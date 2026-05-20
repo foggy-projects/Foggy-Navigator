@@ -12,11 +12,11 @@
 
 ## 状态
 
-- status: recorded
+- status: implemented
 - date: 2026-05-21
 - priority: P1
 - coding_status: implemented
-- test_status: targeted-passed
+- test_status: passed
 
 ## 复现信息
 
@@ -231,6 +231,9 @@ BusinessFunction tms.ticket.createPlatformFeedback upstream_ref "TMS-3" is not c
 tools/langgraph-biz-worker/.venv/Scripts/python.exe -m pytest tests/test_business_function_tools.py tests/test_llm_tool_dispatcher.py tests/test_llm_skill_agent.py -q
 51 passed
 
+tools/langgraph-biz-worker/.venv/Scripts/python.exe -m pytest tests -q
+556 passed, 6 skipped
+
 mvn -pl addons/langgraph-biz-worker,addons/claude-worker-agent -am "-Dtest=InvokeBusinessFunctionToolTest,OpenApiAgentReadinessServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
 OpenApiAgentReadinessServiceTest: 11 passed
 InvokeBusinessFunctionToolTest: 10 passed
@@ -245,8 +248,8 @@ BUILD SUCCESS
 
 ## 体验验证
 
-- experience_status: pending
-- reason: 该 BUG 的主要症状是用户可见错误被折叠为 max-iterations。实现后需要通过实际 TMS 提交工单或等价端到端用例确认前端错误文案。
+- experience_status: pending-real-tms-recheck
+- reason: 自动化链路已覆盖错误分类、停止盲目重试和 readiness 前置校验；仍建议在 `nav_tms_3` 修复 upstream_ref 配置后，用实际 TMS 提交工单再做一次端到端确认。
 
 ## 与主线设计关系
 

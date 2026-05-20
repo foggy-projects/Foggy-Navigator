@@ -16,6 +16,7 @@ from ..auth import verify_token
 from ..config import settings
 from ..graphs.root_graph import RootState, root_graph
 from ..models import QueryEvent, QueryRequest
+from ..runtime.context_memory import context_execution_lock
 from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.file_layout import generate_standard_context_id, require_standard_context_id
 from ..runtime.fsscript_bridge import extract_fsscript_script, get_fsscript_bridge
@@ -75,6 +76,8 @@ async def _event_generator(
     """Run the root graph and yield SSE events."""
     active_tasks.add(task_id)
     context_id: str | None = None
+    context_lock = None
+    context_lock_acquired = False
     try:
         navigator_session_id = _resolve_session_id(request)
         context_id = _resolve_context_id(request)
@@ -95,6 +98,24 @@ async def _event_generator(
                     "data": event.model_dump_json(),
                 }
             return
+
+        context_lock = context_execution_lock(context_id)
+        if not context_lock.acquire(blocking=False):
+            busy_event = _event_with_context_id(QueryEvent(
+                type="error",
+                task_id=task_id,
+                error="context runtime is busy",
+                payload={
+                    "code": "CONTEXT_RUNTIME_BUSY",
+                    "retryable": True,
+                },
+            ), context_id)
+            yield {
+                "event": "message",
+                "data": busy_event.model_dump_json(),
+            }
+            return
+        context_lock_acquired = True
 
         queue: asyncio.Queue[Any] = asyncio.Queue()
         emitted_keys: set[str] = set()
@@ -182,6 +203,8 @@ async def _event_generator(
             "data": error_event.model_dump_json(),
         }
     finally:
+        if context_lock_acquired and context_lock is not None:
+            context_lock.release()
         active_tasks.discard(task_id)
 
 

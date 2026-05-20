@@ -7,6 +7,7 @@ from typing import Any
 
 from langgraph_biz_worker.graphs import root_graph as root_graph_module
 from langgraph_biz_worker.models import SkillManifest
+from langgraph_biz_worker.runtime.context_memory import ContextRuntimeMemory, save_to_root_frame
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
@@ -219,10 +220,134 @@ def test_run_skill_passes_recent_conversation_to_persistent_root_agent(monkeypat
 
     root_graph_module.run_skill(state)
 
-    assert captured["runtime_context"]["_visible_recent_conversation"] == [
+    assert [
+        {"role": item["role"], "content": item["content"]}
+        for item in captured["runtime_context"]["_runtime_visible_conversation"]
+    ] == [
         {"role": "user", "content": "我刚才问了工单 1001"},
         {"role": "assistant", "content": "工单 1001 当前待处理"},
     ]
+    assert "_visible_recent_conversation" not in captured["runtime_context"]
+
+
+def test_root_prompt_uses_bizworker_memory_without_recent_conversation(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    context_id = "bctx_20260521_ab_ctx-memory-root"
+    captured: list[list[dict[str, Any]]] = []
+
+    class FakeAgent:
+        def run(self, **kwargs):
+            captured.append(kwargs["runtime_context"].get("_runtime_visible_conversation", []))
+            runtime.submit_persistent_turn_result(
+                kwargs["frame_id"],
+                "A1",
+                {"message": "A1 visible"},
+            )
+            return []
+
+    monkeypatch.setattr(root_graph_module, "_llm_skill_agent_for_state", lambda current_state: FakeAgent())
+
+    first_state = _state("task_root_memory_001")
+    first_state["context"]["contextId"] = context_id
+    routed = root_graph_module.route_skill(first_state)
+    first_state["active_frame_id"] = routed["active_frame_id"]
+    root_graph_module.run_skill(first_state)
+    root_graph_module.close_skill_frame(first_state)
+
+    second_state = _state("task_root_memory_002")
+    second_state["prompt"] = "U2"
+    second_state["context"]["contextId"] = context_id
+    routed = root_graph_module.route_skill(second_state)
+    second_state["active_frame_id"] = routed["active_frame_id"]
+    root_graph_module.run_skill(second_state)
+
+    assert captured[0] == []
+    assert [(item["role"], item["content"]) for item in captured[1]] == [
+        ("user", "handle the request"),
+        ("assistant", "A1 visible"),
+    ]
+
+
+def test_recent_conversation_bootstrap_ignored_after_memory_revision(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    context_id = "bctx_20260521_cd_ctx-bootstrap-root"
+    captured: list[list[dict[str, Any]]] = []
+
+    class FakeAgent:
+        def run(self, **kwargs):
+            captured.append(kwargs["runtime_context"].get("_runtime_visible_conversation", []))
+            runtime.submit_persistent_turn_result(
+                kwargs["frame_id"],
+                "worker-owned A1",
+                {"message": "worker-owned A1 visible"},
+            )
+            return []
+
+    monkeypatch.setattr(root_graph_module, "_llm_skill_agent_for_state", lambda current_state: FakeAgent())
+
+    first_state = _state("task_root_bootstrap_001")
+    first_state["context"] = {
+        "contextId": context_id,
+        "recentConversation": [
+            {"role": "user", "content": "external U"},
+            {"role": "assistant", "content": "external A"},
+        ],
+    }
+    routed = root_graph_module.route_skill(first_state)
+    first_state["active_frame_id"] = routed["active_frame_id"]
+    root_graph_module.run_skill(first_state)
+    root_graph_module.close_skill_frame(first_state)
+
+    second_state = _state("task_root_bootstrap_002")
+    second_state["context"] = {
+        "contextId": context_id,
+        "recentConversation": [
+            {"role": "user", "content": "conflicting external U"},
+            {"role": "assistant", "content": "conflicting external A"},
+        ],
+    }
+    routed = root_graph_module.route_skill(second_state)
+    second_state["active_frame_id"] = routed["active_frame_id"]
+    root_graph_module.run_skill(second_state)
+
+    assert [(item["role"], item["content"]) for item in captured[0]] == [
+        ("user", "external U"),
+        ("assistant", "external A"),
+    ]
+    assert "conflicting external U" not in [item["content"] for item in captured[1]]
+    assert ("assistant", "worker-owned A1 visible") in [
+        (item["role"], item["content"]) for item in captured[1]
+    ]
+
+
+def test_same_context_running_loop_returns_busy_before_queue_phase(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    state = _state("task_root_busy_001")
+    state["context"]["contextId"] = "bctx_20260521_ef_ctx-busy-root"
+    routed = root_graph_module.route_skill(state)
+    state["active_frame_id"] = routed["active_frame_id"]
+    frame = runtime.get_frame(routed["active_frame_id"])
+    assert frame is not None
+
+    memory = ContextRuntimeMemory(context_id=frame.conversation_id)
+    memory.begin_turn(
+        task_id="task_already_running",
+        root_frame_id=frame.frame_id,
+        user_message="running",
+    )
+    save_to_root_frame(frame, memory)
+    runtime.save_frame(frame)
+
+    class FakeAgent:
+        def run(self, **kwargs):
+            raise AssertionError("busy context must not enter the root LLM loop")
+
+    monkeypatch.setattr(root_graph_module, "_llm_skill_agent_for_state", lambda current_state: FakeAgent())
+
+    result = root_graph_module.run_skill(state)
+
+    assert result["events"][0].type == "error"
+    assert result["events"][0].payload["code"] == "CONTEXT_RUNTIME_BUSY"
 
 
 def test_agentic_routing_prompt_includes_recent_conversation(monkeypatch, tmp_path):

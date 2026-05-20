@@ -30,3 +30,8 @@
 - [05-business-function-upstream-ref-error-feedback-bug.md](./05-business-function-upstream-ref-error-feedback-bug.md) - 记录 BusinessFunction adapter `upstream_ref` 配置错误被误当成 LLM 可修复入参并折叠为 max-iterations 的 BUG
 - [06-normal-turn-runtime-context-design.md](./06-normal-turn-runtime-context-design.md) - 明确普通用户消息在 BizWorker 内写入、恢复、压缩和组装为下一轮 LLM runtime context 的设计
 - [07-normal-turn-runtime-context-implementation-plan.md](./07-normal-turn-runtime-context-implementation-plan.md) - 将普通消息 `ContextRuntimeMemory` 设计拆解为分阶段开发任务、测试清单和验收闸门
+
+## 当前签收记录
+
+- [quality/runtime-context-phase1-implementation-quality.md](./quality/runtime-context-phase1-implementation-quality.md) - BizWorker Runtime Context Phase 1 实现质量检查
+- [acceptance/runtime-context-phase1-acceptance.md](./acceptance/runtime-context-phase1-acceptance.md) - BizWorker Runtime Context Phase 1 功能验收签收

@@ -62,7 +62,7 @@ def _build_user_prompt(
         _build_active_plan_prompt(runtime_context),
         _build_root_planning_policy_prompt(runtime_context, skill_id),
         _build_frame_result_contract_prompt(runtime_context),
-        _build_visible_recent_conversation_prompt(runtime_context),
+        _build_runtime_visible_conversation_prompt(runtime_context),
         f"User request: {prompt}",
         f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}",
         _build_attachment_context_prompt(_runtime_attachments(runtime_context)),
@@ -78,25 +78,41 @@ def _runtime_attachments(runtime_context: dict[str, Any] | None) -> list[dict[st
     return value if isinstance(value, list) else None
 
 
+def _build_runtime_visible_conversation_prompt(runtime_context: dict[str, Any] | None) -> str:
+    if not runtime_context:
+        return ""
+    history = runtime_context.get("_runtime_visible_conversation")
+    if isinstance(history, list):
+        lines = _conversation_lines(history)
+        if lines:
+            return "Runtime-visible conversation before this turn:\n" + "\n".join(lines)
+    return _build_visible_recent_conversation_prompt(runtime_context)
+
+
 def _build_visible_recent_conversation_prompt(runtime_context: dict[str, Any] | None) -> str:
     if not runtime_context:
         return ""
     history = runtime_context.get("_visible_recent_conversation")
     if not isinstance(history, list):
         return ""
+    lines = _conversation_lines(history)
+    if not lines:
+        return ""
+    return "Recent conversation before this turn:\n" + "\n".join(lines)
+
+
+def _conversation_lines(history: list[Any]) -> list[str]:
     lines: list[str] = []
     for item in history[-12:]:
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "message").strip().lower()
-        if role not in {"user", "assistant", "tool", "system"}:
-            role = "message"
+        if role not in {"user", "assistant"}:
+            continue
         content = item.get("content")
         if isinstance(content, str) and content.strip():
             lines.append(f"{role}: {content.strip()[:1200]}")
-    if not lines:
-        return ""
-    return "Recent conversation before this turn:\n" + "\n".join(lines)
+    return lines
 
 
 def _recoverable_interruption_context(working_state: dict[str, Any]) -> dict[str, Any] | None:

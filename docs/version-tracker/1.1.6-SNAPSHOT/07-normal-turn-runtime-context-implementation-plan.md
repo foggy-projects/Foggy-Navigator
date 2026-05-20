@@ -12,10 +12,10 @@
 
 ## 状态
 
-- status: planned
+- status: phase-1-completed
 - date: 2026-05-21
-- coding_status: not-started
-- test_status: not-run
+- coding_status: phase-1-implemented
+- test_status: phase-1-passed
 
 ## 关联设计
 
@@ -354,15 +354,34 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 
 ### Development
 
-- status: not-started
-- 本文件仅完成实施计划落档。
+- status: phase-1-completed
+- 2026-05-21: 已完成 `ContextRuntimeMemory` Phase 1 最小闭环。
+- 已新增 `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/context_memory.py`，封装 Root frame `private_working_state.runtime_context_memory` 的 load / bootstrap / begin / commit / prompt view / abandon。
+- Root `run_skill(...)` 已改为优先使用 BizWorker-owned `_runtime_visible_conversation`；Java `recentConversation` 仅在 memory 为空且 revision 为 0 时 bootstrap 一次。
+- `llm_agent_prompts.py` 已新增 runtime-visible conversation prompt，旧 `_visible_recent_conversation` 保留为非 Root / 兼容 fallback。
+- Root turn 成功完成、`AWAITING_USER` 可见追问、interruption / approval / error abandon 均已接入 runtime memory 的 Phase 1 提交或清理路径。
+- API `/api/v1/query` 已增加进程内 `contextId` 互斥锁；Phase 1 中同会话并发请求返回 `CONTEXT_RUNTIME_BUSY` / `retryable=true`，不静默启动第二条 Root loop。
+- 附带闭环 [05-business-function-upstream-ref-error-feedback-bug.md](./05-business-function-upstream-ref-error-feedback-bug.md)：BusinessFunction 配置类 gateway 错误会被标记为 non-recoverable configuration error，OpenAPI readiness 会前置校验可见函数 adapter `upstream_ref`。
 
 ### Testing
 
-- status: not-run
-- 本次未改实现代码，未运行测试。
+- status: passed
+- `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests -q`
+  - result: `556 passed, 6 skipped`
+- `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -q`
+  - result: `18 passed`
+- `mvn -pl addons/langgraph-biz-worker -am -Dtest=InvokeBusinessFunctionToolTest "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  - result: `10 tests, 0 failures, 0 errors`
+- `mvn -pl addons/claude-worker-agent -am -Dtest=OpenApiAgentReadinessServiceTest "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  - result: `11 tests, 0 failures, 0 errors`
 
 ### Experience
 
-- status: pending
-- Phase 1 完成后需要验证普通多轮对话；Phase 2/3 完成后需要验证 Skill 续接和执行中追加消息体验。
+- status: partially-verified-by-e2e
+- 已通过 scripted E2E 验证第二轮 Root LLM prompt 使用 `Runtime-visible conversation before this turn:`，并包含上一轮 BizWorker memory 中的 `user -> assistant` 语义消息。
+- Phase 2/3 仍需继续验证 Skill 续接、用户取消 escape hatch、执行中追加消息进入 pending queue 的真实体验。
+
+## Implementation Quality / Acceptance
+
+- quality_record: [quality/runtime-context-phase1-implementation-quality.md](./quality/runtime-context-phase1-implementation-quality.md)
+- acceptance_record: [acceptance/runtime-context-phase1-acceptance.md](./acceptance/runtime-context-phase1-acceptance.md)

@@ -18,6 +18,13 @@ from langgraph.graph import END, StateGraph
 from ..config import settings
 from ..models import FrameStatus, QueryEvent, SkillManifest
 from ..runtime.attachment_context import build_attachment_context_prompt as _build_attachment_context_prompt
+from ..runtime.context_memory import (
+    RUNTIME_VISIBLE_CONVERSATION_KEY,
+    ContextRuntimeBusy,
+    assistant_visible_content,
+    load_from_root_frame,
+    save_to_root_frame,
+)
 from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.file_frame_journal import FileFrameJournal
 from ..runtime.file_layout import date_parts_for_now, require_standard_context_id, session_data_dir
@@ -806,9 +813,10 @@ def run_skill(state: RootState) -> dict:
     runtime_context = copy_execution_policy_from_context(state.get("runtime_context") or {}, raw_context)
     runtime_context["task_id"] = task_id
     runtime_context["frame_id"] = frame_id
-    recent_conversation = _recent_conversation_for_runtime(context)
-    if recent_conversation:
-        runtime_context["_visible_recent_conversation"] = recent_conversation
+    if frame.skill_id != ROOT_SKILL_ID:
+        recent_conversation = _recent_conversation_for_runtime(context)
+        if recent_conversation:
+            runtime_context["_visible_recent_conversation"] = recent_conversation
     client_app_id = context.get("client_app_id") or context.get("clientAppId")
     if client_app_id:
         runtime_context.setdefault("client_app_id", client_app_id)
@@ -833,6 +841,15 @@ def run_skill(state: RootState) -> dict:
             )
             if recovered_focus_events is not None:
                 return {"events": recovered_focus_events}
+            busy_event = _prepare_root_runtime_memory_for_turn(
+                frame,
+                task_id=task_id,
+                context=context,
+                prompt=skill_prompt,
+                runtime_context=runtime_context,
+            )
+            if busy_event is not None:
+                return {"events": [busy_event]}
         return {
             "events": llm_skill_agent.run(
                 task_id=task_id,
@@ -874,6 +891,93 @@ def run_skill(state: RootState) -> dict:
     all_events.extend(result4.get("events", []))
 
     return {"events": all_events}
+
+
+def _prepare_root_runtime_memory_for_turn(
+    frame: Any,
+    *,
+    task_id: str,
+    context: dict[str, Any],
+    prompt: str,
+    runtime_context: dict[str, Any],
+) -> QueryEvent | None:
+    memory = load_from_root_frame(frame)
+    memory.bootstrap_from_external_recent_conversation(
+        _recent_conversation_for_runtime(context),
+        task_id=task_id,
+        root_frame_id=frame.frame_id,
+    )
+    prompt_view = memory.build_prompt_view()
+    if prompt_view:
+        runtime_context[RUNTIME_VISIBLE_CONVERSATION_KEY] = prompt_view
+    else:
+        runtime_context.pop(RUNTIME_VISIBLE_CONVERSATION_KEY, None)
+    runtime_context["_runtime_context_revision"] = memory.revision
+
+    try:
+        memory.begin_turn(
+            task_id=task_id,
+            root_frame_id=frame.frame_id,
+            user_message=prompt,
+        )
+    except ContextRuntimeBusy as exc:
+        return QueryEvent(
+            type="error",
+            task_id=task_id,
+            skill_frame_id=frame.frame_id,
+            skill_id=ROOT_SKILL_ID,
+            error=str(exc),
+            payload={
+                "code": "CONTEXT_RUNTIME_BUSY",
+                "retryable": True,
+            },
+        )
+
+    save_to_root_frame(frame, memory)
+    _runtime.save_frame(frame)
+    return None
+
+
+def _commit_root_runtime_memory_turn(
+    frame: Any,
+    *,
+    state: RootState,
+    assistant_message: str,
+    structured_output: dict[str, Any] | None,
+) -> None:
+    memory = load_from_root_frame(frame)
+    if memory.pending_turn is None:
+        try:
+            memory.begin_turn(
+                task_id=state["task_id"],
+                root_frame_id=frame.frame_id,
+                user_message=_skill_agent_prompt(
+                    state["prompt"],
+                    strip_execution_policy_context(state.get("context") or {}),
+                ),
+            )
+        except ContextRuntimeBusy:
+            return
+    metadata = {
+        "source": "root_result",
+        "structuredOutputKeys": sorted(structured_output.keys()) if isinstance(structured_output, dict) else [],
+        "reportRef": _execution_report_ref_from_frame(frame),
+    }
+    memory.commit_turn(
+        assistant_message=assistant_message,
+        metadata=metadata,
+    )
+    save_to_root_frame(frame, memory)
+    _runtime.save_frame(frame)
+
+
+def _abandon_root_runtime_memory_turn(frame: Any, *, status: str) -> None:
+    memory = load_from_root_frame(frame)
+    if memory.pending_turn is None and memory.loop_status != "RUNNING":
+        return
+    memory.abandon_turn(status=status)
+    save_to_root_frame(frame, memory)
+    _runtime.save_frame(frame)
 
 
 def _run_active_focus_before_root(
@@ -1040,6 +1144,16 @@ def _run_active_focus_before_root(
     root_context_summary = _runtime.context_summary_for_frame(root_frame_id)
     if root_context_summary:
         root_runtime_context["_visible_root_context_summary"] = root_context_summary
+    busy_event = _prepare_root_runtime_memory_for_turn(
+        root,
+        task_id=task_id,
+        context=strip_execution_policy_context(state.get("context") or {}),
+        prompt=prompt,
+        runtime_context=root_runtime_context,
+    )
+    if busy_event is not None:
+        events.append(busy_event)
+        return events
 
     events.extend(llm_skill_agent.run(
         task_id=task_id,
@@ -1130,8 +1244,14 @@ def close_skill_frame(state: RootState) -> dict:
         and frame.status == FrameStatus.RUNNING
         and _is_current_turn_interrupted(frame, task_id)
     ):
-        pass
+        _abandon_root_runtime_memory_turn(frame, status="INTERRUPTED")
     elif frame and frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING and frame.result_summary:
+        _commit_root_runtime_memory_turn(
+            frame,
+            state=state,
+            assistant_message=assistant_visible_content(frame.output, frame.result_summary),
+            structured_output=frame.output,
+        )
         events.append(QueryEvent(
             type="result",
             content=frame.result_summary,
@@ -1148,6 +1268,13 @@ def close_skill_frame(state: RootState) -> dict:
         and frame.status == FrameStatus.WAITING_CHILD
         and frame.private_working_state.get("active_focus_status") == "AWAITING_USER"
     ):
+        _commit_root_runtime_memory_turn(
+            frame,
+            state=state,
+            assistant_message=assistant_visible_content(frame.output, frame.result_summary)
+            or "等待用户补充信息。",
+            structured_output=frame.output,
+        )
         events.append(QueryEvent(
             type="result",
             content=frame.result_summary or "等待用户补充信息。",
@@ -1161,8 +1288,12 @@ def close_skill_frame(state: RootState) -> dict:
     elif frame and frame.status == FrameStatus.AWAITING_APPROVAL:
         # The approval_required event has already been emitted by the runtime
         # tool handler. Do not turn a deliberate suspension into an error.
+        if frame.skill_id == ROOT_SKILL_ID:
+            _abandon_root_runtime_memory_turn(frame, status="AWAITING_APPROVAL")
         pass
     elif frame:
+        if frame.skill_id == ROOT_SKILL_ID:
+            _abandon_root_runtime_memory_turn(frame, status=frame.status.value)
         events.append(QueryEvent(
             type="error",
             task_id=task_id,

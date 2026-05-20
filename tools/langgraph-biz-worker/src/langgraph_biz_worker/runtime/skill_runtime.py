@@ -1550,6 +1550,15 @@ class SkillRuntime:
         """
         self.store.save(frame)
 
+    def save_frame(self, frame: SkillFrameState) -> None:
+        """Persist an externally updated frame state.
+
+        This is intentionally narrow: callers that own a frame-scoped runtime
+        extension can update the frame object and ask the runtime to persist it
+        without reaching into the private ``_save`` helper.
+        """
+        self._save(frame)
+
     def context_summary_for_frame(self, frame_id: str) -> dict[str, Any] | None:
         """Return the nearest root context summary visible from a frame stack."""
         for frame in self.get_call_stack(frame_id):

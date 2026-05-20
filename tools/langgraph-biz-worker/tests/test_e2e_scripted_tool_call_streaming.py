@@ -1681,11 +1681,11 @@ async def test_scripted_root_skill_reuses_frame_across_tasks(monkeypatch, mock_l
 
 
 @pytest.mark.anyio
-async def test_scripted_root_skill_second_turn_injects_recent_conversation(
+async def test_scripted_root_skill_second_turn_uses_runtime_visible_conversation(
     monkeypatch,
     mock_llm_server,
 ):
-    """Second turn should expose Navigator-provided recent conversation to the root LLM."""
+    """Second turn should expose BizWorker-owned runtime-visible conversation."""
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-recent-conversation-{run_id}"
     session_id = f"sess-e2e-root-recent-{run_id}"
@@ -1802,7 +1802,8 @@ async def test_scripted_root_skill_second_turn_injects_recent_conversation(
         for message in records[1]["request"]["messages"]
         if message["role"] == "user"
     ]
-    assert any("Recent conversation before this turn:" in content for content in second_user_messages)
+    assert any("Runtime-visible conversation before this turn:" in content for content in second_user_messages)
+    assert not any("Recent conversation before this turn:" in content for content in second_user_messages)
     assert any(f"user: {previous_user_message}" in content for content in second_user_messages)
     assert any(f"assistant: {previous_assistant_message}" in content for content in second_user_messages)
     assert any("User request: 我上一个消息是什么" in content for content in second_user_messages)
