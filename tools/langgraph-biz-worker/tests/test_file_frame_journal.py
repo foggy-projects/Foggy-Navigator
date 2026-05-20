@@ -10,6 +10,9 @@ from langgraph_biz_worker.models import FrameKind, FrameStatus, SkillFrameState
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.file_layout import session_data_dir
 
+CTX_1 = "bctx_20260520_ab_conv_1"
+CTX_2 = "bctx_20260520_cd_wrong_context"
+
 
 def _make_frame(
     frame_id: str = "frm_001",
@@ -78,8 +81,8 @@ class TestSaveAndLoad:
 
     def test_save_assigns_monotonic_journal_sequence(self, tmp_path):
         journal = FileFrameJournal(tmp_path)
-        first = _make_frame(frame_id="frm_001", conversation_id="conv-1")
-        second = _make_frame(frame_id="frm_002", conversation_id="conv-1")
+        first = _make_frame(frame_id="frm_001", conversation_id=CTX_1)
+        second = _make_frame(frame_id="frm_002", conversation_id=CTX_1)
 
         journal.save(first)
         journal.save(second)
@@ -88,27 +91,27 @@ class TestSaveAndLoad:
         assert second.journal_seq is not None
         assert second.journal_seq > first.journal_seq
         assert first.journal_updated_at
-        frames = journal.load_by_conversation("conv-1")
+        frames = journal.load_by_conversation(CTX_1)
         assert [frame.frame_id for frame in frames] == ["frm_001", "frm_002"]
-        assert [frame.frame_id for frame in journal.load_by_task("task_aaa", conversation_id="conv-1")] == [
+        assert [frame.frame_id for frame in journal.load_by_task("task_aaa", conversation_id=CTX_1)] == [
             "frm_001",
             "frm_002",
         ]
-        assert journal.load_by_task("task_aaa", conversation_id="wrong-context") == []
-        session_dir = session_data_dir(tmp_path, ("2026", "01", "01"), "conv-1")
+        assert journal.load_by_task("task_aaa", conversation_id=CTX_2) == []
+        session_dir = session_data_dir(tmp_path, ("2026", "01", "01"), CTX_1)
         assert (session_dir / "frames" / "frm_001.json").exists()
         assert (session_dir / "frames" / "frm_002.json").exists()
         assert not (tmp_path / "runtime" / "frames").exists()
 
     def test_same_conversation_tasks_share_session_directory(self, tmp_path):
         journal = FileFrameJournal(tmp_path)
-        first_path = journal.save(_make_frame(frame_id="frm_001", task_id="task_1", conversation_id="conv-1"))
-        second_path = journal.save(_make_frame(frame_id="frm_002", task_id="task_2", conversation_id="conv-1"))
+        first_path = journal.save(_make_frame(frame_id="frm_001", task_id="task_1", conversation_id=CTX_1))
+        second_path = journal.save(_make_frame(frame_id="frm_002", task_id="task_2", conversation_id=CTX_1))
 
         assert first_path.parent == second_path.parent
-        assert first_path.parent == session_data_dir(tmp_path, ("2026", "01", "01"), "conv-1") / "frames"
+        assert first_path.parent == session_data_dir(tmp_path, ("2026", "01", "01"), CTX_1) / "frames"
         assert [frame.frame_id for frame in journal.load_by_task("task_1")] == ["frm_001"]
-        assert [frame.frame_id for frame in journal.load_by_conversation("conv-1")] == ["frm_001", "frm_002"]
+        assert [frame.frame_id for frame in journal.load_by_conversation(CTX_1)] == ["frm_001", "frm_002"]
 
     def test_context_id_embedded_hash_selects_session_shard(self, tmp_path):
         journal = FileFrameJournal(tmp_path)
@@ -116,10 +119,18 @@ class TestSaveAndLoad:
         path = journal.save(_make_frame(conversation_id=context_id))
 
         assert path == (
-            tmp_path / "runtime" / "sessions" / "by-date" / "2026" / "01" / "01"
+            tmp_path / "runtime" / "sessions" / "by-date" / "2026" / "05" / "20"
             / "ab" / context_id / "frames" / "frm_001.json"
         )
         assert [frame.frame_id for frame in journal.load_by_conversation(context_id)] == ["frm_001"]
+
+    def test_rejects_non_standard_conversation_id(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+
+        with pytest.raises(ValueError, match="bctx_yyyyMMdd_<hash>_<id>"):
+            journal.save(_make_frame(conversation_id="20260520-5fa4"))
+        with pytest.raises(ValueError, match="bctx_yyyyMMdd_<hash>_<id>"):
+            journal.save(_make_frame(conversation_id="bctx_20261340_ab_ctx_bad_date"))
 
 
 class TestLoadByTask:

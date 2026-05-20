@@ -29,7 +29,7 @@ class BusinessAgentTaskControllerTest {
     private static final String USER_ID = "user-001";
     private static final String CLIENT_APP_ID = "app-001";
     private static final String SESSION_ID = "biz-session-001";
-    private static final String CONTEXT_ID = "ctx-001";
+    private static final String CONTEXT_ID = "bctx_20260520_ab_ctx_001";
     private static final String UPSTREAM_USER_ID = "upstream-001";
     private static final String SKILL_ID = "skill-001";
     private static final String WORKER_POOL_ID = "pool-001";

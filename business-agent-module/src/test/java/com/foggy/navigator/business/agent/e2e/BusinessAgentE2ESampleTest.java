@@ -129,7 +129,7 @@ class BusinessAgentE2ESampleTest {
         clientAppUserGrantService = userGrantService;
         BusinessAgentSessionService businessAgentSessionService = mock(BusinessAgentSessionService.class);
         BusinessAgentSessionDTO sessionDTO = new BusinessAgentSessionDTO();
-        sessionDTO.setContextId("ctx_stage6");
+        sessionDTO.setContextId("bctx_20260520_cd_ctx_stage6");
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
                 .thenReturn(sessionDTO);
         taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());

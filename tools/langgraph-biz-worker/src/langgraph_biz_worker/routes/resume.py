@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from ..auth import verify_token
+from ..runtime.file_layout import require_standard_context_id
 from ..runtime.file_frame_journal import FileFrameJournal
 from ..runtime.fsscript_bridge import (
     FsscriptRunBridge,
@@ -154,7 +155,10 @@ async def resume(request: ResumeRequest) -> ResumeResponse:
 
 def _required_context_id(request: ResumeRequest) -> str:
     if isinstance(request.context_id, str) and request.context_id.strip():
-        return request.context_id.strip()
+        try:
+            return require_standard_context_id(request.context_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     raise HTTPException(
         status_code=422,
         detail="contextId is required for resume",

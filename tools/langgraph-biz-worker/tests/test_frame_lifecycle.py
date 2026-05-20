@@ -13,6 +13,9 @@ from langgraph_biz_worker.runtime.skill_runtime import (
     SkillRuntime,
 )
 
+CTX_FOCUS = "bctx_20260520_ab_conv-focus"
+CTX_RECOVERABLE = "bctx_20260520_cd_conv-1"
+
 
 @pytest.fixture
 def runtime() -> SkillRuntime:
@@ -276,7 +279,7 @@ class TestPersistentTurnResult:
         parent_id = runtime.invoke_skill(
             "task-focus-001",
             "test_skill",
-            conversation_id="conv-focus",
+            conversation_id=CTX_FOCUS,
             session_id="sess-focus",
             current_task_id="task-focus-001",
             origin_task_id="task-focus-001",
@@ -313,7 +316,7 @@ class TestPersistentTurnResult:
         assert child.task_id == "task-focus-002"
         assert child.current_task_id == "task-focus-002"
         assert child.origin_task_id == "task-focus-001"
-        assert child.conversation_id == "conv-focus"
+        assert child.conversation_id == CTX_FOCUS
         assert child.session_id == "sess-focus"
 
     def test_latest_recoverable_root_is_selected_and_older_focus_superseded(self, tmp_path):
@@ -324,7 +327,7 @@ class TestPersistentTurnResult:
         old_frame_id = runtime.invoke_skill(
             "task-old",
             "system.root",
-            conversation_id="conv-1",
+            conversation_id=CTX_RECOVERABLE,
             current_task_id="task-old",
         )
         runtime.record_recoverable_interruption(
@@ -336,7 +339,7 @@ class TestPersistentTurnResult:
         new_frame_id = runtime.invoke_skill(
             "task-new",
             "system.root",
-            conversation_id="conv-1",
+            conversation_id=CTX_RECOVERABLE,
             current_task_id="task-new",
         )
         runtime.record_recoverable_interruption(
@@ -348,7 +351,7 @@ class TestPersistentTurnResult:
 
         restored = SkillRuntime(journal=journal)
         selected = restored.select_latest_recoverable_root(
-            conversation_id="conv-1",
+            conversation_id=CTX_RECOVERABLE,
             task_id="task-next",
             root_skill_id="system.root",
         )

@@ -156,7 +156,7 @@ class RestAdapterUpstreamE2ETest {
 
         BusinessAgentSessionService businessAgentSessionService = mock(BusinessAgentSessionService.class);
         BusinessAgentSessionDTO sessionDTO = new BusinessAgentSessionDTO();
-        sessionDTO.setContextId("ctx_rest_e2e");
+        sessionDTO.setContextId("bctx_20260520_ab_ctx_rest_e2e");
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
                 .thenReturn(sessionDTO);
         taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());

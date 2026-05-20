@@ -42,14 +42,14 @@
 
 ## 建议方向
 
-采用“日期 + 一层 hash + session/context”的 canonical 目录。上游必须传入 `contextId`；缺失 `contextId` 视为调用方 BUG。新写入不再创建 task/conversation/report 索引：
+采用“日期 + 一层 hash + session/context”的 canonical 目录。业务 `contextId` 必须采用 `bctx_yyyyMMdd_<hash>_<id>` 格式，其中 `<hash>` 直接作为目录分片；缺失或非标准 `contextId` 视为调用方 BUG。新写入不再创建 task/conversation/report 索引：
 
 ```text
 data/
   runtime/
     sessions/
       by-date/YYYY/MM/DD/
-        <hash>/<context_or_session_id>/
+        <hash>/<context_id>/
           frames/<frame_id>.json
           reports/<frame_id>.md
           reports/<frame_id>.digest.json
@@ -77,6 +77,7 @@ data/
 - frame journal 的读写、按 task 加载、按 conversation 加载仍可通过测试。
 - recoverable continuation、`WAITING_FOR_USER_INPUT` 用户回复恢复、approval resume 路径不退化。
 - approval resume 必须携带 `contextId`，Python Worker 对缺失 `contextId` 返回 422；Java 调用链从 `LanggraphTaskEntity.contextId` 传递。
+- 业务 `contextId` 必须符合 `bctx_yyyyMMdd_<hash>_<id>`；Worker 通过 ID 内嵌 `<hash>` 直接定位目录，不再对业务 ID 二次计算分片。
 - frame report 保留稳定 `frame-report://<task>/<frame>` 引用格式，但物理文件只从 session canonical 目录读取/生成。
 - 清理任务可以按日期分片删除过期数据，并明确跳过 active/recoverable 状态数据。
 - 文档说明哪些目录是恢复必需、哪些是派生 report、哪些是 debug log，但不把“关闭 report/log”作为本项完成前提。
@@ -119,11 +120,12 @@ data/
 
 - completed_at: 2026-05-20
 - completed_work:
-  - `FileFrameJournal` 新写入路径迁移到 `runtime/sessions/by-date/YYYY/MM/DD/<hash>/<session>/frames/...`，同一 session 的多个 task/frame 落在同一目录下。
+  - `FileFrameJournal` 新写入路径迁移到 `runtime/sessions/by-date/YYYY/MM/DD/<hash>/<contextId>/frames/...`，同一 session/context 的多个 task/frame 落在同一目录下。
   - `FrameExecutionReport` 新写入路径迁移到同一 session 目录的 `reports/...`，保留旧 `frame-report://<task>/<frame>` 引用格式。
   - LLM conversation log 和 skill tool audit log 写入同一 session 目录的 `logs/...`，新任务不再直接堆到旧平铺目录。
   - 移除 frame task/conversation locator 写入、report locator 写入和 `.journal-seq` 文件写入；新写入不再创建 `runtime/frames` 或 `reports/frame-execution`。
   - `POST /api/v1/resume` 强制要求 `contextId`，Java LangGraph Worker 调用链从任务实体传入 `sessionId/contextId`。
+  - Java 业务会话默认生成 `bctx_yyyyMMdd_<hash>_<uuid32>`，Worker 对业务 context 只接受 `bctx_yyyyMMdd_<hash>_<id>`，目录分片直接取 ID 内嵌 `<hash>`。
   - frame report GET 和 LLM 工具读取支持携带 `contextId/sessionId`，优先从同一 session 目录定位报告。
   - 增加 frame 日期分片 cleanup dry-run 规划，跳过 active/recoverable frame。
 - compatibility:
@@ -180,5 +182,6 @@ data/
 - Python Worker 不生成业务侧 `contextId`；它只消费上游/Java 侧传入的 `contextId`、`sessionId`、`taskId`。
 - 当前 Java 侧 `sessionId` 由会话模块/上游创建，默认是普通 UUID。
 - 业务会话绑定时如果没有传入 `contextId`，Java 会生成 `bctx_yyyyMMdd_<hash>_<uuid32>` 形式的默认 context，例如 `bctx_20260520_ab_0123456789abcdef0123456789abcdef`。
-- `contextId` 必须是单段 ID，不要包含 `/`。
-- Worker 目录分片优先识别 `bctx_yyyyMMdd_<hash>_<id>` 中的 `<hash>`，因此该默认 ID 可直接定位到 `runtime/sessions/by-date/YYYY/MM/DD/<hash>/<contextId>/`。非该格式的自定义 `contextId` 仍回退为 `sha256(contextId)[:2]`。
+- `contextId` 必须是单段 ID，必须匹配 `bctx_yyyyMMdd_<hash>_<id>`，不要包含 `/`。
+- Worker 对业务 `contextId` 不再执行 `sha256(contextId)[:2]` 分片；目录日期和分片直接来自 `bctx_yyyyMMdd_<hash>_<id>` 中的 `yyyyMMdd` 与 `<hash>`，因此可直接定位到 `runtime/sessions/by-date/YYYY/MM/DD/<hash>/<contextId>/`。
+- 非标准自定义业务 `contextId` 直接拒绝；`sha256` 回退只保留给无业务 context 的内部 task/session fallback。

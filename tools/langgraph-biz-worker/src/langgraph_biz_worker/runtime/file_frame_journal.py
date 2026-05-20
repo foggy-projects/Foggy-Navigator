@@ -37,10 +37,11 @@ from typing import Any
 
 from ..models import FrameKind, FrameStatus, SkillFrameState
 from .file_layout import (
+    context_segment_path,
     date_parts_for_frame,
-    hashed_segment_path,
     iter_date_dirs,
     parse_date,
+    require_standard_context_id,
     safe_path_segment,
     session_data_dir,
     session_key_for_frame,
@@ -90,8 +91,16 @@ class FileFrameJournal:
         frame.journal_updated_at = datetime.now(timezone.utc).isoformat()
 
         date_parts = date_parts_for_frame(frame)
-        session_key = session_key_for_frame(frame)
-        file_path = self._session_frame_path(session_key, frame.frame_id, date_parts)
+        conversation_id = _standard_conversation_id(frame.conversation_id)
+        session_key = conversation_id or session_key_for_frame(frame)
+        if conversation_id:
+            frame.conversation_id = conversation_id
+        file_path = self._session_frame_path(
+            session_key,
+            frame.frame_id,
+            date_parts,
+            require_standard_context=conversation_id is not None,
+        )
         payload = frame.model_dump(mode="json")
         self._write_json(file_path, payload)
 
@@ -303,9 +312,16 @@ class FileFrameJournal:
         session_id: str,
         frame_id: str,
         date_parts: tuple[str, str, str],
+        *,
+        require_standard_context: bool = False,
     ) -> Path:
         return (
-            session_data_dir(self._data_root, date_parts, session_id)
+            session_data_dir(
+                self._data_root,
+                date_parts,
+                session_id,
+                require_standard_context=require_standard_context,
+            )
             / "frames" / f"{safe_path_segment(frame_id)}.json"
         )
 
@@ -335,7 +351,7 @@ class FileFrameJournal:
         frame_id: str | None = None,
     ) -> list[Path]:
         frame_pattern = f"{safe_path_segment(frame_id)}.json" if frame_id else "*.json"
-        session_pattern = hashed_segment_path(conversation_id).as_posix()
+        session_pattern = context_segment_path(conversation_id).as_posix()
         paths = sorted((self._session_root / "by-date").glob(
             f"*/*/*/{session_pattern}/frames/{frame_pattern}",
         ))
@@ -431,6 +447,12 @@ def _unique_paths(paths: list[Path]) -> list[Path]:
 
 def _matches_conversation(frame: SkillFrameState, conversation_id: str) -> bool:
     return frame.conversation_id == conversation_id or frame.session_id == conversation_id
+
+
+def _standard_conversation_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    return require_standard_context_id(value)
 
 
 def _is_recoverable_frame(frame: SkillFrameState) -> bool:

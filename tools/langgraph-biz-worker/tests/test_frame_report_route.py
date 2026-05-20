@@ -8,6 +8,8 @@ from langgraph_biz_worker.models import FrameStatus
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 
+REPORT_ROUTE_CONTEXT_ID = "bctx_20260520_ab_ctx_report_route_read"
+
 
 class TestBusinessFunctionResultReportRoute:
     """Exercise the Java-facing report reconciliation endpoint."""
@@ -44,7 +46,7 @@ class TestBusinessFunctionResultReportRoute:
         frame_id = self.runtime.invoke_skill(
             "task_report_route_read",
             "system.root",
-            conversation_id="ctx_report_route_read",
+            conversation_id=REPORT_ROUTE_CONTEXT_ID,
             session_id="sess_report_route_read",
         )
         frame = self.runtime.get_frame(frame_id)
@@ -58,7 +60,7 @@ class TestBusinessFunctionResultReportRoute:
             "/api/v1/frame-reports",
             params={
                 "reportRef": f"frame-report://task_report_route_read/{frame_id}",
-                "contextId": "ctx_report_route_read",
+                "contextId": REPORT_ROUTE_CONTEXT_ID,
                 "sessionId": "sess_report_route_read",
                 "mode": "markdown",
                 "maxChars": "4000",

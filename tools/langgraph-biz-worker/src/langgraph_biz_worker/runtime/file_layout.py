@@ -8,7 +8,8 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
-_EMBEDDED_HASH_PATTERN = re.compile(r"^bctx_\d{8}_([0-9a-fA-F]{2})_[A-Za-z0-9._-]+$")
+STANDARD_CONTEXT_ID_DESCRIPTION = "bctx_yyyyMMdd_<hash>_<id>"
+_STANDARD_CONTEXT_ID_PATTERN = re.compile(r"^bctx_(\d{8})_([0-9a-fA-F]{2})_[A-Za-z0-9._-]+$")
 
 
 def safe_path_segment(value: str) -> str:
@@ -30,11 +31,46 @@ def hashed_segment_path(value: str) -> Path:
     return hash_shard_path(value) / safe_path_segment(value)
 
 
+def context_segment_path(context_id: str) -> Path:
+    """Return ``<embedded-hash>/<contextId>`` for a standard business context id."""
+    normalized = require_standard_context_id(context_id)
+    embedded = _embedded_hash_shard(normalized)
+    if embedded is None:  # guarded by require_standard_context_id
+        raise ValueError(f"contextId must match {STANDARD_CONTEXT_ID_DESCRIPTION}")
+    return Path(embedded) / safe_path_segment(normalized)
+
+
+def date_parts_for_context_id(context_id: str) -> tuple[str, str, str]:
+    """Return YYYY/MM/DD parts embedded in a standard business context id."""
+    normalized = require_standard_context_id(context_id)
+    match = _STANDARD_CONTEXT_ID_PATTERN.match(normalized)
+    if not match:  # guarded by require_standard_context_id
+        raise ValueError(f"contextId must match {STANDARD_CONTEXT_ID_DESCRIPTION}")
+    compact = match.group(1)
+    return compact[0:4], compact[4:6], compact[6:8]
+
+
+def require_standard_context_id(context_id: Any) -> str:
+    """Validate and normalize a business context id with an embedded shard."""
+    if not isinstance(context_id, str) or not context_id.strip():
+        raise ValueError("contextId is required")
+    normalized = context_id.strip()
+    match = _STANDARD_CONTEXT_ID_PATTERN.match(normalized)
+    if not match:
+        raise ValueError(f"contextId must match {STANDARD_CONTEXT_ID_DESCRIPTION}")
+    compact_date = match.group(1)
+    try:
+        date(int(compact_date[0:4]), int(compact_date[4:6]), int(compact_date[6:8]))
+    except ValueError as exc:
+        raise ValueError(f"contextId must match {STANDARD_CONTEXT_ID_DESCRIPTION}") from exc
+    return normalized
+
+
 def _embedded_hash_shard(value: str) -> str | None:
-    match = _EMBEDDED_HASH_PATTERN.match(str(value))
+    match = _STANDARD_CONTEXT_ID_PATTERN.match(str(value))
     if not match:
         return None
-    return match.group(1).lower()
+    return match.group(2).lower()
 
 
 def session_key_for_frame(frame: Any) -> str:
@@ -51,11 +87,20 @@ def session_data_dir(
     data_root: str | Path,
     date_parts: tuple[str, str, str],
     session_id: str,
+    *,
+    require_standard_context: bool = False,
 ) -> Path:
     """Return the canonical session data directory for runtime artifacts."""
+    has_embedded_context = _embedded_hash_shard(str(session_id)) is not None
+    if require_standard_context or has_embedded_context:
+        effective_date_parts = date_parts_for_context_id(session_id)
+        segment_path = context_segment_path(session_id)
+    else:
+        effective_date_parts = date_parts
+        segment_path = hashed_segment_path(session_id)
     return (
         Path(data_root) / "runtime" / "sessions" / "by-date"
-        / date_path(date_parts) / hashed_segment_path(session_id)
+        / date_path(effective_date_parts) / segment_path
     )
 
 

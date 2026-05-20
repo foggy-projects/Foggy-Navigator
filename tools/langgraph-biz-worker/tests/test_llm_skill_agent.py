@@ -360,7 +360,7 @@ def test_persistent_root_child_timeout_records_recoverable_interruption(tmp_path
         task_id="task_root_child_timeout_001",
         skill_id="system.root",
         skill_input={},
-        conversation_id="sess_child_timeout",
+        conversation_id="bctx_20260520_ab_sess_child_timeout",
         session_id="sess_child_timeout",
     )
 
@@ -394,7 +394,7 @@ def test_persistent_root_continue_reopens_failed_child_frame_after_timeout(tmp_p
         task_id="task_root_failed_child_continue_001",
         skill_id="system.root",
         skill_input={},
-        conversation_id="sess_failed_child_continue",
+        conversation_id="bctx_20260520_cd_sess_failed_child_continue",
         session_id="sess_failed_child_continue",
     )
     model = RecoverableChildTimeoutThenContinueModel()
@@ -759,7 +759,7 @@ def test_llm_agent_prompt_includes_visible_recent_conversation():
     frame_id = runtime.invoke_skill(
         task_id="task_root_recent_prompt_001",
         skill_id="system.root",
-        skill_input={"contextId": "ctx-recent"},
+        skill_input={"contextId": "bctx_20260520_ef_ctx-recent"},
     )
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
@@ -798,7 +798,7 @@ def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_con
         task_id="task_root_continue_001",
         skill_id="system.root",
         skill_input={"request": "create vehicle"},
-        conversation_id="sess_continue",
+        conversation_id="bctx_20260520_12_sess_continue",
         session_id="sess_continue",
     )
     runtime.record_recoverable_interruption(
@@ -859,7 +859,7 @@ def test_llm_agent_prompt_includes_frame_result_contract():
     frame_id = runtime.invoke_skill(
         task_id="task_root_contract_001",
         skill_id="system.root",
-        conversation_id="sess_root_contract",
+        conversation_id="bctx_20260520_34_sess_root_contract",
         session_id="sess_root_contract",
     )
     model = FakeToolCallModel([
@@ -891,7 +891,7 @@ def test_llm_agent_persistent_frame_prompt_includes_pending_recoverable_child():
     root_frame_id = runtime.invoke_skill(
         task_id="task_root_child_prompt_001",
         skill_id="system.root",
-        conversation_id="sess_child_prompt",
+        conversation_id="bctx_20260520_56_sess_child_prompt",
         session_id="sess_child_prompt",
     )
     child_frame_id = runtime.invoke_child_skill(root_frame_id, "child_skill", {"order_id": "ORD-1"})
@@ -939,7 +939,7 @@ def test_llm_agent_persistent_root_exposes_shelve_interrupted_frame_tool():
     frame_id = runtime.invoke_skill(
         task_id="task_root_shelve_tools_001",
         skill_id="system.root",
-        conversation_id="sess_root_shelve_tools",
+        conversation_id="bctx_20260520_78_sess_root_shelve_tools",
         session_id="sess_root_shelve_tools",
     )
     runtime.record_recoverable_interruption(
@@ -1002,7 +1002,7 @@ def test_llm_agent_root_resumes_pending_recoverable_child_frame():
     root_frame_id = runtime.invoke_skill(
         task_id="task_root_resume_child_001",
         skill_id="system.root",
-        conversation_id="sess_resume_child",
+        conversation_id="bctx_20260520_9a_sess_resume_child",
         session_id="sess_resume_child",
     )
     child_frame_id = runtime.invoke_child_skill(
@@ -1082,7 +1082,7 @@ def test_llm_agent_shelve_clears_pending_recoverable_child_frame():
     root_frame_id = runtime.invoke_skill(
         task_id="task_root_shelve_child_001",
         skill_id="system.root",
-        conversation_id="sess_shelve_child",
+        conversation_id="bctx_20260520_bc_sess_shelve_child",
         session_id="sess_shelve_child",
     )
     child_frame_id = runtime.invoke_child_skill(root_frame_id, "child_skill", {"order_id": "ORD-2"})
@@ -1133,7 +1133,7 @@ def test_llm_agent_ask_clarification_keeps_recoverable_focus():
     root_frame_id = runtime.invoke_skill(
         task_id="task_root_clarify_child_001",
         skill_id="system.root",
-        conversation_id="sess_clarify_child",
+        conversation_id="bctx_20260520_de_sess_clarify_child",
         session_id="sess_clarify_child",
     )
     child_frame_id = runtime.invoke_child_skill(root_frame_id, "child_skill", {"order_id": "ORD-3"})
@@ -1213,7 +1213,7 @@ def test_llm_agent_persistent_frame_model_error_records_recoverable_interruption
         task_id="task_root_model_error_001",
         skill_id="system.root",
         skill_input={"request": "create vehicle"},
-        conversation_id="sess_model_error",
+        conversation_id="bctx_20260520_f0_sess_model_error",
         session_id="sess_model_error",
     )
 

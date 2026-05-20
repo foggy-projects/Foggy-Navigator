@@ -12,6 +12,14 @@ from langgraph_biz_worker.runtime.skill_runtime import (
 )
 from langgraph_biz_worker.runtime.fsscript_bridge import FsscriptRunNotFound
 
+CTX_RESUME = "bctx_20260520_ab_ctx_resume"
+CTX_RESUME_MSG = "bctx_20260520_cd_ctx_resume_msg"
+CTX_RESUME_REPORT_RESTORE = "bctx_20260520_ef_ctx_resume_report_restore"
+CTX_MISSING = "bctx_20260520_12_ctx_missing"
+CTX_FSSCRIPT_MSG = "bctx_20260520_34_ctx_fsscript_msg"
+CTX_RUNNING = "bctx_20260520_56_ctx_running"
+CTX_RESTORE = "bctx_20260520_78_ctx_restore"
+
 
 def _make_frame(
     frame_id: str = "frm_001",
@@ -239,14 +247,14 @@ class TestResumeEndpoint:
         fid = self.runtime.invoke_skill(
             "task_resume",
             "skill_a",
-            conversation_id="ctx_resume",
+            conversation_id=CTX_RESUME,
             session_id="sess_resume",
         )
         self.runtime.mark_awaiting_approval(fid, {"approval_type": "test"})
 
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_resume",
-            "contextId": "ctx_resume",
+            "contextId": CTX_RESUME,
             "sessionId": "sess_resume",
             "approvalResult": "approved",
             "comment": "lgtm",
@@ -265,7 +273,7 @@ class TestResumeEndpoint:
         caller_frame_id = self.runtime.invoke_skill(
             "task_resume_msg",
             "system.root",
-            conversation_id="ctx_resume_msg",
+            conversation_id=CTX_RESUME_MSG,
             session_id="sess_resume_msg",
         )
         function_frame_id = self.runtime.invoke_function_call(
@@ -297,7 +305,7 @@ class TestResumeEndpoint:
 
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_resume_msg",
-            "contextId": "ctx_resume_msg",
+            "contextId": CTX_RESUME_MSG,
             "sessionId": "sess_resume_msg",
             "approvalResult": "approved",
             "comment": "同意",
@@ -321,7 +329,7 @@ class TestResumeEndpoint:
         caller_frame_id = self.runtime.invoke_skill(
             "task_resume_report_restore",
             "system.root",
-            conversation_id="ctx_resume_report_restore",
+            conversation_id=CTX_RESUME_REPORT_RESTORE,
             session_id="sess_resume_report_restore",
         )
         function_frame_id = self.runtime.invoke_function_call(
@@ -356,7 +364,7 @@ class TestResumeEndpoint:
 
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_resume_report_restore",
-            "contextId": "ctx_resume_report_restore",
+            "contextId": CTX_RESUME_REPORT_RESTORE,
             "sessionId": "sess_resume_report_restore",
             "approvalResult": "approved",
             "comment": "同意",
@@ -377,7 +385,7 @@ class TestResumeEndpoint:
     async def test_resume_not_found(self, client):
         resp = await client.post("/api/v1/resume", json={
             "taskId": "nonexistent_task",
-            "contextId": "ctx_missing",
+            "contextId": CTX_MISSING,
             "approvalResult": "approved",
         })
         assert resp.status_code == 404
@@ -413,7 +421,7 @@ class TestResumeEndpoint:
 
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_fsscript_msg",
-            "contextId": "ctx_fsscript_msg",
+            "contextId": CTX_FSSCRIPT_MSG,
             "approvalResult": "approved",
             "comment": "同意",
         })
@@ -431,13 +439,13 @@ class TestResumeEndpoint:
         self.runtime.invoke_skill(
             "task_running",
             "skill_a",
-            conversation_id="ctx_running",
+            conversation_id=CTX_RUNNING,
             session_id="sess_running",
         )
 
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_running",
-            "contextId": "ctx_running",
+            "contextId": CTX_RUNNING,
             "sessionId": "sess_running",
             "approvalResult": "approved",
         })
@@ -448,7 +456,7 @@ class TestResumeEndpoint:
         fid = self.runtime.invoke_skill(
             "task_restore",
             "skill_a",
-            conversation_id="ctx_restore",
+            conversation_id=CTX_RESTORE,
             session_id="sess_restore",
         )
         self.runtime.mark_awaiting_approval(fid, {"approval_type": "test"})
@@ -460,7 +468,7 @@ class TestResumeEndpoint:
         # Resume should restore from file
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_restore",
-            "contextId": "ctx_restore",
+            "contextId": CTX_RESTORE,
             "sessionId": "sess_restore",
             "approvalResult": "approved",
         })

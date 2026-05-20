@@ -257,7 +257,7 @@ async def test_scripted_child_waiting_user_input_resumes_same_frame(
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-child-await-user-{run_id}"
     session_id = f"sess-e2e-child-await-{run_id}"
-    context_id = f"ctx-e2e-child-await-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-child-await-{run_id}"
     first_task_id = f"task_e2e_child_await_001_{run_id}"
     second_task_id = f"task_e2e_child_await_002_{run_id}"
     first_prompt = "请回复 1 或 2 选择工单类型。"
@@ -466,7 +466,7 @@ async def test_scripted_awaiting_child_completed_result_returns_directly(
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-child-final-direct-{run_id}"
     session_id = f"sess-e2e-child-final-direct-{run_id}"
-    context_id = f"ctx-e2e-child-final-direct-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-child-final-direct-{run_id}"
     first_task_id = f"task_e2e_child_final_direct_001_{run_id}"
     second_task_id = f"task_e2e_child_final_direct_002_{run_id}"
     first_prompt = "请补充工单类型、标题和详细描述。"
@@ -680,7 +680,7 @@ async def test_scripted_awaiting_child_resume_creates_ticket_with_http_attachmen
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-child-resume-attachment-url-{run_id}"
     session_id = f"sess-e2e-child-resume-attachment-url-{run_id}"
-    context_id = f"ctx-e2e-child-resume-attachment-url-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-child-resume-attachment-url-{run_id}"
     first_task_id = f"task_e2e_child_resume_attachment_url_001_{run_id}"
     second_task_id = f"task_e2e_child_resume_attachment_url_002_{run_id}"
     first_prompt = "请补充工单类型、标题和详细描述。"
@@ -988,7 +988,7 @@ async def test_client_detach_then_next_turn_reuses_persistent_frame(
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-detach-reattach-{run_id}"
     session_id = f"sess-e2e-detach-reattach-{run_id}"
-    context_id = f"ctx-e2e-detach-reattach-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-detach-reattach-{run_id}"
     first_task_id = f"task_e2e_detach_first_{run_id}"
     second_task_id = f"task_e2e_detach_second_{run_id}"
     first_summary = "First turn completed after client detach."
@@ -1120,7 +1120,7 @@ async def test_scripted_tms_ticket_child_receives_attachment_context(monkeypatch
     trace_id = f"worker-tms-ticket-attachment-{run_id}"
     task_id = f"task_e2e_tms_ticket_attachment_{run_id}"
     session_id = f"sess-e2e-tms-ticket-attachment-{run_id}"
-    context_id = f"ctx-e2e-tms-ticket-attachment-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-tms-ticket-attachment-{run_id}"
     client_app_id = "capp_2852124a-48f7-4098-9d5e-33eb736c4375"
     attachment = {
         "id": "att-028",
@@ -1270,7 +1270,7 @@ async def test_scripted_ticket_with_attachment_does_not_analyze_image_by_default
     trace_id = f"worker-ticket-attach-no-analysis-{run_id}"
     task_id = f"task_e2e_ticket_attach_no_analysis_{run_id}"
     session_id = f"sess-e2e-ticket-attach-no-analysis-{run_id}"
-    context_id = f"ctx-e2e-ticket-attach-no-analysis-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-ticket-attach-no-analysis-{run_id}"
     attachment = {
         "id": "att-no-analysis",
         "name": "exception-photo.png",
@@ -1392,7 +1392,7 @@ async def test_scripted_ticket_from_image_content_analyzes_then_uses_result(monk
     trace_id = f"worker-ticket-image-analysis-{run_id}"
     task_id = f"task_e2e_ticket_image_analysis_{run_id}"
     session_id = f"sess-e2e-ticket-image-analysis-{run_id}"
-    context_id = f"ctx-e2e-ticket-image-analysis-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-ticket-image-analysis-{run_id}"
     attachment = {
         "id": "att-vision",
         "name": "cargo-damage.JPG",
@@ -1573,7 +1573,7 @@ async def test_scripted_root_skill_reuses_frame_across_tasks(monkeypatch, mock_l
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-frame-reuse-{run_id}"
     session_id = f"sess-e2e-root-reuse-{run_id}"
-    context_id = f"ctx-e2e-root-reuse-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-root-reuse-{run_id}"
     first_task_id = f"task_e2e_root_reuse_001_{run_id}"
     second_task_id = f"task_e2e_root_reuse_002_{run_id}"
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
@@ -1689,7 +1689,7 @@ async def test_scripted_root_skill_second_turn_injects_recent_conversation(
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-recent-conversation-{run_id}"
     session_id = f"sess-e2e-root-recent-{run_id}"
-    context_id = f"ctx-e2e-root-recent-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-root-recent-{run_id}"
     first_task_id = f"task_e2e_root_recent_001_{run_id}"
     second_task_id = f"task_e2e_root_recent_002_{run_id}"
     previous_user_message = "我刚才提到工单 TMS-1001"
@@ -1814,7 +1814,7 @@ async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-active-plan-{run_id}"
     session_id = f"sess-e2e-active-plan-{run_id}"
-    context_id = f"ctx-e2e-active-plan-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-active-plan-{run_id}"
     first_task_id = f"task_e2e_active_plan_001_{run_id}"
     second_task_id = f"task_e2e_active_plan_002_{run_id}"
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
@@ -1961,7 +1961,7 @@ async def test_scripted_root_skill_continues_after_recoverable_model_loop_failur
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-continue-{run_id}"
     session_id = f"sess-e2e-root-continue-{run_id}"
-    context_id = f"ctx-e2e-root-continue-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-root-continue-{run_id}"
     first_task_id = f"task_e2e_root_continue_001_{run_id}"
     second_task_id = f"task_e2e_root_continue_002_{run_id}"
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
@@ -2098,7 +2098,7 @@ async def test_scripted_continue_prompt_resumes_child_waiting_user_input(
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-child-summary-continue-{run_id}"
     session_id = f"sess-e2e-child-summary-continue-{run_id}"
-    context_id = f"ctx-e2e-child-summary-continue-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-child-summary-continue-{run_id}"
     first_task_id = f"task_e2e_child_summary_continue_001_{run_id}"
     second_task_id = f"task_e2e_child_summary_continue_002_{run_id}"
     manifest_dir = tmp_path / "manifests"
@@ -2340,7 +2340,7 @@ async def test_scripted_tms_continue_after_cancel_uses_root_state_without_child_
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-tms-cancel-continue-{run_id}"
     session_id = f"sess-e2e-tms-cancel-{run_id}"
-    context_id = f"ctx-e2e-tms-cancel-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-tms-cancel-{run_id}"
     first_task_id = f"task_e2e_tms_cancel_001_{run_id}"
     second_task_id = f"task_e2e_tms_cancel_002_{run_id}"
     child_summary = (
@@ -2599,7 +2599,7 @@ async def test_scripted_root_skill_continues_after_user_cancelled_interruption(
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-cancel-continue-{run_id}"
     session_id = f"sess-e2e-root-cancel-{run_id}"
-    context_id = f"ctx-e2e-root-cancel-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-root-cancel-{run_id}"
     first_task_id = f"task_e2e_root_cancel_001_{run_id}"
     second_task_id = f"task_e2e_root_cancel_002_{run_id}"
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
@@ -2741,7 +2741,7 @@ async def test_scripted_root_skill_shelves_interruption_for_unrelated_task(
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-shelve-{run_id}"
     session_id = f"sess-e2e-root-shelve-{run_id}"
-    context_id = f"ctx-e2e-root-shelve-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-root-shelve-{run_id}"
     first_task_id = f"task_e2e_root_shelve_001_{run_id}"
     second_task_id = f"task_e2e_root_shelve_002_{run_id}"
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
@@ -2903,7 +2903,7 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-resume-child-{run_id}"
     session_id = f"sess-e2e-root-resume-child-{run_id}"
-    context_id = f"ctx-e2e-root-resume-child-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-root-resume-child-{run_id}"
     first_task_id = f"task_e2e_root_resume_child_001_{run_id}"
     second_task_id = f"task_e2e_root_resume_child_002_{run_id}"
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
@@ -3065,7 +3065,7 @@ async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_serv
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-real-smoke-{run_id}"
     session_id = f"sess-e2e-real-smoke-{run_id}"
-    context_id = f"ctx-e2e-real-smoke-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-real-smoke-{run_id}"
     first_task_id = f"task_e2e_real_smoke_001_{run_id}"
     second_task_id = f"task_e2e_real_smoke_002_{run_id}"
     third_task_id = f"task_e2e_real_smoke_003_{run_id}"

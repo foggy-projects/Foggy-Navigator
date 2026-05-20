@@ -14,6 +14,7 @@ from ..models import SkillFrameState
 from .file_frame_journal import FileFrameJournal
 from .file_layout import (
     date_parts_for_frame,
+    require_standard_context_id,
     safe_path_segment,
     session_data_dir,
     session_key_for_frame,
@@ -320,6 +321,7 @@ class FrameExecutionReportGenerator:
             self.data_root,
             date_parts,
             session_key_for_frame(frame),
+            require_standard_context=frame.conversation_id is not None,
         ) / "reports"
         paths = {
             "markdown_path": report_dir / f"{frame_stem}.md",
@@ -379,7 +381,10 @@ def read_frame_execution_report(
 
     safe_max_chars = _normalize_max_chars(max_chars)
     root = Path(data_root)
-    locator_ids = _locator_ids(conversation_id, session_id)
+    try:
+        locator_ids = _locator_ids(conversation_id, session_id)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
     markdown_path, digest_path = _report_paths(
         root,
         resolved_task_id,
@@ -504,9 +509,8 @@ def _report_paths(
 
 def _locator_ids(conversation_id: str | None, session_id: str | None) -> list[str]:
     values: list[str] = []
-    for value in (conversation_id, session_id):
-        if isinstance(value, str) and value.strip() and value.strip() not in values:
-            values.append(value.strip())
+    if isinstance(conversation_id, str) and conversation_id.strip():
+        values.append(require_standard_context_id(conversation_id))
     return values
 
 

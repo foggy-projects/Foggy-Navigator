@@ -20,7 +20,7 @@ from ..models import FrameStatus, QueryEvent, SkillManifest
 from ..runtime.attachment_context import build_attachment_context_prompt as _build_attachment_context_prompt
 from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.file_frame_journal import FileFrameJournal
-from ..runtime.file_layout import date_parts_for_now, session_data_dir
+from ..runtime.file_layout import date_parts_for_now, require_standard_context_id, session_data_dir
 from ..runtime.frame_store import FrameStore
 from ..runtime.account_context_files import build_account_context_prompt
 from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model, create_chat_model_from_config
@@ -250,21 +250,17 @@ def _conversation_id_for_root_frame(
     task_id: str,
     session_id: str | None,
     context: dict[str, Any],
-) -> str:
+) -> str | None:
     for key in (
         "contextId",
         "context_id",
         "conversationId",
         "conversation_id",
-        "foggy_session_id",
-        "session_id",
     ):
         value = context.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
-    if session_id:
-        return session_id
-    return task_id
+            return require_standard_context_id(value)
+    return None
 
 
 def _get_or_create_system_root_frame(
@@ -289,26 +285,27 @@ def _get_or_create_system_root_frame(
         )
         return rebound.frame_id, False
 
-    for frame in _runtime.get_frames_by_conversation(conversation_id):
-        if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
-            rebound = _runtime.rebind_frame_to_task(
-                frame.frame_id,
-                task_id,
-                session_id=session_id,
-                conversation_id=conversation_id,
-            )
-            return rebound.frame_id, False
+    if conversation_id:
+        for frame in _runtime.get_frames_by_conversation(conversation_id):
+            if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
+                rebound = _runtime.rebind_frame_to_task(
+                    frame.frame_id,
+                    task_id,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                )
+                return rebound.frame_id, False
 
-    for frame in _journal.load_by_conversation(conversation_id):
-        if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
-            _runtime.restore_frame(frame)
-            rebound = _runtime.rebind_frame_to_task(
-                frame.frame_id,
-                task_id,
-                session_id=session_id,
-                conversation_id=conversation_id,
-            )
-            return rebound.frame_id, False
+        for frame in _journal.load_by_conversation(conversation_id):
+            if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
+                _runtime.restore_frame(frame)
+                rebound = _runtime.rebind_frame_to_task(
+                    frame.frame_id,
+                    task_id,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                )
+                return rebound.frame_id, False
 
     for frame in _runtime.get_frames_by_task(task_id):
         if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
@@ -655,13 +652,16 @@ If no skill matches, respond naturally to the user — you can answer questions,
             # --- Conversation logging setup ---
             import datetime
             session_id = state.get("session_id")
-            _log_file = _conversation_log_file(_data_root, task_id, session_id)
+            conversation_id = _conversation_id_for_root_frame(task_id, session_id, context)
+            log_session_key = conversation_id or session_id
+            _log_file = _conversation_log_file(_data_root, task_id, log_session_key)
             _log_file.parent.mkdir(parents=True, exist_ok=True)
             
             def _append_log(entry: dict) -> None:
                 try:
                     entry.setdefault("task_id", task_id)
                     entry.setdefault("session_id", session_id)
+                    entry.setdefault("conversation_id", conversation_id)
                     with open(_log_file, "a", encoding="utf-8") as f:
                         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 except Exception:

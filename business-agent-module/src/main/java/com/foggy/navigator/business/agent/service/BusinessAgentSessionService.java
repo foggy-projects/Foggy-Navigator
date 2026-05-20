@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -31,6 +33,9 @@ import java.util.stream.Collectors;
 public class BusinessAgentSessionService {
 
     public static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String CONTEXT_ID_FORMAT = "bctx_yyyyMMdd_<hash>_<id>";
+    private static final Pattern CONTEXT_ID_PATTERN =
+            Pattern.compile("^bctx_(\\d{8})_[0-9a-f]{2}_[A-Za-z0-9._-]+$");
     private static final DateTimeFormatter CONTEXT_ID_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
 
     private final BusinessAgentSessionRepository sessionRepository;
@@ -103,10 +108,11 @@ public class BusinessAgentSessionService {
         int safeLimit = Math.min(Math.max(limit, 1), 100);
         Pageable pageable = PageRequest.of(0, safeLimit + 1);
         List<BusinessAgentSessionEntity> sessions;
-        if (StringUtils.hasText(cursor)) {
+        String normalizedCursor = normalizeContextId(cursor);
+        if (normalizedCursor != null) {
             LocalDateTime cursorTime = sessionRepository
                     .findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
-                            tenantId, clientAppId, upstreamUserId, cursor)
+                            tenantId, clientAppId, upstreamUserId, normalizedCursor)
                     .map(BusinessAgentSessionEntity::getLastAccessedAt)
                     .orElse(null);
             sessions = cursorTime == null
@@ -179,10 +185,11 @@ public class BusinessAgentSessionService {
             String clientAppId,
             String upstreamUserId,
             String contextId) {
-        requireText(contextId, "contextId is required");
+        String normalizedContextId = requireContextId(contextId);
         return sessionRepository.findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
-                        tenantId, clientAppId, upstreamUserId, contextId)
-                .orElseThrow(() -> new IllegalArgumentException("business agent session not found: " + contextId));
+                        tenantId, clientAppId, upstreamUserId, normalizedContextId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "business agent session not found: " + normalizedContextId));
     }
 
     private BusinessAgentSessionDTO bindSession(
@@ -201,9 +208,7 @@ public class BusinessAgentSessionService {
         requireText(upstreamUserId, "upstreamUserId is required");
         requireText(sessionId, "sessionId is required");
 
-        String normalizedContextId = StringUtils.hasText(requestedContextId)
-                ? requestedContextId
-                : null;
+        String normalizedContextId = normalizeContextId(requestedContextId);
         BusinessAgentSessionEntity entity = sessionRepository
                 .findByTenantIdAndClientAppIdAndUpstreamUserIdAndSessionId(
                         tenantId, clientAppId, upstreamUserId, sessionId)
@@ -286,6 +291,31 @@ public class BusinessAgentSessionService {
         String entropy = UUID.randomUUID().toString().replace("-", "").toLowerCase(Locale.ROOT);
         String shard = entropy.substring(0, 2);
         return "bctx_" + LocalDate.now().format(CONTEXT_ID_DATE_FORMATTER) + "_" + shard + "_" + entropy;
+    }
+
+    private String requireContextId(String contextId) {
+        String normalized = normalizeContextId(contextId);
+        if (normalized == null) {
+            throw new IllegalArgumentException("contextId is required");
+        }
+        return normalized;
+    }
+
+    private String normalizeContextId(String contextId) {
+        if (!StringUtils.hasText(contextId)) {
+            return null;
+        }
+        String normalized = contextId.trim();
+        Matcher matcher = CONTEXT_ID_PATTERN.matcher(normalized);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("contextId must match " + CONTEXT_ID_FORMAT);
+        }
+        try {
+            LocalDate.parse(matcher.group(1), CONTEXT_ID_DATE_FORMATTER);
+        } catch (RuntimeException ex) {
+            throw new IllegalArgumentException("contextId must match " + CONTEXT_ID_FORMAT);
+        }
+        return normalized;
     }
 
     private void requireText(String value, String message) {

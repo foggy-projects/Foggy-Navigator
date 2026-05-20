@@ -12,6 +12,11 @@ from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 
+CTX_RECENT = "bctx_20260520_ab_ctx-recent"
+CTX_PROMPT = "bctx_20260520_cd_ctx-001"
+CTX_SHARED = "bctx_20260520_ef_ctx-shared"
+CTX_RESTORE = "bctx_20260520_12_ctx-restore"
+
 
 def _state(task_id: str, session_id: str = "sess_root") -> dict[str, Any]:
     return {
@@ -118,16 +123,20 @@ def test_route_skill_explicit_skill_name_uses_named_skill_not_system_root(monkey
 
 def test_route_skill_reuses_system_root_frame_across_tasks_in_same_session(monkeypatch, tmp_path):
     runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    first_state = _state("task_root_session_001", "sess_shared")
+    first_state["context"]["contextId"] = CTX_SHARED
+    second_state = _state("task_root_session_002", "sess_shared")
+    second_state["context"]["contextId"] = CTX_SHARED
 
-    first = root_graph_module.route_skill(_state("task_root_session_001", "sess_shared"))
-    second = root_graph_module.route_skill(_state("task_root_session_002", "sess_shared"))
+    first = root_graph_module.route_skill(first_state)
+    second = root_graph_module.route_skill(second_state)
 
     assert first["active_frame_id"] == second["active_frame_id"]
     assert second["events"][-1].content == "Reusing frame for skill: system.root"
 
     frame = runtime.get_frame(first["active_frame_id"])
     assert frame is not None
-    assert frame.conversation_id == "sess_shared"
+    assert frame.conversation_id == CTX_SHARED
     assert frame.origin_task_id == "task_root_session_001"
     assert frame.current_task_id == "task_root_session_002"
     assert frame.last_task_ids == ["task_root_session_001", "task_root_session_002"]
@@ -135,7 +144,9 @@ def test_route_skill_reuses_system_root_frame_across_tasks_in_same_session(monke
 
 def test_route_skill_restores_system_root_frame_by_session_for_new_task(monkeypatch, tmp_path):
     runtime = _install_isolated_runtime(monkeypatch, tmp_path)
-    first = root_graph_module.route_skill(_state("task_root_session_restore_001", "sess_restore"))
+    first_state = _state("task_root_session_restore_001", "sess_restore")
+    first_state["context"]["contextId"] = CTX_RESTORE
+    first = root_graph_module.route_skill(first_state)
 
     restored_runtime = SkillRuntime(
         frame_store=FrameStore(),
@@ -144,14 +155,16 @@ def test_route_skill_restores_system_root_frame_by_session_for_new_task(monkeypa
     )
     monkeypatch.setattr(root_graph_module, "_runtime", restored_runtime)
 
-    second = root_graph_module.route_skill(_state("task_root_session_restore_002", "sess_restore"))
+    second_state = _state("task_root_session_restore_002", "sess_restore")
+    second_state["context"]["contextId"] = CTX_RESTORE
+    second = root_graph_module.route_skill(second_state)
 
     assert second["active_frame_id"] == first["active_frame_id"]
     assert second["events"][-1].content == "Reusing frame for skill: system.root"
 
     frame = restored_runtime.get_frame(first["active_frame_id"])
     assert frame is not None
-    assert frame.conversation_id == "sess_restore"
+    assert frame.conversation_id == CTX_RESTORE
     assert frame.current_task_id == "task_root_session_restore_002"
 
 
@@ -186,7 +199,7 @@ def test_run_skill_passes_recent_conversation_to_persistent_root_agent(monkeypat
     _install_isolated_runtime(monkeypatch, tmp_path)
     state = _state("task_root_recent_prompt_001")
     state["context"] = {
-        "contextId": "ctx-recent",
+        "contextId": CTX_RECENT,
         "recentConversation": [
             {"role": "user", "content": "我刚才问了工单 1001"},
             {"role": "assistant", "content": "工单 1001 当前待处理"},
@@ -248,7 +261,7 @@ def test_agentic_routing_prompt_includes_recent_conversation(monkeypatch, tmp_pa
     state = _state("task_recent_conversation_prompt_001")
     state["prompt"] = "continue handling it"
     state["context"] = {
-        "contextId": "ctx-001",
+        "contextId": CTX_PROMPT,
         "recentConversation": [
             {"role": "user", "content": "look up ticket A"},
             {"role": "assistant", "content": "ticket A is available"},
@@ -263,5 +276,5 @@ def test_agentic_routing_prompt_includes_recent_conversation(monkeypatch, tmp_pa
     assert "user: look up ticket A" in human_prompt
     assert "assistant: ticket A is available" in human_prompt
     assert "Current user message:\ncontinue handling it" in human_prompt
-    assert '"contextId": "ctx-001"' in human_prompt
+    assert f'"contextId": "{CTX_PROMPT}"' in human_prompt
     assert "recentConversation" not in human_prompt.split("\nContext:", 1)[1]

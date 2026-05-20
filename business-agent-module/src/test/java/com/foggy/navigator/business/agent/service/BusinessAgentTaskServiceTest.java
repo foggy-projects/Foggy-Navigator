@@ -74,7 +74,7 @@ class BusinessAgentTaskServiceTest {
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
                 .thenAnswer(invocation -> {
                     BusinessAgentSessionDTO dto = new BusinessAgentSessionDTO();
-                    dto.setContextId("ctx_01");
+                    dto.setContextId("bctx_20260520_ab_ctx_01");
                     return dto;
                 });
         lenient().when(grantService.tryResolveEffectiveModelConfigId(
@@ -176,7 +176,7 @@ class BusinessAgentTaskServiceTest {
                 ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
         verify(workerTaskLauncher).launch(requestCaptor.capture());
         assertEquals(result.getTaskScopedToken(), requestCaptor.getValue().getTaskScopedToken());
-        assertEquals("ctx_01", requestCaptor.getValue().getContextId());
+        assertEquals("bctx_20260520_ab_ctx_01", requestCaptor.getValue().getContextId());
         assertEquals("materialized skill body", requestCaptor.getValue().getMarkdownBody());
         assertEquals("skill_01", requestCaptor.getValue().getSkillName());
         assertEquals("D:/workspace/app", requestCaptor.getValue().getWorkdir());

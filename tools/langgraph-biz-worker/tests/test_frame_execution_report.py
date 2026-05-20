@@ -18,6 +18,9 @@ from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 
+REPORT_CONTEXT_ID = "bctx_20260520_ab_conv_001"
+AUDIT_CONTEXT_ID = "bctx_20260520_cd_conv_audit"
+
 
 def _make_frame(
     *,
@@ -31,7 +34,7 @@ def _make_frame(
         task_id=task_id,
         skill_id=skill_id,
         status=status,
-        conversation_id="conv_001",
+        conversation_id=REPORT_CONTEXT_ID,
         session_id="session_001",
         input={"order_id": 501},
         output={"order_id": 501, "status": "OK"},
@@ -105,7 +108,7 @@ def test_generate_report_includes_child_frame_digest(tmp_path):
     report = FrameExecutionReportGenerator(tmp_path).generate_for_frame("task_001", "frm_parent")
 
     child_report_path = (
-        session_data_dir(tmp_path, ("2026", "05", "17"), "conv_001")
+        session_data_dir(tmp_path, ("2026", "05", "17"), REPORT_CONTEXT_ID)
         / "reports" / "frm_child.md"
     )
     assert child_report_path.exists()
@@ -216,7 +219,7 @@ def test_read_frame_execution_report_generates_missing_report(tmp_path):
     assert result["summary"]["status"] == "COMPLETED"
     assert result["summary"]["summary"] == "Collected evidence for order 501."
     assert (
-        session_data_dir(tmp_path, ("2026", "05", "17"), "conv_001")
+        session_data_dir(tmp_path, ("2026", "05", "17"), REPORT_CONTEXT_ID)
         / "reports" / "frm_parent.md"
     ).exists()
     assert not (tmp_path / "reports" / "frame-execution").exists()
@@ -444,7 +447,7 @@ def test_llm_tool_audit_log_uses_session_directory(tmp_path):
     frame_id = runtime.invoke_skill(
         "task_tool_audit",
         "test_skill",
-        conversation_id="conv_audit",
+        conversation_id=AUDIT_CONTEXT_ID,
         session_id="session_audit",
     )
     manifest = runtime.registry.get_manifest("test_skill")
@@ -466,10 +469,10 @@ def test_llm_tool_audit_log_uses_session_directory(tmp_path):
     )
 
     session_dirs = sorted(
-        (tmp_path / "runtime" / "sessions" / "by-date").glob("*/*/*/*/conv_audit")
+        (tmp_path / "runtime" / "sessions" / "by-date").glob(f"*/*/*/*/{AUDIT_CONTEXT_ID}")
     )
     assert len(session_dirs) == 1
     log_file = session_dirs[0] / "logs" / "skill-tool-calls" / "task_tool_audit.jsonl"
     entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
     assert [entry["phase"] for entry in entries] == ["request", "response"]
-    assert {entry["session_id"] for entry in entries} == {"conv_audit"}
+    assert {entry["session_id"] for entry in entries} == {AUDIT_CONTEXT_ID}
