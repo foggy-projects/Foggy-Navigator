@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from langgraph_biz_worker.models import QueryEvent, QueryRequest
 from langgraph_biz_worker.graphs.root_graph import _build_attachment_context_prompt
-from langgraph_biz_worker.routes.query import _event_generator, _resolve_session_id
+from langgraph_biz_worker.routes.query import _event_generator, _resolve_context_id, _resolve_session_id
 from langgraph_biz_worker.routes.health import active_tasks
 
 
@@ -70,6 +70,22 @@ def test_query_prefers_foggy_session_id_for_platform_session():
     )
 
     assert _resolve_session_id(request) == "navigator-session"
+
+
+def test_query_generates_standard_context_id_when_missing():
+    context_id = _resolve_context_id(QueryRequest(prompt="test"))
+
+    assert context_id.startswith("bctx_")
+    assert len(context_id.split("_")) == 4
+
+
+def test_query_accepts_context_id_alias():
+    request = QueryRequest.model_validate({
+        "prompt": "test",
+        "contextId": "bctx_20260520_ab_ctx_query",
+    })
+
+    assert _resolve_context_id(request) == "bctx_20260520_ab_ctx_query"
 
 
 def test_query_request_accepts_url_attachment_metadata():
@@ -293,6 +309,33 @@ async def test_query_generator_preserves_model_config_id_and_attachments_in_stat
     assert captured_state["model_config_id"] == "cfg-e2e"
     assert captured_state["vision_llm_config"] == {"provider": "openai", "model": "vision-model"}
     assert captured_state["attachments"] == attachments
+
+
+@pytest.mark.asyncio
+async def test_query_generator_injects_generated_context_id_into_state_and_events():
+    captured_state = {}
+
+    def invoke_and_capture(state):
+        captured_state.update(state)
+        return {"events": [QueryEvent(type="system", task_id="task-context", content="ready")]}
+
+    with patch("langgraph_biz_worker.routes.query.root_graph") as mock_graph:
+        mock_graph.invoke.side_effect = invoke_and_capture
+        generator = _event_generator(
+            "task-context",
+            QueryRequest(prompt="allocate context", session_id="navigator-session-01"),
+        )
+        events = []
+        async for item in generator:
+            events.append(json.loads(item["data"]))
+
+    context_id = captured_state["context"]["contextId"]
+    assert context_id.startswith("bctx_")
+    assert captured_state["context"]["context_id"] == context_id
+    assert captured_state["context"]["navigatorSessionId"] == "navigator-session-01"
+    assert captured_state["session_id"] == context_id
+    assert events[0]["session_id"] == context_id
+    assert events[0]["payload"]["contextId"] == context_id
 
 
 @pytest.mark.asyncio

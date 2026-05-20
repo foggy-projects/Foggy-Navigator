@@ -87,6 +87,44 @@ public class BusinessAgentSessionService {
     }
 
     @Transactional(readOnly = true)
+    public String resolveReusableContextId(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String requestedContextId,
+            String sessionId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(clientAppId, "clientAppId is required");
+        requireText(upstreamUserId, "upstreamUserId is required");
+        requireText(sessionId, "sessionId is required");
+
+        String normalizedContextId = normalizeContextId(requestedContextId);
+        BusinessAgentSessionEntity bySession = sessionRepository
+                .findByTenantIdAndClientAppIdAndUpstreamUserIdAndSessionId(
+                        tenantId, clientAppId, upstreamUserId, sessionId)
+                .orElse(null);
+        if (bySession != null) {
+            if (normalizedContextId != null && !normalizedContextId.equals(bySession.getContextId())) {
+                throw new IllegalArgumentException("business agent session context mismatch");
+            }
+            return bySession.getContextId();
+        }
+
+        if (normalizedContextId == null) {
+            return null;
+        }
+
+        BusinessAgentSessionEntity byContext = sessionRepository
+                .findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
+                        tenantId, clientAppId, upstreamUserId, normalizedContextId)
+                .orElse(null);
+        if (byContext != null && !sessionId.equals(byContext.getSessionId())) {
+            throw new IllegalArgumentException("business agent session context mismatch");
+        }
+        return normalizedContextId;
+    }
+
+    @Transactional(readOnly = true)
     public BusinessAgentSessionDTO getSession(
             String tenantId,
             String clientAppId,

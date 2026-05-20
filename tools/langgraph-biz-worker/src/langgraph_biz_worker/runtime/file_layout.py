@@ -7,6 +7,7 @@ import hashlib
 from pathlib import Path
 import re
 from typing import Any, Iterable
+import uuid
 
 STANDARD_CONTEXT_ID_DESCRIPTION = "bctx_yyyyMMdd_<hash>_<id>"
 _STANDARD_CONTEXT_ID_PATTERN = re.compile(r"^bctx_(\d{8})_([0-9a-fA-F]{2})_[A-Za-z0-9._-]+$")
@@ -64,6 +65,13 @@ def require_standard_context_id(context_id: Any) -> str:
     except ValueError as exc:
         raise ValueError(f"contextId must match {STANDARD_CONTEXT_ID_DESCRIPTION}") from exc
     return normalized
+
+
+def generate_standard_context_id(today: date | None = None) -> str:
+    """Generate a standard BizWorker-owned conversation context id."""
+    entropy = uuid.uuid4().hex
+    compact_date = (today or datetime.now(timezone.utc).date()).strftime("%Y%m%d")
+    return f"bctx_{compact_date}_{entropy[:2]}_{entropy}"
 
 
 def _embedded_hash_shard(value: str) -> str | None:

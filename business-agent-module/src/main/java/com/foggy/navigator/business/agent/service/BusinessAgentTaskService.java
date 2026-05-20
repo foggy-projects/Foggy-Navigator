@@ -128,12 +128,23 @@ public class BusinessAgentTaskService {
         token = tokenRepository.save(token);
         tokenRuntimeStore.registerToken(tenantId, task.getSessionId(), task.getTaskId(), plainToken, expiresAt);
 
-        String contextId = businessAgentSessionService
-                .bindTask(task, form.getContextId(), form.getClientContextJson())
-                .getContextId();
+        String contextId = businessAgentSessionService.resolveReusableContextId(
+                tenantId,
+                form.getClientAppId(),
+                form.getUpstreamUserId(),
+                form.getContextId(),
+                task.getSessionId());
 
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
                 tenantId, actorUserId, task, workerPool, plainToken, finalVisionModelConfigId, contextId, skillName, form);
+        if (launchResult != null && StringUtils.hasText(launchResult.getContextId())) {
+            contextId = launchResult.getContextId();
+        }
+
+        contextId = businessAgentSessionService
+                .bindTask(task, contextId, form.getClientContextJson())
+                .getContextId();
+
         if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
             task.setWorkerTaskId(launchResult.getWorkerTaskId());
             task.setWorkerSessionId(launchResult.getWorkerSessionId());

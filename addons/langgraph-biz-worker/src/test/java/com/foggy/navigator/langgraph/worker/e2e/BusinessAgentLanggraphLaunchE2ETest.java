@@ -331,6 +331,9 @@ class BusinessAgentLanggraphLaunchE2ETest {
 
         BusinessAgentSessionDTO session = new BusinessAgentSessionDTO();
         session.setContextId(CONTEXT_ID);
+        when(businessAgentSessionService.resolveReusableContextId(
+                TENANT, CLIENT_APP_ID, UPSTREAM_USER_ID, CONTEXT_ID, SESSION_ID))
+                .thenReturn(CONTEXT_ID);
         when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), eq(CONTEXT_ID), isNull()))
                 .thenReturn(session);
     }

@@ -156,6 +156,7 @@ class BusinessAgentTaskServiceTest {
                 BusinessAgentWorkerTaskLaunchResult.builder()
                         .workerTaskId("lgt_123")
                         .workerSessionId("worker_session_123")
+                        .contextId("bctx_20260520_ab_ctx_01")
                         .workerId("worker_01")
                         .providerType("langgraph-biz-worker")
                         .build());
@@ -176,7 +177,7 @@ class BusinessAgentTaskServiceTest {
                 ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
         verify(workerTaskLauncher).launch(requestCaptor.capture());
         assertEquals(result.getTaskScopedToken(), requestCaptor.getValue().getTaskScopedToken());
-        assertEquals("bctx_20260520_ab_ctx_01", requestCaptor.getValue().getContextId());
+        assertNull(requestCaptor.getValue().getContextId());
         assertEquals("materialized skill body", requestCaptor.getValue().getMarkdownBody());
         assertEquals("skill_01", requestCaptor.getValue().getSkillName());
         assertEquals("D:/workspace/app", requestCaptor.getValue().getWorkdir());

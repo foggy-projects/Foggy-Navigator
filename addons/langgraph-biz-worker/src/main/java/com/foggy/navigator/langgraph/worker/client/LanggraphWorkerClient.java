@@ -64,6 +64,19 @@ public class LanggraphWorkerClient {
     }
 
     /**
+     * Allocate a BizWorker-owned conversation context id.
+     */
+    public Mono<Map<String, Object>> allocateContext() {
+        return webClient.post()
+                .uri("/api/v1/contexts")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of())
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnError(e -> log.warn("Context allocation failed for langgraph worker {}: {}", workerId, e.getMessage()));
+    }
+
+    /**
      * Stream a query to the Python Worker and return the SSE event flux.
      */
     public Flux<ServerSentEvent<String>> streamQuery(

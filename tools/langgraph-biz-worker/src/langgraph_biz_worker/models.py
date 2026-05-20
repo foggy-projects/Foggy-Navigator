@@ -20,6 +20,10 @@ class QueryRequest(BaseModel):
 
     prompt: str = Field(validation_alias=AliasChoices("prompt", "message"))
     skill_name: str | None = None
+    context_id: str | None = Field(
+        None,
+        validation_alias=AliasChoices("contextId", "context_id"),
+    )
     session_id: str | None = None
     foggy_session_id: str | None = None
     model: str | None = None

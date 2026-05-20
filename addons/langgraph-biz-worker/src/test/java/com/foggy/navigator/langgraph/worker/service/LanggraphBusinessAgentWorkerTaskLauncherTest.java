@@ -5,6 +5,7 @@ import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberReposito
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
+import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
@@ -19,6 +20,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import reactor.core.publisher.Mono;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -67,6 +69,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
 
         assertEquals("lgt_01", result.getWorkerTaskId());
         assertEquals("session_01", result.getWorkerSessionId());
+        assertEquals("ctx_01", result.getContextId());
         assertEquals("worker_01", result.getWorkerId());
         assertEquals(LanggraphTaskService.PROVIDER_TYPE, result.getProviderType());
 
@@ -107,6 +110,44 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertDoesNotThrow(() -> OffsetDateTime.parse((String) runtimeContext.get("current_time")));
         assertDoesNotThrow(() -> LocalDate.parse((String) runtimeContext.get("business_date")));
         assertTrue(((String) runtimeContext.get("timezone")).length() > 0);
+    }
+
+    @Test
+    void launch_allocatesContextFromWorkerWhenMissing() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus("ENABLED");
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01")).thenReturn(List.of(member));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_01");
+        worker.setTenantId("tenant_01");
+        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+
+        LanggraphWorkerClient client = mock(LanggraphWorkerClient.class);
+        when(workerService.createClient(worker)).thenReturn(client);
+        when(client.allocateContext()).thenReturn(Mono.just(Map.of(
+                "contextId", "bctx_20260520_ab_allocated"
+        )));
+
+        LanggraphTaskDTO taskDTO = LanggraphTaskDTO.builder()
+                .taskId("lgt_01")
+                .workerId("worker_01")
+                .sessionId("session_01")
+                .build();
+        when(taskService.createTask(eq("actor_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class))).thenReturn(taskDTO);
+
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setContextId(null);
+
+        BusinessAgentWorkerTaskLaunchResult result = launcher.launch(request);
+
+        assertEquals("bctx_20260520_ab_allocated", result.getContextId());
+        ArgumentCaptor<CreateLanggraphTaskForm> formCaptor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
+        assertEquals("bctx_20260520_ab_allocated", formCaptor.getValue().getContextId());
+        assertEquals("bctx_20260520_ab_allocated", formCaptor.getValue().getContext().get("contextId"));
+        assertEquals("bctx_20260520_ab_allocated", formCaptor.getValue().getContext().get("context_id"));
     }
 
     @Test

@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.Duration;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -25,6 +26,8 @@ import java.util.Objects;
 @Service
 @RequiredArgsConstructor
 public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWorkerTaskLauncher {
+
+    private static final Duration CONTEXT_ALLOCATION_TIMEOUT = Duration.ofSeconds(10);
 
     private final BizWorkerPoolMemberRepository poolMemberRepository;
     private final LanggraphWorkerService workerService;
@@ -53,27 +56,43 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         form.setAgentId(request.getSkillId());
         form.setWorkerId(member.getWorkerId());
         form.setSessionId(request.getSessionId());
-        form.setContextId(request.getContextId());
+        String contextId = resolveContextId(worker, request.getContextId());
+        form.setContextId(contextId);
         form.setModelConfigId(request.getModelConfigId());
         form.setPrompt("Business Agent task " + request.getBusinessTaskId()
                 + ". Use the business function tools when user intent requires controlled business execution.");
-        form.setContext(buildContext(request, skillName));
+        form.setContext(buildContext(request, skillName, contextId));
         form.setRuntimeContext(buildRuntimeContext(request, skillName));
 
         LanggraphTaskDTO workerTask = taskService.createTask(request.getActorUserId(), request.getTenantId(), form);
         return BusinessAgentWorkerTaskLaunchResult.builder()
                 .workerTaskId(workerTask.getTaskId())
                 .workerSessionId(workerTask.getSessionId())
+                .contextId(contextId)
                 .workerId(member.getWorkerId())
                 .providerType(LanggraphTaskService.PROVIDER_TYPE)
                 .build();
     }
 
-    private Map<String, Object> buildContext(BusinessAgentWorkerTaskLaunchRequest request, String skillName) {
+    private String resolveContextId(LanggraphWorkerEntity worker, String requestedContextId) {
+        if (StringUtils.hasText(requestedContextId)) {
+            return requestedContextId.trim();
+        }
+        Map<String, Object> response = workerService.createClient(worker)
+                .allocateContext()
+                .block(CONTEXT_ALLOCATION_TIMEOUT);
+        Object contextId = response != null ? response.get("contextId") : null;
+        if (contextId instanceof String text && StringUtils.hasText(text)) {
+            return text.trim();
+        }
+        throw new IllegalStateException("LangGraph BizWorker did not allocate contextId");
+    }
+
+    private Map<String, Object> buildContext(BusinessAgentWorkerTaskLaunchRequest request, String skillName, String contextId) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("businessTaskId", request.getBusinessTaskId());
-        putText(context, "contextId", request.getContextId());
-        putText(context, "context_id", request.getContextId());
+        putText(context, "contextId", contextId);
+        putText(context, "context_id", contextId);
         putText(context, "session_id", request.getSessionId());
         context.put("clientAppId", request.getClientAppId());
         putText(context, "businessSkillId", request.getSkillId());
