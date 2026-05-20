@@ -341,6 +341,7 @@ export interface NavigatorChatConfig {
 }
 
 export type {
+  BusinessSuspensionDecision,
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
   BusinessSuspensionStatus,

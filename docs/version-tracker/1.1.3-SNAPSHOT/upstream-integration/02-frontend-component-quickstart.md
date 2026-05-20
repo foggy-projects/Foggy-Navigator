@@ -308,7 +308,107 @@ pnpm --dir packages/navigator-chat-widget dev:observe
 
 `NavigatorChat` 不会自动从普通轮询任务结果中推断 suspension。上游宿主应从自己的 BFF、SSE 或任务消息中解析出 `BusinessSuspensionDialogModel` 后传入 `currentSuspension`，再打开 `suspensionVisible`。
 
-### 1.1 BFF ask 前置动作
+### 1.1 移动端 `NavigatorMobileChat`
+
+移动端 H5 / App WebView 推荐使用 `NavigatorMobileChat`。它复用同一套 `NavigatorChatConfig` 和 OpenAPI 轮询/session API，但布局是移动全高面板：顶部状态栏、消息滚动区、底部输入区、历史会话 sheet、执行报告 sheet 和业务确认 sheet。
+
+```vue
+<template>
+  <NavigatorMobileChat
+    class="tms-mobile-agent"
+    :config="chatConfig"
+    title="TMS 移动助手"
+    subtitle="当前账号的业务 Agent"
+    show-history
+    show-tool-calls
+    show-tool-results
+    v-model:suspension-dialog-visible="suspensionVisible"
+    :suspension="currentSuspension"
+    :suspension-submitting="submittingSuspension"
+    @action="onBusinessAction"
+    @suspension-decision="onSuspensionDecision"
+  />
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+import {
+  NavigatorMobileChat,
+  type BusinessSuspensionDecisionPayload,
+  type BusinessSuspensionDialogModel,
+  type ExecutionReportMarkdownPayload,
+  type NavigatorAction,
+  type NavigatorChatConfig,
+} from '@foggy/navigator-chat-widget'
+import '@foggy/navigator-chat-widget/style.css'
+
+const suspensionVisible = ref(false)
+const submittingSuspension = ref(false)
+const currentSuspension = ref<BusinessSuspensionDialogModel | null>(null)
+
+const chatConfig: NavigatorChatConfig = {
+  baseUrl: '/bff/navigator',
+  agentId: 'tms.mobile.agent',
+  pollInterval: 4000,
+  showToolCalls: true,
+  showToolResults: true,
+  executionReportMarkdownLoader: loadExecutionReportMarkdown,
+}
+
+async function loadExecutionReportMarkdown(reportRef: string): Promise<ExecutionReportMarkdownPayload> {
+  const resp = await fetch(`/bff/navigator/execution-reports/${encodeURIComponent(reportRef)}/markdown`)
+  const json = await resp.json()
+  if (!resp.ok || json.code !== 0) {
+    throw new Error(json.msg || '执行报告读取失败')
+  }
+  return json.data
+}
+
+function onBusinessAction(action: NavigatorAction) {
+  if (action.type === 'OPEN_TMS_PAGE') {
+    // 业务路由由上游实现，组件只 emit action。
+    const payload = action.payload as { page?: string; waybillNo?: string } | undefined
+    const target = payload?.page ?? payload?.waybillNo ?? ''
+    window.location.href = `/mobile/tms/${encodeURIComponent(target)}`
+  }
+}
+
+async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) {
+  submittingSuspension.value = true
+  try {
+    await fetch(`/bff/navigator/suspensions/${payload.suspendId}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        decision: payload.decision,
+        comment: payload.comment,
+      }),
+    })
+  } finally {
+    submittingSuspension.value = false
+  }
+}
+</script>
+
+<style>
+.tms-mobile-agent {
+  --nmc-primary: #0f66d0;
+  --nmc-bg: #f7f8fa;
+  --nmc-surface: #ffffff;
+}
+</style>
+```
+
+移动端接入要点：
+
+- 浏览器仍只连上游 BFF，不直接连 Worker Gateway，不持有 `task_scoped_token`、runtime credential、App Secret 或 admin token。
+- `TOOL_CALL` / `TOOL_RESULT` 默认以紧凑卡片展示；`showToolCalls`、`showToolResults` 可按业务需要打开。
+- `structured_output.label` / `pageLabel` 会作为按钮文案，点击后只触发 `@action`，路由跳转由宿主处理。
+- 执行报告默认只展示 digest；完整 Markdown 必须通过 `executionReportMarkdownLoader(reportRef)` 从上游 BFF 按需读取。
+- suspension sheet 只展示 `BusinessSuspensionDialogModel` 中的清洗字段，并只发出 approve/reject 决策事件。
+- 样式可通过 `--nmc-*` CSS variables 覆盖，不需要 fork 组件。
+
+### 1.2 BFF ask 前置动作
 
 上游 BFF 在代理 `ask` 前必须基于当前登录态执行服务端前置动作：
 

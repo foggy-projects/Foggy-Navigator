@@ -31,6 +31,26 @@
         </section>
 
         <section class="panel-section">
+          <div class="section-title">组件形态</div>
+          <div class="segmented-control" role="group" aria-label="组件形态">
+            <button
+              type="button"
+              :class="{ active: componentVariant === 'desktop' }"
+              @click="switchComponentVariant('desktop')"
+            >
+              Desktop
+            </button>
+            <button
+              type="button"
+              :class="{ active: componentVariant === 'mobile' }"
+              @click="switchComponentVariant('mobile')"
+            >
+              Mobile
+            </button>
+          </div>
+        </section>
+
+        <section class="panel-section">
           <div class="section-title">注入模式</div>
           <div class="segmented-control" role="group" aria-label="上传 hook 注入模式">
             <button
@@ -111,6 +131,8 @@
           <dl class="status-grid">
             <dt>连接模式</dt>
             <dd>{{ connectionModeLabel }}</dd>
+            <dt>组件</dt>
+            <dd>{{ componentVariant === 'mobile' ? 'NavigatorMobileChat' : 'NavigatorChat' }}</dd>
             <dt v-if="connectionMode === 'real'">BFF</dt>
             <dd v-if="connectionMode === 'real'">{{ normalizedBffBaseUrl }}</dd>
             <dt v-if="connectionMode === 'real'">BFF auth</dt>
@@ -144,6 +166,17 @@
         </section>
 
         <section class="panel-section">
+          <div class="section-title">最近事件</div>
+          <div v-if="sendEvents.length === 0" class="empty-line">暂无 send/action/decision 事件</div>
+          <ul v-else class="event-list">
+            <li v-for="item in sendEvents.slice(0, 4)" :key="item.id">
+              <span>{{ item.content }}</span>
+              <small>{{ item.attachmentCount }} attachments · {{ item.at }}</small>
+            </li>
+          </ul>
+        </section>
+
+        <section class="panel-section">
           <div class="section-title">最近上传</div>
           <div v-if="uploadLogs.length === 0" class="empty-line">暂无上传调用</div>
           <ul v-else class="event-list">
@@ -156,11 +189,15 @@
 
         <div class="panel-actions">
           <button type="button" class="plain-button" @click="clearLogs">清空记录</button>
+          <button v-if="componentVariant === 'mobile'" type="button" class="plain-button" @click="openMockSuspension">
+            打开审批
+          </button>
         </div>
       </aside>
 
       <main class="chat-panel">
         <NavigatorChat
+          v-if="componentVariant === 'desktop'"
           :key="chatKey"
           :config="chatConfig"
           title="TMS 业务助手"
@@ -169,6 +206,26 @@
           :height="640"
           @send="handleSend"
         />
+        <div v-else class="mobile-preview-frame">
+          <NavigatorMobileChat
+            :key="chatKey"
+            :config="chatConfig"
+            title="TMS 移动业务助手"
+            subtitle="通过上游 BFF 连接 Navigator"
+            :placeholder="chatPlaceholder"
+            empty-text="开始移动端对话"
+            height="720px"
+            show-history
+            show-tool-calls
+            show-tool-results
+            :suspension="mockSuspension"
+            v-model:suspension-dialog-visible="suspensionVisible"
+            :execution-report-markdown-loader="mockLoadExecutionReport"
+            @send="handleSend"
+            @action="handleMobileAction"
+            @suspension-decision="handleSuspensionDecision"
+          />
+        </div>
       </main>
     </div>
   </div>
@@ -178,6 +235,10 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import {
   NavigatorChat,
+  NavigatorMobileChat,
+  type BusinessSuspensionDecisionPayload,
+  type BusinessSuspensionDialogModel,
+  type NavigatorAction,
   type NavigatorAttachmentKind,
   type NavigatorAttachmentResult,
   type NavigatorChatConfig,
@@ -185,9 +246,11 @@ import {
 
 type HookMode = 'enabled' | 'missing'
 type ConnectionMode = 'mock' | 'real'
+type ComponentVariant = 'desktop' | 'mobile'
 
 interface StoredSettings {
   connectionMode?: ConnectionMode
+  componentVariant?: ComponentVariant
   hookMode?: HookMode
   bffBaseUrl?: string
   navigatorBaseUrl?: string
@@ -245,6 +308,7 @@ const STORAGE_KEY = 'navigator-chat-widget-observer-settings'
 const storedSettings = readStoredSettings()
 
 const connectionMode = ref<ConnectionMode>(storedSettings.connectionMode ?? 'mock')
+const componentVariant = ref<ComponentVariant>(storedSettings.componentVariant ?? 'desktop')
 const hookMode = ref<HookMode>(storedSettings.hookMode ?? 'enabled')
 const bffBaseUrl = ref(storedSettings.bffBaseUrl ?? 'http://127.0.0.1:5181')
 const navigatorBaseUrl = ref(storedSettings.navigatorBaseUrl ?? 'http://127.0.0.1:8112')
@@ -264,6 +328,22 @@ const taskSeed = ref(0)
 const uploadLogs = ref<UploadLog[]>([])
 const requestLogs = ref<RequestLog[]>([])
 const sendEvents = ref<SendEventLog[]>([])
+const suspensionVisible = ref(false)
+const mockSuspension = ref<BusinessSuspensionDialogModel>({
+  suspendId: 'sus-mobile-observer',
+  suspensionType: 'APPROVAL_REQUIRED',
+  status: 'pending',
+  title: '确认打开签收工作台',
+  summary: '该操作会跳转到上游 TMS 业务页面，组件只发出 approve/reject 事件。',
+  functionId: 'tms.fulfillment.openSignWorkbench',
+  functionDisplayName: '签收工作台',
+  version: 'v1',
+  riskLevel: 'P2',
+  displayFields: [
+    { label: '运单号', value: 'TMS-20260520-001' },
+    { label: '客户', value: '上海明辉' },
+  ],
+})
 
 const normalizedBffBaseUrl = computed(() => normalizeBaseUrl(bffBaseUrl.value))
 const connectionModeLabel = computed(() => (connectionMode.value === 'real' ? 'Real Navigator BFF' : 'Mock 本地回放'))
@@ -279,6 +359,7 @@ const attachmentsInjected = computed(() => {
 })
 const expectedEntry = computed(() => (attachmentsInjected.value ? '显示回形针按钮' : '隐藏附件入口'))
 const chatKey = computed(() => [
+  componentVariant.value,
   connectionMode.value,
   hookMode.value,
   normalizedBffBaseUrl.value,
@@ -319,6 +400,9 @@ const chatConfig = computed<NavigatorChatConfig>(() => {
     maxTurns: 3,
     mode: 'business',
     fetch: isReal ? observingFetch : mockFetch,
+    showToolCalls: componentVariant.value === 'mobile',
+    showToolResults: componentVariant.value === 'mobile',
+    executionReportMarkdownLoader: mockLoadExecutionReport,
     maxAttachments: 6,
     maxAttachmentSize: 20 * 1024 * 1024,
     acceptedAttachmentTypes: ['image/*', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.txt'],
@@ -334,6 +418,7 @@ const chatConfig = computed<NavigatorChatConfig>(() => {
 
 watch(
   [
+    componentVariant,
     connectionMode,
     hookMode,
     bffBaseUrl,
@@ -348,6 +433,7 @@ watch(
   () => {
     saveStoredSettings({
       connectionMode: connectionMode.value,
+      componentVariant: componentVariant.value,
       hookMode: hookMode.value,
       bffBaseUrl: bffBaseUrl.value,
       navigatorBaseUrl: navigatorBaseUrl.value,
@@ -377,6 +463,12 @@ function switchConnectionMode(mode: ConnectionMode) {
   resetChat()
 }
 
+function switchComponentVariant(variant: ComponentVariant) {
+  if (componentVariant.value === variant) return
+  componentVariant.value = variant
+  resetChat()
+}
+
 function switchMode(mode: HookMode) {
   if (hookMode.value === mode) return
   hookMode.value = mode
@@ -400,6 +492,39 @@ function handleSend(content: string, attachments?: NavigatorAttachmentResult[]) 
     attachmentCount: attachments?.length ?? 0,
     at: currentTime(),
   })
+}
+
+function openMockSuspension() {
+  suspensionVisible.value = true
+}
+
+function handleSuspensionDecision(payload: BusinessSuspensionDecisionPayload) {
+  sendEvents.value.unshift({
+    id: `decision-${Date.now()}-${sendEvents.value.length}`,
+    content: `${payload.decision}: ${payload.suspendId}`,
+    attachmentCount: 0,
+    at: currentTime(),
+  })
+  suspensionVisible.value = false
+}
+
+function handleMobileAction(action: NavigatorAction) {
+  sendEvents.value.unshift({
+    id: `action-${Date.now()}-${sendEvents.value.length}`,
+    content: `${action.type}: ${action.label}`,
+    attachmentCount: 0,
+    at: currentTime(),
+  })
+}
+
+async function mockLoadExecutionReport(reportRef: string): Promise<string> {
+  return [
+    `# ${reportRef}`,
+    '',
+    '- status: COMPLETED',
+    '- summary: Mock BFF returned the full Markdown only after the viewer requested it.',
+    '- source: upstream BFF callback',
+  ].join('\n')
 }
 
 async function loadBffConfig() {
@@ -538,9 +663,92 @@ async function mockFetch(url: string, init: RequestInit): Promise<Response> {
   const method = init.method ?? 'GET'
   const body = parseRequestBody(init.body)
 
+  if (method === 'GET' && path.endsWith('/sessions')) {
+    return jsonResponse({
+      sessions: [
+        {
+          contextId: 'ctx-observer',
+          title: '移动端签收确认',
+          status: 'COMPLETED',
+          turnCount: 2,
+          lastMessagePreview: '已生成签收工作台入口',
+          updatedAt: '2026-05-20T10:20:00',
+        },
+        {
+          contextId: 'ctx-observer-error',
+          title: '异常处理演示',
+          status: 'FAILED',
+          turnCount: 1,
+          lastMessagePreview: '上游 BFF 返回了脱敏错误摘要',
+          updatedAt: '2026-05-20T10:14:00',
+        },
+      ],
+      hasMore: false,
+    })
+  }
+
+  if (method === 'GET' && path.includes('/sessions/') && path.endsWith('/messages')) {
+    return jsonResponse({
+      contextId: path.includes('ctx-observer-error') ? 'ctx-observer-error' : 'ctx-observer',
+      messages: [
+        {
+          messageId: 'hist-user-1',
+          role: 'USER',
+          type: 'USER',
+          content: '帮我打开签收详情',
+          createdAt: '2026-05-20T10:18:00',
+        },
+        {
+          messageId: 'hist-result-1',
+          role: 'ASSISTANT',
+          type: 'RESULT',
+          content: '已准备好签收详情入口。',
+          createdAt: '2026-05-20T10:18:12',
+          metadata: {
+            structured_output: {
+              type: 'OPEN_TMS_PAGE',
+              label: '打开签收详情',
+              pageLabel: '签收详情',
+              payload: { waybillNo: 'TMS-20260520-001' },
+            },
+          },
+        },
+      ],
+      hasMore: false,
+    })
+  }
+
   if (method === 'POST' && path.endsWith('/ask')) {
     const taskId = `task-observer-${++taskSeed.value}`
     const attachments = isRecord(body) && Array.isArray(body.attachments) ? body.attachments : []
+    const question = isRecord(body) && typeof body.question === 'string' ? body.question : ''
+    if (question.toLowerCase().includes('error') || question.includes('失败')) {
+      return jsonResponse({
+        taskId,
+        agentId: 'observer-agent',
+        status: 'FAILED',
+        contextId: 'ctx-observer',
+        terminal: true,
+        terminalStatus: 'FAILED',
+        messages: [
+          {
+            id: `${taskId}-error`,
+            type: 'ERROR',
+            content: '操作执行失败，请稍后重试或联系管理员。',
+            terminal: true,
+            terminalStatus: 'FAILED',
+            timestamp: Date.now(),
+            executionReportRef: 'report-mobile-error',
+            executionReportDigest: {
+              status: 'FAILED',
+              summary: 'Mock error branch for mobile viewport testing.',
+              error: 'BFF sanitized error',
+              reportRef: 'report-mobile-error',
+            },
+          },
+        ],
+      })
+    }
     return jsonResponse({
       taskId,
       agentId: 'observer-agent',
@@ -548,7 +756,71 @@ async function mockFetch(url: string, init: RequestInit): Promise<Response> {
       contextId: 'ctx-observer',
       terminal: true,
       terminalStatus: 'COMPLETED',
-      result: `观测页收到 ask 请求，attachments=${attachments.length}。`,
+      messages: [
+        {
+          id: `${taskId}-state`,
+          type: 'STATE',
+          content: '正在查询签收任务',
+          timestamp: Date.now(),
+          metadata: { subtype: 'task_progress', progressType: 'query' },
+        },
+        {
+          id: `${taskId}-tool-call`,
+          type: 'TOOL_CALL',
+          content: '调用 TMS 签收工作台查询',
+          timestamp: Date.now() + 10,
+          toolCallId: `${taskId}-call-1`,
+          toolName: 'invoke_business_function',
+          functionId: 'tms.fulfillment.openSignWorkbench',
+          args: { waybillNo: 'TMS-20260520-001' },
+        },
+        {
+          id: `${taskId}-tool-result`,
+          type: 'TOOL_RESULT',
+          content: '签收工作台已就绪',
+          timestamp: Date.now() + 20,
+          toolCallId: `${taskId}-call-1`,
+          toolName: 'invoke_business_function',
+          functionId: 'tms.fulfillment.openSignWorkbench',
+          result: {
+            status: 'SUCCESS',
+            structured_output: {
+              type: 'OPEN_TMS_PAGE',
+              label: '打开签收工作台',
+              pageLabel: '签收工作台',
+              payload: { waybillNo: 'TMS-20260520-001' },
+            },
+          },
+          executionReportRef: 'report-mobile-tool',
+          executionReportDigest: {
+            status: 'COMPLETED',
+            summary: 'TMS business function completed.',
+            reportRef: 'report-mobile-tool',
+          },
+        },
+        {
+          id: `${taskId}-result`,
+          type: 'RESULT',
+          content: `观测页收到 ask 请求，attachments=${attachments.length}。已准备移动端业务入口。`,
+          timestamp: Date.now() + 30,
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+          metadata: {
+            structured_output: {
+              type: 'OPEN_TMS_PAGE',
+              label: '打开签收工作台',
+              pageLabel: '签收工作台',
+              payload: { waybillNo: 'TMS-20260520-001' },
+            },
+          },
+          executionReportRef: 'report-mobile-result',
+          executionReportDigest: {
+            status: 'COMPLETED',
+            summary: 'Mock mobile task completed with BFF-safe payload.',
+            reportRef: 'report-mobile-result',
+          },
+        },
+      ],
     })
   }
 
@@ -650,6 +922,7 @@ function readStoredSettings(): StoredSettings {
     if (!isRecord(parsed)) return {}
     return {
       connectionMode: parsed.connectionMode === 'real' || parsed.connectionMode === 'mock' ? parsed.connectionMode : undefined,
+      componentVariant: parsed.componentVariant === 'desktop' || parsed.componentVariant === 'mobile' ? parsed.componentVariant : undefined,
       hookMode: parsed.hookMode === 'enabled' || parsed.hookMode === 'missing' ? parsed.hookMode : undefined,
       bffBaseUrl: typeof parsed.bffBaseUrl === 'string' ? parsed.bffBaseUrl : undefined,
       navigatorBaseUrl: typeof parsed.navigatorBaseUrl === 'string' ? parsed.navigatorBaseUrl : undefined,
@@ -735,6 +1008,15 @@ function saveStoredSettings(settings: StoredSettings) {
 .chat-panel {
   overflow: hidden;
   padding: 12px;
+}
+
+.mobile-preview-frame {
+  width: min(390px, 100%);
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid #cfd6e2;
+  border-radius: 8px;
+  background: #f6f7f9;
 }
 
 .panel-section + .panel-section {

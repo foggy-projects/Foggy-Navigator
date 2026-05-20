@@ -21,6 +21,10 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'mobile-chromium',
+      use: { ...devices['Pixel 5'] },
+    },
   ],
   webServer: {
     command: `pnpm exec vite --host 127.0.0.1 --port ${port} --strictPort`,
