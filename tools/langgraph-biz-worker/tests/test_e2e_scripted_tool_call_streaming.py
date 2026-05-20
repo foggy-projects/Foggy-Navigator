@@ -247,6 +247,314 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
 
 
 @pytest.mark.anyio
+async def test_scripted_awaiting_child_resume_creates_ticket_with_http_attachment_url(
+    monkeypatch,
+    mock_llm_server,
+    tmp_path,
+):
+    """BUG-036: second-turn attachments must reach the resumed child as TMS URL refs."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-child-resume-attachment-url-{run_id}"
+    session_id = f"sess-e2e-child-resume-attachment-url-{run_id}"
+    context_id = f"ctx-e2e-child-resume-attachment-url-{run_id}"
+    first_task_id = f"task_e2e_child_resume_attachment_url_001_{run_id}"
+    second_task_id = f"task_e2e_child_resume_attachment_url_002_{run_id}"
+    first_prompt = "请补充工单类型、标题和详细描述。"
+    ticket_id = "TKT-E2E-ATTACHMENT-URL"
+    attachment_id = "local/tenant-88800/org-88834/2026/05/20/d6376119804b42829ce1fef9e1222766.png"
+    attachment_url = (
+        "http://192.168.31.119:12580/x3-web/tenant/attachment/local/"
+        "88800/88834/d6376119804b42829ce1fef9e1222766.png"
+    )
+    attachment_ref = {
+        "attachmentId": attachment_id,
+        "attachmentName": "image.png",
+        "attachmentType": "IMAGE",
+        "refType": "NAVIGATOR_CHAT",
+        "attachmentUrl": attachment_url,
+        "contentType": "image/png",
+        "sizeBytes": 19397,
+        "width": 330,
+        "height": 706,
+    }
+    attachment = {
+        "id": attachment_id,
+        "name": "image.png",
+        "mimeType": "image/png",
+        "size": 19397,
+        "kind": "image",
+        "provider": "tms-bff",
+        "url": attachment_url,
+        "metadata": {
+            "refType": "NAVIGATOR_CHAT",
+            "width": 330,
+            "height": 706,
+        },
+    }
+    captured_calls = []
+
+    def fake_invoke_business_function(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        captured_calls.append({
+            "task_scoped_token": task_scoped_token,
+            "function_id": function_id,
+            "version": version,
+            "input_data": input_data,
+            "idempotency_key": idempotency_key,
+        })
+        return {
+            "functionId": function_id,
+            "status": "OK",
+            "summary": f"ticket accepted next:{trace_id}:004",
+            "data": {
+                "ticketNo": ticket_id,
+                "attachmentRefs": (input_data or {}).get("attachmentRefs"),
+            },
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke_business_function,
+    )
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "tms-ticket-agent.yaml").write_text(
+        """
+id: tms-ticket-agent
+name: TMS Ticket Agent
+description: Collect ticket fields and submit a TMS work order.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-child-resume-attachment-url",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_skill",
+                                    "args": {
+                                        "skill_id": "tms-ticket-agent",
+                                        "instruction": f"引导用户补充平台反馈工单字段 next:{trace_id}:002",
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": first_prompt,
+                                        "structured_output": {
+                                            "turn_status": "WAITING_FOR_USER_INPUT",
+                                            "user_message": first_prompt,
+                                            "required_fields": [
+                                                "ticket_type",
+                                                "title",
+                                                "description",
+                                            ],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_function",
+                                    "args": {
+                                        "function_id": "tms.ticket.createPlatformFeedback",
+                                        "version": "v1",
+                                        "input": {
+                                            "subType": "SYSTEM_OPTIMIZATION",
+                                            "title": "历史会话标题优化",
+                                            "summary": "建议历史会话显示真实标题，不要总是未命名会话。",
+                                            "subjectType": "TMS_PRODUCT",
+                                            "subjectKey": "TMS_PRODUCT",
+                                            "attachmentRefs": [attachment_ref],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:004",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": f"工单已创建成功，编号 {ticket_id}。",
+                                        "structured_output": {
+                                            "status": "COMPLETED",
+                                            "ticket_id": ticket_id,
+                                            "ticket_status": "SUBMITTED",
+                                            "attachment_handoff": True,
+                                            "remaining_work": [],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+    }
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"帮我生成一个工单 next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {
+                    "contextId": context_id,
+                    "allowed_skills": [
+                        {
+                            "id": "tms-ticket-agent",
+                            "description": "Collect ticket fields and submit a TMS work order.",
+                        }
+                    ],
+                },
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": (
+                    "帮我提交一个系统优化建议，标题是历史会话标题优化，"
+                    f"描述是不要再显示未命名会话，并附上图片 next:{trace_id}:003"
+                ),
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {"contextId": context_id},
+                "runtime_context": {"task_scoped_token": "btt-e2e"},
+                "attachments": [attachment],
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert continued_response.status_code == 200
+    first_events = _parse_worker_sse(first_response.text)
+    continued_events = _parse_worker_sse(continued_response.text)
+
+    first_result = next(event for event in first_events if event.type == "result")
+    continued_result = next(event for event in continued_events if event.type == "result")
+    assert first_result.content == first_prompt
+    assert continued_result.structured_output["ticket_id"] == ticket_id
+    assert continued_result.structured_output["attachment_handoff"] is True
+
+    first_root_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+    )
+    first_child_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    continued_root_open = next(
+        event for event in continued_events
+        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+    )
+    continued_child_open = next(
+        event for event in continued_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    assert continued_root_open.skill_frame_id == first_root_open.skill_frame_id
+    assert continued_child_open.skill_frame_id == first_child_open.skill_frame_id
+    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert not any(event.tool_name == "analyze_attachment" for event in continued_events)
+    assert any(event.tool_name == "invoke_business_function" for event in continued_events)
+
+    assert len(captured_calls) == 1
+    business_call = captured_calls[0]
+    assert business_call["task_scoped_token"] == "btt-e2e"
+    assert business_call["function_id"] == "tms.ticket.createPlatformFeedback"
+    assert business_call["version"] == "v1"
+    payload = business_call["input_data"]
+    assert payload["attachmentRefs"] == [attachment_ref]
+    attachment_payload = payload["attachmentRefs"][0]
+    assert attachment_payload["attachmentId"] == attachment_id
+    assert attachment_payload["attachmentUrl"] == attachment_url
+    assert attachment_payload["attachmentUrl"].startswith("http://")
+    assert not attachment_payload["attachmentUrl"].startswith("local/")
+
+    runtime = root_graph_module.get_runtime()
+    root = runtime.get_frame(first_root_open.skill_frame_id)
+    child = runtime.get_frame(first_child_open.skill_frame_id)
+    assert root is not None
+    assert child is not None
+    assert root.status == FrameStatus.RUNNING
+    assert child.status == FrameStatus.COMPLETED
+    assert "active_focus_frame_id" not in root.private_working_state
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+        f"next:{trace_id}:004",
+    ]
+    resumed_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:003")
+    resumed_user_messages = "\n".join(
+        message["content"] or ""
+        for message in resumed_turn["request"]["messages"]
+        if message["role"] == "user"
+    )
+    assert "Previous child skill turn is waiting for user input." in resumed_user_messages
+    assert "Attachments provided by upstream system:" in resumed_user_messages
+    assert attachment_id in resumed_user_messages
+    assert attachment_url in resumed_user_messages
+    assert f"Current user reply:" in resumed_user_messages
+    assert f"next:{trace_id}:003" in resumed_user_messages
+
+
+@pytest.mark.anyio
 async def test_client_detach_then_next_turn_reuses_persistent_frame(
     monkeypatch,
     mock_llm_server,
