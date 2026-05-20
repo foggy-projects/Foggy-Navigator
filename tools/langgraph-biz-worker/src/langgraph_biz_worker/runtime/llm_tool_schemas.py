@@ -259,6 +259,57 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "analyze_spreadsheet": {
+        "type": "function",
+        "function": {
+            "name": "analyze_spreadsheet",
+            "description": (
+                "Read a user-provided spreadsheet attachment on demand using a deterministic parser. "
+                "Use this for Excel/CSV content requests such as sheet summary, preview, exact range "
+                "reading, or row extraction. Do not use it when the user only asks to submit or attach "
+                "the original file. Do not use analyze_attachment or a vision model for spreadsheet files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "attachment_id": {
+                        "type": "string",
+                        "description": "Attachment id from the upstream attachment metadata.",
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["summary", "preview", "read_range", "extract_rows"],
+                        "description": "summary lists sheets; preview returns first rows; read_range reads A1:F30 style ranges; extract_rows maps rows by header.",
+                    },
+                    "sheet": {
+                        "type": "string",
+                        "description": "Sheet name. Omit to use the first sheet.",
+                    },
+                    "range": {
+                        "type": "string",
+                        "description": "A1-style range, required for read_range, e.g. A1:F30.",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Zero-based row page offset for extract_rows.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum rows to return. The tool enforces a server-side cap.",
+                    },
+                    "header_row": {
+                        "type": "integer",
+                        "description": "Header row number for extract_rows. Defaults to 1.",
+                    },
+                    "options": {
+                        "type": "object",
+                        "description": "Optional parser flags, e.g. include_formulas=false.",
+                    },
+                },
+                "required": ["attachment_id", "operation"],
+            },
+        },
+    },
     "list_skill_resources": {
         "type": "function",
         "function": {

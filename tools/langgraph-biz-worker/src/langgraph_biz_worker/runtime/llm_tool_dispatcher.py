@@ -12,6 +12,7 @@ from typing import Any
 
 from ..models import QueryEvent
 from ..tools.attachment_analysis import analyze_attachment
+from ..tools.spreadsheet_analysis import analyze_spreadsheet
 from ..tools.business_function_tools import (
     BusinessFunctionToolError,
     get_business_function_schema,
@@ -90,6 +91,15 @@ class LlmToolDispatcher:
 
         if name == "analyze_attachment":
             return analyze_attachment(args, context.runtime_context)
+
+        if name == "analyze_spreadsheet":
+            return analyze_spreadsheet(
+                args,
+                context.runtime_context,
+                artifact_store=context.artifact_store,
+                account_id=context.account_id,
+                task_id=context.task_id,
+            )
 
         if name == "read_frame_execution_report":
             if self._data_root is None:

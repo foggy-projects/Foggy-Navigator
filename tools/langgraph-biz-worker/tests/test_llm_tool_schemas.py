@@ -25,3 +25,14 @@ def test_read_frame_execution_report_schema_is_not_default_business_flow():
     assert "fallback recovery" in description
     assert "Do not call it by default" in description
     assert "markdown returns capped human-readable execution details" in mode_description
+
+
+def test_analyze_spreadsheet_schema_keeps_one_tool_entry():
+    schema = _KNOWN_TOOL_SCHEMAS["analyze_spreadsheet"]["function"]
+    description = schema["description"]
+    operation = schema["parameters"]["properties"]["operation"]
+
+    assert "deterministic parser" in description
+    assert "Do not use it when the user only asks to submit or attach" in description
+    assert "Do not use analyze_attachment or a vision model" in description
+    assert operation["enum"] == ["summary", "preview", "read_range", "extract_rows"]

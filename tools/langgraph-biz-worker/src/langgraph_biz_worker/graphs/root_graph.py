@@ -217,6 +217,7 @@ def _system_root_manifest() -> SkillManifest:
             "Use invoke_business_skill to delegate bounded work to a specialized child skill. "
             "Attachments are metadata or URLs. Use analyze_attachment only when the user asks "
             "to inspect image/file contents or when required fields must be extracted from an attachment; "
+            "for Excel or CSV spreadsheet content use analyze_spreadsheet instead of image analysis; "
             "if the user only asks to attach a file to a business operation, preserve the attachment without analysis. "
             "When the current user turn is ready to answer, call submit_skill_result. "
             "This root skill is persistent; submit_skill_result ends the current turn, "
@@ -226,6 +227,7 @@ def _system_root_manifest() -> SkillManifest:
             "invoke_business_function",
             "invoke_business_skill",
             "analyze_attachment",
+            "analyze_spreadsheet",
             "submit_skill_result",
         ],
         promote_to_parent=["result_summary", "structured_output", "artifact_refs", "evidence_refs"],
