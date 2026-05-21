@@ -3839,6 +3839,25 @@ promote_to_parent:
     assert "可恢复焦点栈:" not in system_text
     assert _submission_texts(payload, "human") == [second_prompt]
 
+    leaf_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=grandchild_frame_id,
+    )
+    assert _runtime_initial_roles(leaf_events) == ["system", "user"]
+    assert _runtime_tool_call_names(leaf_events) == ["submit_skill_result"]
+    assert "suspended" in _runtime_checkpoints(leaf_events)
+    assert any(
+        "WAITING_FOR_USER_INPUT" in ((event.get("message") or {}).get("content") or "")
+        for event in leaf_events
+        if event.get("eventType") == "tool_result"
+    )
+    assert _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=root_frame_id,
+    ) == []
+
 
 @pytest.mark.anyio
 async def test_scripted_root_skill_resumes_interrupted_child_frame(
@@ -4024,6 +4043,24 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
     )
     assert _submission_role_sequence(root_payload) == ["system", "human"]
     assert _submission_texts(root_payload, "human") == [f"继续 next:{trace_id}:001"]
+
+    child_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=child_frame_id,
+    )
+    assert _runtime_initial_roles(child_events) == ["system", "user"]
+    assert _runtime_tool_call_names(child_events) == ["submit_skill_result"]
+    assert "frame_completed" in _runtime_checkpoints(child_events)
+
+    root_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=root_frame_id,
+    )
+    assert _runtime_initial_roles(root_events) == ["system", "user"]
+    assert _runtime_tool_call_names(root_events) == ["submit_skill_result"]
+    assert "persistent_turn_completed" in _runtime_checkpoints(root_events)
 
 
 @pytest.mark.anyio

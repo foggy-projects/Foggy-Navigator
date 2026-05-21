@@ -376,6 +376,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 2026-05-21: 已新增 runtime message event JSONL 写入和读取恢复入口。`llm_skill_agent` 在初始 messages、assistant response、assistant tool_call、tool_result 和 checkpoint 处写入 `logs/runtime-message-events/<taskId>_<frameId>.jsonl`；`AWAITING_USER` 与 recoverable child interruption 读取恢复复用同一事件源，只选择不同恢复入口。工具执行完成后立即写 `after_tool_call` checkpoint，避免恢复时重复已完成的副作用工具调用。
 - 2026-05-21: 已完成 nested focus completion unwind。恢复 deepest leaf 后，如果 leaf 正常完成，BizWorker 会逐层 close/promote/resume parent；parent LLM submission 的 system context 会包含“刚完成的子技能提升结果”，直到回到 Root 后直接返回 promoted result 或执行 Root synthesis。
 - 2026-05-21: 已补充 scripted E2E log parity 断言。普通多轮、BusinessFunction tool protocol、`AWAITING_USER` child resume、nested completion unwind 现在会同时校验 `llm-submissions` 与 `runtime-message-events`。详见 [10-runtime-context-e2e-matrix-and-log-parity.md](./10-runtime-context-e2e-matrix-and-log-parity.md)。
+- 2026-05-21: scripted E2E log parity 已扩展到 nested recoverable leaf direct resume 与 interrupted child resume，覆盖 deepest leaf 直达恢复不触发 Root LLM、child 恢复完成后 Root synthesis 的 event JSONL 对账。
 
 ### Testing
 
