@@ -36,7 +36,7 @@ class RegisteredScript:
     trace_id: str
     scenario_id: Optional[str]
     expires_at: Optional[float]
-    turns: Dict[str, ScriptedTurn]
+    turns: Dict[str, List[ScriptedTurn]]
 
 
 @dataclass
@@ -57,21 +57,21 @@ class ScriptStore:
         self._scripts: Dict[str, RegisteredScript] = {}
         self._debug_records: List[DebugRequestRecord] = []
         self._seen_requests: set[str] = set()
+        self._cursor_match_counts: Dict[str, int] = {}
 
     def register(self, script: ScriptRegistration) -> ScriptRegistrationResult:
         trace_id = _require_text(script.traceId, "traceId is required")
         if not script.turns:
             raise ValueError("turns is required")
 
-        turns: Dict[str, ScriptedTurn] = {}
+        turns: Dict[str, List[ScriptedTurn]] = {}
         for turn in script.turns:
             cursor_trace, _ = parse_cursor(turn.cursor)
             if cursor_trace != trace_id:
                 raise ValueError(f"cursor traceId mismatch: {turn.cursor}")
-            if turn.cursor in turns:
-                raise ValueError(f"duplicate cursor: {turn.cursor}")
-            turns[turn.cursor] = turn
+            turns.setdefault(turn.cursor, []).append(turn)
 
+        self._clear_trace_match_state(trace_id)
         ttl = script.expiresInSeconds if script.expiresInSeconds is not None else 3600
         expires_at = time.time() + ttl if ttl > 0 else None
         self._scripts[trace_id] = RegisteredScript(
@@ -83,15 +83,23 @@ class ScriptStore:
         return ScriptRegistrationResult(
             traceId=trace_id,
             scenarioId=script.scenarioId,
-            turns=len(turns),
+            turns=len(script.turns),
             expiresAt=expires_at,
         )
 
     def cleanup(self, trace_id: str) -> bool:
         removed = self._scripts.pop(trace_id, None) is not None
         self._debug_records = [r for r in self._debug_records if r.traceId != trace_id]
-        self._seen_requests = {k for k in self._seen_requests if not k.startswith(trace_id + "|")}
+        self._clear_trace_match_state(trace_id)
         return removed
+
+    def _clear_trace_match_state(self, trace_id: str) -> None:
+        self._seen_requests = {k for k in self._seen_requests if not k.startswith(trace_id + "|")}
+        self._cursor_match_counts = {
+            key: value
+            for key, value in self._cursor_match_counts.items()
+            if not key.startswith(trace_id + "|")
+        }
 
     def match(self, model: str, messages: List[ChatMessage]) -> Optional[ScriptMatch]:
         self._purge_expired()
@@ -102,9 +110,13 @@ class ScriptStore:
         script = self._scripts.get(trace_id)
         if not script:
             return None
-        turn = script.turns.get(cursor)
-        if not turn:
+        turns = script.turns.get(cursor)
+        if not turns:
             return None
+        cursor_key = f"{trace_id}|{cursor}"
+        hit_count = self._cursor_match_counts.get(cursor_key, 0)
+        turn = turns[min(hit_count, len(turns) - 1)]
+        self._cursor_match_counts[cursor_key] = hit_count + 1
 
         request_hash = hash_request({"model": model, "messages": _messages_to_data(messages)})
         seen_key = f"{trace_id}|{cursor}|{request_hash}"

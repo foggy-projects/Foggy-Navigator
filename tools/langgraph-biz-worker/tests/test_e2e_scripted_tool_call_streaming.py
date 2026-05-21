@@ -1108,6 +1108,271 @@ promote_to_parent:
 
 
 @pytest.mark.anyio
+async def test_scripted_child_handoff_can_request_root_synthesis(
+    monkeypatch,
+    mock_llm_server,
+    tmp_path,
+):
+    """A child handoff with parent synthesis should resume Root on the same user turn."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-child-handoff-synthesis-{run_id}"
+    session_id = f"sess-e2e-child-handoff-synthesis-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-child-handoff-synthesis-{run_id}"
+    first_task_id = f"task_e2e_child_handoff_synthesis_001_{run_id}"
+    second_task_id = f"task_e2e_child_handoff_synthesis_002_{run_id}"
+    child_instruction = f"收集工单必要字段 next:{trace_id}:002"
+    switch_prompt = f"先不提交工单了，帮我总结刚才的状态 next:{trace_id}:003"
+    handoff_summary = "用户切换意图，当前工单收集流程交回 Root 处理。"
+    root_summary = "已切换回主对话：刚才的工单流程停留在字段收集阶段，尚未提交。"
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "tms-ticket-agent.yaml").write_text(
+        """
+id: tms-ticket-agent
+name: TMS Ticket Agent
+description: Collect ticket fields and submit a TMS work order.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+  - requires_parent_synthesis
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
+    root_graph_module._skill_registry.load()
+    root_graph_module._ensure_system_root_skill()
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-child-handoff-synthesis",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_skill",
+                                    "args": {
+                                        "skill_id": "tms-ticket-agent",
+                                        "instruction": child_instruction,
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "请提供工单类型、标题、详细描述。",
+                                        "structured_output": {
+                                            "turn_status": "WAITING_FOR_USER_INPUT",
+                                            "user_message": "请提供工单类型、标题、详细描述。",
+                                            "missing_fields": [
+                                                "ticket_type",
+                                                "title",
+                                                "description",
+                                            ],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "handoff_to_parent",
+                                    "args": {
+                                        "summary": handoff_summary,
+                                        "reason": "CHANGE_TOPIC",
+                                        "intent_resolution": "ASK_PARENT_TO_DECIDE",
+                                        "requires_parent_synthesis": True,
+                                        "parent_instruction": "请 Root 根据用户新意图综合答复。",
+                                        "structured_output": {
+                                            "handoff_kind": "change_topic",
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": root_summary,
+                                        "structured_output": {
+                                            "root_synthesized_after_handoff": True,
+                                            "previous_flow": "ticket_field_collection",
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+    }
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"帮我提交一个工单 next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {
+                    "contextId": context_id,
+                    "allowed_skills": [
+                        {
+                            "id": "tms-ticket-agent",
+                            "description": "Collect ticket fields and submit a TMS work order.",
+                        }
+                    ],
+                },
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": switch_prompt,
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert continued_response.status_code == 200
+    first_events = _parse_worker_sse(first_response.text)
+    continued_events = _parse_worker_sse(continued_response.text)
+    first_child_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    continued_child_open = next(
+        event for event in continued_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    close_event = next(event for event in continued_events if event.type == "skill_frame_close")
+    result = next(event for event in continued_events if event.type == "result")
+
+    assert continued_child_open.skill_frame_id == first_child_open.skill_frame_id
+    assert close_event.skill_frame_id == first_child_open.skill_frame_id
+    assert any(event.tool_name == "handoff_to_parent" for event in continued_events)
+    assert result.content == root_summary
+    assert result.structured_output["root_synthesized_after_handoff"] is True
+    assert result.structured_output.get("status") != "HANDOFF_TO_PARENT"
+
+    runtime = root_graph_module.get_runtime()
+    root = runtime.get_frame(first_child_open.parent_frame_id)
+    child = runtime.get_frame(first_child_open.skill_frame_id)
+    assert root is not None
+    assert child is not None
+    assert child.status == FrameStatus.COMPLETED
+    assert root.status == FrameStatus.RUNNING
+    assert "active_focus_frame_id" not in root.private_working_state
+    child_result = root.private_working_state["child_results"][child.frame_id]
+    assert child_result["structured_output"]["requires_parent_synthesis"] is True
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+        f"next:{trace_id}:003",
+    ]
+    assert [record["responseSummary"]["toolCalls"] for record in records] == [
+        ["invoke_business_skill"],
+        ["submit_skill_result"],
+        ["handoff_to_parent"],
+        ["submit_skill_result"],
+    ]
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len(payloads) == 4
+    child_payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id="tms-ticket-agent",
+    )
+    root_payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id="conversation.root",
+    )
+    assert _submission_role_sequence(child_payload) == [
+        "system",
+        "human",
+        "ai",
+        "tool",
+        "human",
+    ]
+    assert _submission_texts(child_payload, "human") == [child_instruction, switch_prompt]
+    assert _submission_tool_call_names(child_payload) == ["submit_skill_result"]
+    assert _submission_texts(root_payload, "human")[-1] == switch_prompt
+    assert any(
+        "HANDOFF_TO_PARENT" in text or handoff_summary in text
+        for text in _submission_texts(root_payload, "system")
+    )
+
+    child_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=first_child_open.skill_frame_id,
+    )
+    root_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=first_child_open.parent_frame_id,
+    )
+    assert _runtime_tool_call_names(child_events) == ["handoff_to_parent"]
+    assert _runtime_tool_call_names(root_events) == ["submit_skill_result"]
+    assert "frame_completed" in _runtime_checkpoints(child_events)
+    assert "persistent_turn_completed" in _runtime_checkpoints(root_events)
+
+
+@pytest.mark.anyio
 async def test_scripted_awaiting_child_completed_result_returns_directly(
     monkeypatch,
     mock_llm_server,
