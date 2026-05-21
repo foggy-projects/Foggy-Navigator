@@ -756,7 +756,8 @@ def test_llm_agent_persistent_frame_prompt_includes_active_plan():
     assert "deliver complex task" in system_prompt
     assert "step-1" in system_prompt
     assert "持久根计划策略:" in system_prompt
-    assert "submit_skill_result.structured_output.active_plan" in system_prompt
+    assert "主动调用 submit_skill_result" in system_prompt
+    assert "structured_output.active_plan" in system_prompt
     assert "intent_resolution" in system_prompt
 
 
@@ -1585,7 +1586,7 @@ def test_llm_agent_inserts_queued_user_input_at_checkpoint():
         return []
 
     model = FakeToolCallModel([
-        AIMessage(content=""),
+        AIMessage(content="Answer for U1."),
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",
             "name": "submit_skill_result",
@@ -1612,6 +1613,7 @@ def test_llm_agent_inserts_queued_user_input_at_checkpoint():
     )
     assert "Additional user message received while this turn was running" in second_prompt
     assert "U2 while root loop is still running" in second_prompt
+    assert "Answer for U1." in second_prompt
 
 
 def test_llm_agent_reconsiders_terminal_submit_when_queued_input_arrives_before_tool_execution():
@@ -1788,7 +1790,6 @@ def test_llm_agent_keeps_pending_info_summary_that_requests_order_number():
         "4. **运单号**：如果是运单异常件，请提供对应的运单号。"
     )
     model = FakeToolCallModel([
-        AIMessage(content="我可以帮您提交工单，请提供工单类型、标题、问题描述和运单号。"),
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",
             "name": "submit_skill_result",
@@ -1817,9 +1818,69 @@ def test_llm_agent_keeps_pending_info_summary_that_requests_order_number():
 
     frame = runtime.get_frame(frame_id)
     assert [event.type for event in events] == ["tool_use", "skill_result_submit"]
-    assert model.calls == 2
+    assert model.calls == 1
     assert frame.result_summary == expected_summary
     assert frame.private_working_state["turn_results"][-1]["summary"] == expected_summary
+
+
+def test_llm_agent_persistent_root_accepts_plain_assistant_final_answer():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_plain_final_001",
+        skill_id="system.root",
+        skill_input={"request": "say hi"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="你好，我可以帮你处理运输和工单相关问题。"),
+    ])
+    markers: list[str] = []
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_root_plain_final_001",
+        frame_id=frame_id,
+        prompt="hi",
+        runtime_context={
+            "_runtime_memory_mark_finalizing": lambda: markers.append("finalizing"),
+            "_runtime_memory_mark_running": lambda: markers.append("running"),
+        },
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert events == []
+    assert model.calls == 1
+    assert frame.status == FrameStatus.RUNNING
+    assert frame.result_summary == "你好，我可以帮你处理运输和工单相关问题。"
+    assert frame.output["completion_mode"] == "assistant_message"
+    assert markers == ["finalizing"]
+
+
+def test_llm_agent_child_plain_assistant_answer_fails_protocol_without_retry():
+    runtime = _root_with_child_runtime()
+    root_id = runtime.invoke_skill(
+        task_id="task_child_plain_final_001",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+    child_id = runtime.invoke_child_skill(root_id, "child_skill")
+    model = FakeToolCallModel([
+        AIMessage(content="我已经完成了。"),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_child_plain_final_001",
+        frame_id=child_id,
+        prompt="继续",
+    )
+
+    child = runtime.get_frame(child_id)
+    assert model.calls == 1
+    assert child.status == FrameStatus.FAILED
+    assert any(
+        event.type == "error"
+        and "submit_skill_result or handoff_to_parent" in event.error
+        for event in events
+    )
 
 
 def test_llm_agent_child_waiting_for_user_input_keeps_frame_open():

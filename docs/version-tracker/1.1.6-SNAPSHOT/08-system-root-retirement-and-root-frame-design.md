@@ -27,6 +27,7 @@
    - runtime memory 投影不再写入 `rootSkillId=system.root`
 4. 业务 Skill、BusinessFunction frame、frame report refs、execution report refs 继续保留并可见。这些信息对 LLM 回溯业务执行结果有价值，不属于本次退场范围。
 5. Root prompt 的 system 身份使用中文“当前业务会话的根编排 Agent”，运行时治理上下文进入 system message；human message 保持用户原文。详细 messages 契约见 [09-llm-submission-message-contract.md](./09-llm-submission-message-contract.md)。
+6. Conversation root frame 是持久运行容器，不是每轮关闭的业务 Skill。Root 普通回合可以用自然语言完成；`submit_skill_result` 仅作为 root 的主动结构化提交能力保留。Child Skill / frame 仍通过 `submit_skill_result` 或 `handoff_to_parent` 显式退出。
 
 ## 兼容策略
 
@@ -63,6 +64,7 @@ parent_frame_id 为空，并且 frame_kind == ROOT
 - [x] root loop 工具事件和 LLM submission meta 不再暴露 `system.root`
 - [x] root-only tools 改为依赖 `persistent_frame`，不依赖 manifest id
 - [x] runtime memory root metadata 去除 `rootSkillId=system.root`
+- [x] root 无 tool call 且有自然语言内容时可完成本回合，不追加伪 human retry；child frame 保持显式退出契约
 - [x] 完成测试更新与回归
 
 ## 测试记录
@@ -81,6 +83,14 @@ $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest -q
 tools/langgraph-biz-worker
 .\.venv\Scripts\python.exe -m pytest
 589 passed, 6 skipped, 11 warnings
+```
+
+2026-05-21 补充 root / child 完成契约后：
+
+```text
+tools/langgraph-biz-worker
+.\.venv\Scripts\python.exe -m pytest -q
+608 passed, 6 skipped, 11 warnings
 ```
 
 ## 验收标准

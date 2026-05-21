@@ -108,7 +108,24 @@ tool call / tool result 分三种场景处理：
    - `A1` 可携带 promoted digest、reportRef、artifactRefs 等受控信息。
    - raw tool call / raw tool result 保留在 execution trace 和 runtime message event log 中。
 
-### 4. system message 内容边界
+### 4. Root 与 Child 的完成契约分离
+
+`conversation.root` 是会话级持久执行载体，不是每轮都需要关闭的业务 Skill frame。它负责普通用户回合、业务工具调度、运行时记忆 commit 与中断恢复。
+
+Root 回合完成规则：
+
+1. 模型未产生 tool call，但返回了自然语言内容时，该内容可直接作为本回合最终答复。
+2. BizWorker 仍会内部完成 runtime memory、report、log、LLM submission 的落档，不要求模型额外调用退出工具。
+3. 如果 root 回合需要保存 `active_plan`、`artifact_refs`、`evidence_refs` 或其他结构化状态，模型应主动调用 `submit_skill_result` 提交这些结构化信息。
+4. 如果 checkpoint 上存在 queued user input，BizWorker 会先把 queued input 追加进当前 loop，让模型继续处理，而不是提前把自然语言答复提交为最终结果。
+
+Child / non-root frame 完成规则：
+
+1. 业务 Skill frame 有明确生命周期边界，完成、等待用户补充或需要返回父级时，必须主动调用 `submit_skill_result` 或 `handoff_to_parent`。
+2. BizWorker 不再在 child frame 返回自然语言但未调用终止工具时，追加伪 `human` 提醒消息要求重试。
+3. child frame 未调用终止工具就返回自然语言，视为协议错误；frame 应失败并暴露真实错误，而不是折叠成 max-iterations。
+
+### 5. system message 内容边界
 
 单条 system message 按以下语义组成：
 
@@ -125,7 +142,8 @@ tool call / tool result 分三种场景处理：
 4. 通用工具与标识治理规则：
    - 内部 tracing id 不能当作订单号、运单号或业务单据号。
    - 只能使用已提供工具。
-   - 完成时必须调用 `submit_skill_result`。
+   - root 普通回合可直接用自然语言完成；需要结构化状态时主动调用 `submit_skill_result`。
+   - child frame 完成、等待用户补充或交还父级时，必须主动调用 `submit_skill_result` 或 `handoff_to_parent`。
 5. 当前运行时上下文：
    - 运行时日期上下文：时区、业务日期、当前月份范围、相对日期解析规则。
    - active plan 与持久 root plan 策略。
@@ -139,7 +157,7 @@ tool call / tool result 分三种场景处理：
 
 精确到秒或毫秒的 `current_time` 不进入 system message。原因是它会让 system prompt 前缀在每次调用时变化，降低 LLM prompt cache 命中率。相对日期推理所需的低频信息保留在 system 中：业务日期通常每日变化，当前月份范围通常每月变化，缓存影响可控。
 
-### 5. Skill 列表必须包含描述，并使用 Markdown
+### 6. Skill 列表必须包含描述，并使用 Markdown
 
 上游传入的 `allowed_skills` 可能只有 Skill id。BizWorker 在 root prompt 组装前会根据本地 Skill registry 补齐：
 
@@ -159,7 +177,7 @@ LLM 不应只看到技能名。缺少 description 会降低 root 编排选择 Sk
 
 真正需要精确字段读取的其他业务输入仍可保留为 JSON `业务上下文`。
 
-### 6. system.root 不作为业务 Skill 暴露
+### 7. system.root 不作为业务 Skill 暴露
 
 `system.root` 是历史内部实现标识，不是业务 Skill。
 
@@ -172,7 +190,7 @@ LLM 不应只看到技能名。缺少 description 会降低 root 编排选择 Sk
 
 业务 Skill、BusinessFunction、frame report ref、artifact ref 仍可按需进入 system context，因为这些对业务回溯和后续决策有价值。
 
-### 7. 附件上下文进入 system
+### 8. 附件上下文进入 system
 
 附件上下文是运行时业务输入，不是用户自然语言本身，因此进入 system message。
 
@@ -279,6 +297,8 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 10. 精确 `current_time` 不进入 `system` message；仅时区或业务日期存在时，不生成 `human` 尾部精确时间块。
 11. nested leaf 完成后的 parent continuation submission 能看到“刚完成的子技能提升结果”，且该信息只用于当前 parent 续跑，不污染下一轮普通 runtime-visible conversation。
 12. child frame 的 system context 包含“子技能退出策略”；persistent root 不暴露 `handoff_to_parent`，child frame 暴露 `handoff_to_parent`。
+13. persistent root 在无 tool call 且有自然语言内容时可完成当前回合，不生成伪 `human` 提醒或 runtime retry instruction。
+14. child frame 在无终止工具调用时不被自动补提示；测试覆盖该协议错误路径，并暴露真实 frame protocol error。
 
 ## Progress Tracking
 
@@ -298,6 +318,7 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 - 2026-05-21: nested leaf 正常完成后，parent continuation 已通过 system context 接收“刚完成的子技能提升结果”，并继续逐层向 Root unwind；`llm-submissions` 会分别保留 leaf 与 parent 的真实提交 body。
 - 2026-05-21: scripted E2E 已补充 `llm-submissions` 与 `runtime-message-events` 对账断言，覆盖普通多轮、BusinessFunction tool protocol、`AWAITING_USER` child resume、nested completion unwind。
 - 2026-05-21: child frame system context 新增“子技能退出策略”，并通过 `handoff_to_parent` 支持取消/停止/换题/回主对话；persistent root 工具列表不暴露该 child-only 工具。
+- 2026-05-21: 收口 root / child 完成契约。Root 普通回合支持自然语言直接完成；`submit_skill_result` 改为 root 的可选结构化提交能力和 child frame 的强制退出契约；移除“无 tool call 后追加伪 human 提醒”的默认行为。
 
 ### Testing
 
@@ -311,9 +332,15 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_nested_focus_completion_unwinds_to_parent_result -q`
   - result: `1 passed`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -q`
-  - result: `23 passed`
+  - result: `27 passed, 3 warnings`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_awaiting_child_can_handoff_cancel_to_parent -q`
   - result: `1 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_llm_skill_agent.py tests/test_llm_message_builder.py tests/test_llm_submission_log.py -q`
+  - result: `62 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\ruff.exe check src/langgraph_biz_worker/runtime/llm_agent_prompts.py src/langgraph_biz_worker/runtime/llm_skill_agent.py tests/test_llm_skill_agent.py tests/test_e2e_scripted_tool_call_streaming.py`
+  - result: `All checks passed!`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest -q`
+  - result: `608 passed, 6 skipped, 11 warnings`
 
 ### Experience
 

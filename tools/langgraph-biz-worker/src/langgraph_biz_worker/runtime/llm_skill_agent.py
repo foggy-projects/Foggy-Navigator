@@ -110,7 +110,7 @@ class LlmSkillAgent:
         runtime_context: dict[str, Any] | None = None,
         persistent_frame: bool = False,
     ) -> list[QueryEvent]:
-        """Execute a Skill until ``submit_skill_result`` completes the frame."""
+        """Execute a Skill frame or a persistent conversation-root turn."""
         frame = self._runtime.get_frame(frame_id)
         if frame is None:
             return [QueryEvent(type="error", task_id=task_id, error=f"Frame not found: {frame_id}")]
@@ -280,20 +280,71 @@ class LlmSkillAgent:
             self._append_private_message(frame_id, "assistant", _safe_content(response.content))
 
             if not tool_calls:
-                retry_instruction = HumanMessage(content=(
-                    "No tool call was produced. If the skill is complete, call "
-                    "submit_skill_result with summary, structured_output, and refs."
-                ))
-                messages.append(retry_instruction)
-                record_runtime_message_event(
-                    "message",
-                    runtime_context,
-                    task_id=task_id,
-                    frame_id=frame_id,
-                    message=retry_instruction,
-                    phase="runtime_retry_instruction",
+                if persistent_frame:
+                    queued_messages = _runtime_memory_checkpoint_messages(runtime_context)
+                    if queued_messages:
+                        self._append_runtime_memory_checkpoint_messages(
+                            runtime_context,
+                            messages=messages,
+                            frame_id=frame_id,
+                            queued_messages=queued_messages,
+                            task_id=task_id,
+                        )
+                        continue
+                    final_text = _assistant_response_text(response)
+                    if final_text:
+                        _mark_runtime_memory_finalizing(runtime_context)
+                        validation = self._runtime.submit_persistent_turn_result(
+                            frame_id=frame_id,
+                            summary=final_text,
+                            structured_output={
+                                "turn_status": "FINAL_FOR_USER",
+                                "message": final_text,
+                                "completion_mode": "assistant_message",
+                            },
+                        )
+                        if validation.ok:
+                            record_checkpoint_runtime_event(
+                                runtime_context,
+                                task_id=task_id,
+                                frame_id=frame_id,
+                                checkpoint="persistent_turn_completed",
+                            )
+                            return events
+                        _mark_runtime_memory_running(runtime_context)
+                        error = "Root assistant response failed output contract: " + "; ".join(validation.errors)
+                    else:
+                        error = "Root assistant returned no tool call and no final content"
+                    self._runtime.record_recoverable_interruption(
+                        frame_id,
+                        reason="model_error",
+                        error=error,
+                        task_id=task_id,
+                    )
+                    events.append(QueryEvent(
+                        type="error",
+                        task_id=task_id,
+                        skill_frame_id=frame_id,
+                        skill_id=event_skill_id,
+                        presentation_hint=event_presentation_hint,
+                        error=error,
+                    ))
+                    return events
+
+                error = (
+                    "Child skill returned a final assistant message without "
+                    "submit_skill_result or handoff_to_parent"
                 )
-                continue
+                self._runtime.fail_frame(frame_id, error)
+                events.append(QueryEvent(
+                    type="error",
+                    task_id=task_id,
+                    skill_frame_id=frame_id,
+                    skill_id=event_skill_id,
+                    presentation_hint=event_presentation_hint,
+                    error=error,
+                ))
+                return events
 
             for call in tool_calls:
                 terminal_tool_call = _is_runtime_memory_terminal_tool_call(call)
@@ -934,6 +985,28 @@ def _has_runtime_memory_terminal_tool_call(tool_calls: list[dict[str, Any]]) -> 
 
 def _is_runtime_memory_terminal_tool_call(call: dict[str, Any]) -> bool:
     return call.get("name") in {"submit_skill_result", "shelve_interrupted_frame", "handoff_to_parent"}
+
+
+def _assistant_response_text(response: Any) -> str:
+    content = _safe_content(getattr(response, "content", ""))
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(part.strip() for part in parts if part and part.strip()).strip()
+    if content in (None, "", [], {}):
+        return ""
+    try:
+        return json.dumps(content, ensure_ascii=False)
+    except Exception:
+        return str(content).strip()
 
 
 def _mark_runtime_memory_finalizing(runtime_context: dict[str, Any] | None) -> None:

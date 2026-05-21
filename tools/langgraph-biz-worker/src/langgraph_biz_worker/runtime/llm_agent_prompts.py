@@ -83,9 +83,8 @@ def _build_system_prompt(
         "推断业务成功或业务 id。"
         "如果技能引用其 bundle 内的文件，使用 list_skill_resources 或 "
         "read_skill_resource；这些工具只会暴露当前 ClientApp 的公开技能资源。"
-        "只能使用已提供的工具。任何最终答复都必须调用 submit_skill_result 工具提交；"
-        "即使只是直接回答用户，也不要直接输出自然语言作为最终结果。"
     )
+    prompt += _build_completion_contract_prompt(skill_id or manifest.id, runtime_context)
     runtime_prompt = _build_runtime_system_context_prompt(
         skill_input or {},
         skill_id or manifest.id,
@@ -111,6 +110,23 @@ def _build_system_identity_prompt(manifest: SkillManifest) -> str:
         f"你正在执行业务技能 {manifest.id}。\n"
         f"职责说明: {manifest.description}\n"
         f"输出 schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
+    )
+
+
+def _build_completion_contract_prompt(
+    skill_id: str,
+    runtime_context: dict[str, Any] | None,
+) -> str:
+    if (runtime_context or {}).get("_persistent_frame") is True or skill_id == _SYSTEM_ROOT_SKILL_ID:
+        return (
+            "只能使用已提供的工具。当前是根会话回合：如果可以直接回答用户，"
+            "可以直接输出自然语言作为本回合最终答复。若需要保存结构化状态、"
+            "active_plan、artifact_refs 或 evidence_refs，则主动调用 "
+            "submit_skill_result 提交本回合结果。"
+        )
+    return (
+        "只能使用已提供的工具。当前是子技能 frame：完成、等待用户补充或需要返回父级时，"
+        "必须主动调用 submit_skill_result 或 handoff_to_parent；不要直接输出自然语言作为最终结果。"
     )
 
 
@@ -438,8 +454,8 @@ def _build_active_plan_prompt(runtime_context: dict[str, Any] | None) -> str:
         json.dumps(active_plan, ensure_ascii=False, sort_keys=True),
         (
             "规则: 将 active_plan 视为当前持久根 frame 的工作计划。"
-            "结束本回合前，将预期结果与该计划对照。若计划仍有用，"
-            "在 submit_skill_result.structured_output.active_plan 中保留或更新。"
+            "结束本回合前，将预期结果与该计划对照。若计划仍有用且需要继续保留，"
+            "主动调用 submit_skill_result，并在 structured_output.active_plan 中保留或更新。"
             "若用户明确放弃该计划或开始无关任务，将 intent_resolution 设置为 "
             "ABANDON_PREVIOUS 或 START_UNRELATED_NEW_TASK，并总结被放弃的计划。"
         ),
@@ -454,7 +470,8 @@ def _build_root_planning_policy_prompt(
         return ""
     return (
         "持久根计划策略: 对复杂、多意图、多技能或需要外部协同的工作，"
-        "在 submit_skill_result.structured_output.active_plan 中维护 active_plan。"
+        "需要跨回合保留计划时，主动调用 submit_skill_result 并在 "
+        "structured_output.active_plan 中维护 active_plan。"
         "计划应简洁、结构化，并随工作推进更新；这是未来回合使用的工作状态，"
         "不是面向用户的叙述。"
     )

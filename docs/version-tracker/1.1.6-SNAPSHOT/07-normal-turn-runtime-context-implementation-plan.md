@@ -110,10 +110,11 @@ Phase 1 需要先固定 assistant 可见内容来源，避免 runtime memory 与
 
 提取优先级：
 
-1. Root / Skill 明确返回的 user-facing final message。
-2. structured output 中声明为用户可见的 `message` / `userMessage` / `finalResponse` 等字段。
-3. `submit_skill_result.summary` 或 promoted result 的 compact user-facing summary。
-4. 不可恢复错误时的标准化 user-visible error message。
+1. Root 普通回合直接返回的 assistant final content。
+2. Root / Skill 明确返回的 user-facing final message。
+3. structured output 中声明为用户可见的 `message` / `userMessage` / `finalResponse` 等字段。
+4. `submit_skill_result.summary` 或 promoted result 的 compact user-facing summary。
+5. 不可恢复错误时的标准化 user-visible error message。
 
 禁止直接写入 `visibleMessages`：
 
@@ -325,7 +326,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 | --- | --- |
 | Root frame 内部字段被 prompt 逻辑直接依赖 | 所有访问通过 `ContextRuntimeMemory` |
 | Java `recentConversation` 每轮覆盖 Worker memory | revision > 0 时强制忽略 external recent conversation |
-| assistant message 来源不稳定 | Phase 1 先使用 Root `submit_skill_result` 的 summary / user-facing output，Phase 2 再补 Skill projection |
+| assistant message 来源不稳定 | Root natural assistant final、Root `submit_skill_result.summary`、Skill promoted result 均走 `assistantVisibleContent` / persistent turn commit 统一入口 |
 | summarizer 失败阻断用户回合 | Phase 4 必须实现 deterministic fallback |
 | 伪并发插入破坏副作用工具一致性 | 只在 checkpoint 插入，不在不可中断工具调用中插入 |
 | prompt token 失控 | Phase 4 引入 head-tail 和 summary 预算 |

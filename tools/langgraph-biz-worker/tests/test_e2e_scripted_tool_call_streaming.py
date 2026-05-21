@@ -3181,7 +3181,8 @@ async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch
     assert any("当前活动任务计划:" in content for content in second_system_messages)
     assert any("handle multi-skill shipment issue" in content for content in second_system_messages)
     assert any("持久根计划策略:" in content for content in second_system_messages)
-    assert any("submit_skill_result.structured_output.active_plan" in content for content in second_system_messages)
+    assert any("主动调用 submit_skill_result" in content for content in second_system_messages)
+    assert any("structured_output.active_plan" in content for content in second_system_messages)
 
 
 @pytest.mark.anyio
@@ -3189,7 +3190,7 @@ async def test_scripted_root_skill_continues_after_recoverable_model_loop_failur
     monkeypatch,
     mock_llm_server,
 ):
-    """A no-submit mock LLM loop should keep system.root recoverable for the next task."""
+    """An empty root LLM response should keep conversation root recoverable for the next task."""
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-continue-{run_id}"
     session_id = f"sess-e2e-root-continue-{run_id}"
@@ -3206,11 +3207,7 @@ async def test_scripted_root_skill_continues_after_recoverable_model_loop_failur
                 "turns": [
                     {
                         "cursor": f"next:{trace_id}:001",
-                        "response": {"content": f"No tool yet next:{trace_id}:002"},
-                    },
-                    {
-                        "cursor": f"next:{trace_id}:002",
-                        "response": {"content": "Still no valid submit."},
+                        "response": {"content": ""},
                     },
                     {
                         "cursor": f"next:{trace_id}:003",
@@ -3281,7 +3278,7 @@ async def test_scripted_root_skill_continues_after_recoverable_model_loop_failur
     assert failed_open.skill_frame_id == continued_open.skill_frame_id
     assert any(
         event.type == "error"
-        and event.error == "LLM skill agent reached max iterations without valid submit"
+        and event.error == "Root assistant returned no tool call and no final content"
         for event in failed_events
     )
     assert continued_open.content == "Reusing conversation root frame"
@@ -3302,17 +3299,16 @@ async def test_scripted_root_skill_continues_after_recoverable_model_loop_failur
     cursors = [record["cursor"] for record in records]
     assert cursors == [
         f"next:{trace_id}:001",
-        f"next:{trace_id}:002",
         f"next:{trace_id}:003",
     ]
-    continue_record = records[2]
+    continue_record = records[1]
     system_messages = _record_messages(continue_record, "system")
     user_messages = _record_messages(continue_record, "user")
     assert user_messages == [f"继续 next:{trace_id}:003"]
     assert any("上一次执行被中断。" in content for content in system_messages)
     assert any("原因: model_error" in content for content in system_messages)
     assert any(
-        "LLM skill agent reached max iterations without valid submit" in content
+        "Root assistant returned no tool call and no final content" in content
         for content in system_messages
     )
     assert any("当前用户消息见下一条 human message。" in content for content in system_messages)
