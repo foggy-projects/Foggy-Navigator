@@ -7,12 +7,15 @@
 - status: draft
 - date: 2026-05-20
 - intended_for: upstream-frontend-developer, upstream-bff-developer, upstream-llm-coding-agent
-- purpose: 给上游 IDE Agent 一段可直接执行的提示词，用于把 `NavigatorMobileChat` 接入移动端 Vue 3 / Vite 应用并完成 BFF 联调。
+- purpose: 给上游 IDE Agent 一段可直接执行的提示词，用于把 H5 fallback `NavigatorMobileChat` 接入移动端 Vue 3 / Vite 应用并完成 BFF 联调。
+
+> TMS v3.2.1 APP 主线已转向 uni-app。uni-app 项目优先使用 [37-uni-app-navigator-chat-bff-handoff-prompt.md](./37-uni-app-navigator-chat-bff-handoff-prompt.md) 和 `packages/foggy-mobile/src/uni_modules/foggy-navigator-chat`；本文只适用于普通 Vue 3 / Vite H5 fallback。
 
 ## 相关文档
 
 - [00-overview.md](./00-overview.md) - 上游接入总览与安全边界。
-- [02-frontend-component-quickstart.md](./02-frontend-component-quickstart.md) - 前端组件快速上手，含 `NavigatorMobileChat` 示例。
+- [02-frontend-component-quickstart.md](./02-frontend-component-quickstart.md) - 前端组件快速上手，含 uni-app `foggy-navigator-chat` 与 H5 `NavigatorMobileChat` 示例。
+- [37-uni-app-navigator-chat-bff-handoff-prompt.md](./37-uni-app-navigator-chat-bff-handoff-prompt.md) - uni-app 主线接入提示词。
 - [06-session-task-message-flow.md](./06-session-task-message-flow.md) - ask、task messages、session history 协议。
 - [07-approval-flow.md](./07-approval-flow.md) - Suspension 审批/确认流。
 - [09-security-boundaries.md](./09-security-boundaries.md) - 上游前后端安全红线。
@@ -25,7 +28,7 @@
 ```markdown
 # Development Handoff: 接入 NavigatorMobileChat 移动端 Agent 组件
 
-你在上游业务系统的 Vue 3 / Vite 移动端项目中工作。目标是在移动端 H5 或 App WebView 页面接入 `@foggy/navigator-chat-widget` 的 `NavigatorMobileChat`，并通过上游 BFF 与 Navigator OpenAPI 联调。
+你在上游业务系统的 Vue 3 / Vite 移动端 H5 fallback 项目中工作。目标是在普通移动端 H5 或非 uni-app WebView 页面接入 `@foggy/navigator-chat-widget` 的 `NavigatorMobileChat`，并通过上游 BFF 与 Navigator OpenAPI 联调。若当前项目是 uni-app，请停止使用本文，改按 `37-uni-app-navigator-chat-bff-handoff-prompt.md` 执行。
 
 重要：不要假设你能看到 Navigator 团队的历史聊天、Codex/Claude memory、CLAUDE.md、AGENTS.md 或本地 skills。先阅读本项目已有接入文档和当前上游项目约定，再改代码。不要回滚用户已有改动，先检查 `git status --short`。
 

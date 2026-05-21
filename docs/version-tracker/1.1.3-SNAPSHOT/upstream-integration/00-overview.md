@@ -138,3 +138,4 @@ graph TB
 | [34-upstream-client-app-admin-key-implementation-plan.md](./34-upstream-client-app-admin-key-implementation-plan.md) | 上游 ClientApp admin key 实施计划 | Navigator / TMS / reviewer |
 | [35-navigator-chat-observer-bff-real-mode.md](./35-navigator-chat-observer-bff-real-mode.md) | Navigator Chat Observer BFF real mode | Navigator / 上游前端 / 上游后端 |
 | [36-mobile-chat-widget-bff-handoff-prompt.md](./36-mobile-chat-widget-bff-handoff-prompt.md) | 移动端 Chat Widget + BFF 联调提示词 | 上游 LLM coding agent / 上游前端 / 上游后端 |
+| [37-uni-app-navigator-chat-bff-handoff-prompt.md](./37-uni-app-navigator-chat-bff-handoff-prompt.md) | uni-app `foggy-navigator-chat` + BFF 联调提示词 | 上游 LLM coding agent / 上游 uni-app / 上游后端 |

@@ -308,9 +308,97 @@ pnpm --dir packages/navigator-chat-widget dev:observe
 
 `NavigatorChat` 不会自动从普通轮询任务结果中推断 suspension。上游宿主应从自己的 BFF、SSE 或任务消息中解析出 `BusinessSuspensionDialogModel` 后传入 `currentSuspension`，再打开 `suspensionVisible`。
 
-### 1.1 移动端 `NavigatorMobileChat`
+### 1.1 uni-app `foggy-navigator-chat`
 
-移动端 H5 / App WebView 推荐使用 `NavigatorMobileChat`。它复用同一套 `NavigatorChatConfig` 和 OpenAPI 轮询/session API，但布局是移动全高面板：顶部状态栏、消息滚动区、底部输入区、历史会话 sheet、执行报告 sheet 和业务确认 sheet。
+TMS v3.2.1 APP 主线使用 uni-app + Vue 3 + TypeScript + Pinia。APP 侧优先接入 `packages/foggy-mobile/src/uni_modules/foggy-navigator-chat`，组件使用 `view`、`scroll-view`、`textarea`、`button` 等 uni-app primitives，不依赖 `window`、`document`、`File` 或 `vue-router`。
+
+```vue
+<template>
+  <foggy-navigator-chat
+    :config="chatConfig"
+    title="TMS 移动助手"
+    subtitle="当前账号的业务 Agent"
+    show-history
+    show-tool-calls
+    show-tool-results
+    v-model:suspension-dialog-visible="suspensionVisible"
+    :suspension="currentSuspension"
+    :suspension-submitting="submittingSuspension"
+    @action="onBusinessAction"
+    @suspension-decision="onSuspensionDecision"
+  />
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+import type {
+  BusinessSuspensionDecisionPayload,
+  BusinessSuspensionDialogModel,
+  FoggyNavigatorAction,
+  FoggyNavigatorChatConfig,
+} from '@/uni_modules/foggy-navigator-chat'
+
+const suspensionVisible = ref(false)
+const submittingSuspension = ref(false)
+const currentSuspension = ref<BusinessSuspensionDialogModel | null>(null)
+
+const chatConfig: FoggyNavigatorChatConfig = {
+  baseUrl: '/bff/navigator',
+  agentId: 'tms.mobile.agent',
+  pollInterval: 4000,
+  showToolCalls: true,
+  showToolResults: true,
+  executionReportMarkdownLoader: loadExecutionReportMarkdown,
+}
+
+async function loadExecutionReportMarkdown(reportRef: string) {
+  const result = await uni.request({
+    url: `/bff/navigator/execution-reports/${encodeURIComponent(reportRef)}/markdown`,
+    method: 'GET',
+  })
+  const body = result.data as { code: number; msg?: string; data: { markdown: string } }
+  if (body.code !== 0) throw new Error(body.msg || '执行报告读取失败')
+  return body.data
+}
+
+function onBusinessAction(action: FoggyNavigatorAction) {
+  if (action.type === 'OPEN_TMS_PAGE') {
+    const payload = action.payload as { id?: string } | undefined
+    uni.navigateTo({ url: `/pages/tms/detail?id=${encodeURIComponent(String(payload?.id ?? ''))}` })
+  }
+}
+
+async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) {
+  submittingSuspension.value = true
+  try {
+    await uni.request({
+      url: `/bff/navigator/suspensions/${encodeURIComponent(payload.suspendId)}/decision`,
+      method: 'POST',
+      data: {
+        decision: payload.decision,
+        comment: payload.comment,
+      },
+    })
+  } finally {
+    submittingSuspension.value = false
+  }
+}
+</script>
+```
+
+uni-app 接入要点：
+
+- APP 只连上游 BFF；组件默认客户端用 `uni.request` 访问 `{baseUrl}/api/v1/open/...`。
+- 如上游 BFF 路由、鉴权、签名不一致，可通过 `client` prop 注入 `FoggyNavigatorChatClient` callbacks。
+- 历史会话、继续 `contextId`、任务取消、执行报告 Markdown、suspension 决策都应由 BFF 兜住安全边界。
+- 业务动作只触发 `@action`；APP 内跳转使用 `uni.navigateTo` / `uni.switchTab`，不使用 `vue-router`。
+- suspension sheet 只展示 BFF 清洗后的 `BusinessSuspensionDialogModel`，事件只携带 `suspendId/suspensionType/decision/comment`。
+
+给上游 IDE Agent / LLM coding agent 的 uni-app 接入提示词见 [37-uni-app-navigator-chat-bff-handoff-prompt.md](./37-uni-app-navigator-chat-bff-handoff-prompt.md)。
+
+### 1.2 H5 fallback `NavigatorMobileChat`
+
+移动端普通 Vue 3 / Vite H5 fallback 可使用 `NavigatorMobileChat`。TMS APP 主线优先使用上一节的 uni-app `foggy-navigator-chat`；`NavigatorMobileChat` 仍用于非 uni-app 的 H5/WebView 页面。
 
 ```vue
 <template>
@@ -408,9 +496,9 @@ async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) 
 - suspension sheet 只展示 `BusinessSuspensionDialogModel` 中的清洗字段，并只发出 approve/reject 决策事件。
 - 样式可通过 `--nmc-*` CSS variables 覆盖，不需要 fork 组件。
 
-给上游 IDE Agent / LLM coding agent 的移动端接入提示词见 [36-mobile-chat-widget-bff-handoff-prompt.md](./36-mobile-chat-widget-bff-handoff-prompt.md)。
+给上游 IDE Agent / LLM coding agent 的普通 Vue H5 接入提示词见 [36-mobile-chat-widget-bff-handoff-prompt.md](./36-mobile-chat-widget-bff-handoff-prompt.md)。
 
-### 1.2 BFF ask 前置动作
+### 1.3 BFF ask 前置动作
 
 上游 BFF 在代理 `ask` 前必须基于当前登录态执行服务端前置动作：
 
