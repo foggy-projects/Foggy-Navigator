@@ -319,6 +319,63 @@ class TestPersistentTurnResult:
         assert child.conversation_id == CTX_FOCUS
         assert child.session_id == "sess-focus"
 
+    def test_prepare_active_focus_resume_rebinds_nested_recoverable_leaf(self, runtime: SkillRuntime):
+        root_id = runtime.invoke_skill(
+            "task-focus-nested-001",
+            "test_skill",
+            conversation_id=CTX_FOCUS,
+            session_id="sess-focus-nested",
+            current_task_id="task-focus-nested-001",
+            origin_task_id="task-focus-nested-001",
+        )
+        child_id = runtime.invoke_child_skill(
+            root_id,
+            "test_skill",
+            {"order_id": "ORD-NESTED"},
+        )
+        grandchild_id = runtime.invoke_child_skill(
+            child_id,
+            "test_skill",
+            {"order_id": "ORD-NESTED", "step": "deep"},
+        )
+        runtime.record_recoverable_child_interruption(
+            root_id,
+            reason="user_cancelled",
+            error="cancelled during nested child",
+            task_id="task-focus-nested-001",
+        )
+        runtime.record_recoverable_interruption(
+            root_id,
+            reason="user_cancelled",
+            error="cancelled during nested child",
+            task_id="task-focus-nested-001",
+        )
+
+        focus = runtime.prepare_active_focus_resume(
+            root_id,
+            task_id="task-focus-nested-002",
+        )
+
+        root = runtime.get_frame(root_id)
+        child = runtime.get_frame(child_id)
+        grandchild = runtime.get_frame(grandchild_id)
+        assert focus is not None
+        assert focus.frame_id == grandchild_id
+        assert root.status == FrameStatus.WAITING_CHILD
+        assert child.status == FrameStatus.WAITING_CHILD
+        assert grandchild.status == FrameStatus.RUNNING
+        assert root.current_task_id == "task-focus-nested-002"
+        assert child.current_task_id == "task-focus-nested-002"
+        assert grandchild.current_task_id == "task-focus-nested-002"
+        assert grandchild.origin_task_id == "task-focus-nested-001"
+        assert grandchild.conversation_id == CTX_FOCUS
+        assert grandchild.session_id == "sess-focus-nested"
+        assert [entry["frame_id"] for entry in root.private_working_state["recoverable_focus_stack"]] == [
+            root_id,
+            child_id,
+            grandchild_id,
+        ]
+
     def test_latest_recoverable_root_is_selected_and_older_focus_superseded(self, tmp_path):
         from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 

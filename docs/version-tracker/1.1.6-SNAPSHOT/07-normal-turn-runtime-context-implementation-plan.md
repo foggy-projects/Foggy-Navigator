@@ -186,11 +186,13 @@ Java 测试暂不改断言，只要现有测试继续通过。
    - metadata 写入 `skillId`、`skillFrameId`、`reportRef`、`promotedResultDigest`。
 2. `AWAITING_USER`：
    - Skill 的用户可见追问写为 assistant visible message。
-   - 下一条用户消息仍通过 active focus resume 进入 child frame。
-   - child Skill 必须识别用户取消、停止、换题等 escape hatch，并通过受控结果把 active focus 交还 Parent。
+   - 下一条用户消息仍通过 active focus resume 进入 focus stack 的 deepest leaf frame。
+   - nested leaf 进入 `AWAITING_USER` 时，immediate parent 和 Root owner 都必须记录同一个 active focus stack，避免下轮从 `contextId` 恢复时只能定位到 Root `WAITING_CHILD`。
+   - child Skill 必须识别用户取消、停止、换题等 escape hatch，并通过 frame 退出/终止工具把 active focus 交还 Parent。
 3. Recoverable interruption：
    - 不写 fake assistant message。
-   - `pendingTurn` 标记为 interrupted，Root frame 继续维护 `_recoverable_interruption`。
+   - `pendingTurn` 标记为 interrupted，Root frame 继续维护 focus stack control state。
+   - 用户中止、TIMEOUT、ERROR 后的下一条普通用户消息默认直达 deepest recoverable leaf；Root LLM 只在没有可恢复 leaf 或 leaf 主动交还 Parent 时接管。
 4. Non-recoverable visible error：
    - 写入 assistant error projection。
    - metadata 写 compact `errorCategory`、`reportRef`，不泄露敏感细节。
@@ -200,9 +202,11 @@ Java 测试暂不改断言，只要现有测试继续通过。
 1. Skill 完成后下一轮 prompt 是 `U1 -> A1 -> U2`。
 2. prompt 不包含 raw `tool_call` / `tool_result`。
 3. `AWAITING_USER` 后 `U2` 直接恢复 child frame。
-4. `AWAITING_USER` 后用户明确取消/换题时，child 不继续原任务，Parent active focus 被清理。
+4. `AWAITING_USER` 后用户明确取消/换题时，child 通过退出工具交还 Parent，Parent active focus 被清理。
 5. recoverable interruption 不产生普通 assistant message。
-6. non-recoverable visible error 进入 assistant projection。
+6. nested recoverable interruption 后，下一条普通用户消息直达 deepest leaf，而不是先进入 Root LLM。
+7. nested leaf `AWAITING_USER` 会冒泡到 Root owner，且 LLM submission log 只记录 leaf frame 的真实提交。
+8. non-recoverable visible error 进入 assistant projection。
 
 ## Phase 3：pendingUserInputs 队列与 checkpoint
 

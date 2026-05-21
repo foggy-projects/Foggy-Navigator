@@ -100,7 +100,8 @@ tool call / tool result 分三种场景处理：
    - 恢复时不能只传孤立的 `tool result`；必须保留它前面的 `assistant tool_call`，否则 provider 可能认为 messages 协议非法。
    - 两类恢复复用同一套底层 runtime message event log，只是恢复点选择不同。
    - `AWAITING_USER` 恢复：从该 frame 已完成的协议上下文恢复，再追加用户新回复。
-   - 异常中断恢复：从最后一个安全 checkpoint 恢复，必要时回退到 summary-based recoverable prompt。
+   - 异常中断恢复：默认从 focus stack 的 deepest leaf frame 恢复，从最后一个安全 checkpoint 继续，必要时回退到 summary-based recoverable prompt。
+   - 控制面 stop / cancel 只表示停止当前执行流并保留 focus stack；下一条普通用户消息仍按 deepest leaf 恢复，不自动丢弃旧 frame。
 3. 正常完成后的下一轮普通对话默认不重放 raw tool trace。
    - 下一轮默认看到 `U1 -> A1 -> U2`。
    - `A1` 可携带 promoted digest、reportRef、artifactRefs 等受控信息。

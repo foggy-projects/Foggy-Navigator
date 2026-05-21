@@ -241,7 +241,8 @@ def _system_root_manifest() -> SkillManifest:
         description="Root business orchestration agent for task-level work.",
         markdown_body=(
             "你是当前任务的根业务编排 Agent。"
-            "可以直接处理用户请求时，直接处理。"
+            "可以直接处理用户请求时，直接完成判断，并必须通过 submit_skill_result 工具提交结果；"
+            "不要直接输出自然语言作为最终回答。"
             "当可用上下文或技能材料中描述了所需的已授权业务函数时，使用 "
             "invoke_business_function 调用业务函数。"
             "需要把边界清晰的工作委派给专业子技能时，使用 invoke_business_skill。"
@@ -1301,6 +1302,8 @@ def _run_active_focus_before_root(
     focus = _runtime.prepare_active_focus_resume(root_frame_id, task_id=task_id)
     if focus is None:
         return None
+    root = _runtime.get_frame(root_frame_id) or root
+    focus_parent_frame_id = focus.parent_frame_id or root_frame_id
 
     focus_manifest = _skill_registry.get_manifest(focus.skill_id)
     if focus_manifest is None:
@@ -1309,7 +1312,7 @@ def _run_active_focus_before_root(
             type="error",
             task_id=task_id,
             skill_frame_id=focus.frame_id,
-            parent_frame_id=root_frame_id,
+            parent_frame_id=focus_parent_frame_id,
             skill_id=focus.skill_id,
             error=f"Skill manifest not found: {focus.skill_id}",
         )]
@@ -1319,7 +1322,7 @@ def _run_active_focus_before_root(
             type="skill_frame_open",
             task_id=task_id,
             skill_frame_id=focus.frame_id,
-            parent_frame_id=root_frame_id,
+            parent_frame_id=focus_parent_frame_id,
             skill_id=focus.skill_id,
             content=f"Resuming frame for skill: {focus.skill_id}",
         )
@@ -1329,7 +1332,7 @@ def _run_active_focus_before_root(
         approval_request = focus.approval_request
         if isinstance(approval_request, dict):
             _runtime.mark_child_awaiting_approval(
-                root_frame_id,
+                focus_parent_frame_id,
                 focus.frame_id,
                 approval_request,
             )
@@ -1338,7 +1341,7 @@ def _run_active_focus_before_root(
                 type="error",
                 task_id=task_id,
                 skill_frame_id=focus.frame_id,
-                parent_frame_id=root_frame_id,
+                parent_frame_id=focus_parent_frame_id,
                 skill_id=focus.skill_id,
                 error="Child skill is awaiting approval without approval_request",
             ))
@@ -1346,7 +1349,7 @@ def _run_active_focus_before_root(
 
     child_runtime_context = _runtime_context_for_child_skill(
         runtime_context,
-        _runtime.context_summary_for_frame(root_frame_id),
+        _runtime.context_summary_for_frame(focus_parent_frame_id),
         focus_manifest,
     )
     child_runtime_context = dict(child_runtime_context or {})
@@ -1388,7 +1391,7 @@ def _run_active_focus_before_root(
         approval_request = refreshed_focus.approval_request
         if isinstance(approval_request, dict):
             _runtime.mark_child_awaiting_approval(
-                root_frame_id,
+                focus_parent_frame_id,
                 refreshed_focus.frame_id,
                 approval_request,
             )
@@ -1398,25 +1401,32 @@ def _run_active_focus_before_root(
                 type="error",
                 task_id=task_id,
                 skill_frame_id=refreshed_focus.frame_id,
-                parent_frame_id=root_frame_id,
+                parent_frame_id=focus_parent_frame_id,
                 skill_id=refreshed_focus.skill_id,
                 error="Child skill is awaiting approval without approval_request",
             ))
         return events
 
     if refreshed_focus and refreshed_focus.status == FrameStatus.AWAITING_USER:
+        awaiting_user_context = _awaiting_user_context_for_focus(refreshed_focus)
         _runtime.mark_child_awaiting_user(
-            root_frame_id,
+            focus_parent_frame_id,
             refreshed_focus.frame_id,
-            _awaiting_user_context_for_focus(refreshed_focus),
+            awaiting_user_context,
         )
+        if focus_parent_frame_id != root_frame_id:
+            _runtime.mark_focus_awaiting_user(
+                root_frame_id,
+                refreshed_focus.frame_id,
+                awaiting_user_context,
+            )
         return events
 
     if not refreshed_focus or refreshed_focus.status != FrameStatus.COMPLETED:
         error = f"Child skill ended in {refreshed_focus.status.value if refreshed_focus else 'MISSING'}"
         _record_parent_child_recoverable_interruption(
             _runtime,
-            parent_frame_id=root_frame_id,
+            parent_frame_id=focus_parent_frame_id,
             child_frame_id=refreshed_focus.frame_id if refreshed_focus else focus.frame_id,
             reason="child_skill_failed",
             error=error,
@@ -1429,12 +1439,15 @@ def _run_active_focus_before_root(
         type="skill_frame_close",
         task_id=task_id,
         skill_frame_id=refreshed_focus.frame_id,
-        parent_frame_id=root_frame_id,
+        parent_frame_id=focus_parent_frame_id,
         skill_id=refreshed_focus.skill_id,
         content=f"Frame closed: {refreshed_focus.skill_id}",
         execution_report_ref=promoted.get("execution_report_ref"),
         execution_report_digest=promoted.get("execution_report_digest"),
     ))
+    if focus_parent_frame_id != root_frame_id:
+        _abandon_root_runtime_memory_turn(root, status="NESTED_FOCUS_PARENT_PENDING")
+        return events
 
     direct_result = _direct_child_result_for_user(
         promoted,

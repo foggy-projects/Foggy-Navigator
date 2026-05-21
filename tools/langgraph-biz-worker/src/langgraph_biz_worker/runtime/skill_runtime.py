@@ -361,6 +361,77 @@ class SkillRuntime:
             child_frame_id,
         )
 
+    def mark_focus_awaiting_user(
+        self,
+        owner_frame_id: str,
+        focus_frame_id: str,
+        awaiting_user_input: dict[str, Any] | None = None,
+    ) -> None:
+        """Bubble a nested awaiting-user focus to a non-immediate owner frame."""
+        owner = self._get_frame(owner_frame_id)
+        focus = self._get_frame(focus_frame_id)
+        if focus.status != FrameStatus.AWAITING_USER:
+            raise IllegalStateTransition(
+                f"mark_focus_awaiting_user requires focus AWAITING_USER, got {focus.status.value}"
+            )
+        if owner.status == FrameStatus.RUNNING:
+            self._transition(owner, FrameStatus.WAITING_CHILD)
+        elif owner.status != FrameStatus.WAITING_CHILD:
+            raise IllegalStateTransition(
+                f"mark_focus_awaiting_user requires owner RUNNING/WAITING_CHILD, got {owner.status.value}"
+            )
+
+        stack = self._focus_stack_for_resume(owner)
+        if not stack or stack[-1].frame_id != focus.frame_id:
+            ancestors = list(reversed(self._parent_stack(focus)))
+            if not ancestors or ancestors[0].frame_id != owner.frame_id:
+                raise IllegalStateTransition("focus frame does not belong to owner focus stack")
+            stack = ancestors + [focus]
+        if len(stack) < 2:
+            raise IllegalStateTransition("focus frame does not belong to owner focus stack")
+
+        now = datetime.now(timezone.utc).isoformat()
+        wait_payload = _awaiting_user_input_payload(
+            summary=focus.result_summary or "",
+            structured_output=focus.output or {},
+            artifact_refs=focus.artifact_refs,
+            evidence_refs=focus.evidence_refs,
+            submitted_at=now,
+        )
+        if awaiting_user_input:
+            wait_payload.update(_safe_json_copy(awaiting_user_input))
+        owner.private_working_state["pending_awaiting_user_focus_frame_id"] = focus.frame_id
+        owner.private_working_state["pending_awaiting_user_focus"] = {
+            "frame_id": focus.frame_id,
+            "skill_id": focus.skill_id,
+            "status": focus.status.value,
+            "input": _safe_json_copy(focus.input),
+            "awaiting_user_input": _safe_json_copy(wait_payload),
+            "updated_at": now,
+        }
+        owner.result_summary = wait_payload.get("user_message") or focus.result_summary
+        owner.output = _safe_json_copy(focus.output or {})
+        self._set_active_focus(
+            owner=owner,
+            focus=focus,
+            kind=_recoverable_focus_kind(owner, focus, stack),
+            status="AWAITING_USER",
+            reason="waiting_for_user_input",
+            error="",
+            last_task_id=owner.current_task_id or owner.task_id,
+            updated_at=now,
+            stack=stack,
+            extra_summary={"awaiting_user_input": _safe_json_copy(wait_payload)},
+        )
+        self._mark_focus_ancestors_waiting(stack)
+        self._save(owner)
+        self._generate_frame_report(owner)
+        logger.info(
+            "Frame %s awaiting user input from nested focus frame %s",
+            owner_frame_id,
+            focus_frame_id,
+        )
+
     def resume_from_approval(
         self,
         frame_id: str,
@@ -1365,9 +1436,8 @@ class SkillRuntime:
         """Return the recoverable focus child and put its parent back in WAITING_CHILD.
 
         This is the deterministic continuation path used before the root LLM
-        loop runs.  It intentionally handles the common immediate-child focus
-        case; deeper focus stacks can continue to use the legacy root fallback
-        until their unwind semantics are implemented explicitly.
+        loop runs.  If a focus stack exists, the deepest leaf is resumed by
+        default so user follow-up continues where execution was interrupted.
         """
         parent = self._get_frame(parent_frame_id)
         if parent.status != FrameStatus.RUNNING:
@@ -1379,58 +1449,11 @@ class SkillRuntime:
         if state.get("continuation_state") != "INTERRUPTED" and not state.get("recoverable"):
             return None
 
-        focus_frame_id = state.get("recoverable_focus_frame_id")
-        if not isinstance(focus_frame_id, str) or not focus_frame_id:
-            return None
-        if focus_frame_id == parent.frame_id:
-            return None
-
-        focus = self._load_related_child_frame(parent, focus_frame_id)
-        if focus is None:
-            self._clear_recoverable_child_reference(parent.frame_id)
-            return None
-        if focus.parent_frame_id != parent.frame_id:
-            return None
-
-        current_task_id = task_id or parent.current_task_id or parent.task_id
-        if current_task_id:
-            focus = self.rebind_frame_to_task(
-                focus.frame_id,
-                current_task_id,
-                session_id=parent.session_id,
-                conversation_id=parent.conversation_id,
-            )
-
-        if focus.status in TERMINAL_STATES:
-            if (
-                focus.private_working_state.get("continuation_state") != "INTERRUPTED"
-                or not focus.private_working_state.get("recoverable")
-            ):
-                self._clear_recoverable_child_reference(parent.frame_id, focus_frame_id)
-                return None
-            focus = self.reopen_recoverable_frame(
-                focus.frame_id,
-                task_id=current_task_id,
-            )
-            if current_task_id:
-                focus = self.rebind_frame_to_task(
-                    focus.frame_id,
-                    current_task_id,
-                    session_id=parent.session_id,
-                    conversation_id=parent.conversation_id,
-                )
-
-        if focus.status == FrameStatus.WAITING_CHILD:
-            self.resume_from_child(focus.frame_id)
-            refreshed_focus = self.get_frame(focus.frame_id)
-            if refreshed_focus is not None:
-                focus = refreshed_focus
-        elif focus.status == FrameStatus.AWAITING_APPROVAL:
-            return focus
-
-        self.mark_waiting_child(parent.frame_id)
-        refreshed_focus = self.get_frame(focus.frame_id)
-        return refreshed_focus or focus
+        return self._prepare_focus_stack_resume(
+            parent,
+            task_id=task_id,
+            allow_awaiting_user=False,
+        )
 
     def prepare_active_focus_resume(
         self,
@@ -1449,62 +1472,11 @@ class SkillRuntime:
                 f"prepare_active_focus_resume requires parent RUNNING/WAITING_CHILD, got {parent.status.value}"
             )
 
-        state = parent.private_working_state
-        focus_frame_id = state.get("active_focus_frame_id") or state.get("recoverable_focus_frame_id")
-        if not isinstance(focus_frame_id, str) or not focus_frame_id:
-            return None
-        if focus_frame_id == parent.frame_id:
-            return None
-
-        focus = self._load_related_child_frame(parent, focus_frame_id)
-        if focus is None:
-            self._clear_recoverable_child_reference(parent.frame_id)
-            return None
-        if focus.parent_frame_id != parent.frame_id:
-            return None
-
-        current_task_id = task_id or parent.current_task_id or parent.task_id
-        if current_task_id:
-            focus = self.rebind_frame_to_task(
-                focus.frame_id,
-                current_task_id,
-                session_id=parent.session_id,
-                conversation_id=parent.conversation_id,
-            )
-
-        if focus.status == FrameStatus.AWAITING_USER:
-            focus = self.resume_from_user_input(focus.frame_id, task_id=current_task_id)
-        elif focus.status in TERMINAL_STATES:
-            if (
-                focus.private_working_state.get("continuation_state") != "INTERRUPTED"
-                or not focus.private_working_state.get("recoverable")
-            ):
-                self._clear_recoverable_child_reference(parent.frame_id, focus_frame_id)
-                return None
-            focus = self.reopen_recoverable_frame(
-                focus.frame_id,
-                task_id=current_task_id,
-            )
-            if current_task_id:
-                focus = self.rebind_frame_to_task(
-                    focus.frame_id,
-                    current_task_id,
-                    session_id=parent.session_id,
-                    conversation_id=parent.conversation_id,
-                )
-
-        if focus.status == FrameStatus.WAITING_CHILD:
-            self.resume_from_child(focus.frame_id)
-            refreshed_focus = self.get_frame(focus.frame_id)
-            if refreshed_focus is not None:
-                focus = refreshed_focus
-        elif focus.status == FrameStatus.AWAITING_APPROVAL:
-            return focus
-
-        if parent.status == FrameStatus.RUNNING:
-            self.mark_waiting_child(parent.frame_id)
-        refreshed_focus = self.get_frame(focus.frame_id)
-        return refreshed_focus or focus
+        return self._prepare_focus_stack_resume(
+            parent,
+            task_id=task_id,
+            allow_awaiting_user=True,
+        )
 
     def clear_recoverable_child_focus(
         self,
@@ -1874,6 +1846,127 @@ class SkillRuntime:
             visited.add(child.frame_id)
             current = child
         return stack
+
+    def _prepare_focus_stack_resume(
+        self,
+        owner: SkillFrameState,
+        *,
+        task_id: str | None,
+        allow_awaiting_user: bool,
+    ) -> SkillFrameState | None:
+        """Prepare the deepest focus leaf for deterministic pre-root resume."""
+        stack = self._focus_stack_for_resume(owner)
+        if len(stack) < 2:
+            self._clear_recoverable_child_reference(owner.frame_id)
+            return None
+
+        current_task_id = task_id or owner.current_task_id or owner.task_id
+        if current_task_id:
+            rebound_stack: list[SkillFrameState] = []
+            for frame in stack:
+                rebound_stack.append(self.rebind_frame_to_task(
+                    frame.frame_id,
+                    current_task_id,
+                    session_id=owner.session_id,
+                    conversation_id=owner.conversation_id,
+                ))
+            stack = rebound_stack
+
+        focus = stack[-1]
+        if focus.status == FrameStatus.AWAITING_USER:
+            if not allow_awaiting_user:
+                return focus
+            focus = self.resume_from_user_input(focus.frame_id, task_id=current_task_id)
+            stack[-1] = focus
+        elif focus.status in TERMINAL_STATES:
+            if (
+                focus.private_working_state.get("continuation_state") != "INTERRUPTED"
+                or not focus.private_working_state.get("recoverable")
+            ):
+                self._clear_recoverable_child_reference(owner.frame_id, focus.frame_id)
+                return None
+            focus = self.reopen_recoverable_frame(
+                focus.frame_id,
+                task_id=current_task_id,
+            )
+            if current_task_id:
+                focus = self.rebind_frame_to_task(
+                    focus.frame_id,
+                    current_task_id,
+                    session_id=owner.session_id,
+                    conversation_id=owner.conversation_id,
+                )
+            stack[-1] = focus
+
+        if focus.status == FrameStatus.WAITING_CHILD:
+            self.resume_from_child(focus.frame_id)
+            refreshed_focus = self.get_frame(focus.frame_id)
+            if refreshed_focus is not None:
+                focus = refreshed_focus
+                stack[-1] = focus
+        elif focus.status == FrameStatus.AWAITING_APPROVAL:
+            self._mark_focus_ancestors_waiting(stack)
+            return focus
+
+        self._mark_focus_ancestors_waiting(stack)
+        refreshed_focus = self.get_frame(focus.frame_id)
+        return refreshed_focus or focus
+
+    def _focus_stack_for_resume(self, owner: SkillFrameState) -> list[SkillFrameState]:
+        """Load owner-to-leaf focus stack from persisted focus metadata."""
+        state = owner.private_working_state
+        snapshot = state.get("active_focus_stack") or state.get("recoverable_focus_stack")
+        if isinstance(snapshot, list) and snapshot:
+            stack = self._load_focus_stack_snapshot(owner, snapshot)
+            if len(stack) >= 2:
+                return stack
+
+        active_stack = self._active_descendant_stack(owner)
+        if len(active_stack) >= 2:
+            return active_stack
+
+        focus_frame_id = state.get("active_focus_frame_id") or state.get("recoverable_focus_frame_id")
+        if not isinstance(focus_frame_id, str) or not focus_frame_id or focus_frame_id == owner.frame_id:
+            return [owner]
+        focus = self._load_related_child_frame(owner, focus_frame_id)
+        if focus is None or focus.parent_frame_id != owner.frame_id:
+            return [owner]
+        return [owner, focus]
+
+    def _load_focus_stack_snapshot(
+        self,
+        owner: SkillFrameState,
+        snapshot: list[Any],
+    ) -> list[SkillFrameState]:
+        stack = [owner]
+        current = owner
+        visited = {owner.frame_id}
+        entries = [entry for entry in snapshot if isinstance(entry, dict)]
+        if not entries:
+            return stack
+
+        start_index = 0
+        first_frame_id = entries[0].get("frame_id")
+        if first_frame_id == owner.frame_id:
+            start_index = 1
+
+        for entry in entries[start_index:]:
+            frame_id = entry.get("frame_id")
+            if not isinstance(frame_id, str) or not frame_id or frame_id in visited:
+                break
+            child = self._load_related_child_frame(current, frame_id)
+            if child is None or child.parent_frame_id != current.frame_id:
+                break
+            stack.append(child)
+            visited.add(child.frame_id)
+            current = child
+        return stack
+
+    def _mark_focus_ancestors_waiting(self, stack: list[SkillFrameState]) -> None:
+        for ancestor in stack[:-1]:
+            refreshed = self.get_frame(ancestor.frame_id) or ancestor
+            if refreshed.status == FrameStatus.RUNNING:
+                self.mark_waiting_child(refreshed.frame_id)
 
     def _set_active_focus(
         self,

@@ -298,10 +298,17 @@ A1 = Parent 基于 S1.promoted_result 生成的最终回复
 6. 当前用户消息直接作为 prompt 进入同一个 child Skill frame。
 7. Root LLM 不先重新判断是否调用 Skill。
 
+如果 deepest leaf 不是 Root 的直接 child，等待态需要同时写回 immediate parent 和 Root owner：
+
+1. immediate parent 用于局部 frame 恢复和 child 结果回灌。
+2. Root owner 用于从 `contextId` 快速定位当前 focus leaf、生成用户可见追问，并在下一条用户消息到来时执行确定性路由。
+3. Root owner 的 `active_focus_stack` / `recoverable_focus_stack` 必须保留完整 `root -> ... -> leaf` 路径；不能只更新 immediate parent，否则 Root 只能看到自己处于 `WAITING_CHILD`，无法把下一轮用户输入直达 leaf。
+
 相关代码：
 
 1. `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/skill_runtime.py`
    - `mark_child_awaiting_user(...)`
+   - `mark_focus_awaiting_user(...)`
    - `prepare_active_focus_resume(...)`
    - `resume_from_user_input(...)`
 2. `tools/langgraph-biz-worker/src/langgraph_biz_worker/graphs/root_graph.py`
@@ -321,7 +328,7 @@ A1 = Parent 基于 S1.promoted_result 生成的最终回复
 
 协议消息上下文从 `runtime-message-events/<taskId>_<frameId>.jsonl` 恢复。`AWAITING_USER` 恢复不是重新拼一套 child prompt 逻辑，而是在同一套事件源上选择“该 frame 已完成到等待用户输入前”的恢复点，再追加当前用户回复 `U2`。
 
-确定性恢复仍必须保留 escape hatch：如果 `U2` 明确表示取消、停止、换题或放弃，child Skill 应识别该意图并返回受控终止/交还 Parent 的结果，而不是继续要求用户补齐原任务参数。
+确定性恢复仍必须保留 escape hatch：如果 `U2` 明确表示取消、停止、换题或放弃，child Skill 应识别该意图并通过 frame 退出/终止工具返回受控终止或交还 Parent 的结果，而不是继续要求用户补齐原任务参数。该判断属于当前 leaf frame 的 LLM 语义职责，不依赖 Root LLM 预先拦截。
 
 不应默认看到：
 
@@ -376,9 +383,22 @@ user: U2
 
 ### 目标上下文规则
 
-Recoverable interruption 是候选恢复，不是强制恢复。
+Recoverable interruption 在路由层默认恢复到当前 focus stack 的 deepest leaf，而不是先交给 Root LLM 判断。业务假设是：用户中止、TIMEOUT、ERROR 后的下一条普通消息，大多数是在补充信息、纠正方向或要求继续；如果用户真正不想继续，后续应通过会话 rollback / regenerate 或 leaf LLM 调用 frame 退出工具完成。
 
-下一轮用户消息 `U2` 到来时，Root prompt 应包含：
+下一轮用户消息 `U2` 到来时，BizWorker 的 frame event router 按以下优先级解析目标 frame：
+
+1. 若存在 `active_focus_stack` / `recoverable_focus_stack` 且 leaf 可恢复，直接把 `U2` 送入 deepest leaf frame。
+2. 若当前同一 `contextId` 仍有 RUNNING loop，`U2` 进入 `pendingUserInputs`，在 checkpoint 后送入当前 active frame。
+3. 若没有可恢复 focus leaf，才进入普通 root turn。
+
+直达 leaf 恢复时，leaf prompt 应包含：
+
+1. 当前用户消息 `U2`
+2. leaf frame 的 provider 协议消息恢复上下文
+3. `_awaiting_user_input` 或 `_runtime_protocol_recovery`
+4. 按 `context_visibility` 允许的父级 / root summary
+
+只有当没有可直达的 focus leaf，或后续 leaf 明确交还 Parent 时，Root prompt 才需要包含：
 
 1. 当前用户消息 `U2`
 2. bounded `runtimeVisibleConversation`
@@ -388,7 +408,7 @@ Recoverable interruption 是候选恢复，不是强制恢复。
 
 如果用户选择继续某个未完成 frame，恢复逻辑同样应从 `runtime-message-events/<taskId>_<frameId>.jsonl` 读取该 frame 的协议消息上下文，并从最后一个安全 checkpoint 继续。若事件日志不完整、checkpoint 不安全或 provider 协议无法重建，则降级使用 summary-based recoverable prompt，并保留原 frame/report/log 作为排障证据。
 
-Root 必须先判断：
+Root fallback 场景才需要判断：
 
 | 用户意图 | 动作 |
 | --- | --- |
@@ -399,12 +419,14 @@ Root 必须先判断：
 
 `_recoverable_interruption` 不写成普通 visible turn。它是控制态，优先级高于一般历史摘要，但低于明确的当前用户指令和安全/审批规则。
 
+控制面 stop / cancel 的语义是“停止当前执行流并保留 focus stack”，不是 terminal cancel。它应落为 `INTERRUPTED_BY_USER` / `user_cancelled` 这类 recoverable interruption。下一条普通用户消息仍然默认直达 deepest leaf。真正不再恢复旧 leaf 的能力边界是后续的会话 rollback / regenerate / discard，而不是普通停止按钮。
+
 ### 与 `AWAITING_USER` 的区别
 
 | 场景 | 是否确定接回 child | 是否需要 Root 判断意图 | 进入 prompt 的形态 |
 | --- | --- | --- | --- |
 | `AWAITING_USER` | 是 | 否，除非用户明确取消/改题由 child 识别后交还 Parent | runtime message events + `_awaiting_user_input` + 当前用户回复 |
-| recoverable child interruption | 否 | 是 | runtime message events 或 summary fallback + `_recoverable_interruption` |
+| recoverable child interruption | 是，默认直达 deepest leaf | 否，除非没有可恢复 leaf 或 leaf 交还 Parent | runtime message events 或 summary fallback + `_runtime_protocol_recovery` |
 | normal Skill completion | 否 | 不需要恢复 | visible turns + promoted metadata |
 
 ## Prompt 组装目标顺序

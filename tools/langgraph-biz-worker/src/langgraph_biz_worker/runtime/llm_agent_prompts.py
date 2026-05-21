@@ -83,8 +83,8 @@ def _build_system_prompt(
         "推断业务成功或业务 id。"
         "如果技能引用其 bundle 内的文件，使用 list_skill_resources 或 "
         "read_skill_resource；这些工具只会暴露当前 ClientApp 的公开技能资源。"
-        "只能使用已提供的工具。技能完成时必须调用 submit_skill_result；"
-        "仅输出自然语言不算完成。"
+        "只能使用已提供的工具。任何最终答复都必须调用 submit_skill_result 工具提交；"
+        "即使只是直接回答用户，也不要直接输出自然语言作为最终结果。"
     )
     runtime_prompt = _build_runtime_system_context_prompt(
         skill_input or {},

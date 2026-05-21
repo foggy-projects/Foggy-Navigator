@@ -23,6 +23,7 @@ from langgraph_biz_worker.graphs import root_graph as root_graph_module
 from langgraph_biz_worker.main import app as worker_app
 from langgraph_biz_worker.models import FrameStatus, QueryEvent
 from langgraph_biz_worker.routes import frame_interruption as frame_interruption_module
+from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_execution_report import read_frame_execution_report
 from mock_llm.main import app as mock_llm_app
 
@@ -146,6 +147,69 @@ def _message_tool_call_names(message: dict) -> list[str]:
                 names.append(function["name"])
             elif isinstance(call.get("name"), str):
                 names.append(call["name"])
+    return names
+
+
+def _llm_submission_payloads(context_id: str) -> list[dict]:
+    session_dir = session_data_dir(
+        Path(root_graph_module._data_root),
+        ("1970", "01", "01"),
+        context_id,
+        require_standard_context=True,
+    )
+    log_dir = session_dir / "logs" / "llm-submissions"
+    return [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(log_dir.glob("*.json"))
+    ]
+
+
+def _llm_submission_for(
+    payloads: list[dict],
+    *,
+    task_id: str,
+    skill_id: str | None = None,
+    iteration: int | None = None,
+) -> dict:
+    matches = []
+    for payload in payloads:
+        meta = payload.get("meta") or {}
+        if meta.get("taskId") != task_id:
+            continue
+        if skill_id is not None and meta.get("skillId") != skill_id:
+            continue
+        if iteration is not None and meta.get("iteration") != iteration:
+            continue
+        matches.append(payload)
+    assert matches, f"missing llm submission task_id={task_id} skill_id={skill_id} iteration={iteration}"
+    return matches[-1]
+
+
+def _submission_messages(payload: dict) -> list[dict]:
+    return list(((payload.get("body") or {}).get("messages") or []))
+
+
+def _submission_texts(payload: dict, message_type: str) -> list[str]:
+    return [
+        message.get("content") or ""
+        for message in _submission_messages(payload)
+        if (message.get("type") or message.get("role")) == message_type
+    ]
+
+
+def _submission_role_sequence(payload: dict) -> list[str]:
+    return [
+        message.get("type") or message.get("role") or ""
+        for message in _submission_messages(payload)
+    ]
+
+
+def _submission_tool_call_names(payload: dict, message_type: str = "ai") -> list[str]:
+    names: list[str] = []
+    for message in _submission_messages(payload):
+        if (message.get("type") or message.get("role")) != message_type:
+            continue
+        names.extend(_message_tool_call_names(message))
     return names
 
 
@@ -487,6 +551,234 @@ promote_to_parent:
     assert any("上一个子技能回合正在等待用户输入。" in content for content in resumed_system_messages)
     assert any(first_prompt in content for content in resumed_system_messages)
     assert any("当前 human message 是用户对上次提示的回复。" in content for content in resumed_system_messages)
+
+
+@pytest.mark.anyio
+async def test_scripted_llm_submission_log_captures_awaiting_child_resume_protocol(
+    monkeypatch,
+    mock_llm_server,
+    tmp_path,
+):
+    """Awaiting-user child resume should persist the exact child tool protocol replayed to the LLM."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-child-resume-log-{run_id}"
+    session_id = f"sess-e2e-child-resume-log-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-child-resume-log-{run_id}"
+    first_task_id = f"task_e2e_child_resume_log_001_{run_id}"
+    second_task_id = f"task_e2e_child_resume_log_002_{run_id}"
+    first_prompt = f"帮我提交一个工单 next:{trace_id}:001"
+    child_instruction = f"收集工单必要字段 next:{trace_id}:002"
+    second_prompt = f"类型平台反馈，标题日志对账，描述验证恢复协议 next:{trace_id}:003"
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "tms-ticket-agent.yaml").write_text(
+        """
+id: tms-ticket-agent
+name: TMS Ticket Agent
+description: Collect ticket fields and submit a TMS work order.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-child-resume-log",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_skill",
+                                    "args": {
+                                        "skill_id": "tms-ticket-agent",
+                                        "instruction": child_instruction,
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "请提供工单类型、标题、详细描述。",
+                                        "structured_output": {
+                                            "status": "WAITING_USER",
+                                            "next_step": "请提供工单类型、标题、详细描述。",
+                                            "missing_fields": [
+                                                "ticket_type",
+                                                "title",
+                                                "description",
+                                            ],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "工单字段已收齐。",
+                                        "structured_output": {
+                                            "ticket_ready": True,
+                                            "ticket_type": "平台反馈",
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+    }
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": first_prompt,
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {
+                    "contextId": context_id,
+                    "allowed_skills": [
+                        {
+                            "id": "tms-ticket-agent",
+                            "description": "Collect ticket fields and submit a TMS work order.",
+                        }
+                    ],
+                },
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": second_prompt,
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert continued_response.status_code == 200
+    first_events = _parse_worker_sse(first_response.text)
+    continued_events = _parse_worker_sse(continued_response.text)
+
+    first_child_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    continued_child_open = next(
+        event for event in continued_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    assert continued_child_open.skill_frame_id == first_child_open.skill_frame_id
+    assert continued_child_open.content == "Resuming frame for skill: tms-ticket-agent"
+    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+
+    continued_result = next(event for event in continued_events if event.type == "result")
+    assert continued_result.content == "工单字段已收齐。"
+    assert continued_result.structured_output == {
+        "ticket_ready": True,
+        "ticket_type": "平台反馈",
+    }
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+        f"next:{trace_id}:003",
+    ]
+    resumed_record = records[-2]
+    assert _record_messages(resumed_record, "user") == [child_instruction, second_prompt]
+    assert any(
+        "submit_skill_result" in _message_tool_call_names(message)
+        for message in _record_role_messages(resumed_record, "assistant")
+    )
+    assert any(
+        "WAITING_FOR_USER_INPUT" in (message.get("content") or "")
+        for message in _record_role_messages(resumed_record, "tool")
+    )
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len(payloads) == 4
+    resumed_payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id="tms-ticket-agent",
+    )
+    assert _submission_role_sequence(resumed_payload) == [
+        "system",
+        "human",
+        "ai",
+        "tool",
+        "human",
+    ]
+    assert _submission_texts(resumed_payload, "human") == [child_instruction, second_prompt]
+    assert _submission_tool_call_names(resumed_payload) == ["submit_skill_result"]
+    assert any(
+        "WAITING_FOR_USER_INPUT" in text
+        for text in _submission_texts(resumed_payload, "tool")
+    )
+    assert any(
+        "当前 human message 是用户对上次提示的回复。" in text
+        for text in _submission_texts(resumed_payload, "system")
+    )
+
+    root_payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id="conversation.root",
+    )
+    assert _submission_role_sequence(root_payload) == ["system", "human", "ai", "human"]
+    assert _submission_texts(root_payload, "human") == [first_prompt, second_prompt]
+    assert _submission_texts(root_payload, "ai") == ["请提供工单类型、标题、详细描述。"]
 
 
 @pytest.mark.anyio
@@ -1423,6 +1715,155 @@ async def test_scripted_ticket_with_attachment_does_not_analyze_image_by_default
 
 
 @pytest.mark.anyio
+async def test_scripted_llm_submission_log_captures_business_function_tool_protocol(
+    monkeypatch,
+    mock_llm_server,
+):
+    """Persisted LLM body should include raw tool_call and tool_result protocol messages."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-llm-log-function-{run_id}"
+    task_id = f"task_e2e_llm_log_function_{run_id}"
+    session_id = f"sess-e2e-llm-log-function-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-llm-log-function-{run_id}"
+    captured_inputs = []
+
+    def fake_invoke_business_function(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        captured_inputs.append({
+            "function_id": function_id,
+            "version": version,
+            "input_data": input_data,
+            "idempotency_key": idempotency_key,
+        })
+        return {
+            "functionId": function_id,
+            "status": "OK",
+            "summary": f"业务函数已受理 next:{trace_id}:002",
+            "ticketNo": "BUG-LLM-LOG-001",
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke_business_function,
+    )
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-llm-log-function",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_function",
+                                    "args": {
+                                        "function_id": "tms.ticket.createPlatformFeedback",
+                                        "version": "v1",
+                                        "input": {
+                                            "title": "提交日志对账工单",
+                                            "description": "验证 invoke_business_function tool protocol 落盘。",
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "工单 BUG-LLM-LOG-001 已提交。",
+                                        "structured_output": {
+                                            "ticketNo": "BUG-LLM-LOG-001",
+                                            "function_result_seen": True,
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"帮我提交一个平台反馈工单 next:{trace_id}:001",
+                "taskId": task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+                "runtime_context": {"task_scoped_token": "btt-e2e"},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _parse_worker_sse(response.text)
+    assert [event.tool_name for event in events if event.type == "tool_use"] == [
+        "invoke_business_function",
+        "submit_skill_result",
+    ]
+    assert next(event for event in events if event.type == "result").structured_output == {
+        "ticketNo": "BUG-LLM-LOG-001",
+        "function_result_seen": True,
+    }
+    assert len(captured_inputs) == 1
+    assert captured_inputs[0] == {
+        "function_id": "tms.ticket.createPlatformFeedback",
+        "version": "v1",
+        "input_data": {
+            "title": "提交日志对账工单",
+            "description": "验证 invoke_business_function tool protocol 落盘。",
+        },
+        "idempotency_key": captured_inputs[0]["idempotency_key"],
+    }
+    assert captured_inputs[0]["idempotency_key"].startswith(
+        "navigator:frm_"
+    )
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    records = debug.json()
+    assert [record["responseSummary"]["toolCalls"] for record in records] == [
+        ["invoke_business_function"],
+        ["submit_skill_result"],
+    ]
+    assert _message_tool_call_names(_record_role_messages(records[1], "assistant")[0]) == [
+        "invoke_business_function",
+    ]
+    assert any("BUG-LLM-LOG-001" in (message.get("content") or "") for message in _record_role_messages(records[1], "tool"))
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len(payloads) == 2
+    second_payload = _llm_submission_for(payloads, task_id=task_id, skill_id="conversation.root", iteration=2)
+    assert _submission_role_sequence(second_payload) == ["system", "human", "ai", "tool"]
+    assert _submission_tool_call_names(second_payload) == ["invoke_business_function"]
+    assert any("BUG-LLM-LOG-001" in content for content in _submission_texts(second_payload, "tool"))
+
+
+@pytest.mark.anyio
 async def test_scripted_ticket_from_image_content_analyzes_then_uses_result(monkeypatch, mock_llm_server):
     """When the user asks to use image content, the agent can analyze first and pass derived fields onward."""
     run_id = uuid.uuid4().hex[:8]
@@ -1846,6 +2287,125 @@ async def test_scripted_root_skill_second_turn_uses_runtime_visible_conversation
     assert not any("本回合前的最近对话:" in content for content in second_system_messages)
     assert not any(f"用户: {previous_user_message}" in content for content in second_system_messages)
     assert not any(f"助手: {previous_assistant_message}" in content for content in second_system_messages)
+
+
+@pytest.mark.anyio
+async def test_scripted_llm_submission_log_matches_root_recent_conversation(
+    monkeypatch,
+    mock_llm_server,
+):
+    """The persisted LLM body should match the runtime-visible two-turn conversation."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-llm-log-root-recent-{run_id}"
+    session_id = f"sess-e2e-llm-log-root-recent-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-llm-log-root-recent-{run_id}"
+    first_task_id = f"task_e2e_llm_log_root_recent_001_{run_id}"
+    second_task_id = f"task_e2e_llm_log_root_recent_002_{run_id}"
+    first_prompt = f"请记住工单 TMS-LLM-LOG-001 next:{trace_id}:001"
+    first_answer = "已记录工单 TMS-LLM-LOG-001。"
+    second_prompt = f"我刚才让你记住哪个工单 next:{trace_id}:002"
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-llm-log-root-recent",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": first_answer,
+                                        "structured_output": {"remembered_ticket": "TMS-LLM-LOG-001"},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "你刚才让我记住工单 TMS-LLM-LOG-001。",
+                                        "structured_output": {"saw_prior_turn": True},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
+
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+    }
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": first_prompt,
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {"contextId": context_id},
+            },
+        )
+        second_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": second_prompt,
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    second_events = _parse_worker_sse(second_response.text)
+    assert next(event for event in second_events if event.type == "result").structured_output == {
+        "saw_prior_turn": True,
+    }
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+    ]
+    assert _record_messages(records[1], "user") == [first_prompt, second_prompt]
+    assert _record_messages(records[1], "assistant") == [first_answer]
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len(payloads) == 2
+    second_payload = _llm_submission_for(payloads, task_id=second_task_id, skill_id="conversation.root")
+    assert _submission_role_sequence(second_payload) == ["system", "human", "ai", "human"]
+    assert _submission_texts(second_payload, "human") == [first_prompt, second_prompt]
+    assert _submission_texts(second_payload, "ai") == [first_answer]
+    assert _submission_tool_call_names(second_payload) == []
 
 
 @pytest.mark.anyio
@@ -2947,6 +3507,218 @@ async def test_scripted_root_skill_shelves_interruption_for_unrelated_task(
 
 
 @pytest.mark.anyio
+async def test_scripted_llm_submission_log_directly_resumes_nested_interruption_leaf(
+    monkeypatch,
+    mock_llm_server,
+    tmp_path,
+):
+    """A nested interrupted focus should resume the deepest leaf before root LLM fallback."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-nested-interrupt-log-{run_id}"
+    session_id = f"sess-e2e-nested-interrupt-log-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-nested-interrupt-log-{run_id}"
+    first_task_id = f"task_e2e_nested_interrupt_log_001_{run_id}"
+    second_task_id = f"task_e2e_nested_interrupt_log_002_{run_id}"
+    child_skill_id = f"nested-child-{run_id}"
+    grandchild_skill_id = f"nested-grandchild-{run_id}"
+    second_prompt = f"补充深层节点信息，请继续处理 next:{trace_id}:001"
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / f"{child_skill_id}.yaml").write_text(
+        f"""
+id: {child_skill_id}
+name: Nested Child Skill
+description: Holds the first nested business frame.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+""".strip(),
+        encoding="utf-8",
+    )
+    (manifest_dir / f"{grandchild_skill_id}.yaml").write_text(
+        f"""
+id: {grandchild_skill_id}
+name: Nested Grandchild Skill
+description: Handles the deepest interrupted business frame.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
+    root_graph_module._skill_registry.load()
+    root_graph_module._ensure_system_root_skill()
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-nested-interrupt-log",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "请继续提供深层业务信息。",
+                                        "structured_output": {
+                                            "turn_status": "WAITING_FOR_USER_INPUT",
+                                            "user_message": "请继续提供深层业务信息。",
+                                            "required_fields": ["deep_detail"],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
+    frame_interruption_module.configure(
+        root_graph_module.get_runtime(),
+        root_graph_module.get_journal(),
+    )
+    runtime = root_graph_module.get_runtime()
+    root_frame_id = runtime.invoke_skill(
+        task_id=first_task_id,
+        skill_id="system.root",
+        conversation_id=context_id,
+        session_id=session_id,
+        current_task_id=first_task_id,
+        origin_task_id=first_task_id,
+    )
+    child_frame_id = runtime.invoke_child_skill(
+        root_frame_id,
+        child_skill_id,
+        {"order_id": "ORD-NESTED"},
+    )
+    grandchild_frame_id = runtime.invoke_child_skill(
+        child_frame_id,
+        grandchild_skill_id,
+        {"order_id": "ORD-NESTED", "step": "deep"},
+    )
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        interruption_response = await worker_client.post(
+            "/api/v1/frames/interruption",
+            json={
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "context_id": context_id,
+                "reason": "user_cancelled",
+                "error": "User aborted while nested child skill was running",
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": second_prompt,
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert interruption_response.status_code == 200
+    assert interruption_response.json()["status"] == "recorded"
+    assert continued_response.status_code == 200
+    events = _parse_worker_sse(continued_response.text)
+    focus_open = next(
+        event for event in events
+        if event.type == "skill_frame_open" and event.skill_id == grandchild_skill_id
+    )
+    result = next(event for event in events if event.type == "result")
+    assert focus_open.skill_frame_id == grandchild_frame_id
+    assert focus_open.parent_frame_id == child_frame_id
+    assert focus_open.content == f"Resuming frame for skill: {grandchild_skill_id}"
+    assert result.content == "请继续提供深层业务信息。"
+    assert result.structured_output["required_fields"] == ["deep_detail"]
+    assert not any(event.tool_name == "shelve_interrupted_frame" for event in events)
+    assert not any(event.tool_name == "resume_recoverable_child_skill" for event in events)
+    assert not any(event.tool_name == "invoke_business_skill" for event in events)
+
+    root = runtime.get_frame(root_frame_id)
+    child = runtime.get_frame(child_frame_id)
+    grandchild = runtime.get_frame(grandchild_frame_id)
+    assert root is not None
+    assert child is not None
+    assert grandchild is not None
+    assert root.status == FrameStatus.WAITING_CHILD
+    assert child.status == FrameStatus.WAITING_CHILD
+    assert grandchild.status == FrameStatus.AWAITING_USER
+    assert root.current_task_id == second_task_id
+    assert child.current_task_id == second_task_id
+    assert grandchild.current_task_id == second_task_id
+    assert root.private_working_state["recoverable_focus_frame_id"] == grandchild_frame_id
+    assert [entry["frame_id"] for entry in root.private_working_state["recoverable_focus_stack"]] == [
+        root_frame_id,
+        child_frame_id,
+        grandchild_frame_id,
+    ]
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [f"next:{trace_id}:001"]
+    system_messages = _record_messages(records[0], "system")
+    assert _record_messages(records[0], "user") == [second_prompt]
+    assert records[0]["responseSummary"]["toolCalls"] == ["submit_skill_result"]
+    assert any("当前业务技能回合上下文:" in content for content in system_messages)
+    assert any(grandchild_skill_id in content for content in system_messages)
+    assert not any("可恢复焦点栈:" in content for content in system_messages)
+    assert not any("shelve_interrupted_frame" in content for content in system_messages)
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len(payloads) == 1
+    payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id=grandchild_skill_id,
+    )
+    assert _submission_role_sequence(payload) == ["system", "human"]
+    system_text = "\n".join(_submission_texts(payload, "system"))
+    assert "当前业务技能回合上下文:" in system_text
+    assert grandchild_skill_id in system_text
+    assert "可恢复焦点栈:" not in system_text
+    assert _submission_texts(payload, "human") == [second_prompt]
+
+
+@pytest.mark.anyio
 async def test_scripted_root_skill_resumes_interrupted_child_frame(
     monkeypatch,
     mock_llm_server,
@@ -3005,6 +3777,8 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
         assert register.status_code == 200
 
     monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
     frame_interruption_module.configure(
         root_graph_module.get_runtime(),
         root_graph_module.get_journal(),
@@ -3108,6 +3882,26 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
     ]
     assert all_user_messages == [f"继续 next:{trace_id}:001"] * len(records)
     assert any("当前业务技能回合上下文:" in content for content in all_system_messages)
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len(payloads) == 2
+    payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id="exception_triage",
+    )
+    assert _submission_role_sequence(payload) == ["system", "human"]
+    assert _submission_texts(payload, "human") == [f"继续 next:{trace_id}:001"]
+    system_text = "\n".join(_submission_texts(payload, "system"))
+    assert "当前业务技能回合上下文:" in system_text
+
+    root_payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id="conversation.root",
+    )
+    assert _submission_role_sequence(root_payload) == ["system", "human"]
+    assert _submission_texts(root_payload, "human") == [f"继续 next:{trace_id}:001"]
 
 
 @pytest.mark.anyio

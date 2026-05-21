@@ -279,10 +279,10 @@ Skill 内部完整过程可以保留在 frame/report/log 中，不受 Parent run
 
 ### `AWAITING_USER` Escape Hatch
 
-`AWAITING_USER` 的默认路由是确定性接回 child frame，但 child 必须提供退出机制：
+`AWAITING_USER` 的默认路由是确定性接回当前 focus stack 的 deepest leaf frame。用户中止、TIMEOUT、ERROR 后只要 focus leaf 可恢复，下一条普通用户消息也遵循同一规则。child 必须提供退出机制：
 
 1. 如果用户明确表示“取消”“停止”“换个任务”“先别做这个”等，child Skill 应识别为退出或改题意图。
-2. child 不应继续要求用户补齐原任务参数，而应返回受控终止结果，例如 `skill_terminated_by_user` / `abandoned` / `handoff_to_parent`。
+2. child 不应继续要求用户补齐原任务参数，而应调用 frame 退出/终止工具，返回受控终止结果，例如 `skill_terminated_by_user` / `abandoned` / `handoff_to_parent`。
 3. Parent 收到该结果后，应清理 active focus / pending awaiting child，并按用户新意图决定结束、切换任务或重新进入 Root 判断。
 4. 如果 child 无法判断用户是在补充信息还是取消任务，应以澄清问题收口，不应继续盲目推进有副作用的动作。
 5. 该退出机制属于 Skill system contract，不能依赖 Java `recentConversation` 或 Root LLM 先行拦截。
@@ -325,7 +325,7 @@ Skill 正常完成后，下一轮普通对话上下文的可见投影见 [04-run
 4. Parent report 是只记录 child refs/digest，还是复制 child report 摘要，需要进一步明确。
 5. Skill report/log 完整证据的读取 API 与按需摘要策略。
 6. `AWAITING_USER` 的用户取消/换题 escape hatch，需要在 child Skill contract 与 active focus 清理逻辑中固化。
-7. 如果未来允许 Skill 调用 Skill，应把 `active_focus_frame_id` / `pending_awaiting_user_child_frame_id` 从单个标量升级为 focus stack；当前阶段不把任意深度 nested Skill 作为默认能力。
+7. Nested Skill 的恢复以 focus stack 为准；`active_focus_frame_id` / `recoverable_focus_frame_id` 只作为 leaf 快捷索引，恢复路由必须能从 `active_focus_stack` / `recoverable_focus_stack` 定位 deepest leaf。
 
 ## 初步验收标准
 
