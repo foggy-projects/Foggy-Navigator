@@ -4838,6 +4838,299 @@ promote_to_parent:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("interrupt_reason", "error_text"),
+    [
+        ("model_timeout", "Model timed out while nested leaf was running"),
+        ("model_error", "Model error while nested leaf was running"),
+    ],
+)
+async def test_scripted_nested_recoverable_leaf_can_handoff_to_parent_after_error(
+    monkeypatch,
+    mock_llm_server,
+    tmp_path,
+    interrupt_reason,
+    error_text,
+):
+    """A recoverable ERROR/TIMEOUT leaf can hand off to its parent on resume."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-nested-handoff-{interrupt_reason}-{run_id}"
+    session_id = f"sess-e2e-nested-handoff-{interrupt_reason}-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-nested-handoff-{interrupt_reason}-{run_id}"
+    first_task_id = f"task_e2e_nested_handoff_001_{run_id}"
+    second_task_id = f"task_e2e_nested_handoff_002_{run_id}"
+    child_skill_id = f"nested-handoff-child-{run_id}"
+    grandchild_skill_id = f"nested-handoff-grandchild-{run_id}"
+    second_prompt = f"刚才中断后换个处理方式，让上层综合判断 next:{trace_id}:001"
+    leaf_handoff_summary = "叶子技能已把中断后的用户新意图交回父技能处理。"
+    parent_summary = "父技能已接管中断后的新意图，并给出最终答复。"
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / f"{child_skill_id}.yaml").write_text(
+        f"""
+id: {child_skill_id}
+name: Nested Handoff Parent Skill
+description: Synthesizes a recoverable leaf handoff.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+  - requires_parent_synthesis
+""".strip(),
+        encoding="utf-8",
+    )
+    (manifest_dir / f"{grandchild_skill_id}.yaml").write_text(
+        f"""
+id: {grandchild_skill_id}
+name: Nested Handoff Leaf Skill
+description: Hands recoverable interruption context back to its parent.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+  - requires_parent_synthesis
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
+    root_graph_module._skill_registry.load()
+    root_graph_module._ensure_system_root_skill()
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-nested-recoverable-leaf-handoff",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "handoff_to_parent",
+                                    "args": {
+                                        "summary": leaf_handoff_summary,
+                                        "reason": "CHANGE_TOPIC",
+                                        "intent_resolution": "ASK_PARENT_TO_DECIDE",
+                                        "requires_parent_synthesis": True,
+                                        "parent_instruction": "请父技能基于用户新意图综合答复。",
+                                        "structured_output": {
+                                            "handoff_stage": "leaf",
+                                            "interruption_reason": interrupt_reason,
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": parent_summary,
+                                        "structured_output": {
+                                            "status": "FINAL_FOR_USER",
+                                            "message": parent_summary,
+                                            "requires_parent_synthesis": False,
+                                            "handled_leaf_handoff": True,
+                                            "interruption_reason": interrupt_reason,
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
+    frame_interruption_module.configure(
+        root_graph_module.get_runtime(),
+        root_graph_module.get_journal(),
+    )
+    runtime = root_graph_module.get_runtime()
+    root_frame_id = runtime.invoke_skill(
+        task_id=first_task_id,
+        skill_id="system.root",
+        conversation_id=context_id,
+        session_id=session_id,
+        current_task_id=first_task_id,
+        origin_task_id=first_task_id,
+    )
+    child_frame_id = runtime.invoke_child_skill(
+        root_frame_id,
+        child_skill_id,
+        {"order_id": "ORD-NESTED-HANDOFF"},
+    )
+    grandchild_frame_id = runtime.invoke_child_skill(
+        child_frame_id,
+        grandchild_skill_id,
+        {"order_id": "ORD-NESTED-HANDOFF", "step": "leaf"},
+    )
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        interruption_response = await worker_client.post(
+            "/api/v1/frames/interruption",
+            json={
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "context_id": context_id,
+                "reason": interrupt_reason,
+                "error": error_text,
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": second_prompt,
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert interruption_response.status_code == 200
+    assert interruption_response.json()["status"] == "recorded"
+    assert continued_response.status_code == 200
+    events = _parse_worker_sse(continued_response.text)
+    assert not [event for event in events if event.type == "error"]
+    leaf_open = next(
+        event for event in events
+        if event.type == "skill_frame_open" and event.skill_id == grandchild_skill_id
+    )
+    parent_open = next(
+        event for event in events
+        if (
+            event.type == "skill_frame_open"
+            and event.skill_id == child_skill_id
+            and event.skill_frame_id == child_frame_id
+        )
+    )
+    close_ids = [
+        event.skill_frame_id
+        for event in events
+        if event.type == "skill_frame_close"
+    ]
+    result = next(event for event in events if event.type == "result")
+    assert leaf_open.skill_frame_id == grandchild_frame_id
+    assert leaf_open.parent_frame_id == child_frame_id
+    assert leaf_open.content == f"Resuming frame for skill: {grandchild_skill_id}"
+    assert parent_open.content == f"Resuming parent frame after child completion: {child_skill_id}"
+    assert close_ids == [grandchild_frame_id, child_frame_id]
+    assert any(event.tool_name == "handoff_to_parent" for event in events)
+    assert result.content == parent_summary
+    assert result.structured_output["handled_leaf_handoff"] is True
+    assert result.structured_output["interruption_reason"] == interrupt_reason
+
+    root = runtime.get_frame(root_frame_id)
+    child = runtime.get_frame(child_frame_id)
+    grandchild = runtime.get_frame(grandchild_frame_id)
+    assert root is not None
+    assert child is not None
+    assert grandchild is not None
+    assert root.status == FrameStatus.RUNNING
+    assert child.status == FrameStatus.COMPLETED
+    assert grandchild.status == FrameStatus.COMPLETED
+    assert "recoverable_focus_frame_id" not in root.private_working_state
+    assert "active_focus_frame_id" not in root.private_working_state
+    parent_promoted = root.private_working_state["child_results"][child_frame_id]
+    assert parent_promoted["structured_output"]["handled_leaf_handoff"] is True
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:001",
+    ]
+    assert [_record_messages(record, "user") for record in records] == [
+        [second_prompt],
+        [second_prompt],
+    ]
+    assert [record["responseSummary"]["toolCalls"] for record in records] == [
+        ["handoff_to_parent"],
+        ["submit_skill_result"],
+    ]
+    parent_system_messages = _record_messages(records[1], "system")
+    assert any("刚完成的子技能提升结果:" in content for content in parent_system_messages)
+    assert any(leaf_handoff_summary in content for content in parent_system_messages)
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len(payloads) == 2
+    leaf_payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id=grandchild_skill_id,
+    )
+    parent_payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id=child_skill_id,
+    )
+    assert _submission_role_sequence(leaf_payload) == ["system", "human"]
+    assert _submission_role_sequence(parent_payload) == ["system", "human"]
+    assert _submission_texts(leaf_payload, "human") == [second_prompt]
+    assert _submission_texts(parent_payload, "human") == [second_prompt]
+    parent_system_text = "\n".join(_submission_texts(parent_payload, "system"))
+    assert "刚完成的子技能提升结果:" in parent_system_text
+    assert leaf_handoff_summary in parent_system_text
+
+    leaf_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=grandchild_frame_id,
+    )
+    parent_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=child_frame_id,
+    )
+    assert _runtime_initial_roles(leaf_events) == ["system", "user"]
+    assert _runtime_tool_call_names(leaf_events) == ["handoff_to_parent"]
+    assert "frame_completed" in _runtime_checkpoints(leaf_events)
+    assert _runtime_initial_roles(parent_events) == ["system", "user"]
+    assert _runtime_tool_call_names(parent_events) == ["submit_skill_result"]
+    assert "frame_completed" in _runtime_checkpoints(parent_events)
+    assert _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=root_frame_id,
+    ) == []
+
+
+@pytest.mark.anyio
 async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_server):
     """Replay the accepted smoke trace and avoid duplicate child work on continue."""
     run_id = uuid.uuid4().hex[:8]

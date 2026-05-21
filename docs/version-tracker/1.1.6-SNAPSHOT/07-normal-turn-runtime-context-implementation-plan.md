@@ -379,6 +379,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 2026-05-21: scripted E2E log parity 已扩展到 nested recoverable leaf direct resume 与 interrupted child resume，覆盖 deepest leaf 直达恢复不触发 Root LLM、child 恢复完成后 Root synthesis 的 event JSONL 对账。
 - 2026-05-21: 已实现 child-only `handoff_to_parent`。`AWAITING_USER` 或 recoverable leaf 直达恢复时，用户取消/停止/换题可由当前 child LLM 受控退出；简单取消可 direct result 返回，需父级重新判断时可设置 `requires_parent_synthesis=true`。
 - 2026-05-21: 已补齐 child handoff 后 Root 同 turn synthesis 的 scripted E2E 覆盖。mock LLM 支持同一 cursor 按注册顺序返回多次响应，用于模拟 child 与 Root 共享同一用户消息但产生两次真实 ChatModel 调用的恢复链路。
+- 2026-05-21: 已补齐 recoverable ERROR/TIMEOUT 后 deepest leaf handoff 的 scripted E2E 覆盖。`model_timeout` / `model_error` 中断后，下一条用户消息默认直达 leaf；leaf 可调用 `handoff_to_parent`，parent 在同一 turn 接管并提交最终结果。
 
 ### Testing
 
@@ -419,10 +420,12 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
   - result: `16 passed, 1 warning`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_child_handoff_can_request_root_synthesis -q`
   - result: `1 passed, 3 warnings`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_nested_recoverable_leaf_can_handoff_to_parent_after_error -q`
+  - result: `2 passed, 3 warnings`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -q`
-  - result: `25 passed, 3 warnings`
+  - result: `27 passed, 3 warnings`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest -q`
-  - result: `600 passed, 6 skipped, 11 warnings`
+  - result: `602 passed, 6 skipped, 11 warnings`
 
 ### Experience
 
@@ -433,6 +436,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 已通过 scripted E2E 验证关键 runtime context 场景的 `llm-submissions` 与 `runtime-message-events` 对账，包括普通多轮、业务函数工具协议、等待用户输入恢复和 nested completion unwind。
 - 已通过 scripted E2E 验证 `AWAITING_USER` child 恢复后，用户取消会调用 `handoff_to_parent`，不重新打开同一业务 skill，且 Root active focus 被清理。
 - 已通过 scripted E2E 验证 child 调用 `handoff_to_parent(requires_parent_synthesis=true)` 后，Root 会在同一用户 turn 继续生成最终答复；`llm-submissions` 分别保存 child 与 Root 的真实请求体，runtime message events 也可分别对账。
+- 已通过 scripted E2E 验证 `model_timeout` / `model_error` recoverable leaf 恢复后可以调用 `handoff_to_parent` 交还 parent；parent 的 submission 能看到 leaf promoted handoff summary，并在同一 turn 生成最终结果。
 - 已通过 captured real smoke replay 验证首轮 root/child 工具链、恢复继续、换题请求的 7 次真实 ChatModel 调用均保存 `llm-submissions`，并能与 root/child runtime message events 对账。
 - 真实前端长会话与 TMS 工单链路仍建议在修复上游 `upstream_ref` 后做一次联调验收。
 
