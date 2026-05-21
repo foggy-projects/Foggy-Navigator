@@ -150,6 +150,52 @@ class BusinessAgentSessionServiceTest {
         assertTrue(result.isHasMore());
     }
 
+    @Test
+    void getMessages_hidesInternalRuntimeMessagesByDefault() {
+        BusinessAgentSessionEntity session = session(CONTEXT_ID_1, "session_1");
+        when(sessionRepository.findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
+                "tenant_01", "app_01", "upstream_01", CONTEXT_ID_1))
+                .thenReturn(Optional.of(session));
+        when(messageRepository.findBySessionIdOrderByCreatedAtAsc(eq("session_1"), any(Pageable.class)))
+                .thenReturn(List.of(
+                        userMessage("msg_user", "session_1", "hi", LocalDateTime.now()),
+                        internalMessage("msg_tool_call", "session_1", "assistant", "submit_skill_result",
+                                "{\"type\":\"TOOL_CALL_START\",\"toolName\":\"submit_skill_result\"}"),
+                        internalMessage("msg_tool_result", "session_1", "tool", "{\"ok\":true}",
+                                "{\"type\":\"TOOL_CALL_RESULT\"}"),
+                        internalMessage("msg_root_state", "session_1", "assistant", "Opening conversation root frame",
+                                "{\"type\":\"STATE_SYNC\",\"subtype\":\"skill_frame_open\",\"content\":\"Opening conversation root frame\"}"),
+                        internalMessage("msg_result", "session_1", "assistant", "你好",
+                                "{\"type\":\"TASK_COMPLETED\"}")));
+
+        BusinessAgentSessionMessagesDTO result = service.getMessages(
+                "tenant_01", "app_01", "upstream_01", CONTEXT_ID_1, null, 20);
+
+        assertEquals(List.of("msg_user", "msg_result"), result.getMessages().stream()
+                .map(message -> message.getMessageId())
+                .toList());
+    }
+
+    @Test
+    void getMessages_canIncludeInternalRuntimeMessagesForDebug() {
+        BusinessAgentSessionEntity session = session(CONTEXT_ID_1, "session_1");
+        when(sessionRepository.findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
+                "tenant_01", "app_01", "upstream_01", CONTEXT_ID_1))
+                .thenReturn(Optional.of(session));
+        when(messageRepository.findBySessionIdOrderByCreatedAtAsc(eq("session_1"), any(Pageable.class)))
+                .thenReturn(List.of(
+                        userMessage("msg_user", "session_1", "hi", LocalDateTime.now()),
+                        internalMessage("msg_tool_call", "session_1", "assistant", "submit_skill_result",
+                                "{\"type\":\"TOOL_CALL_START\",\"toolName\":\"submit_skill_result\"}")));
+
+        BusinessAgentSessionMessagesDTO result = service.getMessages(
+                "tenant_01", "app_01", "upstream_01", CONTEXT_ID_1, null, 20, true);
+
+        assertEquals(List.of("msg_user", "msg_tool_call"), result.getMessages().stream()
+                .map(message -> message.getMessageId())
+                .toList());
+    }
+
     private BusinessAgentTaskEntity task() {
         BusinessAgentTaskEntity task = new BusinessAgentTaskEntity();
         task.setTaskId("bt_01");
@@ -194,6 +240,23 @@ class BusinessAgentSessionServiceTest {
         entity.setRole("USER");
         entity.setContent(content);
         entity.setCreatedAt(createdAt);
+        return entity;
+    }
+
+    private SessionMessageEntity internalMessage(
+            String id,
+            String sessionId,
+            String role,
+            String content,
+            String metadata) {
+        SessionMessageEntity entity = new SessionMessageEntity();
+        entity.setId(id);
+        entity.setSessionId(sessionId);
+        entity.setTaskId("task_01");
+        entity.setRole(role);
+        entity.setContent(content);
+        entity.setMetadata(metadata);
+        entity.setCreatedAt(LocalDateTime.now());
         return entity;
     }
 }

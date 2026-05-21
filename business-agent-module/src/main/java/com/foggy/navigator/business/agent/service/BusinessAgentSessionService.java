@@ -8,6 +8,7 @@ import com.foggy.navigator.business.agent.model.entity.BusinessAgentSessionEntit
 import com.foggy.navigator.business.agent.model.entity.BusinessAgentTaskEntity;
 import com.foggy.navigator.business.agent.repository.BusinessAgentSessionMessageRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentSessionRepository;
+import com.foggy.navigator.business.agent.support.BusinessAgentSessionMessageVisibility;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -186,6 +187,18 @@ public class BusinessAgentSessionService {
             String contextId,
             String cursor,
             int limit) {
+        return getMessages(tenantId, clientAppId, upstreamUserId, contextId, cursor, limit, false);
+    }
+
+    @Transactional(readOnly = true)
+    public BusinessAgentSessionMessagesDTO getMessages(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String contextId,
+            String cursor,
+            int limit,
+            boolean includeInternal) {
         validateGrant(tenantId, clientAppId, upstreamUserId);
         BusinessAgentSessionEntity session = findSession(tenantId, clientAppId, upstreamUserId, contextId);
 
@@ -211,6 +224,8 @@ public class BusinessAgentSessionService {
         dto.setContextId(session.getContextId());
         dto.setSessionId(session.getSessionId());
         dto.setMessages(page.stream()
+                .filter(message -> includeInternal
+                        || BusinessAgentSessionMessageVisibility.isVisibleByDefault(message))
                 .map(message -> BusinessAgentSessionMessageDTO.fromEntity(message, session.getContextId()))
                 .toList());
         dto.setNextCursor(page.isEmpty() ? cursor : page.get(page.size() - 1).getId());

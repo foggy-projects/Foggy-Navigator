@@ -25,6 +25,7 @@ import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.business.agent.service.SkillArtifactService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
+import com.foggy.navigator.business.agent.support.BusinessAgentSessionMessageVisibility;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
@@ -720,6 +721,7 @@ public class OpenApiController {
             @PathVariable String contextId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(defaultValue = "false") boolean includeInternal,
             HttpServletRequest request) {
         BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
         if (service == null) {
@@ -733,7 +735,8 @@ public class OpenApiController {
                 upstreamUserId,
                 contextId,
                 cursor,
-                limit));
+                limit,
+                includeInternal));
     }
 
     private ResolvedClientAppCredentialDTO resolveClientAppCredential(
@@ -1174,6 +1177,7 @@ public class OpenApiController {
             @PathVariable String taskId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(defaultValue = "false") boolean includeInternal,
             HttpServletRequest request) {
         ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppRuntimeToken(request);
         OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
@@ -1200,6 +1204,8 @@ public class OpenApiController {
         String nextCursor = page.isEmpty() ? cursor : page.get(page.size() - 1).getId();
 
         List<OpenSessionMessageDTO> dtos = page.stream()
+                .filter(message -> includeInternal
+                        || BusinessAgentSessionMessageVisibility.isVisibleByDefault(message))
                 .map(m -> toOpenSessionMessageDTO(m, contextId))
                 .toList();
 
@@ -1273,6 +1279,7 @@ public class OpenApiController {
             @PathVariable String contextId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(defaultValue = "false") boolean includeInternal,
             HttpServletRequest request) {
         ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppRuntimeToken(request);
         OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
@@ -1295,6 +1302,8 @@ public class OpenApiController {
         String nextCursor = page.isEmpty() ? cursor : page.get(page.size() - 1).getId();
 
         List<OpenSessionMessageDTO> dtos = page.stream()
+                .filter(message -> includeInternal
+                        || BusinessAgentSessionMessageVisibility.isVisibleByDefault(message))
                 .map(m -> toOpenSessionMessageDTO(m, contextId))
                 .toList();
 

@@ -37,7 +37,6 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from langgraph_biz_worker.runtime.file_layout import (  # noqa: E402
-    generate_standard_context_id,
     session_data_dir,
 )
 
@@ -78,7 +77,7 @@ def main() -> int:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    context_id = args.context_id or generate_standard_context_id()
+    context_id = args.context_id or ""
     if args.validate_only and not args.context_id:
         raise SystemExit("--context-id is required with --validate-only")
     data_root = Path(args.data_root) if args.data_root else WORKER_ROOT / "data"
@@ -241,6 +240,9 @@ def run_openapi_smoke(
         attachments=[],
     )
     write_json(output_dir / "02-first-ask.json", first)
+    first_context_id = first.get("contextId") or context_id
+    if not first_context_id:
+        raise RuntimeError(f"first ask response did not include contextId: {first}")
     first_task = wait_task(
         client,
         args.agent_id,
@@ -254,7 +256,7 @@ def run_openapi_smoke(
     ticket = client.ask(
         agent_id=args.agent_id,
         message=args.ticket_message,
-        context_id=context_id,
+        context_id=first_context_id,
         max_turns=args.max_turns,
         model_config_id=args.model_config_id,
         client_context={"source": "live-upstream-runtime-context-smoke", "runId": run_id},
@@ -270,9 +272,10 @@ def run_openapi_smoke(
         output_dir=output_dir,
         prefix="03-ticket",
     )
+    effective_context_id = ticket.get("contextId") or first_context_id
 
     task_messages_payload = client.task_messages(args.agent_id, ticket["taskId"], limit=200)
-    session_messages_payload = client.session_messages(args.agent_id, context_id, limit=200)
+    session_messages_payload = client.session_messages(args.agent_id, effective_context_id, limit=200)
     write_json(output_dir / "04-ticket-task-messages.json", task_messages_payload)
     write_json(output_dir / "05-session-messages-reopen.json", session_messages_payload)
 
@@ -281,7 +284,7 @@ def run_openapi_smoke(
         "preflight": preflight,
         "firstTask": first_task,
         "ticketTask": ticket_task,
-        "contextId": ticket.get("contextId") or first.get("contextId") or context_id,
+        "contextId": effective_context_id,
         "taskMessages": list(task_messages_payload.get("messages") or []),
         "sessionMessages": list(session_messages_payload.get("messages") or []),
     }
@@ -721,12 +724,13 @@ class NavigatorOpenApiClient:
         payload = {
             "message": message,
             "question": message,
-            "contextId": context_id,
             "maxTurns": max_turns,
             "clientContext": client_context,
             "metadata": {"modelConfigId": model_config_id} if model_config_id else {},
             "attachments": attachments,
         }
+        if context_id:
+            payload["contextId"] = context_id
         if model_config_id:
             payload["modelConfigId"] = model_config_id
         result = self.request(

@@ -562,6 +562,50 @@ class OpenApiControllerMessageMappingTest {
         assertEquals(STANDARD_CONTEXT_ID, captor.getValue().getContextId());
     }
 
+    @Test
+    void getSessionMessages_hidesInternalRuntimeMessagesByDefault() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        CodingAgentRepository codingAgentRepository = mock(CodingAgentRepository.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                codingAgentRepository,
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        CodingAgentEntity agentEntity = new CodingAgentEntity();
+        agentEntity.setAgentId("agent-1");
+        agentEntity.setTenantId("tenant-1");
+        agentEntity.setUserId("owner-1");
+        when(codingAgentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
+                .thenReturn(Optional.of(agentEntity));
+        when(sessionQueryService.resolveSessionId("ctx-1", "owner-1")).thenReturn(Optional.of("session-1"));
+        when(sessionQueryService.getSessionMessages("session-1", null, 20)).thenReturn(List.of(
+                userMessage("msg_user", "session-1", "hi"),
+                message("msg_tool_call", "session-1", "assistant", "submit_skill_result",
+                        "{\"type\":\"TOOL_CALL_START\",\"toolName\":\"submit_skill_result\"}"),
+                message("msg_tool_result", "session-1", "tool", "{\"ok\":true}",
+                        "{\"type\":\"TOOL_CALL_RESULT\"}"),
+                message("msg_root_state", "session-1", "assistant", "Opening conversation root frame",
+                        "{\"type\":\"STATE_SYNC\",\"subtype\":\"skill_frame_open\",\"content\":\"Opening conversation root frame\"}"),
+                message("msg_result", "session-1", "assistant", "你好",
+                        "{\"type\":\"TASK_COMPLETED\"}")));
+
+        var result = controller.getSessionMessages("agent-1", "ctx-1", null, 20, false, request);
+
+        assertEquals(List.of("msg_user", "msg_result"), result.getData().getMessages().stream()
+                .map(OpenSessionMessageDTO::getMessageId)
+                .toList());
+    }
+
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity)
             throws Exception {
         Method method = OpenApiController.class.getDeclaredMethod(
@@ -571,6 +615,27 @@ class OpenApiControllerMessageMappingTest {
         );
         method.setAccessible(true);
         return (OpenSessionMessageDTO) method.invoke(controller, entity, "ctx-1");
+    }
+
+    private SessionMessageEntity userMessage(String id, String sessionId, String content) {
+        return message(id, sessionId, "USER", content, "{\"type\":\"USER\"}");
+    }
+
+    private SessionMessageEntity message(
+            String id,
+            String sessionId,
+            String role,
+            String content,
+            String metadata) {
+        SessionMessageEntity entity = new SessionMessageEntity();
+        entity.setId(id);
+        entity.setSessionId(sessionId);
+        entity.setTaskId("task-1");
+        entity.setRole(role);
+        entity.setContent(content);
+        entity.setMetadata(metadata);
+        entity.setCreatedAt(LocalDateTime.now());
+        return entity;
     }
 
     private String terminalStatusFromTaskStatus(OpenApiController controller, String status) throws Exception {

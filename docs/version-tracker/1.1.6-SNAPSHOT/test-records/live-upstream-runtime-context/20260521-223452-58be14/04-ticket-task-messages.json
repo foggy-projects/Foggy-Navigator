@@ -1,0 +1,58 @@
+{
+  "taskId": "lgt_3900ffd8d5c84762",
+  "contextId": "bctx_20260521_a0_a0299cea3db940beb708b35d55945698",
+  "messages": [
+    {
+      "messageId": "ec0f1e19-9ceb-4cce-9be8-661dbff016fe",
+      "contextId": "bctx_20260521_a0_a0299cea3db940beb708b35d55945698",
+      "taskId": "lgt_3900ffd8d5c84762",
+      "role": "user",
+      "type": "USER",
+      "content": "请用一句中文回复：已收到上一轮 hi，并保持简洁。",
+      "terminal": false,
+      "terminalStatus": null,
+      "metadata": {
+        "type": "USER"
+      },
+      "createdAt": "2026-05-21T22:35:02.476206+08:00"
+    },
+    {
+      "messageId": "09cc13a7-2a65-463a-9cb3-e91c089e5615",
+      "contextId": "bctx_20260521_a0_a0299cea3db940beb708b35d55945698",
+      "taskId": "lgt_3900ffd8d5c84762",
+      "role": "assistant",
+      "type": "RESULT",
+      "content": "已收到上一轮 hi，并保持简洁。",
+      "terminal": true,
+      "terminalStatus": "COMPLETED",
+      "metadata": {
+        "agentId": "langgraph-biz-worker",
+        "execution_report_ref": "frame-report://lgt_3900ffd8d5c84762/frm_ea063f12ab4e",
+        "execution_report_digest": {
+          "report_ref": "frame-report://lgt_3900ffd8d5c84762/frm_ea063f12ab4e",
+          "frame_id": "frm_ea063f12ab4e",
+          "task_id": "lgt_3900ffd8d5c84762",
+          "skill_id": "system.root",
+          "frame_kind": "ROOT",
+          "status": "RUNNING",
+          "summary": "已收到上一轮 hi，并保持简洁。",
+          "started_at": "2026-05-21T14:34:56.093963+00:00",
+          "tool_call_count": 2,
+          "child_frame_count": 0,
+          "approval_required": false,
+          "generated_at": "2026-05-21T14:35:09.407449+00:00",
+          "generator_version": "frame-execution-report-v1"
+        },
+        "type": "TASK_COMPLETED",
+        "content": "已收到上一轮 hi，并保持简洁。",
+        "status": "COMPLETED"
+      },
+      "createdAt": "2026-05-21T22:35:09.467897+08:00"
+    }
+  ],
+  "status": "COMPLETED",
+  "terminal": true,
+  "terminalStatus": "COMPLETED",
+  "nextCursor": "09cc13a7-2a65-463a-9cb3-e91c089e5615",
+  "hasMore": false
+}
