@@ -491,8 +491,8 @@ const filteredHistorySessions = computed(() => {
   )
 })
 
-function handleInput(event: { detail?: { value?: string } }) {
-  inputText.value = event.detail?.value ?? ''
+function handleInput(event: unknown) {
+  inputText.value = eventValue(event)
 }
 
 async function handleSend() {
@@ -554,8 +554,8 @@ function handleNewSession() {
   historyVisible.value = false
 }
 
-function handleHistoryKeywordInput(event: { detail?: { value?: string } }) {
-  historyKeyword.value = event.detail?.value ?? ''
+function handleHistoryKeywordInput(event: unknown) {
+  historyKeyword.value = eventValue(event)
 }
 
 function updateSuspensionDialogVisible(value: boolean) {
@@ -563,8 +563,13 @@ function updateSuspensionDialogVisible(value: boolean) {
   if (!value) suspensionComment.value = ''
 }
 
-function handleSuspensionCommentInput(event: { detail?: { value?: string } }) {
-  suspensionComment.value = event.detail?.value ?? ''
+function handleSuspensionCommentInput(event: unknown) {
+  suspensionComment.value = eventValue(event)
+}
+
+function eventValue(event: unknown): string {
+  const value = (event as { detail?: { value?: unknown } })?.detail?.value
+  return typeof value === 'string' ? value : ''
 }
 
 function submitSuspensionDecision(decision: BusinessSuspensionDecision) {

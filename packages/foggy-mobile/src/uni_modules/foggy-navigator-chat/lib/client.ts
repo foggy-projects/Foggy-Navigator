@@ -10,6 +10,7 @@ import type {
 } from './types'
 
 type UniHttpMethod = 'GET' | 'POST' | 'DELETE'
+type UniRequestData = UniApp.RequestOptions['data']
 
 interface UniRequestResult {
   statusCode?: number
@@ -96,7 +97,7 @@ export class UniNavigatorBffClient implements FoggyNavigatorChatClient {
     const result = await uniRequest({
       url: `${this.openApiBaseUrl}${path}`,
       method,
-      data,
+      data: data as UniRequestData,
       header,
     })
     return unwrapEnvelope<T>(result)
@@ -131,7 +132,7 @@ function paginationParams(options: PaginationOptions, defaultLimit: number): str
 function uniRequest(options: {
   url: string
   method: UniHttpMethod
-  data?: unknown
+  data?: UniRequestData
   header?: Record<string, string>
 }): Promise<UniRequestResult> {
   return new Promise((resolve, reject) => {
