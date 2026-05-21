@@ -153,16 +153,64 @@ def _message_tool_call_names(message: dict) -> list[str]:
 
 
 def _llm_submission_payloads(context_id: str) -> list[dict]:
-    session_dir = session_data_dir(
+    log_dir = _session_dir(context_id) / "logs" / "llm-submissions"
+    return [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(log_dir.glob("*.json"))
+    ]
+
+
+def _session_dir(context_id: str) -> Path:
+    return session_data_dir(
         Path(root_graph_module._data_root),
         ("1970", "01", "01"),
         context_id,
         require_standard_context=True,
     )
-    log_dir = session_dir / "logs" / "llm-submissions"
+
+
+def _runtime_message_events(
+    context_id: str,
+    *,
+    task_id: str | None = None,
+    frame_id: str | None = None,
+) -> list[dict]:
+    log_dir = _session_dir(context_id) / "logs" / "runtime-message-events"
+    if task_id and frame_id:
+        pattern = f"{task_id}_{frame_id}.jsonl"
+    elif frame_id:
+        pattern = f"*_{frame_id}.jsonl"
+    else:
+        pattern = "*.jsonl"
+    events: list[dict] = []
+    for path in sorted(log_dir.glob(pattern)):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                events.append(json.loads(line))
+    return events
+
+
+def _runtime_initial_roles(events: list[dict]) -> list[str]:
     return [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted(log_dir.glob("*.json"))
+        event["message"]["role"]
+        for event in events
+        if event.get("eventType") == "message" and event.get("phase") == "initial"
+    ]
+
+
+def _runtime_tool_call_names(events: list[dict]) -> list[str]:
+    return [
+        event["toolCall"]["name"]
+        for event in events
+        if event.get("eventType") == "assistant_tool_call"
+    ]
+
+
+def _runtime_checkpoints(events: list[dict]) -> list[str]:
+    return [
+        event["checkpoint"]
+        for event in events
+        if event.get("eventType") == "checkpoint"
     ]
 
 
@@ -781,6 +829,40 @@ promote_to_parent:
     assert _submission_role_sequence(root_payload) == ["system", "human", "ai", "human"]
     assert _submission_texts(root_payload, "human") == [first_prompt, second_prompt]
     assert _submission_texts(root_payload, "ai") == ["请提供工单类型、标题、详细描述。"]
+
+    first_child_events = _runtime_message_events(
+        context_id,
+        task_id=first_task_id,
+        frame_id=first_child_open.skill_frame_id,
+    )
+    assert _runtime_initial_roles(first_child_events) == ["system", "user"]
+    assert _runtime_tool_call_names(first_child_events) == ["submit_skill_result"]
+    assert "suspended" in _runtime_checkpoints(first_child_events)
+    assert any(
+        "WAITING_FOR_USER_INPUT" in ((event.get("message") or {}).get("content") or "")
+        for event in first_child_events
+        if event.get("eventType") == "tool_result"
+    )
+
+    resumed_child_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=first_child_open.skill_frame_id,
+    )
+    assert _runtime_initial_roles(resumed_child_events) == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "user",
+    ]
+    resumed_initial_messages = [
+        event["message"]
+        for event in resumed_child_events
+        if event.get("eventType") == "message" and event.get("phase") == "initial"
+    ]
+    assert resumed_initial_messages[2]["toolCalls"][0]["name"] == "submit_skill_result"
+    assert "WAITING_FOR_USER_INPUT" in resumed_initial_messages[3]["content"]
 
 
 @pytest.mark.anyio
@@ -1864,6 +1946,24 @@ async def test_scripted_llm_submission_log_captures_business_function_tool_proto
     assert _submission_tool_call_names(second_payload) == ["invoke_business_function"]
     assert any("BUG-LLM-LOG-001" in content for content in _submission_texts(second_payload, "tool"))
 
+    root_events = _runtime_message_events(
+        context_id,
+        task_id=task_id,
+        frame_id=second_payload["meta"]["frameId"],
+    )
+    assert _runtime_initial_roles(root_events) == ["system", "user"]
+    assert _runtime_tool_call_names(root_events) == [
+        "invoke_business_function",
+        "submit_skill_result",
+    ]
+    assert "after_tool_call" in _runtime_checkpoints(root_events)
+    assert "persistent_turn_completed" in _runtime_checkpoints(root_events)
+    assert any(
+        "BUG-LLM-LOG-001" in ((event.get("message") or {}).get("content") or "")
+        for event in root_events
+        if event.get("eventType") == "tool_result"
+    )
+
 
 @pytest.mark.anyio
 async def test_scripted_ticket_from_image_content_analyzes_then_uses_result(monkeypatch, mock_llm_server):
@@ -2408,6 +2508,26 @@ async def test_scripted_llm_submission_log_matches_root_recent_conversation(
     assert _submission_texts(second_payload, "human") == [first_prompt, second_prompt]
     assert _submission_texts(second_payload, "ai") == [first_answer]
     assert _submission_tool_call_names(second_payload) == []
+
+    second_root_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=second_payload["meta"]["frameId"],
+    )
+    assert _runtime_initial_roles(second_root_events) == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    initial_texts = [
+        event["message"]["content"]
+        for event in second_root_events
+        if event.get("eventType") == "message" and event.get("phase") == "initial"
+    ]
+    assert initial_texts[1:] == [first_prompt, first_answer, second_prompt]
+    assert _runtime_tool_call_names(second_root_events) == ["submit_skill_result"]
+    assert "persistent_turn_completed" in _runtime_checkpoints(second_root_events)
 
 
 @pytest.mark.anyio
@@ -4139,6 +4259,36 @@ promote_to_parent:
     assert grandchild_skill_id in parent_system_text
     assert final_summary in parent_system_text
     assert _submission_texts(parent_payload, "human") == [second_prompt]
+
+    leaf_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=leaf_payload["meta"]["frameId"],
+    )
+    assert _runtime_initial_roles(leaf_events) == ["system", "user"]
+    assert _runtime_tool_call_names(leaf_events) == ["submit_skill_result"]
+    assert "frame_completed" in _runtime_checkpoints(leaf_events)
+
+    parent_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=parent_payload["meta"]["frameId"],
+    )
+    assert _runtime_initial_roles(parent_events) == ["system", "user"]
+    assert _runtime_tool_call_names(parent_events) == ["submit_skill_result"]
+    assert "frame_completed" in _runtime_checkpoints(parent_events)
+    parent_initial_system = next(
+        event["message"]["content"]
+        for event in parent_events
+        if (
+            event.get("eventType") == "message"
+            and event.get("phase") == "initial"
+            and event["message"]["role"] == "system"
+        )
+    )
+    assert "刚完成的子技能提升结果:" in parent_initial_system
+    assert grandchild_skill_id in parent_initial_system
+    assert final_summary in parent_initial_system
 
 
 @pytest.mark.anyio

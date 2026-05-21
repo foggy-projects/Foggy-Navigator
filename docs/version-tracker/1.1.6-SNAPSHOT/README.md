@@ -30,6 +30,7 @@
 1. `01`-`07` 是运行时上下文治理与 Phase 1-5 实施基线。
 2. `08` 是 `system.root` 退场和 Conversation Root Frame 身份收口。
 3. `09` 是当前真实提交给 LLM 的 `messages` 数组契约。
+4. `10` 是 scripted E2E 场景矩阵，以及 `llm-submissions` / `runtime-message-events` 对账验收口径。
 
 若旧文档中仍出现“runtime context 拼入 user prompt”的早期表述，以 `09` 的 system / human 边界为当前实现口径。
 
@@ -44,6 +45,7 @@
 - [07-normal-turn-runtime-context-implementation-plan.md](./07-normal-turn-runtime-context-implementation-plan.md) - 将普通消息 `ContextRuntimeMemory` 设计拆解为分阶段开发任务、测试清单和验收闸门
 - [08-system-root-retirement-and-root-frame-design.md](./08-system-root-retirement-and-root-frame-design.md) - 将 `system.root` 从业务 Skill 身份退场，改为内部 Conversation Root Frame 语义并保留旧数据兼容
 - [09-llm-submission-message-contract.md](./09-llm-submission-message-contract.md) - 收口真实提交给 LLM 的 `messages` 数组契约：system 承载治理上下文，runtime-visible conversation 使用独立 role messages
+- [10-runtime-context-e2e-matrix-and-log-parity.md](./10-runtime-context-e2e-matrix-and-log-parity.md) - 固化 runtime context scripted E2E 矩阵，并要求关键场景同时校验 `llm-submissions` 与 `runtime-message-events`
 - [workitems/BUG-runtime-context-phase2-5-review-fixes.md](./workitems/BUG-runtime-context-phase2-5-review-fixes.md) - 记录并修复 Phase 2-5 评审发现的排队终止窗口、JSON 脱敏和 commit 清理缺陷
 
 ## 当前签收记录

@@ -375,6 +375,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 2026-05-21: 已完成 LLM submission messages 契约收口。运行时治理上下文、业务上下文、active plan、`AWAITING_USER` 和 recoverable interruption 进入 system message；runtime-visible conversation 以独立 `user` / `assistant` role messages 注入；human message 以当前用户原文为主，显式 `current_time` 只作为当前请求尾部信息追加。Root prompt、通用工具治理说明和附件上下文已中文化，`allowed_skills` 会从 registry 补齐 name / description 并渲染为 Markdown；初始 messages 数组由 `llm_message_builder.py` 统一组装。详见 [09-llm-submission-message-contract.md](./09-llm-submission-message-contract.md)。
 - 2026-05-21: 已新增 runtime message event JSONL 写入和读取恢复入口。`llm_skill_agent` 在初始 messages、assistant response、assistant tool_call、tool_result 和 checkpoint 处写入 `logs/runtime-message-events/<taskId>_<frameId>.jsonl`；`AWAITING_USER` 与 recoverable child interruption 读取恢复复用同一事件源，只选择不同恢复入口。工具执行完成后立即写 `after_tool_call` checkpoint，避免恢复时重复已完成的副作用工具调用。
 - 2026-05-21: 已完成 nested focus completion unwind。恢复 deepest leaf 后，如果 leaf 正常完成，BizWorker 会逐层 close/promote/resume parent；parent LLM submission 的 system context 会包含“刚完成的子技能提升结果”，直到回到 Root 后直接返回 promoted result 或执行 Root synthesis。
+- 2026-05-21: 已补充 scripted E2E log parity 断言。普通多轮、BusinessFunction tool protocol、`AWAITING_USER` child resume、nested completion unwind 现在会同时校验 `llm-submissions` 与 `runtime-message-events`。详见 [10-runtime-context-e2e-matrix-and-log-parity.md](./10-runtime-context-e2e-matrix-and-log-parity.md)。
 
 ### Testing
 
@@ -403,6 +404,8 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
   - result: `597 passed, 6 skipped, 11 warnings`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_nested_focus_completion_unwinds_to_parent_result -q`
   - result: `1 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_llm_submission_log_matches_root_recent_conversation tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_llm_submission_log_captures_awaiting_child_resume_protocol tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_llm_submission_log_captures_business_function_tool_protocol tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_nested_focus_completion_unwinds_to_parent_result -q`
+  - result: `4 passed`
 
 ### Experience
 
@@ -410,6 +413,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 已通过 scripted E2E 验证第二轮 Root LLM submission 使用独立 `user` / `assistant` role messages 注入上一轮 BizWorker memory 中的语义消息；system 不再折叠展示 `本回合前的运行时可见对话:`，当前 human message 以当前用户原文为主。
 - 已通过单元/边界测试验证 Skill 投影、non-recoverable error projection、执行中追加消息入队、checkpoint 插入、idle / closing 阶段 retryable busy、lazy compaction、Java recentConversation 默认退场。
 - 已通过 scripted E2E 验证 deepest nested leaf 从 recoverable interruption 恢复后，leaf 完成结果会继续交给 parent LLM，parent 再完成并向 Root 提升结果；对应 `llm-submissions` 可复盘 leaf 与 parent 两次真实提交。
+- 已通过 scripted E2E 验证关键 runtime context 场景的 `llm-submissions` 与 `runtime-message-events` 对账，包括普通多轮、业务函数工具协议、等待用户输入恢复和 nested completion unwind。
 - 真实前端长会话与 TMS 工单链路仍建议在修复上游 `upstream_ref` 后做一次联调验收。
 
 ## Implementation Quality / Acceptance

@@ -295,6 +295,7 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 - 2026-05-21: 新增 `llm_message_builder.py` 作为初始 messages 数组的唯一组装入口，固定 system -> runtime-visible role messages -> current human 的顺序。
 - 2026-05-21: 新增 runtime message event JSONL 写入，记录同一 frame 的 provider 协议消息事件；`AWAITING_USER` 与 recoverable child interruption 恢复已接入同一日志 reader，按 `frameId` 找最新事件文件并重建 provider 协议 messages。
 - 2026-05-21: nested leaf 正常完成后，parent continuation 已通过 system context 接收“刚完成的子技能提升结果”，并继续逐层向 Root unwind；`llm-submissions` 会分别保留 leaf 与 parent 的真实提交 body。
+- 2026-05-21: scripted E2E 已补充 `llm-submissions` 与 `runtime-message-events` 对账断言，覆盖普通多轮、BusinessFunction tool protocol、`AWAITING_USER` child resume、nested completion unwind。
 
 ### Testing
 
@@ -307,6 +308,8 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
   - result: `597 passed, 6 skipped, 11 warnings`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_nested_focus_completion_unwinds_to_parent_result -q`
   - result: `1 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -q`
+  - result: `23 passed`
 
 ### Experience
 
