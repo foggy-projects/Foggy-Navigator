@@ -16,7 +16,7 @@ from typing import Annotated, Any, TypedDict
 from langgraph.graph import END, StateGraph
 
 from ..config import settings
-from ..models import FrameStatus, QueryEvent, SkillManifest
+from ..models import FrameKind, FrameStatus, QueryEvent, SkillManifest
 from ..runtime.attachment_context import build_attachment_context_prompt as _build_attachment_context_prompt
 from ..runtime.context_memory import (
     RUNTIME_VISIBLE_CONVERSATION_KEY,
@@ -33,6 +33,7 @@ from ..runtime.frame_store import FrameStore
 from ..runtime.account_context_files import build_account_context_prompt
 from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model, create_chat_model_from_config
 from ..runtime.llm_skill_agent import LlmSkillAgent
+from ..runtime.llm_agent_prompts import model_visible_context
 from ..runtime.llm_child_recovery import (
     _direct_child_result_for_user,
     _record_parent_child_recoverable_interruption,
@@ -71,6 +72,8 @@ _journal = FileFrameJournal(_data_root)
 _runtime = SkillRuntime(frame_store=_frame_store, skill_registry=_skill_registry, journal=_journal)
 
 ROOT_SKILL_ID = "system.root"
+ROOT_FRAME_OPEN_CONTENT = "Opening conversation root frame"
+ROOT_FRAME_REUSE_CONTENT = "Reusing conversation root frame"
 
 # LLM-based Skill Router (None if llm_provider is empty → rule-based fallback)
 _chat_model = create_chat_model(settings)
@@ -188,11 +191,8 @@ def _recent_conversation_prompt(context: dict[str, Any]) -> str | None:
 
 
 def _context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in context.items()
-        if key not in {"recentConversation", "recent_conversation"}
-    }
+    projected = model_visible_context(context)
+    return projected if isinstance(projected, dict) else {}
 
 
 def _recent_conversation_for_runtime(context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -216,9 +216,9 @@ def _system_root_manifest() -> SkillManifest:
     return SkillManifest(
         id=ROOT_SKILL_ID,
         name=ROOT_SKILL_ID,
-        description="System root business skill for task-level orchestration.",
+        description="Root business orchestration agent for task-level work.",
         markdown_body=(
-            "You are the system root skill for this business task. "
+            "You are the root business orchestration agent for this task. "
             "Handle the user's request directly when possible. "
             "Use invoke_business_function for authorized business functions when the "
             "needed function is described in the available context or skill material. "
@@ -228,8 +228,7 @@ def _system_root_manifest() -> SkillManifest:
             "for Excel or CSV spreadsheet content use analyze_spreadsheet instead of image analysis; "
             "if the user only asks to attach a file to a business operation, preserve the attachment without analysis. "
             "When the current user turn is ready to answer, call submit_skill_result. "
-            "This root skill is persistent; submit_skill_result ends the current turn, "
-            "not the root skill frame."
+            "This root agent is persistent; submit_skill_result ends only the current user turn."
         ),
         allowed_tools=[
             "invoke_business_function",
@@ -271,6 +270,14 @@ def _conversation_id_for_root_frame(
     return None
 
 
+def _is_conversation_root_frame(frame: Any) -> bool:
+    if frame is None or getattr(frame, "parent_frame_id", None):
+        return False
+    if getattr(frame, "frame_kind", None) == FrameKind.ROOT:
+        return True
+    return getattr(frame, "skill_id", None) == ROOT_SKILL_ID
+
+
 def _get_or_create_system_root_frame(
     task_id: str,
     session_id: str | None,
@@ -295,7 +302,7 @@ def _get_or_create_system_root_frame(
 
     if conversation_id:
         for frame in _runtime.get_frames_by_conversation(conversation_id):
-            if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
+            if _is_conversation_root_frame(frame) and frame.status == FrameStatus.RUNNING:
                 rebound = _runtime.rebind_frame_to_task(
                     frame.frame_id,
                     task_id,
@@ -319,7 +326,7 @@ def _get_or_create_system_root_frame(
             return rebound.frame_id, False
 
     for frame in _runtime.get_frames_by_task(task_id):
-        if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
+        if _is_conversation_root_frame(frame) and frame.status == FrameStatus.RUNNING:
             rebound = _runtime.rebind_frame_to_task(
                 frame.frame_id,
                 task_id,
@@ -329,7 +336,7 @@ def _get_or_create_system_root_frame(
             return rebound.frame_id, False
 
     for frame in _journal.load_by_task(task_id):
-        if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
+        if _is_conversation_root_frame(frame) and frame.status == FrameStatus.RUNNING:
             _runtime.restore_frame(frame)
             rebound = _runtime.rebind_frame_to_task(
                 frame.frame_id,
@@ -347,6 +354,7 @@ def _get_or_create_system_root_frame(
         session_id=session_id,
         current_task_id=task_id,
         origin_task_id=task_id,
+        frame_kind=FrameKind.ROOT,
     )
     return frame_id, True
 
@@ -480,12 +488,8 @@ def route_skill(state: RootState) -> dict:
             type="skill_frame_open",
             task_id=task_id,
             skill_frame_id=frame_id,
-            skill_id=ROOT_SKILL_ID,
-            content=(
-                f"Opening frame for skill: {ROOT_SKILL_ID}"
-                if created
-                else f"Reusing frame for skill: {ROOT_SKILL_ID}"
-            ),
+            content=ROOT_FRAME_OPEN_CONTENT if created else ROOT_FRAME_REUSE_CONTENT,
+            presentation_hint="root_frame",
         ))
         return {"events": events, "active_frame_id": frame_id}
 
@@ -821,7 +825,8 @@ def run_skill(state: RootState) -> dict:
         runtime_context.setdefault("contextId", frame.conversation_id)
     elif frame.session_id:
         runtime_context.setdefault("sessionId", frame.session_id)
-    if frame.skill_id != ROOT_SKILL_ID:
+    is_root_frame = _is_conversation_root_frame(frame)
+    if not is_root_frame:
         recent_conversation = _recent_conversation_for_runtime(context)
         if recent_conversation:
             runtime_context["_visible_recent_conversation"] = recent_conversation
@@ -838,7 +843,7 @@ def run_skill(state: RootState) -> dict:
     llm_skill_agent = _llm_skill_agent_for_state(state)
     if llm_skill_agent:
         skill_prompt = _skill_agent_prompt(state["prompt"], context)
-        if frame.skill_id == ROOT_SKILL_ID:
+        if is_root_frame:
             recovered_focus_events = _run_active_focus_before_root(
                 state,
                 root_frame_id=frame_id,
@@ -865,7 +870,7 @@ def run_skill(state: RootState) -> dict:
                 prompt=skill_prompt,
                 account_id=account_id,
                 runtime_context=runtime_context,
-                persistent_frame=frame.skill_id == ROOT_SKILL_ID,
+                persistent_frame=is_root_frame,
             )
         }
 
@@ -939,8 +944,8 @@ def _prepare_root_runtime_memory_for_turn(
                 type="error",
                 task_id=task_id,
                 skill_frame_id=frame.frame_id,
-                skill_id=ROOT_SKILL_ID,
                 error=str(exc),
+                presentation_hint="root_frame",
                 payload={
                     "code": "CONTEXT_RUNTIME_BUSY",
                     "retryable": True,
@@ -1029,8 +1034,8 @@ def enqueue_pending_user_input_for_context(
                 task_id=task_id,
                 session_id=context_id,
                 skill_frame_id=frame.frame_id,
-                skill_id=ROOT_SKILL_ID,
                 error="context execution stream is closing; retry as a new turn",
+                presentation_hint="root_frame",
                 payload={
                     "code": "CONTEXT_RUNTIME_BUSY",
                     "retryable": True,
@@ -1047,8 +1052,8 @@ def enqueue_pending_user_input_for_context(
                 task_id=task_id,
                 session_id=context_id,
                 skill_frame_id=frame.frame_id,
-                skill_id=ROOT_SKILL_ID,
                 error="queued user input is empty",
+                presentation_hint="root_frame",
                 payload={
                     "code": "CONTEXT_RUNTIME_QUEUE_REJECTED",
                     "retryable": False,
@@ -1061,8 +1066,8 @@ def enqueue_pending_user_input_for_context(
             task_id=task_id,
             session_id=context_id,
             skill_frame_id=frame.frame_id,
-            skill_id=ROOT_SKILL_ID,
             content="User input queued for the running context loop.",
+            presentation_hint="root_frame",
             payload={
                 "code": "CONTEXT_RUNTIME_QUEUED",
                 "contextId": context_id,
@@ -1151,9 +1156,7 @@ def _select_active_root_frame_for_context(context_id: str) -> Any | None:
     }
     roots = [
         frame for frame in candidates
-        if frame.skill_id == ROOT_SKILL_ID
-        and not frame.parent_frame_id
-        and frame.status in active_statuses
+        if _is_conversation_root_frame(frame) and frame.status in active_statuses
     ]
     if not roots:
         return None
@@ -1187,9 +1190,9 @@ def _runtime_memory_projection_metadata(
     report_digest = _execution_report_digest_from_frame(frame)
     metadata: dict[str, Any] = {
         "source": "root_result",
-        "skillId": getattr(frame, "skill_id", ROOT_SKILL_ID),
+        "frameKind": getattr(getattr(frame, "frame_kind", None), "value", "ROOT"),
         "skillFrameId": getattr(frame, "frame_id", ""),
-        "rootSkillId": getattr(frame, "skill_id", ROOT_SKILL_ID),
+        "rootFrameKind": "ROOT",
         "rootFrameId": getattr(frame, "frame_id", ""),
         "structuredOutputKeys": sorted(output.keys()),
         "reportRef": report_ref,
@@ -1260,7 +1263,7 @@ def _run_active_focus_before_root(
     """Resume the active child focus before giving the turn to root."""
     task_id = state["task_id"]
     root = _runtime.get_frame(root_frame_id)
-    if root is None or root.skill_id != ROOT_SKILL_ID:
+    if root is None or not _is_conversation_root_frame(root):
         return None
 
     focus_frame_id = (
@@ -1414,8 +1417,8 @@ def _run_active_focus_before_root(
                 type="error",
                 task_id=task_id,
                 skill_frame_id=root_frame_id,
-                skill_id=ROOT_SKILL_ID,
                 error="Failed to submit direct child result: " + "; ".join(validation.errors),
+                presentation_hint="root_frame",
             ))
         return events
 
@@ -1519,12 +1522,12 @@ def close_skill_frame(state: RootState) -> dict:
         ))
     elif (
         frame
-        and frame.skill_id == ROOT_SKILL_ID
+        and _is_conversation_root_frame(frame)
         and frame.status == FrameStatus.RUNNING
         and _is_current_turn_interrupted(frame, task_id)
     ):
         _abandon_root_runtime_memory_turn(frame, status="INTERRUPTED")
-    elif frame and frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING and frame.result_summary:
+    elif frame and _is_conversation_root_frame(frame) and frame.status == FrameStatus.RUNNING and frame.result_summary:
         _commit_root_runtime_memory_turn(
             frame,
             state=state,
@@ -1543,7 +1546,7 @@ def close_skill_frame(state: RootState) -> dict:
         ))
     elif (
         frame
-        and frame.skill_id == ROOT_SKILL_ID
+        and _is_conversation_root_frame(frame)
         and frame.status == FrameStatus.WAITING_CHILD
         and frame.private_working_state.get("active_focus_status") == "AWAITING_USER"
     ):
@@ -1567,11 +1570,11 @@ def close_skill_frame(state: RootState) -> dict:
     elif frame and frame.status == FrameStatus.AWAITING_APPROVAL:
         # The approval_required event has already been emitted by the runtime
         # tool handler. Do not turn a deliberate suspension into an error.
-        if frame.skill_id == ROOT_SKILL_ID:
+        if _is_conversation_root_frame(frame):
             _abandon_root_runtime_memory_turn(frame, status="AWAITING_APPROVAL")
         pass
     elif frame:
-        if frame.skill_id == ROOT_SKILL_ID:
+        if _is_conversation_root_frame(frame):
             _abandon_root_runtime_memory_turn(frame, status=frame.status.value)
         events.append(QueryEvent(
             type="error",

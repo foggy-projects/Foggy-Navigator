@@ -11,12 +11,47 @@ from .attachment_context import build_attachment_context_prompt as _build_attach
 from .llm_tool_call_codec import _safe_content
 
 
+_SYSTEM_ROOT_SKILL_ID = "system.root"
+_PRIVATE_CONTEXT_KEYS = {
+    "clientappid",
+    "contextid",
+    "conversationid",
+    "credentialid",
+    "llmconfig",
+    "messageid",
+    "navigatorsessionid",
+    "rootagentid",
+    "sessionid",
+    "taskscopedtoken",
+    "upstreamref",
+    "upstreamuserid",
+    "visionllmconfig",
+    "workertoken",
+}
+_PRIVATE_CONTEXT_MARKERS = (
+    "apikey",
+    "accesskey",
+    "accesstoken",
+    "authorization",
+    "credential",
+    "password",
+    "secret",
+    "token",
+)
+_MODEL_VISIBLE_SKILL_KEYS = {"id", "name", "description"}
+_SYSTEM_ROOT_IDENTITY_KEYS = {
+    "businessskillid",
+    "businessskillname",
+    "childskillid",
+    "rootskillid",
+    "rootskillname",
+    "skillid",
+    "skillname",
+}
+
+
 def _build_system_prompt(manifest: SkillManifest, account_context_prompt: str = "") -> str:
-    prompt = (
-        f"You are executing skill {manifest.id}.\n"
-        f"Description: {manifest.description}\n"
-        f"Output schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
-    )
+    prompt = _build_system_identity_prompt(manifest)
     if account_context_prompt:
         prompt += f"\n---\n{account_context_prompt}\n---\n\n"
     if manifest.markdown_body:
@@ -48,6 +83,25 @@ def _build_system_prompt(manifest: SkillManifest, account_context_prompt: str = 
     return prompt
 
 
+def _build_system_identity_prompt(manifest: SkillManifest) -> str:
+    if manifest.id == _SYSTEM_ROOT_SKILL_ID:
+        description = (
+            "Root orchestration agent for the current business conversation. "
+            "Coordinate the current user turn, call business tools when needed, "
+            "and return a concise result for the user."
+        )
+        return (
+            "You are the root orchestration agent for this business conversation.\n"
+            f"Description: {description}\n"
+            f"Output schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
+        )
+    return (
+        f"You are executing business skill {manifest.id}.\n"
+        f"Description: {manifest.description}\n"
+        f"Output schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
+    )
+
+
 def _build_user_prompt(
     prompt: str,
     skill_input: dict[str, Any],
@@ -55,7 +109,7 @@ def _build_user_prompt(
     runtime_context: dict[str, Any] | None = None,
 ) -> str:
     parts = [
-        f"SKILL_AGENT_START {skill_id}",
+        _build_turn_header(skill_id, runtime_context),
         _build_runtime_time_context_prompt(runtime_context),
         _build_recoverable_interruption_prompt(runtime_context, prompt),
         _build_awaiting_user_input_prompt(runtime_context, prompt),
@@ -64,11 +118,90 @@ def _build_user_prompt(
         _build_frame_result_contract_prompt(runtime_context),
         _build_runtime_visible_conversation_prompt(runtime_context),
         f"User request: {prompt}",
-        f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}",
+        _build_model_visible_skill_input_prompt(skill_input),
         _build_attachment_context_prompt(_runtime_attachments(runtime_context)),
         _build_visible_context_prompt(runtime_context),
     ]
     return "\n".join(part for part in parts if part)
+
+
+def _build_turn_header(skill_id: str, runtime_context: dict[str, Any] | None = None) -> str:
+    if (runtime_context or {}).get("_persistent_frame") is True or skill_id == _SYSTEM_ROOT_SKILL_ID:
+        return "Current root turn context:"
+    return "Current business skill turn context:"
+
+
+def _build_model_visible_skill_input_prompt(skill_input: dict[str, Any]) -> str:
+    visible = model_visible_context(skill_input)
+    if not visible:
+        return ""
+    return f"Business context: {json.dumps(visible, ensure_ascii=False, sort_keys=True)}"
+
+
+def model_visible_context(value: Any) -> Any:
+    """Return the model-visible projection of runtime context-like data."""
+    if isinstance(value, dict):
+        projected: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if _is_private_context_key(key_text):
+                continue
+            if _is_system_root_identity(key_text, item):
+                continue
+            if key in {"recentConversation", "recent_conversation", "attachments"}:
+                continue
+            if key == "allowed_skills" and isinstance(item, list):
+                allowed_skills = _visible_allowed_skills(item)
+                if allowed_skills:
+                    projected[key] = allowed_skills
+                continue
+            projected_item = model_visible_context(item)
+            if projected_item not in (None, {}, []):
+                projected[str(key)] = projected_item
+        return projected
+    if isinstance(value, list):
+        projected_list = []
+        for item in value:
+            projected_item = model_visible_context(item)
+            if projected_item not in (None, {}, []):
+                projected_list.append(projected_item)
+        return projected_list
+    return value
+
+
+def _visible_allowed_skills(skills: list[Any]) -> list[dict[str, Any]]:
+    visible: list[dict[str, Any]] = []
+    for item in skills:
+        if not isinstance(item, dict):
+            continue
+        if item.get("id") == _SYSTEM_ROOT_SKILL_ID:
+            continue
+        skill = {
+            key: item[key]
+            for key in _MODEL_VISIBLE_SKILL_KEYS
+            if isinstance(item.get(key), str) and item.get(key).strip()
+        }
+        if skill.get("id"):
+            visible.append(skill)
+    return visible
+
+
+def _is_private_context_key(key: str) -> bool:
+    if key.startswith("_"):
+        return True
+    normalized = "".join(char for char in key.lower() if char.isalnum())
+    if normalized in _PRIVATE_CONTEXT_KEYS:
+        return True
+    return any(marker in normalized for marker in _PRIVATE_CONTEXT_MARKERS)
+
+
+def _is_system_root_identity(key: str, value: Any) -> bool:
+    normalized = "".join(char for char in key.lower() if char.isalnum())
+    if normalized not in _SYSTEM_ROOT_IDENTITY_KEYS:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() == _SYSTEM_ROOT_SKILL_ID
+    return False
 
 
 def _runtime_attachments(runtime_context: dict[str, Any] | None) -> list[dict[str, Any]] | None:
@@ -123,21 +256,20 @@ def _recoverable_interruption_context(working_state: dict[str, Any]) -> dict[str
     context = {
         "reason": working_state.get("interrupt_reason") or "unknown",
         "last_error": working_state.get("last_error") or "",
-        "last_task_id": working_state.get("last_task_id") or "",
         "interrupted_at": working_state.get("interrupted_at") or "",
     }
     pending_child = working_state.get("pending_recoverable_child")
     if isinstance(pending_child, dict):
-        context["pending_child_skill"] = _safe_content(pending_child)
+        context["pending_child_skill"] = model_visible_context(_safe_content(pending_child))
     recoverable_focus = working_state.get("recoverable_focus_summary")
     if isinstance(recoverable_focus, dict):
-        context["recoverable_focus"] = _safe_content(recoverable_focus)
+        context["recoverable_focus"] = model_visible_context(_safe_content(recoverable_focus))
     recoverable_focus_stack = working_state.get("recoverable_focus_stack")
     if isinstance(recoverable_focus_stack, list):
-        context["recoverable_focus_stack"] = _safe_content(recoverable_focus_stack)
+        context["recoverable_focus_stack"] = model_visible_context(_safe_content(recoverable_focus_stack))
     continuation_summary = _continuation_summary_context(working_state)
     if isinstance(continuation_summary, dict):
-        context["continuation_summary"] = _safe_content(continuation_summary)
+        context["continuation_summary"] = model_visible_context(_safe_content(continuation_summary))
     return context
 
 
@@ -182,9 +314,6 @@ def _build_recoverable_interruption_prompt(
     last_error = interruption.get("last_error")
     if last_error:
         parts.append(f"Last error: {last_error}")
-    last_task_id = interruption.get("last_task_id")
-    if last_task_id:
-        parts.append(f"Last task: {last_task_id}")
     pending_child = interruption.get("pending_child_skill")
     if isinstance(pending_child, dict):
         parts.append(
@@ -243,7 +372,7 @@ def _build_awaiting_user_input_prompt(
     parts = [
         "Previous child skill turn is waiting for user input.",
         "Awaiting-user context:",
-        json.dumps(awaiting, ensure_ascii=False, sort_keys=True),
+        json.dumps(model_visible_context(awaiting), ensure_ascii=False, sort_keys=True),
         f"Current user reply: {prompt}",
         (
             "Rule: Continue this same unfinished frame. Treat the current user "
@@ -296,8 +425,6 @@ def _build_root_planning_policy_prompt(
     runtime_context: dict[str, Any] | None,
     skill_id: str,
 ) -> str:
-    if skill_id != "system.root":
-        return ""
     if not runtime_context or runtime_context.get("_persistent_frame") is not True:
         return ""
     return (
@@ -317,7 +444,7 @@ def _build_visible_context_prompt(runtime_context: dict[str, Any] | None) -> str
         return ""
     return (
         "Visible parent/root context summary:\n"
-        f"{json.dumps(summary, ensure_ascii=False, sort_keys=True)}"
+        f"{json.dumps(model_visible_context(summary), ensure_ascii=False, sort_keys=True)}"
     )
 
 

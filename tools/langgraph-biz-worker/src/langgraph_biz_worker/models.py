@@ -153,10 +153,12 @@ class FrameStatus(str, Enum):
 class FrameKind(str, Enum):
     """Runtime frame kind.
 
-    ``SKILL`` frames are LLM-executed skills. ``FUNCTION_CALL`` frames are
+    ``ROOT`` frames own conversation-scoped runtime context. ``SKILL`` frames
+    are LLM-executed business skills. ``FUNCTION_CALL`` frames are
     runtime-created wrappers around one business function invocation.
     """
 
+    ROOT = "ROOT"
     SKILL = "SKILL"
     FUNCTION_CALL = "FUNCTION_CALL"
 
@@ -212,7 +214,7 @@ class SkillFrameState(BaseModel):
     parent_frame_id: str | None = None
     status: FrameStatus = FrameStatus.CREATED
 
-    # Conversation-scoped identity for persistent frames such as system.root.
+    # Conversation-scoped identity for persistent root frames.
     # ``task_id`` remains the current recoverable Worker task for compatibility
     # with approval resume and Java-side task lookup.
     conversation_id: str | None = None

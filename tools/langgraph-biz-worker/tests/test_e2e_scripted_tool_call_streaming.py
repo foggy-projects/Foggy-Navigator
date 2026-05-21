@@ -397,7 +397,7 @@ promote_to_parent:
 
     first_root_open = next(
         event for event in first_events
-        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+        if event.type == "skill_frame_open" and event.presentation_hint == "root_frame"
     )
     first_child_open = next(
         event for event in first_events
@@ -405,7 +405,7 @@ promote_to_parent:
     )
     continued_root_open = next(
         event for event in continued_events
-        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+        if event.type == "skill_frame_open" and event.presentation_hint == "root_frame"
     )
     continued_child_open = next(
         event for event in continued_events
@@ -644,7 +644,7 @@ promote_to_parent:
 
     first_root_open = next(
         event for event in first_events
-        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+        if event.type == "skill_frame_open" and event.presentation_hint == "root_frame"
     )
     first_child_open = next(
         event for event in first_events
@@ -912,7 +912,7 @@ promote_to_parent:
 
     first_root_open = next(
         event for event in first_events
-        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+        if event.type == "skill_frame_open" and event.presentation_hint == "root_frame"
     )
     first_child_open = next(
         event for event in first_events
@@ -920,7 +920,7 @@ promote_to_parent:
     )
     continued_root_open = next(
         event for event in continued_events
-        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+        if event.type == "skill_frame_open" and event.presentation_hint == "root_frame"
     )
     continued_child_open = next(
         event for event in continued_events
@@ -1097,7 +1097,7 @@ async def test_client_detach_then_next_turn_reuses_persistent_frame(
     events = _parse_worker_sse(response.text)
     frame_event = next(event for event in events if event.type == "skill_frame_open")
     assert frame_event.skill_frame_id == first_frame_id
-    assert frame_event.content == "Reusing frame for skill: system.root"
+    assert frame_event.content == "Reusing conversation root frame"
     result = next(event for event in events if event.type == "result")
     assert result.content == second_summary
     assert result.structured_output["next_turn_reused_context"] is True
@@ -1251,7 +1251,8 @@ async def test_scripted_tms_ticket_child_receives_attachment_context(monkeypatch
         for message in child_turn["request"]["messages"]
         if message["role"] == "user"
     )
-    assert "SKILL_AGENT_START tms-ticket-agent" in child_user_prompt
+    assert "Current business skill turn context:" in child_user_prompt
+    assert "SKILL_AGENT_START" not in child_user_prompt
     assert "Attachments provided by upstream system:" in child_user_prompt
     assert "att-028" in child_user_prompt
     assert "image.png" in child_user_prompt
@@ -1664,8 +1665,8 @@ async def test_scripted_root_skill_reuses_frame_across_tasks(monkeypatch, mock_l
     first_open = next(event for event in first_events if event.type == "skill_frame_open")
     second_open = next(event for event in second_events if event.type == "skill_frame_open")
     assert first_open.skill_frame_id == second_open.skill_frame_id
-    assert first_open.content == "Opening frame for skill: system.root"
-    assert second_open.content == "Reusing frame for skill: system.root"
+    assert first_open.content == "Opening conversation root frame"
+    assert second_open.content == "Reusing conversation root frame"
 
     first_result = next(event for event in first_events if event.type == "result")
     second_result = next(event for event in second_events if event.type == "result")
@@ -1787,7 +1788,7 @@ async def test_scripted_root_skill_second_turn_uses_runtime_visible_conversation
     first_open = next(event for event in first_events if event.type == "skill_frame_open")
     second_open = next(event for event in second_events if event.type == "skill_frame_open")
     assert first_open.skill_frame_id == second_open.skill_frame_id
-    assert second_open.content == "Reusing frame for skill: system.root"
+    assert second_open.content == "Reusing conversation root frame"
 
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
         debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
@@ -1924,7 +1925,7 @@ async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch
     first_open = next(event for event in first_events if event.type == "skill_frame_open")
     second_open = next(event for event in second_events if event.type == "skill_frame_open")
     assert first_open.skill_frame_id == second_open.skill_frame_id
-    assert second_open.content == "Reusing frame for skill: system.root"
+    assert second_open.content == "Reusing conversation root frame"
 
     frame = root_graph_module.get_runtime().get_frame(first_open.skill_frame_id)
     assert frame is not None
@@ -2053,7 +2054,7 @@ async def test_scripted_root_skill_continues_after_recoverable_model_loop_failur
         and event.error == "LLM skill agent reached max iterations without valid submit"
         for event in failed_events
     )
-    assert continued_open.content == "Reusing frame for skill: system.root"
+    assert continued_open.content == "Reusing conversation root frame"
     result = next(event for event in continued_events if event.type == "result")
     assert result.content == "Continued root turn complete."
     assert result.structured_output == {"continued": True}
@@ -2249,7 +2250,7 @@ promote_to_parent:
     failed_events = _parse_worker_sse(failed_response.text)
     continued_events = _parse_worker_sse(continued_response.text)
 
-    root_open = next(event for event in failed_events if event.type == "skill_frame_open" and event.skill_id == "system.root")
+    root_open = next(event for event in failed_events if event.type == "skill_frame_open" and event.presentation_hint == "root_frame")
     child_open_candidates = [
         event for event in failed_events
         if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
@@ -2265,9 +2266,9 @@ promote_to_parent:
         for event in failed_events
     ]
     child_open = child_open_candidates[0]
-    continued_open = next(event for event in continued_events if event.type == "skill_frame_open" and event.skill_id == "system.root")
+    continued_open = next(event for event in continued_events if event.type == "skill_frame_open" and event.presentation_hint == "root_frame")
     assert continued_open.skill_frame_id == root_open.skill_frame_id
-    assert continued_open.content == "Reusing frame for skill: system.root"
+    assert continued_open.content == "Reusing conversation root frame"
     continued_child_open = next(
         event for event in continued_events
         if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
@@ -2320,7 +2321,6 @@ promote_to_parent:
         for content in continue_user_messages
     ), continue_user_messages
     assert any(child_open.skill_frame_id in content for content in continue_user_messages)
-    assert any("tms-ticket-agent" in content for content in continue_user_messages)
     assert any("WAITING_USER" in content for content in continue_user_messages)
     assert any("Current user reply:" in content and f"next:{trace_id}:004" in content for content in continue_user_messages)
     assert any(
@@ -2511,7 +2511,7 @@ promote_to_parent:
     continued_events = _parse_worker_sse(continued_response.text)
     root_open = next(
         event for event in first_events
-        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+        if event.type == "skill_frame_open" and event.presentation_hint == "root_frame"
     )
     child_open = next(
         event for event in first_events
@@ -2519,10 +2519,10 @@ promote_to_parent:
     )
     continued_root_open = next(
         event for event in continued_events
-        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+        if event.type == "skill_frame_open" and event.presentation_hint == "root_frame"
     )
     assert continued_root_open.skill_frame_id == root_open.skill_frame_id
-    assert continued_root_open.content == "Reusing frame for skill: system.root"
+    assert continued_root_open.content == "Reusing conversation root frame"
     assert any(event.tool_name == "invoke_business_skill" for event in first_events)
     assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
     assert not any(event.tool_name == "read_frame_execution_report" for event in continued_events)
@@ -2707,7 +2707,7 @@ async def test_scripted_root_skill_continues_after_user_cancelled_interruption(
     first_open = next(event for event in first_events if event.type == "skill_frame_open")
     continued_open = next(event for event in continued_events if event.type == "skill_frame_open")
     assert first_open.skill_frame_id == continued_open.skill_frame_id
-    assert continued_open.content == "Reusing frame for skill: system.root"
+    assert continued_open.content == "Reusing conversation root frame"
 
     result = next(event for event in continued_events if event.type == "result")
     assert result.content == "Continued after user cancellation."
@@ -2853,7 +2853,7 @@ async def test_scripted_root_skill_shelves_interruption_for_unrelated_task(
     first_open = next(event for event in first_events if event.type == "skill_frame_open")
     unrelated_open = next(event for event in unrelated_events if event.type == "skill_frame_open")
     assert first_open.skill_frame_id == unrelated_open.skill_frame_id
-    assert unrelated_open.content == "Reusing frame for skill: system.root"
+    assert unrelated_open.content == "Reusing conversation root frame"
 
     result = next(event for event in unrelated_events if event.type == "result")
     assert result.content == "Previous vehicle task was shelved; handled the new lookup."
@@ -3008,11 +3008,11 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
     assert continued_response.status_code == 200
 
     events = _parse_worker_sse(continued_response.text)
-    root_open = next(event for event in events if event.type == "skill_frame_open" and event.skill_id == "system.root")
+    root_open = next(event for event in events if event.type == "skill_frame_open" and event.presentation_hint == "root_frame")
     child_open = next(event for event in events if event.type == "skill_frame_open" and event.skill_id == "exception_triage")
     result = next(event for event in events if event.type == "result")
     assert root_open.skill_frame_id == root_frame_id
-    assert root_open.content == "Reusing frame for skill: system.root"
+    assert root_open.content == "Reusing conversation root frame"
     assert child_open.skill_frame_id == child_frame_id
     assert child_open.content == "Resuming frame for skill: exception_triage"
     assert result.content == "Root completed after resuming child."
@@ -3049,7 +3049,7 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
         if message["role"] == "user"
     ]
     assert any("User request: 继续" in content for content in child_user_messages)
-    assert any("Skill input:" in content and "ORD-1" in content for content in child_user_messages)
+    assert any("Business context:" in content and "ORD-1" in content for content in child_user_messages)
     root_user_messages = [
         message["content"]
         for message in records[1]["request"]["messages"]
@@ -3180,20 +3180,20 @@ async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_serv
 
     first_root_open = next(
         event for event in first_events
-        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+        if event.type == "skill_frame_open" and event.presentation_hint == "root_frame"
     )
     continued_root_open = next(
         event for event in continued_events
-        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+        if event.type == "skill_frame_open" and event.presentation_hint == "root_frame"
     )
     unrelated_root_open = next(
         event for event in unrelated_events
-        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+        if event.type == "skill_frame_open" and event.presentation_hint == "root_frame"
     )
     assert continued_root_open.skill_frame_id == first_root_open.skill_frame_id
     assert unrelated_root_open.skill_frame_id == first_root_open.skill_frame_id
-    assert continued_root_open.content == "Reusing frame for skill: system.root"
-    assert unrelated_root_open.content == "Reusing frame for skill: system.root"
+    assert continued_root_open.content == "Reusing conversation root frame"
+    assert unrelated_root_open.content == "Reusing conversation root frame"
 
     first_result = next(event for event in first_events if event.type == "result")
     assert first_result.structured_output["classification"] == "vehicle_delay"

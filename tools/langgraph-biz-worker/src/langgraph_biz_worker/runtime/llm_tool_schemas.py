@@ -30,7 +30,7 @@ def _tool_specs(
     )
     if "submit_skill_result" not in {s["function"]["name"] for s in specs}:
         specs.append(_KNOWN_TOOL_SCHEMAS["submit_skill_result"])
-    if persistent_frame and manifest.id == "system.root":
+    if persistent_frame:
         if _tool_enabled("resume_recoverable_child_skill", enabled_tool_names):
             specs.append(_KNOWN_TOOL_SCHEMAS["resume_recoverable_child_skill"])
         if _tool_enabled("shelve_interrupted_frame", enabled_tool_names):

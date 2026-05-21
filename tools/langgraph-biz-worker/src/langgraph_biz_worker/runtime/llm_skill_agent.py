@@ -35,6 +35,7 @@ from .llm_agent_prompts import (
     _build_visible_context_prompt,
     _local_timezone_name,
     _month_range_for,
+    model_visible_context,
     _parse_runtime_date,
     _parse_runtime_datetime,
     _recoverable_interruption_context,
@@ -148,6 +149,12 @@ class LlmSkillAgent:
             active_plan = _active_plan_context(frame.private_working_state)
             if active_plan:
                 runtime_context["_active_plan"] = active_plan
+        else:
+            runtime_context.pop("_persistent_frame", None)
+            runtime_context.pop("_recoverable_interruption", None)
+            runtime_context.pop("_active_plan", None)
+        event_skill_id = None if persistent_frame else frame.skill_id
+        event_presentation_hint = "root_frame" if persistent_frame else None
 
         manifest = _manifest_for_frame(self._runtime, frame)
         if manifest is None:
@@ -161,7 +168,8 @@ class LlmSkillAgent:
                 type="error",
                 task_id=task_id,
                 skill_frame_id=frame_id,
-                skill_id=frame.skill_id,
+                skill_id=event_skill_id,
+                presentation_hint=event_presentation_hint,
                 error=str(exc),
             )]
 
@@ -202,7 +210,9 @@ class LlmSkillAgent:
                 spec["function"]["name"] for spec in provider_tool_specs
             }
         runtime_context["_skill_name"] = frame.skill_id
-        runtime_context["_llm_submission_skill_id"] = frame.skill_id
+        runtime_context["_llm_submission_skill_id"] = (
+            "conversation.root" if persistent_frame else frame.skill_id
+        )
         runtime_context["_llm_submission_session_id"] = (
             frame.conversation_id or frame.session_id or task_id
         )
@@ -305,7 +315,7 @@ class LlmSkillAgent:
                     _scrub_create_artifact_content(messages, call["id"], scrub_placeholder)
 
                 messages.append(ToolMessage(
-                    content=json.dumps(tool_result, ensure_ascii=False),
+                    content=json.dumps(model_visible_context(tool_result), ensure_ascii=False),
                     tool_call_id=call["id"],
                 ))
                 self._append_private_message(frame_id, "tool", tool_result)
@@ -344,7 +354,8 @@ class LlmSkillAgent:
                         type="error",
                         task_id=task_id,
                         skill_frame_id=frame_id,
-                        skill_id=manifest.id,
+                        skill_id=event_skill_id,
+                        presentation_hint=event_presentation_hint,
                         reason="non_recoverable_tool_error",
                         error=error,
                     ))
@@ -369,7 +380,8 @@ class LlmSkillAgent:
             type="error",
             task_id=task_id,
             skill_frame_id=frame_id,
-            skill_id=manifest.id,
+            skill_id=event_skill_id,
+            presentation_hint=event_presentation_hint,
             error=error,
         ))
         return events
@@ -407,12 +419,15 @@ class LlmSkillAgent:
         frame = self._runtime.get_frame(frame_id)
         parent_frame_id = frame.parent_frame_id if frame else None
         session_key = (frame.conversation_id or frame.session_id) if frame else None
+        event_skill_id = None if persistent_frame else manifest.id
+        event_presentation_hint = "root_frame" if persistent_frame else None
         tool_use_event = QueryEvent(
             type="tool_use",
             task_id=task_id,
             skill_frame_id=frame_id,
             parent_frame_id=parent_frame_id,
-            skill_id=manifest.id,
+            skill_id=event_skill_id,
+            presentation_hint=event_presentation_hint,
             content=name,
             tool_call_id=call.get("id"),
             tool_name=name,
@@ -472,7 +487,8 @@ class LlmSkillAgent:
             task_id=task_id,
             skill_frame_id=frame_id,
             parent_frame_id=parent_frame_id,
-            skill_id=manifest.id,
+            skill_id=event_skill_id,
+            presentation_hint=event_presentation_hint,
             content=json.dumps(result, ensure_ascii=False),
             error=result.get("error"),
             tool_call_id=call.get("id"),

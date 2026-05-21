@@ -403,6 +403,7 @@ class FileFrameJournal:
             "rootFrameId": frame.frame_id,
             "rootFrameHistory": self._root_frame_history(index_path, frame.frame_id),
             "rootSkillId": frame.skill_id,
+            "rootFrameKind": frame.frame_kind.value,
             "currentTaskId": frame.current_task_id or frame.task_id,
             "originTaskId": frame.origin_task_id,
             "runtimeRevision": runtime_revision,
@@ -644,7 +645,11 @@ def _matches_conversation(frame: SkillFrameState, conversation_id: str) -> bool:
 
 
 def _is_root_frame(frame: SkillFrameState, root_skill_id: str) -> bool:
-    return frame.skill_id == root_skill_id and not frame.parent_frame_id
+    if frame.parent_frame_id:
+        return False
+    if frame.frame_kind == FrameKind.ROOT:
+        return True
+    return frame.skill_id == root_skill_id
 
 
 def _standard_conversation_id(value: Any) -> str | None:

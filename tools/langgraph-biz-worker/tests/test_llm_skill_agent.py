@@ -793,6 +793,72 @@ def test_llm_agent_prompt_includes_visible_recent_conversation():
     assert "User request: 我上一个消息是什么" in user_prompt
 
 
+def test_llm_agent_root_prompt_hides_runtime_private_identifiers():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_private_prompt_001",
+        skill_id="system.root",
+        skill_input={
+            "contextId": "bctx_20260521_ab_private",
+            "session_id": "sess-private",
+            "task_id": "task-private",
+            "frame_id": "frm-private",
+            "execution_report_ref": "frame-report://task-private/frm-private",
+            "report_ref": "frame-report://task-private/frm-private",
+            "skill_id": "system.root",
+            "child_skill_id": "tms-ticket-agent",
+            "credentialId": "cred-private",
+            "apiToken": "secret-token",
+            "allowed_skills": [
+                {
+                    "id": "tms-ticket-agent",
+                    "name": "TMS Ticket Agent",
+                    "description": "Create and inspect TMS tickets.",
+                    "credentialId": "cred-skill",
+                }
+            ],
+            "business_order_no": "ORD-1",
+        },
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_private_prompt_001",
+        frame_id=frame_id,
+        prompt="hi",
+        persistent_frame=True,
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    user_prompt = model.seen_messages[0][1].content
+    combined = system_prompt + "\n" + user_prompt
+    assert "system.root" not in combined
+    assert "SKILL_AGENT_START" not in combined
+    assert "bctx_20260521_ab_private" not in combined
+    assert "sess-private" not in combined
+    assert "cred-private" not in combined
+    assert "cred-skill" not in combined
+    assert "secret-token" not in combined
+    assert "task-private" in combined
+    assert "frm-private" in combined
+    assert "frame-report://task-private/frm-private" in combined
+    assert "tms-ticket-agent" in combined
+    assert "Current root turn context:" in user_prompt
+    assert "User request: hi" in user_prompt
+    assert "Business context:" in user_prompt
+    assert "Create and inspect TMS tickets." in user_prompt
+    assert "ORD-1" in user_prompt
+
+
 def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_context():
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
@@ -931,7 +997,9 @@ def test_llm_agent_persistent_frame_prompt_includes_pending_recoverable_child():
     assert "Recoverable focus:" in user_prompt
     assert "Recoverable focus stack:" in user_prompt
     assert child_frame_id in user_prompt
-    assert "child_skill" in user_prompt
+    assert '"skill_id": "child_skill"' in user_prompt
+    assert "task_root_child_prompt_001" in user_prompt
+    assert "ORD-1" in user_prompt
     assert "resume_recoverable_child_skill" in user_prompt
 
 

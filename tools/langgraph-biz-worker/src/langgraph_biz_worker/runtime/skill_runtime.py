@@ -154,6 +154,7 @@ class SkillRuntime:
         current_task_id: str | None = None,
         origin_task_id: str | None = None,
         last_task_ids: list[str] | None = None,
+        frame_kind: FrameKind = FrameKind.SKILL,
     ) -> str:
         """Create a new Frame and transition to RUNNING.
 
@@ -166,6 +167,7 @@ class SkillRuntime:
             frame_id=frame_id,
             task_id=task_id,
             skill_id=skill_id,
+            frame_kind=frame_kind,
             parent_frame_id=parent_frame_id,
             status=FrameStatus.CREATED,
             conversation_id=conversation_id,
@@ -573,10 +575,10 @@ class SkillRuntime:
     ) -> ValidationResult:
         """Record a turn result for a persistent Frame without closing it.
 
-        System frames such as ``system.root`` do not have ordinary Skill exit
-        semantics.  ``submit_skill_result`` ends the current user turn, but the
-        Frame remains RUNNING so future resume logic can continue from the same
-        root working context.
+        Conversation root frames do not have ordinary Skill exit semantics.
+        ``submit_skill_result`` ends the current user turn, but the Frame
+        remains RUNNING so future resume logic can continue from the same root
+        working context.
         """
         frame = self._get_frame(frame_id)
 
@@ -1767,7 +1769,7 @@ class SkillRuntime:
         digest = _compact_execution_report_digest(report.digest)
         frame.private_working_state["execution_report_ref"] = report.report_ref
         frame.private_working_state["execution_report_digest"] = digest
-        if frame.skill_id == "system.root":
+        if _is_conversation_root_frame(frame, "system.root"):
             summary = frame.private_working_state.setdefault("root_context_summary", {})
             _append_execution_report_to_summary(summary, report.report_ref, digest)
             summary["latest_execution_report_ref"] = report.report_ref
@@ -2603,7 +2605,7 @@ def _dedupe_latest_frame_snapshots(frames: list[SkillFrameState]) -> list[SkillF
 
 
 def _is_active_recoverable_root(frame: SkillFrameState, root_skill_id: str) -> bool:
-    if frame.skill_id != root_skill_id or frame.parent_frame_id:
+    if not _is_conversation_root_frame(frame, root_skill_id):
         return False
     state = frame.private_working_state
     continuation_state = str(state.get("continuation_state") or "").upper()
@@ -2634,6 +2636,14 @@ def _is_active_recoverable_root(frame: SkillFrameState, root_skill_id: str) -> b
     ):
         return False
     return recoverable or has_focus or has_active_focus or has_pending_child or has_awaiting_user_child
+
+
+def _is_conversation_root_frame(frame: SkillFrameState, root_skill_id: str) -> bool:
+    if frame.parent_frame_id:
+        return False
+    if frame.frame_kind == FrameKind.ROOT:
+        return True
+    return frame.skill_id == root_skill_id
 
 
 def _recoverable_root_sort_key(frame: SkillFrameState) -> tuple[int, str, str, str]:

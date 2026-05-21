@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from langgraph_biz_worker.graphs import root_graph as root_graph_module
-from langgraph_biz_worker.models import SkillManifest
+from langgraph_biz_worker.models import FrameKind, SkillManifest
 from langgraph_biz_worker.runtime.context_memory import ContextRuntimeMemory, save_to_root_frame
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.file_layout import session_data_dir
@@ -74,14 +74,15 @@ def test_route_skill_creates_and_reuses_persistent_system_root_frame(monkeypatch
     second = root_graph_module.route_skill(state)
 
     assert first["active_frame_id"] == second["active_frame_id"]
-    assert first["events"][-1].content == "Opening frame for skill: system.root"
-    assert second["events"][-1].content == "Reusing frame for skill: system.root"
+    assert first["events"][-1].content == "Opening conversation root frame"
+    assert second["events"][-1].content == "Reusing conversation root frame"
 
     root_frames = [
         frame for frame in runtime.get_frames_by_task("task_root_reuse_001")
         if frame.skill_id == root_graph_module.ROOT_SKILL_ID
     ]
     assert len(root_frames) == 1
+    assert root_frames[0].frame_kind == FrameKind.ROOT
     assert root_frames[0].status.value == "RUNNING"
 
 
@@ -100,7 +101,7 @@ def test_route_skill_restores_persistent_system_root_frame_from_journal(monkeypa
     second = root_graph_module.route_skill(state)
 
     assert second["active_frame_id"] == first["active_frame_id"]
-    assert second["events"][-1].content == "Reusing frame for skill: system.root"
+    assert second["events"][-1].content == "Reusing conversation root frame"
     assert restored_runtime.get_frame(first["active_frame_id"]) is not None
 
 
@@ -134,7 +135,7 @@ def test_route_skill_reuses_system_root_frame_across_tasks_in_same_session(monke
     second = root_graph_module.route_skill(second_state)
 
     assert first["active_frame_id"] == second["active_frame_id"]
-    assert second["events"][-1].content == "Reusing frame for skill: system.root"
+    assert second["events"][-1].content == "Reusing conversation root frame"
 
     frame = runtime.get_frame(first["active_frame_id"])
     assert frame is not None
@@ -162,7 +163,7 @@ def test_route_skill_restores_system_root_frame_by_session_for_new_task(monkeypa
     second = root_graph_module.route_skill(second_state)
 
     assert second["active_frame_id"] == first["active_frame_id"]
-    assert second["events"][-1].content == "Reusing frame for skill: system.root"
+    assert second["events"][-1].content == "Reusing conversation root frame"
 
     frame = restored_runtime.get_frame(first["active_frame_id"])
     assert frame is not None
@@ -195,7 +196,7 @@ def test_route_skill_restores_system_root_frame_from_session_index_without_scan(
     second = root_graph_module.route_skill(second_state)
 
     assert second["active_frame_id"] == first["active_frame_id"]
-    assert second["events"][-1].content == "Reusing frame for skill: system.root"
+    assert second["events"][-1].content == "Reusing conversation root frame"
 
 
 def test_run_skill_passes_raw_prompt_and_runtime_attachments_to_llm_agent(monkeypatch, tmp_path):
@@ -613,5 +614,6 @@ def test_agentic_routing_prompt_includes_recent_conversation(monkeypatch, tmp_pa
     assert "user: look up ticket A" in human_prompt
     assert "assistant: ticket A is available" in human_prompt
     assert "Current user message:\ncontinue handling it" in human_prompt
-    assert f'"contextId": "{CTX_PROMPT}"' in human_prompt
-    assert "recentConversation" not in human_prompt.split("\nContext:", 1)[1]
+    assert f'"contextId": "{CTX_PROMPT}"' not in human_prompt
+    assert "recentConversation" not in human_prompt
+    assert "\nContext:" not in human_prompt
