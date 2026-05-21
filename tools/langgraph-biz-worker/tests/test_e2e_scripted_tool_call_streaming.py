@@ -3038,6 +3038,124 @@ async def test_scripted_llm_submission_log_matches_root_recent_conversation(
 
 
 @pytest.mark.anyio
+async def test_scripted_api_root_plain_final_commits_runtime_memory_without_retry_prompt(
+    monkeypatch,
+    mock_llm_server,
+):
+    """Root plain assistant answers should commit memory without synthetic retry prompts."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-plain-final-{run_id}"
+    session_id = f"sess-e2e-root-plain-final-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-root-plain-final-{run_id}"
+    first_task_id = f"task_e2e_root_plain_final_001_{run_id}"
+    second_task_id = f"task_e2e_root_plain_final_002_{run_id}"
+    first_prompt = f"hi plain final next:{trace_id}:001"
+    first_answer = "你好，我可以帮你处理运输、工单和履约相关问题。"
+    second_prompt = f"我刚才问了什么 next:{trace_id}:002"
+    second_answer = "你刚才发送了 hi plain final。"
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-plain-final",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {"content": first_answer},
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {"content": second_answer},
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
+
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+    }
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": first_prompt,
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {"contextId": context_id},
+            },
+        )
+        second_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": second_prompt,
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    first_events = _parse_worker_sse(first_response.text)
+    second_events = _parse_worker_sse(second_response.text)
+    assert next(event for event in first_events if event.type == "result").content == first_answer
+    assert next(event for event in second_events if event.type == "result").content == second_answer
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+    ]
+    assert _record_messages(records[1], "user") == [first_prompt, second_prompt]
+    assert _record_messages(records[1], "assistant") == [first_answer]
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len(payloads) == 2
+    first_payload = _llm_submission_for(payloads, task_id=first_task_id, skill_id="conversation.root")
+    second_payload = _llm_submission_for(payloads, task_id=second_task_id, skill_id="conversation.root")
+    assert _submission_role_sequence(first_payload) == ["system", "human"]
+    assert _submission_role_sequence(second_payload) == ["system", "human", "ai", "human"]
+    assert _submission_texts(second_payload, "human") == [first_prompt, second_prompt]
+    assert _submission_texts(second_payload, "ai") == [first_answer]
+    assert _submission_tool_call_names(first_payload) == []
+    assert _submission_tool_call_names(second_payload) == []
+    assert "No tool call was produced" not in json.dumps(payloads, ensure_ascii=False)
+
+    second_root_events = _runtime_message_events(
+        context_id,
+        task_id=second_task_id,
+        frame_id=second_payload["meta"]["frameId"],
+    )
+    assert _runtime_initial_roles(second_root_events) == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert "persistent_turn_completed" in _runtime_checkpoints(second_root_events)
+    assert not any(event.get("phase") == "runtime_retry_instruction" for event in second_root_events)
+
+
+@pytest.mark.anyio
 async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch, mock_llm_server):
     """Root active_plan should be persisted and injected into the next mock LLM request."""
     run_id = uuid.uuid4().hex[:8]

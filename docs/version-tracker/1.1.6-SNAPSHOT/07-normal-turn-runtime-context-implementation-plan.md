@@ -382,6 +382,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 2026-05-21: 已补齐 child handoff 后 Root 同 turn synthesis 的 scripted E2E 覆盖。mock LLM 支持同一 cursor 按注册顺序返回多次响应，用于模拟 child 与 Root 共享同一用户消息但产生两次真实 ChatModel 调用的恢复链路。
 - 2026-05-21: 已补齐 recoverable ERROR/TIMEOUT 后 deepest leaf handoff 的 scripted E2E 覆盖。`model_timeout` / `model_error` 中断后，下一条用户消息默认直达 leaf；leaf 可调用 `handoff_to_parent`，parent 在同一 turn 接管并提交最终结果。
 - 2026-05-21: 已新增真实上游 OpenAPI smoke / validate-only 对账脚本。`live_upstream_runtime_context_smoke.py` 可发送两轮同 `contextId` 上游请求，也可只校验既有 session 目录；校验 `session.json` root 定位、`llm-submissions`、`runtime-message-events`、附件引用、`system.root` 泄漏、重开会话 raw tool 泄漏和 recoverable checkpoint。详见 [11-live-upstream-runtime-context-smoke.md](./11-live-upstream-runtime-context-smoke.md)。
+- 2026-05-21: 已补齐 API 级 root plain final E2E。普通 Root 回合没有 tool call 时会直接提交 assistant final 到 BizWorker runtime memory，下一轮同 `contextId` 的真实 LLM body 恢复为 `system -> user -> assistant -> user`，且不生成 “No tool call was produced” 伪 human retry。
 
 ### Testing
 
@@ -434,6 +435,14 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
   - result: `4 passed`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest -q`
   - result: `606 passed, 6 skipped, 11 warnings`
+- `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_api_root_plain_final_commits_runtime_memory_without_retry_prompt -q`
+  - result: `1 passed, 3 warnings`
+- `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_llm_skill_agent.py tests/test_llm_message_builder.py tests/test_llm_submission_log.py tests/test_e2e_scripted_tool_call_streaming.py -q`
+  - result: `90 passed, 3 warnings`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\ruff.exe check src/langgraph_biz_worker/runtime/llm_agent_prompts.py src/langgraph_biz_worker/runtime/llm_skill_agent.py tests/test_llm_skill_agent.py tests/test_e2e_scripted_tool_call_streaming.py`
+  - result: `All checks passed!`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest -q`
+  - result: `609 passed, 6 skipped, 11 warnings`
 
 ### Experience
 
@@ -447,6 +456,8 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 已通过 scripted E2E 验证 `model_timeout` / `model_error` recoverable leaf 恢复后可以调用 `handoff_to_parent` 交还 parent；parent 的 submission 能看到 leaf promoted handoff summary，并在同一 turn 生成最终结果。
 - 已通过 captured real smoke replay 验证首轮 root/child 工具链、恢复继续、换题请求的 7 次真实 ChatModel 调用均保存 `llm-submissions`，并能与 root/child runtime message events 对账。
 - 已补充 live upstream smoke runbook，可在真实 Navigator OpenAPI 环境中校验两轮同 `contextId`、附件证据、LLM body 快照、runtime event JSONL 和重开会话 raw tool 泄漏；当前等待手动联调验收录入具体 `summary.json`。
+- 已通过本机 HTTP BizWorker + mock LLM smoke 验证普通 Root 多轮和 child/frame 工具链：Root smoke `bctx_20260521_23_2372853b5366440cb39d3268e3ec1eab` 的 LLM body 序列为 `["system","human"]`、`["system","human","ai","human"]`；child/frame smoke `bctx_20260521_2a_2a7d5bd415dd47adb18c7cf7305a6763` 的 runtime events / tool audit 记录 `invoke_business_skill=1`、`submit_skill_result=2`。
+- 已尝试真实 qwen3.5-plus provider smoke，session `bctx_20260521_b1_b1fc1510f49742b5ad541c8903ce100c` 在 provider 请求阶段触发 `LLM_REQUEST_TIMEOUT`，该结果记录为外部 provider 超时阻塞，不作为本轮功能验收通过证据。
 - 真实前端长会话与 TMS 工单链路仍建议在修复上游 `upstream_ref` 后做一次联调验收。
 
 ## Implementation Quality / Acceptance

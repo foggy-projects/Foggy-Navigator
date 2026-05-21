@@ -319,6 +319,7 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 - 2026-05-21: scripted E2E 已补充 `llm-submissions` 与 `runtime-message-events` 对账断言，覆盖普通多轮、BusinessFunction tool protocol、`AWAITING_USER` child resume、nested completion unwind。
 - 2026-05-21: child frame system context 新增“子技能退出策略”，并通过 `handoff_to_parent` 支持取消/停止/换题/回主对话；persistent root 工具列表不暴露该 child-only 工具。
 - 2026-05-21: 收口 root / child 完成契约。Root 普通回合支持自然语言直接完成；`submit_skill_result` 改为 root 的可选结构化提交能力和 child frame 的强制退出契约；移除“无 tool call 后追加伪 human 提醒”的默认行为。
+- 2026-05-21: 补齐 API 级 Root 普通自然语言完成 E2E，验证同 `contextId` 第二轮 LLM body 能恢复上一轮 `user` / `assistant`，并且不会写入伪 human retry instruction。
 
 ### Testing
 
@@ -341,8 +342,18 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
   - result: `All checks passed!`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest -q`
   - result: `608 passed, 6 skipped, 11 warnings`
+- `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_api_root_plain_final_commits_runtime_memory_without_retry_prompt -q`
+  - result: `1 passed, 3 warnings`
+- `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_llm_skill_agent.py tests/test_llm_message_builder.py tests/test_llm_submission_log.py tests/test_e2e_scripted_tool_call_streaming.py -q`
+  - result: `90 passed, 3 warnings`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\ruff.exe check src/langgraph_biz_worker/runtime/llm_agent_prompts.py src/langgraph_biz_worker/runtime/llm_skill_agent.py tests/test_llm_skill_agent.py tests/test_e2e_scripted_tool_call_streaming.py`
+  - result: `All checks passed!`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest -q`
+  - result: `609 passed, 6 skipped, 11 warnings`
 
 ### Experience
 
-- status: N/A
-- 原因：本条目为 Worker LLM submission 组装契约，不涉及 UI 交互变更。真实体验验证可通过 `logs/llm-submissions/*.json` 直接检查提交给 LLM 的 body。
+- status: verified-by-tests-and-local-smoke
+- 原因：本条目为 Worker LLM submission 组装契约，不涉及 UI 交互变更；体验证据以 `logs/llm-submissions/*.json` 和 `logs/runtime-message-events/*.jsonl` 为准。
+- 本机 HTTP BizWorker + mock LLM smoke 已通过：Root 普通多轮 session `bctx_20260521_23_2372853b5366440cb39d3268e3ec1eab` 生成两次 LLM body，role 序列为 `["system","human"]`、`["system","human","ai","human"]`；child/frame session `bctx_20260521_2a_2a7d5bd415dd47adb18c7cf7305a6763` 同时在 runtime events / tool audit 中记录 frame 工具链。
+- 真实 qwen3.5-plus provider smoke 在 provider 请求阶段超时，session `bctx_20260521_b1_b1fc1510f49742b5ad541c8903ce100c` 仅作为外部超时阻塞证据，不作为本契约验收通过证据。

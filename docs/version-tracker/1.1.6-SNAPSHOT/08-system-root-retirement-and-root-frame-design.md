@@ -93,6 +93,17 @@ tools/langgraph-biz-worker
 608 passed, 6 skipped, 11 warnings
 ```
 
+2026-05-21 补充 API 级 Root 普通自然语言完成 E2E 后：
+
+```text
+tools/langgraph-biz-worker
+.\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_api_root_plain_final_commits_runtime_memory_without_retry_prompt -q
+1 passed, 3 warnings
+
+.\.venv\Scripts\python.exe -m pytest -q
+609 passed, 6 skipped, 11 warnings
+```
+
 ## 验收标准
 
 1. 新会话 root frame 的 JSON 中 `frame_kind` 为 `ROOT`。

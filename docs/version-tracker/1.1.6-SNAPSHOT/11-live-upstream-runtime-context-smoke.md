@@ -181,4 +181,8 @@ cd tools/langgraph-biz-worker
 
 - 2026-05-21: 已新增脚本与 validator 单元测试。
 - 2026-05-21: 本地 validate-only 曾对旧会话执行，旧会话没有 `logs/llm-submissions`，因此校验失败；该结果符合预期，说明旧数据或未开日志的会话无法用于 LLM body 复盘验收。
-- 真实 OpenAPI live 验收等待手动提供可访问的 Navigator 地址、ClientApp 凭证和附件 URL 后执行。
+- 2026-05-21: 已用 `.env.local` 启动本机 BizWorker，健康检查通过，环境包含 `BIZ_WORKER_LLM_SUBMISSION_LOG_ENABLED=true`，`logs/llm-submissions` 默认最多保留 100 个文件。
+- 2026-05-21: 真实 qwen3.5-plus provider smoke 已尝试，session `bctx_20260521_b1_b1fc1510f49742b5ad541c8903ce100c` 在 provider 请求阶段触发 `LLM_REQUEST_TIMEOUT`，该结果记录为外部 provider 超时阻塞，不作为 live 验收通过证据。
+- 2026-05-21: 本机 HTTP BizWorker + mock LLM smoke 已通过。Root 普通多轮 session `bctx_20260521_23_2372853b5366440cb39d3268e3ec1eab` 的 LLM body 序列为 `["system","human"]`、`["system","human","ai","human"]`；child/frame session `bctx_20260521_2a_2a7d5bd415dd47adb18c7cf7305a6763` 的 runtime events / tool audit 记录 `invoke_business_skill=1`、`submit_skill_result=2`。
+- 注意：`llm-submissions` 只保存真实请求给 LLM 的 body；关闭 frame 的 `submit_skill_result` 等工具调用如果已经被当前回合消费，可能只出现在 `runtime-message-events` / tool audit 中，不一定出现在下一次 LLM request body 中。
+- 真实 Navigator OpenAPI / TMS 前端 live 验收仍等待手动提供可访问地址、ClientApp 凭证和附件 URL 后执行。
