@@ -33,6 +33,8 @@ _PRIVATE_CONTEXT_MARKERS = (
     "accesskey",
     "accesstoken",
     "authorization",
+    "businessskillid",
+    "businessskillname",
     "credential",
     "password",
     "secret",
@@ -50,55 +52,65 @@ _SYSTEM_ROOT_IDENTITY_KEYS = {
 }
 
 
-def _build_system_prompt(manifest: SkillManifest, account_context_prompt: str = "") -> str:
+def _build_system_prompt(
+    manifest: SkillManifest,
+    account_context_prompt: str = "",
+    *,
+    skill_input: dict[str, Any] | None = None,
+    skill_id: str | None = None,
+    runtime_context: dict[str, Any] | None = None,
+) -> str:
     prompt = _build_system_identity_prompt(manifest)
     if account_context_prompt:
         prompt += f"\n---\n{account_context_prompt}\n---\n\n"
     if manifest.markdown_body:
-        prompt += f"\n---\nSkill Instructions:\n{manifest.markdown_body}\n---\n\n"
+        prompt += f"\n---\n技能说明:\n{manifest.markdown_body}\n---\n\n"
 
     prompt += (
-        "Business functions may be shown as `function_id@version`; when using "
-        "invoke_business_function, pass them as `function_id` without the @version "
-        "suffix and `version` separately. "
-        "Navigator runtime identifiers such as skillId, functionId, frameId, "
-        "skillFrameId, function_frame_id, taskId, sessionId, messageId, and "
-        "values prefixed with frm_, lgt_, msg_, or sess_ are internal tracing "
-        "ids. Use them only when reasoning about execution history or when the "
-        "user explicitly asks for trace/debug identifiers; do not expose them "
-        "in normal user-facing summaries, and never present them as an order "
-        "number, waybill number, business document number, or proof that a "
-        "formal order was created. Only call a value an order/waybill/business "
-        "id when the tool output schema or result explicitly provides a public "
-        "business identifier field such as orderNo, orderIdentifier, or waybillNo. "
-        "For page-opening structured outputs, prefer the tool summary and action "
-        "label; do not infer business success or business ids from page actions, "
-        "buttons, Navigator frame ids, skill ids, or action metadata. "
-        "If the skill references files under its bundle, use list_skill_resources "
-        "or read_skill_resource; those tools only expose the current ClientApp's "
-        "public skill resources. "
-        "Use only the provided tools. When the skill is complete, call "
-        "submit_skill_result. Natural-language completion is not accepted."
+        "业务函数可能以 `function_id@version` 的形式展示；调用 "
+        "invoke_business_function 时，`function_id` 只传不带 @version 的函数 id，"
+        "`version` 单独传入。"
+        "Navigator 运行时标识，例如 skillId、functionId、frameId、"
+        "skillFrameId、function_frame_id、taskId、sessionId、messageId，"
+        "以及 frm_、lgt_、msg_、sess_ 前缀的值，都是内部追踪 id。"
+        "只有在分析执行历史或用户明确要求排查/调试标识时才使用这些 id；"
+        "正常面向用户的总结中不要暴露这些 id，也不要把它们当作订单号、"
+        "运单号、业务单据号，或当作正式业务单已创建的证明。"
+        "只有当工具输出 schema 或结果中明确提供 orderNo、orderIdentifier、"
+        "waybillNo 等公开业务标识字段时，才能称其为订单/运单/业务 id。"
+        "对于打开页面类结构化输出，优先使用工具返回的 summary 和 action label；"
+        "不要根据页面 action、按钮、Navigator frame id、skill id 或 action metadata "
+        "推断业务成功或业务 id。"
+        "如果技能引用其 bundle 内的文件，使用 list_skill_resources 或 "
+        "read_skill_resource；这些工具只会暴露当前 ClientApp 的公开技能资源。"
+        "只能使用已提供的工具。技能完成时必须调用 submit_skill_result；"
+        "仅输出自然语言不算完成。"
     )
+    runtime_prompt = _build_runtime_system_context_prompt(
+        skill_input or {},
+        skill_id or manifest.id,
+        runtime_context,
+    )
+    if runtime_prompt:
+        prompt += f"\n\n---\n{runtime_prompt}\n---\n"
     return prompt
 
 
 def _build_system_identity_prompt(manifest: SkillManifest) -> str:
     if manifest.id == _SYSTEM_ROOT_SKILL_ID:
         description = (
-            "Root orchestration agent for the current business conversation. "
-            "Coordinate the current user turn, call business tools when needed, "
-            "and return a concise result for the user."
+            "当前业务会话的根编排 Agent。负责处理当前用户回合，必要时调用业务工具，"
+            "并向用户返回简洁结果。"
         )
         return (
-            "You are the root orchestration agent for this business conversation.\n"
-            f"Description: {description}\n"
-            f"Output schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
+            "你是当前业务会话的根编排 Agent。\n"
+            f"职责说明: {description}\n"
+            f"输出 schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
         )
     return (
-        f"You are executing business skill {manifest.id}.\n"
-        f"Description: {manifest.description}\n"
-        f"Output schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
+        f"你正在执行业务技能 {manifest.id}。\n"
+        f"职责说明: {manifest.description}\n"
+        f"输出 schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
     )
 
 
@@ -108,17 +120,27 @@ def _build_user_prompt(
     skill_id: str,
     runtime_context: dict[str, Any] | None = None,
 ) -> str:
+    time_prompt = _build_user_request_time_prompt(runtime_context)
+    if time_prompt:
+        return f"{prompt}\n\n---\n{time_prompt}"
+    return prompt
+
+
+def _build_runtime_system_context_prompt(
+    skill_input: dict[str, Any],
+    skill_id: str,
+    runtime_context: dict[str, Any] | None = None,
+) -> str:
+    business_context = _model_visible_business_context(skill_input, runtime_context)
     parts = [
         _build_turn_header(skill_id, runtime_context),
-        _build_runtime_time_context_prompt(runtime_context),
-        _build_recoverable_interruption_prompt(runtime_context, prompt),
-        _build_awaiting_user_input_prompt(runtime_context, prompt),
+        _build_runtime_date_context_prompt(runtime_context),
+        _build_recoverable_interruption_prompt(runtime_context),
+        _build_awaiting_user_input_prompt(runtime_context),
         _build_active_plan_prompt(runtime_context),
         _build_root_planning_policy_prompt(runtime_context, skill_id),
         _build_frame_result_contract_prompt(runtime_context),
-        _build_runtime_visible_conversation_prompt(runtime_context),
-        f"User request: {prompt}",
-        _build_model_visible_skill_input_prompt(skill_input),
+        _build_model_visible_skill_input_prompt(business_context),
         _build_attachment_context_prompt(_runtime_attachments(runtime_context)),
         _build_visible_context_prompt(runtime_context),
     ]
@@ -127,15 +149,56 @@ def _build_user_prompt(
 
 def _build_turn_header(skill_id: str, runtime_context: dict[str, Any] | None = None) -> str:
     if (runtime_context or {}).get("_persistent_frame") is True or skill_id == _SYSTEM_ROOT_SKILL_ID:
-        return "Current root turn context:"
-    return "Current business skill turn context:"
+        return "当前根回合上下文:"
+    return "当前业务技能回合上下文:"
+
+
+def _model_visible_business_context(
+    skill_input: dict[str, Any],
+    runtime_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if runtime_context:
+        override = runtime_context.get("_model_visible_business_context")
+        if isinstance(override, dict):
+            return override
+    return skill_input
 
 
 def _build_model_visible_skill_input_prompt(skill_input: dict[str, Any]) -> str:
     visible = model_visible_context(skill_input)
     if not visible:
         return ""
-    return f"Business context: {json.dumps(visible, ensure_ascii=False, sort_keys=True)}"
+    if not isinstance(visible, dict):
+        return f"业务上下文: {json.dumps(visible, ensure_ascii=False, sort_keys=True)}"
+
+    business_context = dict(visible)
+    allowed_skills = business_context.pop("allowed_skills", None)
+    parts = [_build_allowed_skills_prompt(allowed_skills)]
+    if business_context:
+        parts.append(f"业务上下文: {json.dumps(business_context, ensure_ascii=False, sort_keys=True)}")
+    return "\n".join(part for part in parts if part)
+
+
+def _build_allowed_skills_prompt(allowed_skills: Any) -> str:
+    if not isinstance(allowed_skills, list):
+        return ""
+    lines = ["可用业务技能:"]
+    for item in allowed_skills:
+        if not isinstance(item, dict):
+            continue
+        skill_id = str(item.get("id") or "").strip()
+        if not skill_id:
+            continue
+        name = str(item.get("name") or "").strip()
+        description = str(item.get("description") or "").strip()
+        label = f"`{skill_id}`"
+        if name and name != skill_id:
+            label += f"（{name}）"
+        if description:
+            lines.append(f"- {label}: {description}")
+        else:
+            lines.append(f"- {label}")
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def model_visible_context(value: Any) -> Any:
@@ -211,43 +274,6 @@ def _runtime_attachments(runtime_context: dict[str, Any] | None) -> list[dict[st
     return value if isinstance(value, list) else None
 
 
-def _build_runtime_visible_conversation_prompt(runtime_context: dict[str, Any] | None) -> str:
-    if not runtime_context:
-        return ""
-    history = runtime_context.get("_runtime_visible_conversation")
-    if isinstance(history, list):
-        lines = _conversation_lines(history)
-        if lines:
-            return "Runtime-visible conversation before this turn:\n" + "\n".join(lines)
-    return _build_visible_recent_conversation_prompt(runtime_context)
-
-
-def _build_visible_recent_conversation_prompt(runtime_context: dict[str, Any] | None) -> str:
-    if not runtime_context:
-        return ""
-    history = runtime_context.get("_visible_recent_conversation")
-    if not isinstance(history, list):
-        return ""
-    lines = _conversation_lines(history)
-    if not lines:
-        return ""
-    return "Recent conversation before this turn:\n" + "\n".join(lines)
-
-
-def _conversation_lines(history: list[Any]) -> list[str]:
-    lines: list[str] = []
-    for item in history[-12:]:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role") or "message").strip().lower()
-        if role not in {"user", "assistant"}:
-            continue
-        content = item.get("content")
-        if isinstance(content, str) and content.strip():
-            lines.append(f"{role}: {content.strip()[:1200]}")
-    return lines
-
-
 def _recoverable_interruption_context(working_state: dict[str, Any]) -> dict[str, Any] | None:
     if working_state.get("continuation_state") != "INTERRUPTED":
         return None
@@ -298,86 +324,74 @@ def _active_plan_context(working_state: dict[str, Any]) -> Any | None:
     return None
 
 
-def _build_recoverable_interruption_prompt(
-    runtime_context: dict[str, Any] | None,
-    prompt: str,
-) -> str:
+def _build_recoverable_interruption_prompt(runtime_context: dict[str, Any] | None) -> str:
     if not runtime_context:
         return ""
     interruption = runtime_context.get("_recoverable_interruption")
     if not isinstance(interruption, dict):
         return ""
     parts = [
-        "Previous execution was interrupted.",
-        f"Reason: {interruption.get('reason') or 'unknown'}",
+        "上一次执行被中断。",
+        f"原因: {interruption.get('reason') or 'unknown'}",
     ]
     last_error = interruption.get("last_error")
     if last_error:
-        parts.append(f"Last error: {last_error}")
+        parts.append(f"上次错误: {last_error}")
     pending_child = interruption.get("pending_child_skill")
     if isinstance(pending_child, dict):
         parts.append(
-            "Pending child skill: "
+            "待恢复子技能: "
             f"{json.dumps(pending_child, ensure_ascii=False, sort_keys=True)}"
         )
     recoverable_focus = interruption.get("recoverable_focus")
     if isinstance(recoverable_focus, dict):
         parts.append(
-            "Recoverable focus: "
+            "可恢复焦点: "
             f"{json.dumps(recoverable_focus, ensure_ascii=False, sort_keys=True)}"
         )
     recoverable_focus_stack = interruption.get("recoverable_focus_stack")
     if isinstance(recoverable_focus_stack, list):
         parts.append(
-            "Recoverable focus stack: "
+            "可恢复焦点栈: "
             f"{json.dumps(recoverable_focus_stack, ensure_ascii=False, sort_keys=True)}"
         )
     continuation_summary = interruption.get("continuation_summary")
     if isinstance(continuation_summary, dict):
         parts.append(
-            "Continuation summary from promoted child result: "
+            "来自子技能提升结果的续跑摘要: "
             f"{json.dumps(continuation_summary, ensure_ascii=False, sort_keys=True)}"
         )
-    parts.append(f"User's new instruction: {prompt}")
+    parts.append("当前用户消息见下一条 human message。")
     parts.append(
-        "The interrupted work is a recoverable candidate, not a mandatory "
-        "continuation. First resolve intent_resolution as one of "
-        "CONTINUE_PREVIOUS, ABANDON_PREVIOUS, START_UNRELATED_NEW_TASK, or "
-        "ASK_CLARIFICATION. If the new instruction explicitly continues, "
-        "corrects, or supplements the interrupted work, use CONTINUE_PREVIOUS "
-        "and continue from the existing frame context. If there is a pending "
-        "child skill, use resume_recoverable_child_skill so the same child "
-        "frame continues. If the user explicitly stops/cancels it, use "
-        "ABANDON_PREVIOUS. If the user asks for an unrelated new task, use "
-        "START_UNRELATED_NEW_TASK. For either shelving case, summarize what "
-        "is being abandoned, then use shelve_interrupted_frame with decision "
-        "set to ABANDON_PREVIOUS or START_UNRELATED_NEW_TASK, include "
-        "intent_resolution, and include an abandoned_interruption summary. "
-        "If the intent is ambiguous and the interrupted work involves approval "
-        "or business side effects, use ASK_CLARIFICATION and ask for "
-        "clarification via submit_skill_result."
+        "中断工作只是可恢复候选，不是强制续跑。先判断 intent_resolution，"
+        "取值为 CONTINUE_PREVIOUS、ABANDON_PREVIOUS、START_UNRELATED_NEW_TASK "
+        "或 ASK_CLARIFICATION。若当前用户消息明确继续、纠正或补充中断工作，"
+        "使用 CONTINUE_PREVIOUS 并从现有 frame 上下文继续。若存在待恢复子技能，"
+        "使用 resume_recoverable_child_skill，使同一个子 frame 继续。若用户明确停止/"
+        "取消，使用 ABANDON_PREVIOUS。若用户要求无关的新任务，使用 "
+        "START_UNRELATED_NEW_TASK。对于任何搁置场景，先总结被放弃的内容，然后调用 "
+        "shelve_interrupted_frame，decision 设置为 ABANDON_PREVIOUS 或 "
+        "START_UNRELATED_NEW_TASK，同时包含 intent_resolution 和 "
+        "abandoned_interruption 摘要。若意图不明确且中断工作涉及审批或业务副作用，"
+        "使用 ASK_CLARIFICATION，并通过 submit_skill_result 向用户澄清。"
     )
     return "\n".join(parts)
 
 
-def _build_awaiting_user_input_prompt(
-    runtime_context: dict[str, Any] | None,
-    prompt: str,
-) -> str:
+def _build_awaiting_user_input_prompt(runtime_context: dict[str, Any] | None) -> str:
     if not runtime_context:
         return ""
     awaiting = runtime_context.get("_awaiting_user_input")
     if not isinstance(awaiting, dict):
         return ""
     parts = [
-        "Previous child skill turn is waiting for user input.",
-        "Awaiting-user context:",
+        "上一个子技能回合正在等待用户输入。",
+        "等待用户输入上下文:",
         json.dumps(model_visible_context(awaiting), ensure_ascii=False, sort_keys=True),
-        f"Current user reply: {prompt}",
+        "当前 human message 是用户对上次提示的回复。",
         (
-            "Rule: Continue this same unfinished frame. Treat the current user "
-            "reply as the answer to the previous user-facing prompt unless the "
-            "reply explicitly cancels or changes the request."
+            "规则: 继续同一个未完成 frame。除非当前用户回复明确取消或改变请求，"
+            "否则把当前 human message 视为用户对上一次面向用户提示的回答。"
         ),
     ]
     return "\n".join(parts)
@@ -385,18 +399,13 @@ def _build_awaiting_user_input_prompt(
 
 def _build_frame_result_contract_prompt(runtime_context: dict[str, Any] | None) -> str:
     return (
-        "Frame result contract: Treat the result returned by invoke_business_skill "
-        "or resume_recoverable_child_skill as the primary business-decision "
-        "context from that child frame, including status, next_step, "
-        "missing_fields, structured_output, artifact_refs, and evidence_refs. "
-        "A continuation summary injected after interruption is derived from the "
-        "same promoted child result and should be interpreted consistently with "
-        "the normal tool result. Do not call read_frame_execution_report after "
-        "a normal child completion just to recover those fields. Use "
-        "read_frame_execution_report only when the user asks how the frame ran, "
-        "when debugging/auditing execution, or as a fallback if the promoted "
-        "result/continuation summary lacks a field required for the next "
-        "business decision."
+        "Frame 结果契约: 将 invoke_business_skill 或 resume_recoverable_child_skill "
+        "返回的结果视为该子 frame 的主要业务决策上下文，包括 status、next_step、"
+        "missing_fields、structured_output、artifact_refs 和 evidence_refs。"
+        "中断后注入的续跑摘要来自同一个被提升的子结果，应按普通工具结果一致理解。"
+        "正常子技能完成后，不要仅为了恢复这些字段而调用 read_frame_execution_report。"
+        "只有当用户询问 frame 如何运行、需要调试/审计执行过程，或提升结果/续跑摘要缺少"
+        "下一步业务决策所需字段时，才使用 read_frame_execution_report。"
     )
 
 
@@ -407,16 +416,14 @@ def _build_active_plan_prompt(runtime_context: dict[str, Any] | None) -> str:
     if not isinstance(active_plan, (dict, list)):
         return ""
     return "\n".join([
-        "Active task plan:",
+        "当前活动任务计划:",
         json.dumps(active_plan, ensure_ascii=False, sort_keys=True),
         (
-            "Rule: Treat active_plan as the current persistent root working plan. "
-            "Before finalizing this turn, compare the intended result against the "
-            "plan. If the plan is still useful, preserve or update it in "
-            "submit_skill_result.structured_output.active_plan. If the user "
-            "explicitly abandons it or starts an unrelated task, set "
-            "intent_resolution to ABANDON_PREVIOUS or START_UNRELATED_NEW_TASK "
-            "and summarize the abandoned plan."
+            "规则: 将 active_plan 视为当前持久根 frame 的工作计划。"
+            "结束本回合前，将预期结果与该计划对照。若计划仍有用，"
+            "在 submit_skill_result.structured_output.active_plan 中保留或更新。"
+            "若用户明确放弃该计划或开始无关任务，将 intent_resolution 设置为 "
+            "ABANDON_PREVIOUS 或 START_UNRELATED_NEW_TASK，并总结被放弃的计划。"
         ),
     ])
 
@@ -428,11 +435,10 @@ def _build_root_planning_policy_prompt(
     if not runtime_context or runtime_context.get("_persistent_frame") is not True:
         return ""
     return (
-        "Persistent root planning policy: For complex, multi-intent, multi-skill, "
-        "or externally coordinated work, maintain an active_plan in "
-        "submit_skill_result.structured_output.active_plan. The plan should be "
-        "compact, structured, and updated as work progresses; it is working "
-        "state for future turns, not user-facing narration."
+        "持久根计划策略: 对复杂、多意图、多技能或需要外部协同的工作，"
+        "在 submit_skill_result.structured_output.active_plan 中维护 active_plan。"
+        "计划应简洁、结构化，并随工作推进更新；这是未来回合使用的工作状态，"
+        "不是面向用户的叙述。"
     )
 
 
@@ -443,21 +449,41 @@ def _build_visible_context_prompt(runtime_context: dict[str, Any] | None) -> str
     if not isinstance(summary, dict):
         return ""
     return (
-        "Visible parent/root context summary:\n"
+        "可见父级/根上下文摘要:\n"
         f"{json.dumps(model_visible_context(summary), ensure_ascii=False, sort_keys=True)}"
     )
 
 
-def _build_runtime_time_context_prompt(runtime_context: dict[str, Any] | None) -> str:
+def _build_runtime_date_context_prompt(runtime_context: dict[str, Any] | None) -> str:
     time_context = _runtime_time_context(runtime_context)
     return (
-        "Runtime context:\n"
-        f"- current_time: {time_context['current_time']}\n"
-        f"- timezone: {time_context['timezone']}\n"
-        f"- business_date: {time_context['business_date']}\n"
-        f"- current_month_range: [{time_context['current_month_start']}, {time_context['next_month_start']})\n"
-        "Rule: Resolve relative dates such as 本月, 今天, 昨日, 近7天 using this runtime context."
+        "运行时日期上下文:\n"
+        f"- 时区: {time_context['timezone']}\n"
+        f"- 业务日期: {time_context['business_date']}\n"
+        f"- 当前月份范围: [{time_context['current_month_start']}, {time_context['next_month_start']})\n"
+        "规则: 使用该运行时上下文解析“本月、今天、昨日、近7天”等相对日期。"
     )
+
+
+def _build_user_request_time_prompt(runtime_context: dict[str, Any] | None) -> str:
+    if not _has_explicit_request_time(runtime_context):
+        return ""
+    time_context = _runtime_time_context(runtime_context)
+    return (
+        "当前请求时间:\n"
+        f"- 当前时间: {time_context['current_time']}\n"
+        f"- 时区: {time_context['timezone']}"
+    )
+
+
+def _has_explicit_request_time(runtime_context: dict[str, Any] | None) -> bool:
+    if not runtime_context:
+        return False
+    return bool(_runtime_context_str(runtime_context, "current_time", "currentTime"))
+
+
+def _build_runtime_time_context_prompt(runtime_context: dict[str, Any] | None) -> str:
+    return _build_runtime_date_context_prompt(runtime_context)
 
 
 def _runtime_time_context(runtime_context: dict[str, Any] | None) -> dict[str, str]:

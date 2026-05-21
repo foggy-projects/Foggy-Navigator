@@ -9,11 +9,13 @@ from langchain_core.messages import AIMessage
 
 from langgraph_biz_worker.models import FrameKind, FrameStatus, SkillManifest
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
+from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_state_for_tests
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
+from langgraph_biz_worker.config import settings
 from langgraph_biz_worker.tools.business_function_tools import BusinessFunctionToolError
 
 
@@ -213,6 +215,7 @@ def _root_runtime() -> SkillRuntime:
         id="system.root",
         name="system.root",
         description="Persistent root skill.",
+        markdown_body="根 Agent 负责当前用户回合的业务编排。",
         output_schema={"type": "object"},
         allowed_tools=["submit_skill_result"],
         promote_to_parent=["result_summary", "structured_output"],
@@ -746,13 +749,15 @@ def test_llm_agent_persistent_frame_prompt_includes_active_plan():
         persistent_frame=True,
     )
 
+    system_prompt = model.seen_messages[0][0].content
     user_prompt = model.seen_messages[0][1].content
-    assert "Active task plan:" in user_prompt
-    assert "deliver complex task" in user_prompt
-    assert "step-1" in user_prompt
-    assert "Persistent root planning policy:" in user_prompt
-    assert "submit_skill_result.structured_output.active_plan" in user_prompt
-    assert "intent_resolution" in user_prompt
+    assert user_prompt == "继续"
+    assert "当前活动任务计划:" in system_prompt
+    assert "deliver complex task" in system_prompt
+    assert "step-1" in system_prompt
+    assert "持久根计划策略:" in system_prompt
+    assert "submit_skill_result.structured_output.active_plan" in system_prompt
+    assert "intent_resolution" in system_prompt
 
 
 def test_llm_agent_prompt_includes_visible_recent_conversation():
@@ -786,11 +791,15 @@ def test_llm_agent_prompt_includes_visible_recent_conversation():
         persistent_frame=True,
     )
 
-    user_prompt = model.seen_messages[0][1].content
-    assert "Recent conversation before this turn:" in user_prompt
-    assert "user: 我刚才问了工单 1001" in user_prompt
-    assert "assistant: 工单 1001 当前待处理" in user_prompt
-    assert "User request: 我上一个消息是什么" in user_prompt
+    messages = model.seen_messages[0]
+    system_prompt = messages[0].content
+    assert "本回合前的最近对话:" not in system_prompt
+    assert messages[1].type == "human"
+    assert messages[1].content == "我刚才问了工单 1001"
+    assert messages[2].type == "ai"
+    assert messages[2].content == "工单 1001 当前待处理"
+    assert messages[3].type == "human"
+    assert messages[3].content == "我上一个消息是什么"
 
 
 def test_llm_agent_root_prompt_hides_runtime_private_identifiers():
@@ -807,6 +816,8 @@ def test_llm_agent_root_prompt_hides_runtime_private_identifiers():
             "report_ref": "frame-report://task-private/frm-private",
             "skill_id": "system.root",
             "child_skill_id": "tms-ticket-agent",
+            "businessSkillId": "tms-root-router-agent",
+            "businessSkillName": "tms-root-router-agent",
             "credentialId": "cred-private",
             "apiToken": "secret-token",
             "allowed_skills": [
@@ -842,6 +853,9 @@ def test_llm_agent_root_prompt_hides_runtime_private_identifiers():
     user_prompt = model.seen_messages[0][1].content
     combined = system_prompt + "\n" + user_prompt
     assert "system.root" not in combined
+    assert "tms-root-router-agent" not in combined
+    assert "businessSkillId" not in combined
+    assert "businessSkillName" not in combined
     assert "SKILL_AGENT_START" not in combined
     assert "bctx_20260521_ab_private" not in combined
     assert "sess-private" not in combined
@@ -852,11 +866,47 @@ def test_llm_agent_root_prompt_hides_runtime_private_identifiers():
     assert "frm-private" in combined
     assert "frame-report://task-private/frm-private" in combined
     assert "tms-ticket-agent" in combined
-    assert "Current root turn context:" in user_prompt
-    assert "User request: hi" in user_prompt
-    assert "Business context:" in user_prompt
-    assert "Create and inspect TMS tickets." in user_prompt
-    assert "ORD-1" in user_prompt
+    assert user_prompt == "hi"
+    assert "当前根回合上下文:" in system_prompt
+    assert "可用业务技能:" in system_prompt
+    assert "- `tms-ticket-agent`（TMS Ticket Agent）: Create and inspect TMS tickets." in system_prompt
+    assert '"allowed_skills"' not in system_prompt
+    assert "业务上下文:" in system_prompt
+    assert "Create and inspect TMS tickets." in system_prompt
+    assert "ORD-1" in system_prompt
+
+
+def test_llm_agent_root_system_prompt_is_chinese_and_includes_skill_instructions():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_cn_prompt_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_cn_prompt_001",
+        frame_id=frame_id,
+        prompt="hi",
+        persistent_frame=True,
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert system_prompt.startswith("你是当前业务会话的根编排 Agent。")
+    assert "技能说明:" in system_prompt
+    assert "You are the root orchestration agent" not in system_prompt
+    assert "Use only the provided tools" not in system_prompt
+    assert "只能使用已提供的工具" in system_prompt
 
 
 def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_context():
@@ -902,23 +952,25 @@ def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_con
         persistent_frame=True,
     )
 
+    system_prompt = model.seen_messages[0][0].content
     user_prompt = model.seen_messages[0][1].content
-    assert "Previous execution was interrupted." in user_prompt
-    assert "Reason: model_error" in user_prompt
-    assert "upstream model timed out" in user_prompt
-    assert "Continuation summary from promoted child result:" in user_prompt
-    assert "WAITING_USER" in user_prompt
-    assert "请回复工单类型、标题及详细描述。" in user_prompt
-    assert "User's new instruction: 继续" in user_prompt
-    assert "recoverable candidate, not a mandatory continuation" in user_prompt
-    assert "Recoverable focus:" in user_prompt
-    assert "Recoverable focus stack:" in user_prompt
-    assert "CONTINUE_PREVIOUS" in user_prompt
-    assert "ASK_CLARIFICATION" in user_prompt
-    assert "START_UNRELATED_NEW_TASK" in user_prompt
-    assert "intent_resolution" in user_prompt
-    assert "abandoned_interruption" in user_prompt
-    assert "shelve_interrupted_frame" in user_prompt
+    assert user_prompt == "继续"
+    assert "上一次执行被中断。" in system_prompt
+    assert "原因: model_error" in system_prompt
+    assert "upstream model timed out" in system_prompt
+    assert "来自子技能提升结果的续跑摘要:" in system_prompt
+    assert "WAITING_USER" in system_prompt
+    assert "请回复工单类型、标题及详细描述。" in system_prompt
+    assert "当前用户消息见下一条 human message。" in system_prompt
+    assert "中断工作只是可恢复候选" in system_prompt
+    assert "可恢复焦点:" in system_prompt
+    assert "可恢复焦点栈:" in system_prompt
+    assert "CONTINUE_PREVIOUS" in system_prompt
+    assert "ASK_CLARIFICATION" in system_prompt
+    assert "START_UNRELATED_NEW_TASK" in system_prompt
+    assert "intent_resolution" in system_prompt
+    assert "abandoned_interruption" in system_prompt
+    assert "shelve_interrupted_frame" in system_prompt
 
 
 def test_llm_agent_prompt_includes_frame_result_contract():
@@ -947,10 +999,12 @@ def test_llm_agent_prompt_includes_frame_result_contract():
         persistent_frame=True,
     )
 
+    system_prompt = model.seen_messages[0][0].content
     user_prompt = model.seen_messages[0][1].content
-    assert "Frame result contract:" in user_prompt
-    assert "primary business-decision context" in user_prompt
-    assert "Do not call read_frame_execution_report after a normal child completion" in user_prompt
+    assert user_prompt == "继续"
+    assert "Frame 结果契约:" in system_prompt
+    assert "主要业务决策上下文" in system_prompt
+    assert "正常子技能完成后，不要仅为了恢复这些字段而调用 read_frame_execution_report" in system_prompt
 
 
 def test_llm_agent_persistent_frame_prompt_includes_pending_recoverable_child():
@@ -992,15 +1046,17 @@ def test_llm_agent_persistent_frame_prompt_includes_pending_recoverable_child():
         persistent_frame=True,
     )
 
+    system_prompt = model.seen_messages[0][0].content
     user_prompt = model.seen_messages[0][1].content
-    assert "Pending child skill:" in user_prompt
-    assert "Recoverable focus:" in user_prompt
-    assert "Recoverable focus stack:" in user_prompt
-    assert child_frame_id in user_prompt
-    assert '"skill_id": "child_skill"' in user_prompt
-    assert "task_root_child_prompt_001" in user_prompt
-    assert "ORD-1" in user_prompt
-    assert "resume_recoverable_child_skill" in user_prompt
+    assert user_prompt == "继续"
+    assert "待恢复子技能:" in system_prompt
+    assert "可恢复焦点:" in system_prompt
+    assert "可恢复焦点栈:" in system_prompt
+    assert child_frame_id in system_prompt
+    assert '"skill_id": "child_skill"' in system_prompt
+    assert "task_root_child_prompt_001" in system_prompt
+    assert "ORD-1" in system_prompt
+    assert "resume_recoverable_child_skill" in system_prompt
 
 
 def test_llm_agent_persistent_root_exposes_shelve_interrupted_frame_tool():
@@ -1894,10 +1950,12 @@ def test_llm_agent_resumed_awaiting_user_child_prompt_includes_prior_prompt_and_
         },
     )
 
+    system_prompt = model.seen_messages[0][0].content
     user_prompt = model.seen_messages[0][1].content
-    assert "Previous child skill turn is waiting for user input." in user_prompt
-    assert prior_prompt in user_prompt
-    assert "Current user reply: 1" in user_prompt
+    assert user_prompt == "1"
+    assert "上一个子技能回合正在等待用户输入。" in system_prompt
+    assert prior_prompt in system_prompt
+    assert "当前 human message 是用户对上次提示的回复。" in system_prompt
     assert runtime.get_frame(child_id).status == FrameStatus.AWAITING_USER
 
 
@@ -1986,10 +2044,12 @@ def test_llm_agent_child_skill_summary_visibility_receives_root_context_summary(
         persistent_frame=True,
     )
 
+    child_system_prompt = model.seen_messages[1][0].content
     child_user_prompt = model.seen_messages[1][1].content
-    assert "Visible parent/root context summary:" in child_user_prompt
-    assert "Order ORD-001 was inspected." in child_user_prompt
-    assert "art_1" in child_user_prompt
+    assert child_user_prompt == "handle child work"
+    assert "可见父级/根上下文摘要:" in child_system_prompt
+    assert "Order ORD-001 was inspected." in child_system_prompt
+    assert "art_1" in child_system_prompt
 
 
 def test_llm_agent_child_skill_isolated_visibility_hides_root_context_summary():
@@ -2030,9 +2090,11 @@ def test_llm_agent_child_skill_isolated_visibility_hides_root_context_summary():
         persistent_frame=True,
     )
 
+    child_system_prompt = model.seen_messages[1][0].content
     child_user_prompt = model.seen_messages[1][1].content
-    assert "Visible parent/root context summary:" not in child_user_prompt
-    assert "This should not be visible." not in child_user_prompt
+    assert child_user_prompt == "handle child work"
+    assert "可见父级/根上下文摘要:" not in child_system_prompt
+    assert "This should not be visible." not in child_system_prompt
 
 
 def test_llm_agent_child_skill_receives_sanitized_attachment_context():
@@ -2079,16 +2141,18 @@ def test_llm_agent_child_skill_receives_sanitized_attachment_context():
         persistent_frame=True,
     )
 
+    child_system_prompt = model.seen_messages[1][0].content
     child_user_prompt = model.seen_messages[1][1].content
-    assert "Attachments provided by upstream system:" in child_user_prompt
-    assert "att-1" in child_user_prompt
-    assert "image.png" in child_user_prompt
-    assert "tms-bff" in child_user_prompt
-    assert "https://tms.example.com/files/image.png" in child_user_prompt
-    assert "trace-1" in child_user_prompt
-    assert "token=secret" not in child_user_prompt
-    assert "accessToken" not in child_user_prompt
-    assert "hidden" not in child_user_prompt
+    assert child_user_prompt == "create a TMS ticket"
+    assert "上游系统提供的附件:" in child_system_prompt
+    assert "att-1" in child_system_prompt
+    assert "image.png" in child_system_prompt
+    assert "tms-bff" in child_system_prompt
+    assert "https://tms.example.com/files/image.png" in child_system_prompt
+    assert "trace-1" in child_system_prompt
+    assert "token=secret" not in child_system_prompt
+    assert "accessToken" not in child_system_prompt
+    assert "hidden" not in child_system_prompt
 
 
 def test_llm_agent_child_skill_passthrough_visibility_is_system_only():
@@ -2129,9 +2193,11 @@ def test_llm_agent_child_skill_passthrough_visibility_is_system_only():
         persistent_frame=True,
     )
 
+    child_system_prompt = model.seen_messages[1][0].content
     child_user_prompt = model.seen_messages[1][1].content
-    assert "Visible parent/root context summary:" not in child_user_prompt
-    assert "User skill should not see passthrough context." not in child_user_prompt
+    assert child_user_prompt == "handle child work"
+    assert "可见父级/根上下文摘要:" not in child_system_prompt
+    assert "User skill should not see passthrough context." not in child_system_prompt
 
 
 def test_llm_agent_retries_when_submit_contract_rejected():
@@ -2216,6 +2282,67 @@ def test_llm_agent_artifact_tool_available_with_account_context(tmp_path):
     assert tool_results[0]["artifact_id"].startswith("art_")
     assert "content_ref" not in tool_results[0]
     assert runtime.get_frame(frame_id).status == FrameStatus.COMPLETED
+
+
+def test_llm_agent_writes_runtime_message_event_jsonl(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "runtime_message_event_log_enabled", True)
+    data_root = tmp_path / "data"
+    context_id = "bctx_20260521_aa_eventlog"
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="event_log_skill",
+        name="event_log_skill",
+        description="Writes event log.",
+        output_schema={"type": "object"},
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    frame_id = runtime.invoke_skill(
+        task_id="lgt_event_log_001",
+        skill_id="event_log_skill",
+        skill_input={},
+        conversation_id=context_id,
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime, data_root=data_root).run(
+        task_id="lgt_event_log_001",
+        frame_id=frame_id,
+        prompt="hi",
+    )
+
+    log_path = (
+        session_data_dir(data_root, ("2026", "05", "21"), context_id)
+        / "logs" / "runtime-message-events"
+        / f"lgt_event_log_001_{frame_id}.jsonl"
+    )
+    assert log_path.exists()
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    event_types = [event["eventType"] for event in events]
+    assert event_types[:2] == ["message", "message"]
+    assert "assistant" in event_types
+    assert "assistant_tool_call" in event_types
+    assert "tool_result" in event_types
+    assert event_types[-1] == "checkpoint"
+    assert events[0]["message"]["role"] == "system"
+    assert events[1]["message"]["role"] == "user"
+    assert events[1]["message"]["content"] == "hi"
+    tool_call_event = next(event for event in events if event["eventType"] == "assistant_tool_call")
+    assert tool_call_event["toolCall"]["name"] == "submit_skill_result"
+    tool_result_event = next(event for event in events if event["eventType"] == "tool_result")
+    assert tool_result_event["message"]["role"] == "tool"
+    assert tool_result_event["message"]["toolCallId"] == "call_submit"
+    assert tool_result_event["toolResult"]["ok"] is True
 
 
 def test_llm_agent_uses_frame_manifest_snapshot_after_registry_reload():
@@ -2315,7 +2442,7 @@ def test_llm_agent_injects_account_context_before_skill_instructions(tmp_path):
     system_prompt = model.seen_messages[0][0].content
     assert system_prompt.index("### ACCOUNT_POLICY.md") < system_prompt.index("### AGENT.md")
     assert system_prompt.index("### AGENT.md") < system_prompt.index("### MEMORY.md")
-    assert system_prompt.index("### MEMORY.md") < system_prompt.index("Skill Instructions:")
+    assert system_prompt.index("### MEMORY.md") < system_prompt.index("技能说明:")
     assert "policy rule" in system_prompt
     assert "agent rule" in system_prompt
     assert "memory note" in system_prompt
@@ -2358,16 +2485,21 @@ def test_llm_agent_injects_runtime_time_context_into_user_prompt():
         },
     )
 
+    system_prompt = model.seen_messages[0][0].content
     user_prompt = model.seen_messages[0][1].content
-    assert "Runtime context:" in user_prompt
-    assert "- current_time: 2026-05-11T10:37:10+08:00" in user_prompt
-    assert "- timezone: Asia/Shanghai" in user_prompt
-    assert "- business_date: 2026-05-11" in user_prompt
-    assert "- current_month_range: [2026-05-01, 2026-06-01)" in user_prompt
-    assert "Resolve relative dates such as 本月" in user_prompt
+    assert user_prompt.startswith("本月运费")
+    assert "当前请求时间:" in user_prompt
+    assert "- 当前时间: 2026-05-11T10:37:10+08:00" in user_prompt
+    assert "- 时区: Asia/Shanghai" in user_prompt
+    assert "运行时日期上下文:" in system_prompt
+    assert "2026-05-11T10:37:10+08:00" not in system_prompt
+    assert "- 时区: Asia/Shanghai" in system_prompt
+    assert "- 业务日期: 2026-05-11" in system_prompt
+    assert "- 当前月份范围: [2026-05-01, 2026-06-01)" in system_prompt
+    assert "解析“本月、今天、昨日、近7天”等相对日期" in system_prompt
 
 
-def test_llm_agent_keeps_runtime_time_out_of_system_prompt():
+def test_llm_agent_keeps_precise_runtime_time_out_of_system_prompt():
     registry = SkillRegistry()
     registry.register(SkillManifest(
         id="query_skill",
@@ -2405,9 +2537,60 @@ def test_llm_agent_keeps_runtime_time_out_of_system_prompt():
     )
 
     system_prompt = model.seen_messages[0][0].content
-    assert "current_time" not in system_prompt
-    assert "current_month_range" not in system_prompt
+    user_prompt = model.seen_messages[0][1].content
+    assert user_prompt.startswith("本月运费")
+    assert "当前请求时间" in user_prompt
+    assert "当前时间" in user_prompt
+    assert "当前时间" not in system_prompt
+    assert "当前月份范围" in system_prompt
     assert "2026-05-11T10:37:10+08:00" not in system_prompt
+
+
+def test_llm_agent_does_not_generate_request_time_footer_without_current_time():
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="query_skill",
+        name="query_skill",
+        description="Query business data.",
+        output_schema={"type": "object"},
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    frame_id = runtime.invoke_skill(
+        task_id="task_time_context_003",
+        skill_id="query_skill",
+        skill_input={},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_time_context_003",
+        frame_id=frame_id,
+        prompt="本月运费",
+        runtime_context={
+            "business_date": "2026-05-11",
+            "timezone": "Asia/Shanghai",
+        },
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    user_prompt = model.seen_messages[0][1].content
+    assert user_prompt == "本月运费"
+    assert "当前请求时间" not in user_prompt
+    assert "运行时日期上下文:" in system_prompt
+    assert "- 业务日期: 2026-05-11" in system_prompt
+    assert "- 当前月份范围: [2026-05-01, 2026-06-01)" in system_prompt
+    assert "当前时间" not in system_prompt
 
 
 def test_llm_agent_exposes_only_invoke_business_function_tool_without_skill_allowlist():

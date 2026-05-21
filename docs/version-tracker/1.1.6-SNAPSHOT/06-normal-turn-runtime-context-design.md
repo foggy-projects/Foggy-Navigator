@@ -135,6 +135,24 @@ runtime/sessions/by-date/YYYY/MM/DD/<hash>/<contextId>/logs/llm-submissions/
 4. 默认最多保留 100 个文件，可通过 `BIZ_WORKER_LLM_SUBMISSION_LOG_MAX_FILES` 调整。
 5. 复盘文件属于 debug evidence，不作为 prompt source of truth，也不参与 runtime memory 恢复。
 
+### Runtime message event JSONL
+
+除 submission 复盘文件外，BizWorker 还维护同一 frame 的 provider 协议消息事件日志：
+
+```text
+runtime/sessions/by-date/YYYY/MM/DD/<hash>/<contextId>/logs/runtime-message-events/
+  <taskId>_<frameId>.jsonl
+```
+
+设计规则：
+
+1. 记录同一 frame 内真实进入 LLM loop 的协议事件，包括初始 `system/user/assistant` messages、assistant response、assistant tool_call、tool_result 和 checkpoint。
+2. 它是未完成 frame 恢复的事实源，目标用于 `AWAITING_USER` 续接和 recoverable interruption 续跑。
+3. 它不等同于完整 UI transcript；正常完成后的下一轮普通对话仍默认使用 `visibleMessages`，即 `U1 -> A1 -> U2`。
+4. 它也不等同于 `llm-submissions/*.json`；submission 文件用于复盘单次请求 body，不作为恢复来源。
+5. checkpoint 至少覆盖 `before_model_call`、`after_tool_call`、`frame_completed`、`persistent_turn_completed` 和 `suspended`。
+6. 当前阶段已实现写入和读取入口接线；`AWAITING_USER` 和异常中断复用同一套读取器，只选择不同恢复入口和 checkpoint。
+
 ## 数据结构草案
 
 ```json
@@ -385,6 +403,8 @@ U1 -> Root invokes Skill -> Skill asks A1(需要用户补充)
 3. 下一条用户消息 `U2` 到来时，路由优先走 active focus resume，而不是先让 Root 重新判断。
 4. Child prompt 可以看到 `_awaiting_user_input`、当前 `U2`、child frame state，以及按策略允许的 root summary。
 
+如果 child frame 在等待用户前已经发生过 provider tool_call / tool_result，恢复时还需要从 runtime message event JSONL 恢复该 frame 的协议消息上下文，再追加 `U2`。这和异常中断恢复复用同一套事件读取逻辑，避免维护两套消息恢复实现。
+
 下一轮 UI 语义看起来是：
 
 ```text
@@ -407,6 +427,8 @@ U1 -> 执行中断，未产生可用 A1
 2. `pendingTurn` 进入 `INTERRUPTED` 或被 recovery control state 引用。
 3. Root frame 写入 `continuation_state=INTERRUPTED`、`recoverable=true`、`last_task_id`、`interrupt_reason`、focus summary。
 4. 下一条用户消息进入时，prompt 包含 recovery control state，由 Root 识别继续、放弃、开启新任务或询问澄清。
+
+若用户选择继续原 frame，恢复路径优先从 runtime message event JSONL 读取最后安全 checkpoint 前的协议消息；如果事件日志缺失或协议不完整，则降级使用 compact continuation summary，而不是构造非法 tool_result-only messages。
 
 当用户明确放弃或开启新任务时，可把旧 pending turn 压成 interruption summary，而不是写成普通 assistant 对话。
 

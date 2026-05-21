@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from ..models import FrameStatus, QueryEvent, SkillManifest
 from ..tools.business_function_tools import (
@@ -26,13 +26,6 @@ from .artifact_store import ArtifactStore
 from .llm_call_guard import invoke_chat_model
 from .llm_agent_prompts import (
     _active_plan_context,
-    _build_active_plan_prompt,
-    _build_recoverable_interruption_prompt,
-    _build_root_planning_policy_prompt,
-    _build_runtime_time_context_prompt,
-    _build_system_prompt,
-    _build_user_prompt,
-    _build_visible_context_prompt,
     _local_timezone_name,
     _month_range_for,
     model_visible_context,
@@ -43,6 +36,7 @@ from .llm_agent_prompts import (
     _runtime_context_str,
     _runtime_time_context,
 )
+from .llm_message_builder import build_initial_llm_messages
 from .llm_tool_call_codec import (
     _SCRUB_TEMPLATE,
     _execution_report_payload_from_frame,
@@ -92,6 +86,13 @@ from .llm_tool_schemas import (
     _dedupe_tool_specs,
     _tool_specs,
 )
+from .runtime_message_event_log import (
+    record_assistant_runtime_message,
+    record_checkpoint_runtime_event,
+    record_initial_runtime_messages,
+    record_runtime_message_event,
+    record_tool_result_runtime_message,
+)
 from .execution_policy import ExecutionPolicy
 from .file_layout import date_parts_for_frame
 from .public_skill_resource_tools import PublicSkillResourceTools
@@ -107,10 +108,6 @@ logger = logging.getLogger(__name__)
 
 class LlmSkillAgent:
     """Run a Skill frame by repeatedly processing model tool calls."""
-
-    # Compatibility aliases while prompt builders live in llm_agent_prompts.
-    _build_system_prompt = staticmethod(_build_system_prompt)
-    _build_user_prompt = staticmethod(_build_user_prompt)
 
     def __init__(
         self,
@@ -189,26 +186,6 @@ class LlmSkillAgent:
             else ""
         )
 
-        messages: list[Any] = [
-            SystemMessage(content=self._build_system_prompt(manifest, account_context_prompt)),
-            HumanMessage(content=self._build_user_prompt(
-                prompt,
-                frame.input,
-                manifest.id,
-                runtime_context,
-            )),
-        ]
-        events: list[QueryEvent] = []
-        provider_tool_specs = self._provider_tool_specs(
-            manifest,
-            frame.skill_id,
-            runtime_context,
-            execution_policy=execution_policy,
-        )
-        if self._tool_provider:
-            runtime_context["_provider_allowed_tools"] = {
-                spec["function"]["name"] for spec in provider_tool_specs
-            }
         runtime_context["_skill_name"] = frame.skill_id
         runtime_context["_llm_submission_skill_id"] = (
             "conversation.root" if persistent_frame else frame.skill_id
@@ -220,6 +197,33 @@ class LlmSkillAgent:
         runtime_context["_llm_submission_date_parts"] = date_parts_for_frame(frame)
         if self._data_root:
             runtime_context["_llm_submission_data_root"] = str(self._data_root)
+        recovery = runtime_context.get("_runtime_protocol_recovery")
+        if isinstance(recovery, dict) and recovery.get("enabled") and not recovery.get("frame_id"):
+            recovery["frame_id"] = frame_id
+        messages = build_initial_llm_messages(
+            manifest=manifest,
+            prompt=prompt,
+            skill_input=frame.input,
+            account_context_prompt=account_context_prompt,
+            runtime_context=runtime_context,
+        )
+        record_initial_runtime_messages(
+            messages,
+            runtime_context,
+            task_id=task_id,
+            frame_id=frame_id,
+        )
+        events: list[QueryEvent] = []
+        provider_tool_specs = self._provider_tool_specs(
+            manifest,
+            frame.skill_id,
+            runtime_context,
+            execution_policy=execution_policy,
+        )
+        if self._tool_provider:
+            runtime_context["_provider_allowed_tools"] = {
+                spec["function"]["name"] for spec in provider_tool_specs
+            }
         runtime_context["_llm_submission_tools"] = _tool_specs(
             manifest,
             persistent_frame=persistent_frame,
@@ -240,6 +244,13 @@ class LlmSkillAgent:
                 runtime_context,
                 messages=messages,
                 frame_id=frame_id,
+                task_id=task_id,
+            )
+            record_checkpoint_runtime_event(
+                runtime_context,
+                task_id=task_id,
+                frame_id=frame_id,
+                checkpoint="before_model_call",
             )
             try:
                 response = invoke_chat_model(
@@ -269,6 +280,12 @@ class LlmSkillAgent:
                     error=str(exc),
                 )]
             tool_calls = _extract_tool_calls(response)
+            record_assistant_runtime_message(
+                response,
+                runtime_context,
+                task_id=task_id,
+                frame_id=frame_id,
+            )
             if tool_calls and _has_runtime_memory_terminal_tool_call(tool_calls):
                 queued_messages = _runtime_memory_checkpoint_messages(runtime_context)
                 if queued_messages:
@@ -278,6 +295,7 @@ class LlmSkillAgent:
                         messages=messages,
                         frame_id=frame_id,
                         queued_messages=queued_messages,
+                        task_id=task_id,
                     )
                     continue
 
@@ -285,10 +303,19 @@ class LlmSkillAgent:
             self._append_private_message(frame_id, "assistant", _safe_content(response.content))
 
             if not tool_calls:
-                messages.append(HumanMessage(content=(
+                retry_instruction = HumanMessage(content=(
                     "No tool call was produced. If the skill is complete, call "
                     "submit_skill_result with summary, structured_output, and refs."
-                )))
+                ))
+                messages.append(retry_instruction)
+                record_runtime_message_event(
+                    "message",
+                    runtime_context,
+                    task_id=task_id,
+                    frame_id=frame_id,
+                    message=retry_instruction,
+                    phase="runtime_retry_instruction",
+                )
                 continue
 
             for call in tool_calls:
@@ -314,10 +341,24 @@ class LlmSkillAgent:
                     # Scrub the tool-call args in the messages list
                     _scrub_create_artifact_content(messages, call["id"], scrub_placeholder)
 
-                messages.append(ToolMessage(
+                tool_message = ToolMessage(
                     content=json.dumps(model_visible_context(tool_result), ensure_ascii=False),
                     tool_call_id=call["id"],
-                ))
+                )
+                messages.append(tool_message)
+                record_tool_result_runtime_message(
+                    tool_message,
+                    tool_result,
+                    runtime_context,
+                    task_id=task_id,
+                    frame_id=frame_id,
+                )
+                record_checkpoint_runtime_event(
+                    runtime_context,
+                    task_id=task_id,
+                    frame_id=frame_id,
+                    checkpoint="after_tool_call",
+                )
                 self._append_private_message(frame_id, "tool", tool_result)
 
                 current = self._runtime.get_frame(frame_id)
@@ -328,10 +369,28 @@ class LlmSkillAgent:
                 ):
                     _mark_runtime_memory_running(runtime_context)
                 if current and current.status == FrameStatus.COMPLETED:
+                    record_checkpoint_runtime_event(
+                        runtime_context,
+                        task_id=task_id,
+                        frame_id=frame_id,
+                        checkpoint="frame_completed",
+                    )
                     return events
                 if event.get("persistent_turn_completed"):
+                    record_checkpoint_runtime_event(
+                        runtime_context,
+                        task_id=task_id,
+                        frame_id=frame_id,
+                        checkpoint="persistent_turn_completed",
+                    )
                     return events
                 if event.get("suspended"):
+                    record_checkpoint_runtime_event(
+                        runtime_context,
+                        task_id=task_id,
+                        frame_id=frame_id,
+                        checkpoint="suspended",
+                    )
                     return events
                 if _is_non_recoverable_tool_error(tool_result):
                     error = tool_result.get("user_message") or tool_result.get("error") or "Non-recoverable tool error"
@@ -364,6 +423,7 @@ class LlmSkillAgent:
                     runtime_context,
                     messages=messages,
                     frame_id=frame_id,
+                    task_id=task_id,
                 )
 
         error = "LLM skill agent reached max iterations without valid submit"
@@ -393,9 +453,18 @@ class LlmSkillAgent:
         messages: list[Any],
         frame_id: str,
         queued_messages: list[HumanMessage] | None = None,
+        task_id: str = "",
     ) -> None:
         for queued_message in queued_messages or _runtime_memory_checkpoint_messages(runtime_context):
             messages.append(queued_message)
+            record_runtime_message_event(
+                "message",
+                runtime_context,
+                task_id=task_id,
+                frame_id=frame_id,
+                message=queued_message,
+                phase="queued_user_input",
+            )
             self._append_private_message(frame_id, "user", queued_message.content)
 
     def _execute_tool_call(

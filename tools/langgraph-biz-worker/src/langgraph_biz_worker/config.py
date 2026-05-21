@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     llm_max_concurrent_requests: int = 5
     llm_submission_log_enabled: bool = False
     llm_submission_log_max_files: int = 100
+    runtime_message_event_log_enabled: bool = True
 
     # Public Skill sync from GitLab (leave skill_git_repo empty to disable)
     skill_git_repo: str = ""            # GitLab repo URL, e.g. https://gitlab.example.com/foggy/foggy-skills.git

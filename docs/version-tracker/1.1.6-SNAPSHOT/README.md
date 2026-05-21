@@ -10,6 +10,7 @@
 4. Tool call、Skill private messages、report/log/journal 作为 execution evidence 保留，但不默认进入下一轮 semantic conversation。
 5. 上下文压缩采用 head-tail + lazy LLM summarizer，并提供 deterministic fallback，避免 runtime context 无界增长。
 6. 同一 `contextId` 的 Root frame / runtime memory 写入必须由 BizWorker 自身提供排他保护。
+7. 真实提交给 LLM 的 `messages` 数组中，`system` 承载运行时治理上下文，BizWorker runtime-visible conversation 以独立 `user` / `assistant` messages 注入，当前 `human` 以用户原文为主，最多追加当前请求时间这类极少量请求态信息。
 
 ## 版本验收基线
 
@@ -20,6 +21,17 @@
 5. 同一 `contextId` 不允许真正并发 LLM loop；Phase 1 未实现 queue 前必须有明确 busy / conflict / 上游串行契约，Phase 3 起进入 pending queue + checkpoint。
 6. `AWAITING_USER` 支持用户取消/换题 escape hatch，不能把用户困在 child frame。
 7. UI transcript rollback / regenerate 不作为 Phase 1-4 默认能力；后续必须通过 revision / turnId / fork 契约单独设计。
+8. LLM submission 复盘日志能保存真实 ChatModel body，便于验证每次提交给 LLM 的完整参数。
+
+## 文档收口口径
+
+本版本文档按分层收口，不把早期设计全文重写为单篇巨文：
+
+1. `01`-`07` 是运行时上下文治理与 Phase 1-5 实施基线。
+2. `08` 是 `system.root` 退场和 Conversation Root Frame 身份收口。
+3. `09` 是当前真实提交给 LLM 的 `messages` 数组契约。
+
+若旧文档中仍出现“runtime context 拼入 user prompt”的早期表述，以 `09` 的 system / human 边界为当前实现口径。
 
 ## 当前条目
 
@@ -31,6 +43,7 @@
 - [06-normal-turn-runtime-context-design.md](./06-normal-turn-runtime-context-design.md) - 明确普通用户消息在 BizWorker 内写入、恢复、压缩和组装为下一轮 LLM runtime context 的设计
 - [07-normal-turn-runtime-context-implementation-plan.md](./07-normal-turn-runtime-context-implementation-plan.md) - 将普通消息 `ContextRuntimeMemory` 设计拆解为分阶段开发任务、测试清单和验收闸门
 - [08-system-root-retirement-and-root-frame-design.md](./08-system-root-retirement-and-root-frame-design.md) - 将 `system.root` 从业务 Skill 身份退场，改为内部 Conversation Root Frame 语义并保留旧数据兼容
+- [09-llm-submission-message-contract.md](./09-llm-submission-message-contract.md) - 收口真实提交给 LLM 的 `messages` 数组契约：system 承载治理上下文，runtime-visible conversation 使用独立 role messages
 - [workitems/BUG-runtime-context-phase2-5-review-fixes.md](./workitems/BUG-runtime-context-phase2-5-review-fixes.md) - 记录并修复 Phase 2-5 评审发现的排队终止窗口、JSON 脱敏和 commit 清理缺陷
 
 ## 当前签收记录

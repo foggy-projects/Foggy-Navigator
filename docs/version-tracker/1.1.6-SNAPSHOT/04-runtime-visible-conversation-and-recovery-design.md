@@ -206,6 +206,14 @@ U1 -> tool_call(invoke_business_skill) -> tool_result(S1) -> A1
 
 这些信息应完整落到 frame/report/log/journal 中。
 
+同时，provider 协议消息需要单独有可恢复事实源。当前实现新增：
+
+```text
+logs/runtime-message-events/<taskId>_<frameId>.jsonl
+```
+
+该 JSONL 记录同一 frame 内真实参与 LLM loop 的协议事件，包括初始 messages、assistant response、assistant tool_call、tool_result 和 checkpoint。它不是 UI transcript，也不是下一轮普通 semantic conversation；它用于未完成 frame 的恢复，避免恢复时只拿到孤立 tool_result 而丢失前置 assistant tool_call。
+
 ### 下一轮 runtimeVisibleConversation
 
 下一轮默认不重放 raw tool call。
@@ -308,7 +316,10 @@ A1 = Parent 基于 S1.promoted_result 生成的最终回复
 1. 当前用户回复 `U2`
 2. `_awaiting_user_input`
 3. 当前 child frame state
-4. 按 `context_visibility` 允许的 root summary
+4. 该 child frame 尚未完成的 provider 协议消息上下文
+5. 按 `context_visibility` 允许的 root summary
+
+协议消息上下文从 `runtime-message-events/<taskId>_<frameId>.jsonl` 恢复。`AWAITING_USER` 恢复不是重新拼一套 child prompt 逻辑，而是在同一套事件源上选择“该 frame 已完成到等待用户输入前”的恢复点，再追加当前用户回复 `U2`。
 
 确定性恢复仍必须保留 escape hatch：如果 `U2` 明确表示取消、停止、换题或放弃，child Skill 应识别该意图并返回受控终止/交还 Parent 的结果，而不是继续要求用户补齐原任务参数。
 
@@ -375,6 +386,8 @@ Recoverable interruption 是候选恢复，不是强制恢复。
 4. continuation summary / latest child promoted summary
 5. active plan 或其他 compact working state
 
+如果用户选择继续某个未完成 frame，恢复逻辑同样应从 `runtime-message-events/<taskId>_<frameId>.jsonl` 读取该 frame 的协议消息上下文，并从最后一个安全 checkpoint 继续。若事件日志不完整、checkpoint 不安全或 provider 协议无法重建，则降级使用 summary-based recoverable prompt，并保留原 frame/report/log 作为排障证据。
+
 Root 必须先判断：
 
 | 用户意图 | 动作 |
@@ -390,8 +403,8 @@ Root 必须先判断：
 
 | 场景 | 是否确定接回 child | 是否需要 Root 判断意图 | 进入 prompt 的形态 |
 | --- | --- | --- | --- |
-| `AWAITING_USER` | 是 | 否，除非用户明确取消/改题由 child 识别后交还 Parent | `_awaiting_user_input` + 当前用户回复 |
-| recoverable child interruption | 否 | 是 | `_recoverable_interruption` + continuation summary |
+| `AWAITING_USER` | 是 | 否，除非用户明确取消/改题由 child 识别后交还 Parent | runtime message events + `_awaiting_user_input` + 当前用户回复 |
+| recoverable child interruption | 否 | 是 | runtime message events 或 summary fallback + `_recoverable_interruption` |
 | normal Skill completion | 否 | 不需要恢复 | visible turns + promoted metadata |
 
 ## Prompt 组装目标顺序

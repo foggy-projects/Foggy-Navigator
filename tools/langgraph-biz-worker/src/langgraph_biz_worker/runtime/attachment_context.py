@@ -33,7 +33,7 @@ def build_attachment_context_prompt(attachments: list[dict[str, Any]] | None) ->
     safe_attachments = [_safe_attachment_summary(item) for item in attachments if isinstance(item, dict)]
     if not safe_attachments:
         return ""
-    return "Attachments provided by upstream system:\n" + json.dumps(
+    return "上游系统提供的附件:\n" + json.dumps(
         safe_attachments,
         ensure_ascii=False,
         indent=2,

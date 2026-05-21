@@ -43,6 +43,7 @@ class TestSettingsDefaults:
         s = Settings(_env_file=None)
         assert s.llm_submission_log_enabled is False
         assert s.llm_submission_log_max_files == 100
+        assert s.runtime_message_event_log_enabled is True
 
 
 class TestSettingsEnvOverride:
@@ -82,10 +83,12 @@ class TestSettingsEnvOverride:
         with patch.dict(os.environ, {
             "BIZ_WORKER_LLM_SUBMISSION_LOG_ENABLED": "true",
             "BIZ_WORKER_LLM_SUBMISSION_LOG_MAX_FILES": "7",
+            "BIZ_WORKER_RUNTIME_MESSAGE_EVENT_LOG_ENABLED": "false",
         }):
             s = Settings(_env_file=None)
             assert s.llm_submission_log_enabled is True
             assert s.llm_submission_log_max_files == 7
+            assert s.runtime_message_event_log_enabled is False
 
     def test_biz_worker_env_file_selects_env_file(self, tmp_path):
         env_file = tmp_path / "real.env"

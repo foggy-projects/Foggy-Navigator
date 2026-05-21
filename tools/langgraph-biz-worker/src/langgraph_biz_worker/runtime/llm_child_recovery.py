@@ -200,6 +200,12 @@ def _resume_recoverable_child_skill_tool(
         runtime.context_summary_for_frame(frame_id),
         child_manifest,
     )
+    child_runtime_context = dict(child_runtime_context or {})
+    child_runtime_context["_runtime_protocol_recovery"] = {
+        "enabled": True,
+        "frame_id": child.frame_id,
+        "mode": "RECOVERABLE_INTERRUPTION",
+    }
     child_events = [
         QueryEvent(
             type="skill_frame_open",

@@ -358,7 +358,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 2026-05-21: 已完成 `ContextRuntimeMemory` Phase 1 最小闭环。
 - 已新增 `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/context_memory.py`，封装 Root frame `private_working_state.runtime_context_memory` 的 load / bootstrap / begin / commit / prompt view / abandon。
 - Root `run_skill(...)` 已改为优先使用 BizWorker-owned `_runtime_visible_conversation`；Java `recentConversation` 仅在 memory 为空且 revision 为 0 时 bootstrap 一次。
-- `llm_agent_prompts.py` 已新增 runtime-visible conversation prompt，旧 `_visible_recent_conversation` 保留为非 Root / 兼容 fallback。
+- `llm_message_builder.py` 已集中组装初始 LLM messages；旧 `_visible_recent_conversation` 保留为兼容 fallback，并以独立 `user` / `assistant` role messages 注入。
 - Root turn 成功完成、`AWAITING_USER` 可见追问、interruption / approval / error abandon 均已接入 runtime memory 的 Phase 1 提交或清理路径。
 - API `/api/v1/query` 已增加进程内 `contextId` 互斥锁；Phase 1 中同会话并发请求返回 `CONTEXT_RUNTIME_BUSY` / `retryable=true`，不静默启动第二条 Root loop。
 - 附带闭环 [05-business-function-upstream-ref-error-feedback-bug.md](./05-business-function-upstream-ref-error-feedback-bug.md)：BusinessFunction 配置类 gateway 错误会被标记为 non-recoverable configuration error，OpenAPI readiness 会前置校验可见函数 adapter `upstream_ref`。
@@ -368,6 +368,8 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 2026-05-21: 已完成 Phase 5 Java `recentConversation` 退场。`LanggraphTaskService` 默认不再读取 `SessionMessageRepository` 注入 `recentConversation`；仅保留 `foggy.navigator.langgraph.worker.include-recent-conversation=true` 兼容开关。
 - 2026-05-21: 已补充 session root 定位索引。标准 `contextId` session 目录写入 `session.json`，记录 canonical `rootFrameId` 和小型 `rootFrameHistory`；新任务恢复 Root frame 时优先直达 `frames/<rootFrameId>.json`，历史多 root supersede 也按索引直读，索引缺失或失效时才扫描当前 session 并重建。
 - 2026-05-21: 已补充 LLM submission 复盘文件。开启 `BIZ_WORKER_LLM_SUBMISSION_LOG_ENABLED=true` 后，每次真实 ChatModel 调用保存一个独立 JSON 到 `logs/llm-submissions/000001_...json`，默认最多保留 100 个文件。
+- 2026-05-21: 已完成 LLM submission messages 契约收口。运行时治理上下文、业务上下文、active plan、`AWAITING_USER` 和 recoverable interruption 进入 system message；runtime-visible conversation 以独立 `user` / `assistant` role messages 注入；human message 以当前用户原文为主，显式 `current_time` 只作为当前请求尾部信息追加。Root prompt、通用工具治理说明和附件上下文已中文化，`allowed_skills` 会从 registry 补齐 name / description 并渲染为 Markdown；初始 messages 数组由 `llm_message_builder.py` 统一组装。详见 [09-llm-submission-message-contract.md](./09-llm-submission-message-contract.md)。
+- 2026-05-21: 已新增 runtime message event JSONL 写入和读取恢复入口。`llm_skill_agent` 在初始 messages、assistant response、assistant tool_call、tool_result 和 checkpoint 处写入 `logs/runtime-message-events/<taskId>_<frameId>.jsonl`；`AWAITING_USER` 与 recoverable child interruption 读取恢复复用同一事件源，只选择不同恢复入口。工具执行完成后立即写 `after_tool_call` checkpoint，避免恢复时重复已完成的副作用工具调用。
 
 ### Testing
 
@@ -388,11 +390,17 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
   - result: `23 tests, 0 failures, 0 errors`
 - `mvn -pl addons/langgraph-biz-worker -am test`
   - result: `BUILD SUCCESS`，surefire report 汇总 `1017 tests, 0 failures, 0 errors`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_llm_message_builder.py tests/test_llm_skill_agent.py tests/test_e2e_scripted_tool_call_streaming.py tests/test_llm_submission_log.py`
+  - result: `74 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_config.py tests/test_llm_skill_agent.py tests/test_llm_message_builder.py tests/test_llm_submission_log.py`
+  - result: `69 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest`
+  - result: `589 passed, 6 skipped, 11 warnings`
 
 ### Experience
 
 - status: verified-by-tests
-- 已通过 scripted E2E 验证第二轮 Root LLM prompt 使用 `Runtime-visible conversation before this turn:`，并包含上一轮 BizWorker memory 中的 `user -> assistant` 语义消息。
+- 已通过 scripted E2E 验证第二轮 Root LLM submission 使用独立 `user` / `assistant` role messages 注入上一轮 BizWorker memory 中的语义消息；system 不再折叠展示 `本回合前的运行时可见对话:`，当前 human message 以当前用户原文为主。
 - 已通过单元/边界测试验证 Skill 投影、non-recoverable error projection、执行中追加消息入队、checkpoint 插入、idle / closing 阶段 retryable busy、lazy compaction、Java recentConversation 默认退场。
 - 真实前端长会话与 TMS 工单链路仍建议在修复上游 `upstream_ref` 后做一次联调验收。
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from langgraph_biz_worker.config import settings
 from langgraph_biz_worker.runtime.file_layout import session_data_dir
@@ -44,7 +44,7 @@ def test_record_llm_submission_writes_numbered_json(monkeypatch, tmp_path):
 
     path = record_llm_submission(
         FakeModel(),
-        [HumanMessage(content="hello")],
+        [SystemMessage(content="system rules"), HumanMessage(content="hello")],
         _context(tmp_path),
         operation="skill_agent.invoke",
         task_id="lgt_001",
@@ -62,6 +62,8 @@ def test_record_llm_submission_writes_numbered_json(monkeypatch, tmp_path):
     assert payload["meta"]["runtimeRevision"] == 4
     assert payload["body"]["model"]["model_name"] == "unit-test-model"
     assert "hello" in json.dumps(payload["body"]["messages"], ensure_ascii=False)
+    assert payload["body"]["messages"][0]["type"] == "system"
+    assert payload["body"]["messages"][1]["type"] == "human"
     assert payload["body"]["tools"][0]["function"]["name"] == "submit_skill_result"
 
 

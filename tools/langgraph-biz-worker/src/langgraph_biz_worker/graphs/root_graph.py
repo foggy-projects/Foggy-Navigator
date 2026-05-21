@@ -195,6 +195,28 @@ def _context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
     return projected if isinstance(projected, dict) else {}
 
 
+def _context_with_visible_skill_descriptions(context: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(context)
+    allowed_skills = context.get("allowed_skills")
+    if not isinstance(allowed_skills, list):
+        return enriched
+    enriched_skills: list[Any] = []
+    for item in allowed_skills:
+        if not isinstance(item, dict):
+            enriched_skills.append(item)
+            continue
+        skill = dict(item)
+        skill_id = skill.get("id")
+        manifest = _skill_registry.get_manifest(skill_id) if isinstance(skill_id, str) else None
+        if manifest:
+            skill.setdefault("name", manifest.name or manifest.id)
+            if getattr(manifest, "description", ""):
+                skill.setdefault("description", manifest.description)
+        enriched_skills.append(skill)
+    enriched["allowed_skills"] = enriched_skills
+    return enriched
+
+
 def _recent_conversation_for_runtime(context: dict[str, Any]) -> list[dict[str, Any]]:
     history = context.get("recentConversation") or context.get("recent_conversation")
     if not isinstance(history, list):
@@ -218,17 +240,17 @@ def _system_root_manifest() -> SkillManifest:
         name=ROOT_SKILL_ID,
         description="Root business orchestration agent for task-level work.",
         markdown_body=(
-            "You are the root business orchestration agent for this task. "
-            "Handle the user's request directly when possible. "
-            "Use invoke_business_function for authorized business functions when the "
-            "needed function is described in the available context or skill material. "
-            "Use invoke_business_skill to delegate bounded work to a specialized child skill. "
-            "Attachments are metadata or URLs. Use analyze_attachment only when the user asks "
-            "to inspect image/file contents or when required fields must be extracted from an attachment; "
-            "for Excel or CSV spreadsheet content use analyze_spreadsheet instead of image analysis; "
-            "if the user only asks to attach a file to a business operation, preserve the attachment without analysis. "
-            "When the current user turn is ready to answer, call submit_skill_result. "
-            "This root agent is persistent; submit_skill_result ends only the current user turn."
+            "你是当前任务的根业务编排 Agent。"
+            "可以直接处理用户请求时，直接处理。"
+            "当可用上下文或技能材料中描述了所需的已授权业务函数时，使用 "
+            "invoke_business_function 调用业务函数。"
+            "需要把边界清晰的工作委派给专业子技能时，使用 invoke_business_skill。"
+            "附件默认只是元数据或 URL；只有在用户要求检查图片/文件内容，"
+            "或必须从附件中提取字段时，才使用 analyze_attachment。"
+            "Excel 或 CSV 表格内容应使用 analyze_spreadsheet，不要当作图片分析。"
+            "如果用户只是要求把文件作为业务操作附件提交，应保留附件，不要分析内容。"
+            "当前用户回合可以答复时，调用 submit_skill_result。"
+            "根 Agent 是持久的；submit_skill_result 只结束当前用户回合，不关闭整个会话。"
         ),
         allowed_tools=[
             "invoke_business_function",
@@ -467,6 +489,7 @@ def route_skill(state: RootState) -> dict:
     except ValueError:
         _skill_registry.load()
     _ensure_system_root_skill()
+    context = _context_with_visible_skill_descriptions(context)
 
     events = [
         QueryEvent(
@@ -839,6 +862,8 @@ def run_skill(state: RootState) -> dict:
         runtime_context["vision_llm_config"] = state["vision_llm_config"]
     if state.get("attachments"):
         runtime_context["attachments"] = state["attachments"]
+    if _is_conversation_root_frame(frame):
+        runtime_context["_model_visible_business_context"] = _context_with_visible_skill_descriptions(context)
 
     llm_skill_agent = _llm_skill_agent_for_state(state)
     if llm_skill_agent:
@@ -1339,6 +1364,17 @@ def _run_active_focus_before_root(
     awaiting_user_context = _awaiting_user_context_for_focus(focus)
     if awaiting_user_context:
         child_runtime_context["_awaiting_user_input"] = awaiting_user_context
+        child_runtime_context["_runtime_protocol_recovery"] = {
+            "enabled": True,
+            "frame_id": focus.frame_id,
+            "mode": "AWAITING_USER",
+        }
+    elif _is_recoverable_focus_frame(focus):
+        child_runtime_context["_runtime_protocol_recovery"] = {
+            "enabled": True,
+            "frame_id": focus.frame_id,
+            "mode": "RECOVERABLE_INTERRUPTION",
+        }
     events.extend(llm_skill_agent.run(
         task_id=task_id,
         frame_id=focus.frame_id,
@@ -1459,6 +1495,14 @@ def _awaiting_user_context_for_focus(frame: Any) -> dict[str, Any] | None:
         "status": getattr(getattr(frame, "status", None), "value", ""),
         "awaiting_user_input": payload,
     }
+
+
+def _is_recoverable_focus_frame(frame: Any) -> bool:
+    state = getattr(frame, "private_working_state", {}) or {}
+    return (
+        state.get("continuation_state") == "INTERRUPTED"
+        and state.get("recoverable") is True
+    )
 
 
 def _resume_root_if_waiting_for_focus(root_frame_id: str) -> None:

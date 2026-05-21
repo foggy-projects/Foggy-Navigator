@@ -1,7 +1,7 @@
 # system.root 退场与 Conversation Root Frame 设计
 
 版本：`1.1.6-SNAPSHOT`
-状态：已进入实现
+状态：已实现并通过回归
 类型：runtime context governance / optimization
 
 ## 背景
@@ -26,6 +26,7 @@
    - LLM prompt 中继续只表达 root orchestration agent，不表达 `system.root`
    - runtime memory 投影不再写入 `rootSkillId=system.root`
 4. 业务 Skill、BusinessFunction frame、frame report refs、execution report refs 继续保留并可见。这些信息对 LLM 回溯业务执行结果有价值，不属于本次退场范围。
+5. Root prompt 的 system 身份使用中文“当前业务会话的根编排 Agent”，运行时治理上下文进入 system message；human message 保持用户原文。详细 messages 契约见 [09-llm-submission-message-contract.md](./09-llm-submission-message-contract.md)。
 
 ## 兼容策略
 
@@ -72,6 +73,14 @@ parent_frame_id 为空，并且 frame_kind == ROOT
 tools/langgraph-biz-worker
 $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest -q
 584 passed, 6 skipped, 11 warnings
+```
+
+2026-05-21 补充 system / human prompt contract 收口、prompt cache 友好的时间上下文拆分、`llm_message_builder.py` 初始 messages 组装入口，以及 runtime message event JSONL 写入后：
+
+```text
+tools/langgraph-biz-worker
+.\.venv\Scripts\python.exe -m pytest
+589 passed, 6 skipped, 11 warnings
 ```
 
 ## 验收标准

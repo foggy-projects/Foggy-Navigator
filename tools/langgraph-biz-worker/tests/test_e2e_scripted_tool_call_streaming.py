@@ -121,6 +121,34 @@ def _load_script_fixture(name: str, trace_id: str) -> dict:
     return script
 
 
+def _record_messages(record: dict, role: str) -> list[str]:
+    return [
+        message["content"] or ""
+        for message in record["request"]["messages"]
+        if message["role"] == role
+    ]
+
+
+def _record_role_messages(record: dict, role: str) -> list[dict]:
+    return [
+        message
+        for message in record["request"]["messages"]
+        if message["role"] == role
+    ]
+
+
+def _message_tool_call_names(message: dict) -> list[str]:
+    names: list[str] = []
+    for call in message.get("tool_calls") or message.get("toolCalls") or []:
+        if isinstance(call, dict):
+            function = call.get("function")
+            if isinstance(function, dict) and isinstance(function.get("name"), str):
+                names.append(function["name"])
+            elif isinstance(call.get("name"), str):
+                names.append(call["name"])
+    return names
+
+
 @pytest.mark.anyio
 async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, mock_llm_server):
     """Run Worker route_skill -> LLM Skill Agent using real mock LLM HTTP/SSE."""
@@ -446,14 +474,19 @@ promote_to_parent:
     ]
     resumed_turn = records[-1]
     assert resumed_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
-    resumed_user_messages = [
-        message["content"]
-        for message in resumed_turn["request"]["messages"]
-        if message["role"] == "user"
+    resumed_system_messages = _record_messages(resumed_turn, "system")
+    resumed_user_messages = _record_messages(resumed_turn, "user")
+    resumed_assistant_messages = _record_role_messages(resumed_turn, "assistant")
+    resumed_tool_messages = _record_role_messages(resumed_turn, "tool")
+    assert resumed_user_messages == [
+        f"引导用户选择工单类型 next:{trace_id}:002",
+        f"1 next:{trace_id}:003",
     ]
-    assert any("Previous child skill turn is waiting for user input." in content for content in resumed_user_messages)
-    assert any(first_prompt in content for content in resumed_user_messages)
-    assert any(f"Current user reply: 1 next:{trace_id}:003" in content for content in resumed_user_messages)
+    assert any("submit_skill_result" in _message_tool_call_names(message) for message in resumed_assistant_messages)
+    assert any("WAITING_FOR_USER_INPUT" in (message.get("content") or "") for message in resumed_tool_messages)
+    assert any("上一个子技能回合正在等待用户输入。" in content for content in resumed_system_messages)
+    assert any(first_prompt in content for content in resumed_system_messages)
+    assert any("当前 human message 是用户对上次提示的回复。" in content for content in resumed_system_messages)
 
 
 @pytest.mark.anyio
@@ -965,17 +998,22 @@ promote_to_parent:
         f"next:{trace_id}:004",
     ]
     resumed_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:003")
-    resumed_user_messages = "\n".join(
-        message["content"] or ""
-        for message in resumed_turn["request"]["messages"]
-        if message["role"] == "user"
-    )
-    assert "Previous child skill turn is waiting for user input." in resumed_user_messages
-    assert "Attachments provided by upstream system:" in resumed_user_messages
-    assert attachment_id in resumed_user_messages
-    assert attachment_url in resumed_user_messages
-    assert f"Current user reply:" in resumed_user_messages
-    assert f"next:{trace_id}:003" in resumed_user_messages
+    resumed_system_messages = "\n".join(_record_messages(resumed_turn, "system"))
+    resumed_user_messages = _record_messages(resumed_turn, "user")
+    resumed_assistant_messages = _record_role_messages(resumed_turn, "assistant")
+    resumed_tool_messages = _record_role_messages(resumed_turn, "tool")
+    assert resumed_user_messages == [
+        f"引导用户补充平台反馈工单字段 next:{trace_id}:002",
+        "帮我提交一个系统优化建议，标题是历史会话标题优化，"
+        f"描述是不要再显示未命名会话，并附上图片 next:{trace_id}:003",
+    ]
+    assert any("submit_skill_result" in _message_tool_call_names(message) for message in resumed_assistant_messages)
+    assert any("WAITING_FOR_USER_INPUT" in (message.get("content") or "") for message in resumed_tool_messages)
+    assert "上一个子技能回合正在等待用户输入。" in resumed_system_messages
+    assert "上游系统提供的附件:" in resumed_system_messages
+    assert attachment_id in resumed_system_messages
+    assert attachment_url in resumed_system_messages
+    assert "当前 human message 是用户对上次提示的回复。" in resumed_system_messages
 
 
 @pytest.mark.anyio
@@ -1246,22 +1284,20 @@ async def test_scripted_tms_ticket_child_receives_attachment_context(monkeypatch
     ]
 
     child_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:002")
-    child_user_prompt = "\n".join(
-        message["content"] or ""
-        for message in child_turn["request"]["messages"]
-        if message["role"] == "user"
-    )
-    assert "Current business skill turn context:" in child_user_prompt
+    child_system_prompt = "\n".join(_record_messages(child_turn, "system"))
+    child_user_prompt = "\n".join(_record_messages(child_turn, "user"))
+    assert "当前业务技能回合上下文:" in child_system_prompt
+    assert "SKILL_AGENT_START" not in child_system_prompt
     assert "SKILL_AGENT_START" not in child_user_prompt
-    assert "Attachments provided by upstream system:" in child_user_prompt
-    assert "att-028" in child_user_prompt
-    assert "image.png" in child_user_prompt
-    assert "tms-bff" in child_user_prompt
-    assert "https://tms.example.com/files/image.png" in child_user_prompt
-    assert "trace-028" in child_user_prompt
-    assert "token=secret" not in child_user_prompt
-    assert "accessToken" not in child_user_prompt
-    assert "hidden" not in child_user_prompt
+    assert "上游系统提供的附件:" in child_system_prompt
+    assert "att-028" in child_system_prompt
+    assert "image.png" in child_system_prompt
+    assert "tms-bff" in child_system_prompt
+    assert "https://tms.example.com/files/image.png" in child_system_prompt
+    assert "trace-028" in child_system_prompt
+    assert "token=secret" not in child_system_prompt
+    assert "accessToken" not in child_system_prompt
+    assert "hidden" not in child_system_prompt
 
 
 @pytest.mark.anyio
@@ -1798,16 +1834,18 @@ async def test_scripted_root_skill_second_turn_uses_runtime_visible_conversation
         f"next:{trace_id}:001",
         f"next:{trace_id}:002",
     ]
-    second_user_messages = [
-        message["content"]
-        for message in records[1]["request"]["messages"]
-        if message["role"] == "user"
+    second_system_messages = _record_messages(records[1], "system")
+    second_user_messages = _record_messages(records[1], "user")
+    second_ai_messages = _record_messages(records[1], "assistant")
+    assert second_user_messages == [
+        f"{previous_user_message} next:{trace_id}:001",
+        f"我上一个消息是什么 next:{trace_id}:002",
     ]
-    assert any("Runtime-visible conversation before this turn:" in content for content in second_user_messages)
-    assert not any("Recent conversation before this turn:" in content for content in second_user_messages)
-    assert any(f"user: {previous_user_message}" in content for content in second_user_messages)
-    assert any(f"assistant: {previous_assistant_message}" in content for content in second_user_messages)
-    assert any("User request: 我上一个消息是什么" in content for content in second_user_messages)
+    assert second_ai_messages == [previous_assistant_message]
+    assert not any("本回合前的运行时可见对话:" in content for content in second_system_messages)
+    assert not any("本回合前的最近对话:" in content for content in second_system_messages)
+    assert not any(f"用户: {previous_user_message}" in content for content in second_system_messages)
+    assert not any(f"助手: {previous_assistant_message}" in content for content in second_system_messages)
 
 
 @pytest.mark.anyio
@@ -1943,15 +1981,18 @@ async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch
         f"next:{trace_id}:001",
         f"next:{trace_id}:002",
     ]
-    second_user_messages = [
-        message["content"]
-        for message in records[1]["request"]["messages"]
-        if message["role"] == "user"
+    second_system_messages = _record_messages(records[1], "system")
+    second_user_messages = _record_messages(records[1], "user")
+    second_ai_messages = _record_messages(records[1], "assistant")
+    assert second_user_messages == [
+        f"先分析再处理运输异常 next:{trace_id}:001",
+        f"继续 next:{trace_id}:002",
     ]
-    assert any("Active task plan:" in content for content in second_user_messages)
-    assert any("handle multi-skill shipment issue" in content for content in second_user_messages)
-    assert any("Persistent root planning policy:" in content for content in second_user_messages)
-    assert any("submit_skill_result.structured_output.active_plan" in content for content in second_user_messages)
+    assert second_ai_messages == ["Root plan created."]
+    assert any("当前活动任务计划:" in content for content in second_system_messages)
+    assert any("handle multi-skill shipment issue" in content for content in second_system_messages)
+    assert any("持久根计划策略:" in content for content in second_system_messages)
+    assert any("submit_skill_result.structured_output.active_plan" in content for content in second_system_messages)
 
 
 @pytest.mark.anyio
@@ -2076,18 +2117,16 @@ async def test_scripted_root_skill_continues_after_recoverable_model_loop_failur
         f"next:{trace_id}:003",
     ]
     continue_record = records[2]
-    user_messages = [
-        message["content"]
-        for message in continue_record["request"]["messages"]
-        if message["role"] == "user"
-    ]
-    assert any("Previous execution was interrupted." in content for content in user_messages)
-    assert any("Reason: model_error" in content for content in user_messages)
+    system_messages = _record_messages(continue_record, "system")
+    user_messages = _record_messages(continue_record, "user")
+    assert user_messages == [f"继续 next:{trace_id}:003"]
+    assert any("上一次执行被中断。" in content for content in system_messages)
+    assert any("原因: model_error" in content for content in system_messages)
     assert any(
         "LLM skill agent reached max iterations without valid submit" in content
-        for content in user_messages
+        for content in system_messages
     )
-    assert any("User's new instruction: 继续" in content for content in user_messages)
+    assert any("当前用户消息见下一条 human message。" in content for content in system_messages)
 
 
 @pytest.mark.anyio
@@ -2311,23 +2350,28 @@ promote_to_parent:
         f"next:{trace_id}:002",
         f"next:{trace_id}:004",
     ]
-    continue_user_messages = [
-        message["content"]
-        for message in records[-1]["request"]["messages"]
-        if message["role"] == "user"
+    continue_system_messages = _record_messages(records[-1], "system")
+    continue_user_messages = _record_messages(records[-1], "user")
+    continue_assistant_messages = _record_role_messages(records[-1], "assistant")
+    continue_tool_messages = _record_role_messages(records[-1], "tool")
+    assert continue_user_messages == [
+        f"提交工单，先确认必要字段 next:{trace_id}:002",
+        f"继续 next:{trace_id}:004",
     ]
+    assert any("submit_skill_result" in _message_tool_call_names(message) for message in continue_assistant_messages)
+    assert any("WAITING_USER" in (message.get("content") or "") for message in continue_tool_messages)
     assert any(
-        "Previous child skill turn is waiting for user input." in content
-        for content in continue_user_messages
-    ), continue_user_messages
-    assert any(child_open.skill_frame_id in content for content in continue_user_messages)
-    assert any("WAITING_USER" in content for content in continue_user_messages)
-    assert any("Current user reply:" in content and f"next:{trace_id}:004" in content for content in continue_user_messages)
+        "上一个子技能回合正在等待用户输入。" in content
+        for content in continue_system_messages
+    ), continue_system_messages
+    assert any(child_open.skill_frame_id in content for content in continue_system_messages)
+    assert any("WAITING_USER" in content for content in continue_system_messages)
+    assert any("当前 human message 是用户对上次提示的回复。" in content for content in continue_system_messages)
     assert any(
         "请回复工单类型、运单号（如适用）、标题及详细描述。" in content
-        for content in continue_user_messages
+        for content in continue_system_messages
     )
-    assert any("missing_fields" in content for content in continue_user_messages)
+    assert any("missing_fields" in content for content in continue_system_messages)
     assert not any("read_frame_execution_report" in (event.tool_name or "") for event in continued_events)
 
 
@@ -2577,18 +2621,19 @@ promote_to_parent:
         f"next:{trace_id}:002",
         f"next:{trace_id}:003",
     ]
-    continue_user_messages = [
-        message["content"]
-        for message in records[-1]["request"]["messages"]
-        if message["role"] == "user"
-    ]
-    assert any("Previous execution was interrupted." in content for content in continue_user_messages)
-    assert any("Reason: user_cancelled" in content for content in continue_user_messages)
-    assert any("Continuation summary from promoted child result:" in content for content in continue_user_messages)
-    assert any("TMS 工单助手" in content for content in continue_user_messages)
-    assert any("运单异常件" in content and "平台反馈" in content for content in continue_user_messages)
-    assert any("Active task plan:" in content for content in continue_user_messages)
-    assert any("pending_info" in content and "ticket_type" in content for content in continue_user_messages)
+    continue_system_messages = _record_messages(records[-1], "system")
+    continue_user_messages = _record_messages(records[-1], "user")
+    continue_ai_messages = _record_messages(records[-1], "assistant")
+    assert continue_user_messages[-1] == f"继续 next:{trace_id}:003"
+    assert any(message.startswith("你可以帮我提交工单吗 ") for message in continue_user_messages)
+    assert any("已引导用户选择工单类型" in message for message in continue_ai_messages)
+    assert any("上一次执行被中断。" in content for content in continue_system_messages)
+    assert any("原因: user_cancelled" in content for content in continue_system_messages)
+    assert any("来自子技能提升结果的续跑摘要:" in content for content in continue_system_messages)
+    assert any("TMS 工单助手" in content for content in continue_system_messages)
+    assert any("运单异常件" in content and "平台反馈" in content for content in continue_system_messages)
+    assert any("当前活动任务计划:" in content for content in continue_system_messages)
+    assert any("pending_info" in content and "ticket_type" in content for content in continue_system_messages)
 
 
 @pytest.mark.anyio
@@ -2722,15 +2767,18 @@ async def test_scripted_root_skill_continues_after_user_cancelled_interruption(
         f"next:{trace_id}:002",
     ]
     continue_record = records[1]
-    user_messages = [
-        message["content"]
-        for message in continue_record["request"]["messages"]
-        if message["role"] == "user"
+    system_messages = _record_messages(continue_record, "system")
+    user_messages = _record_messages(continue_record, "user")
+    ai_messages = _record_messages(continue_record, "assistant")
+    assert user_messages == [
+        f"initial root turn next:{trace_id}:001",
+        f"继续 next:{trace_id}:002",
     ]
-    assert any("Previous execution was interrupted." in content for content in user_messages)
-    assert any("Reason: user_cancelled" in content for content in user_messages)
-    assert any("Cancelled by user" in content for content in user_messages)
-    assert any("User's new instruction: 继续" in content for content in user_messages)
+    assert ai_messages == ["Initial root turn complete."]
+    assert any("上一次执行被中断。" in content for content in system_messages)
+    assert any("原因: user_cancelled" in content for content in system_messages)
+    assert any("Cancelled by user" in content for content in system_messages)
+    assert any("当前用户消息见下一条 human message。" in content for content in system_messages)
 
 
 @pytest.mark.anyio
@@ -2879,20 +2927,23 @@ async def test_scripted_root_skill_shelves_interruption_for_unrelated_task(
         f"next:{trace_id}:001",
         f"next:{trace_id}:002",
     ]
-    user_messages = [
-        message["content"]
-        for message in records[1]["request"]["messages"]
-        if message["role"] == "user"
+    system_messages = _record_messages(records[1], "system")
+    user_messages = _record_messages(records[1], "user")
+    ai_messages = _record_messages(records[1], "assistant")
+    assert user_messages == [
+        f"创建车辆 next:{trace_id}:001",
+        f"帮我查一下新的订单列表 next:{trace_id}:002",
     ]
-    assert any("recoverable candidate, not a mandatory continuation" in content for content in user_messages)
-    assert any("Recoverable focus:" in content for content in user_messages)
-    assert any("Recoverable focus stack:" in content for content in user_messages)
-    assert any("CONTINUE_PREVIOUS" in content for content in user_messages)
-    assert any("ASK_CLARIFICATION" in content for content in user_messages)
-    assert any("START_UNRELATED_NEW_TASK" in content for content in user_messages)
-    assert any("intent_resolution" in content for content in user_messages)
-    assert any("abandoned_interruption" in content for content in user_messages)
-    assert any("shelve_interrupted_frame" in content for content in user_messages)
+    assert ai_messages == ["Initial vehicle task started."]
+    assert any("中断工作只是可恢复候选" in content for content in system_messages)
+    assert any("可恢复焦点:" in content for content in system_messages)
+    assert any("可恢复焦点栈:" in content for content in system_messages)
+    assert any("CONTINUE_PREVIOUS" in content for content in system_messages)
+    assert any("ASK_CLARIFICATION" in content for content in system_messages)
+    assert any("START_UNRELATED_NEW_TASK" in content for content in system_messages)
+    assert any("intent_resolution" in content for content in system_messages)
+    assert any("abandoned_interruption" in content for content in system_messages)
+    assert any("shelve_interrupted_frame" in content for content in system_messages)
 
 
 @pytest.mark.anyio
@@ -3015,8 +3066,12 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
     assert root_open.content == "Reusing conversation root frame"
     assert child_open.skill_frame_id == child_frame_id
     assert child_open.content == "Resuming frame for skill: exception_triage"
-    assert result.content == "Root completed after resuming child."
-    assert result.structured_output == {"child_resumed": True}
+    assert result.content == f"Child resumed successfully next:{trace_id}:002"
+    assert result.structured_output == {
+        "classification": "vehicle_delay",
+        "recommended_action": "manual_dispatch",
+        "confidence": 0.91,
+    }
 
     root = runtime.get_frame(root_frame_id)
     child = runtime.get_frame(child_frame_id)
@@ -3039,25 +3094,20 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
         debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
     assert debug.status_code == 200
     records = debug.json()
-    assert [record["cursor"] for record in records] == [
-        f"next:{trace_id}:001",
-        f"next:{trace_id}:002",
+    assert records
+    assert {record["cursor"] for record in records} == {f"next:{trace_id}:001"}
+    all_system_messages = [
+        content
+        for record in records
+        for content in _record_messages(record, "system")
     ]
-    child_user_messages = [
-        message["content"]
-        for message in records[0]["request"]["messages"]
-        if message["role"] == "user"
+    all_user_messages = [
+        content
+        for record in records
+        for content in _record_messages(record, "user")
     ]
-    assert any("User request: 继续" in content for content in child_user_messages)
-    assert any("Business context:" in content and "ORD-1" in content for content in child_user_messages)
-    root_user_messages = [
-        message["content"]
-        for message in records[1]["request"]["messages"]
-        if message["role"] == "user"
-    ]
-    assert any("Continuation summary from promoted child result:" in content for content in root_user_messages)
-    assert any(child_frame_id in content for content in root_user_messages)
-    assert not any("Pending child skill:" in content for content in root_user_messages)
+    assert all_user_messages == [f"继续 next:{trace_id}:001"] * len(records)
+    assert any("当前业务技能回合上下文:" in content for content in all_system_messages)
 
 
 @pytest.mark.anyio
