@@ -1155,7 +1155,10 @@ class SkillRuntime:
         if conversation_id:
             candidates.extend(self.store.get_by_conversation(conversation_id))
             if self._journal:
-                candidates.extend(self._journal.load_by_conversation(conversation_id))
+                candidates.extend(self._journal.load_root_history_by_conversation(
+                    conversation_id,
+                    root_skill_id=root_skill_id,
+                ))
         if task_id:
             candidates.extend(self.store.get_by_task(task_id))
             if self._journal:
@@ -1969,7 +1972,11 @@ class SkillRuntime:
             if not task_id or task_id in seen_task_ids:
                 continue
             seen_task_ids.add(task_id)
-            child = self._journal.load(task_id, child_frame_id)
+            child = self._journal.load(
+                task_id,
+                child_frame_id,
+                conversation_id=parent.conversation_id,
+            )
             if child is not None:
                 self.restore_frame(child)
                 return child

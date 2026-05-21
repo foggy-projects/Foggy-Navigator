@@ -15,6 +15,7 @@ Directory layout::
         sessions/
           by-date/YYYY/MM/DD/
             <hash>/<session-id>/
+              session.json
               frames/<frame-id>.json
               reports/<frame-id>.md
               logs/...
@@ -38,6 +39,7 @@ from typing import Any
 from ..models import FrameKind, FrameStatus, SkillFrameState
 from .file_layout import (
     context_segment_path,
+    date_parts_for_context_id,
     date_parts_for_frame,
     iter_date_dirs,
     parse_date,
@@ -58,6 +60,10 @@ _RECOVERABLE_FRAME_STATUSES = frozenset({
     FrameStatus.AWAITING_APPROVAL,
     FrameStatus.AWAITING_USER,
 })
+
+_SESSION_INDEX_FILE = "session.json"
+_SESSION_INDEX_SCHEMA_VERSION = 1
+_SESSION_INDEX_ROOT_HISTORY_LIMIT = 20
 
 
 class FileFrameJournal:
@@ -103,6 +109,7 @@ class FileFrameJournal:
         )
         payload = frame.model_dump(mode="json")
         self._write_json(file_path, payload)
+        self._write_session_index_if_root(frame, file_path.parent.parent)
 
         logger.debug("Journal saved frame=%s to %s", frame.frame_id, file_path)
         return file_path
@@ -178,6 +185,65 @@ class FileFrameJournal:
         return _sort_frames_by_journal_order(
             _dedupe_latest_frames(self._read_frame_paths(paths, conversation_id=conversation_id))
         )
+
+    def load_root_by_conversation(
+        self,
+        conversation_id: str,
+        *,
+        root_skill_id: str = "system.root",
+    ) -> SkillFrameState | None:
+        """Load the canonical root frame for a conversation.
+
+        The hot path uses ``session.json`` so callers do not need to scan every
+        frame snapshot in the session directory. If the index is missing or
+        stale, this method falls back to a bounded session scan and rewrites the
+        index from the latest matching root frame.
+        """
+        indexed_frame = self._load_indexed_root_frame(
+            conversation_id,
+            root_skill_id=root_skill_id,
+        )
+        if indexed_frame is not None:
+            return indexed_frame
+
+        candidates = [
+            frame for frame in self.load_by_conversation(conversation_id)
+            if _is_root_frame(frame, root_skill_id)
+        ]
+        if not candidates:
+            return None
+        root = _sort_frames_by_journal_order(candidates)[-1]
+        self._write_session_index_if_root(root, self._session_dir_for_conversation(conversation_id))
+        return root
+
+    def load_root_history_by_conversation(
+        self,
+        conversation_id: str,
+        *,
+        root_skill_id: str = "system.root",
+    ) -> list[SkillFrameState]:
+        """Load root frame candidates for a conversation without directory scanning.
+
+        Normal sessions have one canonical root frame. The indexed history is
+        retained for recovery from older data or tests that created multiple
+        root frames before the canonical-root invariant was enforced.
+        """
+        indexed_frames = self._load_indexed_root_history(
+            conversation_id,
+            root_skill_id=root_skill_id,
+        )
+        if indexed_frames:
+            return indexed_frames
+
+        candidates = [
+            frame for frame in self.load_by_conversation(conversation_id)
+            if _is_root_frame(frame, root_skill_id)
+        ]
+        if not candidates:
+            return []
+        roots = _sort_frames_by_journal_order(candidates)
+        self._write_session_index_if_root(roots[-1], self._session_dir_for_conversation(conversation_id))
+        return roots
 
     def _read_frames(self, directory: Path) -> list[SkillFrameState]:
         frames: list[SkillFrameState] = []
@@ -307,6 +373,132 @@ class FileFrameJournal:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _session_dir_for_conversation(self, conversation_id: str) -> Path:
+        return session_data_dir(
+            self._data_root,
+            date_parts_for_context_id(conversation_id),
+            conversation_id,
+            require_standard_context=True,
+        )
+
+    def _session_index_path(self, conversation_id: str) -> Path:
+        return self._session_dir_for_conversation(conversation_id) / _SESSION_INDEX_FILE
+
+    def _conversation_frame_path(self, conversation_id: str, frame_id: str) -> Path:
+        return (
+            self._session_dir_for_conversation(conversation_id)
+            / "frames" / f"{safe_path_segment(frame_id)}.json"
+        )
+
+    def _write_session_index_if_root(self, frame: SkillFrameState, session_dir: Path) -> None:
+        conversation_id = _standard_conversation_id(frame.conversation_id)
+        if not conversation_id or not _is_root_frame(frame, "system.root"):
+            return
+        memory = frame.private_working_state.get("runtime_context_memory")
+        runtime_revision = memory.get("revision") if isinstance(memory, dict) else None
+        index_path = session_dir / _SESSION_INDEX_FILE
+        payload = {
+            "schemaVersion": _SESSION_INDEX_SCHEMA_VERSION,
+            "contextId": conversation_id,
+            "rootFrameId": frame.frame_id,
+            "rootFrameHistory": self._root_frame_history(index_path, frame.frame_id),
+            "rootSkillId": frame.skill_id,
+            "currentTaskId": frame.current_task_id or frame.task_id,
+            "originTaskId": frame.origin_task_id,
+            "runtimeRevision": runtime_revision,
+            "status": frame.status.value if isinstance(frame.status, FrameStatus) else str(frame.status),
+            "updatedAt": frame.journal_updated_at or datetime.now(timezone.utc).isoformat(),
+        }
+        self._write_json(index_path, payload)
+
+    def _root_frame_history(self, index_path: Path, current_root_frame_id: str) -> list[str]:
+        history: list[str] = []
+        if index_path.is_file():
+            try:
+                payload = json.loads(index_path.read_text(encoding="utf-8"))
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict):
+                existing = payload.get("rootFrameHistory")
+                if isinstance(existing, list):
+                    history.extend(str(item) for item in existing if item)
+                root_frame_id = payload.get("rootFrameId")
+                if isinstance(root_frame_id, str) and root_frame_id:
+                    history.append(root_frame_id)
+        history.append(current_root_frame_id)
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for frame_id in history:
+            if frame_id in seen:
+                continue
+            seen.add(frame_id)
+            deduped.append(frame_id)
+        return deduped[-_SESSION_INDEX_ROOT_HISTORY_LIMIT:]
+
+    def _load_indexed_root_frame(
+        self,
+        conversation_id: str,
+        *,
+        root_skill_id: str,
+    ) -> SkillFrameState | None:
+        payload = self._load_session_index(conversation_id)
+        if payload is None:
+            return None
+        root_frame_id = payload.get("rootFrameId")
+        if not isinstance(root_frame_id, str) or not root_frame_id.strip():
+            return None
+        frame = self._read_file(self._conversation_frame_path(conversation_id, root_frame_id))
+        if frame is None or not _matches_conversation(frame, conversation_id):
+            return None
+        if not _is_root_frame(frame, root_skill_id):
+            return None
+        return frame
+
+    def _load_indexed_root_history(
+        self,
+        conversation_id: str,
+        *,
+        root_skill_id: str,
+    ) -> list[SkillFrameState]:
+        payload = self._load_session_index(conversation_id)
+        if payload is None:
+            return []
+        frame_ids: list[str] = []
+        history = payload.get("rootFrameHistory")
+        if isinstance(history, list):
+            frame_ids.extend(str(item) for item in history if item)
+        root_frame_id = payload.get("rootFrameId")
+        if isinstance(root_frame_id, str) and root_frame_id:
+            frame_ids.append(root_frame_id)
+
+        frames: list[SkillFrameState] = []
+        seen: set[str] = set()
+        for frame_id in frame_ids:
+            if frame_id in seen:
+                continue
+            seen.add(frame_id)
+            frame = self._read_file(self._conversation_frame_path(conversation_id, frame_id))
+            if frame is None or not _matches_conversation(frame, conversation_id):
+                continue
+            if not _is_root_frame(frame, root_skill_id):
+                continue
+            frames.append(frame)
+        return _sort_frames_by_journal_order(frames)
+
+    def _load_session_index(self, conversation_id: str) -> dict[str, Any] | None:
+        index_path = self._session_index_path(conversation_id)
+        if not index_path.is_file():
+            return None
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("Failed to parse session index: %s", index_path, exc_info=True)
+            return None
+        if not isinstance(payload, dict) or payload.get("contextId") != conversation_id:
+            return None
+        return payload
+
     def _session_frame_path(
         self,
         session_id: str,
@@ -351,10 +543,12 @@ class FileFrameJournal:
         frame_id: str | None = None,
     ) -> list[Path]:
         frame_pattern = f"{safe_path_segment(frame_id)}.json" if frame_id else "*.json"
-        session_pattern = context_segment_path(conversation_id).as_posix()
-        paths = sorted((self._session_root / "by-date").glob(
-            f"*/*/*/{session_pattern}/frames/{frame_pattern}",
-        ))
+        session_dir = (
+            self._session_root / "by-date"
+            / Path(*date_parts_for_context_id(conversation_id))
+            / context_segment_path(conversation_id)
+        )
+        paths = sorted((session_dir / "frames").glob(frame_pattern))
         return _unique_paths(paths)
 
     def _read_frame_paths(
@@ -447,6 +641,10 @@ def _unique_paths(paths: list[Path]) -> list[Path]:
 
 def _matches_conversation(frame: SkillFrameState, conversation_id: str) -> bool:
     return frame.conversation_id == conversation_id or frame.session_id == conversation_id
+
+
+def _is_root_frame(frame: SkillFrameState, root_skill_id: str) -> bool:
+    return frame.skill_id == root_skill_id and not frame.parent_frame_id
 
 
 def _standard_conversation_id(value: Any) -> str | None:

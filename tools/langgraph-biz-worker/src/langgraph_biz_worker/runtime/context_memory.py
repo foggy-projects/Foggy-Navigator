@@ -7,6 +7,7 @@ or writing that frame field directly so the storage backend can move later.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -281,7 +282,7 @@ class ContextRuntimeMemory:
             return False
         user_message = self.pending_turn.get("userMessage")
         if not isinstance(user_message, dict):
-            self._clear_running(now=now)
+            self.abandon_turn(status="COMMIT_REJECTED", now=now)
             return False
         queued_user_messages = [
             item for item in self.pending_turn.get("queuedUserMessages", [])
@@ -289,7 +290,7 @@ class ContextRuntimeMemory:
         ]
         content = _clean_content(assistant_message, self._max_message_chars())
         if not content:
-            self._clear_running(now=now)
+            self.abandon_turn(status="COMMIT_REJECTED", now=now)
             return False
         timestamp = now or _now()
         task_id = _str_or_default(user_message.get("taskId"))
@@ -316,6 +317,26 @@ class ContextRuntimeMemory:
             self.pending_turn["endedAt"] = now or _now()
         self.pending_turn = None
         self._clear_running(now=now)
+
+    def mark_finalizing(self, *, now: str | None = None) -> bool:
+        if not isinstance(self.pending_turn, dict):
+            return False
+        timestamp = now or _now()
+        self.pending_turn["status"] = "FINALIZING"
+        self.loop_status = "FINALIZING"
+        self.updated_at = timestamp
+        return True
+
+    def mark_running(self, *, now: str | None = None) -> bool:
+        if not isinstance(self.pending_turn, dict):
+            return False
+        timestamp = now or _now()
+        self.pending_turn["status"] = "RUNNING"
+        self.loop_status = "RUNNING"
+        self.running_task_id = _pending_task_id(self.pending_turn)
+        self.running_frame_id = _str_or_none(self.pending_turn.get("rootFrameId"))
+        self.updated_at = timestamp
+        return True
 
     def _clear_running(self, *, now: str | None = None) -> None:
         self.loop_status = "IDLE"
@@ -663,18 +684,65 @@ def _merged_strings(*groups: list[str]) -> list[str]:
     return merged
 
 
+_SENSITIVE_TEXT_KEYS = (
+    "api_key",
+    "apikey",
+    "access_key",
+    "access_token",
+    "accesstoken",
+    "token",
+    "password",
+    "secret",
+    "signature",
+    "credential",
+)
+
+
 def _redact_sensitive_text(text: str) -> str:
+    redacted = _redact_json_text(text)
+    quoted_key_pattern = "|".join(re.escape(key) for key in _SENSITIVE_TEXT_KEYS)
     redacted = re.sub(
-        r"(?i)\b(token|access_token|password|secret|signature)=([^\s&]+)",
-        lambda match: f"{match.group(1)}=[REDACTED]",
-        text,
+        rf"(?i)([\"'](?:{quoted_key_pattern})[\"']\s*:\s*)([\"'])(.*?)(\2)",
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(2)}",
+        redacted,
     )
     redacted = re.sub(
-        r"(?i)\b(api[_-]?key|accessToken|secret)\s*[:=]\s*([^\s,;]+)",
+        r"(?i)\b(api[_-]?key|apikey|access[_-]?token|accessToken|token|password|secret|signature|credential)\s*=\s*([^\s&;,]+)",
         lambda match: f"{match.group(1)}=[REDACTED]",
         redacted,
     )
+    redacted = re.sub(
+        r"(?i)\b(api[_-]?key|apikey|access[_-]?token|accessToken|token|password|secret|signature|credential)\s*:\s*([^\s,;}]+)",
+        lambda match: f"{match.group(1)}: [REDACTED]",
+        redacted,
+    )
     return re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", redacted)
+
+
+def _redact_json_text(text: str) -> str:
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "{[":
+        return text
+    try:
+        value = json.loads(stripped)
+    except Exception:
+        return text
+    return json.dumps(_redact_json_value(value), ensure_ascii=False)
+
+
+def _redact_json_value(value: Any, key_hint: str | None = None) -> Any:
+    if key_hint and _is_sensitive_text_key(key_hint):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {str(key): _redact_json_value(item, str(key)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_json_value(item) for item in value]
+    return value
+
+
+def _is_sensitive_text_key(key: str) -> bool:
+    normalized = key.lower().replace("-", "_")
+    return normalized in _SENSITIVE_TEXT_KEYS or any(part in normalized for part in _SENSITIVE_TEXT_KEYS)
 
 
 def _truncate_text(text: str, max_chars: int) -> str:

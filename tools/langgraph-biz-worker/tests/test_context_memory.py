@@ -9,6 +9,7 @@ from langgraph_biz_worker.runtime.context_memory import (
     RUNTIME_CONTEXT_MEMORY_KEY,
     ContextRuntimeBusy,
     ContextRuntimeMemory,
+    _redact_sensitive_text,
     assistant_visible_content,
     load_from_root_frame,
     save_to_root_frame,
@@ -77,6 +78,34 @@ def test_context_memory_drains_queued_user_input_into_committed_turn():
         ("assistant", "A after queued input"),
     ]
     assert memory.visible_messages[1]["metadata"]["queueStatus"] == "IN_FLIGHT"
+
+
+def test_context_memory_commit_rejection_clears_pending_turn():
+    memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-commit-reject")
+    memory.begin_turn(
+        task_id="task_001",
+        root_frame_id="frm_root",
+        user_message="U1",
+        now="2026-05-21T00:00:00Z",
+    )
+
+    committed = memory.commit_turn(
+        assistant_message="   ",
+        now="2026-05-21T00:00:01Z",
+    )
+
+    assert committed is False
+    assert memory.pending_turn is None
+    assert memory.loop_status == "IDLE"
+    assert memory.running_task_id is None
+
+    memory.begin_turn(
+        task_id="task_002",
+        root_frame_id="frm_root",
+        user_message="U2",
+        now="2026-05-21T00:00:02Z",
+    )
+    assert memory.pending_turn["taskId"] == "task_002"
 
 
 def test_recent_conversation_bootstrap_only_when_memory_empty():
@@ -244,6 +273,17 @@ def test_context_memory_compaction_fallback_redacts_sensitive_text():
     assert "[REDACTED]" in prompt_text
 
 
+def test_context_memory_redacts_json_style_secrets():
+    redacted = _redact_sensitive_text(
+        '{"token":"abc123", "password":"pw123", "secret":"sec123", '
+        '"api_key":"sk123", "nested":{"access_token":"access123"}}'
+    )
+
+    for leaked in ("abc123", "pw123", "sec123", "sk123", "access123"):
+        assert leaked not in redacted
+    assert redacted.count("[REDACTED]") == 5
+
+
 def test_context_memory_compaction_uses_summarizer_output_when_available():
     memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-llm-summary")
     memory.limits.update({
@@ -258,7 +298,11 @@ def test_context_memory_compaction_uses_summarizer_output_when_available():
         memory.begin_turn(
             task_id=f"task_{index:03d}",
             root_frame_id="frm_root",
-            user_message="U2 token=secret123" if index == 2 else f"U{index}",
+            user_message=(
+                'U2 {"token":"secret123", "password":"pw123"} Bearer bearer123'
+                if index == 2
+                else f"U{index}"
+            ),
         )
 
         def summarizer(payload: dict[str, object]) -> dict[str, object]:
@@ -278,7 +322,9 @@ def test_context_memory_compaction_uses_summarizer_output_when_available():
     assert summarizer_payloads
     summarizer_input = str(summarizer_payloads[0]["messages"])
     assert "secret123" not in summarizer_input
-    assert "token=[REDACTED]" in summarizer_input
+    assert "pw123" not in summarizer_input
+    assert "bearer123" not in summarizer_input
+    assert "[REDACTED]" in summarizer_input
     prompt_text = "\n".join(item["content"] for item in memory.build_prompt_view())
     assert "LLM summary: user wants a TMS ticket" in prompt_text
     assert "collect missing ticket title" in prompt_text

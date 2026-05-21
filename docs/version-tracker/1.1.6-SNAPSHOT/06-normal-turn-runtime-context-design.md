@@ -94,6 +94,47 @@ ContextRuntimeMemory
 3. Root frame 内部结构只是第一阶段 backend，后续可以迁移到 session 目录下的 `runtime-memory.json` / `recent-window.jsonl`。
 4. 可选地在后续阶段生成只读 mirror 文件，便于排查和备份，但 mirror 不作为第一阶段事实源。
 
+### Root frame 定位索引
+
+同一个标准 `contextId` 只允许一个 canonical Root frame。由于 `FrameStore` 是全局按 `frame_id` 索引，Root frame 仍保留唯一 `frm_xxx` 标识，不能跨会话统一命名为 `frm_root`。
+
+为了避免每次新任务进入时遍历 session 目录下全部 `frm_*.json`，session 目录维护轻量索引文件：
+
+```text
+runtime/sessions/by-date/YYYY/MM/DD/<hash>/<contextId>/session.json
+```
+
+`session.json` 记录：
+
+1. `contextId`
+2. `rootFrameId`
+3. `rootSkillId`
+4. `rootFrameHistory`
+5. `currentTaskId`
+6. `originTaskId`
+7. `runtimeRevision`
+8. `status`
+9. `updatedAt`
+
+运行时 Root frame 恢复优先读取 `session.json` 并直达 `frames/<rootFrameId>.json`。`rootFrameHistory` 只用于兼容历史上同一 `contextId` 误建多个 Root frame 的情况，使恢复逻辑可以按索引直读旧 root 并完成 supersede，而不是扫描全部 `frm_*.json`。只有索引缺失、损坏或指向的 frame 不存在时，才降级扫描当前 session 目录并重建索引。该索引只是定位加速结构，不取代 Root frame / `ContextRuntimeMemory` 的事实源地位。
+
+### LLM submission 复盘文件
+
+在显式开启 `BIZ_WORKER_LLM_SUBMISSION_LOG_ENABLED=true` 时，BizWorker 会为每次真实提交给 ChatModel 的请求保存一份独立 JSON：
+
+```text
+runtime/sessions/by-date/YYYY/MM/DD/<hash>/<contextId>/logs/llm-submissions/
+  000001_<skill>_<task>_<frame>_iter01_attempt01.json
+```
+
+设计规则：
+
+1. 保存的是当次提交给 LLM 的 body 视图，包括 model snapshot、`messages`、`tools`、`tool_choice` 和调试 metadata。
+2. 第一版不做敏感信息脱敏，因为该文件的定位就是复盘真实提交给 LLM 的参数。
+3. 文件按数字前缀递增，每次调用一个文件，不追加到同一个 JSONL。
+4. 默认最多保留 100 个文件，可通过 `BIZ_WORKER_LLM_SUBMISSION_LOG_MAX_FILES` 调整。
+5. 复盘文件属于 debug evidence，不作为 prompt source of truth，也不参与 runtime memory 恢复。
+
 ## 数据结构草案
 
 ```json

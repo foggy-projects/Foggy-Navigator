@@ -1419,6 +1419,72 @@ def test_llm_agent_inserts_queued_user_input_at_checkpoint():
     assert "U2 while root loop is still running" in second_prompt
 
 
+def test_llm_agent_reconsiders_terminal_submit_when_queued_input_arrives_before_tool_execution():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_queue_terminal_001",
+        skill_id="system.root",
+        skill_input={"request": "start"},
+    )
+    checkpoint_calls = 0
+    markers: list[str] = []
+
+    def checkpoint():
+        nonlocal checkpoint_calls
+        checkpoint_calls += 1
+        if checkpoint_calls == 2:
+            return [{
+                "role": "user",
+                "content": "U2 arrived before stale submit ran",
+            }]
+        return []
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_stale_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Stale answer.",
+                "structured_output": {"message": "Stale answer."},
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_final_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Handled latest input.",
+                "structured_output": {"message": "Handled latest input."},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime, max_iterations=3).run(
+        task_id="task_root_queue_terminal_001",
+        frame_id=frame_id,
+        prompt="U1",
+        runtime_context={
+            "_runtime_memory_checkpoint": checkpoint,
+            "_runtime_memory_mark_finalizing": lambda: markers.append("finalizing"),
+            "_runtime_memory_mark_running": lambda: markers.append("running"),
+        },
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert model.calls == 2
+    assert frame.result_summary == "Handled latest input."
+    assert [event.tool_call_id for event in events if event.type == "skill_result_submit"] == [
+        "call_final_submit"
+    ]
+    assert markers == ["finalizing"]
+    second_prompt = "\n".join(
+        getattr(message, "content", "")
+        for message in model.seen_messages[1]
+    )
+    assert "U2 arrived before stale submit ran" in second_prompt
+    assert "Stale answer." not in second_prompt
+
+
 def test_llm_agent_records_submitted_summary_without_backend_rewrite(monkeypatch):
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(

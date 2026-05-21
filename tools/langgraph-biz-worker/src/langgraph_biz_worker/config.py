@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     llm_circuit_failure_threshold: int = 3
     llm_circuit_open_seconds: float = 60.0
     llm_max_concurrent_requests: int = 5
+    llm_submission_log_enabled: bool = False
+    llm_submission_log_max_files: int = 100
 
     # Public Skill sync from GitLab (leave skill_git_repo empty to disable)
     skill_git_repo: str = ""            # GitLab repo URL, e.g. https://gitlab.example.com/foggy/foggy-skills.git

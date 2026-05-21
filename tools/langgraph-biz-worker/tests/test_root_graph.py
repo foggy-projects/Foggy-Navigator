@@ -9,6 +9,7 @@ from langgraph_biz_worker.graphs import root_graph as root_graph_module
 from langgraph_biz_worker.models import SkillManifest
 from langgraph_biz_worker.runtime.context_memory import ContextRuntimeMemory, save_to_root_frame
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
+from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
@@ -167,6 +168,34 @@ def test_route_skill_restores_system_root_frame_by_session_for_new_task(monkeypa
     assert frame is not None
     assert frame.conversation_id == CTX_RESTORE
     assert frame.current_task_id == "task_root_session_restore_002"
+
+
+def test_route_skill_restores_system_root_frame_from_session_index_without_scan(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    first_state = _state("task_root_index_restore_001", "sess_restore")
+    first_state["context"]["contextId"] = CTX_RESTORE
+    first = root_graph_module.route_skill(first_state)
+    index_path = session_data_dir(tmp_path / "data", ("2026", "01", "01"), CTX_RESTORE) / "session.json"
+    assert index_path.is_file()
+
+    restored_runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=runtime.registry,
+        journal=root_graph_module._journal,
+    )
+    monkeypatch.setattr(root_graph_module, "_runtime", restored_runtime)
+
+    def fail_scan(*args, **kwargs):
+        raise AssertionError("root frame restore should use session.json")
+
+    monkeypatch.setattr(root_graph_module._journal, "_scan_conversation_frame_paths", fail_scan)
+
+    second_state = _state("task_root_index_restore_002", "sess_restore")
+    second_state["context"]["contextId"] = CTX_RESTORE
+    second = root_graph_module.route_skill(second_state)
+
+    assert second["active_frame_id"] == first["active_frame_id"]
+    assert second["events"][-1].content == "Reusing frame for skill: system.root"
 
 
 def test_run_skill_passes_raw_prompt_and_runtime_attachments_to_llm_agent(monkeypatch, tmp_path):
@@ -492,6 +521,38 @@ def test_enqueue_pending_user_input_rejects_idle_memory(monkeypatch, tmp_path):
         context_id,
         task_id="task_root_queue_idle_002",
         prompt="U2 after loop closed",
+    )
+
+    restored = ContextRuntimeMemory.load_from_root_frame(runtime.get_frame(frame.frame_id))
+    assert event.type == "error"
+    assert event.payload["code"] == "CONTEXT_RUNTIME_BUSY"
+    assert event.payload["retryable"] is True
+    assert restored.pending_user_inputs == []
+
+
+def test_enqueue_pending_user_input_rejects_finalizing_memory(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    context_id = "bctx_20260521_ef_ctx-finalizing-root"
+    state = _state("task_root_queue_finalizing_001")
+    state["context"]["contextId"] = context_id
+    routed = root_graph_module.route_skill(state)
+    frame = runtime.get_frame(routed["active_frame_id"])
+    assert frame is not None
+
+    memory = ContextRuntimeMemory(context_id=frame.conversation_id)
+    memory.begin_turn(
+        task_id="task_root_queue_finalizing_001",
+        root_frame_id=frame.frame_id,
+        user_message="U1",
+    )
+    assert memory.mark_finalizing()
+    save_to_root_frame(frame, memory)
+    runtime.save_frame(frame)
+
+    event = root_graph_module.enqueue_pending_user_input_for_context(
+        context_id,
+        task_id="task_root_queue_finalizing_002",
+        prompt="U2 while submit is closing",
     )
 
     restored = ContextRuntimeMemory.load_from_root_frame(runtime.get_frame(frame.frame_id))

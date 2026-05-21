@@ -366,6 +366,8 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 2026-05-21: 已完成 Phase 3 `pendingUserInputs` 队列与 checkpoint。执行锁被占用时，仍处于 RUNNING 的同 `contextId` 请求进入队列；LLM loop 在 model 前、tool 后等 checkpoint 消费并插入当前 active frame。若执行流已 closing / memory 非 RUNNING，则返回 retryable busy，避免消息入队后无人消费。
 - 2026-05-21: 已完成 Phase 4 lazy head-tail compaction。未超预算不调用 summarizer；超预算后保留 pinned head、compacted summary、tail recent messages；summarizer 失败时使用 deterministic fallback，并对 token / bearer / secret 等敏感片段脱敏。
 - 2026-05-21: 已完成 Phase 5 Java `recentConversation` 退场。`LanggraphTaskService` 默认不再读取 `SessionMessageRepository` 注入 `recentConversation`；仅保留 `foggy.navigator.langgraph.worker.include-recent-conversation=true` 兼容开关。
+- 2026-05-21: 已补充 session root 定位索引。标准 `contextId` session 目录写入 `session.json`，记录 canonical `rootFrameId` 和小型 `rootFrameHistory`；新任务恢复 Root frame 时优先直达 `frames/<rootFrameId>.json`，历史多 root supersede 也按索引直读，索引缺失或失效时才扫描当前 session 并重建。
+- 2026-05-21: 已补充 LLM submission 复盘文件。开启 `BIZ_WORKER_LLM_SUBMISSION_LOG_ENABLED=true` 后，每次真实 ChatModel 调用保存一个独立 JSON 到 `logs/llm-submissions/000001_...json`，默认最多保留 100 个文件。
 
 ### Testing
 
@@ -378,6 +380,8 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
   - result: `18 passed`
 - `mvn -pl addons/langgraph-biz-worker -am -Dtest=InvokeBusinessFunctionToolTest "-Dsurefire.failIfNoSpecifiedTests=false" test`
   - result: `10 tests, 0 failures, 0 errors`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_file_frame_journal.py tests/test_root_graph.py tests/test_llm_submission_log.py tests/test_config.py -q`
+  - result: `60 passed`
 - `mvn -pl addons/claude-worker-agent -am -Dtest=OpenApiAgentReadinessServiceTest "-Dsurefire.failIfNoSpecifiedTests=false" test`
   - result: `11 tests, 0 failures, 0 errors`
 - `mvn -pl addons/langgraph-biz-worker -am "-Dtest=LanggraphTaskServiceTest,BusinessAgentLanggraphLaunchE2ETest" "-Dsurefire.failIfNoSpecifiedTests=false" test`

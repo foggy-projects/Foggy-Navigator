@@ -59,3 +59,10 @@ NAVIGATOR_STATUS_RETRIES="${NAVIGATOR_DEPLOY_HEALTH_RETRIES:-45}" \
 NAVIGATOR_STATUS_INTERVAL_SECONDS="${NAVIGATOR_DEPLOY_HEALTH_INTERVAL_SECONDS:-2}" \
 NAVIGATOR_STATUS_QUIET_TRANSIENT_FAILURES=true \
   bash "$SCRIPT_DIR/status-check.sh"
+
+if [ "${NAVIGATOR_DEPLOY_LANGGRAPH_BIZ_WORKER:-true}" = "true" ]; then
+  log "Starting LangGraph Biz Worker for image tag $IMAGE_TAG"
+  bash "$SCRIPT_DIR/start-langgraph-biz-worker.sh"
+else
+  log "Skipping LangGraph Biz Worker deploy"
+fi

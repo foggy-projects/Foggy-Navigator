@@ -38,6 +38,12 @@ class TestSettingsDefaults:
         assert s.llm_provider_max_retries == 0
         assert s.llm_circuit_failure_threshold == 3
 
+    def test_default_llm_submission_log(self):
+        from langgraph_biz_worker.config import Settings
+        s = Settings(_env_file=None)
+        assert s.llm_submission_log_enabled is False
+        assert s.llm_submission_log_max_files == 100
+
 
 class TestSettingsEnvOverride:
     def test_port_from_env(self):
@@ -70,6 +76,16 @@ class TestSettingsEnvOverride:
             assert s.llm_request_timeout_seconds == 42
             assert s.llm_max_retries == 2
             assert s.llm_circuit_failure_threshold == 4
+
+    def test_llm_submission_log_from_env(self):
+        from langgraph_biz_worker.config import Settings
+        with patch.dict(os.environ, {
+            "BIZ_WORKER_LLM_SUBMISSION_LOG_ENABLED": "true",
+            "BIZ_WORKER_LLM_SUBMISSION_LOG_MAX_FILES": "7",
+        }):
+            s = Settings(_env_file=None)
+            assert s.llm_submission_log_enabled is True
+            assert s.llm_submission_log_max_files == 7
 
     def test_biz_worker_env_file_selects_env_file(self, tmp_path):
         env_file = tmp_path / "real.env"

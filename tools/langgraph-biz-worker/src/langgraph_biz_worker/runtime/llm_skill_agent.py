@@ -92,6 +92,7 @@ from .llm_tool_schemas import (
     _tool_specs,
 )
 from .execution_policy import ExecutionPolicy
+from .file_layout import date_parts_for_frame
 from .public_skill_resource_tools import PublicSkillResourceTools
 from .skill_runtime import SkillRuntime
 from .tool_provider import ToolProvider, ToolResult
@@ -201,6 +202,20 @@ class LlmSkillAgent:
                 spec["function"]["name"] for spec in provider_tool_specs
             }
         runtime_context["_skill_name"] = frame.skill_id
+        runtime_context["_llm_submission_skill_id"] = frame.skill_id
+        runtime_context["_llm_submission_session_id"] = (
+            frame.conversation_id or frame.session_id or task_id
+        )
+        runtime_context["_llm_submission_require_standard_context"] = bool(frame.conversation_id)
+        runtime_context["_llm_submission_date_parts"] = date_parts_for_frame(frame)
+        if self._data_root:
+            runtime_context["_llm_submission_data_root"] = str(self._data_root)
+        runtime_context["_llm_submission_tools"] = _tool_specs(
+            manifest,
+            persistent_frame=persistent_frame,
+            extra_tool_specs=provider_tool_specs,
+            enabled_tool_names=execution_policy.allowed_tools,
+        )
         model = _bind_tools(
             self._model,
             manifest,
@@ -209,10 +224,13 @@ class LlmSkillAgent:
             enabled_tool_names=execution_policy.allowed_tools,
         )
 
-        for _ in range(self._max_iterations):
-            for queued_message in _runtime_memory_checkpoint_messages(runtime_context):
-                messages.append(queued_message)
-                self._append_private_message(frame_id, "user", queued_message.content)
+        for iteration in range(1, self._max_iterations + 1):
+            runtime_context["_llm_submission_iteration"] = iteration
+            self._append_runtime_memory_checkpoint_messages(
+                runtime_context,
+                messages=messages,
+                frame_id=frame_id,
+            )
             try:
                 response = invoke_chat_model(
                     model,
@@ -240,10 +258,22 @@ class LlmSkillAgent:
                     reason=interruption_reason,
                     error=str(exc),
                 )]
+            tool_calls = _extract_tool_calls(response)
+            if tool_calls and _has_runtime_memory_terminal_tool_call(tool_calls):
+                queued_messages = _runtime_memory_checkpoint_messages(runtime_context)
+                if queued_messages:
+                    self._append_private_message(frame_id, "assistant", _safe_content(response.content))
+                    self._append_runtime_memory_checkpoint_messages(
+                        runtime_context,
+                        messages=messages,
+                        frame_id=frame_id,
+                        queued_messages=queued_messages,
+                    )
+                    continue
+
             messages.append(response)
             self._append_private_message(frame_id, "assistant", _safe_content(response.content))
 
-            tool_calls = _extract_tool_calls(response)
             if not tool_calls:
                 messages.append(HumanMessage(content=(
                     "No tool call was produced. If the skill is complete, call "
@@ -252,6 +282,9 @@ class LlmSkillAgent:
                 continue
 
             for call in tool_calls:
+                terminal_tool_call = _is_runtime_memory_terminal_tool_call(call)
+                if terminal_tool_call:
+                    _mark_runtime_memory_finalizing(runtime_context)
                 event = self._execute_tool_call(
                     task_id, frame_id, manifest, call,
                     account_id=account_id,
@@ -278,6 +311,12 @@ class LlmSkillAgent:
                 self._append_private_message(frame_id, "tool", tool_result)
 
                 current = self._runtime.get_frame(frame_id)
+                if terminal_tool_call and not (
+                    (current and current.status == FrameStatus.COMPLETED)
+                    or event.get("persistent_turn_completed")
+                    or event.get("suspended")
+                ):
+                    _mark_runtime_memory_running(runtime_context)
                 if current and current.status == FrameStatus.COMPLETED:
                     return events
                 if event.get("persistent_turn_completed"):
@@ -310,9 +349,11 @@ class LlmSkillAgent:
                         error=error,
                     ))
                     return events
-                for queued_message in _runtime_memory_checkpoint_messages(runtime_context):
-                    messages.append(queued_message)
-                    self._append_private_message(frame_id, "user", queued_message.content)
+                self._append_runtime_memory_checkpoint_messages(
+                    runtime_context,
+                    messages=messages,
+                    frame_id=frame_id,
+                )
 
         error = "LLM skill agent reached max iterations without valid submit"
         if persistent_frame:
@@ -332,6 +373,18 @@ class LlmSkillAgent:
             error=error,
         ))
         return events
+
+    def _append_runtime_memory_checkpoint_messages(
+        self,
+        runtime_context: dict[str, Any] | None,
+        *,
+        messages: list[Any],
+        frame_id: str,
+        queued_messages: list[HumanMessage] | None = None,
+    ) -> None:
+        for queued_message in queued_messages or _runtime_memory_checkpoint_messages(runtime_context):
+            messages.append(queued_message)
+            self._append_private_message(frame_id, "user", queued_message.content)
 
     def _execute_tool_call(
         self,
@@ -782,6 +835,34 @@ def _is_non_recoverable_tool_error(result: Any) -> bool:
         result.get("llm_retry_allowed") is False
         or result.get("recoverable") is False
     )
+
+
+def _has_runtime_memory_terminal_tool_call(tool_calls: list[dict[str, Any]]) -> bool:
+    return any(_is_runtime_memory_terminal_tool_call(call) for call in tool_calls)
+
+
+def _is_runtime_memory_terminal_tool_call(call: dict[str, Any]) -> bool:
+    return call.get("name") in {"submit_skill_result", "shelve_interrupted_frame"}
+
+
+def _mark_runtime_memory_finalizing(runtime_context: dict[str, Any] | None) -> None:
+    _call_runtime_memory_marker(runtime_context, "_runtime_memory_mark_finalizing")
+
+
+def _mark_runtime_memory_running(runtime_context: dict[str, Any] | None) -> None:
+    _call_runtime_memory_marker(runtime_context, "_runtime_memory_mark_running")
+
+
+def _call_runtime_memory_marker(runtime_context: dict[str, Any] | None, key: str) -> None:
+    if not runtime_context:
+        return
+    marker = runtime_context.get(key)
+    if not callable(marker):
+        return
+    try:
+        marker()
+    except Exception:
+        logger.warning("Runtime memory marker failed: %s", key, exc_info=True)
 
 
 def _runtime_memory_checkpoint_messages(runtime_context: dict[str, Any] | None) -> list[HumanMessage]:

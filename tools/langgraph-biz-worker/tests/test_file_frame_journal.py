@@ -124,6 +124,67 @@ class TestSaveAndLoad:
         )
         assert [frame.frame_id for frame in journal.load_by_conversation(context_id)] == ["frm_001"]
 
+    def test_system_root_save_writes_session_index(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        frame = _make_frame(skill_id="system.root", conversation_id=CTX_1)
+        frame.private_working_state["runtime_context_memory"] = {"revision": 3}
+
+        journal.save(frame)
+
+        index_path = session_data_dir(tmp_path, ("2026", "01", "01"), CTX_1) / "session.json"
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        assert payload["contextId"] == CTX_1
+        assert payload["rootFrameId"] == "frm_001"
+        assert payload["rootSkillId"] == "system.root"
+        assert payload["runtimeRevision"] == 3
+
+    def test_load_root_by_conversation_uses_session_index_without_scan(self, tmp_path, monkeypatch):
+        journal = FileFrameJournal(tmp_path)
+        journal.save(_make_frame(skill_id="system.root", conversation_id=CTX_1))
+
+        def fail_scan(*args, **kwargs):
+            raise AssertionError("session root lookup should not scan frames")
+
+        monkeypatch.setattr(journal, "_scan_conversation_frame_paths", fail_scan)
+
+        root = journal.load_root_by_conversation(CTX_1)
+
+        assert root is not None
+        assert root.frame_id == "frm_001"
+
+    def test_load_root_by_conversation_fallback_rebuilds_session_index(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        child = _make_frame(frame_id="frm_child", skill_id="child", conversation_id=CTX_1)
+        root = _make_frame(frame_id="frm_root", skill_id="system.root", conversation_id=CTX_1)
+        journal.save(child)
+        journal.save(root)
+        index_path = session_data_dir(tmp_path, ("2026", "01", "01"), CTX_1) / "session.json"
+        index_path.unlink()
+
+        loaded = journal.load_root_by_conversation(CTX_1)
+
+        assert loaded is not None
+        assert loaded.frame_id == "frm_root"
+        rebuilt = json.loads(index_path.read_text(encoding="utf-8"))
+        assert rebuilt["rootFrameId"] == "frm_root"
+
+    def test_load_root_history_by_conversation_uses_index_without_scan(self, tmp_path, monkeypatch):
+        journal = FileFrameJournal(tmp_path)
+        journal.save(_make_frame(frame_id="frm_old", skill_id="system.root", conversation_id=CTX_1))
+        journal.save(_make_frame(frame_id="frm_new", skill_id="system.root", conversation_id=CTX_1))
+        index_path = session_data_dir(tmp_path, ("2026", "01", "01"), CTX_1) / "session.json"
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        assert payload["rootFrameHistory"] == ["frm_old", "frm_new"]
+
+        def fail_scan(*args, **kwargs):
+            raise AssertionError("root history lookup should not scan frames")
+
+        monkeypatch.setattr(journal, "_scan_conversation_frame_paths", fail_scan)
+
+        roots = journal.load_root_history_by_conversation(CTX_1)
+
+        assert [frame.frame_id for frame in roots] == ["frm_old", "frm_new"]
+
     def test_rejects_non_standard_conversation_id(self, tmp_path):
         journal = FileFrameJournal(tmp_path)
 

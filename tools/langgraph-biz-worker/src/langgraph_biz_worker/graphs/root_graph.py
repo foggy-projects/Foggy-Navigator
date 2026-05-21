@@ -304,16 +304,19 @@ def _get_or_create_system_root_frame(
                 )
                 return rebound.frame_id, False
 
-        for frame in _journal.load_by_conversation(conversation_id):
-            if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
-                _runtime.restore_frame(frame)
-                rebound = _runtime.rebind_frame_to_task(
-                    frame.frame_id,
-                    task_id,
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                )
-                return rebound.frame_id, False
+        root_frame = _journal.load_root_by_conversation(
+            conversation_id,
+            root_skill_id=ROOT_SKILL_ID,
+        )
+        if root_frame and root_frame.status == FrameStatus.RUNNING:
+            _runtime.restore_frame(root_frame)
+            rebound = _runtime.rebind_frame_to_task(
+                root_frame.frame_id,
+                task_id,
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+            return rebound.frame_id, False
 
     for frame in _runtime.get_frames_by_task(task_id):
         if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
@@ -814,6 +817,10 @@ def run_skill(state: RootState) -> dict:
     runtime_context = copy_execution_policy_from_context(state.get("runtime_context") or {}, raw_context)
     runtime_context["task_id"] = task_id
     runtime_context["frame_id"] = frame_id
+    if frame.conversation_id:
+        runtime_context.setdefault("contextId", frame.conversation_id)
+    elif frame.session_id:
+        runtime_context.setdefault("sessionId", frame.session_id)
     if frame.skill_id != ROOT_SKILL_ID:
         recent_conversation = _recent_conversation_for_runtime(context)
         if recent_conversation:
@@ -943,6 +950,10 @@ def _prepare_root_runtime_memory_for_turn(
         save_to_root_frame(frame, memory)
         _runtime.save_frame(frame)
     _install_runtime_memory_checkpoint(
+        runtime_context,
+        root_frame_id=frame.frame_id,
+    )
+    _install_runtime_memory_markers(
         runtime_context,
         root_frame_id=frame.frame_id,
     )
@@ -1089,9 +1100,50 @@ def _install_runtime_memory_checkpoint(
     runtime_context["_runtime_memory_checkpoint"] = checkpoint
 
 
+def _install_runtime_memory_markers(
+    runtime_context: dict[str, Any],
+    *,
+    root_frame_id: str,
+) -> None:
+    def mark_finalizing() -> None:
+        _update_runtime_memory_loop_state(root_frame_id, "FINALIZING")
+
+    def mark_running() -> None:
+        _update_runtime_memory_loop_state(root_frame_id, "RUNNING")
+
+    runtime_context["_runtime_memory_mark_finalizing"] = mark_finalizing
+    runtime_context["_runtime_memory_mark_running"] = mark_running
+
+
+def _update_runtime_memory_loop_state(root_frame_id: str, status: str) -> None:
+    frame = _runtime.get_frame(root_frame_id)
+    if frame is None:
+        return
+    context_id = _context_id_for_frame(frame)
+    with context_state_lock(context_id):
+        refreshed = _runtime.get_frame(root_frame_id)
+        if refreshed is None:
+            return
+        memory = load_from_root_frame(refreshed)
+        updated = (
+            memory.mark_finalizing()
+            if status == "FINALIZING"
+            else memory.mark_running()
+        )
+        if not updated:
+            return
+        save_to_root_frame(refreshed, memory)
+        _runtime.save_frame(refreshed)
+
+
 def _select_active_root_frame_for_context(context_id: str) -> Any | None:
     candidates = list(_runtime.get_frames_by_conversation(context_id))
-    candidates.extend(_journal.load_by_conversation(context_id))
+    root_frame = _journal.load_root_by_conversation(
+        context_id,
+        root_skill_id=ROOT_SKILL_ID,
+    )
+    if root_frame is not None:
+        candidates.append(root_frame)
     active_statuses = {
         FrameStatus.RUNNING,
         FrameStatus.WAITING_CHILD,

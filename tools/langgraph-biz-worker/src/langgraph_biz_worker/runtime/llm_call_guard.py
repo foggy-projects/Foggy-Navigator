@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from ..config import settings
 from ..models import QueryEvent
+from .llm_submission_log import record_llm_submission
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,15 @@ def invoke_chat_model(
         release_slot = _ReleaseOnce(semaphore.release)
 
         try:
+            record_llm_submission(
+                model,
+                messages,
+                context,
+                operation=operation,
+                task_id=task_id,
+                frame_id=frame_id,
+                attempt=attempt,
+            )
             result = _call_with_timeout(
                 lambda: model.invoke(messages),
                 timeout_seconds=request_timeout,
