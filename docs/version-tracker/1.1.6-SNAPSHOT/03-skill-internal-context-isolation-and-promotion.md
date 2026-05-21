@@ -282,10 +282,12 @@ Skill 内部完整过程可以保留在 frame/report/log 中，不受 Parent run
 `AWAITING_USER` 的默认路由是确定性接回当前 focus stack 的 deepest leaf frame。用户中止、TIMEOUT、ERROR 后只要 focus leaf 可恢复，下一条普通用户消息也遵循同一规则。child 必须提供退出机制：
 
 1. 如果用户明确表示“取消”“停止”“换个任务”“先别做这个”等，child Skill 应识别为退出或改题意图。
-2. child 不应继续要求用户补齐原任务参数，而应调用 frame 退出/终止工具，返回受控终止结果，例如 `skill_terminated_by_user` / `abandoned` / `handoff_to_parent`。
-3. Parent 收到该结果后，应清理 active focus / pending awaiting child，并按用户新意图决定结束、切换任务或重新进入 Root 判断。
-4. 如果 child 无法判断用户是在补充信息还是取消任务，应以澄清问题收口，不应继续盲目推进有副作用的动作。
-5. 该退出机制属于 Skill system contract，不能依赖 Java `recentConversation` 或 Root LLM 先行拦截。
+2. child 不应继续要求用户补齐原任务参数，而应调用 `handoff_to_parent`，返回受控交还结果。
+3. `handoff_to_parent` 是 child-only runtime 控制工具：它将当前 child frame 标记为 `COMPLETED`，输出 `status=HANDOFF_TO_PARENT`，并复用 `complete_child_and_resume_parent(...)` 的 close/promote/unwind 链路。
+4. `requires_parent_synthesis=false` 表示只需要向用户确认取消或回到主对话；`requires_parent_synthesis=true` 表示 Parent/Root 需要重新判断或处理无关新任务。
+5. Parent 收到该结果后，应清理 active focus / pending awaiting child，并按用户新意图决定结束、切换任务或重新进入 Root 判断。
+6. 如果 child 无法判断用户是在补充信息还是取消任务，应以澄清问题收口，不应继续盲目推进有副作用的动作。
+7. 该退出机制属于 Skill system contract，不能依赖 Java `recentConversation` 或 Root LLM 先行拦截。
 
 当 Skill 进入 `AWAITING_APPROVAL`：
 
@@ -324,7 +326,7 @@ Skill 正常完成后，下一轮普通对话上下文的可见投影见 [04-run
 3. Parent root_context_summary 的字段边界与大小上限。
 4. Parent report 是只记录 child refs/digest，还是复制 child report 摘要，需要进一步明确。
 5. Skill report/log 完整证据的读取 API 与按需摘要策略。
-6. `AWAITING_USER` 的用户取消/换题 escape hatch，需要在 child Skill contract 与 active focus 清理逻辑中固化。
+6. `AWAITING_USER` 的用户取消/换题 escape hatch 已通过 child-only `handoff_to_parent` 固化；后续仍需补真实上游 smoke。
 7. Nested Skill 的恢复以 focus stack 为准；`active_focus_frame_id` / `recoverable_focus_frame_id` 只作为 leaf 快捷索引，恢复路由必须能从 `active_focus_stack` / `recoverable_focus_stack` 定位 deepest leaf。
 
 ## 初步验收标准
@@ -344,14 +346,18 @@ Skill 正常完成后，下一轮普通对话上下文的可见投影见 [04-run
 
 ### Development Progress
 
-- status: design-updated
+- status: implemented
 - 已补充当前 BizWorker Skill 实现快照，包括 `AWAITING_USER` 自动恢复、child runtime context 构造、completion promoted result 写回、report ref/digest 证据链。
 - 已记录后续实现收口点：child runtime context 白名单过滤、Java recentConversation 解耦、Parent summary 字段边界和测试覆盖。
+- 2026-05-21: 已实现 `handoff_to_parent` child-only runtime 控制工具。用户取消/停止/换题/回主对话时，child 可受控完成并交还 Parent；简单取消可作为 direct result 返回，需父级重新判断时通过 `requires_parent_synthesis=true` 触发 parent/root synthesis。
 
 ### Testing Progress
 
-- status: not-run
-- 本次未改代码，未运行测试。
+- status: passed
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_llm_skill_agent.py::test_llm_agent_child_can_handoff_to_parent_without_business_output_validation tests/test_llm_skill_agent.py::test_llm_agent_persistent_root_exposes_shelve_interrupted_frame_tool -q`
+  - result: `2 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_awaiting_child_can_handoff_cancel_to_parent -q`
+  - result: `1 passed`
 
 ### Experience Progress
 

@@ -278,6 +278,7 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 9. runtime message event JSONL 能记录同一 frame 的初始 messages、assistant response、assistant tool_call、tool_result 和 checkpoint。
 10. 精确 `current_time` 不进入 `system` message；仅时区或业务日期存在时，不生成 `human` 尾部精确时间块。
 11. nested leaf 完成后的 parent continuation submission 能看到“刚完成的子技能提升结果”，且该信息只用于当前 parent 续跑，不污染下一轮普通 runtime-visible conversation。
+12. child frame 的 system context 包含“子技能退出策略”；persistent root 不暴露 `handoff_to_parent`，child frame 暴露 `handoff_to_parent`。
 
 ## Progress Tracking
 
@@ -296,6 +297,7 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 - 2026-05-21: 新增 runtime message event JSONL 写入，记录同一 frame 的 provider 协议消息事件；`AWAITING_USER` 与 recoverable child interruption 恢复已接入同一日志 reader，按 `frameId` 找最新事件文件并重建 provider 协议 messages。
 - 2026-05-21: nested leaf 正常完成后，parent continuation 已通过 system context 接收“刚完成的子技能提升结果”，并继续逐层向 Root unwind；`llm-submissions` 会分别保留 leaf 与 parent 的真实提交 body。
 - 2026-05-21: scripted E2E 已补充 `llm-submissions` 与 `runtime-message-events` 对账断言，覆盖普通多轮、BusinessFunction tool protocol、`AWAITING_USER` child resume、nested completion unwind。
+- 2026-05-21: child frame system context 新增“子技能退出策略”，并通过 `handoff_to_parent` 支持取消/停止/换题/回主对话；persistent root 工具列表不暴露该 child-only 工具。
 
 ### Testing
 
@@ -310,6 +312,8 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
   - result: `1 passed`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -q`
   - result: `23 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_awaiting_child_can_handoff_cancel_to_parent -q`
+  - result: `1 passed`
 
 ### Experience
 

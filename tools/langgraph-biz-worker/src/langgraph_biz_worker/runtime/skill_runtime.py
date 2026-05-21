@@ -636,6 +636,84 @@ class SkillRuntime:
         logger.info("Frame %s awaiting user input", frame_id)
         return ValidationResult(ok=True)
 
+    def handoff_to_parent(
+        self,
+        frame_id: str,
+        summary: str,
+        reason: str,
+        intent_resolution: str,
+        parent_instruction: str | None = None,
+        requires_parent_synthesis: bool | None = None,
+        structured_output: dict[str, Any] | None = None,
+        artifact_refs: list[str] | None = None,
+        evidence_refs: list[str] | None = None,
+    ) -> ValidationResult:
+        """Complete a child frame as a controlled handoff to its parent.
+
+        This is an escape hatch for ``AWAITING_USER`` / recoverable child
+        resumes.  It is a runtime control result, not the skill's ordinary
+        business output, so it intentionally bypasses the child manifest's
+        output schema while still using the normal COMPLETED -> close/promote
+        path.
+        """
+        frame = self._get_frame(frame_id)
+        if frame.status != FrameStatus.RUNNING:
+            raise IllegalStateTransition(
+                f"handoff_to_parent requires RUNNING, got {frame.status.value}"
+            )
+        if not frame.parent_frame_id:
+            return ValidationResult(
+                ok=False,
+                errors=["handoff_to_parent requires a parent frame"],
+            )
+
+        summary = str(summary or "").strip()
+        if not summary:
+            return ValidationResult(ok=False, errors=["summary is required"])
+
+        normalized_reason = str(reason or "OTHER").strip().upper() or "OTHER"
+        normalized_intent = (
+            str(intent_resolution or "RETURN_TO_PARENT").strip().upper()
+            or "RETURN_TO_PARENT"
+        )
+        if requires_parent_synthesis is None:
+            requires_parent_synthesis = normalized_intent in {
+                "START_UNRELATED_NEW_TASK",
+                "ASK_PARENT_TO_DECIDE",
+            }
+
+        payload = dict(structured_output or {})
+        payload["status"] = "HANDOFF_TO_PARENT"
+        payload["handoff_to_parent"] = True
+        payload["handoff_reason"] = normalized_reason
+        payload["intent_resolution"] = normalized_intent
+        payload["requires_parent_synthesis"] = bool(requires_parent_synthesis)
+        payload["message"] = summary
+        if parent_instruction:
+            payload["parent_instruction"] = str(parent_instruction).strip()
+
+        now = datetime.now(timezone.utc).isoformat()
+        frame.result_summary = summary
+        frame.output = payload
+        if artifact_refs:
+            frame.artifact_refs = artifact_refs
+        if evidence_refs:
+            frame.evidence_refs = evidence_refs
+        frame.submit_attempts += 1
+        frame.private_working_state["handoff_to_parent"] = {
+            "reason": normalized_reason,
+            "intent_resolution": normalized_intent,
+            "requires_parent_synthesis": bool(requires_parent_synthesis),
+            "parent_instruction": parent_instruction or "",
+            "submitted_at": now,
+        }
+        self._transition(frame, FrameStatus.COMPLETED)
+        frame.ended_at = now
+        self._save(frame)
+        self._generate_frame_report(frame)
+        logger.info("Frame %s handed off to parent", frame_id)
+        return ValidationResult(ok=True)
+
     def submit_persistent_turn_result(
         self,
         frame_id: str,

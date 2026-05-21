@@ -377,6 +377,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 2026-05-21: 已完成 nested focus completion unwind。恢复 deepest leaf 后，如果 leaf 正常完成，BizWorker 会逐层 close/promote/resume parent；parent LLM submission 的 system context 会包含“刚完成的子技能提升结果”，直到回到 Root 后直接返回 promoted result 或执行 Root synthesis。
 - 2026-05-21: 已补充 scripted E2E log parity 断言。普通多轮、BusinessFunction tool protocol、`AWAITING_USER` child resume、nested completion unwind 现在会同时校验 `llm-submissions` 与 `runtime-message-events`。详见 [10-runtime-context-e2e-matrix-and-log-parity.md](./10-runtime-context-e2e-matrix-and-log-parity.md)。
 - 2026-05-21: scripted E2E log parity 已扩展到 nested recoverable leaf direct resume 与 interrupted child resume，覆盖 deepest leaf 直达恢复不触发 Root LLM、child 恢复完成后 Root synthesis 的 event JSONL 对账。
+- 2026-05-21: 已实现 child-only `handoff_to_parent`。`AWAITING_USER` 或 recoverable leaf 直达恢复时，用户取消/停止/换题可由当前 child LLM 受控退出；简单取消可 direct result 返回，需父级重新判断时可设置 `requires_parent_synthesis=true`。
 
 ### Testing
 
@@ -407,6 +408,10 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
   - result: `1 passed`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_llm_submission_log_matches_root_recent_conversation tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_llm_submission_log_captures_awaiting_child_resume_protocol tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_llm_submission_log_captures_business_function_tool_protocol tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_nested_focus_completion_unwinds_to_parent_result -q`
   - result: `4 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_llm_skill_agent.py::test_llm_agent_child_can_handoff_to_parent_without_business_output_validation tests/test_llm_skill_agent.py::test_llm_agent_persistent_root_exposes_shelve_interrupted_frame_tool -q`
+  - result: `2 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_awaiting_child_can_handoff_cancel_to_parent -q`
+  - result: `1 passed`
 
 ### Experience
 
@@ -415,6 +420,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 已通过单元/边界测试验证 Skill 投影、non-recoverable error projection、执行中追加消息入队、checkpoint 插入、idle / closing 阶段 retryable busy、lazy compaction、Java recentConversation 默认退场。
 - 已通过 scripted E2E 验证 deepest nested leaf 从 recoverable interruption 恢复后，leaf 完成结果会继续交给 parent LLM，parent 再完成并向 Root 提升结果；对应 `llm-submissions` 可复盘 leaf 与 parent 两次真实提交。
 - 已通过 scripted E2E 验证关键 runtime context 场景的 `llm-submissions` 与 `runtime-message-events` 对账，包括普通多轮、业务函数工具协议、等待用户输入恢复和 nested completion unwind。
+- 已通过 scripted E2E 验证 `AWAITING_USER` child 恢复后，用户取消会调用 `handoff_to_parent`，不重新打开同一业务 skill，且 Root active focus 被清理。
 - 真实前端长会话与 TMS 工单链路仍建议在修复上游 `upstream_ref` 后做一次联调验收。
 
 ## Implementation Quality / Acceptance

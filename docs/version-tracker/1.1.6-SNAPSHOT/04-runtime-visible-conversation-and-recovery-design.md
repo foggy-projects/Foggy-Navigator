@@ -347,7 +347,15 @@ A1 = Parent 基于 S1.promoted_result 生成的最终回复
 
 协议消息上下文从 `runtime-message-events/<taskId>_<frameId>.jsonl` 恢复。`AWAITING_USER` 恢复不是重新拼一套 child prompt 逻辑，而是在同一套事件源上选择“该 frame 已完成到等待用户输入前”的恢复点，再追加当前用户回复 `U2`。
 
-确定性恢复仍必须保留 escape hatch：如果 `U2` 明确表示取消、停止、换题或放弃，child Skill 应识别该意图并通过 frame 退出/终止工具返回受控终止或交还 Parent 的结果，而不是继续要求用户补齐原任务参数。该判断属于当前 leaf frame 的 LLM 语义职责，不依赖 Root LLM 预先拦截。
+确定性恢复仍必须保留 escape hatch：如果 `U2` 明确表示取消、停止、换题或放弃，child Skill 应识别该意图并调用 `handoff_to_parent`，而不是继续要求用户补齐原任务参数。该判断属于当前 leaf frame 的 LLM 语义职责，不依赖 Root LLM 预先拦截。
+
+`handoff_to_parent` 的运行时语义：
+
+1. 仅 child frame 可用，persistent root 不暴露该工具。
+2. 调用成功后，当前 child frame 进入 `COMPLETED`，输出 `status=HANDOFF_TO_PARENT`、`handoff_reason`、`intent_resolution` 和 `requires_parent_synthesis`。
+3. Runtime 继续使用 `complete_child_and_resume_parent(...)` 关闭 child、提升结果、清理 active focus / pending child，并恢复 Parent。
+4. `requires_parent_synthesis=false` 时，Root 可以把 handoff summary 作为本回合 direct result 返回给用户。
+5. `requires_parent_synthesis=true` 时，Root/Parent 继续执行 synthesis，用 `parent_instruction` 和 promoted result 重新判断后续动作。
 
 不应默认看到：
 
@@ -444,8 +452,8 @@ Root fallback 场景才需要判断：
 
 | 场景 | 是否确定接回 child | 是否需要 Root 判断意图 | 进入 prompt 的形态 |
 | --- | --- | --- | --- |
-| `AWAITING_USER` | 是 | 否，除非用户明确取消/改题由 child 识别后交还 Parent | runtime message events + `_awaiting_user_input` + 当前用户回复 |
-| recoverable child interruption | 是，默认直达 deepest leaf | 否，除非没有可恢复 leaf 或 leaf 交还 Parent | runtime message events 或 summary fallback + `_runtime_protocol_recovery` |
+| `AWAITING_USER` | 是 | 否，除非用户明确取消/改题由 child 调用 `handoff_to_parent` | runtime message events + `_awaiting_user_input` + 当前用户回复 |
+| recoverable child interruption | 是，默认直达 deepest leaf | 否，除非没有可恢复 leaf 或 leaf 调用 `handoff_to_parent` | runtime message events 或 summary fallback + `_runtime_protocol_recovery` |
 | normal Skill completion | 否 | 不需要恢复 | visible turns + promoted metadata |
 
 ## Prompt 组装目标顺序
@@ -580,6 +588,7 @@ runtime/
 - status: implemented
 - 已完成 `runtimeVisibleConversation`、tool call 可见性、Skill 完成、`AWAITING_USER`、recoverable interruption 的统一设计落档。
 - 已实现 nested focus completion unwind：deepest leaf 完成后逐层 close/promote/resume parent，直到 Root direct final 或 Root synthesis。
+- 已实现 child-only `handoff_to_parent`：`AWAITING_USER` 或 recoverable leaf 直达恢复时，用户取消/停止/换题可由当前 leaf LLM 受控交还 Parent，并清理 active focus。
 
 ### Testing Progress
 
@@ -587,6 +596,7 @@ runtime/
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -q`
   - result: `23 passed`
 - 新增覆盖：`test_scripted_nested_focus_completion_unwinds_to_parent_result`，验证 nested leaf 完成后 parent frame 会继续执行、提交给 LLM 的 parent system context 包含刚完成的子技能提升结果，Root 最终提交 direct result。
+- 新增覆盖：`test_scripted_awaiting_child_can_handoff_cancel_to_parent`，验证 awaiting child 恢复后用户取消时不会重新调用 `invoke_business_skill`，child 调用 `handoff_to_parent`，Root active focus 被清理，runtime event JSONL 记录 `handoff_to_parent` 与 `frame_completed`。
 
 ### Experience Progress
 

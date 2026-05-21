@@ -26,15 +26,8 @@ from .artifact_store import ArtifactStore
 from .llm_call_guard import invoke_chat_model
 from .llm_agent_prompts import (
     _active_plan_context,
-    _local_timezone_name,
-    _month_range_for,
     model_visible_context,
-    _parse_runtime_date,
-    _parse_runtime_datetime,
     _recoverable_interruption_context,
-    _runtime_attachments,
-    _runtime_context_str,
-    _runtime_time_context,
 )
 from .llm_message_builder import build_initial_llm_messages
 from .llm_tool_call_codec import (
@@ -42,48 +35,32 @@ from .llm_tool_call_codec import (
     _execution_report_payload_from_frame,
     _execution_report_payload_from_result,
     _extract_tool_calls,
-    _normalize_openai_tool_call,
-    _normalize_tool_call,
     _safe_content,
     _safe_tool_call_args,
     _scrub_create_artifact_content,
 )
 from .llm_child_recovery import (
-    _context_visibility_for_child_manifest,
     _invoke_business_skill_tool,
-    _normalize_context_visibility,
-    _record_parent_child_recoverable_interruption,
-    _resume_parent_if_waiting,
     _resume_recoverable_child_skill_tool,
-    _runtime_context_for_child_skill,
 )
 from .llm_business_function_adapter import (
     _business_function_approval_summary,
     _business_function_result_is_suspended,
     _business_function_suspend_id,
     _business_function_timeout_at,
-    _looks_like_business_function_id,
-    _split_business_function_tool_name,
 )
 from .llm_tool_dispatcher import (
-    _PROGRESS_EVENT_SINK_KEY,
     _TOOL_UNHANDLED,
     LlmToolDispatchContext,
     LlmToolDispatcher,
     _append_tool_audit,
-    _dispatch_file_tool,
-    _dispatch_public_resource_tool,
     _emit_progress_event,
     _runtime_client_app_id,
-    _runtime_task_scoped_token,
     _tool_function_id,
 )
 from .llm_tool_schemas import (
-    _GLOBAL_TOOL_NAMES,
-    _KNOWN_TOOL_SCHEMAS,
     _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES,
     _bind_tools,
-    _dedupe_tool_specs,
     _tool_specs,
 )
 from .runtime_message_event_log import (
@@ -677,6 +654,35 @@ class LlmSkillAgent:
                 "structured_output": frame.output if frame else None,
             }
 
+        if name == "handoff_to_parent":
+            if persistent_frame:
+                return {"ok": False, "error": "handoff_to_parent is only available on child frames"}
+            structured_output = args.get("structured_output")
+            if not isinstance(structured_output, dict):
+                structured_output = {}
+            requires_parent_synthesis = args.get("requires_parent_synthesis")
+            if not isinstance(requires_parent_synthesis, bool):
+                requires_parent_synthesis = None
+            validation = self._runtime.handoff_to_parent(
+                frame_id=frame_id,
+                summary=args.get("summary", ""),
+                reason=args.get("reason") or "OTHER",
+                intent_resolution=args.get("intent_resolution") or "RETURN_TO_PARENT",
+                parent_instruction=args.get("parent_instruction"),
+                requires_parent_synthesis=requires_parent_synthesis,
+                structured_output=structured_output,
+                artifact_refs=args.get("artifact_refs"),
+                evidence_refs=args.get("evidence_refs"),
+            )
+            frame = self._runtime.get_frame(frame_id)
+            return {
+                "ok": validation.ok,
+                "errors": validation.errors,
+                "handoff_to_parent": validation.ok,
+                "structured_output": frame.output if frame else structured_output,
+                **_execution_report_payload_from_frame(frame),
+            }
+
         if name == "submit_skill_result":
             structured_output = args.get("structured_output") or {}
             summary = args.get("summary", "")
@@ -927,7 +933,7 @@ def _has_runtime_memory_terminal_tool_call(tool_calls: list[dict[str, Any]]) -> 
 
 
 def _is_runtime_memory_terminal_tool_call(call: dict[str, Any]) -> bool:
-    return call.get("name") in {"submit_skill_result", "shelve_interrupted_frame"}
+    return call.get("name") in {"submit_skill_result", "shelve_interrupted_frame", "handoff_to_parent"}
 
 
 def _mark_runtime_memory_finalizing(runtime_context: dict[str, Any] | None) -> None:

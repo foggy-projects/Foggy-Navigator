@@ -1105,6 +1105,7 @@ def test_llm_agent_persistent_root_exposes_shelve_interrupted_frame_tool():
     frame = runtime.get_frame(frame_id)
     assert "shelve_interrupted_frame" in bound_tool_names
     assert "resume_recoverable_child_skill" in bound_tool_names
+    assert "handoff_to_parent" not in bound_tool_names
     assert events[-1].tool_name == "shelve_interrupted_frame"
     assert frame.status == FrameStatus.RUNNING
     assert frame.result_summary == "Previous vehicle task was shelved."
@@ -1330,6 +1331,76 @@ def test_llm_agent_non_persistent_frame_does_not_expose_shelve_tool():
 
     bound_tool_names = {tool["function"]["name"] for tool in model.bound_tools}
     assert "shelve_interrupted_frame" not in bound_tool_names
+
+
+def test_llm_agent_child_can_handoff_to_parent_without_business_output_validation():
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="system.root",
+        name="system.root",
+        description="Persistent root skill.",
+        output_schema={"type": "object"},
+        allowed_tools=["invoke_business_skill", "submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+        visibility="builtin",
+        context_visibility="passthrough",
+    ))
+    registry.register(SkillManifest(
+        id="strict_child",
+        name="strict_child",
+        description="Strict child skill.",
+        output_schema={
+            "type": "object",
+            "required": ["business_result"],
+            "properties": {"business_result": {"type": "string"}},
+        },
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output", "evidence_refs"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    root_frame_id = runtime.invoke_skill(
+        task_id="task_child_handoff_001",
+        skill_id="system.root",
+        conversation_id="bctx_20260520_3c_sess_child_handoff",
+        session_id="sess_child_handoff",
+    )
+    child_frame_id = runtime.invoke_child_skill(
+        root_frame_id,
+        "strict_child",
+        {"request": "collect ticket fields"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_handoff",
+            "name": "handoff_to_parent",
+            "args": {
+                "summary": "已取消当前子任务，回到主对话。",
+                "reason": "USER_CANCELLED",
+                "intent_resolution": "RETURN_TO_PARENT",
+                "requires_parent_synthesis": False,
+                "structured_output": {"note": "missing strict business_result on purpose"},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_child_handoff_002",
+        frame_id=child_frame_id,
+        prompt="取消这个任务，回到主对话",
+    )
+
+    child = runtime.get_frame(child_frame_id)
+    bound_tool_names = {tool["function"]["name"] for tool in model.bound_tools}
+    assert "handoff_to_parent" in bound_tool_names
+    assert "shelve_interrupted_frame" not in bound_tool_names
+    assert child.status == FrameStatus.COMPLETED
+    assert child.result_summary == "已取消当前子任务，回到主对话。"
+    assert child.output["status"] == "HANDOFF_TO_PARENT"
+    assert child.output["handoff_to_parent"] is True
+    assert child.output["requires_parent_synthesis"] is False
+    assert child.output["intent_resolution"] == "RETURN_TO_PARENT"
+    assert events[-1].tool_name == "handoff_to_parent"
+    assert json.loads(events[-1].content)["handoff_to_parent"] is True
 
 
 def test_llm_agent_persistent_frame_model_error_records_recoverable_interruption():

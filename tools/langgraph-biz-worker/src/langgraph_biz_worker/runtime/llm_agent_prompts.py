@@ -140,6 +140,7 @@ def _build_runtime_system_context_prompt(
         _build_nested_child_completed_prompt(runtime_context),
         _build_active_plan_prompt(runtime_context),
         _build_root_planning_policy_prompt(runtime_context, skill_id),
+        _build_child_handoff_policy_prompt(runtime_context, skill_id),
         _build_frame_result_contract_prompt(runtime_context),
         _build_model_visible_skill_input_prompt(business_context),
         _build_attachment_context_prompt(_runtime_attachments(runtime_context)),
@@ -456,6 +457,25 @@ def _build_root_planning_policy_prompt(
         "在 submit_skill_result.structured_output.active_plan 中维护 active_plan。"
         "计划应简洁、结构化，并随工作推进更新；这是未来回合使用的工作状态，"
         "不是面向用户的叙述。"
+    )
+
+
+def _build_child_handoff_policy_prompt(
+    runtime_context: dict[str, Any] | None,
+    skill_id: str,
+) -> str:
+    if skill_id == _SYSTEM_ROOT_SKILL_ID:
+        return ""
+    if runtime_context and runtime_context.get("_persistent_frame") is True:
+        return ""
+    return (
+        "子技能退出策略: 如果当前用户消息明确表示取消、停止当前任务、换个问题、"
+        "回到主对话，或当前请求明显不属于本子技能职责，不要继续要求用户补齐原任务参数。"
+        "应调用 handoff_to_parent 受控交还父级。"
+        "仅确认取消或回到主对话时，将 requires_parent_synthesis 设为 false；"
+        "用户提出无关新任务、需要父级重新判断，或你无法独立处理时，将 "
+        "requires_parent_synthesis 设为 true，并在 parent_instruction 中写清父级需要处理的事项。"
+        "如果用户只是在补充、纠正或继续当前任务，则不要退出，继续当前 frame。"
     )
 
 

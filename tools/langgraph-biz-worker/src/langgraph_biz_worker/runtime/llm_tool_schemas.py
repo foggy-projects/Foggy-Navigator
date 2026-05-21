@@ -35,6 +35,8 @@ def _tool_specs(
             specs.append(_KNOWN_TOOL_SCHEMAS["resume_recoverable_child_skill"])
         if _tool_enabled("shelve_interrupted_frame", enabled_tool_names):
             specs.append(_KNOWN_TOOL_SCHEMAS["shelve_interrupted_frame"])
+    elif _tool_enabled("handoff_to_parent", enabled_tool_names):
+        specs.append(_KNOWN_TOOL_SCHEMAS["handoff_to_parent"])
     return _dedupe_tool_specs(specs)
 
 
@@ -69,6 +71,7 @@ _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES = {
 
 _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     "submit_skill_result",
+    "handoff_to_parent",
     "resume_recoverable_child_skill",
     "shelve_interrupted_frame",
 })
@@ -413,6 +416,70 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "evidence_refs": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["summary", "structured_output"],
+            },
+        },
+    },
+    "handoff_to_parent": {
+        "type": "function",
+        "function": {
+            "name": "handoff_to_parent",
+            "description": (
+                "Child-frame only tool. Exit the current child skill without "
+                "continuing the old task when the user clearly cancels, stops, "
+                "switches topic, or asks to return to the parent conversation. "
+                "Use requires_parent_synthesis=true when the parent/root agent "
+                "must decide or handle a new unrelated request; otherwise the "
+                "handoff summary can be returned directly to the user."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "User-facing concise summary of why this child frame is exiting.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "enum": [
+                            "USER_CANCELLED",
+                            "USER_STOPPED",
+                            "CHANGE_TOPIC",
+                            "RETURN_TO_PARENT",
+                            "UNSUPPORTED_BY_CHILD",
+                            "OTHER",
+                        ],
+                    },
+                    "intent_resolution": {
+                        "type": "string",
+                        "enum": [
+                            "ABANDON_CURRENT_FRAME",
+                            "START_UNRELATED_NEW_TASK",
+                            "RETURN_TO_PARENT",
+                            "ASK_PARENT_TO_DECIDE",
+                        ],
+                    },
+                    "parent_instruction": {
+                        "type": "string",
+                        "description": (
+                            "Optional instruction for the parent/root agent when "
+                            "requires_parent_synthesis is true."
+                        ),
+                    },
+                    "requires_parent_synthesis": {
+                        "type": "boolean",
+                        "description": (
+                            "Set true when the parent/root agent must synthesize "
+                            "or handle a new task; set false for a simple cancel/return acknowledgement."
+                        ),
+                    },
+                    "structured_output": {
+                        "type": "object",
+                        "description": "Optional child-visible business state to promote with the handoff.",
+                    },
+                    "artifact_refs": {"type": "array", "items": {"type": "string"}},
+                    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["summary", "reason", "intent_resolution"],
             },
         },
     },
