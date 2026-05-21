@@ -96,6 +96,31 @@ deepest leaf 完成后，parent continuation 不是普通下一轮 semantic conv
 
 这些 helper 用于把 `runtime-message-events` 和 `llm-submissions` 放在同一测试中对账。
 
+## Live Smoke 对账工具
+
+已新增：
+
+```text
+tools/langgraph-biz-worker/scripts/live_upstream_runtime_context_smoke.py
+```
+
+该脚本提供两类入口：
+
+1. `openapi-live`：通过 Navigator OpenAPI 发送两轮同 `contextId` 请求，并抓取 task/session messages。
+2. `validate-only`：只校验既有 BizWorker session 目录和可选的上游 messages JSON。
+
+校验范围包括：
+
+- `session.json.rootFrameId` 是否能直接定位 `frames/<rootFrameId>.json`。
+- `logs/llm-submissions/*.json` 是否存在并包含真实 `body.messages`。
+- `logs/runtime-message-events/*.jsonl` 是否存在。
+- 附件引用是否能在 LLM body、task messages 或 session messages 中复盘。
+- 重开会话消息是否泄漏 raw tool chatter。
+- LLM body 是否仍暴露内部兼容名 `system.root`。
+- recoverable 验收时是否存在 `suspended` / `frame_completed` checkpoint，并能找到指定 tool call。
+
+详细命令见 [11-live-upstream-runtime-context-smoke.md](./11-live-upstream-runtime-context-smoke.md)。
+
 ## 当前测试记录
 
 ```powershell
@@ -207,7 +232,40 @@ cd tools/langgraph-biz-worker
 602 passed, 6 skipped, 11 warnings
 ```
 
+```powershell
+cd tools/langgraph-biz-worker
+.\.venv\Scripts\ruff.exe check scripts/live_upstream_runtime_context_smoke.py tests/test_live_upstream_runtime_context_smoke.py
+```
+
+结果：
+
+```text
+All checks passed!
+```
+
+```powershell
+cd tools/langgraph-biz-worker
+.\.venv\Scripts\python.exe -m pytest tests/test_live_upstream_runtime_context_smoke.py -q
+```
+
+结果：
+
+```text
+4 passed
+```
+
+```powershell
+cd tools/langgraph-biz-worker
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+结果：
+
+```text
+606 passed, 6 skipped, 11 warnings
+```
+
 ## 后续缺口
 
-1. 引入真实上游联调 smoke 脚本，覆盖 TMS 工单、附件、简洁模式重开会话。当前 captured smoke replay 已覆盖长链路复盘，但仍不是 live upstream 联调。
-2. 真实联调验收仍需覆盖 recoverable ERROR/TIMEOUT 后 leaf handoff；scripted E2E 已覆盖协议与日志对账。
+1. 真实上游联调 smoke 脚本已提供，仍需手动用可用 Navigator 地址、ClientApp 凭证和附件 URL 跑一次 live 验收，并把 `summary.json` 作为验收证据。
+2. recoverable ERROR/TIMEOUT 已有 scripted E2E 和 validate-only 对账入口；真实 provider timeout / error 场景仍建议在手动验收中补一条证据。
