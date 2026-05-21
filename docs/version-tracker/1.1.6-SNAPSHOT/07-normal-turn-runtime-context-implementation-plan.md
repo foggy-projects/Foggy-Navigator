@@ -412,6 +412,8 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
   - result: `2 passed`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_awaiting_child_can_handoff_cancel_to_parent -q`
   - result: `1 passed`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_root_skill_real_smoke_fixture -q`
+  - result: `1 passed`
 
 ### Experience
 
@@ -421,6 +423,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 已通过 scripted E2E 验证 deepest nested leaf 从 recoverable interruption 恢复后，leaf 完成结果会继续交给 parent LLM，parent 再完成并向 Root 提升结果；对应 `llm-submissions` 可复盘 leaf 与 parent 两次真实提交。
 - 已通过 scripted E2E 验证关键 runtime context 场景的 `llm-submissions` 与 `runtime-message-events` 对账，包括普通多轮、业务函数工具协议、等待用户输入恢复和 nested completion unwind。
 - 已通过 scripted E2E 验证 `AWAITING_USER` child 恢复后，用户取消会调用 `handoff_to_parent`，不重新打开同一业务 skill，且 Root active focus 被清理。
+- 已通过 captured real smoke replay 验证首轮 root/child 工具链、恢复继续、换题请求的 7 次真实 ChatModel 调用均保存 `llm-submissions`，并能与 root/child runtime message events 对账。
 - 真实前端长会话与 TMS 工单链路仍建议在修复上游 `upstream_ref` 后做一次联调验收。
 
 ## Implementation Quality / Acceptance

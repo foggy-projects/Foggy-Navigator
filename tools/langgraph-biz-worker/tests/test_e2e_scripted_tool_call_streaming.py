@@ -3614,6 +3614,8 @@ async def test_scripted_root_skill_continues_after_user_cancelled_interruption(
         assert register.status_code == 200
 
     monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
     frame_interruption_module.configure(
         root_graph_module.get_runtime(),
         root_graph_module.get_journal(),
@@ -4590,6 +4592,8 @@ async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_serv
         assert register.status_code == 200
 
     monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
     frame_interruption_module.configure(
         root_graph_module.get_runtime(),
         root_graph_module.get_journal(),
@@ -4750,3 +4754,74 @@ async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_serv
     ]
     continued_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:006")
     assert continued_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len(payloads) == 7
+    first_root_payloads = [
+        payload
+        for payload in payloads
+        if (
+            (payload.get("meta") or {}).get("taskId") == first_task_id
+            and (payload.get("meta") or {}).get("skillId") == "conversation.root"
+        )
+    ]
+    first_child_payloads = [
+        payload
+        for payload in payloads
+        if (
+            (payload.get("meta") or {}).get("taskId") == first_task_id
+            and (payload.get("meta") or {}).get("skillId") == "exception_triage"
+        )
+    ]
+    assert len(first_root_payloads) == 2
+    assert len(first_child_payloads) == 3
+    assert _submission_role_sequence(first_root_payloads[0]) == ["system", "human"]
+    assert _submission_role_sequence(first_child_payloads[0]) == ["system", "human"]
+    assert _submission_tool_call_names(first_child_payloads[-1]) == [
+        "mock_get_order",
+        "mock_get_vehicle_status",
+    ]
+    assert _submission_role_sequence(first_root_payloads[-1])[-2:] == ["ai", "tool"]
+    assert _submission_tool_call_names(first_root_payloads[-1]) == ["invoke_business_skill"]
+
+    continued_payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id="conversation.root",
+    )
+    assert _submission_role_sequence(continued_payload)[-1] == "human"
+    assert _submission_texts(continued_payload, "human")[-1] == (
+        f"继续刚才被中断的异常订单处理，沿用已有上下文给出下一步。 next:{trace_id}:006"
+    )
+    assert _submission_tool_call_names(continued_payload) == []
+    assert any(
+        "vehicle_delay" in text
+        for text in _submission_texts(continued_payload, "system")
+    )
+
+    unrelated_payload = _llm_submission_for(
+        payloads,
+        task_id=third_task_id,
+        skill_id="conversation.root",
+    )
+    assert _submission_texts(unrelated_payload, "human")[-1] == (
+        "先不用处理刚才那个异常了。帮我看一个新的异常订单 "
+        f"ORD-REAL-SMOKE-NEW 是否需要人工介入。 next:{trace_id}:012"
+    )
+    assert any(
+        "可恢复焦点栈" in text or "中断" in text
+        for text in _submission_texts(unrelated_payload, "system")
+    )
+
+    root_events = _runtime_message_events(context_id, frame_id=first_root_open.skill_frame_id)
+    child_frame_ids = {
+        event.skill_frame_id
+        for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "exception_triage"
+    }
+    assert child_frame_ids
+    child_events = _runtime_message_events(context_id, frame_id=next(iter(child_frame_ids)))
+    assert "persistent_turn_completed" in _runtime_checkpoints(root_events)
+    assert "frame_completed" in _runtime_checkpoints(child_events)
+    assert "mock_get_order" in _runtime_tool_call_names(child_events)
+    assert "mock_get_vehicle_status" in _runtime_tool_call_names(child_events)
