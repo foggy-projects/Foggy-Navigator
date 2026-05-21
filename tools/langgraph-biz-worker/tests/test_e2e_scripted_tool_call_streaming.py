@@ -3907,6 +3907,241 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
 
 
 @pytest.mark.anyio
+async def test_scripted_nested_focus_completion_unwinds_to_parent_result(
+    monkeypatch,
+    mock_llm_server,
+    tmp_path,
+):
+    """A completed nested focus should resume and close its parent before root result."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-nested-completion-unwind-{run_id}"
+    session_id = f"sess-e2e-nested-completion-unwind-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-nested-completion-unwind-{run_id}"
+    first_task_id = f"task_e2e_nested_completion_unwind_001_{run_id}"
+    second_task_id = f"task_e2e_nested_completion_unwind_002_{run_id}"
+    child_skill_id = f"nested-completion-child-{run_id}"
+    grandchild_skill_id = f"nested-completion-grandchild-{run_id}"
+    second_prompt = f"补充完成信息，请继续处理 next:{trace_id}:001"
+    final_summary = f"嵌套任务已完成 next:{trace_id}:001"
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / f"{child_skill_id}.yaml").write_text(
+        f"""
+id: {child_skill_id}
+name: Nested Completion Parent Skill
+description: Synthesizes a completed nested child result.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+""".strip(),
+        encoding="utf-8",
+    )
+    (manifest_dir / f"{grandchild_skill_id}.yaml").write_text(
+        f"""
+id: {grandchild_skill_id}
+name: Nested Completion Leaf Skill
+description: Finishes the deepest interrupted business frame.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
+    root_graph_module._skill_registry.load()
+    root_graph_module._ensure_system_root_skill()
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-nested-completion-unwind",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": final_summary,
+                                        "structured_output": {
+                                            "status": "FINAL_FOR_USER",
+                                            "message": final_summary,
+                                            "requires_parent_synthesis": False,
+                                            "nested_unwind_done": True,
+                                        },
+                                        "evidence_refs": ["e2e:nested-unwind"],
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
+    frame_interruption_module.configure(
+        root_graph_module.get_runtime(),
+        root_graph_module.get_journal(),
+    )
+    runtime = root_graph_module.get_runtime()
+    root_frame_id = runtime.invoke_skill(
+        task_id=first_task_id,
+        skill_id="system.root",
+        conversation_id=context_id,
+        session_id=session_id,
+        current_task_id=first_task_id,
+        origin_task_id=first_task_id,
+    )
+    child_frame_id = runtime.invoke_child_skill(
+        root_frame_id,
+        child_skill_id,
+        {"order_id": "ORD-NESTED-COMPLETE"},
+    )
+    grandchild_frame_id = runtime.invoke_child_skill(
+        child_frame_id,
+        grandchild_skill_id,
+        {"order_id": "ORD-NESTED-COMPLETE", "step": "leaf"},
+    )
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        interruption_response = await worker_client.post(
+            "/api/v1/frames/interruption",
+            json={
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "context_id": context_id,
+                "reason": "model_timeout",
+                "error": "Model timed out while nested child skill was running",
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": second_prompt,
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert interruption_response.status_code == 200
+    assert interruption_response.json()["status"] == "recorded"
+    assert continued_response.status_code == 200
+    events = _parse_worker_sse(continued_response.text)
+    assert not [event for event in events if event.type == "error"]
+    grandchild_open = next(
+        event for event in events
+        if event.type == "skill_frame_open" and event.skill_id == grandchild_skill_id
+    )
+    parent_resume = next(
+        event for event in events
+        if (
+            event.type == "skill_frame_open"
+            and event.skill_id == child_skill_id
+            and event.skill_frame_id == child_frame_id
+        )
+    )
+    close_ids = [
+        event.skill_frame_id
+        for event in events
+        if event.type == "skill_frame_close"
+    ]
+    result = next(event for event in events if event.type == "result")
+    assert grandchild_open.skill_frame_id == grandchild_frame_id
+    assert grandchild_open.parent_frame_id == child_frame_id
+    assert parent_resume.content == f"Resuming parent frame after child completion: {child_skill_id}"
+    assert close_ids == [grandchild_frame_id, child_frame_id]
+    assert result.content == final_summary
+    assert result.structured_output["nested_unwind_done"] is True
+
+    root = runtime.get_frame(root_frame_id)
+    child = runtime.get_frame(child_frame_id)
+    grandchild = runtime.get_frame(grandchild_frame_id)
+    assert root is not None
+    assert child is not None
+    assert grandchild is not None
+    assert root.status == FrameStatus.RUNNING
+    assert child.status == FrameStatus.COMPLETED
+    assert grandchild.status == FrameStatus.COMPLETED
+    assert "recoverable_focus_frame_id" not in root.private_working_state
+    assert "active_focus_frame_id" not in root.private_working_state
+    assert root.private_working_state["child_results"][child_frame_id]["structured_output"] == {
+        "status": "FINAL_FOR_USER",
+        "message": final_summary,
+        "requires_parent_synthesis": False,
+        "nested_unwind_done": True,
+    }
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:001",
+    ]
+    assert [_record_messages(record, "user") for record in records] == [
+        [second_prompt],
+        [second_prompt],
+    ]
+    parent_system_messages = _record_messages(records[1], "system")
+    assert any("刚完成的子技能提升结果:" in content for content in parent_system_messages)
+    assert any(grandchild_skill_id in content for content in parent_system_messages)
+    assert any(final_summary in content for content in parent_system_messages)
+
+    payloads = _llm_submission_payloads(context_id)
+    leaf_payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id=grandchild_skill_id,
+    )
+    parent_payload = _llm_submission_for(
+        payloads,
+        task_id=second_task_id,
+        skill_id=child_skill_id,
+    )
+    assert _submission_role_sequence(leaf_payload) == ["system", "human"]
+    assert _submission_role_sequence(parent_payload) == ["system", "human"]
+    parent_system_text = "\n".join(_submission_texts(parent_payload, "system"))
+    assert "刚完成的子技能提升结果:" in parent_system_text
+    assert grandchild_skill_id in parent_system_text
+    assert final_summary in parent_system_text
+    assert _submission_texts(parent_payload, "human") == [second_prompt]
+
+
+@pytest.mark.anyio
 async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_server):
     """Replay the accepted smoke trace and avoid duplicate child work on continue."""
     run_id = uuid.uuid4().hex[:8]

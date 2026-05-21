@@ -272,6 +272,25 @@ A1 = Parent 基于 S1.promoted_result 生成的最终回复
 
 `S1` 的 raw structured output 不直接作为 assistant content 展开，只允许以 compact metadata / digest 进入。
 
+### Nested completion unwind
+
+如果恢复的是 focus stack 的 deepest leaf，且该 leaf 在本轮正常完成，BizWorker 不应停在 `NESTED_FOCUS_PARENT_PENDING` 这类中间态。
+
+目标运行路径：
+
+1. close leaf frame，并通过 `complete_child_and_resume_parent(...)` 把 promoted result 写回 immediate parent。
+2. 如果 immediate parent 不是 Root，则用同一条用户消息恢复该 parent frame 的 LLM loop。
+3. parent prompt 通过 system context 注入“刚完成的子技能提升结果”，同时可从 runtime message event log 恢复该 parent frame 既有 provider 协议消息。
+4. parent 如果继续完成，则重复 close / promote / resume，逐层向 Root 回灌。
+5. 到达 Root 后，若 promoted result 已是 direct final，则直接提交 Root persistent turn result；否则 Root 再做 synthesis。
+
+这条路径保证：
+
+1. deepest leaf 的完成结果不会丢在中间 parent。
+2. parent 有机会基于 child promoted result 继续业务决策。
+3. 最终对用户可见的 `A1` 仍只进入 runtime visible conversation 的 assistant semantic turn，不展开 raw child tool trace。
+4. `llm-submissions` 会分别保存 leaf、parent、必要时 Root 的真实提交 body，便于复盘。
+
 ### 证据保留
 
 完整信息保留在：
@@ -518,12 +537,12 @@ runtime/
 2. Skill 正常完成后，下一轮 visible context 是 `U1 -> A1 -> U2`，不是 `U1 -> tool_call -> tool_result -> U2`。
 3. `A1` 可以携带 Skill metadata / digest / refs，但不展开 raw tool result。
 4. `AWAITING_USER` 下一轮消息仍确定性接回原 child Skill frame。
-5. recoverable interruption 下一轮由 Root 先判断 `intent_resolution`。
+5. recoverable interruption 下一轮默认直达 focus stack 的 deepest leaf；只有没有可恢复 leaf，或 leaf 主动交还 Parent 时，才由 Root 判断 `intent_resolution`。
 6. `resume_recoverable_child_skill` 恢复原 child frame，不新建 child。
 7. `shelve_interrupted_frame` 会清理或标记旧 recoverable state，避免污染无关新任务。
 8. `runtimeVisibleConversation` 有 token/条数上限和 compaction 策略。
 9. report/log/frame/journal 仍保留完整执行证据。
-10. 测试覆盖 normal Skill completion、awaiting-user resume、recoverable child resume、abandon/new-task shelving。
+10. 测试覆盖 normal Skill completion、nested completion unwind、awaiting-user resume、recoverable child resume、abandon/new-task shelving。
 
 ## 代码触点候选
 
@@ -558,14 +577,16 @@ runtime/
 
 ### Development Progress
 
-- status: design-recorded
+- status: implemented
 - 已完成 `runtimeVisibleConversation`、tool call 可见性、Skill 完成、`AWAITING_USER`、recoverable interruption 的统一设计落档。
+- 已实现 nested focus completion unwind：deepest leaf 完成后逐层 close/promote/resume parent，直到 Root direct final 或 Root synthesis。
 
 ### Testing Progress
 
-- status: not-run
-- 本次未改代码，未运行测试。
-- 后续开发需要补跨轮 prompt 组装测试、中断恢复测试和 Skill context 过滤测试。
+- status: passed
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -q`
+  - result: `23 passed`
+- 新增覆盖：`test_scripted_nested_focus_completion_unwinds_to_parent_result`，验证 nested leaf 完成后 parent frame 会继续执行、提交给 LLM 的 parent system context 包含刚完成的子技能提升结果，Root 最终提交 direct result。
 
 ### Experience Progress
 

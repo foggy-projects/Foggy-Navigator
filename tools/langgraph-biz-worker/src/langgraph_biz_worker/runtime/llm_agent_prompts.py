@@ -137,6 +137,7 @@ def _build_runtime_system_context_prompt(
         _build_runtime_date_context_prompt(runtime_context),
         _build_recoverable_interruption_prompt(runtime_context),
         _build_awaiting_user_input_prompt(runtime_context),
+        _build_nested_child_completed_prompt(runtime_context),
         _build_active_plan_prompt(runtime_context),
         _build_root_planning_policy_prompt(runtime_context, skill_id),
         _build_frame_result_contract_prompt(runtime_context),
@@ -395,6 +396,22 @@ def _build_awaiting_user_input_prompt(runtime_context: dict[str, Any] | None) ->
         ),
     ]
     return "\n".join(parts)
+
+
+def _build_nested_child_completed_prompt(runtime_context: dict[str, Any] | None) -> str:
+    if not runtime_context:
+        return ""
+    result = runtime_context.get("_nested_child_completed")
+    if not isinstance(result, dict):
+        return ""
+    return "\n".join([
+        "刚完成的子技能提升结果:",
+        json.dumps(model_visible_context(result), ensure_ascii=False, sort_keys=True),
+        (
+            "规则: 这是当前 frame 刚刚等待的子技能结果。继续当前 frame 的业务决策，"
+            "只有在该结果缺少必要字段且用户明确需要排障时，才读取执行报告。"
+        ),
+    ])
 
 
 def _build_frame_result_contract_prompt(runtime_context: dict[str, Any] | None) -> str:

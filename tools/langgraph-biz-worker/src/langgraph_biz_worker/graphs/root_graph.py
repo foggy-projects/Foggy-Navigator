@@ -991,6 +991,38 @@ def _prepare_root_runtime_memory_for_turn(
     return None
 
 
+def _refresh_root_runtime_memory_for_running_turn(
+    frame: Any,
+    *,
+    runtime_context: dict[str, Any],
+    inject_prompt_view: bool = True,
+) -> None:
+    """Expose prompt memory for a root turn that was already opened."""
+    context_id = _context_id_for_frame(frame)
+    with context_state_lock(context_id):
+        refreshed = _runtime.get_frame(frame.frame_id) or frame
+        memory = load_from_root_frame(refreshed)
+        if inject_prompt_view:
+            prompt_view = memory.build_prompt_view()
+            if prompt_view:
+                runtime_context[RUNTIME_VISIBLE_CONVERSATION_KEY] = prompt_view
+            else:
+                runtime_context.pop(RUNTIME_VISIBLE_CONVERSATION_KEY, None)
+        else:
+            runtime_context.pop(RUNTIME_VISIBLE_CONVERSATION_KEY, None)
+        runtime_context["_runtime_context_revision"] = memory.revision
+        save_to_root_frame(refreshed, memory)
+        _runtime.save_frame(refreshed)
+    _install_runtime_memory_checkpoint(
+        runtime_context,
+        root_frame_id=frame.frame_id,
+    )
+    _install_runtime_memory_markers(
+        runtime_context,
+        root_frame_id=frame.frame_id,
+    )
+
+
 def _commit_root_runtime_memory_turn(
     frame: Any,
     *,
@@ -1277,6 +1309,294 @@ def _is_non_recoverable_projection(output: dict[str, Any]) -> bool:
     )
 
 
+def _visible_promoted_child_result(promoted: dict[str, Any]) -> dict[str, Any]:
+    visible: dict[str, Any] = {}
+    skill_id = promoted.get("skill_id")
+    if isinstance(skill_id, str) and skill_id:
+        visible["source_skill"] = skill_id
+    for key in (
+        "result_summary",
+        "structured_output",
+        "artifact_refs",
+        "evidence_refs",
+        "execution_report_ref",
+        "execution_report_digest",
+        "requires_parent_synthesis",
+        "remaining_work",
+    ):
+        value = promoted.get(key)
+        if value not in (None, "", [], {}):
+            visible[key] = value
+    return model_visible_context(visible)
+
+
+def _run_root_synthesis_after_focus_completion(
+    state: RootState,
+    *,
+    root_frame_id: str,
+    prompt: str,
+    account_id: str | None,
+    runtime_context: dict[str, Any],
+    llm_skill_agent: LlmSkillAgent,
+    events: list[QueryEvent],
+) -> list[QueryEvent]:
+    root = _runtime.get_frame(root_frame_id)
+    if root is None:
+        events.append(QueryEvent(
+            type="error",
+            task_id=state["task_id"],
+            skill_frame_id=root_frame_id,
+            error="Root frame not found while synthesizing completed focus result",
+            presentation_hint="root_frame",
+        ))
+        return events
+
+    root_runtime_context = dict(runtime_context)
+    root_context_summary = _runtime.context_summary_for_frame(root_frame_id)
+    if root_context_summary:
+        root_runtime_context["_visible_root_context_summary"] = root_context_summary
+    _refresh_root_runtime_memory_for_running_turn(
+        root,
+        runtime_context=root_runtime_context,
+    )
+    events.extend(llm_skill_agent.run(
+        task_id=state["task_id"],
+        frame_id=root_frame_id,
+        prompt=prompt,
+        account_id=account_id,
+        runtime_context=root_runtime_context,
+        persistent_frame=True,
+    ))
+    return events
+
+
+def _bubble_focus_approval_to_root(
+    *,
+    root_frame_id: str,
+    focus: Any,
+    events: list[QueryEvent],
+    task_id: str,
+) -> list[QueryEvent]:
+    approval_request = getattr(focus, "approval_request", None)
+    if not isinstance(approval_request, dict):
+        _resume_root_if_waiting_for_focus(root_frame_id)
+        events.append(QueryEvent(
+            type="error",
+            task_id=task_id,
+            skill_frame_id=getattr(focus, "frame_id", ""),
+            parent_frame_id=getattr(focus, "parent_frame_id", None),
+            skill_id=getattr(focus, "skill_id", None),
+            error="Child skill is awaiting approval without approval_request",
+        ))
+        return events
+
+    current = focus
+    while getattr(current, "parent_frame_id", None):
+        parent_frame_id = current.parent_frame_id
+        _runtime.mark_child_awaiting_approval(
+            parent_frame_id,
+            current.frame_id,
+            approval_request,
+        )
+        if parent_frame_id == root_frame_id:
+            break
+        refreshed_parent = _runtime.get_frame(parent_frame_id)
+        if refreshed_parent is None:
+            events.append(QueryEvent(
+                type="error",
+                task_id=task_id,
+                skill_frame_id=parent_frame_id,
+                error="Parent frame not found while bubbling approval wait",
+            ))
+            break
+        current = refreshed_parent
+    return events
+
+
+def _run_parent_after_nested_focus_completion(
+    *,
+    state: RootState,
+    parent: Any,
+    child_promoted: dict[str, Any],
+    root_frame_id: str,
+    prompt: str,
+    account_id: str | None,
+    runtime_context: dict[str, Any],
+    llm_skill_agent: LlmSkillAgent,
+    events: list[QueryEvent],
+) -> Any | None:
+    task_id = state["task_id"]
+    manifest = _skill_registry.get_manifest(parent.skill_id)
+    if manifest is None:
+        events.append(QueryEvent(
+            type="error",
+            task_id=task_id,
+            skill_frame_id=parent.frame_id,
+            parent_frame_id=parent.parent_frame_id,
+            skill_id=parent.skill_id,
+            error=f"Skill manifest not found: {parent.skill_id}",
+        ))
+        return None
+
+    events.append(QueryEvent(
+        type="skill_frame_open",
+        task_id=task_id,
+        skill_frame_id=parent.frame_id,
+        parent_frame_id=parent.parent_frame_id or root_frame_id,
+        skill_id=parent.skill_id,
+        content=f"Resuming parent frame after child completion: {parent.skill_id}",
+    ))
+    parent_runtime_context = _runtime_context_for_child_skill(
+        runtime_context,
+        _runtime.context_summary_for_frame(parent.frame_id),
+        manifest,
+    )
+    parent_runtime_context = dict(parent_runtime_context or {})
+    parent_runtime_context["_nested_child_completed"] = _visible_promoted_child_result(child_promoted)
+    parent_runtime_context["_runtime_protocol_recovery"] = {
+        "enabled": True,
+        "frame_id": parent.frame_id,
+        "mode": "CHILD_COMPLETED",
+    }
+    events.extend(llm_skill_agent.run(
+        task_id=task_id,
+        frame_id=parent.frame_id,
+        prompt=prompt,
+        account_id=account_id,
+        runtime_context=parent_runtime_context,
+    ))
+    return _runtime.get_frame(parent.frame_id)
+
+
+def _unwind_completed_focus_to_root(
+    state: RootState,
+    *,
+    root_frame_id: str,
+    completed_focus: Any,
+    prompt: str,
+    account_id: str | None,
+    runtime_context: dict[str, Any],
+    llm_skill_agent: LlmSkillAgent,
+    events: list[QueryEvent],
+) -> list[QueryEvent]:
+    """Close a completed focus and resume each parent frame up to root."""
+    task_id = state["task_id"]
+    current = completed_focus
+
+    while current is not None and getattr(current, "parent_frame_id", None):
+        parent_frame_id = current.parent_frame_id
+        promoted = _runtime.complete_child_and_resume_parent(current.frame_id)
+        events.append(QueryEvent(
+            type="skill_frame_close",
+            task_id=task_id,
+            skill_frame_id=current.frame_id,
+            parent_frame_id=parent_frame_id,
+            skill_id=current.skill_id,
+            content=f"Frame closed: {current.skill_id}",
+            execution_report_ref=promoted.get("execution_report_ref"),
+            execution_report_digest=promoted.get("execution_report_digest"),
+        ))
+
+        if parent_frame_id == root_frame_id:
+            direct_result = _direct_child_result_for_user(
+                promoted,
+                allow_legacy_completed=True,
+            )
+            if direct_result is not None:
+                validation = _runtime.submit_persistent_turn_result(
+                    frame_id=root_frame_id,
+                    summary=direct_result["summary"],
+                    structured_output=direct_result["structured_output"],
+                    artifact_refs=direct_result.get("artifact_refs"),
+                    evidence_refs=direct_result.get("evidence_refs"),
+                )
+                if not validation.ok:
+                    events.append(QueryEvent(
+                        type="error",
+                        task_id=task_id,
+                        skill_frame_id=root_frame_id,
+                        error=(
+                            "Failed to submit direct child result: "
+                            + "; ".join(validation.errors)
+                        ),
+                        presentation_hint="root_frame",
+                    ))
+                return events
+            return _run_root_synthesis_after_focus_completion(
+                state,
+                root_frame_id=root_frame_id,
+                prompt=prompt,
+                account_id=account_id,
+                runtime_context=runtime_context,
+                llm_skill_agent=llm_skill_agent,
+                events=events,
+            )
+
+        parent = _runtime.get_frame(parent_frame_id)
+        if parent is None:
+            events.append(QueryEvent(
+                type="error",
+                task_id=task_id,
+                skill_frame_id=parent_frame_id,
+                error="Parent frame not found while unwinding completed focus",
+            ))
+            return events
+
+        refreshed_parent = _run_parent_after_nested_focus_completion(
+            state=state,
+            parent=parent,
+            child_promoted=promoted,
+            root_frame_id=root_frame_id,
+            prompt=prompt,
+            account_id=account_id,
+            runtime_context=runtime_context,
+            llm_skill_agent=llm_skill_agent,
+            events=events,
+        )
+        if refreshed_parent is None:
+            return events
+
+        if refreshed_parent.status == FrameStatus.AWAITING_APPROVAL:
+            return _bubble_focus_approval_to_root(
+                root_frame_id=root_frame_id,
+                focus=refreshed_parent,
+                events=events,
+                task_id=task_id,
+            )
+
+        if refreshed_parent.status == FrameStatus.AWAITING_USER:
+            awaiting_user_context = _awaiting_user_context_for_focus(refreshed_parent)
+            grandparent_frame_id = refreshed_parent.parent_frame_id or root_frame_id
+            _runtime.mark_child_awaiting_user(
+                grandparent_frame_id,
+                refreshed_parent.frame_id,
+                awaiting_user_context,
+            )
+            if grandparent_frame_id != root_frame_id:
+                _runtime.mark_focus_awaiting_user(
+                    root_frame_id,
+                    refreshed_parent.frame_id,
+                    awaiting_user_context,
+                )
+            return events
+
+        if refreshed_parent.status != FrameStatus.COMPLETED:
+            error = f"Parent skill ended in {refreshed_parent.status.value}"
+            _record_parent_child_recoverable_interruption(
+                _runtime,
+                parent_frame_id=refreshed_parent.parent_frame_id or root_frame_id,
+                child_frame_id=refreshed_parent.frame_id,
+                reason="child_skill_failed",
+                error=error,
+                task_id=task_id,
+            )
+            return events
+
+        current = refreshed_parent
+
+    return events
+
+
 def _run_active_focus_before_root(
     state: RootState,
     *,
@@ -1434,67 +1754,16 @@ def _run_active_focus_before_root(
         )
         return events
 
-    promoted = _runtime.complete_child_and_resume_parent(refreshed_focus.frame_id)
-    events.append(QueryEvent(
-        type="skill_frame_close",
-        task_id=task_id,
-        skill_frame_id=refreshed_focus.frame_id,
-        parent_frame_id=focus_parent_frame_id,
-        skill_id=refreshed_focus.skill_id,
-        content=f"Frame closed: {refreshed_focus.skill_id}",
-        execution_report_ref=promoted.get("execution_report_ref"),
-        execution_report_digest=promoted.get("execution_report_digest"),
-    ))
-    if focus_parent_frame_id != root_frame_id:
-        _abandon_root_runtime_memory_turn(root, status="NESTED_FOCUS_PARENT_PENDING")
-        return events
-
-    direct_result = _direct_child_result_for_user(
-        promoted,
-        allow_legacy_completed=True,
-    )
-    if direct_result is not None:
-        validation = _runtime.submit_persistent_turn_result(
-            frame_id=root_frame_id,
-            summary=direct_result["summary"],
-            structured_output=direct_result["structured_output"],
-            artifact_refs=direct_result.get("artifact_refs"),
-            evidence_refs=direct_result.get("evidence_refs"),
-        )
-        if not validation.ok:
-            events.append(QueryEvent(
-                type="error",
-                task_id=task_id,
-                skill_frame_id=root_frame_id,
-                error="Failed to submit direct child result: " + "; ".join(validation.errors),
-                presentation_hint="root_frame",
-            ))
-        return events
-
-    root_runtime_context = dict(runtime_context)
-    root_context_summary = _runtime.context_summary_for_frame(root_frame_id)
-    if root_context_summary:
-        root_runtime_context["_visible_root_context_summary"] = root_context_summary
-    busy_event = _prepare_root_runtime_memory_for_turn(
-        root,
-        task_id=task_id,
-        context=strip_execution_policy_context(state.get("context") or {}),
-        prompt=prompt,
-        runtime_context=root_runtime_context,
-    )
-    if busy_event is not None:
-        events.append(busy_event)
-        return events
-
-    events.extend(llm_skill_agent.run(
-        task_id=task_id,
-        frame_id=root_frame_id,
+    return _unwind_completed_focus_to_root(
+        state,
+        root_frame_id=root_frame_id,
+        completed_focus=refreshed_focus,
         prompt=prompt,
         account_id=account_id,
-        runtime_context=root_runtime_context,
-        persistent_frame=True,
-    ))
-    return events
+        runtime_context=runtime_context,
+        llm_skill_agent=llm_skill_agent,
+        events=events,
+    )
 
 
 def _awaiting_user_context_for_focus(frame: Any) -> dict[str, Any] | None:

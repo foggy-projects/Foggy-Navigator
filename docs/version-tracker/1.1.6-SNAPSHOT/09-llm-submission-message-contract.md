@@ -102,6 +102,7 @@ tool call / tool result 分三种场景处理：
    - `AWAITING_USER` 恢复：从该 frame 已完成的协议上下文恢复，再追加用户新回复。
    - 异常中断恢复：默认从 focus stack 的 deepest leaf frame 恢复，从最后一个安全 checkpoint 继续，必要时回退到 summary-based recoverable prompt。
    - 控制面 stop / cancel 只表示停止当前执行流并保留 focus stack；下一条普通用户消息仍按 deepest leaf 恢复，不自动丢弃旧 frame。
+   - 如果 deepest leaf 在恢复后正常完成，BizWorker 会把其 promoted result 作为“刚完成的子技能提升结果”注入 immediate parent 的 system context，并继续运行 parent LLM；parent 再完成时继续向上 close/promote/resume，直到回到 Root。
 3. 正常完成后的下一轮普通对话默认不重放 raw tool trace。
    - 下一轮默认看到 `U1 -> A1 -> U2`。
    - `A1` 可携带 promoted digest、reportRef、artifactRefs 等受控信息。
@@ -130,6 +131,7 @@ tool call / tool result 分三种场景处理：
    - active plan 与持久 root plan 策略。
    - `AWAITING_USER` 续接上下文。
    - recoverable interruption 续跑 / 搁置决策上下文。
+   - nested child completion 后，parent 继续执行时可见的“刚完成的子技能提升结果”。
    - frame result contract。
    - 业务上下文。
    - 附件上下文。
@@ -275,6 +277,7 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 8. submission log 能按序保存真实 ChatModel body。
 9. runtime message event JSONL 能记录同一 frame 的初始 messages、assistant response、assistant tool_call、tool_result 和 checkpoint。
 10. 精确 `current_time` 不进入 `system` message；仅时区或业务日期存在时，不生成 `human` 尾部精确时间块。
+11. nested leaf 完成后的 parent continuation submission 能看到“刚完成的子技能提升结果”，且该信息只用于当前 parent 续跑，不污染下一轮普通 runtime-visible conversation。
 
 ## Progress Tracking
 
@@ -291,6 +294,7 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 - 2026-05-21: runtime-visible conversation 已从 system 文本中移出，按 `user` / `assistant` role messages 注入 submission body；补充 E2E 断言覆盖。
 - 2026-05-21: 新增 `llm_message_builder.py` 作为初始 messages 数组的唯一组装入口，固定 system -> runtime-visible role messages -> current human 的顺序。
 - 2026-05-21: 新增 runtime message event JSONL 写入，记录同一 frame 的 provider 协议消息事件；`AWAITING_USER` 与 recoverable child interruption 恢复已接入同一日志 reader，按 `frameId` 找最新事件文件并重建 provider 协议 messages。
+- 2026-05-21: nested leaf 正常完成后，parent continuation 已通过 system context 接收“刚完成的子技能提升结果”，并继续逐层向 Root unwind；`llm-submissions` 会分别保留 leaf 与 parent 的真实提交 body。
 
 ### Testing
 
@@ -300,7 +304,9 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_config.py tests/test_llm_skill_agent.py tests/test_llm_message_builder.py tests/test_llm_submission_log.py`
   - result: `69 passed`
 - `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest`
-  - result: `589 passed, 6 skipped, 11 warnings`
+  - result: `597 passed, 6 skipped, 11 warnings`
+- `cd tools/langgraph-biz-worker; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_nested_focus_completion_unwinds_to_parent_result -q`
+  - result: `1 passed`
 
 ### Experience
 
