@@ -190,6 +190,68 @@ def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[
         memory.limits["runtimeBudgetPresetKey"] = preset_key
 
 
+def _compact_for_prompt_budget_with_warning(
+    memory: Any,
+    *,
+    frame: Any,
+    task_id: str,
+    runtime_context: dict[str, Any],
+    summarizer: Any,
+) -> None:
+    before = memory.prompt_budget_status()
+    compacted = memory.compact_for_prompt_budget(summarizer=summarizer)
+    after = memory.prompt_budget_status()
+    if not before.get("wouldClip") and not compacted and not after.get("wouldClip"):
+        return
+    if after.get("wouldClip"):
+        code = "PROMPT_BUDGET_HARD_CAP_REMAINS"
+        severity = "warning"
+        message = "Prompt budget still requires final prompt assembly to apply hard-cap clipping."
+    else:
+        code = "PROMPT_BUDGET_PRE_COMPACTION"
+        severity = "info"
+        message = "Runtime memory was compacted before prompt assembly would hard-cut visible messages."
+    _append_runtime_context_warning(
+        runtime_context,
+        {
+            "schemaVersion": 1,
+            "code": code,
+            "severity": severity,
+            "message": message,
+            "taskId": task_id,
+            "frameId": getattr(frame, "frame_id", ""),
+            "runtimeRevision": memory.revision,
+            "compacted": compacted,
+            "before": before,
+            "after": after,
+        },
+    )
+
+
+def _append_runtime_context_warning(runtime_context: dict[str, Any], warning: dict[str, Any]) -> None:
+    warnings = runtime_context.setdefault("_runtime_context_warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+        runtime_context["_runtime_context_warnings"] = warnings
+    code = str(warning.get("code") or "")
+    task_id = str(warning.get("taskId") or "")
+    frame_id = str(warning.get("frameId") or "")
+    revision = str(warning.get("runtimeRevision") or "")
+    key = f"{code}:{task_id}:{frame_id}:{revision}"
+    for existing in warnings:
+        if not isinstance(existing, dict):
+            continue
+        existing_key = (
+            f"{existing.get('code') or ''}:"
+            f"{existing.get('taskId') or ''}:"
+            f"{existing.get('frameId') or ''}:"
+            f"{existing.get('runtimeRevision') or ''}"
+        )
+        if existing_key == key:
+            return
+    warnings.append(warning)
+
+
 def _runtime_memory_compaction_summarizer(
     *,
     frame: Any,
@@ -762,12 +824,18 @@ def _prepare_root_runtime_memory_for_turn(
             root_frame_id=frame.frame_id,
         )
         if inject_prompt_view:
-            memory.compact_for_prompt_budget(
-                summarizer=_runtime_memory_compaction_summarizer(
-                    frame=frame,
-                    state=state,
-                    runtime_context=runtime_context,
-                ) if state is not None else None,
+            _compact_for_prompt_budget_with_warning(
+                memory,
+                frame=frame,
+                task_id=task_id,
+                runtime_context=runtime_context,
+                summarizer=(
+                    _runtime_memory_compaction_summarizer(
+                        frame=frame,
+                        state=state,
+                        runtime_context=runtime_context,
+                    ) if state is not None else None
+                ),
             )
             prompt_view = memory.build_prompt_view()
             if prompt_view:
@@ -824,12 +892,21 @@ def _refresh_root_runtime_memory_for_running_turn(
         memory = load_from_root_frame(refreshed)
         _sync_memory_limits_from_runtime_context(memory, runtime_context)
         if inject_prompt_view:
-            memory.compact_for_prompt_budget(
-                summarizer=_runtime_memory_compaction_summarizer(
-                    frame=refreshed,
-                    state=state,
-                    runtime_context=runtime_context,
-                ) if state is not None else None,
+            _compact_for_prompt_budget_with_warning(
+                memory,
+                frame=refreshed,
+                task_id=(
+                    state["task_id"] if state is not None else
+                    getattr(refreshed, "current_task_id", None) or getattr(refreshed, "origin_task_id", "")
+                ),
+                runtime_context=runtime_context,
+                summarizer=(
+                    _runtime_memory_compaction_summarizer(
+                        frame=refreshed,
+                        state=state,
+                        runtime_context=runtime_context,
+                    ) if state is not None else None
+                ),
             )
             prompt_view = memory.build_prompt_view()
             if prompt_view:

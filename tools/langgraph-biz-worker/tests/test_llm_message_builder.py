@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from langgraph_biz_worker.config import settings
@@ -10,6 +12,7 @@ from langgraph_biz_worker.runtime.runtime_message_event_log import (
     record_checkpoint_runtime_event,
     record_initial_runtime_messages,
     record_runtime_message_event,
+    record_runtime_warning_event,
     record_tool_result_runtime_message,
 )
 
@@ -217,3 +220,27 @@ def test_runtime_message_event_log_requires_standard_context_id(monkeypatch, tmp
 
     assert path is None
     assert not (tmp_path / "data" / "runtime" / "sessions" / "by-date").exists()
+
+
+def test_runtime_warning_event_is_recorded(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "runtime_message_event_log_enabled", True)
+    context_id = "bctx_20260521_ab_warning"
+    path = record_runtime_warning_event(
+        {
+            "code": "PROMPT_BUDGET_PRE_COMPACTION",
+            "severity": "info",
+            "message": "compacted before prompt hard cap",
+        },
+        {
+            "_llm_submission_data_root": str(tmp_path / "data"),
+            "_llm_submission_session_id": context_id,
+            "_llm_submission_date_parts": ("2026", "05", "21"),
+        },
+        task_id="lgt_warning",
+        frame_id="frm_warning",
+    )
+
+    assert path is not None
+    payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert payload["eventType"] == "runtime_warning"
+    assert payload["warning"]["code"] == "PROMPT_BUDGET_PRE_COMPACTION"

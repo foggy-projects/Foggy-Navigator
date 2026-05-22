@@ -3055,6 +3055,127 @@ async def test_scripted_llm_submission_log_matches_root_recent_conversation(
 
 
 @pytest.mark.anyio
+async def test_scripted_root_prompt_budget_warning_is_logged(
+    monkeypatch,
+    mock_llm_server,
+):
+    """Prompt pre-compaction should be visible in LLM body metadata and runtime events."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-prompt-budget-warning-{run_id}"
+    session_id = f"sess-e2e-root-prompt-budget-warning-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-root-prompt-budget-warning-{run_id}"
+    task_ids = [
+        f"task_e2e_root_prompt_budget_warning_{index:03d}_{run_id}"
+        for index in range(1, 6)
+    ]
+    prompts = [
+        f"budget warning turn {index} next:{trace_id}:{index:03d}"
+        for index in range(1, 6)
+    ]
+    answers = [
+        f"已记录 budget warning turn {index}。"
+        for index in range(1, 6)
+    ]
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-prompt-budget-warning",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:{index:03d}",
+                        "response": {"content": answers[index - 1]},
+                    }
+                    for index in range(1, 6)
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
+
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+        "runtimeBudgetOverride": {
+            "maxPromptMessages": 6,
+            "maxVisibleMessages": 100,
+            "compactionHeadTurnCount": 1,
+            "compactionTailTurnCount": 1,
+            "maxCompactionSummaryChars": 2000,
+        },
+    }
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        for index, prompt in enumerate(prompts):
+            response = await worker_client.post(
+                "/api/v1/query",
+                json={
+                    "prompt": prompt,
+                    "taskId": task_ids[index],
+                    "session_id": session_id,
+                    "model": "navigator-e2e-scripted",
+                    "llm_config": llm_config,
+                    "context": {"contextId": context_id},
+                },
+            )
+            assert response.status_code == 200
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    records = debug.json()
+    cursors = [record["cursor"] for record in records]
+    expected_cursors = [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+        f"next:{trace_id}:004",
+        f"next:{trace_id}:005",
+    ]
+    for expected_cursor in expected_cursors:
+        assert expected_cursor in cursors
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len([
+        payload
+        for payload in payloads
+        if (payload.get("meta") or {}).get("skillId") == "conversation.root"
+    ]) == 5
+    fifth_payload = _llm_submission_for(payloads, task_id=task_ids[4], skill_id="conversation.root")
+    warnings = fifth_payload["meta"]["runtimeWarnings"]
+    assert [warning["code"] for warning in warnings] == ["PROMPT_BUDGET_PRE_COMPACTION"]
+    assert warnings[0]["before"]["wouldClip"] is True
+    assert warnings[0]["after"]["wouldClip"] is False
+    assert any(
+        "Runtime compacted conversation summary:" in content
+        for content in _submission_texts(fifth_payload, "ai")
+    )
+
+    fifth_root_events = _runtime_message_events(
+        context_id,
+        task_id=task_ids[4],
+        frame_id=fifth_payload["meta"]["frameId"],
+    )
+    warning_events = [
+        event
+        for event in fifth_root_events
+        if event.get("eventType") == "runtime_warning"
+    ]
+    assert [event["warning"]["code"] for event in warning_events] == [
+        "PROMPT_BUDGET_PRE_COMPACTION"
+    ]
+    assert "persistent_turn_completed" in _runtime_checkpoints(fifth_root_events)
+
+
+@pytest.mark.anyio
 async def test_scripted_api_root_plain_final_commits_runtime_memory_without_retry_prompt(
     monkeypatch,
     mock_llm_server,

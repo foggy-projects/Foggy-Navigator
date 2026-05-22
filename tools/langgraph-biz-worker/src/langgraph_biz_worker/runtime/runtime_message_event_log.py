@@ -101,6 +101,22 @@ def record_checkpoint_runtime_event(
     )
 
 
+def record_runtime_warning_event(
+    warning: dict[str, Any],
+    runtime_context: dict[str, Any] | None,
+    *,
+    task_id: str,
+    frame_id: str,
+) -> Path | None:
+    return record_runtime_message_event(
+        "runtime_warning",
+        runtime_context,
+        task_id=task_id,
+        frame_id=frame_id,
+        warning=warning,
+    )
+
+
 def restore_runtime_protocol_messages(
     runtime_context: dict[str, Any] | None,
     *,
@@ -157,6 +173,7 @@ def record_runtime_message_event(
     tool_result: Any | None = None,
     checkpoint: str | None = None,
     phase: str | None = None,
+    warning: dict[str, Any] | None = None,
 ) -> Path | None:
     if not settings.runtime_message_event_log_enabled:
         return None
@@ -186,6 +203,7 @@ def record_runtime_message_event(
                 tool_result=tool_result,
                 checkpoint=checkpoint,
                 phase=phase,
+                warning=warning,
             )
             with log_path.open("a", encoding="utf-8", newline="\n") as handle:
                 handle.write(json.dumps(payload, ensure_ascii=False, default=str))
@@ -375,6 +393,7 @@ def _payload(
     tool_result: Any | None,
     checkpoint: str | None,
     phase: str | None,
+    warning: dict[str, Any] | None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schemaVersion": 1,
@@ -399,6 +418,8 @@ def _payload(
         payload["toolCall"] = _jsonable(tool_call)
     if tool_result is not None:
         payload["toolResult"] = _jsonable(tool_result)
+    if warning is not None:
+        payload["warning"] = _jsonable(warning)
     return payload
 
 

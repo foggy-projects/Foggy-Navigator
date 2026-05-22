@@ -129,6 +129,7 @@ def _payload(
             "iteration": _int_value(context.get("_llm_submission_iteration"), 0),
             "attempt": attempt,
             "runtimeRevision": context.get("_runtime_context_revision"),
+            "runtimeWarnings": _jsonable(context.get("_runtime_context_warnings") or []),
         },
         "body": {
             "model": _model_snapshot(model),

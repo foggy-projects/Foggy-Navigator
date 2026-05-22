@@ -230,13 +230,43 @@ system -> U3/tool... -> U4/agent... -> U5
 2. `build_prompt_view` 只负责从已治理的 runtime memory 生成 prompt；如果它触发最后安全护栏，应记录 warning，并在下一次 commit/prepare 前推动压缩。
 3. 对真实 LLM body 的 `llm-submissions` 日志要保留压缩前后的 evidence refs，便于复盘“为什么这条消息没有进入 prompt”。
 
+## 第五版实现：prompt hard cap warning / event
+
+第五版补齐 prompt 预算触顶的可观测性。正常路径下，BizWorker 应在提交 LLM 前先尝试压缩，避免 `build_prompt_view()` 直接按 hard cap 切掉 runtime-visible messages。若该路径发生，应同时写入本轮提交 body 和 runtime event log：
+
+1. `ContextRuntimeMemory.prompt_budget_status()`
+   - 计算 `maxPromptMessages` / `maxPromptChars` 下，当前 `head + summary + visible` 是否会被最终 prompt assembly 截断。
+   - 输出 `wouldClip`、`projectedVisibleMessageCount`、`remainingMessages`、`projectedVisibleChars`、`remainingChars`、`hasCompactedSummary` 等诊断字段。
+2. Root prepare / refresh 阶段
+   - 调用 `compact_for_prompt_budget()` 前后各采样一次 budget status。
+   - 如果压缩后不再触顶，记录 `PROMPT_BUDGET_PRE_COMPACTION`，表示本轮通过预压缩避免了 hard-cut。
+   - 如果压缩后仍触顶，记录 `PROMPT_BUDGET_HARD_CAP_REMAINS`，表示最终 prompt assembly 仍可能执行最后护栏裁剪，需要继续调大预算、降低 tool 输出或优化 summary。
+3. `logs/llm-submissions/*.json`
+   - `meta.runtimeWarnings[]` 保存本次真实提交 LLM 前发生的 warning。
+   - 该字段是复盘单次 provider body 的入口，不作为下一轮 prompt source。
+4. `logs/runtime-message-events/*.jsonl`
+   - 新增 `eventType=runtime_warning`。
+   - 该事件与同一 `taskId/frameId` 的 provider protocol 事件并列，用于按时间线复盘“本轮 prompt 为什么已经被压缩”。
+
+warning payload 统一包含：
+
+| 字段 | 说明 |
+| --- | --- |
+| `schemaVersion` | warning schema 版本，当前为 `1` |
+| `code` | `PROMPT_BUDGET_PRE_COMPACTION` 或 `PROMPT_BUDGET_HARD_CAP_REMAINS` |
+| `severity` | `info` / `warning` |
+| `taskId` / `frameId` | 触发 warning 的运行上下文 |
+| `runtimeRevision` | 触发时的 runtime memory revision |
+| `compacted` | 本次是否实际执行了压缩 |
+| `before` / `after` | 压缩前后的 `prompt_budget_status()` 快照 |
+
 ## 验收建议
 
 1. 已新增单元测试：`maxPromptMessages` 裁剪后 prompt 不以孤立 assistant 语义消息开头。
 2. 已新增单元测试：裁剪后仍保留匹配的 `assistant.tool_calls -> tool` protocol，或一起裁掉。
 3. 已新增单元测试：单条 tool result 和 tool call args 使用独立预算。
 4. 已新增单元测试：Root commit 超过 visible 阈值时调用 LLM summarizer，并写入 `summaryQuality=llm`。
-5. 待补 scripted E2E：多轮 Root tool call 后，`llm-submissions` 中的 prompt tail 从 user/summary 开始。
+5. 已新增 scripted E2E：多轮 Root 回合在 `maxPromptMessages` 触顶前触发 prompt pre-compaction，并在 `llm-submissions.meta.runtimeWarnings` 与 `runtime-message-events` 中写入 `PROMPT_BUDGET_PRE_COMPACTION`。
 6. 已新增单元测试：最近 N 个语义 turn 内的大 tool result 保持 raw，N 轮之外的历史大 tool result 在 prompt view 中投影为 digest / refs / selected fields。
 7. 已新增单元测试：`projectHistoricalToolResults=false` 时不投影历史大 tool result。
 
@@ -254,8 +284,8 @@ Development:
 - [x] 历史大 tool result prompt projection：最近 `rawToolResultTailTurnCount` 个语义 turn 保持 raw，N 轮之前投影为 digest / refs / selected fields。
 - [x] 历史大 tool result projection 增加 `projectHistoricalToolResults` 开关，默认打开，可由模型 runtime budget override 关闭。
 - [x] 压缩 head / tail / summary 参数进入模型 runtime budget preset / override，并同步到 Root runtime memory。
-- [ ] 将 prompt hard cap 触发记录为 runtime warning / event，便于从日志追踪。
-- [ ] 真实 LLM smoke 后复核 `llm-submissions` 是否符合预期。
+- [x] 将 prompt hard cap 触发记录为 runtime warning / event，便于从日志追踪。
+- [x] 脚本化 LLM smoke 后复核 `llm-submissions` 是否符合预期。
 - [ ] 后续设计真实 tokenizer 与更精确 token 预算。
 
 Testing:
@@ -267,6 +297,9 @@ Testing:
 - [x] `pytest tests/test_context_memory.py -q`：覆盖历史大 tool result projection 与最近 raw tail 保留。
 - [x] `ruff check` 覆盖本次 Python 改动文件。
 - [x] `pytest -q` 全量 BizWorker 测试：`649 passed, 6 skipped`。
+- [x] `pytest tests/test_context_memory.py tests/test_root_graph.py::test_prompt_budget_pre_compaction_records_runtime_warning tests/test_llm_submission_log.py tests/test_llm_message_builder.py -q`：35 passed。
+- [x] `pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_root_prompt_budget_warning_is_logged -q`：覆盖 prompt pre-compaction warning 在真实 mock LLM body 与 runtime event log 中可复盘；该场景会额外生成一次 `runtime-memory.compaction` LLM submission，随后 Root submission 带 warning。
+- [x] `pytest -q` 全量 BizWorker 测试：`654 passed, 6 skipped, 11 warnings`。
 
 Experience:
 

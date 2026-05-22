@@ -60,11 +60,36 @@ def test_record_llm_submission_writes_numbered_json(monkeypatch, tmp_path):
     assert payload["meta"]["contextId"] == CTX
     assert payload["meta"]["taskId"] == "lgt_001"
     assert payload["meta"]["runtimeRevision"] == 4
+    assert payload["meta"]["runtimeWarnings"] == []
     assert payload["body"]["model"]["model_name"] == "unit-test-model"
     assert "hello" in json.dumps(payload["body"]["messages"], ensure_ascii=False)
     assert payload["body"]["messages"][0]["type"] == "system"
     assert payload["body"]["messages"][1]["type"] == "human"
     assert payload["body"]["tools"][0]["function"]["name"] == "submit_skill_result"
+
+
+def test_record_llm_submission_includes_runtime_warnings(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "llm_submission_log_enabled", True)
+
+    context = _context(tmp_path)
+    context["_runtime_context_warnings"] = [{
+        "code": "PROMPT_BUDGET_PRE_COMPACTION",
+        "severity": "info",
+        "message": "compacted",
+    }]
+    path = record_llm_submission(
+        FakeModel(),
+        [HumanMessage(content="hello")],
+        context,
+        operation="skill_agent.invoke",
+        task_id="lgt_001",
+        frame_id="frm_001",
+        attempt=1,
+    )
+
+    assert path is not None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["meta"]["runtimeWarnings"][0]["code"] == "PROMPT_BUDGET_PRE_COMPACTION"
 
 
 def test_record_llm_submission_prunes_old_files(monkeypatch, tmp_path):

@@ -101,6 +101,45 @@ def test_sync_memory_limits_sets_tool_result_projection_tail():
     assert memory.limits["runtimeBudgetPresetKey"] == "generic.128k"
 
 
+def test_prompt_budget_pre_compaction_records_runtime_warning():
+    memory = ContextRuntimeMemory(context_id="bctx_20260523_ab_ctx-prompt-warning")
+    memory.limits.update({
+        "maxVisibleMessages": 100,
+        "maxVisibleChars": 10000,
+        "maxPromptMessages": 6,
+        "maxPromptChars": 10000,
+        "headTurnCount": 1,
+        "tailTurnCount": 1,
+    })
+    for index in range(1, 5):
+        memory.begin_turn(
+            task_id=f"task_{index:03d}",
+            root_frame_id="frm_warn",
+            user_message=f"U{index}",
+        )
+        assert memory.commit_turn(assistant_message=f"A{index}")
+
+    runtime_context: dict[str, Any] = {}
+
+    class Frame:
+        frame_id = "frm_warn"
+
+    root_graph_module._compact_for_prompt_budget_with_warning(
+        memory,
+        frame=Frame(),
+        task_id="lgt_warn",
+        runtime_context=runtime_context,
+        summarizer=lambda _payload: {"durableUserIntent": "compressed"},
+    )
+
+    warnings = runtime_context["_runtime_context_warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["code"] == "PROMPT_BUDGET_PRE_COMPACTION"
+    assert warnings[0]["before"]["wouldClip"] is True
+    assert warnings[0]["after"]["wouldClip"] is False
+    assert memory.compacted_summary is not None
+
+
 def test_system_root_manifest_allows_plain_final_and_discourages_submit_for_simple_replies():
     body = root_graph_module._system_root_manifest().markdown_body
 

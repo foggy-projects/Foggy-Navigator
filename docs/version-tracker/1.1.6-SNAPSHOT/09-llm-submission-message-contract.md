@@ -176,6 +176,8 @@ human(新的用户输入或续跑指令)
 
 默认压缩窗口为 head 2 个语义 turn、tail 8 个语义 turn、summary 4000 chars；`generic.200k` / `generic.1m` preset 可随模型上下文能力放宽 summary 容量。
 
+2026-05-23 第五版收口：如果提交 LLM 前的 prompt hard cap 会截断 runtime-visible messages，Root prepare / refresh 会先触发 `compact_for_prompt_budget()`。该路径会在 `logs/llm-submissions/*.json` 的 `meta.runtimeWarnings[]` 写入本轮 warning，并在 `logs/runtime-message-events/*.jsonl` 写入 `eventType=runtime_warning`。当前 code 为 `PROMPT_BUDGET_PRE_COMPACTION` 和 `PROMPT_BUDGET_HARD_CAP_REMAINS`。这类 warning 只用于复盘真实提交 body 与预算治理，不作为下一轮 prompt source。
+
 ### 4. Root 与 Child 的完成契约分离
 
 `conversation.root` 是会话级持久执行载体，不是每轮都需要关闭的业务 Skill frame。它负责普通用户回合、业务工具调度、运行时记忆 commit 与中断恢复。

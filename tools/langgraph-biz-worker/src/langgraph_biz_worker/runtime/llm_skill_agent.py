@@ -77,6 +77,7 @@ from .runtime_message_event_log import (
     record_checkpoint_runtime_event,
     record_initial_runtime_messages,
     record_runtime_message_event,
+    record_runtime_warning_event,
     record_tool_result_runtime_message,
 )
 from .execution_policy import ExecutionPolicy
@@ -232,6 +233,13 @@ class LlmSkillAgent:
         runtime_context["_llm_submission_date_parts"] = date_parts_for_frame(frame)
         if self._data_root:
             runtime_context["_llm_submission_data_root"] = str(self._data_root)
+        for warning in _runtime_context_warnings(runtime_context):
+            record_runtime_warning_event(
+                warning,
+                runtime_context,
+                task_id=task_id,
+                frame_id=frame_id,
+            )
         recovery = runtime_context.get("_runtime_protocol_recovery")
         if isinstance(recovery, dict) and recovery.get("enabled") and not recovery.get("frame_id"):
             recovery["frame_id"] = frame_id
@@ -1265,6 +1273,13 @@ def _frame_runtime_identity(frame: Any) -> str:
         or getattr(frame, "skill_id", None)
         or getattr(frame, "frame_id", "")
     )
+
+
+def _runtime_context_warnings(runtime_context: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings = runtime_context.get("_runtime_context_warnings")
+    if not isinstance(warnings, list):
+        return []
+    return [warning for warning in warnings if isinstance(warning, dict)]
 
 
 def _generic_agent_manifest(frame: Any) -> SkillManifest:

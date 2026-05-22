@@ -191,14 +191,9 @@ class ContextRuntimeMemory:
         return True
 
     def build_prompt_view(self) -> list[dict[str, Any]]:
-        max_prompt_messages = _int_or_default(
-            self.limits.get("maxPromptMessages"),
-            DEFAULT_LIMITS["maxPromptMessages"],
-        )
-        max_prompt_chars = _int_or_default(
-            self.limits.get("maxPromptChars"),
-            DEFAULT_LIMITS["maxPromptChars"],
-        )
+        budget = self.prompt_budget_status()
+        max_prompt_messages = _int_or_default(budget.get("maxPromptMessages"), DEFAULT_LIMITS["maxPromptMessages"])
+        max_prompt_chars = _int_or_default(budget.get("maxPromptChars"), DEFAULT_LIMITS["maxPromptChars"])
         head_messages = [
             *self.pinned_head_messages,
             *self._compacted_summary_prompt_messages(),
@@ -238,6 +233,51 @@ class ContextRuntimeMemory:
             force=True,
             reason="prompt_budget",
         )
+
+    def prompt_budget_status(self) -> dict[str, Any]:
+        """Return prompt budget statistics before final LLM message assembly."""
+        max_prompt_messages = _int_or_default(
+            self.limits.get("maxPromptMessages"),
+            DEFAULT_LIMITS["maxPromptMessages"],
+        )
+        max_prompt_chars = _int_or_default(
+            self.limits.get("maxPromptChars"),
+            DEFAULT_LIMITS["maxPromptChars"],
+        )
+        head_messages = [
+            *self.pinned_head_messages,
+            *self._compacted_summary_prompt_messages(),
+        ]
+        head_prompt = _prompt_messages_with_tool_projection(
+            head_messages,
+            limits=self.limits,
+            raw_tail_turn_count=0,
+        )
+        visible_prompt = _prompt_messages_with_tool_projection(
+            self.visible_messages,
+            limits=self.limits,
+            raw_tail_turn_count=_raw_tool_result_tail_turn_count(self.limits),
+        )
+        remaining_messages = max_prompt_messages - len(head_prompt)
+        remaining_chars = max_prompt_chars - _messages_total_chars(head_prompt)
+        projected_visible_chars = _messages_total_chars(visible_prompt)
+        would_clip = (
+            len(visible_prompt) > max(0, remaining_messages)
+            or projected_visible_chars > max(0, remaining_chars)
+        )
+        return {
+            "wouldClip": would_clip,
+            "maxPromptMessages": max_prompt_messages,
+            "maxPromptChars": max_prompt_chars,
+            "headMessageCount": len(head_prompt),
+            "visibleMessageCount": len(self.visible_messages),
+            "projectedVisibleMessageCount": len(visible_prompt),
+            "projectedVisibleChars": projected_visible_chars,
+            "remainingMessages": max(0, remaining_messages),
+            "remainingChars": max(0, remaining_chars),
+            "hasCompactedSummary": isinstance(self.compacted_summary, dict),
+            "pinnedHeadMessageCount": len(self.pinned_head_messages),
+        }
 
     def begin_turn(
         self,
@@ -548,34 +588,7 @@ class ContextRuntimeMemory:
         return True
 
     def _prompt_budget_would_clip_visible_messages(self) -> bool:
-        max_prompt_messages = _int_or_default(
-            self.limits.get("maxPromptMessages"),
-            DEFAULT_LIMITS["maxPromptMessages"],
-        )
-        max_prompt_chars = _int_or_default(
-            self.limits.get("maxPromptChars"),
-            DEFAULT_LIMITS["maxPromptChars"],
-        )
-        head_messages = [
-            *self.pinned_head_messages,
-            *self._compacted_summary_prompt_messages(),
-        ]
-        head_prompt = _prompt_messages_with_tool_projection(
-            head_messages,
-            limits=self.limits,
-            raw_tail_turn_count=0,
-        )
-        visible_prompt = _prompt_messages_with_tool_projection(
-            self.visible_messages,
-            limits=self.limits,
-            raw_tail_turn_count=_raw_tool_result_tail_turn_count(self.limits),
-        )
-        remaining_messages = max_prompt_messages - len(head_prompt)
-        remaining_chars = max_prompt_chars - _messages_total_chars(head_prompt)
-        return (
-            len(visible_prompt) > max(0, remaining_messages)
-            or _messages_total_chars(visible_prompt) > max(0, remaining_chars)
-        )
+        return bool(self.prompt_budget_status().get("wouldClip"))
 
     def _max_message_chars(self) -> int:
         return _int_or_default(

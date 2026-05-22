@@ -580,6 +580,10 @@ def test_context_memory_prompt_budget_triggers_compaction_before_tail_cut():
         assert memory.commit_turn(assistant_message=f"A{index}")
 
     assert memory.compacted_summary is None
+    status = memory.prompt_budget_status()
+    assert status["wouldClip"] is True
+    assert status["projectedVisibleMessageCount"] == 8
+    assert status["remainingMessages"] == 6
     assert [item["content"] for item in memory.build_prompt_view()] == [
         "U2",
         "A2",
