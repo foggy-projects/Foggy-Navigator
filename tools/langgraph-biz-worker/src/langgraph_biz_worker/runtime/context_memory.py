@@ -23,7 +23,10 @@ PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY = "_pending_root_turn_protocol_messages"
 DEFAULT_LIMITS = {
     "maxVisibleMessages": 24,
     "maxPromptMessages": 12,
+    "maxPromptChars": 48000,
     "maxMessageChars": 1200,
+    "maxToolResultChars": 48000,
+    "maxToolCallArgsChars": 12000,
     "maxVisibleChars": 12000,
     "headTurnCount": 2,
     "tailTurnCount": 6,
@@ -71,10 +74,10 @@ class ContextRuntimeMemory:
             revision=_int_or_default(value.get("revision"), 0),
             updated_at=_str_or_default(value.get("updatedAt")),
             compacted_summary=value.get("compactedSummary") if isinstance(value.get("compactedSummary"), dict) else None,
-            pinned_head_messages=_sanitize_messages(value.get("pinnedHeadMessages")),
-            visible_messages=_sanitize_messages(value.get("visibleMessages")),
+            pinned_head_messages=_sanitize_messages(value.get("pinnedHeadMessages"), limits=limits),
+            visible_messages=_sanitize_messages(value.get("visibleMessages"), limits=limits),
             pending_turn=value.get("pendingTurn") if isinstance(value.get("pendingTurn"), dict) else None,
-            pending_user_inputs=_sanitize_messages(value.get("pendingUserInputs")),
+            pending_user_inputs=_sanitize_messages(value.get("pendingUserInputs"), limits=limits),
             limits=limits,
             loop_status=_str_or_default(value.get("loopStatus"), "IDLE") or "IDLE",
             running_task_id=_str_or_none(value.get("runningTaskId")),
@@ -143,18 +146,32 @@ class ContextRuntimeMemory:
             self.limits.get("maxPromptMessages"),
             DEFAULT_LIMITS["maxPromptMessages"],
         )
-        messages = [
+        max_prompt_chars = _int_or_default(
+            self.limits.get("maxPromptChars"),
+            DEFAULT_LIMITS["maxPromptChars"],
+        )
+        head_messages = [
             *self.pinned_head_messages,
             *self._compacted_summary_prompt_messages(),
-            *self.visible_messages,
         ]
-        prompt_source = (
-            messages
-            if self.compacted_summary or self.pinned_head_messages
-            else messages[-max_prompt_messages:]
-        )
-        return _ensure_valid_tool_protocol_window([
+        head_prompt = [
             _prompt_message_copy(item)
+            for item in head_messages
+            if _message_visible_in_prompt(item)
+        ]
+        visible_prompt = [
+            _prompt_message_copy(item)
+            for item in self.visible_messages
+            if _message_visible_in_prompt(item)
+        ]
+        tail_prompt = _turn_aware_prompt_tail(
+            visible_prompt,
+            max_messages=max(1, max_prompt_messages - len(head_prompt)),
+            max_chars=max(1, max_prompt_chars - _messages_total_chars(head_prompt)),
+        )
+        prompt_source = [*head_prompt, *tail_prompt]
+        return _ensure_valid_tool_protocol_window([
+            item
             for item in prompt_source
             if _message_visible_in_prompt(item)
         ])
@@ -331,7 +348,7 @@ class ContextRuntimeMemory:
         final_assistant: dict[str, Any],
         metadata: dict[str, Any] | None,
     ) -> list[dict[str, Any]]:
-        protocol_turn = _sanitize_messages(protocol_messages)
+        protocol_turn = _sanitize_messages(protocol_messages, limits=self.limits)
         if not (
             protocol_turn
             and _has_valid_tool_protocol_messages(protocol_turn)
@@ -559,18 +576,29 @@ def runtime_protocol_messages_from_langchain(
     root_frame_id: str,
     now: str | None = None,
     max_chars: int | None = None,
+    max_tool_result_chars: int | None = None,
+    max_tool_args_chars: int | None = None,
 ) -> list[dict[str, Any]]:
     """Serialize root-visible LangChain messages for bounded runtime replay."""
     if not isinstance(messages, list):
         return []
     timestamp = now or _now()
     limit = _int_or_default(max_chars, DEFAULT_LIMITS["maxMessageChars"])
+    tool_result_limit = _int_or_default(
+        max_tool_result_chars,
+        DEFAULT_LIMITS["maxToolResultChars"],
+    )
+    tool_args_limit = _int_or_default(
+        max_tool_args_chars,
+        DEFAULT_LIMITS["maxToolCallArgsChars"],
+    )
     protocol: list[dict[str, Any]] = []
     for index, message in enumerate(messages):
         role = _langchain_message_role(message)
         if role == "system" or not role:
             continue
-        content = _message_content_text(getattr(message, "content", ""), limit)
+        content_limit = tool_result_limit if role == "tool" else limit
+        content = _message_content_text(getattr(message, "content", ""), content_limit)
         suffix = f"protocol_{index}_{_safe_id_part(timestamp)}"
         if role == "user":
             if not content:
@@ -586,7 +614,10 @@ def runtime_protocol_messages_from_langchain(
             ))
             continue
         if role == "assistant":
-            tool_calls = _normalize_runtime_tool_calls(getattr(message, "tool_calls", None))
+            tool_calls = _normalize_runtime_tool_calls(
+                getattr(message, "tool_calls", None),
+                max_args_chars=tool_args_limit,
+            )
             if not content and not tool_calls:
                 continue
             item = _new_message(
@@ -619,6 +650,62 @@ def runtime_protocol_messages_from_langchain(
             item["toolCallId"] = tool_call_id
             protocol.append(item)
     return _ensure_valid_tool_protocol_window(protocol)
+
+
+def _turn_aware_prompt_tail(
+    messages: list[dict[str, Any]],
+    *,
+    max_messages: int,
+    max_chars: int,
+) -> list[dict[str, Any]]:
+    if not messages:
+        return []
+    groups = _semantic_turn_groups(_ensure_valid_tool_protocol_window(messages))
+    if not groups:
+        return []
+    selected: list[list[dict[str, Any]]] = []
+    selected_count = 0
+    selected_chars = 0
+    for group in reversed(groups):
+        group_count = len(group)
+        group_chars = _messages_total_chars(group)
+        if (
+            selected
+            and selected_count + group_count > max_messages
+        ):
+            break
+        if (
+            selected
+            and selected_chars + group_chars > max_chars
+        ):
+            break
+        selected.insert(0, group)
+        selected_count += group_count
+        selected_chars += group_chars
+    if not selected:
+        selected = [groups[-1]]
+    flattened = [item for group in selected for item in group]
+    return _ensure_valid_tool_protocol_window(flattened)
+
+
+def _semantic_turn_groups(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    groups: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for item in messages:
+        role = str(item.get("role") or "").strip().lower()
+        is_summary = item.get("messageId") == "rtm_compacted_summary"
+        if role == "user" or is_summary:
+            if current:
+                groups.append(current)
+            current = [item]
+            continue
+        if not current:
+            current = [item]
+        else:
+            current.append(item)
+    if current:
+        groups.append(current)
+    return groups
 
 
 def _messages_total_chars(messages: list[dict[str, Any]]) -> int:
@@ -950,9 +1037,22 @@ def _message_visible_in_prompt(item: dict[str, Any]) -> bool:
     return role == "user" and bool(item.get("content"))
 
 
-def _sanitize_messages(value: Any) -> list[dict[str, Any]]:
+def _sanitize_messages(value: Any, *, limits: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
+    limit_config = limits if isinstance(limits, dict) else DEFAULT_LIMITS
+    max_message_chars = _int_or_default(
+        limit_config.get("maxMessageChars"),
+        DEFAULT_LIMITS["maxMessageChars"],
+    )
+    max_tool_result_chars = _int_or_default(
+        limit_config.get("maxToolResultChars"),
+        DEFAULT_LIMITS["maxToolResultChars"],
+    )
+    max_tool_args_chars = _int_or_default(
+        limit_config.get("maxToolCallArgsChars"),
+        DEFAULT_LIMITS["maxToolCallArgsChars"],
+    )
     messages: list[dict[str, Any]] = []
     for item in value:
         if not isinstance(item, dict):
@@ -960,8 +1060,12 @@ def _sanitize_messages(value: Any) -> list[dict[str, Any]]:
         role = str(item.get("role") or "").strip().lower()
         if role not in {"user", "assistant", "tool"}:
             continue
-        content = _message_content_text(item.get("content"), DEFAULT_LIMITS["maxMessageChars"])
-        tool_calls = _normalize_runtime_tool_calls(item.get("toolCalls") or item.get("tool_calls"))
+        content_limit = max_tool_result_chars if role == "tool" else max_message_chars
+        content = _message_content_text(item.get("content"), content_limit)
+        tool_calls = _normalize_runtime_tool_calls(
+            item.get("toolCalls") or item.get("tool_calls"),
+            max_args_chars=max_tool_args_chars,
+        )
         tool_call_id = _str_or_none(item.get("toolCallId") or item.get("tool_call_id"))
         if role == "user" and not content:
             continue
@@ -1086,7 +1190,7 @@ def _message_content_text(value: Any, max_chars: int) -> str:
         return _clean_content(str(value), max_chars)
 
 
-def _normalize_runtime_tool_calls(value: Any) -> list[dict[str, Any]]:
+def _normalize_runtime_tool_calls(value: Any, *, max_args_chars: int | None = None) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     normalized: list[dict[str, Any]] = []
@@ -1104,22 +1208,39 @@ def _normalize_runtime_tool_calls(value: Any) -> list[dict[str, Any]]:
             continue
         normalized.append({
             "name": name,
-            "args": _normalize_tool_args(args),
+            "args": _normalize_tool_args(args, max_chars=max_args_chars),
             "id": call_id,
         })
     return normalized
 
 
-def _normalize_tool_args(value: Any) -> dict[str, Any]:
+def _normalize_tool_args(value: Any, *, max_chars: int | None = None) -> dict[str, Any]:
     if isinstance(value, dict):
-        return value
-    if isinstance(value, str) and value.strip():
+        parsed = value
+    elif isinstance(value, str) and value.strip():
         try:
-            parsed = json.loads(value)
+            candidate = json.loads(value)
         except json.JSONDecodeError:
             return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+        parsed = candidate if isinstance(candidate, dict) else {}
+    else:
+        return {}
+    if not parsed:
+        return {}
+    limit = max_chars if isinstance(max_chars, int) and max_chars > 0 else None
+    if limit is None:
+        return parsed
+    try:
+        serialized = json.dumps(parsed, ensure_ascii=False, default=str)
+    except Exception:
+        serialized = str(parsed)
+    if len(serialized) <= limit:
+        return parsed
+    return {
+        "_truncated": True,
+        "_original_chars": len(serialized),
+        "preview": serialized[:limit].rstrip(),
+    }
 
 
 def _clean_content(value: Any, max_chars: int) -> str:

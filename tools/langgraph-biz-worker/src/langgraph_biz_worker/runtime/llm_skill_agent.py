@@ -68,6 +68,7 @@ from .llm_tool_schemas import (
 )
 from .context_memory import (
     PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY,
+    ContextRuntimeMemory,
     runtime_protocol_messages_from_langchain,
 )
 from .runtime_message_event_log import (
@@ -182,8 +183,12 @@ class LlmSkillAgent:
             file_tools_available=file_tools is not None,
         )
         account_context_prompt = (
-            build_account_context_prompt(self._data_root, account_id)
-            if self._data_root and account_id
+            build_account_context_prompt(
+                self._data_root,
+                account_id,
+                execution_policy=execution_policy,
+            )
+            if self._data_root and (account_id or execution_policy.configured)
             else ""
         )
 
@@ -579,10 +584,15 @@ class LlmSkillAgent:
         frame = self._runtime.get_frame(frame_id)
         if frame is None:
             return
+        memory = ContextRuntimeMemory.load_from_root_frame(frame)
+        limits = memory.limits if isinstance(memory.limits, dict) else {}
         protocol = runtime_protocol_messages_from_langchain(
             messages[turn_start_index:],
             task_id=task_id,
             root_frame_id=frame_id,
+            max_chars=limits.get("maxMessageChars"),
+            max_tool_result_chars=limits.get("maxToolResultChars"),
+            max_tool_args_chars=limits.get("maxToolCallArgsChars"),
         )
         if not protocol:
             return

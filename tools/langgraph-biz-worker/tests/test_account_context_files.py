@@ -6,6 +6,7 @@ from langgraph_biz_worker.runtime.account_context_files import (
     build_account_context_prompt,
     read_account_context_files,
 )
+from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
 
 
 def test_reads_account_context_files_in_authority_order(tmp_path):
@@ -59,3 +60,24 @@ def test_long_context_file_is_truncated(tmp_path):
     assert files[0].content == "abc"
     assert files[0].truncated is True
     assert "[truncated after 3 bytes]" in prompt
+
+
+def test_reads_delegated_workspace_context_from_execution_policy(tmp_path):
+    data_root = tmp_path / "data"
+    workspace = tmp_path / "delegated" / "user-001"
+    workspace.mkdir(parents=True)
+    (workspace / "ACCOUNT_POLICY.md").write_text("delegated policy", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("delegated memory", encoding="utf-8")
+    policy = ExecutionPolicy.from_context({
+        "execution_policy": {
+            "workdir": str(workspace),
+            "allowed_dirs": [str(workspace)],
+        },
+    })
+
+    files = read_account_context_files(data_root, None, execution_policy=policy)
+    prompt = build_account_context_prompt(data_root, None, execution_policy=policy)
+
+    assert [file.name for file in files] == ["ACCOUNT_POLICY.md", "MEMORY.md"]
+    assert "delegated policy" in prompt
+    assert "delegated memory" in prompt

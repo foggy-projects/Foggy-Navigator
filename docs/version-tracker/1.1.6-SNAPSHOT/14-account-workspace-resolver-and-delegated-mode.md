@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 状态: 设计收口
+- 状态: 第一阶段已部分落地，待真实会话验收
 - 日期: 2026-05-22
 - 适用范围: `tools/langgraph-biz-worker`
 - 关联文档:
@@ -132,6 +132,22 @@ AccountWorkspaceResolver.resolve(
 3. 默认 managed account 目录: `<data_root>/accounts/<accountId>`。
 
 其中 `workspaceRef` 优先于直接 `workspaceRoot`。`workspaceRef` 由服务端 registry/config 解析为真实路径，便于做 allowlist、审计和后续迁移。
+
+### 第一阶段实现状态
+
+2026-05-22 已完成最小闭环实现:
+
+1. `account_context_files.py` 不再只支持 managed account 路径，已支持从 `ExecutionPolicy.workdir` 读取 delegated workspace 下的 `ACCOUNT_POLICY.md`、`AGENT.md`、`MEMORY.md`。
+2. `LlmSkillAgent` 构造 system prompt 时，如果存在有效 delegated execution policy，即使没有 `accountId`，也会注入 delegated workspace account context。
+3. managed mode 默认行为保持不变，仍读取 `<data_root>/accounts/<accountId>/...`。
+4. 已补单元测试覆盖 delegated workspace 读取和 LLM prompt 注入。
+
+尚未完成:
+
+1. 独立 `workspaceRef -> workspaceRoot` registry / binding resolver。
+2. account context HTTP API 对 delegated workspace 的读写支持。
+3. SkillRegistry、Artifact store、skill sync/materialize 的 resolver 化。
+4. OpenAPI 真实 smoke 中检查 delegated `MEMORY.md` 进入 `llm-submissions`。
 
 ## 需要接入 Resolver 的模块
 

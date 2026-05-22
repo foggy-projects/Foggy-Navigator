@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from langchain_core.messages import AIMessage
+
 from langgraph_biz_worker.graphs import root_graph as root_graph_module
 from langgraph_biz_worker.models import FrameKind, SkillManifest
 from langgraph_biz_worker.runtime.context_memory import (
@@ -142,6 +144,35 @@ def test_route_skill_uses_system_root_before_explicit_skill_name(monkeypatch, tm
     assert frame.skill_id == root_graph_module.ROOT_SKILL_ID
     assert frame.frame_kind == FrameKind.ROOT
     assert routed["events"][-1].content == "Opening conversation root frame"
+
+
+def test_legacy_fallback_agent_frame_uses_standard_conversation_directory(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    root_graph_module._skill_registry.register(
+        SkillManifest(id="exception_triage", name="Exception Triage", allowed_tools=[]),
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "load", lambda **kwargs: None)
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", False)
+
+    state = _state("task_legacy_bctx_001", CTX_SHARED)
+    state["context"]["contextId"] = CTX_SHARED
+    state["context"]["order_id"] = "ORD-001"
+
+    routed = root_graph_module.route_skill(state)
+    frame = runtime.get_frame(routed["active_frame_id"])
+
+    assert frame is not None
+    assert frame.frame_kind == FrameKind.AGENT
+    assert frame.conversation_id == CTX_SHARED
+    assert frame.session_id == CTX_SHARED
+    assert frame.current_task_id == "task_legacy_bctx_001"
+    assert frame.origin_task_id == "task_legacy_bctx_001"
+
+    standard_session_dir = session_data_dir(tmp_path / "data", ("2026", "01", "01"), CTX_SHARED)
+    legacy_task_dir = session_data_dir(tmp_path / "data", ("2026", "01", "01"), "task_legacy_bctx_001")
+
+    assert (standard_session_dir / "frames" / f"{frame.frame_id}.json").is_file()
+    assert not (legacy_task_dir / "frames" / f"{frame.frame_id}.json").exists()
 
 
 def test_route_skill_reuses_system_root_frame_across_tasks_in_same_session(monkeypatch, tmp_path):
@@ -472,6 +503,64 @@ def test_runtime_memory_commit_persists_root_tool_protocol(monkeypatch, tmp_path
     assert restored.visible_messages[1]["toolCalls"][0]["id"] == "call_skill"
     assert restored.visible_messages[2]["toolCallId"] == "call_skill"
     assert restored.visible_messages[3]["content"] == "Ticket created."
+
+
+def test_runtime_memory_commit_uses_llm_compaction_summarizer(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    state = _state("task_root_llm_compaction_001")
+    state["context"]["contextId"] = "bctx_20260522_cd_ctx-llm-compaction"
+    routed = root_graph_module.route_skill(state)
+    root = runtime.get_frame(routed["active_frame_id"])
+    assert root is not None
+
+    memory = ContextRuntimeMemory(context_id=root.conversation_id)
+    memory.limits.update({
+        "maxVisibleMessages": 6,
+        "maxVisibleChars": 10000,
+        "headTurnCount": 1,
+        "tailTurnCount": 1,
+    })
+    for index in range(1, 4):
+        memory.begin_turn(
+            task_id=f"task_history_{index}",
+            root_frame_id=root.frame_id,
+            user_message=f"U{index}",
+        )
+        assert memory.commit_turn(assistant_message=f"A{index}")
+    save_to_root_frame(root, memory)
+    runtime.save_frame(root)
+
+    class FakeSummaryModel:
+        def __init__(self):
+            self.calls: list[list[Any]] = []
+
+        def invoke(self, messages):
+            self.calls.append(messages)
+            return AIMessage(content=(
+                '{"durableUserIntent":"用户要持续处理 TMS 工单",'
+                '"businessEntities":["工单 TKT-1"],'
+                '"pendingActions":["继续查询工单状态"]}'
+            ))
+
+    fake_model = FakeSummaryModel()
+    monkeypatch.setattr(root_graph_module, "_chat_model_for_state", lambda current_state: fake_model)
+
+    state["prompt"] = "U4"
+    root_graph_module._commit_root_runtime_memory_turn(
+        runtime.get_frame(root.frame_id),
+        state=state,
+        assistant_message="A4",
+        structured_output={"message": "A4"},
+    )
+
+    restored = ContextRuntimeMemory.load_from_root_frame(runtime.get_frame(root.frame_id))
+    assert fake_model.calls
+    assert "运行时上下文压缩器" in fake_model.calls[0][0].content
+    assert restored.compacted_summary is not None
+    assert restored.compacted_summary["summaryQuality"] == "llm"
+    assert restored.compacted_summary["durableUserIntent"] == "用户要持续处理 TMS 工单"
+    assert restored.visible_messages[-2]["content"] == "U4"
+    assert restored.visible_messages[-1]["content"] == "A4"
 
 
 def test_recent_conversation_bootstrap_ignored_after_memory_revision(monkeypatch, tmp_path):

@@ -143,6 +143,28 @@ human(新的用户输入或续跑指令)
 
 子 Agent 仍携带 shared platform contract，例如内部 ID 治理、业务函数调用规则、Skill/Agent 边界、附件/日期上下文和 frame 完成契约；但这些属于平台运行时契约，不等于继承 Root-specific context。子 Agent 如需业务 Skill，应在自己的 frame 内通过 `list_skill_resources`、`read_skill_resource` 或 `invoke_business_skill` 自主发现和读取材料。详见 [13-default-subagent-base-prompt-and-skill-discovery.md](./13-default-subagent-base-prompt-and-skill-discovery.md)。
 
+### 3.3 Prompt window 裁剪边界
+
+`maxPromptMessages` 是真实提交给 LLM 前的 prompt 组装上限，不等同于可以直接对 raw messages 做尾部切片。裁剪必须同时满足 provider protocol 和语义轮次边界：
+
+1. tool protocol 优先合法。
+   - 如果 prompt 中保留了 `tool` result，必须保留它前面匹配的 `assistant.tool_calls`。
+   - 如果裁剪会留下孤立 `tool` result，应一起裁掉该 tool result，或扩大窗口补齐匹配的 tool call。
+2. 语义轮次应尽量完整。
+   - 没有 `compactedSummary` / pinned head 时，tail window 应优先从 `user` 或 summary message 开始。
+   - 不应因为 `maxPromptMessages` 原始条数上限，让下一轮 prompt 以孤立的 assistant 语义消息开头，例如只保留 `A1 -> U2` 而丢失对应 `U1`。
+   - 如果预算不足以保留完整近期 turn，应先触发或使用压缩摘要，再保留较短但完整的近期 tail。
+3. 大工具结果应先受控投影，再进入 prompt。
+   - 单条 message 继续受 `maxMessageChars` 控制。
+   - 单条 tool result 使用独立 `maxToolResultChars` 控制。
+   - 历史 assistant tool call args 使用 `maxToolCallArgsChars` 控制，超限后仅保留截断预览和原始长度。
+   - 大型 tool result / artifact body 不应原样长期占用 prompt；应投影为 digest、关键字段和 refs，完整内容保留在 report/log/artifact evidence。
+   - 后续参数设计需要单独收口 `maxToolResultChars` / `maxToolResultItems` 等工具结果预算，而不是只依赖全局 `maxMessageChars`。
+
+该边界不改变“Root-visible tool protocol 默认保留到压缩或裁剪”的原则；它约束的是“如何裁剪才不会产生 provider 非法协议或语义半轮”。
+
+2026-05-22 第一版落地：`ContextRuntimeMemory.build_prompt_view()` 已改为 turn-aware tail；模型 runtime budget preset 已映射到 `maxPromptChars` / `maxVisibleChars` / `maxToolResultChars`。Root 回合 commit 后的 lazy compaction 已接入 LLM summarizer，只有超过 `maxVisibleMessages` 或 `maxVisibleChars` 时才调用；摘要器失败、超时或返回非 JSON 时自动退回确定性 fallback summary，不影响当前回合提交。当前预算仍采用字符近似，后续可替换为真实 tokenizer 统计。
+
 ### 4. Root 与 Child 的完成契约分离
 
 `conversation.root` 是会话级持久执行载体，不是每轮都需要关闭的业务 Skill frame。它负责普通用户回合、业务工具调度、运行时记忆 commit 与中断恢复。

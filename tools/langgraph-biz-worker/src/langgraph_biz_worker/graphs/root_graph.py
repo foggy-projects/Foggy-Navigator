@@ -24,13 +24,15 @@ from ..runtime.context_memory import (
     load_from_root_frame,
     save_to_root_frame,
 )
+from ..runtime.context_compaction_summarizer import build_runtime_compaction_summarizer
 from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.file_frame_journal import FileFrameJournal
-from ..runtime.file_layout import require_standard_context_id
+from ..runtime.file_layout import date_parts_for_frame, require_standard_context_id
 from ..runtime.frame_store import FrameStore
 from ..runtime.llm_skill_router import create_chat_model, create_chat_model_from_config
 from ..runtime.llm_skill_agent import LlmSkillAgent
 from ..runtime.llm_agent_prompts import model_visible_context
+from ..runtime.model_runtime_budget import resolve_model_runtime_budget
 from ..runtime.llm_child_recovery import (
     _context_skill_manifest,
     _direct_child_result_for_user,
@@ -138,6 +140,48 @@ def _context_with_visible_skill_descriptions(context: dict[str, Any]) -> dict[st
         enriched_skills.append(skill)
     enriched["allowed_skills"] = enriched_skills
     return enriched
+
+
+def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[str, Any] | None) -> None:
+    if not isinstance(runtime_context, dict):
+        return
+    llm_config = runtime_context.get("llm_config")
+    if not isinstance(llm_config, dict):
+        return
+    budget = resolve_model_runtime_budget(llm_config)
+    max_input_tokens = _positive_int(budget.get("max_input_tokens"))
+    compact_threshold_tokens = _positive_int(budget.get("auto_compact_input_token_threshold"))
+    max_tool_result_chars = _positive_int(budget.get("max_single_tool_result_chars"))
+    if max_input_tokens is not None:
+        memory.limits["maxPromptChars"] = max_input_tokens * 4
+    if compact_threshold_tokens is not None:
+        memory.limits["maxVisibleChars"] = compact_threshold_tokens * 4
+    if max_tool_result_chars is not None:
+        memory.limits["maxToolResultChars"] = max_tool_result_chars
+    preset_key = budget.get("preset_key")
+    if isinstance(preset_key, str) and preset_key:
+        memory.limits["runtimeBudgetPresetKey"] = preset_key
+
+
+def _runtime_memory_compaction_summarizer(
+    *,
+    frame: Any,
+    state: RootState,
+    runtime_context: dict[str, Any],
+):
+    if not settings.runtime_compaction_llm_enabled:
+        return None
+    model = _chat_model_for_state(state)
+    return build_runtime_compaction_summarizer(
+        model=model,
+        runtime_context=runtime_context,
+        task_id=state["task_id"],
+        frame_id=frame.frame_id,
+        data_root=_data_root,
+        session_id=frame.conversation_id or frame.session_id or state["task_id"],
+        date_parts=date_parts_for_frame(frame),
+        require_standard_context=bool(frame.conversation_id),
+    )
 
 
 def _recent_conversation_for_runtime(context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -320,16 +364,16 @@ def _chat_model_for_state(state: RootState):
 
 
 def _llm_skill_agent_for_state(state: RootState) -> LlmSkillAgent | None:
+    if not settings.llm_execute_skills:
+        return None
     llm_config = state.get("llm_config")
     max_iterations = _llm_skill_max_iterations_for_state(state)
     if not llm_config:
         if max_iterations == settings.llm_skill_max_iterations:
             return _llm_skill_agent
-        if not settings.llm_execute_skills or not _chat_model:
+        if not _chat_model:
             return None
         return LlmSkillAgent(_chat_model, _runtime, max_iterations, data_root=Path(_data_root))
-    if not settings.llm_execute_skills:
-        return None
     chat_model = create_chat_model_from_config(llm_config)
     if not chat_model:
         return None
@@ -480,10 +524,15 @@ def route_skill(state: RootState) -> dict:
         # Create an Agent Frame via Runtime. Older tool names may still pass a
         # skill-like id; it is kept as compatibility metadata while the frame
         # lifecycle semantics are Agent-owned.
+        conversation_id = _conversation_id_for_root_frame(task_id, state.get("session_id"), context)
         frame_id = _runtime.invoke_skill(
             task_id=task_id,
             skill_id=skill_id,
             skill_input=context,
+            conversation_id=conversation_id,
+            session_id=state.get("session_id"),
+            current_task_id=task_id,
+            origin_task_id=task_id,
             frame_kind=FrameKind.AGENT,
             agent_id=skill_id,
             frame_name=skill_id,
@@ -635,6 +684,7 @@ def _prepare_root_runtime_memory_for_turn(
     context_id = _context_id_for_frame(frame)
     with context_state_lock(context_id):
         memory = load_from_root_frame(frame)
+        _sync_memory_limits_from_runtime_context(memory, runtime_context)
         memory.bootstrap_from_external_recent_conversation(
             _recent_conversation_for_runtime(context),
             task_id=task_id,
@@ -693,6 +743,7 @@ def _refresh_root_runtime_memory_for_running_turn(
     with context_state_lock(context_id):
         refreshed = _runtime.get_frame(frame.frame_id) or frame
         memory = load_from_root_frame(refreshed)
+        _sync_memory_limits_from_runtime_context(memory, runtime_context)
         if inject_prompt_view:
             prompt_view = memory.build_prompt_view()
             if prompt_view:
@@ -724,6 +775,10 @@ def _commit_root_runtime_memory_turn(
     context_id = _context_id_for_frame(frame)
     with context_state_lock(context_id):
         memory = load_from_root_frame(frame)
+        budget_context = dict(state.get("runtime_context") or {})
+        if state.get("llm_config"):
+            budget_context["llm_config"] = state["llm_config"]
+        _sync_memory_limits_from_runtime_context(memory, budget_context)
         if memory.pending_turn is None:
             try:
                 memory.begin_turn(
@@ -738,10 +793,16 @@ def _commit_root_runtime_memory_turn(
                 return
         metadata = _runtime_memory_projection_metadata(frame, structured_output)
         protocol_messages = frame.private_working_state.get(PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY)
+        summarizer = _runtime_memory_compaction_summarizer(
+            frame=frame,
+            state=state,
+            runtime_context=budget_context,
+        )
         committed = memory.commit_turn(
             assistant_message=assistant_message,
             metadata=metadata,
             protocol_messages=protocol_messages if isinstance(protocol_messages, list) else None,
+            summarizer=summarizer,
         )
         if committed:
             frame.private_working_state.pop(PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY, None)

@@ -386,11 +386,15 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
         debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
     assert debug.status_code == 200
     records = debug.json()
-    cursors = [record["cursor"] for record in records]
+    tool_loop_records = [
+        record for record in records
+        if record["request"].get("tools")
+    ]
+    cursors = [record["cursor"] for record in tool_loop_records]
     assert cursors == [f"next:{trace_id}:001", f"next:{trace_id}:002", f"next:{trace_id}:003"]
-    first_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:001")
-    second_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:002")
-    third_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:003")
+    first_turn = next(record for record in tool_loop_records if record["cursor"] == f"next:{trace_id}:001")
+    second_turn = next(record for record in tool_loop_records if record["cursor"] == f"next:{trace_id}:002")
+    third_turn = next(record for record in tool_loop_records if record["cursor"] == f"next:{trace_id}:003")
     assert first_turn["responseSummary"]["toolCalls"] == ["invoke_business_agent"]
     assert second_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
     assert third_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]

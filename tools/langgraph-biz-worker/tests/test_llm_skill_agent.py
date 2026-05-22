@@ -14,6 +14,7 @@ from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_state_for_tests
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
 from langgraph_biz_worker.runtime.context_memory import PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY
+from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 from langgraph_biz_worker.config import settings
@@ -2937,6 +2938,59 @@ def test_llm_agent_injects_account_context_before_skill_instructions(tmp_path):
     assert "policy rule" in system_prompt
     assert "agent rule" in system_prompt
     assert "memory note" in system_prompt
+
+
+def test_llm_agent_injects_delegated_workspace_context_without_account_id(tmp_path):
+    data_root = tmp_path / "data"
+    workspace = tmp_path / "delegated" / "user-001"
+    workspace.mkdir(parents=True)
+    (workspace / "ACCOUNT_POLICY.md").write_text("delegated policy", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("delegated memory", encoding="utf-8")
+
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="delegated_context_skill",
+        name="delegated_context_skill",
+        description="Uses delegated workspace context.",
+        markdown_body="skill instruction",
+        output_schema={"type": "object"},
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    frame_id = runtime.invoke_skill(
+        task_id="task_delegated_context_agent_001",
+        skill_id="delegated_context_skill",
+        skill_input={},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+    policy = ExecutionPolicy.from_context({
+        "execution_policy": {
+            "workdir": str(workspace),
+            "allowed_dirs": [str(workspace)],
+        },
+    })
+
+    LlmSkillAgent(model, runtime, data_root=data_root).run(
+        task_id="task_delegated_context_agent_001",
+        frame_id=frame_id,
+        prompt="run",
+        runtime_context=policy.to_context(),
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert "delegated policy" in system_prompt
+    assert "delegated memory" in system_prompt
+    assert system_prompt.index("### MEMORY.md") < system_prompt.index("技能说明:")
 
 
 def test_llm_agent_injects_runtime_time_context_into_user_prompt():

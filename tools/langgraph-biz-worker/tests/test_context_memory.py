@@ -192,6 +192,110 @@ def test_context_memory_commits_root_visible_tool_protocol():
     assert prompt[3]["content"] == "ticket created"
 
 
+def test_context_memory_prompt_tail_is_semantic_turn_aware():
+    memory = ContextRuntimeMemory(context_id="bctx_20260522_ab_ctx-turn-tail")
+    memory.limits.update({
+        "maxPromptMessages": 3,
+        "maxPromptChars": 10000,
+        "maxVisibleMessages": 100,
+        "maxVisibleChars": 10000,
+    })
+
+    for index in range(1, 4):
+        memory.begin_turn(
+            task_id=f"task_{index:03d}",
+            root_frame_id="frm_root",
+            user_message=f"U{index}",
+        )
+        assert memory.commit_turn(assistant_message=f"A{index}")
+
+    prompt = memory.build_prompt_view()
+
+    assert [(item["role"], item["content"]) for item in prompt] == [
+        ("user", "U3"),
+        ("assistant", "A3"),
+    ]
+
+
+def test_context_memory_prompt_tail_keeps_tool_protocol_group_together():
+    memory = ContextRuntimeMemory(context_id="bctx_20260522_ab_ctx-tool-tail")
+    memory.limits.update({
+        "maxPromptMessages": 3,
+        "maxPromptChars": 10000,
+        "maxVisibleMessages": 100,
+        "maxVisibleChars": 10000,
+    })
+
+    memory.begin_turn(
+        task_id="task_001",
+        root_frame_id="frm_root",
+        user_message="U1",
+    )
+    assert memory.commit_turn(assistant_message="A1")
+    memory.begin_turn(
+        task_id="task_002",
+        root_frame_id="frm_root",
+        user_message="call tool",
+    )
+    assert memory.commit_turn(
+        assistant_message="tool done",
+        protocol_messages=[
+            {"role": "user", "content": "call tool", "taskId": "task_002"},
+            {
+                "role": "assistant",
+                "content": "",
+                "toolCalls": [{"id": "call_1", "name": "list_skill_resources", "args": {}}],
+            },
+            {"role": "tool", "content": '{"ok": true}', "toolCallId": "call_1"},
+            {"role": "assistant", "content": "tool done"},
+        ],
+    )
+
+    prompt = memory.build_prompt_view()
+
+    assert [item["role"] for item in prompt] == ["user", "assistant", "tool", "assistant"]
+    assert prompt[1]["toolCalls"][0]["id"] == "call_1"
+    assert prompt[2]["toolCallId"] == "call_1"
+
+
+def test_context_memory_uses_independent_tool_result_and_args_limits():
+    memory = ContextRuntimeMemory(context_id="bctx_20260522_ab_ctx-tool-budget")
+    memory.limits.update({
+        "maxMessageChars": 20,
+        "maxToolResultChars": 50,
+        "maxToolCallArgsChars": 30,
+    })
+    memory.begin_turn(
+        task_id="task_tool_budget",
+        root_frame_id="frm_root",
+        user_message="call large tool",
+    )
+
+    assert memory.commit_turn(
+        assistant_message="done",
+        protocol_messages=[
+            {"role": "user", "content": "call large tool", "taskId": "task_tool_budget"},
+            {
+                "role": "assistant",
+                "content": "",
+                "toolCalls": [{
+                    "id": "call_large",
+                    "name": "read_big_file",
+                    "args": {"path": "a" * 200},
+                }],
+            },
+            {"role": "tool", "content": "x" * 200, "toolCallId": "call_large"},
+            {"role": "assistant", "content": "done"},
+        ],
+    )
+
+    prompt = memory.build_prompt_view()
+
+    assert len(prompt[2]["content"]) == 50
+    assert prompt[1]["toolCalls"][0]["args"]["_truncated"] is True
+    assert prompt[1]["toolCalls"][0]["args"]["_original_chars"] > 30
+
+
 def test_context_memory_accepts_submitted_user_prompt_with_runtime_time_block():
     memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-user-prompt")
     memory.begin_turn(

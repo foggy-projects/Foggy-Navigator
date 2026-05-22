@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .account_path_guard import ERR_SYMLINK, ERR_TRAVERSAL, PathGuardError, _validate_account_id
+from .execution_policy import ExecutionPolicy
 
 ACCOUNT_CONTEXT_FILE_ORDER = ("ACCOUNT_POLICY.md", "AGENT.md", "MEMORY.md")
 MAX_ACCOUNT_CONTEXT_FILE_BYTES = 32 * 1024
@@ -38,18 +39,22 @@ def read_account_context_files(
     account_id: str | None,
     *,
     max_bytes_per_file: int = MAX_ACCOUNT_CONTEXT_FILE_BYTES,
+    execution_policy: ExecutionPolicy | None = None,
 ) -> list[AccountContextFile]:
-    """Read exact account context files from ``accounts/<account-id>/``.
+    """Read exact account context files from the resolved account workspace.
 
-    Missing files are ignored. Invalid account ids, traversal attempts, and
-    symlinks fail closed by returning no context instead of exposing filesystem
-    details to the model.
+    Missing files are ignored. Invalid account ids, unauthorized delegated
+    workspaces, traversal attempts, and symlinks fail closed by returning no
+    context instead of exposing filesystem details to the model.
     """
-    if not account_id:
-        return []
     try:
-        _validate_account_id(account_id)
-        account_root = Path(data_root).resolve() / "accounts" / account_id
+        account_root = _resolve_account_context_root(
+            data_root,
+            account_id,
+            execution_policy=execution_policy,
+        )
+        if account_root is None:
+            return []
         files: list[AccountContextFile] = []
         for file_name in ACCOUNT_CONTEXT_FILE_ORDER:
             try:
@@ -71,12 +76,14 @@ def build_account_context_prompt(
     account_id: str | None,
     *,
     max_bytes_per_file: int = MAX_ACCOUNT_CONTEXT_FILE_BYTES,
+    execution_policy: ExecutionPolicy | None = None,
 ) -> str:
     """Build the account context prompt block in authority order."""
     files = read_account_context_files(
         data_root,
         account_id,
         max_bytes_per_file=max_bytes_per_file,
+        execution_policy=execution_policy,
     )
     if not files:
         return ""
@@ -105,6 +112,27 @@ def build_account_context_prompt(
             lines.append(f"[truncated after {max_bytes_per_file} bytes]")
 
     return "\n".join(lines).strip()
+
+
+def _resolve_account_context_root(
+    data_root: Path | str,
+    account_id: str | None,
+    *,
+    execution_policy: ExecutionPolicy | None = None,
+) -> Path | None:
+    """Resolve the workspace root that owns account context files.
+
+    First phase resolver:
+    - delegated mode: an upstream-authenticated ``ExecutionPolicy.workdir``;
+    - managed mode: ``<data_root>/accounts/<account_id>``.
+    """
+
+    if execution_policy and execution_policy.configured and execution_policy.workdir:
+        return execution_policy.workdir.resolve()
+    if not account_id:
+        return None
+    _validate_account_id(account_id)
+    return Path(data_root).resolve() / "accounts" / account_id
 
 
 def _resolve_context_file(account_root: Path, file_name: str) -> Path:
