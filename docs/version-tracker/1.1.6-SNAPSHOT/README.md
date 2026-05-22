@@ -36,7 +36,7 @@
 7. `13` 是子 Agent 默认系统提示词与 Skill discovery 授权口径：子 Agent 携带 shared platform contract，不继承 Root-specific context。
 8. `14` 是 Account Workspace Resolver 与 delegated workspace 口径：account/upstream user 身份不再等同固定物理目录。
 9. `15` 是受限 `shell_command` 工具设计口径：Linux 命令格式入口，但内部实现为 workspace 受限命令解释器，不开放真实宿主机 shell。
-10. `16` 是 Navigator Upstream CLI 与配套 skill 的 1.1.6 runtime contract 对齐口径，并记录模型 token 预算配置缺口。
+10. `16` 是 Navigator Upstream CLI 与配套 skill 的 1.1.6 runtime contract 对齐口径，并记录模型 token 预算 preset 字段落地方式。
 
 若旧文档中仍出现“runtime context 拼入 user prompt”的早期表述，以 `09` 的 system / human 边界为当前实现口径。
 
@@ -50,7 +50,7 @@
 
 若后续文档讨论 `shell_command`，以 `15` 的 restricted shell 口径为准：命令格式向 Linux 对齐，但必须通过 allowlist、resolver/path guard 和输出预算治理，不直接执行任意系统 shell。
 
-若旧 CLI / skill 文档仍暗示上游自行生成 `contextId`、把 `clientContext` 当成 LLM prompt 配置、或把模型上下文窗口塞入用户消息，以 `16` 为当前口径：新会话由 BizWorker 生成 `contextId`，上游只复用返回值；`clientContext` 只保存会话元数据；模型 token 预算需要后端一等配置字段支持。
+若旧 CLI / skill 文档仍暗示上游自行生成 `contextId`、把 `clientContext` 当成 LLM prompt 配置、或把模型上下文窗口塞入用户消息，以 `16` 为当前口径：新会话由 BizWorker 生成 `contextId`，上游只复用返回值；`clientContext` 只保存会话元数据；模型 token 预算通过 `runtimeBudgetPresetKey` / `runtimeBudgetOverrideJson` 后端一等字段配置。
 
 ## 当前条目
 
@@ -69,7 +69,7 @@
 - [13-default-subagent-base-prompt-and-skill-discovery.md](./13-default-subagent-base-prompt-and-skill-discovery.md) - 收口子 Agent 默认提示词、Root 上下文隔离，以及允许 Skill/Agent 时同步放行 Skill discovery 工具的口径
 - [14-account-workspace-resolver-and-delegated-mode.md](./14-account-workspace-resolver-and-delegated-mode.md) - 收口 Account Workspace Resolver、managed account mode 和 delegated workspace mode 的目录解析契约
 - [15-restricted-shell-command-tool-design.md](./15-restricted-shell-command-tool-design.md) - 记录受限 `shell_command` 工具设计：Linux 命令格式、有限命令子集、workspace path guard 与默认暴露策略
-- [16-upstream-cli-skill-runtime-contract-alignment.md](./16-upstream-cli-skill-runtime-contract-alignment.md) - 收口 Navigator Upstream CLI / 配套 skill 与 1.1.6 runtime context 的对齐口径，并记录模型 token 预算配置缺口
+- [16-upstream-cli-skill-runtime-contract-alignment.md](./16-upstream-cli-skill-runtime-contract-alignment.md) - 收口 Navigator Upstream CLI / 配套 skill 与 1.1.6 runtime context 的对齐口径，并记录模型 token 预算 preset 字段落地方式
 - [workitems/BUG-runtime-context-phase2-5-review-fixes.md](./workitems/BUG-runtime-context-phase2-5-review-fixes.md) - 记录并修复 Phase 2-5 评审发现的排队终止窗口、JSON 脱敏和 commit 清理缺陷
 - [workitems/BUG-root-account-memory-and-runtime-session-directory-governance.md](./workitems/BUG-root-account-memory-and-runtime-session-directory-governance.md) - 记录 Root Prompt upstream user 记忆文件注入疑点，以及非 `bctx_` runtime session 目录的 fallback 来源与治理建议
 - [workitems/BUG-client-app-public-skill-manifest-resolution.md](./workitems/BUG-client-app-public-skill-manifest-resolution.md) - 记录并修复 ClientApp public skill 资源可见但 `invoke_business_skill` 执行 manifest 缺失的问题

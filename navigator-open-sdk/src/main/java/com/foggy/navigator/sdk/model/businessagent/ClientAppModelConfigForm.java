@@ -12,6 +12,8 @@ public class ClientAppModelConfigForm {
     private Boolean setDefault;
     private Map<String, String> envVars;
     private List<String> availableModels;
+    private String runtimeBudgetPresetKey;
+    private String runtimeBudgetOverrideJson;
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
@@ -29,4 +31,8 @@ public class ClientAppModelConfigForm {
     public void setEnvVars(Map<String, String> envVars) { this.envVars = envVars; }
     public List<String> getAvailableModels() { return availableModels; }
     public void setAvailableModels(List<String> availableModels) { this.availableModels = availableModels; }
+    public String getRuntimeBudgetPresetKey() { return runtimeBudgetPresetKey; }
+    public void setRuntimeBudgetPresetKey(String runtimeBudgetPresetKey) { this.runtimeBudgetPresetKey = runtimeBudgetPresetKey; }
+    public String getRuntimeBudgetOverrideJson() { return runtimeBudgetOverrideJson; }
+    public void setRuntimeBudgetOverrideJson(String runtimeBudgetOverrideJson) { this.runtimeBudgetOverrideJson = runtimeBudgetOverrideJson; }
 }

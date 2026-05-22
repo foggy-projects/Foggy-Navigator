@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 
 from ..config import Settings
+from .model_runtime_budget import resolve_model_runtime_budget
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,9 @@ def create_chat_model_from_config(config: dict[str, Any] | None) -> BaseChatMode
         settings_kwargs["llm_provider_max_retries"] = provider_max_retries
 
     max_tokens = _optional_int(config, "max_tokens", "llm_max_tokens", "max_tokens_limit")
+    if max_tokens is None:
+        budget = resolve_model_runtime_budget(config)
+        max_tokens = _optional_int(budget, "max_output_tokens")
     if max_tokens is not None:
         settings_kwargs["llm_max_tokens"] = max_tokens
 

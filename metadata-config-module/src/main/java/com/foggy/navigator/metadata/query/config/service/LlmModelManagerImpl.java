@@ -70,6 +70,8 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setWorkerBackend(form.getWorkerBackend());
         entity.setEnvVars(serializeEnvVars(form.getEnvVars()));
         entity.setAvailableModels(serializeList(form.getAvailableModels()));
+        entity.setRuntimeBudgetPresetKey(trimToNull(form.getRuntimeBudgetPresetKey()));
+        entity.setRuntimeBudgetOverrideJson(trimToNull(form.getRuntimeBudgetOverrideJson()));
         normalizeWorkerAuth(entity);
 
         // 新增项排在最后
@@ -125,6 +127,12 @@ public class LlmModelManagerImpl implements LlmModelManager {
         }
         if (form.getAvailableModels() != null) {
             entity.setAvailableModels(serializeList(form.getAvailableModels()));
+        }
+        if (form.getRuntimeBudgetPresetKey() != null) {
+            entity.setRuntimeBudgetPresetKey(trimToNull(form.getRuntimeBudgetPresetKey()));
+        }
+        if (form.getRuntimeBudgetOverrideJson() != null) {
+            entity.setRuntimeBudgetOverrideJson(trimToNull(form.getRuntimeBudgetOverrideJson()));
         }
         normalizeWorkerAuth(entity);
 
@@ -448,9 +456,15 @@ public class LlmModelManagerImpl implements LlmModelManager {
         dto.setWorkerBackend(entity.getWorkerBackend());
         dto.setEnvVars(deserializeEnvVars(entity.getEnvVars()));
         dto.setAvailableModels(deserializeList(entity.getAvailableModels()));
+        dto.setRuntimeBudgetPresetKey(entity.getRuntimeBudgetPresetKey());
+        dto.setRuntimeBudgetOverrideJson(entity.getRuntimeBudgetOverrideJson());
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());
         return dto;
+    }
+
+    private String trimToNull(String value) {
+        return value != null && !value.isBlank() ? value.trim() : null;
     }
 
     private void normalizeWorkerAuth(LlmModelConfigEntity entity) {

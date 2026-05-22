@@ -1666,6 +1666,8 @@ class UpstreamCliTest {
                 "--model-base-url", "https://llm.example/v1",
                 "--model-name", "gpt-test",
                 "--provider", "openai",
+                "--runtime-budget-preset", "generic.128k",
+                "--runtime-budget-override-json", "{\"maxOutputTokens\":6144}",
                 "--api-key-env", "UPSTREAM_LLM_KEY",
                 "--set-default"}, env("UPSTREAM_LLM_KEY", "llm-secret"));
 
@@ -1679,6 +1681,8 @@ class UpstreamCliTest {
         assertTrue(lastBody.contains("\"modelName\":\"gpt-test\""));
         assertTrue(lastBody.contains("\"apiKey\":\"llm-secret\""));
         assertTrue(lastBody.contains("\"NAVI_LLM_PROVIDER\":\"openai\""));
+        assertTrue(lastBody.contains("\"runtimeBudgetPresetKey\":\"generic.128k\""));
+        assertTrue(lastBody.contains("\"runtimeBudgetOverrideJson\":\"{\\\"maxOutputTokens\\\":6144}\""));
         assertTrue(lastBody.contains("\"setDefault\":true"));
         assertTrue(output.contains("model create ok"));
         assertTrue(output.contains("modelConfigId=model-owned"));

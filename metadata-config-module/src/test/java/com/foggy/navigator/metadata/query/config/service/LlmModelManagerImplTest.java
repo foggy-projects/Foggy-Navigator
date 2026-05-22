@@ -172,4 +172,50 @@ class LlmModelManagerImplTest {
         verify(llmModelRepo).save(entity);
         verifyNoInteractions(credentialEncryptor);
     }
+
+    @Test
+    void updateModelConfig_persistsRuntimeBudgetFields() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-budget");
+        entity.setTenantId("tenant-1");
+        entity.setCategory(LlmModelCategory.GENERAL);
+        entity.setWorkerBackend("LANGGRAPH_BIZ");
+        entity.setBaseUrl("https://llm.example/v1");
+        entity.setModelName("qwen3.5-plus");
+
+        LlmModelConfigForm form = new LlmModelConfigForm();
+        form.setRuntimeBudgetPresetKey(" generic.128k ");
+        form.setRuntimeBudgetOverrideJson(" {\"maxOutputTokens\":6144} ");
+
+        when(llmModelRepo.findById("cfg-budget")).thenReturn(Optional.of(entity));
+
+        service.updateModelConfig("cfg-budget", form);
+
+        assertEquals("generic.128k", entity.getRuntimeBudgetPresetKey());
+        assertEquals("{\"maxOutputTokens\":6144}", entity.getRuntimeBudgetOverrideJson());
+        verify(llmModelRepo).save(entity);
+    }
+
+    @Test
+    void getModelConfig_exposesRuntimeBudgetFields() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-budget");
+        entity.setTenantId("tenant-1");
+        entity.setName("biz model");
+        entity.setCategory(LlmModelCategory.GENERAL);
+        entity.setWorkerBackend("LANGGRAPH_BIZ");
+        entity.setBaseUrl("https://llm.example/v1");
+        entity.setApiKey("encrypted-key");
+        entity.setModelName("qwen3.5-plus");
+        entity.setIsDefault(false);
+        entity.setRuntimeBudgetPresetKey("generic.128k");
+        entity.setRuntimeBudgetOverrideJson("{\"maxOutputTokens\":6144}");
+
+        when(llmModelRepo.findById("cfg-budget")).thenReturn(Optional.of(entity));
+
+        LlmModelConfigDTO dto = service.getModelConfig("cfg-budget").orElseThrow();
+
+        assertEquals("generic.128k", dto.getRuntimeBudgetPresetKey());
+        assertEquals("{\"maxOutputTokens\":6144}", dto.getRuntimeBudgetOverrideJson());
+    }
 }

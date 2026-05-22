@@ -128,8 +128,11 @@ public class LanggraphStreamRelay {
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("model_config_id", modelConfigId);
         putTextIfPresent(config, "provider", resolveProvider(model));
+        putTextIfPresent(config, "worker_backend", model.getWorkerBackend());
         putTextIfPresent(config, "base_url", model.getBaseUrl());
         putTextIfPresent(config, "model", model.getModelName());
+        putTextIfPresent(config, "runtime_budget_preset_key", model.getRuntimeBudgetPresetKey());
+        putTextIfPresent(config, "runtime_budget_override_json", model.getRuntimeBudgetOverrideJson());
         String apiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
         putTextIfPresent(config, "api_key", apiKey);
         if (model.getEnvVars() != null && !model.getEnvVars().isEmpty()) {

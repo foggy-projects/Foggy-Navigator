@@ -192,7 +192,7 @@ public class UpstreamCli {
         out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-control-key, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files, worker-pool list/create/add-member/status, account-context list, account-context read, account-context write-policy");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
-        out.println("  model create/update does not yet expose LangGraph Biz runtime-budget presets or token-budget fields.");
+        out.println("  model create/update supports --runtime-budget-preset <key> and optional --runtime-budget-override-json <json> for LangGraph Biz.");
         return 0;
     }
 
@@ -1261,6 +1261,8 @@ public class UpstreamCli {
         if (hasText(availableModels)) {
             form.setAvailableModels(parseCsv(availableModels));
         }
+        form.setRuntimeBudgetPresetKey(args.option("runtime-budget-preset"));
+        form.setRuntimeBudgetOverrideJson(args.option("runtime-budget-override-json"));
         if (create) {
             form.setApiKey(config.required("NAVI_LLM_API_KEY", "LLM API key; pass --api-key-env <envName>"));
         }

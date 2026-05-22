@@ -65,3 +65,33 @@ class TestCreateChatModel:
         assert kwargs["model"] == "navigator-e2e-scripted"
         assert kwargs["timeout"] == 12
         assert kwargs["max_retries"] == 0
+
+    @patch("langchain_openai.ChatOpenAI")
+    def test_request_config_uses_runtime_budget_preset_for_max_tokens(self, mock_cls):
+        result = create_chat_model_from_config({
+            "provider": "openai",
+            "api_key": "sk-test",
+            "model": "qwen3.5-plus",
+            "runtime_budget_preset_key": "generic.128k",
+            "runtime_budget_override_json": '{"maxOutputTokens": 6144}',
+        })
+
+        assert result is not None
+        mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["max_tokens"] == 6144
+
+    @patch("langchain_openai.ChatOpenAI")
+    def test_request_config_explicit_max_tokens_wins_over_budget(self, mock_cls):
+        result = create_chat_model_from_config({
+            "provider": "openai",
+            "api_key": "sk-test",
+            "model": "qwen3.5-plus",
+            "runtime_budget_preset_key": "generic.128k",
+            "max_tokens": 2048,
+        })
+
+        assert result is not None
+        mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["max_tokens"] == 2048

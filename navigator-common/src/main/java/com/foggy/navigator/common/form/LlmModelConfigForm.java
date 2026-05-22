@@ -68,4 +68,14 @@ public class LlmModelConfigForm {
      * 为空或 null 表示不限制
      */
     private List<String> availableModels;
+
+    /**
+     * LangGraph Biz runtime token budget preset key.
+     */
+    private String runtimeBudgetPresetKey;
+
+    /**
+     * Optional JSON override applied on top of the runtime budget preset.
+     */
+    private String runtimeBudgetOverrideJson;
 }

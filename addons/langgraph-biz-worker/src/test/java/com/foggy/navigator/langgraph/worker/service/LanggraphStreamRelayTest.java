@@ -387,7 +387,10 @@ class LanggraphStreamRelayTest {
         model.setId("cfg-e2e");
         model.setBaseUrl("http://mock-llm:8000");
         model.setModelName("navigator-e2e-scripted");
+        model.setWorkerBackend("LANGGRAPH_BIZ");
         model.setEnvVars(Map.of("NAVI_LLM_PROVIDER", "openai"));
+        model.setRuntimeBudgetPresetKey("generic.128k");
+        model.setRuntimeBudgetOverrideJson("{\"maxOutputTokens\":6144}");
         when(llmModelManager.getModelConfig("cfg-e2e")).thenReturn(Optional.of(model));
         when(llmModelManager.getDecryptedApiKey("cfg-e2e")).thenReturn("mock-key");
 
@@ -399,6 +402,9 @@ class LanggraphStreamRelayTest {
         assertEquals("http://mock-llm:8000", config.get("base_url"));
         assertEquals("navigator-e2e-scripted", config.get("model"));
         assertEquals("mock-key", config.get("api_key"));
+        assertEquals("LANGGRAPH_BIZ", config.get("worker_backend"));
+        assertEquals("generic.128k", config.get("runtime_budget_preset_key"));
+        assertEquals("{\"maxOutputTokens\":6144}", config.get("runtime_budget_override_json"));
     }
 
     @Test

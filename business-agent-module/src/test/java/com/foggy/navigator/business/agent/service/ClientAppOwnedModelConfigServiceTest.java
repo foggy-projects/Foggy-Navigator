@@ -52,6 +52,8 @@ class ClientAppOwnedModelConfigServiceTest {
         assertEquals("secret-key", saved.getApiKey());
         assertEquals(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND, saved.getWorkerBackend());
         assertFalse(Boolean.TRUE.equals(saved.getIsDefault()));
+        assertEquals("generic.128k", saved.getRuntimeBudgetPresetKey());
+        assertEquals("{\"maxOutputTokens\":6144}", saved.getRuntimeBudgetOverrideJson());
 
         ArgumentCaptor<GrantModelConfigForm> grantCaptor = ArgumentCaptor.forClass(GrantModelConfigForm.class);
         verify(grantService).grantModelConfig(eq("tenant-1"), eq("actor-1"), eq("capp-1"), grantCaptor.capture());
@@ -97,6 +99,8 @@ class ClientAppOwnedModelConfigServiceTest {
         form.setModelName("gpt-test");
         form.setApiKey("secret-key");
         form.setSetDefault(true);
+        form.setRuntimeBudgetPresetKey("generic.128k");
+        form.setRuntimeBudgetOverrideJson("{\"maxOutputTokens\":6144}");
         return form;
     }
 
