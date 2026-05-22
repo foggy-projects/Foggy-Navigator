@@ -24,7 +24,7 @@ def create_chat_model(settings: Settings) -> BaseChatModel | None:
         kwargs: dict[str, Any] = {
             "model": settings.llm_model or "claude-sonnet-4-20250514",
             "temperature": settings.llm_temperature,
-            "max_tokens": 64,
+            "max_tokens": settings.llm_max_tokens,
             "timeout": settings.llm_request_timeout_seconds,
             "max_retries": max(0, settings.llm_provider_max_retries),
         }
@@ -40,7 +40,7 @@ def create_chat_model(settings: Settings) -> BaseChatModel | None:
         kwargs = {
             "model": settings.llm_model or "gpt-4o",
             "temperature": settings.llm_temperature,
-            "max_tokens": 64,
+            "max_tokens": settings.llm_max_tokens,
             "timeout": settings.llm_request_timeout_seconds,
             "max_retries": max(0, settings.llm_provider_max_retries),
         }
@@ -87,6 +87,11 @@ def create_chat_model_from_config(config: dict[str, Any] | None) -> BaseChatMode
     provider_max_retries = _optional_int(config, "provider_max_retries", "llm_provider_max_retries")
     if provider_max_retries is not None:
         settings_kwargs["llm_provider_max_retries"] = provider_max_retries
+
+    max_tokens = _optional_int(config, "max_tokens", "llm_max_tokens", "max_tokens_limit")
+    if max_tokens is not None:
+        settings_kwargs["llm_max_tokens"] = max_tokens
+
     request_settings = Settings(**settings_kwargs)
     return create_chat_model(request_settings)
 

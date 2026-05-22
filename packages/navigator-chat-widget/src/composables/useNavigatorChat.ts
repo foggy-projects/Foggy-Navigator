@@ -94,6 +94,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
   const skillFramesById = new Map<string, SkillFrameBlock>()
   const skillFrameMessageIds = new Map<string, string>()
   const pendingToolCallIdsByTask = new Map<string, string[]>()
+  const streamingTextMessageIds = new Map<string, string>()
   let pendingBusinessActions: NavigatorAction[] = []
   let toolSeq = 0
 
@@ -244,6 +245,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       contextId.value = page.contextId ?? targetContextId
       ingestOpenMessages(sessionMessagesToOpenMessages(page.messages ?? []), 'history', undefined, {
         includeUserMessages: true,
+        source: 'history',
       })
       return page
     } catch (e: unknown) {
@@ -277,6 +279,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     skillFramesById.clear()
     skillFrameMessageIds.clear()
     pendingToolCallIdsByTask.clear()
+    streamingTextMessageIds.clear()
     pendingBusinessActions = []
   }
 
@@ -308,9 +311,11 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     openMessages: OpenTaskMessage[],
     taskId: string,
     status?: TaskStatus,
-    options: { includeUserMessages?: boolean } = {}
+    options: { includeUserMessages?: boolean; source?: 'history' | 'task' } = {}
   ) {
     for (const message of openMessages) {
+      const messageType = normalizeOpenMessageType(message)
+      if (!messageType) continue
       const messageTaskId = firstString((message as { taskId?: unknown }).taskId, taskId) ?? taskId
       const id = openMessageId(messageTaskId, message)
       if (seenOpenMessageIds.has(id)) continue
@@ -320,7 +325,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       const sanitizedMessage = sanitizeValue(message) as OpenTaskMessage
       const actions = extractActions(sanitizedMessage)
       const payload = normalizedPayload(message)
-      if (message.type === 'USER') {
+      if (messageType === 'USER') {
         if (options.includeUserMessages && content) {
           rawMessages.value.push({
             id,
@@ -329,24 +334,32 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
             timestamp: openMessageTimestamp(message),
             taskId: messageTaskId,
             status,
-            messageType: message.type,
+            messageType,
           })
         }
         continue
       }
-      if ((message.type === 'TEXT' || message.type === 'RESULT') && content) {
-        const messageActions = mergeActions(pendingBusinessActions, actions)
-        pendingBusinessActions = []
+      if ((messageType === 'TEXT' || messageType === 'RESULT') && content) {
         if (display.mode === 'business' && isRuntimeArtifactContent(content, payload)) {
           continue
         }
+        const isStreamingText = shouldAggregateStreamingText(message, messageType, options.source)
+        const renderActions = isStreamingText ? actions : mergeActions(pendingBusinessActions, actions)
         const businessContent = display.mode === 'business'
-          ? userFacingMessageContent(stripRawJsonArtifact(content, messageActions), display.mode)
+          ? userFacingMessageContent(stripRawJsonArtifact(content, renderActions), display.mode)
           : userFacingMessageContent(content, display.mode)
-        const visibleContent = businessContent || (messageActions.length > 0 ? businessActionIntro(messageActions) : '')
+        const visibleContent = businessContent || (renderActions.length > 0 ? businessActionIntro(renderActions) : '')
         if (!visibleContent) {
           continue
         }
+        if (isStreamingText) {
+          if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
+          upsertStreamingTextMessage(messageTaskId, visibleContent, message, status)
+          continue
+        }
+        removeStreamingTextMessage(messageTaskId)
+        const messageActions = renderActions
+        pendingBusinessActions = []
         const report = extractExecutionReport(undefined, payload)
         rawMessages.value.push({
           id,
@@ -355,14 +368,14 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           timestamp: openMessageTimestamp(message),
           taskId: messageTaskId,
           status,
-          messageType: message.type,
+          messageType,
           terminal: message.terminal,
           terminalStatus: message.terminalStatus ?? null,
           actions: messageActions.length > 0 ? messageActions : undefined,
           executionReportRef: report.ref,
           executionReportDigest: report.digest,
         })
-      } else if (message.type === 'ERROR') {
+      } else if (messageType === 'ERROR') {
         const report = extractExecutionReport(undefined, payload)
         const errMsg = display.mode === 'business'
           ? sanitizeErrorSummary(content || '任务执行失败')
@@ -375,14 +388,14 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           timestamp: openMessageTimestamp(message),
           taskId: messageTaskId,
           status,
-          messageType: message.type,
+          messageType,
           terminal: message.terminal,
           terminalStatus: message.terminalStatus ?? null,
           error: errMsg,
           executionReportRef: report.ref,
           executionReportDigest: report.digest,
         })
-      } else if (message.type === 'STATE') {
+      } else if (messageType === 'STATE') {
         const subtype = firstString(payload.subtype, payload.stateType, payload.state_type)
         const progressType = firstString(payload.progressType, payload.progress_type)
         if (subtype === 'task_progress' || progressType) {
@@ -395,7 +408,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
               timestamp: openMessageTimestamp(message),
               taskId: messageTaskId,
               status,
-              messageType: message.type,
+              messageType,
               terminal: message.terminal,
               terminalStatus: message.terminalStatus ?? null,
               process: true,
@@ -424,20 +437,20 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
             timestamp: openMessageTimestamp(message),
             taskId: messageTaskId,
             status,
-            messageType: message.type,
+            messageType,
             terminal: message.terminal,
             terminalStatus: message.terminalStatus ?? null,
             process: true,
             processKind: 'state',
           })
         }
-      } else if (message.type === 'TOOL_CALL') {
+      } else if (messageType === 'TOOL_CALL') {
         if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
         progressText.value = '正在查询数据...'
         if (display.showToolCalls || display.showToolResults) {
           upsertToolExecution(messageTaskId, message, 'call', id, status)
         }
-      } else if (message.type === 'TOOL_RESULT') {
+      } else if (messageType === 'TOOL_RESULT') {
         if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
         progressText.value = '正在生成回答...'
         if (display.showToolCalls || display.showToolResults) {
@@ -447,6 +460,76 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
         pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
       }
     }
+  }
+
+  function shouldAggregateStreamingText(
+    message: OpenTaskMessage,
+    messageType: OpenTaskMessage['type'],
+    source: 'history' | 'task' = 'task'
+  ): boolean {
+    if (source === 'history' || messageType !== 'TEXT') return false
+    return !isFinalAssistantText(message, messageType)
+  }
+
+  function isFinalAssistantText(message: OpenTaskMessage, messageType: OpenTaskMessage['type']): boolean {
+    if (messageType === 'RESULT') return true
+    if (rawOpenMessageType(message) === 'TEXT_COMPLETE') return true
+    if (message.terminal === true) return true
+    return Boolean(message.terminalStatus)
+  }
+
+  function upsertStreamingTextMessage(
+    taskId: string,
+    content: string,
+    message: OpenTaskMessage,
+    status?: TaskStatus
+  ) {
+    const key = streamingTextKey(taskId)
+    const existingMessageId = streamingTextMessageIds.get(key)
+    const timestamp = openMessageTimestamp(message)
+    if (existingMessageId) {
+      const target = rawMessages.value.find((item) => item.id === existingMessageId)
+      if (target) {
+        target.content = mergeStreamingText(target.content, content)
+        target.timestamp = Math.min(target.timestamp, timestamp)
+        target.status = status
+      }
+      return
+    }
+    const id = `streaming-text:${taskId}`
+    streamingTextMessageIds.set(key, id)
+    rawMessages.value.push({
+      id,
+      role: 'assistant',
+      content,
+      timestamp,
+      taskId,
+      status,
+      messageType: 'TEXT',
+      terminal: false,
+      terminalStatus: null,
+      transient: true,
+    })
+  }
+
+  function removeStreamingTextMessage(taskId: string) {
+    const key = streamingTextKey(taskId)
+    const existingMessageId = streamingTextMessageIds.get(key)
+    if (!existingMessageId) return
+    streamingTextMessageIds.delete(key)
+    rawMessages.value = rawMessages.value.filter((item) => item.id !== existingMessageId)
+  }
+
+  function streamingTextKey(taskId: string): string {
+    return taskId
+  }
+
+  function mergeStreamingText(previous: string, next: string): string {
+    if (!previous) return next
+    if (!next) return previous
+    if (next.startsWith(previous)) return next
+    if (previous.endsWith(next)) return previous
+    return `${previous}${next}`
   }
 
   function finishTask(taskId: string, terminalStatus: TerminalStatus | null, status?: TaskStatus) {
@@ -522,21 +605,31 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
   }
 
   function sessionMessagesToOpenMessages(messages: SessionMessage[]): OpenTaskMessage[] {
-    return messages.map((message) => ({
-      id: message.messageId,
-      messageId: message.messageId,
-      type: normalizeSessionMessageType(message),
-      content: message.content,
-      createdAt: message.createdAt,
-      timestamp: message.createdAt,
-      metadata: message.metadata,
-      taskId: message.taskId,
-    }))
+    const output: OpenTaskMessage[] = []
+    for (const message of messages) {
+      const type = normalizeOpenMessageType(message)
+      if (!type) continue
+      output.push({
+        id: message.messageId,
+        messageId: message.messageId,
+        type,
+        content: message.content,
+        createdAt: message.createdAt,
+        timestamp: message.createdAt,
+        metadata: message.metadata,
+        taskId: message.taskId,
+      })
+    }
+    return output
   }
 
-  function normalizeSessionMessageType(message: SessionMessage): OpenTaskMessage['type'] {
-    const rawType = firstString(message.type, message.metadata?.type)
-    const normalized = rawType?.toUpperCase()
+  function normalizeOpenMessageType(message: {
+    type?: unknown
+    role?: unknown
+    metadata?: Record<string, unknown>
+  }): OpenTaskMessage['type'] | null {
+    const normalized = rawOpenMessageType(message)
+    if (normalized === 'TEXT_CHUNK' || normalized === 'CHUNK' || normalized === 'ASSISTANT_TEXT_CHUNK') return null
     if (normalized === 'USER') return 'USER'
     if (normalized === 'TEXT' || normalized === 'TEXT_COMPLETE') return 'TEXT'
     if (normalized === 'RESULT' || normalized === 'TASK_COMPLETED') return 'RESULT'
@@ -545,10 +638,22 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     if (normalized === 'STATE' || normalized === 'STATUS') return 'STATE'
     if (normalized === 'ERROR') return 'ERROR'
 
-    const role = message.role?.toUpperCase()
+    const role = firstString(message.role)?.toUpperCase()
     if (role === 'USER') return 'USER'
     if (role === 'TOOL') return 'TOOL_RESULT'
     return 'TEXT'
+  }
+
+  function rawOpenMessageType(message: {
+    type?: unknown
+    metadata?: Record<string, unknown>
+  }): string | undefined {
+    return firstString(
+      message.type,
+      message.metadata?.type,
+      message.metadata?.messageType,
+      message.metadata?.message_type,
+    )?.toUpperCase()
   }
 
   return {

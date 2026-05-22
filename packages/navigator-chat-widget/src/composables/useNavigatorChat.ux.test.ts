@@ -322,6 +322,223 @@ describe('useNavigatorChat business action UX', () => {
     })
   })
 
+  it('drops persisted streaming chunks when loading historical messages', async () => {
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            contextId: 'ctx-stream',
+            messages: [
+              {
+                messageId: 'hist-user',
+                contextId: 'ctx-stream',
+                taskId: 'task-stream',
+                role: 'USER',
+                type: 'USER',
+                content: 'hi',
+                createdAt: '2026-05-22T14:00:00',
+              },
+              {
+                messageId: 'chunk-1',
+                contextId: 'ctx-stream',
+                taskId: 'task-stream',
+                role: 'ASSISTANT',
+                type: 'TEXT_CHUNK',
+                content: '你好',
+                createdAt: '2026-05-22T14:00:01',
+              },
+              {
+                messageId: 'chunk-2',
+                contextId: 'ctx-stream',
+                taskId: 'task-stream',
+                role: 'ASSISTANT',
+                content: '！有什么我可以帮',
+                metadata: { type: 'TEXT_CHUNK' },
+                createdAt: '2026-05-22T14:00:02',
+              },
+              {
+                messageId: 'final-reply',
+                contextId: 'ctx-stream',
+                taskId: 'task-stream',
+                role: 'ASSISTANT',
+                type: 'TEXT_COMPLETE',
+                content: '你好！有什么我可以帮你的吗？',
+                createdAt: '2026-05-22T14:00:03',
+              },
+            ],
+            hasMore: false,
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-stream')
+    await nextTick()
+
+    expect(chat.messages.value.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'hi'],
+      ['assistant', '你好！有什么我可以帮你的吗？'],
+    ])
+  })
+
+  it('replaces active streaming text fragments with the final task result', async () => {
+    const now = Date.now()
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            taskId: 'task-stream',
+            agentId: 'agent-1',
+            status: 'COMPLETED',
+            contextId: 'ctx-stream',
+            terminal: true,
+            terminalStatus: 'COMPLETED',
+            messages: [
+              {
+                id: 'chunk-1',
+                type: 'TEXT',
+                content: '你好',
+                timestamp: now + 1,
+              },
+              {
+                id: 'chunk-2',
+                type: 'TEXT',
+                content: '！有什么我可以帮',
+                timestamp: now + 2,
+              },
+              {
+                id: 'chunk-3',
+                type: 'TEXT',
+                content: '你的吗？无论是',
+                timestamp: now + 3,
+              },
+              {
+                id: 'final-reply',
+                type: 'RESULT',
+                content: '你好！有什么我可以帮你的吗？',
+                timestamp: now + 4,
+                terminal: true,
+                terminalStatus: 'COMPLETED',
+              },
+            ],
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('hi')
+    await nextTick()
+
+    expect(chat.messages.value.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'hi'],
+      ['assistant', '你好！有什么我可以帮你的吗？'],
+    ])
+  })
+
+  it('updates active polling text fragments until a later final result arrives', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-22T14:30:00').getTime())
+    let pollCalls = 0
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          pollInterval: 10,
+          fetch: async (url) => {
+            if (String(url).includes('/messages')) {
+              pollCalls += 1
+              if (pollCalls === 1) {
+                return okResponse({
+                  taskId: 'task-stream',
+                  contextId: 'ctx-stream',
+                  status: 'WORKING',
+                  terminal: false,
+                  messages: [
+                    {
+                      id: 'chunk-1',
+                      type: 'TEXT',
+                      content: '你好',
+                      timestamp: Date.now() + 1,
+                    },
+                    {
+                      id: 'chunk-2',
+                      type: 'TEXT',
+                      content: '！有什么我可以帮',
+                      timestamp: Date.now() + 2,
+                    },
+                  ],
+                  nextCursor: 'cursor-2',
+                })
+              }
+              return okResponse({
+                taskId: 'task-stream',
+                contextId: 'ctx-stream',
+                status: 'COMPLETED',
+                terminal: true,
+                terminalStatus: 'COMPLETED',
+                messages: [
+                  {
+                    id: 'final-reply',
+                    type: 'RESULT',
+                    content: '你好！有什么我可以帮你的吗？',
+                    timestamp: Date.now() + 3,
+                    terminal: true,
+                    terminalStatus: 'COMPLETED',
+                  },
+                ],
+              })
+            }
+            return okResponse({
+              taskId: 'task-stream',
+              agentId: 'agent-1',
+              status: 'WORKING',
+              contextId: 'ctx-stream',
+              terminal: false,
+              messages: [],
+            })
+          },
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('hi')
+    await vi.advanceTimersByTimeAsync(10)
+    await nextTick()
+
+    expect(chat.messages.value.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'hi'],
+      ['assistant', '你好！有什么我可以帮'],
+    ])
+
+    await vi.advanceTimersByTimeAsync(10)
+    await nextTick()
+
+    expect(chat.messages.value.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'hi'],
+      ['assistant', '你好！有什么我可以帮你的吗？'],
+    ])
+  })
+
   it('deletes a historical session through the Open API and clears the active context', async () => {
     const requests: Array<{ url: string; method?: string }> = []
     let chat: UseNavigatorChat | undefined
