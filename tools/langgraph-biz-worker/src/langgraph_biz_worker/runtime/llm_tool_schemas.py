@@ -64,6 +64,13 @@ _GLOBAL_TOOL_NAMES = [
     "read_frame_execution_report",
 ]
 
+_DEFAULT_FILE_TOOL_NAMES = (
+    "list_files",
+    "read_file",
+    "write_file",
+    "patch_file",
+)
+
 _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES = {
     "list_business_functions",
     "get_business_function_schema",
@@ -642,11 +649,18 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "List files in the account's skill directory.",
+            "description": (
+                "List files under the current account/workspace file scope. "
+                "When no explicit execution policy is supplied, this is limited "
+                "to the account skill directory."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "relative_path": {"type": "string", "description": "Directory to list (e.g. skills/my-skill)"},
+                    "relative_path": {
+                        "type": "string",
+                        "description": "Directory to list, relative to the current file scope.",
+                    },
                     "recursive": {"type": "boolean"},
                     "max_entries": {"type": "integer"},
                 },
@@ -658,7 +672,10 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read a file from the account's skill directory.",
+            "description": (
+                "Read a text file from the current account/workspace file scope "
+                "with line and byte limits."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -674,7 +691,11 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Write a file to the account's skill directory. mode=create (default) or mode=overwrite.",
+            "description": (
+                "Create or overwrite a text file in the current account/workspace "
+                "file scope. Use mode=create by default; use mode=overwrite with "
+                "expected_sha256 when replacing known existing content."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -725,7 +746,10 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "patch_file",
-            "description": "Apply a unified diff patch to a file. Conflicts cause full rejection.",
+            "description": (
+                "Apply a single-file unified diff patch in the current "
+                "account/workspace file scope. Conflicts cause full rejection."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

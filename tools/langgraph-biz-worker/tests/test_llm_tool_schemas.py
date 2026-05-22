@@ -1,7 +1,11 @@
 """Tests for LLM tool schema wording that affects model behavior."""
 
 from langgraph_biz_worker.models import SkillManifest
-from langgraph_biz_worker.runtime.llm_tool_schemas import _KNOWN_TOOL_SCHEMAS, _tool_specs
+from langgraph_biz_worker.runtime.llm_tool_schemas import (
+    _DEFAULT_FILE_TOOL_NAMES,
+    _KNOWN_TOOL_SCHEMAS,
+    _tool_specs,
+)
 
 
 def test_invoke_business_skill_schema_declares_current_frame_material_contract():
@@ -55,6 +59,17 @@ def test_analyze_spreadsheet_schema_keeps_one_tool_entry():
     assert "Do not use it when the user only asks to submit or attach" in description
     assert "Do not use analyze_attachment or a vision model" in description
     assert operation["enum"] == ["summary", "preview", "read_range", "extract_rows"]
+
+
+def test_default_file_tool_set_is_minimal():
+    assert _DEFAULT_FILE_TOOL_NAMES == (
+        "list_files",
+        "read_file",
+        "write_file",
+        "patch_file",
+    )
+    assert "str_replace" not in _DEFAULT_FILE_TOOL_NAMES
+    assert "edit_file" not in _DEFAULT_FILE_TOOL_NAMES
 
 
 def test_tool_specs_enable_skill_discovery_when_business_skill_allowed():

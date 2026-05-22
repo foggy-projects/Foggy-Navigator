@@ -61,6 +61,7 @@ from .llm_tool_dispatcher import (
     _tool_function_id,
 )
 from .llm_tool_schemas import (
+    _DEFAULT_FILE_TOOL_NAMES,
     _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES,
     _bind_tools,
     _tool_specs,
@@ -176,6 +177,10 @@ class LlmSkillAgent:
         client_app_id = _runtime_client_app_id(runtime_context)
         if self._data_root and client_app_id:
             public_resource_tools = PublicSkillResourceTools(Path(self._data_root).parent / "skills", client_app_id)
+        manifest = _manifest_with_default_file_tools(
+            manifest,
+            file_tools_available=file_tools is not None,
+        )
         account_context_prompt = (
             build_account_context_prompt(self._data_root, account_id)
             if self._data_root and account_id
@@ -1261,6 +1266,24 @@ def _agent_frame_manifest(manifest: SkillManifest) -> SkillManifest:
     for tool_name in ("invoke_business_skill", "invoke_business_agent"):
         if tool_name not in allowed:
             allowed.append(tool_name)
+    return manifest.model_copy(update={"allowed_tools": allowed})
+
+
+def _manifest_with_default_file_tools(
+    manifest: SkillManifest,
+    *,
+    file_tools_available: bool,
+) -> SkillManifest:
+    if not file_tools_available:
+        return manifest
+    allowed = list(manifest.allowed_tools or [])
+    changed = False
+    for tool_name in _DEFAULT_FILE_TOOL_NAMES:
+        if tool_name not in allowed:
+            allowed.append(tool_name)
+            changed = True
+    if not changed:
+        return manifest
     return manifest.model_copy(update={"allowed_tools": allowed})
 
 

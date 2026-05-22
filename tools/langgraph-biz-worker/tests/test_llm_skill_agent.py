@@ -225,6 +225,53 @@ def _root_runtime() -> SkillRuntime:
     return SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
 
 
+def _bound_tool_names(model: FakeToolCallModel) -> set[str]:
+    return {tool["function"]["name"] for tool in model.bound_tools}
+
+
+def test_llm_agent_exposes_default_file_tools_when_account_scope_available(tmp_path):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_default_file_tools_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    model = FakeToolCallModel([AIMessage(content="ok")])
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path).run(
+        task_id="task_default_file_tools_001",
+        frame_id=frame_id,
+        prompt="hi",
+        account_id="acct-file-tools",
+        persistent_frame=True,
+    )
+
+    tool_names = _bound_tool_names(model)
+    assert {"list_files", "read_file", "write_file", "patch_file"} <= tool_names
+    assert "str_replace" not in tool_names
+    assert "edit_file" not in tool_names
+
+
+def test_llm_agent_does_not_expose_default_file_tools_without_account_scope(tmp_path):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_no_file_tools_without_account_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    model = FakeToolCallModel([AIMessage(content="ok")])
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path).run(
+        task_id="task_no_file_tools_without_account_001",
+        frame_id=frame_id,
+        prompt="hi",
+        persistent_frame=True,
+    )
+
+    tool_names = _bound_tool_names(model)
+    assert not ({"list_files", "read_file", "write_file", "patch_file"} & tool_names)
+
+
 def _root_with_child_runtime(child_context_visibility: str = "isolated", data_root=None) -> SkillRuntime:
     registry = SkillRegistry()
     registry.register(SkillManifest(

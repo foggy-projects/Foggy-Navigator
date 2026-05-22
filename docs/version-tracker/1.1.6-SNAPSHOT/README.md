@@ -34,12 +34,20 @@
 5. `11` 是真实上游 OpenAPI smoke 与本地 runtime context 证据对账 runbook。
 6. `12` 是 2026-05-22 收口后的 Agent / Skill / Frame 边界准绳：Skill 工具化，Agent Frame 化。
 7. `13` 是子 Agent 默认系统提示词与 Skill discovery 授权口径：子 Agent 携带 shared platform contract，不继承 Root-specific context。
+8. `14` 是 Account Workspace Resolver 与 delegated workspace 口径：account/upstream user 身份不再等同固定物理目录。
+9. `15` 是受限 `shell_command` 工具设计口径：Linux 命令格式入口，但内部实现为 workspace 受限命令解释器，不开放真实宿主机 shell。
 
 若旧文档中仍出现“runtime context 拼入 user prompt”的早期表述，以 `09` 的 system / human 边界为当前实现口径。
 
 若旧文档中仍出现“Skill frame”“`invoke_business_skill` 打开 child frame”等早期表述，以 `12` 的 Agent / Skill / Frame 边界为当前实现口径。
 
 若旧文档中仍出现“子 Agent 继承 Root 完整上下文”或“Root 预注入全部 Skill 目录给子 Agent”的早期倾向，以 `13` 的 isolated handoff + 子 Agent 自主 Skill discovery 为当前实现口径。
+
+若旧文档中仍只描述“按条数保留最近 messages”，以 `09` 的 Prompt window 裁剪边界为当前口径：裁剪必须同时保护 provider tool protocol 和 user/assistant 语义 turn，后续参数设计见 `OPT-runtime-prompt-window-turn-aware-pruning`。
+
+若旧文档中仍把 upstream user 记忆目录固定描述为 `<data_root>/accounts/<accountId>`，以 `14` 的 managed account mode + delegated workspace resolver 为当前设计口径。
+
+若后续文档讨论 `shell_command`，以 `15` 的 restricted shell 口径为准：命令格式向 Linux 对齐，但必须通过 allowlist、resolver/path guard 和输出预算治理，不直接执行任意系统 shell。
 
 ## 当前条目
 
@@ -56,8 +64,12 @@
 - [11-live-upstream-runtime-context-smoke.md](./11-live-upstream-runtime-context-smoke.md) - 提供真实上游 OpenAPI smoke 与 validate-only 对账脚本，覆盖 session root 定位、LLM body 快照、runtime events、附件引用和重开 UI/task 消息 raw tool 泄漏检查
 - [12-agent-frame-and-skill-tool-boundary.md](./12-agent-frame-and-skill-tool-boundary.md) - 收口 Agent / Skill / Frame 新边界：Skill 不再默认进入 frame，只有 Agent 调用才创建 non-root frame
 - [13-default-subagent-base-prompt-and-skill-discovery.md](./13-default-subagent-base-prompt-and-skill-discovery.md) - 收口子 Agent 默认提示词、Root 上下文隔离，以及允许 Skill/Agent 时同步放行 Skill discovery 工具的口径
+- [14-account-workspace-resolver-and-delegated-mode.md](./14-account-workspace-resolver-and-delegated-mode.md) - 收口 Account Workspace Resolver、managed account mode 和 delegated workspace mode 的目录解析契约
+- [15-restricted-shell-command-tool-design.md](./15-restricted-shell-command-tool-design.md) - 记录受限 `shell_command` 工具设计：Linux 命令格式、有限命令子集、workspace path guard 与默认暴露策略
 - [workitems/BUG-runtime-context-phase2-5-review-fixes.md](./workitems/BUG-runtime-context-phase2-5-review-fixes.md) - 记录并修复 Phase 2-5 评审发现的排队终止窗口、JSON 脱敏和 commit 清理缺陷
+- [workitems/BUG-root-account-memory-and-runtime-session-directory-governance.md](./workitems/BUG-root-account-memory-and-runtime-session-directory-governance.md) - 记录 Root Prompt upstream user 记忆文件注入疑点，以及非 `bctx_` runtime session 目录的 fallback 来源与治理建议
 - [workitems/BUG-client-app-public-skill-manifest-resolution.md](./workitems/BUG-client-app-public-skill-manifest-resolution.md) - 记录并修复 ClientApp public skill 资源可见但 `invoke_business_skill` 执行 manifest 缺失的问题
+- [workitems/OPT-runtime-prompt-window-turn-aware-pruning.md](./workitems/OPT-runtime-prompt-window-turn-aware-pruning.md) - 跟踪 prompt window 按 turn / tool protocol 裁剪、大工具结果预算和压缩触发边界参数设计
 
 ## 当前签收记录
 
