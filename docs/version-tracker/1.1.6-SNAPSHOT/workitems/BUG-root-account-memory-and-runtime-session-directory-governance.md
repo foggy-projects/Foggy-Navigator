@@ -255,3 +255,43 @@ All checks passed!
 
 - 本次只阻止新写入和新恢复路径继续依赖非标准目录。
 - 已存在的旧 `data/runtime/sessions/by-date/.../<non-bctx>` 目录尚未删除，后续可单独按日期 shard 做清理脚本或手工归档。
+
+### Account Workspace Resolver 第一阶段收口
+
+已完成 upstream user 记忆文件注入所需的 runtime resolver 改造:
+
+- 新增 `runtime/account_workspace.py`，统一解析 managed `<data_root>/accounts/<accountId>` 与 delegated `ExecutionPolicy.workdir`。
+- `account_context_files.py` 通过 resolver 读取 `ACCOUNT_POLICY.md` / `AGENT.md` / `MEMORY.md`，不再自行拼固定 account 路径。
+- `LlmSkillAgent` 在没有 `accountId` 但存在 delegated workspace 时，仍会把 account context 注入 system prompt。
+- `AccountFileTools`、`SkillRegistry`、`ArtifactStore` 已接入 resolver；delegated workspace 下可执行默认文件工具、加载私有 skill、写入 artifact。
+- Root route 与 child recovery 加载 skill 时使用同一 workspace 解析结果，避免 Root 可见而子 Agent 恢复不可见。
+
+新增/调整回归测试:
+
+- `tests/test_account_workspace.py`
+- `tests/test_account_context_files.py`
+- `tests/test_account_file_tools.py`
+- `tests/test_artifact_store.py`
+- `tests/test_skill_registry.py`
+- `tests/test_account_skill_routing.py::test_route_skill_loads_delegated_workspace_skill_without_account_id`
+- `tests/test_llm_skill_agent.py::test_llm_agent_injects_delegated_workspace_context_without_account_id`
+
+验证证据:
+
+```text
+tools\langgraph-biz-worker\.venv\Scripts\python.exe -m pytest <resolver-related suite>
+82 passed, 2 skipped in 0.92s
+
+tools\langgraph-biz-worker\.venv\Scripts\python.exe -m ruff check <changed src/tests>
+All checks passed!
+
+cd tools\langgraph-biz-worker
+.\.venv\Scripts\python.exe -m pytest -q
+643 passed, 6 skipped, 11 warnings in 71.39s
+```
+
+未完成项:
+
+- `workspaceRef -> workspaceRoot` binding registry 尚未实现。
+- account context HTTP API 仍只覆盖 managed account 目录。
+- 真实 OpenAPI smoke 仍需由上游或本地模拟请求确认 `MEMORY.md` 出现在 `llm-submissions` system prompt。

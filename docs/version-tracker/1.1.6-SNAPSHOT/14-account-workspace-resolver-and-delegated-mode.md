@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 状态: 第一阶段已部分落地，待真实会话验收
+- 状态: 第一阶段 runtime resolver 已落地，待真实上游验收
 - 日期: 2026-05-22
 - 适用范围: `tools/langgraph-biz-worker`
 - 关联文档:
@@ -135,18 +135,22 @@ AccountWorkspaceResolver.resolve(
 
 ### 第一阶段实现状态
 
-2026-05-22 已完成最小闭环实现:
+2026-05-22 已完成 runtime 路径解析闭环:
 
-1. `account_context_files.py` 不再只支持 managed account 路径，已支持从 `ExecutionPolicy.workdir` 读取 delegated workspace 下的 `ACCOUNT_POLICY.md`、`AGENT.md`、`MEMORY.md`。
-2. `LlmSkillAgent` 构造 system prompt 时，如果存在有效 delegated execution policy，即使没有 `accountId`，也会注入 delegated workspace account context。
-3. managed mode 默认行为保持不变，仍读取 `<data_root>/accounts/<accountId>/...`。
-4. 已补单元测试覆盖 delegated workspace 读取和 LLM prompt 注入。
+1. 新增 `AccountWorkspaceResolver` / `AccountWorkspace`，统一解析 managed account 与 delegated `ExecutionPolicy.workdir`。
+2. `account_context_files.py` 不再只支持 managed account 路径，已支持从 delegated workspace 读取 `ACCOUNT_POLICY.md`、`AGENT.md`、`MEMORY.md`。
+3. `LlmSkillAgent` 构造 system prompt 时，如果存在有效 delegated execution policy，即使没有 `accountId`，也会注入 delegated workspace account context。
+4. `AccountFileTools` 已迁移到 resolver；delegated workspace 没有 accountId 时仍可暴露并执行 `list_files`、`read_file`、`write_file`、`patch_file`。
+5. `SkillRegistry` 已迁移到 resolver；Root route 与 child recovery 在请求上下文中能加载 delegated workspace 下的 private skills。
+6. `ArtifactStore` 已迁移到 resolver；delegated mode 下 artifact 写入 `<workspace-root>/artifacts/...`，managed mode 保持原有 `<data_root>/accounts/<accountId>/artifacts/...` 与 `content_ref` 兼容。
+7. managed mode 默认行为保持不变，仍读取 `<data_root>/accounts/<accountId>/...`。
+8. 已补单元测试覆盖 resolver、account context、文件工具、artifact、private skill 加载和 LLM agent delegated prompt/tool 执行。
 
 尚未完成:
 
 1. 独立 `workspaceRef -> workspaceRoot` registry / binding resolver。
 2. account context HTTP API 对 delegated workspace 的读写支持。
-3. SkillRegistry、Artifact store、skill sync/materialize 的 resolver 化。
+3. skill sync/materialize 的 resolver 化。
 4. OpenAPI 真实 smoke 中检查 delegated `MEMORY.md` 进入 `llm-submissions`。
 
 ## 需要接入 Resolver 的模块
@@ -178,7 +182,7 @@ MEMORY.md
 
 ## LLM 文件工具默认暴露策略
 
-当本回合具备有效 `accountId` 且 BizWorker 能构造账号/工作目录文件作用域时，LLM 默认获得一组收敛后的文件工具:
+当本回合具备有效 `accountId`，或存在有效 delegated workspace，且 BizWorker 能构造账号/工作目录文件作用域时，LLM 默认获得一组收敛后的文件工具:
 
 ```text
 list_files
@@ -189,7 +193,7 @@ patch_file
 
 这组工具用于覆盖观察、读取、创建/覆盖、补丁修改四类基本文件操作。`str_replace`、`edit_file` 继续作为兼容实现保留，但不进入默认 LLM tool body，避免工具面过宽、语义重叠和模型选择不稳定。
 
-默认暴露仍受 `ExecutionPolicy.allowed_tools` 约束。如果上游显式传入工具 allowlist，则只有 allowlist 中允许的工具会出现在本次提交给 LLM 的 body 中。没有有效 `accountId` 或没有可解析文件作用域时，不暴露文件工具。
+默认暴露仍受 `ExecutionPolicy.allowed_tools` 约束。如果上游显式传入工具 allowlist，则只有 allowlist 中允许的工具会出现在本次提交给 LLM 的 body 中。没有有效 `accountId` 且没有 delegated workspace 时，不暴露文件工具。
 
 对齐参考:
 
@@ -240,3 +244,8 @@ Delegated mode:
 3. 补充 managed mode 与 delegated mode 单元测试。
 4. 将 AccountFileTools、SkillRegistry、Artifact store 逐步迁移到 resolver。
 5. 增加 OpenAPI smoke: delegated workspace 的 `MEMORY.md` 能进入 `llm-submissions` system prompt。
+
+当前进度:
+
+- 1-4 已完成。
+- 5 待真实上游 smoke 验收；本地单元测试已覆盖 LLM agent 的 delegated system prompt 注入和 delegated `list_files` 工具执行。

@@ -27,6 +27,7 @@ from typing import Any
 import yaml
 
 from ..models import SkillManifest
+from .account_workspace import AccountWorkspace, resolve_account_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -131,11 +132,16 @@ class SkillRegistry:
         self._legacy_dir = manifests_dir or _LEGACY_MANIFESTS_DIR
         self._data_root = data_root or self._skills_root.parent / "data"
 
+    @property
+    def data_root(self) -> Path:
+        return self._data_root
+
     def load(
         self,
         account_id: str | None = None,
         client_app_id: str | None = None,
         include_standalone: bool = False,
+        account_workspace: AccountWorkspace | None = None,
     ) -> None:
         """Load skills from all sources.
 
@@ -165,8 +171,8 @@ class SkillRegistry:
             self.load_client_app_public_skills(client_app_id)
 
         # 5. Load account-private skills (highest priority, Doc 34 §6)
-        if account_id:
-            self.load_account_skills(account_id)
+        if account_id or account_workspace:
+            self.load_account_skills(account_id, account_workspace=account_workspace)
 
     def load_client_app_public_skills(self, client_app_id: str) -> None:
         """Load public skills granted to a single client app."""
@@ -174,12 +180,18 @@ class SkillRegistry:
         app_dir = self._skills_root / "public" / "apps" / client_app_id
         self._load_skill_md_dir(app_dir, f"public-app:{client_app_id}", client_app_id=client_app_id)
 
-    def load_account_skills(self, account_id: str) -> None:
+    def load_account_skills(
+        self,
+        account_id: str | None,
+        *,
+        account_workspace: AccountWorkspace | None = None,
+    ) -> None:
         """Load skills from an account's private directory (overwrites all lower layers)."""
-        account_id = _validate_account_id(account_id)
-        # Account skills live under <data_root>/accounts/<account_id>/skills/
-        account_dir = self._data_root / "accounts" / account_id / "skills"
-        self._load_skill_md_dir(account_dir, f"account:{account_id}")
+        workspace = account_workspace or resolve_account_workspace(self._data_root, account_id)
+        if workspace is None:
+            return
+        account_dir = workspace.skills_root
+        self._load_skill_md_dir(account_dir, f"account:{workspace.storage_account_id}")
 
     def _load_skill_md_dir(self, base_dir: Path, scope: str, client_app_id: str | None = None) -> None:
         """Scan ``<base_dir>/<skill-name>/SKILL.md`` entries."""

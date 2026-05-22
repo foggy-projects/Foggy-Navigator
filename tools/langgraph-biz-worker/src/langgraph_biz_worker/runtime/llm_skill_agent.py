@@ -22,6 +22,7 @@ from ..tools.business_function_tools import (
 )
 from .account_file_tools import AccountFileTools
 from .account_context_files import build_account_context_prompt
+from .account_workspace import resolve_account_workspace
 from .artifact_store import ArtifactStore
 from .llm_call_guard import invoke_chat_model
 from .llm_agent_prompts import (
@@ -172,9 +173,32 @@ class LlmSkillAgent:
         artifact_store: ArtifactStore | None = None
         file_tools: AccountFileTools | None = None
         public_resource_tools: PublicSkillResourceTools | None = None
-        if self._data_root and account_id:
-            artifact_store = ArtifactStore(self._data_root)
-            file_tools = AccountFileTools(self._data_root, account_id, task_id, execution_policy=execution_policy)
+        try:
+            account_workspace = (
+                resolve_account_workspace(
+                    self._data_root,
+                    account_id,
+                    execution_policy=execution_policy,
+                )
+                if self._data_root
+                else None
+            )
+        except ValueError:
+            account_workspace = None
+        tool_account_id = account_id or (account_workspace.storage_account_id if account_workspace else None)
+        if self._data_root and account_workspace:
+            artifact_store = ArtifactStore(
+                self._data_root,
+                execution_policy=execution_policy,
+                workspace=account_workspace,
+            )
+            file_tools = AccountFileTools(
+                self._data_root,
+                account_id,
+                task_id,
+                execution_policy=execution_policy,
+                workspace=account_workspace,
+            )
         client_app_id = _runtime_client_app_id(runtime_context)
         if self._data_root and client_app_id:
             public_resource_tools = PublicSkillResourceTools(Path(self._data_root).parent / "skills", client_app_id)
@@ -420,7 +444,7 @@ class LlmSkillAgent:
                     _mark_runtime_memory_finalizing(runtime_context)
                 event = self._execute_tool_call(
                     task_id, frame_id, manifest, call,
-                    account_id=account_id,
+                    account_id=tool_account_id,
                     runtime_context=runtime_context,
                     artifact_store=artifact_store,
                     file_tools=file_tools,

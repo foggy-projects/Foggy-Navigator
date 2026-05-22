@@ -25,7 +25,8 @@ from ..runtime.context_memory import (
     save_to_root_frame,
 )
 from ..runtime.context_compaction_summarizer import build_runtime_compaction_summarizer
-from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
+from ..runtime.account_workspace import resolve_account_workspace
+from ..runtime.execution_policy import ExecutionPolicy, copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.file_frame_journal import FileFrameJournal
 from ..runtime.file_layout import (
     date_parts_for_frame,
@@ -472,9 +473,28 @@ def route_skill(state: RootState) -> dict:
     context = strip_execution_policy_context(state.get("context") or {})
     account_id = _account_id_from_state(state)
     client_app_id = context.get("client_app_id") or context.get("clientAppId")
+    account_workspace = None
+    try:
+        execution_policy = ExecutionPolicy.from_context(
+            copy_execution_policy_from_context(
+                state.get("runtime_context") or {},
+                state.get("context") or {},
+            )
+        )
+        account_workspace = resolve_account_workspace(
+            _skill_registry.data_root,
+            account_id,
+            execution_policy=execution_policy,
+        )
+    except ValueError:
+        account_workspace = None
 
     try:
-        _skill_registry.load(account_id=account_id, client_app_id=client_app_id)
+        _skill_registry.load(
+            account_id=account_id,
+            client_app_id=client_app_id,
+            account_workspace=account_workspace,
+        )
     except ValueError:
         _skill_registry.load()
     _ensure_system_root_skill()

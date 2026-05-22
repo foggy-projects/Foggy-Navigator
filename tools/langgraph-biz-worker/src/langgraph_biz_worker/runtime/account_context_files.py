@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .account_path_guard import ERR_SYMLINK, ERR_TRAVERSAL, PathGuardError, _validate_account_id
+from .account_path_guard import ERR_SYMLINK, ERR_TRAVERSAL, PathGuardError
+from .account_workspace import resolve_account_workspace
 from .execution_policy import ExecutionPolicy
 
 ACCOUNT_CONTEXT_FILE_ORDER = ("ACCOUNT_POLICY.md", "AGENT.md", "MEMORY.md")
@@ -127,12 +128,12 @@ def _resolve_account_context_root(
     - managed mode: ``<data_root>/accounts/<account_id>``.
     """
 
-    if execution_policy and execution_policy.configured and execution_policy.workdir:
-        return execution_policy.workdir.resolve()
-    if not account_id:
-        return None
-    _validate_account_id(account_id)
-    return Path(data_root).resolve() / "accounts" / account_id
+    workspace = resolve_account_workspace(
+        data_root,
+        account_id,
+        execution_policy=execution_policy,
+    )
+    return workspace.root if workspace is not None else None
 
 
 def _resolve_context_file(account_root: Path, file_name: str) -> Path:

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from langgraph_biz_worker.runtime.account_file_tools import AccountFileTools, FileToolError
+from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
 
 
 def _setup_skill(tmp_path: Path, account: str = "user-001", skill: str = "my-skill") -> AccountFileTools:
@@ -49,6 +50,24 @@ class TestListFiles:
         result = tools.list_files("skills/my-skill/references")
         assert result["ok"]
         assert result["entries"] == []
+
+    def test_list_delegated_workspace_without_account_id(self, tmp_path: Path):
+        workspace = tmp_path / "workspace"
+        skill_dir = workspace / "skills" / "my-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\nname: my-skill\n---\n", encoding="utf-8")
+        policy = ExecutionPolicy.from_context({
+            "execution_policy": {
+                "workdir": str(workspace),
+                "allowed_dirs": [str(workspace)],
+            },
+        })
+        tools = AccountFileTools(tmp_path / "data", None, task_id="task-001", execution_policy=policy)
+
+        result = tools.list_files("skills", recursive=True)
+
+        assert result["ok"]
+        assert any(entry["path"] == "skills/my-skill/SKILL.md" for entry in result["entries"])
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +160,23 @@ class TestWriteFile:
         assert rec["sha256_after"] is not None
         assert rec["timestamp"]
         assert rec["actor"] == "llm"
+
+    def test_delegated_workspace_write_uses_storage_account_id(self, tmp_path: Path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        policy = ExecutionPolicy.from_context({
+            "execution_policy": {
+                "workdir": str(workspace),
+                "allowed_dirs": [str(workspace)],
+            },
+        })
+        tools = AccountFileTools(tmp_path / "data", None, task_id="task-001", execution_policy=policy)
+
+        result = tools.write_file("skills/my-skill/SKILL.md", content="---\nname: my-skill\n---\n")
+
+        assert result["ok"]
+        assert (workspace / "skills" / "my-skill" / "SKILL.md").is_file()
+        assert tools.audit_records[0]["account_id"] == "delegated"
 
 
 # ---------------------------------------------------------------------------

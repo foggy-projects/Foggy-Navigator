@@ -10,6 +10,12 @@ import logging
 import re
 from pathlib import Path
 from typing import Sequence
+
+from .account_workspace import (
+    AccountWorkspace,
+    _validate_account_id as _validate_workspace_account_id,
+    resolve_account_workspace,
+)
 from .execution_policy import ExecutionPolicy
 
 logger = logging.getLogger(__name__)
@@ -59,12 +65,24 @@ class AccountPathGuard:
     path is never exposed to the model.
     """
 
-    def __init__(self, data_root: Path, account_id: str, execution_policy: ExecutionPolicy | None = None) -> None:
-        _validate_account_id(account_id)
+    def __init__(
+        self,
+        data_root: Path,
+        account_id: str | None,
+        execution_policy: ExecutionPolicy | None = None,
+        workspace: AccountWorkspace | None = None,
+    ) -> None:
         self._data_root = Path(data_root).resolve()
-        self._account_id = account_id
-        self._account_root = self._data_root / "accounts" / account_id
         self._execution_policy = execution_policy
+        resolved_workspace = workspace or resolve_account_workspace(
+            self._data_root,
+            account_id,
+            execution_policy=execution_policy,
+        )
+        if resolved_workspace is None:
+            raise ValueError("account_id or delegated workspace is required")
+        self._account_id = resolved_workspace.storage_account_id
+        self._account_root = resolved_workspace.root
 
     @property
     def account_root(self) -> Path:
@@ -313,10 +331,7 @@ class AccountPathGuard:
 
 def _validate_account_id(account_id: str) -> None:
     """Reject path traversal in account IDs."""
-    if not account_id or account_id.strip() != account_id:
-        raise ValueError("account_id must be non-empty and trimmed")
-    if account_id in {".", ".."} or "/" in account_id or "\\" in account_id:
-        raise ValueError("account_id must be a single path segment")
+    _validate_workspace_account_id(account_id)
 
 
 def _get_extension(filename: str) -> str:

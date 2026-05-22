@@ -136,6 +136,52 @@ def test_route_skill_prefers_upstream_user_context_over_task_owner(tmp_path, mon
     assert frame.private_working_state["_skill_manifest"]["description"] == "upstream version"
 
 
+def test_route_skill_loads_delegated_workspace_skill_without_account_id(tmp_path, monkeypatch):
+    skills_root = tmp_path / "skills"
+    data_root = tmp_path / "data"
+    workspace = tmp_path / "delegated" / "worker-user"
+
+    _write_skill(skills_root / "builtin" / "exception-triage", "builtin version")
+    _write_skill(workspace / "skills" / "exception-triage", "delegated version")
+
+    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
+    runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(tmp_path / "frames"),
+    )
+
+    monkeypatch.setattr(root_module, "_skill_registry", registry)
+    monkeypatch.setattr(root_module, "_runtime", runtime)
+    monkeypatch.setattr(root_module.settings, "llm_execute_skills", False)
+
+    result = root_module.route_skill({
+        "task_id": "task-delegated-skill",
+        "session_id": None,
+        "prompt": "handle exception",
+        "model": None,
+        "context": {
+            "skill": "exception_triage",
+            "execution_policy": {
+                "workdir": str(workspace),
+                "allowed_dirs": [str(workspace)],
+            },
+        },
+        "runtime_context": {},
+        "user_id": None,
+        "tenant_id": None,
+        "events": [],
+        "started_at": 0.0,
+        "active_frame_id": None,
+        "skill_results": [],
+    })
+
+    frame = runtime.get_frame(result["active_frame_id"])
+
+    assert frame is not None
+    assert frame.private_working_state["_skill_manifest"]["description"] == "delegated version"
+
+
 def test_route_skill_loads_client_app_public_skill_and_snapshots_manifest(tmp_path, monkeypatch):
     skills_root = tmp_path / "skills"
     data_root = tmp_path / "data"

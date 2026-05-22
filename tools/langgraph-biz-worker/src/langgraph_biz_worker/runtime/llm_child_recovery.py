@@ -6,6 +6,8 @@ from collections.abc import Callable
 from typing import Any
 
 from ..models import FrameKind, FrameStatus, QueryEvent, SkillManifest
+from .account_workspace import resolve_account_workspace
+from .execution_policy import ExecutionPolicy
 from .llm_tool_call_codec import _child_approval_report_payload
 from .skill_runtime import SkillRuntime
 
@@ -43,9 +45,24 @@ def _load_context_skill_layers(
             runtime.registry.load_client_app_public_skills(client_app_id)
         except ValueError:
             pass
-    if account_id:
+    account_workspace = None
+    data_root = runtime.registry.data_root
+    if data_root is not None:
         try:
-            runtime.registry.load_account_skills(account_id)
+            execution_policy = ExecutionPolicy.from_context(runtime_context)
+            account_workspace = resolve_account_workspace(
+                data_root,
+                account_id,
+                execution_policy=execution_policy,
+            )
+        except ValueError:
+            account_workspace = None
+    if account_id or account_workspace:
+        try:
+            runtime.registry.load_account_skills(
+                account_id,
+                account_workspace=account_workspace,
+            )
         except ValueError:
             pass
 

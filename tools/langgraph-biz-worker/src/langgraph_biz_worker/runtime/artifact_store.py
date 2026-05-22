@@ -1,6 +1,7 @@
 """Artifact Store — file-system backed artifact persistence.
 
-Artifacts live under ``<data_root>/accounts/<account_id>/artifacts/``.
+Managed artifacts live under ``<data_root>/accounts/<account_id>/artifacts/``.
+Delegated workspace artifacts live under ``<workspace-root>/artifacts/``.
 Each artifact has a metadata JSON file and a content file.
 
 Directory layout::
@@ -29,6 +30,9 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .account_workspace import AccountWorkspace, resolve_account_workspace
+from .execution_policy import ExecutionPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +68,18 @@ class ArtifactError(Exception):
 
 
 class ArtifactStore:
-    """File-system backed artifact store scoped to an account."""
+    """File-system backed artifact store scoped to an account workspace."""
 
-    def __init__(self, data_root: Path) -> None:
+    def __init__(
+        self,
+        data_root: Path,
+        *,
+        execution_policy: ExecutionPolicy | None = None,
+        workspace: AccountWorkspace | None = None,
+    ) -> None:
         self._data_root = Path(data_root).resolve()
+        self._execution_policy = execution_policy
+        self._workspace = workspace
 
     # -- Public API ----------------------------------------------------------
 
@@ -127,7 +139,7 @@ class ArtifactStore:
         sha256 = hashlib.sha256(content_bytes).hexdigest()
 
         # --- Build content_ref (internal only) ---
-        content_ref = content_path.relative_to(self._data_root).as_posix()
+        content_ref = content_path.relative_to(self._storage_base(account_id)).as_posix()
 
         # --- Build metadata ---
         now = datetime.now(timezone.utc).isoformat()
@@ -269,8 +281,13 @@ class ArtifactStore:
 
     def _account_artifact_root(self, account_id: str) -> Path:
         """Return and boundary-check the artifact root for an account."""
-        root = (self._data_root / "accounts" / account_id / "artifacts").resolve()
-        expected_parent = (self._data_root / "accounts" / account_id).resolve()
+        workspace = self._workspace_for_account(account_id)
+        if workspace is not None:
+            root = workspace.artifacts_root.resolve()
+            expected_parent = workspace.root.resolve()
+        else:
+            root = (self._data_root / "accounts" / account_id / "artifacts").resolve()
+            expected_parent = (self._data_root / "accounts" / account_id).resolve()
         try:
             root.relative_to(expected_parent)
         except ValueError as exc:
@@ -279,13 +296,33 @@ class ArtifactStore:
 
     def _resolve_content_ref(self, account_id: str, content_ref: str) -> Path:
         """Resolve an internal content_ref and ensure it stays under this account."""
-        content_path = (self._data_root / content_ref).resolve()
+        content_path = (self._storage_base(account_id) / content_ref).resolve()
         account_base = self._account_artifact_root(account_id)
         try:
             content_path.relative_to(account_base)
         except ValueError as exc:
             raise ArtifactError("access_denied", "artifact content_ref escapes account boundary") from exc
         return content_path
+
+    def _storage_base(self, account_id: str) -> Path:
+        workspace = self._workspace_for_account(account_id)
+        if workspace is not None and workspace.mode == "delegated":
+            return workspace.root
+        return self._data_root
+
+    def _workspace_for_account(self, account_id: str) -> AccountWorkspace | None:
+        if self._workspace is not None:
+            allowed_ids = {self._workspace.storage_account_id}
+            if self._workspace.account_id:
+                allowed_ids.add(self._workspace.account_id)
+            if account_id not in allowed_ids:
+                raise ArtifactError("access_denied", "artifact account does not match workspace")
+            return self._workspace
+        return resolve_account_workspace(
+            self._data_root,
+            account_id,
+            execution_policy=self._execution_policy,
+        )
 
     @staticmethod
     def _atomic_write(target: Path, data: bytes) -> None:

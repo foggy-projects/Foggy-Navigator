@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from langgraph_biz_worker.runtime.artifact_store import ArtifactError, ArtifactStore
+from langgraph_biz_worker.runtime.account_workspace import DELEGATED_STORAGE_ACCOUNT_ID, resolve_account_workspace
+from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
 
 
 @pytest.fixture
@@ -146,6 +148,38 @@ class TestReadModes:
         assert "sha256" in read
         assert "created_at" in read
         assert "content" not in read
+
+    def test_delegated_workspace_artifacts_without_account_id(self, tmp_path: Path):
+        data_root = tmp_path / "data"
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        policy = ExecutionPolicy.from_context({
+            "execution_policy": {
+                "workdir": str(workspace_root),
+                "allowed_dirs": [str(workspace_root)],
+            },
+        })
+        workspace = resolve_account_workspace(data_root, None, execution_policy=policy)
+        store = ArtifactStore(data_root, execution_policy=policy, workspace=workspace)
+
+        created = store.create(
+            account_id=DELEGATED_STORAGE_ACCOUNT_ID,
+            task_id="task-001",
+            scope="task",
+            name="delegated-doc",
+            content="payload",
+            summary="delegated summary",
+        )
+        read = store.read(
+            account_id=DELEGATED_STORAGE_ACCOUNT_ID,
+            task_id="task-001",
+            artifact_id=created["artifact_id"],
+            mode="content",
+        )
+
+        assert read["content"] == "payload"
+        assert (workspace_root / "artifacts").is_dir()
+        assert not (data_root / "accounts" / DELEGATED_STORAGE_ACCOUNT_ID / "artifacts").exists()
 
 
 # ---------------------------------------------------------------------------

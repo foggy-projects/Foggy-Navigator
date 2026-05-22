@@ -2965,6 +2965,14 @@ def test_llm_agent_injects_delegated_workspace_context_without_account_id(tmp_pa
     )
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
+            "id": "call_list_files",
+            "name": "list_files",
+            "args": {
+                "relative_path": ".",
+                "recursive": False,
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
             "id": "call_submit",
             "name": "submit_skill_result",
             "args": {
@@ -2988,9 +2996,12 @@ def test_llm_agent_injects_delegated_workspace_context_without_account_id(tmp_pa
     )
 
     system_prompt = model.seen_messages[0][0].content
+    bound_tool_names = {tool["function"]["name"] for tool in model.bound_tools}
     assert "delegated policy" in system_prompt
     assert "delegated memory" in system_prompt
     assert system_prompt.index("### MEMORY.md") < system_prompt.index("技能说明:")
+    assert {"list_files", "read_file", "write_file", "patch_file"}.issubset(bound_tool_names)
+    assert "ACCOUNT_POLICY.md" in model.seen_messages[1][-1].content
 
 
 def test_llm_agent_injects_runtime_time_context_into_user_prompt():
