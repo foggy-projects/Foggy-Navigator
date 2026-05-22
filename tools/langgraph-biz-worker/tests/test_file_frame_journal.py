@@ -12,6 +12,8 @@ from langgraph_biz_worker.runtime.file_layout import session_data_dir
 
 CTX_1 = "bctx_20260520_ab_conv_1"
 CTX_2 = "bctx_20260520_cd_wrong_context"
+CTX_JAN1 = "bctx_20260101_ab_cleanup_done"
+CTX_JAN2 = "bctx_20260102_cd_cleanup_active"
 
 
 def _make_frame(
@@ -19,7 +21,7 @@ def _make_frame(
     task_id: str = "task_aaa",
     skill_id: str = "test_skill",
     status: FrameStatus = FrameStatus.RUNNING,
-    conversation_id: str | None = None,
+    conversation_id: str | None = CTX_1,
 ) -> SkillFrameState:
     return SkillFrameState(
         frame_id=frame_id,
@@ -39,8 +41,9 @@ class TestSaveAndLoad:
 
         assert path.exists()
         assert path.suffix == ".json"
-        session_dir = session_data_dir(tmp_path, ("2026", "01", "01"), "task_aaa")
+        session_dir = session_data_dir(tmp_path, ("2026", "01", "01"), CTX_1)
         assert path == session_dir / "frames" / "frm_001.json"
+        assert frame.conversation_id == CTX_1
         assert not (tmp_path / "frames" / "task_aaa").exists()
         assert not (tmp_path / "runtime" / "frames").exists()
         assert not (tmp_path / "reports" / "frame-execution").exists()
@@ -185,6 +188,17 @@ class TestSaveAndLoad:
 
         assert [frame.frame_id for frame in roots] == ["frm_old", "frm_new"]
 
+    def test_generates_standard_context_id_when_missing(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        frame = _make_frame(conversation_id=None)
+
+        path = journal.save(frame)
+
+        assert frame.conversation_id is not None
+        assert frame.conversation_id.startswith("bctx_")
+        assert path.parent.parent.name == frame.conversation_id
+        assert not (session_data_dir(tmp_path, ("2026", "01", "01"), "task_aaa") / "frames").exists()
+
     def test_rejects_non_standard_conversation_id(self, tmp_path):
         journal = FileFrameJournal(tmp_path)
 
@@ -286,7 +300,7 @@ class TestDeleteAndCleanup:
         journal.save(_make_frame(frame_id="frm_001"))
         journal.save(_make_frame(frame_id="frm_002"))
 
-        task_dir = session_data_dir(tmp_path, ("2026", "01", "01"), "task_aaa") / "frames"
+        task_dir = session_data_dir(tmp_path, ("2026", "01", "01"), CTX_1) / "frames"
         assert task_dir.is_dir()
 
         journal.cleanup_task("task_aaa")
@@ -295,8 +309,17 @@ class TestDeleteAndCleanup:
 
     def test_dry_run_cleanup_skips_recoverable_date_shards(self, tmp_path):
         journal = FileFrameJournal(tmp_path)
-        completed = _make_frame(frame_id="frm_done", status=FrameStatus.COMPLETED)
-        active = _make_frame(frame_id="frm_active", task_id="task_active", status=FrameStatus.AWAITING_USER)
+        completed = _make_frame(
+            frame_id="frm_done",
+            status=FrameStatus.COMPLETED,
+            conversation_id=CTX_JAN1,
+        )
+        active = _make_frame(
+            frame_id="frm_active",
+            task_id="task_active",
+            status=FrameStatus.AWAITING_USER,
+            conversation_id=CTX_JAN2,
+        )
         active.started_at = "2026-01-02T00:00:00Z"
 
         journal.save(completed)
@@ -346,7 +369,7 @@ class TestRuntimeIntegration:
         journal = FileFrameJournal(tmp_path)
         runtime = SkillRuntime(journal=journal)
 
-        frame_id = runtime.invoke_skill("task_t1", "some_skill")
+        frame_id = runtime.invoke_skill("task_t1", "some_skill", conversation_id=CTX_1)
 
         # File should exist
         loaded = journal.load("task_t1", frame_id)
@@ -359,7 +382,7 @@ class TestRuntimeIntegration:
         journal = FileFrameJournal(tmp_path)
         runtime = SkillRuntime(journal=journal)
 
-        frame_id = runtime.invoke_skill("task_t2", "unregistered_skill")
+        frame_id = runtime.invoke_skill("task_t2", "unregistered_skill", conversation_id=CTX_1)
         runtime.submit_result(
             frame_id,
             summary="done",

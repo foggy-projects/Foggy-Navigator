@@ -9,6 +9,7 @@ from langgraph_biz_worker.runtime.runtime_message_event_log import (
     record_assistant_runtime_message,
     record_checkpoint_runtime_event,
     record_initial_runtime_messages,
+    record_runtime_message_event,
     record_tool_result_runtime_message,
 )
 
@@ -197,3 +198,22 @@ def test_build_initial_llm_messages_ignores_invalid_open_tool_call_recovery(monk
 
     assert [message.type for message in messages] == ["system", "human"]
     assert messages[1].content == "U2"
+
+
+def test_runtime_message_event_log_requires_standard_context_id(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "runtime_message_event_log_enabled", True)
+
+    path = record_runtime_message_event(
+        "message",
+        {
+            "_llm_submission_data_root": str(tmp_path / "data"),
+            "_llm_submission_session_id": "legacy-session",
+            "_llm_submission_date_parts": ("2026", "05", "21"),
+        },
+        task_id="lgt_legacy",
+        frame_id="frm_legacy",
+        message=HumanMessage(content="hello"),
+    )
+
+    assert path is None
+    assert not (tmp_path / "data" / "runtime" / "sessions" / "by-date").exists()

@@ -221,3 +221,37 @@ $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_root_grap
 .\.venv\Scripts\python.exe -m ruff check src tests/test_root_graph.py tests/test_skill_agent_facade.py
 All checks passed!
 ```
+
+### 非 `bctx_` session 目录二次收口
+
+已进一步收紧所有已知 `by-date` 写入口，避免 frame 之外的调试产物继续用 `taskId`、UUID、`debug_*`、`e2e_*` 等 legacy key 生成非标准 session 目录。
+
+本次代码口径:
+
+- `FileFrameJournal.save(...)` 显式 `conversation_id` 非法时仍 fail fast；缺省时由 BizWorker 生成标准 `bctx_yyyyMMdd_<hash>_<id>`，并把 frame 写入标准 session 目录。
+- `llm-submissions`、`runtime-message-events`、`skill-tool-calls` 和 frame report 只接受标准 `bctx_...` contextId；没有标准 contextId 时跳过调试日志写入，不再 fallback 到 `taskId` / `frameId`。
+- Root graph 直连调用未提供 `contextId` 时也会生成标准 `bctx_...`，并通过返回的 `context` 写回 graph state。
+- `FileFrameJournal.load_by_task(...)` 的无 context 扫描只读取标准 `bctx_...` session 目录，避免旧 legacy 目录继续参与恢复路径。
+
+新增/调整回归测试:
+
+- `tests/test_file_frame_journal.py`：覆盖缺省生成标准 contextId、非法 conversationId 拒绝、cleanup date shard、runtime journal 写入。
+- `tests/test_llm_submission_log.py`：覆盖非标准 sessionId 不写 `by-date`。
+- `tests/test_llm_message_builder.py`：覆盖 runtime message event 非标准 sessionId 不写 `by-date`。
+- `tests/test_frame_execution_report.py`：覆盖 tool audit 非标准 sessionId 不写 `by-date`。
+- `tests/test_root_graph.py`：覆盖无 contextId 的 Root 直连调用只创建 `bctx_...` session 目录。
+
+验证证据:
+
+```text
+.\.venv\Scripts\python.exe -m ruff check src tests
+All checks passed!
+
+.\.venv\Scripts\python.exe -m pytest -q
+635 passed, 6 skipped, 11 warnings in 94.48s
+```
+
+备注:
+
+- 本次只阻止新写入和新恢复路径继续依赖非标准目录。
+- 已存在的旧 `data/runtime/sessions/by-date/.../<non-bctx>` 目录尚未删除，后续可单独按日期 shard 做清理脚本或手工归档。

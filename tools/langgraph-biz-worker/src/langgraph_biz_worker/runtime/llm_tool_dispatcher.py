@@ -26,7 +26,7 @@ from ..tools.mock_biz_tools import (
 )
 from .account_file_tools import AccountFileTools, FileToolError
 from .artifact_store import ArtifactError, ArtifactStore
-from .file_layout import date_parts_for_now, safe_path_segment, session_data_dir
+from .file_layout import date_parts_for_now, optional_standard_context_id, safe_path_segment, session_data_dir
 from .frame_execution_report import read_frame_execution_report
 from .llm_business_function_adapter import (
     _looks_like_business_function_id,
@@ -334,10 +334,18 @@ def _append_tool_audit(
 ) -> None:
     if data_root is None:
         return
+    session_id = optional_standard_context_id(session_id)
+    if session_id is None:
+        return
     try:
         task_stem = safe_path_segment(task_id)
         log_dir = (
-            session_data_dir(Path(data_root), date_parts_for_now(), session_id or task_id)
+            session_data_dir(
+                Path(data_root),
+                date_parts_for_now(),
+                session_id,
+                require_standard_context=True,
+            )
             / "logs" / "skill-tool-calls"
         )
         log_dir.mkdir(parents=True, exist_ok=True)

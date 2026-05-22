@@ -41,12 +41,13 @@ from .file_layout import (
     context_segment_path,
     date_parts_for_context_id,
     date_parts_for_frame,
+    generate_standard_context_id,
     iter_date_dirs,
+    optional_standard_context_id,
     parse_date,
     require_standard_context_id,
     safe_path_segment,
     session_data_dir,
-    session_key_for_frame,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,15 +98,15 @@ class FileFrameJournal:
         frame.journal_updated_at = datetime.now(timezone.utc).isoformat()
 
         date_parts = date_parts_for_frame(frame)
-        conversation_id = _standard_conversation_id(frame.conversation_id)
-        session_key = conversation_id or session_key_for_frame(frame)
-        if conversation_id:
-            frame.conversation_id = conversation_id
+        conversation_id = _frame_standard_conversation_id(frame)
+        frame.conversation_id = conversation_id
+        if not frame.session_id:
+            frame.session_id = conversation_id
         file_path = self._session_frame_path(
-            session_key,
+            conversation_id,
             frame.frame_id,
             date_parts,
-            require_standard_context=conversation_id is not None,
+            require_standard_context=True,
         )
         payload = frame.model_dump(mode="json")
         self._write_json(file_path, payload)
@@ -535,7 +536,7 @@ class FileFrameJournal:
     def _scan_task_frame_paths(self, task_id: str, frame_id: str | None = None) -> list[Path]:
         frame_pattern = f"{safe_path_segment(frame_id)}.json" if frame_id else "*.json"
         paths = sorted((self._session_root / "by-date").glob(f"*/*/*/*/*/frames/{frame_pattern}"))
-        return _unique_paths(paths)
+        return _unique_paths([path for path in paths if _is_standard_session_frame_path(path)])
 
     def _scan_conversation_frame_paths(
         self,
@@ -656,6 +657,19 @@ def _standard_conversation_id(value: Any) -> str | None:
     if value is None:
         return None
     return require_standard_context_id(value)
+
+
+def _frame_standard_conversation_id(frame: SkillFrameState) -> str:
+    if frame.conversation_id is not None:
+        return require_standard_context_id(frame.conversation_id)
+    session_id = optional_standard_context_id(frame.session_id)
+    if session_id is not None:
+        return session_id
+    return generate_standard_context_id()
+
+
+def _is_standard_session_frame_path(path: Path) -> bool:
+    return optional_standard_context_id(path.parent.parent.name) is not None
 
 
 def _is_recoverable_frame(frame: SkillFrameState) -> bool:

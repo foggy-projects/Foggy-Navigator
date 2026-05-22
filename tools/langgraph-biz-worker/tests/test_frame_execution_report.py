@@ -15,6 +15,7 @@ from langgraph_biz_worker.runtime.frame_execution_report import (
 from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
+from langgraph_biz_worker.runtime.llm_tool_dispatcher import _append_tool_audit
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 
@@ -227,7 +228,11 @@ def test_read_frame_execution_report_generates_missing_report(tmp_path):
 
 def test_runtime_generates_report_and_promotes_ref_on_close(tmp_path):
     runtime = _runtime_with_journal(tmp_path)
-    frame_id = runtime.invoke_skill("task_runtime_report", "test_skill")
+    frame_id = runtime.invoke_skill(
+        "task_runtime_report",
+        "test_skill",
+        conversation_id=REPORT_CONTEXT_ID,
+    )
     frame = runtime.get_frame(frame_id)
     frame.private_messages.append({
         "role": "tool_call",
@@ -266,7 +271,11 @@ def test_runtime_generates_report_and_promotes_ref_on_close(tmp_path):
 
 def test_runtime_links_child_report_to_active_plan_step(tmp_path):
     runtime = _runtime_with_journal(tmp_path)
-    parent_id = runtime.invoke_skill("task_plan_report", "test_skill")
+    parent_id = runtime.invoke_skill(
+        "task_plan_report",
+        "test_skill",
+        conversation_id=REPORT_CONTEXT_ID,
+    )
     parent = runtime.get_frame(parent_id)
     parent.private_working_state["active_plan"] = {
         "goal": "finish child work",
@@ -275,7 +284,12 @@ def test_runtime_links_child_report_to_active_plan_step(tmp_path):
     }
     parent.private_working_state["root_context_summary"] = {}
     runtime.store.save(parent)
-    child_id = runtime.invoke_skill("task_plan_report", "test_skill", parent_frame_id=parent_id)
+    child_id = runtime.invoke_skill(
+        "task_plan_report",
+        "test_skill",
+        parent_frame_id=parent_id,
+        conversation_id=REPORT_CONTEXT_ID,
+    )
     runtime.submit_result(child_id, "child report done", {"result": "success", "step_id": "collect"})
 
     promoted = runtime.close_frame(child_id)
@@ -292,7 +306,11 @@ def test_runtime_links_child_report_to_active_plan_step(tmp_path):
 
 def test_function_call_approval_report_is_readable(tmp_path):
     runtime = _runtime_with_journal(tmp_path)
-    parent_id = runtime.invoke_skill("task_function_report", "test_skill")
+    parent_id = runtime.invoke_skill(
+        "task_function_report",
+        "test_skill",
+        conversation_id=REPORT_CONTEXT_ID,
+    )
     function_frame_id = runtime.invoke_function_call(
         parent_id,
         "tms.vehicle.create",
@@ -326,7 +344,11 @@ def test_function_call_approval_report_is_readable(tmp_path):
 
 def test_business_function_result_finalizes_child_and_root_reports(tmp_path):
     runtime = _runtime_with_journal(tmp_path)
-    root_id = runtime.invoke_skill("task_business_result_report", "system.root")
+    root_id = runtime.invoke_skill(
+        "task_business_result_report",
+        "system.root",
+        conversation_id=REPORT_CONTEXT_ID,
+    )
     child_id = runtime.invoke_child_skill(root_id, "child_skill")
     function_frame_id = runtime.invoke_function_call(
         child_id,
@@ -379,7 +401,11 @@ def test_business_function_result_finalizes_child_and_root_reports(tmp_path):
 
 def test_business_function_result_failure_finalizes_root_report(tmp_path):
     runtime = _runtime_with_journal(tmp_path)
-    root_id = runtime.invoke_skill("task_business_failure_report", "system.root")
+    root_id = runtime.invoke_skill(
+        "task_business_failure_report",
+        "system.root",
+        conversation_id=REPORT_CONTEXT_ID,
+    )
     function_frame_id = runtime.invoke_function_call(
         root_id,
         "tms.vehicle.create",
@@ -425,7 +451,11 @@ def test_business_function_result_failure_finalizes_root_report(tmp_path):
 
 def test_llm_tool_reads_frame_execution_report(tmp_path):
     runtime = _runtime_with_journal(tmp_path)
-    frame_id = runtime.invoke_skill("task_tool_report", "test_skill")
+    frame_id = runtime.invoke_skill(
+        "task_tool_report",
+        "test_skill",
+        conversation_id=REPORT_CONTEXT_ID,
+    )
     runtime.submit_result(frame_id, "tool readable", {"result": "success"})
     report_ref = runtime.get_frame(frame_id).private_working_state["execution_report_ref"]
 
@@ -476,3 +506,18 @@ def test_llm_tool_audit_log_uses_session_directory(tmp_path):
     entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
     assert [entry["phase"] for entry in entries] == ["request", "response"]
     assert {entry["session_id"] for entry in entries} == {AUDIT_CONTEXT_ID}
+
+
+def test_llm_tool_audit_requires_standard_context_id(tmp_path):
+    _append_tool_audit(
+        tmp_path,
+        "task_tool_audit",
+        "frm_audit",
+        "test_skill",
+        "submit_skill_result",
+        {"summary": "done"},
+        phase="request",
+        session_id="legacy-session",
+    )
+
+    assert not (tmp_path / "runtime" / "sessions" / "by-date").exists()

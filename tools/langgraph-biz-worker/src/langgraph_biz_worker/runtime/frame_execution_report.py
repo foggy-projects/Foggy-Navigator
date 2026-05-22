@@ -17,7 +17,7 @@ from .file_layout import (
     require_standard_context_id,
     safe_path_segment,
     session_data_dir,
-    session_key_for_frame,
+    standard_context_id_for_frame,
 )
 
 GENERATOR_VERSION = "frame-execution-report-v1"
@@ -321,19 +321,21 @@ class FrameExecutionReportGenerator:
     def _report_paths_for_frame(self, frame: SkillFrameState) -> dict[str, Path]:
         date_parts = date_parts_for_frame(frame)
         frame_stem = _safe_path_segment(frame.frame_id)
+        conversation_id = standard_context_id_for_frame(frame)
+        if conversation_id is None:
+            raise ValueError("Frame report persistence requires a standard contextId")
         report_dir = session_data_dir(
             self.data_root,
             date_parts,
-            session_key_for_frame(frame),
-            require_standard_context=frame.conversation_id is not None,
+            conversation_id,
+            require_standard_context=True,
         ) / "reports"
         paths = {
             "markdown_path": report_dir / f"{frame_stem}.md",
             "digest_path": report_dir / f"{frame_stem}.digest.json",
         }
-        if frame.conversation_id:
-            paths["conversation_markdown_path"] = paths["markdown_path"]
-            paths["conversation_digest_path"] = paths["digest_path"]
+        paths["conversation_markdown_path"] = paths["markdown_path"]
+        paths["conversation_digest_path"] = paths["digest_path"]
         return paths
 
 

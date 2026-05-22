@@ -27,7 +27,12 @@ from ..runtime.context_memory import (
 from ..runtime.context_compaction_summarizer import build_runtime_compaction_summarizer
 from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.file_frame_journal import FileFrameJournal
-from ..runtime.file_layout import date_parts_for_frame, require_standard_context_id
+from ..runtime.file_layout import (
+    date_parts_for_frame,
+    generate_standard_context_id,
+    optional_standard_context_id,
+    require_standard_context_id,
+)
 from ..runtime.frame_store import FrameStore
 from ..runtime.llm_skill_router import create_chat_model, create_chat_model_from_config
 from ..runtime.llm_skill_agent import LlmSkillAgent
@@ -172,15 +177,18 @@ def _runtime_memory_compaction_summarizer(
     if not settings.runtime_compaction_llm_enabled:
         return None
     model = _chat_model_for_state(state)
+    session_id = optional_standard_context_id(frame.conversation_id or frame.session_id)
+    if session_id is None:
+        return None
     return build_runtime_compaction_summarizer(
         model=model,
         runtime_context=runtime_context,
         task_id=state["task_id"],
         frame_id=frame.frame_id,
         data_root=_data_root,
-        session_id=frame.conversation_id or frame.session_id or state["task_id"],
+        session_id=session_id,
         date_parts=date_parts_for_frame(frame),
-        require_standard_context=bool(frame.conversation_id),
+        require_standard_context=True,
     )
 
 
@@ -254,7 +262,7 @@ def _conversation_id_for_root_frame(
     task_id: str,
     session_id: str | None,
     context: dict[str, Any],
-) -> str | None:
+) -> str:
     for key in (
         "contextId",
         "context_id",
@@ -263,8 +271,14 @@ def _conversation_id_for_root_frame(
     ):
         value = context.get(key)
         if isinstance(value, str) and value.strip():
-            return require_standard_context_id(value)
-    return None
+            conversation_id = require_standard_context_id(value)
+            context["contextId"] = conversation_id
+            context["context_id"] = conversation_id
+            return conversation_id
+    conversation_id = optional_standard_context_id(session_id) or generate_standard_context_id()
+    context["contextId"] = conversation_id
+    context["context_id"] = conversation_id
+    return conversation_id
 
 
 def _is_conversation_root_frame(frame: Any) -> bool:
@@ -483,13 +497,13 @@ def route_skill(state: RootState) -> dict:
             content=ROOT_FRAME_OPEN_CONTENT if created else ROOT_FRAME_REUSE_CONTENT,
             presentation_hint="root_frame",
         ))
-        return {"events": events, "active_frame_id": frame_id}
+        return {"events": events, "active_frame_id": frame_id, "context": context}
 
     try:
         explicit_skill_name = _explicit_skill_name_from_state(state)
     except SkillNameValidationError as exc:
         events.append(QueryEvent(type="error", task_id=task_id, error=str(exc)))
-        return {"events": events, "active_frame_id": None}
+        return {"events": events, "active_frame_id": None, "context": context}
 
     # Legacy non-LLM fallback priority:
     # 0. Dynamic skill injection via markdown
@@ -545,7 +559,7 @@ def route_skill(state: RootState) -> dict:
             content=f"Opening frame for agent: {skill_id}",
             presentation_hint="agent_frame",
         ))
-        return {"events": events, "active_frame_id": frame_id}
+        return {"events": events, "active_frame_id": frame_id, "context": context}
     else:
         # Static fallback if model routing fails or model is missing
         content_msg = "抱歉，我未能识别出与您请求匹配的业务技能。请尝试提供更多业务上下文或具体的操作指令。"
@@ -565,7 +579,7 @@ def route_skill(state: RootState) -> dict:
                 duration_ms=int((time.time() - state["started_at"]) * 1000),
             ),
         ])
-        return {"events": events, "active_frame_id": None}
+        return {"events": events, "active_frame_id": None, "context": context}
 
 
 def run_skill(state: RootState) -> dict:
@@ -986,12 +1000,12 @@ def _select_active_root_frame_for_context(context_id: str) -> Any | None:
 
 
 def _context_id_for_frame(frame: Any) -> str:
-    return (
-        getattr(frame, "conversation_id", None)
-        or getattr(frame, "session_id", None)
-        or getattr(frame, "frame_id", None)
-        or "unknown"
+    context_id = optional_standard_context_id(
+        getattr(frame, "conversation_id", None) or getattr(frame, "session_id", None)
     )
+    if context_id is None:
+        raise ValueError("Root runtime context requires a standard contextId")
+    return context_id
 
 
 def _runtime_memory_projection_metadata(

@@ -79,7 +79,7 @@ from .runtime_message_event_log import (
     record_tool_result_runtime_message,
 )
 from .execution_policy import ExecutionPolicy
-from .file_layout import date_parts_for_frame
+from .file_layout import date_parts_for_frame, optional_standard_context_id
 from .public_skill_resource_tools import PublicSkillResourceTools
 from .skill_runtime import SkillRuntime
 from .tool_provider import ToolProvider, ToolResult
@@ -200,9 +200,11 @@ class LlmSkillAgent:
             "conversation.root" if persistent_frame else frame_identity
         )
         runtime_context["_llm_submission_session_id"] = (
-            frame.conversation_id or frame.session_id or task_id
+            optional_standard_context_id(frame.conversation_id)
+            or optional_standard_context_id(frame.session_id)
+            or ""
         )
-        runtime_context["_llm_submission_require_standard_context"] = bool(frame.conversation_id)
+        runtime_context["_llm_submission_require_standard_context"] = True
         runtime_context["_llm_submission_date_parts"] = date_parts_for_frame(frame)
         if self._data_root:
             runtime_context["_llm_submission_data_root"] = str(self._data_root)

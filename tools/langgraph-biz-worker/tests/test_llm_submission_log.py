@@ -105,3 +105,22 @@ def test_record_llm_submission_disabled(monkeypatch, tmp_path):
     )
 
     assert path is None
+
+
+def test_record_llm_submission_requires_standard_context_id(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "llm_submission_log_enabled", True)
+    context = _context(tmp_path)
+    context["_llm_submission_session_id"] = "legacy-session"
+
+    path = record_llm_submission(
+        FakeModel(),
+        [HumanMessage(content="hello")],
+        context,
+        operation="skill_agent.invoke",
+        task_id="lgt_001",
+        frame_id="frm_001",
+        attempt=1,
+    )
+
+    assert path is None
+    assert not (tmp_path / "runtime" / "sessions" / "by-date").exists()

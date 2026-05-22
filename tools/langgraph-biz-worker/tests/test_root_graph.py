@@ -92,6 +92,7 @@ def test_route_skill_creates_and_reuses_persistent_system_root_frame(monkeypatch
     state = _state("task_root_reuse_001")
 
     first = root_graph_module.route_skill(state)
+    state.update(first)
     second = root_graph_module.route_skill(state)
 
     assert first["active_frame_id"] == second["active_frame_id"]
@@ -105,6 +106,14 @@ def test_route_skill_creates_and_reuses_persistent_system_root_frame(monkeypatch
     assert len(root_frames) == 1
     assert root_frames[0].frame_kind == FrameKind.ROOT
     assert root_frames[0].status.value == "RUNNING"
+    assert root_frames[0].conversation_id.startswith("bctx_")
+    assert first["context"]["contextId"] == root_frames[0].conversation_id
+    session_dirs = [
+        path for path in (tmp_path / "data" / "runtime" / "sessions" / "by-date").glob("*/*/*/*/*")
+        if path.is_dir()
+    ]
+    assert session_dirs
+    assert all(path.name.startswith("bctx_") for path in session_dirs)
 
 
 def test_route_skill_restores_persistent_system_root_frame_from_journal(monkeypatch, tmp_path):

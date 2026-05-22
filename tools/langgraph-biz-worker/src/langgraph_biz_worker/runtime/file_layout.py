@@ -67,6 +67,26 @@ def require_standard_context_id(context_id: Any) -> str:
     return normalized
 
 
+def optional_standard_context_id(context_id: Any) -> str | None:
+    """Return a normalized standard context id, or ``None`` when absent/invalid."""
+    try:
+        return require_standard_context_id(context_id)
+    except ValueError:
+        return None
+
+
+def standard_context_id_for_frame(frame: Any) -> str | None:
+    """Return the standard conversation id carried by a frame-like object."""
+    for value in (
+        getattr(frame, "conversation_id", None),
+        getattr(frame, "session_id", None),
+    ):
+        normalized = optional_standard_context_id(value)
+        if normalized is not None:
+            return normalized
+    return None
+
+
 def generate_standard_context_id(today: date | None = None) -> str:
     """Generate a standard BizWorker-owned conversation context id."""
     entropy = uuid.uuid4().hex

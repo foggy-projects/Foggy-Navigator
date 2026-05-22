@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import settings
-from .file_layout import safe_path_segment, session_data_dir
+from .file_layout import optional_standard_context_id, safe_path_segment, session_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,9 @@ def record_llm_submission(
     session_id = context.get("_llm_submission_session_id")
     if not isinstance(data_root, (str, Path)) or not data_root:
         return None
-    if not isinstance(session_id, str) or not session_id.strip():
-        session_id = task_id or frame_id or "unknown-session"
+    session_id = optional_standard_context_id(session_id)
+    if session_id is None:
+        return None
 
     try:
         log_dir = _submission_log_dir(Path(data_root), session_id, context)
@@ -96,7 +97,7 @@ def _submission_log_dir(data_root: Path, session_id: str, context: dict[str, Any
             data_root,
             tuple(date_parts),  # type: ignore[arg-type]
             session_id,
-            require_standard_context=bool(context.get("_llm_submission_require_standard_context")),
+            require_standard_context=True,
         )
         / "logs" / "llm-submissions"
     )
@@ -121,7 +122,7 @@ def _payload(
             "recordedAt": datetime.now(timezone.utc).isoformat(),
             "operation": operation,
             "sessionId": session_id,
-            "contextId": session_id if context.get("_llm_submission_require_standard_context") else None,
+            "contextId": session_id,
             "taskId": task_id,
             "frameId": frame_id,
             "skillId": _string_value(context.get("_llm_submission_skill_id")),
