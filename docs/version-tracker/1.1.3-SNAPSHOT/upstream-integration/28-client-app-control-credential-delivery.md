@@ -155,6 +155,8 @@ NAVI_ADMIN_TOKEN=<internal-only>
 
 注意：`--base-url` 是 Navigator 服务地址；上游 LLM/OpenAI-compatible 地址使用 `--model-base-url`。
 
+当前 `ClientAppModelConfigForm` / `LlmModelConfig` 尚未提供 LangGraph Biz 一等 token 预算字段，因此 CLI 还不能配置模型上下文窗口、单次最大输入、单次最大输出或单工具结果预算。不要把这些值写入 `clientContext`、用户消息或非约定 env var。后续模型预算字段和 CLI 参数设计见 `docs/version-tracker/1.1.6-SNAPSHOT/16-upstream-cli-skill-runtime-contract-alignment.md`。
+
 `NAVI_UPSTREAM_USER_TOKEN` 可选：需要 Worker 代表当前上游用户回调上游系统时再提供；SIM/E2E 或纯 Navi 会话授权可先省略。`TMS_STAFF_SESSION_TOKEN` 仅保留为 TMS sandbox 旧别名。
 
 上游不应把 `NAVI_CONTROL_API_KEY` 写入源码、文档、issue、日志或截图，只能放在项目本地 gitignored `.navigator/upstream.env`。

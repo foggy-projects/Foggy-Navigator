@@ -106,9 +106,16 @@ NAVI_ADMIN_API_KEY=<upstreamSystemScopedClientAppAdminKey>
 NAVI_ADMIN_KEY_REQUEST_CODE=<requestCode>
 NAVI_ADMIN_KEY_CLAIM_TOKEN=<claimToken>
 NAVI_UPSTREAM_SYSTEM_ID=<upstreamSystemId>
+NAVI_SOURCE_TENANT_ID=<sourceTenantId>
 NAVI_UPSTREAM_MULTI_TENANT=true
+NAVI_UPSTREAM_USER_ID=<upstreamUserId>
+NAVI_UPSTREAM_USER_TOKEN=<optionalCurrentUpstreamUserToken>
 NAVI_AGENT_CODE=<agentId>
 NAVI_MODEL_CONFIG_ID=<modelConfigId>
+NAVI_SKILL_ID=<skillId>
+NAVI_WORKER_ID=<workerId>
+NAVI_DIRECTORY_ID=<directoryId>
+NAVI_WORKER_POOL_ID=<workerPoolId>
 NAVI_E2E_MOCK_LLM_URL=http://localhost:8200
 NAVI_POLL_INTERVAL_SECONDS=4
 ```
@@ -116,6 +123,8 @@ NAVI_POLL_INTERVAL_SECONDS=4
 这个文件必须留在本项目本地，不提交到 Git。不同上游项目使用各自的 `.navigator/upstream.env`，不共用全局 shell 环境变量。
 
 `NAVI_MODEL_CONFIG_ID` 可为空；为空时 readiness/ask 由 Navigator 后端按当前 ClientApp 的默认 model config grant 解析。命令行 `--model-config-id` 会覆盖该值。
+
+BizWorker `1.1.6-SNAPSHOT` 起，新会话 `ask` 默认由 Navigator / BizWorker 生成 `contextId`，上游只保存返回值用于续聊。不要在 profile 中预置一个固定 `contextId`，也不要把完整 UI transcript 或模型 token 预算放进 `clientContext`。当前 runtime context、Skill/Agent 边界和模型预算缺口见 `docs/version-tracker/1.1.6-SNAPSHOT/16-upstream-cli-skill-runtime-contract-alignment.md`。
 
 ## 常用命令
 

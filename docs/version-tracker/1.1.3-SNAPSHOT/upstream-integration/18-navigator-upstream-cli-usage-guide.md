@@ -272,12 +272,14 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 
 `ask` 只发送 runtime access token 和 `X-Upstream-User-Id`，不会发送 ClientApp secret。
 
+从 BizWorker `1.1.6-SNAPSHOT` 起，新会话不需要也不建议由上游自行生成 `contextId`。`ask` 未传 `--context-id` 时，Navigator / BizWorker 会生成标准 `bctx_yyyyMMdd_<hash>_<id>` 并在任务结果中返回。上游应保存这个返回值用于后续续聊、UI 会话归属和排查定位。
+
 续聊与上游会话扩展数据：
 
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream ask `
   --upstream-user-id <id> `
-  --context-id <contextId> `
+  --context-id <returnedContextId> `
   --message "继续分析这个订单" `
   --client-context-json '{"upstreamConversationId":"tms-ai-10001","bizObjectType":"order","bizObjectId":"SO-10001"}'
 ```
@@ -291,7 +293,9 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
   --client-context-file .\navigator-client-context.json
 ```
 
-`clientContext` 是 `POST /ask` 的顶层字段，只写入 Navigator 会话摘要，不进入 Worker metadata 或 LLM prompt。
+`clientContext` 是 `POST /ask` 的顶层字段，只写入 Navigator 会话摘要和上游关联元数据，不是 LLM runtime prompt、模型配置或 workspace 配置。不要用它传完整 UI transcript、`recentConversation`、模型 token 预算、system prompt 覆盖、Skill/Function 私有配置或临时文件系统路径。
+
+上游仍负责保存完整 UI transcript。BizWorker 只维护下一轮模型推理需要的 bounded runtime context，包括 Root-visible user / assistant / tool protocol、压缩摘要和 focus / interruption control state。CLI 的 `messages` / `session-messages` 用于查看展示态消息，不是下一轮提交给 LLM 的事实来源。
 
 ### 5. 轮询 Task Messages
 
@@ -402,6 +406,7 @@ $env:NAVI_LLM_API_KEY="<new-llm-api-key>"
 7. `--api-key-env` 从环境变量读取 LLM key，避免 key 进入命令历史或 CLI 输出。
 8. `--write-profile` 只把最终 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
 9. `NAVI_MODEL_CONFIG_ID` 是上游项目本地默认模型，不代表租户全局默认模型。
+10. 当前模型配置还没有 LangGraph Biz 一等 token 预算字段。不要把 `contextWindowTokens`、`maxInputTokens`、`maxOutputTokens`、工具结果裁剪上限等值塞入 `clientContext` 或用户消息。后续字段设计见 `1.1.6-SNAPSHOT/16-upstream-cli-skill-runtime-contract-alignment.md`。
 
 ## Deterministic E2E Test Model
 
