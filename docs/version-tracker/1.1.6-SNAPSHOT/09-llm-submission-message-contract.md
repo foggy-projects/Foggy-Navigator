@@ -178,6 +178,8 @@ human(新的用户输入或续跑指令)
 
 2026-05-23 第五版收口：如果提交 LLM 前的 prompt hard cap 会截断 runtime-visible messages，Root prepare / refresh 会先触发 `compact_for_prompt_budget()`。该路径会在 `logs/llm-submissions/*.json` 的 `meta.runtimeWarnings[]` 写入本轮 warning，并在 `logs/runtime-message-events/*.jsonl` 写入 `eventType=runtime_warning`。当前 code 为 `PROMPT_BUDGET_PRE_COMPACTION` 和 `PROMPT_BUDGET_HARD_CAP_REMAINS`。这类 warning 只用于复盘真实提交 body 与预算治理，不作为下一轮 prompt source。
 
+2026-05-23 第六版收口：`meta.runtimeBudget` 写入本次提交解析后的 model runtime budget，包含 `preset_key`、`source`、`context_window_tokens`、`max_input_tokens`、`max_output_tokens`、`auto_compact_input_token_threshold`、`max_single_tool_result_tokens`、`token_estimator` 等字段。Root runtime memory 已增加 `maxPromptTokens`、`maxVisibleTokens`、`maxToolResultTokens`，`prompt_budget_status()` 同时报告 token / chars / message count。当前 token 统计为 `heuristic-v1` 估算，后续可替换为 provider/model 精确 tokenizer；submission log contract 不变。
+
 ### 4. Root 与 Child 的完成契约分离
 
 `conversation.root` 是会话级持久执行载体，不是每轮都需要关闭的业务 Skill frame。它负责普通用户回合、业务工具调度、运行时记忆 commit 与中断恢复。

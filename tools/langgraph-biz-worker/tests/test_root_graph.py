@@ -81,6 +81,9 @@ def test_sync_memory_limits_sets_tool_result_projection_tail():
             "llm_config": {
                 "runtimeBudgetPresetKey": "generic.128k",
                 "runtimeBudgetOverride": {
+                    "maxInputTokens": 64000,
+                    "autoCompactInputTokenThreshold": 48000,
+                    "maxSingleToolResultTokens": 6000,
                     "maxSingleToolResultChars": 24000,
                     "projectHistoricalToolResults": False,
                     "rawToolResultTailTurnCount": 3,
@@ -92,6 +95,9 @@ def test_sync_memory_limits_sets_tool_result_projection_tail():
         },
     )
 
+    assert memory.limits["maxPromptTokens"] == 64000
+    assert memory.limits["maxVisibleTokens"] == 48000
+    assert memory.limits["maxToolResultTokens"] == 6000
     assert memory.limits["maxToolResultChars"] == 24000
     assert memory.limits["projectHistoricalToolResults"] is False
     assert memory.limits["rawToolResultTailTurnCount"] == 3
@@ -99,6 +105,8 @@ def test_sync_memory_limits_sets_tool_result_projection_tail():
     assert memory.limits["tailTurnCount"] == 5
     assert memory.limits["maxSummaryChars"] == 3000
     assert memory.limits["runtimeBudgetPresetKey"] == "generic.128k"
+    assert memory.limits["runtimeBudgetSource"] == "EXPLICIT+OVERRIDE"
+    assert memory.limits["tokenEstimator"] == "heuristic-v1"
 
 
 def test_prompt_budget_pre_compaction_records_runtime_warning():

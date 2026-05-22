@@ -155,8 +155,14 @@ def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[
     if not isinstance(llm_config, dict):
         return
     budget = resolve_model_runtime_budget(llm_config)
+    runtime_context["_runtime_budget"] = budget
     max_input_tokens = _positive_int(budget.get("max_input_tokens"))
     compact_threshold_tokens = _positive_int(budget.get("auto_compact_input_token_threshold"))
+    context_window_tokens = _positive_int(budget.get("context_window_tokens"))
+    max_output_tokens = _positive_int(budget.get("max_output_tokens"))
+    prompt_reserve_output_tokens = _positive_int(budget.get("prompt_reserve_output_tokens"))
+    prompt_reserve_system_tokens = _positive_int(budget.get("prompt_reserve_system_tokens"))
+    max_tool_result_tokens = _positive_int(budget.get("max_single_tool_result_tokens"))
     max_tool_result_chars = _positive_int(budget.get("max_single_tool_result_chars"))
     project_historical_tool_results = _bool_or_none(budget.get("project_historical_tool_results"))
     raw_tool_result_tail_turn_count = _positive_int(budget.get("raw_tool_result_tail_turn_count"))
@@ -166,9 +172,21 @@ def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[
     max_prompt_messages = _positive_int(budget.get("max_prompt_messages"))
     max_visible_messages = _positive_int(budget.get("max_visible_messages"))
     if max_input_tokens is not None:
+        memory.limits["maxPromptTokens"] = max_input_tokens
         memory.limits["maxPromptChars"] = max_input_tokens * 4
     if compact_threshold_tokens is not None:
+        memory.limits["maxVisibleTokens"] = compact_threshold_tokens
         memory.limits["maxVisibleChars"] = compact_threshold_tokens * 4
+    if context_window_tokens is not None:
+        memory.limits["contextWindowTokens"] = context_window_tokens
+    if max_output_tokens is not None:
+        memory.limits["maxOutputTokens"] = max_output_tokens
+    if prompt_reserve_output_tokens is not None:
+        memory.limits["promptReserveOutputTokens"] = prompt_reserve_output_tokens
+    if prompt_reserve_system_tokens is not None:
+        memory.limits["promptReserveSystemTokens"] = prompt_reserve_system_tokens
+    if max_tool_result_tokens is not None:
+        memory.limits["maxToolResultTokens"] = max_tool_result_tokens
     if max_tool_result_chars is not None:
         memory.limits["maxToolResultChars"] = max_tool_result_chars
     if project_historical_tool_results is not None:
@@ -188,6 +206,12 @@ def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[
     preset_key = budget.get("preset_key")
     if isinstance(preset_key, str) and preset_key:
         memory.limits["runtimeBudgetPresetKey"] = preset_key
+    source = budget.get("source")
+    if isinstance(source, str) and source:
+        memory.limits["runtimeBudgetSource"] = source
+    token_estimator = budget.get("token_estimator")
+    if isinstance(token_estimator, str) and token_estimator:
+        memory.limits["tokenEstimator"] = token_estimator
 
 
 def _compact_for_prompt_budget_with_warning(

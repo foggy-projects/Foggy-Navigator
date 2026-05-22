@@ -130,6 +130,7 @@ def _payload(
             "attempt": attempt,
             "runtimeRevision": context.get("_runtime_context_revision"),
             "runtimeWarnings": _jsonable(context.get("_runtime_context_warnings") or []),
+            "runtimeBudget": _jsonable(context.get("_runtime_budget") or {}),
         },
         "body": {
             "model": _model_snapshot(model),

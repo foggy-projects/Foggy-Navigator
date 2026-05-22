@@ -34,6 +34,11 @@ def _context(tmp_path, *, max_files: int = 100) -> dict:
             },
         }],
         "_runtime_context_revision": 4,
+        "_runtime_budget": {
+            "preset_key": "generic.128k",
+            "max_input_tokens": 100000,
+            "token_estimator": "heuristic-v1",
+        },
         "llm_submission_log_max_files": max_files,
     }
 
@@ -61,6 +66,8 @@ def test_record_llm_submission_writes_numbered_json(monkeypatch, tmp_path):
     assert payload["meta"]["taskId"] == "lgt_001"
     assert payload["meta"]["runtimeRevision"] == 4
     assert payload["meta"]["runtimeWarnings"] == []
+    assert payload["meta"]["runtimeBudget"]["preset_key"] == "generic.128k"
+    assert payload["meta"]["runtimeBudget"]["token_estimator"] == "heuristic-v1"
     assert payload["body"]["model"]["model_name"] == "unit-test-model"
     assert "hello" in json.dumps(payload["body"]["messages"], ensure_ascii=False)
     assert payload["body"]["messages"][0]["type"] == "system"

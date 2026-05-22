@@ -403,6 +403,54 @@ def test_context_memory_projects_only_historical_large_tool_results():
     assert json.loads(tool_messages[1]["content"])["payload"] == "y" * 1000
 
 
+def test_context_memory_projects_historical_tool_result_by_token_budget():
+    memory = ContextRuntimeMemory(context_id="bctx_20260523_ab_ctx-tool-token-projection")
+    memory.limits.update({
+        "maxPromptMessages": 100,
+        "maxPromptChars": 10000,
+        "maxPromptTokens": 10000,
+        "maxVisibleMessages": 100,
+        "maxVisibleChars": 10000,
+        "maxVisibleTokens": 10000,
+        "maxMessageChars": 800,
+        "maxToolResultChars": 4000,
+        "maxToolResultTokens": 20,
+        "rawToolResultTailTurnCount": 0,
+    })
+    tool_result = json.dumps({
+        "ok": True,
+        "ticketId": "TICKET-CJK",
+        "payload": "中文内容" * 80,
+    }, ensure_ascii=False)
+
+    memory.begin_turn(
+        task_id="task_cjk",
+        root_frame_id="frm_root",
+        user_message="call cjk tool",
+    )
+    assert memory.commit_turn(
+        assistant_message="cjk done",
+        protocol_messages=[
+            {"role": "user", "content": "call cjk tool", "taskId": "task_cjk"},
+            {
+                "role": "assistant",
+                "content": "",
+                "toolCalls": [{"id": "call_cjk", "name": "query_ticket", "args": {}}],
+            },
+            {"role": "tool", "content": tool_result, "toolCallId": "call_cjk"},
+            {"role": "assistant", "content": "cjk done"},
+        ],
+    )
+
+    prompt = memory.build_prompt_view()
+    tool_messages = [item for item in prompt if item["role"] == "tool"]
+    projection = json.loads(tool_messages[0]["content"])
+
+    assert projection["projection"] == "historical_large_tool_result"
+    assert projection["originalTokensEstimate"] > 20
+    assert projection["tokenEstimator"] == "heuristic-v1"
+
+
 def test_context_memory_can_disable_historical_tool_result_projection():
     memory = ContextRuntimeMemory(context_id="bctx_20260523_ab_ctx-tool-projection-off")
     memory.limits.update({
@@ -649,6 +697,68 @@ def test_context_memory_visible_char_budget_triggers_compaction():
         "U3-long-message",
         "A3-long-answer",
     ]
+
+
+def test_context_memory_visible_token_budget_triggers_compaction():
+    memory = ContextRuntimeMemory(context_id="bctx_20260523_ab_ctx-token-budget")
+    memory.limits.update({
+        "maxVisibleMessages": 100,
+        "maxVisibleChars": 10000,
+        "maxVisibleTokens": 20,
+        "maxPromptMessages": 100,
+        "maxPromptChars": 10000,
+        "maxPromptTokens": 10000,
+        "headTurnCount": 1,
+        "tailTurnCount": 1,
+    })
+    summarizer_payloads: list[dict[str, object]] = []
+
+    def summarizer(payload: dict[str, object]) -> dict[str, object]:
+        summarizer_payloads.append(payload)
+        return {"durableUserIntent": "token budget summary"}
+
+    for index in range(1, 4):
+        memory.begin_turn(
+            task_id=f"task_{index:03d}",
+            root_frame_id="frm_root",
+            user_message=f"用户输入第{index}轮，包含较多中文字符用于触发 token 预算",
+        )
+        assert memory.commit_turn(
+            assistant_message=f"助手回复第{index}轮，继续包含中文字符",
+            summarizer=summarizer if index == 3 else None,
+        )
+
+    assert summarizer_payloads
+    assert summarizer_payloads[0]["reason"] == "visible_window"
+    assert memory.compacted_summary is not None
+    assert memory.compacted_summary["durableUserIntent"] == "token budget summary"
+
+
+def test_context_memory_prompt_budget_status_reports_token_pressure():
+    memory = ContextRuntimeMemory(context_id="bctx_20260523_ab_ctx-prompt-token-budget")
+    memory.limits.update({
+        "maxVisibleMessages": 100,
+        "maxVisibleChars": 10000,
+        "maxVisibleTokens": 10000,
+        "maxPromptMessages": 100,
+        "maxPromptChars": 10000,
+        "maxPromptTokens": 16,
+    })
+
+    for index in range(1, 3):
+        memory.begin_turn(
+            task_id=f"task_{index:03d}",
+            root_frame_id="frm_root",
+            user_message=f"中文用户消息第{index}轮，用于触发 prompt token 预算",
+        )
+        assert memory.commit_turn(assistant_message=f"中文助手回复第{index}轮")
+
+    status = memory.prompt_budget_status()
+
+    assert status["wouldClip"] is True
+    assert status["maxPromptTokens"] == 16
+    assert status["projectedVisibleTokens"] > status["remainingTokens"]
+    assert status["tokenEstimator"] == "heuristic-v1"
 
 
 def test_context_memory_compaction_fallback_redacts_sensitive_text():

@@ -16,6 +16,7 @@ from threading import Lock
 from typing import Any, Callable
 
 from ..models import SkillFrameState
+from .token_budget import ESTIMATOR_NAME, estimate_messages_tokens, estimate_text_tokens
 
 RUNTIME_CONTEXT_MEMORY_KEY = "runtime_context_memory"
 RUNTIME_VISIBLE_CONVERSATION_KEY = "_runtime_visible_conversation"
@@ -24,16 +25,20 @@ PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY = "_pending_root_turn_protocol_messages"
 DEFAULT_LIMITS = {
     "maxVisibleMessages": 128,
     "maxPromptMessages": 128,
+    "maxPromptTokens": 12000,
     "maxPromptChars": 48000,
     "maxMessageChars": 1200,
+    "maxToolResultTokens": 12000,
     "maxToolResultChars": 48000,
     "projectHistoricalToolResults": True,
     "maxToolCallArgsChars": 12000,
     "rawToolResultTailTurnCount": 6,
+    "maxVisibleTokens": 3000,
     "maxVisibleChars": 12000,
     "headTurnCount": 2,
     "tailTurnCount": 8,
     "maxSummaryChars": 4000,
+    "tokenEstimator": ESTIMATOR_NAME,
 }
 
 _TOOL_RESULT_SELECTED_FIELD_NAMES = {
@@ -194,6 +199,7 @@ class ContextRuntimeMemory:
         budget = self.prompt_budget_status()
         max_prompt_messages = _int_or_default(budget.get("maxPromptMessages"), DEFAULT_LIMITS["maxPromptMessages"])
         max_prompt_chars = _int_or_default(budget.get("maxPromptChars"), DEFAULT_LIMITS["maxPromptChars"])
+        max_prompt_tokens = _int_or_default(budget.get("maxPromptTokens"), DEFAULT_LIMITS["maxPromptTokens"])
         head_messages = [
             *self.pinned_head_messages,
             *self._compacted_summary_prompt_messages(),
@@ -212,6 +218,7 @@ class ContextRuntimeMemory:
             visible_prompt,
             max_messages=max(1, max_prompt_messages - len(head_prompt)),
             max_chars=max(1, max_prompt_chars - _messages_total_chars(head_prompt)),
+            max_tokens=max(1, max_prompt_tokens - _messages_total_tokens(head_prompt)),
         )
         prompt_source = [*head_prompt, *tail_prompt]
         return _ensure_valid_tool_protocol_window([
@@ -244,6 +251,10 @@ class ContextRuntimeMemory:
             self.limits.get("maxPromptChars"),
             DEFAULT_LIMITS["maxPromptChars"],
         )
+        max_prompt_tokens = _int_or_default(
+            self.limits.get("maxPromptTokens"),
+            DEFAULT_LIMITS["maxPromptTokens"],
+        )
         head_messages = [
             *self.pinned_head_messages,
             *self._compacted_summary_prompt_messages(),
@@ -260,21 +271,29 @@ class ContextRuntimeMemory:
         )
         remaining_messages = max_prompt_messages - len(head_prompt)
         remaining_chars = max_prompt_chars - _messages_total_chars(head_prompt)
+        remaining_tokens = max_prompt_tokens - _messages_total_tokens(head_prompt)
         projected_visible_chars = _messages_total_chars(visible_prompt)
+        projected_visible_tokens = _messages_total_tokens(visible_prompt)
         would_clip = (
             len(visible_prompt) > max(0, remaining_messages)
             or projected_visible_chars > max(0, remaining_chars)
+            or projected_visible_tokens > max(0, remaining_tokens)
         )
         return {
             "wouldClip": would_clip,
             "maxPromptMessages": max_prompt_messages,
             "maxPromptChars": max_prompt_chars,
+            "maxPromptTokens": max_prompt_tokens,
+            "tokenEstimator": _str_or_default(self.limits.get("tokenEstimator"), ESTIMATOR_NAME),
             "headMessageCount": len(head_prompt),
+            "headTokens": _messages_total_tokens(head_prompt),
             "visibleMessageCount": len(self.visible_messages),
             "projectedVisibleMessageCount": len(visible_prompt),
             "projectedVisibleChars": projected_visible_chars,
+            "projectedVisibleTokens": projected_visible_tokens,
             "remainingMessages": max(0, remaining_messages),
             "remainingChars": max(0, remaining_chars),
+            "remainingTokens": max(0, remaining_tokens),
             "hasCompactedSummary": isinstance(self.compacted_summary, dict),
             "pinnedHeadMessageCount": len(self.pinned_head_messages),
         }
@@ -518,11 +537,16 @@ class ContextRuntimeMemory:
             self.limits.get("maxVisibleChars"),
             DEFAULT_LIMITS["maxVisibleChars"],
         )
+        max_visible_tokens = _int_or_default(
+            self.limits.get("maxVisibleTokens"),
+            DEFAULT_LIMITS["maxVisibleTokens"],
+        )
         if (
             not force
             and
             len(self.visible_messages) <= max_visible
             and _messages_total_chars(self.visible_messages) <= max_visible_chars
+            and _messages_total_tokens(self.visible_messages) <= max_visible_tokens
         ):
             return False
 
@@ -757,6 +781,7 @@ def _turn_aware_prompt_tail(
     *,
     max_messages: int,
     max_chars: int,
+    max_tokens: int,
 ) -> list[dict[str, Any]]:
     if not messages:
         return []
@@ -766,9 +791,11 @@ def _turn_aware_prompt_tail(
     selected: list[list[dict[str, Any]]] = []
     selected_count = 0
     selected_chars = 0
+    selected_tokens = 0
     for group in reversed(groups):
         group_count = len(group)
         group_chars = _messages_total_chars(group)
+        group_tokens = _messages_total_tokens(group)
         if (
             selected
             and selected_count + group_count > max_messages
@@ -779,9 +806,15 @@ def _turn_aware_prompt_tail(
             and selected_chars + group_chars > max_chars
         ):
             break
+        if (
+            selected
+            and selected_tokens + group_tokens > max_tokens
+        ):
+            break
         selected.insert(0, group)
         selected_count += group_count
         selected_chars += group_chars
+        selected_tokens += group_tokens
     if not selected:
         selected = [groups[-1]]
     flattened = [item for group in selected for item in group]
@@ -843,6 +876,10 @@ def _semantic_turn_groups(messages: list[dict[str, Any]]) -> list[list[dict[str,
 
 def _messages_total_chars(messages: list[dict[str, Any]]) -> int:
     return sum(len(item.get("content") or "") for item in messages if isinstance(item, dict))
+
+
+def _messages_total_tokens(messages: list[dict[str, Any]]) -> int:
+    return estimate_messages_tokens(messages)
 
 
 def _normalize_compacted_summary(
@@ -1161,6 +1198,10 @@ def _prompt_messages_with_tool_projection(
         limits.get("maxToolResultChars"),
         DEFAULT_LIMITS["maxToolResultChars"],
     )
+    max_tool_result_tokens = _int_or_default(
+        limits.get("maxToolResultTokens"),
+        DEFAULT_LIMITS["maxToolResultTokens"],
+    )
     project_historical_tool_results_enabled = _bool_or_default(
         limits.get("projectHistoricalToolResults"),
         DEFAULT_LIMITS["projectHistoricalToolResults"],
@@ -1176,6 +1217,7 @@ def _prompt_messages_with_tool_projection(
                 item,
                 project_historical_tool_result=project_historical_tool_results,
                 max_tool_result_chars=max_tool_result_chars,
+                max_tool_result_tokens=max_tool_result_tokens,
             ))
     return _ensure_valid_tool_protocol_window(projected)
 
@@ -1192,6 +1234,7 @@ def _prompt_message_copy(
     *,
     project_historical_tool_result: bool = False,
     max_tool_result_chars: int | None = None,
+    max_tool_result_tokens: int | None = None,
 ) -> dict[str, Any]:
     role = item["role"]
     content = item.get("content", "")
@@ -1200,6 +1243,7 @@ def _prompt_message_copy(
             content,
             item=item,
             max_chars=max_tool_result_chars,
+            max_tokens=max_tool_result_tokens,
         )
     copied = {
         "role": role,
@@ -1222,10 +1266,13 @@ def _project_historical_tool_result_content(
     *,
     item: dict[str, Any],
     max_chars: int | None,
+    max_tokens: int | None,
 ) -> str:
     text = _message_content_text_unbounded(content)
-    limit = _int_or_default(max_chars, DEFAULT_LIMITS["maxToolResultChars"])
-    if not text or len(text) <= limit:
+    char_limit = _int_or_default(max_chars, DEFAULT_LIMITS["maxToolResultChars"])
+    token_limit = _int_or_default(max_tokens, DEFAULT_LIMITS["maxToolResultTokens"])
+    token_count = estimate_text_tokens(text)
+    if not text or (len(text) <= char_limit and token_count <= token_limit):
         return text
     parsed = _try_parse_json(text)
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -1233,13 +1280,15 @@ def _project_historical_tool_result_content(
         "projected": True,
         "projection": "historical_large_tool_result",
         "originalChars": len(text),
+        "originalTokensEstimate": token_count,
+        "tokenEstimator": ESTIMATOR_NAME,
         "digest": f"sha256:{digest}",
         "sha256": digest,
         "refs": _tool_result_refs(item=item, parsed=parsed),
         "selectedFields": _selected_tool_result_fields(parsed),
-        "preview": _truncate_text(text, max(0, min(1024, limit // 2))),
+        "preview": _truncate_text(text, max(0, min(1024, char_limit // 2))),
     }
-    return _bounded_projection_json(projection, limit=max(256, limit))
+    return _bounded_projection_json(projection, limit=max(256, char_limit))
 
 
 def _try_parse_json(text: str) -> Any:

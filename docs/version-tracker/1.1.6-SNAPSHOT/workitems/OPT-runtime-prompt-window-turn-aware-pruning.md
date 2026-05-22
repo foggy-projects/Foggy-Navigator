@@ -260,6 +260,53 @@ warning payload 统一包含：
 | `compacted` | 本次是否实际执行了压缩 |
 | `before` / `after` | 压缩前后的 `prompt_budget_status()` 快照 |
 
+## 第六版实现：token-aware 预算入口
+
+第六版将模型 preset 中的 token 字段真正接入 runtime memory 的治理路径。当前不引入 provider tokenizer 依赖，先使用可替换的 `heuristic-v1` token estimator；字符预算继续作为 fail-safe。
+
+1. `model_runtime_budget.py`
+   - preset 输出继续包含：
+     - `context_window_tokens`
+     - `max_input_tokens`
+     - `max_output_tokens`
+     - `auto_compact_input_token_threshold`
+     - `prompt_reserve_output_tokens`
+     - `prompt_reserve_system_tokens`
+     - `max_single_tool_result_tokens`
+   - 新增 `token_estimator=heuristic-v1`，可通过 `runtimeBudgetOverride.tokenEstimator` 覆盖。
+2. `root_graph._sync_memory_limits_from_runtime_context(...)`
+   - 将 token budget 同步到 Root runtime memory：
+     - `max_input_tokens -> maxPromptTokens`
+     - `auto_compact_input_token_threshold -> maxVisibleTokens`
+     - `max_single_tool_result_tokens -> maxToolResultTokens`
+     - `context_window_tokens -> contextWindowTokens`
+     - `max_output_tokens -> maxOutputTokens`
+     - `prompt_reserve_output_tokens -> promptReserveOutputTokens`
+     - `prompt_reserve_system_tokens -> promptReserveSystemTokens`
+   - 同时保留 `maxPromptChars = max_input_tokens * 4`、`maxVisibleChars = threshold * 4` 作为兜底。
+3. `ContextRuntimeMemory.prompt_budget_status()`
+   - 新增 `maxPromptTokens`、`projectedVisibleTokens`、`remainingTokens`、`headTokens`、`tokenEstimator`。
+   - `wouldClip` 同时考虑 message count、chars 和 token 估算。
+4. `ContextRuntimeMemory._compact_visible_messages(...)`
+   - lazy compaction 触发条件新增 `maxVisibleTokens`。
+   - 也就是说，少量大消息或中文长文本在 message count 未触顶时，也能触发 summary 压缩。
+5. 历史大 tool result projection
+   - 新增 `maxToolResultTokens` 判断。
+   - 历史 tool result 只要超过 chars 或 token 任一阈值，就投影为 digest / refs / selected fields。
+   - 最新 `rawToolResultTailTurnCount` 个语义 turn 仍保持 raw，不受投影影响。
+6. `logs/llm-submissions/*.json`
+   - `meta.runtimeBudget` 写入解析后的 budget，包含 preset key、source、token estimator 和主要 token 参数。
+   - 这让单次真实 provider body 可以反查当时使用的预算来源。
+
+`heuristic-v1` 估算规则：
+
+1. ASCII 文本约 4 chars / token。
+2. CJK 字符约 1 char / token。
+3. 其他非 ASCII 字符约 2 chars / token。
+4. 每条 message 增加少量固定 overhead，并将 `toolCalls` JSON 和 `toolCallId` 计入估算。
+
+该估算不追求和某个 provider tokenizer 完全一致，目标是让 BizWorker 的治理路径先以 token 预算为主。后续接入真实 tokenizer 时，只替换 estimator，不改变 memory / preset / log contract。
+
 ## 验收建议
 
 1. 已新增单元测试：`maxPromptMessages` 裁剪后 prompt 不以孤立 assistant 语义消息开头。
@@ -269,6 +316,9 @@ warning payload 统一包含：
 5. 已新增 scripted E2E：多轮 Root 回合在 `maxPromptMessages` 触顶前触发 prompt pre-compaction，并在 `llm-submissions.meta.runtimeWarnings` 与 `runtime-message-events` 中写入 `PROMPT_BUDGET_PRE_COMPACTION`。
 6. 已新增单元测试：最近 N 个语义 turn 内的大 tool result 保持 raw，N 轮之外的历史大 tool result 在 prompt view 中投影为 digest / refs / selected fields。
 7. 已新增单元测试：`projectHistoricalToolResults=false` 时不投影历史大 tool result。
+8. 已新增单元测试：visible token budget 可触发 lazy compaction。
+9. 已新增单元测试：prompt budget status 报告 token pressure，并参与 `wouldClip` 判断。
+10. 已新增单元测试：历史大 tool result 可按 token budget 触发 projection。
 
 ## Progress Tracking
 
@@ -286,7 +336,8 @@ Development:
 - [x] 压缩 head / tail / summary 参数进入模型 runtime budget preset / override，并同步到 Root runtime memory。
 - [x] 将 prompt hard cap 触发记录为 runtime warning / event，便于从日志追踪。
 - [x] 脚本化 LLM smoke 后复核 `llm-submissions` 是否符合预期。
-- [ ] 后续设计真实 tokenizer 与更精确 token 预算。
+- [x] token-aware 预算入口落地：preset token 字段同步进 Root memory，并参与 prompt / visible / tool result 判断。
+- [ ] 后续替换为 provider/model 精确 tokenizer。
 
 Testing:
 
@@ -300,6 +351,7 @@ Testing:
 - [x] `pytest tests/test_context_memory.py tests/test_root_graph.py::test_prompt_budget_pre_compaction_records_runtime_warning tests/test_llm_submission_log.py tests/test_llm_message_builder.py -q`：35 passed。
 - [x] `pytest tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_root_prompt_budget_warning_is_logged -q`：覆盖 prompt pre-compaction warning 在真实 mock LLM body 与 runtime event log 中可复盘；该场景会额外生成一次 `runtime-memory.compaction` LLM submission，随后 Root submission 带 warning。
 - [x] `pytest -q` 全量 BizWorker 测试：`654 passed, 6 skipped, 11 warnings`。
+- [x] `pytest tests/test_context_memory.py tests/test_root_graph.py::test_sync_memory_limits_sets_tool_result_projection_tail tests/test_root_graph.py::test_prompt_budget_pre_compaction_records_runtime_warning tests/test_model_runtime_budget.py tests/test_llm_submission_log.py -q`：39 passed，覆盖 token-aware budget sync / status / compaction / projection / submission log。
 
 Experience:
 

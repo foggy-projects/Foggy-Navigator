@@ -206,6 +206,7 @@ Codex / Claude Code / Gemini CLI 这类 native worker backend 默认由各自 wo
 | `maxSingleToolResultChars` | tokenizer 不可用或估算失败时的历史 tool result projection 字符兜底上限 |
 | `projectHistoricalToolResults` | 是否对历史大 tool result 做 digest/refs/selected fields projection；默认 `true` |
 | `rawToolResultTailTurnCount` | 最近多少个语义 turn 的 tool result 保持 raw，不做 digest/refs projection；默认 `6` |
+| `tokenEstimator` | token 统计策略；当前 BizWorker 内置 `heuristic-v1`，后续可替换为模型精确 tokenizer |
 
 实现上已先采用 `runtimeBudgetOverrideJson` 结构化 JSON 字段承载少量特殊覆盖。不要继续把 LangGraph Biz 的核心预算只塞进 `envVars`。
 
@@ -235,6 +236,14 @@ CLI 已补充 preset 参数，而不是优先暴露所有数字字段：
 ## 与消息裁剪 / 压缩设计的关系
 
 模型预算 resolver 的输出是 `ContextRuntimeMemory.build_prompt_view()` 和 compaction policy 的输入之一。
+
+2026-05-23 实现更新：BizWorker 已把 preset token 字段同步进 Root `ContextRuntimeMemory`：
+
+- `maxInputTokens -> maxPromptTokens`
+- `autoCompactInputTokenThreshold -> maxVisibleTokens`
+- `maxSingleToolResultTokens -> maxToolResultTokens`
+
+当前 token 统计使用 `heuristic-v1`，并与 chars / message count 共同参与 prompt hard cap、lazy compaction 和历史大 tool result projection。`llm-submissions.meta.runtimeBudget` 会保存解析后的 budget，供上游验收真实提交 body 时复盘。
 
 裁剪顺序建议：
 

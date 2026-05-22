@@ -16,7 +16,8 @@ def test_explicit_preset_and_json_override():
                 '"rawToolResultTailTurnCount": 4, '
                 '"compactionHeadTurnCount": 1, '
                 '"compactionTailTurnCount": 5, '
-                '"maxCompactionSummaryChars": 3000}'
+                '"maxCompactionSummaryChars": 3000, '
+                '"tokenEstimator": "heuristic-v1"}'
             ),
             "model": "qwen3.5-plus",
         }
@@ -31,6 +32,7 @@ def test_explicit_preset_and_json_override():
     assert budget["compaction_head_turn_count"] == 1
     assert budget["compaction_tail_turn_count"] == 5
     assert budget["max_compaction_summary_chars"] == 3000
+    assert budget["token_estimator"] == "heuristic-v1"
     assert budget["max_prompt_messages"] == 512
     assert budget["max_visible_messages"] == 768
 

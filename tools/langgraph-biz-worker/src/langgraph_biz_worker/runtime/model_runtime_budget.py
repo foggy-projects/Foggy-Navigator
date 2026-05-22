@@ -7,6 +7,7 @@ import re
 from copy import deepcopy
 from typing import Any, Mapping
 
+from .token_budget import ESTIMATOR_NAME
 
 DEFAULT_PRESET_KEY = "generic.128k"
 
@@ -20,6 +21,7 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_output_tokens": 4_096,
         "prompt_reserve_system_tokens": 2_048,
         "max_single_tool_result_tokens": 4_096,
+        "token_estimator": ESTIMATOR_NAME,
         "max_single_tool_result_chars": 16_384,
         "project_historical_tool_results": True,
         "raw_tool_result_tail_turn_count": 6,
@@ -38,6 +40,7 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_output_tokens": 8_192,
         "prompt_reserve_system_tokens": 4_096,
         "max_single_tool_result_tokens": 12_000,
+        "token_estimator": ESTIMATOR_NAME,
         "max_single_tool_result_chars": 48_000,
         "project_historical_tool_results": True,
         "raw_tool_result_tail_turn_count": 6,
@@ -56,6 +59,7 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_output_tokens": 8_192,
         "prompt_reserve_system_tokens": 4_096,
         "max_single_tool_result_tokens": 16_000,
+        "token_estimator": ESTIMATOR_NAME,
         "max_single_tool_result_chars": 64_000,
         "project_historical_tool_results": True,
         "raw_tool_result_tail_turn_count": 6,
@@ -74,6 +78,7 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_output_tokens": 16_384,
         "prompt_reserve_system_tokens": 8_192,
         "max_single_tool_result_tokens": 32_000,
+        "token_estimator": ESTIMATOR_NAME,
         "max_single_tool_result_chars": 128_000,
         "project_historical_tool_results": True,
         "raw_tool_result_tail_turn_count": 6,
@@ -112,6 +117,10 @@ _INT_OVERRIDABLE_FIELDS = {
 
 _BOOL_OVERRIDABLE_FIELDS = {
     "project_historical_tool_results",
+}
+
+_STRING_OVERRIDABLE_FIELDS = {
+    "token_estimator",
 }
 
 
@@ -204,6 +213,13 @@ def _apply_overrides(budget: dict[str, Any], overrides: Mapping[str, Any], warni
                 warnings.append(f"Ignored non-boolean runtime budget override '{raw_key}'.")
                 continue
             budget[key] = parsed_bool
+            continue
+        if key in _STRING_OVERRIDABLE_FIELDS:
+            parsed_text = _text(raw_value)
+            if not parsed_text:
+                warnings.append(f"Ignored empty runtime budget override '{raw_key}'.")
+                continue
+            budget[key] = parsed_text
             continue
 
 
