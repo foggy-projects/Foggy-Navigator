@@ -132,10 +132,39 @@ data/runtime/sessions/by-date/yyyy/MM/dd/<hash>/<contextId>/logs/llm-submissions
 
 ## 建议新增模型预算字段
 
-下一阶段建议在 `LlmModelConfig` 增加独立配置对象或字段。推荐逻辑模型：
+下一阶段建议在 `LlmModelConfig` 增加“预算预设引用 + 自动匹配 + 可选覆盖”的独立配置对象或字段，而不是要求每个上游每次手填完整 token 参数。
+
+推荐新增字段：
+
+| 字段 | 用途 |
+| --- | --- |
+| `runtimeBudgetPresetKey` | 可选。指向一个预置模型预算，例如 `openai.gpt-4.1-128k`、`qwen.qwen3-235b-128k`、`generic.128k` |
+| `runtimeBudgetOverrideJson` | 可选。只覆盖少量特殊字段，正常上游不需要填写 |
+
+预设值不要求全部存在数据库中。第一版可以使用代码内置或配置文件，例如：
+
+```text
+config/model-runtime-budget-presets.json
+```
+
+预算解析顺序：
+
+1. 如果 `runtimeBudgetPresetKey` 存在，优先使用它指向的预设。
+2. 如果没有显式 preset，则按 `workerBackend` + `provider/envVars.NAVI_LLM_PROVIDER` + `modelName` 自动匹配内置预设。
+3. 如果自动匹配失败，使用 backend 默认兜底预算，并在 readiness / logs 中给出 warning。
+4. 如果存在 `runtimeBudgetOverrideJson`，只覆盖 preset 中指定字段。
+
+Codex / Claude Code / Gemini CLI 这类 native worker backend 默认由各自 worker 自主管理上下文。Navigator 只在以下场景使用预算预设：
+
+1. `workerBackend=LANGGRAPH_BIZ`，BizWorker 自己组装 ChatModel prompt。
+2. Codex / Claude Code 等 worker 被配置为代理第三方或非原生模型，且需要 Navigator 写入对应 worker env / hint。
+3. 诊断、展示或 readiness 需要说明当前模型预算来源。
+
+预设解析后的逻辑模型：
 
 ```json
 {
+  "presetKey": "generic.128k",
   "contextWindowTokens": 128000,
   "maxInputTokens": 100000,
   "maxOutputTokens": 8192,
@@ -152,6 +181,7 @@ data/runtime/sessions/by-date/yyyy/MM/dd/<hash>/<contextId>/logs/llm-submissions
 
 | 字段 | 用途 |
 | --- | --- |
+| `presetKey` | 解析后的预算预设 key，用于诊断和日志 |
 | `contextWindowTokens` | 模型总上下文窗口，作为所有预算的上限来源 |
 | `maxInputTokens` | 单次请求最多允许提交给 LLM 的输入 token |
 | `maxOutputTokens` | 单次请求允许的最大输出 token，映射 provider `max_tokens` / `max_completion_tokens` |
@@ -162,11 +192,11 @@ data/runtime/sessions/by-date/yyyy/MM/dd/<hash>/<contextId>/logs/llm-submissions
 | `maxSingleToolResultTokens` | 单个 tool result 进入 prompt 的 token 上限 |
 | `maxSingleToolResultChars` | tokenizer 不可用或估算失败时的字符兜底上限 |
 
-实现上可先放入结构化 JSON 字段，例如 `runtimeBudgetJson` / `inferenceLimitsJson`，再逐步迁移为一等列。不要继续把 LangGraph Biz 的核心预算只塞进 `envVars`。
+实现上可先放入结构化 JSON 字段，例如 `runtimeBudgetOverrideJson` / `inferenceLimitsJson`，再逐步迁移常用字段为一等列。不要继续把 LangGraph Biz 的核心预算只塞进 `envVars`。
 
 ## CLI 更新建议
 
-当后端有稳定字段后，CLI 应补充：
+当后端有稳定字段后，CLI 应先补充 preset 参数，而不是优先暴露所有数字字段：
 
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream model create `
@@ -174,21 +204,24 @@ data/runtime/sessions/by-date/yyyy/MM/dd/<hash>/<contextId>/logs/llm-submissions
   --model-base-url "https://llm.example/v1" `
   --model-name "<modelName>" `
   --api-key-env NAVI_LLM_API_KEY `
-  --context-window-tokens 128000 `
-  --max-input-tokens 100000 `
-  --max-output-tokens 8192 `
-  --default-output-tokens 4096 `
-  --auto-compact-input-token-threshold 80000 `
-  --max-single-tool-result-chars 48000
+  --runtime-budget-preset generic.128k
 ```
 
-`model update` 应支持同一组参数。CLI 输出只显示非敏感预算字段，不打印 API key。
+`model update` 应支持同一参数。CLI 输出只显示非敏感预算来源，例如 `runtimeBudgetPresetKey`、`runtimeBudgetSource=AUTO|EXPLICIT|DEFAULT`，不打印 API key。
+
+如果上游确实需要覆盖少量数值，后续再增加：
+
+```powershell
+--runtime-budget-override-json '{"maxOutputTokens":8192,"maxSingleToolResultChars":48000}'
+```
+
+不建议在第一版 CLI 暴露一长串 token 数字参数。多数场景应通过 `modelName` 自动匹配或显式 preset key 完成。
 
 在字段落地前，配套 skill 与文档只能说明“当前 CLI 尚不能配置 LangGraph Biz 一等 token 预算”，不能指导上游把这些值塞入 `clientContext` 或用户消息。
 
 ## 与消息裁剪 / 压缩设计的关系
 
-模型预算字段是 `ContextRuntimeMemory.build_prompt_view()` 和 compaction policy 的输入之一。
+模型预算 resolver 的输出是 `ContextRuntimeMemory.build_prompt_view()` 和 compaction policy 的输入之一。
 
 裁剪顺序建议：
 
@@ -206,5 +239,6 @@ data/runtime/sessions/by-date/yyyy/MM/dd/<hash>/<contextId>/logs/llm-submissions
 1. 配套 CLI skill 明确：新会话不传 `contextId`，续聊复用返回的 `contextId`。
 2. CLI 文档不再暗示 `clientContext` 可承载 LLM runtime prompt 或模型预算。
 3. CLI 文档明确 Skill 工具化、Agent frame 化。
-4. CLI 文档明确当前 `LlmModelConfig` 缺少一等 token 预算字段，并给出后续字段建议。
+4. CLI 文档明确当前 `LlmModelConfig` 缺少预算 preset / token budget 字段，并给出后续字段建议。
 5. 后续实现模型预算字段前，不新增只在 CLI 生效、后端无法保存的假参数。
+6. LangGraph Biz 可按 `modelName` 自动匹配预算预设；无法匹配时有明确 fallback 和 readiness warning。
