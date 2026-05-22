@@ -190,11 +190,14 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "invoke_business_skill",
             "description": (
                 "Load a business Skill's instructions and resources into the "
-                "current frame. This does not create a child frame. After the "
+                "current frame. This is the default tool for ordinary business "
+                "skill requests. It does not create a child frame. After the "
                 "tool returns, continue reasoning in the same frame and call "
                 "business functions or other tools directly if needed. Use "
-                "invoke_business_agent only when you need a delegated Agent "
-                "with its own frame, lifecycle, waiting-user state, and report."
+                "invoke_business_agent only when the user explicitly asks for a "
+                "sub-agent/independent agent, or when the work truly needs an "
+                "isolated lifecycle, separate report, long-running wait, or "
+                "multi-agent delegation."
             ),
             "parameters": {
                 "type": "object",
@@ -233,10 +236,15 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "invoke_business_agent",
             "description": (
                 "Delegate work to a business Agent and open a child Agent frame. "
-                "Use this for tasks that need an isolated loop, multi-step "
-                "execution, waiting for user input, handoff, or a separate "
-                "execution report. Inside the Agent frame, the Agent may load "
-                "Skill materials and call business functions."
+                "Do not use this for ordinary business skill routing or merely "
+                "because a skill/bundle name ends with '-agent'. For ordinary "
+                "business requests, load the Skill in the current frame with "
+                "invoke_business_skill and continue there. Use this only when "
+                "the user explicitly asks for a sub-agent/independent agent, or "
+                "the work truly needs an isolated loop, separate report, "
+                "long-running wait, handoff, or multi-agent delegation. Inside "
+                "the Agent frame, the Agent may load Skill materials and call "
+                "business functions."
             ),
             "parameters": {
                 "type": "object",
@@ -437,7 +445,10 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "needs more user input, set structured_output.turn_status or "
                 "next_step to WAITING_FOR_USER_INPUT and include a user-facing "
                 "summary/message; the runtime will pause this same frame instead "
-                "of closing it."
+                "of closing it. Persistent root should not use this tool for "
+                "ordinary greetings, simple Q&A, or natural-language answers; "
+                "use it only when preserving structured state such as active_plan, "
+                "artifact_refs, evidence_refs, or structured_output."
             ),
             "parameters": {
                 "type": "object",

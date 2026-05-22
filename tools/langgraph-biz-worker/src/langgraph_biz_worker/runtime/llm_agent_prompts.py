@@ -84,7 +84,10 @@ def _build_system_prompt(
         "如果技能引用其 bundle 内的文件，使用 list_skill_resources 或 "
         "read_skill_resource；这些工具只会暴露当前 ClientApp 的公开技能资源。"
         "Skill 是当前 frame 内的能力材料，使用 invoke_business_skill 不会打开 child frame。"
-        "只有需要委派独立执行体、等待用户、单独 report 或隔离上下文时，才使用 "
+        "普通业务领域请求默认先用 invoke_business_skill 加载 Skill 材料，并在当前 frame "
+        "继续推理和调用业务函数；不要仅因为 bundle 名称包含 agent 就调用 "
+        "invoke_business_agent。只有用户明确要求子 Agent/独立代理，或任务确实需要与当前 "
+        "frame 隔离的独立生命周期、独立报告、长任务等待或多层委派时，才使用 "
         "invoke_business_agent 打开 Agent frame。"
     )
     prompt += _build_completion_contract_prompt(skill_id or manifest.id, runtime_context)
@@ -133,9 +136,11 @@ def _build_completion_contract_prompt(
     if (runtime_context or {}).get("_persistent_frame") is True or skill_id == _SYSTEM_ROOT_SKILL_ID:
         return (
             "只能使用已提供的工具。当前是根会话回合：如果可以直接回答用户，"
-            "可以直接输出自然语言作为本回合最终答复。若需要保存结构化状态、"
-            "active_plan、artifact_refs 或 evidence_refs，则主动调用 "
-            "submit_skill_result 提交本回合结果。"
+            "可以直接输出自然语言作为本回合最终答复。普通寒暄、简单问答、"
+            "无需保留结构化状态的答复，不要调用 submit_skill_result。若需要保存结构化状态、"
+            "active_plan、artifact_refs 或 evidence_refs，才主动调用 submit_skill_result "
+            "提交本回合结果。普通业务技能请求默认加载 Skill 材料并在 Root 当前上下文继续；"
+            "不要为了普通业务路由打开子 Agent frame。"
         )
     return (
         "只能使用已提供的工具。当前是子 Agent frame：完成、等待用户补充或需要返回父级时，"

@@ -57,6 +57,70 @@ def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None
     return value if isinstance(value, str) and value else None
 
 
+_CHILD_FRAME_RUNTIME_CONTEXT_KEYS = {
+    "account_id",
+    "accountId",
+    "attachments",
+    "business_date",
+    "businessDate",
+    "client_app_id",
+    "clientAppId",
+    "context_id",
+    "contextId",
+    "current_time",
+    "currentTime",
+    "execution_policy",
+    "executionPolicy",
+    "llm_config",
+    "llm_circuit_failure_threshold",
+    "llm_circuit_open_seconds",
+    "llmCircuitFailureThreshold",
+    "llmCircuitOpenSeconds",
+    "llm_execution_deadline_seconds",
+    "llmExecutionDeadlineSeconds",
+    "llm_max_retries",
+    "llmMaxRetries",
+    "llm_request_timeout_seconds",
+    "llmRequestTimeoutSeconds",
+    "llm_retry_backoff_seconds",
+    "llmRetryBackoffSeconds",
+    "session_id",
+    "sessionId",
+    "task_id",
+    "taskId",
+    "task_scoped_token",
+    "timeZone",
+    "timezone",
+    "tz",
+    "vision_llm_config",
+}
+
+_CHILD_FRAME_INTERNAL_CONTEXT_KEYS = {
+    "_progress_event_sink",
+}
+
+
+def _base_runtime_context_for_child_frame(
+    runtime_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return execution environment safe for an isolated child frame.
+
+    Child Agent frames must not inherit the parent's provider protocol,
+    root-visible conversation memory, business-skill catalog, or root memory
+    callbacks.  They receive only request-scoped execution inputs needed to run
+    tools and build their own prompt.  Same-frame recovery adds its own protocol
+    log after this helper returns.
+    """
+    if not isinstance(runtime_context, dict):
+        return {}
+    return {
+        key: value
+        for key, value in runtime_context.items()
+        if key in _CHILD_FRAME_RUNTIME_CONTEXT_KEYS
+        or key in _CHILD_FRAME_INTERNAL_CONTEXT_KEYS
+    }
+
+
 def _invoke_business_skill_tool(
     runtime: SkillRuntime,
     *,
@@ -594,10 +658,9 @@ def _runtime_context_for_child_skill(
     root_context_summary: dict[str, Any] | None,
     child_manifest: SkillManifest,
 ) -> dict[str, Any] | None:
-    child_context = dict(runtime_context or {})
+    child_context = _base_runtime_context_for_child_frame(runtime_context)
     visibility = _context_visibility_for_child_manifest(child_manifest)
     child_context["_context_visibility"] = visibility
-    child_context.pop("_visible_root_context_summary", None)
     if visibility == "summary" and root_context_summary:
         child_context["_visible_root_context_summary"] = root_context_summary
     return child_context
@@ -610,7 +673,7 @@ def _runtime_context_for_child_agent(
     agent_manifest: SkillManifest | None,
     agent_id: str,
 ) -> dict[str, Any] | None:
-    child_context = dict(runtime_context or {})
+    child_context = _base_runtime_context_for_child_frame(runtime_context)
     if agent_manifest:
         visibility = _context_visibility_for_child_manifest(agent_manifest)
     else:
@@ -618,7 +681,6 @@ def _runtime_context_for_child_agent(
     child_context["_context_visibility"] = visibility
     child_context["_agent_frame"] = True
     child_context["_agent_id"] = agent_id
-    child_context.pop("_visible_root_context_summary", None)
     if visibility == "summary" and root_context_summary:
         child_context["_visible_root_context_summary"] = root_context_summary
     return child_context

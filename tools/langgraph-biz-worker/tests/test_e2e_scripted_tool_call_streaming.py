@@ -3249,6 +3249,12 @@ async def test_scripted_root_prompt_contract_ignores_skill_alias_and_keeps_user_
     system_text = _submission_texts(payload, "system")[0]
     human_text = _submission_texts(payload, "human")[0]
     assert "你是当前业务会话的根编排 Agent" in system_text
+    assert "可以直接输出自然语言作为本回合最终答复" in system_text
+    assert "普通寒暄、简单问答、无需保留结构化状态的答复，不要调用 submit_skill_result" in system_text
+    assert "普通业务技能请求默认加载 Skill 材料并在 Root 当前上下文继续" in system_text
+    assert "不要仅因为 bundle 名称包含 agent 就调用 invoke_business_agent" in system_text
+    assert "必须通过 submit_skill_result" not in system_text
+    assert "不要直接输出自然语言" not in system_text
     assert "可用业务技能:" in system_text
     assert "`tms-ticket-agent`（TMS 工单 Agent）: 创建工单和查询工单。" in system_text
     assert "You are an intelligent business assistant" not in system_text

@@ -2480,6 +2480,62 @@ def test_llm_agent_child_skill_isolated_visibility_hides_root_context_summary():
     assert "This should not be visible." not in child_system_prompt
 
 
+def test_llm_agent_child_agent_does_not_inherit_root_visible_protocol_or_skill_catalog():
+    runtime = _root_with_child_runtime(child_context_visibility="isolated")
+    frame_id = runtime.invoke_skill(
+        task_id="task_child_isolated_protocol_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child",
+            "name": "invoke_business_agent",
+            "args": {"skill_id": "child_skill", "instruction": "handle child work"},
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Child done.",
+                "structured_output": {
+                    "turn_status": "FINAL_FOR_USER",
+                    "requires_parent_synthesis": False,
+                    "message": "Child done.",
+                },
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_child_isolated_protocol_001",
+        frame_id=frame_id,
+        prompt="delegate from root",
+        runtime_context={
+            "_runtime_visible_conversation": [
+                {"role": "user", "content": "ROOT_ONLY_USER_MESSAGE"},
+                {"role": "assistant", "content": "ROOT_ONLY_ASSISTANT_MESSAGE"},
+            ],
+            "_model_visible_business_context": {
+                "allowed_skills": [{
+                    "name": "ROOT_ONLY_ALLOWED_SKILL",
+                    "description": "root-only skill catalog entry",
+                }],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    assert model.seen_messages[0][1].content == "ROOT_ONLY_USER_MESSAGE"
+    child_messages = model.seen_messages[1]
+    child_text = "\n".join(str(message.content) for message in child_messages)
+    assert [message.type for message in child_messages] == ["system", "human"]
+    assert child_messages[1].content == "handle child work"
+    assert "ROOT_ONLY_USER_MESSAGE" not in child_text
+    assert "ROOT_ONLY_ASSISTANT_MESSAGE" not in child_text
+    assert "ROOT_ONLY_ALLOWED_SKILL" not in child_text
+
+
 def test_llm_agent_child_skill_receives_sanitized_attachment_context():
     runtime = _root_with_child_runtime(child_context_visibility="isolated")
     frame_id = runtime.invoke_skill(

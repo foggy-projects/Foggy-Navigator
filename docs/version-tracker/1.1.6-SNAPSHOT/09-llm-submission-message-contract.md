@@ -115,6 +115,32 @@ tool call / tool result 分三种场景处理：
    - Agent 完成时，Root 侧的 `tool_result` 只能包含 promoted digest、reportRef、artifactRefs 等受控信息。
    - child-private raw tool call / raw tool result 保留在 execution trace 和 runtime message event log 中，不进入 Root-visible protocol。
 
+### 3.2 Agent frame 的 messages 隔离边界
+
+显式 `invoke_business_agent` 打开的子 Agent frame 默认不是 Root conversation 的 fork。子 Agent 的首次 LLM submission 结构为：
+
+```text
+system(child Agent 身份、Agent manifest、必要执行上下文)
+human(parent handoff instruction / 当前用户给该 Agent 的续接输入)
+```
+
+当子 Agent 处于 `AWAITING_USER`、TIMEOUT、ERROR 或 recoverable interruption 后恢复时，BizWorker 只从该 Agent frame 自己的 `runtime-message-events` 恢复 provider protocol：
+
+```text
+system(child Agent 身份、Agent manifest、必要执行上下文)
+child frame 已恢复的 user / assistant / tool protocol messages
+human(新的用户输入或续跑指令)
+```
+
+子 Agent 默认不接收：
+
+- Root 已保存的完整 `runtime-visible protocol`。
+- Root 的 `allowed_skills` 业务技能目录。
+- Root runtime memory 的 checkpoint / finalizing 回调。
+- Parent frame 的 raw tool chain。
+
+只有 Agent manifest 明确配置 `context_visibility=summary` 时，BizWorker 才把 root summary 作为受控上下文注入 system；完整 parent fork 作为未来显式模式保留，不作为默认行为。
+
 ### 4. Root 与 Child 的完成契约分离
 
 `conversation.root` 是会话级持久执行载体，不是每轮都需要关闭的业务 Skill frame。它负责普通用户回合、业务工具调度、运行时记忆 commit 与中断恢复。
@@ -123,8 +149,9 @@ Root 回合完成规则：
 
 1. 模型未产生 tool call，但返回了自然语言内容时，该内容可直接作为本回合最终答复。
 2. BizWorker 仍会内部完成 runtime memory、report、log、LLM submission 的落档，不要求模型额外调用退出工具。
-3. 如果 root 回合需要保存 `active_plan`、`artifact_refs`、`evidence_refs` 或其他结构化状态，模型应主动调用 `submit_skill_result` 提交这些结构化信息。
-4. 如果 checkpoint 上存在 queued user input，BizWorker 会先把 queued input 追加进当前 loop，让模型继续处理，而不是提前把自然语言答复提交为最终结果。
+3. 普通寒暄、简单问答、无需保留结构化状态的答复，不应调用 `submit_skill_result`。
+4. 如果 root 回合需要保存 `active_plan`、`artifact_refs`、`evidence_refs` 或其他结构化状态，模型应主动调用 `submit_skill_result` 提交这些结构化信息。
+5. 如果 checkpoint 上存在 queued user input，BizWorker 会先把 queued input 追加进当前 loop，让模型继续处理，而不是提前把自然语言答复提交为最终结果。
 
 Child / non-root Agent frame 完成规则：
 
@@ -152,7 +179,8 @@ Child / non-root Agent frame 完成规则：
 4. 通用工具与标识治理规则：
    - 内部 tracing id 不能当作订单号、运单号或业务单据号。
    - 只能使用已提供工具。
-   - root 普通回合可直接用自然语言完成；需要结构化状态时主动调用 `submit_skill_result`。
+   - root 普通回合可直接用自然语言完成；普通寒暄、简单问答不要调用 `submit_skill_result`；需要结构化状态时才主动调用 `submit_skill_result`。
+   - root 普通业务技能请求默认用 `invoke_business_skill` 加载 Skill 材料，并在 Root 当前上下文继续；不要仅因为 Skill bundle 名称包含 `agent` 就打开 Agent frame。
    - child frame 完成、等待用户补充或交还父级时，优先主动调用 `submit_skill_result` 或 `handoff_to_parent`；自然语言最终消息会被归一化为子 Agent 结果。
 5. 当前运行时上下文：
    - 运行时日期上下文：时区、业务日期、当前月份范围、相对日期解析规则。

@@ -10,8 +10,10 @@ def test_invoke_business_skill_schema_declares_current_frame_material_contract()
     input_description = schema["parameters"]["properties"]["input"]["description"]
 
     assert "current frame" in description
+    assert "default tool for ordinary business skill requests" in description
     assert "does not create a child frame" in description
     assert "invoke_business_agent" in description
+    assert "user explicitly asks for a sub-agent" in description
     assert "will not run in a child frame" in instruction_description
     assert "structured business inputs" in input_description
 
@@ -24,7 +26,10 @@ def test_invoke_business_agent_schema_declares_child_agent_frame_contract():
 
     assert "Delegate work to a business Agent" in description
     assert "open a child Agent frame" in description
-    assert "waiting for user input" in description
+    assert "Do not use this for ordinary business skill routing" in description
+    assert "skill/bundle name ends with '-agent'" in description
+    assert "invoke_business_skill and continue there" in description
+    assert "long-running wait" in description
     assert "Natural-language work order" in instruction_description
     assert "structured business inputs" in input_description
 
