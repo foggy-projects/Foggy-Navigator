@@ -168,6 +168,14 @@ human(新的用户输入或续跑指令)
 
 2026-05-22 第一版落地：`ContextRuntimeMemory.build_prompt_view()` 已改为 turn-aware tail；模型 runtime budget preset 已映射到 `maxPromptChars` / `maxVisibleChars` / `maxToolResultChars`。Root 回合 commit 后的 lazy compaction 已接入 LLM summarizer，只有超过 `maxVisibleMessages` 或 `maxVisibleChars` 时才调用；摘要器失败、超时或返回非 JSON 时自动退回确定性 fallback summary，不影响当前回合提交。当前预算仍采用字符近似，后续可替换为真实 tokenizer 统计。
 
+2026-05-23 第四版收口：压缩窗口参数进入 model runtime budget preset / override，并在每轮同步到 Root runtime memory：
+
+- `compactionHeadTurnCount -> headTurnCount`
+- `compactionTailTurnCount -> tailTurnCount`
+- `maxCompactionSummaryChars -> maxSummaryChars`
+
+默认压缩窗口为 head 2 个语义 turn、tail 8 个语义 turn、summary 4000 chars；`generic.200k` / `generic.1m` preset 可随模型上下文能力放宽 summary 容量。
+
 ### 4. Root 与 Child 的完成契约分离
 
 `conversation.root` 是会话级持久执行载体，不是每轮都需要关闭的业务 Skill frame。它负责普通用户回合、业务工具调度、运行时记忆 commit 与中断恢复。

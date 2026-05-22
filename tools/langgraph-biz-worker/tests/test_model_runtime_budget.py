@@ -13,7 +13,10 @@ def test_explicit_preset_and_json_override():
                 '{"maxOutputTokens": 6144, '
                 '"maxSingleToolResultChars": 24000, '
                 '"projectHistoricalToolResults": false, '
-                '"rawToolResultTailTurnCount": 4}'
+                '"rawToolResultTailTurnCount": 4, '
+                '"compactionHeadTurnCount": 1, '
+                '"compactionTailTurnCount": 5, '
+                '"maxCompactionSummaryChars": 3000}'
             ),
             "model": "qwen3.5-plus",
         }
@@ -25,6 +28,9 @@ def test_explicit_preset_and_json_override():
     assert budget["max_single_tool_result_chars"] == 24000
     assert budget["project_historical_tool_results"] is False
     assert budget["raw_tool_result_tail_turn_count"] == 4
+    assert budget["compaction_head_turn_count"] == 1
+    assert budget["compaction_tail_turn_count"] == 5
+    assert budget["max_compaction_summary_chars"] == 3000
     assert budget["max_prompt_messages"] == 512
     assert budget["max_visible_messages"] == 768
 

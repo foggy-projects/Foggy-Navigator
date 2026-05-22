@@ -32,8 +32,8 @@ DEFAULT_LIMITS = {
     "rawToolResultTailTurnCount": 6,
     "maxVisibleChars": 12000,
     "headTurnCount": 2,
-    "tailTurnCount": 6,
-    "maxSummaryChars": 2400,
+    "tailTurnCount": 8,
+    "maxSummaryChars": 4000,
 }
 
 _TOOL_RESULT_SELECTED_FIELD_NAMES = {

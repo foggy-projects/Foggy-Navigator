@@ -84,6 +84,9 @@ def test_sync_memory_limits_sets_tool_result_projection_tail():
                     "maxSingleToolResultChars": 24000,
                     "projectHistoricalToolResults": False,
                     "rawToolResultTailTurnCount": 3,
+                    "compactionHeadTurnCount": 1,
+                    "compactionTailTurnCount": 5,
+                    "maxCompactionSummaryChars": 3000,
                 },
             },
         },
@@ -92,6 +95,9 @@ def test_sync_memory_limits_sets_tool_result_projection_tail():
     assert memory.limits["maxToolResultChars"] == 24000
     assert memory.limits["projectHistoricalToolResults"] is False
     assert memory.limits["rawToolResultTailTurnCount"] == 3
+    assert memory.limits["headTurnCount"] == 1
+    assert memory.limits["tailTurnCount"] == 5
+    assert memory.limits["maxSummaryChars"] == 3000
     assert memory.limits["runtimeBudgetPresetKey"] == "generic.128k"
 
 

@@ -7,7 +7,7 @@
 - purpose: 记录真实会话暴露出的 prompt 裁剪边界问题，作为后续消息裁剪、压缩策略和工具结果预算参数设计的跟踪项
 
 版本：`1.1.6-SNAPSHOT`
-状态：第三版核心实现已落地；待补 runtime warning 与真实会话验收
+状态：第四版配置闭环已落地；待补 runtime warning 与真实会话验收
 类型：runtime context governance / prompt pruning
 
 ## 背景
@@ -57,8 +57,8 @@ system -> U3/tool... -> U4/agent... -> U5
   "maxMessageChars": 1200,
   "maxVisibleChars": 12000,
   "headTurnCount": 2,
-  "tailTurnCount": 6,
-  "maxSummaryChars": 2400
+  "tailTurnCount": 8,
+  "maxSummaryChars": 4000
 }
 ```
 
@@ -182,6 +182,34 @@ system -> U3/tool... -> U4/agent... -> U5
 
 当前实现仍使用字符数近似 token。后续引入 tokenizer 后，应将 `maxPromptChars` / `maxVisibleChars` 替换或补充为真实 token 预算；在此之前，字符预算继续作为 fail-safe。
 
+## 第四版实现：压缩参数进入 runtime budget
+
+第四版把压缩窗口参数纳入 model runtime budget preset / override，避免 head / tail / summary 上限仍停留在不可观测的代码默认值：
+
+1. `model_runtime_budget.py`
+   - preset 新增：
+     - `compaction_head_turn_count`
+     - `compaction_tail_turn_count`
+     - `max_compaction_summary_chars`
+   - override 支持 camelCase / snake_case：
+     - `compactionHeadTurnCount`
+     - `compactionTailTurnCount`
+     - `maxCompactionSummaryChars`
+2. `root_graph._sync_memory_limits_from_runtime_context(...)`
+   - 将上述 budget 字段同步到 Root runtime memory：
+     - `compaction_head_turn_count -> headTurnCount`
+     - `compaction_tail_turn_count -> tailTurnCount`
+     - `max_compaction_summary_chars -> maxSummaryChars`
+3. 默认值与 `06-normal-turn-runtime-context-design.md` 对齐：
+   - `headTurnCount = 2`
+   - `tailTurnCount = 8`
+   - `maxSummaryChars = 4000`
+4. 长上下文 preset 可适度放宽 summary 容量：
+   - `generic.200k` 默认 `max_compaction_summary_chars = 6000`
+   - `generic.1m` 默认 `compaction_tail_turn_count = 12`、`max_compaction_summary_chars = 8000`
+
+这意味着压缩策略可以随模型能力自动匹配，也可以由上游在 `runtimeBudgetOverride` 中覆盖，不需要改 BizWorker 代码。
+
 压缩时必须保护以下结构：
 
 1. provider tool protocol 不可拆分：`assistant.tool_calls` 与对应 `tool` result 要么一起进入 tail，要么一起进入 summarizer，不允许只保留孤立 tool result。
@@ -225,6 +253,7 @@ Development:
 - [x] `build_prompt_view` 前新增 prompt budget 预压缩：如果完整 visible window 会被 hard cap 截断，先压缩中间区间再提交 summary + tail。
 - [x] 历史大 tool result prompt projection：最近 `rawToolResultTailTurnCount` 个语义 turn 保持 raw，N 轮之前投影为 digest / refs / selected fields。
 - [x] 历史大 tool result projection 增加 `projectHistoricalToolResults` 开关，默认打开，可由模型 runtime budget override 关闭。
+- [x] 压缩 head / tail / summary 参数进入模型 runtime budget preset / override，并同步到 Root runtime memory。
 - [ ] 将 prompt hard cap 触发记录为 runtime warning / event，便于从日志追踪。
 - [ ] 真实 LLM smoke 后复核 `llm-submissions` 是否符合预期。
 - [ ] 后续设计真实 tokenizer 与更精确 token 预算。

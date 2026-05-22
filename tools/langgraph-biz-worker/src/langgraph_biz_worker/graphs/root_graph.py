@@ -160,6 +160,9 @@ def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[
     max_tool_result_chars = _positive_int(budget.get("max_single_tool_result_chars"))
     project_historical_tool_results = _bool_or_none(budget.get("project_historical_tool_results"))
     raw_tool_result_tail_turn_count = _positive_int(budget.get("raw_tool_result_tail_turn_count"))
+    compaction_head_turn_count = _positive_int(budget.get("compaction_head_turn_count"))
+    compaction_tail_turn_count = _positive_int(budget.get("compaction_tail_turn_count"))
+    max_compaction_summary_chars = _positive_int(budget.get("max_compaction_summary_chars"))
     max_prompt_messages = _positive_int(budget.get("max_prompt_messages"))
     max_visible_messages = _positive_int(budget.get("max_visible_messages"))
     if max_input_tokens is not None:
@@ -172,6 +175,12 @@ def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[
         memory.limits["projectHistoricalToolResults"] = project_historical_tool_results
     if raw_tool_result_tail_turn_count is not None:
         memory.limits["rawToolResultTailTurnCount"] = raw_tool_result_tail_turn_count
+    if compaction_head_turn_count is not None:
+        memory.limits["headTurnCount"] = compaction_head_turn_count
+    if compaction_tail_turn_count is not None:
+        memory.limits["tailTurnCount"] = compaction_tail_turn_count
+    if max_compaction_summary_chars is not None:
+        memory.limits["maxSummaryChars"] = max_compaction_summary_chars
     if max_prompt_messages is not None:
         memory.limits["maxPromptMessages"] = max_prompt_messages
     if max_visible_messages is not None:
