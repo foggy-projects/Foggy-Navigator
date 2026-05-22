@@ -21,6 +21,8 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_system_tokens": 2_048,
         "max_single_tool_result_tokens": 4_096,
         "max_single_tool_result_chars": 16_384,
+        "project_historical_tool_results": True,
+        "raw_tool_result_tail_turn_count": 6,
         "max_prompt_messages": 160,
         "max_visible_messages": 240,
     },
@@ -34,6 +36,8 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_system_tokens": 4_096,
         "max_single_tool_result_tokens": 12_000,
         "max_single_tool_result_chars": 48_000,
+        "project_historical_tool_results": True,
+        "raw_tool_result_tail_turn_count": 6,
         "max_prompt_messages": 512,
         "max_visible_messages": 768,
     },
@@ -47,6 +51,8 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_system_tokens": 4_096,
         "max_single_tool_result_tokens": 16_000,
         "max_single_tool_result_chars": 64_000,
+        "project_historical_tool_results": True,
+        "raw_tool_result_tail_turn_count": 6,
         "max_prompt_messages": 768,
         "max_visible_messages": 1_024,
     },
@@ -60,6 +66,8 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_system_tokens": 8_192,
         "max_single_tool_result_tokens": 32_000,
         "max_single_tool_result_chars": 128_000,
+        "project_historical_tool_results": True,
+        "raw_tool_result_tail_turn_count": 6,
         "max_prompt_messages": 2_048,
         "max_visible_messages": 3_072,
     },
@@ -72,7 +80,7 @@ _PRESET_ALIASES = {
     "1m": "generic.1m",
 }
 
-_OVERRIDABLE_FIELDS = {
+_INT_OVERRIDABLE_FIELDS = {
     "context_window_tokens",
     "max_input_tokens",
     "max_output_tokens",
@@ -82,8 +90,13 @@ _OVERRIDABLE_FIELDS = {
     "prompt_reserve_system_tokens",
     "max_single_tool_result_tokens",
     "max_single_tool_result_chars",
+    "raw_tool_result_tail_turn_count",
     "max_prompt_messages",
     "max_visible_messages",
+}
+
+_BOOL_OVERRIDABLE_FIELDS = {
+    "project_historical_tool_results",
 }
 
 
@@ -163,13 +176,20 @@ def _parse_override(config: Mapping[str, Any]) -> Mapping[str, Any] | None:
 def _apply_overrides(budget: dict[str, Any], overrides: Mapping[str, Any], warnings: list[str]) -> None:
     for raw_key, raw_value in overrides.items():
         key = _to_snake(str(raw_key))
-        if key not in _OVERRIDABLE_FIELDS:
+        if key in _INT_OVERRIDABLE_FIELDS:
+            parsed_int = _positive_int(raw_value)
+            if parsed_int is None:
+                warnings.append(f"Ignored non-positive runtime budget override '{raw_key}'.")
+                continue
+            budget[key] = parsed_int
             continue
-        parsed = _positive_int(raw_value)
-        if parsed is None:
-            warnings.append(f"Ignored non-positive runtime budget override '{raw_key}'.")
+        if key in _BOOL_OVERRIDABLE_FIELDS:
+            parsed_bool = _bool_or_none(raw_value)
+            if parsed_bool is None:
+                warnings.append(f"Ignored non-boolean runtime budget override '{raw_key}'.")
+                continue
+            budget[key] = parsed_bool
             continue
-        budget[key] = parsed
 
 
 def _env_text(config: Mapping[str, Any], key: str) -> str:
@@ -201,11 +221,27 @@ def _text(value: Any) -> str:
 
 
 def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
     try:
         parsed = int(value)
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    return None
 
 
 def _to_snake(value: str) -> str:

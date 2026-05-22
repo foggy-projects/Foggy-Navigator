@@ -128,6 +128,8 @@ data/runtime/sessions/by-date/yyyy/MM/dd/<hash>/<contextId>/logs/llm-submissions
 - `maxOutputTokens`
 - `defaultOutputTokens`
 - `maxToolResultTokens` / `maxToolResultChars`
+- `projectHistoricalToolResults`
+- `rawToolResultTailTurnCount`
 - `autoCompactInputTokenThreshold`
 
 前端只在 worker backend 环境变量说明中展示了 Codex / Claude 相关参考项，例如 `model_context_window`、`model_auto_compact_token_limit`、`tool_output_token_limit`。这些属于特定 worker backend 的 env var，不是 LangGraph Biz runtime context governance 的稳定模型字段。
@@ -182,7 +184,9 @@ Codex / Claude Code / Gemini CLI 这类 native worker backend 默认由各自 wo
   "promptReserveOutputTokens": 8192,
   "promptReserveSystemTokens": 4096,
   "maxSingleToolResultTokens": 12000,
-  "maxSingleToolResultChars": 48000
+  "maxSingleToolResultChars": 48000,
+  "projectHistoricalToolResults": true,
+  "rawToolResultTailTurnCount": 6
 }
 ```
 
@@ -198,8 +202,10 @@ Codex / Claude Code / Gemini CLI 这类 native worker backend 默认由各自 wo
 | `autoCompactInputTokenThreshold` | prompt 估算输入 token 超过该阈值时触发 lazy compaction |
 | `promptReserveOutputTokens` | 为输出预留的输入窗口余量 |
 | `promptReserveSystemTokens` | 为 system / account context / skill descriptions 预留的预算 |
-| `maxSingleToolResultTokens` | 单个 tool result 进入 prompt 的 token 上限 |
-| `maxSingleToolResultChars` | tokenizer 不可用或估算失败时的字符兜底上限 |
+| `maxSingleToolResultTokens` | 单个历史 tool result 进入 prompt projection 的 token 上限 |
+| `maxSingleToolResultChars` | tokenizer 不可用或估算失败时的历史 tool result projection 字符兜底上限 |
+| `projectHistoricalToolResults` | 是否对历史大 tool result 做 digest/refs/selected fields projection；默认 `true` |
+| `rawToolResultTailTurnCount` | 最近多少个语义 turn 的 tool result 保持 raw，不做 digest/refs projection；默认 `6` |
 
 实现上已先采用 `runtimeBudgetOverrideJson` 结构化 JSON 字段承载少量特殊覆盖。不要继续把 LangGraph Biz 的核心预算只塞进 `envVars`。
 
@@ -221,7 +227,7 @@ CLI 已补充 preset 参数，而不是优先暴露所有数字字段：
  如果上游确实需要覆盖少量数值，可以使用：
 
 ```powershell
---runtime-budget-override-json '{"maxOutputTokens":8192,"maxSingleToolResultChars":48000,"maxPromptMessages":512,"maxVisibleMessages":768}'
+--runtime-budget-override-json '{"maxOutputTokens":8192,"maxSingleToolResultChars":48000,"projectHistoricalToolResults":true,"rawToolResultTailTurnCount":6,"maxPromptMessages":512,"maxVisibleMessages":768}'
 ```
 
 不建议在第一版 CLI 暴露一长串 token 数字参数。多数场景应通过 `modelName` 自动匹配或显式 preset key 完成。配套 skill 与文档必须继续禁止把这些值塞入 `clientContext` 或用户消息。
@@ -235,9 +241,11 @@ CLI 已补充 preset 参数，而不是优先暴露所有数字字段：
 1. 先计算 system / account / business context 的基础预算。
 2. 再给当前 user message 和必要附件 digest 留预算。
 3. 对 Root-visible provider protocol 做 turn-aware + tool-protocol-aware tail selection。
-4. 单工具结果先按 `maxSingleToolResult*` 投影成 digest / refs。
+4. 单工具结果先按 `projectHistoricalToolResults` 和 `maxSingleToolResult*` 判断是否投影成 digest / refs；最近 `rawToolResultTailTurnCount` 个语义 turn 保持 raw。
 5. 如果 prompt 仍超过 `autoCompactInputTokenThreshold`，触发 lazy compaction。
 6. compaction 后写回 `ContextRuntimeMemory`，下一轮以 summary + retained tail 为事实来源。
+
+`rawToolResultTailTurnCount` 里的 turn 指用户语义 turn / 业务任务回合，不是一次任务内部的 LLM loop iteration。一个用户消息触发多次 assistant/tool 调用时，这些 protocol messages 仍归属于同一最近 turn。
 
 详见 [workitems/OPT-runtime-prompt-window-turn-aware-pruning.md](./workitems/OPT-runtime-prompt-window-turn-aware-pruning.md)。
 

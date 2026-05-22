@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from langgraph_biz_worker.models import SkillFrameState
@@ -322,9 +324,128 @@ def test_context_memory_uses_independent_tool_result_and_args_limits():
 
     prompt = memory.build_prompt_view()
 
-    assert len(prompt[2]["content"]) == 50
+    assert prompt[2]["content"] == "x" * 200
     assert prompt[1]["toolCalls"][0]["args"]["_truncated"] is True
     assert prompt[1]["toolCalls"][0]["args"]["_original_chars"] > 30
+
+
+def test_context_memory_projects_only_historical_large_tool_results():
+    memory = ContextRuntimeMemory(context_id="bctx_20260523_ab_ctx-tool-projection")
+    memory.limits.update({
+        "maxPromptMessages": 100,
+        "maxPromptChars": 10000,
+        "maxVisibleMessages": 100,
+        "maxVisibleChars": 10000,
+        "maxMessageChars": 80,
+        "maxToolResultChars": 512,
+        "rawToolResultTailTurnCount": 1,
+    })
+    first_tool_result = json.dumps({
+        "ok": True,
+        "ticketId": "TICKET-OLD",
+        "execution_report_ref": "frame-report://task_old/frm_old",
+        "payload": "x" * 1000,
+    }, ensure_ascii=False)
+    second_tool_result = json.dumps({
+        "ok": True,
+        "ticketId": "TICKET-NEW",
+        "execution_report_ref": "frame-report://task_new/frm_new",
+        "payload": "y" * 1000,
+    }, ensure_ascii=False)
+
+    memory.begin_turn(
+        task_id="task_old",
+        root_frame_id="frm_root",
+        user_message="call old tool",
+    )
+    assert memory.commit_turn(
+        assistant_message="old done",
+        protocol_messages=[
+            {"role": "user", "content": "call old tool", "taskId": "task_old"},
+            {
+                "role": "assistant",
+                "content": "",
+                "toolCalls": [{"id": "call_old", "name": "query_ticket", "args": {}}],
+            },
+            {"role": "tool", "content": first_tool_result, "toolCallId": "call_old"},
+            {"role": "assistant", "content": "old done"},
+        ],
+    )
+    memory.begin_turn(
+        task_id="task_new",
+        root_frame_id="frm_root",
+        user_message="call new tool",
+    )
+    assert memory.commit_turn(
+        assistant_message="new done",
+        protocol_messages=[
+            {"role": "user", "content": "call new tool", "taskId": "task_new"},
+            {
+                "role": "assistant",
+                "content": "",
+                "toolCalls": [{"id": "call_new", "name": "query_ticket", "args": {}}],
+            },
+            {"role": "tool", "content": second_tool_result, "toolCallId": "call_new"},
+            {"role": "assistant", "content": "new done"},
+        ],
+    )
+
+    prompt = memory.build_prompt_view()
+    tool_messages = [item for item in prompt if item["role"] == "tool"]
+
+    assert len(tool_messages) == 2
+    old_projection = json.loads(tool_messages[0]["content"])
+    assert old_projection["projection"] == "historical_large_tool_result"
+    assert old_projection["digest"].startswith("sha256:")
+    assert old_projection["selectedFields"]["ticketId"] == "TICKET-OLD"
+    assert old_projection["refs"] == ["frame-report://task_old/frm_old"]
+    assert "x" * 200 not in tool_messages[0]["content"]
+    assert json.loads(tool_messages[1]["content"])["payload"] == "y" * 1000
+
+
+def test_context_memory_can_disable_historical_tool_result_projection():
+    memory = ContextRuntimeMemory(context_id="bctx_20260523_ab_ctx-tool-projection-off")
+    memory.limits.update({
+        "maxPromptMessages": 100,
+        "maxPromptChars": 10000,
+        "maxVisibleMessages": 100,
+        "maxVisibleChars": 10000,
+        "maxMessageChars": 80,
+        "maxToolResultChars": 256,
+        "projectHistoricalToolResults": False,
+        "rawToolResultTailTurnCount": 0,
+    })
+    tool_result = json.dumps({
+        "ok": True,
+        "ticketId": "TICKET-RAW",
+        "execution_report_ref": "frame-report://task_raw/frm_raw",
+        "payload": "z" * 1000,
+    }, ensure_ascii=False)
+
+    memory.begin_turn(
+        task_id="task_raw",
+        root_frame_id="frm_root",
+        user_message="call raw tool",
+    )
+    assert memory.commit_turn(
+        assistant_message="raw done",
+        protocol_messages=[
+            {"role": "user", "content": "call raw tool", "taskId": "task_raw"},
+            {
+                "role": "assistant",
+                "content": "",
+                "toolCalls": [{"id": "call_raw", "name": "query_ticket", "args": {}}],
+            },
+            {"role": "tool", "content": tool_result, "toolCallId": "call_raw"},
+            {"role": "assistant", "content": "raw done"},
+        ],
+    )
+
+    prompt = memory.build_prompt_view()
+    tool_messages = [item for item in prompt if item["role"] == "tool"]
+
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == tool_result
 
 
 def test_context_memory_accepts_submitted_user_prompt_with_runtime_time_block():
@@ -437,6 +558,93 @@ def test_context_memory_compaction_keeps_head_summary_and_tail():
         "task_001",
         "task_004",
     }
+
+
+def test_context_memory_prompt_budget_triggers_compaction_before_tail_cut():
+    memory = ContextRuntimeMemory(context_id="bctx_20260522_ab_ctx-prompt-budget")
+    memory.limits.update({
+        "maxVisibleMessages": 100,
+        "maxVisibleChars": 10000,
+        "maxPromptMessages": 6,
+        "maxPromptChars": 10000,
+        "headTurnCount": 1,
+        "tailTurnCount": 1,
+    })
+
+    for index in range(1, 5):
+        memory.begin_turn(
+            task_id=f"task_{index:03d}",
+            root_frame_id="frm_root",
+            user_message=f"U{index}",
+        )
+        assert memory.commit_turn(assistant_message=f"A{index}")
+
+    assert memory.compacted_summary is None
+    assert [item["content"] for item in memory.build_prompt_view()] == [
+        "U2",
+        "A2",
+        "U3",
+        "A3",
+        "U4",
+        "A4",
+    ]
+
+    summarizer_payloads: list[dict[str, object]] = []
+
+    def summarizer(payload: dict[str, object]) -> dict[str, object]:
+        summarizer_payloads.append(payload)
+        return {
+            "durableUserIntent": "compressed middle turns",
+            "pendingActions": ["continue latest task"],
+        }
+
+    assert memory.compact_for_prompt_budget(summarizer=summarizer) is True
+
+    assert summarizer_payloads
+    assert summarizer_payloads[0]["reason"] == "prompt_budget"
+    assert [item["content"] for item in memory.pinned_head_messages] == ["U1", "A1"]
+    assert [item["content"] for item in memory.visible_messages] == ["U4", "A4"]
+    prompt = memory.build_prompt_view()
+    prompt_text = "\n".join(item["content"] for item in prompt)
+    assert "compressed middle turns" in prompt_text
+    assert "U2" not in [item["content"] for item in prompt]
+    assert [item["content"] for item in prompt[-2:]] == ["U4", "A4"]
+
+
+def test_context_memory_visible_char_budget_triggers_compaction():
+    memory = ContextRuntimeMemory(context_id="bctx_20260522_ab_ctx-char-budget")
+    memory.limits.update({
+        "maxVisibleMessages": 100,
+        "maxVisibleChars": 30,
+        "maxPromptMessages": 100,
+        "headTurnCount": 1,
+        "tailTurnCount": 1,
+    })
+    summarizer_payloads: list[dict[str, object]] = []
+
+    def summarizer(payload: dict[str, object]) -> dict[str, object]:
+        summarizer_payloads.append(payload)
+        return {"durableUserIntent": "char budget summary"}
+
+    for index in range(1, 4):
+        memory.begin_turn(
+            task_id=f"task_{index:03d}",
+            root_frame_id="frm_root",
+            user_message=f"U{index}-long-message",
+        )
+        assert memory.commit_turn(
+            assistant_message=f"A{index}-long-answer",
+            summarizer=summarizer if index == 3 else None,
+        )
+
+    assert summarizer_payloads
+    assert summarizer_payloads[0]["reason"] == "visible_window"
+    assert memory.compacted_summary is not None
+    assert memory.compacted_summary["durableUserIntent"] == "char budget summary"
+    assert [item["content"] for item in memory.visible_messages] == [
+        "U3-long-message",
+        "A3-long-answer",
+    ]
 
 
 def test_context_memory_compaction_fallback_redacts_sensitive_text():

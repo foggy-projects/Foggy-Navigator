@@ -7,7 +7,7 @@
 - purpose: 记录真实会话暴露出的 prompt 裁剪边界问题，作为后续消息裁剪、压缩策略和工具结果预算参数设计的跟踪项
 
 版本：`1.1.6-SNAPSHOT`
-状态：第二版已实现；第三版裁剪/压缩口径已落档，待实现对齐与真实会话验收
+状态：第三版核心实现已落地；待补 runtime warning 与真实会话验收
 类型：runtime context governance / prompt pruning
 
 ## 背景
@@ -81,11 +81,12 @@ system -> U3/tool... -> U4/agent... -> U5
      - `maxPromptChars`
      - `maxToolResultChars`
      - `maxToolCallArgsChars`
-   - `tool` result 使用 `maxToolResultChars`，不再被普通 `maxMessageChars` 过早截断。
+   - `tool` result 在 runtime memory 中保留 raw content，不再被普通 `maxMessageChars` 过早截断。
+   - `maxToolResultChars` 用作 prompt projection 阈值，而不是运行时存储截断阈值。
    - assistant tool call args 超过 `maxToolCallArgsChars` 时投影为 `_truncated / _original_chars / preview`。
 2. `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_skill_agent.py`
    - 保存 Root-visible protocol 到 runtime memory 时，读取 Root memory limits。
-   - protocol 序列化时使用独立 tool result / tool args 预算。
+   - protocol 序列化时保留 raw tool result，并使用独立 tool args 预算。
 3. `tools/langgraph-biz-worker/src/langgraph_biz_worker/graphs/root_graph.py`
    - 从 `llm_config.runtimeBudgetPresetKey` / 自动 preset 解析模型预算。
    - 将模型预算映射到 Root runtime memory：
@@ -117,12 +118,18 @@ system -> U3/tool... -> U4/agent... -> U5
    - 如果超预算，触发 lazy compaction，生成 summary + 完整 tail。
 3. 为 tool result 增加独立边界参数：
    - `maxToolResultChars`
+   - `projectHistoricalToolResults`
+   - `rawToolResultTailTurnCount`
    - `maxToolResultItems`
    - `maxToolCallArgsChars`
    - `maxToolResultsPerTurn`
-4. 大工具结果默认投影为 digest / refs / selected fields，完整内容保留在 frame report、runtime event log 或 artifact evidence 中。
+4. 大工具结果默认投影为 digest / refs / selected fields，完整内容保留在 runtime memory、frame report、runtime event log 或 artifact evidence 中。
+   - `projectHistoricalToolResults` 默认打开；特殊排障或超大上下文模型可通过模型 runtime budget override 关闭。
+   - 投影只作用于最近 N 个语义 turn 之外的历史 tool result。
+   - 最近 N 个语义 turn 内的大 tool result 保持 raw content，以便 LLM 对最新证据做精确追问、修正或续跑。
+   - N 指用户语义 turn / 业务任务回合，不是一次任务内部的 LLM loop iteration。一个用户消息触发多次工具调用时，仍算同一个最近 turn。
 
-第一版已经完成方向 1、方向 2、方向 3 的核心实现：prompt tail 已按语义 turn 裁剪，commit 后 lazy compaction 已接入 LLM summarizer，并保留确定性 fallback。方向 4 的业务工具级 digest/ref 仍需后续按具体工具补 projection。
+第一版已经完成方向 1、方向 2、方向 3 的核心实现：prompt tail 已按语义 turn 裁剪，commit 后 lazy compaction 已接入 LLM summarizer，并保留确定性 fallback。第三版已完成通用历史大 tool result prompt projection；后续仍可按具体业务工具补更精细的 selected fields。
 
 ## 第二版实现
 
@@ -162,8 +169,11 @@ system -> U3/tool... -> U4/agent... -> U5
    - 如果 `build_prompt_view()` 发现 prompt 会因为该护栏切掉历史，应优先在 commit / prepare 阶段触发压缩，再提交 `summary + tail`。
 3. 单条消息 / 单个 tool result 预算
    - 这是 projection 边界。
-   - 单个 tool result 过大时，应投影为 digest / selected fields / refs。
-   - 完整内容继续保留在 frame report、runtime event log、artifact 或业务证据文件中。
+   - 单个历史 tool result 过大时，应投影为 digest / selected fields / refs。
+   - 该投影不得作用于最近 N 个语义 turn；最新窗口内的大 tool result 必须保持 raw content。
+   - 当前参数为 `projectHistoricalToolResults` 和 `rawToolResultTailTurnCount`；前者默认打开，后者默认保留最近 6 个语义 turn 的 raw tool result。
+   - 这里的 N 是用户语义 turn / 业务任务回合，不是 provider loop iteration。一个用户任务内的 assistant/tool 多轮循环作为同一语义 turn 的一部分处理。
+   - 完整内容继续保留在 runtime memory、frame report、runtime event log、artifact 或业务证据文件中。
 
 压缩触发条件至少包含两类：
 
@@ -178,6 +188,7 @@ system -> U3/tool... -> U4/agent... -> U5
 2. 语义 turn 尽量不拆分：普通 user / assistant 回合应按 turn 进入 tail 或 summary。
 3. head / tail 语义优先：保留最早的关键约束、身份、长期用户目标，以及最近 N 个业务回合。
 4. summarized middle 必须可追溯：summary 中记录被压缩区间的 turn 范围、关键实体、已完成工作、未决动作、错误与恢复线索。
+5. 大 tool result projection 只发生在 prompt assembly 阶段；runtime memory 不因 projection 丢失 raw tool result。
 
 压缩失败时：
 
@@ -198,7 +209,8 @@ system -> U3/tool... -> U4/agent... -> U5
 3. 已新增单元测试：单条 tool result 和 tool call args 使用独立预算。
 4. 已新增单元测试：Root commit 超过 visible 阈值时调用 LLM summarizer，并写入 `summaryQuality=llm`。
 5. 待补 scripted E2E：多轮 Root tool call 后，`llm-submissions` 中的 prompt tail 从 user/summary 开始。
-6. 待补业务工具 projection 验收：大型 tool result 在具体工具层投影为 digest / refs，完整内容仍可在 evidence 中查到。
+6. 已新增单元测试：最近 N 个语义 turn 内的大 tool result 保持 raw，N 轮之外的历史大 tool result 在 prompt view 中投影为 digest / refs / selected fields。
+7. 已新增单元测试：`projectHistoricalToolResults=false` 时不投影历史大 tool result。
 
 ## Progress Tracking
 
@@ -210,7 +222,10 @@ Development:
 - [x] Root commit lazy compaction 接入 LLM summarizer，并保留 fallback。
 - [x] 第二版调大默认/preset message count，避免 128k 模型下未超预算就只取最近 N 条。
 - [x] 第三版裁剪/压缩语义落档：裁剪水位触发压缩，不直接丢弃。
-- [ ] 将 `build_prompt_view` 最后安全护栏与 commit/prepare 压缩触发的 warning / follow-up 机制进一步对齐。
+- [x] `build_prompt_view` 前新增 prompt budget 预压缩：如果完整 visible window 会被 hard cap 截断，先压缩中间区间再提交 summary + tail。
+- [x] 历史大 tool result prompt projection：最近 `rawToolResultTailTurnCount` 个语义 turn 保持 raw，N 轮之前投影为 digest / refs / selected fields。
+- [x] 历史大 tool result projection 增加 `projectHistoricalToolResults` 开关，默认打开，可由模型 runtime budget override 关闭。
+- [ ] 将 prompt hard cap 触发记录为 runtime warning / event，便于从日志追踪。
 - [ ] 真实 LLM smoke 后复核 `llm-submissions` 是否符合预期。
 - [ ] 后续设计真实 tokenizer 与更精确 token 预算。
 
@@ -218,8 +233,11 @@ Testing:
 
 - [x] `pytest tests/test_context_memory.py tests/test_llm_message_builder.py tests/test_model_runtime_budget.py tests/test_llm_skill_router.py -q`
 - [x] `pytest tests/test_root_graph.py::test_runtime_memory_commit_uses_llm_compaction_summarizer tests/test_context_memory.py -q`
+- [x] `pytest tests/test_context_memory.py tests/test_root_graph.py::test_runtime_memory_commit_uses_llm_compaction_summarizer -q`
+- [x] `pytest -q` under `tools/langgraph-biz-worker`：650 passed, 6 skipped, 11 warnings。
+- [x] `pytest tests/test_context_memory.py -q`：覆盖历史大 tool result projection 与最近 raw tail 保留。
 - [x] `ruff check` 覆盖本次 Python 改动文件。
-- [x] `pytest -q` 全量 BizWorker 测试：`645 passed, 6 skipped`。
+- [x] `pytest -q` 全量 BizWorker 测试：`649 passed, 6 skipped`。
 
 Experience:
 

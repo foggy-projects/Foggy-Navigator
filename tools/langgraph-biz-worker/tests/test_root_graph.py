@@ -72,6 +72,29 @@ def test_llm_skill_max_iterations_uses_runtime_context(monkeypatch):
     assert root_graph_module._llm_skill_max_iterations_for_state(state) == 14
 
 
+def test_sync_memory_limits_sets_tool_result_projection_tail():
+    memory = ContextRuntimeMemory(context_id="bctx_20260523_ab_ctx-budget-sync")
+
+    root_graph_module._sync_memory_limits_from_runtime_context(
+        memory,
+        {
+            "llm_config": {
+                "runtimeBudgetPresetKey": "generic.128k",
+                "runtimeBudgetOverride": {
+                    "maxSingleToolResultChars": 24000,
+                    "projectHistoricalToolResults": False,
+                    "rawToolResultTailTurnCount": 3,
+                },
+            },
+        },
+    )
+
+    assert memory.limits["maxToolResultChars"] == 24000
+    assert memory.limits["projectHistoricalToolResults"] is False
+    assert memory.limits["rawToolResultTailTurnCount"] == 3
+    assert memory.limits["runtimeBudgetPresetKey"] == "generic.128k"
+
+
 def test_system_root_manifest_allows_plain_final_and_discourages_submit_for_simple_replies():
     body = root_graph_module._system_root_manifest().markdown_body
 

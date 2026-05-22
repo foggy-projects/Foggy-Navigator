@@ -7,6 +7,7 @@ or writing that frame field directly so the storage backend can move later.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -26,11 +27,59 @@ DEFAULT_LIMITS = {
     "maxPromptChars": 48000,
     "maxMessageChars": 1200,
     "maxToolResultChars": 48000,
+    "projectHistoricalToolResults": True,
     "maxToolCallArgsChars": 12000,
+    "rawToolResultTailTurnCount": 6,
     "maxVisibleChars": 12000,
     "headTurnCount": 2,
     "tailTurnCount": 6,
     "maxSummaryChars": 2400,
+}
+
+_TOOL_RESULT_SELECTED_FIELD_NAMES = {
+    "ok",
+    "success",
+    "status",
+    "state",
+    "code",
+    "excode",
+    "msg",
+    "message",
+    "summary",
+    "error",
+    "errors",
+    "id",
+    "ticketid",
+    "ticketno",
+    "ticketnumber",
+    "functionid",
+    "upstreamref",
+    "executionreportref",
+    "executionreportdigest",
+    "execution_report_ref",
+    "execution_report_digest",
+    "reportref",
+    "report_ref",
+    "framereportref",
+    "frame_report_ref",
+    "artifactrefs",
+    "artifact_refs",
+    "refs",
+}
+
+_TOOL_RESULT_REF_FIELD_NAMES = {
+    "ref",
+    "refs",
+    "reportref",
+    "report_ref",
+    "framereportref",
+    "frame_report_ref",
+    "executionreportref",
+    "execution_report_ref",
+    "artifactref",
+    "artifact_ref",
+    "artifactrefs",
+    "artifact_refs",
 }
 
 _CONTEXT_LOCKS_GUARD = Lock()
@@ -154,16 +203,16 @@ class ContextRuntimeMemory:
             *self.pinned_head_messages,
             *self._compacted_summary_prompt_messages(),
         ]
-        head_prompt = [
-            _prompt_message_copy(item)
-            for item in head_messages
-            if _message_visible_in_prompt(item)
-        ]
-        visible_prompt = [
-            _prompt_message_copy(item)
-            for item in self.visible_messages
-            if _message_visible_in_prompt(item)
-        ]
+        head_prompt = _prompt_messages_with_tool_projection(
+            head_messages,
+            limits=self.limits,
+            raw_tail_turn_count=0,
+        )
+        visible_prompt = _prompt_messages_with_tool_projection(
+            self.visible_messages,
+            limits=self.limits,
+            raw_tail_turn_count=_raw_tool_result_tail_turn_count(self.limits),
+        )
         tail_prompt = _turn_aware_prompt_tail(
             visible_prompt,
             max_messages=max(1, max_prompt_messages - len(head_prompt)),
@@ -175,6 +224,20 @@ class ContextRuntimeMemory:
             for item in prompt_source
             if _message_visible_in_prompt(item)
         ])
+
+    def compact_for_prompt_budget(
+        self,
+        *,
+        summarizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> bool:
+        """Compact visible history before prompt assembly would hard-cut it."""
+        if not self._prompt_budget_would_clip_visible_messages():
+            return False
+        return self._compact_visible_messages(
+            summarizer=summarizer,
+            force=True,
+            reason="prompt_budget",
+        )
 
     def begin_turn(
         self,
@@ -404,7 +467,9 @@ class ContextRuntimeMemory:
         self,
         *,
         summarizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-    ) -> None:
+        force: bool = False,
+        reason: str = "visible_window",
+    ) -> bool:
         max_visible = _int_or_default(
             self.limits.get("maxVisibleMessages"),
             DEFAULT_LIMITS["maxVisibleMessages"],
@@ -414,44 +479,35 @@ class ContextRuntimeMemory:
             DEFAULT_LIMITS["maxVisibleChars"],
         )
         if (
+            not force
+            and
             len(self.visible_messages) <= max_visible
             and _messages_total_chars(self.visible_messages) <= max_visible_chars
         ):
-            return
+            return False
 
-        head_count = max(0, _int_or_default(
+        head_turn_count = max(0, _int_or_default(
             self.limits.get("headTurnCount"),
             DEFAULT_LIMITS["headTurnCount"],
-        )) * 2
-        tail_count = max(1, _int_or_default(
+        ))
+        tail_turn_count = max(1, _int_or_default(
             self.limits.get("tailTurnCount"),
             DEFAULT_LIMITS["tailTurnCount"],
-        )) * 2
+        ))
         max_summary_chars = _int_or_default(
             self.limits.get("maxSummaryChars"),
             DEFAULT_LIMITS["maxSummaryChars"],
         )
 
         messages = list(self.visible_messages)
-        if self.pinned_head_messages:
-            head: list[dict[str, Any]] = []
-            middle = messages[:-tail_count] if len(messages) > tail_count else []
-        else:
-            head = _ensure_valid_tool_protocol_window(messages[:head_count])
-            middle_end = max(head_count, len(messages) - tail_count)
-            middle = messages[head_count:middle_end]
-        tail = _ensure_valid_tool_protocol_window(
-            messages[-tail_count:] if len(messages) > tail_count else list(messages)
+        head, middle, tail = _compaction_windows(
+            messages,
+            head_turn_count=head_turn_count,
+            tail_turn_count=tail_turn_count,
+            pin_head=not self.pinned_head_messages,
         )
-
         if not middle:
-            if len(messages) <= max_visible:
-                return
-            middle = messages[:-tail_count]
-            head = []
-            tail = _ensure_valid_tool_protocol_window(messages[-tail_count:])
-        if not middle:
-            return
+            return False
 
         previous_summary = self.compacted_summary if isinstance(self.compacted_summary, dict) else None
         summarizer_messages = _summary_input_messages(
@@ -462,6 +518,7 @@ class ContextRuntimeMemory:
             "previousSummary": previous_summary,
             "messages": summarizer_messages,
             "limits": dict(self.limits),
+            "reason": reason,
         }
         summary = None
         if summarizer is not None:
@@ -488,6 +545,37 @@ class ContextRuntimeMemory:
             self.pinned_head_messages.extend(head)
         self.compacted_summary = summary
         self.visible_messages = tail
+        return True
+
+    def _prompt_budget_would_clip_visible_messages(self) -> bool:
+        max_prompt_messages = _int_or_default(
+            self.limits.get("maxPromptMessages"),
+            DEFAULT_LIMITS["maxPromptMessages"],
+        )
+        max_prompt_chars = _int_or_default(
+            self.limits.get("maxPromptChars"),
+            DEFAULT_LIMITS["maxPromptChars"],
+        )
+        head_messages = [
+            *self.pinned_head_messages,
+            *self._compacted_summary_prompt_messages(),
+        ]
+        head_prompt = _prompt_messages_with_tool_projection(
+            head_messages,
+            limits=self.limits,
+            raw_tail_turn_count=0,
+        )
+        visible_prompt = _prompt_messages_with_tool_projection(
+            self.visible_messages,
+            limits=self.limits,
+            raw_tail_turn_count=_raw_tool_result_tail_turn_count(self.limits),
+        )
+        remaining_messages = max_prompt_messages - len(head_prompt)
+        remaining_chars = max_prompt_chars - _messages_total_chars(head_prompt)
+        return (
+            len(visible_prompt) > max(0, remaining_messages)
+            or _messages_total_chars(visible_prompt) > max(0, remaining_chars)
+        )
 
     def _max_message_chars(self) -> int:
         return _int_or_default(
@@ -584,10 +672,6 @@ def runtime_protocol_messages_from_langchain(
         return []
     timestamp = now or _now()
     limit = _int_or_default(max_chars, DEFAULT_LIMITS["maxMessageChars"])
-    tool_result_limit = _int_or_default(
-        max_tool_result_chars,
-        DEFAULT_LIMITS["maxToolResultChars"],
-    )
     tool_args_limit = _int_or_default(
         max_tool_args_chars,
         DEFAULT_LIMITS["maxToolCallArgsChars"],
@@ -597,8 +681,11 @@ def runtime_protocol_messages_from_langchain(
         role = _langchain_message_role(message)
         if role == "system" or not role:
             continue
-        content_limit = tool_result_limit if role == "tool" else limit
-        content = _message_content_text(getattr(message, "content", ""), content_limit)
+        content = (
+            _message_content_text_unbounded(getattr(message, "content", ""))
+            if role == "tool"
+            else _message_content_text(getattr(message, "content", ""), limit)
+        )
         suffix = f"protocol_{index}_{_safe_id_part(timestamp)}"
         if role == "user":
             if not content:
@@ -686,6 +773,39 @@ def _turn_aware_prompt_tail(
         selected = [groups[-1]]
     flattened = [item for group in selected for item in group]
     return _ensure_valid_tool_protocol_window(flattened)
+
+
+def _compaction_windows(
+    messages: list[dict[str, Any]],
+    *,
+    head_turn_count: int,
+    tail_turn_count: int,
+    pin_head: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    groups = _semantic_turn_groups(_ensure_valid_tool_protocol_window(messages))
+    if not groups:
+        return [], [], []
+
+    safe_tail_count = max(1, tail_turn_count)
+    if pin_head:
+        safe_head_count = max(0, head_turn_count)
+        head_groups = groups[:safe_head_count]
+        tail_start = max(len(head_groups), len(groups) - safe_tail_count)
+        middle_groups = groups[len(head_groups):tail_start]
+    else:
+        head_groups = []
+        tail_start = max(0, len(groups) - safe_tail_count)
+        middle_groups = groups[:tail_start]
+    tail_groups = groups[tail_start:]
+
+    head = [item for group in head_groups for item in group]
+    middle = [item for group in middle_groups for item in group]
+    tail = [item for group in tail_groups for item in group]
+    return (
+        _ensure_valid_tool_protocol_window(head),
+        _ensure_valid_tool_protocol_window(middle),
+        _ensure_valid_tool_protocol_window(tail),
+    )
 
 
 def _semantic_turn_groups(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -1009,10 +1129,68 @@ def _new_message(
     }
 
 
-def _prompt_message_copy(item: dict[str, Any]) -> dict[str, Any]:
+def _prompt_messages_with_tool_projection(
+    messages: list[dict[str, Any]],
+    *,
+    limits: dict[str, Any],
+    raw_tail_turn_count: int,
+) -> list[dict[str, Any]]:
+    visible_messages = [
+        item
+        for item in messages
+        if _message_visible_in_prompt(item)
+    ]
+    groups = _semantic_turn_groups(_ensure_valid_tool_protocol_window(visible_messages))
+    if not groups:
+        return []
+    raw_start = max(0, len(groups) - max(0, raw_tail_turn_count))
+    max_tool_result_chars = _int_or_default(
+        limits.get("maxToolResultChars"),
+        DEFAULT_LIMITS["maxToolResultChars"],
+    )
+    project_historical_tool_results_enabled = _bool_or_default(
+        limits.get("projectHistoricalToolResults"),
+        DEFAULT_LIMITS["projectHistoricalToolResults"],
+    )
+    projected: list[dict[str, Any]] = []
+    for index, group in enumerate(groups):
+        project_historical_tool_results = (
+            project_historical_tool_results_enabled
+            and index < raw_start
+        )
+        for item in group:
+            projected.append(_prompt_message_copy(
+                item,
+                project_historical_tool_result=project_historical_tool_results,
+                max_tool_result_chars=max_tool_result_chars,
+            ))
+    return _ensure_valid_tool_protocol_window(projected)
+
+
+def _raw_tool_result_tail_turn_count(limits: dict[str, Any]) -> int:
+    return max(0, _int_or_default(
+        limits.get("rawToolResultTailTurnCount"),
+        DEFAULT_LIMITS["rawToolResultTailTurnCount"],
+    ))
+
+
+def _prompt_message_copy(
+    item: dict[str, Any],
+    *,
+    project_historical_tool_result: bool = False,
+    max_tool_result_chars: int | None = None,
+) -> dict[str, Any]:
+    role = item["role"]
+    content = item.get("content", "")
+    if role == "tool" and project_historical_tool_result:
+        content = _project_historical_tool_result_content(
+            content,
+            item=item,
+            max_chars=max_tool_result_chars,
+        )
     copied = {
-        "role": item["role"],
-        "content": item.get("content", ""),
+        "role": role,
+        "content": content,
         "messageId": item.get("messageId"),
         "taskId": item.get("taskId"),
         "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
@@ -1024,6 +1202,158 @@ def _prompt_message_copy(item: dict[str, Any]) -> dict[str, Any]:
     if tool_call_id:
         copied["toolCallId"] = tool_call_id
     return copied
+
+
+def _project_historical_tool_result_content(
+    content: Any,
+    *,
+    item: dict[str, Any],
+    max_chars: int | None,
+) -> str:
+    text = _message_content_text_unbounded(content)
+    limit = _int_or_default(max_chars, DEFAULT_LIMITS["maxToolResultChars"])
+    if not text or len(text) <= limit:
+        return text
+    parsed = _try_parse_json(text)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    projection = {
+        "projected": True,
+        "projection": "historical_large_tool_result",
+        "originalChars": len(text),
+        "digest": f"sha256:{digest}",
+        "sha256": digest,
+        "refs": _tool_result_refs(item=item, parsed=parsed),
+        "selectedFields": _selected_tool_result_fields(parsed),
+        "preview": _truncate_text(text, max(0, min(1024, limit // 2))),
+    }
+    return _bounded_projection_json(projection, limit=max(256, limit))
+
+
+def _try_parse_json(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def _bounded_projection_json(projection: dict[str, Any], *, limit: int) -> str:
+    candidate = json.dumps(projection, ensure_ascii=False, separators=(",", ":"), default=str)
+    if len(candidate) <= limit:
+        return candidate
+    compact = dict(projection)
+    compact["preview"] = ""
+    selected_fields = compact.get("selectedFields")
+    if isinstance(selected_fields, dict) and selected_fields:
+        compact["selectedFields"] = _first_items(selected_fields, 4)
+    candidate = json.dumps(compact, ensure_ascii=False, separators=(",", ":"), default=str)
+    if len(candidate) <= limit:
+        return candidate
+    minimal = {
+        "projected": True,
+        "projection": "historical_large_tool_result",
+        "originalChars": projection.get("originalChars"),
+        "digest": projection.get("digest"),
+        "sha256": projection.get("sha256"),
+        "refs": projection.get("refs") or [],
+    }
+    return json.dumps(minimal, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _first_items(value: dict[str, Any], count: int) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        result[key] = item
+        if len(result) >= count:
+            break
+    return result
+
+
+def _selected_tool_result_fields(parsed: Any) -> dict[str, Any]:
+    selected: dict[str, Any] = {}
+
+    def visit(value: Any, *, path: str, depth: int) -> None:
+        if len(selected) >= 16 or depth > 3:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if len(selected) >= 16:
+                    return
+                key_text = str(key)
+                child_path = key_text if not path else f"{path}.{key_text}"
+                normalized_key = _normalize_projection_key(key_text)
+                if normalized_key in _TOOL_RESULT_SELECTED_FIELD_NAMES:
+                    projected_value = _project_selected_value(child)
+                    if projected_value is not None:
+                        selected[child_path] = projected_value
+                visit(child, path=child_path, depth=depth + 1)
+        elif isinstance(value, list) and depth < 2:
+            for index, child in enumerate(value[:8]):
+                visit(child, path=f"{path}[{index}]", depth=depth + 1)
+
+    visit(parsed, path="", depth=0)
+    return selected
+
+
+def _tool_result_refs(*, item: dict[str, Any], parsed: Any) -> list[str]:
+    refs: list[str] = []
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    _collect_refs(metadata, refs=refs, depth=0)
+    _collect_refs(parsed, refs=refs, depth=0)
+    return _merged_strings(refs)[:24]
+
+
+def _collect_refs(value: Any, *, refs: list[str], depth: int) -> None:
+    if depth > 4 or len(refs) >= 64:
+        return
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            normalized_key = _normalize_projection_key(key_text)
+            if normalized_key in _TOOL_RESULT_REF_FIELD_NAMES:
+                _append_ref_values(child, refs=refs)
+            _collect_refs(child, refs=refs, depth=depth + 1)
+    elif isinstance(value, list):
+        for child in value[:32]:
+            _collect_refs(child, refs=refs, depth=depth + 1)
+
+
+def _append_ref_values(value: Any, *, refs: list[str]) -> None:
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            refs.append(text)
+        return
+    if isinstance(value, list):
+        for item in value[:32]:
+            _append_ref_values(item, refs=refs)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _append_ref_values(item, refs=refs)
+
+
+def _project_selected_value(value: Any) -> Any:
+    if value in (None, "", [], {}):
+        return value
+    if isinstance(value, str):
+        return _truncate_text(value.strip(), 512)
+    if isinstance(value, (bool, int, float)):
+        return value
+    try:
+        serialized = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    except Exception:
+        serialized = str(value)
+    if len(serialized) > 512:
+        return {
+            "projected": True,
+            "originalChars": len(serialized),
+            "preview": serialized[:256].rstrip(),
+        }
+    return value
+
+
+def _normalize_projection_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
 def _message_visible_in_prompt(item: dict[str, Any]) -> bool:
@@ -1045,10 +1375,6 @@ def _sanitize_messages(value: Any, *, limits: dict[str, Any] | None = None) -> l
         limit_config.get("maxMessageChars"),
         DEFAULT_LIMITS["maxMessageChars"],
     )
-    max_tool_result_chars = _int_or_default(
-        limit_config.get("maxToolResultChars"),
-        DEFAULT_LIMITS["maxToolResultChars"],
-    )
     max_tool_args_chars = _int_or_default(
         limit_config.get("maxToolCallArgsChars"),
         DEFAULT_LIMITS["maxToolCallArgsChars"],
@@ -1060,8 +1386,11 @@ def _sanitize_messages(value: Any, *, limits: dict[str, Any] | None = None) -> l
         role = str(item.get("role") or "").strip().lower()
         if role not in {"user", "assistant", "tool"}:
             continue
-        content_limit = max_tool_result_chars if role == "tool" else max_message_chars
-        content = _message_content_text(item.get("content"), content_limit)
+        content = (
+            _message_content_text_unbounded(item.get("content"))
+            if role == "tool"
+            else _message_content_text(item.get("content"), max_message_chars)
+        )
         tool_calls = _normalize_runtime_tool_calls(
             item.get("toolCalls") or item.get("tool_calls"),
             max_args_chars=max_tool_args_chars,
@@ -1190,6 +1519,17 @@ def _message_content_text(value: Any, max_chars: int) -> str:
         return _clean_content(str(value), max_chars)
 
 
+def _message_content_text_unbounded(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if value in (None, "", [], {}):
+        return ""
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str).strip()
+    except Exception:
+        return str(value).strip()
+
+
 def _normalize_runtime_tool_calls(value: Any, *, max_args_chars: int | None = None) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -1274,6 +1614,20 @@ def _int_or_default(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _bool_or_default(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    return default
 
 
 def _safe_id_part(value: str) -> str:

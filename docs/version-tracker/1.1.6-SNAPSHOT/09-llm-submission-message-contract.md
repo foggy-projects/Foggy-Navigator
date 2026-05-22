@@ -156,10 +156,13 @@ human(新的用户输入或续跑指令)
    - 如果预算不足以保留完整近期 turn，应先触发或使用压缩摘要，再保留较短但完整的近期 tail。
 3. 大工具结果应先受控投影，再进入 prompt。
    - 单条 message 继续受 `maxMessageChars` 控制。
-   - 单条 tool result 使用独立 `maxToolResultChars` 控制。
+   - 单条 tool result 在 runtime memory 中保留 raw content；`maxToolResultChars` 只作为提交 LLM 前的 projection 阈值。
+   - projection 只作用于最近 N 个语义 turn 之外的历史 tool result；默认最近 6 个语义 turn 保留 raw tool result。
+   - `projectHistoricalToolResults` 默认打开；关闭后历史大 tool result 也保持 raw content，但仍可能受全局 prompt hard cap 影响。
+   - 这里的 N 是用户语义 turn / 业务任务回合，不是一次任务内的 LLM loop iteration；一个用户消息触发的多次 assistant/tool 循环仍属于同一语义 turn。
    - 历史 assistant tool call args 使用 `maxToolCallArgsChars` 控制，超限后仅保留截断预览和原始长度。
    - 大型 tool result / artifact body 不应原样长期占用 prompt；应投影为 digest、关键字段和 refs，完整内容保留在 report/log/artifact evidence。
-   - 后续参数设计需要单独收口 `maxToolResultChars` / `maxToolResultItems` 等工具结果预算，而不是只依赖全局 `maxMessageChars`。
+   - 后续参数设计需要单独收口 `maxToolResultChars` / `projectHistoricalToolResults` / `rawToolResultTailTurnCount` / `maxToolResultItems` 等工具结果预算，而不是只依赖全局 `maxMessageChars`。
 
 该边界不改变“Root-visible tool protocol 默认保留到压缩或裁剪”的原则；它约束的是“如何裁剪才不会产生 provider 非法协议或语义半轮”。
 

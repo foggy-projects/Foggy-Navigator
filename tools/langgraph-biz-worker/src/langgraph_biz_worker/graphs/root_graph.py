@@ -158,6 +158,8 @@ def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[
     max_input_tokens = _positive_int(budget.get("max_input_tokens"))
     compact_threshold_tokens = _positive_int(budget.get("auto_compact_input_token_threshold"))
     max_tool_result_chars = _positive_int(budget.get("max_single_tool_result_chars"))
+    project_historical_tool_results = _bool_or_none(budget.get("project_historical_tool_results"))
+    raw_tool_result_tail_turn_count = _positive_int(budget.get("raw_tool_result_tail_turn_count"))
     max_prompt_messages = _positive_int(budget.get("max_prompt_messages"))
     max_visible_messages = _positive_int(budget.get("max_visible_messages"))
     if max_input_tokens is not None:
@@ -166,6 +168,10 @@ def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[
         memory.limits["maxVisibleChars"] = compact_threshold_tokens * 4
     if max_tool_result_chars is not None:
         memory.limits["maxToolResultChars"] = max_tool_result_chars
+    if project_historical_tool_results is not None:
+        memory.limits["projectHistoricalToolResults"] = project_historical_tool_results
+    if raw_tool_result_tail_turn_count is not None:
+        memory.limits["rawToolResultTailTurnCount"] = raw_tool_result_tail_turn_count
     if max_prompt_messages is not None:
         memory.limits["maxPromptMessages"] = max_prompt_messages
     if max_visible_messages is not None:
@@ -428,6 +434,20 @@ def _positive_int(value: Any) -> int | None:
     return None
 
 
+def _bool_or_none(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    return None
+
+
 def get_runtime() -> SkillRuntime:
     """Expose the shared runtime for testing and external access."""
     return _runtime
@@ -662,6 +682,7 @@ def run_skill(state: RootState) -> dict:
                 return {"events": recovered_focus_events}
             busy_event = _prepare_root_runtime_memory_for_turn(
                 frame,
+                state=state,
                 task_id=task_id,
                 context=context,
                 prompt=skill_prompt,
@@ -715,6 +736,7 @@ def run_skill(state: RootState) -> dict:
 def _prepare_root_runtime_memory_for_turn(
     frame: Any,
     *,
+    state: RootState | None = None,
     task_id: str,
     context: dict[str, Any],
     prompt: str,
@@ -731,6 +753,13 @@ def _prepare_root_runtime_memory_for_turn(
             root_frame_id=frame.frame_id,
         )
         if inject_prompt_view:
+            memory.compact_for_prompt_budget(
+                summarizer=_runtime_memory_compaction_summarizer(
+                    frame=frame,
+                    state=state,
+                    runtime_context=runtime_context,
+                ) if state is not None else None,
+            )
             prompt_view = memory.build_prompt_view()
             if prompt_view:
                 runtime_context[RUNTIME_VISIBLE_CONVERSATION_KEY] = prompt_view
@@ -775,6 +804,7 @@ def _prepare_root_runtime_memory_for_turn(
 def _refresh_root_runtime_memory_for_running_turn(
     frame: Any,
     *,
+    state: RootState | None = None,
     runtime_context: dict[str, Any],
     inject_prompt_view: bool = True,
 ) -> None:
@@ -785,6 +815,13 @@ def _refresh_root_runtime_memory_for_running_turn(
         memory = load_from_root_frame(refreshed)
         _sync_memory_limits_from_runtime_context(memory, runtime_context)
         if inject_prompt_view:
+            memory.compact_for_prompt_budget(
+                summarizer=_runtime_memory_compaction_summarizer(
+                    frame=refreshed,
+                    state=state,
+                    runtime_context=runtime_context,
+                ) if state is not None else None,
+            )
             prompt_view = memory.build_prompt_view()
             if prompt_view:
                 runtime_context[RUNTIME_VISIBLE_CONVERSATION_KEY] = prompt_view
@@ -1153,6 +1190,7 @@ def _run_root_synthesis_after_focus_completion(
         root_runtime_context["_visible_root_context_summary"] = root_context_summary
     _refresh_root_runtime_memory_for_running_turn(
         root,
+        state=state,
         runtime_context=root_runtime_context,
     )
     events.extend(llm_skill_agent.run(
