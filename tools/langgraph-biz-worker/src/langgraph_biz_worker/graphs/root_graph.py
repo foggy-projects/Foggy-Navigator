@@ -158,12 +158,18 @@ def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[
     max_input_tokens = _positive_int(budget.get("max_input_tokens"))
     compact_threshold_tokens = _positive_int(budget.get("auto_compact_input_token_threshold"))
     max_tool_result_chars = _positive_int(budget.get("max_single_tool_result_chars"))
+    max_prompt_messages = _positive_int(budget.get("max_prompt_messages"))
+    max_visible_messages = _positive_int(budget.get("max_visible_messages"))
     if max_input_tokens is not None:
         memory.limits["maxPromptChars"] = max_input_tokens * 4
     if compact_threshold_tokens is not None:
         memory.limits["maxVisibleChars"] = compact_threshold_tokens * 4
     if max_tool_result_chars is not None:
         memory.limits["maxToolResultChars"] = max_tool_result_chars
+    if max_prompt_messages is not None:
+        memory.limits["maxPromptMessages"] = max_prompt_messages
+    if max_visible_messages is not None:
+        memory.limits["maxVisibleMessages"] = max_visible_messages
     preset_key = budget.get("preset_key")
     if isinstance(preset_key, str) and preset_key:
         memory.limits["runtimeBudgetPresetKey"] = preset_key

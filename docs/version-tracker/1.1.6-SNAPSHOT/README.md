@@ -37,6 +37,7 @@
 8. `14` 是 Account Workspace Resolver 与 delegated workspace 口径：account/upstream user 身份不再等同固定物理目录。
 9. `15` 是受限 `shell_command` 工具设计口径：Linux 命令格式入口，但内部实现为 workspace 受限命令解释器，不开放真实宿主机 shell。
 10. `16` 是 Navigator Upstream CLI 与配套 skill 的 1.1.6 runtime contract 对齐口径，并记录模型 token 预算 preset 字段落地方式。
+11. `OPT-runtime-plan-tool-contract` 是后续 `update_plan` / plan 工具函数的初始契约；实现前需专项调研 Claude Code / Codex 的 plan 机制。
 
 若旧文档中仍出现“runtime context 拼入 user prompt”的早期表述，以 `09` 的 system / human 边界为当前实现口径。
 
@@ -44,13 +45,15 @@
 
 若旧文档中仍出现“子 Agent 继承 Root 完整上下文”或“Root 预注入全部 Skill 目录给子 Agent”的早期倾向，以 `13` 的 isolated handoff + 子 Agent 自主 Skill discovery 为当前实现口径。
 
-若旧文档中仍只描述“按条数保留最近 messages”，以 `09` 的 Prompt window 裁剪边界为当前口径：裁剪必须同时保护 provider tool protocol 和 user/assistant 语义 turn，后续参数设计见 `OPT-runtime-prompt-window-turn-aware-pruning`。
+若旧文档中仍只描述“按条数保留最近 messages”，以 `09` 和 `OPT-runtime-prompt-window-turn-aware-pruning` 为当前口径：裁剪必须同时保护 provider tool protocol 和 user/assistant 语义 turn；`maxVisibleMessages` / token 或 char 水位是压缩触发条件，不是直接丢弃条件。
 
 若旧文档中仍把 upstream user 记忆目录固定描述为 `<data_root>/accounts/<accountId>`，以 `14` 的 managed account mode + delegated workspace resolver 为当前设计口径。
 
 若后续文档讨论 `shell_command`，以 `15` 的 restricted shell 口径为准：命令格式向 Linux 对齐，但必须通过 allowlist、resolver/path guard 和输出预算治理，不直接执行任意系统 shell。
 
 若旧 CLI / skill 文档仍暗示上游自行生成 `contextId`、把 `clientContext` 当成 LLM prompt 配置、或把模型上下文窗口塞入用户消息，以 `16` 为当前口径：新会话由 BizWorker 生成 `contextId`，上游只复用返回值；`clientContext` 只保存会话元数据；模型 token 预算通过 `runtimeBudgetPresetKey` / `runtimeBudgetOverrideJson` 后端一等字段配置。
+
+若后续文档讨论 `plan` 工具函数，以 `OPT-runtime-plan-tool-contract` 为当前口径：plan 是 runtime state 工具，不是普通业务工具；不暴露私有推理；Root 与 Agent frame 默认隔离；实现前先复盘 Claude Code / Codex 的 plan 行为。
 
 ## 当前条目
 
@@ -74,6 +77,7 @@
 - [workitems/BUG-root-account-memory-and-runtime-session-directory-governance.md](./workitems/BUG-root-account-memory-and-runtime-session-directory-governance.md) - 记录 Root Prompt upstream user 记忆文件注入疑点，以及非 `bctx_` runtime session 目录的 fallback 来源与治理建议
 - [workitems/BUG-client-app-public-skill-manifest-resolution.md](./workitems/BUG-client-app-public-skill-manifest-resolution.md) - 记录并修复 ClientApp public skill 资源可见但 `invoke_business_skill` 执行 manifest 缺失的问题
 - [workitems/OPT-runtime-prompt-window-turn-aware-pruning.md](./workitems/OPT-runtime-prompt-window-turn-aware-pruning.md) - 跟踪 prompt window 按 turn / tool protocol 裁剪、大工具结果预算和压缩触发边界参数设计
+- [workitems/OPT-runtime-plan-tool-contract.md](./workitems/OPT-runtime-plan-tool-contract.md) - 记录 BizWorker `update_plan` / plan 工具函数的初始契约、runtime state 边界和后续 Claude Code / Codex 调研项
 
 ## 当前签收记录
 

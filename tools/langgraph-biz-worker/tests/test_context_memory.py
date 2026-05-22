@@ -217,6 +217,37 @@ def test_context_memory_prompt_tail_is_semantic_turn_aware():
     ]
 
 
+def test_context_memory_default_prompt_keeps_small_history_before_budget():
+    memory = ContextRuntimeMemory(context_id="bctx_20260522_ab_ctx-default-window")
+
+    for index in range(1, 8):
+        memory.begin_turn(
+            task_id=f"task_{index:03d}",
+            root_frame_id="frm_root",
+            user_message=f"U{index}",
+        )
+        assert memory.commit_turn(assistant_message=f"A{index}")
+
+    prompt = memory.build_prompt_view()
+
+    assert [(item["role"], item["content"]) for item in prompt] == [
+        ("user", "U1"),
+        ("assistant", "A1"),
+        ("user", "U2"),
+        ("assistant", "A2"),
+        ("user", "U3"),
+        ("assistant", "A3"),
+        ("user", "U4"),
+        ("assistant", "A4"),
+        ("user", "U5"),
+        ("assistant", "A5"),
+        ("user", "U6"),
+        ("assistant", "A6"),
+        ("user", "U7"),
+        ("assistant", "A7"),
+    ]
+
+
 def test_context_memory_prompt_tail_keeps_tool_protocol_group_together():
     memory = ContextRuntimeMemory(context_id="bctx_20260522_ab_ctx-tool-tail")
     memory.limits.update({

@@ -18,6 +18,8 @@ def test_explicit_preset_and_json_override():
     assert budget["source"] == "EXPLICIT+OVERRIDE"
     assert budget["max_output_tokens"] == 6144
     assert budget["max_single_tool_result_chars"] == 24000
+    assert budget["max_prompt_messages"] == 512
+    assert budget["max_visible_messages"] == 768
 
 
 def test_unknown_explicit_preset_falls_back():
@@ -40,6 +42,22 @@ def test_auto_match_default_key_still_reports_auto_source():
 
     assert budget["preset_key"] == "generic.128k"
     assert budget["source"] == "AUTO"
+    assert budget["max_prompt_messages"] == 512
+
+
+def test_prompt_message_budget_can_be_overridden():
+    budget = resolve_model_runtime_budget(
+        {
+            "runtimeBudgetPresetKey": "generic.128k",
+            "runtimeBudgetOverride": {
+                "maxPromptMessages": 64,
+                "maxVisibleMessages": 96,
+            },
+        }
+    )
+
+    assert budget["max_prompt_messages"] == 64
+    assert budget["max_visible_messages"] == 96
 
 
 def test_env_var_preset_hint():

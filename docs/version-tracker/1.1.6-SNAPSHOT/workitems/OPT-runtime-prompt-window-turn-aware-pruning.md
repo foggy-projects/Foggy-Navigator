@@ -7,7 +7,7 @@
 - purpose: 记录真实会话暴露出的 prompt 裁剪边界问题，作为后续消息裁剪、压缩策略和工具结果预算参数设计的跟踪项
 
 版本：`1.1.6-SNAPSHOT`
-状态：第一版已实现，待真实会话验收
+状态：第二版已实现；第三版裁剪/压缩口径已落档，待实现对齐与真实会话验收
 类型：runtime context governance / prompt pruning
 
 ## 背景
@@ -22,9 +22,25 @@ tools/langgraph-biz-worker/data/runtime/sessions/by-date/2026/05/22/fa/bctx_2026
 
 这不是 provider tool protocol 非法问题，但会让 LLM 看到的近期上下文变成语义半轮，不利于稳定推理，也不符合“head-tail + summary”的设计意图。
 
+## 当前问题复盘
+
+真实上游会话：
+
+```text
+tools/langgraph-biz-worker/data/runtime/sessions/by-date/2026/05/22/4b/bctx_20260522_4b_4b0f4945823f4bcea7c1657b99010dcc
+```
+
+`logs/llm-submissions/000011_...json` 显示 `runtime_context_memory.visibleMessages` 仍保存从 `hi` 开始的完整 Root-visible protocol，但 `build_prompt_view()` 由于历史保存的 `maxPromptMessages=12`，只投影了最近 12 条 provider messages：
+
+```text
+system -> U3/tool... -> U4/agent... -> U5
+```
+
+这会在未达到 128k 模型预算、也未触发 compaction 的情况下过早丢弃前两轮 `hi` 和 `随便调个工具`。该行为不符合“模型预算优先，未超预算前尽量保留完整 runtime window；超预算后再 summary + tail”的目标。
+
 ## 当前实现基线
 
-`ContextRuntimeMemory.build_prompt_view()` 当前行为：
+第一版 `ContextRuntimeMemory.build_prompt_view()` 行为：
 
 1. 如果已有 `compactedSummary` 或 `pinned_head_messages`，使用 `pinned head + summary + visible messages`。
 2. 否则使用 `messages[-maxPromptMessages:]`。
@@ -32,7 +48,7 @@ tools/langgraph-biz-worker/data/runtime/sessions/by-date/2026/05/22/fa/bctx_2026
 
 该逻辑能保护 tool protocol，但没有保护普通 user / assistant 语义 turn。
 
-当前默认参数：
+第一版默认参数：
 
 ```json
 {
@@ -108,6 +124,73 @@ tools/langgraph-biz-worker/data/runtime/sessions/by-date/2026/05/22/fa/bctx_2026
 
 第一版已经完成方向 1、方向 2、方向 3 的核心实现：prompt tail 已按语义 turn 裁剪，commit 后 lazy compaction 已接入 LLM summarizer，并保留确定性 fallback。方向 4 的业务工具级 digest/ref 仍需后续按具体工具补 projection。
 
+## 第二版实现
+
+第二版修复真实会话暴露的过早 tail-only 问题：
+
+1. `ContextRuntimeMemory.DEFAULT_LIMITS`
+   - `maxPromptMessages` 从 `12` 调整为 `128`。
+   - `maxVisibleMessages` 从 `24` 调整为 `128`。
+2. `model_runtime_budget.py`
+   - 模型预算 preset 新增 message count 边界：
+     - `generic.32k`: `max_prompt_messages=160`, `max_visible_messages=240`
+     - `generic.128k`: `max_prompt_messages=512`, `max_visible_messages=768`
+     - `generic.200k`: `max_prompt_messages=768`, `max_visible_messages=1024`
+     - `generic.1m`: `max_prompt_messages=2048`, `max_visible_messages=3072`
+   - `runtimeBudgetOverride` / `runtime_budget_override_json` 支持覆盖 `maxPromptMessages` 和 `maxVisibleMessages`。
+3. `root_graph._sync_memory_limits_from_runtime_context(...)`
+   - 每次 turn prepare / refresh / commit 时，从 `llm_config` 解析预算并同步 `maxPromptMessages` / `maxVisibleMessages`。
+   - 这会修正已经落在旧 session root frame 中的 `maxPromptMessages=12`，下一轮提交即可恢复到模型预算对应窗口。
+
+边界策略调整为：
+
+1. message count 只作为安全上限，不再作为 128k/200k 模型下的主要裁剪依据。
+2. 主要裁剪依据仍是 `maxPromptChars` / `maxVisibleChars`，后续可替换为真实 tokenizer。
+3. 真正超过预算时，才由 lazy compaction 生成 `compactedSummary + pinned head + retained tail`。
+
+## 第三版设计口径：裁剪触发压缩，不直接丢弃
+
+后续实现必须区分三类边界：
+
+1. `maxVisibleMessages` / `maxVisibleChars` / 后续 `maxVisibleTokens`
+   - 这是 runtime memory 的压缩触发水位。
+   - 达到水位时，不应直接丢弃中间消息。
+   - 正确行为是保留 pinned head 与 tail，把中间可压缩区间交给 summarizer，生成或增量更新 `compactedSummary`。
+2. `maxPromptMessages` / `maxPromptChars` / 后续 `maxPromptTokens`
+   - 这是提交给 LLM 前的最后安全护栏。
+   - 正常路径下不应依赖它做主要记忆裁剪。
+   - 如果 `build_prompt_view()` 发现 prompt 会因为该护栏切掉历史，应优先在 commit / prepare 阶段触发压缩，再提交 `summary + tail`。
+3. 单条消息 / 单个 tool result 预算
+   - 这是 projection 边界。
+   - 单个 tool result 过大时，应投影为 digest / selected fields / refs。
+   - 完整内容继续保留在 frame report、runtime event log、artifact 或业务证据文件中。
+
+压缩触发条件至少包含两类：
+
+1. 消息数量水位：适合发现长对话、小消息、多工具回合导致的 provider protocol 膨胀。
+2. token/char 水位：适合发现少量大消息、大工具结果、长文本输入导致的上下文膨胀。
+
+当前实现仍使用字符数近似 token。后续引入 tokenizer 后，应将 `maxPromptChars` / `maxVisibleChars` 替换或补充为真实 token 预算；在此之前，字符预算继续作为 fail-safe。
+
+压缩时必须保护以下结构：
+
+1. provider tool protocol 不可拆分：`assistant.tool_calls` 与对应 `tool` result 要么一起进入 tail，要么一起进入 summarizer，不允许只保留孤立 tool result。
+2. 语义 turn 尽量不拆分：普通 user / assistant 回合应按 turn 进入 tail 或 summary。
+3. head / tail 语义优先：保留最早的关键约束、身份、长期用户目标，以及最近 N 个业务回合。
+4. summarized middle 必须可追溯：summary 中记录被压缩区间的 turn 范围、关键实体、已完成工作、未决动作、错误与恢复线索。
+
+压缩失败时：
+
+1. 不能静默丢弃中间消息。
+2. 使用 deterministic fallback summary，至少记录被压缩区间的消息数量、role 分布、用户输入摘要和工具调用名称。
+3. fallback summary 应标记 `summaryQuality=deterministic_fallback`，便于后续排查。
+
+实现收口建议：
+
+1. `commit_turn` 后，先根据 visible window 水位决定是否压缩。
+2. `build_prompt_view` 只负责从已治理的 runtime memory 生成 prompt；如果它触发最后安全护栏，应记录 warning，并在下一次 commit/prepare 前推动压缩。
+3. 对真实 LLM body 的 `llm-submissions` 日志要保留压缩前后的 evidence refs，便于复盘“为什么这条消息没有进入 prompt”。
+
 ## 验收建议
 
 1. 已新增单元测试：`maxPromptMessages` 裁剪后 prompt 不以孤立 assistant 语义消息开头。
@@ -125,6 +208,9 @@ Development:
 - [x] Tool result / tool call args 独立裁剪参数落地。
 - [x] 模型 runtime budget preset 接入 Root memory limits。
 - [x] Root commit lazy compaction 接入 LLM summarizer，并保留 fallback。
+- [x] 第二版调大默认/preset message count，避免 128k 模型下未超预算就只取最近 N 条。
+- [x] 第三版裁剪/压缩语义落档：裁剪水位触发压缩，不直接丢弃。
+- [ ] 将 `build_prompt_view` 最后安全护栏与 commit/prepare 压缩触发的 warning / follow-up 机制进一步对齐。
 - [ ] 真实 LLM smoke 后复核 `llm-submissions` 是否符合预期。
 - [ ] 后续设计真实 tokenizer 与更精确 token 预算。
 
@@ -133,7 +219,7 @@ Testing:
 - [x] `pytest tests/test_context_memory.py tests/test_llm_message_builder.py tests/test_model_runtime_budget.py tests/test_llm_skill_router.py -q`
 - [x] `pytest tests/test_root_graph.py::test_runtime_memory_commit_uses_llm_compaction_summarizer tests/test_context_memory.py -q`
 - [x] `ruff check` 覆盖本次 Python 改动文件。
-- [ ] 全量测试待本轮后续阶段统一跑。
+- [x] `pytest -q` 全量 BizWorker 测试：`645 passed, 6 skipped`。
 
 Experience:
 

@@ -21,6 +21,8 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_system_tokens": 2_048,
         "max_single_tool_result_tokens": 4_096,
         "max_single_tool_result_chars": 16_384,
+        "max_prompt_messages": 160,
+        "max_visible_messages": 240,
     },
     "generic.128k": {
         "context_window_tokens": 131_072,
@@ -32,6 +34,8 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_system_tokens": 4_096,
         "max_single_tool_result_tokens": 12_000,
         "max_single_tool_result_chars": 48_000,
+        "max_prompt_messages": 512,
+        "max_visible_messages": 768,
     },
     "generic.200k": {
         "context_window_tokens": 200_000,
@@ -43,6 +47,8 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_system_tokens": 4_096,
         "max_single_tool_result_tokens": 16_000,
         "max_single_tool_result_chars": 64_000,
+        "max_prompt_messages": 768,
+        "max_visible_messages": 1_024,
     },
     "generic.1m": {
         "context_window_tokens": 1_048_576,
@@ -54,6 +60,8 @@ MODEL_RUNTIME_BUDGET_PRESETS: dict[str, dict[str, Any]] = {
         "prompt_reserve_system_tokens": 8_192,
         "max_single_tool_result_tokens": 32_000,
         "max_single_tool_result_chars": 128_000,
+        "max_prompt_messages": 2_048,
+        "max_visible_messages": 3_072,
     },
 }
 
@@ -74,6 +82,8 @@ _OVERRIDABLE_FIELDS = {
     "prompt_reserve_system_tokens",
     "max_single_tool_result_tokens",
     "max_single_tool_result_chars",
+    "max_prompt_messages",
+    "max_visible_messages",
 }
 
 

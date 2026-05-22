@@ -21,8 +21,8 @@ RUNTIME_VISIBLE_CONVERSATION_KEY = "_runtime_visible_conversation"
 PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY = "_pending_root_turn_protocol_messages"
 
 DEFAULT_LIMITS = {
-    "maxVisibleMessages": 24,
-    "maxPromptMessages": 12,
+    "maxVisibleMessages": 128,
+    "maxPromptMessages": 128,
     "maxPromptChars": 48000,
     "maxMessageChars": 1200,
     "maxToolResultChars": 48000,

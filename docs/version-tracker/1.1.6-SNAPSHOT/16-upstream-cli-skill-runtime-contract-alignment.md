@@ -218,10 +218,10 @@ CLI 已补充 preset 参数，而不是优先暴露所有数字字段：
 
 `model update` 支持同一参数。CLI 输出只显示非敏感模型授权信息，不打印 API key。
 
-如果上游确实需要覆盖少量数值，可以使用：
+ 如果上游确实需要覆盖少量数值，可以使用：
 
 ```powershell
---runtime-budget-override-json '{"maxOutputTokens":8192,"maxSingleToolResultChars":48000}'
+--runtime-budget-override-json '{"maxOutputTokens":8192,"maxSingleToolResultChars":48000,"maxPromptMessages":512,"maxVisibleMessages":768}'
 ```
 
 不建议在第一版 CLI 暴露一长串 token 数字参数。多数场景应通过 `modelName` 自动匹配或显式 preset key 完成。配套 skill 与文档必须继续禁止把这些值塞入 `clientContext` 或用户消息。
