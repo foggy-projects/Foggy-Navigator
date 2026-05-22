@@ -1720,6 +1720,77 @@ class UpstreamCliTest {
         assertFalse(output.contains("new-llm-secret"));
     }
 
+    @Test
+    void workerCreateUsesUpstreamAdminKeyAndStoresWorkerId() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".navigator").resolve("worker.json"), """
+                {"name":"Codex Worker","baseUrl":"http://127.0.0.1:3031","authToken":"worker-secret"}
+                """, StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{"workerId":"w-1","name":"Codex Worker","baseUrl":"http://127.0.0.1:3031","status":"ONLINE"}}
+                """;
+
+        int code = run(new String[]{"upstream", "worker", "create",
+                "--profile", ".navigator/upstream.env",
+                "--file", ".navigator/worker.json",
+                "--target-tenant-id", "tenant-a",
+                "--write-profile"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tempDir.resolve(".navigator").resolve("upstream.env"), StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/workers?targetTenantId=tenant-a", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"authToken\":\"worker-secret\""));
+        assertTrue(profile.contains("NAVI_WORKER_ID=w-1"));
+        assertTrue(output.contains("worker create ok"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+        assertFalse(output.contains("worker-secret"));
+    }
+
+    @Test
+    void modelCreateCanUseUpstreamAdminKeyFallback() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":42,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-owned",
+                  "modelConfigName":"Upstream GPT",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP_OWNED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "create",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--admin-api-key", "naa-secret-admin-key",
+                "--client-app-id", "app-1",
+                "--name", "Upstream GPT",
+                "--model-base-url", "https://llm.example/v1",
+                "--model-name", "gpt-test",
+                "--api-key-env", "UPSTREAM_LLM_KEY"}, env("UPSTREAM_LLM_KEY", "llm-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastClientAppControlKeyHeader);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"apiKey\":\"llm-secret\""));
+        assertTrue(output.contains("model create ok"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+        assertFalse(output.contains("llm-secret"));
+    }
+
     private int run(String[] args, Map<String, String> env) {
         return new UpstreamCli(
                 new PrintStream(stdout, true, StandardCharsets.UTF_8),

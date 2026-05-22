@@ -4,10 +4,13 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.sdk.api.AgentApi;
 import com.foggy.navigator.sdk.api.BusinessAgentApi;
+import com.foggy.navigator.sdk.api.DirectoryApi;
+import com.foggy.navigator.sdk.api.WorkerApi;
 import com.foggy.navigator.sdk.internal.HttpHelper;
 import com.foggy.navigator.sdk.model.AgentTask;
 import com.foggy.navigator.sdk.model.AgentReadiness;
 import com.foggy.navigator.sdk.model.AgentReadinessCheck;
+import com.foggy.navigator.sdk.model.Directory;
 import com.foggy.navigator.sdk.model.SessionListPage;
 import com.foggy.navigator.sdk.model.SessionMessage;
 import com.foggy.navigator.sdk.model.SessionMessagesPage;
@@ -16,6 +19,7 @@ import com.foggy.navigator.sdk.model.SkillArtifactFile;
 import com.foggy.navigator.sdk.model.SkillArtifactSlice;
 import com.foggy.navigator.sdk.model.SkillArtifactTree;
 import com.foggy.navigator.sdk.model.TaskMessagesPage;
+import com.foggy.navigator.sdk.model.Worker;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm;
@@ -152,6 +156,27 @@ public class UpstreamCli {
             case "client-app ensure" -> upstreamClientAppEnsure(args);
             case "client-app ensure-tenant" -> upstreamTenantClientAppEnsure(args);
             case "client-app issue-control-key" -> upstreamClientAppIssueControlKey(args);
+            case "worker", "worker help" -> workerUsage();
+            case "worker list" -> workerList(args);
+            case "worker create" -> workerCreate(args);
+            case "worker get" -> workerGet(args);
+            case "worker update" -> workerUpdate(args);
+            case "worker delete" -> workerDelete(args);
+            case "worker health" -> workerHealth(args);
+            case "worker processes" -> workerProcesses(args);
+            case "worker kill" -> workerKill(args);
+            case "directory", "directory help" -> directoryUsage();
+            case "directory list" -> directoryList(args);
+            case "directory init" -> directoryInit(args);
+            case "directory get" -> directoryGet(args);
+            case "directory delete" -> directoryDelete(args);
+            case "directory env" -> directoryEnv(args);
+            case "directory files" -> directoryFiles(args);
+            case "worker-pool", "worker-pool help" -> workerPoolUsage();
+            case "worker-pool list" -> workerPoolList(args);
+            case "worker-pool create" -> workerPoolCreate(args);
+            case "worker-pool add-member" -> workerPoolAddMember(args);
+            case "worker-pool status" -> workerPoolStatus(args);
             case "account-context list" -> accountContextList(args);
             case "account-context read" -> accountContextRead(args);
             case "account-context write-policy" -> accountContextWritePolicy(args);
@@ -164,7 +189,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-control-key, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-control-key, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files, worker-pool list/create/add-member/status, account-context list, account-context read, account-context write-policy");
         return 0;
     }
 
@@ -188,6 +213,37 @@ public class UpstreamCli {
         out.println("  ensure --target-tenant-id <tenantId> --upstream-ref <ref> [--name <name>] [--tenant-profile <path>] [--write-profile]");
         out.println("  ensure-tenant --source-system <system> --source-tenant-id <id> [--name <name>] [--tenant-profile <path>] [--rotate-credentials] --write-profile");
         out.println("  issue-control-key --client-app-id <id> [--scopes <scope[,scope]>] [--tenant-profile <path>] --write-profile");
+        return 0;
+    }
+
+    private int workerUsage() {
+        out.println("Usage: navi upstream worker <command> [options]");
+        out.println("Commands: list, create, get, update, delete, health, processes, kill");
+        out.println("  list [--target-tenant-id <tenantId>]");
+        out.println("  create --file <json> [--target-tenant-id <tenantId>] [--write-profile]");
+        out.println("  get|delete|health|processes --worker-id <id>");
+        out.println("  update --worker-id <id> --file <json>");
+        out.println("  kill --worker-id <id> --pid <pid> [--force]");
+        return 0;
+    }
+
+    private int directoryUsage() {
+        out.println("Usage: navi upstream directory <command> [options]");
+        out.println("Commands: list, init, get, delete, env, files");
+        out.println("  list [--target-tenant-id <tenantId>] [--worker-id <id>]");
+        out.println("  init --file <json> [--write-profile]");
+        out.println("  get|delete --directory-id <id>");
+        out.println("  env|files --directory-id <id> --file <json>");
+        return 0;
+    }
+
+    private int workerPoolUsage() {
+        out.println("Usage: navi upstream worker-pool <command> [options]");
+        out.println("Commands: list, create, add-member, status");
+        out.println("  list [--target-tenant-id <tenantId>]");
+        out.println("  create --file <json> [--target-tenant-id <tenantId>] [--write-profile]");
+        out.println("  add-member --pool-id <id> --worker-id <workerId> [--target-tenant-id <tenantId>]");
+        out.println("  status --pool-id <id> --status ENABLED|DISABLED [--target-tenant-id <tenantId>]");
         return 0;
     }
 
@@ -531,6 +587,178 @@ public class UpstreamCli {
         out.println("controlApiKey=" + SecretMasker.mask(credential.getControlApiKey()));
         out.println("scopes=" + joinList(credential.getScopes()));
         out.println("expiresAt=" + valueOrEmpty(credential.getExpiresAt()));
+        return 0;
+    }
+
+    private int workerList(CliArguments args) {
+        List<Worker> workers = upstreamAdminWorkerApi()
+                .listWithUpstreamAdmin(optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID"));
+        out.println("workerCount=" + (workers != null ? workers.size() : 0));
+        if (workers != null) {
+            workers.forEach(this::printWorker);
+        }
+        return 0;
+    }
+
+    private int workerCreate(CliArguments args) throws Exception {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        Worker worker = upstreamAdminWorkerApi().createWithUpstreamAdmin(
+                readJsonMap(requiredOption(args, "file", "worker json file")),
+                optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID"));
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_WORKER_ID", valueOrEmpty(worker != null ? worker.getWorkerId() : null));
+        }
+        out.println("worker create ok");
+        printWorker(worker);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_WORKER_ID");
+        }
+        return 0;
+    }
+
+    private int workerGet(CliArguments args) {
+        printWorker(upstreamAdminWorkerApi().getWithUpstreamAdmin(requiredOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID", "worker id")));
+        return 0;
+    }
+
+    private int workerUpdate(CliArguments args) throws Exception {
+        Worker worker = upstreamAdminWorkerApi().updateWithUpstreamAdmin(
+                requiredOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID", "worker id"),
+                readJsonMap(requiredOption(args, "file", "worker json file")));
+        out.println("worker update ok");
+        printWorker(worker);
+        return 0;
+    }
+
+    private int workerDelete(CliArguments args) {
+        String workerId = requiredOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID", "worker id");
+        upstreamAdminWorkerApi().deleteWithUpstreamAdmin(workerId);
+        out.println("worker delete ok");
+        out.println("workerId=" + valueOrEmpty(workerId));
+        return 0;
+    }
+
+    private int workerHealth(CliArguments args) {
+        Worker worker = upstreamAdminWorkerApi().healthCheckWithUpstreamAdmin(
+                requiredOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID", "worker id"));
+        out.println("worker health ok");
+        printWorker(worker);
+        return 0;
+    }
+
+    private int workerProcesses(CliArguments args) throws Exception {
+        printJson(upstreamAdminWorkerApi().listProcessesWithUpstreamAdmin(
+                requiredOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID", "worker id")));
+        return 0;
+    }
+
+    private int workerKill(CliArguments args) throws Exception {
+        printJson(upstreamAdminWorkerApi().killProcessWithUpstreamAdmin(
+                requiredOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID", "worker id"),
+                parseInteger(requiredOption(args, "pid", "process pid")),
+                args.flag("force")));
+        return 0;
+    }
+
+    private int directoryList(CliArguments args) {
+        List<Directory> dirs = upstreamAdminDirectoryApi().listWithUpstreamAdmin(
+                optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID"),
+                optionalOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID"));
+        out.println("directoryCount=" + (dirs != null ? dirs.size() : 0));
+        if (dirs != null) {
+            dirs.forEach(this::printDirectory);
+        }
+        return 0;
+    }
+
+    private int directoryInit(CliArguments args) throws Exception {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        Directory dir = upstreamAdminDirectoryApi().initWithUpstreamAdmin(
+                readJsonMap(requiredOption(args, "file", "directory init json file")));
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_DIRECTORY_ID", valueOrEmpty(dir != null ? dir.getDirectoryId() : null));
+        }
+        out.println("directory init ok");
+        printDirectory(dir);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_DIRECTORY_ID");
+        }
+        return 0;
+    }
+
+    private int directoryGet(CliArguments args) {
+        printDirectory(upstreamAdminDirectoryApi().getWithUpstreamAdmin(
+                requiredOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID", "directory id")));
+        return 0;
+    }
+
+    private int directoryDelete(CliArguments args) {
+        String directoryId = requiredOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID", "directory id");
+        upstreamAdminDirectoryApi().deleteWithUpstreamAdmin(directoryId);
+        out.println("directory delete ok");
+        out.println("directoryId=" + valueOrEmpty(directoryId));
+        return 0;
+    }
+
+    private int directoryEnv(CliArguments args) throws Exception {
+        printJson(upstreamAdminDirectoryApi().updateEnvVarsWithUpstreamAdmin(
+                requiredOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID", "directory id"),
+                readJsonStringMap(requiredOption(args, "file", "env json file"))));
+        return 0;
+    }
+
+    private int directoryFiles(CliArguments args) throws Exception {
+        printJson(upstreamAdminDirectoryApi().updateFilesWithUpstreamAdmin(
+                requiredOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID", "directory id"),
+                readJsonStringMap(requiredOption(args, "file", "files json file"))));
+        return 0;
+    }
+
+    private int workerPoolList(CliArguments args) throws Exception {
+        printJson(upstreamAdminApi().listUpstreamWorkerPools(
+                optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID")));
+        return 0;
+    }
+
+    private int workerPoolCreate(CliArguments args) throws Exception {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        Map<String, Object> pool = upstreamAdminApi().createUpstreamWorkerPool(
+                readJsonMap(requiredOption(args, "file", "worker pool json file")),
+                optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID"));
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_WORKER_POOL_ID", valueOrEmpty(pool != null ? pool.get("poolId") : null));
+        }
+        out.println("worker-pool create ok");
+        printJson(pool);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_WORKER_POOL_ID");
+        }
+        return 0;
+    }
+
+    private int workerPoolAddMember(CliArguments args) {
+        upstreamAdminApi().addUpstreamWorkerPoolMember(
+                requiredOptionOrConfig(args, "pool-id", "NAVI_WORKER_POOL_ID", "worker pool id"),
+                Map.of("workerId", requiredOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID", "worker id")),
+                optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID"));
+        out.println("worker-pool add-member ok");
+        return 0;
+    }
+
+    private int workerPoolStatus(CliArguments args) throws Exception {
+        printJson(upstreamAdminApi().updateUpstreamWorkerPoolStatus(
+                requiredOptionOrConfig(args, "pool-id", "NAVI_WORKER_POOL_ID", "worker pool id"),
+                requiredOption(args, "status", "status"),
+                optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID")));
         return 0;
     }
 
@@ -1157,11 +1385,36 @@ public class UpstreamCli {
                 Duration.ofSeconds(30)));
     }
 
+    private WorkerApi upstreamAdminWorkerApi() {
+        return new WorkerApi(upstreamAdminHttp());
+    }
+
+    private DirectoryApi upstreamAdminDirectoryApi() {
+        return new DirectoryApi(upstreamAdminHttp());
+    }
+
+    private HttpHelper upstreamAdminHttp() {
+        String adminApiKey = config.get("NAVI_ADMIN_API_KEY");
+        if (!hasText(adminApiKey)) {
+            throw new UpstreamCliException("upstream admin credential is required (NAVI_ADMIN_API_KEY)");
+        }
+        return new HttpHelper(
+                config.required("NAVI_BASE_URL", "Navigator base URL"),
+                null,
+                null,
+                config.get("NAVI_TENANT_ID"),
+                null,
+                null,
+                adminApiKey,
+                Duration.ofSeconds(30));
+    }
+
     private BusinessAgentApi businessAgentControlApi() {
         String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
         String adminToken = config.get("NAVI_ADMIN_TOKEN");
-        if (!hasText(controlApiKey) && !hasText(adminToken)) {
-            throw new UpstreamCliException("control-plane credential is required (NAVI_CONTROL_API_KEY; admin fallback: NAVI_ADMIN_TOKEN)");
+        String upstreamAdminApiKey = config.get("NAVI_ADMIN_API_KEY");
+        if (!hasText(controlApiKey) && !hasText(adminToken) && !hasText(upstreamAdminApiKey)) {
+            throw new UpstreamCliException("control-plane credential is required (NAVI_CONTROL_API_KEY; admin fallback: NAVI_ADMIN_TOKEN or NAVI_ADMIN_API_KEY)");
         }
         return new BusinessAgentApi(new HttpHelper(
                 config.required("NAVI_BASE_URL", "Navigator base URL"),
@@ -1169,6 +1422,8 @@ public class UpstreamCli {
                 adminToken,
                 config.get("NAVI_TENANT_ID"),
                 controlApiKey,
+                null,
+                upstreamAdminApiKey,
                 Duration.ofSeconds(30)));
     }
 
@@ -1550,6 +1805,42 @@ public class UpstreamCli {
             throw new UpstreamCliException("json file not found: " + path);
         }
         return new ObjectMapper().readValue(Files.readString(path, StandardCharsets.UTF_8), type);
+    }
+
+    private Map<String, Object> readJsonMap(String file) throws Exception {
+        Path path = cwd.resolve(file).normalize();
+        if (!Files.isRegularFile(path)) {
+            throw new UpstreamCliException("json file not found: " + path);
+        }
+        return new ObjectMapper().readValue(Files.readString(path, StandardCharsets.UTF_8), new TypeReference<>() {});
+    }
+
+    private Map<String, String> readJsonStringMap(String file) throws Exception {
+        Path path = cwd.resolve(file).normalize();
+        if (!Files.isRegularFile(path)) {
+            throw new UpstreamCliException("json file not found: " + path);
+        }
+        return new ObjectMapper().readValue(Files.readString(path, StandardCharsets.UTF_8), new TypeReference<>() {});
+    }
+
+    private void printJson(Object value) throws Exception {
+        String json = new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(value);
+        out.println(redact(json));
+    }
+
+    private void printWorker(Worker worker) {
+        out.println("worker workerId=" + valueOrEmpty(worker != null ? worker.getWorkerId() : null)
+                + " name=" + redact(worker != null ? worker.getName() : null)
+                + " baseUrl=" + redact(worker != null ? worker.getBaseUrl() : null)
+                + " status=" + valueOrEmpty(worker != null ? worker.getStatus() : null)
+                + " authMode=" + valueOrEmpty(worker != null ? worker.getAuthMode() : null));
+    }
+
+    private void printDirectory(Directory dir) {
+        out.println("directory directoryId=" + valueOrEmpty(dir != null ? dir.getDirectoryId() : null)
+                + " workerId=" + valueOrEmpty(dir != null ? dir.getWorkerId() : null)
+                + " projectName=" + redact(dir != null ? dir.getProjectName() : null)
+                + " path=" + redact(dir != null ? dir.getPath() : null));
     }
 
     private void printMessages(List<SessionMessage> messages) {

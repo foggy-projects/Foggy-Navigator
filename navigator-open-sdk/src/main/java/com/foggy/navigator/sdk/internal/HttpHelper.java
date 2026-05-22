@@ -117,6 +117,12 @@ public class HttpHelper {
                 upstreamAdminOnlyHeaders(upstreamAdminApiKeyOverride)), type);
     }
 
+    public <T> T putWithUpstreamAdminAuth(String path, Object body, String upstreamAdminApiKeyOverride,
+                                          TypeReference<T> type) {
+        return execute(buildRequest("PUT", path, body, false,
+                upstreamAdminOnlyHeaders(upstreamAdminApiKeyOverride)), type);
+    }
+
     public <T> T put(String path, Object body, TypeReference<T> type) {
         return execute(buildRequest("PUT", path, body), type);
     }
@@ -127,6 +133,11 @@ public class HttpHelper {
 
     public void delete(String path) {
         execute(buildRequest("DELETE", path, null), new TypeReference<Void>() {});
+    }
+
+    public void deleteWithUpstreamAdminAuth(String path, String upstreamAdminApiKeyOverride) {
+        execute(buildRequest("DELETE", path, null, false,
+                upstreamAdminOnlyHeaders(upstreamAdminApiKeyOverride)), new TypeReference<Void>() {});
     }
 
     /**

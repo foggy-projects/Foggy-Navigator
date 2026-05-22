@@ -176,8 +176,13 @@ public class ClientAppModelConfigGrantService {
         if (!tenantId.equals(model.getTenantId())) {
             throw new IllegalArgumentException("model config tenant mismatch");
         }
-        if (!LANGGRAPH_BIZ_BACKEND.equals(model.getWorkerBackend())) {
-            throw new IllegalArgumentException("model config worker backend must be " + LANGGRAPH_BIZ_BACKEND);
+        String backend = model.getWorkerBackend();
+        boolean isValidBackend = LANGGRAPH_BIZ_BACKEND.equals(backend)
+                || "CLAUDE_CODE".equals(backend)
+                || "OPENAI_CODEX".equals(backend)
+                || "GEMINI_CLI".equals(backend);
+        if (!isValidBackend) {
+            throw new IllegalArgumentException("model config worker backend must be LANGGRAPH_BIZ_BACKEND, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
         }
         return model;
     }

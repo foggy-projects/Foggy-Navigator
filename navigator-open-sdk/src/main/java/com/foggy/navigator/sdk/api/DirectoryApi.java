@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.foggy.navigator.sdk.internal.HttpHelper;
 import com.foggy.navigator.sdk.model.Directory;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -105,5 +107,52 @@ public class DirectoryApi {
     public Map<String, Object> updateFiles(String directoryId, Map<String, String> files) {
         return http.put("/api/v1/open/directories/" + directoryId + "/files",
                 files, new TypeReference<>() {});
+    }
+
+    public Directory initWithUpstreamAdmin(Map<String, Object> params) {
+        return http.postWithUpstreamAdminAuth("/api/v1/upstream-admin/directories/init",
+                params, null, new TypeReference<>() {});
+    }
+
+    public List<Directory> listWithUpstreamAdmin(String targetTenantId, String workerId) {
+        return http.getWithUpstreamAdminAuth("/api/v1/upstream-admin/directories" + query(targetTenantId, workerId),
+                null, new TypeReference<>() {});
+    }
+
+    public Directory getWithUpstreamAdmin(String directoryId) {
+        return http.getWithUpstreamAdminAuth("/api/v1/upstream-admin/directories/" + directoryId,
+                null, new TypeReference<>() {});
+    }
+
+    public void deleteWithUpstreamAdmin(String directoryId) {
+        http.deleteWithUpstreamAdminAuth("/api/v1/upstream-admin/directories/" + directoryId, null);
+    }
+
+    public Map<String, String> updateEnvVarsWithUpstreamAdmin(String directoryId, Map<String, String> envVars) {
+        return http.putWithUpstreamAdminAuth("/api/v1/upstream-admin/directories/" + directoryId + "/env",
+                envVars, null, new TypeReference<>() {});
+    }
+
+    public Map<String, Object> updateFilesWithUpstreamAdmin(String directoryId, Map<String, String> files) {
+        return http.putWithUpstreamAdminAuth("/api/v1/upstream-admin/directories/" + directoryId + "/files",
+                files, null, new TypeReference<>() {});
+    }
+
+    private String query(String targetTenantId, String workerId) {
+        Map<String, String> values = new LinkedHashMap<>();
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            values.put("targetTenantId", targetTenantId);
+        }
+        if (workerId != null && !workerId.isBlank()) {
+            values.put("workerId", workerId);
+        }
+        if (values.isEmpty()) {
+            return "";
+        }
+        return "?" + values.entrySet().stream()
+                .map(e -> URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8)
+                        + "=" + URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8))
+                .reduce((a, b) -> a + "&" + b)
+                .orElse("");
     }
 }

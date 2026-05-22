@@ -100,6 +100,38 @@ public class BusinessAgentApi {
                 + "/control-credentials", form, upstreamAdminApiKey, new TypeReference<>() {});
     }
 
+    public List<Map<String, Object>> listUpstreamWorkerPools(String targetTenantId) {
+        String path = "/api/v1/upstream-admin/worker-pools";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.getWithUpstreamAdminAuth(path, null, new TypeReference<>() {});
+    }
+
+    public Map<String, Object> createUpstreamWorkerPool(Map<String, Object> form, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/worker-pools";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.postWithUpstreamAdminAuth(path, form, null, new TypeReference<>() {});
+    }
+
+    public void addUpstreamWorkerPoolMember(String poolId, Map<String, Object> form, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/worker-pools/" + urlEncode(poolId) + "/members";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        http.postWithUpstreamAdminAuth(path, form, null, new TypeReference<Void>() {});
+    }
+
+    public Map<String, Object> updateUpstreamWorkerPoolStatus(String poolId, String status, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/worker-pools/" + urlEncode(poolId) + "/status";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.putWithUpstreamAdminAuth(path, Map.of("status", status), null, new TypeReference<>() {});
+    }
+
     // ===== Upstream Bootstrap Admin Key Request =====
 
     public UpstreamBootstrapRequestCreatedDTO requestUpstreamAdminKey(CreateUpstreamBootstrapRequestForm form) {

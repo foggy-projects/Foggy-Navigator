@@ -48,6 +48,11 @@ public class UpstreamBootstrapRequestService {
     public static final String SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE = "CLIENT_APP_CONTROL_KEY_ISSUE";
     public static final String SCOPE_CLIENT_APP_ADMIN = "CLIENT_APP_ADMIN";
     public static final String SCOPE_CONTROL_KEY_ISSUE = "CONTROL_KEY_ISSUE";
+    public static final String SCOPE_WORKER_MANAGE = "WORKER_MANAGE";
+    public static final String SCOPE_WORKING_DIRECTORY_MANAGE = "WORKING_DIRECTORY_MANAGE";
+    public static final String SCOPE_WORKER_POOL_MANAGE = "WORKER_POOL_MANAGE";
+    public static final String SCOPE_MODEL_CONFIG_MANAGE = "MODEL_CONFIG_MANAGE";
+    public static final String SCOPE_AGENT_BUNDLE_SYNC = "AGENT_BUNDLE_SYNC";
 
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
     private static final long DEFAULT_REQUEST_TTL_MINUTES = 24 * 60;
@@ -361,7 +366,7 @@ public class UpstreamBootstrapRequestService {
 
     private List<String> normalizeScopes(List<String> scopes) {
         if (scopes == null || scopes.isEmpty()) {
-            return List.of(SCOPE_CLIENT_APP_MANAGE, SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE);
+            return defaultAdminScopes();
         }
         Set<String> normalized = new LinkedHashSet<>();
         for (String scope : scopes) {
@@ -371,7 +376,7 @@ public class UpstreamBootstrapRequestService {
             }
         }
         if (normalized.isEmpty()) {
-            return List.of(SCOPE_CLIENT_APP_MANAGE, SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE);
+            return defaultAdminScopes();
         }
         return List.copyOf(normalized);
     }
@@ -471,8 +476,22 @@ public class UpstreamBootstrapRequestService {
         return switch (normalized) {
             case SCOPE_CLIENT_APP_ADMIN -> SCOPE_CLIENT_APP_MANAGE;
             case SCOPE_CONTROL_KEY_ISSUE -> SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE;
+            case "DIRECTORY_MANAGE", "WORKDIR_MANAGE", "WORKING_DIR_MANAGE" -> SCOPE_WORKING_DIRECTORY_MANAGE;
+            case "CONFIG_MODEL_MANAGE", "CONFIGMODEL_MANAGE" -> SCOPE_MODEL_CONFIG_MANAGE;
+            case "AGENT_MANAGE", "AGENT_SYNC" -> SCOPE_AGENT_BUNDLE_SYNC;
             default -> normalized;
         };
+    }
+
+    private List<String> defaultAdminScopes() {
+        return List.of(
+                SCOPE_CLIENT_APP_MANAGE,
+                SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE,
+                SCOPE_WORKER_MANAGE,
+                SCOPE_WORKING_DIRECTORY_MANAGE,
+                SCOPE_WORKER_POOL_MANAGE,
+                SCOPE_MODEL_CONFIG_MANAGE,
+                SCOPE_AGENT_BUNDLE_SYNC);
     }
 
     private UpstreamBootstrapRequestDTO toDTO(UpstreamBootstrapRequestEntity entity, boolean adminView) {
