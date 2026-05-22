@@ -122,9 +122,12 @@ Root 回合完成规则：
 
 Child / non-root frame 完成规则：
 
-1. 业务 Skill frame 有明确生命周期边界，完成、等待用户补充或需要返回父级时，必须主动调用 `submit_skill_result` 或 `handoff_to_parent`。
+1. 业务 Skill frame 有明确生命周期边界，完成、等待用户补充或需要返回父级时，优先主动调用 `submit_skill_result` 或 `handoff_to_parent`，以便提交结构化状态、refs 与受控退出意图。
 2. BizWorker 不再在 child frame 返回自然语言但未调用终止工具时，追加伪 `human` 提醒消息要求重试。
-3. child frame 未调用终止工具就返回自然语言，视为协议错误；frame 应失败并暴露真实错误，而不是折叠成 max-iterations。
+3. child frame 未调用终止工具但返回自然语言时，按子 Agent 风格归一化处理：
+   - 如果文本明显在追问或请求用户补充，则转为 `WAITING_FOR_USER_INPUT`，child frame 进入 `AWAITING_USER`，下一条用户消息继续直达该 frame。
+   - 否则转为 `FINAL_FOR_USER`，child frame 完成并将摘要/结构化结果按 promoted result 提升给 parent。
+4. child frame 无 tool call 且无自然语言内容，或自然语言归一化后无法通过输出契约，才视为运行时协议错误。
 
 ### 5. system message 内容边界
 
@@ -144,7 +147,7 @@ Child / non-root frame 完成规则：
    - 内部 tracing id 不能当作订单号、运单号或业务单据号。
    - 只能使用已提供工具。
    - root 普通回合可直接用自然语言完成；需要结构化状态时主动调用 `submit_skill_result`。
-   - child frame 完成、等待用户补充或交还父级时，必须主动调用 `submit_skill_result` 或 `handoff_to_parent`。
+   - child frame 完成、等待用户补充或交还父级时，优先主动调用 `submit_skill_result` 或 `handoff_to_parent`；自然语言最终消息会被归一化为子 Agent 结果。
 5. 当前运行时上下文：
    - 运行时日期上下文：时区、业务日期、当前月份范围、相对日期解析规则。
    - active plan 与持久 root plan 策略。

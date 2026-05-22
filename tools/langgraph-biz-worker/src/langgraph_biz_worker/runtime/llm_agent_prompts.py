@@ -125,8 +125,9 @@ def _build_completion_contract_prompt(
             "submit_skill_result 提交本回合结果。"
         )
     return (
-        "只能使用已提供的工具。当前是子技能 frame：完成、等待用户补充或需要返回父级时，"
-        "必须主动调用 submit_skill_result 或 handoff_to_parent；不要直接输出自然语言作为最终结果。"
+        "只能使用已提供的工具。当前是子技能 / 子 Agent frame：完成、等待用户补充或需要返回父级时，"
+        "优先主动调用 submit_skill_result 或 handoff_to_parent，以便提交结构化状态。"
+        "如果只是自然语言完成或追问用户，也可以直接输出最终消息，运行时会将其归一化为子 Agent 结果。"
     )
 
 

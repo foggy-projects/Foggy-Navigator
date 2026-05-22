@@ -350,10 +350,37 @@ class LlmSkillAgent:
                     ))
                     return events
 
-                error = (
-                    "Child skill returned a final assistant message without "
-                    "submit_skill_result or handoff_to_parent"
-                )
+                final_text = _assistant_response_text(response)
+                if final_text:
+                    validation = self._submit_child_plain_assistant_response(
+                        frame_id=frame_id,
+                        summary=final_text,
+                    )
+                    frame = self._runtime.get_frame(frame_id)
+                    if validation.ok:
+                        report_payload = _execution_report_payload_from_frame(frame)
+                        structured_output = frame.output if frame else {}
+                        events.append(QueryEvent(
+                            type="skill_result_submit",
+                            task_id=task_id,
+                            skill_frame_id=frame_id,
+                            parent_frame_id=frame.parent_frame_id if frame else None,
+                            skill_id=event_skill_id,
+                            presentation_hint=event_presentation_hint,
+                            content=json.dumps({
+                                "ok": True,
+                                "assistant_message": True,
+                                "turn_status": structured_output.get("turn_status"),
+                                "structured_output": structured_output,
+                            }, ensure_ascii=False),
+                            tool_name="assistant_message",
+                            execution_report_ref=report_payload.get("execution_report_ref"),
+                            execution_report_digest=report_payload.get("execution_report_digest"),
+                        ))
+                        return events
+                    error = "Child assistant response failed output contract: " + "; ".join(validation.errors)
+                else:
+                    error = "Child assistant returned no tool call and no final content"
                 self._runtime.fail_frame(frame_id, error)
                 events.append(QueryEvent(
                     type="error",
@@ -546,6 +573,29 @@ class LlmSkillAgent:
             return
         frame.private_working_state[PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY] = protocol
         self._runtime.save_frame(frame)
+
+    def _submit_child_plain_assistant_response(self, *, frame_id: str, summary: str):
+        structured_output = {
+            "turn_status": (
+                "WAITING_FOR_USER_INPUT"
+                if _assistant_text_requests_user_input(summary)
+                else "FINAL_FOR_USER"
+            ),
+            "message": summary,
+            "completion_mode": "assistant_message",
+        }
+        if structured_output["turn_status"] == "WAITING_FOR_USER_INPUT":
+            structured_output["user_message"] = summary
+            return self._runtime.submit_user_input_request(
+                frame_id=frame_id,
+                summary=summary,
+                structured_output=structured_output,
+            )
+        return self._runtime.submit_result(
+            frame_id=frame_id,
+            summary=summary,
+            structured_output=structured_output,
+        )
 
     def _execute_tool_call(
         self,
@@ -1059,6 +1109,42 @@ def _assistant_response_text(response: Any) -> str:
         return json.dumps(content, ensure_ascii=False)
     except Exception:
         return str(content).strip()
+
+
+def _assistant_text_requests_user_input(text: str) -> bool:
+    normalized = text.strip().lower()
+    if not normalized:
+        return False
+    if "?" in text or "？" in text:
+        return True
+    zh_markers = (
+        "请告诉我",
+        "请提供",
+        "需要您提供",
+        "需要你提供",
+        "请回复",
+        "请选择",
+        "请确认",
+        "请补充",
+        "请说明",
+        "还需要",
+        "哪种",
+        "哪个",
+        "是否",
+    )
+    en_markers = (
+        "please provide",
+        "please tell me",
+        "please confirm",
+        "could you",
+        "can you provide",
+        "which",
+        "what type",
+        "need you to",
+    )
+    return any(marker in text for marker in zh_markers) or any(
+        marker in normalized for marker in en_markers
+    )
 
 
 def _mark_runtime_memory_finalizing(runtime_context: dict[str, Any] | None) -> None:

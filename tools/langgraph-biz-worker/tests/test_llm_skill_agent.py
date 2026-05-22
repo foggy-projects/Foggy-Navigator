@@ -1970,7 +1970,7 @@ def test_llm_agent_persistent_root_accepts_plain_assistant_final_answer():
     assert markers == ["finalizing"]
 
 
-def test_llm_agent_child_plain_assistant_answer_fails_protocol_without_retry():
+def test_llm_agent_child_plain_assistant_answer_completes_as_subagent_result():
     runtime = _root_with_child_runtime()
     root_id = runtime.invoke_skill(
         task_id="task_child_plain_final_001",
@@ -1990,12 +1990,42 @@ def test_llm_agent_child_plain_assistant_answer_fails_protocol_without_retry():
 
     child = runtime.get_frame(child_id)
     assert model.calls == 1
-    assert child.status == FrameStatus.FAILED
-    assert any(
-        event.type == "error"
-        and "submit_skill_result or handoff_to_parent" in event.error
-        for event in events
+    assert child.status == FrameStatus.COMPLETED
+    assert child.result_summary == "我已经完成了。"
+    assert child.output["turn_status"] == "FINAL_FOR_USER"
+    assert child.output["completion_mode"] == "assistant_message"
+    assert [event.type for event in events] == ["skill_result_submit"]
+    assert events[0].tool_name == "assistant_message"
+
+
+def test_llm_agent_child_plain_assistant_clarification_pauses_for_user():
+    runtime = _root_with_child_runtime()
+    root_id = runtime.invoke_skill(
+        task_id="task_child_plain_waiting_user_001",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
     )
+    child_id = runtime.invoke_child_skill(root_id, "child_skill")
+    prompt = "请告诉我您想创建哪种类型的工单？"
+    model = FakeToolCallModel([
+        AIMessage(content=prompt),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_child_plain_waiting_user_001",
+        frame_id=child_id,
+        prompt="继续",
+    )
+
+    child = runtime.get_frame(child_id)
+    assert model.calls == 1
+    assert child.status == FrameStatus.AWAITING_USER
+    assert child.result_summary == prompt
+    assert child.output["turn_status"] == "WAITING_FOR_USER_INPUT"
+    assert child.private_working_state["turn_status"] == "WAITING_FOR_USER_INPUT"
+    assert child.private_working_state["awaiting_user_input"]["user_message"] == prompt
+    assert [event.type for event in events] == ["skill_result_submit"]
+    assert events[0].tool_name == "assistant_message"
 
 
 def test_llm_agent_child_waiting_for_user_input_keeps_frame_open():
@@ -2089,6 +2119,46 @@ def test_llm_agent_invoke_business_skill_bubbles_waiting_user_focus():
     assert root.private_working_state["active_focus_frame_id"] == child_id
     assert root.private_working_state["active_focus_status"] == "AWAITING_USER"
     assert child.status == FrameStatus.AWAITING_USER
+
+
+def test_llm_agent_invoke_business_skill_plain_clarification_bubbles_waiting_user_focus():
+    runtime = _root_with_child_runtime()
+    root_id = runtime.invoke_skill(
+        task_id="task_child_plain_waiting_user_002",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+    prompt = "请告诉我您想创建哪种类型的工单？"
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child",
+            "name": "invoke_business_skill",
+            "args": {
+                "skill_id": "child_skill",
+                "instruction": "引导用户选择工单类型。",
+            },
+        }]),
+        AIMessage(content=prompt),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_child_plain_waiting_user_002",
+        frame_id=root_id,
+        prompt="你可以帮我提交工单吗",
+        persistent_frame=True,
+    )
+
+    root = runtime.get_frame(root_id)
+    child_id = root.child_frame_ids[-1]
+    child = runtime.get_frame(child_id)
+    assert model.calls == 2
+    assert root.status == FrameStatus.WAITING_CHILD
+    assert root.result_summary == prompt
+    assert root.private_working_state["active_focus_frame_id"] == child_id
+    assert root.private_working_state["active_focus_status"] == "AWAITING_USER"
+    assert child.status == FrameStatus.AWAITING_USER
+    assert child.private_working_state["awaiting_user_input"]["user_message"] == prompt
+    assert any(event.tool_name == "assistant_message" for event in events)
 
 
 def test_llm_agent_invoke_business_skill_direct_returns_final_for_user():
