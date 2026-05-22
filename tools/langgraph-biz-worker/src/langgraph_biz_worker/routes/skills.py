@@ -7,17 +7,16 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import logging
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from ..auth import verify_token
 from ..config import settings
-from ..runtime.skill_git_sync import SyncResult, sync_public_skills
+from ..runtime.skill_git_sync import sync_public_skills
 
 logger = logging.getLogger(__name__)
 

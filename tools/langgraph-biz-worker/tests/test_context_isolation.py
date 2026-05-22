@@ -17,7 +17,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from langgraph_biz_worker.main import app
-from langgraph_biz_worker.models import FrameStatus, QueryEvent
+from langgraph_biz_worker.models import FrameStatus
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 
 
@@ -235,7 +235,6 @@ class TestE2EContextIsolation:
         # No private data in any event
         for event in events:
             so = event.get("structured_output") or {}
-            content = event.get("content", "")
             assert "private_messages" not in so, f"private_messages leaked in {event['type']}"
             assert "private_working_state" not in so, f"private_working_state leaked in {event['type']}"
             assert "gc_scratch" not in str(so), f"grandchild scratch leaked in {event['type']}"

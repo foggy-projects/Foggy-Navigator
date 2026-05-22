@@ -4,6 +4,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from langgraph_biz_worker import SkillAgent
+from langgraph_biz_worker.runtime.file_layout import require_standard_context_id
 from langgraph_biz_worker.tools import LocalPythonToolProvider
 
 
@@ -65,6 +66,25 @@ class OneToolThenSubmitModel:
         }])
 
 
+class SubmitOnlyModel:
+    def __init__(self) -> None:
+        self.bound_tools = []
+
+    def bind_tools(self, tools):
+        self.bound_tools = tools
+        return self
+
+    def invoke(self, messages):
+        return AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {},
+            },
+        }])
+
+
 def _write_skill(skills_root, skill_name: str, tools: str = "query_order") -> None:
     skill_dir = skills_root / skill_name
     skill_dir.mkdir(parents=True)
@@ -102,6 +122,44 @@ async def test_skill_agent_ask_invokes_provider_tool_by_skill_name(tmp_path):
     assert result["structured_output"] == {"order_id": "O-1001", "status": "OPEN"}
     assert provider.calls[0]["tool_name"] == "query_order"
     assert {tool["function"]["name"] for tool in model.bound_tools} >= {"query_order", "submit_skill_result"}
+
+
+@pytest.mark.asyncio
+async def test_skill_agent_ask_generates_standard_context_directory_when_missing(tmp_path):
+    skills_root = tmp_path / "skills"
+    skill_dir = skills_root / "simple-assistant"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: simple_internal
+description: Simple helper
+---
+
+Submit a concise result.
+""",
+        encoding="utf-8",
+    )
+    data_root = tmp_path / "data"
+    agent = SkillAgent(skills_root, data_root=data_root, model_provider=SubmitOnlyModel())
+
+    result = await agent.ask(skill_name="simple-assistant", message="hello")
+
+    assert result["ok"] is True
+    session_dirs = [
+        path
+        for path in (data_root / "runtime" / "sessions" / "by-date").rglob("bctx_*")
+        if path.is_dir()
+    ]
+    assert len(session_dirs) == 1
+    require_standard_context_id(session_dirs[0].name)
+    non_standard_session_dirs = [
+        path
+        for path in (data_root / "runtime" / "sessions" / "by-date").rglob("*")
+        if path.is_dir()
+        and (path / "frames").is_dir()
+        and not path.name.startswith("bctx_")
+    ]
+    assert non_standard_session_dirs == []
 
 
 @pytest.mark.asyncio

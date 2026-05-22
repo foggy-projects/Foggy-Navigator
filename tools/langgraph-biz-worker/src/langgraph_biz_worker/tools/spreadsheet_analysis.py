@@ -123,7 +123,7 @@ def _analyze_xlsx(
 ) -> dict[str, Any]:
     try:
         from openpyxl import load_workbook
-        from openpyxl.utils.cell import get_column_letter, range_boundaries
+        from openpyxl.utils.cell import range_boundaries
     except ImportError as exc:
         raise SpreadsheetAnalysisError(
             "SPREADSHEET_DEPENDENCY_MISSING",

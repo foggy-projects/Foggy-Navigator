@@ -368,6 +368,7 @@ def test_run_skill_passes_account_id_to_llm_agent(tmp_path, monkeypatch):
     agent = CapturingAgent()
     monkeypatch.setattr(root_module, "_runtime", runtime)
     monkeypatch.setattr(root_module, "_llm_skill_agent", agent)
+    monkeypatch.setattr(root_module.settings, "llm_execute_skills", True)
 
     root_module.run_skill({
         "task_id": "task-run-skill-account",

@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage
 
 from ..models import FrameStatus, QueryEvent
 from .execution_policy import ExecutionPolicy, strip_execution_policy_context
+from .file_layout import generate_standard_context_id, require_standard_context_id
 from .frame_store import FrameStore
 from .llm_skill_agent import LlmSkillAgent
 from .skill_identity import SkillNameValidationError, validate_skill_name
@@ -222,11 +223,17 @@ class SkillAgent:
         runtime_context = dict(context or {})
         task_id = str(runtime_context.get("task_id") or f"task_{uuid.uuid4().hex[:12]}")
         account_id = _string_or_none(runtime_context.get("account_id") or runtime_context.get("accountId"))
+        conversation_id = _conversation_id_from_context(runtime_context) or generate_standard_context_id()
+        runtime_context["contextId"] = conversation_id
         ExecutionPolicy.from_context(runtime_context)
         frame_id = self._runtime.invoke_skill(
             task_id=task_id,
             skill_id=normalized_skill_name,
             skill_input=strip_execution_policy_context(runtime_context),
+            conversation_id=conversation_id,
+            session_id=conversation_id,
+            current_task_id=task_id,
+            origin_task_id=task_id,
         )
         runtime_context["task_id"] = task_id
         runtime_context["skill_name"] = normalized_skill_name
@@ -288,6 +295,14 @@ class _SubmitOnlyModel:
 
 def _string_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _conversation_id_from_context(context: Mapping[str, Any]) -> str | None:
+    for key in ("contextId", "context_id", "conversationId", "conversation_id"):
+        value = context.get(key)
+        if isinstance(value, str) and value.strip():
+            return require_standard_context_id(value)
+    return None
 
 
 def _event_to_dict(event: QueryEvent) -> dict[str, Any]:

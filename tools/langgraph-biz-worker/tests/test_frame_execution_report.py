@@ -112,7 +112,7 @@ def test_generate_report_includes_child_frame_digest(tmp_path):
         / "reports" / "frm_child.md"
     )
     assert child_report_path.exists()
-    assert "| frm_child | address_verify | SKILL | COMPLETED | Address verified." in report.markdown
+    assert "| frm_child | address_verify |  | SKILL | COMPLETED | Address verified." in report.markdown
     assert report.digest["child_reports"][0]["report_ref"] == "frame-report://task_001/frm_child"
     assert report.digest["child_reports"][0]["summary"] == "Address verified."
 

@@ -7,9 +7,8 @@ Worker only runs on Linux; all path validation assumes POSIX semantics.
 from __future__ import annotations
 
 import logging
-import os
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Sequence
 from .execution_policy import ExecutionPolicy
 
@@ -233,8 +232,8 @@ class AccountPathGuard:
 
         raise PathGuardError(
             ERR_FORBIDDEN,
-            f"list_files only allowed at: skills/, skills/<name>/, "
-            f"skills/<name>/references/, skills/<name>/assets/",
+            "list_files only allowed at: skills/, skills/<name>/, "
+            "skills/<name>/references/, skills/<name>/assets/",
         )
 
     def _validate_skill_name(self, name: str) -> None:

@@ -9,9 +9,9 @@ import pytest
 from pydantic import ValidationError
 
 from langgraph_biz_worker.models import QueryEvent, QueryRequest
-from langgraph_biz_worker.graphs.root_graph import _build_attachment_context_prompt
 from langgraph_biz_worker.routes.query import _event_generator, _resolve_context_id, _resolve_session_id
 from langgraph_biz_worker.routes.health import active_tasks
+from langgraph_biz_worker.runtime.attachment_context import build_attachment_context_prompt
 
 
 @pytest.mark.asyncio
@@ -140,7 +140,7 @@ def test_query_request_rejects_conflicting_skill_name_aliases():
 
 
 def test_attachment_context_prompt_sanitizes_url_and_keeps_metadata():
-    prompt = _build_attachment_context_prompt([
+    prompt = build_attachment_context_prompt([
         {
             "id": "att-1",
             "name": "pod-photo.png",

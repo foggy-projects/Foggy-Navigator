@@ -5,7 +5,6 @@ import json
 import pytest
 
 from langgraph_biz_worker.models import FrameStatus
-from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 
 
 @pytest.mark.asyncio
@@ -16,7 +15,6 @@ async def test_child_skill_frame_appears_in_events(client):
         json={"prompt": "analyze", "context": {"order_id": "100"}},
     )
     events = _parse_sse_events(resp.text)
-    event_types = [e["type"] for e in events]
 
     # Parent frame
     parent_opens = [e for e in events if e["type"] == "skill_frame_open" and e.get("skill_id") == "exception_triage"]
