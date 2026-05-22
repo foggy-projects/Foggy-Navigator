@@ -13,6 +13,7 @@ from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_state_for_tests
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
+from langgraph_biz_worker.runtime.context_memory import PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 from langgraph_biz_worker.config import settings
@@ -250,6 +251,87 @@ def _root_with_child_runtime(child_context_visibility: str = "isolated", data_ro
         skill_registry=registry,
         journal=FileFrameJournal(data_root) if data_root is not None else None,
     )
+
+
+def test_llm_agent_invokes_client_app_public_skill_from_runtime_context(tmp_path):
+    client_app_id = "capp_test_public_skill"
+    skills_root = tmp_path / "skills"
+    skill_dir = skills_root / "public" / "apps" / client_app_id / "tms-ticket-agent"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """
+---
+name: tms-ticket-agent
+description: Ticket skill.
+allowed-tools: submit_skill_result
+metadata:
+  display_name: TMS Ticket Agent
+  visibility: public
+  context-visibility: isolated
+  client_app_id: capp_test_public_skill
+  promote-to-parent:
+    - result_summary
+    - structured_output
+---
+
+# Ticket skill
+""".strip(),
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(skills_root=skills_root, data_root=tmp_path / "data")
+    registry.register(SkillManifest(
+        id="system.root",
+        name="system.root",
+        description="Persistent root skill.",
+        output_schema={"type": "object"},
+        allowed_tools=["invoke_business_skill", "submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+        visibility="builtin",
+        context_visibility="passthrough",
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    root_id = runtime.invoke_skill(
+        task_id="task_client_app_public_skill_001",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_public_skill",
+            "name": "invoke_business_skill",
+            "args": {
+                "skill_name": "tms-ticket-agent",
+                "instruction": "Collect ticket fields.",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child_done",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Ticket fields are required.",
+                "structured_output": {
+                    "turn_status": "FINAL_FOR_USER",
+                    "message": "Ticket fields are required.",
+                },
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_client_app_public_skill_001",
+        frame_id=root_id,
+        prompt="Help me create a ticket",
+        runtime_context={"client_app_id": client_app_id},
+        persistent_frame=True,
+    )
+
+    root = runtime.get_frame(root_id)
+    child = runtime.get_frame(root.child_frame_ids[-1])
+    assert model.calls == 2
+    assert child.skill_id == "tms-ticket-agent"
+    assert child.status == FrameStatus.COMPLETED
+    assert root.output["message"] == "Ticket fields are required."
+    assert not any("Skill manifest not found" in (event.error or "") for event in events)
 
 
 def test_llm_agent_completes_skill_via_submit_tool():
@@ -1680,6 +1762,39 @@ def test_llm_agent_reconsiders_terminal_submit_when_queued_input_arrives_before_
     )
     assert "U2 arrived before stale submit ran" in second_prompt
     assert "Stale answer." not in second_prompt
+
+
+def test_llm_agent_persistent_frame_stores_root_turn_protocol():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_protocol_store_001",
+        skill_id="system.root",
+        skill_input={"request": "start"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Protocol stored.",
+                "structured_output": {"message": "Protocol stored."},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_root_protocol_store_001",
+        frame_id=frame_id,
+        prompt="U1",
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    protocol = frame.private_working_state[PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY]
+    assert any(event.type == "skill_result_submit" for event in events)
+    assert [item["role"] for item in protocol] == ["user", "assistant", "tool"]
+    assert protocol[1]["toolCalls"][0]["id"] == "call_submit"
+    assert protocol[2]["toolCallId"] == "call_submit"
 
 
 def test_llm_agent_records_submitted_summary_without_backend_rewrite(monkeypatch):

@@ -13,8 +13,8 @@
 ## 状态
 
 - status: design-discussion
-- date: 2026-05-21
-- coding_status: not-started
+- date: 2026-05-22
+- coding_status: root-visible-protocol-implemented
 
 ## 与已有文档的关系
 
@@ -35,8 +35,8 @@
 2. BizWorker 保存完整 frame/report/log/journal/diagnostic evidence，用于排障、审计和恢复。
 3. BizWorker 提交给 LLM 的上下文必须是 bounded runtime context。
 4. `recentConversation` 不应继续表示“上游传来的最近完整历史”，目标语义应升级为 BizWorker 维护的 `runtimeVisibleConversation`。
-5. Tool call / tool result / Skill 内部过程是 execution trace，不是下一轮默认可见的 semantic conversation。
-6. 正常 Skill 完成后，下一轮 LLM 默认看到用户与助手的语义轮次，而不是 raw tool call 协议。
+5. Root frame 可见的 tool call / tool result 是 LLM runtime protocol，不是 UI transcript，但需要进入后续 bounded runtime context，直到压缩或裁剪。
+6. Skill 内部过程仍是 child-private execution trace；正常 Skill 完成后，Root 只能看到 `invoke_business_skill` 的 promoted result / digest / refs，不展开 child 内部 raw tool call 协议。
 7. 中断恢复状态是 runtime control state，应按规则进入 prompt，但不等同于一条普通 assistant/user 对话。
 
 ## 命名建议
@@ -61,7 +61,8 @@ runtimeVisibleConversation = BizWorker 维护的、下一轮 LLM 可见的语义
 
 ```text
 recentConversation = deprecated external compatibility input
-runtimeVisibleConversation = BizWorker-owned prompt assembly source of truth
+runtimeVisibleProtocol = BizWorker-owned prompt assembly source of truth
+runtimeVisibleConversation = runtimeVisibleProtocol 中的 user/assistant 语义投影
 ```
 
 ## 上下文分层
@@ -83,9 +84,9 @@ runtimeVisibleConversation = BizWorker-owned prompt assembly source of truth
 
 不作为 BizWorker prompt assembly 的权威来源。
 
-### 2. Runtime Visible Conversation
+### 2. Runtime Visible Protocol
 
-LLM 下一轮需要看到的语义窗口。
+LLM 下一轮需要看到的 bounded protocol window。
 
 所属方：
 
@@ -93,18 +94,18 @@ LLM 下一轮需要看到的语义窗口。
 
 内容：
 
-1. 最近用户消息
-2. 最近面向用户的 assistant 最终回复
-3. 必要 metadata，例如 skillId、frameId、reportRef、artifactRefs、promoted digest
-4. compacted summary 引用或摘要
+1. 最近用户消息。
+2. 最近面向用户的 assistant 最终回复。
+3. Root frame 可见的 assistant tool_call 和匹配 tool result。
+4. 必要 metadata，例如 skillId、frameId、reportRef、artifactRefs、promoted digest。
+5. compacted summary 引用或摘要。
 
 不包含：
 
-1. raw tool call
-2. raw tool result
-3. Skill 内部 LLM 消息栈
-4. diagnostic logs
-5. 未经压缩的大块工具输出
+1. child Skill 内部 raw tool call / tool result。
+2. child Skill 内部 LLM 消息栈。
+3. diagnostic logs。
+4. 未经压缩的大块工具输出。
 
 ### 3. Execution Trace
 
@@ -158,7 +159,7 @@ LLM 下一轮需要看到的语义窗口。
 
 ## Visible Turn 结构草案
 
-BizWorker 侧 `runtimeVisibleConversation` 建议维护为 bounded list。
+BizWorker 侧建议维护 `runtimeVisibleProtocol` bounded list；其中 `user` / `assistant` 文本消息形成 `runtimeVisibleConversation` 语义投影，`assistant.tool_calls` / `tool` 消息用于保留 provider 协议连续性。
 
 ```json
 {
@@ -185,11 +186,11 @@ BizWorker 侧 `runtimeVisibleConversation` 建议维护为 bounded list。
 
 | 字段 | 规则 |
 | --- | --- |
-| `role` | 只允许 `user` / `assistant`，除非后续显式设计 system visible turn |
+| `role` | 允许 `user` / `assistant` / `tool`；`system` 仍由 prompt builder 当前轮组装，不作为历史消息持久化 |
 | `content` | 面向下一轮 LLM 的自然语言语义内容，应接近用户可见最终回复 |
 | `metadata.source` | `root` / `skill` / `compaction` / `recovery` 等 |
 | `metadata.reportRef` | 指向完整执行证据，不展开 report |
-| `metadata.promotedResultDigest` | 只放 compact digest，不放 raw tool result |
+| `metadata.promotedResultDigest` | 对 child Skill 只放 compact digest，不展开 child raw tool result |
 | `metadata.skillFrameId` | 调试定位用，普通用户回复不直接暴露 |
 
 ## Tool Call 可见性规则
@@ -214,35 +215,36 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 
 该 JSONL 记录同一 frame 内真实参与 LLM loop 的协议事件，包括初始 messages、assistant response、assistant tool_call、tool_result 和 checkpoint。它不是 UI transcript，也不是下一轮普通 semantic conversation；它用于未完成 frame 的恢复，避免恢复时只拿到孤立 tool_result 而丢失前置 assistant tool_call。
 
-### 下一轮 runtimeVisibleConversation
+### 下一轮 runtimeVisibleProtocol
 
-下一轮默认不重放 raw tool call。
+下一轮默认保留 Root frame 可见 tool protocol，但不展开 child-private trace。
 
 正常 Skill 完成后，下一轮应看到：
 
 ```text
-U1 -> A1 -> U2
+U1 -> assistant.tool_call(invoke_business_skill) -> tool_result(promoted S1) -> A1 -> U2
 ```
 
 其中：
 
 1. `A1` 是面向用户的 assistant 最终回复。
 2. 如果 `A1` 来源于 Skill，可以在 metadata 中挂 `skillFrameId`、`reportRef`、`promotedResultDigest`。
-3. `tool_call(invoke_business_skill)` 和 `tool_result(S1)` 不作为普通 visible turn 注入。
+3. `tool_call(invoke_business_skill)` 和匹配 `tool_result(promoted S1)` 是 Root frame 的 provider protocol，应保留给下一轮 LLM。
+4. `promoted S1` 只能包含 child frame 提升后的受控结果，不包含 child 内部 raw tool chain。
 
-因此不采用：
-
-```text
-U1 -> tool_call -> S1 -> U2
-```
-
-也不采用：
+因此不采用只保留语义轮次的旧口径：
 
 ```text
-U1 -> tool_call(skill调用及结果S1) -> U2
+U1 -> A1 -> U2
 ```
 
-除非用户明确追问执行过程，此时应通过 `reportRef` / `logRef` 按需读取、裁剪和摘要。
+也不采用把 child 内部过程直接外泄为 Root 历史：
+
+```text
+U1 -> child.internal.tool_call -> child.internal.tool_result -> U2
+```
+
+如果用户明确追问执行过程，Root 可以通过 `reportRef` / `logRef` 按需读取、裁剪和摘要更多 execution evidence。
 
 ## Skill 正常完成场景
 
@@ -250,10 +252,12 @@ U1 -> tool_call(skill调用及结果S1) -> U2
 
 用户发送 `U1`，Root LLM 调用 Skill，Skill 返回 `S1`，最终对用户输出 `A1`。用户再发送 `U2`。
 
-目标下一轮 prompt 的语义窗口：
+目标下一轮 prompt 的 Root-visible protocol window：
 
 ```text
 user: U1
+assistant: tool_call(invoke_business_skill)
+tool: promoted S1
 assistant: A1
 user: U2
 ```
@@ -270,7 +274,7 @@ A1 ~= S1.user_message / S1.result_summary
 A1 = Parent 基于 S1.promoted_result 生成的最终回复
 ```
 
-`S1` 的 raw structured output 不直接作为 assistant content 展开，只允许以 compact metadata / digest 进入。
+`S1` 在 Root 侧只能是 child promoted result。child raw structured output、内部 tool result 和 private LLM stack 不直接展开；需要进入 Root 的信息必须先经过 promotion / digest / refs。
 
 ### Nested completion unwind
 
@@ -428,7 +432,7 @@ Recoverable interruption 在路由层默认恢复到当前 focus stack 的 deepe
 只有当没有可直达的 focus leaf，或后续 leaf 明确交还 Parent 时，Root prompt 才需要包含：
 
 1. 当前用户消息 `U2`
-2. bounded `runtimeVisibleConversation`
+2. bounded `runtimeVisibleProtocol`
 3. `_recoverable_interruption` control block
 4. continuation summary / latest child promoted summary
 5. active plan 或其他 compact working state
@@ -465,7 +469,7 @@ Root fallback 场景才需要判断：
    - active focus / awaiting user 优先走确定性路由
    - recoverable interruption 进入 Root 意图判断
 3. compacted runtime summary
-4. bounded `runtimeVisibleConversation`
+4. bounded `runtimeVisibleProtocol`
 5. current user message
 6. current explicit request context
 7. attachments / execution policy
@@ -499,17 +503,19 @@ runtime/
 
 说明：
 
-1. `runtime-visible-conversation.jsonl`
-   - 只保存 bounded semantic turns。
-   - 不保存 raw tool call。
-2. `compacted-summary.json`
+1. `runtime-visible-protocol.jsonl`
+   - 保存 Root frame 可见的 bounded provider protocol window，包括 user / assistant / tool。
+   - 不保存 child-private raw tool chain。
+2. `runtime-visible-conversation.jsonl`
+   - 可选 mirror，仅保存 user / assistant semantic projection，便于人工阅读和 UI 对账。
+3. `compacted-summary.json`
    - 上下文压缩后的长期运行摘要。
-3. `recovery-state.json`
+4. `recovery-state.json`
    - 当前 active focus / recoverable interruption 的索引视图。
    - 权威状态仍以 frame/journal 为准。
-4. `execution-digests.jsonl`
+5. `execution-digests.jsonl`
    - 每轮 task/frame 的 compact execution digest。
-5. `memory-index.json`
+6. `memory-index.json`
    - 最近 task/frame/report/artifact 快速定位索引。
 
 是否落成独立文件仍需结合现有 file layout 设计；本阶段先固定语义边界。
@@ -525,7 +531,7 @@ runtime/
 
 ### 中期
 
-1. BizWorker 写入 `runtimeVisibleConversation`。
+1. BizWorker 写入 `runtimeVisibleProtocol`，并可派生 `runtimeVisibleConversation` 语义投影。
 2. Root prompt 优先读取 BizWorker memory。
 3. Java `recentConversation` 只作为兼容兜底，不作为默认 prompt 输入。
 4. 正常完成、awaiting-user、recoverable interruption 都写入统一 memory/digest。
@@ -535,20 +541,20 @@ runtime/
 1. 上游只传 `contextId`、当前用户消息和显式请求上下文。
 2. BizWorker 仅凭 `contextId` 恢复 runtime context。
 3. Java/UI 完整 transcript 与 BizWorker runtime context 解耦。
-4. Tool call / Skill internal trace 全部留在 evidence，不进入默认 semantic turns。
+4. Root-visible tool protocol 进入 bounded runtime context；Skill internal trace 全部留在 child evidence，不进入 Root semantic projection。
 
 ## 验收标准
 
 进入开发后，至少满足：
 
 1. 普通下一轮 prompt 不依赖 Java `SessionMessageRepository` 生成的 `recentConversation`。
-2. Skill 正常完成后，下一轮 visible context 是 `U1 -> A1 -> U2`，不是 `U1 -> tool_call -> tool_result -> U2`。
-3. `A1` 可以携带 Skill metadata / digest / refs，但不展开 raw tool result。
+2. Skill 正常完成后，下一轮 Root visible protocol 包含 `U1 -> tool_call(invoke_business_skill) -> tool_result(promoted S1) -> A1 -> U2`。
+3. `A1` 和 `tool_result(promoted S1)` 可以携带 Skill metadata / digest / refs，但不展开 child raw tool result。
 4. `AWAITING_USER` 下一轮消息仍确定性接回原 child Skill frame。
 5. recoverable interruption 下一轮默认直达 focus stack 的 deepest leaf；只有没有可恢复 leaf，或 leaf 主动交还 Parent 时，才由 Root 判断 `intent_resolution`。
 6. `resume_recoverable_child_skill` 恢复原 child frame，不新建 child。
 7. `shelve_interrupted_frame` 会清理或标记旧 recoverable state，避免污染无关新任务。
-8. `runtimeVisibleConversation` 有 token/条数上限和 compaction 策略。
+8. `runtimeVisibleProtocol` 有 token/条数上限和 compaction 策略；`runtimeVisibleConversation` 只是其 user/assistant 语义投影。
 9. report/log/frame/journal 仍保留完整执行证据。
 10. 测试覆盖 normal Skill completion、nested completion unwind、awaiting-user resume、recoverable child resume、abandon/new-task shelving。
 
@@ -589,6 +595,7 @@ runtime/
 - 已完成 `runtimeVisibleConversation`、tool call 可见性、Skill 完成、`AWAITING_USER`、recoverable interruption 的统一设计落档。
 - 已实现 nested focus completion unwind：deepest leaf 完成后逐层 close/promote/resume parent，直到 Root direct final 或 Root synthesis。
 - 已实现 child-only `handoff_to_parent`：`AWAITING_USER` 或 recoverable leaf 直达恢复时，用户取消/停止/换题可由当前 leaf LLM 受控交还 Parent，并清理 active focus。
+- 已按 Codex recorder probe 结论实现 completed root turn 的 provider protocol 保留：Root 自己产生的 `assistant.tool_calls` 与匹配 `tool` result 写入 `ContextRuntimeMemory`，下一轮以独立 role messages 回放；child-private 工具链仍只保留在 child evidence / report / runtime event log 中。
 
 ### Testing Progress
 

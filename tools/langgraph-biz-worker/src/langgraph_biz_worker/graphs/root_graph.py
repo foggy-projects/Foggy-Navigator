@@ -19,6 +19,7 @@ from ..config import settings
 from ..models import FrameKind, FrameStatus, QueryEvent, SkillManifest
 from ..runtime.attachment_context import build_attachment_context_prompt as _build_attachment_context_prompt
 from ..runtime.context_memory import (
+    PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY,
     RUNTIME_VISIBLE_CONVERSATION_KEY,
     ContextRuntimeBusy,
     assistant_visible_content,
@@ -35,6 +36,7 @@ from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model, create
 from ..runtime.llm_skill_agent import LlmSkillAgent
 from ..runtime.llm_agent_prompts import model_visible_context
 from ..runtime.llm_child_recovery import (
+    _context_skill_manifest,
     _direct_child_result_for_user,
     _record_parent_child_recoverable_interruption,
     _runtime_context_for_child_skill,
@@ -1046,10 +1048,14 @@ def _commit_root_runtime_memory_turn(
             except ContextRuntimeBusy:
                 return
         metadata = _runtime_memory_projection_metadata(frame, structured_output)
-        memory.commit_turn(
+        protocol_messages = frame.private_working_state.get(PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY)
+        committed = memory.commit_turn(
             assistant_message=assistant_message,
             metadata=metadata,
+            protocol_messages=protocol_messages if isinstance(protocol_messages, list) else None,
         )
+        if committed:
+            frame.private_working_state.pop(PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY, None)
         save_to_root_frame(frame, memory)
         _runtime.save_frame(frame)
 
@@ -1426,7 +1432,12 @@ def _run_parent_after_nested_focus_completion(
     events: list[QueryEvent],
 ) -> Any | None:
     task_id = state["task_id"]
-    manifest = _skill_registry.get_manifest(parent.skill_id)
+    manifest = _context_skill_manifest(
+        _runtime,
+        parent.skill_id,
+        account_id=account_id,
+        runtime_context=runtime_context,
+    )
     if manifest is None:
         events.append(QueryEvent(
             type="error",
@@ -1625,7 +1636,12 @@ def _run_active_focus_before_root(
     root = _runtime.get_frame(root_frame_id) or root
     focus_parent_frame_id = focus.parent_frame_id or root_frame_id
 
-    focus_manifest = _skill_registry.get_manifest(focus.skill_id)
+    focus_manifest = _context_skill_manifest(
+        _runtime,
+        focus.skill_id,
+        account_id=account_id,
+        runtime_context=runtime_context,
+    )
     if focus_manifest is None:
         _resume_root_if_waiting_for_focus(root_frame_id)
         return [QueryEvent(

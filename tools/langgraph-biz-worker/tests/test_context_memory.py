@@ -133,7 +133,7 @@ def test_recent_conversation_bootstrap_only_when_memory_empty():
     assert [item["content"] for item in memory.visible_messages] == ["old U", "old A"]
 
 
-def test_runtime_memory_does_not_include_raw_tool_messages():
+def test_external_recent_conversation_bootstrap_does_not_import_raw_tool_messages():
     memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-tool")
 
     memory.bootstrap_from_external_recent_conversation(
@@ -150,6 +150,71 @@ def test_runtime_memory_does_not_include_raw_tool_messages():
         ("user", "create ticket"),
         ("assistant", "ticket created"),
     ]
+
+
+def test_context_memory_commits_root_visible_tool_protocol():
+    memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-tool-protocol")
+    memory.begin_turn(
+        task_id="task_tool_protocol",
+        root_frame_id="frm_root",
+        user_message="create ticket",
+        now="2026-05-21T00:00:00Z",
+    )
+
+    committed = memory.commit_turn(
+        assistant_message="ticket created",
+        protocol_messages=[
+            {"role": "user", "content": "create ticket"},
+            {
+                "role": "assistant",
+                "content": "",
+                "toolCalls": [{
+                    "id": "call_ticket",
+                    "name": "invoke_business_skill",
+                    "args": {"skill_name": "tms-ticket-agent"},
+                }],
+            },
+            {
+                "role": "tool",
+                "content": '{"ok": true, "result": "ticket created"}',
+                "toolCallId": "call_ticket",
+            },
+            {"role": "assistant", "content": "ticket created"},
+        ],
+        now="2026-05-21T00:00:01Z",
+    )
+
+    assert committed is True
+    prompt = memory.build_prompt_view()
+    assert [item["role"] for item in prompt] == ["user", "assistant", "tool", "assistant"]
+    assert prompt[1]["toolCalls"][0]["name"] == "invoke_business_skill"
+    assert prompt[2]["toolCallId"] == "call_ticket"
+    assert prompt[3]["content"] == "ticket created"
+
+
+def test_context_memory_accepts_submitted_user_prompt_with_runtime_time_block():
+    memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-user-prompt")
+    memory.begin_turn(
+        task_id="task_user_prompt",
+        root_frame_id="frm_root",
+        user_message="hi",
+        now="2026-05-21T00:00:00Z",
+    )
+
+    assert memory.commit_turn(
+        assistant_message="hello",
+        protocol_messages=[
+            {
+                "role": "user",
+                "content": "hi\n\n---\n运行时上下文:\n- 当前时间: 2026-05-21T00:00:00+08:00",
+                "taskId": "task_user_prompt",
+            },
+            {"role": "assistant", "content": "hello"},
+        ],
+    )
+
+    assert memory.visible_messages[0]["content"].startswith("hi\n\n---")
+    assert memory.visible_messages[1]["content"] == "hello"
 
 
 def test_assistant_visible_content_prefers_user_facing_output():

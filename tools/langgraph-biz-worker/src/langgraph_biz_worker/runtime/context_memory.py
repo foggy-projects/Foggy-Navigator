@@ -18,6 +18,7 @@ from ..models import SkillFrameState
 
 RUNTIME_CONTEXT_MEMORY_KEY = "runtime_context_memory"
 RUNTIME_VISIBLE_CONVERSATION_KEY = "_runtime_visible_conversation"
+PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY = "_pending_root_turn_protocol_messages"
 
 DEFAULT_LIMITS = {
     "maxVisibleMessages": 24,
@@ -152,17 +153,11 @@ class ContextRuntimeMemory:
             if self.compacted_summary or self.pinned_head_messages
             else messages[-max_prompt_messages:]
         )
-        return [
-            {
-                "role": item["role"],
-                "content": item["content"],
-                "messageId": item.get("messageId"),
-                "taskId": item.get("taskId"),
-                "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
-            }
+        return _ensure_valid_tool_protocol_window([
+            _prompt_message_copy(item)
             for item in prompt_source
-            if item.get("role") in {"user", "assistant"} and item.get("content")
-        ]
+            if _message_visible_in_prompt(item)
+        ])
 
     def begin_turn(
         self,
@@ -273,10 +268,19 @@ class ContextRuntimeMemory:
         *,
         assistant_message: str,
         metadata: dict[str, Any] | None = None,
+        protocol_messages: list[dict[str, Any]] | None = None,
         now: str | None = None,
         summarizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> bool:
-        """Commit pending user message plus final assistant projection."""
+        """Commit the completed root turn.
+
+        ``protocol_messages`` is the exact root-visible provider protocol for
+        this turn: user messages, assistant tool calls, tool results, and the
+        final assistant projection when the model produced one.  If the
+        protocol is missing or invalid, commit falls back to the semantic
+        ``user -> assistant`` projection so runtime memory never stores an
+        invalid provider sequence.
+        """
         if not self.pending_turn:
             self._clear_running(now=now)
             return False
@@ -304,12 +308,47 @@ class ContextRuntimeMemory:
             source="root_result",
             metadata=metadata,
         )
-        self.visible_messages.extend([user_message, *queued_user_messages, assistant])
+        turn_messages = self._commit_protocol_messages(
+            protocol_messages,
+            pending_user_message=user_message,
+            fallback_user_messages=[user_message, *queued_user_messages],
+            final_assistant=assistant,
+            metadata=metadata,
+        )
+        self.visible_messages.extend(turn_messages)
         self._compact_visible_messages(summarizer=summarizer)
         self.pending_turn = None
         self.revision += 1
         self._clear_running(now=timestamp)
         return True
+
+    def _commit_protocol_messages(
+        self,
+        protocol_messages: list[dict[str, Any]] | None,
+        *,
+        pending_user_message: dict[str, Any],
+        fallback_user_messages: list[dict[str, Any]],
+        final_assistant: dict[str, Any],
+        metadata: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        protocol_turn = _sanitize_messages(protocol_messages)
+        if not (
+            protocol_turn
+            and _has_valid_tool_protocol_messages(protocol_turn)
+            and _protocol_contains_user_message(protocol_turn, pending_user_message)
+        ):
+            protocol_turn = list(fallback_user_messages)
+
+        if protocol_turn and _is_final_assistant_message(protocol_turn[-1]):
+            merged = dict(protocol_turn[-1])
+            merged_metadata = merged.get("metadata") if isinstance(merged.get("metadata"), dict) else {}
+            merged["metadata"] = {
+                **merged_metadata,
+                "projection": metadata or {},
+            }
+            protocol_turn[-1] = merged
+            return protocol_turn
+        return [*protocol_turn, final_assistant]
 
     def abandon_turn(self, *, status: str = "ABANDONED", now: str | None = None) -> None:
         if isinstance(self.pending_turn, dict):
@@ -381,17 +420,19 @@ class ContextRuntimeMemory:
             head: list[dict[str, Any]] = []
             middle = messages[:-tail_count] if len(messages) > tail_count else []
         else:
-            head = messages[:head_count]
+            head = _ensure_valid_tool_protocol_window(messages[:head_count])
             middle_end = max(head_count, len(messages) - tail_count)
             middle = messages[head_count:middle_end]
-        tail = messages[-tail_count:] if len(messages) > tail_count else list(messages)
+        tail = _ensure_valid_tool_protocol_window(
+            messages[-tail_count:] if len(messages) > tail_count else list(messages)
+        )
 
         if not middle:
             if len(messages) <= max_visible:
                 return
             middle = messages[:-tail_count]
             head = []
-            tail = messages[-tail_count:]
+            tail = _ensure_valid_tool_protocol_window(messages[-tail_count:])
         if not middle:
             return
 
@@ -509,6 +550,75 @@ def assistant_visible_content(
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return (summary or "").strip()
+
+
+def runtime_protocol_messages_from_langchain(
+    messages: list[Any],
+    *,
+    task_id: str,
+    root_frame_id: str,
+    now: str | None = None,
+    max_chars: int | None = None,
+) -> list[dict[str, Any]]:
+    """Serialize root-visible LangChain messages for bounded runtime replay."""
+    if not isinstance(messages, list):
+        return []
+    timestamp = now or _now()
+    limit = _int_or_default(max_chars, DEFAULT_LIMITS["maxMessageChars"])
+    protocol: list[dict[str, Any]] = []
+    for index, message in enumerate(messages):
+        role = _langchain_message_role(message)
+        if role == "system" or not role:
+            continue
+        content = _message_content_text(getattr(message, "content", ""), limit)
+        suffix = f"protocol_{index}_{_safe_id_part(timestamp)}"
+        if role == "user":
+            if not content:
+                continue
+            protocol.append(_new_message(
+                role="user",
+                content=content,
+                task_id=task_id,
+                root_frame_id=root_frame_id,
+                created_at=timestamp,
+                source="root_protocol",
+                suffix=suffix,
+            ))
+            continue
+        if role == "assistant":
+            tool_calls = _normalize_runtime_tool_calls(getattr(message, "tool_calls", None))
+            if not content and not tool_calls:
+                continue
+            item = _new_message(
+                role="assistant",
+                content=content,
+                task_id=task_id,
+                root_frame_id=root_frame_id,
+                created_at=timestamp,
+                source="root_protocol",
+                suffix=suffix,
+            )
+            if tool_calls:
+                item["toolCalls"] = tool_calls
+            protocol.append(item)
+            continue
+        if role == "tool":
+            tool_call_id = _str_or_none(getattr(message, "tool_call_id", None))
+            if not tool_call_id:
+                continue
+            item = _new_message(
+                role="tool",
+                content=content,
+                task_id=task_id,
+                root_frame_id=root_frame_id,
+                created_at=timestamp,
+                source="root_protocol",
+                suffix=suffix,
+                metadata={"toolCallId": tool_call_id},
+            )
+            item["toolCallId"] = tool_call_id
+            protocol.append(item)
+    return _ensure_valid_tool_protocol_window(protocol)
 
 
 def _messages_total_chars(messages: list[dict[str, Any]]) -> int:
@@ -812,6 +922,34 @@ def _new_message(
     }
 
 
+def _prompt_message_copy(item: dict[str, Any]) -> dict[str, Any]:
+    copied = {
+        "role": item["role"],
+        "content": item.get("content", ""),
+        "messageId": item.get("messageId"),
+        "taskId": item.get("taskId"),
+        "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+    }
+    tool_calls = item.get("toolCalls")
+    if isinstance(tool_calls, list) and tool_calls:
+        copied["toolCalls"] = _normalize_runtime_tool_calls(tool_calls)
+    tool_call_id = _str_or_none(item.get("toolCallId"))
+    if tool_call_id:
+        copied["toolCallId"] = tool_call_id
+    return copied
+
+
+def _message_visible_in_prompt(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    role = str(item.get("role") or "").strip().lower()
+    if role == "assistant":
+        return bool(item.get("content") or item.get("toolCalls"))
+    if role == "tool":
+        return bool(item.get("toolCallId"))
+    return role == "user" and bool(item.get("content"))
+
+
 def _sanitize_messages(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -820,16 +958,168 @@ def _sanitize_messages(value: Any) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "").strip().lower()
-        if role not in {"user", "assistant"}:
+        if role not in {"user", "assistant", "tool"}:
             continue
-        content = _clean_content(item.get("content"), DEFAULT_LIMITS["maxMessageChars"])
-        if not content:
+        content = _message_content_text(item.get("content"), DEFAULT_LIMITS["maxMessageChars"])
+        tool_calls = _normalize_runtime_tool_calls(item.get("toolCalls") or item.get("tool_calls"))
+        tool_call_id = _str_or_none(item.get("toolCallId") or item.get("tool_call_id"))
+        if role == "user" and not content:
+            continue
+        if role == "assistant" and not content and not tool_calls:
+            continue
+        if role == "tool" and not tool_call_id:
             continue
         normalized = dict(item)
         normalized["role"] = role
         normalized["content"] = content
+        if tool_calls:
+            normalized["toolCalls"] = tool_calls
+        else:
+            normalized.pop("toolCalls", None)
+            normalized.pop("tool_calls", None)
+        if tool_call_id:
+            normalized["toolCallId"] = tool_call_id
+        else:
+            normalized.pop("toolCallId", None)
+            normalized.pop("tool_call_id", None)
         messages.append(normalized)
-    return messages
+    return _ensure_valid_tool_protocol_window(messages)
+
+
+def _ensure_valid_tool_protocol_window(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not messages or _has_valid_tool_protocol_messages(messages):
+        return messages
+    best: list[dict[str, Any]] = []
+    best_end = -1
+    total = len(messages)
+    for start in range(total):
+        for end in range(start + 1, total + 1):
+            candidate = messages[start:end]
+            if not _has_valid_tool_protocol_messages(candidate):
+                continue
+            if len(candidate) > len(best) or (len(candidate) == len(best) and end > best_end):
+                best = candidate
+                best_end = end
+    return best
+
+
+def _has_valid_tool_protocol_messages(messages: list[dict[str, Any]]) -> bool:
+    pending_tool_call_ids: set[str] = set()
+    for item in messages:
+        if not isinstance(item, dict):
+            return False
+        role = str(item.get("role") or "").strip().lower()
+        if role == "assistant":
+            if pending_tool_call_ids:
+                return False
+            for tool_call in _normalize_runtime_tool_calls(item.get("toolCalls")):
+                call_id = tool_call.get("id")
+                if isinstance(call_id, str) and call_id:
+                    pending_tool_call_ids.add(call_id)
+        elif role == "tool":
+            tool_call_id = _str_or_none(item.get("toolCallId"))
+            if not tool_call_id or tool_call_id not in pending_tool_call_ids:
+                return False
+            pending_tool_call_ids.remove(tool_call_id)
+        elif role == "user":
+            if pending_tool_call_ids:
+                return False
+        else:
+            return False
+    return not pending_tool_call_ids
+
+
+def _protocol_contains_user_message(
+    protocol_messages: list[dict[str, Any]],
+    pending_user_message: dict[str, Any],
+) -> bool:
+    expected = _str_or_default(pending_user_message.get("content"))
+    expected_task_id = _str_or_none(pending_user_message.get("taskId"))
+    if not expected and not expected_task_id:
+        return False
+    for item in protocol_messages:
+        if not isinstance(item, dict) or item.get("role") != "user":
+            continue
+        if expected_task_id and item.get("taskId") == expected_task_id:
+            return True
+        content = _str_or_default(item.get("content"))
+        if expected and (content == expected or content.startswith(f"{expected}\n\n---")):
+            return True
+    return False
+
+
+def _is_final_assistant_message(item: dict[str, Any]) -> bool:
+    return (
+        item.get("role") == "assistant"
+        and bool(item.get("content"))
+        and not item.get("toolCalls")
+    )
+
+
+def _langchain_message_role(message: Any) -> str:
+    message_type = str(getattr(message, "type", "") or "").strip().lower()
+    if message_type in {"system", "human", "ai", "tool"}:
+        return {
+            "human": "user",
+            "ai": "assistant",
+        }.get(message_type, message_type)
+    class_name = message.__class__.__name__.lower()
+    if "system" in class_name:
+        return "system"
+    if "human" in class_name or "user" in class_name:
+        return "user"
+    if "tool" in class_name:
+        return "tool"
+    if "ai" in class_name or "assistant" in class_name:
+        return "assistant"
+    return ""
+
+
+def _message_content_text(value: Any, max_chars: int) -> str:
+    if isinstance(value, str):
+        return _clean_content(value, max_chars)
+    if value in (None, "", [], {}):
+        return ""
+    try:
+        return _clean_content(json.dumps(value, ensure_ascii=False), max_chars)
+    except Exception:
+        return _clean_content(str(value), max_chars)
+
+
+def _normalize_runtime_tool_calls(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        call_id = _str_or_none(item.get("id") or item.get("tool_call_id"))
+        name = _str_or_none(item.get("name"))
+        args = item.get("args")
+        function = item.get("function")
+        if isinstance(function, dict):
+            name = name or _str_or_none(function.get("name"))
+            args = args if args is not None else function.get("arguments")
+        if not call_id or not name:
+            continue
+        normalized.append({
+            "name": name,
+            "args": _normalize_tool_args(args),
+            "id": call_id,
+        })
+    return normalized
+
+
+def _normalize_tool_args(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _clean_content(value: Any, max_chars: int) -> str:

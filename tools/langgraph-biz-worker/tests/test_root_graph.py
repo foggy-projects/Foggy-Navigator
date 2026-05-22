@@ -7,7 +7,11 @@ from typing import Any
 
 from langgraph_biz_worker.graphs import root_graph as root_graph_module
 from langgraph_biz_worker.models import FrameKind, SkillManifest
-from langgraph_biz_worker.runtime.context_memory import ContextRuntimeMemory, save_to_root_frame
+from langgraph_biz_worker.runtime.context_memory import (
+    PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY,
+    ContextRuntimeMemory,
+    save_to_root_frame,
+)
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_store import FrameStore
@@ -391,6 +395,67 @@ def test_runtime_memory_projection_records_non_recoverable_error(monkeypatch, tm
     assert assistant["metadata"]["source"] == "error"
     assert assistant["metadata"]["errorCategory"] == "CONFIGURATION"
     assert assistant["metadata"]["recoverable"] is False
+
+
+def test_runtime_memory_commit_persists_root_tool_protocol(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    state = _state("task_root_tool_protocol_001")
+    state["context"]["contextId"] = "bctx_20260521_cd_ctx-tool-protocol"
+    routed = root_graph_module.route_skill(state)
+    root = runtime.get_frame(routed["active_frame_id"])
+    assert root is not None
+
+    memory = ContextRuntimeMemory(context_id=root.conversation_id)
+    memory.begin_turn(
+        task_id=state["task_id"],
+        root_frame_id=root.frame_id,
+        user_message="handle the request",
+    )
+    save_to_root_frame(root, memory)
+    root.private_working_state[PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY] = [
+        {"role": "user", "content": "handle the request"},
+        {
+            "role": "assistant",
+            "content": "",
+            "toolCalls": [{
+                "id": "call_skill",
+                "name": "invoke_business_skill",
+                "args": {"skill_name": "ticket_skill"},
+            }],
+        },
+        {
+            "role": "tool",
+            "content": '{"ok": true, "summary": "Ticket created."}',
+            "toolCallId": "call_skill",
+        },
+    ]
+    runtime.save_frame(root)
+
+    runtime.submit_persistent_turn_result(
+        root.frame_id,
+        "Ticket created.",
+        {"message": "Ticket created."},
+    )
+    root = runtime.get_frame(root.frame_id)
+    root_graph_module._commit_root_runtime_memory_turn(
+        root,
+        state=state,
+        assistant_message="Ticket created.",
+        structured_output={"message": "Ticket created."},
+    )
+
+    restored_frame = runtime.get_frame(root.frame_id)
+    restored = ContextRuntimeMemory.load_from_root_frame(restored_frame)
+    assert PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY not in restored_frame.private_working_state
+    assert [item["role"] for item in restored.visible_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert restored.visible_messages[1]["toolCalls"][0]["id"] == "call_skill"
+    assert restored.visible_messages[2]["toolCallId"] == "call_skill"
+    assert restored.visible_messages[3]["content"] == "Ticket created."
 
 
 def test_recent_conversation_bootstrap_ignored_after_memory_revision(monkeypatch, tmp_path):

@@ -63,6 +63,15 @@ Turn 2 prompt: U1 -> A1 -> U2
 
 其中 `U1 -> A1` 来自 BizWorker `ContextRuntimeMemory`，不是 Java `SessionMessageRepository`。
 
+如果 Turn 1 期间 Root frame 产生 tool call / tool result，则提交和 Turn 2 prompt 必须保留 Root-visible provider protocol，例如：
+
+```text
+Turn 1 commit: U1 -> assistant.tool_call(...) -> tool_result(...) -> A1
+Turn 2 prompt: U1 -> assistant.tool_call(...) -> tool_result(...) -> A1 -> U2
+```
+
+只有 child Skill 内部 private tool chain 不进入 Root-visible protocol。
+
 ### 开发任务
 
 1. 新增 `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/context_memory.py`。
@@ -82,13 +91,14 @@ runtime_context_memory
 4. `root_graph.run_skill(...)` 在调用 Root LLM 前：
    - 加载 Root frame memory。
    - 如果 memory revision 为 0 且 Java `recentConversation` 存在，则 bootstrap 一次。
-   - 将 prompt view 写入 `runtime_context["_runtime_visible_conversation"]`。
+   - 将 prompt view 写入 `runtime_context["_runtime_visible_protocol"]`，并兼容派生 `_runtime_visible_conversation`。
    - 不再优先使用 `_visible_recent_conversation`。
 5. `llm_agent_prompts.py`：
    - 新增 `_build_runtime_visible_conversation_prompt(...)`。
    - 保留 `_build_visible_recent_conversation_prompt(...)` 作为迁移兼容，但优先级低于 runtime memory。
 6. Root persistent turn 成功提交时：
    - 从当前 user prompt 生成 user visible message。
+   - 收集本 Root 回合产生的 assistant tool_call / tool_result protocol events。
    - 通过 `assistantVisibleContent` 规则生成 assistant visible message。
    - 调用 `ContextRuntimeMemory.commit_turn(...)`。
 7. frame report 继续完整保留，不改变 report/log/journal 结构。
@@ -116,9 +126,9 @@ Phase 1 需要先固定 assistant 可见内容来源，避免 runtime memory 与
 4. `submit_skill_result.summary` 或 promoted result 的 compact user-facing summary。
 5. 不可恢复错误时的标准化 user-visible error message。
 
-禁止直接写入 `visibleMessages`：
+禁止直接写入 Root `visibleProtocolMessages`：
 
-1. raw tool call / tool result。
+1. child-private raw tool call / tool result。
 2. Skill private messages。
 3. report/log/journal 原文。
 4. 仅供调试的内部 summary。
@@ -155,11 +165,12 @@ Python 自动化测试：
 3. `test_recent_conversation_bootstrap_only_when_memory_empty`
    - memory 为空时导入一次 Java recent conversation。
    - memory revision > 0 时忽略 Java recent conversation。
-4. `test_runtime_memory_does_not_include_raw_tool_messages`
-   - 即使 frame/tool log 有 tool trace，prompt view 只包含语义 user/assistant。
+4. `test_runtime_memory_retains_root_tool_protocol_without_child_private_trace`
+   - Root frame tool trace 会作为 provider protocol 进入下一轮 prompt view。
+   - child Skill 内部 tool trace 不进入 Root prompt view。
 5. `test_assistant_visible_content_prefers_user_facing_output`
    - assistant visible message 优先取用户可见 final message。
-   - 不把 raw tool result 或内部 summary 写入 prompt view。
+   - 不把 child-private raw tool result 或内部 summary 写入 Root prompt view。
 6. `test_same_context_running_loop_returns_busy_before_queue_phase`
    - 同一 `contextId` 已有 running loop 时，不进入第二条 Root loop。
    - 返回明确 busy / conflict / retryable。
@@ -200,8 +211,8 @@ Java 测试暂不改断言，只要现有测试继续通过。
 
 ### Phase 2 测试
 
-1. Skill 完成后下一轮 prompt 是 `U1 -> A1 -> U2`。
-2. prompt 不包含 raw `tool_call` / `tool_result`。
+1. Skill 完成后下一轮 prompt 是 `U1 -> root tool_call(invoke_business_skill) -> tool_result(promoted S1) -> A1 -> U2`。
+2. prompt 不包含 child-private raw `tool_call` / `tool_result`。
 3. `AWAITING_USER` 后 `U2` 直接恢复 child frame。
 4. `AWAITING_USER` 后用户明确取消/换题时，child 通过退出工具交还 Parent，Parent active focus 被清理。
 5. recoverable interruption 不产生普通 assistant message。
@@ -283,7 +294,7 @@ current user message
 1. 超过窗口后 prompt 包含 head + summary + tail。
 2. 中间 raw messages 不再进入 prompt。
 3. summarizer 失败不阻断 turn commit。
-4. summary 不包含 raw tool call、token、signed URL 等敏感信息。
+4. summary 不包含 child-private raw tool call、token、signed URL 等敏感信息；Root-visible tool protocol 可在压缩前进入窗口，压缩后只保留摘要。
 5. 未超过预算时不调用 LLM summarizer，只追加 visible turn。
 
 ## Rollback / Regenerate 非目标与后续契约
@@ -381,8 +392,9 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 2026-05-21: 已实现 child-only `handoff_to_parent`。`AWAITING_USER` 或 recoverable leaf 直达恢复时，用户取消/停止/换题可由当前 child LLM 受控退出；简单取消可 direct result 返回，需父级重新判断时可设置 `requires_parent_synthesis=true`。
 - 2026-05-21: 已补齐 child handoff 后 Root 同 turn synthesis 的 scripted E2E 覆盖。mock LLM 支持同一 cursor 按注册顺序返回多次响应，用于模拟 child 与 Root 共享同一用户消息但产生两次真实 ChatModel 调用的恢复链路。
 - 2026-05-21: 已补齐 recoverable ERROR/TIMEOUT 后 deepest leaf handoff 的 scripted E2E 覆盖。`model_timeout` / `model_error` 中断后，下一条用户消息默认直达 leaf；leaf 可调用 `handoff_to_parent`，parent 在同一 turn 接管并提交最终结果。
-- 2026-05-21: 已新增真实上游 OpenAPI smoke / validate-only 对账脚本。`live_upstream_runtime_context_smoke.py` 可发送两轮同 `contextId` 上游请求，也可只校验既有 session 目录；校验 `session.json` root 定位、`llm-submissions`、`runtime-message-events`、附件引用、`system.root` 泄漏、重开会话 raw tool 泄漏和 recoverable checkpoint。详见 [11-live-upstream-runtime-context-smoke.md](./11-live-upstream-runtime-context-smoke.md)。
+- 2026-05-21: 已新增真实上游 OpenAPI smoke / validate-only 对账脚本。`live_upstream_runtime_context_smoke.py` 可发送两轮同 `contextId` 上游请求，也可只校验既有 session 目录；校验 `session.json` root 定位、`llm-submissions`、`runtime-message-events`、附件引用、`system.root` 泄漏、重开 UI/task 消息 raw tool 泄漏和 recoverable checkpoint。详见 [11-live-upstream-runtime-context-smoke.md](./11-live-upstream-runtime-context-smoke.md)。
 - 2026-05-21: 已补齐 API 级 root plain final E2E。普通 Root 回合没有 tool call 时会直接提交 assistant final 到 BizWorker runtime memory，下一轮同 `contextId` 的真实 LLM body 恢复为 `system -> user -> assistant -> user`，且不生成 “No tool call was produced” 伪 human retry。
+- 2026-05-22: 已完成 root-visible tool protocol retention 实现。`LlmSkillAgent` 在 persistent root turn 完成时保存本轮真实 provider protocol；`root_graph` commit 时写入 `ContextRuntimeMemory`；下一轮 `llm_message_builder` 会恢复 `user / assistant.tool_calls / tool / assistant` role messages。child-private tool trace 仍隔离在 child frame evidence 中。新增回归覆盖 `ContextRuntimeMemory`、message builder、persistent root protocol store 与 root commit。
 
 ### Testing
 
@@ -455,7 +467,7 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - 已通过 scripted E2E 验证 child 调用 `handoff_to_parent(requires_parent_synthesis=true)` 后，Root 会在同一用户 turn 继续生成最终答复；`llm-submissions` 分别保存 child 与 Root 的真实请求体，runtime message events 也可分别对账。
 - 已通过 scripted E2E 验证 `model_timeout` / `model_error` recoverable leaf 恢复后可以调用 `handoff_to_parent` 交还 parent；parent 的 submission 能看到 leaf promoted handoff summary，并在同一 turn 生成最终结果。
 - 已通过 captured real smoke replay 验证首轮 root/child 工具链、恢复继续、换题请求的 7 次真实 ChatModel 调用均保存 `llm-submissions`，并能与 root/child runtime message events 对账。
-- 已补充 live upstream smoke runbook，可在真实 Navigator OpenAPI 环境中校验两轮同 `contextId`、附件证据、LLM body 快照、runtime event JSONL 和重开会话 raw tool 泄漏；当前等待手动联调验收录入具体 `summary.json`。
+- 已补充 live upstream smoke runbook，可在真实 Navigator OpenAPI 环境中校验两轮同 `contextId`、附件证据、LLM body 快照、runtime event JSONL 和重开 UI/task 消息 raw tool 泄漏；当前等待手动联调验收录入具体 `summary.json`。
 - 已通过本机 HTTP BizWorker + mock LLM smoke 验证普通 Root 多轮和 child/frame 工具链：Root smoke `bctx_20260521_23_2372853b5366440cb39d3268e3ec1eab` 的 LLM body 序列为 `["system","human"]`、`["system","human","ai","human"]`；child/frame smoke `bctx_20260521_2a_2a7d5bd415dd47adb18c7cf7305a6763` 的 runtime events / tool audit 记录 `invoke_business_skill=1`、`submit_skill_result=2`。
 - 已尝试真实 qwen3.5-plus provider smoke，session `bctx_20260521_b1_b1fc1510f49742b5ad541c8903ce100c` 在 provider 请求阶段触发 `LLM_REQUEST_TIMEOUT`，该结果记录为外部 provider 超时阻塞，不作为本轮功能验收通过证据。
 - 真实前端长会话与 TMS 工单链路仍建议在修复上游 `upstream_ref` 后做一次联调验收。

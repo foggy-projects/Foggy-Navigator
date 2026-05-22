@@ -126,7 +126,7 @@ def _load_script_fixture(name: str, trace_id: str) -> dict:
 
 def _record_messages(record: dict, role: str) -> list[str]:
     return [
-        message["content"] or ""
+        message.get("content") or ""
         for message in record["request"]["messages"]
         if message["role"] == role
     ]
@@ -149,6 +149,13 @@ def _message_tool_call_names(message: dict) -> list[str]:
                 names.append(function["name"])
             elif isinstance(call.get("name"), str):
                 names.append(call["name"])
+    return names
+
+
+def _record_tool_call_names(record: dict, role: str = "assistant") -> list[str]:
+    names: list[str] = []
+    for message in _record_role_messages(record, role):
+        names.extend(_message_tool_call_names(message))
     return names
 
 
@@ -2891,7 +2898,8 @@ async def test_scripted_root_skill_second_turn_uses_runtime_visible_conversation
         f"{previous_user_message} next:{trace_id}:001",
         f"我上一个消息是什么 next:{trace_id}:002",
     ]
-    assert second_ai_messages == [previous_assistant_message]
+    assert previous_assistant_message in second_ai_messages
+    assert _record_tool_call_names(records[1]) == ["submit_skill_result"]
     assert not any("本回合前的运行时可见对话:" in content for content in second_system_messages)
     assert not any("本回合前的最近对话:" in content for content in second_system_messages)
     assert not any(f"用户: {previous_user_message}" in content for content in second_system_messages)
@@ -3006,15 +3014,16 @@ async def test_scripted_llm_submission_log_matches_root_recent_conversation(
         f"next:{trace_id}:002",
     ]
     assert _record_messages(records[1], "user") == [first_prompt, second_prompt]
-    assert _record_messages(records[1], "assistant") == [first_answer]
+    assert first_answer in _record_messages(records[1], "assistant")
+    assert _record_tool_call_names(records[1]) == ["submit_skill_result"]
 
     payloads = _llm_submission_payloads(context_id)
     assert len(payloads) == 2
     second_payload = _llm_submission_for(payloads, task_id=second_task_id, skill_id="conversation.root")
-    assert _submission_role_sequence(second_payload) == ["system", "human", "ai", "human"]
+    assert _submission_role_sequence(second_payload) == ["system", "human", "ai", "tool", "ai", "human"]
     assert _submission_texts(second_payload, "human") == [first_prompt, second_prompt]
-    assert _submission_texts(second_payload, "ai") == [first_answer]
-    assert _submission_tool_call_names(second_payload) == []
+    assert first_answer in _submission_texts(second_payload, "ai")
+    assert _submission_tool_call_names(second_payload) == ["submit_skill_result"]
 
     second_root_events = _runtime_message_events(
         context_id,
@@ -3025,6 +3034,8 @@ async def test_scripted_llm_submission_log_matches_root_recent_conversation(
         "system",
         "user",
         "assistant",
+        "tool",
+        "assistant",
         "user",
     ]
     initial_texts = [
@@ -3032,7 +3043,9 @@ async def test_scripted_llm_submission_log_matches_root_recent_conversation(
         for event in second_root_events
         if event.get("eventType") == "message" and event.get("phase") == "initial"
     ]
-    assert initial_texts[1:] == [first_prompt, first_answer, second_prompt]
+    assert first_prompt in initial_texts
+    assert first_answer in initial_texts
+    assert second_prompt in initial_texts
     assert _runtime_tool_call_names(second_root_events) == ["submit_skill_result"]
     assert "persistent_turn_completed" in _runtime_checkpoints(second_root_events)
 
@@ -3295,7 +3308,8 @@ async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch
         f"先分析再处理运输异常 next:{trace_id}:001",
         f"继续 next:{trace_id}:002",
     ]
-    assert second_ai_messages == ["Root plan created."]
+    assert "Root plan created." in second_ai_messages
+    assert _record_tool_call_names(records[1]) == ["submit_skill_result"]
     assert any("当前活动任务计划:" in content for content in second_system_messages)
     assert any("handle multi-skill shipment issue" in content for content in second_system_messages)
     assert any("持久根计划策略:" in content for content in second_system_messages)
@@ -4079,7 +4093,8 @@ async def test_scripted_root_skill_continues_after_user_cancelled_interruption(
         f"initial root turn next:{trace_id}:001",
         f"继续 next:{trace_id}:002",
     ]
-    assert ai_messages == ["Initial root turn complete."]
+    assert "Initial root turn complete." in ai_messages
+    assert _record_tool_call_names(continue_record) == ["submit_skill_result"]
     assert any("上一次执行被中断。" in content for content in system_messages)
     assert any("原因: user_cancelled" in content for content in system_messages)
     assert any("Cancelled by user" in content for content in system_messages)
@@ -4239,7 +4254,8 @@ async def test_scripted_root_skill_shelves_interruption_for_unrelated_task(
         f"创建车辆 next:{trace_id}:001",
         f"帮我查一下新的订单列表 next:{trace_id}:002",
     ]
-    assert ai_messages == ["Initial vehicle task started."]
+    assert "Initial vehicle task started." in ai_messages
+    assert _record_tool_call_names(records[1]) == ["submit_skill_result"]
     assert any("中断工作只是可恢复候选" in content for content in system_messages)
     assert any("可恢复焦点:" in content for content in system_messages)
     assert any("可恢复焦点栈:" in content for content in system_messages)
@@ -5465,7 +5481,9 @@ async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_serv
     assert _submission_texts(continued_payload, "human")[-1] == (
         f"继续刚才被中断的异常订单处理，沿用已有上下文给出下一步。 next:{trace_id}:006"
     )
-    assert _submission_tool_call_names(continued_payload) == []
+    continued_tool_names = _submission_tool_call_names(continued_payload)
+    assert "invoke_business_skill" in continued_tool_names
+    assert "submit_skill_result" in continued_tool_names
     assert any(
         "vehicle_delay" in text
         for text in _submission_texts(continued_payload, "system")

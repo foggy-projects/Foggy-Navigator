@@ -40,6 +40,7 @@ from .llm_tool_call_codec import (
     _scrub_create_artifact_content,
 )
 from .llm_child_recovery import (
+    _context_skill_manifest,
     _invoke_business_skill_tool,
     _resume_recoverable_child_skill_tool,
 )
@@ -62,6 +63,10 @@ from .llm_tool_schemas import (
     _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES,
     _bind_tools,
     _tool_specs,
+)
+from .context_memory import (
+    PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY,
+    runtime_protocol_messages_from_langchain,
 )
 from .runtime_message_event_log import (
     record_assistant_runtime_message,
@@ -132,6 +137,13 @@ class LlmSkillAgent:
 
         manifest = _manifest_for_frame(self._runtime, frame)
         if manifest is None:
+            manifest = _context_skill_manifest(
+                self._runtime,
+                frame.skill_id,
+                account_id=account_id,
+                runtime_context=runtime_context,
+            )
+        if manifest is None:
             self._runtime.fail_frame(frame_id, f"Skill manifest not found: {frame.skill_id}")
             return [QueryEvent(type="error", task_id=task_id, error="Skill manifest not found")]
         try:
@@ -184,6 +196,7 @@ class LlmSkillAgent:
             account_context_prompt=account_context_prompt,
             runtime_context=runtime_context,
         )
+        turn_start_index = max(0, len(messages) - 1)
         record_initial_runtime_messages(
             messages,
             runtime_context,
@@ -304,6 +317,12 @@ class LlmSkillAgent:
                             },
                         )
                         if validation.ok:
+                            self._store_persistent_turn_protocol_messages(
+                                frame_id,
+                                messages=messages,
+                                turn_start_index=turn_start_index,
+                                task_id=task_id,
+                            )
                             record_checkpoint_runtime_event(
                                 runtime_context,
                                 task_id=task_id,
@@ -405,6 +424,12 @@ class LlmSkillAgent:
                     )
                     return events
                 if event.get("persistent_turn_completed"):
+                    self._store_persistent_turn_protocol_messages(
+                        frame_id,
+                        messages=messages,
+                        turn_start_index=turn_start_index,
+                        task_id=task_id,
+                    )
                     record_checkpoint_runtime_event(
                         runtime_context,
                         task_id=task_id,
@@ -434,6 +459,12 @@ class LlmSkillAgent:
                                 "llm_retry_allowed": False,
                                 "function_frame_id": tool_result.get("function_frame_id"),
                             },
+                        )
+                        self._store_persistent_turn_protocol_messages(
+                            frame_id,
+                            messages=messages,
+                            turn_start_index=turn_start_index,
+                            task_id=task_id,
                         )
                     else:
                         self._runtime.fail_frame(frame_id, error)
@@ -494,6 +525,27 @@ class LlmSkillAgent:
                 phase="queued_user_input",
             )
             self._append_private_message(frame_id, "user", queued_message.content)
+
+    def _store_persistent_turn_protocol_messages(
+        self,
+        frame_id: str,
+        *,
+        messages: list[Any],
+        turn_start_index: int,
+        task_id: str,
+    ) -> None:
+        frame = self._runtime.get_frame(frame_id)
+        if frame is None:
+            return
+        protocol = runtime_protocol_messages_from_langchain(
+            messages[turn_start_index:],
+            task_id=task_id,
+            root_frame_id=frame_id,
+        )
+        if not protocol:
+            return
+        frame.private_working_state[PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY] = protocol
+        self._runtime.save_frame(frame)
 
     def _execute_tool_call(
         self,

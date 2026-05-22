@@ -34,19 +34,33 @@ def test_build_initial_llm_messages_keeps_runtime_history_as_role_messages():
             "_persistent_frame": True,
             "_runtime_visible_conversation": [
                 {"role": "user", "content": "第一轮问题"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "toolCalls": [{
+                        "id": "call_list",
+                        "name": "list_skill_resources",
+                        "args": {"skill_name": "tms-ticket-agent"},
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "content": '{"resources": ["SKILL.md"]}',
+                    "toolCallId": "call_list",
+                },
                 {"role": "assistant", "content": "第一轮回答"},
-                {"role": "tool", "content": "raw tool result should stay out"},
             ],
         },
     )
 
-    assert [message.type for message in messages] == ["system", "human", "ai", "human"]
+    assert [message.type for message in messages] == ["system", "human", "ai", "tool", "ai", "human"]
     assert messages[1].content == "第一轮问题"
-    assert messages[2].content == "第一轮回答"
-    assert messages[3].content == "第二轮问题"
+    assert messages[2].tool_calls[0]["id"] == "call_list"
+    assert messages[3].tool_call_id == "call_list"
+    assert messages[4].content == "第一轮回答"
+    assert messages[5].content == "第二轮问题"
     assert "第一轮问题" not in messages[0].content
     assert "第一轮回答" not in messages[0].content
-    assert "raw tool result should stay out" not in "\n".join(str(message.content) for message in messages)
 
 
 def test_build_initial_llm_messages_renders_allowed_skills_as_markdown():
