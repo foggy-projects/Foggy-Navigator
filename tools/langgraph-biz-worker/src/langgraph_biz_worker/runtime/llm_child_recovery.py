@@ -13,6 +13,50 @@ from .skill_runtime import SkillRuntime
 RunChildFrame = Callable[..., list[QueryEvent]]
 
 
+def _context_skill_manifest(
+    runtime: SkillRuntime,
+    skill_id: str,
+    *,
+    account_id: str | None,
+    runtime_context: dict[str, Any] | None,
+) -> SkillManifest | None:
+    """Return a manifest after installing request-scoped skill layers.
+
+    ClientApp public skill resources and executable skill manifests must resolve
+    from the same request context.  The process-wide registry may have been
+    loaded by another request, so recover the current context's app/account
+    layers immediately before resolving the target skill.
+    """
+    _load_context_skill_layers(runtime, account_id=account_id, runtime_context=runtime_context)
+    return runtime.registry.get_manifest(skill_id)
+
+
+def _load_context_skill_layers(
+    runtime: SkillRuntime,
+    *,
+    account_id: str | None,
+    runtime_context: dict[str, Any] | None,
+) -> None:
+    client_app_id = _runtime_client_app_id(runtime_context)
+    if client_app_id:
+        try:
+            runtime.registry.load_client_app_public_skills(client_app_id)
+        except ValueError:
+            pass
+    if account_id:
+        try:
+            runtime.registry.load_account_skills(account_id)
+        except ValueError:
+            pass
+
+
+def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None:
+    if not isinstance(runtime_context, dict):
+        return None
+    value = runtime_context.get("client_app_id") or runtime_context.get("clientAppId")
+    return value if isinstance(value, str) and value else None
+
+
 def _invoke_business_skill_tool(
     runtime: SkillRuntime,
     *,
@@ -34,7 +78,12 @@ def _invoke_business_skill_tool(
         return {"ok": False, "error": "skill_name is required"}
     if child_skill_id == runtime.get_frame(frame_id).skill_id:
         return {"ok": False, "error": "A skill cannot invoke itself"}
-    child_manifest = runtime.registry.get_manifest(child_skill_id)
+    child_manifest = _context_skill_manifest(
+        runtime,
+        child_skill_id,
+        account_id=account_id,
+        runtime_context=runtime_context,
+    )
     if not child_manifest:
         return {"ok": False, "error": f"Skill manifest not found: {child_skill_id}"}
 
@@ -190,7 +239,12 @@ def _resume_recoverable_child_skill_tool(
     child = runtime.prepare_recoverable_child_resume(frame_id)
     if child is None:
         return {"ok": False, "error": "No recoverable child skill is pending"}
-    child_manifest = runtime.registry.get_manifest(child.skill_id)
+    child_manifest = _context_skill_manifest(
+        runtime,
+        child.skill_id,
+        account_id=account_id,
+        runtime_context=runtime_context,
+    )
     if not child_manifest:
         return {"ok": False, "error": f"Skill manifest not found: {child.skill_id}"}
 

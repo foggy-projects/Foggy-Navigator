@@ -19,7 +19,7 @@ scripted E2E 已经覆盖普通多轮、业务工具调用、`AWAITING_USER` 续
 3. `logs/llm-submissions/*.json` 保存真实提交给 LLM 的 body。
 4. `logs/runtime-message-events/*.jsonl` 保存可恢复 provider protocol events。
 5. 两张附件等上游输入证据能在 LLM body、任务消息或会话消息中被复盘。
-6. 重开会话后的消息不泄漏 `invoke_business_skill` / `invoke_business_function` / `submit_skill_result` 这类 raw tool chatter。
+6. 重开会话后的 UI / task messages 不泄漏 `invoke_business_skill` / `invoke_business_function` / `submit_skill_result` 这类 raw tool chatter；LLM body 则应保留 Root-visible tool protocol。
 7. LLM body 不再暴露内部兼容 skill 名 `system.root`。
 
 ## 脚本入口
@@ -163,7 +163,7 @@ cd tools/langgraph-biz-worker
 | `expected_user_prompts_present` | live 模式下两轮用户消息能在 LLM body 中复盘 |
 | `system_root_not_exposed_to_llm` | LLM body 不暴露 `system.root` |
 | `expected_attachment_refs_present` | 期望附件引用能在证据中匹配 |
-| `reopen_messages_hide_raw_tools` | 重开会话消息不泄漏 raw tool chatter |
+| `reopen_messages_hide_raw_tools` | 重开会话 UI / task messages 不泄漏 raw tool chatter，不约束 LLM body 中的 Root-visible tool protocol |
 | `expected_tool_calls_present` | 指定工具调用能在 LLM body 或 runtime events 中找到 |
 | `recoverable_checkpoint_present` | recoverable 验收时存在可恢复 checkpoint |
 
@@ -184,5 +184,5 @@ cd tools/langgraph-biz-worker
 - 2026-05-21: 已用 `.env.local` 启动本机 BizWorker，健康检查通过，环境包含 `BIZ_WORKER_LLM_SUBMISSION_LOG_ENABLED=true`，`logs/llm-submissions` 默认最多保留 100 个文件。
 - 2026-05-21: 真实 qwen3.5-plus provider smoke 已尝试，session `bctx_20260521_b1_b1fc1510f49742b5ad541c8903ce100c` 在 provider 请求阶段触发 `LLM_REQUEST_TIMEOUT`，该结果记录为外部 provider 超时阻塞，不作为 live 验收通过证据。
 - 2026-05-21: 本机 HTTP BizWorker + mock LLM smoke 已通过。Root 普通多轮 session `bctx_20260521_23_2372853b5366440cb39d3268e3ec1eab` 的 LLM body 序列为 `["system","human"]`、`["system","human","ai","human"]`；child/frame session `bctx_20260521_2a_2a7d5bd415dd47adb18c7cf7305a6763` 的 runtime events / tool audit 记录 `invoke_business_skill=1`、`submit_skill_result=2`。
-- 注意：`llm-submissions` 只保存真实请求给 LLM 的 body；关闭 frame 的 `submit_skill_result` 等工具调用如果已经被当前回合消费，可能只出现在 `runtime-message-events` / tool audit 中，不一定出现在下一次 LLM request body 中。
+- 注意：`llm-submissions` 只保存真实请求给 LLM 的 body。按 2026-05-22 收口后的口径，Root frame 自己产生的 tool_call / tool_result 应出现在后续 Root LLM request body 中；child-private tool trace 只出现在该 child frame 的 `runtime-message-events` / tool audit / report 中，不外泄到 Root。
 - 真实 Navigator OpenAPI / TMS 前端 live 验收仍等待手动提供可访问地址、ClientApp 凭证和附件 URL 后执行。

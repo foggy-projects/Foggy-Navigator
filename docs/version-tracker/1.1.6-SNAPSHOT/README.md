@@ -7,21 +7,21 @@
 1. BizWorker 成为 LLM runtime context 的 source of truth；Java / 上游继续负责完整 UI transcript。
 2. 普通多轮对话、Skill 完成、`AWAITING_USER` 续接、中断恢复都统一进入 `ContextRuntimeMemory` / focus stack control state 规则。
 3. `recentConversation` 降级为 deprecated external compatibility input，只允许空 memory bootstrap，不允许覆盖 BizWorker memory。
-4. Tool call、Skill private messages、report/log/journal 作为 execution evidence 保留，但不默认进入下一轮 semantic conversation。
+4. Root frame 可见的 tool call / tool result 属于 LLM runtime protocol，应进入后续 bounded runtime context，直到压缩或裁剪；Skill private messages、report/log/journal 作为 execution evidence 保留，不直接外泄到 Root。
 5. 上下文压缩采用 head-tail + lazy LLM summarizer，并提供 deterministic fallback，避免 runtime context 无界增长。
 6. 同一 `contextId` 的 Root frame / runtime memory 写入必须由 BizWorker 自身提供排他保护。
-7. 真实提交给 LLM 的 `messages` 数组中，`system` 承载运行时治理上下文，BizWorker runtime-visible conversation 以独立 `user` / `assistant` messages 注入，当前 `human` 以用户原文为主，最多追加当前请求时间这类极少量请求态信息。
+7. 真实提交给 LLM 的 `messages` 数组中，`system` 承载运行时治理上下文，BizWorker runtime-visible protocol 以独立 `user` / `assistant` / `tool` messages 注入，当前 `human` 以用户原文为主，最多追加当前请求时间这类极少量请求态信息。
 
 ## 版本验收基线
 
 1. 没有 Java `recentConversation` 时，BizWorker 仍能维持普通多轮语义连续。
-2. 正常 Skill 完成后，下一轮 prompt 默认看到 `U1 -> A1 -> U2`，而不是 raw tool call / tool result。
+2. Root frame 在上一轮产生的 tool call / tool result 会随后续 prompt 保留；正常 Skill 完成后，Root 只能看到 `invoke_business_skill` 的 promoted result，不展开 child frame 内部 tool trace。
 3. 只要存在可恢复 focus stack，下一条普通用户消息默认直达 deepest leaf frame；`AWAITING_USER`、用户中止、TIMEOUT/ERROR 都遵循该规则。
 4. recoverable interruption 通过 control state 恢复或后续显式丢弃，不伪造成普通 assistant turn。
 5. 同一 `contextId` 不允许真正并发 LLM loop；Phase 1 未实现 queue 前必须有明确 busy / conflict / 上游串行契约，Phase 3 起进入 pending queue + checkpoint。
 6. `AWAITING_USER` / interrupted leaf 支持由 LLM 调用 frame 退出工具完成 escape hatch；普通 stop/cancel 只暂停当前运行，不清除 focus stack。
 7. UI transcript rollback / regenerate 不作为 Phase 1-4 默认能力；后续必须通过 revision / turnId / fork 契约单独设计，并作为真正丢弃旧 focus stack 的能力边界。
-8. LLM submission 复盘日志能保存真实 ChatModel body，便于验证每次提交给 LLM 的完整参数。
+8. LLM submission 复盘日志能保存真实 ChatModel body，便于验证每次提交给 LLM 的完整参数，并对账 root-visible tool protocol 是否被保留。
 
 ## 文档收口口径
 
@@ -47,8 +47,9 @@
 - [08-system-root-retirement-and-root-frame-design.md](./08-system-root-retirement-and-root-frame-design.md) - 将 `system.root` 从业务 Skill 身份退场，改为内部 Conversation Root Frame 语义并保留旧数据兼容
 - [09-llm-submission-message-contract.md](./09-llm-submission-message-contract.md) - 收口真实提交给 LLM 的 `messages` 数组契约：system 承载治理上下文，runtime-visible conversation 使用独立 role messages
 - [10-runtime-context-e2e-matrix-and-log-parity.md](./10-runtime-context-e2e-matrix-and-log-parity.md) - 固化 runtime context scripted E2E 矩阵，并要求关键场景同时校验 `llm-submissions` 与 `runtime-message-events`
-- [11-live-upstream-runtime-context-smoke.md](./11-live-upstream-runtime-context-smoke.md) - 提供真实上游 OpenAPI smoke 与 validate-only 对账脚本，覆盖 session root 定位、LLM body 快照、runtime events、附件引用和重开会话 raw tool 泄漏检查
+- [11-live-upstream-runtime-context-smoke.md](./11-live-upstream-runtime-context-smoke.md) - 提供真实上游 OpenAPI smoke 与 validate-only 对账脚本，覆盖 session root 定位、LLM body 快照、runtime events、附件引用和重开 UI/task 消息 raw tool 泄漏检查
 - [workitems/BUG-runtime-context-phase2-5-review-fixes.md](./workitems/BUG-runtime-context-phase2-5-review-fixes.md) - 记录并修复 Phase 2-5 评审发现的排队终止窗口、JSON 脱敏和 commit 清理缺陷
+- [workitems/BUG-client-app-public-skill-manifest-resolution.md](./workitems/BUG-client-app-public-skill-manifest-resolution.md) - 记录并修复 ClientApp public skill 资源可见但 `invoke_business_skill` 执行 manifest 缺失的问题
 
 ## 当前签收记录
 

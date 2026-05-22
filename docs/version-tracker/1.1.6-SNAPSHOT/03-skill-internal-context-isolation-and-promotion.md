@@ -307,7 +307,7 @@ Skill 内部完整过程可以保留在 frame/report/log 中，不受 Parent run
 4. Parent 只消费 promoted result / digest / refs。
 5. 压缩发生时，压缩的是 Parent runtime context 和 Skill runtime context 各自的可见窗口，不删除完整证据。
 
-Skill 正常完成后，下一轮普通对话上下文的可见投影见 [04-runtime-visible-conversation-and-recovery-design.md](./04-runtime-visible-conversation-and-recovery-design.md)。原则是：同一轮内部可以存在 `tool_call(invoke_skill) -> tool_result(S1)`，但下一轮 `runtimeVisibleConversation` 默认只保留 `U1 -> A1 -> U2`，并通过 metadata/ref 关联 Skill report，而不重放 raw tool call。
+Skill 正常完成后，下一轮普通对话上下文的可见投影见 [04-runtime-visible-conversation-and-recovery-design.md](./04-runtime-visible-conversation-and-recovery-design.md)。原则是：Root frame 自己产生并消费的 `tool_call(invoke_skill) -> tool_result(S1)` 属于 Root 可见 LLM protocol，应在 bounded runtime context 中保留直到压缩或裁剪；但 `S1` 只能是 child frame 的 promoted result / digest / refs，不能展开 child 内部 raw tool call、private messages 或 diagnostic logs。
 
 ## 当前实现核对结论
 
