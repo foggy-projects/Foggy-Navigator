@@ -90,6 +90,9 @@ def _build_system_prompt(
         "frame 隔离的独立生命周期、独立报告、长任务等待或多层委派时，才使用 "
         "invoke_business_agent 打开 Agent frame。"
     )
+    child_agent_contract = _build_sub_agent_base_contract_prompt(runtime_context)
+    if child_agent_contract:
+        prompt += child_agent_contract
     prompt += _build_completion_contract_prompt(skill_id or manifest.id, runtime_context)
     runtime_prompt = _build_runtime_system_context_prompt(
         skill_input or {},
@@ -126,6 +129,23 @@ def _build_system_identity_prompt(
         f"你正在执行业务技能 {manifest.id}。\n"
         f"职责说明: {manifest.description}\n"
         f"输出 schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
+    )
+
+
+def _build_sub_agent_base_contract_prompt(runtime_context: dict[str, Any] | None) -> str:
+    if not (runtime_context or {}).get("_agent_frame"):
+        return ""
+    return (
+        "子 Agent 默认工作方式: "
+        "你是被委派的子 Agent，只处理父级交给你的任务。"
+        "你不会默认看到 Root 完整历史、Root 可用业务技能目录或 parent raw tool chain；"
+        "以上下文中的 handoff instruction、附件、refs 和必要摘要为准。"
+        "如需业务 Skill，先在当前 Agent frame 内调用 list_skill_resources 查看可见技能，"
+        "再调用 read_skill_resource 或 invoke_business_skill 读取 Skill 材料。"
+        "invoke_business_skill 只在当前 Agent frame 内加载材料，不会创建新的 frame。"
+        "只有任务确实需要更深层独立生命周期，或用户明确要求子 Agent 时，才继续调用 "
+        "invoke_business_agent。完成、等待用户补充或交还父级时，优先调用 "
+        "submit_skill_result 或 handoff_to_parent 提交结构化状态、refs 和退出意图。"
     )
 
 

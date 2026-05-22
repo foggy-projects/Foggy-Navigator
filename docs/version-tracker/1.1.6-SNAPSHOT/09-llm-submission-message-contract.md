@@ -141,6 +141,8 @@ human(新的用户输入或续跑指令)
 
 只有 Agent manifest 明确配置 `context_visibility=summary` 时，BizWorker 才把 root summary 作为受控上下文注入 system；完整 parent fork 作为未来显式模式保留，不作为默认行为。
 
+子 Agent 仍携带 shared platform contract，例如内部 ID 治理、业务函数调用规则、Skill/Agent 边界、附件/日期上下文和 frame 完成契约；但这些属于平台运行时契约，不等于继承 Root-specific context。子 Agent 如需业务 Skill，应在自己的 frame 内通过 `list_skill_resources`、`read_skill_resource` 或 `invoke_business_skill` 自主发现和读取材料。详见 [13-default-subagent-base-prompt-and-skill-discovery.md](./13-default-subagent-base-prompt-and-skill-discovery.md)。
+
 ### 4. Root 与 Child 的完成契约分离
 
 `conversation.root` 是会话级持久执行载体，不是每轮都需要关闭的业务 Skill frame。它负责普通用户回合、业务工具调度、运行时记忆 commit 与中断恢复。

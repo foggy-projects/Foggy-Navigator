@@ -31,6 +31,14 @@ _ALL_POLICY_KEYS = frozenset({
     *ALLOWED_DIRS_KEYS,
     *ALLOWED_TOOLS_KEYS,
 })
+_SKILL_DISCOVERY_TOOL_NAMES = frozenset({
+    "list_skill_resources",
+    "read_skill_resource",
+})
+_SKILL_MATERIAL_TOOL_NAMES = frozenset({
+    "invoke_business_skill",
+    "invoke_business_agent",
+})
 
 
 @dataclass(frozen=True)
@@ -89,6 +97,8 @@ class ExecutionPolicy:
         if self.allowed_tools is None:
             return True
         if tool_name == "invoke_business_agent" and "invoke_business_skill" in self.allowed_tools:
+            return True
+        if tool_name in _SKILL_DISCOVERY_TOOL_NAMES and self.allowed_tools & _SKILL_MATERIAL_TOOL_NAMES:
             return True
         return tool_name in self.allowed_tools
 

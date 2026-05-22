@@ -1,6 +1,7 @@
 """Tests for LLM tool schema wording that affects model behavior."""
 
-from langgraph_biz_worker.runtime.llm_tool_schemas import _KNOWN_TOOL_SCHEMAS
+from langgraph_biz_worker.models import SkillManifest
+from langgraph_biz_worker.runtime.llm_tool_schemas import _KNOWN_TOOL_SCHEMAS, _tool_specs
 
 
 def test_invoke_business_skill_schema_declares_current_frame_material_contract():
@@ -54,3 +55,57 @@ def test_analyze_spreadsheet_schema_keeps_one_tool_entry():
     assert "Do not use it when the user only asks to submit or attach" in description
     assert "Do not use analyze_attachment or a vision model" in description
     assert operation["enum"] == ["summary", "preview", "read_range", "extract_rows"]
+
+
+def test_tool_specs_enable_skill_discovery_when_business_skill_allowed():
+    manifest = SkillManifest(
+        id="delegated-agent",
+        name="Delegated Agent",
+        allowed_tools=["invoke_business_skill", "invoke_business_agent"],
+    )
+
+    names = {spec["function"]["name"] for spec in _tool_specs(
+        manifest,
+        enabled_tool_names=frozenset({"invoke_business_skill"}),
+    )}
+
+    assert "invoke_business_skill" in names
+    assert "invoke_business_agent" in names
+    assert "list_skill_resources" in names
+    assert "read_skill_resource" in names
+    assert "invoke_business_function" not in names
+
+
+def test_tool_specs_enable_skill_discovery_when_business_agent_allowed():
+    manifest = SkillManifest(
+        id="delegated-agent",
+        name="Delegated Agent",
+        allowed_tools=["invoke_business_agent"],
+    )
+
+    names = {spec["function"]["name"] for spec in _tool_specs(
+        manifest,
+        enabled_tool_names=frozenset({"invoke_business_agent"}),
+    )}
+
+    assert "invoke_business_agent" in names
+    assert "list_skill_resources" in names
+    assert "read_skill_resource" in names
+    assert "invoke_business_skill" not in names
+
+
+def test_tool_specs_do_not_enable_skill_discovery_for_unrelated_tools():
+    manifest = SkillManifest(
+        id="function-agent",
+        name="Function Agent",
+        allowed_tools=["invoke_business_function"],
+    )
+
+    names = {spec["function"]["name"] for spec in _tool_specs(
+        manifest,
+        enabled_tool_names=frozenset({"invoke_business_function"}),
+    )}
+
+    assert "invoke_business_function" in names
+    assert "list_skill_resources" not in names
+    assert "read_skill_resource" not in names

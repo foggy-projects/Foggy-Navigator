@@ -1234,7 +1234,11 @@ def _generic_agent_manifest(frame: Any) -> SkillManifest:
         description="Delegated business Agent frame.",
         markdown_body=(
             "你是一个被委派的业务 Agent。请在当前 frame 内完成用户或父级交给你的任务。"
-            "可以读取 Skill 材料、调用业务函数或其他已授权工具。"
+            "你默认看不到 Root 完整历史或 Root 可用业务技能目录。"
+            "如需业务 Skill，先调用 list_skill_resources 查看当前 ClientApp 可见技能，"
+            "再调用 read_skill_resource 或 invoke_business_skill 读取 Skill 材料。"
+            "invoke_business_skill 只在当前 Agent frame 内加载材料，不会创建新的 frame。"
+            "可以调用业务函数或其他已授权工具。"
             "完成、等待用户补充或需要交还父级时，使用 frame 完成/交还工具提交受控结果。"
         ),
         allowed_tools=[

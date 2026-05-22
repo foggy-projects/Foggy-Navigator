@@ -75,6 +75,14 @@ _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     "resume_recoverable_child_skill",
     "shelve_interrupted_frame",
 })
+_SKILL_DISCOVERY_TOOL_NAMES = frozenset({
+    "list_skill_resources",
+    "read_skill_resource",
+})
+_SKILL_MATERIAL_TOOL_NAMES = frozenset({
+    "invoke_business_skill",
+    "invoke_business_agent",
+})
 
 
 def _tool_enabled(
@@ -84,6 +92,8 @@ def _tool_enabled(
     if enabled_tool_names is None:
         return True
     if name == "invoke_business_agent" and "invoke_business_skill" in enabled_tool_names:
+        return True
+    if name in _SKILL_DISCOVERY_TOOL_NAMES and enabled_tool_names & _SKILL_MATERIAL_TOOL_NAMES:
         return True
     return name in enabled_tool_names or name in _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES
 

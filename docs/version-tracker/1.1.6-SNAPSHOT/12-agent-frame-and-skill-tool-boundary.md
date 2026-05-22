@@ -146,6 +146,21 @@ Agent frame 的默认输入边界：
 5. 不默认注入 Root 的 `allowed_skills` 业务目录；子 Agent 如需读取 Skill 材料，应在自己的 frame 内调用 `invoke_business_skill` / `list_skill_resources`。
 6. 不继承 Root runtime memory 的 checkpoint/finalizing 回调，避免子 Agent 的内部消息被错误提交进 Root visible memory。
 
+### 子 Agent 默认提示词与 Skill discovery
+
+子 Agent 会携带 shared platform contract，包括内部 ID 治理、业务函数调用规则、Skill/Agent 边界、附件/日期上下文和 frame 完成契约。它不会继承 Root-specific context，例如 Root 完整历史、Root `allowed_skills` Markdown 目录、Root memory callback 或 parent raw tool chain。
+
+默认 SubAgent Base Prompt 要求子 Agent：
+
+1. 只处理父级委派的任务。
+2. 以 handoff instruction、附件、refs 和必要摘要为准，不假设看到了 Root 完整对话。
+3. 如需业务 Skill，先在当前 Agent frame 内调用 `list_skill_resources` / `read_skill_resource` 或 `invoke_business_skill` 获取材料。
+4. `invoke_business_skill` 在 Agent frame 内仍只是普通 Skill 材料读取，不创建下一层 frame。
+5. 只有需要更深层独立生命周期或用户明确要求时，才继续调用 `invoke_business_agent`。
+6. 完成、等待用户或交还父级时，优先调用 frame 完成/交还工具提交结构化结果、refs 和退出意图。
+
+当执行策略允许 `invoke_business_skill` 或 `invoke_business_agent` 时，运行时必须同步允许 `list_skill_resources` 与 `read_skill_resource`，否则子 Agent 无法按提示词发现和读取 Skill 材料。详细规则见 [13-default-subagent-base-prompt-and-skill-discovery.md](./13-default-subagent-base-prompt-and-skill-discovery.md)。
+
 Agent 完成后：
 
 1. Parent 只接收 promoted result、status、refs、summary、awaiting-user prompt 等受控结果。

@@ -2531,6 +2531,11 @@ def test_llm_agent_child_agent_does_not_inherit_root_visible_protocol_or_skill_c
     child_text = "\n".join(str(message.content) for message in child_messages)
     assert [message.type for message in child_messages] == ["system", "human"]
     assert child_messages[1].content == "handle child work"
+    assert "子 Agent 默认工作方式" in child_text
+    assert "你不会默认看到 Root 完整历史" in child_text
+    assert "list_skill_resources" in child_text
+    assert "read_skill_resource" in child_text
+    assert "invoke_business_skill 只在当前 Agent frame 内加载材料" in child_text
     assert "ROOT_ONLY_USER_MESSAGE" not in child_text
     assert "ROOT_ONLY_ASSISTANT_MESSAGE" not in child_text
     assert "ROOT_ONLY_ALLOWED_SKILL" not in child_text
