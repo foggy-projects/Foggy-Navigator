@@ -11,6 +11,7 @@ import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Sequence
+from .execution_policy import ExecutionPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +60,12 @@ class AccountPathGuard:
     path is never exposed to the model.
     """
 
-    def __init__(self, data_root: Path, account_id: str) -> None:
+    def __init__(self, data_root: Path, account_id: str, execution_policy: ExecutionPolicy | None = None) -> None:
         _validate_account_id(account_id)
         self._data_root = Path(data_root).resolve()
         self._account_id = account_id
         self._account_root = self._data_root / "accounts" / account_id
+        self._execution_policy = execution_policy
 
     @property
     def account_root(self) -> Path:
@@ -77,6 +79,13 @@ class AccountPathGuard:
 
     def resolve_read(self, relative_path: str) -> Path:
         """Resolve a relative path for read operations (read_file, str_replace source)."""
+        if self._execution_policy and self._execution_policy.configured:
+            try:
+                resolved = self._execution_policy.resolve_path(relative_path)
+                return resolved
+            except ValueError as exc:
+                raise PathGuardError(ERR_FORBIDDEN, str(exc))
+
         segments = self._validate_and_split(relative_path)
         self._check_allowed_file_path(segments)
         resolved = self._join_and_resolve(segments)
@@ -85,6 +94,13 @@ class AccountPathGuard:
 
     def resolve_write(self, relative_path: str) -> Path:
         """Resolve a relative path for write operations (write_file, str_replace, edit_file, patch_file)."""
+        if self._execution_policy and self._execution_policy.configured:
+            try:
+                resolved = self._execution_policy.resolve_path(relative_path)
+                return resolved
+            except ValueError as exc:
+                raise PathGuardError(ERR_FORBIDDEN, str(exc))
+
         segments = self._validate_and_split(relative_path)
         self._check_allowed_file_path(segments)
         resolved = self._join_and_resolve(segments)
@@ -104,6 +120,13 @@ class AccountPathGuard:
         - ``skills/<skill-name>/references/``
         - ``skills/<skill-name>/assets/``
         """
+        if self._execution_policy and self._execution_policy.configured:
+            try:
+                resolved = self._execution_policy.resolve_path(relative_path)
+                return resolved
+            except ValueError as exc:
+                raise PathGuardError(ERR_FORBIDDEN, str(exc))
+
         segments = self._validate_and_split(relative_path)
         self._check_allowed_list_path(segments)
         resolved = self._join_and_resolve(segments)

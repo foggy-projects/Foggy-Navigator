@@ -5,9 +5,9 @@
 ## 版本目标
 
 1. BizWorker 成为 LLM runtime context 的 source of truth；Java / 上游继续负责完整 UI transcript。
-2. 普通多轮对话、Skill 完成、`AWAITING_USER` 续接、中断恢复都统一进入 `ContextRuntimeMemory` / focus stack control state 规则。
+2. 普通多轮对话、Agent frame 完成、`AWAITING_USER` 续接、中断恢复都统一进入 `ContextRuntimeMemory` / focus stack control state 规则；Skill 不再默认进入 frame。
 3. `recentConversation` 降级为 deprecated external compatibility input，只允许空 memory bootstrap，不允许覆盖 BizWorker memory。
-4. Root frame 可见的 tool call / tool result 属于 LLM runtime protocol，应进入后续 bounded runtime context，直到压缩或裁剪；Skill private messages、report/log/journal 作为 execution evidence 保留，不直接外泄到 Root。
+4. Root frame 可见的 tool call / tool result 属于 LLM runtime protocol，应进入后续 bounded runtime context，直到压缩或裁剪；Agent frame 内部 messages、report/log/journal 作为 execution evidence 保留，不直接外泄到 Root。
 5. 上下文压缩采用 head-tail + lazy LLM summarizer，并提供 deterministic fallback，避免 runtime context 无界增长。
 6. 同一 `contextId` 的 Root frame / runtime memory 写入必须由 BizWorker 自身提供排他保护。
 7. 真实提交给 LLM 的 `messages` 数组中，`system` 承载运行时治理上下文，BizWorker runtime-visible protocol 以独立 `user` / `assistant` / `tool` messages 注入，当前 `human` 以用户原文为主，最多追加当前请求时间这类极少量请求态信息。
@@ -15,7 +15,7 @@
 ## 版本验收基线
 
 1. 没有 Java `recentConversation` 时，BizWorker 仍能维持普通多轮语义连续。
-2. Root frame 在上一轮产生的 tool call / tool result 会随后续 prompt 保留；正常 Skill 完成后，Root 只能看到 `invoke_business_skill` 的 promoted result，不展开 child frame 内部 tool trace。
+2. Root frame 在上一轮产生的 tool call / tool result 会随后续 prompt 保留；普通 Skill 调用作为当前 frame 的 tool protocol 保留；Agent frame 完成后，Root 只能看到 Agent promoted result，不展开 Agent frame 内部 tool trace。
 3. 只要存在可恢复 focus stack，下一条普通用户消息默认直达 deepest leaf frame；`AWAITING_USER`、用户中止、TIMEOUT/ERROR 都遵循该规则。
 4. recoverable interruption 通过 control state 恢复或后续显式丢弃，不伪造成普通 assistant turn。
 5. 同一 `contextId` 不允许真正并发 LLM loop；Phase 1 未实现 queue 前必须有明确 busy / conflict / 上游串行契约，Phase 3 起进入 pending queue + checkpoint。
@@ -32,8 +32,11 @@
 3. `09` 是当前真实提交给 LLM 的 `messages` 数组契约。
 4. `10` 是 scripted E2E 场景矩阵，以及 `llm-submissions` / `runtime-message-events` 对账验收口径。
 5. `11` 是真实上游 OpenAPI smoke 与本地 runtime context 证据对账 runbook。
+6. `12` 是 2026-05-22 收口后的 Agent / Skill / Frame 边界准绳：Skill 工具化，Agent Frame 化。
 
 若旧文档中仍出现“runtime context 拼入 user prompt”的早期表述，以 `09` 的 system / human 边界为当前实现口径。
+
+若旧文档中仍出现“Skill frame”“`invoke_business_skill` 打开 child frame”等早期表述，以 `12` 的 Agent / Skill / Frame 边界为当前实现口径。
 
 ## 当前条目
 
@@ -48,6 +51,7 @@
 - [09-llm-submission-message-contract.md](./09-llm-submission-message-contract.md) - 收口真实提交给 LLM 的 `messages` 数组契约：system 承载治理上下文，runtime-visible conversation 使用独立 role messages
 - [10-runtime-context-e2e-matrix-and-log-parity.md](./10-runtime-context-e2e-matrix-and-log-parity.md) - 固化 runtime context scripted E2E 矩阵，并要求关键场景同时校验 `llm-submissions` 与 `runtime-message-events`
 - [11-live-upstream-runtime-context-smoke.md](./11-live-upstream-runtime-context-smoke.md) - 提供真实上游 OpenAPI smoke 与 validate-only 对账脚本，覆盖 session root 定位、LLM body 快照、runtime events、附件引用和重开 UI/task 消息 raw tool 泄漏检查
+- [12-agent-frame-and-skill-tool-boundary.md](./12-agent-frame-and-skill-tool-boundary.md) - 收口 Agent / Skill / Frame 新边界：Skill 不再默认进入 frame，只有 Agent 调用才创建 non-root frame
 - [workitems/BUG-runtime-context-phase2-5-review-fixes.md](./workitems/BUG-runtime-context-phase2-5-review-fixes.md) - 记录并修复 Phase 2-5 评审发现的排队终止窗口、JSON 脱敏和 commit 清理缺陷
 - [workitems/BUG-client-app-public-skill-manifest-resolution.md](./workitems/BUG-client-app-public-skill-manifest-resolution.md) - 记录并修复 ClientApp public skill 资源可见但 `invoke_business_skill` 执行 manifest 缺失的问题
 

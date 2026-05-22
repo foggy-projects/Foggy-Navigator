@@ -3,16 +3,29 @@
 from langgraph_biz_worker.runtime.llm_tool_schemas import _KNOWN_TOOL_SCHEMAS
 
 
-def test_invoke_business_skill_schema_declares_promoted_result_contract():
+def test_invoke_business_skill_schema_declares_current_frame_material_contract():
     schema = _KNOWN_TOOL_SCHEMAS["invoke_business_skill"]["function"]
     description = schema["description"]
     instruction_description = schema["parameters"]["properties"]["instruction"]["description"]
     input_description = schema["parameters"]["properties"]["input"]["description"]
 
-    assert "promoted result" in description
-    assert "primary business-decision context" in description
-    assert "Do not call read_frame_execution_report after normal completion" in description
-    assert "complete promoted result" in instruction_description
+    assert "current frame" in description
+    assert "does not create a child frame" in description
+    assert "invoke_business_agent" in description
+    assert "will not run in a child frame" in instruction_description
+    assert "structured business inputs" in input_description
+
+
+def test_invoke_business_agent_schema_declares_child_agent_frame_contract():
+    schema = _KNOWN_TOOL_SCHEMAS["invoke_business_agent"]["function"]
+    description = schema["description"]
+    instruction_description = schema["parameters"]["properties"]["instruction"]["description"]
+    input_description = schema["parameters"]["properties"]["input"]["description"]
+
+    assert "Delegate work to a business Agent" in description
+    assert "open a child Agent frame" in description
+    assert "waiting for user input" in description
+    assert "Natural-language work order" in instruction_description
     assert "structured business inputs" in input_description
 
 

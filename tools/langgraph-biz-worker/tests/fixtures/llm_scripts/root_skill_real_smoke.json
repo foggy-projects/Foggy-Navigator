@@ -6,7 +6,7 @@
       "response": {
         "tool_calls": [
           {
-            "name": "invoke_business_skill",
+            "name": "invoke_business_agent",
             "args": {
               "skill_id": "exception_triage",
               "instruction": "Analyze exception order ORD-REAL-SMOKE-001. First collect evidence, then provide disposal suggestions. next:__TRACE_ID__:002",

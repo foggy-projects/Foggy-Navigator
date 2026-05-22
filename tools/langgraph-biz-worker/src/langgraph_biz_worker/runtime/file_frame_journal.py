@@ -270,7 +270,7 @@ class FileFrameJournal:
         ]
         for frame in candidates:
             if (
-                frame.frame_kind == FrameKind.SKILL
+                frame.frame_kind in {FrameKind.ROOT, FrameKind.AGENT, FrameKind.SKILL}
                 and isinstance(
                     frame.private_working_state.get("pending_child_approval_frame_id"),
                     str,
@@ -278,7 +278,7 @@ class FileFrameJournal:
             ):
                 return frame
         for frame in candidates:
-            if frame.frame_kind == FrameKind.SKILL:
+            if frame.frame_kind in {FrameKind.AGENT, FrameKind.SKILL}:
                 return frame
         for frame in candidates:
             if frame.status == FrameStatus.AWAITING_APPROVAL:

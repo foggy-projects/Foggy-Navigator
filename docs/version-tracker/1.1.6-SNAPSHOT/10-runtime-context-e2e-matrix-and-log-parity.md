@@ -10,13 +10,18 @@
 状态：实施中
 类型：runtime context governance / E2E test matrix
 
+> 2026-05-22 收口：本文既有 child / Skill 场景为历史测试基线。后续新增和修订测试时，
+> plain Skill 调用应断言“不创建 frame、留在当前 frame tool protocol”；只有
+> Agent 调用才断言 child frame、focus stack、`AWAITING_USER` 和 promoted result。
+> 当前准绳见 [12-agent-frame-and-skill-tool-boundary.md](./12-agent-frame-and-skill-tool-boundary.md)。
+
 ## 核心原则
 
 BizWorker runtime context 的验收不能只看最终 SSE result。关键路径必须同时回答三个问题：
 
 1. 本轮真实提交给 LLM 的 `messages` 是否符合 [09-llm-submission-message-contract.md](./09-llm-submission-message-contract.md)。
 2. 未完成 frame 的 provider protocol messages 是否已写入 `logs/runtime-message-events/*.jsonl`，并可用于恢复。
-3. 完成后的下一轮普通 runtime protocol 是否保留 Root-visible tool call / tool result，同时不把 child-private raw tool trace 泄漏进 Root。
+3. 完成后的下一轮普通 runtime protocol 是否保留 Root-visible tool call / tool result，同时不把 Agent child-private raw tool trace 泄漏进 Root。
 
 因此 scripted E2E 的最低断言不再只是“业务结果正确”，还必须覆盖：
 

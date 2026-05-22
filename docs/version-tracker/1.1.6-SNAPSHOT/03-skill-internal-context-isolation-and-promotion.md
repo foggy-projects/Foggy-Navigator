@@ -16,6 +16,12 @@
 - date: 2026-05-21
 - coding_status: not-started
 
+> 2026-05-22 收口：本文保留为历史设计记录。当前实现准绳见
+> [12-agent-frame-and-skill-tool-boundary.md](./12-agent-frame-and-skill-tool-boundary.md)。
+> Skill 不再默认进入 frame；本文中的 “Skill frame / child Skill / promoted Skill result”
+> 应按 “Agent frame / child Agent / promoted Agent result” 理解。`invoke_business_skill`
+> 不再打开 child frame，只返回当前 frame 可用的 Skill 材料。
+
 ## 已确认基线
 
 1. Skill 内部完整信息默认不带入外部 Parent runtime context。

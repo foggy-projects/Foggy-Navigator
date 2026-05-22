@@ -10,6 +10,12 @@
 状态：已实现并通过回归
 类型：runtime context governance / prompt contract
 
+> 2026-05-22 收口：本文的 messages 数组契约继续有效，但 non-root lifecycle
+> frame 的主语从 “Skill frame” 收口为 “Agent frame”。Skill 调用本身不再创建
+> frame；`invoke_business_skill` 返回 Skill 材料并留在当前 frame 的 tool protocol 中。
+> Agent 调用才创建 child frame，详见
+> [12-agent-frame-and-skill-tool-boundary.md](./12-agent-frame-and-skill-tool-boundary.md)。
+
 ## 背景
 
 Phase 1-5 已经把 BizWorker 调整为 LLM runtime context 的事实源：上游保存完整 UI transcript，BizWorker 维护模型运行所需的 bounded runtime context。
@@ -83,7 +89,7 @@ system
 注意：
 
 - 这里注入 BizWorker runtime memory 中受控保留的 Root-visible protocol messages，包含 semantic user / assistant messages，也包含 Root frame 自己产生的 assistant tool_call 和匹配 tool result。
-- Skill private messages、child-private raw tool chain、frame report/log/journal 仍作为 execution trace 保留，不默认变成 Root 下一轮 role messages。
+- Agent frame private messages、child-private raw tool chain、frame report/log/journal 仍作为 execution trace 保留，不默认变成 Root 下一轮 role messages。普通 Skill 调用没有 child-private frame，属于当前 frame 的 tool protocol。
 - 若上下文压缩发生，压缩摘要按后续 compaction 设计进入受控上下文；不会恢复完整历史栈。
 - 当前初始 messages 由 `runtime/llm_message_builder.py` 统一组装。执行 loop 只在模型返回后追加 assistant / tool messages，不再负责 system / history / current-human 的契约拼接。
 - completed root turn 的本轮协议先暂存在 Root frame `private_working_state._pending_root_turn_protocol_messages`，随后由 Root close/commit 写入 `private_working_state.runtime_context_memory.visibleMessages`；该字段当前承载 bounded provider protocol，而不是仅承载 user/assistant 语义投影。
@@ -106,7 +112,7 @@ tool call / tool result 分三种场景处理：
 3. 正常完成后的下一轮普通对话默认保留 Root-visible tool protocol。
    - 如果上一轮 Root 没有工具调用，下一轮看到 `U1 -> A1 -> U2`。
    - 如果上一轮 Root 发生工具调用，下一轮看到 `U1 -> assistant.tool_call(...) -> tool_result(...) -> A1 -> U2`。
-   - Skill 完成时，Root 侧的 `tool_result` 只能包含 promoted digest、reportRef、artifactRefs 等受控信息。
+   - Agent 完成时，Root 侧的 `tool_result` 只能包含 promoted digest、reportRef、artifactRefs 等受控信息。
    - child-private raw tool call / raw tool result 保留在 execution trace 和 runtime message event log 中，不进入 Root-visible protocol。
 
 ### 4. Root 与 Child 的完成契约分离
@@ -120,9 +126,9 @@ Root 回合完成规则：
 3. 如果 root 回合需要保存 `active_plan`、`artifact_refs`、`evidence_refs` 或其他结构化状态，模型应主动调用 `submit_skill_result` 提交这些结构化信息。
 4. 如果 checkpoint 上存在 queued user input，BizWorker 会先把 queued input 追加进当前 loop，让模型继续处理，而不是提前把自然语言答复提交为最终结果。
 
-Child / non-root frame 完成规则：
+Child / non-root Agent frame 完成规则：
 
-1. 业务 Skill frame 有明确生命周期边界，完成、等待用户补充或需要返回父级时，优先主动调用 `submit_skill_result` 或 `handoff_to_parent`，以便提交结构化状态、refs 与受控退出意图。
+1. 业务 Agent frame 有明确生命周期边界，完成、等待用户补充或需要返回父级时，优先主动调用 `submit_skill_result` 或 `handoff_to_parent`，以便提交结构化状态、refs 与受控退出意图。
 2. BizWorker 不再在 child frame 返回自然语言但未调用终止工具时，追加伪 `human` 提醒消息要求重试。
 3. child frame 未调用终止工具但返回自然语言时，按子 Agent 风格归一化处理：
    - 如果文本明显在追问或请求用户补充，则转为 `WAITING_FOR_USER_INPUT`，child frame 进入 `AWAITING_USER`，下一条用户消息继续直达该 frame。

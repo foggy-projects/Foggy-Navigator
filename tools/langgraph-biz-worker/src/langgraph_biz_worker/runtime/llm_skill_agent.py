@@ -14,7 +14,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, ToolMessage
 
-from ..models import FrameStatus, QueryEvent, SkillManifest
+from ..models import FrameKind, FrameStatus, QueryEvent, SkillManifest
 from ..tools.business_function_tools import (
     get_business_function_schema,
     invoke_business_function,
@@ -41,6 +41,7 @@ from .llm_tool_call_codec import (
 )
 from .llm_child_recovery import (
     _context_skill_manifest,
+    _invoke_business_agent_tool,
     _invoke_business_skill_tool,
     _resume_recoverable_child_skill_tool,
 )
@@ -132,11 +133,12 @@ class LlmSkillAgent:
             runtime_context.pop("_persistent_frame", None)
             runtime_context.pop("_recoverable_interruption", None)
             runtime_context.pop("_active_plan", None)
-        event_skill_id = None if persistent_frame else frame.skill_id
+        frame_identity = _frame_runtime_identity(frame)
+        event_skill_id = None if persistent_frame else frame_identity
         event_presentation_hint = "root_frame" if persistent_frame else None
 
         manifest = _manifest_for_frame(self._runtime, frame)
-        if manifest is None:
+        if manifest is None and frame.skill_id:
             manifest = _context_skill_manifest(
                 self._runtime,
                 frame.skill_id,
@@ -144,8 +146,13 @@ class LlmSkillAgent:
                 runtime_context=runtime_context,
             )
         if manifest is None:
-            self._runtime.fail_frame(frame_id, f"Skill manifest not found: {frame.skill_id}")
-            return [QueryEvent(type="error", task_id=task_id, error="Skill manifest not found")]
+            if frame.frame_kind == FrameKind.AGENT:
+                manifest = _generic_agent_manifest(frame)
+            else:
+                self._runtime.fail_frame(frame_id, f"Skill manifest not found: {frame.skill_id}")
+                return [QueryEvent(type="error", task_id=task_id, error="Skill manifest not found")]
+        if frame.frame_kind == FrameKind.AGENT:
+            manifest = _agent_frame_manifest(manifest)
         try:
             execution_policy = ExecutionPolicy.from_context(runtime_context)
         except ValueError as exc:
@@ -165,7 +172,7 @@ class LlmSkillAgent:
         public_resource_tools: PublicSkillResourceTools | None = None
         if self._data_root and account_id:
             artifact_store = ArtifactStore(self._data_root)
-            file_tools = AccountFileTools(self._data_root, account_id, task_id)
+            file_tools = AccountFileTools(self._data_root, account_id, task_id, execution_policy=execution_policy)
         client_app_id = _runtime_client_app_id(runtime_context)
         if self._data_root and client_app_id:
             public_resource_tools = PublicSkillResourceTools(Path(self._data_root).parent / "skills", client_app_id)
@@ -175,9 +182,12 @@ class LlmSkillAgent:
             else ""
         )
 
-        runtime_context["_skill_name"] = frame.skill_id
+        runtime_context["_skill_name"] = frame_identity
+        if frame.frame_kind == FrameKind.AGENT:
+            runtime_context["_agent_frame"] = True
+            runtime_context["_agent_id"] = frame.agent_id or frame_identity
         runtime_context["_llm_submission_skill_id"] = (
-            "conversation.root" if persistent_frame else frame.skill_id
+            "conversation.root" if persistent_frame else frame_identity
         )
         runtime_context["_llm_submission_session_id"] = (
             frame.conversation_id or frame.session_id or task_id
@@ -206,7 +216,7 @@ class LlmSkillAgent:
         events: list[QueryEvent] = []
         provider_tool_specs = self._provider_tool_specs(
             manifest,
-            frame.skill_id,
+            frame_identity,
             runtime_context,
             execution_policy=execution_policy,
         )
@@ -775,6 +785,18 @@ class LlmSkillAgent:
                 run_child_frame=self.run,
             )
 
+        if name == "invoke_business_agent":
+            return _invoke_business_agent_tool(
+                self._runtime,
+                frame_id=frame_id,
+                args=args,
+                task_id=task_id,
+                account_id=account_id,
+                runtime_context=runtime_context,
+                persistent_frame=persistent_frame,
+                run_child_frame=self.run,
+            )
+
         if name == "resume_recoverable_child_skill":
             return _resume_recoverable_child_skill_tool(
                 self._runtime,
@@ -1195,6 +1217,49 @@ def _tool_not_authorized_error(name: str) -> str:
     return f"TOOL_NOT_AUTHORIZED: tool '{name}' is not allowed by upstream execution_policy"
 
 
+def _frame_runtime_identity(frame: Any) -> str:
+    return (
+        getattr(frame, "agent_id", None)
+        or getattr(frame, "frame_name", None)
+        or getattr(frame, "skill_id", None)
+        or getattr(frame, "frame_id", "")
+    )
+
+
+def _generic_agent_manifest(frame: Any) -> SkillManifest:
+    identity = _frame_runtime_identity(frame) or "business.agent"
+    return SkillManifest(
+        id=identity,
+        name=getattr(frame, "frame_name", None) or identity,
+        description="Delegated business Agent frame.",
+        markdown_body=(
+            "你是一个被委派的业务 Agent。请在当前 frame 内完成用户或父级交给你的任务。"
+            "可以读取 Skill 材料、调用业务函数或其他已授权工具。"
+            "完成、等待用户补充或需要交还父级时，使用 frame 完成/交还工具提交受控结果。"
+        ),
+        allowed_tools=[
+            "invoke_business_skill",
+            "invoke_business_agent",
+            "invoke_business_function",
+            "analyze_attachment",
+            "analyze_spreadsheet",
+            "submit_skill_result",
+            "handoff_to_parent",
+            "read_frame_execution_report",
+        ],
+        visibility="public",
+        context_visibility="isolated",
+    )
+
+
+def _agent_frame_manifest(manifest: SkillManifest) -> SkillManifest:
+    allowed = list(manifest.allowed_tools or [])
+    for tool_name in ("invoke_business_skill", "invoke_business_agent"):
+        if tool_name not in allowed:
+            allowed.append(tool_name)
+    return manifest.model_copy(update={"allowed_tools": allowed})
+
+
 # ---------------------------------------------------------------------------
 # Tool schema registry
 # ---------------------------------------------------------------------------
@@ -1208,4 +1273,6 @@ def _manifest_for_frame(runtime: SkillRuntime, frame: Any) -> SkillManifest | No
             return SkillManifest(**snapshot)
         except Exception:
             logger.warning("Invalid manifest snapshot in frame=%s", frame.frame_id, exc_info=True)
+    if not frame.skill_id:
+        return None
     return runtime.registry.get_manifest(frame.skill_id)

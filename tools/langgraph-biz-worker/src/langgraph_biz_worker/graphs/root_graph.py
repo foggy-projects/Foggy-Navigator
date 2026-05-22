@@ -39,6 +39,7 @@ from ..runtime.llm_child_recovery import (
     _context_skill_manifest,
     _direct_child_result_for_user,
     _record_parent_child_recoverable_interruption,
+    _runtime_context_for_child_agent,
     _runtime_context_for_child_skill,
 )
 from ..runtime.skill_identity import (
@@ -247,7 +248,8 @@ def _system_root_manifest() -> SkillManifest:
             "不要直接输出自然语言作为最终回答。"
             "当可用上下文或技能材料中描述了所需的已授权业务函数时，使用 "
             "invoke_business_function 调用业务函数。"
-            "需要把边界清晰的工作委派给专业子技能时，使用 invoke_business_skill。"
+            "需要读取业务技能说明时，使用 invoke_business_skill；"
+            "需要把边界清晰的工作委派给专业 Agent 时，使用 invoke_business_agent。"
             "附件默认只是元数据或 URL；只有在用户要求检查图片/文件内容，"
             "或必须从附件中提取字段时，才使用 analyze_attachment。"
             "Excel 或 CSV 表格内容应使用 analyze_spreadsheet，不要当作图片分析。"
@@ -258,6 +260,7 @@ def _system_root_manifest() -> SkillManifest:
         allowed_tools=[
             "invoke_business_function",
             "invoke_business_skill",
+            "invoke_business_agent",
             "analyze_attachment",
             "analyze_spreadsheet",
             "submit_skill_result",
@@ -617,36 +620,40 @@ def route_skill(state: RootState) -> dict:
             invoke_tool = {
                 "type": "function",
                 "function": {
-                    "name": "invoke_business_skill",
+                    "name": "invoke_business_agent",
                     "description": (
-                        "Delegate the user's request to a specialized business skill. "
+                        "Delegate the user's request to a specialized business Agent. "
                         "Use this when the user asks to perform an action that matches "
-                        "one of the available skills. The returned promoted result is "
-                        "the primary business-decision context from that child skill; "
+                        "one of the available agent-like capabilities. The returned promoted result is "
+                        "the primary business-decision context from that child Agent frame; "
                         "do not inspect execution reports after normal completion just "
                         "to recover status, next_step, or structured_output fields. "
-                        "If the child asks for user input, the runtime keeps that child "
+                        "If the child asks for user input, the runtime keeps that Agent "
                         "frame open and resumes it on the next user message."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "agent_id": {
+                                "type": "string",
+                                "description": "The exact Agent or agent-like skill folder name to invoke."
+                            },
                             "skill_name": {
                                 "type": "string",
-                                "description": "The exact skill folder name to invoke."
+                                "description": "Compatibility alias for agent_id."
                             },
                             "instruction": {
                                 "type": "string",
                                 "description": (
-                                    "Natural language instructions for the skill, "
+                                    "Natural language instructions for the Agent, "
                                     "summarizing what needs to be done and any "
                                     "extracted entities (e.g. order numbers) from "
-                                    "the user's request so the child can return a "
+                                    "the user's request so the Agent can return a "
                                     "complete promoted result."
                                 )
                             }
                         },
-                        "required": ["skill_name", "instruction"]
+                        "required": ["instruction"]
                     }
                 }
             }
@@ -654,7 +661,7 @@ def route_skill(state: RootState) -> dict:
             
             if routable_skills:
                 skills_summary = "\n".join([f"- {s.id}: {s.description}" for s in routable_skills])
-                skills_section = f"Available Skills:\n{skills_summary}\n\nIf the user's request matches a skill, use the `invoke_business_skill` tool to delegate the work.\nProvide the `skill_name` and a detailed `instruction` based on the user's input. Treat the returned promoted result as the primary child-skill business context."
+                skills_section = f"Available Agents:\n{skills_summary}\n\nIf the user's request should be delegated, use the `invoke_business_agent` tool to open an Agent frame.\nProvide `agent_id` and a detailed `instruction` based on the user's input. Treat the returned promoted result as the primary child-Agent business context."
             else:
                 skills_section = "No business skills are currently registered. Respond naturally to the user."
 
@@ -745,10 +752,14 @@ If no skill matches, respond naturally to the user — you can answer questions,
                 # Check if there are tool calls
                 if final_msg and getattr(final_msg, "tool_calls", None):
                     tc = final_msg.tool_calls[0]
-                    if tc.get("name") == "invoke_business_skill":
+                    if tc.get("name") in {"invoke_business_agent", "invoke_business_skill"}:
                         args = tc.get("args", {})
                         candidate_skill_name = (
-                            args.get("skill_name")
+                            args.get("agent_id")
+                            or args.get("agentId")
+                            or args.get("agent_name")
+                            or args.get("agentName")
+                            or args.get("skill_name")
                             or args.get("skillName")
                             or args.get("skill_id")
                             or args.get("skillId")
@@ -794,18 +805,24 @@ If no skill matches, respond naturally to the user — you can answer questions,
                     skill_id = llm_choice
 
     if skill_id:
-        # Create Frame via Runtime
+        # Create an Agent Frame via Runtime. Older tool names may still pass a
+        # skill-like id; it is kept as compatibility metadata while the frame
+        # lifecycle semantics are Agent-owned.
         frame_id = _runtime.invoke_skill(
             task_id=task_id,
             skill_id=skill_id,
             skill_input=context,
+            frame_kind=FrameKind.AGENT,
+            agent_id=skill_id,
+            frame_name=skill_id,
         )
         events.append(QueryEvent(
             type="skill_frame_open",
             task_id=task_id,
             skill_frame_id=frame_id,
             skill_id=skill_id,
-            content=f"Opening frame for skill: {skill_id}",
+            content=f"Opening frame for agent: {skill_id}",
+            presentation_hint="agent_frame",
         ))
         return {"events": events, "active_frame_id": frame_id}
     else:
@@ -1432,13 +1449,15 @@ def _run_parent_after_nested_focus_completion(
     events: list[QueryEvent],
 ) -> Any | None:
     task_id = state["task_id"]
-    manifest = _context_skill_manifest(
-        _runtime,
-        parent.skill_id,
-        account_id=account_id,
-        runtime_context=runtime_context,
-    )
-    if manifest is None:
+    manifest = None
+    if parent.skill_id:
+        manifest = _context_skill_manifest(
+            _runtime,
+            parent.skill_id,
+            account_id=account_id,
+            runtime_context=runtime_context,
+        )
+    if manifest is None and parent.frame_kind != FrameKind.AGENT:
         events.append(QueryEvent(
             type="error",
             task_id=task_id,
@@ -1454,14 +1473,23 @@ def _run_parent_after_nested_focus_completion(
         task_id=task_id,
         skill_frame_id=parent.frame_id,
         parent_frame_id=parent.parent_frame_id or root_frame_id,
-        skill_id=parent.skill_id,
-        content=f"Resuming parent frame after child completion: {parent.skill_id}",
+        skill_id=parent.agent_id or parent.skill_id,
+        content=f"Resuming parent frame after child completion: {parent.agent_id or parent.skill_id or parent.frame_id}",
+        presentation_hint="agent_frame" if parent.frame_kind == FrameKind.AGENT else None,
     ))
-    parent_runtime_context = _runtime_context_for_child_skill(
-        runtime_context,
-        _runtime.context_summary_for_frame(parent.frame_id),
-        manifest,
-    )
+    if parent.frame_kind == FrameKind.AGENT:
+        parent_runtime_context = _runtime_context_for_child_agent(
+            runtime_context=runtime_context,
+            root_context_summary=_runtime.context_summary_for_frame(parent.frame_id),
+            agent_manifest=manifest,
+            agent_id=parent.agent_id or parent.skill_id or parent.frame_id,
+        )
+    else:
+        parent_runtime_context = _runtime_context_for_child_skill(
+            runtime_context,
+            _runtime.context_summary_for_frame(parent.frame_id),
+            manifest,
+        )
     parent_runtime_context = dict(parent_runtime_context or {})
     parent_runtime_context["_nested_child_completed"] = _visible_promoted_child_result(child_promoted)
     parent_runtime_context["_runtime_protocol_recovery"] = {
@@ -1502,8 +1530,9 @@ def _unwind_completed_focus_to_root(
             task_id=task_id,
             skill_frame_id=current.frame_id,
             parent_frame_id=parent_frame_id,
-            skill_id=current.skill_id,
-            content=f"Frame closed: {current.skill_id}",
+            skill_id=current.agent_id or current.skill_id,
+            content=f"Frame closed: {current.agent_id or current.skill_id or current.frame_id}",
+            presentation_hint="agent_frame" if current.frame_kind == FrameKind.AGENT else None,
             execution_report_ref=promoted.get("execution_report_ref"),
             execution_report_digest=promoted.get("execution_report_digest"),
         ))
@@ -1636,13 +1665,15 @@ def _run_active_focus_before_root(
     root = _runtime.get_frame(root_frame_id) or root
     focus_parent_frame_id = focus.parent_frame_id or root_frame_id
 
-    focus_manifest = _context_skill_manifest(
-        _runtime,
-        focus.skill_id,
-        account_id=account_id,
-        runtime_context=runtime_context,
-    )
-    if focus_manifest is None:
+    focus_manifest = None
+    if focus.skill_id:
+        focus_manifest = _context_skill_manifest(
+            _runtime,
+            focus.skill_id,
+            account_id=account_id,
+            runtime_context=runtime_context,
+        )
+    if focus_manifest is None and focus.frame_kind != FrameKind.AGENT:
         _resume_root_if_waiting_for_focus(root_frame_id)
         return [QueryEvent(
             type="error",
@@ -1659,8 +1690,9 @@ def _run_active_focus_before_root(
             task_id=task_id,
             skill_frame_id=focus.frame_id,
             parent_frame_id=focus_parent_frame_id,
-            skill_id=focus.skill_id,
-            content=f"Resuming frame for skill: {focus.skill_id}",
+            skill_id=focus.agent_id or focus.skill_id,
+            content=f"Resuming frame for agent: {focus.agent_id or focus.skill_id or focus.frame_id}",
+            presentation_hint="agent_frame" if focus.frame_kind == FrameKind.AGENT else None,
         )
     ]
 
@@ -1678,16 +1710,24 @@ def _run_active_focus_before_root(
                 task_id=task_id,
                 skill_frame_id=focus.frame_id,
                 parent_frame_id=focus_parent_frame_id,
-                skill_id=focus.skill_id,
-                error="Child skill is awaiting approval without approval_request",
+                skill_id=focus.agent_id or focus.skill_id,
+                error="Child agent is awaiting approval without approval_request",
             ))
         return events
 
-    child_runtime_context = _runtime_context_for_child_skill(
-        runtime_context,
-        _runtime.context_summary_for_frame(focus_parent_frame_id),
-        focus_manifest,
-    )
+    if focus.frame_kind == FrameKind.AGENT:
+        child_runtime_context = _runtime_context_for_child_agent(
+            runtime_context=runtime_context,
+            root_context_summary=_runtime.context_summary_for_frame(focus_parent_frame_id),
+            agent_manifest=focus_manifest,
+            agent_id=focus.agent_id or focus.skill_id or focus.frame_id,
+        )
+    else:
+        child_runtime_context = _runtime_context_for_child_skill(
+            runtime_context,
+            _runtime.context_summary_for_frame(focus_parent_frame_id),
+            focus_manifest,
+        )
     child_runtime_context = dict(child_runtime_context or {})
     busy_event = _prepare_root_runtime_memory_for_turn(
         root,
@@ -1738,8 +1778,8 @@ def _run_active_focus_before_root(
                 task_id=task_id,
                 skill_frame_id=refreshed_focus.frame_id,
                 parent_frame_id=focus_parent_frame_id,
-                skill_id=refreshed_focus.skill_id,
-                error="Child skill is awaiting approval without approval_request",
+                skill_id=refreshed_focus.agent_id or refreshed_focus.skill_id,
+                error="Child agent is awaiting approval without approval_request",
             ))
         return events
 
@@ -1759,12 +1799,12 @@ def _run_active_focus_before_root(
         return events
 
     if not refreshed_focus or refreshed_focus.status != FrameStatus.COMPLETED:
-        error = f"Child skill ended in {refreshed_focus.status.value if refreshed_focus else 'MISSING'}"
+        error = f"Child agent ended in {refreshed_focus.status.value if refreshed_focus else 'MISSING'}"
         _record_parent_child_recoverable_interruption(
             _runtime,
             parent_frame_id=focus_parent_frame_id,
             child_frame_id=refreshed_focus.frame_id if refreshed_focus else focus.frame_id,
-            reason="child_skill_failed",
+            reason="child_agent_failed",
             error=error,
             task_id=task_id,
         )

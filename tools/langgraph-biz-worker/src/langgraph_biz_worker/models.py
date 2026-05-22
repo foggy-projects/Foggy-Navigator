@@ -131,6 +131,36 @@ class QueryEvent(BaseModel):
     remaining_ms: int | None = None
     presentation_hint: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_content(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        content = data.get("content")
+        if content is not None and not isinstance(content, str):
+            if isinstance(content, list):
+                text_parts = []
+                for item in content:
+                    if isinstance(item, str):
+                        text_parts.append(item)
+                    elif isinstance(item, dict):
+                        if item.get("type") == "text":
+                            text_parts.append(item.get("text", ""))
+                        elif "text" in item:
+                            text_parts.append(item.get("text", ""))
+                        elif item.get("type") == "thinking":
+                            thinking_content = item.get("thinking", "")
+                            if thinking_content:
+                                text_parts.append(f"<thinking>{thinking_content}</thinking>\n")
+                        elif "thinking" in item:
+                            thinking_content = item.get("thinking", "")
+                            if thinking_content:
+                                text_parts.append(f"<thinking>{thinking_content}</thinking>\n")
+                data["content"] = "".join(text_parts)
+            else:
+                data["content"] = str(content)
+        return data
+
 
 # ---------------------------------------------------------------------------
 # Frame status enum
@@ -153,12 +183,14 @@ class FrameStatus(str, Enum):
 class FrameKind(str, Enum):
     """Runtime frame kind.
 
-    ``ROOT`` frames own conversation-scoped runtime context. ``SKILL`` frames
-    are LLM-executed business skills. ``FUNCTION_CALL`` frames are
-    runtime-created wrappers around one business function invocation.
+    ``ROOT`` frames own conversation-scoped runtime context. ``AGENT`` frames
+    are delegated non-root LLM execution containers. ``SKILL`` is retained for
+    legacy frame snapshots created before skills were tool-only. ``FUNCTION_CALL``
+    frames are runtime-created wrappers around one business function invocation.
     """
 
     ROOT = "ROOT"
+    AGENT = "AGENT"
     SKILL = "SKILL"
     FUNCTION_CALL = "FUNCTION_CALL"
 
@@ -205,11 +237,19 @@ VALID_TRANSITIONS: dict[FrameStatus, frozenset[FrameStatus]] = {
 
 
 class SkillFrameState(BaseModel):
-    """Private execution state for a single Skill invocation."""
+    """Private execution state for a runtime frame.
+
+    The historical model name is retained for compatibility. New non-root LLM
+    lifecycle frames should use ``frame_kind=AGENT`` and identify themselves via
+    ``agent_id`` / ``frame_name``; ``skill_id`` is no longer a required semantic
+    identity for new frames.
+    """
 
     frame_id: str
     task_id: str
-    skill_id: str
+    skill_id: str = ""
+    agent_id: str | None = None
+    frame_name: str | None = None
     frame_kind: FrameKind = FrameKind.SKILL
     parent_frame_id: str | None = None
     status: FrameStatus = FrameStatus.CREATED

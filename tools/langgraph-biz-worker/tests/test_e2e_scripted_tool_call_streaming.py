@@ -287,7 +287,7 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "invoke_business_skill",
+                                    "name": "invoke_business_agent",
                                     "args": {
                                         "skill_id": "exception_triage",
                                         "instruction": f"route to skill next:{trace_id}:002",
@@ -372,9 +372,9 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
     event_types = [event.type for event in events]
     assert event_types.count("skill_frame_open") == 2
     assert "tool_result" in event_types
-    assert any(event.tool_name == "invoke_business_skill" for event in events)
+    assert any(event.tool_name == "invoke_business_agent" for event in events)
     assert not any(
-        "Unknown tool: invoke_business_skill" in (event.content or "")
+        "Unknown tool: invoke_business_agent" in (event.content or "")
         for event in events
     )
     assert sum(1 for event in events if event.type == "skill_result_submit") == 2
@@ -391,7 +391,7 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
     first_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:001")
     second_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:002")
     third_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:003")
-    assert first_turn["responseSummary"]["toolCalls"] == ["invoke_business_skill"]
+    assert first_turn["responseSummary"]["toolCalls"] == ["invoke_business_agent"]
     assert second_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
     assert third_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
 
@@ -448,7 +448,7 @@ promote_to_parent:
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "invoke_business_skill",
+                                    "name": "invoke_business_agent",
                                     "args": {
                                         "skill_id": "tms-ticket-agent",
                                         "instruction": f"引导用户选择工单类型 next:{trace_id}:002",
@@ -562,8 +562,8 @@ promote_to_parent:
     )
     assert continued_root_open.skill_frame_id == first_root_open.skill_frame_id
     assert continued_child_open.skill_frame_id == first_child_open.skill_frame_id
-    assert any(event.tool_name == "invoke_business_skill" for event in first_events)
-    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert any(event.tool_name == "invoke_business_agent" for event in first_events)
+    assert not any(event.tool_name == "invoke_business_agent" for event in continued_events)
     assert not any(event.tool_name == "resume_recoverable_child_skill" for event in continued_events)
 
     first_result = next(event for event in first_events if event.type == "result")
@@ -605,7 +605,7 @@ promote_to_parent:
     ]
     assert any("submit_skill_result" in _message_tool_call_names(message) for message in resumed_assistant_messages)
     assert any("WAITING_FOR_USER_INPUT" in (message.get("content") or "") for message in resumed_tool_messages)
-    assert any("上一个子技能回合正在等待用户输入。" in content for content in resumed_system_messages)
+    assert any("上一个子 Agent frame 正在等待用户输入。" in content for content in resumed_system_messages)
     assert any(first_prompt in content for content in resumed_system_messages)
     assert any("当前 human message 是用户对上次提示的回复。" in content for content in resumed_system_messages)
 
@@ -665,7 +665,7 @@ promote_to_parent:
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "invoke_business_skill",
+                                    "name": "invoke_business_agent",
                                     "args": {
                                         "skill_id": "tms-ticket-agent",
                                         "instruction": child_instruction,
@@ -772,8 +772,8 @@ promote_to_parent:
         if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
     )
     assert continued_child_open.skill_frame_id == first_child_open.skill_frame_id
-    assert continued_child_open.content == "Resuming frame for skill: tms-ticket-agent"
-    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert continued_child_open.content == "Resuming frame for agent: tms-ticket-agent"
+    assert not any(event.tool_name == "invoke_business_agent" for event in continued_events)
 
     continued_result = next(event for event in continued_events if event.type == "result")
     assert continued_result.content == "工单字段已收齐。"
@@ -929,7 +929,7 @@ promote_to_parent:
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "invoke_business_skill",
+                                    "name": "invoke_business_agent",
                                     "args": {
                                         "skill_id": "tms-ticket-agent",
                                         "instruction": child_instruction,
@@ -1045,7 +1045,7 @@ promote_to_parent:
     close_event = next(event for event in continued_events if event.type == "skill_frame_close")
 
     assert continued_child_open.skill_frame_id == first_child_open.skill_frame_id
-    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert not any(event.tool_name == "invoke_business_agent" for event in continued_events)
     assert not any(event.tool_name == "resume_recoverable_child_skill" for event in continued_events)
     assert any(event.tool_name == "handoff_to_parent" for event in continued_events)
     assert close_event.skill_frame_id == first_child_open.skill_frame_id
@@ -1095,7 +1095,7 @@ promote_to_parent:
     ]
     assert _submission_texts(resumed_payload, "human") == [child_instruction, cancel_prompt]
     system_text = "\n".join(_submission_texts(resumed_payload, "system"))
-    assert "子技能退出策略:" in system_text
+    assert "子 Agent 退出策略:" in system_text
     assert "handoff_to_parent" in system_text
 
     resumed_child_events = _runtime_message_events(
@@ -1173,7 +1173,7 @@ promote_to_parent:
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "invoke_business_skill",
+                                    "name": "invoke_business_agent",
                                     "args": {
                                         "skill_id": "tms-ticket-agent",
                                         "instruction": child_instruction,
@@ -1330,7 +1330,7 @@ promote_to_parent:
         f"next:{trace_id}:003",
     ]
     assert [record["responseSummary"]["toolCalls"] for record in records] == [
-        ["invoke_business_skill"],
+        ["invoke_business_agent"],
         ["submit_skill_result"],
         ["handoff_to_parent"],
         ["submit_skill_result"],
@@ -1431,7 +1431,7 @@ promote_to_parent:
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "invoke_business_skill",
+                                    "name": "invoke_business_agent",
                                     "args": {
                                         "skill_id": "tms-ticket-agent",
                                         "instruction": f"引导用户补充工单字段 next:{trace_id}:002",
@@ -1557,7 +1557,7 @@ promote_to_parent:
     }
 
     assert not any(
-        event.tool_name == "invoke_business_skill"
+        event.tool_name == "invoke_business_agent"
         for event in continued_events
     )
     assert sum(
@@ -1699,7 +1699,7 @@ promote_to_parent:
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "invoke_business_skill",
+                                    "name": "invoke_business_agent",
                                     "args": {
                                         "skill_id": "tms-ticket-agent",
                                         "instruction": f"引导用户补充平台反馈工单字段 next:{trace_id}:002",
@@ -1851,7 +1851,7 @@ promote_to_parent:
     )
     assert continued_root_open.skill_frame_id == first_root_open.skill_frame_id
     assert continued_child_open.skill_frame_id == first_child_open.skill_frame_id
-    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert not any(event.tool_name == "invoke_business_agent" for event in continued_events)
     assert not any(event.tool_name == "analyze_attachment" for event in continued_events)
     assert any(event.tool_name == "invoke_business_function" for event in continued_events)
 
@@ -1899,7 +1899,7 @@ promote_to_parent:
     ]
     assert any("submit_skill_result" in _message_tool_call_names(message) for message in resumed_assistant_messages)
     assert any("WAITING_FOR_USER_INPUT" in (message.get("content") or "") for message in resumed_tool_messages)
-    assert "上一个子技能回合正在等待用户输入。" in resumed_system_messages
+    assert "上一个子 Agent frame 正在等待用户输入。" in resumed_system_messages
     assert "上游系统提供的附件:" in resumed_system_messages
     assert attachment_id in resumed_system_messages
     assert attachment_url in resumed_system_messages
@@ -2077,7 +2077,7 @@ async def test_scripted_tms_ticket_child_receives_attachment_context(monkeypatch
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "invoke_business_skill",
+                                    "name": "invoke_business_agent",
                                     "args": {
                                         "skill_id": "tms-ticket-agent",
                                         "instruction": f"请创建一个平台反馈工单 next:{trace_id}:002",
@@ -2176,7 +2176,7 @@ async def test_scripted_tms_ticket_child_receives_attachment_context(monkeypatch
     child_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:002")
     child_system_prompt = "\n".join(_record_messages(child_turn, "system"))
     child_user_prompt = "\n".join(_record_messages(child_turn, "user"))
-    assert "当前业务技能回合上下文:" in child_system_prompt
+    assert "当前业务 Agent frame 上下文:" in child_system_prompt
     assert "SKILL_AGENT_START" not in child_system_prompt
     assert "SKILL_AGENT_START" not in child_user_prompt
     assert "上游系统提供的附件:" in child_system_prompt
@@ -3494,7 +3494,7 @@ promote_to_parent:
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "invoke_business_skill",
+                                    "name": "invoke_business_agent",
                                     "args": {
                                         "skill_id": "tms-ticket-agent",
                                         "instruction": f"提交工单，先确认必要字段 next:{trace_id}:002",
@@ -3630,7 +3630,7 @@ promote_to_parent:
         if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
     )
     assert continued_child_open.skill_frame_id == child_open.skill_frame_id
-    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert not any(event.tool_name == "invoke_business_agent" for event in continued_events)
     assert not any(event.tool_name == "resume_recoverable_child_skill" for event in continued_events)
     assert not any(
         event.type == "error"
@@ -3678,7 +3678,7 @@ promote_to_parent:
     assert any("submit_skill_result" in _message_tool_call_names(message) for message in continue_assistant_messages)
     assert any("WAITING_USER" in (message.get("content") or "") for message in continue_tool_messages)
     assert any(
-        "上一个子技能回合正在等待用户输入。" in content
+        "上一个子 Agent frame 正在等待用户输入。" in content
         for content in continue_system_messages
     ), continue_system_messages
     assert any(child_open.skill_frame_id in content for content in continue_system_messages)
@@ -3750,7 +3750,7 @@ promote_to_parent:
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "invoke_business_skill",
+                                    "name": "invoke_business_agent",
                                     "args": {
                                         "skill_id": "tms-ticket-agent",
                                         "instruction": f"引导用户选择工单类型 next:{trace_id}:002",
@@ -3884,8 +3884,8 @@ promote_to_parent:
     )
     assert continued_root_open.skill_frame_id == root_open.skill_frame_id
     assert continued_root_open.content == "Reusing conversation root frame"
-    assert any(event.tool_name == "invoke_business_skill" for event in first_events)
-    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert any(event.tool_name == "invoke_business_agent" for event in first_events)
+    assert not any(event.tool_name == "invoke_business_agent" for event in continued_events)
     assert not any(event.tool_name == "read_frame_execution_report" for event in continued_events)
     assert not any(
         event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
@@ -3946,7 +3946,7 @@ promote_to_parent:
     assert any("已引导用户选择工单类型" in message for message in continue_ai_messages)
     assert any("上一次执行被中断。" in content for content in continue_system_messages)
     assert any("原因: user_cancelled" in content for content in continue_system_messages)
-    assert any("来自子技能提升结果的续跑摘要:" in content for content in continue_system_messages)
+    assert any("来自子 Agent 提升结果的续跑摘要:" in content for content in continue_system_messages)
     assert any("TMS 工单助手" in content for content in continue_system_messages)
     assert any("运单异常件" in content and "平台反馈" in content for content in continue_system_messages)
     assert any("当前活动任务计划:" in content for content in continue_system_messages)
@@ -4425,12 +4425,12 @@ promote_to_parent:
     result = next(event for event in events if event.type == "result")
     assert focus_open.skill_frame_id == grandchild_frame_id
     assert focus_open.parent_frame_id == child_frame_id
-    assert focus_open.content == f"Resuming frame for skill: {grandchild_skill_id}"
+    assert focus_open.content == f"Resuming frame for agent: {grandchild_skill_id}"
     assert result.content == "请继续提供深层业务信息。"
     assert result.structured_output["required_fields"] == ["deep_detail"]
     assert not any(event.tool_name == "shelve_interrupted_frame" for event in events)
     assert not any(event.tool_name == "resume_recoverable_child_skill" for event in events)
-    assert not any(event.tool_name == "invoke_business_skill" for event in events)
+    assert not any(event.tool_name == "invoke_business_agent" for event in events)
 
     root = runtime.get_frame(root_frame_id)
     child = runtime.get_frame(child_frame_id)
@@ -4619,7 +4619,7 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
     assert root_open.skill_frame_id == root_frame_id
     assert root_open.content == "Reusing conversation root frame"
     assert child_open.skill_frame_id == child_frame_id
-    assert child_open.content == "Resuming frame for skill: exception_triage"
+    assert child_open.content == "Resuming frame for agent: exception_triage"
     assert result.content == f"Child resumed successfully next:{trace_id}:002"
     assert result.structured_output == {
         "classification": "vehicle_delay",
@@ -4641,7 +4641,7 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
         "confidence": 0.91,
     }
     assert not any(event.tool_name == "resume_recoverable_child_skill" for event in events)
-    assert not any(event.tool_name == "invoke_business_skill" for event in events)
+    assert not any(event.tool_name == "invoke_business_agent" for event in events)
     assert not any(event.tool_name == "read_frame_execution_report" for event in events)
 
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
@@ -4913,7 +4913,7 @@ promote_to_parent:
         [second_prompt],
     ]
     parent_system_messages = _record_messages(records[1], "system")
-    assert any("刚完成的子技能提升结果:" in content for content in parent_system_messages)
+    assert any("刚完成的子 Agent 提升结果:" in content for content in parent_system_messages)
     assert any(grandchild_skill_id in content for content in parent_system_messages)
     assert any(final_summary in content for content in parent_system_messages)
 
@@ -4931,7 +4931,7 @@ promote_to_parent:
     assert _submission_role_sequence(leaf_payload) == ["system", "human"]
     assert _submission_role_sequence(parent_payload) == ["system", "human"]
     parent_system_text = "\n".join(_submission_texts(parent_payload, "system"))
-    assert "刚完成的子技能提升结果:" in parent_system_text
+    assert "刚完成的子 Agent 提升结果:" in parent_system_text
     assert grandchild_skill_id in parent_system_text
     assert final_summary in parent_system_text
     assert _submission_texts(parent_payload, "human") == [second_prompt]
@@ -4962,7 +4962,7 @@ promote_to_parent:
             and event["message"]["role"] == "system"
         )
     )
-    assert "刚完成的子技能提升结果:" in parent_initial_system
+    assert "刚完成的子 Agent 提升结果:" in parent_initial_system
     assert grandchild_skill_id in parent_initial_system
     assert final_summary in parent_initial_system
 
@@ -5175,7 +5175,7 @@ promote_to_parent:
     result = next(event for event in events if event.type == "result")
     assert leaf_open.skill_frame_id == grandchild_frame_id
     assert leaf_open.parent_frame_id == child_frame_id
-    assert leaf_open.content == f"Resuming frame for skill: {grandchild_skill_id}"
+    assert leaf_open.content == f"Resuming frame for agent: {grandchild_skill_id}"
     assert parent_open.content == f"Resuming parent frame after child completion: {child_skill_id}"
     assert close_ids == [grandchild_frame_id, child_frame_id]
     assert any(event.tool_name == "handoff_to_parent" for event in events)
@@ -5214,7 +5214,7 @@ promote_to_parent:
         ["submit_skill_result"],
     ]
     parent_system_messages = _record_messages(records[1], "system")
-    assert any("刚完成的子技能提升结果:" in content for content in parent_system_messages)
+    assert any("刚完成的子 Agent 提升结果:" in content for content in parent_system_messages)
     assert any(leaf_handoff_summary in content for content in parent_system_messages)
 
     payloads = _llm_submission_payloads(context_id)
@@ -5234,7 +5234,7 @@ promote_to_parent:
     assert _submission_texts(leaf_payload, "human") == [second_prompt]
     assert _submission_texts(parent_payload, "human") == [second_prompt]
     parent_system_text = "\n".join(_submission_texts(parent_payload, "system"))
-    assert "刚完成的子技能提升结果:" in parent_system_text
+    assert "刚完成的子 Agent 提升结果:" in parent_system_text
     assert leaf_handoff_summary in parent_system_text
 
     leaf_events = _runtime_message_events(
@@ -5411,7 +5411,7 @@ async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_serv
         for event in continued_events
     )
     assert not any(event.tool_name == "resume_recoverable_child_skill" for event in continued_events)
-    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert not any(event.tool_name == "invoke_business_agent" for event in continued_events)
     assert not any(event.tool_name == "read_frame_execution_report" for event in continued_events)
 
     unrelated_result = next(event for event in unrelated_events if event.type == "result")
@@ -5470,7 +5470,7 @@ async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_serv
         "mock_get_vehicle_status",
     ]
     assert _submission_role_sequence(first_root_payloads[-1])[-2:] == ["ai", "tool"]
-    assert _submission_tool_call_names(first_root_payloads[-1]) == ["invoke_business_skill"]
+    assert _submission_tool_call_names(first_root_payloads[-1]) == ["invoke_business_agent"]
 
     continued_payload = _llm_submission_for(
         payloads,
@@ -5482,7 +5482,7 @@ async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_serv
         f"继续刚才被中断的异常订单处理，沿用已有上下文给出下一步。 next:{trace_id}:006"
     )
     continued_tool_names = _submission_tool_call_names(continued_payload)
-    assert "invoke_business_skill" in continued_tool_names
+    assert "invoke_business_agent" in continued_tool_names
     assert "submit_skill_result" in continued_tool_names
     assert any(
         "vehicle_delay" in text

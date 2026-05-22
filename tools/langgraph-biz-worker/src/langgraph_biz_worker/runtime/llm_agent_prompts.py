@@ -60,7 +60,7 @@ def _build_system_prompt(
     skill_id: str | None = None,
     runtime_context: dict[str, Any] | None = None,
 ) -> str:
-    prompt = _build_system_identity_prompt(manifest)
+    prompt = _build_system_identity_prompt(manifest, runtime_context)
     if account_context_prompt:
         prompt += f"\n---\n{account_context_prompt}\n---\n\n"
     if manifest.markdown_body:
@@ -83,6 +83,9 @@ def _build_system_prompt(
         "推断业务成功或业务 id。"
         "如果技能引用其 bundle 内的文件，使用 list_skill_resources 或 "
         "read_skill_resource；这些工具只会暴露当前 ClientApp 的公开技能资源。"
+        "Skill 是当前 frame 内的能力材料，使用 invoke_business_skill 不会打开 child frame。"
+        "只有需要委派独立执行体、等待用户、单独 report 或隔离上下文时，才使用 "
+        "invoke_business_agent 打开 Agent frame。"
     )
     prompt += _build_completion_contract_prompt(skill_id or manifest.id, runtime_context)
     runtime_prompt = _build_runtime_system_context_prompt(
@@ -95,7 +98,10 @@ def _build_system_prompt(
     return prompt
 
 
-def _build_system_identity_prompt(manifest: SkillManifest) -> str:
+def _build_system_identity_prompt(
+    manifest: SkillManifest,
+    runtime_context: dict[str, Any] | None = None,
+) -> str:
     if manifest.id == _SYSTEM_ROOT_SKILL_ID:
         description = (
             "当前业务会话的根编排 Agent。负责处理当前用户回合，必要时调用业务工具，"
@@ -104,6 +110,13 @@ def _build_system_identity_prompt(manifest: SkillManifest) -> str:
         return (
             "你是当前业务会话的根编排 Agent。\n"
             f"职责说明: {description}\n"
+            f"输出 schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
+        )
+    if runtime_context and runtime_context.get("_agent_frame") is True:
+        agent_id = runtime_context.get("_agent_id") or manifest.id
+        return (
+            f"你正在执行被委派的业务 Agent `{agent_id}`。\n"
+            f"职责说明: {manifest.description}\n"
             f"输出 schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
         )
     return (
@@ -125,7 +138,7 @@ def _build_completion_contract_prompt(
             "submit_skill_result 提交本回合结果。"
         )
     return (
-        "只能使用已提供的工具。当前是子技能 / 子 Agent frame：完成、等待用户补充或需要返回父级时，"
+        "只能使用已提供的工具。当前是子 Agent frame：完成、等待用户补充或需要返回父级时，"
         "优先主动调用 submit_skill_result 或 handoff_to_parent，以便提交结构化状态。"
         "如果只是自然语言完成或追问用户，也可以直接输出最终消息，运行时会将其归一化为子 Agent 结果。"
     )
@@ -169,6 +182,8 @@ def _build_runtime_system_context_prompt(
 def _build_turn_header(skill_id: str, runtime_context: dict[str, Any] | None = None) -> str:
     if (runtime_context or {}).get("_persistent_frame") is True or skill_id == _SYSTEM_ROOT_SKILL_ID:
         return "当前根回合上下文:"
+    if (runtime_context or {}).get("_agent_frame") is True:
+        return "当前业务 Agent frame 上下文:"
     return "当前业务技能回合上下文:"
 
 
@@ -305,7 +320,7 @@ def _recoverable_interruption_context(working_state: dict[str, Any]) -> dict[str
     }
     pending_child = working_state.get("pending_recoverable_child")
     if isinstance(pending_child, dict):
-        context["pending_child_skill"] = model_visible_context(_safe_content(pending_child))
+        context["pending_child_agent"] = model_visible_context(_safe_content(pending_child))
     recoverable_focus = working_state.get("recoverable_focus_summary")
     if isinstance(recoverable_focus, dict):
         context["recoverable_focus"] = model_visible_context(_safe_content(recoverable_focus))
@@ -356,10 +371,10 @@ def _build_recoverable_interruption_prompt(runtime_context: dict[str, Any] | Non
     last_error = interruption.get("last_error")
     if last_error:
         parts.append(f"上次错误: {last_error}")
-    pending_child = interruption.get("pending_child_skill")
+    pending_child = interruption.get("pending_child_agent") or interruption.get("pending_child_skill")
     if isinstance(pending_child, dict):
         parts.append(
-            "待恢复子技能: "
+            "待恢复子 Agent: "
             f"{json.dumps(pending_child, ensure_ascii=False, sort_keys=True)}"
         )
     recoverable_focus = interruption.get("recoverable_focus")
@@ -377,7 +392,7 @@ def _build_recoverable_interruption_prompt(runtime_context: dict[str, Any] | Non
     continuation_summary = interruption.get("continuation_summary")
     if isinstance(continuation_summary, dict):
         parts.append(
-            "来自子技能提升结果的续跑摘要: "
+            "来自子 Agent 提升结果的续跑摘要: "
             f"{json.dumps(continuation_summary, ensure_ascii=False, sort_keys=True)}"
         )
     parts.append("当前用户消息见下一条 human message。")
@@ -385,7 +400,7 @@ def _build_recoverable_interruption_prompt(runtime_context: dict[str, Any] | Non
         "中断工作只是可恢复候选，不是强制续跑。先判断 intent_resolution，"
         "取值为 CONTINUE_PREVIOUS、ABANDON_PREVIOUS、START_UNRELATED_NEW_TASK "
         "或 ASK_CLARIFICATION。若当前用户消息明确继续、纠正或补充中断工作，"
-        "使用 CONTINUE_PREVIOUS 并从现有 frame 上下文继续。若存在待恢复子技能，"
+        "使用 CONTINUE_PREVIOUS 并从现有 frame 上下文继续。若存在待恢复子 Agent，"
         "使用 resume_recoverable_child_skill，使同一个子 frame 继续。若用户明确停止/"
         "取消，使用 ABANDON_PREVIOUS。若用户要求无关的新任务，使用 "
         "START_UNRELATED_NEW_TASK。对于任何搁置场景，先总结被放弃的内容，然后调用 "
@@ -404,7 +419,7 @@ def _build_awaiting_user_input_prompt(runtime_context: dict[str, Any] | None) ->
     if not isinstance(awaiting, dict):
         return ""
     parts = [
-        "上一个子技能回合正在等待用户输入。",
+        "上一个子 Agent frame 正在等待用户输入。",
         "等待用户输入上下文:",
         json.dumps(model_visible_context(awaiting), ensure_ascii=False, sort_keys=True),
         "当前 human message 是用户对上次提示的回复。",
@@ -423,10 +438,10 @@ def _build_nested_child_completed_prompt(runtime_context: dict[str, Any] | None)
     if not isinstance(result, dict):
         return ""
     return "\n".join([
-        "刚完成的子技能提升结果:",
+        "刚完成的子 Agent 提升结果:",
         json.dumps(model_visible_context(result), ensure_ascii=False, sort_keys=True),
         (
-            "规则: 这是当前 frame 刚刚等待的子技能结果。继续当前 frame 的业务决策，"
+            "规则: 这是当前 frame 刚刚等待的子 Agent 结果。继续当前 frame 的业务决策，"
             "只有在该结果缺少必要字段且用户明确需要排障时，才读取执行报告。"
         ),
     ])
@@ -434,11 +449,12 @@ def _build_nested_child_completed_prompt(runtime_context: dict[str, Any] | None)
 
 def _build_frame_result_contract_prompt(runtime_context: dict[str, Any] | None) -> str:
     return (
-        "Frame 结果契约: 将 invoke_business_skill 或 resume_recoverable_child_skill "
-        "返回的结果视为该子 frame 的主要业务决策上下文，包括 status、next_step、"
+        "Frame 结果契约: 将 invoke_business_agent 或 resume_recoverable_child_skill "
+        "返回的结果视为该子 Agent frame 的主要业务决策上下文，包括 status、next_step、"
         "missing_fields、structured_output、artifact_refs 和 evidence_refs。"
         "中断后注入的续跑摘要来自同一个被提升的子结果，应按普通工具结果一致理解。"
-        "正常子技能完成后，不要仅为了恢复这些字段而调用 read_frame_execution_report。"
+        "普通 invoke_business_skill 只返回当前 frame 可用的 Skill 材料，不代表 child frame。"
+        "正常子 Agent 完成后，不要仅为了恢复这些字段而调用 read_frame_execution_report。"
         "只有当用户询问 frame 如何运行、需要调试/审计执行过程，或提升结果/续跑摘要缺少"
         "下一步业务决策所需字段时，才使用 read_frame_execution_report。"
     )
@@ -487,8 +503,8 @@ def _build_child_handoff_policy_prompt(
     if runtime_context and runtime_context.get("_persistent_frame") is True:
         return ""
     return (
-        "子技能退出策略: 如果当前用户消息明确表示取消、停止当前任务、换个问题、"
-        "回到主对话，或当前请求明显不属于本子技能职责，不要继续要求用户补齐原任务参数。"
+        "子 Agent 退出策略: 如果当前用户消息明确表示取消、停止当前任务、换个问题、"
+        "回到主对话，或当前请求明显不属于本 Agent 职责，不要继续要求用户补齐原任务参数。"
         "应调用 handoff_to_parent 受控交还父级。"
         "仅确认取消或回到主对话时，将 requires_parent_synthesis 设为 false；"
         "用户提出无关新任务、需要父级重新判断，或你无法独立处理时，将 "

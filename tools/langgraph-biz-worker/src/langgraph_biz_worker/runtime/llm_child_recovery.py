@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from ..models import FrameStatus, QueryEvent, SkillManifest
+from ..models import FrameKind, FrameStatus, QueryEvent, SkillManifest
 from .llm_tool_call_codec import _child_approval_report_payload
 from .skill_runtime import SkillRuntime
 
@@ -68,36 +68,91 @@ def _invoke_business_skill_tool(
     persistent_frame: bool,
     run_child_frame: RunChildFrame,
 ) -> dict[str, Any]:
-    child_skill_id = (
+    skill_id = (
         args.get("skill_name")
         or args.get("skillName")
         or args.get("skill_id")
         or args.get("skillId")
     )
-    if not child_skill_id:
+    if not skill_id:
         return {"ok": False, "error": "skill_name is required"}
-    if child_skill_id == runtime.get_frame(frame_id).skill_id:
-        return {"ok": False, "error": "A skill cannot invoke itself"}
-    child_manifest = _context_skill_manifest(
+    manifest = _context_skill_manifest(
         runtime,
-        child_skill_id,
+        skill_id,
         account_id=account_id,
         runtime_context=runtime_context,
     )
-    if not child_manifest:
-        return {"ok": False, "error": f"Skill manifest not found: {child_skill_id}"}
+    if not manifest:
+        return {"ok": False, "error": f"Skill manifest not found: {skill_id}"}
+
+    return {
+        "ok": True,
+        "frame_created": False,
+        "skill_id": manifest.id,
+        "name": manifest.name,
+        "description": manifest.description,
+        "markdown_body": manifest.markdown_body,
+        "input_schema": manifest.input_schema,
+        "output_schema": manifest.output_schema,
+        "allowed_tools": list(manifest.allowed_tools),
+        "approval_tools": list(manifest.approval_tools),
+        "business_rules": manifest.business_rules,
+        "context_visibility": manifest.context_visibility,
+        "input": args.get("input") if isinstance(args.get("input"), dict) else {},
+        "usage": (
+            "Skill material loaded into the current frame. Continue reasoning in "
+            "this same frame; call business functions or other tools directly if needed."
+        ),
+    }
+
+
+def _invoke_business_agent_tool(
+    runtime: SkillRuntime,
+    *,
+    frame_id: str,
+    args: dict[str, Any],
+    task_id: str,
+    account_id: str | None,
+    runtime_context: dict[str, Any] | None,
+    persistent_frame: bool,
+    run_child_frame: RunChildFrame,
+) -> dict[str, Any]:
+    agent_id = (
+        args.get("agent_id")
+        or args.get("agentId")
+        or args.get("agent_name")
+        or args.get("agentName")
+        or args.get("skill_name")
+        or args.get("skillName")
+        or args.get("skill_id")
+        or args.get("skillId")
+    )
+    if not agent_id:
+        return {"ok": False, "error": "agent_id is required"}
+    current_frame = runtime.get_frame(frame_id)
+    if current_frame and agent_id in {current_frame.agent_id, current_frame.skill_id}:
+        return {"ok": False, "error": "An agent cannot invoke itself"}
+    agent_manifest = _context_skill_manifest(
+        runtime,
+        agent_id,
+        account_id=account_id,
+        runtime_context=runtime_context,
+    )
 
     instruction = args.get("instruction") or args.get("prompt") or ""
     child_input = args.get("input") if isinstance(args.get("input"), dict) else {}
-    child_runtime_context = _runtime_context_for_child_skill(
-        runtime_context,
-        runtime.context_summary_for_frame(frame_id),
-        child_manifest,
+    child_runtime_context = _runtime_context_for_child_agent(
+        runtime_context=runtime_context,
+        root_context_summary=runtime.context_summary_for_frame(frame_id),
+        agent_manifest=agent_manifest,
+        agent_id=str(agent_id),
     )
-    child_frame_id = runtime.invoke_child_skill(
+    child_frame_id = runtime.invoke_agent(
         parent_frame_id=frame_id,
-        child_skill_id=child_skill_id,
-        child_input=child_input,
+        agent_id=str(agent_id),
+        frame_name=str(args.get("frame_name") or args.get("frameName") or agent_id),
+        agent_input=child_input,
+        legacy_skill_id=agent_manifest.id if agent_manifest else None,
     )
     child_events = [
         QueryEvent(
@@ -105,8 +160,10 @@ def _invoke_business_skill_tool(
             task_id=task_id,
             skill_frame_id=child_frame_id,
             parent_frame_id=frame_id,
-            skill_id=child_skill_id,
-            content=f"Opening frame for skill: {child_skill_id}",
+            skill_id=str(agent_id),
+            content=f"Opening frame for agent: {agent_id}",
+            presentation_hint="agent_frame",
+            payload={"agent_id": str(agent_id), "frame_kind": FrameKind.AGENT.value},
         )
     ]
     child_events.extend(run_child_frame(
@@ -123,7 +180,7 @@ def _invoke_business_skill_tool(
         if not isinstance(approval_request, dict):
             return {
                 "ok": False,
-                "error": "Child skill is awaiting approval without approval_request",
+                "error": "Child agent is awaiting approval without approval_request",
                 "_events": child_events,
             }
         runtime.mark_child_awaiting_approval(
@@ -153,7 +210,7 @@ def _invoke_business_skill_tool(
             "child_frame_id": child_frame_id,
             "result": {
                 "frame_id": child.frame_id,
-                "skill_id": child.skill_id,
+                "agent_id": child.agent_id or child.skill_id,
                 "result_summary": child.result_summary,
                 "structured_output": child.output or {},
                 "artifact_refs": list(child.artifact_refs),
@@ -163,13 +220,13 @@ def _invoke_business_skill_tool(
             "_suspended": True,
         }
     if not child or child.status != FrameStatus.COMPLETED:
-        error = f"Child skill ended in {child.status.value if child else 'MISSING'}"
+        error = f"Child agent ended in {child.status.value if child else 'MISSING'}"
         if persistent_frame:
             _record_parent_child_recoverable_interruption(
                 runtime,
                 parent_frame_id=frame_id,
                 child_frame_id=child.frame_id if child else child_frame_id,
-                reason="child_skill_failed",
+                reason="child_agent_failed",
                 error=error,
                 task_id=task_id,
             )
@@ -193,8 +250,9 @@ def _invoke_business_skill_tool(
         task_id=task_id,
         skill_frame_id=child_frame_id,
         parent_frame_id=frame_id,
-        skill_id=child_skill_id,
-        content=f"Frame closed: {child_skill_id}",
+        skill_id=str(agent_id),
+        content=f"Frame closed: {agent_id}",
+        presentation_hint="agent_frame",
         execution_report_ref=promoted.get("execution_report_ref"),
         execution_report_digest=promoted.get("execution_report_digest"),
     ))
@@ -238,22 +296,34 @@ def _resume_recoverable_child_skill_tool(
         return {"ok": False, "error": f"Frame not found: {frame_id}"}
     child = runtime.prepare_recoverable_child_resume(frame_id)
     if child is None:
-        return {"ok": False, "error": "No recoverable child skill is pending"}
-    child_manifest = _context_skill_manifest(
-        runtime,
-        child.skill_id,
-        account_id=account_id,
-        runtime_context=runtime_context,
-    )
-    if not child_manifest:
-        return {"ok": False, "error": f"Skill manifest not found: {child.skill_id}"}
+        return {"ok": False, "error": "No recoverable child agent is pending"}
+    child_manifest = None
+    if child.skill_id:
+        child_manifest = _context_skill_manifest(
+            runtime,
+            child.skill_id,
+            account_id=account_id,
+            runtime_context=runtime_context,
+        )
+        if not child_manifest:
+            return {"ok": False, "error": f"Skill manifest not found: {child.skill_id}"}
 
     instruction = args.get("instruction") or args.get("prompt") or ""
-    child_runtime_context = _runtime_context_for_child_skill(
-        runtime_context,
-        runtime.context_summary_for_frame(frame_id),
-        child_manifest,
-    )
+    if child.frame_kind == FrameKind.AGENT:
+        child_runtime_context = _runtime_context_for_child_agent(
+            runtime_context=runtime_context,
+            root_context_summary=runtime.context_summary_for_frame(frame_id),
+            agent_manifest=child_manifest,
+            agent_id=child.agent_id or child.frame_name or child.skill_id or child.frame_id,
+        )
+    elif child_manifest:
+        child_runtime_context = _runtime_context_for_child_skill(
+            runtime_context,
+            runtime.context_summary_for_frame(frame_id),
+            child_manifest,
+        )
+    else:
+        return {"ok": False, "error": f"Skill manifest not found: {child.skill_id}"}
     child_runtime_context = dict(child_runtime_context or {})
     child_runtime_context["_runtime_protocol_recovery"] = {
         "enabled": True,
@@ -266,8 +336,9 @@ def _resume_recoverable_child_skill_tool(
             task_id=task_id,
             skill_frame_id=child.frame_id,
             parent_frame_id=frame_id,
-            skill_id=child.skill_id,
-            content=f"Resuming frame for skill: {child.skill_id}",
+            skill_id=child.agent_id or child.skill_id,
+            content=f"Resuming frame for agent: {child.agent_id or child.skill_id or child.frame_id}",
+            presentation_hint="agent_frame" if child.frame_kind == FrameKind.AGENT else None,
         )
     ]
     child_events.extend(run_child_frame(
@@ -285,7 +356,7 @@ def _resume_recoverable_child_skill_tool(
             _resume_parent_if_waiting(runtime, frame_id)
             return {
                 "ok": False,
-                "error": "Child skill is awaiting approval without approval_request",
+                "error": "Child agent is awaiting approval without approval_request",
                 "_events": child_events,
             }
         runtime.mark_child_awaiting_approval(
@@ -315,7 +386,7 @@ def _resume_recoverable_child_skill_tool(
             "child_frame_id": refreshed_child.frame_id,
             "result": {
                 "frame_id": refreshed_child.frame_id,
-                "skill_id": refreshed_child.skill_id,
+                "agent_id": refreshed_child.agent_id or refreshed_child.skill_id,
                 "result_summary": refreshed_child.result_summary,
                 "structured_output": refreshed_child.output or {},
                 "artifact_refs": list(refreshed_child.artifact_refs),
@@ -325,12 +396,12 @@ def _resume_recoverable_child_skill_tool(
             "_suspended": True,
         }
     if not refreshed_child or refreshed_child.status != FrameStatus.COMPLETED:
-        error = f"Child skill ended in {refreshed_child.status.value if refreshed_child else 'MISSING'}"
+        error = f"Child agent ended in {refreshed_child.status.value if refreshed_child else 'MISSING'}"
         _record_parent_child_recoverable_interruption(
             runtime,
             parent_frame_id=frame_id,
             child_frame_id=refreshed_child.frame_id if refreshed_child else child.frame_id,
-            reason="child_skill_failed",
+            reason="child_agent_failed",
             error=error,
             task_id=task_id,
         )
@@ -348,8 +419,9 @@ def _resume_recoverable_child_skill_tool(
         task_id=task_id,
         skill_frame_id=child.frame_id,
         parent_frame_id=frame_id,
-        skill_id=child.skill_id,
-        content=f"Frame closed: {child.skill_id}",
+        skill_id=child.agent_id or child.skill_id,
+        content=f"Frame closed: {child.agent_id or child.skill_id or child.frame_id}",
+        presentation_hint="agent_frame" if child.frame_kind == FrameKind.AGENT else None,
         execution_report_ref=promoted.get("execution_report_ref"),
         execution_report_digest=promoted.get("execution_report_digest"),
     ))
@@ -525,6 +597,27 @@ def _runtime_context_for_child_skill(
     child_context = dict(runtime_context or {})
     visibility = _context_visibility_for_child_manifest(child_manifest)
     child_context["_context_visibility"] = visibility
+    child_context.pop("_visible_root_context_summary", None)
+    if visibility == "summary" and root_context_summary:
+        child_context["_visible_root_context_summary"] = root_context_summary
+    return child_context
+
+
+def _runtime_context_for_child_agent(
+    *,
+    runtime_context: dict[str, Any] | None,
+    root_context_summary: dict[str, Any] | None,
+    agent_manifest: SkillManifest | None,
+    agent_id: str,
+) -> dict[str, Any] | None:
+    child_context = dict(runtime_context or {})
+    if agent_manifest:
+        visibility = _context_visibility_for_child_manifest(agent_manifest)
+    else:
+        visibility = "isolated"
+    child_context["_context_visibility"] = visibility
+    child_context["_agent_frame"] = True
+    child_context["_agent_id"] = agent_id
     child_context.pop("_visible_root_context_summary", None)
     if visibility == "summary" and root_context_summary:
         child_context["_visible_root_context_summary"] = root_context_summary

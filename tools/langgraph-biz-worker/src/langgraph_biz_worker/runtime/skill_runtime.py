@@ -146,7 +146,7 @@ class SkillRuntime:
     def invoke_skill(
         self,
         task_id: str,
-        skill_id: str,
+        skill_id: str | None = None,
         skill_input: dict[str, Any] | None = None,
         parent_frame_id: str | None = None,
         conversation_id: str | None = None,
@@ -155,6 +155,8 @@ class SkillRuntime:
         origin_task_id: str | None = None,
         last_task_ids: list[str] | None = None,
         frame_kind: FrameKind = FrameKind.SKILL,
+        agent_id: str | None = None,
+        frame_name: str | None = None,
     ) -> str:
         """Create a new Frame and transition to RUNNING.
 
@@ -166,7 +168,9 @@ class SkillRuntime:
         frame = SkillFrameState(
             frame_id=frame_id,
             task_id=task_id,
-            skill_id=skill_id,
+            skill_id=skill_id or "",
+            agent_id=agent_id,
+            frame_name=frame_name,
             frame_kind=frame_kind,
             parent_frame_id=parent_frame_id,
             status=FrameStatus.CREATED,
@@ -179,7 +183,7 @@ class SkillRuntime:
             started_at=now,
         )
 
-        manifest = self.registry.get_manifest(skill_id)
+        manifest = self.registry.get_manifest(skill_id) if skill_id else None
         if manifest:
             # Freeze the manifest for this frame so later account/public registry
             # reloads cannot change validation or promotion semantics mid-run.
@@ -197,8 +201,8 @@ class SkillRuntime:
                 self._save(parent)
 
         logger.info(
-            "Invoked skill=%s frame=%s task=%s parent=%s",
-            skill_id, frame_id, task_id, parent_frame_id,
+            "Invoked frame kind=%s skill=%s agent=%s frame=%s task=%s parent=%s",
+            frame_kind.value, skill_id or "", agent_id or frame_name or "", frame_id, task_id, parent_frame_id,
         )
         return frame_id
 
@@ -334,6 +338,9 @@ class SkillRuntime:
         parent.private_working_state["pending_awaiting_user_child"] = {
             "frame_id": child.frame_id,
             "skill_id": child.skill_id,
+            "agent_id": child.agent_id,
+            "frame_name": child.frame_name,
+            "frame_kind": child.frame_kind.value,
             "status": child.status.value,
             "input": _safe_json_copy(child.input),
             "awaiting_user_input": _safe_json_copy(wait_payload),
@@ -404,6 +411,9 @@ class SkillRuntime:
         owner.private_working_state["pending_awaiting_user_focus"] = {
             "frame_id": focus.frame_id,
             "skill_id": focus.skill_id,
+            "agent_id": focus.agent_id,
+            "frame_name": focus.frame_name,
+            "frame_kind": focus.frame_kind.value,
             "status": focus.status.value,
             "input": _safe_json_copy(focus.input),
             "awaiting_user_input": _safe_json_copy(wait_payload),
@@ -871,8 +881,14 @@ class SkillRuntime:
         # Build promoted result
         promoted: dict[str, Any] = {
             "frame_id": frame.frame_id,
-            "skill_id": frame.skill_id,
+            "frame_kind": frame.frame_kind.value,
         }
+        if frame.skill_id:
+            promoted["skill_id"] = frame.skill_id
+        if frame.agent_id:
+            promoted["agent_id"] = frame.agent_id
+        if frame.frame_name:
+            promoted["frame_name"] = frame.frame_name
 
         manifest = self._manifest_for_frame(frame)
         promote_fields = manifest.promote_to_parent if manifest else [
@@ -1228,6 +1244,44 @@ class SkillRuntime:
         )
         return child_frame_id
 
+    def invoke_agent(
+        self,
+        parent_frame_id: str,
+        *,
+        agent_id: str | None = None,
+        frame_name: str | None = None,
+        agent_input: dict[str, Any] | None = None,
+        legacy_skill_id: str | None = None,
+    ) -> str:
+        """Standard delegated Agent frame invocation with depth check."""
+        depth = self.get_nesting_depth(parent_frame_id)
+        if depth >= self._max_nesting_depth:
+            raise MaxNestingDepthExceeded(depth, self._max_nesting_depth)
+
+        parent = self._get_frame(parent_frame_id)
+        self.mark_waiting_child(parent_frame_id)
+
+        child_frame_id = self.invoke_skill(
+            task_id=parent.task_id,
+            skill_id=legacy_skill_id,
+            skill_input=agent_input,
+            parent_frame_id=parent_frame_id,
+            conversation_id=parent.conversation_id,
+            session_id=parent.session_id,
+            current_task_id=parent.current_task_id or parent.task_id,
+            origin_task_id=parent.origin_task_id or parent.task_id,
+            last_task_ids=parent.last_task_ids or [parent.task_id],
+            frame_kind=FrameKind.AGENT,
+            agent_id=agent_id,
+            frame_name=frame_name,
+        )
+
+        logger.info(
+            "Child agent invoked: parent=%s child=%s agent=%s depth=%d",
+            parent_frame_id, child_frame_id, agent_id or frame_name or legacy_skill_id or "", depth + 1,
+        )
+        return child_frame_id
+
     def complete_child_and_resume_parent(
         self,
         child_frame_id: str,
@@ -1441,6 +1495,9 @@ class SkillRuntime:
         parent.private_working_state["pending_recoverable_child"] = {
             "frame_id": child.frame_id,
             "skill_id": child.skill_id,
+            "agent_id": child.agent_id,
+            "frame_name": child.frame_name,
+            "frame_kind": child.frame_kind.value,
             "status": child.status.value,
             "input": _safe_json_copy(child.input),
             "reason": reason,
@@ -1727,6 +1784,9 @@ class SkillRuntime:
         promoted = {
             "frame_id": child.frame_id,
             "skill_id": child.skill_id,
+            "agent_id": child.agent_id,
+            "frame_name": child.frame_name,
+            "frame_kind": child.frame_kind.value,
             "status": child.status.value,
             "result_summary": child.result_summary,
             "structured_output": _safe_json_copy(child.output or {}),
@@ -1778,6 +1838,8 @@ class SkillRuntime:
                 return SkillManifest(**snapshot)
             except Exception:
                 logger.warning("Invalid manifest snapshot in frame=%s", frame.frame_id, exc_info=True)
+        if not frame.skill_id:
+            return None
         return self.registry.get_manifest(frame.skill_id)
 
     def _save(self, frame: SkillFrameState) -> None:
@@ -2063,6 +2125,8 @@ class SkillRuntime:
         summary = {
             "frame_id": focus.frame_id,
             "skill_id": focus.skill_id,
+            "agent_id": focus.agent_id,
+            "frame_name": focus.frame_name,
             "frame_kind": focus.frame_kind.value,
             "focus_kind": kind,
             "status": focus.status.value,
@@ -2097,6 +2161,8 @@ class SkillRuntime:
         summary = {
             "frame_id": focus.frame_id,
             "skill_id": focus.skill_id,
+            "agent_id": focus.agent_id,
+            "frame_name": focus.frame_name,
             "frame_kind": focus.frame_kind.value,
             "focus_kind": kind,
             "status": focus.status.value,
@@ -2473,7 +2539,15 @@ def _child_continuation_summary_from_promoted(
     structured_output = structured if isinstance(structured, dict) else {}
 
     summary: dict[str, Any] = {}
-    for key in ("frame_id", "skill_id", "result_summary", "execution_report_ref"):
+    for key in (
+        "frame_id",
+        "skill_id",
+        "agent_id",
+        "frame_name",
+        "frame_kind",
+        "result_summary",
+        "execution_report_ref",
+    ):
         value = child_promoted.get(key)
         if value not in (None, "", [], {}):
             summary[key] = _safe_continuation_value_copy(value, key)
@@ -2718,6 +2792,8 @@ def _frame_stack_snapshot(stack: list[SkillFrameState]) -> list[dict[str, Any]]:
             "frame_id": frame.frame_id,
             "parent_frame_id": frame.parent_frame_id,
             "skill_id": frame.skill_id,
+            "agent_id": frame.agent_id,
+            "frame_name": frame.frame_name,
             "frame_kind": frame.frame_kind.value,
             "status": frame.status.value,
             "input": _safe_json_copy(frame.input),

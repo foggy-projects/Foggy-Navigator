@@ -24,6 +24,7 @@
 1. [01-biz-worker-context-owned-runtime-memory.md](./01-biz-worker-context-owned-runtime-memory.md)
 2. [04-runtime-visible-conversation-and-recovery-design.md](./04-runtime-visible-conversation-and-recovery-design.md)
 3. [06-normal-turn-runtime-context-design.md](./06-normal-turn-runtime-context-design.md)
+4. [12-agent-frame-and-skill-tool-boundary.md](./12-agent-frame-and-skill-tool-boundary.md) - 2026-05-22 收口后，Skill 不再默认进入 frame；Agent 调用才进入 non-root frame。
 
 ## 已确认约束
 

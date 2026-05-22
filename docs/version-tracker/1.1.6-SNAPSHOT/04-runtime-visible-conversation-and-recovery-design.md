@@ -16,6 +16,11 @@
 - date: 2026-05-22
 - coding_status: root-visible-protocol-implemented
 
+> 2026-05-22 收口：本文中的 runtime context、tool protocol 和恢复控制态仍有效；
+> 但 “Skill frame” 语义已由
+> [12-agent-frame-and-skill-tool-boundary.md](./12-agent-frame-and-skill-tool-boundary.md)
+> 替换为 “Agent frame”。Skill 是普通工具/能力材料，不再默认创建 frame。
+
 ## 与已有文档的关系
 
 本设计承接：
@@ -36,7 +41,7 @@
 3. BizWorker 提交给 LLM 的上下文必须是 bounded runtime context。
 4. `recentConversation` 不应继续表示“上游传来的最近完整历史”，目标语义应升级为 BizWorker 维护的 `runtimeVisibleConversation`。
 5. Root frame 可见的 tool call / tool result 是 LLM runtime protocol，不是 UI transcript，但需要进入后续 bounded runtime context，直到压缩或裁剪。
-6. Skill 内部过程仍是 child-private execution trace；正常 Skill 完成后，Root 只能看到 `invoke_business_skill` 的 promoted result / digest / refs，不展开 child 内部 raw tool call 协议。
+6. Agent frame 内部过程仍是 child-private execution trace；正常 Agent 完成后，Root 只能看到 `invoke_business_agent` 的 promoted result / digest / refs，不展开 child 内部 raw tool call 协议。普通 Skill 调用不创建 child frame，属于当前 frame 的 tool protocol。
 7. 中断恢复状态是 runtime control state，应按规则进入 prompt，但不等同于一条普通 assistant/user 对话。
 
 ## 命名建议

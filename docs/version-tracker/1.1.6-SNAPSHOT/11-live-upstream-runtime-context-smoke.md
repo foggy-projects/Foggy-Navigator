@@ -10,6 +10,11 @@
 状态：ready-for-manual-acceptance
 类型：runtime context governance / live smoke / log parity
 
+> 2026-05-22 收口：后续 smoke 验收需区分 plain Skill 与 Agent。
+> `invoke_business_skill` 应表现为当前 frame 内的 tool protocol，不应产生 child frame；
+> Agent 调用才应产生 child frame 和 promoted result。当前准绳见
+> [12-agent-frame-and-skill-tool-boundary.md](./12-agent-frame-and-skill-tool-boundary.md)。
+
 ## 背景
 
 scripted E2E 已经覆盖普通多轮、业务工具调用、`AWAITING_USER` 续接、nested recoverable leaf resume 和 handoff。但真实上游链路还需要一个可重复的 smoke 入口，用于同时确认：

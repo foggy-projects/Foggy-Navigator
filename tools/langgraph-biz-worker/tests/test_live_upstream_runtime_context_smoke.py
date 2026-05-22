@@ -81,7 +81,7 @@ def _build_session(
                             {
                                 "id": "call_1",
                                 "type": "function",
-                                "function": {"name": "invoke_business_skill", "arguments": "{}"},
+                                "function": {"name": "invoke_business_agent", "arguments": "{}"},
                             }
                         ],
                     },
@@ -93,7 +93,7 @@ def _build_session(
         directory / "logs" / "runtime-message-events" / "lgt_live_frm_root.jsonl",
         [
             {"eventType": "initial_messages", "messages": [{"role": "system"}, {"role": "user"}]},
-            {"eventType": "assistant_tool_call", "toolCall": {"name": "invoke_business_skill"}},
+            {"eventType": "assistant_tool_call", "toolCall": {"name": "invoke_business_agent"}},
             {"eventType": "checkpoint", "checkpoint": "persistent_turn_completed"},
         ],
     )
@@ -128,7 +128,7 @@ def test_validate_runtime_context_artifacts_passes_for_complete_session(tmp_path
         ],
         task_messages=[],
         require_recoverable_checkpoint=False,
-        expected_tool_calls=["invoke_business_skill"],
+        expected_tool_calls=["invoke_business_agent"],
         allow_system_root_reference=False,
     )
 
@@ -154,7 +154,7 @@ def test_validate_runtime_context_artifacts_flags_tool_leak_and_system_root(tmp_
         expected_attachment_refs=[],
         expected_attachment_count=0,
         session_messages=[
-            {"messageId": "m1", "role": "tool", "type": "TOOL_CALL", "content": "invoke_business_skill"}
+            {"messageId": "m1", "role": "tool", "type": "TOOL_CALL", "content": "invoke_business_agent"}
         ],
         task_messages=[],
         require_recoverable_checkpoint=False,

@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-SKILL_NAME_ALIASES = ("skill_name", "skillName", "skill_id", "skillId")
+SKILL_NAME_ALIASES = ("skill_name", "skillName", "skill_id", "skillId", "businessSkillName", "businessSkillId")
 _SAFE_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 

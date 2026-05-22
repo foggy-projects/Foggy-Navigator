@@ -186,6 +186,8 @@ class FrameExecutionReportGenerator:
             "current_task_id": frame.current_task_id,
             "origin_task_id": frame.origin_task_id,
             "skill_id": frame.skill_id,
+            "agent_id": frame.agent_id,
+            "frame_name": frame.frame_name,
             "frame_kind": frame.frame_kind.value,
             "status": frame.status.value,
             "summary": _summary_text(frame),
@@ -223,6 +225,8 @@ class FrameExecutionReportGenerator:
             f"- task_id: `{_md_text(frame.task_id)}`",
             f"- conversation_id: `{_md_text(frame.conversation_id or '')}`",
             f"- parent_frame_id: `{_md_text(frame.parent_frame_id or '')}`",
+            f"- agent_id: `{_md_text(frame.agent_id or '')}`",
+            f"- frame_name: `{_md_text(frame.frame_name or '')}`",
             f"- started_at: `{_md_text(frame.started_at)}`",
             f"- ended_at: `{_md_text(frame.ended_at)}`",
             f"- result_summary: {_md_text(digest['summary'])}",
@@ -446,6 +450,8 @@ def read_frame_execution_report(
         for key in (
             "summary",
             "skill_id",
+            "agent_id",
+            "frame_name",
             "frame_kind",
             "status",
             "started_at",
@@ -538,6 +544,8 @@ def _child_report_digest(digest: dict[str, Any]) -> dict[str, Any]:
         "frame_id": digest.get("frame_id"),
         "report_ref": digest.get("report_ref"),
         "skill_id": digest.get("skill_id"),
+        "agent_id": digest.get("agent_id"),
+        "frame_name": digest.get("frame_name"),
         "frame_kind": digest.get("frame_kind"),
         "status": digest.get("status"),
         "summary": digest.get("summary"),
@@ -651,14 +659,15 @@ def _child_table(child_reports: list[dict[str, Any]]) -> str:
     if not child_reports:
         return "_No child frames recorded._"
     lines = [
-        "| frame_id | skill_id | frame_kind | status | summary | report_ref |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| frame_id | skill_id | agent_id | frame_kind | status | summary | report_ref |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for child in child_reports:
         lines.append(
             "| "
             f"{_table_text(child.get('frame_id'))} | "
             f"{_table_text(child.get('skill_id'))} | "
+            f"{_table_text(child.get('agent_id'))} | "
             f"{_table_text(child.get('frame_kind'))} | "
             f"{_table_text(child.get('status'))} | "
             f"{_table_text(_one_line(child.get('summary'), 160))} | "

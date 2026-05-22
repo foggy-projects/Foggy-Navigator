@@ -83,6 +83,8 @@ def _tool_enabled(
 ) -> bool:
     if enabled_tool_names is None:
         return True
+    if name == "invoke_business_agent" and "invoke_business_skill" in enabled_tool_names:
+        return True
     return name in enabled_tool_names or name in _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES
 
 
@@ -187,15 +189,12 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "invoke_business_skill",
             "description": (
-                "Invoke a child business skill and return its promoted result. "
-                "The promoted result is the parent agent's primary "
-                "business-decision context for that child frame; use it directly "
-                "for status, next_step, missing_fields, structured_output, "
-                "artifact_refs, and evidence_refs. Do not call "
-                "read_frame_execution_report after normal completion just to "
-                "recover these business fields. If the child asks for user "
-                "input, the runtime keeps that child frame open and resumes it "
-                "on the next user message; do not reopen the same skill yourself."
+                "Load a business Skill's instructions and resources into the "
+                "current frame. This does not create a child frame. After the "
+                "tool returns, continue reasoning in the same frame and call "
+                "business functions or other tools directly if needed. Use "
+                "invoke_business_agent only when you need a delegated Agent "
+                "with its own frame, lifecycle, waiting-user state, and report."
             ),
             "parameters": {
                 "type": "object",
@@ -211,10 +210,8 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "instruction": {
                         "type": "string",
                         "description": (
-                            "Natural-language work order for the child skill. "
-                            "Include the user's business goal, known fields, and "
-                            "constraints so the child can return a complete "
-                            "promoted result without requiring report inspection."
+                            "Optional reason for loading this skill. The skill "
+                            "will not run in a child frame."
                         ),
                     },
                     "input": {
@@ -227,6 +224,48 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     },
                 },
                 "required": ["skill_name", "instruction"],
+            },
+        },
+    },
+    "invoke_business_agent": {
+        "type": "function",
+        "function": {
+            "name": "invoke_business_agent",
+            "description": (
+                "Delegate work to a business Agent and open a child Agent frame. "
+                "Use this for tasks that need an isolated loop, multi-step "
+                "execution, waiting for user input, handoff, or a separate "
+                "execution report. Inside the Agent frame, the Agent may load "
+                "Skill materials and call business functions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent id or agent-like bundle id to invoke.",
+                    },
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Legacy alias for agent_id.",
+                    },
+                    "skill_name": {
+                        "type": "string",
+                        "description": "Compatibility alias when an existing skill bundle acts as an Agent.",
+                    },
+                    "instruction": {
+                        "type": "string",
+                        "description": (
+                            "Natural-language work order for the child Agent. "
+                            "Include the user's business goal, known fields, and constraints."
+                        ),
+                    },
+                    "input": {
+                        "type": "object",
+                        "description": "Optional structured business inputs for the child Agent.",
+                    },
+                },
+                "required": ["instruction"],
             },
         },
     },
@@ -351,15 +390,15 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "read_frame_execution_report",
-            "description": (
-                "Read a persisted Frame execution report by report_ref or by "
-                "task_id/frame_id. Use this for user-requested explanations, "
-                "debugging, audit, or fallback recovery when the promoted child "
-                "result/continuation summary is missing a field required for the "
-                "next business decision. Do not call it by default after "
-                "invoke_business_skill or resume_recoverable_child_skill "
-                "completes normally."
-            ),
+                "description": (
+                    "Read a persisted Frame execution report by report_ref or by "
+                    "task_id/frame_id. Use this for user-requested explanations, "
+                    "debugging, audit, or fallback recovery when the promoted child "
+                    "result/continuation summary is missing a field required for the "
+                    "next business decision. Do not call it by default after "
+                    "invoke_business_agent or resume_recoverable_child_skill "
+                    "completes normally."
+                ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -393,7 +432,7 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "submit_skill_result",
             "description": (
-                "Submit a skill result to the runtime. For ordinary child "
+                "Submit a frame result to the runtime. For ordinary child Agent "
                 "completion, return the final business result. If this child "
                 "needs more user input, set structured_output.turn_status or "
                 "next_step to WAITING_FOR_USER_INPUT and include a user-facing "
@@ -407,7 +446,7 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "structured_output": {
                         "type": "object",
                         "description": (
-                            "Skill result payload. Persistent root may include "
+                            "Frame result payload. Persistent root may include "
                             "active_plan for compact multi-turn working state "
                             "and intent_resolution for interruption handling."
                         ),
@@ -424,7 +463,7 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "handoff_to_parent",
             "description": (
-                "Child-frame only tool. Exit the current child skill without "
+                "Child-frame only tool. Exit the current child Agent without "
                 "continuing the old task when the user clearly cancels, stops, "
                 "switches topic, or asks to return to the parent conversation. "
                 "Use requires_parent_synthesis=true when the parent/root agent "

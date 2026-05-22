@@ -96,7 +96,7 @@ class RootChildTimeoutModel:
         if self.calls == 1:
             return AIMessage(content="", tool_calls=[{
                 "id": "call_child",
-                "name": "invoke_business_skill",
+                "name": "invoke_business_agent",
                 "args": {
                     "skill_id": "child_skill",
                     "instruction": "Handle the ticket request.",
@@ -118,7 +118,7 @@ class RecoverableChildTimeoutThenContinueModel:
         if self.calls == 1:
             return AIMessage(content="", tool_calls=[{
                 "id": "call_child",
-                "name": "invoke_business_skill",
+                "name": "invoke_business_agent",
                 "args": {
                     "skill_id": "child_skill",
                     "instruction": "Handle the ticket request.",
@@ -232,7 +232,7 @@ def _root_with_child_runtime(child_context_visibility: str = "isolated", data_ro
         name="system.root",
         description="Persistent root skill.",
         output_schema={"type": "object"},
-        allowed_tools=["invoke_business_skill", "submit_skill_result"],
+        allowed_tools=["invoke_business_agent", "submit_skill_result"],
         promote_to_parent=["result_summary", "structured_output"],
         visibility="builtin",
         context_visibility="passthrough",
@@ -251,6 +251,72 @@ def _root_with_child_runtime(child_context_visibility: str = "isolated", data_ro
         skill_registry=registry,
         journal=FileFrameJournal(data_root) if data_root is not None else None,
     )
+
+
+def test_llm_agent_loads_business_skill_material_without_child_frame():
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="system.root",
+        name="system.root",
+        description="Persistent root skill.",
+        output_schema={"type": "object"},
+        allowed_tools=["invoke_business_skill", "submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+        visibility="builtin",
+        context_visibility="passthrough",
+    ))
+    registry.register(SkillManifest(
+        id="ticket_helper",
+        name="ticket_helper",
+        description="Ticket helper material.",
+        markdown_body="# Ticket helper\n\nAsk for ticket type and description.",
+        output_schema={"type": "object"},
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    root_id = runtime.invoke_skill(
+        task_id="task_skill_material_001",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_skill_material",
+            "name": "invoke_business_skill",
+            "args": {
+                "skill_name": "ticket_helper",
+                "instruction": "Read ticket helper material.",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Need ticket fields.",
+                "structured_output": {"message": "Need ticket fields."},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_skill_material_001",
+        frame_id=root_id,
+        prompt="Help me create a ticket",
+        persistent_frame=True,
+    )
+
+    root = runtime.get_frame(root_id)
+    skill_result_event = next(
+        event for event in events
+        if event.type == "tool_result" and event.tool_name == "invoke_business_skill"
+    )
+    skill_payload = json.loads(skill_result_event.content)
+    assert root.child_frame_ids == []
+    assert skill_payload["frame_created"] is False
+    assert skill_payload["skill_id"] == "ticket_helper"
+    assert "Ask for ticket type" in skill_payload["markdown_body"]
+    assert root.output["message"] == "Need ticket fields."
 
 
 def test_llm_agent_invokes_client_app_public_skill_from_runtime_context(tmp_path):
@@ -284,7 +350,7 @@ metadata:
         name="system.root",
         description="Persistent root skill.",
         output_schema={"type": "object"},
-        allowed_tools=["invoke_business_skill", "submit_skill_result"],
+        allowed_tools=["invoke_business_agent", "submit_skill_result"],
         promote_to_parent=["result_summary", "structured_output"],
         visibility="builtin",
         context_visibility="passthrough",
@@ -298,7 +364,7 @@ metadata:
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_public_skill",
-            "name": "invoke_business_skill",
+            "name": "invoke_business_agent",
             "args": {
                 "skill_name": "tms-ticket-agent",
                 "instruction": "Collect ticket fields.",
@@ -467,7 +533,7 @@ def test_persistent_root_child_timeout_records_recoverable_interruption(tmp_path
     assert child.status == FrameStatus.FAILED
     assert root.status == FrameStatus.RUNNING
     assert root.private_working_state["continuation_state"] == "INTERRUPTED"
-    assert root.private_working_state["interrupt_reason"] == "child_skill_failed"
+    assert root.private_working_state["interrupt_reason"] == "child_agent_failed"
     assert root.private_working_state["pending_recoverable_child_frame_id"] == child.frame_id
     assert child.private_working_state["continuation_state"] == "INTERRUPTED"
     assert any(event.type == "error" and "LLM_REQUEST_TIMEOUT" in event.error for event in events)
@@ -531,7 +597,7 @@ def test_persistent_root_continue_reopens_failed_child_frame_after_timeout(tmp_p
     assert any(
         event.type == "skill_frame_open"
         and event.skill_frame_id == child_frame_id
-        and event.content == "Resuming frame for skill: child_skill"
+        and event.content == "Resuming frame for agent: child_skill"
         for event in second_events
     )
     assert any(
@@ -1041,7 +1107,7 @@ def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_con
     assert "上一次执行被中断。" in system_prompt
     assert "原因: model_error" in system_prompt
     assert "upstream model timed out" in system_prompt
-    assert "来自子技能提升结果的续跑摘要:" in system_prompt
+    assert "来自子 Agent 提升结果的续跑摘要:" in system_prompt
     assert "WAITING_USER" in system_prompt
     assert "请回复工单类型、标题及详细描述。" in system_prompt
     assert "当前用户消息见下一条 human message。" in system_prompt
@@ -1087,7 +1153,7 @@ def test_llm_agent_prompt_includes_frame_result_contract():
     assert user_prompt == "继续"
     assert "Frame 结果契约:" in system_prompt
     assert "主要业务决策上下文" in system_prompt
-    assert "正常子技能完成后，不要仅为了恢复这些字段而调用 read_frame_execution_report" in system_prompt
+    assert "正常子 Agent 完成后，不要仅为了恢复这些字段而调用 read_frame_execution_report" in system_prompt
 
 
 def test_llm_agent_persistent_frame_prompt_includes_pending_recoverable_child():
@@ -1132,7 +1198,7 @@ def test_llm_agent_persistent_frame_prompt_includes_pending_recoverable_child():
     system_prompt = model.seen_messages[0][0].content
     user_prompt = model.seen_messages[0][1].content
     assert user_prompt == "继续"
-    assert "待恢复子技能:" in system_prompt
+    assert "待恢复子 Agent:" in system_prompt
     assert "可恢复焦点:" in system_prompt
     assert "可恢复焦点栈:" in system_prompt
     assert child_frame_id in system_prompt
@@ -1281,7 +1347,7 @@ def test_llm_agent_root_resumes_pending_recoverable_child_frame():
     assert any(
         event.type == "skill_frame_open"
         and event.skill_frame_id == child_frame_id
-        and event.content == "Resuming frame for skill: child_skill"
+        and event.content == "Resuming frame for agent: child_skill"
         for event in events
     )
 
@@ -1423,7 +1489,7 @@ def test_llm_agent_child_can_handoff_to_parent_without_business_output_validatio
         name="system.root",
         description="Persistent root skill.",
         output_schema={"type": "object"},
-        allowed_tools=["invoke_business_skill", "submit_skill_result"],
+        allowed_tools=["invoke_business_agent", "submit_skill_result"],
         promote_to_parent=["result_summary", "structured_output"],
         visibility="builtin",
         context_visibility="passthrough",
@@ -2070,7 +2136,7 @@ def test_llm_agent_child_waiting_for_user_input_keeps_frame_open():
     )
 
 
-def test_llm_agent_invoke_business_skill_bubbles_waiting_user_focus():
+def test_llm_agent_invoke_business_agent_bubbles_waiting_user_focus():
     runtime = _root_with_child_runtime()
     root_id = runtime.invoke_skill(
         task_id="task_child_waiting_user_002",
@@ -2081,7 +2147,7 @@ def test_llm_agent_invoke_business_skill_bubbles_waiting_user_focus():
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_child",
-            "name": "invoke_business_skill",
+            "name": "invoke_business_agent",
             "args": {
                 "skill_id": "child_skill",
                 "instruction": "引导用户选择工单类型。",
@@ -2112,7 +2178,7 @@ def test_llm_agent_invoke_business_skill_bubbles_waiting_user_focus():
     child_id = root.child_frame_ids[-1]
     child = runtime.get_frame(child_id)
     assert model.calls == 2
-    assert any(event.tool_name == "invoke_business_skill" for event in events)
+    assert any(event.tool_name == "invoke_business_agent" for event in events)
     assert root.status == FrameStatus.WAITING_CHILD
     assert root.result_summary == prompt
     assert root.private_working_state["pending_awaiting_user_child_frame_id"] == child_id
@@ -2121,7 +2187,7 @@ def test_llm_agent_invoke_business_skill_bubbles_waiting_user_focus():
     assert child.status == FrameStatus.AWAITING_USER
 
 
-def test_llm_agent_invoke_business_skill_plain_clarification_bubbles_waiting_user_focus():
+def test_llm_agent_invoke_business_agent_plain_clarification_bubbles_waiting_user_focus():
     runtime = _root_with_child_runtime()
     root_id = runtime.invoke_skill(
         task_id="task_child_plain_waiting_user_002",
@@ -2132,7 +2198,7 @@ def test_llm_agent_invoke_business_skill_plain_clarification_bubbles_waiting_use
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_child",
-            "name": "invoke_business_skill",
+            "name": "invoke_business_agent",
             "args": {
                 "skill_id": "child_skill",
                 "instruction": "引导用户选择工单类型。",
@@ -2161,7 +2227,7 @@ def test_llm_agent_invoke_business_skill_plain_clarification_bubbles_waiting_use
     assert any(event.tool_name == "assistant_message" for event in events)
 
 
-def test_llm_agent_invoke_business_skill_direct_returns_final_for_user():
+def test_llm_agent_invoke_business_agent_direct_returns_final_for_user():
     runtime = _root_with_child_runtime()
     root_id = runtime.invoke_skill(
         task_id="task_child_final_direct_001",
@@ -2172,7 +2238,7 @@ def test_llm_agent_invoke_business_skill_direct_returns_final_for_user():
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_child",
-            "name": "invoke_business_skill",
+            "name": "invoke_business_agent",
             "args": {
                 "skill_id": "child_skill",
                 "instruction": "创建工单。",
@@ -2208,7 +2274,7 @@ def test_llm_agent_invoke_business_skill_direct_returns_final_for_user():
     assert root.output["turn_status"] == "FINAL_FOR_USER"
     assert child.status == FrameStatus.COMPLETED
     assert any(
-        event.tool_name == "invoke_business_skill" and event.type == "tool_result"
+        event.tool_name == "invoke_business_agent" and event.type == "tool_result"
         for event in events
     )
     assert not any(
@@ -2270,7 +2336,7 @@ def test_llm_agent_resumed_awaiting_user_child_prompt_includes_prior_prompt_and_
     system_prompt = model.seen_messages[0][0].content
     user_prompt = model.seen_messages[0][1].content
     assert user_prompt == "1"
-    assert "上一个子技能回合正在等待用户输入。" in system_prompt
+    assert "上一个子 Agent frame 正在等待用户输入。" in system_prompt
     assert prior_prompt in system_prompt
     assert "当前 human message 是用户对上次提示的回复。" in system_prompt
     assert runtime.get_frame(child_id).status == FrameStatus.AWAITING_USER
@@ -2329,7 +2395,7 @@ def test_llm_agent_child_skill_summary_visibility_receives_root_context_summary(
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_child",
-            "name": "invoke_business_skill",
+            "name": "invoke_business_agent",
             "args": {
                 "skill_id": "child_skill",
                 "instruction": "handle child work",
@@ -2385,7 +2451,7 @@ def test_llm_agent_child_skill_isolated_visibility_hides_root_context_summary():
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_child",
-            "name": "invoke_business_skill",
+            "name": "invoke_business_agent",
             "args": {"skill_id": "child_skill", "instruction": "handle child work"},
         }]),
         AIMessage(content="", tool_calls=[{
@@ -2424,7 +2490,7 @@ def test_llm_agent_child_skill_receives_sanitized_attachment_context():
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_child",
-            "name": "invoke_business_skill",
+            "name": "invoke_business_agent",
             "args": {"skill_id": "child_skill", "instruction": "create a TMS ticket"},
         }]),
         AIMessage(content="", tool_calls=[{
@@ -2488,7 +2554,7 @@ def test_llm_agent_child_skill_passthrough_visibility_is_system_only():
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_child",
-            "name": "invoke_business_skill",
+            "name": "invoke_business_agent",
             "args": {"skill_id": "child_skill", "instruction": "handle child work"},
         }]),
         AIMessage(content="", tool_calls=[{
@@ -3112,7 +3178,7 @@ def test_llm_agent_bubbles_child_business_function_approval_to_root(monkeypatch,
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_child",
-            "name": "invoke_business_skill",
+            "name": "invoke_business_agent",
             "args": {
                 "skill_id": "child_skill",
                 "instruction": "create vehicle",
@@ -3153,7 +3219,7 @@ def test_llm_agent_bubbles_child_business_function_approval_to_root(monkeypatch,
     skill_tool_result = next(
         event
         for event in events
-        if event.type == "tool_result" and event.tool_name == "invoke_business_skill"
+        if event.type == "tool_result" and event.tool_name == "invoke_business_agent"
     )
     skill_tool_payload = json.loads(skill_tool_result.content)
     assert skill_tool_payload["approval_wait"] is True
