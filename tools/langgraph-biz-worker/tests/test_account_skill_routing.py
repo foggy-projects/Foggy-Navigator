@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from langgraph_biz_worker.graphs import root_graph as root_module
@@ -76,6 +75,7 @@ def test_route_skill_loads_account_private_skill_and_snapshots_manifest(tmp_path
 
     monkeypatch.setattr(root_module, "_skill_registry", registry)
     monkeypatch.setattr(root_module, "_runtime", runtime)
+    monkeypatch.setattr(root_module.settings, "llm_execute_skills", False)
 
     result = root_module.route_skill({
         "task_id": "task-account-skill",
@@ -114,6 +114,7 @@ def test_route_skill_prefers_upstream_user_context_over_task_owner(tmp_path, mon
 
     monkeypatch.setattr(root_module, "_skill_registry", registry)
     monkeypatch.setattr(root_module, "_runtime", runtime)
+    monkeypatch.setattr(root_module.settings, "llm_execute_skills", False)
 
     result = root_module.route_skill({
         "task_id": "task-upstream-skill",
@@ -156,6 +157,7 @@ def test_route_skill_loads_client_app_public_skill_and_snapshots_manifest(tmp_pa
 
     monkeypatch.setattr(root_module, "_skill_registry", registry)
     monkeypatch.setattr(root_module, "_runtime", runtime)
+    monkeypatch.setattr(root_module.settings, "llm_execute_skills", False)
 
     result = root_module.route_skill({
         "task_id": "task-app-public-skill",
@@ -178,52 +180,7 @@ def test_route_skill_loads_client_app_public_skill_and_snapshots_manifest(tmp_pa
     assert frame.private_working_state["_skill_manifest"]["description"] == "tms app version"
 
 
-def test_route_skill_auto_injects_only_client_app_public_skills(tmp_path, monkeypatch):
-    skills_root = tmp_path / "skills"
-    data_root = tmp_path / "data"
-
-    _write_named_skill(skills_root / "public" / "global-skill", "global_skill", "Global Skill", "global version")
-    _write_named_skill(
-        skills_root / "public" / "apps" / "tms_app" / "app-skill",
-        "app_skill",
-        "App Skill",
-        "tms app version",
-    )
-
-    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
-    runtime = SkillRuntime(
-        frame_store=FrameStore(),
-        skill_registry=registry,
-        journal=FileFrameJournal(tmp_path / "frames"),
-    )
-    fake_chat = _FakeChatModel()
-
-    monkeypatch.setattr(root_module, "_skill_registry", registry)
-    monkeypatch.setattr(root_module, "_runtime", runtime)
-    monkeypatch.setattr(root_module, "_chat_model", fake_chat)
-    monkeypatch.setattr(root_module.settings, "llm_agentic_routing", True)
-    monkeypatch.setattr(root_module, "_data_root", str(data_root))
-
-    root_module.route_skill({
-        "task_id": "task-app-public-auto-inject",
-        "session_id": None,
-        "prompt": "what can you do",
-        "model": None,
-        "context": {"clientAppId": "tms_app"},
-        "user_id": None,
-        "tenant_id": None,
-        "events": [],
-        "started_at": 0.0,
-        "active_frame_id": None,
-        "skill_results": [],
-    })
-
-    system_prompt = fake_chat.messages[0].content
-    assert "- app_skill: tms app version" in system_prompt
-    assert "global_skill" not in system_prompt
-
-
-def test_route_skill_uses_request_llm_config_for_agentic_routing(tmp_path, monkeypatch):
+def test_route_skill_uses_request_llm_config_for_system_root(tmp_path, monkeypatch):
     skills_root = tmp_path / "skills"
     data_root = tmp_path / "data"
 
@@ -244,10 +201,10 @@ def test_route_skill_uses_request_llm_config_for_agentic_routing(tmp_path, monke
     monkeypatch.setattr(root_module, "_runtime", runtime)
     monkeypatch.setattr(root_module, "_chat_model", None)
     monkeypatch.setattr(root_module, "create_chat_model_from_config", fake_create_chat_model)
-    monkeypatch.setattr(root_module.settings, "llm_agentic_routing", True)
+    monkeypatch.setattr(root_module.settings, "llm_execute_skills", True)
     monkeypatch.setattr(root_module, "_data_root", str(data_root))
 
-    root_module.route_skill({
+    result = root_module.route_skill({
         "task_id": "task-request-llm-config",
         "session_id": None,
         "prompt": "say hello",
@@ -268,129 +225,9 @@ def test_route_skill_uses_request_llm_config_for_agentic_routing(tmp_path, monke
     })
 
     assert seen_configs[0]["base_url"] == "http://mock-llm:8000"
-    assert fake_chat.messages is not None
-
-
-def test_route_skill_injects_account_context_for_agentic_routing(tmp_path, monkeypatch):
-    skills_root = tmp_path / "skills"
-    data_root = tmp_path / "data"
-    account_root = data_root / "accounts" / "user-001"
-    account_root.mkdir(parents=True)
-    (account_root / "ACCOUNT_POLICY.md").write_text("routing policy", encoding="utf-8")
-    (account_root / "AGENT.md").write_text("routing agent", encoding="utf-8")
-    (account_root / "MEMORY.md").write_text("routing memory", encoding="utf-8")
-
-    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
-    runtime = SkillRuntime(
-        frame_store=FrameStore(),
-        skill_registry=registry,
-        journal=FileFrameJournal(tmp_path / "frames"),
-    )
-    fake_chat = _FakeChatModel()
-
-    monkeypatch.setattr(root_module, "_skill_registry", registry)
-    monkeypatch.setattr(root_module, "_runtime", runtime)
-    monkeypatch.setattr(root_module, "_chat_model", fake_chat)
-    monkeypatch.setattr(root_module.settings, "llm_agentic_routing", True)
-    monkeypatch.setattr(root_module, "_data_root", str(data_root))
-
-    root_module.route_skill({
-        "task_id": "task-account-context-routing",
-        "session_id": "session-account-context",
-        "prompt": "what should I do",
-        "model": None,
-        "context": {},
-        "user_id": "user-001",
-        "tenant_id": None,
-        "events": [],
-        "started_at": 0.0,
-        "active_frame_id": None,
-        "skill_results": [],
-    })
-
-    system_prompt = fake_chat.messages[0].content
-    assert system_prompt.index("### ACCOUNT_POLICY.md") < system_prompt.index("### AGENT.md")
-    assert system_prompt.index("### AGENT.md") < system_prompt.index("### MEMORY.md")
-    assert "routing policy" in system_prompt
-    assert "routing agent" in system_prompt
-    assert "routing memory" in system_prompt
-
-    log_files = sorted(
-        (data_root / "runtime" / "sessions" / "by-date").glob(
-            "*/*/*/*/session-account-context/logs/llm-conversations/"
-            "0001_task-account-context-routing.jsonl",
-        )
-    )
-    assert len(log_files) == 1
-    log_file = log_files[0]
-    request_entry = json.loads(log_file.read_text(encoding="utf-8").splitlines()[0])
-    logged_system_prompt = request_entry["messages"][0]["content"]
-    assert "[account_context_files: omitted from conversation log]" in logged_system_prompt
-    assert "routing policy" not in logged_system_prompt
-    assert "routing agent" not in logged_system_prompt
-    assert "routing memory" not in logged_system_prompt
-
-
-def test_llm_conversation_log_groups_tasks_by_session_directory(tmp_path, monkeypatch):
-    skills_root = tmp_path / "skills"
-    data_root = tmp_path / "data"
-    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
-    runtime = SkillRuntime(
-        frame_store=FrameStore(),
-        skill_registry=registry,
-        journal=FileFrameJournal(tmp_path / "frames"),
-    )
-
-    monkeypatch.setattr(root_module, "_skill_registry", registry)
-    monkeypatch.setattr(root_module, "_runtime", runtime)
-    monkeypatch.setattr(root_module, "_chat_model", _FakeChatModel())
-    monkeypatch.setattr(root_module.settings, "llm_agentic_routing", True)
-    monkeypatch.setattr(root_module, "_data_root", str(data_root))
-
-    for task_id, prompt in (("task-1", "first"), ("task-2", "second")):
-        root_module.route_skill({
-            "task_id": task_id,
-            "session_id": "session-123",
-            "prompt": prompt,
-            "model": None,
-            "context": {},
-            "runtime_context": {
-                "current_time": "2026-05-11T10:37:10+08:00",
-                "timezone": "Asia/Shanghai",
-                "business_date": "2026-05-11",
-                "task_scoped_token": "secret-token",
-            },
-            "user_id": None,
-            "tenant_id": None,
-            "events": [],
-            "started_at": 0.0,
-            "active_frame_id": None,
-            "skill_results": [],
-        })
-
-    session_dirs = sorted((data_root / "runtime" / "sessions" / "by-date").glob("*/*/*/*/session-123"))
-    assert len(session_dirs) == 1
-    session_dir = session_dirs[0] / "logs" / "llm-conversations"
-    files = sorted(session_dir.glob("*.jsonl"))
-
-    assert [p.name for p in files] == ["0001_task-1.jsonl", "0002_task-2.jsonl"]
-    assert not (data_root / "logs" / "llm-conversations" / "session-123.jsonl").exists()
-    assert not (data_root / "logs" / "llm-conversations" / "session-123").exists()
-
-    first_entries = [json.loads(line) for line in files[0].read_text(encoding="utf-8").splitlines()]
-    second_entries = [json.loads(line) for line in files[1].read_text(encoding="utf-8").splitlines()]
-
-    assert first_entries[0]["event"] == "llm_request"
-    assert [message["role"] for message in first_entries[0]["messages"]] == ["system", "user"]
-    assert first_entries[0]["runtime_time_context"] == {
-        "current_time": "2026-05-11T10:37:10+08:00",
-        "timezone": "Asia/Shanghai",
-        "business_date": "2026-05-11",
-    }
-    assert "task_scoped_token" not in first_entries[0]["runtime_time_context"]
-    assert {entry["task_id"] for entry in first_entries} == {"task-1"}
-    assert {entry["task_id"] for entry in second_entries} == {"task-2"}
-    assert {entry["session_id"] for entry in first_entries + second_entries} == {"session-123"}
+    frame = runtime.get_frame(result["active_frame_id"])
+    assert frame is not None
+    assert frame.skill_id == root_module.ROOT_SKILL_ID
 
 
 # ---------------------------------------------------------------------------
@@ -475,6 +312,7 @@ def test_query_time_routing_reaches_new_private_skill(tmp_path, monkeypatch):
 
     monkeypatch.setattr(root_module, "_skill_registry", registry)
     monkeypatch.setattr(root_module, "_runtime", runtime)
+    monkeypatch.setattr(root_module.settings, "llm_execute_skills", False)
 
     result = root_module.route_skill({
         "task_id": "task-new-skill",

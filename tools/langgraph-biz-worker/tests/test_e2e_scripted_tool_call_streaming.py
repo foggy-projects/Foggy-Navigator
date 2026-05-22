@@ -3169,6 +3169,98 @@ async def test_scripted_api_root_plain_final_commits_runtime_memory_without_retr
 
 
 @pytest.mark.anyio
+async def test_scripted_root_prompt_contract_ignores_skill_alias_and_keeps_user_message_clean(
+    monkeypatch,
+    mock_llm_server,
+):
+    """Explicit skill aliases must not revive the removed root.agentic_routing prompt path."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-prompt-contract-{run_id}"
+    context_id = f"bctx_20260520_ab_ctx-e2e-root-prompt-contract-{run_id}"
+    task_id = f"task_e2e_root_prompt_contract_{run_id}"
+    prompt = f"hi prompt contract next:{trace_id}:001"
+    answer = "你好，我可以帮你处理 TMS 业务。"
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-prompt-contract",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {"content": answer},
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_enabled", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_submission_log_max_files", 100)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": prompt,
+                "taskId": task_id,
+                "session_id": context_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {
+                    "contextId": context_id,
+                    "businessSkillName": "tms-ticket-agent",
+                    "allowed_skills": [
+                        {
+                            "id": "tms-ticket-agent",
+                            "name": "TMS 工单 Agent",
+                            "description": "创建工单和查询工单。",
+                        },
+                    ],
+                    "auto_inject_public_skills": False,
+                    "auto_inject_app_public_skills": False,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    events = _parse_worker_sse(response.text)
+    assert next(event for event in events if event.type == "result").content == answer
+
+    payloads = _llm_submission_payloads(context_id)
+    assert len(payloads) == 1
+    payload = _llm_submission_for(payloads, task_id=task_id, skill_id="conversation.root")
+    assert payload["meta"]["operation"] == "skill_agent.invoke"
+    assert payload["meta"]["frameId"].startswith("frm_")
+    assert payload["meta"]["contextId"] == context_id
+    assert payload["meta"]["sessionId"] == context_id
+    assert _submission_role_sequence(payload) == ["system", "human"]
+    system_text = _submission_texts(payload, "system")[0]
+    human_text = _submission_texts(payload, "human")[0]
+    assert "你是当前业务会话的根编排 Agent" in system_text
+    assert "可用业务技能:" in system_text
+    assert "`tms-ticket-agent`（TMS 工单 Agent）: 创建工单和查询工单。" in system_text
+    assert "You are an intelligent business assistant" not in system_text
+    assert "Available Agents" not in system_text
+    assert human_text == prompt
+    assert "allowed_skills" not in human_text
+    assert "Context:" not in human_text
+    assert "tms-ticket-agent" not in human_text
+    assert not any((item.get("meta") or {}).get("operation") == "root.agentic_routing" for item in payloads)
+
+
+@pytest.mark.anyio
 async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch, mock_llm_server):
     """Root active_plan should be persisted and injected into the next mock LLM request."""
     run_id = uuid.uuid4().hex[:8]

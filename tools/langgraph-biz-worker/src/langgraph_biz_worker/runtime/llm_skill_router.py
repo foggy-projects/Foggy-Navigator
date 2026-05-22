@@ -1,47 +1,15 @@
-"""LLM-based Skill Router — selects the best Skill for a given prompt.
-
-Supports Anthropic and OpenAI providers, configured via Settings.
-When llm_provider is empty, this module is not used (rule-based fallback).
-"""
+"""Chat model factory helpers for BizWorker LLM execution."""
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
 
 from ..config import Settings
-from ..models import SkillManifest
-from .llm_call_guard import invoke_chat_model
 
 logger = logging.getLogger(__name__)
-
-_SYSTEM_PROMPT_TEMPLATE = """\
-You are a skill router for a business automation system.
-Given a user's request, decide which skill best handles it.
-
-Available skills:
-{skills_json}
-
-Rules:
-- Respond with ONLY the skill id (e.g. "exception_triage"), nothing else.
-- If no skill matches the request, respond with exactly "NONE".
-- Choose based on the skill description and the user's intent.
-- If user provides context with a specific domain keyword (e.g. order_id), prefer skills in that domain."""
-
-
-def _build_skills_json(skills: list[SkillManifest]) -> str:
-    """Build a compact JSON summary of available skills for the system prompt."""
-    entries = []
-    for s in skills:
-        entry: dict[str, Any] = {"id": s.id, "description": s.description}
-        if s.input_schema:
-            entry["input_hint"] = list(s.input_schema.get("properties", {}).keys())
-        entries.append(entry)
-    return json.dumps(entries, ensure_ascii=False, indent=2)
 
 
 def create_chat_model(settings: Settings) -> BaseChatModel | None:
@@ -154,53 +122,3 @@ def _optional_int(source: dict[str, Any], *keys: str) -> int | None:
             return None
         return max(0, parsed)
     return None
-
-
-class LlmSkillRouter:
-    """Routes user prompts to the best matching Skill using an LLM."""
-
-    def __init__(self, chat_model: BaseChatModel) -> None:
-        self._model = chat_model
-
-    def route(
-        self,
-        prompt: str,
-        context: dict[str, Any] | None,
-        skills: list[SkillManifest],
-    ) -> str | None:
-        """Ask the LLM which skill to invoke.
-
-        Returns a skill_id string, or None if no skill matches.
-        """
-        if not skills:
-            return None
-
-        skills_json = _build_skills_json(skills)
-        system = _SYSTEM_PROMPT_TEMPLATE.format(skills_json=skills_json)
-
-        # Build the human message: prompt + context summary
-        human_parts = [prompt]
-        if context:
-            human_parts.append(f"\nContext: {json.dumps(context, ensure_ascii=False)}")
-        human = "\n".join(human_parts)
-
-        try:
-            response = invoke_chat_model(
-                self._model,
-                [
-                    SystemMessage(content=system),
-                    HumanMessage(content=human),
-                ],
-                runtime_context=dict(context or {}),
-                operation="skill_router.invoke",
-            )
-            raw = response.content.strip().strip('"').strip("'")
-            logger.info("LLM skill routing: prompt=%s → %s", prompt[:80], raw)
-
-            if raw.upper() == "NONE" or not raw:
-                return None
-            return raw
-
-        except Exception:
-            logger.warning("LLM skill routing failed, returning None", exc_info=True)
-            return None

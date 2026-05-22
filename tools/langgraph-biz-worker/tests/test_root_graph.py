@@ -109,7 +109,7 @@ def test_route_skill_restores_persistent_system_root_frame_from_journal(monkeypa
     assert restored_runtime.get_frame(first["active_frame_id"]) is not None
 
 
-def test_route_skill_explicit_skill_name_uses_named_skill_not_system_root(monkeypatch, tmp_path):
+def test_route_skill_uses_system_root_before_explicit_skill_name(monkeypatch, tmp_path):
     runtime = _install_isolated_runtime(monkeypatch, tmp_path)
     root_graph_module._skill_registry.register(
         SkillManifest(id="order_internal", name="Order Internal", allowed_tools=[]),
@@ -124,8 +124,9 @@ def test_route_skill_explicit_skill_name_uses_named_skill_not_system_root(monkey
     frame = runtime.get_frame(routed["active_frame_id"])
 
     assert frame is not None
-    assert frame.skill_id == "order-assistant"
-    assert routed["events"][-1].content == "Opening frame for skill: order-assistant"
+    assert frame.skill_id == root_graph_module.ROOT_SKILL_ID
+    assert frame.frame_kind == FrameKind.ROOT
+    assert routed["events"][-1].content == "Opening conversation root frame"
 
 
 def test_route_skill_reuses_system_root_frame_across_tasks_in_same_session(monkeypatch, tmp_path):
@@ -628,43 +629,13 @@ def test_enqueue_pending_user_input_rejects_finalizing_memory(monkeypatch, tmp_p
     assert restored.pending_user_inputs == []
 
 
-def test_agentic_routing_prompt_includes_recent_conversation(monkeypatch, tmp_path):
-    registry = SkillRegistry(skills_root=tmp_path / "skills", data_root=tmp_path / "data")
-    journal = FileFrameJournal(tmp_path / "data")
-    runtime = SkillRuntime(
-        frame_store=FrameStore(),
-        skill_registry=registry,
-        journal=journal,
-    )
-    captured: dict[str, Any] = {}
-
-    class FakeChunk:
-        content = "No skill needed"
-        tool_calls = None
-
-        def __add__(self, other):
-            return self
-
-    class FakeChatModel:
-        def bind_tools(self, tools):
-            captured["tools"] = tools
-            return self
-
-        def stream(self, messages):
-            captured["messages"] = messages
-            yield FakeChunk()
-
-    monkeypatch.setattr(root_graph_module, "_skill_registry", registry)
-    monkeypatch.setattr(root_graph_module, "_journal", journal)
-    monkeypatch.setattr(root_graph_module, "_runtime", runtime)
-    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", False)
-    monkeypatch.setattr(root_graph_module.settings, "llm_agentic_routing", True)
-    monkeypatch.setattr(root_graph_module, "_chat_model_for_state", lambda state: FakeChatModel())
-
-    state = _state("task_recent_conversation_prompt_001")
+def test_legacy_agentic_routing_prompt_path_is_removed(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    state = _state("task_removed_agentic_routing_001")
     state["prompt"] = "continue handling it"
     state["context"] = {
         "contextId": CTX_PROMPT,
+        "businessSkillName": "order-assistant",
         "recentConversation": [
             {"role": "user", "content": "look up ticket A"},
             {"role": "assistant", "content": "ticket A is available"},
@@ -672,13 +643,9 @@ def test_agentic_routing_prompt_includes_recent_conversation(monkeypatch, tmp_pa
     }
 
     result = root_graph_module.route_skill(state)
+    frame = runtime.get_frame(result["active_frame_id"])
 
-    assert result["events"][-1].content == "No skill needed"
-    human_prompt = captured["messages"][1].content
-    assert "Recent conversation before the current user message:" in human_prompt
-    assert "user: look up ticket A" in human_prompt
-    assert "assistant: ticket A is available" in human_prompt
-    assert "Current user message:\ncontinue handling it" in human_prompt
-    assert f'"contextId": "{CTX_PROMPT}"' not in human_prompt
-    assert "recentConversation" not in human_prompt
-    assert "\nContext:" not in human_prompt
+    assert frame is not None
+    assert frame.skill_id == root_graph_module.ROOT_SKILL_ID
+    assert frame.frame_kind == FrameKind.ROOT
+    assert result["events"][-1].content == "Opening conversation root frame"

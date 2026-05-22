@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import operator
 import time
-import json
-import re
 from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
@@ -17,7 +15,6 @@ from langgraph.graph import END, StateGraph
 
 from ..config import settings
 from ..models import FrameKind, FrameStatus, QueryEvent, SkillManifest
-from ..runtime.attachment_context import build_attachment_context_prompt as _build_attachment_context_prompt
 from ..runtime.context_memory import (
     PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY,
     RUNTIME_VISIBLE_CONVERSATION_KEY,
@@ -29,10 +26,9 @@ from ..runtime.context_memory import (
 )
 from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.file_frame_journal import FileFrameJournal
-from ..runtime.file_layout import date_parts_for_now, require_standard_context_id, session_data_dir
+from ..runtime.file_layout import require_standard_context_id
 from ..runtime.frame_store import FrameStore
-from ..runtime.account_context_files import build_account_context_prompt
-from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model, create_chat_model_from_config
+from ..runtime.llm_skill_router import create_chat_model, create_chat_model_from_config
 from ..runtime.llm_skill_agent import LlmSkillAgent
 from ..runtime.llm_agent_prompts import model_visible_context
 from ..runtime.llm_child_recovery import (
@@ -80,56 +76,11 @@ ROOT_FRAME_REUSE_CONTENT = "Reusing conversation root frame"
 
 # LLM-based Skill Router (None if llm_provider is empty → rule-based fallback)
 _chat_model = create_chat_model(settings)
-_llm_router: LlmSkillRouter | None = LlmSkillRouter(_chat_model) if _chat_model else None
 _llm_skill_agent: LlmSkillAgent | None = (
     LlmSkillAgent(_chat_model, _runtime, settings.llm_skill_max_iterations, data_root=Path(_data_root))
     if _chat_model and settings.llm_execute_skills
     else None
 )
-
-
-def _safe_log_stem(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", value)
-
-
-def _conversation_log_file(data_root: str | Path, task_id: str, session_id: str | None) -> Path:
-    """Return the JSONL path for a single LLM routing request.
-
-    Logs are grouped by session directory, with one numbered file per task. This
-    keeps a multi-turn session ordered without making each task look like it
-    reused earlier system prompts.
-    """
-    task_stem = _safe_log_stem(task_id)
-
-    log_dir = (
-        session_data_dir(Path(data_root), date_parts_for_now(), session_id or "_no-session")
-        / "logs" / "llm-conversations"
-    )
-    max_index = 0
-    if log_dir.exists():
-        for existing in log_dir.glob("*.jsonl"):
-            prefix = existing.name.split("_", 1)[0]
-            if prefix.isdigit():
-                max_index = max(max_index, int(prefix))
-    return log_dir / f"{max_index + 1:04d}_{task_stem}.jsonl"
-
-
-def _runtime_time_context_for_log(runtime_context: dict[str, Any] | None) -> dict[str, str]:
-    """Whitelist dynamic time context for conversation logs without leaking tokens."""
-    context = runtime_context or {}
-    aliases = {
-        "current_time": ("current_time", "currentTime"),
-        "timezone": ("timezone", "timeZone", "tz"),
-        "business_date": ("business_date", "businessDate"),
-    }
-    safe_context: dict[str, str] = {}
-    for canonical_key, keys in aliases.items():
-        for key in keys:
-            value = context.get(key)
-            if isinstance(value, str) and value:
-                safe_context[canonical_key] = value
-                break
-    return safe_context
 
 
 def _account_id_from_state(state: RootState) -> str | None:
@@ -160,42 +111,11 @@ def _explicit_skill_name_from_state(state: RootState) -> str | None:
     return validate_skill_name(legacy, "skill")
 
 
-def _prompt_with_attachment_context(prompt: str, attachments: list[dict[str, Any]] | None) -> str:
-    attachment_context = _build_attachment_context_prompt(attachments)
-    if not attachment_context:
-        return prompt
-    return f"{prompt}\n\n{attachment_context}"
-
-
 def _skill_agent_prompt(prompt: str, context: dict[str, Any]) -> str:
     instruction = context.get("skill_instruction")
     if isinstance(instruction, str) and instruction.strip():
         return instruction.strip()
     return prompt
-
-
-def _recent_conversation_prompt(context: dict[str, Any]) -> str | None:
-    history = context.get("recentConversation") or context.get("recent_conversation")
-    if not isinstance(history, list):
-        return None
-    lines: list[str] = []
-    for item in history[-12:]:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role") or "message").strip().lower()
-        content = item.get("content")
-        if role not in {"user", "assistant", "tool", "system"}:
-            role = "message"
-        if isinstance(content, str) and content.strip():
-            lines.append(f"{role}: {content.strip()[:1200]}")
-    if not lines:
-        return None
-    return "Recent conversation before the current user message:\n" + "\n".join(lines)
-
-
-def _context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
-    projected = model_visible_context(context)
-    return projected if isinstance(projected, dict) else {}
 
 
 def _context_with_visible_skill_descriptions(context: dict[str, Any]) -> dict[str, Any]:
@@ -241,7 +161,7 @@ def _system_root_manifest() -> SkillManifest:
     return SkillManifest(
         id=ROOT_SKILL_ID,
         name=ROOT_SKILL_ID,
-        description="Root business orchestration agent for task-level work.",
+        description="当前业务会话的根编排 Agent。",
         markdown_body=(
             "你是当前任务的根业务编排 Agent。"
             "可以直接处理用户请求时，直接完成判断，并必须通过 submit_skill_result 工具提交结果；"
@@ -505,13 +425,7 @@ def route_skill(state: RootState) -> dict:
         ),
     ]
 
-    try:
-        explicit_skill_name = _explicit_skill_name_from_state(state)
-    except SkillNameValidationError as exc:
-        events.append(QueryEvent(type="error", task_id=task_id, error=str(exc)))
-        return {"events": events, "active_frame_id": None}
-
-    if not explicit_skill_name and _should_use_system_root_skill(state):
+    if _should_use_system_root_skill(state):
         frame_id, created = _get_or_create_system_root_frame(task_id, state.get("session_id"), context)
         events.append(QueryEvent(
             type="skill_frame_open",
@@ -522,17 +436,17 @@ def route_skill(state: RootState) -> dict:
         ))
         return {"events": events, "active_frame_id": frame_id}
 
-    # Three-level routing priority:
+    try:
+        explicit_skill_name = _explicit_skill_name_from_state(state)
+    except SkillNameValidationError as exc:
+        events.append(QueryEvent(type="error", task_id=task_id, error=str(exc)))
+        return {"events": events, "active_frame_id": None}
+
+    # Legacy non-LLM fallback priority:
     # 0. Dynamic skill injection via markdown
     # 1. Explicit skill in context
-    # 2. LLM routing (if enabled)
-    # 3. Rule-based fallback (backward compat)
+    # 2. Rule-based fallback (backward compat)
     skill_id = None
-    chat_model = _chat_model_for_state(state)
-    prompt_with_attachments = _prompt_with_attachment_context(
-        state["prompt"],
-        state.get("attachments"),
-    )
 
     # Priority 0: dynamic markdown injection
     markdown_body = context.get("skill_markdown")
@@ -542,7 +456,7 @@ def route_skill(state: RootState) -> dict:
             id=explicit_skill_name,
             name=explicit_skill_name,
             markdown_body=markdown_body,
-            allowed_tools=[] # Tools can be registered if needed
+            allowed_tools=[],  # Tools can be registered if needed
         )
         _skill_registry.register(manifest)
         skill_id = manifest.id
@@ -556,253 +470,6 @@ def route_skill(state: RootState) -> dict:
     if not skill_id:
         if context.get("order_id"):
             skill_id = "exception_triage"
-
-    # Priority 3: Agentic LLM routing (only if no prior priority matched)
-    if not skill_id and chat_model:
-        if getattr(settings, "llm_agentic_routing", False):
-            from langchain_core.messages import HumanMessage, SystemMessage
-            
-            allowed_skills_param = context.get("allowed_skills")
-            routable_skills = []
-            
-            # 1. Process explicit allowed_skills from context
-            if allowed_skills_param and isinstance(allowed_skills_param, list):
-                for sk in allowed_skills_param:
-                    sk_id = sk.get("id")
-                    if not sk_id:
-                        continue
-                    if "markdown_body" in sk:
-                        manifest = SkillManifest(
-                            id=sk_id,
-                            name=sk.get("name", sk_id),
-                            description=sk.get("description", ""),
-                            markdown_body=sk["markdown_body"],
-                            allowed_tools=sk.get("allowed_tools", [])
-                        )
-                        _skill_registry.register(manifest)
-                        routable_skills.append(manifest)
-                    else:
-                        manifest = _skill_registry.get_manifest(sk_id)
-                        if manifest:
-                            routable_skills.append(manifest)
-                        else:
-                            stub = SkillManifest(
-                                id=sk_id,
-                                name=sk.get("name", sk_id),
-                                description=sk.get("description", ""),
-                                allowed_tools=[]
-                            )
-                            routable_skills.append(stub)
-            
-            # 2. Process system public skills and user private skills
-            auto_inject = context.get("auto_inject_public_skills", False)
-            auto_inject_app_public = context.get("auto_inject_app_public_skills", bool(client_app_id))
-            all_skills = _skill_registry.list_skills()
-            for s in all_skills:
-                # Deduplicate if already added via allowed_skills
-                if any(r.id == s.id for r in routable_skills):
-                    continue
-                    
-                vis = getattr(s, "visibility", "public")
-                if vis == "builtin":
-                    continue
-                    
-                # Private account skills are ALWAYS injected (not controlled by TMS allowed_skills)
-                if vis == "private":
-                    routable_skills.append(s)
-                    continue
-                    
-                # App-scoped public skills are safe to inject after Java resolves clientAppId.
-                app_scoped = bool(client_app_id) and getattr(s, "client_app_id", None) == client_app_id
-                if vis == "public" and (auto_inject or (auto_inject_app_public and app_scoped)):
-                    routable_skills.append(s)
-            
-            invoke_tool = {
-                "type": "function",
-                "function": {
-                    "name": "invoke_business_agent",
-                    "description": (
-                        "Delegate the user's request to a specialized business Agent. "
-                        "Use this when the user asks to perform an action that matches "
-                        "one of the available agent-like capabilities. The returned promoted result is "
-                        "the primary business-decision context from that child Agent frame; "
-                        "do not inspect execution reports after normal completion just "
-                        "to recover status, next_step, or structured_output fields. "
-                        "If the child asks for user input, the runtime keeps that Agent "
-                        "frame open and resumes it on the next user message."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "agent_id": {
-                                "type": "string",
-                                "description": "The exact Agent or agent-like skill folder name to invoke."
-                            },
-                            "skill_name": {
-                                "type": "string",
-                                "description": "Compatibility alias for agent_id."
-                            },
-                            "instruction": {
-                                "type": "string",
-                                "description": (
-                                    "Natural language instructions for the Agent, "
-                                    "summarizing what needs to be done and any "
-                                    "extracted entities (e.g. order numbers) from "
-                                    "the user's request so the Agent can return a "
-                                    "complete promoted result."
-                                )
-                            }
-                        },
-                        "required": ["instruction"]
-                    }
-                }
-            }
-            tools = [invoke_tool]
-            
-            if routable_skills:
-                skills_summary = "\n".join([f"- {s.id}: {s.description}" for s in routable_skills])
-                skills_section = f"Available Agents:\n{skills_summary}\n\nIf the user's request should be delegated, use the `invoke_business_agent` tool to open an Agent frame.\nProvide `agent_id` and a detailed `instruction` based on the user's input. Treat the returned promoted result as the primary child-Agent business context."
-            else:
-                skills_section = "No business skills are currently registered. Respond naturally to the user."
-
-            account_context_section = build_account_context_prompt(Path(_data_root), account_id)
-            
-            sys_msg_content = f"""You are an intelligent business assistant embedded in a business system.
-Your job is to chat with the user and automatically delegate tasks to specialized skills when appropriate.
-
-{account_context_section}
-
-{skills_section}
-
-If no skill matches, respond naturally to the user — you can answer questions, provide guidance, or have a general conversation."""
-            sys_msg_content_for_log = (
-                sys_msg_content.replace(
-                    account_context_section,
-                    "[account_context_files: omitted from conversation log]",
-                )
-                if account_context_section
-                else sys_msg_content
-            )
-            
-            sys_msg = SystemMessage(content=sys_msg_content)
-            human_parts = []
-            recent_conversation = _recent_conversation_prompt(context)
-            if recent_conversation:
-                human_parts.append(recent_conversation)
-            human_parts.append(f"Current user message:\n{prompt_with_attachments}")
-            context_for_prompt = _context_for_prompt(context)
-            if context_for_prompt:
-                human_parts.append(f"\nContext: {json.dumps(context_for_prompt, ensure_ascii=False)}")
-            human_msg = HumanMessage(content="\n".join(human_parts))
-
-            llm_with_tools = chat_model.bind_tools(tools)
-            
-            # --- Conversation logging setup ---
-            import datetime
-            session_id = state.get("session_id")
-            conversation_id = _conversation_id_for_root_frame(task_id, session_id, context)
-            log_session_key = conversation_id or session_id
-            _log_file = _conversation_log_file(_data_root, task_id, log_session_key)
-            _log_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            def _append_log(entry: dict) -> None:
-                try:
-                    entry.setdefault("task_id", task_id)
-                    entry.setdefault("session_id", session_id)
-                    entry.setdefault("conversation_id", conversation_id)
-                    with open(_log_file, "a", encoding="utf-8") as f:
-                        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-            
-            _append_log({
-                "ts": datetime.datetime.now().isoformat(),
-                "event": "llm_request",
-                "messages": [
-                    {"role": "system", "content": sys_msg_content_for_log},
-                    {"role": "user", "content": human_msg.content},
-                ],
-                "runtime_time_context": _runtime_time_context_for_log(state.get("runtime_context")),
-                "routable_skills": [s.id for s in routable_skills],
-            })
-            
-            try:
-                final_msg = None
-                for chunk in llm_with_tools.stream([sys_msg, human_msg]):
-                    if chunk.content:
-                        events.append(QueryEvent(
-                            type="assistant_text",
-                            content=chunk.content,
-                            task_id=task_id,
-                            model=state.get("model"),
-                        ))
-                    if final_msg is None:
-                        final_msg = chunk
-                    else:
-                        final_msg += chunk
-                
-                # Log assistant response
-                _append_log({
-                    "ts": datetime.datetime.now().isoformat(),
-                    "event": "llm_response",
-                    "content": final_msg.content if final_msg else "",
-                    "tool_calls": getattr(final_msg, "tool_calls", None),
-                })
-                
-                # Check if there are tool calls
-                if final_msg and getattr(final_msg, "tool_calls", None):
-                    tc = final_msg.tool_calls[0]
-                    if tc.get("name") in {"invoke_business_agent", "invoke_business_skill"}:
-                        args = tc.get("args", {})
-                        candidate_skill_name = (
-                            args.get("agent_id")
-                            or args.get("agentId")
-                            or args.get("agent_name")
-                            or args.get("agentName")
-                            or args.get("skill_name")
-                            or args.get("skillName")
-                            or args.get("skill_id")
-                            or args.get("skillId")
-                        )
-                        if candidate_skill_name:
-                            try:
-                                skill_id = validate_skill_name(candidate_skill_name)
-                            except SkillNameValidationError:
-                                skill_id = None
-                        if "instruction" in args:
-                            context["skill_instruction"] = args["instruction"]
-                        _append_log({
-                            "ts": datetime.datetime.now().isoformat(),
-                            "event": "skill_delegated",
-                            "skill_id": skill_id,
-                            "instruction": args.get("instruction"),
-                        })
-                else:
-                    # No tool call made, pure conversational chat completed
-                    events.append(QueryEvent(
-                        type="result",
-                        content=final_msg.content if final_msg else "",
-                        task_id=task_id,
-                        model=state.get("model"),
-                        duration_ms=int((time.time() - state["started_at"]) * 1000),
-                    ))
-                    return {"events": events, "active_frame_id": None}
-                    
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning("Agentic routing failed: %s", e)
-                _append_log({
-                    "ts": datetime.datetime.now().isoformat(),
-                    "event": "routing_error",
-                    "error": str(e),
-                })
-        else:
-            # Standalone routing (Legacy)
-            llm_router = LlmSkillRouter(chat_model)
-            if llm_router:
-                llm_choice = llm_router.route(prompt_with_attachments, context, _skill_registry.list_skills())
-                if llm_choice and _skill_registry.get_manifest(llm_choice):
-                    skill_id = llm_choice
 
     if skill_id:
         # Create an Agent Frame via Runtime. Older tool names may still pass a
@@ -828,7 +495,7 @@ If no skill matches, respond naturally to the user — you can answer questions,
     else:
         # Static fallback if model routing fails or model is missing
         content_msg = "抱歉，我未能识别出与您请求匹配的业务技能。请尝试提供更多业务上下文或具体的操作指令。"
-        
+
         events.extend([
             QueryEvent(
                 type="assistant_text",
