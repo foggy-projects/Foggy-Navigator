@@ -19,7 +19,7 @@ describe.skipIf(!TEST_CONFIG.enableLanggraphWorkerSmoke)(
       await assertMockLlmReady();
     });
 
-    test('launches a Java Navi task into BizWorker and completes a scripted command tool loop', async () => {
+    test('launches a Java Navi task into BizWorker and completes command with natural final', async () => {
       const suffix = generateTestSuffix();
       const tenantId = `tenant_lgw_e2e_${suffix}`;
       const username = `lgw_e2e_${suffix}`;
@@ -107,7 +107,7 @@ describe.skipIf(!TEST_CONFIG.enableLanggraphWorkerSmoke)(
         description: 'Scripted command smoke skill for LangGraph BizWorker',
         status: 'ENABLED',
         markdownBody: [
-          'Use the command tool once, then submit the final structured result.',
+          'Use the command tool once, then answer with the marker as the final natural-language response.',
           `The first scripted cursor is next:${traceId}:001.`
         ].join('\n'),
         contextVisibility: 'passthrough'
@@ -153,8 +153,9 @@ describe.skipIf(!TEST_CONFIG.enableLanggraphWorkerSmoke)(
       );
       expect(workerTask.resultText).toBe('OK_JAVA_NAVI_COMMAND_MOCK_LLM_E2E');
       expect(JSON.parse(workerTask.structuredOutput ?? '{}')).toMatchObject({
-        command_e2e: true,
-        marker: 'OK_JAVA_NAVI_COMMAND_MOCK_LLM_E2E'
+        turn_status: 'FINAL_FOR_USER',
+        message: 'OK_JAVA_NAVI_COMMAND_MOCK_LLM_E2E',
+        completion_mode: 'assistant_message'
       });
 
       const businessTask = await tenantClient.getBusinessTask(created.taskId);
@@ -166,7 +167,7 @@ describe.skipIf(!TEST_CONFIG.enableLanggraphWorkerSmoke)(
         `next:${traceId}:002`
       ]);
       expect(records[0].responseSummary.toolCalls).toEqual(['command']);
-      expect(records[1].responseSummary.toolCalls).toEqual(['submit_skill_result']);
+      expect(records[1].responseSummary.toolCalls).toEqual([]);
     }, 120000);
   }
 );
@@ -207,22 +208,7 @@ async function registerMockScript(traceId: string, command: string): Promise<voi
         {
           cursor: `next:${traceId}:002`,
           response: {
-            tool_calls: [
-              {
-                id: `call_submit_${traceId}`,
-                type: 'function',
-                function: {
-                  name: 'submit_skill_result',
-                  arguments: JSON.stringify({
-                    summary: 'OK_JAVA_NAVI_COMMAND_MOCK_LLM_E2E',
-                    structured_output: {
-                      command_e2e: true,
-                      marker: 'OK_JAVA_NAVI_COMMAND_MOCK_LLM_E2E'
-                    }
-                  })
-                }
-              }
-            ]
+            content: 'OK_JAVA_NAVI_COMMAND_MOCK_LLM_E2E'
           }
         }
       ]

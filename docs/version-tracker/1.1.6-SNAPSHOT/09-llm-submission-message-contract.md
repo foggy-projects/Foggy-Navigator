@@ -396,7 +396,8 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 - 2026-05-21: nested leaf 正常完成后，parent continuation 已通过 system context 接收“刚完成的子技能提升结果”，并继续逐层向 Root unwind；`llm-submissions` 会分别保留 leaf 与 parent 的真实提交 body。
 - 2026-05-21: scripted E2E 已补充 `llm-submissions` 与 `runtime-message-events` 对账断言，覆盖普通多轮、BusinessFunction tool protocol、`AWAITING_USER` child resume、nested completion unwind。
 - 2026-05-21: child frame system context 新增“子技能退出策略”，并通过 `handoff_to_parent` 支持取消/停止/换题/回主对话；persistent root 工具列表不暴露该 child-only 工具。
-- 2026-05-21: 收口 root / child 完成契约。Root 普通回合支持自然语言直接完成；`submit_skill_result` 改为 root 的可选结构化提交能力和 child frame 的强制退出契约；移除“无 tool call 后追加伪 human 提醒”的默认行为。
+- 2026-05-21: 收口 root / child 完成契约。Root 普通回合支持自然语言直接完成；`submit_skill_result` 改为 root 的可选结构化提交能力和 child frame 的首选结构化完成/暂停工具；移除“无 tool call 后追加伪 human 提醒”的默认行为。
+- 2026-05-23: 修正 command smoke 口径：顶层 `command` 工具调用后可直接自然语言完成，不应被描述成必须 `command -> submit_skill_result`。`submit_skill_result` 只在需要结构化状态、refs、等待用户或 non-root Agent frame 明确完成/暂停时使用。
 - 2026-05-21: 补齐 API 级 Root 普通自然语言完成 E2E，验证同 `contextId` 第二轮 LLM body 能恢复上一轮 `user` / `assistant`，并且不会写入伪 human retry instruction。
 
 ### Testing

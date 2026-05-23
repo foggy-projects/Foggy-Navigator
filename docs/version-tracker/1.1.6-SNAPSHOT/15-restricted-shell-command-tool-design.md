@@ -308,16 +308,16 @@ BIZ_WORKER_PORT=3065
 - result: `command` tool result returned `ok=true`, `exit_code=0`, `timed_out=false`, and stdout began with `curl 8.5.0`; final skill result was `BizWorker command smoke completed`.
 - audit log: `tools/langgraph-biz-worker/data/runtime/sessions/by-date/2026/05/23/8b/bctx_20260523_8b_command_smoke_b/logs/skill-tool-calls/task_command_smoke_20260523b.jsonl`
 
-说明: 第一次 scripted smoke 曾因 mock LLM cursor 脚本重复返回 `command` 导致 max-iterations，命令本身已经返回成功；第二次 smoke 已修正脚本并完成 `command -> submit_skill_result -> result` 全链路。
+说明: 第一次 scripted smoke 曾因 mock LLM cursor 脚本重复返回 `command` 导致 max-iterations，命令本身已经返回成功；第二次 smoke 的脚本使用了旧式 `submit_skill_result` 结束回合。该终止工具只用于当时的 scripted finalization，不是 `command` 的必需后续步骤。
 
 ## Automated Mock LLM E2E Coverage
 
 - date: 2026-05-23
 - Python E2E: `tools/langgraph-biz-worker/tests/test_command_tool_e2e.py`
-- 覆盖范围: Linux worker 中通过 mock LLM scripted turn 触发 `command`，执行 `git --version` / `curl --version`，再通过 tool result 中的 cursor 推进到 `submit_skill_result`。
+- 覆盖范围: Linux worker 中通过 mock LLM scripted turn 触发 `command`，执行 `git --version` / `curl --version`，再通过 tool result 中的 cursor 推进到自然语言最终答复；不依赖 `submit_skill_result`。
 - 执行条件: 仅在 Linux 且存在 `bash`、`git`、`curl` 时执行；Windows 原生环境自动 skip，本机验证应在 WSL 中运行。
 - Java L3 optional: `business-agent-module/integration-tests/tests/03-langgraph-biz-worker-mock-llm.test.ts`
-- 覆盖范围: Java Navigator REST 控制面注册临时 tenant / ClientApp / Skill / WorkerPool / LangGraph Worker，将 BusinessAgent task 发往真实 BizWorker，并由 mock LLM 完成 `command -> submit_skill_result`。
+- 覆盖范围: Java Navigator REST 控制面注册临时 tenant / ClientApp / Skill / WorkerPool / LangGraph Worker，将 BusinessAgent task 发往真实 BizWorker，并由 mock LLM 完成 `command -> assistant natural final`。
 - 执行条件: 默认跳过；需显式设置 `BIZ_AGENT_E2E_LANGGRAPH_WORKER_SMOKE=true`，并准备 Java Navigator、WSL BizWorker `3065`、mock LLM service。
 
 ## WSL Real LLM Smoke Evidence
@@ -488,7 +488,8 @@ write_file
 
 - status: automated-mock-e2e-added; complete-through-java-navi-real-llm-smoke
 - 已补 Python 单测: 默认关闭配置、环境变量开启、默认隐藏、Windows 隐藏、未显式授权隐藏、workdir 越权拒绝、timeout、subprocess 调用参数、schema 文案。
-- 已补 Python mock LLM E2E: `test_command_tool_e2e.py` 固化 scripted `command -> submit_skill_result` 闭环，避免真实 LLM smoke 成为唯一回归手段。
+- 已补 Python mock LLM E2E: `test_command_tool_e2e.py` 固化 scripted `command -> assistant natural final` 闭环，避免真实 LLM smoke 成为唯一回归手段。
+- 2026-05-23 收口修正: 顶层 command E2E 已改为 `command -> assistant natural final`，避免误导为 `submit_skill_result` 是 command 的必需终止步骤；`submit_skill_result` 仅保留为 Root 结构化状态提交或 non-root Agent frame 结构化完成/暂停工具。
 - Python 全量回归通过: `tools/langgraph-biz-worker` pytest 结果为 `668 passed, 6 skipped`。
 - WSL 真实 smoke 通过: BizWorker 端口 3065，授权 workspace 内执行 `git init` / `git status --short` / `curl --version`，tool audit 已记录 `exit_code=0`。
 - Java 专项单测已补: LangGraph launcher 将 `allowed_tools=["read_file","write_file","patch_file","command"]`、`workdir`、`allowed_dirs` 写入 hidden `runtime_context.execution_policy`。

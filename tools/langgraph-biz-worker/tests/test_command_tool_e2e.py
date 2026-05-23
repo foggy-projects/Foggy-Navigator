@@ -91,7 +91,7 @@ def _parse_worker_sse(raw_text: str) -> list[QueryEvent]:
 
 
 @pytest.mark.anyio
-async def test_scripted_mock_llm_runs_command_tool_and_submits_result(
+async def test_scripted_mock_llm_runs_command_tool_and_returns_natural_final(
     monkeypatch,
     mock_llm_server,
     tmp_path,
@@ -137,24 +137,7 @@ async def test_scripted_mock_llm_runs_command_tool_and_submits_result(
             {
                 "cursor": f"next:{trace_id}:002",
                 "response": {
-                    "tool_calls": [
-                        {
-                            "id": f"call_submit_{run_id}",
-                            "type": "function",
-                            "function": {
-                                "name": "submit_skill_result",
-                                "arguments": json.dumps(
-                                    {
-                                        "summary": "OK_COMMAND_MOCK_LLM_E2E",
-                                        "structured_output": {
-                                            "command_e2e": True,
-                                            "marker": "OK_COMMAND_MOCK_LLM_E2E",
-                                        },
-                                    }
-                                ),
-                            },
-                        }
-                    ],
+                    "content": "OK_COMMAND_MOCK_LLM_E2E",
                 },
             },
         ],
@@ -198,7 +181,6 @@ async def test_scripted_mock_llm_runs_command_tool_and_submits_result(
     events = _parse_worker_sse(response.text)
     assert [event.tool_name for event in events if event.type == "tool_use"] == [
         "command",
-        "submit_skill_result",
     ]
 
     command_result_event = next(
@@ -215,8 +197,9 @@ async def test_scripted_mock_llm_runs_command_tool_and_submits_result(
     result = next(event for event in events if event.type == "result")
     assert result.content == "OK_COMMAND_MOCK_LLM_E2E"
     assert result.structured_output == {
-        "command_e2e": True,
-        "marker": "OK_COMMAND_MOCK_LLM_E2E",
+        "turn_status": "FINAL_FOR_USER",
+        "message": "OK_COMMAND_MOCK_LLM_E2E",
+        "completion_mode": "assistant_message",
     }
 
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
@@ -228,4 +211,4 @@ async def test_scripted_mock_llm_runs_command_tool_and_submits_result(
         f"next:{trace_id}:002",
     ]
     assert records[0]["responseSummary"]["toolCalls"] == ["command"]
-    assert records[1]["responseSummary"]["toolCalls"] == ["submit_skill_result"]
+    assert records[1]["responseSummary"]["toolCalls"] == []

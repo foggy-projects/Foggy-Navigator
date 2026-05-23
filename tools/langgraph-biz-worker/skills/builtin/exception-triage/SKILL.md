@@ -52,4 +52,4 @@ Use this skill when the task involves analyzing an exception order and providing
 4. Recommend an action (manual_dispatch / auto_retry / escalate / ignore).
 5. Provide a confidence score between 0 and 1.
 6. Do not guess without evidence.
-7. When finished, call `submit_skill_result`.
+7. Return the classification, action, confidence, and evidence. If this run needs structured output or is inside an Agent frame, call `submit_skill_result`; otherwise a root/top-level caller may finish with a natural-language answer.

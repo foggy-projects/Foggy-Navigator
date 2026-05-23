@@ -111,7 +111,15 @@ Agent 内部完整 tool trace 保存在该 Agent frame 的 report/log/runtime me
 
 ### `submit_skill_result` 与 `handoff_to_parent`
 
-这两个工具的语义收口为 non-root frame 的完成 / handoff 工具。它们不再意味着“只有 Skill frame 才能调用”。
+这两个工具的语义收口为 frame 控制工具，而不是普通 Skill 调用的必经出口。它们不再意味着“只有 Skill frame 才能调用”，也不意味着 `invoke_business_skill` 之后必须调用。
+
+当前约定:
+
+1. Root 普通回合可以直接用自然语言完成，不需要 `submit_skill_result`。
+2. Root 只有在需要保存 `active_plan`、`artifact_refs`、`evidence_refs`、`structured_output` 等跨回合结构化状态时，才主动调用 `submit_skill_result`。
+3. Non-root Agent frame 完成、等待用户补充或提交结构化 refs 时，优先调用 `submit_skill_result`。
+4. Non-root Agent frame 需要受控退出并交还父级时，调用 `handoff_to_parent`。
+5. 普通 Skill 材料加载不创建 frame，因此不要求 `submit_skill_result` 或 `handoff_to_parent`。
 
 当前命名保留是为了兼容旧工具名和前端展示；实现和文档中应逐步转向：
 
