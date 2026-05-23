@@ -234,7 +234,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         entity.setContextId(form.getContextId());
         entity.setTaskDeadlineAt(runtimeContextText(form.getRuntimeContext(), "taskDeadlineAt", "task_deadline_at"));
         persistTask(entity);
-        persistUserPrompt(sessionId, taskId, form.getPrompt());
+        persistUserPrompt(sessionId, taskId, form.getPrompt(), form.getAttachments());
 
         // 3. Publish WorkerTaskStartEvent → LanggraphStreamRelay listens
         Map<String, Object> providerConfig = new LinkedHashMap<>();
@@ -349,16 +349,22 @@ public class LanggraphTaskService implements TaskQueryProvider {
         }
     }
 
-    private void persistUserPrompt(String sessionId, String taskId, String prompt) {
+    private void persistUserPrompt(String sessionId, String taskId, String prompt, List<Map<String, Object>> attachments) {
         if (!StringUtils.hasText(sessionId) || !StringUtils.hasText(prompt)) {
             return;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("type", "USER");
+        metadata.put("taskId", taskId);
+        if (attachments != null && !attachments.isEmpty()) {
+            metadata.put("attachments", attachments);
         }
         sessionManager.addMessage(sessionId, Message.builder()
                 .sessionId(sessionId)
                 .taskId(taskId)
                 .role(MessageRole.USER)
                 .content(prompt)
-                .metadata(Map.of("type", "USER", "taskId", taskId))
+                .metadata(metadata)
                 .build());
     }
 

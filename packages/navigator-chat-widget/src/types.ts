@@ -151,6 +151,7 @@ export interface OpenTaskMessage {
   timestamp?: string | number
   status?: TaskStatus | string
   metadata?: Record<string, unknown>
+  attachments?: NavigatorAttachmentResult[]
   toolCallId?: string
   callId?: string
   invocationId?: string
@@ -262,7 +263,11 @@ export interface SessionMessage {
   role?: string
   type?: string
   content?: unknown
-  metadata?: Record<string, unknown>
+  terminal?: boolean
+  terminalStatus?: TerminalStatus | null
+  status?: TaskStatus | string
+  metadata?: Record<string, unknown> | string | null
+  attachments?: NavigatorAttachmentResult[]
   createdAt?: string
 }
 

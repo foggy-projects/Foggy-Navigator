@@ -102,6 +102,30 @@ class LanggraphWorkerClientTest {
     }
 
     @Test
+    void getFrameReport_forwardsQueryToWorker() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            LanggraphWorkerClient client = new LanggraphWorkerClient("worker-1", server.baseUrl(), "token");
+
+            Map<String, Object> report = client.getFrameReport(
+                    "frame-report://lgt_123/frm_456",
+                    "lgt_123",
+                    "frm_456",
+                    "ctx-1",
+                    "session-1",
+                    "markdown",
+                    30_000
+            ).block(Duration.ofSeconds(5));
+
+            assertEquals("/api/v1/frame-reports", server.path());
+            assertEquals("ok", report.get("status"));
+            assertTrue(server.query().contains("reportRef=frame-report://lgt_123/frm_456"));
+            assertTrue(server.query().contains("mode=markdown"));
+            assertTrue(server.query().contains("maxChars=30000"));
+        }
+    }
+
+
+    @Test
     void streamQuery_appliesConfiguredResponseTimeout() throws Exception {
         try (CaptureServer server = CaptureServer.start(1_000)) {
             LanggraphWorkerClient client = new LanggraphWorkerClient(
@@ -189,6 +213,15 @@ class LanggraphWorkerClientTest {
                 exchange.getResponseBody().write(response);
                 exchange.close();
             });
+            server.createContext("/api/v1/frame-reports", exchange -> {
+                capture.path.set(exchange.getRequestURI().getPath());
+                capture.body.set(exchange.getRequestURI().getQuery());
+                byte[] response = "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+            });
             server.start();
             return capture;
         }
@@ -203,6 +236,10 @@ class LanggraphWorkerClientTest {
 
         String path() {
             return path.get();
+        }
+
+        String query() {
+            return body.get();
         }
 
         @Override

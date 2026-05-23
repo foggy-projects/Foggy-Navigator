@@ -253,6 +253,38 @@ public class AgentApi {
                 new TypeReference<>() {});
     }
 
+    public Map<String, Object> getFrameReport(String reportRef, String mode, int maxChars) {
+        return http.get(frameReportPath(reportRef, mode, maxChars, null), new TypeReference<>() {});
+    }
+
+    public String getFrameReportMarkdown(String reportRef, int maxChars) {
+        Map<String, Object> report = getFrameReport(reportRef, "markdown", maxChars);
+        Object markdown = report == null ? null : report.get("markdown");
+        return markdown instanceof String ? (String) markdown : null;
+    }
+
+    public Map<String, Object> getFrameReportWithClientAppAccessToken(
+            String reportRef,
+            String mode,
+            int maxChars,
+            String clientAppKey,
+            String clientAppAccessToken) {
+        return http.get(frameReportPath(reportRef, mode, maxChars, null),
+                clientAppHeaders(clientAppKey, clientAppAccessToken, null),
+                new TypeReference<>() {});
+    }
+
+    public String getFrameReportMarkdownWithClientAppAccessToken(
+            String reportRef,
+            int maxChars,
+            String clientAppKey,
+            String clientAppAccessToken) {
+        Map<String, Object> report = getFrameReportWithClientAppAccessToken(
+                reportRef, "markdown", maxChars, clientAppKey, clientAppAccessToken);
+        Object markdown = report == null ? null : report.get("markdown");
+        return markdown instanceof String ? (String) markdown : null;
+    }
+
     private Map<String, String> clientAppHeaders(
             String clientAppKey,
             String clientAppAccessToken,
@@ -268,6 +300,24 @@ public class AgentApi {
 
     private String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    private String frameReportPath(String reportRef, String mode, int maxChars, String clientAppId) {
+        if (reportRef == null || reportRef.isBlank()) {
+            throw new IllegalArgumentException("reportRef is required");
+        }
+        StringBuilder path = new StringBuilder("/api/v1/open/frame-reports?reportRef=")
+                .append(encode(reportRef));
+        if (mode != null && !mode.isBlank()) {
+            path.append("&mode=").append(encode(mode));
+        }
+        if (maxChars > 0) {
+            path.append("&maxChars=").append(maxChars);
+        }
+        if (clientAppId != null && !clientAppId.isBlank()) {
+            path.append("&clientAppId=").append(encode(clientAppId));
+        }
+        return path.toString();
     }
 
     private Map<String, Object> buildAskBody(String question, String contextId, Integer maxTurns,

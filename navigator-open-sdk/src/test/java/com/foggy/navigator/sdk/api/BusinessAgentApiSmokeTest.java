@@ -515,6 +515,39 @@ public class BusinessAgentApiSmokeTest {
     }
 
     @Test
+    public void testGetFrameReportMarkdownWithClientAppAccessToken() {
+        responseOverride = "{\"ok\":true,\"mode\":\"markdown\",\"markdown\":\"# report\"}";
+
+        String markdown = client.agents().getFrameReportMarkdownWithClientAppAccessToken(
+                "frame-report://lgt_123/frm_456",
+                30000,
+                "cak-test",
+                "cat-runtime");
+
+        assertEquals("# report", markdown);
+        assertEquals("/api/v1/open/frame-reports?reportRef=frame-report%3A%2F%2Flgt_123%2Ffrm_456&mode=markdown&maxChars=30000", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("cak-test", lastClientAppKeyHeader);
+        assertEquals("cat-runtime", lastClientAppAccessTokenHeader);
+        assertCommon();
+    }
+
+    @Test
+    public void testBusinessAgentGetFrameReportUsesOpenApiPath() {
+        responseOverride = "{\"code\":0,\"data\":{\"ok\":true,\"mode\":\"digest\"}}";
+
+        Map<String, Object> report = client.businessAgent().getFrameReport(
+                "frame-report://lgt_123/frm_456",
+                "digest",
+                6000);
+
+        assertEquals(true, report.get("ok"));
+        assertEquals("/api/v1/open/frame-reports?reportRef=frame-report%3A%2F%2Flgt_123%2Ffrm_456&mode=digest&maxChars=6000", lastPath);
+        assertEquals("GET", lastMethod);
+        assertCommon();
+    }
+
+    @Test
     public void testCreateSkill() {
         CreateSkillForm form = new CreateSkillForm();
         form.setName("test-skill");

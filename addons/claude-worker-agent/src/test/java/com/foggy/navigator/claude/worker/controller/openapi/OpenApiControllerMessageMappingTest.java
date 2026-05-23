@@ -3,8 +3,10 @@ package com.foggy.navigator.claude.worker.controller.openapi;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
+import com.foggy.navigator.business.agent.service.BusinessAgentFrameReportService;
 import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
+import com.foggy.navigator.business.agent.service.ClientAppControlCredentialService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
@@ -90,6 +92,57 @@ class OpenApiControllerMessageMappingTest {
 
         assertEquals("TOOL_CALL", dto.getType());
         assertEquals(false, dto.getTerminal());
+    }
+
+    @Test
+    void messageCarriesOwningTaskStatusWithoutChangingMessageTerminalFlag() throws Exception {
+        OpenApiController controller = newController();
+        SessionMessageEntity entity = new SessionMessageEntity();
+        entity.setId("msg-status");
+        entity.setSessionId("session-1");
+        entity.setTaskId("task-1");
+        entity.setRole("ASSISTANT");
+        entity.setContent("处理中间过程");
+        entity.setMetadata("{\"type\":\"TEXT_COMPLETE\",\"taskId\":\"task-1\"}");
+        entity.setCreatedAt(LocalDateTime.now());
+
+        OpenSessionMessageDTO dto = mapMessage(controller, entity, "COMPLETED");
+
+        assertEquals("TEXT", dto.getType());
+        assertEquals("COMPLETED", dto.getStatus());
+        assertEquals(false, dto.getTerminal());
+        assertNull(dto.getTerminalStatus());
+    }
+
+
+    @Test
+    void userMessageExposesAttachmentsAsTopLevelField() throws Exception {
+        OpenApiController controller = newController();
+        SessionMessageEntity entity = new SessionMessageEntity();
+        entity.setId("msg-attachments");
+        entity.setSessionId("session-1");
+        entity.setTaskId("task-1");
+        entity.setRole("USER");
+        entity.setContent("请创建带附件的工单");
+        entity.setMetadata("""
+                {
+                  "type": "USER",
+                  "taskId": "task-1",
+                  "attachments": [
+                    {"id": "att-1", "name": "smoke-a.png", "mimeType": "image/png"},
+                    {"id": "att-2", "name": "smoke-b.png", "mimeType": "image/png"}
+                  ]
+                }
+                """);
+        entity.setCreatedAt(LocalDateTime.now());
+
+        OpenSessionMessageDTO dto = mapMessage(controller, entity);
+
+        assertEquals("USER", dto.getType());
+        assertEquals(2, dto.getAttachments().size());
+        assertEquals("smoke-a.png", dto.getAttachments().get(0).get("name"));
+        assertEquals("smoke-b.png", dto.getAttachments().get(1).get("name"));
+        assertNull(dto.getMetadata().get("taskId"));
     }
 
     @Test
@@ -598,11 +651,16 @@ class OpenApiControllerMessageMappingTest {
                         "{\"type\":\"STATE_SYNC\",\"subtype\":\"skill_frame_open\",\"content\":\"Opening conversation root frame\"}"),
                 message("msg_result", "session-1", "assistant", "你好",
                         "{\"type\":\"TASK_COMPLETED\"}")));
+        when(sessionQueryService.batchFindTaskStatuses(any()))
+                .thenReturn(Map.of("task-1", "COMPLETED"));
 
         var result = controller.getSessionMessages("agent-1", "ctx-1", null, 20, false, request);
 
         assertEquals(List.of("msg_user", "msg_result"), result.getData().getMessages().stream()
                 .map(OpenSessionMessageDTO::getMessageId)
+                .toList());
+        assertEquals(List.of("COMPLETED", "COMPLETED"), result.getData().getMessages().stream()
+                .map(OpenSessionMessageDTO::getStatus)
                 .toList());
     }
 
@@ -615,6 +673,18 @@ class OpenApiControllerMessageMappingTest {
         );
         method.setAccessible(true);
         return (OpenSessionMessageDTO) method.invoke(controller, entity, "ctx-1");
+    }
+
+    private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity, String status)
+            throws Exception {
+        Method method = OpenApiController.class.getDeclaredMethod(
+                "toOpenSessionMessageDTO",
+                SessionMessageEntity.class,
+                String.class,
+                String.class
+        );
+        method.setAccessible(true);
+        return (OpenSessionMessageDTO) method.invoke(controller, entity, "ctx-1", status);
     }
 
     private SessionMessageEntity userMessage(String id, String sessionId, String content) {
@@ -740,6 +810,10 @@ class OpenApiControllerMessageMappingTest {
         when(taskProvider.getIfAvailable()).thenReturn(taskService);
         ObjectProvider<BusinessAgentSessionService> sessionProvider = mock(ObjectProvider.class);
         when(sessionProvider.getIfAvailable()).thenReturn(sessionService);
+        ObjectProvider<BusinessAgentFrameReportService> frameReportProvider = mock(ObjectProvider.class);
+        when(frameReportProvider.getIfAvailable()).thenReturn(null);
+        ObjectProvider<ClientAppControlCredentialService> controlCredentialProvider = mock(ObjectProvider.class);
+        when(controlCredentialProvider.getIfAvailable()).thenReturn(null);
         return new OpenApiController(
                 mock(OpenApiProvisioningService.class),
                 mock(ClaudeWorkerService.class),
@@ -761,7 +835,9 @@ class OpenApiControllerMessageMappingTest {
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
-                sessionProvider
+                sessionProvider,
+                frameReportProvider,
+                controlCredentialProvider
         );
     }
 

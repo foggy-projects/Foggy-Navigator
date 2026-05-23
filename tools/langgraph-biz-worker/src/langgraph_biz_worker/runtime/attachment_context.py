@@ -33,10 +33,21 @@ def build_attachment_context_prompt(attachments: list[dict[str, Any]] | None) ->
     safe_attachments = [_safe_attachment_summary(item) for item in attachments if isinstance(item, dict)]
     if not safe_attachments:
         return ""
-    return "上游系统提供的附件:\n" + json.dumps(
-        safe_attachments,
-        ensure_ascii=False,
-        indent=2,
+    return (
+        "上游系统提供的附件:\n"
+        "规则: 下列附件已经由上游系统上传并提供了可访问引用。"
+        "如果用户只是要求把这些文件随业务操作提交，直接按业务函数 schema 映射为 "
+        "attachmentRefs，例如 attachmentId=id、attachmentName=name、attachmentUrl=url、"
+        "contentType=mimeType、sizeBytes=size、thumbnailUrl=thumbnailUrl，"
+        "图片 attachmentType 使用 IMAGE，其他文件使用 FILE。"
+        "不要为这些附件调用 attachment.upload，也不要把 id、objectKey、local 路径或 URL "
+        "作为 attachment.upload 的 file 入参。只有用户提供的是尚未上传的原始二进制文件，"
+        "且当前运行时明确提供可上传的文件流时，才考虑 attachment.upload。\n"
+        + json.dumps(
+            safe_attachments,
+            ensure_ascii=False,
+            indent=2,
+        )
     )
 
 

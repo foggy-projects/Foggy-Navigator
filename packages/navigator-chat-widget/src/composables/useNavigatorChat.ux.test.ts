@@ -635,6 +635,208 @@ describe('useNavigatorChat business action UX', () => {
     })
   })
 
+  it('restores user attachments when loading session history', async () => {
+    const attachments: NavigatorAttachmentResult[] = [
+      {
+        id: 'att-a',
+        name: 'smoke-a.png',
+        mimeType: 'image/png',
+        size: 3900,
+        kind: 'image',
+        url: 'https://tms.example.com/attachments/smoke-a.png',
+      },
+      {
+        id: 'att-b',
+        name: 'smoke-b.png',
+        mimeType: 'image/png',
+        size: 4500,
+        kind: 'image',
+        url: 'https://tms.example.com/attachments/smoke-b.png',
+      },
+    ]
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            contextId: 'ctx-attachments',
+            messages: [
+              {
+                messageId: 'user-attachments',
+                role: 'USER',
+                type: 'USER',
+                content: '随便提交一个系统反馈工单',
+                attachments,
+                metadata: JSON.stringify({ type: 'USER', attachments }),
+                createdAt: '2026-05-23T07:28:00',
+              },
+              {
+                messageId: 'assistant-done',
+                role: 'ASSISTANT',
+                type: 'RESULT',
+                content: '测试工单已成功提交。',
+                terminal: true,
+                terminalStatus: 'COMPLETED',
+                createdAt: '2026-05-23T07:28:30',
+              },
+            ],
+            hasMore: false,
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-attachments')
+    await nextTick()
+
+    const userMessage = chat.messages.value.find((message) => message.role === 'user')
+    expect(userMessage?.attachments).toEqual(attachments)
+  })
+
+  it('normalizes terminal report digest status from stale running state', async () => {
+    const task: AgentTask = {
+      taskId: 'task-report',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-report',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'result-1',
+          type: 'RESULT',
+          content: '任务处理完成。',
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+          status: 'RUNNING',
+          metadata: {
+            execution_report_digest: {
+              status: 'RUNNING',
+              summary: '根任务执行完成',
+              reportRef: 'frame-report://task-report/root',
+            },
+          },
+        },
+      ],
+    }
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('hi')
+    await nextTick()
+
+    const reply = chat.messages.value.find((message) => message.messageType === 'RESULT')
+    expect(reply?.executionReportDigest?.status).toBe('COMPLETED')
+    expect(chat.taskStatus.value).toBe('COMPLETED')
+  })
+
+  it('normalizes stale running report digest when loading completed session history', async () => {
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            contextId: 'ctx-report-history',
+            messages: [
+              {
+                messageId: 'result-history-1',
+                taskId: 'task-report-history',
+                role: 'assistant',
+                type: 'TEXT',
+                content: '任务处理完成。',
+                status: 'COMPLETED',
+                metadata: {
+                  execution_report_digest: {
+                    status: 'RUNNING',
+                    summary: '历史加载时残留的运行中状态',
+                    reportRef: 'frame-report://task-report-history/root',
+                  },
+                },
+                createdAt: '2026-05-23T10:10:00',
+              },
+            ],
+            hasMore: false,
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-report-history')
+    await nextTick()
+
+    const reply = chat.messages.value.find((message) => message.id === 'result-history-1')
+    expect(reply?.status).toBe('COMPLETED')
+    expect(reply?.executionReportDigest?.status).toBe('COMPLETED')
+  })
+
+  it('treats finalized historical assistant text as completed without task terminal fields', async () => {
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            contextId: 'ctx-stale-report-history',
+            messages: [
+              {
+                messageId: 'result-history-stale',
+                taskId: 'task-report-stale',
+                role: 'assistant',
+                type: 'TEXT',
+                content: '历史回放中的最终答复。',
+                metadata: {
+                  execution_report_digest: {
+                    status: 'RUNNING',
+                    summary: '历史落库时残留的运行中快照',
+                    reportRef: 'frame-report://task-report-stale/root',
+                  },
+                },
+                createdAt: '2026-05-23T10:52:00',
+              },
+            ],
+            hasMore: false,
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-stale-report-history')
+    await nextTick()
+
+    const reply = chat.messages.value.find((message) => message.id === 'result-history-stale')
+    expect(reply?.status).toBe('COMPLETED')
+    expect(reply?.executionReportDigest?.status).toBe('COMPLETED')
+  })
+
   it('treats UI wait timeout as detach and keeps context for the next send', async () => {
     vi.useFakeTimers()
     const askBodies: unknown[] = []

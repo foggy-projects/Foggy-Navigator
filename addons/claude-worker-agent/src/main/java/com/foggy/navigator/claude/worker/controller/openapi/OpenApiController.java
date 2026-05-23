@@ -12,6 +12,7 @@ import com.foggy.navigator.business.agent.model.dto.AccountContextFileTreeDTO;
 import com.foggy.navigator.business.agent.model.dto.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionListDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionMessagesDTO;
+import com.foggy.navigator.business.agent.model.dto.ClientAppControlPlanePrincipal;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillBundleDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillArtifactSliceDTO;
@@ -20,8 +21,10 @@ import com.foggy.navigator.business.agent.model.form.AccountContextFileWriteForm
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
 import com.foggy.navigator.business.agent.model.form.SyncAccountSkillBundleForm;
 import com.foggy.navigator.business.agent.service.AccountContextFileService;
+import com.foggy.navigator.business.agent.service.BusinessAgentFrameReportService;
 import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
+import com.foggy.navigator.business.agent.service.ClientAppControlCredentialService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.business.agent.service.SkillArtifactService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
@@ -54,6 +57,7 @@ import org.springframework.web.bind.annotation.*;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -91,6 +95,8 @@ public class OpenApiController {
     private final ObjectProvider<SkillRegistryService> skillRegistryService;
     private final ObjectProvider<AccountContextFileService> accountContextFileService;
     private final ObjectProvider<BusinessAgentSessionService> businessAgentSessionService;
+    private final ObjectProvider<BusinessAgentFrameReportService> businessAgentFrameReportService;
+    private final ObjectProvider<ClientAppControlCredentialService> clientAppControlCredentialService;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -739,6 +745,38 @@ public class OpenApiController {
                 includeInternal));
     }
 
+    @GetMapping("/frame-reports")
+    public RX<Map<String, Object>> getFrameReport(
+            @RequestParam(required = false) String reportRef,
+            @RequestParam(required = false) String taskId,
+            @RequestParam(required = false) String frameId,
+            @RequestParam(required = false) String contextId,
+            @RequestParam(required = false) String sessionId,
+            @RequestParam(defaultValue = "summary") String mode,
+            @RequestParam(required = false) Integer maxChars,
+            @RequestParam(required = false) String clientAppId,
+            HttpServletRequest request) {
+        BusinessAgentFrameReportService service = businessAgentFrameReportService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("business agent frame report service is not available");
+        }
+        try {
+            ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeOrControlCredential(request, clientAppId);
+            return RX.ok(service.getFrameReport(
+                    credential.getTenantId(),
+                    credential.getClientAppId(),
+                    reportRef,
+                    taskId,
+                    frameId,
+                    contextId,
+                    sessionId,
+                    mode,
+                    maxChars));
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            return RX.failB(e.getMessage());
+        }
+    }
+
     private ResolvedClientAppCredentialDTO resolveClientAppCredential(
             String skillId,
             HttpServletRequest request) {
@@ -793,6 +831,28 @@ public class OpenApiController {
             throw RX.throwB("client app access token is required");
         }
         return resolved;
+    }
+
+    private ResolvedClientAppCredentialDTO requireClientAppRuntimeOrControlCredential(
+            HttpServletRequest request,
+            String clientAppId) {
+        ResolvedClientAppCredentialDTO runtime = resolveClientAppRuntimeToken(request);
+        if (runtime != null) {
+            return runtime;
+        }
+        ClientAppControlCredentialService controlService = clientAppControlCredentialService.getIfAvailable();
+        if (controlService == null) {
+            throw RX.throwB("client app access token is required");
+        }
+        ClientAppControlPlanePrincipal principal = controlService.requireAccess(
+                request,
+                ClientAppControlCredentialService.SCOPE_FRAME_REPORT_READ,
+                clientAppId);
+        return ResolvedClientAppCredentialDTO.builder()
+                .credentialId(principal.getCredentialId())
+                .tenantId(principal.getTenantId())
+                .clientAppId(principal.getClientAppId())
+                .build();
     }
 
     private OpenApiAgentRouteService.ResolvedOpenApiAgentRoute requireOpenApiAgentRoute(
@@ -1206,7 +1266,7 @@ public class OpenApiController {
         List<OpenSessionMessageDTO> dtos = page.stream()
                 .filter(message -> includeInternal
                         || BusinessAgentSessionMessageVisibility.isVisibleByDefault(message))
-                .map(m -> toOpenSessionMessageDTO(m, contextId))
+                .map(m -> toOpenSessionMessageDTO(m, contextId, taskEntity.getStatus()))
                 .toList();
 
         String status = mapTaskStatus(taskEntity.getStatus());
@@ -1301,10 +1361,18 @@ public class OpenApiController {
 
         String nextCursor = page.isEmpty() ? cursor : page.get(page.size() - 1).getId();
 
+        List<String> taskIds = page.stream()
+                .map(SessionMessageEntity::getTaskId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        Map<String, String> rawTaskStatusMap = sessionQueryService.batchFindTaskStatuses(taskIds);
+        final Map<String, String> taskStatusMap = rawTaskStatusMap == null ? Map.of() : rawTaskStatusMap;
+
         List<OpenSessionMessageDTO> dtos = page.stream()
                 .filter(message -> includeInternal
                         || BusinessAgentSessionMessageVisibility.isVisibleByDefault(message))
-                .map(m -> toOpenSessionMessageDTO(m, contextId))
+                .map(m -> toOpenSessionMessageDTO(m, contextId, taskStatusMap.get(m.getTaskId())))
                 .toList();
 
         return RX.ok(OpenSessionMessagesResponse.builder()
@@ -1508,6 +1576,13 @@ public class OpenApiController {
      * SessionMessageEntity → OpenSessionMessageDTO
      */
     private OpenSessionMessageDTO toOpenSessionMessageDTO(SessionMessageEntity entity, String contextId) {
+        return toOpenSessionMessageDTO(entity, contextId, null);
+    }
+
+    private OpenSessionMessageDTO toOpenSessionMessageDTO(
+            SessionMessageEntity entity,
+            String contextId,
+            String taskStatus) {
         Map<String, Object> metadata = null;
         if (entity.getMetadata() != null && !entity.getMetadata().isBlank()) {
             try {
@@ -1521,6 +1596,8 @@ public class OpenApiController {
         // 推断消息类型
         String type = inferMessageType(entity.getRole(), metadata);
         String terminalStatus = inferTerminalStatus(metadata);
+        String status = taskStatus == null || taskStatus.isBlank() ? null : mapTaskStatus(taskStatus);
+        List<Map<String, Object>> attachments = extractOpenMessageAttachments(metadata);
 
         // 过滤内部字段，避免泄露（不直接 mutate Jackson 反序列化的 Map）
         if (metadata != null) {
@@ -1535,11 +1612,39 @@ public class OpenApiController {
                 .role(entity.getRole() != null ? entity.getRole().toLowerCase() : null)
                 .type(type)
                 .content(entity.getContent())
+                .status(status)
                 .terminal(terminalStatus != null)
                 .terminalStatus(terminalStatus)
                 .metadata(metadata)
+                .attachments(attachments)
                 .createdAt(entity.getCreatedAt())
                 .build();
+    }
+
+    private List<Map<String, Object>> extractOpenMessageAttachments(Map<String, Object> metadata) {
+        if (metadata == null) {
+            return null;
+        }
+        Object rawAttachments = metadata.get("attachments");
+        if (!(rawAttachments instanceof List<?> rawList) || rawList.isEmpty()) {
+            return null;
+        }
+        List<Map<String, Object>> attachments = new ArrayList<>();
+        for (Object item : rawList) {
+            if (!(item instanceof Map<?, ?> rawMap)) {
+                continue;
+            }
+            Map<String, Object> attachment = new LinkedHashMap<>();
+            rawMap.forEach((key, value) -> {
+                if (key instanceof String keyString) {
+                    attachment.put(keyString, value);
+                }
+            });
+            if (!attachment.isEmpty()) {
+                attachments.add(attachment);
+            }
+        }
+        return attachments.isEmpty() ? null : attachments;
     }
 
     /**

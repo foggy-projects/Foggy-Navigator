@@ -215,6 +215,13 @@ class LlmToolDispatcher:
             function_id = args.get("function_id", "")
             version = args.get("version")
             input_data = args.get("input") if isinstance(args.get("input"), dict) else {}
+            guarded_result = _guard_already_uploaded_attachment_upload(
+                function_id=function_id,
+                input_data=input_data,
+                runtime_context=context.runtime_context,
+            )
+            if guarded_result is not None:
+                return guarded_result
             idempotency_key = args.get("idempotency_key") or _auto_business_function_idempotency_key(
                 context.frame_id,
                 function_id,
@@ -265,6 +272,13 @@ class LlmToolDispatcher:
                 if key not in {"version", "idempotency_key"}
             }
             resolved_version = args.get("version") or version
+            guarded_result = _guard_already_uploaded_attachment_upload(
+                function_id=function_id,
+                input_data=input_data,
+                runtime_context=context.runtime_context,
+            )
+            if guarded_result is not None:
+                return guarded_result
             idempotency_key = args.get("idempotency_key") or _auto_business_function_idempotency_key(
                 context.frame_id,
                 function_id,
@@ -465,6 +479,119 @@ def _auto_business_function_idempotency_key(
     canonical = json.dumps(input_data or {}, ensure_ascii=False, sort_keys=True, default=str)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
     return f"navigator:{frame_id}:{function_id}:{digest}"
+
+
+def _guard_already_uploaded_attachment_upload(
+    *,
+    function_id: str,
+    input_data: dict[str, Any],
+    runtime_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if function_id != "attachment.upload":
+        return None
+    attachments = runtime_context.get("attachments") if isinstance(runtime_context, dict) else None
+    if not isinstance(attachments, list) or not attachments:
+        return None
+    uploaded_refs = _uploaded_attachment_refs(attachments)
+    if not uploaded_refs:
+        return None
+    matched_refs = sorted(uploaded_refs & _leaf_text_values(input_data))
+    if not matched_refs:
+        return None
+    return {
+        "ok": False,
+        "error": (
+            "ALREADY_UPLOADED_ATTACHMENT: current request attachments are already uploaded by upstream. "
+            "Do not call attachment.upload for these refs; pass them to the target business function as attachmentRefs."
+        ),
+        "error_category": "RUNTIME_CONTRACT",
+        "recoverable": True,
+        "llm_retry_allowed": True,
+        "user_message": (
+            "当前用户附件已经由上游系统上传，请直接在创建工单或追加沟通时映射为 attachmentRefs，"
+            "不要再次调用 attachment.upload。"
+        ),
+        "matched_attachment_refs": matched_refs,
+        "suggested_attachment_refs": _suggested_attachment_refs(attachments),
+    }
+
+
+def _uploaded_attachment_refs(attachments: list[Any]) -> set[str]:
+    refs: set[str] = set()
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        for key in (
+            "id",
+            "attachmentId",
+            "attachment_id",
+            "attachmentRef",
+            "attachment_ref",
+            "objectKey",
+            "object_key",
+            "url",
+            "href",
+            "downloadUrl",
+            "download_url",
+            "name",
+            "fileName",
+            "filename",
+        ):
+            value = item.get(key)
+            if value is not None and value != "":
+                refs.add(str(value).strip())
+    return {value for value in refs if value}
+
+
+def _leaf_text_values(value: Any) -> set[str]:
+    values: set[str] = set()
+    if isinstance(value, dict):
+        for item in value.values():
+            values.update(_leaf_text_values(item))
+    elif isinstance(value, list):
+        for item in value:
+            values.update(_leaf_text_values(item))
+    elif value is not None and value != "":
+        values.add(str(value).strip())
+    return {item for item in values if item}
+
+
+def _suggested_attachment_refs(attachments: list[Any]) -> list[dict[str, Any]]:
+    suggested: list[dict[str, Any]] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        attachment_ref: dict[str, Any] = {}
+        attachment_id = _first_non_empty(item, "id", "attachmentId", "attachment_id", "attachmentRef", "attachment_ref")
+        if attachment_id:
+            attachment_ref["attachmentId"] = attachment_id
+        name = _first_non_empty(item, "name", "fileName", "filename")
+        if name:
+            attachment_ref["attachmentName"] = name
+        url = _first_non_empty(item, "url", "href", "downloadUrl", "download_url")
+        if url:
+            attachment_ref["attachmentUrl"] = url
+        content_type = _first_non_empty(item, "mimeType", "mime_type", "contentType", "content_type")
+        if content_type:
+            attachment_ref["contentType"] = content_type
+            attachment_ref["attachmentType"] = "IMAGE" if str(content_type).lower().startswith("image/") else "FILE"
+        size = _first_non_empty(item, "size", "sizeBytes", "size_bytes")
+        if size is not None:
+            attachment_ref["sizeBytes"] = size
+        thumbnail = _first_non_empty(item, "thumbnailUrl", "thumbnail_url")
+        if thumbnail:
+            attachment_ref["thumbnailUrl"] = thumbnail
+        if attachment_ref:
+            suggested.append(attachment_ref)
+    return suggested
+
+
+def _first_non_empty(item: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = item.get(key)
+        if value is not None and value != "":
+            return value
+    return None
 
 
 def _tool_function_id(

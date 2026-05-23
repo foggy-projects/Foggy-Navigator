@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.foggy.navigator.sdk.internal.HttpHelper;
 import com.foggy.navigator.sdk.model.businessagent.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -261,6 +262,27 @@ public class BusinessAgentApi {
         return http.post("/api/v1/business-agent/agent-bundles/sync", form, new TypeReference<>() {});
     }
 
+    // ===== Frame Report =====
+
+    public Map<String, Object> getFrameReport(String reportRef, String mode, int maxChars) {
+        return getFrameReport(reportRef, mode, maxChars, null);
+    }
+
+    public Map<String, Object> getFrameReport(String reportRef, String mode, int maxChars, String clientAppId) {
+        return http.get(frameReportPath(reportRef, mode, maxChars, clientAppId), new TypeReference<>() {});
+    }
+
+    public Map<String, Object> getFrameReportWithClientAppAccessToken(
+            String reportRef,
+            String mode,
+            int maxChars,
+            String clientAppKey,
+            String clientAppAccessToken) {
+        return http.get(frameReportPath(reportRef, mode, maxChars, null),
+                clientAppHeaders(clientAppKey, clientAppAccessToken),
+                new TypeReference<>() {});
+    }
+
     // ===== Skill =====
 
     public SkillDTO createSkill(CreateSkillForm form) {
@@ -378,6 +400,31 @@ public class BusinessAgentApi {
             return Map.of();
         }
         return Map.of(OPERATOR_KEY_HEADER, operatorApiKey);
+    }
+
+    private Map<String, String> clientAppHeaders(String clientAppKey, String clientAppAccessToken) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("X-Client-App-Key", clientAppKey);
+        headers.put("X-Client-App-Access-Token", clientAppAccessToken);
+        return headers;
+    }
+
+    private String frameReportPath(String reportRef, String mode, int maxChars, String clientAppId) {
+        if (reportRef == null || reportRef.isBlank()) {
+            throw new IllegalArgumentException("reportRef is required");
+        }
+        StringBuilder path = new StringBuilder("/api/v1/open/frame-reports?reportRef=")
+                .append(urlEncode(reportRef));
+        if (mode != null && !mode.isBlank()) {
+            path.append("&mode=").append(urlEncode(mode));
+        }
+        if (maxChars > 0) {
+            path.append("&maxChars=").append(maxChars);
+        }
+        if (clientAppId != null && !clientAppId.isBlank()) {
+            path.append("&clientAppId=").append(urlEncode(clientAppId));
+        }
+        return path.toString();
     }
 
 }

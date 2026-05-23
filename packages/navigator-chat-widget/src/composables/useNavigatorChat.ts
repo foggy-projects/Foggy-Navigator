@@ -18,6 +18,7 @@ import type {
   NavigatorAction,
   NavigatorChatMode,
   ExecutionReportDigest,
+  NavigatorAttachmentResult,
 } from '../types'
 
 let _seq = 0
@@ -325,16 +326,19 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       const sanitizedMessage = sanitizeValue(message) as OpenTaskMessage
       const actions = extractActions(sanitizedMessage)
       const payload = normalizedPayload(message)
+      const messageStatus = effectiveIngestMessageStatus(message, messageType, content, status, options.source)
       if (messageType === 'USER') {
         if (options.includeUserMessages && content) {
+          const attachments = extractMessageAttachments(message)
           rawMessages.value.push({
             id,
             role: 'user',
             content: sanitizeText(content),
             timestamp: openMessageTimestamp(message),
             taskId: messageTaskId,
-            status,
+            status: messageStatus,
             messageType,
+            attachments,
           })
         }
         continue
@@ -354,29 +358,31 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
         }
         if (isStreamingText) {
           if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
-          upsertStreamingTextMessage(messageTaskId, visibleContent, message, status)
+          upsertStreamingTextMessage(messageTaskId, visibleContent, message, messageStatus)
           continue
         }
         removeStreamingTextMessage(messageTaskId)
         const messageActions = renderActions
         pendingBusinessActions = []
         const report = extractExecutionReport(undefined, payload)
+        const digest = normalizeMessageReportDigest(report.digest, message, messageStatus)
         rawMessages.value.push({
           id,
           role: 'assistant',
           content: visibleContent,
           timestamp: openMessageTimestamp(message),
           taskId: messageTaskId,
-          status,
+          status: messageStatus,
           messageType,
           terminal: message.terminal,
           terminalStatus: message.terminalStatus ?? null,
           actions: messageActions.length > 0 ? messageActions : undefined,
           executionReportRef: report.ref,
-          executionReportDigest: report.digest,
+          executionReportDigest: digest,
         })
       } else if (messageType === 'ERROR') {
         const report = extractExecutionReport(undefined, payload)
+        const digest = normalizeMessageReportDigest(report.digest, message, messageStatus)
         const errMsg = display.mode === 'business'
           ? sanitizeErrorSummary(content || '任务执行失败')
           : sanitizeText(content || '任务执行失败')
@@ -387,13 +393,13 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           content: errMsg,
           timestamp: openMessageTimestamp(message),
           taskId: messageTaskId,
-          status,
+          status: messageStatus,
           messageType,
           terminal: message.terminal,
           terminalStatus: message.terminalStatus ?? null,
           error: errMsg,
           executionReportRef: report.ref,
-          executionReportDigest: report.digest,
+          executionReportDigest: digest,
         })
       } else if (messageType === 'STATE') {
         const subtype = firstString(payload.subtype, payload.stateType, payload.state_type)
@@ -407,7 +413,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
               content: taskProgressDisplayContent(payload, content, display.mode),
               timestamp: openMessageTimestamp(message),
               taskId: messageTaskId,
-              status,
+              status: messageStatus,
               messageType,
               terminal: message.terminal,
               terminalStatus: message.terminalStatus ?? null,
@@ -423,7 +429,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
             subtype === 'skill_frame_open' ? 'open' : 'close'
           )
           if (display.showRuntimeEvents || display.showToolCalls || display.showToolResults) {
-            upsertSkillFrame(messageTaskId, message, subtype, id, status)
+            upsertSkillFrame(messageTaskId, message, subtype, id, messageStatus)
           }
           continue
         }
@@ -436,7 +442,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
             content: stateDisplayContent(content || stringifySafe(sanitizedMessage), display.mode),
             timestamp: openMessageTimestamp(message),
             taskId: messageTaskId,
-            status,
+            status: messageStatus,
             messageType,
             terminal: message.terminal,
             terminalStatus: message.terminalStatus ?? null,
@@ -448,13 +454,13 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
         if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
         progressText.value = '正在查询数据...'
         if (display.showToolCalls || display.showToolResults) {
-          upsertToolExecution(messageTaskId, message, 'call', id, status)
+          upsertToolExecution(messageTaskId, message, 'call', id, messageStatus)
         }
       } else if (messageType === 'TOOL_RESULT') {
         if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
         progressText.value = '正在生成回答...'
         if (display.showToolCalls || display.showToolResults) {
-          upsertToolExecution(messageTaskId, message, 'result', id, status)
+          upsertToolExecution(messageTaskId, message, 'result', id, messageStatus)
         }
       } else if (actions.length > 0) {
         pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
@@ -604,20 +610,119 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     return Date.now()
   }
 
+  function effectiveMessageStatus(message: OpenTaskMessage, fallback?: TaskStatus): TaskStatus | undefined {
+    const terminal = String(message.terminalStatus ?? '').toUpperCase()
+    if (terminal === 'COMPLETED' || terminal === 'SUCCESS') return 'COMPLETED'
+    if (terminal === 'FAILED' || terminal === 'ERROR') return 'FAILED'
+    if (terminal === 'CANCELED' || terminal === 'CANCELLED') return 'CANCELED'
+
+    const raw = firstString(message.status, fallback)?.toUpperCase()
+    if (!raw) return fallback
+    if (raw === 'COMPLETED' || raw === 'SUCCESS' || raw === 'DONE') return 'COMPLETED'
+    if (raw === 'FAILED' || raw === 'ERROR') return 'FAILED'
+    if (raw === 'CANCELED' || raw === 'CANCELLED') return 'CANCELED'
+    if (raw === 'INPUT_REQUIRED' || raw === 'AWAITING_INPUT') return 'INPUT_REQUIRED'
+    if (raw === 'SUBMITTED') return 'SUBMITTED'
+    if (raw === 'RUNNING' || raw === 'WORKING' || raw === 'PROCESSING' || raw === 'ACTIVE') return 'WORKING'
+    return fallback
+  }
+
+  function effectiveIngestMessageStatus(
+    message: OpenTaskMessage,
+    messageType: OpenTaskMessage['type'],
+    content: string,
+    fallback?: TaskStatus,
+    source: 'history' | 'task' = 'task',
+  ): TaskStatus | undefined {
+    const status = effectiveMessageStatus(message, fallback)
+    if (source !== 'history') return status
+    if (!content || (messageType !== 'TEXT' && messageType !== 'RESULT' && messageType !== 'ERROR')) return status
+    if (status === 'FAILED' || status === 'CANCELED') return status
+    if (messageType === 'ERROR') return 'FAILED'
+    return 'COMPLETED'
+  }
+
+  function normalizeMessageReportDigest(
+    digest: ExecutionReportDigest | undefined,
+    message: OpenTaskMessage,
+    status?: TaskStatus
+  ): ExecutionReportDigest | undefined {
+    if (!digest) return undefined
+    if (!status || !isTerminal(status)) return digest
+    const rawStatus = firstString(digest.status, digest.state)?.toUpperCase()
+    if (rawStatus && !['SUBMITTED', 'WORKING', 'RUNNING', 'PROCESSING', 'ACTIVE'].includes(rawStatus)) {
+      return digest
+    }
+    return { ...digest, status }
+  }
+
+  function extractMessageAttachments(message: {
+    attachments?: unknown
+    metadata?: unknown
+    content?: unknown
+  }): NavigatorAttachmentResult[] | undefined {
+    const metadata = objectValue(parseMaybeJson(message.metadata))
+    const content = objectValue(parseMaybeJson(message.content))
+    const candidates = [
+      message.attachments,
+      metadata?.attachments,
+      content?.attachments,
+    ]
+    const output: NavigatorAttachmentResult[] = []
+    const seen = new Set<string>()
+    for (const candidate of candidates) {
+      const parsed = parseMaybeJson(candidate)
+      if (!Array.isArray(parsed)) continue
+      for (const item of parsed) {
+        const attachment = normalizeMessageAttachment(item)
+        if (!attachment) continue
+        const key = attachmentKey(attachment)
+        if (seen.has(key)) continue
+        seen.add(key)
+        output.push(attachment)
+      }
+    }
+    return output.length > 0 ? output : undefined
+  }
+
+  function normalizeMessageAttachment(value: unknown): NavigatorAttachmentResult | undefined {
+    const object = objectValue(parseMaybeJson(value))
+    if (!object) return undefined
+    const sanitized = sanitizeValue(object) as NavigatorAttachmentResult
+    const hasIdentity = firstString(
+      sanitized.id,
+      sanitized.name,
+      sanitized.url,
+      sanitized.thumbnailUrl,
+    )
+    return hasIdentity ? sanitized : undefined
+  }
+
+  function attachmentKey(attachment: NavigatorAttachmentResult): string {
+    return firstString(attachment.id, attachment.url)
+      ?? `${firstString(attachment.name) ?? 'attachment'}:${numberValue(attachment.size) ?? ''}`
+  }
+
   function sessionMessagesToOpenMessages(messages: SessionMessage[]): OpenTaskMessage[] {
     const output: OpenTaskMessage[] = []
     for (const message of messages) {
       const type = normalizeOpenMessageType(message)
       if (!type) continue
+      const metadata = objectValue(parseMaybeJson(message.metadata))
+      const attachments = extractMessageAttachments(message)
       output.push({
         id: message.messageId,
         messageId: message.messageId,
         type,
         content: message.content,
+        terminal: message.terminal,
+        terminalStatus: message.terminalStatus ?? null,
+        status: message.status,
         createdAt: message.createdAt,
         timestamp: message.createdAt,
-        metadata: message.metadata,
+        metadata,
         taskId: message.taskId,
+        attachments,
       })
     }
     return output
@@ -626,7 +731,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
   function normalizeOpenMessageType(message: {
     type?: unknown
     role?: unknown
-    metadata?: Record<string, unknown>
+    metadata?: unknown
   }): OpenTaskMessage['type'] | null {
     const normalized = rawOpenMessageType(message)
     if (normalized === 'TEXT_CHUNK' || normalized === 'CHUNK' || normalized === 'ASSISTANT_TEXT_CHUNK') return null
@@ -646,13 +751,14 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
 
   function rawOpenMessageType(message: {
     type?: unknown
-    metadata?: Record<string, unknown>
+    metadata?: unknown
   }): string | undefined {
+    const metadata = objectValue(parseMaybeJson(message.metadata))
     return firstString(
       message.type,
-      message.metadata?.type,
-      message.metadata?.messageType,
-      message.metadata?.message_type,
+      metadata?.type,
+      metadata?.messageType,
+      metadata?.message_type,
     )?.toUpperCase()
   }
 
@@ -1089,11 +1195,14 @@ function parseMaybeJson(value: unknown): unknown {
 
 function normalizedPayload(message: OpenTaskMessage): Record<string, unknown> {
   const contentObject = parseMaybeJson(message.content)
+  const metadataObject = parseMaybeJson(message.metadata)
   const payload: Record<string, unknown> = {}
   if (contentObject && typeof contentObject === 'object' && !Array.isArray(contentObject)) {
     Object.assign(payload, contentObject as Record<string, unknown>)
   }
-  if (message.metadata) Object.assign(payload, message.metadata)
+  if (metadataObject && typeof metadataObject === 'object' && !Array.isArray(metadataObject)) {
+    Object.assign(payload, metadataObject as Record<string, unknown>)
+  }
   Object.assign(payload, message)
   return sanitizeValue(payload) as Record<string, unknown>
 }

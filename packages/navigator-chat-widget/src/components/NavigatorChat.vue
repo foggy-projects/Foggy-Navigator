@@ -883,7 +883,7 @@ function sessionTurnCount(session: SessionSummary): number | null {
 
 function sessionStatusKind(session: SessionSummary): 'working' | 'input' | 'completed' | 'failed' | 'idle' {
   const status = String(session.status ?? '').toUpperCase()
-  if (['SUBMITTED', 'WORKING', 'RUNNING', 'PROCESSING', 'ACTIVE'].includes(status)) return 'working'
+  if (['SUBMITTED', 'WORKING', 'RUNNING', 'PROCESSING'].includes(status)) return 'working'
   if (['INPUT_REQUIRED', 'WAITING_USER', 'NEED_REPLY', 'PENDING_USER'].includes(status)) return 'input'
   if (['COMPLETED', 'SUCCESS', 'DONE'].includes(status)) return 'completed'
   if (['FAILED', 'ERROR', 'CANCELED', 'CANCELLED'].includes(status)) return 'failed'

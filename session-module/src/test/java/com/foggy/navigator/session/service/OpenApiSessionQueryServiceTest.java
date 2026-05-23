@@ -218,6 +218,21 @@ class OpenApiSessionQueryServiceTest {
         assertEquals("Other first prompt", result.get(otherSessionId));
     }
 
+    @Test
+    void batchFindTaskStatuses_shouldReturnStatusByTaskId() {
+        SessionTaskEntity completedTask = taskEntity("task-" + UUID.randomUUID().toString().substring(0, 8),
+                "COMPLETED");
+        SessionTaskEntity runningTask = taskEntity("task-" + UUID.randomUUID().toString().substring(0, 8),
+                "RUNNING");
+        taskRepository.saveAll(List.of(completedTask, runningTask));
+
+        Map<String, String> result = queryService.batchFindTaskStatuses(
+                List.of(completedTask.getTaskId(), runningTask.getTaskId()));
+
+        assertEquals("COMPLETED", result.get(completedTask.getTaskId()));
+        assertEquals("RUNNING", result.get(runningTask.getTaskId()));
+    }
+
     // ── taskId + cursor 增量消息查询 ──
 
     @Test
@@ -322,5 +337,17 @@ class OpenApiSessionQueryServiceTest {
                 .metadata(metadata)
                 .build();
         return sessionManager.addMessage(sessionId, msg);
+    }
+
+    private SessionTaskEntity taskEntity(String taskId, String status) {
+        SessionTaskEntity entity = new SessionTaskEntity();
+        entity.setTaskId(taskId);
+        entity.setSessionId(sessionId);
+        entity.setProviderType("LANGGRAPH_BIZ_WORKER");
+        entity.setUserId(USER_ID);
+        entity.setTenantId(TENANT_ID);
+        entity.setAgentId(AGENT_ID);
+        entity.setStatus(status);
+        return entity;
     }
 }

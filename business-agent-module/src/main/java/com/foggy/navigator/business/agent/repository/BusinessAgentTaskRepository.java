@@ -17,4 +17,7 @@ public interface BusinessAgentTaskRepository extends JpaRepository<BusinessAgent
     List<BusinessAgentTaskEntity> findBySessionIdAndTenantIdOrderByCreatedAtDesc(String sessionId, String tenantId);
 
     List<BusinessAgentTaskEntity> findByClientAppIdAndTenantIdOrderByCreatedAtDesc(String clientAppId, String tenantId);
+
+    Optional<BusinessAgentTaskEntity> findByWorkerTaskIdAndTenantIdAndClientAppId(
+            String workerTaskId, String tenantId, String clientAppId);
 }

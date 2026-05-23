@@ -339,6 +339,8 @@ def _system_root_manifest() -> SkillManifest:
             "或必须从附件中提取字段时，才使用 analyze_attachment。"
             "Excel 或 CSV 表格内容应使用 analyze_spreadsheet，不要当作图片分析。"
             "如果用户只是要求把文件作为业务操作附件提交，应保留附件，不要分析内容。"
+            "上游系统提供的附件已经上传并带有 URL/ref；创建工单或追加沟通时，"
+            "直接按业务函数 schema 映射为 attachmentRefs，不要再调用 attachment.upload。"
             "根 Agent 是持久的；自然语言最终消息或 submit_skill_result 都只完成当前用户回合，"
             "不会关闭整个会话。"
         ),

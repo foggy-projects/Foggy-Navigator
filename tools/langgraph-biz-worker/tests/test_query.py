@@ -159,6 +159,9 @@ def test_attachment_context_prompt_sanitizes_url_and_keeps_metadata():
     assert "pod-photo.png" in prompt
     assert "image/png" in prompt
     assert "att-20260513-001" in prompt
+    assert "attachmentRefs" in prompt
+    assert "attachmentUrl=url" in prompt
+    assert "不要为这些附件调用 attachment.upload" in prompt
     assert "https://tms.example.com/files/pod-photo.png" in prompt
     assert "token=secret" not in prompt
     assert "accessToken" not in prompt

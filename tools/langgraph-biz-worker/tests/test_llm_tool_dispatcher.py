@@ -138,3 +138,56 @@ def test_business_function_configuration_error_result_is_non_recoverable() -> No
     assert result["recoverable"] is False
     assert result["llm_retry_allowed"] is False
     assert result["user_message"].startswith("业务函数配置错误")
+
+
+def test_attachment_upload_rejects_already_uploaded_request_attachment() -> None:
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=SkillRegistry())
+    root_frame_id = runtime.invoke_skill(
+        task_id="task-upload-guard-001",
+        skill_id="system.root",
+        skill_input={"request": "create ticket with attachments"},
+    )
+    dispatcher = LlmToolDispatcher(runtime)
+    context = LlmToolDispatchContext(
+        frame_id=root_frame_id,
+        task_id="task-upload-guard-001",
+        runtime_context={
+            "task_scoped_token": "runtime-token",
+            "attachments": [
+                {
+                    "id": "local/tenant-88800/org-43/2026/05/23/a.png",
+                    "name": "retake2-a.png",
+                    "mimeType": "image/png",
+                    "url": "http://example.test/x3-web/a.png",
+                    "size": 123,
+                }
+            ],
+        },
+    )
+    invoked = False
+
+    def fake_invoke(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal invoked
+        invoked = True
+        return {"ok": True}
+
+    result = dispatcher.dispatch_business_function(
+        "invoke_business_function",
+        {
+            "function_id": "attachment.upload",
+            "version": "v1",
+            "input": {"file": "local/tenant-88800/org-43/2026/05/23/a.png"},
+        },
+        context,
+        lambda **kwargs: kwargs["result"],
+        invoke_business_function_fn=fake_invoke,
+    )
+
+    assert invoked is False
+    assert result["ok"] is False
+    assert result["error_category"] == "RUNTIME_CONTRACT"
+    assert result["recoverable"] is True
+    assert result["llm_retry_allowed"] is True
+    assert result["matched_attachment_refs"] == ["local/tenant-88800/org-43/2026/05/23/a.png"]
+    assert result["suggested_attachment_refs"][0]["attachmentId"] == "local/tenant-88800/org-43/2026/05/23/a.png"
+    assert result["suggested_attachment_refs"][0]["attachmentType"] == "IMAGE"

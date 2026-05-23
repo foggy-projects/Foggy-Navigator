@@ -243,7 +243,12 @@ class LanggraphTaskServiceTest {
 
         @Test
         void omits_recent_conversation_by_default_and_persists_current_user_prompt() {
-            service.createTask(USER_ID, TENANT_ID, makeForm());
+            CreateLanggraphTaskForm form = makeForm();
+            form.setAttachments(List.of(
+                    Map.of("id", "att-1", "name", "smoke-a.png"),
+                    Map.of("id", "att-2", "name", "smoke-b.png")
+            ));
+            service.createTask(USER_ID, TENANT_ID, form);
 
             ArgumentCaptor<WorkerTaskStartEvent> eventCaptor =
                     ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
@@ -261,7 +266,13 @@ class LanggraphTaskServiceTest {
                             && "USER".equals(message.getRole().name())
                             && "分析异常订单".equals(message.getContent())
                             && eventCaptor.getValue().getTaskId().equals(message.getTaskId())
+                            && message.getMetadata() != null
+                            && List.of(
+                                    Map.of("id", "att-1", "name", "smoke-a.png"),
+                                    Map.of("id", "att-2", "name", "smoke-b.png")
+                            ).equals(message.getMetadata().get("attachments"))
             ));
+            assertEquals(form.getAttachments(), eventCaptor.getValue().getProviderConfigValue("attachments"));
         }
 
         @Test

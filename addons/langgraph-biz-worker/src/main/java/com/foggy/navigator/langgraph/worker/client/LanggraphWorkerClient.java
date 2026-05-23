@@ -6,15 +6,18 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.web.util.UriBuilder;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * HTTP client for the LangGraph Biz Worker Python service.
@@ -74,6 +77,23 @@ public class LanggraphWorkerClient {
                 .retrieve()
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
                 .doOnError(e -> log.warn("Context allocation failed for langgraph worker {}: {}", workerId, e.getMessage()));
+    }
+
+    public Mono<Map<String, Object>> getFrameReport(
+            String reportRef,
+            String taskId,
+            String frameId,
+            String contextId,
+            String sessionId,
+            String mode,
+            Integer maxChars
+    ) {
+        return webClient.get()
+                .uri(frameReportUri(reportRef, taskId, frameId, contextId, sessionId, mode, maxChars))
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnError(e -> log.warn("Frame report read failed for task {} frame {} on worker {}: {}",
+                        taskId, frameId, workerId, e.getMessage()));
     }
 
     /**
@@ -228,5 +248,34 @@ public class LanggraphWorkerClient {
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
                 .doOnError(e -> log.warn("Business function report reconciliation failed for task {}: {}",
                         body != null ? body.get("taskId") : null, e.getMessage()));
+    }
+
+    private Function<UriBuilder, URI> frameReportUri(
+            String reportRef,
+            String taskId,
+            String frameId,
+            String contextId,
+            String sessionId,
+            String mode,
+            Integer maxChars) {
+        return builder -> {
+            UriBuilder uri = builder.path("/api/v1/frame-reports");
+            queryParamIfPresent(uri, "reportRef", reportRef);
+            queryParamIfPresent(uri, "taskId", taskId);
+            queryParamIfPresent(uri, "frameId", frameId);
+            queryParamIfPresent(uri, "contextId", contextId);
+            queryParamIfPresent(uri, "sessionId", sessionId);
+            queryParamIfPresent(uri, "mode", mode);
+            if (maxChars != null) {
+                uri.queryParam("maxChars", maxChars);
+            }
+            return uri.build();
+        };
+    }
+
+    private void queryParamIfPresent(UriBuilder uri, String name, String value) {
+        if (value != null && !value.isBlank()) {
+            uri.queryParam(name, value);
+        }
     }
 }

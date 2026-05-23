@@ -172,6 +172,23 @@ public class OpenApiSessionQueryService {
     }
 
     /**
+     * 批量查找 taskId 对应的内部任务状态。
+     *
+     * @return taskId → internal status 映射
+     */
+    public Map<String, String> batchFindTaskStatuses(Collection<String> taskIds) {
+        if (taskIds == null || taskIds.isEmpty()) {
+            return Map.of();
+        }
+        return taskRepository.findByTaskIdIn(taskIds).stream()
+                .collect(Collectors.toMap(
+                        SessionTaskEntity::getTaskId,
+                        SessionTaskEntity::getStatus,
+                        (first, second) -> first
+                ));
+    }
+
+    /**
      * 查找某个会话最近的任务（用于会话摘要中的 latestTaskId）
      */
     public Optional<SessionTaskEntity> findLatestTaskBySessionId(String sessionId) {
