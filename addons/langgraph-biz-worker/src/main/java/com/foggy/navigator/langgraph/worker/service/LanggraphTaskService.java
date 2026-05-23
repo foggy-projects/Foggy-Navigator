@@ -202,6 +202,8 @@ public class LanggraphTaskService implements TaskQueryProvider {
 
     @Transactional
     public LanggraphTaskDTO createTask(String userId, String tenantId, CreateLanggraphTaskForm form) {
+        String workerId = resolveCompatibleWorkerId(tenantId, form.getWorkerId());
+
         // 1. Create or reuse session
         String sessionId = form.getSessionId();
         String agentId = resolveAgentId(form);
@@ -221,7 +223,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         LanggraphTaskEntity entity = new LanggraphTaskEntity();
         entity.setTaskId(taskId);
         entity.setSessionId(sessionId);
-        entity.setWorkerId(form.getWorkerId());
+        entity.setWorkerId(workerId);
         entity.setAgentId(agentId);
         entity.setUserId(userId);
         entity.setTenantId(tenantId);
@@ -257,7 +259,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId)
                 .sessionId(sessionId)
-                .workerId(form.getWorkerId())
+                .workerId(workerId)
                 .userId(userId)
                 .tenantId(tenantId)
                 .prompt(form.getPrompt())
@@ -268,9 +270,20 @@ public class LanggraphTaskService implements TaskQueryProvider {
                 .build());
 
         log.info("Created langgraph task: taskId={}, sessionId={}, workerId={}",
-                taskId, sessionId, form.getWorkerId());
+                taskId, sessionId, workerId);
 
         return toDTO(entity);
+    }
+
+    private String resolveCompatibleWorkerId(String tenantId, String workerId) {
+        if (!StringUtils.hasText(workerId)) {
+            throw new IllegalArgumentException("LangGraph workerId is required");
+        }
+        LanggraphWorkerEntity worker = workerService.getWorkerEntity(workerId.trim());
+        if (StringUtils.hasText(worker.getTenantId()) && !Objects.equals(worker.getTenantId(), tenantId)) {
+            throw new SecurityException("LangGraph worker tenant mismatch");
+        }
+        return worker.getWorkerId();
     }
 
     private Map<String, Object> buildProviderContext(CreateLanggraphTaskForm form, String sessionId) {
