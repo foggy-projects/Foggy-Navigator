@@ -87,15 +87,34 @@ TMS 侧需要重新构建 BFF / Web，使历史消息状态、附件字段与 fr
 
 ### Navigator 自动化验证
 
-已执行并通过：
+2026-05-23 发布前 release gate 已重新执行并通过。
+
+Java / OpenAPI / SDK / Worker client 定向回归：
 
 ```powershell
-mvn -pl session-module,business-agent-module,addons/claude-worker-agent,addons/langgraph-biz-worker,navigator-open-sdk -am '-Dtest=OpenApiSessionQueryServiceTest,OpenApiControllerMessageMappingTest,LanggraphTaskServiceTest,LanggraphWorkerClientTest,BusinessAgentFrameReportServiceTest,BusinessAgentApiSmokeTest' '-DfailIfNoTests=false' '-Dsurefire.failIfNoSpecifiedTests=false' test
+mvn -pl session-module,business-agent-module,addons/claude-worker-agent,addons/langgraph-biz-worker,navigator-open-sdk -am '-Dtest=OpenApiSessionQueryServiceTest,OpenApiControllerMessageMappingTest,LanggraphTaskServiceTest,LanggraphWorkerClientTest,BusinessAgentFrameReportServiceTest,BusinessAgentApiSmokeTest,UpstreamCliTest,AgentApiAttachmentTest' '-DfailIfNoTests=false' '-Dsurefire.failIfNoSpecifiedTests=false' test
 ```
 
-结果：91 tests passed。
+结果：142 tests passed。
 
-已执行并通过：
+Observer BFF package 验证：
+
+```powershell
+mvn -f tools\navigator-chat-observer-bff\pom.xml -DskipTests package
+```
+
+结果：build success，确认可解析 `navigator-open-sdk:1.0.5`。
+
+BizWorker runtime context / prompt / report / scripted E2E 定向回归：
+
+```powershell
+cd tools\langgraph-biz-worker
+.\.venv\Scripts\python.exe -m pytest tests/test_model_runtime_budget.py tests/test_context_memory.py tests/test_llm_message_builder.py tests/test_llm_submission_log.py tests/test_account_context_files.py tests/test_attachment_context.py tests/test_frame_report_route.py tests/test_llm_tool_dispatcher.py tests/test_query.py tests/test_llm_skill_agent.py tests/test_e2e_scripted_tool_call_streaming.py
+```
+
+结果：171 tests passed，3 warnings。
+
+Navigator Chat Widget 回归：
 
 ```powershell
 pnpm --filter @foggy/navigator-chat-widget test -- src/composables/useNavigatorChat.ux.test.ts
@@ -103,14 +122,6 @@ pnpm --filter @foggy/navigator-chat-widget build
 ```
 
 结果：23 tests passed，widget build passed。
-
-已执行并通过：
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_llm_tool_dispatcher.py tests/test_query.py tests/test_attachment_context.py tests/test_llm_skill_agent.py::test_llm_agent_child_skill_receives_sanitized_attachment_context
-```
-
-结果：26 tests passed。
 
 ### TMS 真实复测
 
