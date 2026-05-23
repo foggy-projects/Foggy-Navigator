@@ -1,11 +1,13 @@
 package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.ClientAppModelConfigGrantDTO;
+import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppModelConfigGrantEntity;
 import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -42,8 +44,8 @@ public class ClientAppModelConfigGrantService {
             throw new IllegalArgumentException("form is required");
         }
         requireText(form.getModelConfigId(), "modelConfigId is required");
-        clientAppService.requireClientApp(tenantId, clientAppId);
-        LlmModelConfigDTO model = requireModelConfig(tenantId, form.getModelConfigId());
+        ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
+        LlmModelConfigDTO model = requireModelConfig(tenantId, clientApp, form.getModelConfigId());
 
         ClientAppModelConfigGrantEntity existing = grantRepository
                 .findByClientAppIdAndModelConfigId(clientAppId, form.getModelConfigId())
@@ -106,7 +108,7 @@ public class ClientAppModelConfigGrantService {
 
     @Transactional
     public ClientAppModelConfigGrantDTO setDefault(String tenantId, String clientAppId, Long grantId) {
-        clientAppService.requireClientApp(tenantId, clientAppId);
+        ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
         ClientAppModelConfigGrantEntity grant = requireGrant(clientAppId, grantId);
         if (!tenantId.equals(grant.getTenantId())) {
             throw new IllegalArgumentException("grant tenant mismatch");
@@ -114,7 +116,7 @@ public class ClientAppModelConfigGrantService {
         if (!STATUS_ENABLED.equals(grant.getStatus())) {
             throw new IllegalArgumentException("disabled grant cannot be default");
         }
-        LlmModelConfigDTO model = requireModelConfig(tenantId, grant.getModelConfigId());
+        LlmModelConfigDTO model = requireModelConfig(tenantId, clientApp, grant.getModelConfigId());
         clearDefaults(clientAppId, model.getCategory());
         grant.setIsDefault(true);
         return toDTO(grantRepository.save(grant));
@@ -129,13 +131,13 @@ public class ClientAppModelConfigGrantService {
     public String resolveEffectiveModelConfigId(String tenantId, String clientAppId,
                                                 String requestedModelConfigId,
                                                 LlmModelCategory category) {
-        clientAppService.requireClientApp(tenantId, clientAppId);
+        ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
         ClientAppModelConfigGrantEntity grant;
         if (StringUtils.hasText(requestedModelConfigId)) {
             grant = grantRepository.findByClientAppIdAndModelConfigIdAndStatus(
                             clientAppId, requestedModelConfigId, STATUS_ENABLED)
                     .orElseThrow(() -> new IllegalArgumentException("requested model config is not granted"));
-            LlmModelConfigDTO model = requireModelConfig(tenantId, grant.getModelConfigId());
+            LlmModelConfigDTO model = requireModelConfig(tenantId, clientApp, grant.getModelConfigId());
             requireCategory(model, category);
             return grant.getModelConfigId();
         } else {
@@ -147,7 +149,7 @@ public class ClientAppModelConfigGrantService {
                     .findFirst()
                     .orElseThrow(() -> new IllegalArgumentException(defaultModelRequiredMessage(category)));
         }
-        requireModelConfig(tenantId, grant.getModelConfigId());
+        requireModelConfig(tenantId, clientApp, grant.getModelConfigId());
         return grant.getModelConfigId();
     }
 
@@ -170,11 +172,15 @@ public class ClientAppModelConfigGrantService {
                 .orElseThrow(() -> new IllegalArgumentException("grant not found: " + grantId));
     }
 
-    private LlmModelConfigDTO requireModelConfig(String tenantId, String modelConfigId) {
+    private LlmModelConfigDTO requireModelConfig(String tenantId, ClientAppEntity clientApp, String modelConfigId) {
         LlmModelConfigDTO model = llmModelManager.getModelConfig(modelConfigId)
                 .orElseThrow(() -> new IllegalArgumentException("model config not found: " + modelConfigId));
         if (!tenantId.equals(model.getTenantId())) {
             throw new IllegalArgumentException("model config tenant mismatch");
+        }
+        requireVisibleModelOwner(clientApp, model);
+        if (Boolean.FALSE.equals(model.getEnabled())) {
+            throw new IllegalArgumentException("model config is disabled");
         }
         String backend = model.getWorkerBackend();
         boolean isValidBackend = LANGGRAPH_BIZ_BACKEND.equals(backend)
@@ -185,6 +191,25 @@ public class ClientAppModelConfigGrantService {
             throw new IllegalArgumentException("model config worker backend must be LANGGRAPH_BIZ_BACKEND, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
         }
         return model;
+    }
+
+    private void requireVisibleModelOwner(ClientAppEntity clientApp, LlmModelConfigDTO model) {
+        ResourceOwnerType ownerType = model.getOwnerType();
+        if (ownerType == null) {
+            throw new IllegalArgumentException("model config ownerType is required");
+        }
+        if (ownerType == ResourceOwnerType.PLATFORM) {
+            return;
+        }
+        if (ownerType == ResourceOwnerType.UPSTREAM_SYSTEM
+                && StringUtils.hasText(clientApp.getUpstreamSystemId())
+                && clientApp.getUpstreamSystemId().equals(model.getOwnerId())) {
+            return;
+        }
+        if (ownerType == ResourceOwnerType.CLIENT_APP && clientApp.getClientAppId().equals(model.getOwnerId())) {
+            return;
+        }
+        throw new IllegalArgumentException("model config is not visible to this ClientApp");
     }
 
     private void clearDefaults(String clientAppId, LlmModelCategory category) {
@@ -215,7 +240,8 @@ public class ClientAppModelConfigGrantService {
 
     private boolean matchesDefaultBucket(String tenantId, ClientAppModelConfigGrantEntity grant, LlmModelCategory category) {
         try {
-            LlmModelConfigDTO model = requireModelConfig(tenantId, grant.getModelConfigId());
+            ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, grant.getClientAppId());
+            LlmModelConfigDTO model = requireModelConfig(tenantId, clientApp, grant.getModelConfigId());
             if (category == LlmModelCategory.VISION) {
                 return model.getCategory() == LlmModelCategory.VISION;
             }

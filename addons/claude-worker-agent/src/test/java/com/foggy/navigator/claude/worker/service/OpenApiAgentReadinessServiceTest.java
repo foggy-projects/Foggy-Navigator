@@ -7,8 +7,8 @@ import com.foggy.navigator.business.agent.model.dto.BusinessFunctionSummaryDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
+import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService;
-import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
@@ -34,7 +34,7 @@ class OpenApiAgentReadinessServiceTest {
     private ClientAppService clientAppService;
     private SkillRegistryService skillRegistryService;
     private ClientAppUserGrantService userGrantService;
-    private ClientAppModelConfigGrantService modelConfigGrantService;
+    private A2AgentResourceResolver resourceResolver;
     private ClientAppUpstreamRouteService upstreamRouteService;
     private BusinessFunctionRegistryService functionRegistryService;
     private OpenApiAgentRouteService agentRouteService;
@@ -47,7 +47,7 @@ class OpenApiAgentReadinessServiceTest {
         clientAppService = mock(ClientAppService.class);
         skillRegistryService = mock(SkillRegistryService.class);
         userGrantService = mock(ClientAppUserGrantService.class);
-        modelConfigGrantService = mock(ClientAppModelConfigGrantService.class);
+        resourceResolver = mock(A2AgentResourceResolver.class);
         upstreamRouteService = mock(ClientAppUpstreamRouteService.class);
         functionRegistryService = mock(BusinessFunctionRegistryService.class);
         agentRouteService = mock(OpenApiAgentRouteService.class);
@@ -57,7 +57,7 @@ class OpenApiAgentReadinessServiceTest {
                 clientAppService,
                 skillRegistryService,
                 userGrantService,
-                modelConfigGrantService,
+                resourceResolver,
                 upstreamRouteService,
                 functionRegistryService,
                 agentRouteService,
@@ -70,7 +70,7 @@ class OpenApiAgentReadinessServiceTest {
         when(clientAppService.requireActiveClientApp("tenant_1", "capp_1")).thenReturn(app);
         when(agentResolver.resolveAgent(eq("world-sim.bug-coordinator.decision.v1"), any(AgentResolveContext.class)))
                 .thenReturn(Optional.of(mock(A2aAgent.class)));
-        when(modelConfigGrantService.resolveEffectiveModelConfigId("tenant_1", "capp_1", "model_1"))
+        when(resourceResolver.resolveRequiredModelConfigId(eq("tenant_1"), eq("capp_1"), eq("model_1"), any()))
                 .thenReturn("model_1");
         when(agentRouteService.resolve(eq("world-sim.bug-coordinator.decision.v1"), any()))
                 .thenReturn(new OpenApiAgentRouteService.ResolvedOpenApiAgentRoute(
@@ -152,7 +152,7 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals("FAIL", result.getOverallStatus());
         assertEquals("ROOT_AGENT_BINDING", result.getChecks().get(0).getCode());
         assertTrue(result.getChecks().get(0).getMessage().contains("not bound"));
-        verifyNoInteractions(agentResolver, skillRegistryService, userGrantService, modelConfigGrantService);
+        verifyNoInteractions(agentResolver, skillRegistryService, userGrantService, resourceResolver);
     }
 
     @Test

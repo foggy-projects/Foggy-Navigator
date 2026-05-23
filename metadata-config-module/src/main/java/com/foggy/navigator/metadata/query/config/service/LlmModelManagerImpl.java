@@ -6,6 +6,7 @@ import com.foggy.navigator.common.entity.LlmModelConfigEntity;
 import com.foggy.navigator.common.entity.ModelWorkerAccessEntity;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ModelAccessScope;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.AgentModelOverrideForm;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.common.security.CredentialEncryptor;
@@ -52,7 +53,13 @@ public class LlmModelManagerImpl implements LlmModelManager {
 
     @Override
     @Transactional
-    public String saveModelConfig(String tenantId, LlmModelConfigForm form) {
+    public String saveModelConfig(String tenantId,
+                                  LlmModelConfigForm form,
+                                  ResourceOwnerType ownerType,
+                                  String ownerId,
+                                  ResourceOwnerType createdByPrincipalType,
+                                  String createdByPrincipalId,
+                                  String createdByCredentialId) {
         log.info("Saving LLM model config: tenantId={}, name={}", tenantId, form.getName());
 
         LlmModelConfigEntity entity = new LlmModelConfigEntity();
@@ -72,6 +79,12 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setAvailableModels(serializeList(form.getAvailableModels()));
         entity.setRuntimeBudgetPresetKey(trimToNull(form.getRuntimeBudgetPresetKey()));
         entity.setRuntimeBudgetOverrideJson(trimToNull(form.getRuntimeBudgetOverrideJson()));
+        entity.setOwnerType(ownerType != null ? ownerType : ResourceOwnerType.PLATFORM);
+        entity.setOwnerId(trimToDefault(ownerId, "platform"));
+        entity.setCreatedByPrincipalType(createdByPrincipalType);
+        entity.setCreatedByPrincipalId(trimToNull(createdByPrincipalId));
+        entity.setCreatedByCredentialId(trimToNull(createdByCredentialId));
+        entity.setEnabled(true);
         normalizeWorkerAuth(entity);
 
         // 新增项排在最后
@@ -458,6 +471,12 @@ public class LlmModelManagerImpl implements LlmModelManager {
         dto.setAvailableModels(deserializeList(entity.getAvailableModels()));
         dto.setRuntimeBudgetPresetKey(entity.getRuntimeBudgetPresetKey());
         dto.setRuntimeBudgetOverrideJson(entity.getRuntimeBudgetOverrideJson());
+        dto.setOwnerType(entity.getOwnerType());
+        dto.setOwnerId(entity.getOwnerId());
+        dto.setCreatedByPrincipalType(entity.getCreatedByPrincipalType());
+        dto.setCreatedByPrincipalId(entity.getCreatedByPrincipalId());
+        dto.setCreatedByCredentialId(entity.getCreatedByCredentialId());
+        dto.setEnabled(entity.getEnabled());
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());
         return dto;
@@ -465,6 +484,11 @@ public class LlmModelManagerImpl implements LlmModelManager {
 
     private String trimToNull(String value) {
         return value != null && !value.isBlank() ? value.trim() : null;
+    }
+
+    private String trimToDefault(String value, String fallback) {
+        String trimmed = trimToNull(value);
+        return trimmed != null ? trimmed : fallback;
     }
 
     private void normalizeWorkerAuth(LlmModelConfigEntity entity) {

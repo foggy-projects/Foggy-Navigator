@@ -136,4 +136,42 @@ describe('foggy-navigator-chat normalizer', () => {
     })
     expect(renderBasicMarkdown('**ok** <script>x</script>')).toContain('&lt;script&gt;')
   })
+
+  it('renders approval state as an immediate suspension action', () => {
+    const ingestor = createFoggyMessageIngestor()
+
+    ingestor.ingestOpenMessages([
+      {
+        id: 'approval-1',
+        type: 'STATE',
+        content: 'Approval required, execution suspended.',
+        payload: {
+          subtype: 'approval_required',
+          taskId: 'task-1',
+          approvalType: 'APPROVAL_REQUIRED',
+          suspendId: 'sus_123',
+          functionId: 'tms.fulfillment.selfPickupSign',
+          status: 'AWAITING_APPROVAL',
+        },
+      },
+    ], 'task-1', 'AWAITING_APPROVAL')
+
+    const messages = ingestor.getMessages()
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      role: 'assistant',
+      messageType: 'STATE',
+    })
+    expect(messages[0].actions?.[0]).toMatchObject({
+      type: 'BUSINESS_SUSPENSION',
+      label: '去确认',
+      payload: {
+        suspendId: 'sus_123',
+        suspensionType: 'APPROVAL_REQUIRED',
+        taskId: 'task-1',
+        functionId: 'tms.fulfillment.selfPickupSign',
+        status: 'AWAITING_APPROVAL',
+      },
+    })
+  })
 })

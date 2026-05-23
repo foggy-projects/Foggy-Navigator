@@ -13,5 +13,7 @@ public class ClientAppControlPlanePrincipal {
     private String clientAppId;
     private String credentialId;
     private String actorUserId;
+    private String principalType;
+    private String principalId;
     private Set<String> scopes;
 }

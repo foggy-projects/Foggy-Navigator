@@ -6,6 +6,7 @@ import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,6 +74,65 @@ class ClientAppModelConfigGrantServiceTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> service.grantModelConfig("tenant-1", "admin-1", "capp-1", grantForm("cfg-other", false)));
+    }
+
+    @Test
+    void grantModelConfig_accepts_same_upstream_system_owner() {
+        when(llmModelManager.getModelConfig("cfg-system"))
+                .thenReturn(Optional.of(model(
+                        "cfg-system",
+                        "tenant-1",
+                        "LANGGRAPH_BIZ",
+                        LlmModelCategory.GENERAL,
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "ups-1")));
+
+        service.grantModelConfig("tenant-1", "admin-1", "capp-1", grantForm("cfg-system", false));
+
+        verify(grantRepository).save(argThat(grant -> "cfg-system".equals(grant.getModelConfigId())));
+    }
+
+    @Test
+    void grantModelConfig_rejects_foreign_upstream_system_owner() {
+        when(llmModelManager.getModelConfig("cfg-foreign-system"))
+                .thenReturn(Optional.of(model(
+                        "cfg-foreign-system",
+                        "tenant-1",
+                        "LANGGRAPH_BIZ",
+                        LlmModelCategory.GENERAL,
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "ups-2")));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.grantModelConfig("tenant-1", "admin-1", "capp-1",
+                        grantForm("cfg-foreign-system", false)));
+    }
+
+    @Test
+    void grantModelConfig_rejects_foreign_clientApp_owner() {
+        when(llmModelManager.getModelConfig("cfg-foreign-client"))
+                .thenReturn(Optional.of(model(
+                        "cfg-foreign-client",
+                        "tenant-1",
+                        "LANGGRAPH_BIZ",
+                        LlmModelCategory.GENERAL,
+                        ResourceOwnerType.CLIENT_APP,
+                        "capp-2")));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.grantModelConfig("tenant-1", "admin-1", "capp-1",
+                        grantForm("cfg-foreign-client", false)));
+    }
+
+    @Test
+    void grantModelConfig_rejects_disabled_model() {
+        LlmModelConfigDTO disabled = model("cfg-disabled", "tenant-1", "LANGGRAPH_BIZ");
+        disabled.setEnabled(false);
+        when(llmModelManager.getModelConfig("cfg-disabled")).thenReturn(Optional.of(disabled));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.grantModelConfig("tenant-1", "admin-1", "capp-1",
+                        grantForm("cfg-disabled", false)));
     }
 
     @Test
@@ -329,6 +389,7 @@ class ClientAppModelConfigGrantServiceTest {
         ClientAppEntity entity = new ClientAppEntity();
         entity.setClientAppId("capp-1");
         entity.setTenantId("tenant-1");
+        entity.setUpstreamSystemId("ups-1");
         entity.setStatus(ClientAppService.STATUS_ACTIVE);
         return entity;
     }
@@ -338,12 +399,24 @@ class ClientAppModelConfigGrantServiceTest {
     }
 
     private LlmModelConfigDTO model(String id, String tenantId, String workerBackend, LlmModelCategory category) {
+        return model(id, tenantId, workerBackend, category, ResourceOwnerType.PLATFORM, "platform");
+    }
+
+    private LlmModelConfigDTO model(String id,
+                                    String tenantId,
+                                    String workerBackend,
+                                    LlmModelCategory category,
+                                    ResourceOwnerType ownerType,
+                                    String ownerId) {
         LlmModelConfigDTO dto = new LlmModelConfigDTO();
         dto.setId(id);
         dto.setTenantId(tenantId);
         dto.setName(id + "-name");
         dto.setWorkerBackend(workerBackend);
         dto.setCategory(category);
+        dto.setOwnerType(ownerType);
+        dto.setOwnerId(ownerId);
+        dto.setEnabled(true);
         return dto;
     }
 }

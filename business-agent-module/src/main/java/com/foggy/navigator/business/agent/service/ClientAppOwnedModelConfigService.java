@@ -8,6 +8,7 @@ import com.foggy.navigator.business.agent.model.form.RotateModelConfigKeyForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ModelAccessScope;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
@@ -36,7 +37,14 @@ public class ClientAppOwnedModelConfigService {
         requireCreateForm(form);
         clientAppService.requireClientApp(tenantId, clientAppId);
 
-        String modelConfigId = llmModelManager.saveModelConfig(tenantId, buildCreateModelForm(form));
+        String modelConfigId = llmModelManager.saveModelConfig(
+                tenantId,
+                buildCreateModelForm(form),
+                ResourceOwnerType.CLIENT_APP,
+                clientAppId,
+                ResourceOwnerType.CLIENT_APP,
+                clientAppId,
+                actorUserId);
 
         GrantModelConfigForm grantForm = new GrantModelConfigForm();
         grantForm.setModelConfigId(modelConfigId);

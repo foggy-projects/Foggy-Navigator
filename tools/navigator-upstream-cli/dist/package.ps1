@@ -68,7 +68,10 @@ $features = @(
     "account-context",
     "deterministic-e2e",
     "admin-key-bootstrap",
-    "client-app-bootstrap"
+    "client-app-bootstrap",
+    "upstream-worker-orchestration",
+    "upstream-directory-orchestration",
+    "upstream-worker-pool-orchestration"
 )
 
 Push-Location $RepoRoot

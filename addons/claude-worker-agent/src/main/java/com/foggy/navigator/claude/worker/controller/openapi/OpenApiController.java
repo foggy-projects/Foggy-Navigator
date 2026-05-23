@@ -21,6 +21,7 @@ import com.foggy.navigator.business.agent.model.form.AccountContextFileWriteForm
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
 import com.foggy.navigator.business.agent.model.form.SyncAccountSkillBundleForm;
 import com.foggy.navigator.business.agent.service.AccountContextFileService;
+import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.BusinessAgentFrameReportService;
 import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
@@ -32,6 +33,7 @@ import com.foggy.navigator.business.agent.support.BusinessAgentSessionMessageVis
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.claude.worker.service.*;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
@@ -97,6 +99,7 @@ public class OpenApiController {
     private final ObjectProvider<BusinessAgentSessionService> businessAgentSessionService;
     private final ObjectProvider<BusinessAgentFrameReportService> businessAgentFrameReportService;
     private final ObjectProvider<ClientAppControlCredentialService> clientAppControlCredentialService;
+    private final ObjectProvider<A2AgentResourceResolver> a2AgentResourceResolver;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -500,7 +503,12 @@ public class OpenApiController {
                 contextId,
                 requestedContextId);
 
-        String modelConfigId = resolveModelConfigId(form);
+        String requestedModelConfigId = extractRequestedModelConfigId(form);
+        String modelConfigId = requireA2AgentResourceResolver().resolveRequiredModelConfigId(
+                tenantId,
+                clientAppCredential.getClientAppId(),
+                requestedModelConfigId,
+                LlmModelCategory.GENERAL);
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId)
                 .modelConfigId(modelConfigId)
@@ -571,7 +579,7 @@ public class OpenApiController {
         return RX.ok(toOpenApiTaskDTO(task, route.agentId()));
     }
 
-    private String resolveModelConfigId(OpenApiQueryForm form) {
+    private String extractRequestedModelConfigId(OpenApiQueryForm form) {
         if (form == null) {
             return null;
         }
@@ -580,6 +588,14 @@ public class OpenApiController {
         }
         Object value = form.getMetadata() != null ? form.getMetadata().get("modelConfigId") : null;
         return value instanceof String text && StringUtils.hasText(text) ? text : null;
+    }
+
+    private A2AgentResourceResolver requireA2AgentResourceResolver() {
+        A2AgentResourceResolver resolver = a2AgentResourceResolver.getIfAvailable();
+        if (resolver == null) {
+            throw RX.throwB("A2Agent resource resolver is not available");
+        }
+        return resolver;
     }
 
     @PostMapping("/agents/{agentId}/preflight")

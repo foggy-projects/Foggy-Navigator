@@ -10,6 +10,7 @@ import com.foggy.navigator.business.agent.service.*;
 import com.foggy.navigator.business.agent.service.adapter.*;
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -159,7 +160,8 @@ class RestAdapterUpstreamE2ETest {
         sessionDTO.setContextId("bctx_20260520_ab_ctx_rest_e2e");
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
                 .thenReturn(sessionDTO);
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
+        A2AgentResourceResolver resourceResolver = new A2AgentResourceResolver(modelGrantService);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
         BusinessFunctionAuthorizationService authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService1, skillRegistryService, functionRegistryService);
 
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
@@ -368,6 +370,9 @@ class RestAdapterUpstreamE2ETest {
         model.setTenantId(TENANT);
         model.setWorkerBackend("LANGGRAPH_BIZ");
         model.setName("REST E2E Model");
+        model.setOwnerType(ResourceOwnerType.PLATFORM);
+        model.setOwnerId("platform");
+        model.setEnabled(true);
         when(llmModelManager.getModelConfig(MODEL_ID)).thenReturn(Optional.of(model));
 
         ClientAppModelConfigGrantEntity grant = new ClientAppModelConfigGrantEntity();

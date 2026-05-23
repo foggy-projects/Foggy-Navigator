@@ -2049,6 +2049,76 @@ def test_llm_agent_records_submitted_summary_without_backend_rewrite(monkeypatch
     assert frame.output == structured_output
 
 
+def test_llm_agent_auto_submits_business_function_action_output(monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_tms_draft_auto_submit_001",
+        skill_id="system.root",
+        skill_input={"request": "create opening draft"},
+    )
+    draft_id = "afd_f5a0cbbc0c1044f380fbfe9e47611e1e"
+    structured_output = {
+        "type": "OPEN_TMS_PAGE",
+        "label": "去下单",
+        "routeName": "OrderWorkbench",
+        "query": {"aiDraftId": draft_id},
+    }
+
+    def fake_invoke(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        return {
+            "functionId": function_id,
+            "version": version,
+            "status": "SUCCESS",
+            "approvalRequired": False,
+            "message": "Adapter execution successful",
+            "outputJson": json.dumps({
+                "code": 200,
+                "data": {
+                    "draftId": draft_id,
+                    "summary": "已生成开单草稿，可点击打开补齐并确认。",
+                    "structured_output": structured_output,
+                },
+            }, ensure_ascii=False),
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_function",
+            "name": "invoke_business_function",
+            "args": {
+                "function_id": "tms.order.createOpeningDraft",
+                "version": "v1",
+                "input": {
+                    "customerPhone": "18911897361",
+                    "cargoWeightKg": 100,
+                },
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime, max_iterations=3).run(
+        task_id="task_tms_draft_auto_submit_001",
+        frame_id=frame_id,
+        prompt="创建开单草稿",
+        runtime_context={"task_scoped_token": "runtime-token"},
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert model.calls == 1
+    assert [event.type for event in events] == ["tool_use", "tool_result", "skill_result_submit"]
+    assert events[-1].tool_call_id == "call_function:auto_submit"
+    assert frame.status == FrameStatus.RUNNING
+    assert frame.result_summary == "已生成开单草稿，可点击打开补齐并确认。"
+    assert frame.output == structured_output
+    assert not any(event.type == "error" for event in events)
+
+
 def test_llm_agent_allows_explicit_order_number_field_in_final_summary():
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(

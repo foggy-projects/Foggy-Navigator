@@ -837,7 +837,8 @@ class OpenApiControllerMessageMappingTest {
                 mock(ObjectProvider.class),
                 sessionProvider,
                 frameReportProvider,
-                controlCredentialProvider
+                controlCredentialProvider,
+                mock(ObjectProvider.class)
         );
     }
 

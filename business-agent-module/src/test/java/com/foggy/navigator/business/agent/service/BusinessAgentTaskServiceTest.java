@@ -45,7 +45,7 @@ class BusinessAgentTaskServiceTest {
     private BizWorkerPoolService bizWorkerPoolService;
 
     @Mock
-    private ClientAppModelConfigGrantService grantService;
+    private A2AgentResourceResolver resourceResolver;
     @Mock
     private ClientAppUserGrantService userGrantService;
     @Mock
@@ -77,14 +77,15 @@ class BusinessAgentTaskServiceTest {
                     dto.setContextId("bctx_20260520_ab_ctx_01");
                     return dto;
                 });
-        lenient().when(grantService.tryResolveEffectiveModelConfigId(
-                anyString(), anyString(), isNull(), eq(LlmModelCategory.VISION)))
-                .thenReturn(Optional.empty());
+        lenient().when(resourceResolver.resolveOptionalModelConfigId(
+                anyString(), anyString(), eq(LlmModelCategory.VISION)))
+                .thenReturn(null);
     }
 
     @Test
     void createTask_success() {
-        when(grantService.resolveEffectiveModelConfigId("tenant_01", "app_01", null)).thenReturn("model_01");
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", null, LlmModelCategory.GENERAL)).thenReturn("model_01");
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
         when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> {
@@ -134,7 +135,7 @@ class BusinessAgentTaskServiceTest {
                 tokenRepository,
                 clientAppService,
                 bizWorkerPoolService,
-                grantService,
+                resourceResolver,
                 userGrantService,
                 skillRegistryService,
                 tokenRuntimeStore,
@@ -146,7 +147,8 @@ class BusinessAgentTaskServiceTest {
         pool.setWorkerBackend("LANGGRAPH_BIZ");
 
         when(bizWorkerPoolService.requireAvailablePool("tenant_01", "pool_01")).thenReturn(pool);
-        when(grantService.resolveEffectiveModelConfigId("tenant_01", "app_01", null)).thenReturn("model_01");
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", null, LlmModelCategory.GENERAL)).thenReturn("model_01");
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
         when(skillRegistryService.buildMaterializedPublicSkillMarkdown("tenant_01", "skill_01", "app_01"))
@@ -241,7 +243,7 @@ class BusinessAgentTaskServiceTest {
 
         assertNotNull(result);
         assertEquals("model_01", result.getModelConfigId());
-        verify(grantService, never()).resolveEffectiveModelConfigId(any(), any(), any());
+        verify(resourceResolver, never()).resolveRequiredModelConfigId(any(), any(), any(), any());
     }
 
     @Test

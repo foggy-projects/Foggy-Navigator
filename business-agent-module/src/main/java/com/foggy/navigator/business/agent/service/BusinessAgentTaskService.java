@@ -21,7 +21,6 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -36,7 +35,7 @@ public class BusinessAgentTaskService {
     private final BusinessTaskScopedTokenRepository tokenRepository;
     private final ClientAppService clientAppService;
     private final BizWorkerPoolService bizWorkerPoolService;
-    private final ClientAppModelConfigGrantService grantService;
+    private final A2AgentResourceResolver resourceResolver;
     private final ClientAppUserGrantService userGrantService;
     private final SkillRegistryService skillRegistryService;
     private final BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
@@ -89,7 +88,11 @@ public class BusinessAgentTaskService {
             finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId());
         } else {
             // 4, 5, 6. 新建 task 时必须调用 resolveEffectiveModelConfigId
-            finalModelConfigId = grantService.resolveEffectiveModelConfigId(tenantId, form.getClientAppId(), form.getRequestedModelConfigId());
+            finalModelConfigId = resourceResolver.resolveRequiredModelConfigId(
+                    tenantId,
+                    form.getClientAppId(),
+                    form.getRequestedModelConfigId(),
+                    LlmModelCategory.GENERAL);
             finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId());
         }
 
@@ -202,9 +205,11 @@ public class BusinessAgentTaskService {
         userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
         skillRegistryService.checkClientAppSkillAccess(tenantId, clientAppId, skillId);
 
-        String finalModelConfigId = StringUtils.hasText(requestedModelConfigId)
-                ? grantService.resolveEffectiveModelConfigId(tenantId, clientAppId, requestedModelConfigId)
-                : grantService.resolveEffectiveModelConfigId(tenantId, clientAppId, null);
+        String finalModelConfigId = resourceResolver.resolveRequiredModelConfigId(
+                tenantId,
+                clientAppId,
+                requestedModelConfigId,
+                LlmModelCategory.GENERAL);
 
         String taskId = "obt_" + UUID.randomUUID().toString().replace("-", "");
         String plainToken = "btt_" + UUID.randomUUID().toString().replace("-", "");
@@ -386,13 +391,13 @@ public class BusinessAgentTaskService {
     }
 
     private String resolveOptionalVisionModelConfigId(String tenantId, String clientAppId) {
-        Optional<String> modelConfigId = grantService.tryResolveEffectiveModelConfigId(
-                tenantId, clientAppId, null, LlmModelCategory.VISION);
-        if (modelConfigId == null || modelConfigId.isEmpty()) {
+        String modelConfigId = resourceResolver.resolveOptionalModelConfigId(
+                tenantId, clientAppId, LlmModelCategory.VISION);
+        if (!StringUtils.hasText(modelConfigId)) {
             log.debug("Vision model config not resolved for clientAppId={}: default VISION model config grant is required",
                     clientAppId);
             return null;
         }
-        return modelConfigId.get();
+        return modelConfigId;
     }
 }

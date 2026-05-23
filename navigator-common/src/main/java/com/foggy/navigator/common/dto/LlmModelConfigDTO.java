@@ -2,6 +2,7 @@ package com.foggy.navigator.common.dto;
 
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ModelAccessScope;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -29,6 +30,12 @@ public class LlmModelConfigDTO {
     private List<String> availableModels;
     private String runtimeBudgetPresetKey;
     private String runtimeBudgetOverrideJson;
+    private ResourceOwnerType ownerType;
+    private String ownerId;
+    private ResourceOwnerType createdByPrincipalType;
+    private String createdByPrincipalId;
+    private String createdByCredentialId;
+    private Boolean enabled;
     private Integer sortOrder;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

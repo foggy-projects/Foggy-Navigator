@@ -49,14 +49,14 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/ins
 
 当前已发布版本：
 
-- version: `1.0.4`
-- released: `2026-05-18`
-- buildId: `1.0.4+354ba23aed93.dirty`
-- gitCommit: `354ba23aed93bb894c332a5268850ec0555f00c1`
+- version: `1.0.5`
+- released: `2026-05-23`
+- buildId: `1.0.5+ad6b0ba6a8df.dirty`
+- gitCommit: `ad6b0ba6a8df137f1129d2cbcfd6045518cfa03a`
 - gitDirty: `true`
-- Windows archive: `1.0.4/navigator-upstream-cli-1.0.4-windows.zip`
-- SHA256: `3b7737d28a1ab9654fe07e76f4c6821f417a21432a8fb786502298aab7286113`
-- release smoke: `docs/version-tracker/1.1.3-SNAPSHOT/coverage/upstream-client-app-admin-key-cli-release-smoke.md`
+- Windows archive: `1.0.5/navigator-upstream-cli-1.0.5-windows.zip`
+- SHA256: `735f574bec9989f06550348379feb956b312f5ca5f3196f711e2fd9e2451e6a6`
+- release smoke: remote installer smoke passed during `tools/navigator-upstream-cli/dist/upload.ps1 -Version 1.0.5 -AllowSameVersion`
 
 安装脚本会：
 

@@ -17,11 +17,13 @@ import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberReposito
 import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskScopedTokenRuntimeStore;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
+import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
+import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
@@ -82,6 +84,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
     @Mock private ClientAppService clientAppService;
     @Mock private BizWorkerPoolService bizWorkerPoolService;
     @Mock private ClientAppModelConfigGrantService modelGrantService;
+    private A2AgentResourceResolver resourceResolver;
     @Mock private ClientAppUserGrantService userGrantService;
     @Mock private SkillRegistryService skillRegistryService;
     @Mock private BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
@@ -116,12 +119,13 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 langgraphWorkerService,
                 langgraphTaskService
         );
+        resourceResolver = new A2AgentResourceResolver(modelGrantService);
         businessAgentTaskService = new BusinessAgentTaskService(
                 businessTaskRepository,
                 tokenRepository,
                 clientAppService,
                 bizWorkerPoolService,
-                modelGrantService,
+                resourceResolver,
                 userGrantService,
                 skillRegistryService,
                 tokenRuntimeStore,
@@ -300,7 +304,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
         pool.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
         when(bizWorkerPoolService.requireAvailablePool(TENANT, WORKER_POOL_ID)).thenReturn(pool);
 
-        when(modelGrantService.resolveEffectiveModelConfigId(TENANT, CLIENT_APP_ID, null))
+        when(modelGrantService.resolveEffectiveModelConfigId(TENANT, CLIENT_APP_ID, null, LlmModelCategory.GENERAL))
                 .thenReturn(MODEL_CONFIG_ID);
         ClientAppEntity clientApp = new ClientAppEntity();
         clientApp.setTenantId(TENANT);

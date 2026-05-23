@@ -35,9 +35,11 @@
 6. `12` 是 2026-05-22 收口后的 Agent / Skill / Frame 边界准绳：Skill 工具化，Agent Frame 化。
 7. `13` 是子 Agent 默认系统提示词与 Skill discovery 授权口径：子 Agent 携带 shared platform contract，不继承 Root-specific context。
 8. `14` 是 Account Workspace Resolver 与 delegated workspace 口径：account/upstream user 身份不再等同固定物理目录。
-9. `15` 是受限 `shell_command` 工具设计口径：Linux 命令格式入口，但内部实现为 workspace 受限命令解释器，不开放真实宿主机 shell。
+9. `15` 是 BizWorker 命令能力设计口径：`shell_command` 保持 workspace 受限文件观察解释器；真实外部工具执行拆为 Linux-only `command`，默认关闭并要求显式授权。
 10. `16` 是 Navigator Upstream CLI 与配套 skill 的 1.1.6 runtime contract 对齐口径，并记录模型 token 预算 preset 字段落地方式。
-11. `OPT-runtime-plan-tool-contract` 是后续 `update_plan` / plan 工具函数的初始契约；实现前需专项调研 Claude Code / Codex 的 plan 机制。
+11. `17` 是上游主体、credential、资源 owner 与 runtime 可见性口径：`ADMIN_KEY` / `CONTROL_KEY` / upstream user token 都是 credential，不是资源 owner；Worker / LLMConfigModel / WorkingDirectory / Agent 通过 owner + grant + resolver 统一治理。
+12. `18` 是 `17` 的实施计划：在不考虑旧数据迁移和旧接口兼容的前提下，按 LLMConfigModel、resolver、WorkingDirectory、Agent、Worker、SDK/CLI 的顺序推进。
+13. `OPT-runtime-plan-tool-contract` 是后续 `update_plan` / plan 工具函数的初始契约；实现前需专项调研 Claude Code / Codex 的 plan 机制。
 
 若旧文档中仍出现“runtime context 拼入 user prompt”的早期表述，以 `09` 的 system / human 边界为当前实现口径。
 
@@ -49,9 +51,13 @@
 
 若旧文档中仍把 upstream user 记忆目录固定描述为 `<data_root>/accounts/<accountId>`，以 `14` 的 managed account mode + delegated workspace resolver 为当前设计口径。
 
-若后续文档讨论 `shell_command`，以 `15` 的 restricted shell 口径为准：命令格式向 Linux 对齐，但必须通过 allowlist、resolver/path guard 和输出预算治理，不直接执行任意系统 shell。
+若后续文档讨论 `shell_command`，以 `15` 的 restricted shell 口径为准：命令格式向 Linux 对齐，但必须通过 allowlist、resolver/path guard 和输出预算治理，不直接执行任意系统 shell。若讨论 `git`、`curl`、测试或构建命令，以 `15` 的 Linux-only `command` 补充决策为准：只在 Linux worker 暴露，Windows 本机调试走 WSL + 3065 端口，且必须经 worker 开关、OS gate、任务 `allowed_tools` 和 `workdir` 校验。
 
 若旧 CLI / skill 文档仍暗示上游自行生成 `contextId`、把 `clientContext` 当成 LLM prompt 配置、或把模型上下文窗口塞入用户消息，以 `16` 为当前口径：新会话由 BizWorker 生成 `contextId`，上游只复用返回值；`clientContext` 只保存会话元数据；模型 token 预算通过 `runtimeBudgetPresetKey` / `runtimeBudgetOverrideJson` 后端一等字段配置。
+
+若旧 upstream admin / ClientApp 文档仍把 `NAVI_ADMIN_API_KEY`、`NAVI_CONTROL_API_KEY` 或 upstream user token 当作资源 owner，以 `17` 为当前口径：key 是可轮换 credential，资源 owner 必须指向稳定主体；A2Agent runtime 可见资源通过 `UpstreamSystemPrincipal + UpstreamClientApp + UpstreamUser + Agent` 的交集解析。
+
+若后续实施讨论需要兼容旧资源或旧接口，以 `18` 为当前阶段边界：本轮不做旧数据迁移，不做旧接口兼容，不保留 legacy fallback；缺少 owner / grant / workspace policy 的资源在新 runtime 路径下 fail-closed，测试环境可重建资源。
 
 若后续文档讨论 `plan` 工具函数，以 `OPT-runtime-plan-tool-contract` 为当前口径：plan 是 runtime state 工具，不是普通业务工具；不暴露私有推理；Root 与 Agent frame 默认隔离；实现前先复盘 Claude Code / Codex 的 plan 行为。
 
@@ -71,8 +77,10 @@
 - [12-agent-frame-and-skill-tool-boundary.md](./12-agent-frame-and-skill-tool-boundary.md) - 收口 Agent / Skill / Frame 新边界：Skill 不再默认进入 frame，只有 Agent 调用才创建 non-root frame
 - [13-default-subagent-base-prompt-and-skill-discovery.md](./13-default-subagent-base-prompt-and-skill-discovery.md) - 收口子 Agent 默认提示词、Root 上下文隔离，以及允许 Skill/Agent 时同步放行 Skill discovery 工具的口径
 - [14-account-workspace-resolver-and-delegated-mode.md](./14-account-workspace-resolver-and-delegated-mode.md) - 收口 Account Workspace Resolver、managed account mode 和 delegated workspace mode 的目录解析契约
-- [15-restricted-shell-command-tool-design.md](./15-restricted-shell-command-tool-design.md) - 记录受限 `shell_command` 工具设计：Linux 命令格式、有限命令子集、workspace path guard 与默认暴露策略
+- [15-restricted-shell-command-tool-design.md](./15-restricted-shell-command-tool-design.md) - 记录 BizWorker `shell_command` / `command` 双轨设计：受限文件观察、Linux-only 真实命令执行、WSL 3065 调试和授权验收策略
 - [16-upstream-cli-skill-runtime-contract-alignment.md](./16-upstream-cli-skill-runtime-contract-alignment.md) - 收口 Navigator Upstream CLI / 配套 skill 与 1.1.6 runtime context 的对齐口径，并记录模型 token 预算 preset 字段落地方式
+- [17-upstream-principal-resource-ownership-and-visibility.md](./17-upstream-principal-resource-ownership-and-visibility.md) - 定义 UpstreamSystemPrincipal / UpstreamClientApp / UpstreamUser 与 Worker / LLMConfigModel / WorkingDirectory / Agent 的 owner、grant 和 runtime resolver 关系
+- [18-upstream-principal-resource-implementation-plan.md](./18-upstream-principal-resource-implementation-plan.md) - 将主体、资源 owner、grant / binding 与 A2Agent resolver 拆成不兼容旧数据、不兼容旧接口的分阶段实施计划和测试矩阵
 - [workitems/BUG-runtime-context-phase2-5-review-fixes.md](./workitems/BUG-runtime-context-phase2-5-review-fixes.md) - 记录并修复 Phase 2-5 评审发现的排队终止窗口、JSON 脱敏和 commit 清理缺陷
 - [workitems/BUG-root-account-memory-and-runtime-session-directory-governance.md](./workitems/BUG-root-account-memory-and-runtime-session-directory-governance.md) - 记录 Root Prompt upstream user 记忆文件注入疑点，以及非 `bctx_` runtime session 目录的 fallback 来源与治理建议
 - [workitems/BUG-client-app-public-skill-manifest-resolution.md](./workitems/BUG-client-app-public-skill-manifest-resolution.md) - 记录并修复 ClientApp public skill 资源可见但 `invoke_business_skill` 执行 manifest 缺失的问题

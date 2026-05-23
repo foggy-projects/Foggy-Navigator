@@ -768,6 +768,50 @@ class LlmSkillAgent:
             _emit_progress_event(runtime_context, extra_event)
 
         ret: dict[str, Any] = {"events": events, "tool_result": result}
+        auto_submit = None
+        if persistent_frame and not suspended:
+            auto_submit = _auto_submit_payload_from_business_function_result(name, result)
+        if auto_submit is not None:
+            summary = auto_submit["summary"]
+            structured_output = auto_submit["structured_output"]
+            validation = self._runtime.submit_persistent_turn_result(
+                frame_id=frame_id,
+                summary=summary,
+                structured_output=structured_output,
+            )
+            auto_submit_result = {
+                "ok": validation.ok,
+                "errors": validation.errors,
+                "auto_submitted": True,
+                "summary": summary,
+                "structured_output": structured_output,
+                **report_payload,
+            }
+            auto_event_type = "skill_result_submit" if validation.ok else "skill_result_reject"
+            auto_submit_event = QueryEvent(
+                type=auto_event_type,
+                task_id=task_id,
+                skill_frame_id=frame_id,
+                parent_frame_id=parent_frame_id,
+                skill_id=event_skill_id,
+                presentation_hint=event_presentation_hint,
+                content=json.dumps(auto_submit_result, ensure_ascii=False),
+                error="; ".join(validation.errors) if not validation.ok else None,
+                tool_call_id=f"{call.get('id')}:auto_submit" if call.get("id") else None,
+                tool_name="submit_skill_result",
+                function_id=_tool_function_id(name, safe_args, result),
+                args={
+                    "summary": summary,
+                    "structured_output": structured_output,
+                    "auto_submitted_from": name,
+                },
+                execution_report_ref=report_payload.get("execution_report_ref"),
+                execution_report_digest=report_payload.get("execution_report_digest"),
+            )
+            events.append(auto_submit_event)
+            _emit_progress_event(runtime_context, auto_submit_event)
+            if validation.ok:
+                ret["persistent_turn_completed"] = True
         if name in {"submit_skill_result", "shelve_interrupted_frame"} and persistent_frame and result.get("ok"):
             ret["persistent_turn_completed"] = True
         if suspended:
@@ -1156,6 +1200,69 @@ def _is_non_recoverable_tool_error(result: Any) -> bool:
         result.get("llm_retry_allowed") is False
         or result.get("recoverable") is False
     )
+
+
+def _auto_submit_payload_from_business_function_result(
+    tool_name: str,
+    result: Any,
+) -> dict[str, Any] | None:
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        return None
+    if result.get("approval_wait") is True or result.get("suspend_id"):
+        return None
+    if tool_name != "invoke_business_function" and not _tool_function_id(tool_name, {}, result):
+        return None
+
+    gateway_result = result.get("result") if isinstance(result.get("result"), dict) else {}
+    if not gateway_result:
+        return None
+
+    payloads = _business_function_result_payload_candidates(gateway_result)
+    structured_output = _first_structured_action(payloads)
+    if structured_output is None:
+        return None
+
+    summary = _first_summary(payloads)
+    if not summary:
+        message = gateway_result.get("message")
+        summary = message if isinstance(message, str) and message.strip() else "业务函数已完成。"
+    return {
+        "summary": summary.strip(),
+        "structured_output": structured_output,
+    }
+
+
+def _business_function_result_payload_candidates(gateway_result: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    output_json = gateway_result.get("outputJson") or gateway_result.get("output_json")
+    if isinstance(output_json, str) and output_json.strip():
+        try:
+            decoded = json.loads(output_json)
+        except Exception:
+            decoded = None
+        if isinstance(decoded, dict):
+            candidates.append(decoded)
+            data = decoded.get("data")
+            if isinstance(data, dict):
+                candidates.append(data)
+    return candidates
+
+
+def _first_structured_action(payloads: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for payload in payloads:
+        for key in ("structured_output", "structuredOutput"):
+            value = payload.get(key)
+            if isinstance(value, dict) and isinstance(value.get("type"), str) and value.get("type").strip():
+                return _safe_content(value)
+    return None
+
+
+def _first_summary(payloads: list[dict[str, Any]]) -> str:
+    for payload in payloads:
+        value = payload.get("summary") or payload.get("message")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _has_runtime_memory_terminal_tool_call(tool_calls: list[dict[str, Any]]) -> bool:

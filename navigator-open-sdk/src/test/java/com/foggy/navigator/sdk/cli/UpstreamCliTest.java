@@ -1759,6 +1759,107 @@ class UpstreamCliTest {
     }
 
     @Test
+    void upstreamUsageAdvertisesProgrammingProjectOrchestrationCommands() {
+        int code = run(new String[]{"upstream", "--help"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertTrue(output.contains("worker list/create/get/update/delete/health/processes/kill"));
+        assertTrue(output.contains("directory list/init/get/delete/env/files"));
+        assertTrue(output.contains("worker-pool list/create/add-member/status"));
+    }
+
+    @Test
+    void programmingProjectOrchestrationCommandsUseUpstreamAdminEndpointsAndProfileWriteback() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".navigator").resolve("directory-init.json"), """
+                {"workerId":"w-1","path":"D:/work/project","projectName":"project","files":{"README.md":"hello"}}
+                """, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".navigator").resolve("worker-pool.json"), """
+                {"poolId":"pool-1","name":"Coding Pool","workerBackend":"CODEX"}
+                """, StandardCharsets.UTF_8);
+
+        responseOverride = """
+                {"code":0,"data":[{"workerId":"w-1","name":"Codex Worker","status":"ONLINE"}]}
+                """;
+        assertEquals(0, run(new String[]{"upstream", "worker", "list",
+                "--profile", ".navigator/upstream.env",
+                "--target-tenant-id", "tenant-a"}, Map.of()));
+        assertEquals("/api/v1/upstream-admin/workers?targetTenantId=tenant-a", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+
+        responseOverride = """
+                {"code":0,"data":{"workerId":"w-1","name":"Codex Worker","status":"ONLINE"}}
+                """;
+        assertEquals(0, run(new String[]{"upstream", "worker", "health",
+                "--profile", ".navigator/upstream.env",
+                "--worker-id", "w-1"}, Map.of()));
+        assertEquals("/api/v1/upstream-admin/workers/w-1/health-check", lastPath);
+        assertEquals("POST", lastMethod);
+
+        responseOverride = """
+                {"code":0,"data":{"processes":[{"pid":1234,"command":"codex","taskId":"task-1"}]}}
+                """;
+        assertEquals(0, run(new String[]{"upstream", "worker", "processes",
+                "--profile", ".navigator/upstream.env",
+                "--worker-id", "w-1"}, Map.of()));
+        assertEquals("/api/v1/upstream-admin/workers/w-1/processes", lastPath);
+        assertEquals("GET", lastMethod);
+
+        responseOverride = """
+                {"code":0,"data":[{"directoryId":"dir-1","workerId":"w-1","projectName":"project","path":"D:/work/project"}]}
+                """;
+        assertEquals(0, run(new String[]{"upstream", "directory", "list",
+                "--profile", ".navigator/upstream.env",
+                "--worker-id", "w-1"}, Map.of()));
+        assertEquals("/api/v1/upstream-admin/directories?workerId=w-1", lastPath);
+        assertEquals("GET", lastMethod);
+
+        responseOverride = """
+                {"code":0,"data":{"directoryId":"dir-1","workerId":"w-1","projectName":"project","path":"D:/work/project"}}
+                """;
+        assertEquals(0, run(new String[]{"upstream", "directory", "init",
+                "--profile", ".navigator/upstream.env",
+                "--file", ".navigator/directory-init.json",
+                "--write-profile"}, Map.of()));
+        assertEquals("/api/v1/upstream-admin/directories/init", lastPath);
+        assertEquals("POST", lastMethod);
+
+        responseOverride = """
+                {"code":0,"data":{"poolId":"pool-1","name":"Coding Pool","workerBackend":"CODEX","status":"ENABLED"}}
+                """;
+        assertEquals(0, run(new String[]{"upstream", "worker-pool", "create",
+                "--profile", ".navigator/upstream.env",
+                "--file", ".navigator/worker-pool.json",
+                "--target-tenant-id", "tenant-a",
+                "--write-profile"}, Map.of()));
+        assertEquals("/api/v1/upstream-admin/worker-pools?targetTenantId=tenant-a", lastPath);
+        assertEquals("POST", lastMethod);
+
+        responseOverride = "{\"code\":0,\"data\":null}";
+        assertEquals(0, run(new String[]{"upstream", "worker-pool", "add-member",
+                "--profile", ".navigator/upstream.env",
+                "--pool-id", "pool-1",
+                "--worker-id", "w-1",
+                "--target-tenant-id", "tenant-a"}, Map.of()));
+        assertEquals("/api/v1/upstream-admin/worker-pools/pool-1/members?targetTenantId=tenant-a", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"workerId\":\"w-1\""));
+
+        String profile = Files.readString(tempDir.resolve(".navigator").resolve("upstream.env"), StandardCharsets.UTF_8);
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertTrue(profile.contains("NAVI_DIRECTORY_ID=dir-1"));
+        assertTrue(profile.contains("NAVI_WORKER_POOL_ID=pool-1"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
     void modelCreateCanUseUpstreamAdminKeyFallback() {
         responseOverride = """
                 {"code":0,"data":{

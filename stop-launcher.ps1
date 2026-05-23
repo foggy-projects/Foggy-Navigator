@@ -12,7 +12,7 @@ $portConnection = Get-NetTCPConnection -LocalPort $BACKEND_PORT -State Listen -E
 if ($portConnection) {
     $procId = $portConnection.OwningProcess | Select-Object -First 1
     $process = Get-Process -Id $procId -ErrorAction SilentlyContinue
-    Write-Host "  Found process on port ${BACKEND_PORT}: PID=${pid} ($($process.ProcessName))" -ForegroundColor Yellow
+    Write-Host "  Found process on port ${BACKEND_PORT}: PID=${procId} ($($process.ProcessName))" -ForegroundColor Yellow
     Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
 

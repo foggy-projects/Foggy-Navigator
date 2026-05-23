@@ -7,6 +7,7 @@ import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ModelAccessScope;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
@@ -44,7 +45,7 @@ public class E2eModelConfigEnsureService {
         String mockBaseUrl = normalizeMockBaseUrl(form);
         String configName = MODEL_NAME_PREFIX + clientAppId;
 
-        ModelEnsureResult model = ensureModelConfig(tenantId, configName, mockBaseUrl, standard);
+        ModelEnsureResult model = ensureModelConfig(tenantId, actorUserId, clientAppId, configName, mockBaseUrl, standard);
         GrantEnsureResult grant = ensureGrant(tenantId, actorUserId, clientAppId, model.modelConfigId(),
                 form != null && Boolean.TRUE.equals(form.getSetDefault()));
 
@@ -63,14 +64,28 @@ public class E2eModelConfigEnsureService {
         return result;
     }
 
-    private ModelEnsureResult ensureModelConfig(String tenantId, String configName, String mockBaseUrl, String standard) {
+    private ModelEnsureResult ensureModelConfig(String tenantId,
+                                                String actorUserId,
+                                                String clientAppId,
+                                                String configName,
+                                                String mockBaseUrl,
+                                                String standard) {
         Optional<LlmModelConfigDTO> existing = llmModelManager.listModelConfigs(tenantId).stream()
                 .filter(model -> configName.equals(model.getName()))
                 .filter(model -> ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND.equals(model.getWorkerBackend()))
+                .filter(model -> model.getOwnerType() == ResourceOwnerType.CLIENT_APP
+                        && clientAppId.equals(model.getOwnerId()))
                 .findFirst();
 
         if (existing.isEmpty()) {
-            String modelConfigId = llmModelManager.saveModelConfig(tenantId, buildModelForm(configName, mockBaseUrl, standard));
+            String modelConfigId = llmModelManager.saveModelConfig(
+                    tenantId,
+                    buildModelForm(configName, mockBaseUrl, standard),
+                    ResourceOwnerType.CLIENT_APP,
+                    clientAppId,
+                    ResourceOwnerType.CLIENT_APP,
+                    clientAppId,
+                    actorUserId);
             return new ModelEnsureResult(modelConfigId, true, false);
         }
 

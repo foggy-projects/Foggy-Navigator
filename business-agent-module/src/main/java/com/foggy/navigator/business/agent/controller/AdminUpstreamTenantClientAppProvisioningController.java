@@ -24,15 +24,14 @@ public class AdminUpstreamTenantClientAppProvisioningController {
     @PostMapping("/ensure")
     public RX<UpstreamTenantClientAppProvisioningDTO> ensure(HttpServletRequest request,
                                                              @RequestBody EnsureUpstreamTenantClientAppForm form) {
-        log.info("Upstream tenant ClientApp ensure requested: method={}, path={}, remoteAddr={}, sourceSystem={}, sourceTenantId={}, rotateCredentials={}, adminKeyPresent={}, adminApiKeyPresent={}",
+        log.info("Upstream tenant ClientApp ensure requested: method={}, path={}, remoteAddr={}, sourceSystem={}, sourceTenantId={}, rotateCredentials={}, adminKeyPresent={}",
                 request == null ? null : request.getMethod(),
                 request == null ? null : request.getRequestURI(),
                 request == null ? null : request.getRemoteAddr(),
                 form == null ? null : form.getSourceSystem(),
                 form == null ? null : form.getSourceTenantId(),
                 form == null ? null : form.getRotateCredentials(),
-                hasHeader(request, UpstreamClientAppAdminCredentialService.HEADER_ADMIN_KEY),
-                hasHeader(request, UpstreamClientAppAdminCredentialService.HEADER_ADMIN_API_KEY));
+                hasHeader(request, UpstreamClientAppAdminCredentialService.HEADER_ADMIN_KEY));
         UpstreamClientAppAdminPrincipal principal = adminCredentialService.requireAccess(
                 request,
                 UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE);

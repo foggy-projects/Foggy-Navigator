@@ -7,6 +7,7 @@ import com.foggy.navigator.business.agent.model.form.ClientAppModelConfigForm;
 import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.business.agent.model.form.RotateModelConfigKeyForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,7 +36,14 @@ class ClientAppOwnedModelConfigServiceTest {
         service = new ClientAppOwnedModelConfigService(clientAppService, grantService, grantRepository, llmModelManager);
 
         when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp());
-        when(llmModelManager.saveModelConfig(anyString(), any())).thenReturn("cfg-owned");
+        when(llmModelManager.saveModelConfig(
+                anyString(),
+                any(),
+                any(ResourceOwnerType.class),
+                anyString(),
+                any(ResourceOwnerType.class),
+                anyString(),
+                anyString())).thenReturn("cfg-owned");
         when(grantService.grantModelConfig(anyString(), anyString(), anyString(), any())).thenReturn(grantDto("cfg-owned"));
     }
 
@@ -44,7 +52,14 @@ class ClientAppOwnedModelConfigServiceTest {
         ClientAppModelConfigGrantDTO dto = service.create("tenant-1", "actor-1", "capp-1", createForm());
 
         ArgumentCaptor<LlmModelConfigForm> modelCaptor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
-        verify(llmModelManager).saveModelConfig(eq("tenant-1"), modelCaptor.capture());
+        verify(llmModelManager).saveModelConfig(
+                eq("tenant-1"),
+                modelCaptor.capture(),
+                eq(ResourceOwnerType.CLIENT_APP),
+                eq("capp-1"),
+                eq(ResourceOwnerType.CLIENT_APP),
+                eq("capp-1"),
+                eq("actor-1"));
         LlmModelConfigForm saved = modelCaptor.getValue();
         assertEquals("Upstream GPT", saved.getName());
         assertEquals("https://llm.example/v1", saved.getBaseUrl());

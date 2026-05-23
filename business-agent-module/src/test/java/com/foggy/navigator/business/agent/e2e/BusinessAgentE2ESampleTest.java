@@ -6,6 +6,7 @@ import com.foggy.navigator.business.agent.model.form.*;
 import com.foggy.navigator.business.agent.repository.*;
 import com.foggy.navigator.business.agent.service.*;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -132,7 +133,8 @@ class BusinessAgentE2ESampleTest {
         sessionDTO.setContextId("bctx_20260520_cd_ctx_stage6");
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
                 .thenReturn(sessionDTO);
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
+        A2AgentResourceResolver resourceResolver = new A2AgentResourceResolver(modelGrantService);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
         authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService, skillRegistryService, functionRegistryService);
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
         com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker adapterInvoker = new com.foggy.navigator.business.agent.service.adapter.LocalEchoBusinessFunctionAdapterInvoker(objectMapper);
@@ -156,6 +158,9 @@ class BusinessAgentE2ESampleTest {
         model.setTenantId(TENANT);
         model.setWorkerBackend("LANGGRAPH_BIZ");
         model.setName("Stage6 LangGraph Model");
+        model.setOwnerType(ResourceOwnerType.PLATFORM);
+        model.setOwnerId("platform");
+        model.setEnabled(true);
         when(llmModelManager.getModelConfig(MODEL_ID)).thenReturn(Optional.of(model));
 
         modelGrantEntity = new ClientAppModelConfigGrantEntity();

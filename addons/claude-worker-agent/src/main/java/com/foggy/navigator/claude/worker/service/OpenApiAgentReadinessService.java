@@ -11,12 +11,13 @@ import com.foggy.navigator.business.agent.model.dto.SkillArtifactLinkDTO;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
 import com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService;
-import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
+import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
+import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.env.Environment;
@@ -42,7 +43,7 @@ public class OpenApiAgentReadinessService {
     private final ClientAppService clientAppService;
     private final SkillRegistryService skillRegistryService;
     private final ClientAppUserGrantService userGrantService;
-    private final ClientAppModelConfigGrantService modelConfigGrantService;
+    private final A2AgentResourceResolver resourceResolver;
     private final ClientAppUpstreamRouteService upstreamRouteService;
     private final BusinessFunctionRegistryService functionRegistryService;
     private final OpenApiAgentRouteService agentRouteService;
@@ -100,8 +101,11 @@ public class OpenApiAgentReadinessService {
                     "upstreamUserId is required"));
         }
         addCheck(result, "MODEL_CONFIG_GRANT", () -> {
-            String effective = modelConfigGrantService.resolveEffectiveModelConfigId(
-                    credential.getTenantId(), credential.getClientAppId(), safeForm.getModelConfigId());
+            String effective = resourceResolver.resolveRequiredModelConfigId(
+                    credential.getTenantId(),
+                    credential.getClientAppId(),
+                    safeForm.getModelConfigId(),
+                    LlmModelCategory.GENERAL);
             result.setEffectiveModelConfigId(effective);
         });
         addRequiredUpstreamRouteChecks(result, credential, safeForm);

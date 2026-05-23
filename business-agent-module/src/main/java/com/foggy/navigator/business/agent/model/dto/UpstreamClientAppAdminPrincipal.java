@@ -9,6 +9,7 @@ import java.util.Set;
 @Builder
 public class UpstreamClientAppAdminPrincipal {
     private String credentialId;
+    private String principalId;
     private String upstreamSystemId;
     private String authorizedClientAppNamespace;
     private Set<String> authorizedTenantIds;

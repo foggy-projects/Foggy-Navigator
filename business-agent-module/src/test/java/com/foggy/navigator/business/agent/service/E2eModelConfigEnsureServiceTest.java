@@ -7,6 +7,7 @@ import com.foggy.navigator.business.agent.model.form.EnsureE2eModelConfigForm;
 import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,7 +34,14 @@ class E2eModelConfigEnsureServiceTest {
         service = new E2eModelConfigEnsureService(clientAppService, grantService, llmModelManager);
 
         when(clientAppService.requireActiveClientApp("tenant-1", "capp-1")).thenReturn(clientApp());
-        when(llmModelManager.saveModelConfig(eq("tenant-1"), any())).thenReturn("cfg-e2e");
+        when(llmModelManager.saveModelConfig(
+                eq("tenant-1"),
+                any(),
+                any(ResourceOwnerType.class),
+                anyString(),
+                any(ResourceOwnerType.class),
+                anyString(),
+                anyString())).thenReturn("cfg-e2e");
         when(grantService.listGrants("tenant-1", "capp-1")).thenReturn(List.of());
         when(grantService.grantModelConfig(eq("tenant-1"), eq("admin-1"), eq("capp-1"), any()))
                 .thenReturn(grant(7L, "cfg-e2e", true, ClientAppModelConfigGrantService.STATUS_ENABLED));
@@ -45,7 +53,14 @@ class E2eModelConfigEnsureServiceTest {
                 "tenant-1", "admin-1", "capp-1", form("http://localhost:8200/", true));
 
         ArgumentCaptor<LlmModelConfigForm> modelCaptor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
-        verify(llmModelManager).saveModelConfig(eq("tenant-1"), modelCaptor.capture());
+        verify(llmModelManager).saveModelConfig(
+                eq("tenant-1"),
+                modelCaptor.capture(),
+                eq(ResourceOwnerType.CLIENT_APP),
+                eq("capp-1"),
+                eq(ResourceOwnerType.CLIENT_APP),
+                eq("capp-1"),
+                eq("admin-1"));
         LlmModelConfigForm modelForm = modelCaptor.getValue();
         assertEquals("Navigator E2E Test Model - capp-1", modelForm.getName());
         assertEquals("http://localhost:8200/v1", modelForm.getBaseUrl());
@@ -76,7 +91,14 @@ class E2eModelConfigEnsureServiceTest {
         E2eModelConfigEnsureResultDTO result = service.ensure(
                 "tenant-1", "admin-1", "capp-1", form("http://localhost:8200", true));
 
-        verify(llmModelManager, never()).saveModelConfig(anyString(), any());
+        verify(llmModelManager, never()).saveModelConfig(
+                anyString(),
+                any(),
+                any(ResourceOwnerType.class),
+                anyString(),
+                any(ResourceOwnerType.class),
+                anyString(),
+                anyString());
         verify(llmModelManager, never()).updateModelConfig(anyString(), any());
         verify(grantService, never()).grantModelConfig(anyString(), anyString(), anyString(), any());
         assertEquals("cfg-existing", result.getModelConfigId());
@@ -91,7 +113,14 @@ class E2eModelConfigEnsureServiceTest {
                 "tenant-1", "admin-1", "capp-1", form("http://localhost:8200/v1/", true));
 
         ArgumentCaptor<LlmModelConfigForm> modelCaptor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
-        verify(llmModelManager).saveModelConfig(eq("tenant-1"), modelCaptor.capture());
+        verify(llmModelManager).saveModelConfig(
+                eq("tenant-1"),
+                modelCaptor.capture(),
+                eq(ResourceOwnerType.CLIENT_APP),
+                eq("capp-1"),
+                eq(ResourceOwnerType.CLIENT_APP),
+                eq("capp-1"),
+                eq("admin-1"));
         assertEquals("http://localhost:8200/v1", modelCaptor.getValue().getBaseUrl());
         assertEquals("http://localhost:8200/v1", result.getMockBaseUrl());
     }
@@ -157,6 +186,9 @@ class E2eModelConfigEnsureServiceTest {
         dto.setModelName("navigator-e2e-scripted");
         dto.setWorkerBackend("LANGGRAPH_BIZ");
         dto.setCategory(LlmModelCategory.GENERAL);
+        dto.setOwnerType(ResourceOwnerType.CLIENT_APP);
+        dto.setOwnerId("capp-1");
+        dto.setEnabled(true);
         dto.setIsDefault(false);
         dto.setHasApiKey(true);
         return dto;
@@ -177,6 +209,7 @@ class E2eModelConfigEnsureServiceTest {
         ClientAppEntity entity = new ClientAppEntity();
         entity.setClientAppId("capp-1");
         entity.setTenantId("tenant-1");
+        entity.setUpstreamSystemId("ups-1");
         entity.setStatus(ClientAppService.STATUS_ACTIVE);
         return entity;
     }

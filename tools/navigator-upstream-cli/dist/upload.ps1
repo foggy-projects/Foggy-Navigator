@@ -64,8 +64,23 @@ function Invoke-RemoteInstallSmoke {
         }
 
         $clientAppHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream client-app --help 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $clientAppHelpOutput -notmatch "Commands: list, ensure, issue-control-key") {
+        if ($LASTEXITCODE -ne 0 -or $clientAppHelpOutput -notmatch "Commands: list, ensure, ensure-tenant, issue-control-key") {
             throw "client-app help smoke failed: $clientAppHelpOutput"
+        }
+
+        $workerHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream worker --help 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $workerHelpOutput -notmatch "Commands: list, create, get, update, delete, health, processes, kill") {
+            throw "worker help smoke failed: $workerHelpOutput"
+        }
+
+        $directoryHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream directory --help 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $directoryHelpOutput -notmatch "Commands: list, init, get, delete, env, files") {
+            throw "directory help smoke failed: $directoryHelpOutput"
+        }
+
+        $workerPoolHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream worker-pool --help 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $workerPoolHelpOutput -notmatch "Commands: list, create, add-member, status") {
+            throw "worker-pool help smoke failed: $workerPoolHelpOutput"
         }
 
         Write-Host "Remote install smoke passed." -ForegroundColor Green
