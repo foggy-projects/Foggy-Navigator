@@ -7,11 +7,3 @@ agent:
     openai:
       api-key: mock-key
       base-url: http://localhost:8200/v1
-
-# 覆盖 coding-agent 的 LLM 配置
-foggy:
-  coding-agent:
-    openhands:
-      api-key: mock-key
-      api-base-url: http://localhost:8200/v1
-      model-name: mock-model

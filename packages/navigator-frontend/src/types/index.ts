@@ -393,14 +393,6 @@ export interface AgentModelOverride {
   modelConfigId: string
 }
 
-/** 初始化状态 */
-export interface SetupStatus {
-  gitConfigured: boolean
-  llmConfigured: boolean
-  credentialConfigured: boolean
-  setupComplete: boolean
-}
-
 // ===== 用户记忆类型 =====
 
 export type UserMemoryCategory = 'PREFERENCE' | 'FACT' | 'NOTE'

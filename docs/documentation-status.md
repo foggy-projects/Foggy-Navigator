@@ -38,8 +38,6 @@
 |------|------|------|
 | [A2A Agent 架构](./a2a-agent-architecture.md) | 当前有效 | 已对齐当前产品口径，可作为 A2A 实现参考 |
 | [会话模块](./02-modules/session-module.md) | 当前有效 | 已对齐当前产品口径，可作为会话与任务路由实现参考 |
-| [编程 Agent 集成](./02-modules/coding-agent-integration.md) | 当前有效 | 已收口为 `addons/coding-agent` 独立模块说明，不再混入旧的语义层主线叙事 |
-| [Tutor-Coding 联动](./02-modules/tutor-coding-agent-integration.md) | 当前有效 | 已改写为当前产品下的引导与路由关系说明 |
 | [可观测性系统](./02-modules/observability-system.md) | 当前有效 | 已区分当前实现与规划能力 |
 | [工具能力模块](./02-modules/tool-module.md) | 部分有效 | 已改为当前 `agent-framework` 工具能力说明，但后续仍可继续拆分“现状”与“演进草案” |
 

@@ -42,7 +42,7 @@ public class SessionEventListener {
                 sessionId, message.getType(), message.getAgentId());
 
         // 1. 持久化（只保存需要存储的消息类型，跳过 result 事件避免重复写入）
-        if (shouldPersist(message.getType()) && !isResultEvent(message)) {
+        if (shouldPersist(message) && !isResultEvent(message)) {
             try {
                 Message msg = toSessionMessage(message);
                 sessionManager.addMessage(sessionId, msg);
@@ -56,9 +56,22 @@ public class SessionEventListener {
         sseEmitter.sendSessionEvent(sessionId, message);
     }
 
-    private boolean shouldPersist(MessageType type) {
+    private boolean shouldPersist(AgentMessage message) {
+        if (message == null || message.getType() == null) {
+            return false;
+        }
+        MessageType type = message.getType();
         return type != MessageType.TEXT_CHUNK
-                && type != MessageType.HEARTBEAT;
+                && type != MessageType.HEARTBEAT
+                && type != MessageType.SESSION_START
+                && !isInternalSystemState(message);
+    }
+
+    private boolean isInternalSystemState(AgentMessage message) {
+        if (message.getType() != MessageType.STATE_SYNC || !(message.getPayload() instanceof Map<?, ?> payload)) {
+            return false;
+        }
+        return "system".equals(payload.get("subtype"));
     }
 
     /**

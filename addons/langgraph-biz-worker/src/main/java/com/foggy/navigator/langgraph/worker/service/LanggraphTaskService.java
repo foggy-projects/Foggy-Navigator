@@ -1,8 +1,11 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
+import com.foggy.navigator.agent.framework.session.Message;
+import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
@@ -18,16 +21,21 @@ import com.foggy.navigator.langgraph.worker.model.form.ApproveTaskForm;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalRepository;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
+import com.foggy.navigator.langgraph.worker.support.LanggraphSkillNameContract;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -54,6 +62,9 @@ public class LanggraphTaskService implements TaskQueryProvider {
     private final SessionTaskRepository sessionTaskRepository;
     private final SessionEntityRepository sessionEntityRepository;
     private final SessionMessageRepository sessionMessageRepository;
+
+    @Value("${foggy.navigator.langgraph.worker.include-recent-conversation:false}")
+    private boolean includeRecentConversation;
 
     // ── TaskQueryProvider SPI ──────────────────────────────────────────────
 
@@ -91,12 +102,14 @@ public class LanggraphTaskService implements TaskQueryProvider {
     public DispatchTaskDTO createTaskDirect(Map<String, Object> params, String userId, String tenantId) {
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
         form.setAgentId((String) params.get("agentId"));
+        form.setSkillName(resolveSkillName(params, "direct task params"));
         form.setWorkerId((String) params.get("workerId"));
         form.setPrompt((String) params.get("prompt"));
         form.setDirectoryId((String) params.get("directoryId"));
         form.setCwd((String) params.get("cwd"));
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setMaxTurns(positiveInteger(firstPresent(params, "maxTurns", "max_turns")));
         form.setContextId((String) params.get("contextId"));
         form.setSessionId((String) params.get("sessionId"));
         form.setAttachments(attachmentsParam(params.get("attachments")));
@@ -204,6 +217,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
 
         // 2. Persist task entity
         String taskId = "lgt_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        Map<String, Object> providerContext = buildProviderContext(form, sessionId);
         LanggraphTaskEntity entity = new LanggraphTaskEntity();
         entity.setTaskId(taskId);
         entity.setSessionId(sessionId);
@@ -218,12 +232,14 @@ public class LanggraphTaskService implements TaskQueryProvider {
         entity.setDirectoryId(form.getDirectoryId());
         entity.setCwd(form.getCwd());
         entity.setContextId(form.getContextId());
+        entity.setTaskDeadlineAt(runtimeContextText(form.getRuntimeContext(), "taskDeadlineAt", "task_deadline_at"));
         persistTask(entity);
+        persistUserPrompt(sessionId, taskId, form.getPrompt(), form.getAttachments());
 
         // 3. Publish WorkerTaskStartEvent → LanggraphStreamRelay listens
         Map<String, Object> providerConfig = new LinkedHashMap<>();
-        if (form.getContext() != null) {
-            providerConfig.put("context", form.getContext());
+        if (!providerContext.isEmpty()) {
+            providerConfig.put("context", providerContext);
         }
         if (form.getRuntimeContext() != null && !form.getRuntimeContext().isEmpty()) {
             providerConfig.put("runtimeContext", form.getRuntimeContext());
@@ -232,6 +248,11 @@ public class LanggraphTaskService implements TaskQueryProvider {
             providerConfig.put("attachments", form.getAttachments());
         }
         putIfNotBlank(providerConfig, "modelConfigId", form.getModelConfigId());
+        if (form.getMaxTurns() != null && form.getMaxTurns() > 0) {
+            providerConfig.put("maxTurns", form.getMaxTurns());
+        }
+        putIfNotBlank(providerConfig, LanggraphSkillNameContract.CANONICAL_KEY, form.getSkillName());
+        putIfNotBlank(providerConfig, LanggraphSkillNameContract.JAVA_ALIAS_KEY, form.getSkillName());
 
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId)
@@ -252,6 +273,101 @@ public class LanggraphTaskService implements TaskQueryProvider {
         return toDTO(entity);
     }
 
+    private Map<String, Object> buildProviderContext(CreateLanggraphTaskForm form, String sessionId) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        if (form.getContext() != null) {
+            context.putAll(form.getContext());
+        }
+        putIfNotBlank(context, "contextId", form.getContextId());
+        putIfNotBlank(context, "context_id", form.getContextId());
+        putIfNotBlank(context, "session_id", sessionId);
+
+        if (includeRecentConversation) {
+            List<Map<String, Object>> recentConversation = recentConversation(sessionId);
+            if (!recentConversation.isEmpty()) {
+                context.put("recentConversation", recentConversation);
+            }
+        }
+        return context;
+    }
+
+    private static String resolveSkillName(Map<String, Object> values, String source) {
+        return LanggraphSkillNameContract.resolve(values, (key, ignored) ->
+                log.warn("Deprecated LangGraph skill alias '{}' received from {}; use 'skill_name'", key, source));
+    }
+
+    private List<Map<String, Object>> recentConversation(String sessionId) {
+        if (!StringUtils.hasText(sessionId) || sessionMessageRepository == null) {
+            return List.of();
+        }
+        List<SessionMessageEntity> messages = sessionMessageRepository
+                .findBySessionIdOrderByCreatedAtDesc(sessionId, PageRequest.of(0, 12));
+        if (messages == null || messages.isEmpty()) {
+            return List.of();
+        }
+        messages = new ArrayList<>(messages);
+        Collections.reverse(messages);
+        return messages.stream()
+                .map(this::toConversationMessage)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    private Map<String, Object> toConversationMessage(SessionMessageEntity message) {
+        if (message == null || !StringUtils.hasText(message.getContent())) {
+            return null;
+        }
+        String role = message.getRole() != null ? message.getRole().toLowerCase() : "";
+        if (!"user".equals(role) && !"assistant".equals(role)) {
+            return null;
+        }
+        if ("assistant".equals(role) && !isConversationalAssistantMessage(message)) {
+            return null;
+        }
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("role", role);
+        item.put("content", truncate(message.getContent(), 1200));
+        putIfNotBlank(item, "taskId", message.getTaskId());
+        return item;
+    }
+
+    private boolean isConversationalAssistantMessage(SessionMessageEntity message) {
+        String type = messageType(message);
+        return type == null || "TEXT_COMPLETE".equals(type) || "TASK_COMPLETED".equals(type);
+    }
+
+    private String messageType(SessionMessageEntity message) {
+        if (message == null || !StringUtils.hasText(message.getMetadata())) {
+            return null;
+        }
+        try {
+            JsonNode node = OBJECT_MAPPER.readTree(message.getMetadata());
+            JsonNode type = node.get("type");
+            return type != null && type.isTextual() ? type.asText() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void persistUserPrompt(String sessionId, String taskId, String prompt, List<Map<String, Object>> attachments) {
+        if (!StringUtils.hasText(sessionId) || !StringUtils.hasText(prompt)) {
+            return;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("type", "USER");
+        metadata.put("taskId", taskId);
+        if (attachments != null && !attachments.isEmpty()) {
+            metadata.put("attachments", attachments);
+        }
+        sessionManager.addMessage(sessionId, Message.builder()
+                .sessionId(sessionId)
+                .taskId(taskId)
+                .role(MessageRole.USER)
+                .content(prompt)
+                .metadata(metadata)
+                .build());
+    }
+
     @Transactional
     public void startTask(String taskId) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
@@ -267,6 +383,10 @@ public class LanggraphTaskService implements TaskQueryProvider {
             entity.setResultText(resultText);
             entity.setStructuredOutput(structuredOutput);
             entity.setDurationMs(durationMs);
+            entity.setTaskSubStatus(null);
+            entity.setInterruptionReason(null);
+            entity.setInterruptionMessage(null);
+            entity.setRecoverable(false);
             persistTask(entity);
             log.info("Task completed: taskId={}", taskId);
         });
@@ -277,6 +397,9 @@ public class LanggraphTaskService implements TaskQueryProvider {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setStatus("FAILED");
             entity.setErrorMessage(errorMessage);
+            if (!StringUtils.hasText(entity.getTaskSubStatus())) {
+                entity.setTaskSubStatus("FAILED");
+            }
             persistTask(entity);
             log.warn("Task failed: taskId={}, error={}", taskId, errorMessage);
         });
@@ -291,6 +414,10 @@ public class LanggraphTaskService implements TaskQueryProvider {
             return;
         }
         entity.setStatus("ABORTED");
+        entity.setTaskSubStatus("INTERRUPTED");
+        entity.setInterruptionReason("user_cancelled");
+        entity.setInterruptionMessage("Cancelled by user");
+        entity.setRecoverable(true);
         entity.setErrorMessage("Cancelled by user");
         persistTask(entity);
         recordRecoverableInterruption(entity, "user_cancelled", "Cancelled by user");
@@ -298,8 +425,29 @@ public class LanggraphTaskService implements TaskQueryProvider {
     }
 
     public void recordTaskInterruption(String taskId, String reason, String errorMessage) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity ->
-                recordRecoverableInterruption(entity, reason, errorMessage));
+        recordTaskInterruption(taskId, reason, errorMessage, true);
+    }
+
+    public void recordTaskInterruptionProjection(String taskId, String reason, String errorMessage) {
+        recordTaskInterruption(taskId, reason, errorMessage, false);
+    }
+
+    private void recordTaskInterruption(
+            String taskId,
+            String reason,
+            String errorMessage,
+            boolean recordWorkerInterruption
+    ) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            entity.setTaskSubStatus("INTERRUPTED");
+            entity.setInterruptionReason(reason);
+            entity.setInterruptionMessage(errorMessage);
+            entity.setRecoverable(true);
+            persistTask(entity);
+            if (recordWorkerInterruption) {
+                recordRecoverableInterruption(entity, reason, errorMessage);
+            }
+        });
     }
 
     @Override
@@ -438,6 +586,13 @@ public class LanggraphTaskService implements TaskQueryProvider {
         Map<String, Object> state = new LinkedHashMap<>();
         putIfNotBlank(state, "contextId", entity.getContextId());
         putIfNotBlank(state, "structuredOutput", entity.getStructuredOutput());
+        putIfNotBlank(state, "taskSubStatus", entity.getTaskSubStatus());
+        putIfNotBlank(state, "interruptionReason", entity.getInterruptionReason());
+        putIfNotBlank(state, "interruptionMessage", entity.getInterruptionMessage());
+        putIfNotBlank(state, "taskDeadlineAt", entity.getTaskDeadlineAt());
+        if (entity.getRecoverable() != null) {
+            state.put("recoverable", entity.getRecoverable());
+        }
         if (state.isEmpty()) {
             return null;
         }
@@ -498,13 +653,16 @@ public class LanggraphTaskService implements TaskQueryProvider {
         approval.setReviewedAt(java.time.LocalDateTime.now());
         approvalRepository.save(approval);
 
-        // Call Worker resume API (Doc 31 §16.5: only pass taskId)
+        // Call Worker resume API with the persisted context locator.
         LanggraphTaskEntity task = taskRepository.findByTaskId(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!StringUtils.hasText(task.getContextId())) {
+            throw new IllegalStateException("Task contextId is required for LangGraph worker resume: " + taskId);
+        }
         LanggraphWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
         var client = workerService.createClient(worker);
 
-        client.resumeTask(taskId, form.getApprovalResult(), form.getComment())
+        client.resumeTask(taskId, task.getSessionId(), task.getContextId(), form.getApprovalResult(), form.getComment())
                 .doOnSuccess(resp -> log.info("Worker resume success: taskId={}", taskId))
                 .doOnError(e -> log.error("Worker resume failed: taskId={}", taskId, e))
                 .subscribe();
@@ -616,6 +774,47 @@ public class LanggraphTaskService implements TaskQueryProvider {
         if (value != null && !value.isBlank()) {
             target.put(key, value);
         }
+    }
+
+    private static String runtimeContextText(Map<String, Object> runtimeContext, String... keys) {
+        if (runtimeContext == null || runtimeContext.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = runtimeContext.get(key);
+            if (value instanceof String text && !text.isBlank()) {
+                return text.trim();
+            }
+        }
+        return null;
+    }
+
+    private static Object firstPresent(Map<String, Object> values, String... keys) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            if (values.containsKey(key)) {
+                return values.get(key);
+            }
+        }
+        return null;
+    }
+
+    private static Integer positiveInteger(Object value) {
+        if (value instanceof Number number) {
+            int parsed = number.intValue();
+            return parsed > 0 ? parsed : null;
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                int parsed = Integer.parseInt(text.trim());
+                return parsed > 0 ? parsed : null;
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     @SuppressWarnings("unchecked")

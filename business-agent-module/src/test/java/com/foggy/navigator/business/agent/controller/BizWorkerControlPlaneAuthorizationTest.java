@@ -23,6 +23,21 @@ class BizWorkerControlPlaneAuthorizationTest {
     }
 
     @Test
+    void adminUpstreamTenantClientAppProvisioningController_uses_upstream_admin_key_guard() {
+        assertNull(AdminUpstreamTenantClientAppProvisioningController.class.getAnnotation(RequireAuth.class));
+    }
+
+    @Test
+    void upstreamClientAppAdminController_uses_upstream_admin_key_guard() {
+        assertNull(UpstreamClientAppAdminController.class.getAnnotation(RequireAuth.class));
+    }
+
+    @Test
+    void adminUpstreamAdminCredentialController_uses_operator_or_admin_guard() {
+        assertNull(AdminUpstreamAdminCredentialController.class.getAnnotation(RequireAuth.class));
+    }
+
+    @Test
     void modelConfigGrantController_uses_client_app_control_plane_guard() {
         assertNull(ClientAppModelConfigGrantController.class.getAnnotation(RequireAuth.class));
     }
@@ -51,10 +66,14 @@ class BizWorkerControlPlaneAuthorizationTest {
     }
 
     @Test
-    void workerPool_control_plane_requires_tenant_admin() throws NoSuchMethodException {
-        assertMethodRole(BizWorkerPoolController.class.getMethod("listPools"), "TENANT_ADMIN");
-        assertMethodRole(BizWorkerPoolController.class.getMethod(
-                "createPool", com.foggy.navigator.business.agent.model.form.CreateWorkerPoolForm.class), "TENANT_ADMIN");
+    void workerPool_control_plane_requires_login_only() throws NoSuchMethodException {
+        assertMethodHasNoRoleRequirement(BizWorkerPoolController.class.getMethod("listPools"));
+        assertMethodHasNoRoleRequirement(BizWorkerPoolController.class.getMethod(
+                "createPool", com.foggy.navigator.business.agent.model.form.CreateWorkerPoolForm.class));
+        assertMethodHasNoRoleRequirement(BizWorkerPoolController.class.getMethod(
+                "addMember", String.class, com.foggy.navigator.business.agent.model.form.AddWorkerPoolMemberForm.class));
+        assertMethodHasNoRoleRequirement(BizWorkerPoolController.class.getMethod(
+                "updatePoolStatus", String.class, com.foggy.navigator.business.agent.model.form.UpdateStatusForm.class));
     }
 
     private void assertClassRole(Class<?> controllerClass, String role) {
@@ -67,6 +86,12 @@ class BizWorkerControlPlaneAuthorizationTest {
         RequireAuth annotation = method.getAnnotation(RequireAuth.class);
         assertNotNull(annotation);
         assertTrue(Arrays.asList(annotation.roles()).contains(role));
+    }
+
+    private void assertMethodHasNoRoleRequirement(Method method) {
+        RequireAuth annotation = method.getAnnotation(RequireAuth.class);
+        assertNotNull(annotation);
+        assertEquals(0, annotation.roles().length);
     }
 
     @Test

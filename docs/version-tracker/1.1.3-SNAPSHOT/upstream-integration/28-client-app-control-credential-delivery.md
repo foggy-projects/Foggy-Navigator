@@ -8,11 +8,11 @@
 - date: 2026-05-13
 - source_type: upstream-delivery-hardening
 - intended_for: Navigator maintainer | upstream backend developer | upstream LLM coding agent
-- purpose: 用 ClientApp 绑定的控制面凭证替代上游项目持有租户级 `NAVI_ADMIN_API_KEY`
+- purpose: 用 ClientApp 绑定的控制面凭证替代上游项目持有租户级管理员凭证或普通 `X-API-Key` fallback
 
 ## 结论
 
-上游项目正式交付不再使用租户级 admin key。Navigator 侧给每个 ClientApp 发放一个项目本地控制面凭证：
+上游项目正式交付不再使用租户级 admin key 或普通 `X-API-Key` fallback。Navigator 侧给每个 ClientApp 发放一个项目本地控制面凭证：
 
 ```properties
 NAVI_CONTROL_API_KEY=<client-app-scoped-control-key>
@@ -132,8 +132,9 @@ CLI 控制面命令优先使用 `NAVI_CONTROL_API_KEY`，仍保留以下内部 f
 
 ```properties
 NAVI_ADMIN_TOKEN=<internal-only>
-NAVI_ADMIN_API_KEY=<internal-only>
 ```
+
+`NAVI_ADMIN_API_KEY` 是上游系统级 ClientApp 管理凭证，仅用于多租户上游 bootstrap 阶段创建/复用 ClientApp 和签发该 ClientApp 的控制面凭证；不再作为控制面命令的普通 `X-API-Key` fallback。
 
 涉及命令：
 
@@ -154,6 +155,8 @@ NAVI_ADMIN_API_KEY=<internal-only>
 
 注意：`--base-url` 是 Navigator 服务地址；上游 LLM/OpenAI-compatible 地址使用 `--model-base-url`。
 
+当前 `ClientAppModelConfigForm` / `LlmModelConfig` 尚未提供 LangGraph Biz 一等 token 预算字段，因此 CLI 还不能配置模型上下文窗口、单次最大输入、单次最大输出或单工具结果预算。不要把这些值写入 `clientContext`、用户消息或非约定 env var。后续模型预算字段和 CLI 参数设计见 `docs/version-tracker/1.1.6-SNAPSHOT/16-upstream-cli-skill-runtime-contract-alignment.md`。
+
 `NAVI_UPSTREAM_USER_TOKEN` 可选：需要 Worker 代表当前上游用户回调上游系统时再提供；SIM/E2E 或纯 Navi 会话授权可先省略。`TMS_STAFF_SESSION_TOKEN` 仅保留为 TMS sandbox 旧别名。
 
 上游不应把 `NAVI_CONTROL_API_KEY` 写入源码、文档、issue、日志或截图，只能放在项目本地 gitignored `.navigator/upstream.env`。
@@ -168,6 +171,7 @@ NAVI_ADMIN_API_KEY=<internal-only>
 | ClientApp scope enforcement | completed | cross-clientApp reject |
 | Function import/grant control key support | completed | SDK 使用 `controlApiKey(...)` |
 | SDK/CLI header support | completed | `NAVI_CONTROL_API_KEY` |
+| Multi-tenant bootstrap handoff | completed | `NAVI_ADMIN_API_KEY` 通过 `X-Navi-Admin-Key` 签发 tenant profile 中的 `NAVI_CONTROL_API_KEY` |
 | CLI `upstream agent sync` | completed | manifest driven, uses control key |
 | CLI `upstream model` | completed | `grants` / `grant` / `set-default` / `create` / `update` / `rotate-key` |
 | Tests | completed | service boundary + module tests |

@@ -3,20 +3,26 @@
     <summary class="nc-frame-summary">
       <span class="nc-frame-title">
         <el-icon v-if="frame.status === 'running'" class="is-loading"><Loading /></el-icon>
-        <span>技能 {{ frame.displayName }}</span>
+        <span>{{ frameTitle(frame) }}</span>
       </span>
       <span :class="['nc-frame-status', `nc-frame-status--${frame.status}`]">
         {{ frameStatusLabel(frame.status) }}
       </span>
-      <span v-if="frame.durationMs != null" class="nc-frame-duration">
+      <span v-if="showDuration && frame.durationMs != null" class="nc-frame-duration">
         {{ (frame.durationMs / 1000).toFixed(1) }}s
       </span>
     </summary>
 
     <div class="nc-frame-body">
-      <div v-if="frame.openContent || frame.closeContent" class="nc-frame-note">
-        {{ frame.closeContent || frame.openContent }}
+      <div v-if="frameNote(frame)" class="nc-frame-note">
+        {{ frameNote(frame) }}
       </div>
+
+      <ExecutionReportInline
+        :report-ref="frame.executionReportRef"
+        :digest="frame.executionReportDigest"
+        :load-markdown="loadMarkdown"
+      />
 
       <div v-if="frame.toolExecutions.length" class="nc-frame-tools">
         <details
@@ -26,34 +32,39 @@
           :open="tool.status === 'running'"
         >
           <summary class="nc-tool-summary-row">
-            <span class="nc-tool-title">
-              <el-icon v-if="tool.status === 'running'" class="is-loading"><Loading /></el-icon>
-              <span>工具 {{ tool.displayName }}</span>
+              <span class="nc-tool-title">
+                <el-icon v-if="tool.status === 'running'" class="is-loading"><Loading /></el-icon>
+              <span>{{ toolTitle(tool) }}</span>
             </span>
             <span :class="['nc-tool-status', `nc-tool-status--${tool.status}`]">
               {{ toolStatusLabel(tool.status) }}
             </span>
-            <span v-if="tool.durationMs != null" class="nc-tool-duration">
+            <span v-if="showDuration && tool.durationMs != null" class="nc-tool-duration">
               {{ (tool.durationMs / 1000).toFixed(1) }}s
             </span>
           </summary>
           <div class="nc-tool-body">
-            <div class="nc-tool-summary-text">
-              摘要：{{ tool.summary.join(', ') }}
+            <div v-if="toolSummary(tool)" class="nc-tool-summary-text">
+              摘要：{{ toolSummary(tool) }}
             </div>
-            <details class="nc-nested">
+            <ExecutionReportInline
+              :report-ref="tool.executionReportRef"
+              :digest="tool.executionReportDigest"
+              :load-markdown="loadMarkdown"
+            />
+            <details v-if="isDebug" class="nc-nested">
               <summary>参数</summary>
               <pre>{{ formatJson(tool.args) }}</pre>
             </details>
-            <details class="nc-nested">
+            <details v-if="isDebug" class="nc-nested">
               <summary>结果</summary>
               <pre>{{ formatJson(tool.result ?? tool.error) }}</pre>
             </details>
-            <details class="nc-nested">
+            <details v-if="isDebug" class="nc-nested">
               <summary>排障字段</summary>
               <pre>{{ formatJson(tool.trace) }}</pre>
             </details>
-            <details class="nc-nested">
+            <details v-if="isDebug" class="nc-nested">
               <summary>原始 JSON</summary>
               <pre>{{ formatJson({ call: tool.rawCall, result: tool.rawResult }) }}</pre>
             </details>
@@ -66,10 +77,12 @@
           v-for="child in frame.children"
           :key="child.frameId"
           :frame="child"
+          :display-mode="props.displayMode"
+          :load-markdown="loadMarkdown"
         />
       </div>
 
-      <details class="nc-nested">
+      <details v-if="isDebug" class="nc-nested">
         <summary>Frame 原始 JSON</summary>
         <pre>{{ formatJson({ open: frame.rawOpen, close: frame.rawClose, trace: frame.trace }) }}</pre>
       </details>
@@ -80,13 +93,54 @@
 <script setup lang="ts">
 import { ElIcon } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
-import type { SkillFrameBlock, ToolExecutionBlock } from '../types'
+import { ExecutionReportInline } from '@foggy/chat'
+import { computed } from 'vue'
+import type { ExecutionReportMarkdownLoader, NavigatorChatMode, SkillFrameBlock, ToolExecutionBlock } from '../types'
 
 defineOptions({ name: 'SkillFrameBlockView' })
 
-defineProps<{
+const props = withDefaults(defineProps<{
   frame: SkillFrameBlock
-}>()
+  displayMode?: NavigatorChatMode
+  loadMarkdown?: ExecutionReportMarkdownLoader
+}>(), {
+  displayMode: 'business',
+})
+
+const isDebug = computed(() => props.displayMode === 'debug')
+const showDuration = computed(() => props.displayMode !== 'business')
+
+function frameTitle(frame: SkillFrameBlock): string {
+  if (props.displayMode === 'debug' && frame.skillId) return `技能 ${frame.skillId}`
+  return frame.displayName
+}
+
+function frameNote(frame: SkillFrameBlock): string {
+  const content = frame.closeContent || frame.openContent || ''
+  if (props.displayMode === 'debug') return content
+  if (frame.skillId === 'system.root') {
+    return frame.status === 'running' ? '任务处理主流程已启动。' : '任务处理完成。'
+  }
+  if (/Opening frame|Reusing frame|system\.root|skill:/i.test(content)) return ''
+  return content
+}
+
+function toolTitle(tool: ToolExecutionBlock): string {
+  if (props.displayMode === 'debug') return `工具 ${tool.toolName}`
+  return tool.displayName
+}
+
+function toolSummary(tool: ToolExecutionBlock): string {
+  if (props.displayMode === 'debug') return tool.summary.join(', ')
+  if (tool.toolName === 'submit_skill_result') {
+    if (tool.status === 'running') return '正在整理本次处理结果。'
+    if (tool.status === 'success') return '结果已准备完成。'
+    if (tool.status === 'failed') return '结果准备失败。'
+  }
+  return tool.summary
+    .filter((item) => !/^(SUCCESS|RUNNING|COMPLETED|FAILED)$/i.test(item))
+    .join(', ')
+}
 
 function frameStatusLabel(status: SkillFrameBlock['status']): string {
   switch (status) {

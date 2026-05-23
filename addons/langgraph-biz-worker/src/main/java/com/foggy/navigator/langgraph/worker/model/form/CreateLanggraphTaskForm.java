@@ -8,12 +8,15 @@ import java.util.Map;
 @Data
 public class CreateLanggraphTaskForm {
     private String agentId;
+    /** Worker-facing skill identity. JSON contract should use skill_name. */
+    private String skillName;
     private String workerId;
     private String prompt;
     private String directoryId;
     private String cwd;
     private String model;
     private String modelConfigId;
+    private Integer maxTurns;
     private String contextId;
     private String sessionId;
     /** Business context passed to Python Worker (serialized as JSON in request) */

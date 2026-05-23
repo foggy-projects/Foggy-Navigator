@@ -14,16 +14,20 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.Duration;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
 public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWorkerTaskLauncher {
+
+    private static final Duration CONTEXT_ALLOCATION_TIMEOUT = Duration.ofSeconds(10);
 
     private final BizWorkerPoolMemberRepository poolMemberRepository;
     private final LanggraphWorkerService workerService;
@@ -48,51 +52,115 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         }
 
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
+        String skillName = resolveSkillName(request);
         form.setAgentId(request.getSkillId());
         form.setWorkerId(member.getWorkerId());
         form.setSessionId(request.getSessionId());
+        String contextId = resolveContextId(worker, request.getContextId());
+        form.setContextId(contextId);
         form.setModelConfigId(request.getModelConfigId());
         form.setPrompt("Business Agent task " + request.getBusinessTaskId()
-                + " for skill " + request.getSkillId()
                 + ". Use the business function tools when user intent requires controlled business execution.");
-        form.setContext(buildContext(request));
-        form.setRuntimeContext(buildRuntimeContext(request));
+        form.setContext(buildContext(request, skillName, contextId));
+        form.setRuntimeContext(buildRuntimeContext(request, skillName));
 
         LanggraphTaskDTO workerTask = taskService.createTask(request.getActorUserId(), request.getTenantId(), form);
         return BusinessAgentWorkerTaskLaunchResult.builder()
                 .workerTaskId(workerTask.getTaskId())
                 .workerSessionId(workerTask.getSessionId())
+                .contextId(contextId)
                 .workerId(member.getWorkerId())
                 .providerType(LanggraphTaskService.PROVIDER_TYPE)
                 .build();
     }
 
-    private Map<String, Object> buildContext(BusinessAgentWorkerTaskLaunchRequest request) {
+    private String resolveContextId(LanggraphWorkerEntity worker, String requestedContextId) {
+        if (StringUtils.hasText(requestedContextId)) {
+            return requestedContextId.trim();
+        }
+        Map<String, Object> response = workerService.createClient(worker)
+                .allocateContext()
+                .block(CONTEXT_ALLOCATION_TIMEOUT);
+        Object contextId = response != null ? response.get("contextId") : null;
+        if (contextId instanceof String text && StringUtils.hasText(text)) {
+            return text.trim();
+        }
+        throw new IllegalStateException("LangGraph BizWorker did not allocate contextId");
+    }
+
+    private Map<String, Object> buildContext(BusinessAgentWorkerTaskLaunchRequest request, String skillName, String contextId) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("businessTaskId", request.getBusinessTaskId());
+        putText(context, "contextId", contextId);
+        putText(context, "context_id", contextId);
+        putText(context, "session_id", request.getSessionId());
         context.put("clientAppId", request.getClientAppId());
+        putText(context, "businessSkillId", request.getSkillId());
+        putText(context, "businessSkillName", skillName);
         context.put("upstreamUserId", request.getUpstreamUserId());
         context.put("accountId", request.getUpstreamUserId());
         context.put("account_id", request.getUpstreamUserId());
-        context.put("skillId", request.getSkillId());
         context.put("workerPoolId", request.getWorkerPoolId());
         context.put("workerBackend", request.getWorkerBackend());
+        context.put("auto_inject_app_public_skills", true);
         if (request.getMarkdownBody() != null && !request.getMarkdownBody().isBlank()) {
             context.put("skill_markdown", request.getMarkdownBody());
         }
         return context;
     }
 
-    private Map<String, Object> buildRuntimeContext(BusinessAgentWorkerTaskLaunchRequest request) {
+    private void putText(Map<String, Object> target, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            target.put(key, value);
+        }
+    }
+
+    private Map<String, Object> buildRuntimeContext(BusinessAgentWorkerTaskLaunchRequest request, String skillName) {
         ZoneId zoneId = ZoneId.systemDefault();
         ZonedDateTime now = ZonedDateTime.now(zoneId);
         Map<String, Object> runtimeContext = new LinkedHashMap<>();
         if (StringUtils.hasText(request.getTaskScopedToken())) {
             runtimeContext.put("task_scoped_token", request.getTaskScopedToken());
         }
+        putText(runtimeContext, "skill_name", skillName);
+        if (StringUtils.hasText(request.getVisionModelConfigId())) {
+            runtimeContext.put("vision_model_config_id", request.getVisionModelConfigId());
+        }
+        Map<String, Object> executionPolicy = buildExecutionPolicy(request);
+        if (!executionPolicy.isEmpty()) {
+            runtimeContext.put("execution_policy", executionPolicy);
+        }
         runtimeContext.put("current_time", now.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
         runtimeContext.put("timezone", zoneId.getId());
         runtimeContext.put("business_date", now.toLocalDate().toString());
         return runtimeContext;
+    }
+
+    private String resolveSkillName(BusinessAgentWorkerTaskLaunchRequest request) {
+        if (StringUtils.hasText(request.getSkillName())) {
+            return request.getSkillName().trim();
+        }
+        return request.getSkillId();
+    }
+
+    private Map<String, Object> buildExecutionPolicy(BusinessAgentWorkerTaskLaunchRequest request) {
+        Map<String, Object> policy = new LinkedHashMap<>();
+        putText(policy, "workdir", request.getWorkdir());
+        putStringList(policy, "allowed_dirs", request.getAllowedDirs());
+        putStringList(policy, "allowed_tools", request.getAllowedTools());
+        return policy;
+    }
+
+    private void putStringList(Map<String, Object> target, String key, List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return;
+        }
+        List<String> cleaned = values.stream()
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .toList();
+        if (!cleaned.isEmpty()) {
+            target.put(key, cleaned);
+        }
     }
 }

@@ -48,16 +48,16 @@
 **关键点**：
 - 所有会话统一存储在 `sessions` 表
 - `agentId` 字段标识会话类型
-- coding-agent 会话在 `conversations` 表存储额外字段，通过 `sessionId` 关联
+- 早期独立编程执行会话曾在 `conversations` 表存储额外字段；该方案已废弃
 
 ---
 
 ## 三、后端改动
 
-### 3.1 ConversationEntity 添加 sessionId
+### 3.1 历史 ConversationEntity 添加 sessionId
 
 ```java
-// addons/coding-agent/src/.../entity/ConversationEntity.java
+// legacy coding addon ConversationEntity.java
 @Entity
 @Table(name = "conversations")
 public class ConversationEntity {

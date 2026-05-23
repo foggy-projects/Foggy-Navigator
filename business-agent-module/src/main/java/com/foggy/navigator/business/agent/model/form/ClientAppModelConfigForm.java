@@ -16,4 +16,6 @@ public class ClientAppModelConfigForm {
     private Boolean setDefault;
     private Map<String, String> envVars;
     private List<String> availableModels;
+    private String runtimeBudgetPresetKey;
+    private String runtimeBudgetOverrideJson;
 }

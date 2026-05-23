@@ -14,8 +14,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from ..auth import verify_token
-from ..models import FrameStatus, SkillFrameState
+from ..models import FrameKind, FrameStatus, SkillFrameState
 from ..runtime.file_frame_journal import FileFrameJournal
+from ..runtime.file_layout import require_standard_context_id
 from ..runtime.skill_runtime import FrameNotFound, IllegalStateTransition, SkillRuntime
 
 logger = logging.getLogger(__name__)
@@ -158,9 +159,17 @@ def _find_root_frame(request: FrameInterruptionRequest) -> SkillFrameState | Non
 
     for status_value in (FrameStatus.RUNNING, FrameStatus.WAITING_CHILD, FrameStatus.AWAITING_APPROVAL):
         for frame in deduped:
-            if frame.skill_id == ROOT_SKILL_ID and frame.status == status_value:
+            if _is_conversation_root_frame(frame) and frame.status == status_value:
                 return frame
     return None
+
+
+def _is_conversation_root_frame(frame: SkillFrameState) -> bool:
+    if frame.parent_frame_id:
+        return False
+    if frame.frame_kind == FrameKind.ROOT:
+        return True
+    return frame.skill_id == ROOT_SKILL_ID
 
 
 def _normalize_awaiting_frame_for_interruption(
@@ -214,13 +223,16 @@ def _conversation_id(request: FrameInterruptionRequest) -> str | None:
         context.get("context_id"),
         context.get("conversationId"),
         context.get("conversation_id"),
-        context.get("foggy_session_id"),
-        context.get("session_id"),
-        request.session_id,
     ):
         if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+            try:
+                return require_standard_context_id(value)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail="contextId is required for frame interruption",
+    )
 
 
 def _normalize_reason(reason: str) -> str:

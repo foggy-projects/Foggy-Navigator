@@ -6,6 +6,7 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphCodingAgentRepository;
 import com.foggy.navigator.langgraph.worker.service.LanggraphTaskService;
+import com.foggy.navigator.langgraph.worker.service.LanggraphWorkerService;
 import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
@@ -31,6 +32,7 @@ public class LanggraphWorkerAgentProvider implements A2aAgentProvider {
 
     private final LanggraphCodingAgentRepository agentRepository;
     private final LanggraphTaskService taskService;
+    private final LanggraphWorkerService workerService;
     private final LlmModelManager llmModelManager;
     @Nullable
     private final AgentContextStore contextStore;
@@ -113,7 +115,8 @@ public class LanggraphWorkerAgentProvider implements A2aAgentProvider {
     }
 
     private A2aAgent toA2aAgent(CodingAgentEntity entity) {
-        InnerA2aAgent inner = new LanggraphWorkerInnerA2aAgent(entity, taskService);
+        String workerId = workerService.resolveTaskWorkerId(entity.getWorkerId());
+        InnerA2aAgent inner = new LanggraphWorkerInnerA2aAgent(entity, taskService, workerId);
         // Use explicit providerType since ContextResolvingA2aAgent's auto-derive
         // doesn't know about LOCAL_LANGGRAPH_WORKER yet
         return new ContextResolvingA2aAgent(inner, contextStore, entity, LanggraphTaskService.PROVIDER_TYPE);

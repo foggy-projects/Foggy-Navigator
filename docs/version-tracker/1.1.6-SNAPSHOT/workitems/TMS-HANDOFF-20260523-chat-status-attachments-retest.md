@@ -1,0 +1,90 @@
+# TMS 业务助手复测交付报告 - 2026-05-23
+
+## 背景
+
+本次针对 TMS 业务助手 smoke 中发现的两个问题完成 Navigator 侧修复：
+
+1. 助手已经返回最终答复后，前端仍显示 `查看执行报告 RUNNING`，历史会话列表仍显示 `进行中`。
+2. 用户创建带附件工单时，发送消息中能看到 2 个附件；刷新页面重新打开历史会话后，用户消息附件展示丢失。
+
+TMS 在 `2026-05-23 10:10` 的复测中确认实时态、历史列表和附件历史展示已恢复；剩余问题是刷新后重新打开历史会话时，历史消息下方执行报告状态仍回退显示 `RUNNING`。Navigator 已完成二次修复。
+
+## Navigator 侧修复内容
+
+1. 用户消息持久化时保留附件 metadata。
+2. 历史会话接口返回消息时透出顶层 `attachments` 字段。
+3. NavigatorChat 历史消息加载时恢复用户消息附件。
+4. NavigatorChat 对终态消息中的 stale `RUNNING` 执行报告状态做展示归一。
+5. 历史会话列表不再仅因会话摘要为 `ACTIVE` 就持续展示 `进行中`。
+6. OpenAPI 历史消息接口为每条 message 补充所属 task 的当前对外状态。
+7. OpenAPI 任务消息接口同样补充 message 级 task 状态，避免历史加载缺少终态依据。
+
+## Navigator 服务状态
+
+复测前已重启 Navigator 相关服务：
+
+- Navigator launcher：`http://localhost:8112/actuator/health` 返回 `UP`
+- LangGraph BizWorker：`http://localhost:3061/health` 正常，`active_tasks=0`
+
+二次修复后已重新启动 Navigator launcher，启动时间约 `2026-05-23 10:31`，健康检查返回 `UP`。
+
+TMS 自身前端预览、BFF、业务服务请由 TMS 侧按本地环境自行重启或重新构建。
+
+## 请 TMS 侧执行的复测
+
+测试入口：
+
+- `http://localhost:3199/tms/`
+- 账号：`88800 / admin_88800`
+
+建议按以下顺序重新开一个新会话测试：
+
+1. 发送普通消息，例如 `hi`。
+2. 等助手返回最终答复后，检查消息下方执行报告状态不应继续显示 `RUNNING`。
+3. 检查历史会话列表中，该会话不应在已经完成后继续显示 `进行中`。
+4. 创建一个普通系统反馈工单，确认提交成功。
+5. 继续追问“刚才创建的那个工单”，确认多轮上下文正常。
+6. 创建一个带 2 张图片附件的系统反馈工单，确认工单提交成功。
+7. 刷新页面，重新打开同一个历史会话。
+8. 检查创建附件工单的用户消息中，2 个附件 chip / 图片仍然可见。
+9. 检查助手回复中提到的工单详情与后端工单详情一致，附件数量仍为 2。
+10. 重点检查刷新后重新打开历史会话时，历史消息下方的执行报告状态不应再回退为 `RUNNING`。
+
+## 预期结果
+
+1. 最终答复后，执行报告状态不再卡在 `RUNNING`。
+2. 历史会话列表不再大量残留 `进行中`。
+3. 刷新后，用户历史消息中的附件仍能正常展示。
+4. 普通多轮、创建工单、查询刚才工单、带附件创建工单均不回退。
+
+## 可接受现象
+
+1. 非简洁模式下出现内部工具名，当前可接受。
+2. LLM provider 超时后的重试提示，当前可接受。
+
+## 如仍异常，请回传
+
+1. 新会话完整截图。
+2. 刷新前和刷新后的附件消息截图。
+3. 前端测试报告或浏览器控制台错误。
+4. 涉及的工单号、会话标题、测试时间。
+
+## TMS 最终复测结论
+
+TMS 在 `2026-05-23 11:21-11:26` 完成复测，结论：全部通过。
+
+- `hi` 实时完成态为 `COMPLETED`，未卡 `RUNNING`。
+- 普通工单创建成功：`TKT2026052311223276294D8B0`。
+- 多轮追问“刚才创建的那个工单”能正确查询上一轮工单。
+- 带 2 张图片附件工单创建成功：`TKT202605231124109988A4C7E`。
+- 刷新后重新打开历史会话，用户消息中的 2 个附件仍可见。
+- 历史消息下方执行报告没有再回退 `RUNNING`，`reopenedRawRunningCount=0`。
+- 历史会话列表没有 `进行中` 残留，`reopenedHistoryGoingCount=0`。
+- 后端工单详情确认附件数量为 2：`retake3-a.png`、`retake3-b.png`。
+- 浏览器 console error / page error 为 0。
+
+证据：
+
+- `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\report.json`
+- `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\04-before-refresh-attachment.png`
+- `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\06-reopened-history-session.png`

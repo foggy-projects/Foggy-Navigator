@@ -154,6 +154,11 @@ OpenApiQueryForm.attachments
   - 用户消息展示本地 pending 附件或上传结果摘要。
 - `packages/navigator-chat-widget/src/components/NavigatorChat.vue`
   - 添加文件选择、粘贴、拖拽、删除、上传中和失败状态。
+  - 根节点提供 `data-upload-hook` 和 `data-attachments-enabled`，用于浏览器侧排查宿主注入状态。
+- `packages/navigator-chat-widget/index.html`
+- `packages/navigator-chat-widget/src/dev-main.ts`
+- `packages/navigator-chat-widget/src/dev/WidgetObservabilityDemo.vue`
+  - 提供本地观测页，模拟“已注入 / 未注入”两种宿主配置，并展示上传调用和最近 ask body。
 - `packages/navigator-frontend/src/composables/useAttachments.ts`
   - 保留现有 Navigator 主前端老链路。
   - 如复用该 composable，需要新增 pending File 模式，避免影响旧 `images` 语义。
@@ -222,7 +227,8 @@ OpenApiQueryForm.attachments
 
 ### Stage D - 文档与上游接入说明
 
-- [ ] 更新前端组件快速上手文档。
+- [x] 更新前端组件快速上手文档。
+- [x] 提供本地 widget 观测页用于排查 `uploadAttachment` 注入状态。
 - [ ] 更新 OpenAPI / SDK ask 请求文档。
 - [ ] 给 TMS BFF 明确 upload-on-submit 和 ask 转发样例。
 - [ ] 标注 `images` 旧字段继续保留。
@@ -293,12 +299,19 @@ OpenApiQueryForm.attachments
 - 2026-05-13：完成 `@foggy/navigator-chat-widget` upload-on-submit：发送前上传、失败阻断 ask、成功后把附件元数据放入顶层 `attachments`。
 - 2026-05-13：补充 Session dispatch、OpenAPI ask、Claude/Codex/Gemini/LangGraph Java Worker client 请求体回归测试。
 - 2026-05-13：补充 Codex/Gemini TS Worker 请求校验，以及 Claude/LangGraph Python Worker 请求模型校验。
+- 2026-05-18：核对上游反馈后补齐当前工作树中缺失的 `@foggy/navigator-chat-widget` 选择、粘贴、拖拽、发送前上传和顶层 `attachments` ask 请求体实现，并补充快速接入文档中的 `uploadAttachment` 用法。
+- 2026-05-18：新增 `packages/navigator-chat-widget` 本地观测页和组件根节点诊断标记，用于判断上游是否注入 `uploadAttachment` 以及 ask body 是否带顶层 `attachments`。
 
 ## 验证记录
 
 - [x] `mvn -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am "-Dtest=TaskDispatchFacadeTest,OpenApiControllerMessageMappingTest,ClaudeWorkerClientTest,CodexWorkerClientTest,CodexWorkerFacadeImplTest,GeminiWorkerClientTest,LanggraphWorkerClientTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 - [x] `pnpm --dir packages/navigator-chat-widget test src/composables/useNavigatorChat.ux.test.ts`
 - [x] `pnpm --dir packages/navigator-chat-widget build`
+- [x] `pnpm --dir packages/navigator-chat-widget test src/composables/useNavigatorChat.ux.test.ts`（2026-05-18，6 tests passed，覆盖 ask 顶层 `attachments`）
+- [x] `pnpm --dir packages/navigator-chat-widget test`（2026-05-18，11 tests passed）
+- [x] `pnpm --dir packages/navigator-chat-widget build`（2026-05-18，Vite build + declaration emit passed）
+- [x] `pnpm --dir packages/navigator-chat-widget dev:observe`（2026-05-18，绑定 `0.0.0.0:5179`，`http://127.0.0.1:5179/` 返回 200）
+- [x] Playwright smoke（2026-05-18，本地观测页已验证：已注入模式显示附件按钮，未注入模式隐藏；发送附件后最近 ask body 包含顶层 `attachments`）
 - [x] `pnpm --dir tools/codex-agent-worker test`
 - [x] `pnpm --dir tools/codex-agent-worker typecheck`
 - [x] `pnpm --dir tools/gemini-agent-worker exec node --import tsx --test tests/**/*.test.ts`

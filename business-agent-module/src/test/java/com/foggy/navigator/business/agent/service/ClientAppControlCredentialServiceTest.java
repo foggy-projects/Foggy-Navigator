@@ -3,6 +3,7 @@ package com.foggy.navigator.business.agent.service;
 import com.foggy.navigator.business.agent.model.dto.ClientAppControlPlanePrincipal;
 import com.foggy.navigator.business.agent.model.entity.ClientAppControlCredentialEntity;
 import com.foggy.navigator.business.agent.repository.ClientAppControlCredentialRepository;
+import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
 import org.junit.jupiter.api.AfterEach;
@@ -19,13 +20,17 @@ import static org.mockito.Mockito.*;
 class ClientAppControlCredentialServiceTest {
 
     private ClientAppControlCredentialRepository repository;
+    private UpstreamClientAppAdminCredentialService upstreamAdminCredentialService;
+    private ClientAppRepository clientAppRepository;
     private ClientAppControlCredentialService service;
 
     @BeforeEach
     void setUp() {
         repository = mock(ClientAppControlCredentialRepository.class);
+        upstreamAdminCredentialService = mock(UpstreamClientAppAdminCredentialService.class);
+        clientAppRepository = mock(ClientAppRepository.class);
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        service = new ClientAppControlCredentialService(repository);
+        service = new ClientAppControlCredentialService(repository, upstreamAdminCredentialService, clientAppRepository);
     }
 
     @AfterEach

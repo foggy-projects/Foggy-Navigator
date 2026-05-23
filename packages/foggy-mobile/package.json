@@ -32,22 +32,24 @@
     "linkify-it": "^5.0.0",
     "markdown-it": "^14.1.0",
     "mdurl": "^2.0.0",
+    "pinia": "2.1.7",
     "punycode.js": "^2.3.1",
     "uc.micro": "^2.1.0",
-    "pinia": "2.1.7",
     "vue": "3.4.21",
     "wot-design-uni": "^1.9.3"
   },
   "devDependencies": {
+    "@dcloudio/types": "^3.4.19",
     "@dcloudio/uni-automator": "3.0.0-4080720251210001",
     "@dcloudio/uni-cli-shared": "3.0.0-4080720251210001",
     "@dcloudio/uni-stacktracey": "3.0.0-4080720251210001",
     "@dcloudio/vite-plugin-uni": "3.0.0-4080720251210001",
-    "@types/node": "^24.10.1",
     "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.10.1",
     "happy-dom": "^20.0.10",
     "typescript": "~5.9.3",
     "vite": "^5.4.19",
-    "vitest": "^1.6.1"
+    "vitest": "^1.6.1",
+    "vue-tsc": "^3.2.5"
   }
 }

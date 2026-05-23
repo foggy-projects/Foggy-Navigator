@@ -44,6 +44,9 @@ public class LanggraphTaskEntity {
     private String status; // PENDING, RUNNING, COMPLETED, FAILED, ABORTED
 
     @Column(length = 64)
+    private String taskSubStatus;
+
+    @Column(length = 64)
     private String model;
 
     @Column(length = 64)
@@ -67,6 +70,17 @@ public class LanggraphTaskEntity {
 
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
+
+    @Column(length = 64)
+    private String interruptionReason;
+
+    @Column(columnDefinition = "TEXT")
+    private String interruptionMessage;
+
+    private Boolean recoverable;
+
+    @Column(length = 64)
+    private String taskDeadlineAt;
 
     private Long durationMs;
 

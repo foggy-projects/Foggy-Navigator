@@ -26,7 +26,7 @@
 | `scripts/10-sync-release-kit.sh` | 从本地同步发布脚本包到远端。 |
 | `scripts/11-remote-init-release.sh` | 初始化远端目录、检查依赖、配置 Harbor insecure registry。 |
 | `scripts/20-build-and-push-images.sh` | 远端 checkout 指定 Git ref，构建并推送镜像。 |
-| `scripts/30-deploy-by-image.sh` | 目标服务器按 image tag pull + run。 |
+| `scripts/30-deploy-by-image.sh` | 目标服务器按 image tag pull + run，并默认重启与 tag 对齐的 LangGraph Biz Worker。 |
 | `scripts/31-rollback-by-image.sh` | 按历史或指定 image tag 回滚。 |
 | `scripts/32-status-check.sh` | Compose、HTTP、健康探针和启动日志检查。 |
 | `scripts/40-install-workers-from-obs.sh` | 从 OBS 安装并启动启用的 Worker。 |
@@ -36,6 +36,7 @@
 | `scripts/51-bootstrap-platform.sh` | 首次平台 bootstrap：租户、管理员、LLM、Biz Worker、Worker Pool、ClientApp、TMS env。 |
 | `scripts/52-check-platform-bootstrap.sh` | 检查主应用和 LangGraph Biz Worker 健康状态。 |
 | `scripts/53-smoke-tms-openapi.sh` | 用 TMS ClientApp runtime credential 执行 runtime-token、preflight、ask、messages 烟测。 |
+| `scripts/54-check-business-agent-materialize-env.sh` | 检查 backend 容器 Business Agent materialize worker URL 和 token 配置状态，token 只输出 configured。 |
 | `inventory.md` | 当前部署资产、端口、依赖、密钥清单。 |
 | `deployment-report-image-release-2026-05-15.md` | 本次部署流程改造报告。 |
 
@@ -116,6 +117,7 @@ GIT_REF=<tag-or-release-branch>
 IMAGE_TAG=dev-kvm-x3-20260515-1
 HARBOR_USERNAME=<harbor-user>
 HARBOR_PASSWORD=<harbor-password>
+BUSINESS_AGENT_DEV_SYNC_WORKER_URL=http://192.168.31.81:3061
 ```
 
 构建并推送：
@@ -131,6 +133,16 @@ dev/demo 或目标服务器部署：
 ```bash
 bash deploy/dev-kvm-x3/scripts/30-deploy-by-image.sh
 ```
+
+部署脚本会在 `docker compose up -d` 后等待前端和后端容器进入 healthy，并验证 HTTP 探针；健康检查通过后默认执行 `remote/start-langgraph-biz-worker.sh`，从 `/opt/foggy/navigator/build/source/<IMAGE_TAG>/tools/langgraph-biz-worker` 启动或重启 LangGraph Biz Worker。默认等待窗口和 Biz Worker 开关由远端 `release.env` 控制：
+
+```bash
+NAVIGATOR_DEPLOY_HEALTH_RETRIES=45
+NAVIGATOR_DEPLOY_HEALTH_INTERVAL_SECONDS=2
+NAVIGATOR_DEPLOY_LANGGRAPH_BIZ_WORKER=true
+```
+
+没有保留 release source tree 的 pull-only 目标机可以设置 `NAVIGATOR_DEPLOY_LANGGRAPH_BIZ_WORKER=false`，改由独立镜像、OBS 包或 systemd 流程托管 Biz Worker。
 
 dev/demo 节点安装或升级 Worker：
 
@@ -161,11 +173,31 @@ bash deploy/dev-kvm-x3/scripts/53-smoke-tms-openapi.sh
 
 当前 dev/demo bootstrap 默认 `NAVIGATOR_TMS_MATERIALIZE_AGENT_BUNDLE=false`：先完成 ClientApp、Business Agent、public skill 索引、model grant 和 upstream user grant。TMS 侧同步真实 function manifest / skill bundle 后，再按需打开 materialize 或通过 CLI/SDK 执行 materialize，避免首次空 bundle 依赖 Worker 文件落地能力。
 
+Business Agent materialize worker 固定使用：
+
+```bash
+BUSINESS_AGENT_DEV_SYNC_WORKER_URL=http://192.168.31.81:3061
+```
+
+对应 token 只能放在远端 `/opt/foggy/navigator/runtime/release.env` 或服务器 secret 管理系统中，不提交、不打印。验证时使用：
+
+```bash
+bash deploy/dev-kvm-x3/scripts/54-check-business-agent-materialize-env.sh
+```
+
 只检查状态：
 
 ```bash
 bash deploy/dev-kvm-x3/scripts/32-status-check.sh
 ```
+
+`32-status-check.sh` 默认只执行一次。需要等待启动完成时可临时设置：
+
+```bash
+NAVIGATOR_STATUS_RETRIES=45 NAVIGATOR_STATUS_INTERVAL_SECONDS=2 bash deploy/dev-kvm-x3/scripts/32-status-check.sh
+```
+
+部署脚本内部会把重试过程中的临时 HTTP 失败显示为 `waiting`；只有等待窗口耗尽后才输出最终 `FAILED`。
 
 回滚到上一个 tag：
 
@@ -205,16 +237,19 @@ bash remote/status-check.sh
 - `foggy-navigator-frontend`
 - 旧源码部署的 `foggy-navigator-nginx`
 
-默认还会停止旧源码部署占用的 Navigator app 端口 `8112`，用于从旧流程切换到镜像流程。Worker 由 OBS 安装脚本独立管理，不在 Docker Compose 清理范围内。脚本不会主动删除 TMS、Verdaccio、共享数据库或其他非 Navigator 管理容器。MySQL/RabbitMQ 数据卷也不会在部署脚本中删除。
+默认还会停止旧源码部署占用的 Navigator app 端口 `8112`，用于从旧流程切换到镜像流程。Claude/Codex/Gemini Worker 由 OBS 安装脚本独立管理，不在 Docker Compose 清理范围内；LangGraph Biz Worker 由部署脚本按 `IMAGE_TAG` 单独启动或重启，也不进入 Docker Compose 清理范围。脚本不会主动删除 TMS、Verdaccio、共享数据库或其他非 Navigator 管理容器。MySQL/RabbitMQ 数据卷也不会在部署脚本中删除。
 
 ## 验证
 
 `remote/status-check.sh` 会检查：
 
 - Docker Compose 容器状态。
+- 应用容器 Docker health，`starting` 和 `unhealthy` 会被视为未就绪。
 - `http://127.0.0.1/health`
 - `http://127.0.0.1:8112/actuator/health`
 - 关键容器最近日志中的启动失败模式。
+
+`remote/deploy-by-image.sh` 在上述检查通过后还会默认启动 LangGraph Biz Worker，并由 `remote/start-langgraph-biz-worker.sh` 验证 `http://127.0.0.1:3061/health`。
 
 Worker 由 `remote/check-workers.sh` 单独检查：
 
@@ -239,5 +274,5 @@ Worker 由 `remote/check-workers.sh` 单独检查：
 - 前端仍依赖 monorepo workspace：`@foggy/navigator-frontend` 使用 `@foggy/chat: workspace:*`，`@foggy/chat` 使用 `@foggy/chat-core: workspace:*`。当前 build-and-push 在同一个 Git checkout 内执行 `pnpm install --no-frozen-lockfile`，并按 `chat-core -> chat -> navigator-frontend` 顺序构建。
 - 根目录 `pnpm-lock.yaml` 当前未跟踪，生产前需要决定是否提交锁文件，或将内部包发布到 Verdaccio 后切换成普通版本依赖。
 - Claude/Codex/Gemini Worker 继续使用 OBS 安装脚本分发，节点级运行态位于 `~/.claude-worker`、`~/.codex-worker`、`~/.gemini-worker`。生产前需要固化 Worker 配置、升级策略和账号/token 注入方式。
-- LangGraph Biz Worker 当前作为 Business Agent 的 Python 节点级运行态，从 `/opt/foggy/navigator/current/tools/langgraph-biz-worker` 创建 venv 启动；生产前需要决定是否改为独立镜像或 OBS 包，并固化 systemd/自启动、token 注入和回滚策略。
+- LangGraph Biz Worker 当前作为 Business Agent 的 Python 节点级运行态，`30-deploy-by-image.sh` 默认从 `/opt/foggy/navigator/build/source/<IMAGE_TAG>/tools/langgraph-biz-worker` 创建 venv 并重启，保证与镜像 tag 对齐。`BIZ_WORKER_SOURCE_DIR` 只作为应急兼容开关使用；生产前需要决定是否改为独立镜像或 OBS 包，并固化 systemd/自启动、token 注入和回滚策略。
 - `dev-kvm-x3` 可继续启用本地 MySQL/RabbitMQ；生产建议改为外部托管依赖并设置 `NAVIGATOR_LOCAL_INFRA=false`。

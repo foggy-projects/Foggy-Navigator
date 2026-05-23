@@ -1,6 +1,6 @@
 spring:
   application:
-    name: coding-agent
+    name: foggy-navigator
   main:
     allow-bean-definition-overriding: true
 
@@ -106,52 +106,6 @@ foggy:
           tms-x3-agent:
             url: ${TMS_X3_AGENT_UPSTREAM_URL:http://localhost:12580}
             user-token-header: ${TMS_X3_AGENT_USER_TOKEN_HEADER:X-TMS-Agent-Token}
-
-  coding-agent:
-    # OpenHands 配置
-    openhands:
-      image: ghcr.io/all-hands-ai/openhands:main
-      workspace-base: /workspace
-      container-timeout: 1800  # 容器超时时间（秒）
-      max-concurrent: 10       # 最大并发容器数
-
-      # LLM 配置
-      api-key: ${OPENAI_API_KEY:sk-test-key}
-      model-name: gpt-4
-      api-base-url: ${OPENAI_API_BASE_URL:}
-
-    # 验证服务配置
-    validation:
-      url: http://localhost:7108  # 验证服务地址（可配置）
-      enabled: true
-      realtime: true  # 实时验证
-      timeout: 30000  # 验证超时时间（毫秒）
-      auto-trigger-on-create: true  # 创建会话后自动触发验证
-      auto-trigger-on-message: false  # 发送消息后自动触发验证
-
-    # Git 配置
-    git:
-      default-branch: main
-      auto-commit: true
-      auto-pr: true
-
-    # 会话清理配置
-    cleanup:
-      enabled: true  # 是否启用自动清理
-      interval: 300000  # 空闲会话清理间隔（毫秒，默认 5 分钟）
-      idle-timeout: 3600000  # 空闲会话超时时间（毫秒，默认 1 小时）
-      max-age: 86400000  # 会话最大存活时间（毫秒，默认 1 天）
-      max-age-check-interval: 3600000  # 过期会话检查间隔（毫秒，默认 1 小时）
-      orphan-interval: 600000  # 孤儿容器检查间隔（毫秒，默认 10 分钟）
-
-    # 健康检查配置
-    health:
-      check-interval: 60000  # 健康检查间隔（毫秒，默认 1 分钟）
-      enabled: true
-
-    # 会话恢复配置
-    recovery:
-      auto-recover-on-startup: false  # 应用启动时自动恢复会话
 
 # 日志配置
 logging:

@@ -1,0 +1,1278 @@
+[
+  {
+    "traceId": "20260518-203003-99163e",
+    "scenarioId": "opt-029-timeout-recovery",
+    "cursor": "next:20260518-203003-99163e:001",
+    "turnIndex": "001",
+    "model": "opt029-scripted",
+    "requestHash": "2424dfc2e6de4a2772181d48f89796851951af86775ac3a73495737a180d3622",
+    "matched": true,
+    "responseSummary": {
+      "finishReason": "stop",
+      "contentLength": 27,
+      "responseDelayMs": 600,
+      "toolCalls": []
+    },
+    "request": {
+      "model": "opt029-scripted",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are executing skill system.root.\nDescription: System root business skill for task-level orchestration.\nOutput schema: {}\n\n---\nSkill Instructions:\nYou are the system root skill for this business task. Handle the user's request directly when possible. Use invoke_business_function for authorized business functions when the needed function is described in the available context or skill material. Use invoke_business_skill to delegate bounded work to a specialized child skill. Attachments are metadata or URLs. Use analyze_attachment only when the user asks to inspect image/file contents or when required fields must be extracted from an attachment; if the user only asks to attach a file to a business operation, preserve the attachment without analysis. When the current user turn is ready to answer, call submit_skill_result. This root skill is persistent; submit_skill_result ends the current turn, not the root skill frame.\n---\n\nBusiness functions may be shown as `function_id@version`; when using invoke_business_function, pass them as `function_id` without the @version suffix and `version` separately. Navigator runtime identifiers such as skillId, functionId, frameId, skillFrameId, function_frame_id, taskId, sessionId, messageId, and values prefixed with frm_, lgt_, msg_, or sess_ are internal tracing ids. Use them only when reasoning about execution history or when the user explicitly asks for trace/debug identifiers; do not expose them in normal user-facing summaries, and never present them as an order number, waybill number, business document number, or proof that a formal order was created. Only call a value an order/waybill/business id when the tool output schema or result explicitly provides a public business identifier field such as orderNo, orderIdentifier, or waybillNo. For page-opening structured outputs, prefer the tool summary and action label; do not infer business success or business ids from page actions, buttons, Navigator frame ids, skill ids, or action metadata. If the skill references files under its bundle, use list_skill_resources or read_skill_resource; those tools only expose the current ClientApp's public skill resources. Use only the provided tools. When the skill is complete, call submit_skill_result. Natural-language completion is not accepted."
+        },
+        {
+          "role": "user",
+          "content": "SKILL_AGENT_START system.root\nRuntime context:\n- current_time: 2026-05-18T20:30:04.742506+08:00\n- timezone: Asia/Shanghai\n- business_date: 2026-05-18\n- current_month_range: [2026-05-01, 2026-06-01)\nRule: Resolve relative dates such as 本月, 今天, 昨日, 近7天 using this runtime context.\nPersistent root planning policy: For complex, multi-intent, multi-skill, or externally coordinated work, maintain an active_plan in submit_skill_result.structured_output.active_plan. The plan should be compact, structured, and updated as work progresses; it is working state for future turns, not user-facing narration.\nUser request: OPT-029 probe: trigger a retryable LLM timeout and preserve recoverable frame context. next:20260518-203003-99163e:001\nSkill input: {\"contextId\": \"ctx-opt029-20260518-203003-99163e\", \"opt029RunId\": \"20260518-203003-99163e\", \"scenario\": \"timeout-recovery-governance\"}"
+        }
+      ],
+      "temperature": 0.0,
+      "stream": false,
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "invoke_business_function",
+            "description": "Invoke an allowlisted business function through Navigator Java.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "function_id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object"
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "function_id",
+                "version",
+                "input"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "list_skill_resources",
+            "description": "List public skill bundle resources for the current ClientApp.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string",
+                  "description": "Skill id under the current ClientApp public directory. Omit to list skills."
+                },
+                "relative_path": {
+                  "type": "string",
+                  "description": "Directory under the skill, usually references or assets."
+                },
+                "recursive": {
+                  "type": "boolean"
+                },
+                "max_entries": {
+                  "type": "integer"
+                }
+              },
+              "required": []
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "read_skill_resource",
+            "description": "Read SKILL.md, references/**, or assets/** from a public skill bundle for the current ClientApp.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string"
+                },
+                "relative_path": {
+                  "type": "string",
+                  "description": "SKILL.md, references/<file>, or assets/<file>."
+                },
+                "start_line": {
+                  "type": "integer"
+                },
+                "max_lines": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "skill_id",
+                "relative_path"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "read_frame_execution_report",
+            "description": "Read a persisted Frame execution report by report_ref or by task_id/frame_id. Use this for debugging or reviewing prior frame work instead of re-reading raw frame JSON.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "report_ref": {
+                  "type": "string",
+                  "description": "Frame report reference, e.g. frame-report://task_id/frame_id."
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "frame_id": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "summary",
+                    "metadata",
+                    "markdown"
+                  ],
+                  "description": "summary is compact; markdown returns capped human-readable report text."
+                },
+                "max_chars": {
+                  "type": "integer"
+                }
+              },
+              "required": []
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "invoke_business_skill",
+            "description": "Invoke a child business skill and return its promoted result.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string"
+                },
+                "instruction": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "skill_id",
+                "instruction"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "analyze_attachment",
+            "description": "Analyze a user-provided attachment on demand using the configured vision model. Use this only when the user asks to inspect image/file contents or when attachment-derived fields are required before a business function call. Do not use it when the user only asks to submit or attach the original file.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "attachment_id": {
+                  "type": "string",
+                  "description": "Attachment id from the upstream attachment metadata."
+                },
+                "purpose": {
+                  "type": "string",
+                  "description": "Business reason for analysis, e.g. extract exception type or read damaged cargo text."
+                },
+                "expected_fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Optional field names to extract from the attachment."
+                }
+              },
+              "required": [
+                "attachment_id",
+                "purpose"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "submit_skill_result",
+            "description": "Submit final skill result to the runtime.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "type": "string"
+                },
+                "structured_output": {
+                  "type": "object",
+                  "description": "Skill result payload. Persistent root may include active_plan for compact multi-turn working state and intent_resolution for interruption handling."
+                },
+                "artifact_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidence_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "summary",
+                "structured_output"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "resume_recoverable_child_skill",
+            "description": "Root-only tool. Continue the pending recoverable child skill frame after an interrupted child-skill execution.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "instruction": {
+                  "type": "string",
+                  "description": "Natural language instruction for continuing the child skill."
+                }
+              },
+              "required": [
+                "instruction"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "shelve_interrupted_frame",
+            "description": "Root-only tool. Shelve the previous recoverable interruption when the user stops it or asks for an unrelated new task.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "type": "string"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "ABANDON_PREVIOUS",
+                    "START_UNRELATED_NEW_TASK"
+                  ]
+                },
+                "intent_resolution": {
+                  "type": "string",
+                  "enum": [
+                    "ABANDON_PREVIOUS",
+                    "START_UNRELATED_NEW_TASK"
+                  ],
+                  "description": "Normalized intent after comparing the user's new instruction with the interrupted focus."
+                },
+                "abandoned_interruption": {
+                  "type": "object",
+                  "description": "Compact summary of the interrupted work being shelved."
+                },
+                "new_task": {
+                  "type": "object",
+                  "description": "Optional compact description of the unrelated new task."
+                },
+                "artifact_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidence_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "summary",
+                "decision",
+                "abandoned_interruption"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "createdAt": 1779107405.7029204
+  },
+  {
+    "traceId": "20260518-203003-99163e",
+    "scenarioId": "opt-029-timeout-recovery",
+    "cursor": "next:20260518-203003-99163e:002",
+    "turnIndex": "002",
+    "model": "opt029-scripted",
+    "requestHash": "2fdbfef4014b2db42bf8485158d68a1781bba47c644a6bfe92975cb8b983318d",
+    "matched": true,
+    "responseSummary": {
+      "finishReason": "tool_calls",
+      "contentLength": 0,
+      "responseDelayMs": 0,
+      "toolCalls": [
+        "submit_skill_result"
+      ]
+    },
+    "request": {
+      "model": "opt029-scripted",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are executing skill system.root.\nDescription: System root business skill for task-level orchestration.\nOutput schema: {}\n\n---\nSkill Instructions:\nYou are the system root skill for this business task. Handle the user's request directly when possible. Use invoke_business_function for authorized business functions when the needed function is described in the available context or skill material. Use invoke_business_skill to delegate bounded work to a specialized child skill. Attachments are metadata or URLs. Use analyze_attachment only when the user asks to inspect image/file contents or when required fields must be extracted from an attachment; if the user only asks to attach a file to a business operation, preserve the attachment without analysis. When the current user turn is ready to answer, call submit_skill_result. This root skill is persistent; submit_skill_result ends the current turn, not the root skill frame.\n---\n\nBusiness functions may be shown as `function_id@version`; when using invoke_business_function, pass them as `function_id` without the @version suffix and `version` separately. Navigator runtime identifiers such as skillId, functionId, frameId, skillFrameId, function_frame_id, taskId, sessionId, messageId, and values prefixed with frm_, lgt_, msg_, or sess_ are internal tracing ids. Use them only when reasoning about execution history or when the user explicitly asks for trace/debug identifiers; do not expose them in normal user-facing summaries, and never present them as an order number, waybill number, business document number, or proof that a formal order was created. Only call a value an order/waybill/business id when the tool output schema or result explicitly provides a public business identifier field such as orderNo, orderIdentifier, or waybillNo. For page-opening structured outputs, prefer the tool summary and action label; do not infer business success or business ids from page actions, buttons, Navigator frame ids, skill ids, or action metadata. If the skill references files under its bundle, use list_skill_resources or read_skill_resource; those tools only expose the current ClientApp's public skill resources. Use only the provided tools. When the skill is complete, call submit_skill_result. Natural-language completion is not accepted."
+        },
+        {
+          "role": "user",
+          "content": "SKILL_AGENT_START system.root\nRuntime context:\n- current_time: 2026-05-18T20:30:04.742506+08:00\n- timezone: Asia/Shanghai\n- business_date: 2026-05-18\n- current_month_range: [2026-05-01, 2026-06-01)\nRule: Resolve relative dates such as 本月, 今天, 昨日, 近7天 using this runtime context.\nPrevious execution was interrupted.\nReason: llm_retry_exhausted\nLast error: LLM_REQUEST_TIMEOUT; operation=skill_agent.invoke; provider=RunnableBinding|opt029-scripted|127.0.0.1:52676; task_id=lgt_opt029_20260518-203003-99163e_timeout; frame_id=frm_5c4877ef57e5; request timeout exceeded; timeout_seconds=0.15\nLast task: lgt_opt029_20260518-203003-99163e_timeout\nRecoverable focus: {\"focus_kind\": \"ROOT\", \"frame_id\": \"frm_5c4877ef57e5\", \"frame_kind\": \"SKILL\", \"input\": {\"contextId\": \"ctx-opt029-20260518-203003-99163e\", \"opt029RunId\": \"20260518-203003-99163e\", \"scenario\": \"timeout-recovery-governance\"}, \"interrupted_at\": \"2026-05-18T12:30:05.469287+00:00\", \"last_error\": \"LLM_REQUEST_TIMEOUT; operation=skill_agent.invoke; provider=RunnableBinding|opt029-scripted|127.0.0.1:52676; task_id=lgt_opt029_20260518-203003-99163e_timeout; frame_id=frm_5c4877ef57e5; request timeout exceeded; timeout_seconds=0.15\", \"last_task_id\": \"lgt_opt029_20260518-203003-99163e_timeout\", \"reason\": \"llm_retry_exhausted\", \"skill_id\": \"system.root\", \"status\": \"RUNNING\"}\nRecoverable focus stack: [{\"frame_id\": \"frm_5c4877ef57e5\", \"frame_kind\": \"SKILL\", \"input\": {\"contextId\": \"ctx-opt029-20260518-203003-99163e\", \"opt029RunId\": \"20260518-203003-99163e\", \"scenario\": \"timeout-recovery-governance\"}, \"parent_frame_id\": null, \"skill_id\": \"system.root\", \"status\": \"RUNNING\"}]\nUser's new instruction: 继续刚才被 LLM timeout 中断的任务，沿用 frame 上下文给出恢复结果。next:20260518-203003-99163e:002\nThe interrupted work is a recoverable candidate, not a mandatory continuation. First resolve intent_resolution as one of CONTINUE_PREVIOUS, ABANDON_PREVIOUS, START_UNRELATED_NEW_TASK, or ASK_CLARIFICATION. If the new instruction explicitly continues, corrects, or supplements the interrupted work, use CONTINUE_PREVIOUS and continue from the existing frame context. If there is a pending child skill, use resume_recoverable_child_skill so the same child frame continues. If the user explicitly stops/cancels it, use ABANDON_PREVIOUS. If the user asks for an unrelated new task, use START_UNRELATED_NEW_TASK. For either shelving case, summarize what is being abandoned, then use shelve_interrupted_frame with decision set to ABANDON_PREVIOUS or START_UNRELATED_NEW_TASK, include intent_resolution, and include an abandoned_interruption summary. If the intent is ambiguous and the interrupted work involves approval or business side effects, use ASK_CLARIFICATION and ask for clarification via submit_skill_result.\nPersistent root planning policy: For complex, multi-intent, multi-skill, or externally coordinated work, maintain an active_plan in submit_skill_result.structured_output.active_plan. The plan should be compact, structured, and updated as work progresses; it is working state for future turns, not user-facing narration.\nUser request: 继续刚才被 LLM timeout 中断的任务，沿用 frame 上下文给出恢复结果。next:20260518-203003-99163e:002\nSkill input: {\"contextId\": \"ctx-opt029-20260518-203003-99163e\", \"opt029RunId\": \"20260518-203003-99163e\", \"scenario\": \"timeout-recovery-governance\"}"
+        }
+      ],
+      "temperature": 0.0,
+      "stream": false,
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "invoke_business_function",
+            "description": "Invoke an allowlisted business function through Navigator Java.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "function_id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object"
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "function_id",
+                "version",
+                "input"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "list_skill_resources",
+            "description": "List public skill bundle resources for the current ClientApp.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string",
+                  "description": "Skill id under the current ClientApp public directory. Omit to list skills."
+                },
+                "relative_path": {
+                  "type": "string",
+                  "description": "Directory under the skill, usually references or assets."
+                },
+                "recursive": {
+                  "type": "boolean"
+                },
+                "max_entries": {
+                  "type": "integer"
+                }
+              },
+              "required": []
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "read_skill_resource",
+            "description": "Read SKILL.md, references/**, or assets/** from a public skill bundle for the current ClientApp.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string"
+                },
+                "relative_path": {
+                  "type": "string",
+                  "description": "SKILL.md, references/<file>, or assets/<file>."
+                },
+                "start_line": {
+                  "type": "integer"
+                },
+                "max_lines": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "skill_id",
+                "relative_path"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "read_frame_execution_report",
+            "description": "Read a persisted Frame execution report by report_ref or by task_id/frame_id. Use this for debugging or reviewing prior frame work instead of re-reading raw frame JSON.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "report_ref": {
+                  "type": "string",
+                  "description": "Frame report reference, e.g. frame-report://task_id/frame_id."
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "frame_id": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "summary",
+                    "metadata",
+                    "markdown"
+                  ],
+                  "description": "summary is compact; markdown returns capped human-readable report text."
+                },
+                "max_chars": {
+                  "type": "integer"
+                }
+              },
+              "required": []
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "invoke_business_skill",
+            "description": "Invoke a child business skill and return its promoted result.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string"
+                },
+                "instruction": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "skill_id",
+                "instruction"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "analyze_attachment",
+            "description": "Analyze a user-provided attachment on demand using the configured vision model. Use this only when the user asks to inspect image/file contents or when attachment-derived fields are required before a business function call. Do not use it when the user only asks to submit or attach the original file.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "attachment_id": {
+                  "type": "string",
+                  "description": "Attachment id from the upstream attachment metadata."
+                },
+                "purpose": {
+                  "type": "string",
+                  "description": "Business reason for analysis, e.g. extract exception type or read damaged cargo text."
+                },
+                "expected_fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Optional field names to extract from the attachment."
+                }
+              },
+              "required": [
+                "attachment_id",
+                "purpose"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "submit_skill_result",
+            "description": "Submit final skill result to the runtime.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "type": "string"
+                },
+                "structured_output": {
+                  "type": "object",
+                  "description": "Skill result payload. Persistent root may include active_plan for compact multi-turn working state and intent_resolution for interruption handling."
+                },
+                "artifact_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidence_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "summary",
+                "structured_output"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "resume_recoverable_child_skill",
+            "description": "Root-only tool. Continue the pending recoverable child skill frame after an interrupted child-skill execution.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "instruction": {
+                  "type": "string",
+                  "description": "Natural language instruction for continuing the child skill."
+                }
+              },
+              "required": [
+                "instruction"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "shelve_interrupted_frame",
+            "description": "Root-only tool. Shelve the previous recoverable interruption when the user stops it or asks for an unrelated new task.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "type": "string"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "ABANDON_PREVIOUS",
+                    "START_UNRELATED_NEW_TASK"
+                  ]
+                },
+                "intent_resolution": {
+                  "type": "string",
+                  "enum": [
+                    "ABANDON_PREVIOUS",
+                    "START_UNRELATED_NEW_TASK"
+                  ],
+                  "description": "Normalized intent after comparing the user's new instruction with the interrupted focus."
+                },
+                "abandoned_interruption": {
+                  "type": "object",
+                  "description": "Compact summary of the interrupted work being shelved."
+                },
+                "new_task": {
+                  "type": "object",
+                  "description": "Optional compact description of the unrelated new task."
+                },
+                "artifact_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidence_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "summary",
+                "decision",
+                "abandoned_interruption"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "createdAt": 1779107405.7951555
+  },
+  {
+    "traceId": "20260518-203003-99163e",
+    "scenarioId": "opt-029-timeout-recovery",
+    "cursor": "next:20260518-203003-99163e:001",
+    "turnIndex": "001",
+    "model": "opt029-scripted",
+    "requestHash": "2424dfc2e6de4a2772181d48f89796851951af86775ac3a73495737a180d3622",
+    "matched": true,
+    "responseSummary": {
+      "finishReason": "stop",
+      "contentLength": 27,
+      "responseDelayMs": 600,
+      "toolCalls": []
+    },
+    "request": {
+      "model": "opt029-scripted",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are executing skill system.root.\nDescription: System root business skill for task-level orchestration.\nOutput schema: {}\n\n---\nSkill Instructions:\nYou are the system root skill for this business task. Handle the user's request directly when possible. Use invoke_business_function for authorized business functions when the needed function is described in the available context or skill material. Use invoke_business_skill to delegate bounded work to a specialized child skill. Attachments are metadata or URLs. Use analyze_attachment only when the user asks to inspect image/file contents or when required fields must be extracted from an attachment; if the user only asks to attach a file to a business operation, preserve the attachment without analysis. When the current user turn is ready to answer, call submit_skill_result. This root skill is persistent; submit_skill_result ends the current turn, not the root skill frame.\n---\n\nBusiness functions may be shown as `function_id@version`; when using invoke_business_function, pass them as `function_id` without the @version suffix and `version` separately. Navigator runtime identifiers such as skillId, functionId, frameId, skillFrameId, function_frame_id, taskId, sessionId, messageId, and values prefixed with frm_, lgt_, msg_, or sess_ are internal tracing ids. Use them only when reasoning about execution history or when the user explicitly asks for trace/debug identifiers; do not expose them in normal user-facing summaries, and never present them as an order number, waybill number, business document number, or proof that a formal order was created. Only call a value an order/waybill/business id when the tool output schema or result explicitly provides a public business identifier field such as orderNo, orderIdentifier, or waybillNo. For page-opening structured outputs, prefer the tool summary and action label; do not infer business success or business ids from page actions, buttons, Navigator frame ids, skill ids, or action metadata. If the skill references files under its bundle, use list_skill_resources or read_skill_resource; those tools only expose the current ClientApp's public skill resources. Use only the provided tools. When the skill is complete, call submit_skill_result. Natural-language completion is not accepted."
+        },
+        {
+          "role": "user",
+          "content": "SKILL_AGENT_START system.root\nRuntime context:\n- current_time: 2026-05-18T20:30:04.742506+08:00\n- timezone: Asia/Shanghai\n- business_date: 2026-05-18\n- current_month_range: [2026-05-01, 2026-06-01)\nRule: Resolve relative dates such as 本月, 今天, 昨日, 近7天 using this runtime context.\nPersistent root planning policy: For complex, multi-intent, multi-skill, or externally coordinated work, maintain an active_plan in submit_skill_result.structured_output.active_plan. The plan should be compact, structured, and updated as work progresses; it is working state for future turns, not user-facing narration.\nUser request: OPT-029 probe: trigger a retryable LLM timeout and preserve recoverable frame context. next:20260518-203003-99163e:001\nSkill input: {\"contextId\": \"ctx-opt029-20260518-203003-99163e\", \"opt029RunId\": \"20260518-203003-99163e\", \"scenario\": \"timeout-recovery-governance\"}"
+        }
+      ],
+      "temperature": 0.0,
+      "stream": false,
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "invoke_business_function",
+            "description": "Invoke an allowlisted business function through Navigator Java.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "function_id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object"
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "function_id",
+                "version",
+                "input"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "list_skill_resources",
+            "description": "List public skill bundle resources for the current ClientApp.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string",
+                  "description": "Skill id under the current ClientApp public directory. Omit to list skills."
+                },
+                "relative_path": {
+                  "type": "string",
+                  "description": "Directory under the skill, usually references or assets."
+                },
+                "recursive": {
+                  "type": "boolean"
+                },
+                "max_entries": {
+                  "type": "integer"
+                }
+              },
+              "required": []
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "read_skill_resource",
+            "description": "Read SKILL.md, references/**, or assets/** from a public skill bundle for the current ClientApp.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string"
+                },
+                "relative_path": {
+                  "type": "string",
+                  "description": "SKILL.md, references/<file>, or assets/<file>."
+                },
+                "start_line": {
+                  "type": "integer"
+                },
+                "max_lines": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "skill_id",
+                "relative_path"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "read_frame_execution_report",
+            "description": "Read a persisted Frame execution report by report_ref or by task_id/frame_id. Use this for debugging or reviewing prior frame work instead of re-reading raw frame JSON.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "report_ref": {
+                  "type": "string",
+                  "description": "Frame report reference, e.g. frame-report://task_id/frame_id."
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "frame_id": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "summary",
+                    "metadata",
+                    "markdown"
+                  ],
+                  "description": "summary is compact; markdown returns capped human-readable report text."
+                },
+                "max_chars": {
+                  "type": "integer"
+                }
+              },
+              "required": []
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "invoke_business_skill",
+            "description": "Invoke a child business skill and return its promoted result.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string"
+                },
+                "instruction": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "skill_id",
+                "instruction"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "analyze_attachment",
+            "description": "Analyze a user-provided attachment on demand using the configured vision model. Use this only when the user asks to inspect image/file contents or when attachment-derived fields are required before a business function call. Do not use it when the user only asks to submit or attach the original file.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "attachment_id": {
+                  "type": "string",
+                  "description": "Attachment id from the upstream attachment metadata."
+                },
+                "purpose": {
+                  "type": "string",
+                  "description": "Business reason for analysis, e.g. extract exception type or read damaged cargo text."
+                },
+                "expected_fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Optional field names to extract from the attachment."
+                }
+              },
+              "required": [
+                "attachment_id",
+                "purpose"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "submit_skill_result",
+            "description": "Submit final skill result to the runtime.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "type": "string"
+                },
+                "structured_output": {
+                  "type": "object",
+                  "description": "Skill result payload. Persistent root may include active_plan for compact multi-turn working state and intent_resolution for interruption handling."
+                },
+                "artifact_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidence_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "summary",
+                "structured_output"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "resume_recoverable_child_skill",
+            "description": "Root-only tool. Continue the pending recoverable child skill frame after an interrupted child-skill execution.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "instruction": {
+                  "type": "string",
+                  "description": "Natural language instruction for continuing the child skill."
+                }
+              },
+              "required": [
+                "instruction"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "shelve_interrupted_frame",
+            "description": "Root-only tool. Shelve the previous recoverable interruption when the user stops it or asks for an unrelated new task.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "type": "string"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "ABANDON_PREVIOUS",
+                    "START_UNRELATED_NEW_TASK"
+                  ]
+                },
+                "intent_resolution": {
+                  "type": "string",
+                  "enum": [
+                    "ABANDON_PREVIOUS",
+                    "START_UNRELATED_NEW_TASK"
+                  ],
+                  "description": "Normalized intent after comparing the user's new instruction with the interrupted focus."
+                },
+                "abandoned_interruption": {
+                  "type": "object",
+                  "description": "Compact summary of the interrupted work being shelved."
+                },
+                "new_task": {
+                  "type": "object",
+                  "description": "Optional compact description of the unrelated new task."
+                },
+                "artifact_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidence_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "summary",
+                "decision",
+                "abandoned_interruption"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "createdAt": 1779107405.9339466
+  },
+  {
+    "traceId": "20260518-203003-99163e",
+    "scenarioId": "opt-029-timeout-recovery",
+    "cursor": "next:20260518-203003-99163e:003",
+    "turnIndex": "003",
+    "model": "opt029-scripted",
+    "requestHash": "fcecb07de3c03ba377fb681c16ccc6f4cd89e856c4d58940cbee63c542e4487f",
+    "matched": true,
+    "responseSummary": {
+      "finishReason": "tool_calls",
+      "contentLength": 0,
+      "responseDelayMs": 1000,
+      "toolCalls": [
+        "submit_skill_result"
+      ]
+    },
+    "request": {
+      "model": "opt029-scripted",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are executing skill system.root.\nDescription: System root business skill for task-level orchestration.\nOutput schema: {}\n\n---\nSkill Instructions:\nYou are the system root skill for this business task. Handle the user's request directly when possible. Use invoke_business_function for authorized business functions when the needed function is described in the available context or skill material. Use invoke_business_skill to delegate bounded work to a specialized child skill. Attachments are metadata or URLs. Use analyze_attachment only when the user asks to inspect image/file contents or when required fields must be extracted from an attachment; if the user only asks to attach a file to a business operation, preserve the attachment without analysis. When the current user turn is ready to answer, call submit_skill_result. This root skill is persistent; submit_skill_result ends the current turn, not the root skill frame.\n---\n\nBusiness functions may be shown as `function_id@version`; when using invoke_business_function, pass them as `function_id` without the @version suffix and `version` separately. Navigator runtime identifiers such as skillId, functionId, frameId, skillFrameId, function_frame_id, taskId, sessionId, messageId, and values prefixed with frm_, lgt_, msg_, or sess_ are internal tracing ids. Use them only when reasoning about execution history or when the user explicitly asks for trace/debug identifiers; do not expose them in normal user-facing summaries, and never present them as an order number, waybill number, business document number, or proof that a formal order was created. Only call a value an order/waybill/business id when the tool output schema or result explicitly provides a public business identifier field such as orderNo, orderIdentifier, or waybillNo. For page-opening structured outputs, prefer the tool summary and action label; do not infer business success or business ids from page actions, buttons, Navigator frame ids, skill ids, or action metadata. If the skill references files under its bundle, use list_skill_resources or read_skill_resource; those tools only expose the current ClientApp's public skill resources. Use only the provided tools. When the skill is complete, call submit_skill_result. Natural-language completion is not accepted."
+        },
+        {
+          "role": "user",
+          "content": "SKILL_AGENT_START system.root\nRuntime context:\n- current_time: 2026-05-18T20:30:04.742506+08:00\n- timezone: Asia/Shanghai\n- business_date: 2026-05-18\n- current_month_range: [2026-05-01, 2026-06-01)\nRule: Resolve relative dates such as 本月, 今天, 昨日, 近7天 using this runtime context.\nPersistent root planning policy: For complex, multi-intent, multi-skill, or externally coordinated work, maintain an active_plan in submit_skill_result.structured_output.active_plan. The plan should be compact, structured, and updated as work progresses; it is working state for future turns, not user-facing narration.\nUser request: OPT-029 probe: simulate upstream client wait timeout while server keeps processing. next:20260518-203003-99163e:003\nSkill input: {\"contextId\": \"ctx-opt029-20260518-203003-99163e\", \"opt029RunId\": \"20260518-203003-99163e\", \"scenario\": \"timeout-recovery-governance\"}"
+        }
+      ],
+      "temperature": 0.0,
+      "stream": false,
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "invoke_business_function",
+            "description": "Invoke an allowlisted business function through Navigator Java.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "function_id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object"
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "function_id",
+                "version",
+                "input"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "list_skill_resources",
+            "description": "List public skill bundle resources for the current ClientApp.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string",
+                  "description": "Skill id under the current ClientApp public directory. Omit to list skills."
+                },
+                "relative_path": {
+                  "type": "string",
+                  "description": "Directory under the skill, usually references or assets."
+                },
+                "recursive": {
+                  "type": "boolean"
+                },
+                "max_entries": {
+                  "type": "integer"
+                }
+              },
+              "required": []
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "read_skill_resource",
+            "description": "Read SKILL.md, references/**, or assets/** from a public skill bundle for the current ClientApp.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string"
+                },
+                "relative_path": {
+                  "type": "string",
+                  "description": "SKILL.md, references/<file>, or assets/<file>."
+                },
+                "start_line": {
+                  "type": "integer"
+                },
+                "max_lines": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "skill_id",
+                "relative_path"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "read_frame_execution_report",
+            "description": "Read a persisted Frame execution report by report_ref or by task_id/frame_id. Use this for debugging or reviewing prior frame work instead of re-reading raw frame JSON.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "report_ref": {
+                  "type": "string",
+                  "description": "Frame report reference, e.g. frame-report://task_id/frame_id."
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "frame_id": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "summary",
+                    "metadata",
+                    "markdown"
+                  ],
+                  "description": "summary is compact; markdown returns capped human-readable report text."
+                },
+                "max_chars": {
+                  "type": "integer"
+                }
+              },
+              "required": []
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "invoke_business_skill",
+            "description": "Invoke a child business skill and return its promoted result.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "skill_id": {
+                  "type": "string"
+                },
+                "instruction": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "skill_id",
+                "instruction"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "analyze_attachment",
+            "description": "Analyze a user-provided attachment on demand using the configured vision model. Use this only when the user asks to inspect image/file contents or when attachment-derived fields are required before a business function call. Do not use it when the user only asks to submit or attach the original file.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "attachment_id": {
+                  "type": "string",
+                  "description": "Attachment id from the upstream attachment metadata."
+                },
+                "purpose": {
+                  "type": "string",
+                  "description": "Business reason for analysis, e.g. extract exception type or read damaged cargo text."
+                },
+                "expected_fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Optional field names to extract from the attachment."
+                }
+              },
+              "required": [
+                "attachment_id",
+                "purpose"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "submit_skill_result",
+            "description": "Submit final skill result to the runtime.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "type": "string"
+                },
+                "structured_output": {
+                  "type": "object",
+                  "description": "Skill result payload. Persistent root may include active_plan for compact multi-turn working state and intent_resolution for interruption handling."
+                },
+                "artifact_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidence_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "summary",
+                "structured_output"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "resume_recoverable_child_skill",
+            "description": "Root-only tool. Continue the pending recoverable child skill frame after an interrupted child-skill execution.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "instruction": {
+                  "type": "string",
+                  "description": "Natural language instruction for continuing the child skill."
+                }
+              },
+              "required": [
+                "instruction"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "shelve_interrupted_frame",
+            "description": "Root-only tool. Shelve the previous recoverable interruption when the user stops it or asks for an unrelated new task.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "type": "string"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "ABANDON_PREVIOUS",
+                    "START_UNRELATED_NEW_TASK"
+                  ]
+                },
+                "intent_resolution": {
+                  "type": "string",
+                  "enum": [
+                    "ABANDON_PREVIOUS",
+                    "START_UNRELATED_NEW_TASK"
+                  ],
+                  "description": "Normalized intent after comparing the user's new instruction with the interrupted focus."
+                },
+                "abandoned_interruption": {
+                  "type": "object",
+                  "description": "Compact summary of the interrupted work being shelved."
+                },
+                "new_task": {
+                  "type": "object",
+                  "description": "Optional compact description of the unrelated new task."
+                },
+                "artifact_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "evidence_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "summary",
+                "decision",
+                "abandoned_interruption"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "createdAt": 1779107407.1535997
+  }
+]

@@ -24,7 +24,7 @@ def verify_and_submit(state: AddressVerifyState) -> dict:
     frame_id = state["frame_id"]
     order_id = state["skill_input"].get("order_id", "UNKNOWN")
 
-    result = runtime.submit_result(
+    runtime.submit_result(
         frame_id=frame_id,
         summary=f"Address for order {order_id} is reachable",
         structured_output={

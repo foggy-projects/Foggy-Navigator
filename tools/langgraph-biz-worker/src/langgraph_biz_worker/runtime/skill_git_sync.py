@@ -28,7 +28,8 @@ def _run_git(args: list[str], cwd: Path | None = None, token: str = "") -> subpr
     env = None
     if token:
         # Use GIT_ASKPASS trick to inject token non-interactively
-        import os, tempfile
+        import os
+        import tempfile
         helper = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
         helper.write(f"#!/bin/sh\necho {token}\n")
         helper.close()

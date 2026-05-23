@@ -7,10 +7,16 @@ Worker only runs on Linux; all path validation assumes POSIX semantics.
 from __future__ import annotations
 
 import logging
-import os
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Sequence
+
+from .account_workspace import (
+    AccountWorkspace,
+    _validate_account_id as _validate_workspace_account_id,
+    resolve_account_workspace,
+)
+from .execution_policy import ExecutionPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +65,24 @@ class AccountPathGuard:
     path is never exposed to the model.
     """
 
-    def __init__(self, data_root: Path, account_id: str) -> None:
-        _validate_account_id(account_id)
+    def __init__(
+        self,
+        data_root: Path,
+        account_id: str | None,
+        execution_policy: ExecutionPolicy | None = None,
+        workspace: AccountWorkspace | None = None,
+    ) -> None:
         self._data_root = Path(data_root).resolve()
-        self._account_id = account_id
-        self._account_root = self._data_root / "accounts" / account_id
+        self._execution_policy = execution_policy
+        resolved_workspace = workspace or resolve_account_workspace(
+            self._data_root,
+            account_id,
+            execution_policy=execution_policy,
+        )
+        if resolved_workspace is None:
+            raise ValueError("account_id or delegated workspace is required")
+        self._account_id = resolved_workspace.storage_account_id
+        self._account_root = resolved_workspace.root
 
     @property
     def account_root(self) -> Path:
@@ -77,6 +96,13 @@ class AccountPathGuard:
 
     def resolve_read(self, relative_path: str) -> Path:
         """Resolve a relative path for read operations (read_file, str_replace source)."""
+        if self._execution_policy and self._execution_policy.configured:
+            try:
+                resolved = self._execution_policy.resolve_path(relative_path)
+                return resolved
+            except ValueError as exc:
+                raise PathGuardError(ERR_FORBIDDEN, str(exc))
+
         segments = self._validate_and_split(relative_path)
         self._check_allowed_file_path(segments)
         resolved = self._join_and_resolve(segments)
@@ -85,6 +111,13 @@ class AccountPathGuard:
 
     def resolve_write(self, relative_path: str) -> Path:
         """Resolve a relative path for write operations (write_file, str_replace, edit_file, patch_file)."""
+        if self._execution_policy and self._execution_policy.configured:
+            try:
+                resolved = self._execution_policy.resolve_path(relative_path)
+                return resolved
+            except ValueError as exc:
+                raise PathGuardError(ERR_FORBIDDEN, str(exc))
+
         segments = self._validate_and_split(relative_path)
         self._check_allowed_file_path(segments)
         resolved = self._join_and_resolve(segments)
@@ -104,6 +137,13 @@ class AccountPathGuard:
         - ``skills/<skill-name>/references/``
         - ``skills/<skill-name>/assets/``
         """
+        if self._execution_policy and self._execution_policy.configured:
+            try:
+                resolved = self._execution_policy.resolve_path(relative_path)
+                return resolved
+            except ValueError as exc:
+                raise PathGuardError(ERR_FORBIDDEN, str(exc))
+
         segments = self._validate_and_split(relative_path)
         self._check_allowed_list_path(segments)
         resolved = self._join_and_resolve(segments)
@@ -210,8 +250,8 @@ class AccountPathGuard:
 
         raise PathGuardError(
             ERR_FORBIDDEN,
-            f"list_files only allowed at: skills/, skills/<name>/, "
-            f"skills/<name>/references/, skills/<name>/assets/",
+            "list_files only allowed at: skills/, skills/<name>/, "
+            "skills/<name>/references/, skills/<name>/assets/",
         )
 
     def _validate_skill_name(self, name: str) -> None:
@@ -291,10 +331,7 @@ class AccountPathGuard:
 
 def _validate_account_id(account_id: str) -> None:
     """Reject path traversal in account IDs."""
-    if not account_id or account_id.strip() != account_id:
-        raise ValueError("account_id must be non-empty and trimmed")
-    if account_id in {".", ".."} or "/" in account_id or "\\" in account_id:
-        raise ValueError("account_id must be a single path segment")
+    _validate_workspace_account_id(account_id)
 
 
 def _get_extension(filename: str) -> str:

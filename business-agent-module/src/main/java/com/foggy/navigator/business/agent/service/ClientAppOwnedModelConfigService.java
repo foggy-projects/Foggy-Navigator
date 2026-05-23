@@ -108,6 +108,8 @@ public class ClientAppOwnedModelConfigService {
         modelForm.setAvailableModels(form.getAvailableModels() != null && !form.getAvailableModels().isEmpty()
                 ? form.getAvailableModels()
                 : (StringUtils.hasText(form.getModelName()) ? List.of(form.getModelName().trim()) : null));
+        modelForm.setRuntimeBudgetPresetKey(trimToNull(form.getRuntimeBudgetPresetKey()));
+        modelForm.setRuntimeBudgetOverrideJson(trimToNull(form.getRuntimeBudgetOverrideJson()));
         modelForm.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
         return modelForm;
     }

@@ -12,7 +12,6 @@ Validates the complete chain:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient

@@ -1,0 +1,53 @@
+{
+  "taskId": "lgt_3900ffd8d5c84762",
+  "snapshots": [
+    {
+      "taskId": "lgt_3900ffd8d5c84762",
+      "agentId": "tms-agent-v305",
+      "status": "SUBMITTED",
+      "contextId": null,
+      "result": null,
+      "errorMessage": null,
+      "durationMs": null,
+      "costUsd": null,
+      "createdAt": null,
+      "updatedAt": null
+    },
+    {
+      "taskId": "lgt_3900ffd8d5c84762",
+      "agentId": "tms-agent-v305",
+      "status": "SUBMITTED",
+      "contextId": null,
+      "result": null,
+      "errorMessage": null,
+      "durationMs": null,
+      "costUsd": null,
+      "createdAt": null,
+      "updatedAt": null
+    },
+    {
+      "taskId": "lgt_3900ffd8d5c84762",
+      "agentId": "tms-agent-v305",
+      "status": "SUBMITTED",
+      "contextId": null,
+      "result": null,
+      "errorMessage": null,
+      "durationMs": null,
+      "costUsd": null,
+      "createdAt": null,
+      "updatedAt": null
+    },
+    {
+      "taskId": "lgt_3900ffd8d5c84762",
+      "agentId": "tms-agent-v305",
+      "status": "COMPLETED",
+      "contextId": null,
+      "result": "已收到上一轮 hi，并保持简洁。",
+      "errorMessage": null,
+      "durationMs": null,
+      "costUsd": null,
+      "createdAt": null,
+      "updatedAt": null
+    }
+  ]
+}

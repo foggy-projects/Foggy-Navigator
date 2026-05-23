@@ -1,0 +1,11 @@
+server:
+  address: 0.0.0.0
+  port: ${NAVIGATOR_OBSERVER_BFF_PORT:5181}
+
+spring:
+  application:
+    name: navigator-chat-observer-bff
+  servlet:
+    multipart:
+      max-file-size: ${NAVIGATOR_OBSERVER_MAX_FILE_SIZE:20MB}
+      max-request-size: ${NAVIGATOR_OBSERVER_MAX_REQUEST_SIZE:24MB}

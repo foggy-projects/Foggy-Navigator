@@ -2,6 +2,7 @@ package com.foggy.navigator.business.agent.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.ClientAppSkillGrantDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillClearResultDTO;
@@ -44,7 +45,13 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.HashMap;
 import java.util.List;
@@ -52,6 +59,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService.STATUS_DISABLED;
@@ -68,6 +76,9 @@ public class SkillRegistryService {
     private static final int MAX_SKILL_RESOURCES = 100;
     private static final int MAX_SKILL_RESOURCE_BYTES = 1024 * 1024;
     private static final Pattern SAFE_RESOURCE_SEGMENT = Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9._-]*$");
+    private static final Pattern SCHEMA_PLACEHOLDER = Pattern.compile("\\$\\{@schema\\.([A-Za-z0-9][A-Za-z0-9._-]*)\\}");
+    private static final String SCHEMA_PLACEHOLDER_PREFIX = "${@schema.";
+    private static final int MAX_RENDERED_SCHEMA_FIELDS = 80;
     private static final String CONTEXT_VISIBILITY_ISOLATED = "isolated";
     private static final String CONTEXT_VISIBILITY_SUMMARY = "summary";
     private static final String CONTEXT_VISIBILITY_PASSTHROUGH = "passthrough";
@@ -229,6 +240,24 @@ public class SkillRegistryService {
         return materializePublicSkillInternal(tenantId, skill, null);
     }
 
+    @Transactional(readOnly = true)
+    public String buildMaterializedPublicSkillMarkdown(String tenantId, String skillId, String clientAppId) {
+        Assert.hasText(tenantId, "tenantId is required");
+        Assert.hasText(skillId, "skillId is required");
+        Assert.hasText(clientAppId, "clientAppId is required");
+
+        SkillEntity skill = getSkill(tenantId, skillId);
+        if (!STATUS_ENABLED.equals(skill.getStatus())) {
+            throw new IllegalStateException("Skill is disabled");
+        }
+        SchemaPlaceholderContext schemaContext = buildPublicSkillSchemaPlaceholderContext(
+                tenantId,
+                skill.getSkillId(),
+                clientAppId
+        );
+        return buildMaterializedMarkdown(tenantId, skill, schemaContext);
+    }
+
     @Transactional
     public SkillBundleDTO syncSkillBundle(String tenantId, String actorUserId, SyncSkillBundleForm form) {
         Assert.hasText(tenantId, "tenantId is required");
@@ -246,6 +275,7 @@ public class SkillRegistryService {
 
         clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
         validateBundleFunctions(tenantId, form.getClientAppId(), form.getFunctions());
+        validateBundleSchemaPlaceholders(tenantId, form);
 
         SkillBundleEntity bundle = skillBundleRepository
                 .findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
@@ -552,6 +582,8 @@ public class SkillRegistryService {
         }
 
         try {
+            List<Map<String, Object>> resources = parseResourcesJson(skill.getResourcesJson());
+            SchemaPlaceholderContext schemaContext = buildPublicSkillSchemaPlaceholderContext(tenantId, skill.getSkillId(), clientAppId);
             Map<String, Object> payload = new HashMap<>();
             payload.put("skill_id", skill.getSkillId());
             payload.put("scope", "public");
@@ -559,8 +591,8 @@ public class SkillRegistryService {
             payload.put("display_name", StringUtils.hasText(skill.getName()) ? skill.getName() : skill.getSkillId());
             payload.put("description", skill.getDescription());
             payload.put("context_visibility", normalizeContextVisibility(skill.getContextVisibility()));
-            payload.put("markdown_body", buildMaterializedMarkdown(tenantId, skill));
-            payload.put("resources", parseResourcesJson(skill.getResourcesJson()));
+            payload.put("markdown_body", buildMaterializedMarkdown(tenantId, skill, schemaContext));
+            payload.put("resources", resolveMaterializedResources(tenantId, resources, schemaContext));
             if (StringUtils.hasText(clientAppId)) {
                 payload.put("client_app_id", clientAppId);
             }
@@ -624,6 +656,8 @@ public class SkillRegistryService {
         }
 
         try {
+            List<Map<String, Object>> resources = parseResourcesJson(bundle.getResourcesJson());
+            SchemaPlaceholderContext schemaContext = buildBundleSchemaPlaceholderContext(bundle.getClientAppId(), parseFunctionsJson(bundle.getFunctionsJson()));
             Map<String, Object> payload = new HashMap<>();
             payload.put("skill_id", bundle.getSkillId());
             payload.put("scope", accountScope ? "account" : "public");
@@ -631,8 +665,8 @@ public class SkillRegistryService {
             payload.put("display_name", StringUtils.hasText(bundle.getName()) ? bundle.getName() : bundle.getSkillId());
             payload.put("description", bundle.getDescription());
             payload.put("context_visibility", normalizeContextVisibility(bundle.getContextVisibility()));
-            payload.put("markdown_body", buildMaterializedMarkdown(tenantId, bundle));
-            payload.put("resources", parseResourcesJson(bundle.getResourcesJson()));
+            payload.put("markdown_body", buildMaterializedMarkdown(tenantId, bundle, schemaContext));
+            payload.put("resources", resolveMaterializedResources(tenantId, resources, schemaContext));
             payload.put("client_app_id", bundle.getClientAppId());
             if (accountScope) {
                 payload.put("account_id", bundle.getAccountId());
@@ -728,6 +762,12 @@ public class SkillRegistryService {
         return result;
     }
 
+    private record SchemaPlaceholderContext(String clientAppId, Map<String, FunctionContractRef> allowedFunctions) {
+    }
+
+    private record FunctionContractRef(String version) {
+    }
+
     private static class MaterializeFailedException extends IllegalStateException {
         private final SkillMaterializeResultDTO result;
 
@@ -746,10 +786,11 @@ public class SkillRegistryService {
         }
     }
 
-    private String buildMaterializedMarkdown(String tenantId, SkillEntity skill) {
+    private String buildMaterializedMarkdown(String tenantId, SkillEntity skill, SchemaPlaceholderContext schemaContext) {
         StringBuilder md = new StringBuilder();
         if (StringUtils.hasText(skill.getMarkdownBody())) {
-            md.append(skill.getMarkdownBody().trim()).append("\n");
+            md.append(resolveSchemaPlaceholders(tenantId, skill.getMarkdownBody().trim(), schemaContext,
+                    "skill " + skill.getSkillId() + " markdownBody")).append("\n");
         }
 
         List<SkillFunctionAllowlistEntity> allowlist = allowlistRepository.findByTenantIdAndSkillId(tenantId, skill.getSkillId());
@@ -772,13 +813,16 @@ public class SkillRegistryService {
                     .filter(function -> STATUS_ENABLED.equals(function.getStatus()))
                     .ifPresent(function -> appendFunctionSummary(md, tenantId, function));
         }
-        return md.toString();
+        String result = md.toString();
+        assertNoUnresolvedSchemaPlaceholder(result, "skill " + skill.getSkillId() + " materialized markdown");
+        return result;
     }
 
-    private String buildMaterializedMarkdown(String tenantId, SkillBundleEntity bundle) {
+    private String buildMaterializedMarkdown(String tenantId, SkillBundleEntity bundle, SchemaPlaceholderContext schemaContext) {
         StringBuilder md = new StringBuilder();
         if (StringUtils.hasText(bundle.getMarkdownBody())) {
-            md.append(bundle.getMarkdownBody().trim()).append("\n");
+            md.append(resolveSchemaPlaceholders(tenantId, bundle.getMarkdownBody().trim(), schemaContext,
+                    "skill bundle " + bundle.getSkillId() + " markdownBody")).append("\n");
         }
 
         List<SkillBundleFunctionForm> functions = parseFunctionsJson(bundle.getFunctionsJson());
@@ -799,7 +843,9 @@ public class SkillRegistryService {
                     .filter(function -> STATUS_ENABLED.equals(function.getStatus()))
                     .ifPresent(function -> appendFunctionSummary(md, tenantId, function));
         }
-        return md.toString();
+        String result = md.toString();
+        assertNoUnresolvedSchemaPlaceholder(result, "skill bundle " + bundle.getSkillId() + " materialized markdown");
+        return result;
     }
 
     private void syncLegacySkillIndex(SkillBundleEntity bundle, String actorUserId) {
@@ -992,6 +1038,407 @@ public class SkillRegistryService {
             return objectMapper.readValue(resourcesJson, new TypeReference<List<Map<String, Object>>>() {});
         } catch (Exception e) {
             throw new IllegalStateException("Stored skill resourcesJson is invalid", e);
+        }
+    }
+
+    private void validateBundleSchemaPlaceholders(String tenantId, SyncSkillBundleForm form) {
+        boolean hasPlaceholders = hasSchemaPlaceholder(form.getMarkdownBody())
+                || hasSchemaPlaceholderInResourceForms(form.getResources());
+        if (!hasPlaceholders) {
+            return;
+        }
+
+        SchemaPlaceholderContext context = buildBundleSchemaPlaceholderContext(form.getClientAppId(), form.getFunctions());
+        if (StringUtils.hasText(form.getMarkdownBody())) {
+            resolveSchemaPlaceholders(tenantId, form.getMarkdownBody(), context,
+                    "skill bundle " + form.getSkillId() + " markdownBody");
+        }
+        if (form.getResources() == null) {
+            return;
+        }
+        for (SkillResourceForm resource : form.getResources()) {
+            if (resource != null && hasSchemaPlaceholder(resource.getContent())) {
+                resolveSchemaPlaceholders(tenantId, resource.getContent(), context,
+                        "skill bundle " + form.getSkillId() + " resource " + resource.getPath());
+            }
+        }
+    }
+
+    private SchemaPlaceholderContext buildPublicSkillSchemaPlaceholderContext(String tenantId, String skillId, String clientAppId) {
+        List<SkillFunctionAllowlistEntity> allowlist = allowlistRepository.findByTenantIdAndSkillId(tenantId, skillId);
+        if (allowlist == null || allowlist.isEmpty()) {
+            return new SchemaPlaceholderContext(clientAppId, Map.of());
+        }
+        Map<String, FunctionContractRef> allowed = new LinkedHashMap<>();
+        for (SkillFunctionAllowlistEntity item : allowlist) {
+            if (item != null && STATUS_ENABLED.equals(item.getStatus()) && StringUtils.hasText(item.getFunctionId())) {
+                allowed.put(item.getFunctionId(), new FunctionContractRef(null));
+            }
+        }
+        return new SchemaPlaceholderContext(clientAppId, allowed);
+    }
+
+    private SchemaPlaceholderContext buildBundleSchemaPlaceholderContext(String clientAppId, List<SkillBundleFunctionForm> functions) {
+        if (functions == null || functions.isEmpty()) {
+            return new SchemaPlaceholderContext(clientAppId, Map.of());
+        }
+        Map<String, FunctionContractRef> allowed = new LinkedHashMap<>();
+        for (SkillBundleFunctionForm function : functions) {
+            if (function == null || !StringUtils.hasText(function.getFunctionId())) {
+                continue;
+            }
+            if (!STATUS_ENABLED.equals(normalizeStatus(function.getStatus()))) {
+                continue;
+            }
+            allowed.put(function.getFunctionId(), new FunctionContractRef(function.getVersion()));
+        }
+        return new SchemaPlaceholderContext(clientAppId, allowed);
+    }
+
+    private List<Map<String, Object>> resolveMaterializedResources(
+            String tenantId,
+            List<Map<String, Object>> resources,
+            SchemaPlaceholderContext schemaContext) {
+        if (resources == null || resources.isEmpty() || !hasSchemaPlaceholderInResources(resources)) {
+            return resources == null ? List.of() : resources;
+        }
+        List<Map<String, Object>> resolved = new ArrayList<>(resources.size());
+        for (Map<String, Object> resource : resources) {
+            Map<String, Object> copy = new LinkedHashMap<>(resource);
+            Object contentValue = copy.get("content");
+            if (contentValue instanceof String content && hasSchemaPlaceholder(content)) {
+                String path = String.valueOf(copy.getOrDefault("path", "<unknown>"));
+                String rendered = resolveSchemaPlaceholders(tenantId, content, schemaContext,
+                        "skill resource " + path);
+                copy.put("content", rendered);
+                Object sha256 = copy.get("sha256");
+                if (sha256 instanceof String sha && StringUtils.hasText(sha)) {
+                    copy.put("sha256", sha256Hex(rendered));
+                }
+            }
+            resolved.add(copy);
+        }
+        return resolved;
+    }
+
+    private String resolveSchemaPlaceholders(
+            String tenantId,
+            String source,
+            SchemaPlaceholderContext schemaContext,
+            String location) {
+        if (!StringUtils.hasText(source) || !source.contains(SCHEMA_PLACEHOLDER_PREFIX)) {
+            return source;
+        }
+
+        Matcher matcher = SCHEMA_PLACEHOLDER.matcher(source);
+        StringBuffer resolved = new StringBuffer();
+        boolean found = false;
+        while (matcher.find()) {
+            found = true;
+            String functionId = matcher.group(1);
+            String contract = renderFunctionContract(tenantId, functionId, schemaContext, location);
+            matcher.appendReplacement(resolved, Matcher.quoteReplacement(contract));
+        }
+        if (!found) {
+            throw new IllegalStateException("Unresolved schema placeholder in " + location);
+        }
+        matcher.appendTail(resolved);
+        String result = resolved.toString();
+        assertNoUnresolvedSchemaPlaceholder(result, location);
+        return result;
+    }
+
+    private void assertNoUnresolvedSchemaPlaceholder(String text, String location) {
+        if (StringUtils.hasText(text) && text.contains(SCHEMA_PLACEHOLDER_PREFIX)) {
+            throw new IllegalStateException("Unresolved schema placeholder in " + location);
+        }
+    }
+
+    private String renderFunctionContract(
+            String tenantId,
+            String functionId,
+            SchemaPlaceholderContext schemaContext,
+            String location) {
+        FunctionContractRef ref = schemaContext == null ? null : schemaContext.allowedFunctions().get(functionId);
+        if (ref == null) {
+            throw new IllegalStateException("Schema placeholder function is not allowlisted for this skill: " + functionId
+                    + " in " + location);
+        }
+
+        BusinessFunctionEntity function = functionRepository.findByTenantIdAndFunctionId(tenantId, functionId)
+                .filter(item -> STATUS_ENABLED.equals(item.getStatus()))
+                .orElseThrow(() -> new IllegalStateException("Schema placeholder function not found or disabled: " + functionId));
+        String versionId = StringUtils.hasText(ref.version()) ? ref.version() : function.getCurrentVersion();
+        if (!StringUtils.hasText(versionId)) {
+            throw new IllegalStateException("Schema placeholder function version is missing: " + functionId);
+        }
+        if (!StringUtils.hasText(schemaContext.clientAppId())) {
+            throw new IllegalStateException("Client App is required to render schema placeholder function: " + functionId + "@" + versionId);
+        }
+        if (!hasEnabledClientAppFunctionGrant(tenantId, schemaContext.clientAppId(), functionId, versionId)) {
+            throw new IllegalStateException("Client App is not granted access to schema placeholder function: " + functionId + "@" + versionId);
+        }
+
+        BusinessFunctionVersionEntity version = versionRepository
+                .findByTenantIdAndFunctionIdAndVersion(tenantId, functionId, versionId)
+                .filter(item -> STATUS_ENABLED.equals(item.getStatus()))
+                .orElseThrow(() -> new IllegalStateException("Schema placeholder function version not found or disabled: "
+                        + functionId + "@" + versionId));
+        if (!StringUtils.hasText(version.getInputSchemaJson()) && !StringUtils.hasText(version.getOutputSchemaJson())) {
+            throw new IllegalStateException("Schema placeholder function schema is missing: " + functionId + "@" + versionId);
+        }
+
+        StringBuilder md = new StringBuilder();
+        md.append("### ").append(functionId).append("@").append(versionId).append("\n\n");
+        if (StringUtils.hasText(function.getName())) {
+            md.append("- Name: ").append(cleanInline(function.getName())).append("\n");
+        }
+        if (StringUtils.hasText(function.getDescription())) {
+            md.append("- Description: ").append(cleanInline(function.getDescription())).append("\n");
+        }
+        md.append("- Approval required: ").append(Boolean.TRUE.equals(function.getApprovalRequired())).append("\n");
+        md.append("- Idempotency required: ").append(Boolean.TRUE.equals(function.getIdempotencyRequired())).append("\n");
+        if (StringUtils.hasText(version.getLlmVisibleSummary())) {
+            md.append("- When to call: ").append(cleanInline(version.getLlmVisibleSummary())).append("\n");
+        }
+        if (StringUtils.hasText(version.getSchemaVisibleSummary())) {
+            md.append("- Public schema notes: ").append(cleanInline(version.getSchemaVisibleSummary())).append("\n");
+        }
+
+        appendSchemaSection(md, "Input Fields", version.getInputSchemaJson(), functionId, versionId);
+        appendSchemaSection(md, "Output Fields", version.getOutputSchemaJson(), functionId, versionId);
+        return md.toString().trim();
+    }
+
+    private void appendSchemaSection(StringBuilder md, String heading, String schemaJson, String functionId, String versionId) {
+        if (!StringUtils.hasText(schemaJson)) {
+            return;
+        }
+        JsonNode schema;
+        try {
+            schema = objectMapper.readTree(schemaJson);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Function schema is invalid JSON: " + functionId + "@" + versionId, e);
+        }
+        md.append("\n#### ").append(heading).append("\n");
+        int[] count = new int[] {0};
+        boolean appended = appendSchemaProperties(md, schema, schema, "", 0, count);
+        if (!appended) {
+            md.append("- Registered schema has no top-level JSON Schema properties.\n");
+        }
+    }
+
+    private boolean appendSchemaProperties(
+            StringBuilder md,
+            JsonNode rootSchema,
+            JsonNode schema,
+            String pathPrefix,
+            int depth,
+            int[] count) {
+        JsonNode properties = schema == null ? null : schema.get("properties");
+        if (properties == null || !properties.isObject()) {
+            return false;
+        }
+        boolean appended = false;
+        Set<String> required = requiredNames(schema);
+        Iterator<Map.Entry<String, JsonNode>> fields = properties.fields();
+        while (fields.hasNext()) {
+            if (count[0] >= MAX_RENDERED_SCHEMA_FIELDS) {
+                md.append("- Additional schema fields omitted after ").append(MAX_RENDERED_SCHEMA_FIELDS).append(" fields.\n");
+                return true;
+            }
+            Map.Entry<String, JsonNode> field = fields.next();
+            String name = field.getKey();
+            JsonNode fieldSchema = resolveLocalSchemaRef(rootSchema, field.getValue());
+            String fieldPath = StringUtils.hasText(pathPrefix) ? pathPrefix + "." + name : name;
+            md.append("- `").append(fieldPath).append("` (")
+                    .append(describeSchemaField(fieldSchema, required.contains(name)))
+                    .append(")");
+            String description = schemaDescription(fieldSchema);
+            if (StringUtils.hasText(description)) {
+                md.append(": ").append(description);
+            }
+            md.append("\n");
+            count[0]++;
+            appended = true;
+
+            if (depth < 4) {
+                appendSchemaProperties(md, rootSchema, fieldSchema, fieldPath, depth + 1, count);
+                JsonNode items = fieldSchema == null ? null : fieldSchema.get("items");
+                if (items != null && items.isObject()) {
+                    appendSchemaProperties(md, rootSchema, resolveLocalSchemaRef(rootSchema, items),
+                            fieldPath + "[]", depth + 1, count);
+                }
+            }
+        }
+        return appended;
+    }
+
+    private JsonNode resolveLocalSchemaRef(JsonNode rootSchema, JsonNode node) {
+        if (rootSchema == null || node == null || !node.isObject()) {
+            return node;
+        }
+        JsonNode ref = node.get("$ref");
+        if (ref == null || !ref.isTextual()) {
+            return node;
+        }
+        String pointer = ref.asText();
+        if (!pointer.startsWith("#/")) {
+            return node;
+        }
+        JsonNode resolved = rootSchema.at(pointer.substring(1));
+        return resolved.isMissingNode() ? node : resolved;
+    }
+
+    private Set<String> requiredNames(JsonNode schema) {
+        JsonNode required = schema == null ? null : schema.get("required");
+        if (required == null || !required.isArray()) {
+            return Set.of();
+        }
+        Set<String> names = new LinkedHashSet<>();
+        for (JsonNode item : required) {
+            if (item.isTextual()) {
+                names.add(item.asText());
+            }
+        }
+        return names;
+    }
+
+    private String describeSchemaField(JsonNode fieldSchema, boolean required) {
+        List<String> parts = new ArrayList<>();
+        parts.add(schemaType(fieldSchema));
+        if (required) {
+            parts.add("required");
+        } else if (isRecommended(fieldSchema)) {
+            parts.add("recommended");
+        } else {
+            parts.add("optional");
+        }
+        String enumValues = enumValues(fieldSchema);
+        if (StringUtils.hasText(enumValues)) {
+            parts.add("enum: " + enumValues);
+        }
+        return String.join(", ", parts);
+    }
+
+    private String schemaType(JsonNode fieldSchema) {
+        if (fieldSchema == null || fieldSchema.isMissingNode()) {
+            return "value";
+        }
+        JsonNode type = fieldSchema.get("type");
+        if (type != null && type.isTextual() && StringUtils.hasText(type.asText())) {
+            return type.asText();
+        }
+        if (type != null && type.isArray()) {
+            List<String> values = new ArrayList<>();
+            for (JsonNode item : type) {
+                if (item.isTextual() && StringUtils.hasText(item.asText())) {
+                    values.add(item.asText());
+                }
+            }
+            if (!values.isEmpty()) {
+                return String.join("|", values);
+            }
+        }
+        if (fieldSchema.has("properties")) {
+            return "object";
+        }
+        if (fieldSchema.has("items")) {
+            return "array";
+        }
+        if (fieldSchema.has("enum")) {
+            return "enum";
+        }
+        return "value";
+    }
+
+    private boolean isRecommended(JsonNode fieldSchema) {
+        if (fieldSchema == null || fieldSchema.isMissingNode()) {
+            return false;
+        }
+        return booleanField(fieldSchema, "recommended")
+                || booleanField(fieldSchema, "x-recommended")
+                || booleanField(fieldSchema, "xRecommended");
+    }
+
+    private boolean booleanField(JsonNode node, String name) {
+        JsonNode value = node.get(name);
+        return value != null && value.isBoolean() && value.asBoolean();
+    }
+
+    private String enumValues(JsonNode fieldSchema) {
+        JsonNode enumNode = fieldSchema == null ? null : fieldSchema.get("enum");
+        if (enumNode == null || !enumNode.isArray()) {
+            return "";
+        }
+        List<String> values = new ArrayList<>();
+        int count = 0;
+        for (JsonNode item : enumNode) {
+            if (count >= 12) {
+                values.add("...");
+                break;
+            }
+            if (item.isTextual()) {
+                values.add("`" + cleanInline(item.asText()) + "`");
+            } else if (!item.isNull()) {
+                values.add("`" + cleanInline(item.toString()) + "`");
+            }
+            count++;
+        }
+        return String.join(", ", values);
+    }
+
+    private String schemaDescription(JsonNode fieldSchema) {
+        if (fieldSchema == null || fieldSchema.isMissingNode()) {
+            return "";
+        }
+        JsonNode description = fieldSchema.get("description");
+        if (description != null && description.isTextual() && StringUtils.hasText(description.asText())) {
+            return cleanInline(description.asText());
+        }
+        JsonNode title = fieldSchema.get("title");
+        if (title != null && title.isTextual() && StringUtils.hasText(title.asText())) {
+            return cleanInline(title.asText());
+        }
+        return "";
+    }
+
+    private String cleanInline(String value) {
+        return value == null ? "" : value.replace("\r", " ").replace("\n", " ").replaceAll("\\s+", " ").trim();
+    }
+
+    private boolean hasSchemaPlaceholder(String text) {
+        return StringUtils.hasText(text) && text.contains(SCHEMA_PLACEHOLDER_PREFIX);
+    }
+
+    private boolean hasSchemaPlaceholderInResourceForms(List<SkillResourceForm> resources) {
+        if (resources == null || resources.isEmpty()) {
+            return false;
+        }
+        return resources.stream()
+                .anyMatch(resource -> resource != null && hasSchemaPlaceholder(resource.getContent()));
+    }
+
+    private boolean hasSchemaPlaceholderInResources(List<Map<String, Object>> resources) {
+        if (resources == null || resources.isEmpty()) {
+            return false;
+        }
+        return resources.stream()
+                .map(resource -> resource == null ? null : resource.get("content"))
+                .anyMatch(content -> content instanceof String text && hasSchemaPlaceholder(text));
+    }
+
+    private String sha256Hex(String content) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(content.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 algorithm is not available", e);
         }
     }
 

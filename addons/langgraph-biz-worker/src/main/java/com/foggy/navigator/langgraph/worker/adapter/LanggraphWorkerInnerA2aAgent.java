@@ -5,7 +5,9 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import com.foggy.navigator.langgraph.worker.service.LanggraphTaskService;
+import com.foggy.navigator.langgraph.worker.support.LanggraphSkillNameContract;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -18,14 +20,17 @@ import java.util.Optional;
  * <p>
  * Phase 1: simplified — no dedup, no session-busy check.
  */
+@Slf4j
 class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
 
     private final CodingAgentEntity entity;
     private final LanggraphTaskService taskService;
+    private final String workerId;
 
-    LanggraphWorkerInnerA2aAgent(CodingAgentEntity entity, LanggraphTaskService taskService) {
+    LanggraphWorkerInnerA2aAgent(CodingAgentEntity entity, LanggraphTaskService taskService, String workerId) {
         this.entity = entity;
         this.taskService = taskService;
+        this.workerId = workerId;
     }
 
     @Override
@@ -45,11 +50,13 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
 
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
         form.setAgentId(entity.getAgentId());
-        form.setWorkerId(entity.getWorkerId());
+        form.setSkillName(resolveSkillName(meta, "A2A metadata"));
+        form.setWorkerId(workerId);
         form.setPrompt(prompt);
         form.setDirectoryId(entity.getDefaultDirectoryId());
         form.setModel(firstText(meta.get("model"), entity.getDefaultModel()));
         form.setModelConfigId(firstText(meta.get("modelConfigId"), entity.getDefaultModelConfigId()));
+        form.setMaxTurns(positiveInteger(firstPresent(meta, "maxTurns", "max_turns")));
         form.setAttachments(attachmentsMeta(meta.get("attachments")));
         form.setContextId(context.getContextId());
         form.setSessionId(context.getNavigatorSessionId());
@@ -92,7 +99,12 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
 
     @Override
     public void cancelTask(String taskId) {
-        taskService.failTask(taskId, "Cancelled by user");
+        taskService.cancelTask(taskId, entity.getUserId());
+    }
+
+    @Override
+    public void abortWorkerTask(String taskId, String remoteTaskId) {
+        taskService.cancelTask(taskId, entity.getUserId());
     }
 
     private A2aTask toA2aTask(LanggraphTaskDTO dto) {
@@ -144,6 +156,36 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
             return value;
         }
         return fallback;
+    }
+
+    private String resolveSkillName(Map<String, Object> values, String source) {
+        return LanggraphSkillNameContract.resolve(values, (key, ignored) ->
+                log.warn("Deprecated LangGraph skill alias '{}' received from {}; use 'skill_name'", key, source));
+    }
+
+    private Object firstPresent(Map<String, Object> meta, String... keys) {
+        for (String key : keys) {
+            if (meta.containsKey(key)) {
+                return meta.get(key);
+            }
+        }
+        return null;
+    }
+
+    private Integer positiveInteger(Object value) {
+        if (value instanceof Number number) {
+            int parsed = number.intValue();
+            return parsed > 0 ? parsed : null;
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                int parsed = Integer.parseInt(text.trim());
+                return parsed > 0 ? parsed : null;
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private Map<String, Object> taskMetadata(LanggraphTaskDTO task) {

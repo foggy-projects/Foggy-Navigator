@@ -14,9 +14,12 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -41,10 +44,12 @@ class LanggraphWorkerInnerA2aAgentTest {
         entity.setDefaultModelConfigId("model_default");
         entity.setDefaultModel("sonnet");
 
-        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService);
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
         message.setContextId("ctx_01");
-        message.setMetadata(Map.of("runtimeContext", Map.of("task_scoped_token", "btt_01")));
+        message.setMetadata(Map.of(
+                "skill_name", "tms.navigator.agent",
+                "runtimeContext", Map.of("task_scoped_token", "btt_01")));
 
         agent.sendTask(A2aContext.builder()
                 .message(message)
@@ -57,6 +62,33 @@ class LanggraphWorkerInnerA2aAgentTest {
         assertEquals("model_default", captor.getValue().getModelConfigId());
         assertEquals("sonnet", captor.getValue().getModel());
         assertEquals("worker_01", captor.getValue().getWorkerId());
+        assertEquals("tms.navigator.agent", captor.getValue().getSkillName());
+    }
+
+    @Test
+    void sendTask_rejectsConflictingSkillAliases() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setAgentId("agent_01");
+        entity.setName("Agent");
+        entity.setUserId("admin_01");
+        entity.setTenantId("tenant_01");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
+        A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
+        message.setMetadata(Map.of(
+                "skill_name", "canonical.skill",
+                "skill_id", "legacy.skill"));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                agent.sendTask(A2aContext.builder()
+                        .message(message)
+                        .contextId("ctx_01")
+                        .navigatorSessionId("session_01")
+                        .build()));
+
+        assertEquals("skill_name aliases must resolve to the same value", error.getMessage());
+        verify(taskService, never()).createTask(anyString(), anyString(), any(CreateLanggraphTaskForm.class));
     }
 
     @Test
@@ -74,9 +106,9 @@ class LanggraphWorkerInnerA2aAgentTest {
         entity.setDefaultModelConfigId("model_default");
         entity.setDefaultModel("sonnet");
 
-        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService);
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
-        message.setMetadata(Map.of("modelConfigId", "model_override", "model", "opus"));
+        message.setMetadata(Map.of("modelConfigId", "model_override", "model", "opus", "maxTurns", 12));
 
         agent.sendTask(A2aContext.builder()
                 .message(message)
@@ -88,5 +120,62 @@ class LanggraphWorkerInnerA2aAgentTest {
         verify(taskService).createTask(eq("admin_01"), eq("tenant_01"), captor.capture());
         assertEquals("model_override", captor.getValue().getModelConfigId());
         assertEquals("opus", captor.getValue().getModel());
+        assertEquals(12, captor.getValue().getMaxTurns());
+    }
+
+    @Test
+    void sendTask_usesResolvedWorkerIdInsteadOfAgentStoredWorkerId() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        when(taskService.createTask(eq("admin_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class)))
+                .thenReturn(LanggraphTaskDTO.builder()
+                        .taskId("lgt_01")
+                        .sessionId("session_01")
+                        .workerId("worker_default")
+                        .build());
+
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setAgentId("agent_01");
+        entity.setName("Agent");
+        entity.setUserId("admin_01");
+        entity.setTenantId("tenant_01");
+        entity.setWorkerId("old_pool_id");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_default");
+        agent.sendTask(A2aContext.builder()
+                .message(A2aMessage.user(List.of(A2aPart.text("hello"))))
+                .contextId("ctx_01")
+                .build());
+
+        ArgumentCaptor<CreateLanggraphTaskForm> captor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("admin_01"), eq("tenant_01"), captor.capture());
+        assertEquals("worker_default", captor.getValue().getWorkerId());
+    }
+
+    @Test
+    void cancelTask_recordsRecoverableInterruptionThroughTaskService() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setUserId("admin_01");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
+
+        agent.cancelTask("lgt_01");
+
+        verify(taskService).cancelTask("lgt_01", "admin_01");
+        verify(taskService, never()).failTask(anyString(), anyString());
+    }
+
+    @Test
+    void abortWorkerTask_recordsRecoverableInterruptionThroughTaskService() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setUserId("admin_01");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
+
+        agent.abortWorkerTask("lgt_01", "remote_01");
+
+        verify(taskService).cancelTask("lgt_01", "admin_01");
+        verify(taskService, never()).failTask(anyString(), anyString());
     }
 }

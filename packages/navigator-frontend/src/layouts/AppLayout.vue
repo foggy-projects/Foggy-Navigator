@@ -51,7 +51,6 @@ import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Bell, ArrowDown } from '@element-plus/icons-vue'
 import { getUserInfo, clearAuth } from '@/utils/auth'
-import { resetSetupStatus, clearSetupSkipped } from '@/router'
 import { useNotifications } from '@/composables/useNotifications'
 import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
 
@@ -87,8 +86,6 @@ function handleNotificationClick() {
 function handleCommand(command: string) {
   if (command === 'logout') {
     clearAuth()
-    resetSetupStatus()
-    clearSetupSkipped()
     router.push('/login')
   }
 }

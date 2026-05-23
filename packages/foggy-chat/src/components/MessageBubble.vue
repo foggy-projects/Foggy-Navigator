@@ -5,6 +5,10 @@
       <span class="timestamp">{{ formattedTime }}</span>
     </div>
     <div ref="contentRef" class="bubble-content markdown-body" v-html="renderedContent"></div>
+    <ExecutionReportInline
+      :report-ref="props.message.executionReportRef"
+      :digest="props.message.executionReportDigest"
+    />
     <div v-if="props.message.images && props.message.images.length > 0" class="bubble-images">
       <img
         v-for="(img, idx) in props.message.images"
@@ -49,6 +53,7 @@ import { AipMessageType } from '../types/aip'
 import type { ChatMessage } from '../types/chat'
 import { copyToClipboard } from '../utils/clipboard'
 import { renderMarkdown } from '../utils/markdownRenderer'
+import ExecutionReportInline from './ExecutionReportInline.vue'
 
 const props = defineProps<{
   message: ChatMessage
@@ -73,8 +78,14 @@ const senderLabel = computed(() => {
 
 const formattedTime = computed(() => {
   const d = new Date(props.message.timestamp)
-  return d.toLocaleTimeString()
+  if (Number.isNaN(d.getTime())) return ''
+  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} `
+    + `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
 })
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
+}
 
 // Clean LLM artifacts like <think>...</think> tags
 function cleanContent(content: string): string {

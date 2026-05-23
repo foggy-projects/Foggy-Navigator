@@ -1,0 +1,692 @@
+{
+  "overallStatus": "OK",
+  "baseUrl": "http://localhost:8112",
+  "clientAppId": "capp_2852124a-48f7-4098-9d5e-33eb736c4375",
+  "clientAppName": "tms-x3-agent-v305",
+  "agentCode": "tms-agent-v305",
+  "upstreamUserId": "navi-local-smoke-user",
+  "requestedModelConfigId": null,
+  "effectiveModelConfigId": "885e470e-8e4f-4904-b5e7-2bf57fa60a2d",
+  "checks": [
+    {
+      "code": "ROOT_AGENT_BINDING",
+      "status": "OK",
+      "message": "root agent binding resolved"
+    },
+    {
+      "code": "AGENT_REGISTERED",
+      "status": "OK",
+      "message": null
+    },
+    {
+      "code": "CLIENT_APP_SKILL_GRANT",
+      "status": "OK",
+      "message": null
+    },
+    {
+      "code": "UPSTREAM_USER_GRANT",
+      "status": "OK",
+      "message": null
+    },
+    {
+      "code": "MODEL_CONFIG_GRANT",
+      "status": "OK",
+      "message": null
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:attachment.upload",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction attachment.upload client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.account.disable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.account.disable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.account.enable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.account.enable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.account.resetPassword",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.account.resetPassword client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.org.create",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.org.create client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.org.disable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.org.disable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.org.enable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.org.enable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.org.get",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.org.get client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.org.update",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.org.update client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.role.create",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.role.create client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.role.disable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.role.disable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.role.enable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.role.enable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.role.get",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.role.get client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.role.rename",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.role.rename client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.staff.create",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.staff.create client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.staff.disable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.staff.disable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.staff.enable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.staff.enable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.staff.get",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.staff.get client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.staff.update",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.staff.update client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.station.disable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.station.disable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.station.enable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.station.enable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.station.get",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.station.get client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.station.getByOrg",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.station.getByOrg client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.station.getCurrent",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.station.getCurrent client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.station.resolve",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.station.resolve client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:basic.station.update",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction basic.station.update client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:platform.tenant.create",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction platform.tenant.create client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:platform.tenant.disable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction platform.tenant.disable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:platform.tenant.enable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction platform.tenant.enable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:platform.tenant.get",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction platform.tenant.get client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:platform.tenant.resolve",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction platform.tenant.resolve client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:platform.tenant.update",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction platform.tenant.update client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.dataset.composeScript",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.dataset.composeScript client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.dataset.describeModel",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.dataset.describeModel client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.dataset.listModels",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.dataset.listModels client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.dataset.queryModel",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.dataset.queryModel client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.driver.create",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.driver.create client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.driver.findByPhone",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.driver.findByPhone client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.finance.getPaymentSummary",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.finance.getPaymentSummary client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.fulfillment.selfPickupSign",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.fulfillment.selfPickupSign client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.order.createOpeningDraft",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.order.createOpeningDraft client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.order.getExecutionStatus",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.order.getExecutionStatus client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.order.getSummary",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.order.getSummary client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.route.create",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.route.create client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.route.disable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.route.disable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.route.enable",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.route.enable client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.route.get",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.route.get client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.route.resolve",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.route.resolve client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.route.update",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.route.update client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.serviceArea.get",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.serviceArea.get client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.serviceArea.resolve",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.serviceArea.resolve client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.shipment.arriveTask",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.shipment.arriveTask client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.shipment.createTask",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.shipment.createTask client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.shipment.departTask",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.shipment.departTask client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.shipment.resolveLoadingTarget",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.shipment.resolveLoadingTarget client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.shipment.scanLoad",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.shipment.scanLoad client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.shipment.unloadByIdentifier",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.shipment.unloadByIdentifier client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.ticket.addComment",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.ticket.addComment client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.ticket.changeStatus",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.ticket.changeStatus client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.ticket.createOrderException",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.ticket.createOrderException client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.ticket.createPlatformFeedback",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.ticket.createPlatformFeedback client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.ticket.detail",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.ticket.detail client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.ticket.events",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.ticket.events client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.vehicle.create",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.vehicle.create client-app upstream route resolved"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_ADAPTER:tms.vehicle.findByPlate",
+      "status": "OK",
+      "message": "REST adapter upstream_ref \"local-smoke-2026-05-18\" is valid"
+    },
+    {
+      "code": "BUSINESS_FUNCTION_UPSTREAM_ROUTE:local-smoke-2026-05-18",
+      "status": "OK",
+      "message": "BusinessFunction tms.vehicle.findByPlate client-app upstream route resolved"
+    }
+  ],
+  "skillArtifact": {
+    "available": true,
+    "treeUrl": "/api/v1/open/skills/tms-agent-v305/files/tree",
+    "sliceUrlTemplate": "/api/v1/open/skills/tms-agent-v305/files/slice?path={path}&startLine={startLine}&startColumn={startColumn}&maxChars={maxChars}"
+  }
+}

@@ -425,6 +425,55 @@ class RestBusinessFunctionAdapterInvokerTest {
     }
 
     @Test
+    void invoke_business_error_envelope_fails_closed() {
+        context.setAdapterConfigJson("""
+            {
+              "type": "rest",
+              "method": "POST",
+              "upstream_ref": "tms",
+              "path": "/x3-agent/tickets"
+            }
+            """);
+        when(environment.getProperty("foggy.navigator.business.agent.upstreams.tms.url"))
+                .thenReturn("http://internal-tms:8080");
+        when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(String.class)))
+                .thenReturn(ResponseEntity.ok("""
+                        {"code":600,"exCode":"B600","msg":"系统异常，请稍后重试"}
+                        """));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                invoker.invoke(context, "{}")
+        );
+
+        assertTrue(ex.getMessage().contains("business code 600"));
+        assertTrue(ex.getMessage().contains("B600"));
+        assertTrue(ex.getMessage().contains("系统异常"));
+    }
+
+    @Test
+    void invoke_text_business_error_envelope_fails_closed() {
+        context.setAdapterConfigJson("""
+            {
+              "type": "rest",
+              "method": "POST",
+              "upstream_ref": "tms",
+              "path": "/x3-agent/tickets"
+            }
+            """);
+        when(environment.getProperty("foggy.navigator.business.agent.upstreams.tms.url"))
+                .thenReturn("http://internal-tms:8080");
+        when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(String.class)))
+                .thenReturn(ResponseEntity.ok("{\"code\":\"600\",\"message\":\"business rejected\"}"));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                invoker.invoke(context, "{}")
+        );
+
+        assertTrue(ex.getMessage().contains("business code 600"));
+        assertTrue(ex.getMessage().contains("business rejected"));
+    }
+
+    @Test
     void invoke_injects_configured_upstream_user_token_header() {
         context.setAdapterConfigJson("""
             {

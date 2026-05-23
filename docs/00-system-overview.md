@@ -25,7 +25,7 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 | 会话协作中心 | `会话` | 统一承接用户与 Agent 的对话、消息流和委派跳转 | `session-module`、`tutor-agent`、`agent-framework` |
 | 任务治理中心 | `任务` | 统一查看和治理平台侧 Agent Task / Worker Task | `session-module` |
 | 跨项目编排 | `跨项目` | 把一个目标拆成多阶段、多目录、多 Agent 的串行协作流程 | `addons/claude-worker-agent` |
-| 平台设置与资源治理 | `设置`、`初始化配置` | 管理 Git、LLM、Worker、凭证、记忆、Agent 模型覆盖等 | `metadata-config-module`、`addons/task-assistant`、`addons/claude-worker-agent` |
+| 平台设置与资源治理 | `设置` | 管理 Git、LLM、Worker、凭证、记忆、Agent 模型覆盖等 | `metadata-config-module`、`addons/task-assistant`、`addons/claude-worker-agent` |
 | 用户与访问控制 | `登录`、`用户` | 登录认证、用户管理、角色状态、API Key 管理 | `user-auth-module` |
 | 监控、通知与开放集成 | `监控`、SSE、Open API | 提供事件面板、通知流和对外集成接口 | `monitoring-module`、`session-module`、`navigator-open-sdk`、`addons/claude-worker-agent` |
 
@@ -40,7 +40,6 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 - `/monitoring`：监控事件
 - `/users`：用户管理
 - `/settings`：平台设置
-- `/setup`：初始化引导
 - `/files`：文件浏览器
 
 ### 2.3 后端分层
@@ -61,7 +60,7 @@ Launcher
   -> tutor-agent
   -> addons/claude-worker-agent
   -> addons/codex-worker-agent
-  -> addons/coding-agent
+  -> addons/gemini-worker-agent
   -> addons/task-assistant
 
 平台底座层
@@ -102,7 +101,7 @@ Launcher
 |------|------|
 | `addons/claude-worker-agent` | 远程 Claude Worker、目录、文件浏览、跨项目任务、Open API |
 | `addons/codex-worker-agent` | Codex Worker 任务和进程治理 |
-| `addons/coding-agent` | OpenHands 集成、容器/会话/事件/Git 环境管理 |
+| `addons/gemini-worker-agent` | Gemini Worker 任务和进程治理 |
 | `addons/task-assistant` | 针对任务生命周期生成通知和摘要的助手能力 |
 | `addons/echo-agent` | 示例/测试型 Agent |
 
@@ -145,7 +144,7 @@ Launcher
 ### 4.4 平台治理流程
 
 ```text
-初始化配置 / 设置页
+设置页
   -> 管理 Git 提供方
   -> 管理 LLM 模型
   -> 管理 Agent 模型覆盖
@@ -169,7 +168,6 @@ Launcher
 
 ### 5.2 当前不是主轴或仍偏支撑的能力
 
-- `addons/coding-agent` 已存在，但在主前端中不是主要导航入口，更多是独立集成能力
 - `echo-agent` 属于示例/测试能力
 - 历史文档中的“语义层管理、数据分析 Agent、权限建模平台”不再是当前产品主线
 

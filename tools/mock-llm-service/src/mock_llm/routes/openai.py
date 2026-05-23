@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 from fastapi import APIRouter
@@ -55,6 +56,10 @@ async def chat_completions(request: ChatCompletionRequest):
     else:
         content = rule.response.content
 
+    response_delay_ms = _response_delay_ms(script_match, rule)
+    if response_delay_ms > 0:
+        await asyncio.sleep(response_delay_ms / 1000)
+
     # 流式响应
     if request.stream:
         stream_config = rule.stream if rule and rule.stream else StreamConfig()
@@ -64,6 +69,7 @@ async def chat_completions(request: ChatCompletionRequest):
             request,
             {
                 "stream": True,
+                "responseDelayMs": response_delay_ms,
                 "toolCalls": [tc["function"]["name"] for tc in tool_calls],
             },
         )
@@ -125,6 +131,7 @@ async def chat_completions(request: ChatCompletionRequest):
         {
             "finishReason": finish_reason,
             "contentLength": len(content or ""),
+            "responseDelayMs": response_delay_ms,
             "toolCalls": [
                 tc.function.name for tc in (response_message.tool_calls or [])
             ],
@@ -135,13 +142,33 @@ async def chat_completions(request: ChatCompletionRequest):
 
 def _estimate_tokens(messages: list) -> int:
     """估算 token 数量"""
-    return sum(len(m.content or "") // 4 for m in messages)
+    return sum(_content_length(m.content) // 4 for m in messages)
+
+
+def _content_length(content) -> int:
+    if content is None:
+        return 0
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(_content_length(item) for item in content)
+    if isinstance(content, dict):
+        return sum(_content_length(value) for value in content.values())
+    return len(str(content))
 
 
 def _response_tool_calls(script_match: ScriptMatch, rule):
     if script_match:
         return script_match.response.tool_calls
     return rule.response.tool_calls if rule and rule.response.tool_calls else None
+
+
+def _response_delay_ms(script_match: ScriptMatch, rule) -> int:
+    if script_match:
+        return max(0, int(script_match.response.delay_ms or 0))
+    if rule and rule.response:
+        return max(0, int(rule.response.delay_ms or 0))
+    return 0
 
 
 def _normalized_tool_calls(script_match: ScriptMatch, rule):

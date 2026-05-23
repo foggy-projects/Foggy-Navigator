@@ -92,11 +92,22 @@ public class LanggraphWorkerResumeEventListener {
             log.warn("Worker ID is missing for taskId: {}, cannot dispatch resume", event.getTaskId());
             return;
         }
+        String contextId = task.getContextId();
+        if (!StringUtils.hasText(contextId)) {
+            log.error("Resume binding rejected for taskId={}: task contextId is absent", event.getTaskId());
+            return;
+        }
 
         LanggraphWorkerEntity worker = workerService.getWorkerEntity(workerId);
         var client = workerService.createClient(worker);
 
-        client.resumeTask(event.getTaskId(), event.getApprovalResult(), event.getComment())
+        client.resumeTask(
+                event.getTaskId(),
+                event.getSessionId(),
+                contextId,
+                event.getApprovalResult(),
+                event.getComment()
+        )
                 .doOnSuccess(resp -> {
                     log.info("Successfully dispatched worker conversation resume notification: taskId={}, workerId={}",
                             event.getTaskId(), workerId);

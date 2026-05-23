@@ -8,6 +8,7 @@ import com.foggy.navigator.business.agent.model.entity.BusinessAgentSessionEntit
 import com.foggy.navigator.business.agent.model.entity.BusinessAgentTaskEntity;
 import com.foggy.navigator.business.agent.repository.BusinessAgentSessionMessageRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentSessionRepository;
+import com.foggy.navigator.business.agent.support.BusinessAgentSessionMessageVisibility;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -16,15 +17,27 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class BusinessAgentSessionService {
 
     public static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String CONTEXT_ID_FORMAT = "bctx_yyyyMMdd_<hash>_<id>";
+    private static final Pattern CONTEXT_ID_PATTERN =
+            Pattern.compile("^bctx_(\\d{8})_[0-9a-f]{2}_[A-Za-z0-9._-]+$");
+    private static final DateTimeFormatter CONTEXT_ID_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
 
     private final BusinessAgentSessionRepository sessionRepository;
     private final BusinessAgentSessionMessageRepository messageRepository;
@@ -75,6 +88,44 @@ public class BusinessAgentSessionService {
     }
 
     @Transactional(readOnly = true)
+    public String resolveReusableContextId(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String requestedContextId,
+            String sessionId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(clientAppId, "clientAppId is required");
+        requireText(upstreamUserId, "upstreamUserId is required");
+        requireText(sessionId, "sessionId is required");
+
+        String normalizedContextId = normalizeContextId(requestedContextId);
+        BusinessAgentSessionEntity bySession = sessionRepository
+                .findByTenantIdAndClientAppIdAndUpstreamUserIdAndSessionId(
+                        tenantId, clientAppId, upstreamUserId, sessionId)
+                .orElse(null);
+        if (bySession != null) {
+            if (normalizedContextId != null && !normalizedContextId.equals(bySession.getContextId())) {
+                throw new IllegalArgumentException("business agent session context mismatch");
+            }
+            return bySession.getContextId();
+        }
+
+        if (normalizedContextId == null) {
+            return null;
+        }
+
+        BusinessAgentSessionEntity byContext = sessionRepository
+                .findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
+                        tenantId, clientAppId, upstreamUserId, normalizedContextId)
+                .orElse(null);
+        if (byContext != null && !sessionId.equals(byContext.getSessionId())) {
+            throw new IllegalArgumentException("business agent session context mismatch");
+        }
+        return normalizedContextId;
+    }
+
+    @Transactional(readOnly = true)
     public BusinessAgentSessionDTO getSession(
             String tenantId,
             String clientAppId,
@@ -96,10 +147,11 @@ public class BusinessAgentSessionService {
         int safeLimit = Math.min(Math.max(limit, 1), 100);
         Pageable pageable = PageRequest.of(0, safeLimit + 1);
         List<BusinessAgentSessionEntity> sessions;
-        if (StringUtils.hasText(cursor)) {
+        String normalizedCursor = normalizeContextId(cursor);
+        if (normalizedCursor != null) {
             LocalDateTime cursorTime = sessionRepository
                     .findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
-                            tenantId, clientAppId, upstreamUserId, cursor)
+                            tenantId, clientAppId, upstreamUserId, normalizedCursor)
                     .map(BusinessAgentSessionEntity::getLastAccessedAt)
                     .orElse(null);
             sessions = cursorTime == null
@@ -113,10 +165,14 @@ public class BusinessAgentSessionService {
         }
         boolean hasMore = sessions.size() > safeLimit;
         List<BusinessAgentSessionEntity> page = hasMore ? sessions.subList(0, safeLimit) : sessions;
+        Map<String, String> firstUserMessageMap = batchFindFirstUserMessageContents(
+                page.stream()
+                        .map(BusinessAgentSessionEntity::getSessionId)
+                        .toList());
 
         BusinessAgentSessionListDTO dto = new BusinessAgentSessionListDTO();
         dto.setSessions(page.stream()
-                .map(BusinessAgentSessionDTO::fromEntity)
+                .map(session -> toSessionDTO(session, firstUserMessageMap))
                 .toList());
         dto.setNextCursor(page.isEmpty() ? null : page.get(page.size() - 1).getContextId());
         dto.setHasMore(hasMore);
@@ -131,6 +187,18 @@ public class BusinessAgentSessionService {
             String contextId,
             String cursor,
             int limit) {
+        return getMessages(tenantId, clientAppId, upstreamUserId, contextId, cursor, limit, false);
+    }
+
+    @Transactional(readOnly = true)
+    public BusinessAgentSessionMessagesDTO getMessages(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String contextId,
+            String cursor,
+            int limit,
+            boolean includeInternal) {
         validateGrant(tenantId, clientAppId, upstreamUserId);
         BusinessAgentSessionEntity session = findSession(tenantId, clientAppId, upstreamUserId, contextId);
 
@@ -156,6 +224,8 @@ public class BusinessAgentSessionService {
         dto.setContextId(session.getContextId());
         dto.setSessionId(session.getSessionId());
         dto.setMessages(page.stream()
+                .filter(message -> includeInternal
+                        || BusinessAgentSessionMessageVisibility.isVisibleByDefault(message))
                 .map(message -> BusinessAgentSessionMessageDTO.fromEntity(message, session.getContextId()))
                 .toList());
         dto.setNextCursor(page.isEmpty() ? cursor : page.get(page.size() - 1).getId());
@@ -168,10 +238,11 @@ public class BusinessAgentSessionService {
             String clientAppId,
             String upstreamUserId,
             String contextId) {
-        requireText(contextId, "contextId is required");
+        String normalizedContextId = requireContextId(contextId);
         return sessionRepository.findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
-                        tenantId, clientAppId, upstreamUserId, contextId)
-                .orElseThrow(() -> new IllegalArgumentException("business agent session not found: " + contextId));
+                        tenantId, clientAppId, upstreamUserId, normalizedContextId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "business agent session not found: " + normalizedContextId));
     }
 
     private BusinessAgentSessionDTO bindSession(
@@ -190,9 +261,7 @@ public class BusinessAgentSessionService {
         requireText(upstreamUserId, "upstreamUserId is required");
         requireText(sessionId, "sessionId is required");
 
-        String normalizedContextId = StringUtils.hasText(requestedContextId)
-                ? requestedContextId
-                : null;
+        String normalizedContextId = normalizeContextId(requestedContextId);
         BusinessAgentSessionEntity entity = sessionRepository
                 .findByTenantIdAndClientAppIdAndUpstreamUserIdAndSessionId(
                         tenantId, clientAppId, upstreamUserId, sessionId)
@@ -231,6 +300,39 @@ public class BusinessAgentSessionService {
         return BusinessAgentSessionDTO.fromEntity(sessionRepository.save(entity));
     }
 
+    private BusinessAgentSessionDTO toSessionDTO(
+            BusinessAgentSessionEntity entity,
+            Map<String, String> firstUserMessageMap) {
+        BusinessAgentSessionDTO dto = BusinessAgentSessionDTO.fromEntity(entity);
+        if (dto != null && entity != null) {
+            dto.setTitle(truncate(firstUserMessageMap.get(entity.getSessionId()), 120));
+        }
+        return dto;
+    }
+
+    private Map<String, String> batchFindFirstUserMessageContents(Collection<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        List<SessionMessageEntity> messages = messageRepository
+                .findBySessionIdInAndRoleOrderBySessionIdAscCreatedAtAsc(sessionIds, "USER");
+        return messages.stream()
+                .filter(message -> StringUtils.hasText(message.getContent()))
+                .collect(Collectors.toMap(
+                        SessionMessageEntity::getSessionId,
+                        SessionMessageEntity::getContent,
+                        (first, second) -> first
+                ));
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.length() <= maxLength ? trimmed : trimmed.substring(0, maxLength);
+    }
+
     private void validateGrant(String tenantId, String clientAppId, String upstreamUserId) {
         requireText(tenantId, "tenantId is required");
         requireText(clientAppId, "clientAppId is required");
@@ -238,8 +340,35 @@ public class BusinessAgentSessionService {
         userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
     }
 
-    private String generateContextId() {
-        return "bctx_" + UUID.randomUUID().toString().replace("-", "");
+    public static String generateContextId() {
+        String entropy = UUID.randomUUID().toString().replace("-", "").toLowerCase(Locale.ROOT);
+        String shard = entropy.substring(0, 2);
+        return "bctx_" + LocalDate.now().format(CONTEXT_ID_DATE_FORMATTER) + "_" + shard + "_" + entropy;
+    }
+
+    private String requireContextId(String contextId) {
+        String normalized = normalizeContextId(contextId);
+        if (normalized == null) {
+            throw new IllegalArgumentException("contextId is required");
+        }
+        return normalized;
+    }
+
+    private String normalizeContextId(String contextId) {
+        if (!StringUtils.hasText(contextId)) {
+            return null;
+        }
+        String normalized = contextId.trim();
+        Matcher matcher = CONTEXT_ID_PATTERN.matcher(normalized);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("contextId must match " + CONTEXT_ID_FORMAT);
+        }
+        try {
+            LocalDate.parse(matcher.group(1), CONTEXT_ID_DATE_FORMATTER);
+        } catch (RuntimeException ex) {
+            throw new IllegalArgumentException("contextId must match " + CONTEXT_ID_FORMAT);
+        }
+        return normalized;
     }
 
     private void requireText(String value, String message) {

@@ -111,6 +111,19 @@ public class LlmModelConfigEntity {
     private String availableModels;
 
     /**
+     * Runtime token budget preset key for LangGraph Biz prompt governance.
+     * Examples: generic.128k, qwen.qwen3-128k.
+     */
+    @Column(length = 100)
+    private String runtimeBudgetPresetKey;
+
+    /**
+     * Optional JSON override applied on top of the runtime budget preset.
+     */
+    @Column(columnDefinition = "TEXT")
+    private String runtimeBudgetOverrideJson;
+
+    /**
      * 更新时间
      */
     @Column(nullable = false)

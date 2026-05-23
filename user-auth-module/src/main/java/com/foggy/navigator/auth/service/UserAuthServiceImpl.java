@@ -240,16 +240,16 @@ public class UserAuthServiceImpl implements UserAuthService {
     }
 
     @Override
+    public Optional<ApiKeyDTO> getApiKey(String apiKeyId) {
+        return apiKeyRepository.findById(apiKeyId)
+                .map(this::apiKeyToDTO);
+    }
+
+    @Override
     public List<ApiKeyDTO> listApiKeysByUser(String userId) {
         return apiKeyRepository.findByUserId(userId)
                 .stream()
-                .map(entity -> {
-                    ApiKeyDTO dto = new ApiKeyDTO();
-                    BeanUtils.copyProperties(entity, dto);
-                    dto.setApiKey(null); // 不返回明文
-                    dto.setMaskedApiKey(apiKeyGenerator.mask(entity.getApiKey()));
-                    return dto;
-                })
+                .map(this::apiKeyToDTO)
                 .collect(Collectors.toList());
     }
 
@@ -280,6 +280,17 @@ public class UserAuthServiceImpl implements UserAuthService {
     private UserDTO entityToDTO(UserEntity entity) {
         UserDTO dto = new UserDTO();
         BeanUtils.copyProperties(entity, dto);
+        return dto;
+    }
+
+    /**
+     * API Key 元信息转 DTO。除创建响应外，管理查询不返回明文 key。
+     */
+    private ApiKeyDTO apiKeyToDTO(ApiKeyEntity entity) {
+        ApiKeyDTO dto = new ApiKeyDTO();
+        BeanUtils.copyProperties(entity, dto);
+        dto.setApiKey(null);
+        dto.setMaskedApiKey(apiKeyGenerator.mask(entity.getApiKey()));
         return dto;
     }
 

@@ -1,0 +1,6 @@
+{
+  "hostname": "foggy",
+  "version": "0.1.0",
+  "active_tasks": 0,
+  "worker_name": "langgraph-biz-worker-qwen35-plus"
+}

@@ -64,8 +64,11 @@ $features = @(
     "upstream-route",
     "model-grant",
     "model-owned-config",
+    "runtime-budget-preset",
     "account-context",
-    "deterministic-e2e"
+    "deterministic-e2e",
+    "admin-key-bootstrap",
+    "client-app-bootstrap"
 )
 
 Push-Location $RepoRoot

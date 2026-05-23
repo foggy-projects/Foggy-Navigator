@@ -235,12 +235,15 @@ import type {
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
   NavigatorChatConfig,
+  NavigatorAttachmentResult,
 } from '@foggy/navigator-chat-widget'
 
 const chatConfig: NavigatorChatConfig = {
   baseUrl: '/bff/api',    // 上游 BFF 代理地址
   agentId: 'your-agent-id',
   pollInterval: 4000,     // TMS 初始接入先使用 4s 轮询，后续按体验和服务负载再调整
+  uploadAttachment: uploadTmsAttachment,
+  acceptedAttachmentTypes: ['image/*', 'application/pdf', '.xlsx', '.xls', '.doc', '.docx', '.txt', '.csv', '.zip'],
   // 不在浏览器中配置 Navigator admin/provisioning/runtime credential。
   // 如需鉴权，推荐通过 cookie 或自定义 fetch 与上游 BFF 会话绑定。
 }
@@ -249,8 +252,22 @@ const suspensionVisible = ref(false)
 const submittingSuspension = ref(false)
 const currentSuspension = ref<BusinessSuspensionDialogModel | null>(null)
 
-function onSend(content: string) {
-  console.log('用户发送:', content)
+async function uploadTmsAttachment(file: File): Promise<NavigatorAttachmentResult> {
+  const form = new FormData()
+  form.append('file', file)
+  const resp = await fetch('/x3-web/tenant/attachment/upload', {
+    method: 'POST',
+    body: form,
+  })
+  const json = await resp.json()
+  if (!resp.ok || json.code !== 0) {
+    throw new Error(json.msg || '附件上传失败')
+  }
+  return json.data
+}
+
+function onSend(content: string, attachments?: NavigatorAttachmentResult[]) {
+  console.log('用户发送:', content, attachments)
 }
 
 function onStatusChange(status) {
@@ -277,9 +294,211 @@ async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) 
 
 `NavigatorChat` 默认采用 `ask -> poll task -> display result` 模式。TMS 初始接入建议显式传入 `pollInterval: 4000`，即浏览器轮询 TMS BFF，TMS BFF 再代理查询 Navigator task 状态。
 
+附件采用 upload-on-submit：用户选择、拖拽或粘贴文件时，组件只保留浏览器本地 `File` 和预览信息；点击发送后先调用 `uploadAttachment(file)`，上传成功后把返回的 `NavigatorAttachmentResult[]` 放入 ask 请求顶层 `attachments`。任一附件上传失败时不会发送 ask，附件会保留在输入区供用户重试或删除。
+
+本仓库提供本地观测页用于区分“上游未注入 hook”和“组件自身未显示入口”：
+
+```bash
+pnpm --dir packages/navigator-chat-widget dev:observe
+```
+
+打开页面后切换“已注入 / 未注入”模式。已注入模式应显示回形针按钮，并在发送后展示最近 ask body 中的顶层 `attachments`；未注入模式应隐藏附件入口。组件根节点同时带有 `data-upload-hook="present|missing"` 和 `data-attachments-enabled="true|false"`，可在浏览器 Elements 面板直接确认。
+
+观测页默认绑定 `0.0.0.0:5179`，本机可访问 `http://127.0.0.1:5179/`，局域网内其他设备可访问 `http://<本机IP>:5179/`。
+
 `NavigatorChat` 不会自动从普通轮询任务结果中推断 suspension。上游宿主应从自己的 BFF、SSE 或任务消息中解析出 `BusinessSuspensionDialogModel` 后传入 `currentSuspension`，再打开 `suspensionVisible`。
 
-### 1.1 BFF ask 前置动作
+### 1.1 uni-app `foggy-navigator-chat`
+
+TMS v3.2.1 APP 主线使用 uni-app + Vue 3 + TypeScript + Pinia。APP 侧优先接入 `packages/foggy-mobile/src/uni_modules/foggy-navigator-chat`，组件使用 `view`、`scroll-view`、`textarea`、`button` 等 uni-app primitives，不依赖 `window`、`document`、`File` 或 `vue-router`。
+
+```vue
+<template>
+  <foggy-navigator-chat
+    :config="chatConfig"
+    title="TMS 移动助手"
+    subtitle="当前账号的业务 Agent"
+    show-history
+    show-tool-calls
+    show-tool-results
+    v-model:suspension-dialog-visible="suspensionVisible"
+    :suspension="currentSuspension"
+    :suspension-submitting="submittingSuspension"
+    @action="onBusinessAction"
+    @suspension-decision="onSuspensionDecision"
+  />
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+import type {
+  BusinessSuspensionDecisionPayload,
+  BusinessSuspensionDialogModel,
+  FoggyNavigatorAction,
+  FoggyNavigatorChatConfig,
+} from '@/uni_modules/foggy-navigator-chat'
+
+const suspensionVisible = ref(false)
+const submittingSuspension = ref(false)
+const currentSuspension = ref<BusinessSuspensionDialogModel | null>(null)
+
+const chatConfig: FoggyNavigatorChatConfig = {
+  baseUrl: '/bff/navigator',
+  agentId: 'tms.mobile.agent',
+  pollInterval: 4000,
+  showToolCalls: true,
+  showToolResults: true,
+  executionReportMarkdownLoader: loadExecutionReportMarkdown,
+}
+
+async function loadExecutionReportMarkdown(reportRef: string) {
+  const result = await uni.request({
+    url: `/bff/navigator/execution-reports/${encodeURIComponent(reportRef)}/markdown`,
+    method: 'GET',
+  })
+  const body = result.data as { code: number; msg?: string; data: { markdown: string } }
+  if (body.code !== 0) throw new Error(body.msg || '执行报告读取失败')
+  return body.data
+}
+
+function onBusinessAction(action: FoggyNavigatorAction) {
+  if (action.type === 'OPEN_TMS_PAGE') {
+    const payload = action.payload as { id?: string } | undefined
+    uni.navigateTo({ url: `/pages/tms/detail?id=${encodeURIComponent(String(payload?.id ?? ''))}` })
+  }
+}
+
+async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) {
+  submittingSuspension.value = true
+  try {
+    await uni.request({
+      url: `/bff/navigator/suspensions/${encodeURIComponent(payload.suspendId)}/decision`,
+      method: 'POST',
+      data: {
+        decision: payload.decision,
+        comment: payload.comment,
+      },
+    })
+  } finally {
+    submittingSuspension.value = false
+  }
+}
+</script>
+```
+
+uni-app 接入要点：
+
+- APP 只连上游 BFF；组件默认客户端用 `uni.request` 访问 `{baseUrl}/api/v1/open/...`。
+- 如上游 BFF 路由、鉴权、签名不一致，可通过 `client` prop 注入 `FoggyNavigatorChatClient` callbacks。
+- 历史会话、继续 `contextId`、任务取消、执行报告 Markdown、suspension 决策都应由 BFF 兜住安全边界。
+- 业务动作只触发 `@action`；APP 内跳转使用 `uni.navigateTo` / `uni.switchTab`，不使用 `vue-router`。
+- suspension sheet 只展示 BFF 清洗后的 `BusinessSuspensionDialogModel`，事件只携带 `suspendId/suspensionType/decision/comment`。
+
+给上游 IDE Agent / LLM coding agent 的 uni-app 接入提示词见 [37-uni-app-navigator-chat-bff-handoff-prompt.md](./37-uni-app-navigator-chat-bff-handoff-prompt.md)。
+
+### 1.2 H5 fallback `NavigatorMobileChat`
+
+移动端普通 Vue 3 / Vite H5 fallback 可使用 `NavigatorMobileChat`。TMS APP 主线优先使用上一节的 uni-app `foggy-navigator-chat`；`NavigatorMobileChat` 仍用于非 uni-app 的 H5/WebView 页面。
+
+```vue
+<template>
+  <NavigatorMobileChat
+    class="tms-mobile-agent"
+    :config="chatConfig"
+    title="TMS 移动助手"
+    subtitle="当前账号的业务 Agent"
+    show-history
+    show-tool-calls
+    show-tool-results
+    v-model:suspension-dialog-visible="suspensionVisible"
+    :suspension="currentSuspension"
+    :suspension-submitting="submittingSuspension"
+    @action="onBusinessAction"
+    @suspension-decision="onSuspensionDecision"
+  />
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+import {
+  NavigatorMobileChat,
+  type BusinessSuspensionDecisionPayload,
+  type BusinessSuspensionDialogModel,
+  type ExecutionReportMarkdownPayload,
+  type NavigatorAction,
+  type NavigatorChatConfig,
+} from '@foggy/navigator-chat-widget'
+import '@foggy/navigator-chat-widget/style.css'
+
+const suspensionVisible = ref(false)
+const submittingSuspension = ref(false)
+const currentSuspension = ref<BusinessSuspensionDialogModel | null>(null)
+
+const chatConfig: NavigatorChatConfig = {
+  baseUrl: '/bff/navigator',
+  agentId: 'tms.mobile.agent',
+  pollInterval: 4000,
+  showToolCalls: true,
+  showToolResults: true,
+  executionReportMarkdownLoader: loadExecutionReportMarkdown,
+}
+
+async function loadExecutionReportMarkdown(reportRef: string): Promise<ExecutionReportMarkdownPayload> {
+  const resp = await fetch(`/bff/navigator/execution-reports/${encodeURIComponent(reportRef)}/markdown`)
+  const json = await resp.json()
+  if (!resp.ok || json.code !== 0) {
+    throw new Error(json.msg || '执行报告读取失败')
+  }
+  return json.data
+}
+
+function onBusinessAction(action: NavigatorAction) {
+  if (action.type === 'OPEN_TMS_PAGE') {
+    // 业务路由由上游实现，组件只 emit action。
+    const payload = action.payload as { page?: string; waybillNo?: string } | undefined
+    const target = payload?.page ?? payload?.waybillNo ?? ''
+    window.location.href = `/mobile/tms/${encodeURIComponent(target)}`
+  }
+}
+
+async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) {
+  submittingSuspension.value = true
+  try {
+    await fetch(`/bff/navigator/suspensions/${payload.suspendId}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        decision: payload.decision,
+        comment: payload.comment,
+      }),
+    })
+  } finally {
+    submittingSuspension.value = false
+  }
+}
+</script>
+
+<style>
+.tms-mobile-agent {
+  --nmc-primary: #0f66d0;
+  --nmc-bg: #f7f8fa;
+  --nmc-surface: #ffffff;
+}
+</style>
+```
+
+移动端接入要点：
+
+- 浏览器仍只连上游 BFF，不直接连 Worker Gateway，不持有 `task_scoped_token`、runtime credential、App Secret 或 admin token。
+- `TOOL_CALL` / `TOOL_RESULT` 默认以紧凑卡片展示；`showToolCalls`、`showToolResults` 可按业务需要打开。
+- `structured_output.label` / `pageLabel` 会作为按钮文案，点击后只触发 `@action`，路由跳转由宿主处理。
+- 执行报告默认只展示 digest；完整 Markdown 必须通过 `executionReportMarkdownLoader(reportRef)` 从上游 BFF 按需读取。
+- suspension sheet 只展示 `BusinessSuspensionDialogModel` 中的清洗字段，并只发出 approve/reject 决策事件。
+- 样式可通过 `--nmc-*` CSS variables 覆盖，不需要 fork 组件。
+
+给上游 IDE Agent / LLM coding agent 的普通 Vue H5 接入提示词见 [36-mobile-chat-widget-bff-handoff-prompt.md](./36-mobile-chat-widget-bff-handoff-prompt.md)。
+
+### 1.3 BFF ask 前置动作
 
 上游 BFF 在代理 `ask` 前必须基于当前登录态执行服务端前置动作：
 
@@ -319,6 +538,7 @@ chatRef.value.clear()
 | 工具调用展示 | ✅ ToolCallBlock | — 需扩展 |
 | 审批卡片 | ✅ ChatPanel/MessageList 内置审批渲染 | — 需扩展 |
 | Suspension 弹窗 | ✅ BusinessSuspensionDialog | ✅ 可选默认弹窗 / slot 覆盖 |
+| 附件上传 | 宿主自定义 | ✅ 选择/粘贴/拖拽 + upload-on-submit |
 | 思考动画 | ✅ ThinkingIndicator | ✅ 内置 |
 | SSE 客户端 | ✅ createSseClient | ✅ 内置 |
 | 状态管理 | ✅ useChatStore (Pinia) | ✅ useNavigatorChat |

@@ -60,6 +60,8 @@ def run_child_skill(
             parent_frame_id=parent_frame_id,
             skill_id=child_skill_id,
             content=f"Closed child frame: {child_skill_id}",
+            execution_report_ref=promoted.get("execution_report_ref"),
+            execution_report_digest=promoted.get("execution_report_digest"),
         ))
 
     return events, promoted

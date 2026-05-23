@@ -1,7 +1,10 @@
 <template>
   <div class="error-block">
     <span class="error-icon">&#9888;</span>
-    <span class="error-text">{{ props.error }}</span>
+    <span class="error-text">
+      {{ props.error }}
+      <ExecutionReportInline :report-ref="props.reportRef" :digest="props.digest" />
+    </span>
     <button
       v-if="props.reconnectable"
       class="reconnect-btn"
@@ -15,11 +18,15 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import type { ExecutionReportDigest } from '../types/chat'
+import ExecutionReportInline from './ExecutionReportInline.vue'
 
 const props = defineProps<{
   error: string
   reconnectable?: boolean
   taskId?: string
+  reportRef?: string
+  digest?: ExecutionReportDigest
 }>()
 
 const emit = defineEmits<{

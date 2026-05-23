@@ -9,7 +9,8 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "client_app", indexes = {
         @Index(name = "idx_client_app_tenant", columnList = "tenantId"),
-        @Index(name = "idx_client_app_status", columnList = "status")
+        @Index(name = "idx_client_app_status", columnList = "status"),
+        @Index(name = "idx_client_app_upstream", columnList = "upstreamSystemId,upstreamClientAppNamespace,tenantId,upstreamRef")
 })
 public class ClientAppEntity {
 
@@ -34,6 +35,15 @@ public class ClientAppEntity {
 
     @Column(length = 64)
     private String capabilityDomain;
+
+    @Column(length = 128)
+    private String upstreamSystemId;
+
+    @Column(length = 128)
+    private String upstreamClientAppNamespace;
+
+    @Column(length = 128)
+    private String upstreamRef;
 
     @Column(length = 32, nullable = false)
     private String status;

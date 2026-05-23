@@ -11,7 +11,9 @@ import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepo
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
+import com.foggy.navigator.common.enums.LlmModelCategory;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -19,10 +21,12 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class BusinessAgentTaskService {
 
     public static final String STATUS_CREATED = "CREATED";
@@ -51,6 +55,7 @@ public class BusinessAgentTaskService {
         requireText(form.getWorkerPoolId(), "workerPoolId is required");
         requireText(form.getUpstreamUserId(), "upstreamUserId is required");
         requireText(form.getSkillId(), "skillId is required");
+        String skillName = resolveSkillName(form.getSkillId(), form.getSkillName());
 
         // 2. 校验 clientAppId 存在、属于当前 tenant、状态可用
         clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
@@ -65,6 +70,7 @@ public class BusinessAgentTaskService {
         skillRegistryService.checkClientAppSkillAccess(tenantId, form.getClientAppId(), form.getSkillId());
 
         String finalModelConfigId;
+        String finalVisionModelConfigId;
 
         if (StringUtils.hasText(form.getResumeFromTaskId())) {
             BusinessAgentTaskEntity existingTask = taskRepository.findByTaskId(form.getResumeFromTaskId())
@@ -80,9 +86,11 @@ public class BusinessAgentTaskService {
                 throw new IllegalArgumentException("cannot change modelConfigId when resuming task");
             }
             finalModelConfigId = existingTask.getModelConfigId();
+            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId());
         } else {
             // 4, 5, 6. 新建 task 时必须调用 resolveEffectiveModelConfigId
             finalModelConfigId = grantService.resolveEffectiveModelConfigId(tenantId, form.getClientAppId(), form.getRequestedModelConfigId());
+            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId());
         }
 
         // 7. task 创建后固定最终 modelConfigId
@@ -120,12 +128,23 @@ public class BusinessAgentTaskService {
         token = tokenRepository.save(token);
         tokenRuntimeStore.registerToken(tenantId, task.getSessionId(), task.getTaskId(), plainToken, expiresAt);
 
-        String contextId = businessAgentSessionService
-                .bindTask(task, form.getContextId(), form.getClientContextJson())
-                .getContextId();
+        String contextId = businessAgentSessionService.resolveReusableContextId(
+                tenantId,
+                form.getClientAppId(),
+                form.getUpstreamUserId(),
+                form.getContextId(),
+                task.getSessionId());
 
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
-                tenantId, actorUserId, task, workerPool, plainToken);
+                tenantId, actorUserId, task, workerPool, plainToken, finalVisionModelConfigId, contextId, skillName, form);
+        if (launchResult != null && StringUtils.hasText(launchResult.getContextId())) {
+            contextId = launchResult.getContextId();
+        }
+
+        contextId = businessAgentSessionService
+                .bindTask(task, contextId, form.getClientContextJson())
+                .getContextId();
+
         if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
             task.setWorkerTaskId(launchResult.getWorkerTaskId());
             task.setWorkerSessionId(launchResult.getWorkerSessionId());
@@ -290,16 +309,36 @@ public class BusinessAgentTaskService {
         }
     }
 
+    private String resolveSkillName(String skillId, String skillName) {
+        String normalizedSkillId = skillId != null ? skillId.trim() : null;
+        if (!StringUtils.hasText(skillName)) {
+            return normalizedSkillId;
+        }
+        String normalizedSkillName = skillName.trim();
+        if (StringUtils.hasText(normalizedSkillId) && !normalizedSkillId.equals(normalizedSkillName)) {
+            throw new IllegalArgumentException("skillName must match skillId during compatibility phase");
+        }
+        return normalizedSkillName;
+    }
+
     private BusinessAgentWorkerTaskLaunchResult launchWorkerTaskIfAvailable(
             String tenantId,
             String actorUserId,
             BusinessAgentTaskEntity task,
             BizWorkerPoolEntity workerPool,
-            String taskScopedToken) {
+            String taskScopedToken,
+            String visionModelConfigId,
+            String contextId,
+            String skillName,
+            CreateBusinessAgentTaskForm form) {
         if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
             return null;
         }
-        String markdownBody = skillRegistryService.getSkill(tenantId, task.getSkillId()).getMarkdownBody();
+        String markdownBody = skillRegistryService.buildMaterializedPublicSkillMarkdown(
+                tenantId,
+                task.getSkillId(),
+                task.getClientAppId()
+        );
 
         return workerTaskLaunchers.stream()
                 .filter(Objects::nonNull)
@@ -310,15 +349,50 @@ public class BusinessAgentTaskService {
                         .actorUserId(actorUserId)
                         .businessTaskId(task.getTaskId())
                         .sessionId(task.getSessionId())
+                        .contextId(contextId)
                         .clientAppId(task.getClientAppId())
                         .upstreamUserId(task.getUpstreamUserId())
                         .skillId(task.getSkillId())
+                        .skillName(skillName)
                         .workerPoolId(task.getWorkerPoolId())
                         .workerBackend(workerPool.getWorkerBackend())
                         .modelConfigId(task.getModelConfigId())
+                        .visionModelConfigId(visionModelConfigId)
                         .markdownBody(markdownBody)
                         .taskScopedToken(taskScopedToken)
+                        .workdir(trimToNull(form.getWorkdir()))
+                        .allowedDirs(cleanStringList(form.getAllowedDirs()))
+                        .allowedTools(cleanStringList(form.getAllowedTools()))
                         .build()))
                 .orElse(null);
+    }
+
+    private String trimToNull(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private List<String> cleanStringList(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        List<String> cleaned = values.stream()
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .toList();
+        return cleaned.isEmpty() ? null : cleaned;
+    }
+
+    private String resolveOptionalVisionModelConfigId(String tenantId, String clientAppId) {
+        Optional<String> modelConfigId = grantService.tryResolveEffectiveModelConfigId(
+                tenantId, clientAppId, null, LlmModelCategory.VISION);
+        if (modelConfigId == null || modelConfigId.isEmpty()) {
+            log.debug("Vision model config not resolved for clientAppId={}: default VISION model config grant is required",
+                    clientAppId);
+            return null;
+        }
+        return modelConfigId.get();
     }
 }

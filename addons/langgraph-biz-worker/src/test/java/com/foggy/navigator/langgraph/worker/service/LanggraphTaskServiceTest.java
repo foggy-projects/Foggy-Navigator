@@ -19,9 +19,11 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -125,7 +127,10 @@ class LanggraphTaskServiceTest {
 
         @Test
         void publishes_worker_task_start_event() {
-            service.createTask(USER_ID, TENANT_ID, makeForm());
+            CreateLanggraphTaskForm form = makeForm();
+            form.setSkillName("tms.navigator.agent");
+            form.setMaxTurns(12);
+            service.createTask(USER_ID, TENANT_ID, form);
 
             ArgumentCaptor<WorkerTaskStartEvent> captor =
                     ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
@@ -138,6 +143,52 @@ class LanggraphTaskServiceTest {
             assertEquals("langgraph-biz-worker", event.getProviderType());
             assertEquals("claude-sonnet", event.getModel());
             assertEquals("cfg-langgraph", event.getProviderConfigString("modelConfigId"));
+            assertEquals(Integer.valueOf(12), event.getProviderConfigValue("maxTurns"));
+            assertEquals("tms.navigator.agent", event.getProviderConfigString("skill_name"));
+            assertEquals("tms.navigator.agent", event.getProviderConfigString("skillName"));
+        }
+
+        @Test
+        void createTaskDirect_accepts_legacy_skill_alias_and_publishes_canonical_skillName() {
+            var savedTask = new java.util.concurrent.atomic.AtomicReference<LanggraphTaskEntity>();
+            when(taskRepository.save(any(LanggraphTaskEntity.class))).thenAnswer(inv -> {
+                LanggraphTaskEntity entity = inv.getArgument(0);
+                savedTask.set(entity);
+                return entity;
+            });
+            when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> {
+                LanggraphTaskEntity entity = savedTask.get();
+                return entity != null && invocation.getArgument(0).equals(entity.getTaskId())
+                        ? Optional.of(entity)
+                        : Optional.empty();
+            });
+
+            Map<String, Object> params = directTaskParams();
+            params.put("skill_id", "legacy.skill");
+
+            service.createTaskDirect(params, USER_ID, TENANT_ID);
+
+            ArgumentCaptor<WorkerTaskStartEvent> captor =
+                    ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
+            verify(eventPublisher).publishEvent(captor.capture());
+
+            WorkerTaskStartEvent event = captor.getValue();
+            assertEquals("legacy.skill", event.getProviderConfigString("skill_name"));
+            assertEquals("legacy.skill", event.getProviderConfigString("skillName"));
+        }
+
+        @Test
+        void createTaskDirect_rejects_conflicting_skill_aliases() {
+            Map<String, Object> params = directTaskParams();
+            params.put("skill_name", "canonical.skill");
+            params.put("skill_id", "legacy.skill");
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> service.createTaskDirect(params, USER_ID, TENANT_ID));
+
+            assertEquals("skill_name aliases must resolve to the same value", error.getMessage());
+            verify(eventPublisher, never()).publishEvent(any());
+            verify(taskRepository, never()).save(any());
         }
 
         @Test
@@ -158,6 +209,7 @@ class LanggraphTaskServiceTest {
         @Test
         void forwards_context_in_event_provider_config() {
             CreateLanggraphTaskForm form = makeForm();
+            form.setContextId("ctx-1");
             form.setContext(Map.of("order_id", "ORD-001"));
 
             service.createTask(USER_ID, TENANT_ID, form);
@@ -171,7 +223,105 @@ class LanggraphTaskServiceTest {
                     (Map<String, Object>) captor.getValue().getProviderConfig().get("context");
             assertNotNull(context);
             assertEquals("ORD-001", context.get("order_id"));
+            assertEquals("ctx-1", context.get("contextId"));
+            assertEquals("ctx-1", context.get("context_id"));
+            assertEquals(SESSION_ID, context.get("session_id"));
         }
+
+        @Test
+        void projects_task_deadline_from_runtime_context() {
+            CreateLanggraphTaskForm form = makeForm();
+            form.setRuntimeContext(Map.of("taskDeadlineAt", "2026-05-18T10:00:00Z"));
+
+            service.createTask(USER_ID, TENANT_ID, form);
+
+            verify(sessionTaskRepository).save(argThat((SessionTaskEntity projection) ->
+                    projection.getTaskStateJson() != null
+                            && projection.getTaskStateJson().contains("\"taskDeadlineAt\":\"2026-05-18T10:00:00Z\"")
+            ));
+        }
+
+        @Test
+        void omits_recent_conversation_by_default_and_persists_current_user_prompt() {
+            CreateLanggraphTaskForm form = makeForm();
+            form.setAttachments(List.of(
+                    Map.of("id", "att-1", "name", "smoke-a.png"),
+                    Map.of("id", "att-2", "name", "smoke-b.png")
+            ));
+            service.createTask(USER_ID, TENANT_ID, form);
+
+            ArgumentCaptor<WorkerTaskStartEvent> eventCaptor =
+                    ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
+            verify(eventPublisher).publishEvent(eventCaptor.capture());
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> context =
+                    (Map<String, Object>) eventCaptor.getValue().getProviderConfig().get("context");
+            assertNotNull(context);
+            assertFalse(context.containsKey("recentConversation"));
+
+            verify(sessionMessageRepository, never()).findBySessionIdOrderByCreatedAtDesc(eq(SESSION_ID), any());
+            verify(sessionManager).addMessage(eq(SESSION_ID), argThat(message ->
+                    message.getRole() != null
+                            && "USER".equals(message.getRole().name())
+                            && "分析异常订单".equals(message.getContent())
+                            && eventCaptor.getValue().getTaskId().equals(message.getTaskId())
+                            && message.getMetadata() != null
+                            && List.of(
+                                    Map.of("id", "att-1", "name", "smoke-a.png"),
+                                    Map.of("id", "att-2", "name", "smoke-b.png")
+                            ).equals(message.getMetadata().get("attachments"))
+            ));
+            assertEquals(form.getAttachments(), eventCaptor.getValue().getProviderConfigValue("attachments"));
+        }
+
+        @Test
+        @SuppressWarnings("unchecked")
+        void can_forward_recent_conversation_when_compatibility_switch_enabled() {
+            ReflectionTestUtils.setField(service, "includeRecentConversation", true);
+            when(sessionMessageRepository.findBySessionIdOrderByCreatedAtDesc(eq(SESSION_ID), any()))
+                    .thenReturn(List.of(
+                            sessionMessage("m3", "assistant", "Opening frame", LocalDateTime.of(2026, 4, 1, 10, 2),
+                                    "{\"type\":\"STATE_SYNC\"}"),
+                            sessionMessage("m2", "assistant", "工单状态正常", LocalDateTime.of(2026, 4, 1, 10, 1),
+                                    "{\"type\":\"TEXT_COMPLETE\"}"),
+                            sessionMessage("m1", "user", "之前查工单", LocalDateTime.of(2026, 4, 1, 10, 0),
+                                    "{\"type\":\"USER\"}")
+                    ));
+
+            service.createTask(USER_ID, TENANT_ID, makeForm());
+
+            ArgumentCaptor<WorkerTaskStartEvent> eventCaptor =
+                    ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
+            verify(eventPublisher).publishEvent(eventCaptor.capture());
+
+            Map<String, Object> context =
+                    (Map<String, Object>) eventCaptor.getValue().getProviderConfig().get("context");
+            assertNotNull(context);
+            List<Map<String, Object>> recentConversation =
+                    (List<Map<String, Object>>) context.get("recentConversation");
+            assertEquals(2, recentConversation.size());
+            assertEquals("之前查工单", recentConversation.get(0).get("content"));
+            assertEquals("工单状态正常", recentConversation.get(1).get("content"));
+
+            verify(sessionManager).addMessage(eq(SESSION_ID), argThat(message ->
+                    message.getRole() != null
+                            && "USER".equals(message.getRole().name())
+                            && "分析异常订单".equals(message.getContent())
+                            && eventCaptor.getValue().getTaskId().equals(message.getTaskId())
+            ));
+        }
+    }
+
+    private Map<String, Object> directTaskParams() {
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("agentId", AGENT_ID);
+        params.put("workerId", WORKER_ID);
+        params.put("prompt", "分析异常订单");
+        params.put("sessionId", SESSION_ID);
+        params.put("model", "claude-sonnet");
+        params.put("modelConfigId", "cfg-langgraph");
+        return params;
     }
 
     // -- Status transitions --------------------------------------------------
@@ -216,6 +366,7 @@ class LanggraphTaskServiceTest {
             service.failTask("lgt_existing", "connection timeout");
 
             assertEquals("FAILED", existingTask.getStatus());
+            assertEquals("FAILED", existingTask.getTaskSubStatus());
             assertEquals("connection timeout", existingTask.getErrorMessage());
             verify(taskRepository).save(existingTask);
         }
@@ -225,6 +376,9 @@ class LanggraphTaskServiceTest {
             service.cancelTask("lgt_existing", USER_ID);
 
             assertEquals("ABORTED", existingTask.getStatus());
+            assertEquals("INTERRUPTED", existingTask.getTaskSubStatus());
+            assertEquals("user_cancelled", existingTask.getInterruptionReason());
+            assertEquals(true, existingTask.getRecoverable());
             assertEquals("Cancelled by user", existingTask.getErrorMessage());
             verify(taskRepository).save(existingTask);
         }
@@ -390,12 +544,18 @@ class LanggraphTaskServiceTest {
     }
 
     private SessionMessageEntity sessionMessage(String id, String role, String content, LocalDateTime createdAt) {
+        return sessionMessage(id, role, content, createdAt, null);
+    }
+
+    private SessionMessageEntity sessionMessage(String id, String role, String content, LocalDateTime createdAt,
+                                                String metadata) {
         SessionMessageEntity entity = new SessionMessageEntity();
         entity.setId(id);
         entity.setSessionId(SESSION_ID);
         entity.setTaskId("lgt_task");
         entity.setRole(role);
         entity.setContent(content);
+        entity.setMetadata(metadata);
         entity.setCreatedAt(createdAt);
         return entity;
     }

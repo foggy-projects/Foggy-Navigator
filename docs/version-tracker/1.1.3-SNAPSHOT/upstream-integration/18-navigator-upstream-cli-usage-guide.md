@@ -45,6 +45,18 @@ model set-default
 model create
 model update
 model rotate-key
+admin-key request
+admin-key status
+admin-key claim
+admin-key list
+admin-key approve
+admin-key deny
+admin-key revoke
+admin-key rotate
+client-app list
+client-app ensure
+client-app ensure-tenant
+client-app issue-control-key
 account-context list
 account-context read
 account-context write-policy
@@ -98,7 +110,10 @@ NAVI_CLIENT_APP_ACCESS_TOKEN=
 NAVI_CONTROL_API_KEY=
 NAVI_UPSTREAM_USER_TOKEN=
 # NAVI_ADMIN_TOKEN=        # Navigator maintainer fallback only
-# NAVI_ADMIN_API_KEY=      # Navigator maintainer fallback only
+# NAVI_USER_API_KEY=       # tenant admin user API key fallback for admin endpoints
+# NAVI_ADMIN_API_KEY=      # upstream admin credential after approval; not a control-plane fallback
+# NAVI_OPERATOR_API_KEY=   # Navigator maintainer/operator only; never write to upstream project profile
+# NAVI_ADMIN_KEY_CLAIM_TOKEN=
 # TMS_STAFF_SESSION_TOKEN= # legacy TMS sandbox alias for NAVI_UPSTREAM_USER_TOKEN
 ```
 
@@ -134,6 +149,76 @@ UPSTREAM_USER_ID -> NAVI_UPSTREAM_USER_ID
 4. CLI 输出只显示字段名、非敏感值和敏感值脱敏摘要。
 5. 不要用 `echo $env:...`、截图、日志或文档打印真实 token。
 6. 多个上游项目不要共用全局 profile；每个项目维护自己的 `.navigator/upstream.env`。
+
+## 多租户上游 Bootstrap
+
+多租户上游系统可先申请 `NAVI_ADMIN_API_KEY`，再为每个上游租户创建或复用一个 Navigator ClientApp，并签发该 ClientApp 自己的 `NAVI_CONTROL_API_KEY`。
+
+上游侧提交申请、查询状态、领取已批准凭证：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream admin-key request --upstream-system-id <id> --requested-tenant-id <tenantId> --multi-tenant --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream admin-key status --request-code <requestCode>
+.\tools\navigator-upstream\navi.ps1 upstream admin-key claim --request-code <requestCode> --write-profile
+```
+
+Navigator 管理员或 operator Agent 审批申请时使用 `NAVI_OPERATOR_API_KEY` 或 `NAVI_ADMIN_TOKEN`，不使用申请生成的 `NAVI_ADMIN_API_KEY`：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream admin-key list --status PENDING
+.\tools\navigator-upstream\navi.ps1 upstream admin-key approve `
+  --request-code <requestCode> `
+  --authorized-tenant-ids <tenantId> `
+  --namespace <namespace> `
+  --scopes CLIENT_APP_ADMIN,CONTROL_KEY_ISSUE `
+  --credential-expires-at 2026-05-19T10:00:00
+.\tools\navigator-upstream\navi.ps1 upstream admin-key deny --request-code <requestCode> --reason "<reason>"
+```
+
+`--scopes CLIENT_APP_ADMIN,CONTROL_KEY_ISSUE` 是面向 operator 的别名，服务端会规范化为后端实际校验的 `CLIENT_APP_MANAGE,CLIENT_APP_CONTROL_KEY_ISSUE`。`--credential-expires-at` 省略时，`NAVI_ADMIN_API_KEY` 默认 24 小时过期；长期有效必须显式审批。
+
+Navigator 管理员或 operator Agent 撤销、轮换上游系统级 admin key 时仍使用 `NAVI_OPERATOR_API_KEY` 或 `NAVI_ADMIN_TOKEN`，不能使用被维护的 `NAVI_ADMIN_API_KEY` 自管：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream admin-key revoke --credential-id <credentialId>
+.\tools\navigator-upstream\navi.ps1 upstream admin-key rotate --credential-id <credentialId> --write-profile
+```
+
+`rotate --write-profile` 只把新的完整 `NAVI_ADMIN_API_KEY` 写入当前 gitignored profile，控制台只显示脱敏摘要。
+
+领取 `NAVI_ADMIN_API_KEY` 后，为单个上游租户写入独立 profile：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream client-app ensure `
+  --target-tenant-id <tenantId> `
+  --upstream-ref <upstreamTenantCode> `
+  --tenant-profile .\.navigator\tenants\<upstreamTenantCode>.env `
+  --write-profile
+
+.\tools\navigator-upstream\navi.ps1 upstream client-app issue-control-key `
+  --client-app-id <clientAppId> `
+  --tenant-profile .\.navigator\tenants\<upstreamTenantCode>.env `
+  --write-profile
+```
+
+`client-app` 命令使用 `X-Navi-Admin-Key`，不使用普通 `X-API-Key`。`issue-control-key` 只把完整 `NAVI_CONTROL_API_KEY` 写入 gitignored tenant profile，控制台只打印脱敏摘要。
+
+如果当前 Navigator 已提供上游租户聚合 provisioning API，TMS 这类上游可优先使用一条命令创建或复用租户 ClientApp，并把 runtime key/secret、control key、root agent、model、skill、worker 绑定写入租户 profile：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream client-app ensure-tenant `
+  --source-system TMS `
+  --source-tenant-id 3 `
+  --name "TMS tenant 3" `
+  --capability-domain tms.ops `
+  --model-config-id <modelConfigId> `
+  --skill-id <skillId> `
+  --worker-pool-id <workerPoolId> `
+  --tenant-profile .\.navigator\tenants\tms-3.env `
+  --write-profile
+```
+
+`ensure-tenant` 调用 `POST /api/v1/admin/upstream-tenants/client-apps/ensure`，使用 `NAVI_ADMIN_API_KEY` 通过 `X-Navi-Admin-Key` 鉴权；TMS 多租户初始化的唯一必需输入是 `NAVI_ADMIN_API_KEY`、`sourceSystem`、`sourceTenantId`。首次创建会返回完整 `NAVI_CLIENT_APP_KEY`、`NAVI_CLIENT_APP_SECRET`、`NAVI_CONTROL_API_KEY` 并写入 gitignored tenant profile；重复 ensure 不轮换也不回放一次性 secret，服务端返回 `status/errorCode=CREDENTIALS_NOT_REPLAYABLE`，TMS 需要显式重试 `--rotate-credentials` 才会重新签发。该命令必须带 `--write-profile` 并在调用前检查目标 profile 被 git ignore 覆盖，避免首次或轮换返回的一次性凭证丢失。
 
 ## 最小联调流程
 
@@ -174,7 +259,7 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 
 约束：
 
-- `ensure-grant` 必须使用 `NAVI_CONTROL_API_KEY` 这类 ClientApp-scoped 控制面凭据；`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback。
+- `ensure-grant` 必须使用 `NAVI_CONTROL_API_KEY` 这类 ClientApp-scoped 控制面凭据；`NAVI_ADMIN_TOKEN` 仅作为 Navigator 内部 fallback。`NAVI_ADMIN_API_KEY` 不再作为普通 `X-API-Key` fallback。
 - `NAVI_UPSTREAM_USER_TOKEN` 是可选项；如果上游 Worker 需要回调上游系统，可放入当前上游用户 token；如果只是 SIM/E2E 或纯 Navi 会话授权，可省略。
 - 不允许使用 ClientApp runtime access token 做授权。
 - 只处理当前指定 `upstreamUserId`，不得枚举或批量授权上游全部用户。
@@ -187,12 +272,14 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 
 `ask` 只发送 runtime access token 和 `X-Upstream-User-Id`，不会发送 ClientApp secret。
 
+从 BizWorker `1.1.6-SNAPSHOT` 起，新会话不需要也不建议由上游自行生成 `contextId`。`ask` 未传 `--context-id` 时，Navigator / BizWorker 会生成标准 `bctx_yyyyMMdd_<hash>_<id>` 并在任务结果中返回。上游应保存这个返回值用于后续续聊、UI 会话归属和排查定位。
+
 续聊与上游会话扩展数据：
 
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream ask `
   --upstream-user-id <id> `
-  --context-id <contextId> `
+  --context-id <returnedContextId> `
   --message "继续分析这个订单" `
   --client-context-json '{"upstreamConversationId":"tms-ai-10001","bizObjectType":"order","bizObjectId":"SO-10001"}'
 ```
@@ -206,7 +293,9 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
   --client-context-file .\navigator-client-context.json
 ```
 
-`clientContext` 是 `POST /ask` 的顶层字段，只写入 Navigator 会话摘要，不进入 Worker metadata 或 LLM prompt。
+`clientContext` 是 `POST /ask` 的顶层字段，只写入 Navigator 会话摘要和上游关联元数据，不是 LLM runtime prompt、模型配置或 workspace 配置。不要用它传完整 UI transcript、`recentConversation`、模型 token 预算、system prompt 覆盖、Skill/Function 私有配置或临时文件系统路径。
+
+上游仍负责保存完整 UI transcript。BizWorker 只维护下一轮模型推理需要的 bounded runtime context，包括 Root-visible user / assistant / tool protocol、压缩摘要和 focus / interruption control state。CLI 的 `messages` / `session-messages` 用于查看展示态消息，不是下一轮提交给 LLM 的事实来源。
 
 ### 5. 轮询 Task Messages
 
@@ -317,6 +406,7 @@ $env:NAVI_LLM_API_KEY="<new-llm-api-key>"
 7. `--api-key-env` 从环境变量读取 LLM key，避免 key 进入命令历史或 CLI 输出。
 8. `--write-profile` 只把最终 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
 9. `NAVI_MODEL_CONFIG_ID` 是上游项目本地默认模型，不代表租户全局默认模型。
+10. 当前模型配置还没有 LangGraph Biz 一等 token 预算字段。不要把 `contextWindowTokens`、`maxInputTokens`、`maxOutputTokens`、工具结果裁剪上限等值塞入 `clientContext` 或用户消息。后续字段设计见 `1.1.6-SNAPSHOT/16-upstream-cli-skill-runtime-contract-alignment.md`。
 
 ## Deterministic E2E Test Model
 
@@ -354,7 +444,7 @@ next:4f6c0a7e-7d7b-4f1d-91af-7c7f60d0b2d1:002
 .\tools\navigator-upstream\navi-e2e.ps1 script cleanup --trace-id <e2eTraceId>
 ```
 
-`navi-e2e` 默认读取同一个 project-local `.navigator/upstream.env`，其中 `NAVI_E2E_MOCK_LLM_URL` 默认指向 `http://localhost:8200`，也可用 `--mock-url` 临时覆盖。`model ensure` 需要 `NAVI_CONTROL_API_KEY`，只创建/更新当前 ClientApp 专属的标准 E2E model config 与 ClientApp model grant；`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback；`--write-profile` 只把 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
+`navi-e2e` 默认读取同一个 project-local `.navigator/upstream.env`，其中 `NAVI_E2E_MOCK_LLM_URL` 默认指向 `http://localhost:8200`，也可用 `--mock-url` 临时覆盖。`model ensure` 需要 `NAVI_CONTROL_API_KEY`，只创建/更新当前 ClientApp 专属的标准 E2E model config 与 ClientApp model grant；`NAVI_ADMIN_TOKEN` 仅作为 Navigator 内部 fallback；`NAVI_ADMIN_API_KEY` 不再作为普通 `X-API-Key` fallback；`--write-profile` 只把 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
 
 ### 9. 查询或维护账号上下文文件
 

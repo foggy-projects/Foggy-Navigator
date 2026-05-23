@@ -116,23 +116,42 @@ final class UpstreamCliConfig {
     }
 
     void assertProfileWritable() {
-        if (profilePath == null) {
+        assertProfileWritable(profilePath);
+    }
+
+    void assertProfileWritable(Path targetProfile) {
+        if (targetProfile == null) {
             throw new UpstreamCliException("Profile path is required");
         }
-        if (!profileCanBeWrittenSafely()) {
-            throw new UpstreamCliException("Profile path is not git-ignored: " + profilePath);
+        if (!profileCanBeWrittenSafely(targetProfile)) {
+            throw new UpstreamCliException("Profile path is not git-ignored: " + targetProfile);
         }
     }
 
     void writeProfileValue(String key, String value) {
-        assertProfileWritable();
+        writeProfileValue(profilePath, key, value, true);
+    }
+
+    void writeProfileValue(Path targetProfile, String key, String value) {
+        writeProfileValue(targetProfile, key, value, targetProfile != null && targetProfile.equals(profilePath));
+    }
+
+    private void writeProfileValue(Path targetProfile, String key, String value, boolean updateLoadedValues) {
+        assertProfileWritable(targetProfile);
+        writeProfileValueUnchecked(targetProfile, key, value, updateLoadedValues);
+    }
+
+    private void writeProfileValueUnchecked(Path targetProfile, String key, String value, boolean updateLoadedValues) {
+        if (targetProfile == null) {
+            throw new UpstreamCliException("Profile path is required");
+        }
         try {
-            Path parent = profilePath.getParent();
+            Path parent = targetProfile.getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
-            List<String> lines = Files.exists(profilePath)
-                    ? Files.readAllLines(profilePath, StandardCharsets.UTF_8)
+            List<String> lines = Files.exists(targetProfile)
+                    ? Files.readAllLines(targetProfile, StandardCharsets.UTF_8)
                     : new ArrayList<>();
             boolean replaced = false;
             for (int i = 0; i < lines.size(); i++) {
@@ -151,17 +170,19 @@ final class UpstreamCliConfig {
             if (!replaced) {
                 lines.add(key + "=" + value);
             }
-            Path temp = profilePath.resolveSibling(profilePath.getFileName() + ".tmp");
+            Path temp = targetProfile.resolveSibling(targetProfile.getFileName() + ".tmp");
             Files.write(temp, lines, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
             try {
-                Files.move(temp, profilePath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                Files.move(temp, targetProfile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (AtomicMoveNotSupportedException e) {
-                Files.move(temp, profilePath, StandardCopyOption.REPLACE_EXISTING);
+                Files.move(temp, targetProfile, StandardCopyOption.REPLACE_EXISTING);
             }
-            values.put(key, value);
+            if (updateLoadedValues) {
+                values.put(key, value);
+            }
         } catch (IOException e) {
-            throw new UpstreamCliException("Failed to write profile: " + profilePath, e);
+            throw new UpstreamCliException("Failed to write profile: " + targetProfile, e);
         }
     }
 
@@ -176,9 +197,22 @@ final class UpstreamCliConfig {
         putOption(values, args, "client-app-key", "NAVI_CLIENT_APP_KEY");
         putOption(values, args, "client-app-secret", "NAVI_CLIENT_APP_SECRET");
         putOption(values, args, "client-app-access-token", "NAVI_CLIENT_APP_ACCESS_TOKEN");
+        putOption(values, args, "upstream-system-id", "NAVI_UPSTREAM_SYSTEM_ID");
+        putOption(values, args, "source-system", "NAVI_UPSTREAM_SYSTEM_ID");
+        putOption(values, args, "source-tenant-id", "NAVI_SOURCE_TENANT_ID");
+        putOption(values, args, "requested-tenant-id", "NAVI_REQUESTED_TENANT_ID");
+        putOption(values, args, "target-tenant-id", "NAVI_TARGET_TENANT_ID");
+        putOption(values, args, "upstream-ref", "NAVI_UPSTREAM_REF");
+        putOption(values, args, "model-profile-code", "NAVI_MODEL_PROFILE_CODE");
+        putOption(values, args, "skill-id", "NAVI_SKILL_ID");
+        putOption(values, args, "worker-pool-id", "NAVI_WORKER_POOL_ID");
+        putOption(values, args, "user-api-key", "NAVI_USER_API_KEY");
         putOption(values, args, "admin-token", "NAVI_ADMIN_TOKEN");
         putOption(values, args, "admin-api-key", "NAVI_ADMIN_API_KEY");
+        putOption(values, args, "operator-api-key", "NAVI_OPERATOR_API_KEY");
         putOption(values, args, "control-api-key", "NAVI_CONTROL_API_KEY");
+        putOption(values, args, "request-code", "NAVI_ADMIN_KEY_REQUEST_CODE");
+        putOption(values, args, "claim-token", "NAVI_ADMIN_KEY_CLAIM_TOKEN");
         putOption(values, args, "upstream-user-token", "NAVI_UPSTREAM_USER_TOKEN");
         putOption(values, args, "upstream-user-id", "NAVI_UPSTREAM_USER_ID");
         putOption(values, args, "model-config-id", "NAVI_MODEL_CONFIG_ID");
@@ -187,9 +221,12 @@ final class UpstreamCliConfig {
         putOption(values, args, "mock-url", "NAVI_E2E_MOCK_LLM_URL");
         putEnvOption(values, args, env, "client-app-secret-env", "NAVI_CLIENT_APP_SECRET");
         putEnvOption(values, args, env, "client-app-access-token-env", "NAVI_CLIENT_APP_ACCESS_TOKEN");
+        putEnvOption(values, args, env, "user-api-key-env", "NAVI_USER_API_KEY");
         putEnvOption(values, args, env, "admin-token-env", "NAVI_ADMIN_TOKEN");
         putEnvOption(values, args, env, "admin-api-key-env", "NAVI_ADMIN_API_KEY");
+        putEnvOption(values, args, env, "operator-api-key-env", "NAVI_OPERATOR_API_KEY");
         putEnvOption(values, args, env, "control-api-key-env", "NAVI_CONTROL_API_KEY");
+        putEnvOption(values, args, env, "claim-token-env", "NAVI_ADMIN_KEY_CLAIM_TOKEN");
         putEnvOption(values, args, env, "api-key-env", "NAVI_LLM_API_KEY");
         putEnvOption(values, args, env, "upstream-user-token-env", "NAVI_UPSTREAM_USER_TOKEN");
     }
@@ -203,6 +240,7 @@ final class UpstreamCliConfig {
         putAlias(values, "CLIENT_APP_RUNTIME_TOKEN", "NAVI_CLIENT_APP_ACCESS_TOKEN");
         putAlias(values, "NAVIGATOR_ADMIN_TOKEN", "NAVI_ADMIN_TOKEN");
         putAlias(values, "NAVIGATOR_ADMIN_API_KEY", "NAVI_ADMIN_API_KEY");
+        putAlias(values, "NAVIGATOR_OPERATOR_API_KEY", "NAVI_OPERATOR_API_KEY");
         putAlias(values, "NAVIGATOR_CONTROL_API_KEY", "NAVI_CONTROL_API_KEY");
         putAlias(values, "TMS_STAFF_SESSION_TOKEN", "NAVI_UPSTREAM_USER_TOKEN");
         putAlias(values, "UPSTREAM_USER_ID", "NAVI_UPSTREAM_USER_ID");
@@ -292,14 +330,14 @@ final class UpstreamCliConfig {
         return path.toAbsolutePath().normalize().startsWith(parent.toAbsolutePath().normalize());
     }
 
-    private boolean profileCanBeWrittenSafely() {
-        if (profilePath == null) {
+    private boolean profileCanBeWrittenSafely(Path targetProfile) {
+        if (targetProfile == null) {
             return true;
         }
-        if (!isUnder(profilePath, cwd)) {
+        if (!isUnder(targetProfile, cwd)) {
             return true;
         }
-        return isUnder(profilePath, cwd.resolve("temp")) || GitIgnoreSupport.isIgnored(cwd, profilePath);
+        return isUnder(targetProfile, cwd.resolve("temp")) || GitIgnoreSupport.isIgnored(cwd, targetProfile);
     }
 
     private static boolean hasText(String value) {
@@ -310,18 +348,23 @@ final class UpstreamCliConfig {
         return List.of("NAVI_BASE_URL", "TMS_WEB_BASE_URL", "BASIC_BASE_URL", "NAVI_TENANT_ID",
                 "NAVI_CLIENT_APP_ID", "NAVI_CLIENT_APP_KEY", "NAVI_AGENT_CODE",
                 "NAVI_MODEL_CONFIG_ID", "NAVI_POLL_INTERVAL_SECONDS", "NAVI_E2E_MOCK_LLM_URL", "NAVI_CLIENT_APP_SECRET",
-                "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN", "NAVI_ADMIN_API_KEY", "NAVI_CONTROL_API_KEY",
+                "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN", "NAVI_ADMIN_API_KEY", "NAVI_OPERATOR_API_KEY",
+                "NAVI_CONTROL_API_KEY", "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_REQUEST_CODE", "NAVI_ADMIN_KEY_CLAIM_TOKEN",
+                "NAVI_UPSTREAM_SYSTEM_ID", "NAVI_REQUESTED_TENANT_ID", "NAVI_TARGET_TENANT_ID",
+                "NAVI_SOURCE_TENANT_ID", "NAVI_UPSTREAM_REF", "NAVI_UPSTREAM_MULTI_TENANT",
+                "NAVI_MODEL_PROFILE_CODE", "NAVI_SKILL_ID", "NAVI_WORKER_POOL_ID",
                 "NAVI_LLM_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "NAVIGATOR_BASE_URL", "NAVIGATOR_TENANT_ID",
                 "CLIENT_APP_ID", "CLIENT_APP_KEY", "CLIENT_APP_SECRET",
-                "CLIENT_APP_RUNTIME_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY",
+                "CLIENT_APP_RUNTIME_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY", "NAVIGATOR_OPERATOR_API_KEY",
                 "NAVIGATOR_CONTROL_API_KEY", "NAVI_UPSTREAM_PROFILE");
     }
 
     private static List<String> sensitiveKeys() {
         return List.of("NAVI_CLIENT_APP_SECRET", "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN",
-                "NAVI_ADMIN_API_KEY", "NAVI_CONTROL_API_KEY", "NAVI_LLM_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "CLIENT_APP_KEY",
+                "NAVI_ADMIN_API_KEY", "NAVI_OPERATOR_API_KEY", "NAVI_CONTROL_API_KEY", "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_CLAIM_TOKEN",
+                "NAVI_LLM_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "CLIENT_APP_KEY",
                 "NAVI_CLIENT_APP_KEY", "CLIENT_APP_SECRET", "CLIENT_APP_RUNTIME_TOKEN",
-                "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY", "NAVIGATOR_CONTROL_API_KEY");
+                "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY", "NAVIGATOR_OPERATOR_API_KEY", "NAVIGATOR_CONTROL_API_KEY");
     }
 
     private static boolean isSensitiveKey(String key) {

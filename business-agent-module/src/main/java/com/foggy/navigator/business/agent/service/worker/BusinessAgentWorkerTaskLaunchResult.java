@@ -8,6 +8,7 @@ import lombok.Data;
 public class BusinessAgentWorkerTaskLaunchResult {
     private String workerTaskId;
     private String workerSessionId;
+    private String contextId;
     private String workerId;
     private String providerType;
 }

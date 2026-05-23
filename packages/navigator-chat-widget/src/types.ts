@@ -32,10 +32,16 @@ export interface ChatMessage {
   costUsd?: number
   /** 错误信息 */
   error?: string
+  /** Navigator frame execution report 引用 */
+  executionReportRef?: string
+  /** Navigator frame execution report 摘要 */
+  executionReportDigest?: ExecutionReportDigest
+  /** 已随用户消息提交的附件 */
+  attachments?: NavigatorAttachmentResult[]
 }
 
 /** Widget 展示模式 */
-export type NavigatorChatMode = 'business' | 'debug'
+export type NavigatorChatMode = 'business' | 'details' | 'debug'
 
 /** 可点击业务动作 */
 export interface NavigatorAction {
@@ -46,6 +52,40 @@ export interface NavigatorAction {
   payload?: unknown
   raw?: unknown
 }
+
+/** Navigator Frame Execution Report 精简摘要 */
+export interface ExecutionReportDigest {
+  status?: string
+  summary?: string
+  error?: string | null
+  reportRef?: string
+  taskId?: string
+  frameId?: string
+  skillId?: string
+  frameKind?: string
+  generatedAt?: string
+  [key: string]: unknown
+}
+
+export interface ExecutionReportMarkdownPayload {
+  ok?: boolean
+  mode?: string
+  reportRef?: string
+  report_ref?: string
+  markdown?: string
+  markdownExcerpt?: string
+  markdown_excerpt?: string
+  content?: string
+  text?: string
+  error?: string
+  message?: string
+  truncated?: boolean
+  [key: string]: unknown
+}
+
+export type ExecutionReportMarkdownLoader = (
+  reportRef: string,
+) => Promise<string | ExecutionReportMarkdownPayload>
 
 /** Debug 模式下的一次工具执行块 */
 export interface ToolExecutionBlock {
@@ -65,6 +105,8 @@ export interface ToolExecutionBlock {
   rawResult?: unknown
   summary: string[]
   trace: Record<string, unknown>
+  executionReportRef?: string
+  executionReportDigest?: ExecutionReportDigest
 }
 
 /** Debug 模式下的 Skill Frame 执行块 */
@@ -84,6 +126,8 @@ export interface SkillFrameBlock {
   toolExecutions: ToolExecutionBlock[]
   children: SkillFrameBlock[]
   trace: Record<string, unknown>
+  executionReportRef?: string
+  executionReportDigest?: ExecutionReportDigest
 }
 
 /** 任务状态 */
@@ -107,6 +151,7 @@ export interface OpenTaskMessage {
   timestamp?: string | number
   status?: TaskStatus | string
   metadata?: Record<string, unknown>
+  attachments?: NavigatorAttachmentResult[]
   toolCallId?: string
   callId?: string
   invocationId?: string
@@ -145,6 +190,50 @@ export interface NavigatorSendOptions {
   clientContext?: Record<string, unknown>
   /** Agent 执行链路元数据 */
   metadata?: Record<string, unknown>
+  /** TMS/BFF 上传后返回并透传给 Navigator OpenAPI 的附件 */
+  attachments?: NavigatorAttachmentResult[]
+}
+
+export type NavigatorAttachmentKind =
+  | 'image'
+  | 'pdf'
+  | 'text'
+  | 'spreadsheet'
+  | 'document'
+  | 'archive'
+  | 'file'
+
+/** 上游附件上传接口返回并传给 Navigator 的通用附件元数据 */
+export interface NavigatorAttachmentResult {
+  id?: string
+  name?: string
+  mimeType?: string
+  size?: number
+  kind?: NavigatorAttachmentKind | string
+  url?: string
+  thumbnailUrl?: string
+  provider?: string
+  metadata?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export type UploadAttachmentHook = (file: File) => Promise<NavigatorAttachmentResult>
+
+export type PendingAttachmentStatus = 'pending' | 'uploading' | 'uploaded' | 'error'
+
+/** 浏览器侧尚未或刚刚上传的本地附件 */
+export interface PendingNavigatorAttachment {
+  id: string
+  file: File
+  name: string
+  mimeType: string
+  size: number
+  kind: NavigatorAttachmentKind
+  isImage: boolean
+  previewUrl?: string
+  status: PendingAttachmentStatus
+  error?: string
+  uploaded?: NavigatorAttachmentResult
 }
 
 export interface PaginationOptions {
@@ -158,6 +247,10 @@ export interface SessionSummary {
   title?: string | null
   status?: string
   latestTaskId?: string | null
+  /** C 端历史列表展示用：该会话的用户/助手交互轮数 */
+  turnCount?: number
+  /** C 端历史列表展示用：最后一条可读消息摘要 */
+  lastMessagePreview?: string | null
   clientContext?: Record<string, unknown> | null
   createdAt?: string
   updatedAt?: string
@@ -170,7 +263,11 @@ export interface SessionMessage {
   role?: string
   type?: string
   content?: unknown
-  metadata?: Record<string, unknown>
+  terminal?: boolean
+  terminalStatus?: TerminalStatus | null
+  status?: TaskStatus | string
+  metadata?: Record<string, unknown> | string | null
+  attachments?: NavigatorAttachmentResult[]
   createdAt?: string
 }
 
@@ -215,6 +312,10 @@ export interface NavigatorChatConfig {
   maxTurns?: number
   /** 展示模式，默认 business */
   mode?: NavigatorChatMode
+  /** 是否在组件头部显示展示模式切换入口；启用后会保留过程消息以支持运行中随时切换 */
+  showDisplayModeSwitcher?: boolean
+  /** 展示模式切换入口可选项，默认 business/details/debug */
+  displayModeOptions?: NavigatorChatMode[]
   /** 等价调试开关；未显式指定 mode 时，true 等价 mode=debug */
   debugMode?: boolean
   /** 是否展示运行时/连接/状态事件 */
@@ -223,6 +324,18 @@ export interface NavigatorChatConfig {
   showToolCalls?: boolean
   /** 是否展示工具结果 */
   showToolResults?: boolean
+  /** 完整 Frame 执行报告 Markdown 加载器；通常由上游 BFF 代理 Worker 只读接口 */
+  executionReportMarkdownLoader?: ExecutionReportMarkdownLoader
+  /** 发送前上传附件；TMS 场景由宿主注入并调用自己的上传接口 */
+  uploadAttachment?: UploadAttachmentHook
+  /** 是否启用默认附件入口；默认在提供 uploadAttachment 时启用 */
+  enableAttachments?: boolean
+  /** 单条消息最多附件数，默认 6 */
+  maxAttachments?: number
+  /** 单个附件最大字节数，默认 20MB */
+  maxAttachmentSize?: number
+  /** 可接受的附件类型，支持 MIME、image/* 和 .pdf 这类扩展名 */
+  acceptedAttachmentTypes?: string[]
   /**
    * 自定义请求函数（用于上游后端代理模式）
    *
@@ -233,6 +346,7 @@ export interface NavigatorChatConfig {
 }
 
 export type {
+  BusinessSuspensionDecision,
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
   BusinessSuspensionStatus,

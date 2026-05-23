@@ -6,10 +6,12 @@ import threading
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from langgraph_biz_worker.models import QueryEvent, QueryRequest
-from langgraph_biz_worker.graphs.root_graph import _build_attachment_context_prompt
-from langgraph_biz_worker.routes.query import _event_generator, _resolve_session_id
+from langgraph_biz_worker.routes.query import _event_generator, _resolve_context_id, _resolve_session_id
+from langgraph_biz_worker.routes.health import active_tasks
+from langgraph_biz_worker.runtime.attachment_context import build_attachment_context_prompt
 
 
 @pytest.mark.asyncio
@@ -70,9 +72,26 @@ def test_query_prefers_foggy_session_id_for_platform_session():
     assert _resolve_session_id(request) == "navigator-session"
 
 
+def test_query_generates_standard_context_id_when_missing():
+    context_id = _resolve_context_id(QueryRequest(prompt="test"))
+
+    assert context_id.startswith("bctx_")
+    assert len(context_id.split("_")) == 4
+
+
+def test_query_accepts_context_id_alias():
+    request = QueryRequest.model_validate({
+        "prompt": "test",
+        "contextId": "bctx_20260520_ab_ctx_query",
+    })
+
+    assert _resolve_context_id(request) == "bctx_20260520_ab_ctx_query"
+
+
 def test_query_request_accepts_url_attachment_metadata():
     request = QueryRequest(
         prompt="describe",
+        vision_llm_config={"provider": "openai", "model": "vision-model"},
         attachments=[
             {
                 "name": "pod-photo.png",
@@ -89,10 +108,39 @@ def test_query_request_accepts_url_attachment_metadata():
             "kind": "image",
         }
     ]
+    assert request.vision_llm_config == {"provider": "openai", "model": "vision-model"}
+
+
+def test_query_request_accepts_max_turns_aliases():
+    camel = QueryRequest.model_validate({"prompt": "test", "maxTurns": 9})
+    snake = QueryRequest.model_validate({"prompt": "test", "max_turns": 10})
+
+    assert camel.max_turns == 9
+    assert snake.max_turns == 10
+
+
+def test_query_request_accepts_message_and_skill_name_aliases():
+    request = QueryRequest.model_validate({
+        "message": "check order",
+        "skillName": "order-assistant",
+        "skill_id": "order-assistant",
+    })
+
+    assert request.prompt == "check order"
+    assert request.skill_name == "order-assistant"
+
+
+def test_query_request_rejects_conflicting_skill_name_aliases():
+    with pytest.raises(ValidationError):
+        QueryRequest.model_validate({
+            "prompt": "check order",
+            "skill_name": "order-assistant",
+            "skillId": "legacy_order",
+        })
 
 
 def test_attachment_context_prompt_sanitizes_url_and_keeps_metadata():
-    prompt = _build_attachment_context_prompt([
+    prompt = build_attachment_context_prompt([
         {
             "id": "att-1",
             "name": "pod-photo.png",
@@ -111,6 +159,9 @@ def test_attachment_context_prompt_sanitizes_url_and_keeps_metadata():
     assert "pod-photo.png" in prompt
     assert "image/png" in prompt
     assert "att-20260513-001" in prompt
+    assert "attachmentRefs" in prompt
+    assert "attachmentUrl=url" in prompt
+    assert "不要为这些附件调用 attachment.upload" in prompt
     assert "https://tms.example.com/files/pod-photo.png" in prompt
     assert "token=secret" not in prompt
     assert "accessToken" not in prompt
@@ -164,6 +215,64 @@ async def test_query_generator_streams_tool_progress_before_graph_finishes():
 
 
 @pytest.mark.asyncio
+async def test_query_generator_fsscript_slow_task_stays_active_after_initial_progress():
+    release_fsscript = asyncio.Event()
+
+    class SlowFsscriptBridge:
+        async def stream_events(self, **kwargs):
+            yield QueryEvent(
+                type="system",
+                task_id=kwargs["task_id"],
+                session_id=kwargs["session_id"],
+                content="FSScript started",
+            )
+            await release_fsscript.wait()
+            yield QueryEvent(
+                type="result",
+                task_id=kwargs["task_id"],
+                session_id=kwargs["session_id"],
+                content="FSScript completed",
+            )
+
+    with patch(
+        "langgraph_biz_worker.routes.query.get_fsscript_bridge",
+        return_value=SlowFsscriptBridge(),
+    ):
+        task_id = "slow-fsscript-task-001"
+        generator = _event_generator(
+            task_id,
+            QueryRequest(
+                prompt="run slow fsscript",
+                session_id="session-slow-fsscript",
+                context={"fsscript": "return slow();"},
+            ),
+        )
+        try:
+            first = await asyncio.wait_for(generator.__anext__(), timeout=1)
+            first_event = json.loads(first["data"])
+            assert first_event["type"] == "system"
+            assert task_id in active_tasks
+
+            pending_result = asyncio.create_task(generator.__anext__())
+            await asyncio.sleep(0.05)
+            assert not pending_result.done()
+            assert task_id in active_tasks
+
+            release_fsscript.set()
+            second = await asyncio.wait_for(pending_result, timeout=1)
+            second_event = json.loads(second["data"])
+            assert second_event["type"] == "result"
+
+            with pytest.raises(StopAsyncIteration):
+                await asyncio.wait_for(generator.__anext__(), timeout=1)
+            assert task_id not in active_tasks
+        finally:
+            release_fsscript.set()
+            await generator.aclose()
+            active_tasks.discard(task_id)
+
+
+@pytest.mark.asyncio
 async def test_query_generator_preserves_model_config_id_and_attachments_in_state():
     captured_state = {}
 
@@ -188,7 +297,9 @@ async def test_query_generator_preserves_model_config_id_and_attachments_in_stat
             "task-attachments",
             QueryRequest(
                 prompt="describe attachment",
+                skill_name="order-assistant",
                 model_config_id="cfg-e2e",
+                vision_llm_config={"provider": "openai", "model": "vision-model"},
                 attachments=attachments,
             ),
         )
@@ -197,8 +308,59 @@ async def test_query_generator_preserves_model_config_id_and_attachments_in_stat
             events.append(json.loads(item["data"]))
 
     assert events[-1]["type"] == "result"
+    assert captured_state["skill_name"] == "order-assistant"
     assert captured_state["model_config_id"] == "cfg-e2e"
+    assert captured_state["vision_llm_config"] == {"provider": "openai", "model": "vision-model"}
     assert captured_state["attachments"] == attachments
+
+
+@pytest.mark.asyncio
+async def test_query_generator_injects_generated_context_id_into_state_and_events():
+    captured_state = {}
+
+    def invoke_and_capture(state):
+        captured_state.update(state)
+        return {"events": [QueryEvent(type="system", task_id="task-context", content="ready")]}
+
+    with patch("langgraph_biz_worker.routes.query.root_graph") as mock_graph:
+        mock_graph.invoke.side_effect = invoke_and_capture
+        generator = _event_generator(
+            "task-context",
+            QueryRequest(prompt="allocate context", session_id="navigator-session-01"),
+        )
+        events = []
+        async for item in generator:
+            events.append(json.loads(item["data"]))
+
+    context_id = captured_state["context"]["contextId"]
+    assert context_id.startswith("bctx_")
+    assert captured_state["context"]["context_id"] == context_id
+    assert captured_state["context"]["navigatorSessionId"] == "navigator-session-01"
+    assert captured_state["session_id"] == context_id
+    assert events[0]["session_id"] == context_id
+    assert events[0]["payload"]["contextId"] == context_id
+
+
+@pytest.mark.asyncio
+async def test_query_generator_forwards_max_turns_to_runtime_context():
+    captured_state = {}
+
+    def invoke_and_capture(state):
+        captured_state.update(state)
+        return {"events": [QueryEvent(type="result", task_id="task-max-turns", content="done")]}
+
+    with patch("langgraph_biz_worker.routes.query.root_graph") as mock_graph:
+        mock_graph.invoke.side_effect = invoke_and_capture
+        generator = _event_generator(
+            "task-max-turns",
+            QueryRequest.model_validate({"prompt": "use budget", "maxTurns": 11}),
+        )
+        events = []
+        async for item in generator:
+            events.append(json.loads(item["data"]))
+
+    assert events[-1]["type"] == "result"
+    assert captured_state["runtime_context"]["max_turns"] == 11
 
 
 @pytest.mark.asyncio

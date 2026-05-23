@@ -15,4 +15,7 @@ public interface BusinessTaskScopedTokenRepository extends JpaRepository<Busines
 
     Optional<BusinessTaskScopedTokenEntity> findByTokenHash(String tokenHash);
 
+    Optional<BusinessTaskScopedTokenEntity> findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
+            String workerTaskId, String tenantId, String clientAppId);
+
 }

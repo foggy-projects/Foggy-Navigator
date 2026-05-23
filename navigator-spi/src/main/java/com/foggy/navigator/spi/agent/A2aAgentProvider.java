@@ -16,7 +16,7 @@ public interface A2aAgentProvider {
     /** Resolve an agent instance by ID (returns empty if not managed by this provider) */
     Optional<A2aAgent> resolveAgent(String agentId, String userId);
 
-    /** Provider type identifier (e.g. "claude-worker", "langchain4j", "openhands") */
+    /** Provider type identifier (e.g. "claude-worker", "codex-worker", "gemini-worker") */
     String getProviderType();
 
     // ── 上下文感知方法（default 实现回退到 userId 维度，Provider 可 override 支持 tenant 等） ──

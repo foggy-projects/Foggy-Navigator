@@ -1,5 +1,7 @@
 """Tests for Frame lifecycle — state machine, completion protocol, close semantics."""
 
+import json
+
 import pytest
 
 from langgraph_biz_worker.models import FrameStatus, SkillManifest
@@ -10,6 +12,9 @@ from langgraph_biz_worker.runtime.skill_runtime import (
     IllegalStateTransition,
     SkillRuntime,
 )
+
+CTX_FOCUS = "bctx_20260520_ab_conv-focus"
+CTX_RECOVERABLE = "bctx_20260520_cd_conv-1"
 
 
 @pytest.fixture
@@ -270,6 +275,152 @@ class TestPersistentTurnResult:
             "summary": "Vehicle creation was interrupted before completion.",
         }
 
+    def test_prepare_recoverable_focus_resume_rebinds_immediate_child(self, runtime: SkillRuntime):
+        parent_id = runtime.invoke_skill(
+            "task-focus-001",
+            "test_skill",
+            conversation_id=CTX_FOCUS,
+            session_id="sess-focus",
+            current_task_id="task-focus-001",
+            origin_task_id="task-focus-001",
+        )
+        child_id = runtime.invoke_child_skill(
+            parent_id,
+            "test_skill",
+            {"order_id": "ORD-1"},
+        )
+        runtime.record_recoverable_child_interruption(
+            parent_id,
+            reason="user_cancelled",
+            error="cancelled during child",
+            task_id="task-focus-001",
+        )
+        runtime.record_recoverable_interruption(
+            parent_id,
+            reason="user_cancelled",
+            error="cancelled during child",
+            task_id="task-focus-001",
+        )
+
+        focus = runtime.prepare_recoverable_focus_resume(
+            parent_id,
+            task_id="task-focus-002",
+        )
+
+        parent = runtime.get_frame(parent_id)
+        child = runtime.get_frame(child_id)
+        assert focus is not None
+        assert focus.frame_id == child_id
+        assert parent.status == FrameStatus.WAITING_CHILD
+        assert child.status == FrameStatus.RUNNING
+        assert child.task_id == "task-focus-002"
+        assert child.current_task_id == "task-focus-002"
+        assert child.origin_task_id == "task-focus-001"
+        assert child.conversation_id == CTX_FOCUS
+        assert child.session_id == "sess-focus"
+
+    def test_prepare_active_focus_resume_rebinds_nested_recoverable_leaf(self, runtime: SkillRuntime):
+        root_id = runtime.invoke_skill(
+            "task-focus-nested-001",
+            "test_skill",
+            conversation_id=CTX_FOCUS,
+            session_id="sess-focus-nested",
+            current_task_id="task-focus-nested-001",
+            origin_task_id="task-focus-nested-001",
+        )
+        child_id = runtime.invoke_child_skill(
+            root_id,
+            "test_skill",
+            {"order_id": "ORD-NESTED"},
+        )
+        grandchild_id = runtime.invoke_child_skill(
+            child_id,
+            "test_skill",
+            {"order_id": "ORD-NESTED", "step": "deep"},
+        )
+        runtime.record_recoverable_child_interruption(
+            root_id,
+            reason="user_cancelled",
+            error="cancelled during nested child",
+            task_id="task-focus-nested-001",
+        )
+        runtime.record_recoverable_interruption(
+            root_id,
+            reason="user_cancelled",
+            error="cancelled during nested child",
+            task_id="task-focus-nested-001",
+        )
+
+        focus = runtime.prepare_active_focus_resume(
+            root_id,
+            task_id="task-focus-nested-002",
+        )
+
+        root = runtime.get_frame(root_id)
+        child = runtime.get_frame(child_id)
+        grandchild = runtime.get_frame(grandchild_id)
+        assert focus is not None
+        assert focus.frame_id == grandchild_id
+        assert root.status == FrameStatus.WAITING_CHILD
+        assert child.status == FrameStatus.WAITING_CHILD
+        assert grandchild.status == FrameStatus.RUNNING
+        assert root.current_task_id == "task-focus-nested-002"
+        assert child.current_task_id == "task-focus-nested-002"
+        assert grandchild.current_task_id == "task-focus-nested-002"
+        assert grandchild.origin_task_id == "task-focus-nested-001"
+        assert grandchild.conversation_id == CTX_FOCUS
+        assert grandchild.session_id == "sess-focus-nested"
+        assert [entry["frame_id"] for entry in root.private_working_state["recoverable_focus_stack"]] == [
+            root_id,
+            child_id,
+            grandchild_id,
+        ]
+
+    def test_latest_recoverable_root_is_selected_and_older_focus_superseded(self, tmp_path):
+        from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
+
+        journal = FileFrameJournal(tmp_path)
+        runtime = SkillRuntime(journal=journal)
+        old_frame_id = runtime.invoke_skill(
+            "task-old",
+            "system.root",
+            conversation_id=CTX_RECOVERABLE,
+            current_task_id="task-old",
+        )
+        runtime.record_recoverable_interruption(
+            old_frame_id,
+            reason="user_cancelled",
+            error="cancelled",
+            task_id="task-old",
+        )
+        new_frame_id = runtime.invoke_skill(
+            "task-new",
+            "system.root",
+            conversation_id=CTX_RECOVERABLE,
+            current_task_id="task-new",
+        )
+        runtime.record_recoverable_interruption(
+            new_frame_id,
+            reason="llm_retry_exhausted",
+            error="timeout",
+            task_id="task-new",
+        )
+
+        restored = SkillRuntime(journal=journal)
+        selected = restored.select_latest_recoverable_root(
+            conversation_id=CTX_RECOVERABLE,
+            task_id="task-next",
+            root_skill_id="system.root",
+        )
+
+        assert selected is not None
+        assert selected.frame_id == new_frame_id
+        old_frame = restored.get_frame(old_frame_id)
+        assert old_frame is not None
+        assert old_frame.private_working_state["continuation_state"] == "SUPERSEDED"
+        assert old_frame.private_working_state["recoverable"] is False
+        assert old_frame.private_working_state["superseded_by_frame_id"] == new_frame_id
+
 
 class TestCloseFrame:
     def test_close_returns_promoted_result(self, runtime: SkillRuntime):
@@ -312,3 +463,89 @@ class TestWriteChildResult:
         parent = runtime.get_frame(parent_id)
         assert child_id in parent.private_working_state["child_results"]
         assert parent.private_working_state["child_results"][child_id] == promoted
+
+    def test_child_result_summary_preserves_business_wait_state(self, runtime: SkillRuntime):
+        parent_id = runtime.invoke_skill("t", "test_skill")
+        child_id = runtime.invoke_skill("t", "test_skill", parent_frame_id=parent_id)
+
+        promoted = {
+            "frame_id": child_id,
+            "skill_id": "ticket_skill",
+            "status": "COMPLETED",
+            "result_summary": "Need more ticket fields.",
+            "structured_output": {
+                "status": "WAITING_USER",
+                "next_step": "请回复工单类型、标题及详细描述。",
+                "missing_fields": ["ticket_type", "title", "description"],
+            },
+            "execution_report_ref": f"frame-report://t/{child_id}",
+        }
+        runtime.write_child_result_to_parent(parent_id, child_id, promoted)
+
+        parent = runtime.get_frame(parent_id)
+        summary = parent.private_working_state["latest_child_result_summary"]
+        assert summary["frame_id"] == child_id
+        assert summary["skill_id"] == "ticket_skill"
+        assert summary["frame_status"] == "COMPLETED"
+        assert summary["status"] == "WAITING_USER"
+        assert summary["next_step"] == "请回复工单类型、标题及详细描述。"
+        assert summary["missing_fields"] == ["ticket_type", "title", "description"]
+
+        root_summary = parent.private_working_state["root_context_summary"]
+        assert root_summary["latest_child_result_summary"] == summary
+        assert root_summary["child_result_summaries"][-1] == summary
+
+    def test_child_result_summary_redacts_sensitive_recovery_payload(self, runtime: SkillRuntime):
+        parent_id = runtime.invoke_skill("t", "test_skill")
+        child_id = runtime.invoke_skill("t", "test_skill", parent_frame_id=parent_id)
+
+        promoted = {
+            "frame_id": child_id,
+            "skill_id": "ticket_skill",
+            "status": "COMPLETED",
+            "result_summary": "Need more ticket fields. See https://signed.example.test/file?token=leak",
+            "structured_output": {
+                "status": "WAITING_USER",
+                "next_step": "请回复工单类型、标题及详细描述。",
+                "missing_fields": ["ticket_type", "title", "description"],
+                "signed_url": "https://signed.example.test/file?X-Amz-Signature=leak",
+                "api_key": "sk-secret-token",
+                "raw_prompt": "SYSTEM PROMPT SECRET",
+                "nested": {
+                    "Authorization": "Bearer secret-token",
+                    "callbackUrl": "https://signed.example.test/callback?signature=leak",
+                    "public_note": "safe note",
+                },
+            },
+            "artifact_refs": [
+                {
+                    "artifact_id": "artifact_1",
+                    "url": "https://signed.example.test/artifact?signature=leak",
+                }
+            ],
+            "evidence_refs": [
+                "evidence://safe/ref",
+                "https://signed.example.test/evidence?signature=leak",
+            ],
+            "execution_report_digest": {
+                "report_ref": f"frame-report://t/{child_id}",
+                "error": "provider returned sk-secret-token",
+                "artifact_refs": ["https://signed.example.test/report-artifact?token=leak"],
+            },
+        }
+        runtime.write_child_result_to_parent(parent_id, child_id, promoted)
+
+        parent = runtime.get_frame(parent_id)
+        summary = parent.private_working_state["latest_child_result_summary"]
+        encoded = json.dumps(summary, ensure_ascii=False)
+
+        assert summary["status"] == "WAITING_USER"
+        assert summary["next_step"] == "请回复工单类型、标题及详细描述。"
+        assert summary["missing_fields"] == ["ticket_type", "title", "description"]
+        assert "evidence://safe/ref" in encoded
+        assert "<redacted" in encoded
+        assert "https://signed.example.test" not in encoded
+        assert "X-Amz-Signature" not in encoded
+        assert "sk-secret-token" not in encoded
+        assert "SYSTEM PROMPT SECRET" not in encoded
+        assert "secret-token" not in encoded

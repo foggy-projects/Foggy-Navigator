@@ -7,6 +7,7 @@ import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
+import com.foggy.navigator.langgraph.worker.support.LanggraphSkillNameContract;
 import com.foggy.navigator.session.event.SessionEventListener;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeoutException;
 
 /**
  * SSE relay: consumes Python Worker SSE stream and publishes AgentMessage events
@@ -72,18 +74,27 @@ public class LanggraphStreamRelay {
             List<Map<String, Object>> attachments = event.getProviderConfigValue("attachments");
             String modelConfigId = event.getProviderConfigString("modelConfigId");
             Map<String, Object> llmConfig = resolveLlmConfig(modelConfigId, workerId);
+            Map<String, Object> visionLlmConfig = resolveVisionLlmConfig(
+                    runtimeContextText(runtimeContext, "vision_model_config_id", "visionModelConfigId"),
+                    workerId
+            );
+            Integer maxTurns = positiveInteger(firstPresent(event.getProviderConfig(), "maxTurns", "max_turns"));
+            String skillName = resolveSkillName(event.getProviderConfig(), "worker start event providerConfig");
 
             Disposable subscription = client.streamQuery(
                     event.getPrompt(),
+                    skillName,
                     context,
                     runtimeContext,
                     event.getModel(),
                     modelConfigId,
                     llmConfig,
+                    visionLlmConfig,
                     taskId,
                     sessionId,
                     event.getUserId(),
                     event.getTenantId(),
+                    maxTurns,
                     attachments
             ).doOnNext(sse -> handleEvent(sse, taskId, sessionId))
               .doOnError(e -> handleStreamError(e, taskId, sessionId))
@@ -101,7 +112,8 @@ public class LanggraphStreamRelay {
             taskService.failTask(taskId, e.getMessage());
             publishMessage(sessionId, MessageType.ERROR,
                     Map.of("content", "Failed to connect to LangGraph worker: " + e.getMessage(),
-                            "taskId", taskId));
+                            "taskId", taskId,
+                            "status", "FAILED"));
         }
     }
 
@@ -116,14 +128,70 @@ public class LanggraphStreamRelay {
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("model_config_id", modelConfigId);
         putTextIfPresent(config, "provider", resolveProvider(model));
+        putTextIfPresent(config, "worker_backend", model.getWorkerBackend());
         putTextIfPresent(config, "base_url", model.getBaseUrl());
         putTextIfPresent(config, "model", model.getModelName());
+        putTextIfPresent(config, "runtime_budget_preset_key", model.getRuntimeBudgetPresetKey());
+        putTextIfPresent(config, "runtime_budget_override_json", model.getRuntimeBudgetOverrideJson());
         String apiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
         putTextIfPresent(config, "api_key", apiKey);
         if (model.getEnvVars() != null && !model.getEnvVars().isEmpty()) {
             config.put("env_vars", model.getEnvVars());
         }
         return config;
+    }
+
+    private Map<String, Object> resolveVisionLlmConfig(String modelConfigId, String workerId) {
+        if (!StringUtils.hasText(modelConfigId)) {
+            return null;
+        }
+        return resolveLlmConfig(modelConfigId, workerId);
+    }
+
+    private String runtimeContextText(Map<String, Object> runtimeContext, String... keys) {
+        if (runtimeContext == null || runtimeContext.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = runtimeContext.get(key);
+            if (value instanceof String text && StringUtils.hasText(text)) {
+                return text.trim();
+            }
+        }
+        return null;
+    }
+
+    private String resolveSkillName(Map<String, Object> values, String source) {
+        return LanggraphSkillNameContract.resolve(values, (key, ignored) ->
+                log.warn("Deprecated LangGraph skill alias '{}' received from {}; use 'skill_name'", key, source));
+    }
+
+    private Object firstPresent(Map<String, Object> values, String... keys) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            if (values.containsKey(key)) {
+                return values.get(key);
+            }
+        }
+        return null;
+    }
+
+    private Integer positiveInteger(Object value) {
+        if (value instanceof Number number) {
+            int parsed = number.intValue();
+            return parsed > 0 ? parsed : null;
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                int parsed = Integer.parseInt(text.trim());
+                return parsed > 0 ? parsed : null;
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private String resolveProvider(LlmModelConfigDTO model) {
@@ -155,10 +223,8 @@ public class LanggraphStreamRelay {
 
             // Map Python Worker event → AgentMessage (using existing MessageType enum)
             switch (type) {
-                case "system" -> publishMessage(sessionId, MessageType.STATE_SYNC,
-                        Map.of("content", node.path("content").asText(""),
-                                "subtype", "system",
-                                "taskId", taskId));
+                case "system" -> log.debug("LangGraph system event for task {}: {}",
+                        taskId, node.path("content").asText(""));
 
                 case "assistant_text" -> publishMessage(sessionId, MessageType.TEXT_COMPLETE,
                         buildSkillScopedPayload(node, taskId, null));
@@ -168,6 +234,9 @@ public class LanggraphStreamRelay {
 
                 case "skill_frame_close" -> publishMessage(sessionId, MessageType.STATE_SYNC,
                         buildSkillScopedPayload(node, taskId, "skill_frame_close"));
+
+                case "task_progress" -> publishMessage(sessionId, MessageType.STATE_SYNC,
+                        buildTaskProgressPayload(node, taskId));
 
                 case "tool_use" -> publishToolUse(sessionId, taskId, node);
 
@@ -181,8 +250,13 @@ public class LanggraphStreamRelay {
                     Long durationMs = node.has("duration_ms") && !node.get("duration_ms").isNull()
                             ? node.get("duration_ms").asLong() : null;
 
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("content", content);
+                    payload.put("taskId", taskId);
+                    payload.put("status", "COMPLETED");
+                    copyExecutionReportFields(payload, node);
                     publishMessage(sessionId, MessageType.TASK_COMPLETED,
-                            Map.of("content", content, "taskId", taskId));
+                            payload);
 
                     taskService.completeTask(taskId, content, structuredOutput, durationMs);
                 }
@@ -192,8 +266,15 @@ public class LanggraphStreamRelay {
 
                 case "error" -> {
                     String error = node.path("error").asText(node.path("content").asText("Unknown error"));
-                    publishMessage(sessionId, MessageType.ERROR,
-                            Map.of("content", error, "taskId", taskId));
+                    String reason = node.path("reason").asText("");
+                    if (StringUtils.hasText(reason)) {
+                        taskService.recordTaskInterruptionProjection(taskId, reason, error);
+                    }
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("content", error);
+                    payload.put("taskId", taskId);
+                    payload.put("status", "FAILED");
+                    publishMessage(sessionId, MessageType.ERROR, payload);
                     taskService.failTask(taskId, error);
                 }
 
@@ -215,6 +296,40 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
         putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
         putTextIfPresent(payload, "skillId", node, "skill_id");
+        copyExecutionReportFields(payload, node);
+        if ("skill_frame_open".equals(subtype)) {
+            payload.put("status", "RUNNING");
+        } else if ("skill_frame_close".equals(subtype)) {
+            payload.put("status", statusFromExecutionReportDigest(node, "COMPLETED"));
+        }
+        return payload;
+    }
+
+    private Map<String, Object> buildTaskProgressPayload(JsonNode node, String taskId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("content", node.path("content").asText(""));
+        payload.put("subtype", "task_progress");
+        payload.put("taskId", taskId);
+        putTextIfPresent(payload, "progressType", firstText(
+                node.path("progress_type").asText(""),
+                node.path("progressType").asText("")));
+        putTextIfPresent(payload, "reason", firstText(
+                node.path("reason").asText(""),
+                node.path("error").asText("")));
+        putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
+        putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
+        putTextIfPresent(payload, "skillId", node, "skill_id");
+        putNumberIfPresent(payload, "attempt", node, "attempt");
+        putNumberIfPresent(payload, "maxAttempts", node, "max_attempts");
+        putNumberIfPresent(payload, "nextRetryAfterMs", node, "next_retry_after_ms");
+        putNumberIfPresent(payload, "remainingMs", node, "remaining_ms");
+        putTextIfPresent(payload, "presentationHint", firstText(
+                node.path("presentation_hint").asText(""),
+                node.path("presentationHint").asText("")));
+        JsonNode nestedPayload = node.get("payload");
+        if (nestedPayload != null && !nestedPayload.isNull()) {
+            payload.put("payload", toObject(nestedPayload));
+        }
         return payload;
     }
 
@@ -238,6 +353,8 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
         putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
         putTextIfPresent(payload, "skillId", node, "skill_id");
+        copyExecutionReportFields(payload, node);
+        payload.put("status", "RUNNING");
         publishMessage(sessionId, MessageType.TOOL_CALL_START, payload);
     }
 
@@ -268,6 +385,8 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
         putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
         putTextIfPresent(payload, "skillId", node, "skill_id");
+        copyExecutionReportFields(payload, node);
+        payload.put("status", success ? statusFromExecutionReportDigest(node, "COMPLETED") : "FAILED");
         payload.put("data", parseJsonOrText(content));
         payload.put("success", success);
         String error = node.path("error").asText("");
@@ -301,6 +420,13 @@ public class LanggraphStreamRelay {
         }
     }
 
+    private void putNumberIfPresent(Map<String, Object> payload, String targetKey, JsonNode node, String sourceKey) {
+        JsonNode value = node.get(sourceKey);
+        if (value != null && value.isNumber()) {
+            payload.put(targetKey, value.numberValue());
+        }
+    }
+
     private static String firstText(String... values) {
         for (String value : values) {
             if (StringUtils.hasText(value)) {
@@ -311,12 +437,52 @@ public class LanggraphStreamRelay {
     }
 
     private void handleStreamError(Throwable error, String taskId, String sessionId) {
-        log.warn("SSE stream error for langgraph task {}: {}", taskId, error.getMessage());
+        String message = streamErrorMessage(error);
+        log.warn("SSE stream error for langgraph task {}: {}", taskId, message);
         activeStreams.remove(taskId);
-        taskService.recordTaskInterruption(taskId, "stream_error", error.getMessage());
-        taskService.failTask(taskId, "Stream error: " + error.getMessage());
+        String reason = streamInterruptionReason(error);
+        taskService.recordTaskInterruption(taskId, reason, message);
+        taskService.failTask(taskId, "Stream error: " + message);
         publishMessage(sessionId, MessageType.ERROR,
-                Map.of("content", "Stream connection lost: " + error.getMessage(), "taskId", taskId));
+                Map.of("content", "Stream connection lost: " + message,
+                        "taskId", taskId,
+                        "status", "FAILED"));
+    }
+
+    private String streamErrorMessage(Throwable error) {
+        if (error == null) {
+            return "Unknown stream error";
+        }
+        if (StringUtils.hasText(error.getMessage())) {
+            return error.getMessage();
+        }
+        return error.getClass().getSimpleName();
+    }
+
+    private String streamInterruptionReason(Throwable error) {
+        if (isTimeout(error)) {
+            return "stream_read_timeout";
+        }
+        return "stream_error";
+    }
+
+    private boolean isTimeout(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof TimeoutException) {
+                return true;
+            }
+            String className = current.getClass().getName().toLowerCase();
+            if (className.contains("timeout")) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null && message.toLowerCase().contains("timeout")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void handleApprovalRequired(JsonNode node, String eventType, String taskId, String sessionId) {
@@ -348,6 +514,8 @@ public class LanggraphStreamRelay {
         payload.put("suspendId", node.path("suspend_id").asText(""));
         payload.put("reason", node.path("reason").asText(""));
         payload.put("timeoutAt", node.path("timeout_at").asText(""));
+        copyExecutionReportFields(payload, node);
+        payload.put("status", statusFromExecutionReportDigest(node, "AWAITING_APPROVAL"));
 
         publishMessage(sessionId, MessageType.STATE_SYNC, payload);
     }
@@ -361,6 +529,41 @@ public class LanggraphStreamRelay {
         if (!text.isBlank()) {
             payload.put(targetKey, text);
         }
+    }
+
+    private void copyExecutionReportFields(Map<String, Object> payload, JsonNode node) {
+        JsonNode reportRef = firstPresent(node, "execution_report_ref", "executionReportRef");
+        if (reportRef != null && !reportRef.isNull()) {
+            String text = reportRef.asText("");
+            if (!text.isBlank()) {
+                payload.put("execution_report_ref", text);
+            }
+        }
+        JsonNode reportDigest = firstPresent(node, "execution_report_digest", "executionReportDigest");
+        if (reportDigest != null && reportDigest.isObject()) {
+            payload.put("execution_report_digest", toObject(reportDigest));
+        }
+    }
+
+    private String statusFromExecutionReportDigest(JsonNode node, String fallback) {
+        JsonNode reportDigest = firstPresent(node, "execution_report_digest", "executionReportDigest");
+        if (reportDigest != null && reportDigest.isObject()) {
+            JsonNode status = reportDigest.get("status");
+            if (status != null && status.isTextual() && StringUtils.hasText(status.asText())) {
+                return status.asText();
+            }
+        }
+        return fallback;
+    }
+
+    private JsonNode firstPresent(JsonNode node, String... keys) {
+        for (String key : keys) {
+            JsonNode value = node.get(key);
+            if (value != null && !value.isNull()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private void handleStreamComplete(String taskId, String sessionId) {

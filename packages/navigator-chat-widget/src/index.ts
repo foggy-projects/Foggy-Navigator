@@ -12,6 +12,15 @@ export type {
   NavigatorAction,
   NavigatorChatConfig,
   NavigatorChatMode,
+  NavigatorAttachmentKind,
+  NavigatorAttachmentResult,
+  PendingAttachmentStatus,
+  PendingNavigatorAttachment,
+  UploadAttachmentHook,
+  ExecutionReportDigest,
+  ExecutionReportMarkdownLoader,
+  ExecutionReportMarkdownPayload,
+  BusinessSuspensionDecision,
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
   BusinessSuspensionStatus,
@@ -29,3 +38,4 @@ export { NavigatorApi } from './api/navigatorApi'
 
 // Component (ready-to-use UI)
 export { default as NavigatorChat } from './components/NavigatorChat.vue'
+export { default as NavigatorMobileChat } from './components/NavigatorMobileChat.vue'

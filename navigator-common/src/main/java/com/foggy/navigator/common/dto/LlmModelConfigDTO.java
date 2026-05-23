@@ -27,6 +27,8 @@ public class LlmModelConfigDTO {
     private String workerBackend;
     private Map<String, String> envVars;
     private List<String> availableModels;
+    private String runtimeBudgetPresetKey;
+    private String runtimeBudgetOverrideJson;
     private Integer sortOrder;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

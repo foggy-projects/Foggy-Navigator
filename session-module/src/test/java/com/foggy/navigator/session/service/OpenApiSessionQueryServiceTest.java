@@ -197,6 +197,42 @@ class OpenApiSessionQueryServiceTest {
         assertEquals("Second", messages.get(0).getContent());
     }
 
+    @Test
+    void batchFindFirstUserMessageContents_shouldReturnFirstUserMessagePerSession() {
+        String otherSessionId = sessionManager.createSession(SessionCreateRequest.builder()
+                .userId(USER_ID)
+                .tenantId(TENANT_ID)
+                .agentId(AGENT_ID)
+                .taskName("Other")
+                .build());
+
+        addMessage(sessionId, null, MessageRole.ASSISTANT, "Assistant first");
+        addMessage(sessionId, null, MessageRole.USER, "First user prompt");
+        addMessage(sessionId, null, MessageRole.USER, "Second user prompt");
+        addMessage(otherSessionId, null, MessageRole.USER, "Other first prompt");
+
+        Map<String, String> result = queryService.batchFindFirstUserMessageContents(
+                List.of(sessionId, otherSessionId));
+
+        assertEquals("First user prompt", result.get(sessionId));
+        assertEquals("Other first prompt", result.get(otherSessionId));
+    }
+
+    @Test
+    void batchFindTaskStatuses_shouldReturnStatusByTaskId() {
+        SessionTaskEntity completedTask = taskEntity("task-" + UUID.randomUUID().toString().substring(0, 8),
+                "COMPLETED");
+        SessionTaskEntity runningTask = taskEntity("task-" + UUID.randomUUID().toString().substring(0, 8),
+                "RUNNING");
+        taskRepository.saveAll(List.of(completedTask, runningTask));
+
+        Map<String, String> result = queryService.batchFindTaskStatuses(
+                List.of(completedTask.getTaskId(), runningTask.getTaskId()));
+
+        assertEquals("COMPLETED", result.get(completedTask.getTaskId()));
+        assertEquals("RUNNING", result.get(runningTask.getTaskId()));
+    }
+
     // ── taskId + cursor 增量消息查询 ──
 
     @Test
@@ -301,5 +337,17 @@ class OpenApiSessionQueryServiceTest {
                 .metadata(metadata)
                 .build();
         return sessionManager.addMessage(sessionId, msg);
+    }
+
+    private SessionTaskEntity taskEntity(String taskId, String status) {
+        SessionTaskEntity entity = new SessionTaskEntity();
+        entity.setTaskId(taskId);
+        entity.setSessionId(sessionId);
+        entity.setProviderType("LANGGRAPH_BIZ_WORKER");
+        entity.setUserId(USER_ID);
+        entity.setTenantId(TENANT_ID);
+        entity.setAgentId(AGENT_ID);
+        entity.setStatus(status);
+        return entity;
     }
 }

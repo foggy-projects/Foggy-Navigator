@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -38,6 +39,8 @@ public class HttpHelper {
     private final String apiKey;
     private final String bearerToken;
     private final String clientAppControlKey;
+    private final String operatorApiKey;
+    private final String upstreamAdminApiKey;
     private final String tenantId;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -53,10 +56,23 @@ public class HttpHelper {
 
     public HttpHelper(String baseUrl, String apiKey, String bearerToken, String tenantId,
                       String clientAppControlKey, Duration timeout) {
+        this(baseUrl, apiKey, bearerToken, tenantId, clientAppControlKey, null, timeout);
+    }
+
+    public HttpHelper(String baseUrl, String apiKey, String bearerToken, String tenantId,
+                      String clientAppControlKey, String operatorApiKey, Duration timeout) {
+        this(baseUrl, apiKey, bearerToken, tenantId, clientAppControlKey, operatorApiKey, null, timeout);
+    }
+
+    public HttpHelper(String baseUrl, String apiKey, String bearerToken, String tenantId,
+                      String clientAppControlKey, String operatorApiKey,
+                      String upstreamAdminApiKey, Duration timeout) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.apiKey = apiKey;
         this.bearerToken = bearerToken;
         this.clientAppControlKey = clientAppControlKey;
+        this.operatorApiKey = operatorApiKey;
+        this.upstreamAdminApiKey = upstreamAdminApiKey;
         this.tenantId = tenantId;
         this.timeout = timeout != null ? timeout : Duration.ofSeconds(30);
         this.httpClient = HttpClient.newBuilder()
@@ -90,6 +106,23 @@ public class HttpHelper {
         return execute(buildRequest("POST", path, body, true, headers), type);
     }
 
+    public <T> T getWithUpstreamAdminAuth(String path, String upstreamAdminApiKeyOverride, TypeReference<T> type) {
+        return execute(buildRequest("GET", path, null, false,
+                upstreamAdminOnlyHeaders(upstreamAdminApiKeyOverride)), type);
+    }
+
+    public <T> T postWithUpstreamAdminAuth(String path, Object body, String upstreamAdminApiKeyOverride,
+                                           TypeReference<T> type) {
+        return execute(buildRequest("POST", path, body, false,
+                upstreamAdminOnlyHeaders(upstreamAdminApiKeyOverride)), type);
+    }
+
+    public <T> T putWithUpstreamAdminAuth(String path, Object body, String upstreamAdminApiKeyOverride,
+                                          TypeReference<T> type) {
+        return execute(buildRequest("PUT", path, body, false,
+                upstreamAdminOnlyHeaders(upstreamAdminApiKeyOverride)), type);
+    }
+
     public <T> T put(String path, Object body, TypeReference<T> type) {
         return execute(buildRequest("PUT", path, body), type);
     }
@@ -100,6 +133,11 @@ public class HttpHelper {
 
     public void delete(String path) {
         execute(buildRequest("DELETE", path, null), new TypeReference<Void>() {});
+    }
+
+    public void deleteWithUpstreamAdminAuth(String path, String upstreamAdminApiKeyOverride) {
+        execute(buildRequest("DELETE", path, null, false,
+                upstreamAdminOnlyHeaders(upstreamAdminApiKeyOverride)), new TypeReference<Void>() {});
     }
 
     /**
@@ -142,6 +180,12 @@ public class HttpHelper {
             if (clientAppControlKey != null && !clientAppControlKey.isBlank()) {
                 builder.header("X-Client-App-Control-Key", clientAppControlKey);
             }
+            if (operatorApiKey != null && !operatorApiKey.isBlank()) {
+                builder.header("X-Navi-Operator-Key", operatorApiKey);
+            }
+            if (upstreamAdminApiKey != null && !upstreamAdminApiKey.isBlank()) {
+                builder.header("X-Navi-Admin-Key", upstreamAdminApiKey);
+            }
             if (tenantId != null && !tenantId.isBlank()) {
                 builder.header("X-Tenant-Id", tenantId);
             }
@@ -175,6 +219,18 @@ public class HttpHelper {
             return trimmed;
         }
         return "Bearer " + trimmed;
+    }
+
+    private Map<String, String> upstreamAdminOnlyHeaders(String override) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        String adminKey = override != null && !override.isBlank() ? override : upstreamAdminApiKey;
+        if (adminKey != null && !adminKey.isBlank()) {
+            headers.put("X-Navi-Admin-Key", adminKey);
+        }
+        if (tenantId != null && !tenantId.isBlank()) {
+            headers.put("X-Tenant-Id", tenantId);
+        }
+        return headers;
     }
 
     private static JavaTimeModule javaTimeModule() {

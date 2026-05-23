@@ -92,20 +92,13 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
     void toolMessagesShouldBeVisibleByCursorBeforeTaskCompletes() throws Exception {
         String cursor = invokeEvent("""
                 {
-                  "type": "system",
-                  "content": "started"
-                }
-                """).getId();
-
-        invokeEvent("""
-                {
                   "type": "skill_frame_open",
                   "content": "open skill",
                   "skill_frame_id": "frame-101",
                   "parent_frame_id": "frame-parent",
                   "skill_id": "skill-1"
                 }
-                """);
+                """).getId();
         invokeEvent("""
                 {
                   "type": "tool_use",
@@ -146,6 +139,14 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
                         .filter(message -> isToolCallStart(message) || isToolCallResult(message))
                         .allMatch(message -> message.getMetadata().contains("\"parentFrameId\":\"frame-parent\"")),
                 "tool messages should retain parentFrameId for frame hierarchy");
+        assertTrue(runningIncrement.stream()
+                        .filter(this::isToolCallStart)
+                        .allMatch(message -> message.getMetadata().contains("\"status\":\"RUNNING\"")),
+                "tool start messages should expose RUNNING status");
+        assertTrue(runningIncrement.stream()
+                        .filter(this::isToolCallResult)
+                        .allMatch(message -> message.getMetadata().contains("\"status\":\"COMPLETED\"")),
+                "tool result messages should expose COMPLETED status");
 
         AtomicReference<List<SessionMessageEntity>> messagesAtComplete = new AtomicReference<>();
         doAnswer(invocation -> {

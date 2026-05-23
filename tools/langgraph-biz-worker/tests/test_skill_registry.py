@@ -3,6 +3,8 @@
 import pytest
 from pathlib import Path
 
+from langgraph_biz_worker.runtime.account_workspace import resolve_account_workspace
+from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 
 
@@ -42,3 +44,35 @@ class TestSkillRegistry:
         reg = SkillRegistry()
         reg.register(SkillManifest(id="dynamic", name="Dynamic Skill"))
         assert reg.get_manifest("dynamic") is not None
+
+    def test_loads_delegated_workspace_account_skills_without_account_id(self, tmp_path: Path):
+        skills_root = tmp_path / "skills"
+        workspace_root = tmp_path / "workspace"
+        skill_dir = workspace_root / "skills" / "delegated-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: delegated-skill\n"
+            "description: Delegated workspace skill\n"
+            "---\n\n"
+            "# Delegated Skill\n",
+            encoding="utf-8",
+        )
+        policy = ExecutionPolicy.from_context({
+            "execution_policy": {
+                "workdir": str(workspace_root),
+                "allowed_dirs": [str(workspace_root)],
+            },
+        })
+        workspace = resolve_account_workspace(tmp_path / "data", None, execution_policy=policy)
+        reg = SkillRegistry(
+            skills_root=skills_root,
+            manifests_dir=tmp_path / "missing-manifests",
+            data_root=tmp_path / "data",
+        )
+
+        reg.load(account_workspace=workspace)
+
+        manifest = reg.get_manifest("delegated-skill")
+        assert manifest is not None
+        assert manifest.description == "Delegated workspace skill"

@@ -145,7 +145,7 @@ class TestMultiChildSequence:
         # First child
         c1 = runtime.invoke_child_skill(parent, "child_1")
         runtime.submit_result(c1, "c1 done", {"c1": True})
-        p1 = runtime.complete_child_and_resume_parent(c1)
+        runtime.complete_child_and_resume_parent(c1)
 
         # Parent is RUNNING again
         assert runtime.get_frame(parent).status == FrameStatus.RUNNING
@@ -153,7 +153,7 @@ class TestMultiChildSequence:
         # Second child
         c2 = runtime.invoke_child_skill(parent, "child_2")
         runtime.submit_result(c2, "c2 done", {"c2": True})
-        p2 = runtime.complete_child_and_resume_parent(c2)
+        runtime.complete_child_and_resume_parent(c2)
 
         # Parent should have both child results
         parent_frame = runtime.get_frame(parent)

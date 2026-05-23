@@ -918,24 +918,24 @@ export const useSettingsStore = defineStore('settings', {
 
 ---
 
-## 五、与 coding-agent/frontend 的关系
+## 五、与旧独立调试前端的关系
 
-| 方面 | coding-agent/frontend | navigator-frontend |
+| 方面 | 旧独立调试前端 | navigator-frontend |
 |------|----------------------|-------------------|
 | 用途 | 开发调试 | 正式产品 |
-| 对话入口 | 直连 coding-agent | 统一走 tutor-agent |
+| 对话入口 | 直连独立执行模块 | 统一走 tutor-agent |
 | 页面 | Dashboard、容器管理、事件日志 | 对话、配置管理 |
 | 共享 | `@foggy/chat` | `@foggy/chat` |
-| 适配器 | OpenHandsAdapter | TutorAgentAdapter |
+| 适配器 | WorkerEventAdapter | TutorAgentAdapter |
 
 ### 代码复用
 
 | 来源 | 复用内容 | 变化点 |
 |------|---------|--------|
 | `@foggy/chat` | ChatPanel, useChatStore, createSseClient, AIP 类型 | 不变 |
-| coding-agent `client.ts` | Axios 拦截器模式、Token 管理 | 参考，重写 |
-| coding-agent `event.ts` | SSE 订阅封装 | 参考，改用 TutorAgentAdapter，路径改为 /sessions |
-| coding-agent `auth.ts` | 登录 API 调用 | 相同后端，直接复用逻辑 |
+| 旧调试前端 `client.ts` | Axios 拦截器模式、Token 管理 | 参考，重写 |
+| 旧调试前端 `event.ts` | SSE 订阅封装 | 参考，改用 TutorAgentAdapter，路径改为 /sessions |
+| 旧调试前端 `auth.ts` | 登录 API 调用 | 相同后端，直接复用逻辑 |
 
 ---
 

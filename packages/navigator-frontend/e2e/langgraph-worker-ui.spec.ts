@@ -90,6 +90,31 @@ const directories = {
   ],
 }
 
+const sessionMessages: Record<string, unknown[]> = {
+  'session-lg-failed': [
+    {
+      id: 'msg-lg-report-result',
+      sessionId: 'session-lg-failed',
+      role: 'ASSISTANT',
+      content: 'final result already streamed',
+      metadata: {
+        type: 'TEXT_COMPLETE',
+        content: 'final result already streamed',
+        isResult: true,
+        execution_report_ref: 'frame-report://task-lg-failed/root-frame',
+        execution_report_digest: {
+          status: 'COMPLETED',
+          summary: 'Frame execution completed for audit review',
+          skill_id: 'langgraph-root-agent',
+          frame_kind: 'ROOT',
+          generated_at: '2026-05-01T00:01:30Z',
+        },
+      },
+      createdAt: '2026-05-01T00:01:30Z',
+    },
+  ],
+}
+
 function rx(data: unknown) {
   return {
     code: 200,
@@ -105,7 +130,6 @@ async function mockApi(page: Page) {
       'navigator_user',
       JSON.stringify({ userId: 'u-e2e', username: 'root', roles: ['ADMIN'] }),
     )
-    localStorage.setItem('navigator_setup_skipped', '1')
   })
 
   await page.route('**/api/v1/**', async (route) => {
@@ -124,11 +148,6 @@ async function mockApi(page: Page) {
 
     if (path === '/sse/subscribe' || path === '/sse/unsubscribe') {
       await fulfill(route, null)
-      return
-    }
-
-    if (path === '/config/platform/setup-status') {
-      await fulfill(route, { setupComplete: true })
       return
     }
 
@@ -173,6 +192,20 @@ async function mockApi(page: Page) {
           tags: [],
         })),
       )
+      return
+    }
+
+    const latestMessagesMatch = path.match(/^\/sessions\/([^/]+)\/messages\/latest$/)
+    if (latestMessagesMatch) {
+      const sessionId = latestMessagesMatch[1]!
+      const messages = sessionMessages[sessionId] || []
+      await fulfill(route, {
+        messages,
+        total: messages.length,
+        limit: Number(url.searchParams.get('limit') || '50'),
+        offset: Number(url.searchParams.get('offset') || '0'),
+        hasMore: false,
+      })
       return
     }
 
@@ -249,5 +282,31 @@ test.describe('LangGraph Biz Worker UI boundaries', () => {
 
     await expect(menu.getByText('重新同步', { exact: true })).toBeVisible()
     await expect(menu.getByText('回退', { exact: true })).toBeVisible()
+  })
+
+  test('shows execution report entry from task event digest', async ({ page }) => {
+    await gotoWorkers(page)
+    await page.getByText('LangGraph Biz', { exact: true }).click()
+
+    const conversation = page.locator('.conv-item', { hasText: 'submit close order request' }).first()
+    await expect(conversation).toBeVisible()
+    await conversation.click()
+
+    await expect(page.getByText('查看执行报告', { exact: true })).toBeVisible()
+    await page.getByText('查看执行报告', { exact: true }).click()
+
+    const dialog = page.getByRole('dialog', { name: '执行报告' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByText('status', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('COMPLETED', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('summary', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('Frame execution completed for audit review')).toBeVisible()
+    await expect(dialog.getByText('skill_id', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('langgraph-root-agent', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('frame_kind', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('ROOT', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('generated_at', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('2026-05-01T00:01:30Z', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('frame-report://task-lg-failed/root-frame', { exact: true })).toBeVisible()
   })
 })

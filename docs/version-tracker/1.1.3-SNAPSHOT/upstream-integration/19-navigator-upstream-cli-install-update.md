@@ -47,6 +47,17 @@ irm <release-base-url>/install.ps1 | iex
 irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/install.ps1 | iex
 ```
 
+当前已发布版本：
+
+- version: `1.0.4`
+- released: `2026-05-18`
+- buildId: `1.0.4+354ba23aed93.dirty`
+- gitCommit: `354ba23aed93bb894c332a5268850ec0555f00c1`
+- gitDirty: `true`
+- Windows archive: `1.0.4/navigator-upstream-cli-1.0.4-windows.zip`
+- SHA256: `3b7737d28a1ab9654fe07e76f4c6821f417a21432a8fb786502298aab7286113`
+- release smoke: `docs/version-tracker/1.1.3-SNAPSHOT/coverage/upstream-client-app-admin-key-cli-release-smoke.md`
+
 安装脚本会：
 
 - 下载最新 `navigator-upstream-cli-<version>-windows.zip`。
@@ -90,8 +101,21 @@ NAVI_CLIENT_APP_ID=<clientAppId>
 NAVI_CLIENT_APP_KEY=<clientAppKey>
 NAVI_CLIENT_APP_SECRET=<clientAppSecret>
 NAVI_CLIENT_APP_ACCESS_TOKEN=
+NAVI_CONTROL_API_KEY=<clientAppScopedControlKey>
+NAVI_ADMIN_API_KEY=<upstreamSystemScopedClientAppAdminKey>
+NAVI_ADMIN_KEY_REQUEST_CODE=<requestCode>
+NAVI_ADMIN_KEY_CLAIM_TOKEN=<claimToken>
+NAVI_UPSTREAM_SYSTEM_ID=<upstreamSystemId>
+NAVI_SOURCE_TENANT_ID=<sourceTenantId>
+NAVI_UPSTREAM_MULTI_TENANT=true
+NAVI_UPSTREAM_USER_ID=<upstreamUserId>
+NAVI_UPSTREAM_USER_TOKEN=<optionalCurrentUpstreamUserToken>
 NAVI_AGENT_CODE=<agentId>
 NAVI_MODEL_CONFIG_ID=<modelConfigId>
+NAVI_SKILL_ID=<skillId>
+NAVI_WORKER_ID=<workerId>
+NAVI_DIRECTORY_ID=<directoryId>
+NAVI_WORKER_POOL_ID=<workerPoolId>
 NAVI_E2E_MOCK_LLM_URL=http://localhost:8200
 NAVI_POLL_INTERVAL_SECONDS=4
 ```
@@ -99,6 +123,8 @@ NAVI_POLL_INTERVAL_SECONDS=4
 这个文件必须留在本项目本地，不提交到 Git。不同上游项目使用各自的 `.navigator/upstream.env`，不共用全局 shell 环境变量。
 
 `NAVI_MODEL_CONFIG_ID` 可为空；为空时 readiness/ask 由 Navigator 后端按当前 ClientApp 的默认 model config grant 解析。命令行 `--model-config-id` 会覆盖该值。
+
+BizWorker `1.1.6-SNAPSHOT` 起，新会话 `ask` 默认由 Navigator / BizWorker 生成 `contextId`，上游只保存返回值用于续聊。不要在 profile 中预置一个固定 `contextId`，也不要把完整 UI transcript 或模型 token 预算放进 `clientContext`。当前 runtime context、Skill/Agent 边界和模型预算缺口见 `docs/version-tracker/1.1.6-SNAPSHOT/16-upstream-cli-skill-runtime-contract-alignment.md`。
 
 ## 常用命令
 
@@ -129,7 +155,7 @@ E2E 回归使用独立 wrapper，仍读取同一个 project-local `.navigator/up
 .\tools\navigator-upstream\navi-e2e.ps1 script cleanup --trace-id <e2eTraceId>
 ```
 
-`model ensure` 需要 `.navigator/upstream.env` 中存在 `NAVI_CLIENT_APP_ID`，并提供 `NAVI_CONTROL_API_KEY`。它只维护当前 ClientApp 的标准 E2E model grant；不会修改租户默认模型。`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback。
+`model ensure` 需要 `.navigator/upstream.env` 中存在 `NAVI_CLIENT_APP_ID`，并提供 `NAVI_CONTROL_API_KEY`。它只维护当前 ClientApp 的标准 E2E model grant；不会修改租户默认模型。`NAVI_ADMIN_TOKEN` 仅作为 Navigator 内部 fallback；`NAVI_ADMIN_API_KEY` 不再作为普通 `X-API-Key` fallback。
 
 ## 更新
 
@@ -201,11 +227,11 @@ https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli
 发布校验：
 
 - `latest.json` 可访问，版本与本次发布版本一致。
-- `latest.json` 的 `features` 包含 `function-import`、`function-grant`、`function-grant-status`、`function-visible`。
+- `latest.json` 的 `features` 包含 `function-import`、`function-grant`、`function-grant-status`、`function-visible`、`admin-key-bootstrap`、`client-app-bootstrap`。
 - Windows 包 SHA256 与 `latest.json.sha256.windows` 一致。
 - 临时上游项目执行远程安装命令成功。
 - 安装后 `.\tools\navigator-upstream\navi.ps1 upstream config check` 成功，默认读取本项目 `.navigator/upstream.env`。
-- 临时解压包执行 `.\navi.ps1 version`、`.\navi.ps1 upstream --help` 与 `.\navi.ps1 upstream function --help` 成功。
+- 临时解压包执行 `.\navi.ps1 version`、`.\navi.ps1 upstream --help`、`.\navi.ps1 upstream function --help`、`.\navi.ps1 upstream admin-key --help` 与 `.\navi.ps1 upstream client-app --help` 成功。
 
 ## 安全约束
 

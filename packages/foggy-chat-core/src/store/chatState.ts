@@ -13,7 +13,7 @@ import type {
   ConfirmationRequestPayload,
   ConfirmationResponsePayload,
 } from '../types/aip'
-import type { ChatMessage, ConnectionStatus } from '../types/chat'
+import type { ChatMessage, ConnectionStatus, ExecutionReportDigest } from '../types/chat'
 
 let _msgSeq = 0
 function nextId(): string {
@@ -46,6 +46,163 @@ function formatArguments(args: unknown): string {
   }
 }
 
+interface ExecutionReportFields {
+  ref?: string
+  digest?: ExecutionReportDigest
+}
+
+const EXECUTION_REPORT_CONTAINER_KEYS = [
+  'executionReport',
+  'execution_report',
+  'report',
+  'result',
+  'data',
+  'payload',
+]
+
+function extractExecutionReport(
+  existing: ExecutionReportFields | undefined,
+  ...sources: unknown[]
+): ExecutionReportFields {
+  let ref = existing?.ref
+  let digest = existing?.digest
+  const seen = new WeakSet<object>()
+
+  function visit(value: unknown) {
+    const source = objectValue(parseMaybeJson(value))
+    if (!source || seen.has(source)) return
+    seen.add(source)
+
+    const directRef = firstString(
+      source.executionReportRef,
+      source.execution_report_ref,
+      source.reportRef,
+      source.report_ref,
+    )
+    if (directRef) ref = directRef
+
+    const directDigest = normalizeExecutionReportDigest(
+      source.executionReportDigest
+        ?? source.execution_report_digest
+        ?? source.reportDigest
+        ?? source.report_digest
+        ?? source.frameExecutionReportDigest
+        ?? source.frame_execution_report_digest,
+    )
+    if (directDigest) digest = mergeExecutionReportDigest(digest, directDigest)
+
+    for (const key of EXECUTION_REPORT_CONTAINER_KEYS) {
+      visit(source[key])
+    }
+  }
+
+  for (const source of sources) visit(source)
+
+  const digestRef = firstString(
+    digest?.reportRef,
+    digest?.report_ref,
+    digest?.executionReportRef,
+    digest?.execution_report_ref,
+  )
+  if (!ref && digestRef) ref = digestRef
+  if (ref && digest?.reportRef !== ref) {
+    digest = mergeExecutionReportDigest(digest, { reportRef: ref })
+  }
+  return { ref, digest }
+}
+
+function normalizeExecutionReportDigest(value: unknown): ExecutionReportDigest | undefined {
+  const parsed = parseMaybeJson(value)
+  if (typeof parsed === 'string' && parsed.trim()) {
+    return { summary: parsed.trim() }
+  }
+  const source = objectValue(parsed)
+  if (!source) return undefined
+
+  const digest: ExecutionReportDigest = { ...source }
+  const status = firstString(source.status, source.state)
+  const summary = firstString(source.summary, source.resultSummary, source.result_summary, source.message, source.text)
+  const error = firstNullableString(source.error, source.errorMessage, source.error_message)
+  const reportRef = firstString(source.reportRef, source.report_ref, source.executionReportRef, source.execution_report_ref)
+  const taskId = firstString(source.taskId, source.task_id)
+  const frameId = firstString(source.frameId, source.frame_id)
+  const skillId = firstString(source.skillId, source.skill_id)
+  const frameKind = firstString(source.frameKind, source.frame_kind)
+  const generatedAt = firstString(source.generatedAt, source.generated_at)
+
+  if (status) digest.status = status
+  if (summary) digest.summary = summary
+  if (error !== undefined) digest.error = error
+  if (reportRef) digest.reportRef = reportRef
+  if (taskId) digest.taskId = taskId
+  if (frameId) digest.frameId = frameId
+  if (skillId) digest.skillId = skillId
+  if (frameKind) digest.frameKind = frameKind
+  if (generatedAt) digest.generatedAt = generatedAt
+  return digest
+}
+
+function executionReportProps(report: ExecutionReportFields): Partial<ChatMessage> {
+  return {
+    ...(report.ref ? { executionReportRef: report.ref } : {}),
+    ...(report.digest ? { executionReportDigest: report.digest } : {}),
+  }
+}
+
+function applyExecutionReport(target: ChatMessage, report: ExecutionReportFields) {
+  if (report.ref) target.executionReportRef = report.ref
+  if (report.digest) {
+    target.executionReportDigest = mergeExecutionReportDigest(target.executionReportDigest, report.digest)
+  }
+  if (target.executionReportRef && target.executionReportDigest?.reportRef !== target.executionReportRef) {
+    target.executionReportDigest = mergeExecutionReportDigest(target.executionReportDigest, {
+      reportRef: target.executionReportRef,
+    })
+  }
+}
+
+function mergeExecutionReportDigest(
+  previous: ExecutionReportDigest | undefined,
+  next: ExecutionReportDigest,
+): ExecutionReportDigest {
+  return { ...(previous ?? {}), ...next }
+}
+
+function parseMaybeJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  if (!trimmed || !['{', '['].includes(trimmed[0])) return value
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return value
+  }
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return undefined
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  }
+  return undefined
+}
+
+function firstNullableString(...values: unknown[]): string | null | undefined {
+  for (const value of values) {
+    if (value === null) return null
+    const text = firstString(value)
+    if (text) return text
+  }
+  return undefined
+}
+
 export function createChatState(): ChatState {
   const messages = ref<ChatMessage[]>([])
   const connectionStatus = ref<ConnectionStatus>('disconnected')
@@ -66,6 +223,7 @@ export function createChatState(): ChatState {
   function processAipMessage(aip: AipMessage) {
     // Clear waiting hint when a real event arrives (except STATE_SYNC/waiting itself)
     const raw = aip.payload as Record<string, unknown> | undefined
+    const report = extractExecutionReport(undefined, raw)
     if (!(aip.type === AipMessageType.STATE_SYNC && raw?.subtype === 'waiting')) {
       removeWaitingHint()
     }
@@ -79,6 +237,7 @@ export function createChatState(): ChatState {
         )
         if (lastChunk) {
           lastChunk.content += p.content
+          applyExecutionReport(lastChunk, report)
         } else {
           messages.value.push({
             id: aip.messageId,
@@ -86,6 +245,7 @@ export function createChatState(): ChatState {
             sender: 'assistant',
             content: p.content,
             timestamp: aip.timestamp,
+            ...executionReportProps(report),
           })
         }
         break
@@ -95,21 +255,26 @@ export function createChatState(): ChatState {
         isThinking.value = false
         // Skip result events — their text content was already emitted by assistant_text.
         // The result event still carries metadata (cost, tokens) handled by useTaskPane.
-        const raw = aip.payload as Record<string, unknown>
-        if (raw?.isResult === true) break
+        if (raw?.isResult === true) {
+          appendExecutionReportMessage(aip, report)
+          break
+        }
         const lastChunk = [...messages.value].reverse().find(
           (m) => m.type === AipMessageType.TEXT_CHUNK && m.sender === 'assistant',
         )
         if (lastChunk) {
           lastChunk.content = p.content
           lastChunk.type = AipMessageType.TEXT_COMPLETE
+          applyExecutionReport(lastChunk, report)
         } else {
+          if (!p.content && appendExecutionReportMessage(aip, report)) break
           messages.value.push({
             id: aip.messageId,
             type: aip.type,
             sender: 'assistant',
             content: p.content,
             timestamp: aip.timestamp,
+            ...executionReportProps(report),
           })
         }
         break
@@ -141,6 +306,7 @@ export function createChatState(): ChatState {
           existingResult.thought = p.thought
           existingResult.toolName = p.toolName
           existingResult.timestamp = Math.min(existingResult.timestamp, aip.timestamp)
+          applyExecutionReport(existingResult, report)
         } else {
           messages.value.push({
             id: aip.messageId,
@@ -152,6 +318,7 @@ export function createChatState(): ChatState {
             thought: p.thought,
             raw: aip.payload,
             timestamp: aip.timestamp,
+            ...executionReportProps(report),
           })
         }
         break
@@ -167,6 +334,7 @@ export function createChatState(): ChatState {
         if (existing) {
           existing.toolOutput = output
           existing.toolSuccess = success
+          applyExecutionReport(existing, report)
         } else {
           messages.value.push({
             id: aip.messageId,
@@ -178,6 +346,7 @@ export function createChatState(): ChatState {
             toolOutput: output,
             toolSuccess: success,
             timestamp: aip.timestamp,
+            ...executionReportProps(report),
           })
         }
         break
@@ -189,6 +358,7 @@ export function createChatState(): ChatState {
         )
         if (existing) {
           existing.error = p.errorMessage
+          applyExecutionReport(existing, report)
         } else {
           messages.value.push({
             id: aip.messageId,
@@ -199,6 +369,7 @@ export function createChatState(): ChatState {
             toolName: p.toolName,
             error: p.errorMessage,
             timestamp: aip.timestamp,
+            ...executionReportProps(report),
           })
         }
         break
@@ -216,6 +387,7 @@ export function createChatState(): ChatState {
             content: (raw.content as string) || 'Context compressed',
             raw: { subtype },
             timestamp: aip.timestamp,
+            ...executionReportProps(report),
           })
           break
         }
@@ -237,6 +409,7 @@ export function createChatState(): ChatState {
             content: (raw.content as string) || 'Task stream reconnected',
             raw: taskId ? { subtype, taskId } : { subtype },
             timestamp: aip.timestamp,
+            ...executionReportProps(report),
           })
           break
         }
@@ -254,6 +427,7 @@ export function createChatState(): ChatState {
             approvalStatus: 'pending',
             raw,
             timestamp: aip.timestamp,
+            ...executionReportProps(report),
           })
           break
         }
@@ -275,6 +449,7 @@ export function createChatState(): ChatState {
             content,
             raw: { subtype, elapsedSeconds: elapsed, timeoutSeconds: timeout },
             timestamp: aip.timestamp,
+            ...executionReportProps(report),
           }
           if (existingIdx >= 0) {
             messages.value[existingIdx] = msg
@@ -285,7 +460,10 @@ export function createChatState(): ChatState {
         }
         // Default: use status if available, otherwise fall back to content field
         const statusText = p.status || (raw.content as string)
-        if (!statusText) break // skip empty STATE_SYNC
+        if (!statusText) {
+          appendExecutionReportMessage(aip, report)
+          break
+        }
         if (conversationStatus.value === statusText) break
         conversationStatus.value = statusText
         messages.value.push({
@@ -294,6 +472,7 @@ export function createChatState(): ChatState {
           sender: 'system',
           content: p.status ? `状态变更: ${p.status}` : statusText,
           timestamp: aip.timestamp,
+          ...executionReportProps(report),
         })
         break
       }
@@ -311,6 +490,7 @@ export function createChatState(): ChatState {
           reconnectable: raw?.reconnectable === true,
           raw: { taskId: raw?.taskId, reconnectable: raw?.reconnectable },
           timestamp: aip.timestamp,
+          ...executionReportProps(report),
         })
         break
       }
@@ -323,6 +503,7 @@ export function createChatState(): ChatState {
           content: p.resultSummary || '',
           raw: p,
           timestamp: aip.timestamp,
+          ...executionReportProps(report),
         })
         break
       }
@@ -336,7 +517,10 @@ export function createChatState(): ChatState {
             sender: 'assistant',
             content,
             timestamp: aip.timestamp,
+            ...executionReportProps(report),
           })
+        } else {
+          appendExecutionReportMessage(aip, report)
         }
         break
       }
@@ -360,6 +544,7 @@ export function createChatState(): ChatState {
           plan: p.plan,
           raw: p,
           timestamp: aip.timestamp,
+          ...executionReportProps(report),
         })
         break
       }
@@ -385,6 +570,21 @@ export function createChatState(): ChatState {
         break
       }
     }
+  }
+
+  function appendExecutionReportMessage(aip: AipMessage, report: ExecutionReportFields): boolean {
+    if (!report.ref) return false
+    if (messages.value.some((message) => message.executionReportRef === report.ref)) return false
+    messages.value.push({
+      id: aip.messageId,
+      type: AipMessageType.STATE_SYNC,
+      sender: 'system',
+      content: '执行报告',
+      raw: aip.payload,
+      timestamp: aip.timestamp,
+      ...executionReportProps(report),
+    })
+    return true
   }
 
   function addUserMessage(content: string, _sessionId?: string, images?: Array<{ name: string; url: string }>) {

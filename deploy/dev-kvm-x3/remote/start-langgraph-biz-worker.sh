@@ -13,7 +13,13 @@ set -a
 . "$BOOTSTRAP_ENV"
 set +a
 
-SOURCE_DIR="${BIZ_WORKER_SOURCE_DIR:-/opt/foggy/navigator/current/tools/langgraph-biz-worker}"
+if [ -n "${BIZ_WORKER_SOURCE_DIR:-}" ]; then
+  SOURCE_DIR="$BIZ_WORKER_SOURCE_DIR"
+else
+  load_release_env
+  require_var IMAGE_TAG
+  SOURCE_DIR="$(release_source_dir)/tools/langgraph-biz-worker"
+fi
 VENV_DIR="${BIZ_WORKER_VENV_DIR:-$SOURCE_DIR/.venv-x3}"
 WORKER_ENV_FILE="${BIZ_WORKER_RUNTIME_ENV_FILE:-$RUNTIME_DIR/langgraph-biz-worker.env}"
 PID_FILE="${BIZ_WORKER_PID_FILE:-$RUNTIME_DIR/langgraph-biz-worker.pid}"

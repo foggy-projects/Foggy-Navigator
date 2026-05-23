@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.foggy.navigator.sdk.internal.HttpHelper;
 import com.foggy.navigator.sdk.model.businessagent.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -11,6 +12,8 @@ import java.util.Map;
  * Foggy Navigator Business Agent 控制面 API
  */
 public class BusinessAgentApi {
+
+    private static final String OPERATOR_KEY_HEADER = "X-Navi-Operator-Key";
 
     private final HttpHelper http;
 
@@ -49,6 +52,172 @@ public class BusinessAgentApi {
 
     public ClientAppDTO updateClientAppStatus(String clientAppId, UpdateStatusForm form) {
         return http.put("/api/v1/client-apps/" + clientAppId + "/status", form, new TypeReference<>() {});
+    }
+
+    public UpstreamTenantClientAppProvisioningDTO ensureUpstreamTenantClientApp(
+            EnsureUpstreamTenantClientAppForm form) {
+        return ensureUpstreamTenantClientApp(form, null);
+    }
+
+    public UpstreamTenantClientAppProvisioningDTO ensureUpstreamTenantClientApp(
+            EnsureUpstreamTenantClientAppForm form,
+            String upstreamAdminApiKey) {
+        return http.postWithUpstreamAdminAuth("/api/v1/admin/upstream-tenants/client-apps/ensure",
+                form, upstreamAdminApiKey, new TypeReference<>() {});
+    }
+
+    // ===== Upstream Admin ClientApp Management =====
+
+    public List<ClientAppDTO> listUpstreamManagedClientApps(String tenantId) {
+        return listUpstreamManagedClientApps(tenantId, null);
+    }
+
+    public List<ClientAppDTO> listUpstreamManagedClientApps(String tenantId, String upstreamAdminApiKey) {
+        String path = "/api/v1/upstream-admin/client-apps";
+        if (tenantId != null && !tenantId.isBlank()) {
+            path += "?tenantId=" + urlEncode(tenantId);
+        }
+        return http.getWithUpstreamAdminAuth(path, upstreamAdminApiKey, new TypeReference<>() {});
+    }
+
+    public ClientAppDTO ensureUpstreamClientApp(EnsureUpstreamClientAppForm form) {
+        return ensureUpstreamClientApp(form, null);
+    }
+
+    public ClientAppDTO ensureUpstreamClientApp(EnsureUpstreamClientAppForm form, String upstreamAdminApiKey) {
+        return http.postWithUpstreamAdminAuth("/api/v1/upstream-admin/client-apps/ensure",
+                form, upstreamAdminApiKey, new TypeReference<>() {});
+    }
+
+    public IssuedCredentialDTO issueUpstreamClientAppControlCredential(String clientAppId,
+                                                                       IssueControlCredentialForm form) {
+        return issueUpstreamClientAppControlCredential(clientAppId, form, null);
+    }
+
+    public IssuedCredentialDTO issueUpstreamClientAppControlCredential(String clientAppId,
+                                                                       IssueControlCredentialForm form,
+                                                                       String upstreamAdminApiKey) {
+        return http.postWithUpstreamAdminAuth("/api/v1/upstream-admin/client-apps/" + urlEncode(clientAppId)
+                + "/control-credentials", form, upstreamAdminApiKey, new TypeReference<>() {});
+    }
+
+    public List<Map<String, Object>> listUpstreamWorkerPools(String targetTenantId) {
+        String path = "/api/v1/upstream-admin/worker-pools";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.getWithUpstreamAdminAuth(path, null, new TypeReference<>() {});
+    }
+
+    public Map<String, Object> createUpstreamWorkerPool(Map<String, Object> form, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/worker-pools";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.postWithUpstreamAdminAuth(path, form, null, new TypeReference<>() {});
+    }
+
+    public void addUpstreamWorkerPoolMember(String poolId, Map<String, Object> form, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/worker-pools/" + urlEncode(poolId) + "/members";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        http.postWithUpstreamAdminAuth(path, form, null, new TypeReference<Void>() {});
+    }
+
+    public Map<String, Object> updateUpstreamWorkerPoolStatus(String poolId, String status, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/worker-pools/" + urlEncode(poolId) + "/status";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.putWithUpstreamAdminAuth(path, Map.of("status", status), null, new TypeReference<>() {});
+    }
+
+    // ===== Upstream Bootstrap Admin Key Request =====
+
+    public UpstreamBootstrapRequestCreatedDTO requestUpstreamAdminKey(CreateUpstreamBootstrapRequestForm form) {
+        return http.postNoAuth("/api/v1/upstream-bootstrap/admin-key-requests", form, new TypeReference<>() {});
+    }
+
+    public UpstreamBootstrapRequestDTO getUpstreamAdminKeyRequestStatus(String requestCode) {
+        return http.get("/api/v1/upstream-bootstrap/admin-key-requests/"
+                + urlEncode(requestCode) + "/status", new TypeReference<>() {});
+    }
+
+    public UpstreamAdminCredentialClaimDTO claimUpstreamAdminKey(String requestCode,
+                                                                 ClaimUpstreamAdminCredentialForm form) {
+        return http.postNoAuth("/api/v1/upstream-bootstrap/admin-key-requests/"
+                + urlEncode(requestCode) + "/claim", form, new TypeReference<>() {});
+    }
+
+    public List<UpstreamBootstrapRequestDTO> listUpstreamBootstrapRequests(String status) {
+        return listUpstreamBootstrapRequests(status, null);
+    }
+
+    public List<UpstreamBootstrapRequestDTO> listUpstreamBootstrapRequests(String status, String operatorApiKey) {
+        String path = "/api/v1/admin/upstream-bootstrap-requests";
+        if (status != null && !status.isBlank()) {
+            path += "?status=" + urlEncode(status);
+        }
+        return http.get(path, operatorHeaders(operatorApiKey), new TypeReference<>() {});
+    }
+
+    public UpstreamBootstrapRequestDTO getUpstreamBootstrapRequest(String requestCode) {
+        return getUpstreamBootstrapRequest(requestCode, null);
+    }
+
+    public UpstreamBootstrapRequestDTO getUpstreamBootstrapRequest(String requestCode, String operatorApiKey) {
+        return http.get("/api/v1/admin/upstream-bootstrap-requests/" + urlEncode(requestCode),
+                operatorHeaders(operatorApiKey), new TypeReference<>() {});
+    }
+
+    public UpstreamBootstrapRequestDTO approveUpstreamBootstrapRequest(
+            String requestCode,
+            ApproveUpstreamBootstrapRequestForm form) {
+        return approveUpstreamBootstrapRequest(requestCode, form, null);
+    }
+
+    public UpstreamBootstrapRequestDTO approveUpstreamBootstrapRequest(
+            String requestCode,
+            ApproveUpstreamBootstrapRequestForm form,
+            String operatorApiKey) {
+        return http.post("/api/v1/admin/upstream-bootstrap-requests/"
+                + urlEncode(requestCode) + "/approve", form, operatorHeaders(operatorApiKey), new TypeReference<>() {});
+    }
+
+    public UpstreamBootstrapRequestDTO denyUpstreamBootstrapRequest(
+            String requestCode,
+            DenyUpstreamBootstrapRequestForm form) {
+        return denyUpstreamBootstrapRequest(requestCode, form, null);
+    }
+
+    public UpstreamBootstrapRequestDTO denyUpstreamBootstrapRequest(
+            String requestCode,
+            DenyUpstreamBootstrapRequestForm form,
+            String operatorApiKey) {
+        return http.post("/api/v1/admin/upstream-bootstrap-requests/"
+                + urlEncode(requestCode) + "/deny", form, operatorHeaders(operatorApiKey), new TypeReference<>() {});
+    }
+
+    public UpstreamAdminCredentialDTO revokeUpstreamAdminCredential(String credentialId) {
+        return revokeUpstreamAdminCredential(credentialId, null);
+    }
+
+    public UpstreamAdminCredentialDTO revokeUpstreamAdminCredential(String credentialId, String operatorApiKey) {
+        return http.post("/api/v1/admin/upstream-admin-credentials/"
+                + urlEncode(credentialId) + "/revoke", null, operatorHeaders(operatorApiKey), new TypeReference<>() {});
+    }
+
+    public UpstreamAdminCredentialClaimDTO rotateUpstreamAdminCredential(String credentialId,
+                                                                        RotateUpstreamAdminCredentialForm form) {
+        return rotateUpstreamAdminCredential(credentialId, form, null);
+    }
+
+    public UpstreamAdminCredentialClaimDTO rotateUpstreamAdminCredential(String credentialId,
+                                                                        RotateUpstreamAdminCredentialForm form,
+                                                                        String operatorApiKey) {
+        return http.post("/api/v1/admin/upstream-admin-credentials/"
+                + urlEncode(credentialId) + "/rotate", form, operatorHeaders(operatorApiKey), new TypeReference<>() {});
     }
 
     // ===== Model Config Grant =====
@@ -91,6 +260,27 @@ public class BusinessAgentApi {
 
     public BusinessAgentBundleDTO syncBusinessAgentBundle(SyncBusinessAgentBundleForm form) {
         return http.post("/api/v1/business-agent/agent-bundles/sync", form, new TypeReference<>() {});
+    }
+
+    // ===== Frame Report =====
+
+    public Map<String, Object> getFrameReport(String reportRef, String mode, int maxChars) {
+        return getFrameReport(reportRef, mode, maxChars, null);
+    }
+
+    public Map<String, Object> getFrameReport(String reportRef, String mode, int maxChars, String clientAppId) {
+        return http.get(frameReportPath(reportRef, mode, maxChars, clientAppId), new TypeReference<>() {});
+    }
+
+    public Map<String, Object> getFrameReportWithClientAppAccessToken(
+            String reportRef,
+            String mode,
+            int maxChars,
+            String clientAppKey,
+            String clientAppAccessToken) {
+        return http.get(frameReportPath(reportRef, mode, maxChars, null),
+                clientAppHeaders(clientAppKey, clientAppAccessToken),
+                new TypeReference<>() {});
     }
 
     // ===== Skill =====
@@ -204,4 +394,37 @@ public class BusinessAgentApi {
     private String urlEncode(String value) {
         return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
     }
+
+    private Map<String, String> operatorHeaders(String operatorApiKey) {
+        if (operatorApiKey == null || operatorApiKey.isBlank()) {
+            return Map.of();
+        }
+        return Map.of(OPERATOR_KEY_HEADER, operatorApiKey);
+    }
+
+    private Map<String, String> clientAppHeaders(String clientAppKey, String clientAppAccessToken) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("X-Client-App-Key", clientAppKey);
+        headers.put("X-Client-App-Access-Token", clientAppAccessToken);
+        return headers;
+    }
+
+    private String frameReportPath(String reportRef, String mode, int maxChars, String clientAppId) {
+        if (reportRef == null || reportRef.isBlank()) {
+            throw new IllegalArgumentException("reportRef is required");
+        }
+        StringBuilder path = new StringBuilder("/api/v1/open/frame-reports?reportRef=")
+                .append(urlEncode(reportRef));
+        if (mode != null && !mode.isBlank()) {
+            path.append("&mode=").append(urlEncode(mode));
+        }
+        if (maxChars > 0) {
+            path.append("&maxChars=").append(maxChars);
+        }
+        if (clientAppId != null && !clientAppId.isBlank()) {
+            path.append("&clientAppId=").append(urlEncode(clientAppId));
+        }
+        return path.toString();
+    }
+
 }

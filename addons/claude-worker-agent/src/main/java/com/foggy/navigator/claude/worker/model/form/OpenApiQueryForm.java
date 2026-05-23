@@ -1,5 +1,7 @@
 package com.foggy.navigator.claude.worker.model.form;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 import java.util.List;
@@ -40,6 +42,20 @@ public class OpenApiQueryForm {
 
     /** 上游已上传附件元数据和 URL；不转换为旧 images 字段 */
     private List<Map<String, Object>> attachments;
+
+    /** 本次任务工作目录。Navigator 只透传给 BizWorker 执行策略，不做插件热加载或租户 sandbox。 */
+    @JsonAlias({"workDir", "working_dir", "workingDirectory", "working_directory"})
+    private String workdir;
+
+    /** 本次任务允许访问的目录集合。 */
+    @JsonProperty("allowed_dirs")
+    @JsonAlias({"allowedDirs", "allowed_directories", "allowedDirectories"})
+    private List<String> allowedDirs;
+
+    /** 本次任务允许使用的工具集合。 */
+    @JsonProperty("allowed_tools")
+    @JsonAlias({"allowedTools", "authorized_tools", "authorizedTools", "tool_allowlist", "toolAllowlist"})
+    private List<String> allowedTools;
 
     /**
      * 获取实际消息内容（优先 message，回退 question）

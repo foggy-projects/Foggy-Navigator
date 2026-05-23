@@ -74,6 +74,37 @@ describe('createChatState', () => {
       expect(state.messages.value).toHaveLength(1)
       expect(state.messages.value[0].content).toBe('Direct')
     })
+
+    it('keeps execution report metadata from result events without duplicating assistant text', () => {
+      state.processAipMessage(makeAip(AipMessageType.TEXT_COMPLETE, {
+        content: 'final result already streamed',
+        isResult: true,
+        execution_report_ref: 'frame-report://task-1/root-frame',
+        execution_report_digest: {
+          status: 'COMPLETED',
+          summary: '根任务执行完成',
+          skill_id: 'root-agent',
+          frame_kind: 'ROOT',
+          generated_at: '2026-05-17T12:00:00Z',
+        },
+      }))
+
+      expect(state.messages.value).toHaveLength(1)
+      expect(state.messages.value[0]).toMatchObject({
+        type: AipMessageType.STATE_SYNC,
+        sender: 'system',
+        content: '执行报告',
+        executionReportRef: 'frame-report://task-1/root-frame',
+        executionReportDigest: {
+          status: 'COMPLETED',
+          summary: '根任务执行完成',
+          reportRef: 'frame-report://task-1/root-frame',
+          skillId: 'root-agent',
+          frameKind: 'ROOT',
+          generatedAt: '2026-05-17T12:00:00Z',
+        },
+      })
+    })
   })
 
   // ========== THINKING ==========
@@ -156,6 +187,41 @@ describe('createChatState', () => {
 
       expect(state.messages.value).toHaveLength(1)
       expect(state.messages.value[0].toolOutput).toBe('/home/user')
+    })
+
+    it('attaches execution report metadata to tool results', () => {
+      state.processAipMessage(makeAip(AipMessageType.TOOL_CALL_START, {
+        toolCallId: 'tc-report',
+        toolName: 'invoke_business_function',
+        command: '{"functionId":"tms.vehicle.create"}',
+      }))
+      state.processAipMessage(makeAip(AipMessageType.TOOL_CALL_RESULT, {
+        toolCallId: 'tc-report',
+        toolName: 'invoke_business_function',
+        output: '{"ok":true}',
+        execution_report_ref: 'frame-report://task-1/function-frame',
+        execution_report_digest: {
+          status: 'COMPLETED',
+          summary: '业务函数执行完成',
+          skill_id: 'tms-vehicle-agent',
+          frame_kind: 'FUNCTION',
+          generated_at: '2026-05-17T12:00:01Z',
+        },
+      }))
+
+      expect(state.messages.value).toHaveLength(1)
+      expect(state.messages.value[0]).toMatchObject({
+        toolCallId: 'tc-report',
+        executionReportRef: 'frame-report://task-1/function-frame',
+        executionReportDigest: {
+          status: 'COMPLETED',
+          summary: '业务函数执行完成',
+          reportRef: 'frame-report://task-1/function-frame',
+          skillId: 'tms-vehicle-agent',
+          frameKind: 'FUNCTION',
+          generatedAt: '2026-05-17T12:00:01Z',
+        },
+      })
     })
 
     it('creates standalone message if no start exists', () => {

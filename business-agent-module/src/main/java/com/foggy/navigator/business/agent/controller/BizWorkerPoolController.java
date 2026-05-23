@@ -36,19 +36,19 @@ public class BizWorkerPoolController {
     }
 
     @GetMapping("/worker-pools")
-    @RequireAuth(roles = {"TENANT_ADMIN"})
+    @RequireAuth
     public RX<List<BizWorkerPoolDTO>> listPools() {
         return RX.ok(workerPoolService.listPools(resolveTenantId()));
     }
 
     @PostMapping("/worker-pools")
-    @RequireAuth(roles = {"TENANT_ADMIN"})
+    @RequireAuth
     public RX<BizWorkerPoolDTO> createPool(@RequestBody CreateWorkerPoolForm form) {
         return RX.ok(workerPoolService.createPool(resolveTenantId(), form));
     }
 
     @PostMapping("/worker-pools/{poolId}/members")
-    @RequireAuth(roles = {"TENANT_ADMIN"})
+    @RequireAuth
     public RX<Void> addMember(@PathVariable String poolId,
                               @RequestBody AddWorkerPoolMemberForm form) {
         workerPoolService.addMember(resolveTenantId(), poolId, form);
@@ -56,7 +56,7 @@ public class BizWorkerPoolController {
     }
 
     @PutMapping("/worker-pools/{poolId}/status")
-    @RequireAuth(roles = {"TENANT_ADMIN"})
+    @RequireAuth
     public RX<BizWorkerPoolDTO> updatePoolStatus(@PathVariable String poolId,
                                                  @RequestBody UpdateStatusForm form) {
         return RX.ok(workerPoolService.updatePoolStatus(

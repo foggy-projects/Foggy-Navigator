@@ -22,13 +22,13 @@ upstream ClientApp: external-llm-agent-dev
 upstream user mapping: privateAccountId -> X-Upstream-User-Id
 ```
 
-该 adapter 使用显式 skill route，要求 OpenAPI URL 中的 `agentId` 与 request metadata 中的 `context.skillId` 一致。正式 actor smoke 前，上游需要一个安全诊断命令，确认当前 Navigator 环境中：
+该 adapter 初版使用显式 skill route。后续上游租户初始化引入 `rootAgentId` 后，OpenAPI URL 中的 `agentId` 代表对外 root agent route，Navigator 从 root agent 的服务端 metadata 派生内部 `skillId`。正式 actor smoke 前，上游需要一个安全诊断命令，确认当前 Navigator 环境中：
 
 1. 指定 skill/agent 已注册。
 2. 当前 ClientApp 可见并可调用该 skill/agent。
 3. 目标 upstream user 已授权。
 4. 指定或默认 model config 对当前 ClientApp 可用。
-5. 路由参数不会因为 `agentId` / `skillId` 不一致导致 ask 失败。
+5. root agent route 能解析到当前 ClientApp 可授权的内部 skill。
 6. 上游 LLM agent 可以按需查看已授权 skill 的交付文件内容，避免只知道 skill code 而无法确认使用说明。
 
 ## 设计结论
@@ -83,17 +83,18 @@ X-Client-App-Access-Token: <runtimeAccessToken>
 
 规则：
 
-1. `context.skillId` 可选；为空时默认等于 URL `{agentId}`。
-2. `context.skillId` 一旦提供，必须与 URL `{agentId}` 完全一致，否则返回 `ROUTE_SKILL_MISMATCH`。
-3. `modelConfigId` 可选；为空时后端按当前 ClientApp 的默认 model config grant 解析。
-4. 接口只读，不创建 task、不调用 Worker、不生成 task scoped token。
+1. URL `{agentId}` 是 OpenAPI agent route；上游租户初始化场景传 `rootAgentId`。
+2. `context.skillId` 可选，仅作为诊断上下文；后端不要求它与 URL `{agentId}` 相等。
+3. 后端按 `agent_profile.skillId`、`skills[].id`、legacy route 的顺序解析内部 effective skill。
+4. `modelConfigId` 可选；为空时后端按当前 ClientApp 的默认 model config grant 解析。
+5. 接口只读，不创建 task、不调用 Worker、不生成 task scoped token。
 
 ### 后端检查顺序
 
 1. 使用 `X-Client-App-Key` 与 runtime access token 解析当前 active ClientApp。
-2. 校验 URL `{agentId}` 与 request `context.skillId` 一致。
-3. 校验 skill/agent 已注册。
-4. 校验当前 ClientApp 有该 skill/agent 的访问授权。
+2. 解析 URL `{agentId}` 对应的 root agent binding 与 effective skill。
+3. 校验 root agent 已注册。
+4. 校验当前 ClientApp 有 effective skill 的访问授权。
 5. 校验 `upstreamUserId` 已授权给当前 ClientApp。
 6. 校验请求或默认 model config 对当前 ClientApp 可用，并满足 backend 类型要求。
 7. 生成稳定、脱敏、可机器解析的 check list。
@@ -287,7 +288,7 @@ readiness 至少区分：
 CONFIG_ENV_MISSING
 CONFIG_ENV_NOT_GITIGNORED
 RUNTIME_TOKEN_FAILED
-ROUTE_SKILL_MISMATCH
+ROOT_AGENT_BINDING
 AGENT_NOT_FOUND
 CLIENT_APP_SKILL_GRANT_MISSING
 UPSTREAM_USER_GRANT_MISSING
@@ -343,13 +344,13 @@ Skill 文档：
 
 1. 上游项目根目录可执行 `verify-agent-readiness`，不需要 admin token。
 2. 缺少 agent 注册、ClientApp skill grant、upstream user grant、model config grant 时，返回不同错误码和非敏感错误摘要。
-3. URL `{agentId}` 与 request `context.skillId` 不一致时 fail-closed。
+3. URL `{agentId}` 可使用 root agent route；`context.skillId` 不再作为等值路由门禁。
 4. readiness 不创建 task、不调用 Worker、不签发 task scoped token。
 5. `skill tree` 只返回当前 ClientApp 已授权 skill 的 artifact 相对路径和 slice URL。
 6. `skill read` 支持 `startLine + startColumn + maxChars`，中文和长行不乱码。
 7. `skill read` 返回 `nextLine + nextColumn`，CLI 可据此继续读取下一段。
 8. 不输出 ClientApp secret、app key、runtime token、upstream user token、admin token、prompt body、`adapterConfigJson`、`manifestJson`、业务私有数据和服务器物理路径。
-9. 单元测试覆盖 OK、缺少各类 grant、route mismatch、slice range、非法 path、UTF-8 长行和中文切片。
+9. 单元测试覆盖 OK、缺少各类 grant、root route 解析失败、slice range、非法 path、UTF-8 长行和中文切片。
 10. 配套 CLI skill 更新，指导上游 agent 在 live actor smoke 前先执行 readiness，再按需读取 skill 文档。
 
 ## Progress Tracking
@@ -359,7 +360,7 @@ Skill 文档：
 | Item | Status | Notes |
 | --- | --- | --- |
 | 需求落版 | done | 记录 GitHub issue #102 的 readiness 与 skill artifact 浏览设计 |
-| 后端 readiness API | done | `POST /api/v1/open/agents/{agentId}/preflight`，只读检查 agent、skill grant、upstream user grant、model config grant 与 route skill match |
+| 后端 readiness API | done | `POST /api/v1/open/agents/{agentId}/preflight`，只读检查 root agent binding、skill grant、upstream user grant 与 model config grant |
 | 后端 skill artifact tree/slice API | done | `GET /api/v1/open/skills/{skillId}/files/tree` 与 `files/slice`，按已授权 skill artifact 相对路径只读浏览 |
 | SDK wrapper | done | `AgentApi` 补 readiness、skill tree、skill slice wrapper |
 | CLI 命令 | done | 补 `verify-agent-readiness`、`verify-agent-grant` alias、`skill tree`、`skill read` |
@@ -373,7 +374,7 @@ Skill 文档：
 | --- | --- | --- |
 | readiness 成功路径 | done | `OpenApiAgentReadinessServiceTest` 与 `UpstreamCliTest.verifyAgentReadinessPrintsChecksAndUsesClientAppRuntimeHeaders` |
 | readiness 失败区分 | partial | 覆盖 upstream user grant 缺失与 CLI 非零退出；agent/skill/model grant 的细分可继续补矩阵测试 |
-| route mismatch | done | `OpenApiAgentReadinessServiceTest` 覆盖 URL agentId 与 context.skillId 不一致时 fail-closed |
+| root route binding | done | `OpenApiAgentReadinessServiceTest` 覆盖 rootAgentId 派生 effective skill，以及 root agent binding 失败 |
 | artifact access control | done | service/controller 复用 `checkClientAppSkillAccess`；`SkillArtifactServiceTest` 验证调用授权检查 |
 | artifact path safety | done | `SkillArtifactServiceTest.slice_rejectsPathTraversal` 覆盖 `..` 拒绝 |
 | slice unicode safety | done | `SkillArtifactServiceTest` 覆盖中文 code point 切片与超长单行续读 |

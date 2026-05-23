@@ -41,8 +41,6 @@
 | 文档 | 说明 |
 |------|------|
 | [会话模块](./02-modules/session-module.md) | 会话管理、统一任务分发、SSE 与绑定模型 |
-| [编码 Agent 集成](./02-modules/coding-agent-integration.md) | `addons/coding-agent` 编程执行模块说明 |
-| [Tutor-Coding 联动](./02-modules/tutor-coding-agent-integration.md) | Tutor 到编程执行能力的协作链路 |
 | [可观察性系统](./02-modules/observability-system.md) | 监控、日志、追踪设计 |
 | [工具模块](./02-modules/tool-module.md) | `agent-framework` 工具能力说明 |
 

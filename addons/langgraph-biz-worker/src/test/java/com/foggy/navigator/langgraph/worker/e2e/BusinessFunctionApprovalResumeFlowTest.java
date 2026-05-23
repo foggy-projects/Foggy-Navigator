@@ -61,6 +61,7 @@ class BusinessFunctionApprovalResumeFlowTest {
     private static final String BUSINESS_SESSION_ID = "business_session_1";
     private static final String WORKER_TASK_ID = "lgt_1";
     private static final String WORKER_SESSION_ID = "worker_session_1";
+    private static final String WORKER_CONTEXT_ID = "ctx_worker_1";
     private static final String SUSPEND_ID = "sus_approval_flow";
     private static final String INPUT_JSON = "{\"orderId\":\"ORD-1\"}";
 
@@ -112,12 +113,13 @@ class BusinessFunctionApprovalResumeFlowTest {
         LanggraphTaskEntity task = new LanggraphTaskEntity();
         task.setTaskId(WORKER_TASK_ID);
         task.setSessionId(WORKER_SESSION_ID);
+        task.setContextId(WORKER_CONTEXT_ID);
         task.setWorkerId("worker_1");
         task.setTenantId(TENANT_ID);
         when(taskRepository.findByTaskId(WORKER_TASK_ID)).thenReturn(Optional.of(task));
         when(workerService.getWorkerEntity("worker_1")).thenReturn(new LanggraphWorkerEntity());
         when(workerService.createClient(any(LanggraphWorkerEntity.class))).thenReturn(workerClient);
-        when(workerClient.resumeTask(WORKER_TASK_ID, "approved", "同意提交"))
+        when(workerClient.resumeTask(WORKER_TASK_ID, WORKER_SESSION_ID, WORKER_CONTEXT_ID, "approved", "同意提交"))
                 .thenReturn(Mono.just(Map.of(
                         "resume_message", Map.of(
                                 "content", "审批已通过，已继续提交关单申请。",
@@ -145,7 +147,7 @@ class BusinessFunctionApprovalResumeFlowTest {
 
         assertEquals("COMPLETED", suspension.getStatus());
         assertEquals("COMPLETED", suspension.getBusinessExecutionStatus());
-        verify(workerClient).resumeTask(WORKER_TASK_ID, "approved", "同意提交");
+        verify(workerClient).resumeTask(WORKER_TASK_ID, WORKER_SESSION_ID, WORKER_CONTEXT_ID, "approved", "同意提交");
         verify(adapterInvoker).invoke(any(BusinessFunctionRuntimeContextDTO.class), eq(INPUT_JSON));
 
         ArgumentCaptor<AgentMessage> messageCaptor = ArgumentCaptor.forClass(AgentMessage.class);

@@ -15,6 +15,7 @@ public class BusinessAgentSessionDTO {
     private String sessionId;
     private String skillId;
     private String agentId;
+    private String title;
     private String latestTaskId;
     private String status;
     private String clientContextJson;

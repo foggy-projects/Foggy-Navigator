@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from .account_path_guard import AccountPathGuard, PathGuardError
+from .account_workspace import AccountWorkspace
+from .execution_policy import ExecutionPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +57,21 @@ class AccountFileTools:
     All methods accept *logical* relative paths (as the model sees them).
     """
 
-    def __init__(self, data_root: Path, account_id: str, task_id: str = "") -> None:
-        self._guard = AccountPathGuard(data_root, account_id)
-        self._account_id = account_id
+    def __init__(
+        self,
+        data_root: Path,
+        account_id: str | None,
+        task_id: str = "",
+        execution_policy: ExecutionPolicy | None = None,
+        workspace: AccountWorkspace | None = None,
+    ) -> None:
+        self._guard = AccountPathGuard(
+            data_root,
+            account_id,
+            execution_policy=execution_policy,
+            workspace=workspace,
+        )
+        self._account_id = self._guard.account_id
         self._task_id = task_id
         self._file_locks: dict[str, threading.Lock] = {}
         self._global_lock = threading.Lock()

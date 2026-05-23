@@ -172,6 +172,23 @@ public class OpenApiSessionQueryService {
     }
 
     /**
+     * 批量查找 taskId 对应的内部任务状态。
+     *
+     * @return taskId → internal status 映射
+     */
+    public Map<String, String> batchFindTaskStatuses(Collection<String> taskIds) {
+        if (taskIds == null || taskIds.isEmpty()) {
+            return Map.of();
+        }
+        return taskRepository.findByTaskIdIn(taskIds).stream()
+                .collect(Collectors.toMap(
+                        SessionTaskEntity::getTaskId,
+                        SessionTaskEntity::getStatus,
+                        (first, second) -> first
+                ));
+    }
+
+    /**
      * 查找某个会话最近的任务（用于会话摘要中的 latestTaskId）
      */
     public Optional<SessionTaskEntity> findLatestTaskBySessionId(String sessionId) {
@@ -195,6 +212,26 @@ public class OpenApiSessionQueryService {
                         SessionTaskEntity::getSessionId,
                         SessionTaskEntity::getTaskId,
                         (first, second) -> first  // 已按降序排，取第一个即最新
+                ));
+    }
+
+    /**
+     * 批量查找每个 sessionId 的首条用户消息，用作无显式别名时的默认会话标题。
+     *
+     * @return sessionId → first USER message content
+     */
+    public Map<String, String> batchFindFirstUserMessageContents(Collection<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        List<SessionMessageEntity> messages = messageRepository
+                .findBySessionIdInAndRoleOrderBySessionIdAscCreatedAtAsc(sessionIds, "USER");
+        return messages.stream()
+                .filter(message -> message.getContent() != null && !message.getContent().isBlank())
+                .collect(Collectors.toMap(
+                        SessionMessageEntity::getSessionId,
+                        SessionMessageEntity::getContent,
+                        (first, second) -> first
                 ));
     }
 }

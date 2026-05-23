@@ -1,13 +1,17 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, defineComponent, h, nextTick, type App } from 'vue'
+import ElementPlus from 'element-plus'
+import NavigatorChat from '../components/NavigatorChat.vue'
+import SkillFrameBlockView from '../components/SkillFrameBlockView.vue'
 import { useNavigatorChat, type UseNavigatorChat } from './useNavigatorChat'
-import type { AgentTask } from '../types'
+import type { AgentTask, NavigatorAttachmentResult, SkillFrameBlock } from '../types'
 
 let app: App<Element> | undefined
 
 afterEach(() => {
   app?.unmount()
   app = undefined
+  vi.useRealTimers()
 })
 
 function okResponse(data: unknown): Response {
@@ -17,7 +21,217 @@ function okResponse(data: unknown): Response {
   })
 }
 
+async function flushPromises() {
+  await Promise.resolve()
+  await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await nextTick()
+}
+
 describe('useNavigatorChat business action UX', () => {
+  it('renders built-in history sidebar with consumer-facing session summary', async () => {
+    const root = document.createElement('div')
+    app = createApp(defineComponent({
+      setup() {
+        return () => h(NavigatorChat, {
+          showHistory: true,
+          config: {
+            baseUrl: 'http://navigator.test',
+            agentId: 'agent-1',
+            mode: 'business',
+            fetch: async (url) => {
+              if (String(url).includes('/sessions?')) {
+                return okResponse({
+                  sessions: [
+                    {
+                      contextId: 'ctx-1',
+                      title: '上海明辉发货下单',
+                      status: 'WORKING',
+                      turnCount: 3,
+                      lastMessagePreview: '电子配件 5 件，重量 120KG',
+                      updatedAt: '2026-05-13T12:54:00',
+                      clientContext: {
+                        costUsd: 29,
+                        milestone: '1.1.3-SNAPSHOT',
+                      },
+                    },
+                  ],
+                  hasMore: false,
+                })
+              }
+              return okResponse({
+                taskId: 'task-1',
+                agentId: 'agent-1',
+                status: 'COMPLETED',
+                contextId: 'ctx-1',
+                terminal: true,
+                terminalStatus: 'COMPLETED',
+                messages: [],
+              })
+            },
+          },
+        })
+      },
+    }))
+    app.use(ElementPlus)
+    app.mount(root)
+    await flushPromises()
+
+    expect(root.querySelector('.nc-history')).not.toBeNull()
+    expect(root.querySelector('.nc-history-action[title="新会话"]')).not.toBeNull()
+    expect(root.querySelector('.nc-history-delete')).toBeNull()
+    expect(root.querySelector('.nc-history-item-title')?.textContent).toContain('上海明辉发货下单')
+    expect(root.querySelector('.nc-history-preview')?.textContent).toContain('电子配件')
+    expect(root.querySelector('.nc-history-status')?.textContent).toContain('进行中')
+    expect(root.querySelector('.nc-history-item-meta')?.textContent).toContain('3轮')
+    expect(root.querySelector('.nc-history-item-meta')?.textContent).toContain('05/13')
+    expect(root.textContent).not.toContain('$29')
+    expect(root.textContent).not.toContain('1.1.3-SNAPSHOT')
+  })
+
+  it('hides runtime artifacts when loading history in business mode', async () => {
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            contextId: 'ctx-1',
+            messages: [
+              {
+                messageId: 'user-1',
+                role: 'USER',
+                type: 'USER',
+                content: '帮我生成一个工单',
+                createdAt: '2026-05-20T15:40:00',
+              },
+              {
+                messageId: 'artifact-1',
+                role: 'ASSISTANT',
+                type: 'TEXT',
+                content: 'invoke_business_skill',
+                createdAt: '2026-05-20T15:40:01',
+              },
+              {
+                messageId: 'artifact-2',
+                role: 'ASSISTANT',
+                type: 'RESULT',
+                content: 'Opening frame for skill: system.root',
+                createdAt: '2026-05-20T15:40:02',
+              },
+              {
+                messageId: 'artifact-3',
+                role: 'ASSISTANT',
+                type: 'TEXT',
+                content: 'submit_skill_result',
+                createdAt: '2026-05-20T15:40:03',
+              },
+              {
+                messageId: 'assistant-1',
+                role: 'ASSISTANT',
+                type: 'RESULT',
+                content: '收到，为了帮您准确创建工单，请补充以下信息。',
+                createdAt: '2026-05-20T15:40:04',
+              },
+            ],
+            hasMore: false,
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-1')
+    await nextTick()
+
+    const text = chat.messages.value.map((message) => message.content).join('\n')
+    expect(text).toContain('帮我生成一个工单')
+    expect(text).toContain('收到，为了帮您准确创建工单')
+    expect(text).not.toContain('invoke_business_skill')
+    expect(text).not.toContain('submit_skill_result')
+    expect(text).not.toContain('Opening frame for skill')
+  })
+
+  it('can render delete affordance for hosts that enable session deletion', async () => {
+    const root = document.createElement('div')
+    app = createApp(defineComponent({
+      setup() {
+        return () => h(NavigatorChat, {
+          showHistory: true,
+          showHistoryDelete: true,
+          config: {
+            baseUrl: 'http://navigator.test',
+            agentId: 'agent-1',
+            mode: 'business',
+            fetch: async (url) => {
+              if (String(url).includes('/sessions?')) {
+                return okResponse({
+                  sessions: [
+                    {
+                      contextId: 'ctx-delete',
+                      title: '待删除会话',
+                      status: 'COMPLETED',
+                      updatedAt: '2026-05-13T12:54:00',
+                    },
+                  ],
+                  hasMore: false,
+                })
+              }
+              return okResponse({})
+            },
+          },
+        })
+      },
+    }))
+    app.use(ElementPlus)
+    app.mount(root)
+    await flushPromises()
+
+    expect(root.querySelector('.nc-history-delete')).not.toBeNull()
+  })
+
+  it('keeps config enableAttachments when the direct boolean prop is absent', async () => {
+    const root = document.createElement('div')
+    app = createApp(defineComponent({
+      setup() {
+        return () => h(NavigatorChat, {
+          config: {
+            baseUrl: 'http://navigator.test',
+            agentId: 'agent-1',
+            mode: 'business',
+            enableAttachments: true,
+            uploadAttachment: async (file: File) => ({
+              name: file.name,
+              size: file.size,
+              mimeType: file.type,
+              kind: 'file',
+            }),
+            fetch: async () => okResponse({
+              taskId: 'task-1',
+              agentId: 'agent-1',
+              status: 'COMPLETED',
+              contextId: 'ctx-1',
+              terminal: true,
+              terminalStatus: 'COMPLETED',
+              messages: [],
+            }),
+          },
+        })
+      },
+    }))
+    app.use(ElementPlus)
+    app.mount(root)
+    await nextTick()
+
+    const chatRoot = root.querySelector('.navigator-chat')
+    expect(chatRoot?.getAttribute('data-upload-hook')).toBe('present')
+    expect(chatRoot?.getAttribute('data-attachments-enabled')).toBe('true')
+    expect(root.querySelector('.nc-attachment-button')).not.toBeNull()
+  })
 
   it('loads historical messages and reuses contextId on the next send', async () => {
     const requests: Array<{ url: string; method?: string; body?: unknown }> = []
@@ -105,6 +319,605 @@ describe('useNavigatorChat business action UX', () => {
       question: '继续问',
       contextId: 'ctx-1',
       clientContext: { upstreamConversationId: 'tms-1' },
+    })
+  })
+
+  it('drops persisted streaming chunks when loading historical messages', async () => {
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            contextId: 'ctx-stream',
+            messages: [
+              {
+                messageId: 'hist-user',
+                contextId: 'ctx-stream',
+                taskId: 'task-stream',
+                role: 'USER',
+                type: 'USER',
+                content: 'hi',
+                createdAt: '2026-05-22T14:00:00',
+              },
+              {
+                messageId: 'chunk-1',
+                contextId: 'ctx-stream',
+                taskId: 'task-stream',
+                role: 'ASSISTANT',
+                type: 'TEXT_CHUNK',
+                content: '你好',
+                createdAt: '2026-05-22T14:00:01',
+              },
+              {
+                messageId: 'chunk-2',
+                contextId: 'ctx-stream',
+                taskId: 'task-stream',
+                role: 'ASSISTANT',
+                content: '！有什么我可以帮',
+                metadata: { type: 'TEXT_CHUNK' },
+                createdAt: '2026-05-22T14:00:02',
+              },
+              {
+                messageId: 'final-reply',
+                contextId: 'ctx-stream',
+                taskId: 'task-stream',
+                role: 'ASSISTANT',
+                type: 'TEXT_COMPLETE',
+                content: '你好！有什么我可以帮你的吗？',
+                createdAt: '2026-05-22T14:00:03',
+              },
+            ],
+            hasMore: false,
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-stream')
+    await nextTick()
+
+    expect(chat.messages.value.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'hi'],
+      ['assistant', '你好！有什么我可以帮你的吗？'],
+    ])
+  })
+
+  it('replaces active streaming text fragments with the final task result', async () => {
+    const now = Date.now()
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            taskId: 'task-stream',
+            agentId: 'agent-1',
+            status: 'COMPLETED',
+            contextId: 'ctx-stream',
+            terminal: true,
+            terminalStatus: 'COMPLETED',
+            messages: [
+              {
+                id: 'chunk-1',
+                type: 'TEXT',
+                content: '你好',
+                timestamp: now + 1,
+              },
+              {
+                id: 'chunk-2',
+                type: 'TEXT',
+                content: '！有什么我可以帮',
+                timestamp: now + 2,
+              },
+              {
+                id: 'chunk-3',
+                type: 'TEXT',
+                content: '你的吗？无论是',
+                timestamp: now + 3,
+              },
+              {
+                id: 'final-reply',
+                type: 'RESULT',
+                content: '你好！有什么我可以帮你的吗？',
+                timestamp: now + 4,
+                terminal: true,
+                terminalStatus: 'COMPLETED',
+              },
+            ],
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('hi')
+    await nextTick()
+
+    expect(chat.messages.value.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'hi'],
+      ['assistant', '你好！有什么我可以帮你的吗？'],
+    ])
+  })
+
+  it('updates active polling text fragments until a later final result arrives', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-22T14:30:00').getTime())
+    let pollCalls = 0
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          pollInterval: 10,
+          fetch: async (url) => {
+            if (String(url).includes('/messages')) {
+              pollCalls += 1
+              if (pollCalls === 1) {
+                return okResponse({
+                  taskId: 'task-stream',
+                  contextId: 'ctx-stream',
+                  status: 'WORKING',
+                  terminal: false,
+                  messages: [
+                    {
+                      id: 'chunk-1',
+                      type: 'TEXT',
+                      content: '你好',
+                      timestamp: Date.now() + 1,
+                    },
+                    {
+                      id: 'chunk-2',
+                      type: 'TEXT',
+                      content: '！有什么我可以帮',
+                      timestamp: Date.now() + 2,
+                    },
+                  ],
+                  nextCursor: 'cursor-2',
+                })
+              }
+              return okResponse({
+                taskId: 'task-stream',
+                contextId: 'ctx-stream',
+                status: 'COMPLETED',
+                terminal: true,
+                terminalStatus: 'COMPLETED',
+                messages: [
+                  {
+                    id: 'final-reply',
+                    type: 'RESULT',
+                    content: '你好！有什么我可以帮你的吗？',
+                    timestamp: Date.now() + 3,
+                    terminal: true,
+                    terminalStatus: 'COMPLETED',
+                  },
+                ],
+              })
+            }
+            return okResponse({
+              taskId: 'task-stream',
+              agentId: 'agent-1',
+              status: 'WORKING',
+              contextId: 'ctx-stream',
+              terminal: false,
+              messages: [],
+            })
+          },
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('hi')
+    await vi.advanceTimersByTimeAsync(10)
+    await nextTick()
+
+    expect(chat.messages.value.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'hi'],
+      ['assistant', '你好！有什么我可以帮'],
+    ])
+
+    await vi.advanceTimersByTimeAsync(10)
+    await nextTick()
+
+    expect(chat.messages.value.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'hi'],
+      ['assistant', '你好！有什么我可以帮你的吗？'],
+    ])
+  })
+
+  it('deletes a historical session through the Open API and clears the active context', async () => {
+    const requests: Array<{ url: string; method?: string }> = []
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async (url, init) => {
+            requests.push({ url: String(url), method: init.method })
+            if (init.method === 'DELETE') return okResponse({})
+            if (String(url).includes('/sessions/ctx-1/messages')) {
+              return okResponse({
+                contextId: 'ctx-1',
+                messages: [],
+                hasMore: false,
+              })
+            }
+            return okResponse({})
+          },
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-1')
+    await chat.deleteSession('ctx-1')
+
+    expect(chat.contextId.value).toBeNull()
+    expect(requests.some((request) =>
+      request.method === 'DELETE'
+      && request.url === 'http://navigator.test/api/v1/open/agents/agent-1/sessions/ctx-1'
+    )).toBe(true)
+  })
+
+  it('sends uploaded attachments as top-level ask payload', async () => {
+    const requests: Array<{ url: string; method?: string; body?: unknown }> = []
+    const attachments: NavigatorAttachmentResult[] = [
+      {
+        id: 'att-1',
+        name: '回单照片.jpg',
+        mimeType: 'image/jpeg',
+        size: 123456,
+        kind: 'image',
+        url: 'https://tms.example.com/attachments/att-1',
+        provider: 'tms',
+      },
+    ]
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async (url, init) => {
+            requests.push({
+              url,
+              method: init.method,
+              body: init.body ? JSON.parse(String(init.body)) : undefined,
+            })
+            return okResponse({
+              taskId: 'task-attachments',
+              agentId: 'agent-1',
+              status: 'COMPLETED',
+              contextId: 'ctx-attachments',
+              terminal: true,
+              terminalStatus: 'COMPLETED',
+              messages: [],
+            })
+          },
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('请识别这张回单', { attachments })
+    await nextTick()
+
+    const askRequest = requests.find((request) => request.url.includes('/ask'))
+    expect(askRequest?.body).toMatchObject({
+      question: '请识别这张回单',
+      attachments,
+    })
+    expect(chat.messages.value[0]).toMatchObject({
+      role: 'user',
+      content: '请识别这张回单',
+      attachments,
+    })
+  })
+
+  it('restores user attachments when loading session history', async () => {
+    const attachments: NavigatorAttachmentResult[] = [
+      {
+        id: 'att-a',
+        name: 'smoke-a.png',
+        mimeType: 'image/png',
+        size: 3900,
+        kind: 'image',
+        url: 'https://tms.example.com/attachments/smoke-a.png',
+      },
+      {
+        id: 'att-b',
+        name: 'smoke-b.png',
+        mimeType: 'image/png',
+        size: 4500,
+        kind: 'image',
+        url: 'https://tms.example.com/attachments/smoke-b.png',
+      },
+    ]
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            contextId: 'ctx-attachments',
+            messages: [
+              {
+                messageId: 'user-attachments',
+                role: 'USER',
+                type: 'USER',
+                content: '随便提交一个系统反馈工单',
+                attachments,
+                metadata: JSON.stringify({ type: 'USER', attachments }),
+                createdAt: '2026-05-23T07:28:00',
+              },
+              {
+                messageId: 'assistant-done',
+                role: 'ASSISTANT',
+                type: 'RESULT',
+                content: '测试工单已成功提交。',
+                terminal: true,
+                terminalStatus: 'COMPLETED',
+                createdAt: '2026-05-23T07:28:30',
+              },
+            ],
+            hasMore: false,
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-attachments')
+    await nextTick()
+
+    const userMessage = chat.messages.value.find((message) => message.role === 'user')
+    expect(userMessage?.attachments).toEqual(attachments)
+  })
+
+  it('normalizes terminal report digest status from stale running state', async () => {
+    const task: AgentTask = {
+      taskId: 'task-report',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-report',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'result-1',
+          type: 'RESULT',
+          content: '任务处理完成。',
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+          status: 'RUNNING',
+          metadata: {
+            execution_report_digest: {
+              status: 'RUNNING',
+              summary: '根任务执行完成',
+              reportRef: 'frame-report://task-report/root',
+            },
+          },
+        },
+      ],
+    }
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('hi')
+    await nextTick()
+
+    const reply = chat.messages.value.find((message) => message.messageType === 'RESULT')
+    expect(reply?.executionReportDigest?.status).toBe('COMPLETED')
+    expect(chat.taskStatus.value).toBe('COMPLETED')
+  })
+
+  it('normalizes stale running report digest when loading completed session history', async () => {
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            contextId: 'ctx-report-history',
+            messages: [
+              {
+                messageId: 'result-history-1',
+                taskId: 'task-report-history',
+                role: 'assistant',
+                type: 'TEXT',
+                content: '任务处理完成。',
+                status: 'COMPLETED',
+                metadata: {
+                  execution_report_digest: {
+                    status: 'RUNNING',
+                    summary: '历史加载时残留的运行中状态',
+                    reportRef: 'frame-report://task-report-history/root',
+                  },
+                },
+                createdAt: '2026-05-23T10:10:00',
+              },
+            ],
+            hasMore: false,
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-report-history')
+    await nextTick()
+
+    const reply = chat.messages.value.find((message) => message.id === 'result-history-1')
+    expect(reply?.status).toBe('COMPLETED')
+    expect(reply?.executionReportDigest?.status).toBe('COMPLETED')
+  })
+
+  it('treats finalized historical assistant text as completed without task terminal fields', async () => {
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            contextId: 'ctx-stale-report-history',
+            messages: [
+              {
+                messageId: 'result-history-stale',
+                taskId: 'task-report-stale',
+                role: 'assistant',
+                type: 'TEXT',
+                content: '历史回放中的最终答复。',
+                metadata: {
+                  execution_report_digest: {
+                    status: 'RUNNING',
+                    summary: '历史落库时残留的运行中快照',
+                    reportRef: 'frame-report://task-report-stale/root',
+                  },
+                },
+                createdAt: '2026-05-23T10:52:00',
+              },
+            ],
+            hasMore: false,
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-stale-report-history')
+    await nextTick()
+
+    const reply = chat.messages.value.find((message) => message.id === 'result-history-stale')
+    expect(reply?.status).toBe('COMPLETED')
+    expect(reply?.executionReportDigest?.status).toBe('COMPLETED')
+  })
+
+  it('treats UI wait timeout as detach and keeps context for the next send', async () => {
+    vi.useFakeTimers()
+    const askBodies: unknown[] = []
+    let cancelCalls = 0
+    let chat: UseNavigatorChat | undefined
+
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          pollInterval: 10,
+          timeout: 25,
+          fetch: async (url, init) => {
+            const textUrl = String(url)
+            if (textUrl.includes('/cancel')) {
+              cancelCalls += 1
+              return okResponse({})
+            }
+            if (textUrl.includes('/messages')) {
+              return okResponse({
+                taskId: 'task-slow',
+                contextId: 'ctx-slow',
+                status: 'RUNNING',
+                terminal: false,
+                messages: [],
+                nextCursor: null,
+                hasMore: false,
+              })
+            }
+            askBodies.push(init.body ? JSON.parse(String(init.body)) : undefined)
+            if (askBodies.length === 1) {
+              return okResponse({
+                taskId: 'task-slow',
+                agentId: 'agent-1',
+                status: 'RUNNING',
+                contextId: 'ctx-slow',
+                terminal: false,
+                messages: [],
+              })
+            }
+            return okResponse({
+              taskId: 'task-next',
+              agentId: 'agent-1',
+              status: 'COMPLETED',
+              contextId: 'ctx-slow',
+              terminal: true,
+              terminalStatus: 'COMPLETED',
+              messages: [],
+            })
+          },
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('慢任务')
+    await vi.advanceTimersByTimeAsync(30)
+    await nextTick()
+
+    expect(cancelCalls).toBe(0)
+    expect(chat.isLoading.value).toBe(false)
+    expect(chat.error.value).toBeNull()
+    expect(chat.contextId.value).toBe('ctx-slow')
+    expect(chat.progressText.value).toBe('任务仍在后台处理')
+    expect(chat.messages.value.some((message) =>
+      message.role === 'system'
+        && message.processKind === 'state'
+        && message.content.includes('后台处理')
+    )).toBe(true)
+
+    await chat.send('继续')
+    await nextTick()
+
+    expect(cancelCalls).toBe(0)
+    expect(askBodies[1]).toMatchObject({
+      question: '继续',
+      contextId: 'ctx-slow',
     })
   })
 
@@ -252,8 +1065,446 @@ describe('useNavigatorChat business action UX', () => {
     await nextTick()
 
     const frameMessage = chat.messages.value.find((message) => message.skillFrame)
-    expect(frameMessage?.content).toContain('技能 执行步骤')
+    expect(frameMessage?.content).toContain('执行步骤')
     expect(frameMessage?.content).not.toContain('frm_622f67035042')
     expect(frameMessage?.skillFrame?.displayName).toBe('执行步骤')
+  })
+
+  it('renders details mode with friendly skill and tool labels only', async () => {
+    const root = document.createElement('div')
+    const frame: SkillFrameBlock = {
+      frameId: 'frame-root',
+      skillId: 'system.root',
+      displayName: '开始处理任务',
+      status: 'success',
+      openedAt: 1_000,
+      closedAt: 2_000,
+      durationMs: 1_000,
+      openContent: 'Opening frame for skill: system.root',
+      rawOpen: { skillId: 'system.root' },
+      rawClose: { status: 'COMPLETED' },
+      trace: { taskId: 'task-1' },
+      children: [],
+      toolExecutions: [
+        {
+          toolCallId: 'tool-1',
+          toolName: 'submit_skill_result',
+          displayName: '处理完成',
+          status: 'success',
+          durationMs: 200,
+          args: { summary: 'done' },
+          result: { status: 'SUCCESS' },
+          rawCall: { toolName: 'submit_skill_result' },
+          rawResult: { status: 'SUCCESS' },
+          summary: ['SUCCESS'],
+          trace: { toolCallId: 'tool-1' },
+        },
+      ],
+    }
+
+    app = createApp(defineComponent({
+      setup() {
+        return () => h(SkillFrameBlockView, {
+          frame,
+          displayMode: 'details',
+        })
+      },
+    }))
+    app.use(ElementPlus)
+    app.mount(root)
+    await nextTick()
+
+    const text = root.textContent ?? ''
+    expect(text).toContain('开始处理任务')
+    expect(text).toContain('处理完成')
+    expect(text).toContain('结果已准备完成。')
+    expect(text).not.toContain('system.root')
+    expect(text).not.toContain('submit_skill_result')
+    expect(text).not.toContain('Frame 原始 JSON')
+    expect(text).not.toContain('参数')
+    expect(text).not.toContain('SUCCESS')
+  })
+
+  it('localizes LangGraph worker connection text in non-debug assistant messages', async () => {
+    const task: AgentTask = {
+      taskId: 'task-1',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'connecting-text',
+          type: 'TEXT',
+          content: 'Connecting to LangGraph worker...',
+          timestamp: 1_000,
+        },
+      ],
+    }
+
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'details',
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('执行一下')
+    await nextTick()
+
+    const assistantText = chat.messages.value.find((message) => message.role === 'assistant')?.content ?? ''
+    expect(assistantText).toBe('正在连接至道同。')
+    expect(assistantText).not.toContain('LangGraph')
+  })
+
+  it('switches display modes in the component without changing the backend protocol', async () => {
+    const root = document.createElement('div')
+    let requests = 0
+    let chatVm: { send: (content: string) => Promise<void> } | undefined
+    const task: AgentTask = {
+      taskId: 'task-1',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'frame-open',
+          type: 'STATE',
+          content: 'Opening frame for skill: system.root',
+          timestamp: 1_000,
+          metadata: {
+            subtype: 'skill_frame_open',
+            skillFrameId: 'frame-root',
+            skillId: 'system.root',
+          },
+        },
+        {
+          id: 'tool-call',
+          type: 'TOOL_CALL',
+          content: 'Calling tool submit_skill_result',
+          timestamp: 1_100,
+          toolCallId: 'tool-1',
+          metadata: {
+            skillFrameId: 'frame-root',
+            toolName: 'submit_skill_result',
+            args: { summary: 'done' },
+          },
+        },
+        {
+          id: 'tool-result',
+          type: 'TOOL_RESULT',
+          content: 'Tool submit_skill_result returned SUCCESS',
+          timestamp: 1_300,
+          toolCallId: 'tool-1',
+          metadata: {
+            skillFrameId: 'frame-root',
+            toolName: 'submit_skill_result',
+            result: { status: 'SUCCESS' },
+          },
+        },
+        {
+          id: 'frame-close',
+          type: 'STATE',
+          content: 'Closing frame for skill: system.root',
+          timestamp: 1_500,
+          metadata: {
+            subtype: 'skill_frame_close',
+            skillFrameId: 'frame-root',
+            skillId: 'system.root',
+            status: 'COMPLETED',
+          },
+        },
+        {
+          id: 'final-result',
+          type: 'RESULT',
+          content: '已完成操作。',
+          timestamp: 2_000,
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+        },
+      ],
+    }
+
+    app = createApp(defineComponent({
+      setup() {
+        return () => h(NavigatorChat, {
+          ref: (instance: unknown) => {
+            chatVm = instance as typeof chatVm
+          },
+          showHeader: true,
+          config: {
+            baseUrl: 'http://navigator.test',
+            agentId: 'agent-1',
+            mode: 'business',
+            showDisplayModeSwitcher: true,
+            fetch: async () => {
+              requests += 1
+              return okResponse(task)
+            },
+          },
+        })
+      },
+    }))
+    app.use(ElementPlus)
+    app.mount(root)
+    await nextTick()
+    if (!chatVm) throw new Error('failed to mount navigator chat')
+
+    await chatVm.send('执行一下')
+    await nextTick()
+
+    expect(requests).toBe(1)
+    expect(root.textContent ?? '').toContain('已完成操作。')
+    expect(root.textContent ?? '').not.toContain('开始处理任务')
+    expect(root.textContent ?? '').not.toContain('system.root')
+
+    const modeButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('.nc-mode-button'))
+    modeButtons.find((button) => button.textContent?.trim() === '详情')?.click()
+    await nextTick()
+
+    expect(requests).toBe(1)
+    expect(root.textContent ?? '').toContain('开始处理任务')
+    expect(root.textContent ?? '').toContain('处理完成')
+    expect(root.textContent ?? '').not.toContain('system.root')
+    expect(root.textContent ?? '').not.toContain('submit_skill_result')
+    expect(root.textContent ?? '').not.toContain('Frame 原始 JSON')
+
+    modeButtons.find((button) => button.textContent?.trim() === '调试')?.click()
+    await nextTick()
+
+    expect(requests).toBe(1)
+    expect(root.textContent ?? '').toContain('system.root')
+    expect(root.textContent ?? '').toContain('submit_skill_result')
+    expect(root.textContent ?? '').toContain('Frame 原始 JSON')
+  })
+
+  it('keeps execution report fields on skill frames', async () => {
+    const task: AgentTask = {
+      taskId: 'task-1',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'frame-close',
+          type: 'STATE',
+          content: 'skill frame close',
+          timestamp: 1_000,
+          metadata: {
+            subtype: 'skill_frame_close',
+            skillFrameId: 'frame-1',
+            skillId: 'tms-fulfillment-agent',
+            execution_report_ref: 'frame-report://task-1/frame-1',
+            execution_report_digest: {
+              status: 'COMPLETED',
+              summary: '履约技能执行完成',
+              skill_id: 'tms-fulfillment-agent',
+              frame_kind: 'SKILL',
+              generated_at: '2026-05-17T12:00:00Z',
+            },
+          },
+        },
+        {
+          id: 'final-result',
+          type: 'RESULT',
+          content: '已完成操作。',
+          timestamp: 2_000,
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+        },
+      ],
+    }
+
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          showRuntimeEvents: true,
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('创建车辆')
+    await nextTick()
+
+    const frame = chat.messages.value.find((message) => message.skillFrame)?.skillFrame
+    expect(frame?.executionReportRef).toBe('frame-report://task-1/frame-1')
+    expect(frame?.executionReportDigest).toMatchObject({
+      status: 'COMPLETED',
+      summary: '履约技能执行完成',
+      reportRef: 'frame-report://task-1/frame-1',
+      skillId: 'tms-fulfillment-agent',
+      frameKind: 'SKILL',
+      generatedAt: '2026-05-17T12:00:00Z',
+    })
+  })
+
+  it('keeps execution report fields on tool results and final replies', async () => {
+    const task: AgentTask = {
+      taskId: 'task-1',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'tool-result',
+          type: 'TOOL_RESULT',
+          content: JSON.stringify({ status: 'COMPLETED', success: true }),
+          timestamp: 1_000,
+          metadata: {
+            toolName: 'invoke_business_function',
+            toolCallId: 'tool-1',
+            functionId: 'tms.vehicle.create',
+            execution_report_ref: 'frame-report://task-1/function-frame',
+            execution_report_digest: {
+              status: 'COMPLETED',
+              summary: '业务函数执行完成',
+              skill_id: 'tms-vehicle-agent',
+              frame_kind: 'FUNCTION',
+              generated_at: '2026-05-17T12:00:01Z',
+            },
+          },
+        },
+        {
+          id: 'final-result',
+          type: 'RESULT',
+          content: '车辆创建完成。',
+          timestamp: 2_000,
+          metadata: {
+            execution_report_ref: 'frame-report://task-1/root-frame',
+            execution_report_digest: {
+              status: 'COMPLETED',
+              summary: '根任务执行完成',
+              skill_id: 'root-agent',
+              frame_kind: 'ROOT',
+              generated_at: '2026-05-17T12:00:02Z',
+            },
+          },
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+        },
+      ],
+    }
+
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          showToolResults: true,
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('创建车辆')
+    await nextTick()
+
+    const tool = chat.messages.value.find((message) => message.toolExecution)?.toolExecution
+    expect(tool?.executionReportRef).toBe('frame-report://task-1/function-frame')
+    expect(tool?.executionReportDigest).toMatchObject({
+      status: 'COMPLETED',
+      summary: '业务函数执行完成',
+      reportRef: 'frame-report://task-1/function-frame',
+      skillId: 'tms-vehicle-agent',
+      frameKind: 'FUNCTION',
+      generatedAt: '2026-05-17T12:00:01Z',
+    })
+
+    const reply = chat.messages.value.find((message) => message.messageType === 'RESULT')
+    expect(reply?.executionReportRef).toBe('frame-report://task-1/root-frame')
+    expect(reply?.executionReportDigest).toMatchObject({
+      status: 'COMPLETED',
+      summary: '根任务执行完成',
+      reportRef: 'frame-report://task-1/root-frame',
+      skillId: 'root-agent',
+      frameKind: 'ROOT',
+      generatedAt: '2026-05-17T12:00:02Z',
+    })
+  })
+
+  it('shows task progress retry events in details mode', async () => {
+    const task: AgentTask = {
+      taskId: 'task-progress',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'retry-progress',
+          type: 'STATE',
+          content: 'LLM call retrying after LLM_REQUEST_TIMEOUT (1/2)',
+          timestamp: 1_000,
+          metadata: {
+            subtype: 'task_progress',
+            progressType: 'llm_retrying',
+            reason: 'LLM_REQUEST_TIMEOUT',
+            attempt: 1,
+            maxAttempts: 2,
+          },
+        },
+        {
+          id: 'final-result',
+          type: 'RESULT',
+          content: '处理完成。',
+          timestamp: 2_000,
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+        },
+      ],
+    }
+
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'details',
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('处理一下')
+    await nextTick()
+
+    expect(chat.progressText.value).toBe('模型调用重试中 1/2')
+    const progressMessage = chat.messages.value.find((message) =>
+      message.processKind === 'state' && message.content.includes('LLM_REQUEST_TIMEOUT')
+    )
+    expect(progressMessage?.process).toBe(true)
   })
 })

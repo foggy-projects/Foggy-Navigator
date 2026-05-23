@@ -22,8 +22,38 @@
 - [16-history-session-page-content-overflow-bug.md](./16-history-session-page-content-overflow-bug.md)
 - [17-biz-worker-complex-task-plan-observer-design.md](./17-biz-worker-complex-task-plan-observer-design.md) - BizWorker complex task active_plan and read-only plan observer design
 - [18-biz-worker-complex-task-session-sample-audit.md](./18-biz-worker-complex-task-session-sample-audit.md) - Desensitized Codex/Claude session sample audit for complex task planning
+- [19-biz-worker-frame-execution-report-design.md](./19-biz-worker-frame-execution-report-design.md) - BizWorker frame execution report and provenance markdown design
 - [workitems/BUG-021-follow-up-3-langgraph-terminal-status-after-approval-result.md](./workitems/BUG-021-follow-up-3-langgraph-terminal-status-after-approval-result.md) - BUG-021 follow-up terminal status persistence after approval result
 - [workitems/BUG-022-materialize-bootstrap-non-blocking.md](./workitems/BUG-022-materialize-bootstrap-non-blocking.md) - materialize should not block first bootstrap when Skill/Function resources are not ready
+- [workitems/BUG-023-frame-execution-report-approval-resume-propagation.md](./workitems/BUG-023-frame-execution-report-approval-resume-propagation.md) - frame execution report propagation and terminal convergence after approval resume
+- [workitems/DEPLOY-024-dev-kvm-x3-image-release-experience.md](./workitems/DEPLOY-024-dev-kvm-x3-image-release-experience.md) - dev-kvm-x3 image release, bootstrap, and deployment-script experience notes
+- [workitems/REQ-025-public-skill-schema-placeholders.md](./workitems/REQ-025-public-skill-schema-placeholders.md) - public skill schema placeholder contract and materialize-time rendering for issue #120
+- [workitems/OPT-026-biz-worker-user-facing-status-copy-and-detail-mode.md](./workitems/OPT-026-biz-worker-user-facing-status-copy-and-detail-mode.md) - BizWorker user-facing status copy, execution details mode, and debug visibility split
+- [workitems/BUG-027-biz-worker-llm-call-timeout-fuse-missing.md](./workitems/BUG-027-biz-worker-llm-call-timeout-fuse-missing.md) - BizWorker LLM call explicit timeout, retry and fuse gap found by TMS live timeout
+- [workitems/BUG-028-tms-ticket-agent-attachment-not-delivered.md](./workitems/BUG-028-tms-ticket-agent-attachment-not-delivered.md) - TMS ticket agent child skill did not receive attachment context from user message
+- [workitems/OPT-029-upstream-timeout-governance.md](./workitems/OPT-029-upstream-timeout-governance.md) - cross-layer upstream timeout, deadline, cancel, retry and status convergence governance
+- [workitems/REQ-030-biz-worker-on-demand-attachment-analysis-and-vision-model-config.md](./workitems/REQ-030-biz-worker-on-demand-attachment-analysis-and-vision-model-config.md) - BizWorker on-demand attachment image analysis and VISION model configuration
+- [workitems/OPT-031-biz-worker-llm-skill-agent-module-governance.md](./workitems/OPT-031-biz-worker-llm-skill-agent-module-governance.md) - BizWorker LlmSkillAgent module boundary and refactor governance plan
+- [workitems/OPT-032-attachment-preprocessing-governance-follow-up.md](./workitems/OPT-032-attachment-preprocessing-governance-follow-up.md) - BUG-028 attachment direct-handoff, preprocessing evidence, and OpenAPI compatibility governance
+- [workitems/BUG-033-biz-worker-continue-context-injection-gap.md](./workitems/BUG-033-biz-worker-continue-context-injection-gap.md) - recoverable continuation context parity for child promoted result / WAITING_USER digest
+- [workitems/BUG-034-biz-worker-child-result-parent-synthesis-degradation.md](./workitems/BUG-034-biz-worker-child-result-parent-synthesis-degradation.md) - child result direct return envelope for WAITING_FOR_USER_INPUT / FINAL_FOR_USER without parent synthesis degradation
+- [workitems/BUG-034-waiting-user-input-context-walkthrough.md](./workitems/BUG-034-waiting-user-input-context-walkthrough.md) - target runtime/LLM context walkthrough for WAITING_FOR_USER_INPUT pause and same-context user reply resume
+- [workitems/REQ-035-biz-worker-spreadsheet-attachment-tool.md](./workitems/REQ-035-biz-worker-spreadsheet-attachment-tool.md) - BizWorker spreadsheet attachment tool with one operation-based tool entry, tool-first and skill-deferred
+- [workitems/BUG-036-tms-ticket-agent-attachment-missing-after-awaiting-user-resume.md](./workitems/BUG-036-tms-ticket-agent-attachment-missing-after-awaiting-user-resume.md) - TMS ticket attachment follow-up false negative after detail query failure
+- [workitems/OPT-037-biz-worker-data-directory-sharding-governance.md](./workitems/OPT-037-biz-worker-data-directory-sharding-governance.md) - BizWorker data directory sharding governance to avoid unbounded per-directory file growth
+- [workitems/BUG-038-multi-image-ticket-submits-only-one-attachment.md](./workitems/BUG-038-multi-image-ticket-submits-only-one-attachment.md) - multi-image TMS ticket creation reaches BusinessFunction with only one attachment
+- [workitems/BUG-039-chat-attachments-lost-after-session-reopen.md](./workitems/BUG-039-chat-attachments-lost-after-session-reopen.md) - chat message attachments are lost after refresh or session reopen
+- [workitems/BUG-040-concise-mode-shows-tool-events-after-session-reopen.md](./workitems/BUG-040-concise-mode-shows-tool-events-after-session-reopen.md) - concise mode renders raw tool events after session reopen
+- [workitems/REQ-126-mobile-agent-chat-component.md](./workitems/REQ-126-mobile-agent-chat-component.md) - mobile-ready public Agent chat component for upstream Vue 3 apps
 - [workitems/BUG-issue-115-world-sim-route-smoke-blocked.md](./workitems/BUG-issue-115-world-sim-route-smoke-blocked.md) - issue #115 live smoke is blocked by CLI release and control credential scope
+- [acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md](./acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md)
+- [acceptance/OPT-029-upstream-timeout-governance-acceptance.md](./acceptance/OPT-029-upstream-timeout-governance-acceptance.md)
+- [acceptance/OPT-032-attachment-preprocessing-governance-acceptance.md](./acceptance/OPT-032-attachment-preprocessing-governance-acceptance.md)
+- [quality/OPT-031-llm-skill-agent-module-governance-implementation-quality.md](./quality/OPT-031-llm-skill-agent-module-governance-implementation-quality.md)
+- [quality/OPT-029-upstream-timeout-governance-implementation-quality.md](./quality/OPT-029-upstream-timeout-governance-implementation-quality.md)
+- [quality/OPT-032-attachment-preprocessing-governance-implementation-quality.md](./quality/OPT-032-attachment-preprocessing-governance-implementation-quality.md)
 - [quality/biz-worker-root-skill-implementation-quality.md](./quality/biz-worker-root-skill-implementation-quality.md)
+- [coverage/OPT-031-llm-skill-agent-module-governance-coverage-audit.md](./coverage/OPT-031-llm-skill-agent-module-governance-coverage-audit.md)
+- [coverage/OPT-029-upstream-timeout-governance-coverage-audit.md](./coverage/OPT-029-upstream-timeout-governance-coverage-audit.md)
+- [coverage/OPT-032-attachment-preprocessing-governance-coverage-audit.md](./coverage/OPT-032-attachment-preprocessing-governance-coverage-audit.md)
 - [coverage/biz-worker-root-skill-coverage-audit.md](./coverage/biz-worker-root-skill-coverage-audit.md)

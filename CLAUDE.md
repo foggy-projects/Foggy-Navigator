@@ -9,14 +9,13 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 ```
 Foggy-Navigator/
 ├── navigator-common/           # 公共 DTO、Entity、CredentialEncryptor
-├── navigator-spi/              # SPI 接口定义（CodingAgentFacade、ClaudeWorkerFacade）
+├── navigator-spi/              # SPI 接口定义（A2A、ClaudeWorkerFacade 等）
 ├── agent-framework/            # Agent 核心框架（LLM调用、Skill解析、工具执行、会话路由）
 ├── user-auth-module/           # 用户认证（JWT）
 ├── metadata-config-module/     # Skill 配置 + 平台配置管理（Git/LLM/AgentModel）
 ├── metadata-query-module/      # 元数据查询服务
 ├── session-module/             # 会话管理 + SSE 推送 + JpaAgentRegistry
 ├── tutor-agent/                # 导师 Agent（引导用户、分派任务）
-├── addons/coding-agent/        # 编程 Agent（OpenHands 集成）
 ├── addons/claude-worker-agent/ # Claude Code 工人 Agent（远程编程）
 ├── addons/langgraph-biz-worker/# LangGraph 业务型 Worker Agent（Java 侧，待开发）
 └── launcher/                   # Spring Boot 启动器
@@ -99,7 +98,7 @@ cd packages/navigator-frontend && pnpm exec vite build
 ## 重要配置
 
 - **LLM 配置**：`launcher/src/main/resources/application-docker.yml`（已 gitignore）
-- **平台配置**：首次使用需在 `/#/setup` 配置 Git 提供者和 AI 模型
+- **平台配置**：首次使用需在 `/#/settings` 配置 Git 提供者和 AI 模型
 - **日志文件**：`logs/backend.log`、`logs/backend-error.log`
 
 ## Agent 编排核心 — A2A 统一发现与调用
@@ -123,7 +122,7 @@ Claude Worker Agent 是系统核心模块之一。所有 Agent（无论底层实
 2. **统一返回**：Controller 返回 `RX<T>`，成功 `RX.ok(data)`，失败 `RX.failA/B/C(msg)`
 3. **接口参数**：使用 Form/DTO 而非 Entity，详见 `/form-design` 技能
 4. **需求记录**：所有新增需求、缺陷、重构、延期事项统一记录到 `docs/version-tracker/<version>/NN-事项简述.md`，按版本号跟踪，用户确认后再开发；`docs/requirement-tracker/` 仅保留为历史季度制归档，禁止再写入新事项
-5. **先调研再实现**：集成外部系统（Claude Code SDK、OpenHands 等）的功能时，必须先调研目标系统的已有机制和内部数据结构，再设计实现方案。禁止在不了解底层机制的情况下"猜测式"实现。
+5. **先调研再实现**：集成外部系统（Claude Code SDK、Codex SDK、Gemini CLI 等）的功能时，必须先调研目标系统的已有机制和内部数据结构，再设计实现方案。禁止在不了解底层机制的情况下"猜测式"实现。
 6. **语义对齐**：实现涉及用户交互的功能前，先明确关键语义（操作是否产生新实体、是否等待用户确认、UI 状态如何变化），必要时主动向用户确认，避免多轮返工。
 7. **SecurityConfig.java**：增加新的http端口注意更新权限
 8. **前端构建验证**：修改完前端代码后，务必运行 `bash scripts/build-frontend.sh` 确保可以正确构建（含 TypeScript 类型检查）

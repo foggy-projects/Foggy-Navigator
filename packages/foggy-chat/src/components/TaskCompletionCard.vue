@@ -8,12 +8,17 @@
     <div v-if="message.content" class="card-body">
       {{ message.content }}
     </div>
+    <ExecutionReportInline
+      :report-ref="message.executionReportRef"
+      :digest="message.executionReportDigest"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ChatMessage } from '../types/chat'
+import ExecutionReportInline from './ExecutionReportInline.vue'
 
 const props = defineProps<{
   message: ChatMessage

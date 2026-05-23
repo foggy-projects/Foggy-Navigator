@@ -97,9 +97,9 @@ Claude Worker、Codex Worker 等能力负责在具体目录和执行环境里完
 
 A2A 负责把异构或外部 Agent 接入统一分发链路，是路由机制，不是单独的产品功能域。
 
-### 5.4 编程执行模块
+### 5.4 编程执行入口
 
-`addons/coding-agent` 当前更适合被理解成一个独立编程执行模块，提供会话、环境、容器、Git 和验证相关能力，但不是当前主前端唯一的执行入口。
+编程执行能力当前由 Claude、Codex、Gemini 等 Worker addon 承接，通过 Worker 目录、任务和 A2A 路由进入统一平台。
 
 ## 6. 当前边界判断
 
@@ -116,7 +116,7 @@ A2A 负责把异构或外部 Agent 接入统一分发链路，是路由机制，
 - 数据分析平台
 - 语义层管理平台
 - 以 TM/QM 编辑为核心的产品定位
-- 把整个系统直接等同为 OpenHands 集成壳层
+- 把整个系统直接等同为单一编程执行引擎的集成壳层
 
 ## 7. 推荐理解顺序
 
@@ -140,7 +140,7 @@ A2A 负责把异构或外部 Agent 接入统一分发链路，是路由机制，
 - 功能域层  
   Workers、会话、任务、跨项目、设置、用户、监控
 - 模块层  
-  session、A2A、coding-agent、tutor-coding、observability、tool
+  session、A2A、Worker addon、observability、tool
 - 历史层  
   `docs/01-overview/` 仅作为演进参考
 

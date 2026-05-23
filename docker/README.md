@@ -1,6 +1,6 @@
 # Foggy Navigator Docker 环境
 
-本目录包含 Coding Agent 开发和测试所需的 Docker 环境配置。
+本目录包含 Foggy Navigator 开发和测试所需的 Docker 环境配置。
 
 ## 服务列表
 
@@ -356,24 +356,6 @@ docker-compose up -d --build
 # 只启动特定服务
 docker-compose up -d mysql
 docker-compose up -d gitlab
-```
-
----
-
-## 集成测试配置
-
-在运行集成测试前，确保 MySQL 服务已启动：
-
-```bash
-# 启动 MySQL
-docker-compose up -d mysql
-
-# 等待 MySQL 就绪
-docker-compose exec mysql mysqladmin ping -h localhost -u root -pfoggy@root123
-
-# 运行集成测试
-cd ../addons/coding-agent/integration-tests
-npm test
 ```
 
 ---

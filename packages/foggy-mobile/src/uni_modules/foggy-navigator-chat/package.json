@@ -1,0 +1,83 @@
+{
+  "id": "foggy-navigator-chat",
+  "displayName": "Foggy Navigator Chat",
+  "version": "0.1.0",
+  "description": "uni-app native Navigator Agent chat component for upstream BFF integration",
+  "keywords": [
+    "foggy",
+    "navigator",
+    "agent",
+    "chat",
+    "uni-app"
+  ],
+  "repository": "https://github.com/foggy-projects/Foggy-Navigator",
+  "engines": {
+    "uni-app": "^3.0.0"
+  },
+  "dcloudext": {
+    "sale": {
+      "regular": {
+        "price": "0.00"
+      },
+      "sourcecode": {
+        "price": "0.00"
+      }
+    },
+    "contact": {
+      "qq": ""
+    },
+    "declaration": {
+      "ads": "无",
+      "data": "无",
+      "permissions": "无"
+    },
+    "npmurl": "",
+    "type": "component-vue",
+    "darkmode": "y",
+    "i18n": "-"
+  },
+  "uni_modules": {
+    "dependencies": [],
+    "encrypt": [],
+    "platforms": {
+      "cloud": {
+        "tcb": "-",
+        "aliyun": "-"
+      },
+      "client": {
+        "uni-app": {
+          "vue": {
+            "vue2": "-",
+            "vue3": "y"
+          },
+          "web": {
+            "safari": "y",
+            "chrome": "y"
+          },
+          "app": {
+            "vue": "y",
+            "nvue": "-",
+            "android": "y",
+            "ios": "y",
+            "harmony": "u"
+          },
+          "mp": {
+            "weixin": "u",
+            "alipay": "u",
+            "toutiao": "u",
+            "baidu": "u",
+            "kuaishou": "u",
+            "jd": "u",
+            "harmony": "u",
+            "qq": "u",
+            "lark": "u"
+          },
+          "quickapp": {
+            "huawei": "-",
+            "union": "-"
+          }
+        }
+      }
+    }
+  }
+}

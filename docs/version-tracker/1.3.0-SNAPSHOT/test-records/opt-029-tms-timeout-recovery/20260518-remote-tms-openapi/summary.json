@@ -1,0 +1,66 @@
+{
+  "agentId": "tms.navigator.agent",
+  "skillId": "tms.navigator.agent",
+  "upstreamUserId": "tms-x3-smoke-user",
+  "runtimeTokenIssued": true,
+  "runtimeTokenExpiresAt": "2026-05-18T21:47:03.006108031+08:00",
+  "preflight": {
+    "overallStatus": "OK",
+    "baseUrl": "http://192.168.31.81:8112",
+    "clientAppId": "capp_91859c0b-9049-46fa-ba2b-a4fcce50e3c9",
+    "clientAppName": "TMS X3 Demo",
+    "agentCode": "tms.navigator.agent",
+    "upstreamUserId": "tms-x3-smoke-user",
+    "requestedModelConfigId": "de146b42-23db-4b2b-b349-0af76aa61ad3",
+    "effectiveModelConfigId": "de146b42-23db-4b2b-b349-0af76aa61ad3",
+    "checks": [
+      {
+        "code": "AGENT_REGISTERED",
+        "status": "OK",
+        "message": null
+      },
+      {
+        "code": "CLIENT_APP_SKILL_GRANT",
+        "status": "OK",
+        "message": null
+      },
+      {
+        "code": "UPSTREAM_USER_GRANT",
+        "status": "OK",
+        "message": null
+      },
+      {
+        "code": "MODEL_CONFIG_GRANT",
+        "status": "OK",
+        "message": null
+      }
+    ],
+    "skillArtifact": {
+      "available": true,
+      "treeUrl": "/api/v1/open/skills/tms.navigator.agent/files/tree",
+      "sliceUrlTemplate": "/api/v1/open/skills/tms.navigator.agent/files/slice?path={path}&startLine={startLine}&startColumn={startColumn}&maxChars={maxChars}"
+    }
+  },
+  "simulatedUiWaitTimeoutMs": 0,
+  "simulatedClientDetachSeconds": 5.0,
+  "cancelApiCalled": false,
+  "firstTaskId": "lgt_4956a179d5c4464b",
+  "firstContextId": "20260518-73b3",
+  "firstInitialStatus": "SUBMITTED",
+  "firstFinalStatus": "COMPLETED",
+  "firstMessageCount": 6,
+  "secondTaskId": "lgt_ae42b98871a045fe",
+  "secondContextId": "20260518-73b3",
+  "secondInitialStatus": "SUBMITTED",
+  "secondFinalStatus": "COMPLETED",
+  "secondMessageCount": 6,
+  "verdicts": {
+    "initial_task_created": true,
+    "ui_wait_timeout_simulated_without_cancel": true,
+    "reattach_messages_available": true,
+    "first_task_completed": true,
+    "next_turn_reused_context": true,
+    "second_task_completed": true
+  },
+  "passed": true
+}

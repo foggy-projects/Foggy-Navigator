@@ -13,6 +13,9 @@ public class ClientAppDTO {
     private String description;
     private String ownerUserId;
     private String capabilityDomain;
+    private String upstreamSystemId;
+    private String upstreamClientAppNamespace;
+    private String upstreamRef;
     private String status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -25,6 +28,9 @@ public class ClientAppDTO {
         dto.setDescription(entity.getDescription());
         dto.setOwnerUserId(entity.getOwnerUserId());
         dto.setCapabilityDomain(entity.getCapabilityDomain());
+        dto.setUpstreamSystemId(entity.getUpstreamSystemId());
+        dto.setUpstreamClientAppNamespace(entity.getUpstreamClientAppNamespace());
+        dto.setUpstreamRef(entity.getUpstreamRef());
         dto.setStatus(entity.getStatus());
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());

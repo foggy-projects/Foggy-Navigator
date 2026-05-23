@@ -65,6 +65,17 @@ final class CliArguments {
         if (words.size() >= 2 && "account-context".equals(words.get(0))) {
             return "account-context " + words.get(1);
         }
+        if (words.size() >= 2 && "admin-key".equals(words.get(0))) {
+            return "admin-key " + words.get(1);
+        }
+        if (words.size() >= 2 && "client-app".equals(words.get(0))) {
+            return "client-app " + words.get(1);
+        }
+        if (words.size() >= 2 && ("worker".equals(words.get(0))
+                || "directory".equals(words.get(0))
+                || "worker-pool".equals(words.get(0)))) {
+            return words.get(0) + " " + words.get(1);
+        }
         if (words.size() >= 2 && ("script".equals(words.get(0))
                 || "debug".equals(words.get(0))
                 || "model".equals(words.get(0)))) {

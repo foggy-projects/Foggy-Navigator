@@ -1,0 +1,61 @@
+{
+  "run_id": "20260518-162515-65bf00",
+  "test_case": "BUG-028 real LLM attachment handoff smoke",
+  "status": "PASS",
+  "started_at": "2026-05-18T16:25:15.198765+08:00",
+  "completed_at": "2026-05-18T16:25:49.258273+08:00",
+  "base_url": "http://localhost:3061",
+  "worker": {
+    "version": "0.1.0",
+    "worker_name": "langgraph-biz-worker-qwen35-plus"
+  },
+  "task_id": "lgt_real_bug028_20260518-162515-65bf00",
+  "session_id": "sess-real-bug028-20260518-162515-65bf00",
+  "context_id": "ctx-real-bug028-20260518-162515-65bf00",
+  "request": {
+    "prompt": "Ask the real LLM root agent to invoke tms-ticket-agent for BUG-028 attachment context visibility verification. Do not create a ticket.",
+    "attachment": {
+      "id": "att-028-real",
+      "name": "image.png",
+      "mimeType": "image/png",
+      "size": 33485,
+      "kind": "image",
+      "provider": "tms-bff",
+      "url_path": "https://tms.example.com/files/image.png",
+      "metadata": {
+        "traceId": "trace-real-bug028",
+        "note": "safe-note"
+      }
+    }
+  },
+  "observed_flow": {
+    "root_skill": "system.root",
+    "root_tool_call": "invoke_business_skill",
+    "child_skill": "tms-ticket-agent",
+    "child_result_tool": "submit_skill_result",
+    "child_frame_id": "frm_2909a9ed2a81",
+    "root_frame_id": "frm_4cedd2b0fe2d"
+  },
+  "child_attachment_visibility": {
+    "attachment_id": "att-028-real",
+    "name": "image.png",
+    "provider": "tms-bff",
+    "url_path": "https://tms.example.com/files/image.png",
+    "security_metadata": {
+      "note": "safe-note",
+      "traceId": "trace-real-bug028"
+    }
+  },
+  "sanitization": {
+    "sensitive_pattern_hits": [],
+    "checked_patterns": [
+      "token=secret",
+      "accessToken",
+      "hidden"
+    ]
+  },
+  "raw_artifacts": {
+    "committed": true,
+    "reason": "Raw SSE, frame, and tool-audit logs were scanned for sensitive patterns and committed as sanitized regression evidence."
+  }
+}

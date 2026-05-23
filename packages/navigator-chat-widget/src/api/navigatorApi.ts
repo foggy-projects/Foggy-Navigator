@@ -31,6 +31,7 @@ export class NavigatorApi {
     if (this.config.maxTurns) body.maxTurns = this.config.maxTurns
     if (options.metadata && Object.keys(options.metadata).length > 0) body.metadata = options.metadata
     if (options.clientContext && Object.keys(options.clientContext).length > 0) body.clientContext = options.clientContext
+    if (options.attachments && options.attachments.length > 0) body.attachments = options.attachments
     return this.post(`/agents/${this.config.agentId}/ask`, body)
   }
 
@@ -69,6 +70,11 @@ export class NavigatorApi {
     return this.get(`/agents/${this.config.agentId}/sessions/${encodeURIComponent(contextId)}/messages?${params.toString()}`)
   }
 
+  /** 删除指定历史会话 */
+  async deleteSession(contextId: string): Promise<void> {
+    await this.delete(`/agents/${this.config.agentId}/sessions/${encodeURIComponent(contextId)}`)
+  }
+
   // ===== HTTP helpers =====
 
   private async get<T>(path: string): Promise<T> {
@@ -86,6 +92,15 @@ export class NavigatorApi {
       method: 'POST',
       headers: { ...this.headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    })
+    return this.unwrap(resp)
+  }
+
+  private async delete<T>(path: string): Promise<T> {
+    const url = `${this.baseUrl}${path}`
+    const resp = await this.doFetch(url, {
+      method: 'DELETE',
+      headers: this.headers(),
     })
     return this.unwrap(resp)
   }
@@ -114,6 +129,9 @@ export class NavigatorApi {
     if (!resp.ok) {
       const text = await resp.text().catch(() => '')
       throw new Error(`HTTP ${resp.status}: ${text}`)
+    }
+    if (resp.status === 204) {
+      return undefined as T
     }
     const json = await resp.json()
     if (json.code !== 0) {

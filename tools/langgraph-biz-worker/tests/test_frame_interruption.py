@@ -8,6 +8,12 @@ from langgraph_biz_worker.models import FrameStatus
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 
+CTX_INTERRUPTION = "bctx_20260520_ab_ctx-interruption"
+CTX_REBIND = "bctx_20260520_cd_ctx-rebind"
+CTX_AWAITING = "bctx_20260520_ef_ctx-awaiting"
+CTX_WAITING_CHILD = "bctx_20260520_12_ctx-waiting-child"
+CTX_NESTED_CHILD = "bctx_20260520_34_ctx-nested-child"
+
 
 @pytest.fixture(autouse=True)
 def _setup_frame_interruption_service(tmp_path):
@@ -38,14 +44,14 @@ async def test_records_recoverable_interruption_on_running_root(client, _setup_f
     frame_id = runtime.invoke_skill(
         task_id="lgt_interruption_1",
         skill_id="system.root",
-        conversation_id="ctx-interruption",
+        conversation_id=CTX_INTERRUPTION,
         session_id="session-1",
     )
 
     resp = await client.post("/api/v1/frames/interruption", json={
         "taskId": "lgt_interruption_1",
         "session_id": "session-1",
-        "context_id": "ctx-interruption",
+        "context_id": CTX_INTERRUPTION,
         "reason": "user_cancelled",
         "error": "Cancelled by user",
     })
@@ -68,7 +74,7 @@ async def test_restores_by_conversation_and_rebinds_current_task(client, _setup_
     frame_id = runtime.invoke_skill(
         task_id="lgt_old_task",
         skill_id="system.root",
-        conversation_id="ctx-rebind",
+        conversation_id=CTX_REBIND,
         session_id="session-2",
     )
     runtime.store.clear()
@@ -76,7 +82,7 @@ async def test_restores_by_conversation_and_rebinds_current_task(client, _setup_
     resp = await client.post("/api/v1/frames/interruption", json={
         "taskId": "lgt_new_task",
         "sessionId": "session-2",
-        "contextId": "ctx-rebind",
+        "contextId": CTX_REBIND,
         "reason": "stream_error",
         "error": "connection reset",
     })
@@ -95,7 +101,7 @@ async def test_user_cancelled_awaiting_root_becomes_reusable(client, _setup_fram
     frame_id = runtime.invoke_skill(
         task_id="lgt_awaiting_cancel",
         skill_id="system.root",
-        conversation_id="ctx-awaiting",
+        conversation_id=CTX_AWAITING,
         session_id="session-3",
     )
     runtime.mark_awaiting_approval(frame_id, {"approval_type": "business_function"})
@@ -103,7 +109,7 @@ async def test_user_cancelled_awaiting_root_becomes_reusable(client, _setup_fram
     resp = await client.post("/api/v1/frames/interruption", json={
         "taskId": "lgt_awaiting_cancel",
         "session_id": "session-3",
-        "context_id": "ctx-awaiting",
+        "context_id": CTX_AWAITING,
         "reason": "user_cancelled",
         "error": "User aborted while approval was pending",
     })
@@ -125,7 +131,7 @@ async def test_user_cancelled_waiting_child_records_child_and_reuses_root(
     root_frame_id = runtime.invoke_skill(
         task_id="lgt_waiting_child_cancel",
         skill_id="system.root",
-        conversation_id="ctx-waiting-child",
+        conversation_id=CTX_WAITING_CHILD,
         session_id="session-4",
     )
     child_frame_id = runtime.invoke_child_skill(
@@ -137,7 +143,7 @@ async def test_user_cancelled_waiting_child_records_child_and_reuses_root(
     resp = await client.post("/api/v1/frames/interruption", json={
         "taskId": "lgt_waiting_child_cancel",
         "session_id": "session-4",
-        "context_id": "ctx-waiting-child",
+        "context_id": CTX_WAITING_CHILD,
         "reason": "user_cancelled",
         "error": "User aborted while child skill was running",
     })
@@ -167,12 +173,25 @@ async def test_user_cancelled_waiting_child_records_child_and_reuses_root(
 async def test_returns_not_found_without_failing_cancel_path(client):
     resp = await client.post("/api/v1/frames/interruption", json={
         "taskId": "missing-task",
+        "context_id": CTX_INTERRUPTION,
         "reason": "user_cancelled",
         "error": "Cancelled by user",
     })
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "not_found"
+
+
+async def test_rejects_non_standard_context_id(client):
+    resp = await client.post("/api/v1/frames/interruption", json={
+        "taskId": "lgt_invalid_context",
+        "context_id": "20260520-5fa4",
+        "reason": "user_cancelled",
+        "error": "Cancelled by user",
+    })
+
+    assert resp.status_code == 422
+    assert "bctx_yyyyMMdd_<hash>_<id>" in resp.json()["detail"]
 
 
 async def test_nested_waiting_child_records_deepest_recoverable_focus(
@@ -183,7 +202,7 @@ async def test_nested_waiting_child_records_deepest_recoverable_focus(
     root_frame_id = runtime.invoke_skill(
         task_id="lgt_nested_cancel",
         skill_id="system.root",
-        conversation_id="ctx-nested-child",
+        conversation_id=CTX_NESTED_CHILD,
         session_id="session-5",
     )
     child_frame_id = runtime.invoke_child_skill(
@@ -200,7 +219,7 @@ async def test_nested_waiting_child_records_deepest_recoverable_focus(
     resp = await client.post("/api/v1/frames/interruption", json={
         "taskId": "lgt_nested_cancel",
         "session_id": "session-5",
-        "context_id": "ctx-nested-child",
+        "context_id": CTX_NESTED_CHILD,
         "reason": "user_cancelled",
         "error": "User aborted while nested child skill was running",
     })

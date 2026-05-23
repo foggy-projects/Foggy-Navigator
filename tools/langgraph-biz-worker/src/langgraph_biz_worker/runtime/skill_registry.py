@@ -27,6 +27,7 @@ from typing import Any
 import yaml
 
 from ..models import SkillManifest
+from .account_workspace import AccountWorkspace, resolve_account_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,13 @@ def _frontmatter_to_manifest(
     metadata = data.get("metadata", {})
 
     # Parse allowed-tools: space-separated string → list
-    raw_tools = data.get("allowed-tools", "")
-    allowed_tools = raw_tools.split() if isinstance(raw_tools, str) else list(raw_tools)
+    raw_tools = data.get("allowed-tools", data.get("tools", ""))
+    if raw_tools is None:
+        allowed_tools = []
+    elif isinstance(raw_tools, str):
+        allowed_tools = raw_tools.split()
+    else:
+        allowed_tools = list(raw_tools)
 
     return SkillManifest(
         id=name,
@@ -121,11 +127,22 @@ class SkillRegistry:
         data_root: Path | None = None,
     ) -> None:
         self._manifests: dict[str, SkillManifest] = {}
+        self._aliases: dict[str, str] = {}
         self._skills_root = skills_root or _DEFAULT_SKILLS_ROOT
         self._legacy_dir = manifests_dir or _LEGACY_MANIFESTS_DIR
         self._data_root = data_root or self._skills_root.parent / "data"
 
-    def load(self, account_id: str | None = None, client_app_id: str | None = None) -> None:
+    @property
+    def data_root(self) -> Path:
+        return self._data_root
+
+    def load(
+        self,
+        account_id: str | None = None,
+        client_app_id: str | None = None,
+        include_standalone: bool = False,
+        account_workspace: AccountWorkspace | None = None,
+    ) -> None:
         """Load skills from all sources.
 
         Priority (later overwrites earlier): legacy < builtin < public < app-public < account.
@@ -133,9 +150,13 @@ class SkillRegistry:
         If ``account_id`` is provided, also loads account-private skills.
         """
         self._manifests.clear()
+        self._aliases.clear()
 
         # 1. Load legacy YAML manifests (lowest priority)
         self._load_legacy_yaml()
+
+        if include_standalone:
+            self._load_skill_md_dir(self._skills_root, "standalone")
 
         # 2. Load SKILL.md from skills/builtin/
         builtin_dir = self._skills_root / "builtin"
@@ -150,8 +171,8 @@ class SkillRegistry:
             self.load_client_app_public_skills(client_app_id)
 
         # 5. Load account-private skills (highest priority, Doc 34 §6)
-        if account_id:
-            self.load_account_skills(account_id)
+        if account_id or account_workspace:
+            self.load_account_skills(account_id, account_workspace=account_workspace)
 
     def load_client_app_public_skills(self, client_app_id: str) -> None:
         """Load public skills granted to a single client app."""
@@ -159,12 +180,18 @@ class SkillRegistry:
         app_dir = self._skills_root / "public" / "apps" / client_app_id
         self._load_skill_md_dir(app_dir, f"public-app:{client_app_id}", client_app_id=client_app_id)
 
-    def load_account_skills(self, account_id: str) -> None:
+    def load_account_skills(
+        self,
+        account_id: str | None,
+        *,
+        account_workspace: AccountWorkspace | None = None,
+    ) -> None:
         """Load skills from an account's private directory (overwrites all lower layers)."""
-        account_id = _validate_account_id(account_id)
-        # Account skills live under <data_root>/accounts/<account_id>/skills/
-        account_dir = self._data_root / "accounts" / account_id / "skills"
-        self._load_skill_md_dir(account_dir, f"account:{account_id}")
+        workspace = account_workspace or resolve_account_workspace(self._data_root, account_id)
+        if workspace is None:
+            return
+        account_dir = workspace.skills_root
+        self._load_skill_md_dir(account_dir, f"account:{workspace.storage_account_id}")
 
     def _load_skill_md_dir(self, base_dir: Path, scope: str, client_app_id: str | None = None) -> None:
         """Scan ``<base_dir>/<skill-name>/SKILL.md`` entries."""
@@ -187,7 +214,7 @@ class SkillRegistry:
             if manifest is None:
                 continue
 
-            self._manifests[manifest.id] = manifest
+            self.register(manifest, aliases=[skill_dir.name])
             logger.info("Loaded skill [%s] %s from %s", scope, manifest.id, skill_md)
 
     def _load_legacy_yaml(self) -> None:
@@ -200,20 +227,29 @@ class SkillRegistry:
                 with open(path, encoding="utf-8") as f:
                     data = yaml.safe_load(f)
                 manifest = SkillManifest(**data)
-                self._manifests[manifest.id] = manifest
+                self.register(manifest)
                 logger.info("Loaded legacy manifest: %s (%s)", manifest.id, path.name)
             except Exception:
                 logger.exception("Failed to load legacy manifest: %s", path)
 
     def get_manifest(self, skill_id: str) -> SkillManifest | None:
-        return self._manifests.get(skill_id)
+        manifest = self._manifests.get(skill_id)
+        if manifest is not None:
+            return manifest
+        canonical = self._aliases.get(skill_id)
+        if canonical:
+            return self._manifests.get(canonical)
+        return None
 
     def list_skills(self) -> list[SkillManifest]:
         return list(self._manifests.values())
 
-    def register(self, manifest: SkillManifest) -> None:
+    def register(self, manifest: SkillManifest, aliases: list[str] | None = None) -> None:
         """Programmatically register a manifest (useful for tests)."""
         self._manifests[manifest.id] = manifest
+        for alias in aliases or []:
+            if alias and alias != manifest.id:
+                self._aliases[alias] = manifest.id
 
 
 def _validate_account_id(account_id: str) -> str:

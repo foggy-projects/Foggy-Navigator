@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -31,6 +32,9 @@ public class OpenSessionMessageDTO {
     /** 消息内容 */
     private String content;
 
+    /** 所属任务对外状态：SUBMITTED | RUNNING | AWAITING_INPUT | COMPLETED | FAILED | CANCELLED */
+    private String status;
+
     /** 是否为任务终态消息 */
     private Boolean terminal;
 
@@ -39,6 +43,9 @@ public class OpenSessionMessageDTO {
 
     /** 扩展元数据 */
     private Map<String, Object> metadata;
+
+    /** 用户消息附件；兼容 metadata.attachments，同时给前端稳定顶层字段 */
+    private List<Map<String, Object>> attachments;
 
     /** 创建时间 */
     private LocalDateTime createdAt;

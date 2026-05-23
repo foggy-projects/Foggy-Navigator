@@ -1,0 +1,53 @@
+{
+  "taskId": "lgt_e3851a5e1d734777",
+  "snapshots": [
+    {
+      "taskId": "lgt_e3851a5e1d734777",
+      "agentId": "tms-agent-v305",
+      "status": "SUBMITTED",
+      "contextId": null,
+      "result": null,
+      "errorMessage": null,
+      "durationMs": null,
+      "costUsd": null,
+      "createdAt": null,
+      "updatedAt": null
+    },
+    {
+      "taskId": "lgt_e3851a5e1d734777",
+      "agentId": "tms-agent-v305",
+      "status": "SUBMITTED",
+      "contextId": null,
+      "result": null,
+      "errorMessage": null,
+      "durationMs": null,
+      "costUsd": null,
+      "createdAt": null,
+      "updatedAt": null
+    },
+    {
+      "taskId": "lgt_e3851a5e1d734777",
+      "agentId": "tms-agent-v305",
+      "status": "SUBMITTED",
+      "contextId": null,
+      "result": null,
+      "errorMessage": null,
+      "durationMs": null,
+      "costUsd": null,
+      "createdAt": null,
+      "updatedAt": null
+    },
+    {
+      "taskId": "lgt_e3851a5e1d734777",
+      "agentId": "tms-agent-v305",
+      "status": "COMPLETED",
+      "contextId": null,
+      "result": "你好！我是你的业务助手。请问今天有什么我可以帮你的？",
+      "errorMessage": null,
+      "durationMs": null,
+      "costUsd": null,
+      "createdAt": null,
+      "updatedAt": null
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 from httpx import AsyncClient, ASGITransport
@@ -208,6 +209,129 @@ async def test_scripted_cursor_tool_call_and_debug_requests(client):
 
 
 @pytest.mark.anyio
+async def test_scripted_duplicate_cursor_uses_registered_sequence(client):
+    """同一用户消息触发多个 LLM 调用时，可按注册顺序返回不同响应。"""
+    trace_id = "e2e-script-duplicate-cursor-001"
+    cursor = f"next:{trace_id}:001"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    script_payload = {
+        "traceId": trace_id,
+        "scenarioId": "duplicate-cursor-sequence",
+        "turns": [
+            {
+                "cursor": cursor,
+                "response": {
+                    "tool_calls": [
+                        {
+                            "name": "handoff_to_parent",
+                            "args": {
+                                "summary": "child asks parent to decide",
+                                "requires_parent_synthesis": True,
+                            },
+                        }
+                    ],
+                },
+            },
+            {
+                "cursor": cursor,
+                "response": {
+                    "tool_calls": [
+                        {
+                            "name": "submit_skill_result",
+                            "args": {
+                                "summary": "parent synthesized final answer",
+                                "structured_output": {"ok": True},
+                            },
+                        }
+                    ],
+                },
+            },
+        ],
+    }
+    register = await client.post("/__e2e/scripts", json=script_payload)
+    assert register.status_code == 200
+    assert register.json()["turns"] == 2
+
+    payload = {
+        "model": "navigator-e2e-scripted",
+        "messages": [{"role": "user", "content": f"same prompt {cursor}"}],
+    }
+    first = await client.post("/v1/chat/completions", json=payload)
+    second = await client.post("/v1/chat/completions", json=payload)
+    third = await client.post("/v1/chat/completions", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 200
+    assert first.json()["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "handoff_to_parent"
+    assert second.json()["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "submit_skill_result"
+    assert third.json()["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "submit_skill_result"
+
+    debug = await client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [cursor, cursor, cursor]
+    assert [record["responseSummary"]["toolCalls"] for record in records] == [
+        ["handoff_to_parent"],
+        ["submit_skill_result"],
+        ["submit_skill_result"],
+    ]
+
+    register_again = await client.post("/__e2e/scripts", json=script_payload)
+    assert register_again.status_code == 200
+    reset = await client.post("/v1/chat/completions", json=payload)
+    assert reset.status_code == 200
+    assert reset.json()["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "handoff_to_parent"
+
+
+@pytest.mark.anyio
+async def test_scripted_response_can_delay_before_reply(client):
+    trace_id = "e2e-script-delay-001"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    register = await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "scenarioId": "slow-provider",
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:001",
+                    "response": {
+                        "content": "slow ok",
+                        "delay_ms": 120,
+                    },
+                }
+            ],
+        },
+    )
+    assert register.status_code == 200
+
+    started = time.monotonic()
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "navigator-e2e-scripted",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"run slow provider next:{trace_id}:001",
+                }
+            ],
+        },
+    )
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 200
+    assert elapsed >= 0.10
+    assert response.json()["choices"][0]["message"]["content"] == "slow ok"
+
+    debug = await client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert records[0]["responseSummary"]["responseDelayMs"] == 120
+
+
+@pytest.mark.anyio
 async def test_scripted_stream_accepts_langchain_style_tool_call(client):
     """测试 streaming scripted response 支持 name/args 形式的 tool call。"""
     trace_id = "e2e-script-stream-tool-001"
@@ -381,6 +505,46 @@ async def test_scripted_cursor_advances_from_latest_tool_message_content(client)
 
     assert response.status_code == 200
     assert response.json()["choices"][0]["message"]["content"] == "{\"summary\":\"tool-result-cursor\"}"
+
+
+@pytest.mark.anyio
+async def test_scripted_cursor_uses_last_cursor_inside_message(client):
+    """同一条消息内有旧摘要和当前指令时，应选择靠后的当前 cursor。"""
+    trace_id = "e2e-script-current-cursor"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:002",
+                    "response": {
+                        "content": "{\"summary\":\"current-cursor\"}",
+                    },
+                }
+            ],
+        },
+    )
+
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "navigator-e2e-biz-worker-v1",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Previous summary next:{trace_id}:001\n"
+                        f"User request: continue next:{trace_id}:002"
+                    ),
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "{\"summary\":\"current-cursor\"}"
 
 
 @pytest.mark.anyio

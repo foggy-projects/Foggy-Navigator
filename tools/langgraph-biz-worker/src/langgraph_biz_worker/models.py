@@ -5,7 +5,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
+
+from .runtime.skill_identity import normalize_skill_name
 
 
 # ---------------------------------------------------------------------------
@@ -16,7 +18,12 @@ from pydantic import BaseModel, Field
 class QueryRequest(BaseModel):
     """Request body for ``POST /api/v1/query``."""
 
-    prompt: str
+    prompt: str = Field(validation_alias=AliasChoices("prompt", "message"))
+    skill_name: str | None = None
+    context_id: str | None = Field(
+        None,
+        validation_alias=AliasChoices("contextId", "context_id"),
+    )
     session_id: str | None = None
     foggy_session_id: str | None = None
     model: str | None = None
@@ -24,6 +31,9 @@ class QueryRequest(BaseModel):
     # Internal model routing data resolved by Navigator Java from model_config_id.
     # Never include this in prompts or user-visible context.
     llm_config: dict[str, Any] | None = None
+    # Optional vision model routing data resolved by Navigator Java.
+    # This is consumed only by attachment analysis tools.
+    vision_llm_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     # Hidden runtime data from Navigator Java. Never include this in LLM prompts.
     runtime_context: dict[str, Any] | None = None
@@ -33,6 +43,30 @@ class QueryRequest(BaseModel):
     task_id: str | None = Field(None, alias="taskId")
     user_id: str | None = Field(None, alias="userId")
     tenant_id: str | None = Field(None, alias="tenantId")
+    task_deadline_at: str | None = Field(
+        None,
+        validation_alias=AliasChoices("taskDeadlineAt", "task_deadline_at"),
+    )
+    task_timeout_ms: int | None = Field(
+        None,
+        validation_alias=AliasChoices("taskTimeoutMs", "task_timeout_ms"),
+    )
+    max_turns: int | None = Field(
+        None,
+        validation_alias=AliasChoices("maxTurns", "max_turns"),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_skill_name_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = normalize_skill_name(data, required=False)
+        if normalized is None:
+            return data
+        updated = dict(data)
+        updated["skill_name"] = normalized
+        return updated
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +110,8 @@ class QueryEvent(BaseModel):
 
     # Result metadata (populated on type="result")
     duration_ms: int | None = None
+    execution_report_ref: str | None = None
+    execution_report_digest: dict[str, Any] | None = None
 
     # Structured output (populated on type="result")
     structured_output: dict[str, Any] | None = None
@@ -88,6 +124,42 @@ class QueryEvent(BaseModel):
     reason: str | None = None
     summary: dict[str, Any] | None = None
     timeout_at: str | None = None
+    progress_type: str | None = None
+    attempt: int | None = None
+    max_attempts: int | None = None
+    next_retry_after_ms: int | None = None
+    remaining_ms: int | None = None
+    presentation_hint: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_content(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        content = data.get("content")
+        if content is not None and not isinstance(content, str):
+            if isinstance(content, list):
+                text_parts = []
+                for item in content:
+                    if isinstance(item, str):
+                        text_parts.append(item)
+                    elif isinstance(item, dict):
+                        if item.get("type") == "text":
+                            text_parts.append(item.get("text", ""))
+                        elif "text" in item:
+                            text_parts.append(item.get("text", ""))
+                        elif item.get("type") == "thinking":
+                            thinking_content = item.get("thinking", "")
+                            if thinking_content:
+                                text_parts.append(f"<thinking>{thinking_content}</thinking>\n")
+                        elif "thinking" in item:
+                            thinking_content = item.get("thinking", "")
+                            if thinking_content:
+                                text_parts.append(f"<thinking>{thinking_content}</thinking>\n")
+                data["content"] = "".join(text_parts)
+            else:
+                data["content"] = str(content)
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +174,7 @@ class FrameStatus(str, Enum):
     RUNNING = "RUNNING"
     WAITING_CHILD = "WAITING_CHILD"
     AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    AWAITING_USER = "AWAITING_USER"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
@@ -110,10 +183,14 @@ class FrameStatus(str, Enum):
 class FrameKind(str, Enum):
     """Runtime frame kind.
 
-    ``SKILL`` frames are LLM-executed skills. ``FUNCTION_CALL`` frames are
-    runtime-created wrappers around one business function invocation.
+    ``ROOT`` frames own conversation-scoped runtime context. ``AGENT`` frames
+    are delegated non-root LLM execution containers. ``SKILL`` is retained for
+    legacy frame snapshots created before skills were tool-only. ``FUNCTION_CALL``
+    frames are runtime-created wrappers around one business function invocation.
     """
 
+    ROOT = "ROOT"
+    AGENT = "AGENT"
     SKILL = "SKILL"
     FUNCTION_CALL = "FUNCTION_CALL"
 
@@ -127,6 +204,7 @@ VALID_TRANSITIONS: dict[FrameStatus, frozenset[FrameStatus]] = {
     FrameStatus.RUNNING: frozenset({
         FrameStatus.WAITING_CHILD,
         FrameStatus.AWAITING_APPROVAL,
+        FrameStatus.AWAITING_USER,
         FrameStatus.COMPLETED,
         FrameStatus.FAILED,
         FrameStatus.CANCELLED,
@@ -138,6 +216,11 @@ VALID_TRANSITIONS: dict[FrameStatus, frozenset[FrameStatus]] = {
         FrameStatus.CANCELLED,
     }),
     FrameStatus.AWAITING_APPROVAL: frozenset({
+        FrameStatus.RUNNING,
+        FrameStatus.FAILED,
+        FrameStatus.CANCELLED,
+    }),
+    FrameStatus.AWAITING_USER: frozenset({
         FrameStatus.RUNNING,
         FrameStatus.FAILED,
         FrameStatus.CANCELLED,
@@ -154,16 +237,24 @@ VALID_TRANSITIONS: dict[FrameStatus, frozenset[FrameStatus]] = {
 
 
 class SkillFrameState(BaseModel):
-    """Private execution state for a single Skill invocation."""
+    """Private execution state for a runtime frame.
+
+    The historical model name is retained for compatibility. New non-root LLM
+    lifecycle frames should use ``frame_kind=AGENT`` and identify themselves via
+    ``agent_id`` / ``frame_name``; ``skill_id`` is no longer a required semantic
+    identity for new frames.
+    """
 
     frame_id: str
     task_id: str
-    skill_id: str
+    skill_id: str = ""
+    agent_id: str | None = None
+    frame_name: str | None = None
     frame_kind: FrameKind = FrameKind.SKILL
     parent_frame_id: str | None = None
     status: FrameStatus = FrameStatus.CREATED
 
-    # Conversation-scoped identity for persistent frames such as system.root.
+    # Conversation-scoped identity for persistent root frames.
     # ``task_id`` remains the current recoverable Worker task for compatibility
     # with approval resume and Java-side task lookup.
     conversation_id: str | None = None
@@ -186,6 +277,8 @@ class SkillFrameState(BaseModel):
 
     started_at: str = ""
     ended_at: str = ""
+    journal_seq: int | None = None
+    journal_updated_at: str | None = None
 
     # Retry tracking for submit_result rejections
     submit_attempts: int = 0

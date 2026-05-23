@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.foggy.navigator.sdk.internal.HttpHelper;
 import com.foggy.navigator.sdk.model.Worker;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -105,5 +107,51 @@ public class WorkerApi {
         Map<String, Object> body = Map.of("force", force);
         return http.post("/api/v1/open/workers/" + workerId + "/processes/" + pid + "/kill",
                 body, new TypeReference<>() {});
+    }
+
+    public Worker createWithUpstreamAdmin(Map<String, Object> params, String targetTenantId) {
+        return http.postWithUpstreamAdminAuth("/api/v1/upstream-admin/workers" + targetTenantQuery(targetTenantId),
+                params, null, new TypeReference<>() {});
+    }
+
+    public List<Worker> listWithUpstreamAdmin(String targetTenantId) {
+        return http.getWithUpstreamAdminAuth("/api/v1/upstream-admin/workers" + targetTenantQuery(targetTenantId),
+                null, new TypeReference<>() {});
+    }
+
+    public Worker getWithUpstreamAdmin(String workerId) {
+        return http.getWithUpstreamAdminAuth("/api/v1/upstream-admin/workers/" + workerId,
+                null, new TypeReference<>() {});
+    }
+
+    public Worker updateWithUpstreamAdmin(String workerId, Map<String, Object> params) {
+        return http.putWithUpstreamAdminAuth("/api/v1/upstream-admin/workers/" + workerId,
+                params, null, new TypeReference<>() {});
+    }
+
+    public void deleteWithUpstreamAdmin(String workerId) {
+        http.deleteWithUpstreamAdminAuth("/api/v1/upstream-admin/workers/" + workerId, null);
+    }
+
+    public Worker healthCheckWithUpstreamAdmin(String workerId) {
+        return http.postWithUpstreamAdminAuth("/api/v1/upstream-admin/workers/" + workerId + "/health-check",
+                null, null, new TypeReference<>() {});
+    }
+
+    public Map<String, Object> listProcessesWithUpstreamAdmin(String workerId) {
+        return http.getWithUpstreamAdminAuth("/api/v1/upstream-admin/workers/" + workerId + "/processes",
+                null, new TypeReference<>() {});
+    }
+
+    public Map<String, Object> killProcessWithUpstreamAdmin(String workerId, int pid, boolean force) {
+        return http.postWithUpstreamAdminAuth("/api/v1/upstream-admin/workers/" + workerId + "/processes/" + pid + "/kill",
+                Map.of("force", force), null, new TypeReference<>() {});
+    }
+
+    private String targetTenantQuery(String targetTenantId) {
+        if (targetTenantId == null || targetTenantId.isBlank()) {
+            return "";
+        }
+        return "?targetTenantId=" + URLEncoder.encode(targetTenantId, StandardCharsets.UTF_8);
     }
 }

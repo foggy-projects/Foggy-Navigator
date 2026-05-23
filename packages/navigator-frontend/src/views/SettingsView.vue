@@ -808,15 +808,15 @@ codex-worker status</pre>
         <el-form-item>
           <el-checkbox v-model="llmForm.isDefault">设为该类别的默认模型</el-checkbox>
         </el-form-item>
-        <el-form-item v-if="llmForm.category === 'CODING'" label="Worker 后端">
+        <el-form-item v-if="llmForm.category === 'CODING' || llmForm.category === 'VISION'" label="Worker 后端">
           <el-radio-group v-model="llmForm.workerBackend">
-            <el-radio-button value="CLAUDE_CODE">Claude Code</el-radio-button>
-            <el-radio-button value="OPENAI_CODEX">OpenAI Codex</el-radio-button>
-            <el-radio-button value="GEMINI_CLI">Gemini CLI</el-radio-button>
+            <el-radio-button v-if="llmForm.category === 'CODING'" value="CLAUDE_CODE">Claude Code</el-radio-button>
+            <el-radio-button v-if="llmForm.category === 'CODING'" value="OPENAI_CODEX">OpenAI Codex</el-radio-button>
+            <el-radio-button v-if="llmForm.category === 'CODING'" value="GEMINI_CLI">Gemini CLI</el-radio-button>
             <el-radio-button value="LANGGRAPH_BIZ">LangGraph Biz</el-radio-button>
           </el-radio-group>
           <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
-            指定此编程模型由哪个 Worker 后端执行
+            {{ llmForm.category === 'VISION' ? '视觉模型用于 BizWorker 附件解析，需选择 LangGraph Biz' : '指定此编程模型由哪个 Worker 后端执行' }}
           </div>
         </el-form-item>
         <el-form-item>
@@ -1098,7 +1098,7 @@ codex-worker status</pre>
           <el-input v-model="grantForm.grantScope" placeholder="可选，如 specific-agent-id" />
         </el-form-item>
         <el-form-item>
-          <el-checkbox v-model="grantForm.isDefault">设为默认模型</el-checkbox>
+          <el-checkbox v-model="grantForm.isDefault">设为该类别默认模型</el-checkbox>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1110,8 +1110,7 @@ codex-worker status</pre>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { resetSetupStatus } from '@/router'
+import { ref, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import {
@@ -1268,7 +1267,6 @@ async function deleteGit(id: string) {
   try {
     await ElMessageBox.confirm('确认删除该 Git 提供者？', '提示', { type: 'warning' })
     await apiDeleteGit(id)
-    resetSetupStatus()
     ElMessage.success('已删除')
     await loadGitProviders()
   } catch { /* cancelled */ }
@@ -1435,6 +1433,14 @@ function showLlmDialog(mode: 'add' | 'edit') {
   showLlmDialog_.value = true
 }
 
+watch(() => llmForm.value.category, (category) => {
+  if (category === 'VISION') {
+    llmForm.value.workerBackend = 'LANGGRAPH_BIZ'
+  } else if (category !== 'CODING') {
+    llmForm.value.workerBackend = undefined
+  }
+})
+
 function applyPreset(preset: (typeof llmPresets)[number]) {
   llmDialogMode.value = 'add'
   editingLlmId.value = ''
@@ -1508,7 +1514,7 @@ async function saveLlm() {
         scope: llmForm.value.scope,
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : undefined,
         envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
-        workerBackend: llmForm.value.category === 'CODING' ? llmForm.value.workerBackend : undefined,
+        workerBackend: ['CODING', 'VISION'].includes(llmForm.value.category) ? llmForm.value.workerBackend : undefined,
         availableModels: supportsAvailableModels(llmForm.value.workerBackend)
           && llmForm.value.availableModels.length > 0
           ? llmForm.value.availableModels
@@ -1527,7 +1533,7 @@ async function saveLlm() {
         scope: llmForm.value.scope,
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : [],
         envVars: envVarsMap,
-        workerBackend: llmForm.value.category === 'CODING' ? (llmForm.value.workerBackend || null) : null,
+        workerBackend: ['CODING', 'VISION'].includes(llmForm.value.category) ? (llmForm.value.workerBackend || null) : null,
         availableModels: supportsAvailableModels(llmForm.value.workerBackend)
           && llmForm.value.availableModels.length > 0
           ? llmForm.value.availableModels
@@ -1621,7 +1627,6 @@ async function deleteLlm(id: string) {
   try {
     await ElMessageBox.confirm('确认删除该模型配置？', '提示', { type: 'warning' })
     await apiDeleteLlm(id)
-    resetSetupStatus()
     ElMessage.success('已删除')
     await loadLlmModels()
   } catch { /* cancelled */ }
@@ -1992,7 +1997,6 @@ async function deleteCredentialById(id: string) {
   try {
     await ElMessageBox.confirm('确认删除该凭证？', '提示', { type: 'warning' })
     await apiDeleteCredential(id)
-    resetSetupStatus()
     ElMessage.success('已删除')
     await loadCredentials()
   } catch { /* cancelled */ }

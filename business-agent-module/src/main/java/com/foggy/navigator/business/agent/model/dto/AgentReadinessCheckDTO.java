@@ -15,6 +15,12 @@ public class AgentReadinessCheckDTO {
         return dto;
     }
 
+    public static AgentReadinessCheckDTO ok(String code, String message) {
+        AgentReadinessCheckDTO dto = ok(code);
+        dto.setMessage(message);
+        return dto;
+    }
+
     public static AgentReadinessCheckDTO fail(String code, String message) {
         AgentReadinessCheckDTO dto = new AgentReadinessCheckDTO();
         dto.setCode(code);

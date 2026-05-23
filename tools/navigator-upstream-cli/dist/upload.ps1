@@ -58,6 +58,16 @@ function Invoke-RemoteInstallSmoke {
             throw "route help smoke failed: $routeHelpOutput"
         }
 
+        $adminKeyHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream admin-key --help 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $adminKeyHelpOutput -notmatch "Commands: request, status, claim, list, approve, deny, revoke, rotate") {
+            throw "admin-key help smoke failed: $adminKeyHelpOutput"
+        }
+
+        $clientAppHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream client-app --help 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $clientAppHelpOutput -notmatch "Commands: list, ensure, issue-control-key") {
+            throw "client-app help smoke failed: $clientAppHelpOutput"
+        }
+
         Write-Host "Remote install smoke passed." -ForegroundColor Green
     }
     finally {

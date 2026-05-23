@@ -12,6 +12,7 @@ import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepo
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
+import com.foggy.navigator.common.enums.LlmModelCategory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -73,9 +74,12 @@ class BusinessAgentTaskServiceTest {
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
                 .thenAnswer(invocation -> {
                     BusinessAgentSessionDTO dto = new BusinessAgentSessionDTO();
-                    dto.setContextId("ctx_01");
+                    dto.setContextId("bctx_20260520_ab_ctx_01");
                     return dto;
                 });
+        lenient().when(grantService.tryResolveEffectiveModelConfigId(
+                anyString(), anyString(), isNull(), eq(LlmModelCategory.VISION)))
+                .thenReturn(Optional.empty());
     }
 
     @Test
@@ -121,6 +125,10 @@ class BusinessAgentTaskServiceTest {
 
     @Test
     void createTask_withWorkerTaskLauncher_bindsWorkerTaskAndRuntimeTokenAlias() {
+        form.setWorkdir("D:/workspace/app");
+        form.setAllowedDirs(List.of("D:/workspace"));
+        form.setAllowedTools(List.of("read_file", "invoke_business_function"));
+
         BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
                 taskRepository,
                 tokenRepository,
@@ -141,14 +149,14 @@ class BusinessAgentTaskServiceTest {
         when(grantService.resolveEffectiveModelConfigId("tenant_01", "app_01", null)).thenReturn("model_01");
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
-        SkillEntity skill = new SkillEntity();
-        skill.setMarkdownBody("skill body");
-        when(skillRegistryService.getSkill("tenant_01", "skill_01")).thenReturn(skill);
+        when(skillRegistryService.buildMaterializedPublicSkillMarkdown("tenant_01", "skill_01", "app_01"))
+                .thenReturn("materialized skill body");
         when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
         when(workerTaskLauncher.launch(any(BusinessAgentWorkerTaskLaunchRequest.class))).thenReturn(
                 BusinessAgentWorkerTaskLaunchResult.builder()
                         .workerTaskId("lgt_123")
                         .workerSessionId("worker_session_123")
+                        .contextId("bctx_20260520_ab_ctx_01")
                         .workerId("worker_01")
                         .providerType("langgraph-biz-worker")
                         .build());
@@ -169,6 +177,12 @@ class BusinessAgentTaskServiceTest {
                 ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
         verify(workerTaskLauncher).launch(requestCaptor.capture());
         assertEquals(result.getTaskScopedToken(), requestCaptor.getValue().getTaskScopedToken());
+        assertNull(requestCaptor.getValue().getContextId());
+        assertEquals("materialized skill body", requestCaptor.getValue().getMarkdownBody());
+        assertEquals("skill_01", requestCaptor.getValue().getSkillName());
+        assertEquals("D:/workspace/app", requestCaptor.getValue().getWorkdir());
+        assertEquals(List.of("D:/workspace"), requestCaptor.getValue().getAllowedDirs());
+        assertEquals(List.of("read_file", "invoke_business_function"), requestCaptor.getValue().getAllowedTools());
 
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor = ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
         verify(tokenRepository, atLeastOnce()).save(tokenCaptor.capture());
@@ -306,6 +320,15 @@ class BusinessAgentTaskServiceTest {
     void createTask_rejects_blank_skillId() {
         form.setSkillId(null);
         assertThrows(IllegalArgumentException.class, () -> taskService.createTask("tenant_01", "actor_01", form));
+    }
+
+    @Test
+    void createTask_rejectsConflictingSkillAliasDuringCompatibilityPhase() {
+        form.setSkillName("other_skill");
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> taskService.createTask("tenant_01", "actor_01", form));
+        assertTrue(error.getMessage().contains("skillName must match skillId"));
     }
 
     @Test
