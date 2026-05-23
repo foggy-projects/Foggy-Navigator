@@ -78,6 +78,7 @@
 - [workitems/BUG-client-app-public-skill-manifest-resolution.md](./workitems/BUG-client-app-public-skill-manifest-resolution.md) - 记录并修复 ClientApp public skill 资源可见但 `invoke_business_skill` 执行 manifest 缺失的问题
 - [workitems/BUG-20260523-mobile-frame-report-404.md](./workitems/BUG-20260523-mobile-frame-report-404.md) - 记录 TMS 移动端执行报告 Markdown 加载 404 的 BizWorker 侧排查结论：格式支持、本机可读、重点核查 worker/baseUrl 与持久化后端一致性
 - [workitems/RELEASE-20260523-runtime-context-and-tms-chat-closure.md](./workitems/RELEASE-20260523-runtime-context-and-tms-chat-closure.md) - 记录 2026-05-23 对外发布收口：SDK 1.0.5、CLI 本地包、OpenAPI frame report、TMS Chat 历史状态与附件复测通过
+- [workitems/TMS-HANDOFF-20260523-final-release-upgrade.md](./workitems/TMS-HANDOFF-20260523-final-release-upgrade.md) - 提供给 TMS / 上游的最终发布升级提示词，覆盖 SDK 1.0.5、Chat Widget 更新、重启、真实 smoke 与失败回传字段
 - [workitems/OPT-runtime-prompt-window-turn-aware-pruning.md](./workitems/OPT-runtime-prompt-window-turn-aware-pruning.md) - 跟踪 prompt window 按 turn / tool protocol 裁剪、大工具结果预算和压缩触发边界参数设计
 - [workitems/OPT-runtime-plan-tool-contract.md](./workitems/OPT-runtime-plan-tool-contract.md) - 记录 BizWorker `update_plan` / plan 工具函数的初始契约、runtime state 边界和后续 Claude Code / Codex 调研项
 
