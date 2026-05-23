@@ -27,7 +27,7 @@ metadata:
     - structured_output
   business-rules: {}
   subgraph: address_verify
-allowed-tools: submit_skill_result
+allowed-tools: submit_frame_result
 ---
 
 # 地址验证
@@ -38,4 +38,4 @@ Use this skill when the parent skill needs to verify the delivery address reacha
 ## Instructions
 1. Look up the order address.
 2. Check if it is reachable.
-3. Return the reachability result. If this run needs structured output or is inside an Agent frame, call `submit_skill_result`; otherwise a root/top-level caller may finish with a natural-language answer.
+3. Return the reachability result. If this run needs structured output or is inside an Agent frame, call `submit_frame_result`; otherwise a root/top-level caller may finish with a natural-language answer.

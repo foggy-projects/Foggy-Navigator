@@ -64,6 +64,8 @@ from .llm_tool_dispatcher import (
 )
 from .llm_tool_schemas import (
     _DEFAULT_FILE_TOOL_NAMES,
+    _FRAME_RESULT_TOOL_NAME,
+    _FRAME_RESULT_TOOL_NAMES,
     _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES,
     _bind_tools,
     _tool_specs,
@@ -740,8 +742,9 @@ class LlmSkillAgent:
             result=result,
         )
 
-        event_type = "skill_result_submit" if name == "submit_skill_result" and result.get("ok") else "tool_result"
-        if name == "submit_skill_result" and not result.get("ok"):
+        is_frame_result_tool = name in _FRAME_RESULT_TOOL_NAMES
+        event_type = "skill_result_submit" if is_frame_result_tool and result.get("ok") else "tool_result"
+        if is_frame_result_tool and not result.get("ok"):
             event_type = "skill_result_reject"
 
         report_payload = _execution_report_payload_from_result(result)
@@ -798,7 +801,7 @@ class LlmSkillAgent:
                 content=json.dumps(auto_submit_result, ensure_ascii=False),
                 error="; ".join(validation.errors) if not validation.ok else None,
                 tool_call_id=f"{call.get('id')}:auto_submit" if call.get("id") else None,
-                tool_name="submit_skill_result",
+                tool_name=_FRAME_RESULT_TOOL_NAME,
                 function_id=_tool_function_id(name, safe_args, result),
                 args={
                     "summary": summary,
@@ -812,7 +815,7 @@ class LlmSkillAgent:
             _emit_progress_event(runtime_context, auto_submit_event)
             if validation.ok:
                 ret["persistent_turn_completed"] = True
-        if name in {"submit_skill_result", "shelve_interrupted_frame"} and persistent_frame and result.get("ok"):
+        if name in {*_FRAME_RESULT_TOOL_NAMES, "shelve_interrupted_frame"} and persistent_frame and result.get("ok"):
             ret["persistent_turn_completed"] = True
         if suspended:
             ret["suspended"] = True
@@ -957,7 +960,7 @@ class LlmSkillAgent:
                 **_execution_report_payload_from_frame(frame),
             }
 
-        if name == "submit_skill_result":
+        if name in _FRAME_RESULT_TOOL_NAMES:
             structured_output = args.get("structured_output") or {}
             summary = args.get("summary", "")
             if not isinstance(summary, str):
@@ -1270,7 +1273,7 @@ def _has_runtime_memory_terminal_tool_call(tool_calls: list[dict[str, Any]]) -> 
 
 
 def _is_runtime_memory_terminal_tool_call(call: dict[str, Any]) -> bool:
-    return call.get("name") in {"submit_skill_result", "shelve_interrupted_frame", "handoff_to_parent"}
+    return call.get("name") in {*_FRAME_RESULT_TOOL_NAMES, "shelve_interrupted_frame", "handoff_to_parent"}
 
 
 def _assistant_response_text(response: Any) -> str:
@@ -1416,7 +1419,7 @@ def _generic_agent_manifest(frame: Any) -> SkillManifest:
             "invoke_business_function",
             "analyze_attachment",
             "analyze_spreadsheet",
-            "submit_skill_result",
+            _FRAME_RESULT_TOOL_NAME,
             "handoff_to_parent",
             "read_frame_execution_report",
         ],

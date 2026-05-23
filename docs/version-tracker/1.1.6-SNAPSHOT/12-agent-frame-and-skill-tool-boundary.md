@@ -30,7 +30,7 @@ Skill 的默认行为：
 
 1. 不创建 child frame。
 2. 不拥有独立生命周期。
-3. 不要求 `submit_skill_result` 或 `handoff_to_parent`。
+3. 不要求 `submit_frame_result` 或 `handoff_to_parent`。
 4. 作为当前 frame 的 tool protocol 留存在当前 frame 的 runtime-visible messages 中。
 5. 如果 Skill 内部说明建议调用业务函数，LLM 在同一个 frame 中继续调用 `invoke_business_function`。
 6. 即使 Skill bundle 名称包含 `agent`，普通业务技能请求仍默认按 Skill 材料加载处理，不因此自动打开 Agent frame。
@@ -109,24 +109,25 @@ A1
 
 Agent 内部完整 tool trace 保存在该 Agent frame 的 report/log/runtime message events 中。
 
-### `submit_skill_result` 与 `handoff_to_parent`
+### `submit_frame_result` 与 `handoff_to_parent`
 
 这两个工具的语义收口为 frame 控制工具，而不是普通 Skill 调用的必经出口。它们不再意味着“只有 Skill frame 才能调用”，也不意味着 `invoke_business_skill` 之后必须调用。
 
 当前约定:
 
-1. Root 普通回合可以直接用自然语言完成，不需要 `submit_skill_result`。
-2. Root 只有在需要保存 `active_plan`、`artifact_refs`、`evidence_refs`、`structured_output` 等跨回合结构化状态时，才主动调用 `submit_skill_result`。
-3. Non-root Agent frame 完成、等待用户补充或提交结构化 refs 时，优先调用 `submit_skill_result`。
+1. Root 普通回合可以直接用自然语言完成，不需要 `submit_frame_result`。
+2. Root 只有在需要保存 `active_plan`、`artifact_refs`、`evidence_refs`、`structured_output` 等跨回合结构化状态时，才主动调用 `submit_frame_result`。
+3. Non-root Agent frame 完成、等待用户补充或提交结构化 refs 时，优先调用 `submit_frame_result`。
 4. Non-root Agent frame 需要受控退出并交还父级时，调用 `handoff_to_parent`。
-5. 普通 Skill 材料加载不创建 frame，因此不要求 `submit_skill_result` 或 `handoff_to_parent`。
+5. 普通 Skill 材料加载不创建 frame，因此不要求 `submit_frame_result` 或 `handoff_to_parent`。
 
-当前命名保留是为了兼容旧工具名和前端展示；实现和文档中应逐步转向：
+当前实现已引入新工具名，并保留旧工具名兼容：
 
-1. `submit_frame_result`
-2. `handoff_to_parent`
+1. `submit_frame_result`: 新提示、新 manifest 和新脚本优先使用的 frame result 提交工具。
+2. `submit_skill_result`: 旧名兼容 alias，runtime 仍接受旧日志、旧测试和旧上游调用。
+3. `handoff_to_parent`: non-root Agent frame 的受控交还父级工具。
 
-Phase 内不强制一次性重命名，但提示词、文档和错误信息应避免把它们描述成 Skill 专属能力。
+Phase 内不删除旧名；提示词、文档和错误信息应避免把 frame result 工具描述成 Skill 专属能力。
 
 ## Runtime Context 规则
 
@@ -165,7 +166,7 @@ Agent frame 的默认输入边界：
 3. 如需业务 Skill，先在当前 Agent frame 内调用 `list_skill_resources` / `read_skill_resource` 或 `invoke_business_skill` 获取材料。
 4. `invoke_business_skill` 在 Agent frame 内仍只是普通 Skill 材料读取，不创建下一层 frame。
 5. 只有需要更深层独立生命周期或用户明确要求时，才继续调用 `invoke_business_agent`。
-6. 完成、等待用户或交还父级时，优先调用 frame 完成/交还工具提交结构化结果、refs 和退出意图。
+6. 完成、等待用户或交还父级时，优先调用 `submit_frame_result` / `handoff_to_parent` 提交结构化结果、refs 和退出意图。
 
 当执行策略允许 `invoke_business_skill` 或 `invoke_business_agent` 时，运行时必须同步允许 `list_skill_resources` 与 `read_skill_resource`，否则子 Agent 无法按提示词发现和读取 Skill 材料。详细规则见 [13-default-subagent-base-prompt-and-skill-discovery.md](./13-default-subagent-base-prompt-and-skill-discovery.md)。
 

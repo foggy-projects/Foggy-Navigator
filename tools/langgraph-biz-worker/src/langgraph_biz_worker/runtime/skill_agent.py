@@ -285,7 +285,7 @@ class _SubmitOnlyModel:
     def invoke(self, messages: list[Any]) -> AIMessage:
         return AIMessage(content="", tool_calls=[{
             "id": "call_submit",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {
                 "summary": "Skill completed.",
                 "structured_output": {},

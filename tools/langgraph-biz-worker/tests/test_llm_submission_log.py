@@ -29,7 +29,7 @@ def _context(tmp_path, *, max_files: int = 100) -> dict:
         "_llm_submission_tools": [{
             "type": "function",
             "function": {
-                "name": "submit_skill_result",
+                "name": "submit_frame_result",
                 "parameters": {"type": "object"},
             },
         }],
@@ -72,7 +72,7 @@ def test_record_llm_submission_writes_numbered_json(monkeypatch, tmp_path):
     assert "hello" in json.dumps(payload["body"]["messages"], ensure_ascii=False)
     assert payload["body"]["messages"][0]["type"] == "system"
     assert payload["body"]["messages"][1]["type"] == "human"
-    assert payload["body"]["tools"][0]["function"]["name"] == "submit_skill_result"
+    assert payload["body"]["tools"][0]["function"]["name"] == "submit_frame_result"
 
 
 def test_record_llm_submission_includes_runtime_warnings(monkeypatch, tmp_path):

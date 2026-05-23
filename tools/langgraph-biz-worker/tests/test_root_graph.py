@@ -152,15 +152,15 @@ def test_system_root_manifest_allows_plain_final_and_discourages_submit_for_simp
     body = root_graph_module._system_root_manifest().markdown_body
 
     assert "直接用自然语言回复用户" in body
-    assert "普通寒暄、简单问答、无需保留结构化状态的答复，不要调用 submit_skill_result" in body
+    assert "普通寒暄、简单问答、无需保留结构化状态的答复，不要调用 submit_frame_result" in body
     assert "只有需要保存 active_plan" in body
     assert "默认使用 invoke_business_skill" in body
     assert "不要仅因为技能或目录名称包含 agent 就打开子 Agent frame" in body
     assert "只有用户明确要求使用子 Agent/独立代理" in body
-    assert "自然语言最终消息或 submit_skill_result 都只完成当前用户回合" in body
-    assert "必须通过 submit_skill_result" not in body
+    assert "自然语言最终消息或 submit_frame_result 都只完成当前用户回合" in body
+    assert "必须通过 submit_frame_result" not in body
     assert "不要直接输出自然语言" not in body
-    assert "当前用户回合可以答复时，调用 submit_skill_result" not in body
+    assert "当前用户回合可以答复时，调用 submit_frame_result" not in body
 
 
 def test_route_skill_creates_and_reuses_persistent_system_root_frame(monkeypatch, tmp_path):

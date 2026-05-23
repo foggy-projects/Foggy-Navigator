@@ -28,7 +28,7 @@ metadata:
     - evidence_refs
   business-rules: {}
   subgraph: order_evidence_collect
-allowed-tools: mock_get_order mock_get_vehicle_status submit_skill_result
+allowed-tools: mock_get_order mock_get_vehicle_status submit_frame_result
 ---
 
 # 订单取证
@@ -40,4 +40,4 @@ Use this skill when the parent skill needs order and vehicle evidence collected.
 1. Fetch order details via `mock_get_order`.
 2. Fetch vehicle status via `mock_get_vehicle_status`.
 3. Assemble structured evidence.
-4. Return the assembled evidence. If this run needs structured output or is inside an Agent frame, call `submit_skill_result`; otherwise a root/top-level caller may finish with a natural-language answer.
+4. Return the assembled evidence. If this run needs structured output or is inside an Agent frame, call `submit_frame_result`; otherwise a root/top-level caller may finish with a natural-language answer.

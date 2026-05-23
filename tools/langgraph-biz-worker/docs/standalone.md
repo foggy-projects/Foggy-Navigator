@@ -111,7 +111,7 @@ Rules:
 - `workdir` must be inside `allowed_dirs`.
 - If `workdir` is set and `allowed_dirs` is omitted, `allowed_dirs` defaults to `[workdir]`.
 - If `allowed_tools` is set, provider tools outside that list are not exposed to the model and fabricated calls are rejected with `TOOL_NOT_AUTHORIZED`.
-- Runtime control tools such as `submit_skill_result` remain available when a frame needs structured completion or pause state. Ordinary root turns can finish with a natural-language assistant response.
+- Runtime control tools such as `submit_frame_result` remain available when a frame needs structured completion or pause state. `submit_skill_result` is still accepted as a legacy compatibility alias. Ordinary root turns can finish with a natural-language assistant response.
 - Local Python tools can receive normalized policy data by declaring a reserved `tool_context` argument:
 
 ```python

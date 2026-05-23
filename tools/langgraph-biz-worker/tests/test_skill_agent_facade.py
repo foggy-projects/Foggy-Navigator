@@ -121,7 +121,7 @@ async def test_skill_agent_ask_invokes_provider_tool_by_skill_name(tmp_path):
     assert result["summary"] == "Order fetched."
     assert result["structured_output"] == {"order_id": "O-1001", "status": "OPEN"}
     assert provider.calls[0]["tool_name"] == "query_order"
-    assert {tool["function"]["name"] for tool in model.bound_tools} >= {"query_order", "submit_skill_result"}
+    assert {tool["function"]["name"] for tool in model.bound_tools} >= {"query_order", "submit_frame_result"}
 
 
 @pytest.mark.asyncio

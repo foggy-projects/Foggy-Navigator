@@ -325,9 +325,9 @@ def _system_root_manifest() -> SkillManifest:
         markdown_body=(
             "你是当前任务的根业务编排 Agent。"
             "可以直接处理用户请求时，直接用自然语言回复用户并结束当前回合。"
-            "普通寒暄、简单问答、无需保留结构化状态的答复，不要调用 submit_skill_result。"
+            "普通寒暄、简单问答、无需保留结构化状态的答复，不要调用 submit_frame_result。"
             "只有需要保存 active_plan、artifact_refs、evidence_refs、structured_output "
-            "或其他跨回合结构化状态时，才主动调用 submit_skill_result。"
+            "或其他跨回合结构化状态时，才主动调用 submit_frame_result。"
             "当可用上下文或技能材料中描述了所需的已授权业务函数时，使用 "
             "invoke_business_function 调用业务函数。"
             "处理某个业务技能可直接支持的请求时，默认使用 invoke_business_skill "
@@ -341,7 +341,7 @@ def _system_root_manifest() -> SkillManifest:
             "如果用户只是要求把文件作为业务操作附件提交，应保留附件，不要分析内容。"
             "上游系统提供的附件已经上传并带有 URL/ref；创建工单或追加沟通时，"
             "直接按业务函数 schema 映射为 attachmentRefs，不要再调用 attachment.upload。"
-            "根 Agent 是持久的；自然语言最终消息或 submit_skill_result 都只完成当前用户回合，"
+            "根 Agent 是持久的；自然语言最终消息或 submit_frame_result 都只完成当前用户回合，"
             "不会关闭整个会话。"
         ),
         allowed_tools=[
@@ -350,7 +350,7 @@ def _system_root_manifest() -> SkillManifest:
             "invoke_business_agent",
             "analyze_attachment",
             "analyze_spreadsheet",
-            "submit_skill_result",
+            "submit_frame_result",
         ],
         promote_to_parent=["result_summary", "structured_output", "artifact_refs", "evidence_refs"],
         visibility="builtin",

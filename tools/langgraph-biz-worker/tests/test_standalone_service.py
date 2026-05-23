@@ -203,7 +203,7 @@ async def test_standalone_ask_uses_configured_tool_provider(client, standalone_r
     assert provider.calls[0]["tool_name"] == "query_order"
     assert {tool["function"]["name"] for tool in model.bound_tools} >= {
         "query_order",
-        "submit_skill_result",
+        "submit_frame_result",
     }
 
 

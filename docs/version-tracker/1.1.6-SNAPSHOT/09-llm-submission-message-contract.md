@@ -188,13 +188,13 @@ Root 回合完成规则：
 
 1. 模型未产生 tool call，但返回了自然语言内容时，该内容可直接作为本回合最终答复。
 2. BizWorker 仍会内部完成 runtime memory、report、log、LLM submission 的落档，不要求模型额外调用退出工具。
-3. 普通寒暄、简单问答、无需保留结构化状态的答复，不应调用 `submit_skill_result`。
-4. 如果 root 回合需要保存 `active_plan`、`artifact_refs`、`evidence_refs` 或其他结构化状态，模型应主动调用 `submit_skill_result` 提交这些结构化信息。
+3. 普通寒暄、简单问答、无需保留结构化状态的答复，不应调用 `submit_frame_result`。
+4. 如果 root 回合需要保存 `active_plan`、`artifact_refs`、`evidence_refs` 或其他结构化状态，模型应主动调用 `submit_frame_result` 提交这些结构化信息。
 5. 如果 checkpoint 上存在 queued user input，BizWorker 会先把 queued input 追加进当前 loop，让模型继续处理，而不是提前把自然语言答复提交为最终结果。
 
 Child / non-root Agent frame 完成规则：
 
-1. 业务 Agent frame 有明确生命周期边界，完成、等待用户补充或需要返回父级时，优先主动调用 `submit_skill_result` 或 `handoff_to_parent`，以便提交结构化状态、refs 与受控退出意图。
+1. 业务 Agent frame 有明确生命周期边界，完成、等待用户补充或需要返回父级时，优先主动调用 `submit_frame_result` 或 `handoff_to_parent`，以便提交结构化状态、refs 与受控退出意图。
 2. BizWorker 不再在 child frame 返回自然语言但未调用终止工具时，追加伪 `human` 提醒消息要求重试。
 3. child frame 未调用终止工具但返回自然语言时，按子 Agent 风格归一化处理：
    - 如果文本明显在追问或请求用户补充，则转为 `WAITING_FOR_USER_INPUT`，child frame 进入 `AWAITING_USER`，下一条用户消息继续直达该 frame。
@@ -218,9 +218,9 @@ Child / non-root Agent frame 完成规则：
 4. 通用工具与标识治理规则：
    - 内部 tracing id 不能当作订单号、运单号或业务单据号。
    - 只能使用已提供工具。
-   - root 普通回合可直接用自然语言完成；普通寒暄、简单问答不要调用 `submit_skill_result`；需要结构化状态时才主动调用 `submit_skill_result`。
+   - root 普通回合可直接用自然语言完成；普通寒暄、简单问答不要调用 `submit_frame_result`；需要结构化状态时才主动调用 `submit_frame_result`。
    - root 普通业务技能请求默认用 `invoke_business_skill` 加载 Skill 材料，并在 Root 当前上下文继续；不要仅因为 Skill bundle 名称包含 `agent` 就打开 Agent frame。
-   - child frame 完成、等待用户补充或交还父级时，优先主动调用 `submit_skill_result` 或 `handoff_to_parent`；自然语言最终消息会被归一化为子 Agent 结果。
+   - child frame 完成、等待用户补充或交还父级时，优先主动调用 `submit_frame_result` 或 `handoff_to_parent`；自然语言最终消息会被归一化为子 Agent 结果。
 5. 当前运行时上下文：
    - 运行时日期上下文：时区、业务日期、当前月份范围、相对日期解析规则。
    - active plan 与持久 root plan 策略。
@@ -396,8 +396,9 @@ logs/runtime-message-events/<taskId>_<frameId>.jsonl
 - 2026-05-21: nested leaf 正常完成后，parent continuation 已通过 system context 接收“刚完成的子技能提升结果”，并继续逐层向 Root unwind；`llm-submissions` 会分别保留 leaf 与 parent 的真实提交 body。
 - 2026-05-21: scripted E2E 已补充 `llm-submissions` 与 `runtime-message-events` 对账断言，覆盖普通多轮、BusinessFunction tool protocol、`AWAITING_USER` child resume、nested completion unwind。
 - 2026-05-21: child frame system context 新增“子技能退出策略”，并通过 `handoff_to_parent` 支持取消/停止/换题/回主对话；persistent root 工具列表不暴露该 child-only 工具。
-- 2026-05-21: 收口 root / child 完成契约。Root 普通回合支持自然语言直接完成；`submit_skill_result` 改为 root 的可选结构化提交能力和 child frame 的首选结构化完成/暂停工具；移除“无 tool call 后追加伪 human 提醒”的默认行为。
-- 2026-05-23: 修正 command smoke 口径：顶层 `command` 工具调用后可直接自然语言完成，不应被描述成必须 `command -> submit_skill_result`。`submit_skill_result` 只在需要结构化状态、refs、等待用户或 non-root Agent frame 明确完成/暂停时使用。
+- 2026-05-21: 收口 root / child 完成契约。Root 普通回合支持自然语言直接完成；frame result 工具改为 root 的可选结构化提交能力和 child frame 的首选结构化完成/暂停工具；移除“无 tool call 后追加伪 human 提醒”的默认行为。
+- 2026-05-23: 修正 command smoke 口径：顶层 `command` 工具调用后可直接自然语言完成，不应被描述成必须 `command -> submit_skill_result`。frame result 工具只在需要结构化状态、refs、等待用户或 non-root Agent frame 明确完成/暂停时使用。
+- 2026-05-24: 引入 `submit_frame_result` 作为新主工具名，`submit_skill_result` 保留为兼容 alias。新提示、新 manifest 和新脚本优先使用 `submit_frame_result`。
 - 2026-05-21: 补齐 API 级 Root 普通自然语言完成 E2E，验证同 `contextId` 第二轮 LLM body 能恢复上一轮 `user` / `assistant`，并且不会写入伪 human retry instruction。
 
 ### Testing

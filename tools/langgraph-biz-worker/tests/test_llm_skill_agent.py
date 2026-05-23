@@ -220,7 +220,7 @@ def _root_runtime() -> SkillRuntime:
         description="Persistent root skill.",
         markdown_body="根 Agent 负责当前用户回合的业务编排。",
         output_schema={"type": "object"},
-        allowed_tools=["submit_skill_result"],
+        allowed_tools=["submit_frame_result"],
         promote_to_parent=["result_summary", "structured_output"],
         visibility="builtin",
     ))
@@ -416,7 +416,7 @@ def test_llm_agent_loads_business_skill_material_without_child_frame():
         }]),
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {
                 "summary": "Need ticket fields.",
                 "structured_output": {"message": "Need ticket fields."},
@@ -454,7 +454,7 @@ def test_llm_agent_invokes_client_app_public_skill_from_runtime_context(tmp_path
 ---
 name: tms-ticket-agent
 description: Ticket skill.
-allowed-tools: submit_skill_result
+allowed-tools: submit_frame_result
 metadata:
   display_name: TMS Ticket Agent
   visibility: public
@@ -525,7 +525,7 @@ metadata:
     assert not any("Skill manifest not found" in (event.error or "") for event in events)
 
 
-def test_llm_agent_completes_skill_via_submit_tool():
+def test_llm_agent_completes_skill_via_submit_frame_result_tool():
     runtime = _runtime()
     frame_id = runtime.invoke_skill(
         task_id="task_llm_agent_001",
@@ -545,7 +545,7 @@ def test_llm_agent_completes_skill_via_submit_tool():
         }]),
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {
                 "summary": "Order diagnosed as vehicle_delay.",
                 "structured_output": {
@@ -567,12 +567,50 @@ def test_llm_agent_completes_skill_via_submit_tool():
     frame = runtime.get_frame(frame_id)
     assert frame.status == FrameStatus.COMPLETED
     assert frame.output["classification"] == "vehicle_delay"
-    assert "submit_skill_result" in {t["function"]["name"] for t in model.bound_tools}
+    assert "submit_frame_result" in {t["function"]["name"] for t in model.bound_tools}
     assert events[-1].type == "skill_result_submit"
 
     promoted = runtime.close_frame(frame_id)
     assert promoted["structured_output"]["recommended_action"] == "manual_dispatch"
     assert runtime.get_frame(frame_id).private_messages == []
+
+
+def test_llm_agent_accepts_legacy_submit_skill_result_alias():
+    runtime = _runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_llm_agent_legacy_submit_001",
+        skill_id="exception_triage",
+        skill_input={"order_id": "ORD-LEGACY-SUBMIT"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Legacy submit alias accepted.",
+                "structured_output": {
+                    "classification": "other",
+                    "recommended_action": "ignore",
+                    "confidence": 0.8,
+                },
+                "evidence_refs": ["legacy:submit_skill_result"],
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_llm_agent_legacy_submit_001",
+        frame_id=frame_id,
+        prompt="legacy submit",
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert frame.status == FrameStatus.COMPLETED
+    assert frame.output["recommended_action"] == "ignore"
+    assert "submit_frame_result" in {t["function"]["name"] for t in model.bound_tools}
+    assert "submit_skill_result" not in {t["function"]["name"] for t in model.bound_tools}
+    assert events[-1].tool_name == "submit_skill_result"
+    assert events[-1].type == "skill_result_submit"
 
 
 def test_llm_agent_times_out_hung_model_and_fails_frame():
@@ -1029,7 +1067,7 @@ def test_llm_agent_persistent_frame_prompt_includes_active_plan():
     assert "deliver complex task" in system_prompt
     assert "step-1" in system_prompt
     assert "持久根计划策略:" in system_prompt
-    assert "主动调用 submit_skill_result" in system_prompt
+    assert "主动调用 submit_frame_result" in system_prompt
     assert "structured_output.active_plan" in system_prompt
     assert "intent_resolution" in system_prompt
 
@@ -2933,7 +2971,7 @@ def test_llm_agent_writes_runtime_message_event_jsonl(monkeypatch, tmp_path):
         name="event_log_skill",
         description="Writes event log.",
         output_schema={"type": "object"},
-        allowed_tools=["submit_skill_result"],
+        allowed_tools=["submit_frame_result"],
         promote_to_parent=["result_summary", "structured_output"],
     ))
     runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
@@ -2946,7 +2984,7 @@ def test_llm_agent_writes_runtime_message_event_jsonl(monkeypatch, tmp_path):
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {
                 "summary": "Done.",
                 "structured_output": {"ok": True},
@@ -2977,7 +3015,7 @@ def test_llm_agent_writes_runtime_message_event_jsonl(monkeypatch, tmp_path):
     assert events[1]["message"]["role"] == "user"
     assert events[1]["message"]["content"] == "hi"
     tool_call_event = next(event for event in events if event["eventType"] == "assistant_tool_call")
-    assert tool_call_event["toolCall"]["name"] == "submit_skill_result"
+    assert tool_call_event["toolCall"]["name"] == "submit_frame_result"
     tool_result_event = next(event for event in events if event["eventType"] == "tool_result")
     assert tool_result_event["message"]["role"] == "tool"
     assert tool_result_event["message"]["toolCallId"] == "call_submit"

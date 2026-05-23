@@ -610,7 +610,7 @@ class SkillRuntime:
     ) -> ValidationResult:
         """Pause a non-persistent skill frame until the next user message.
 
-        This is the child-frame variant of ``submit_skill_result`` for
+        This is the child-frame variant of ``submit_frame_result`` for
         ``turn_status=WAITING_FOR_USER_INPUT``.  It records the user-facing
         prompt but deliberately does not close the child frame.
         """
@@ -735,7 +735,7 @@ class SkillRuntime:
         """Record a turn result for a persistent Frame without closing it.
 
         Conversation root frames do not have ordinary Skill exit semantics.
-        ``submit_skill_result`` ends the current user turn, but the Frame
+        ``submit_frame_result`` ends the current user turn, but the Frame
         remains RUNNING so future resume logic can continue from the same root
         working context.
         """
@@ -2775,7 +2775,7 @@ def _append_synthetic_private_assistant_message(
         "role": "assistant",
         "content": text,
         "synthetic": True,
-        "source": "submit_skill_result.structured_output",
+        "source": "submit_frame_result.structured_output",
     })
 
 

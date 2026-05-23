@@ -6,7 +6,7 @@
 
 - 受控工具调用与结构化结果
 - Skill 按需加载并进入当前 frame 的 tool protocol
-- 显式 Agent frame 的独立生命周期、结构化完成与 handoff
+- 显式 Agent frame 的独立生命周期、`submit_frame_result` 结构化完成与 handoff
 - 审批中断与恢复（Phase 6）
 - 可审计的执行痕迹
 
@@ -132,7 +132,7 @@ BIZ_WORKER_LLM_MODEL=mock-model
 BIZ_WORKER_LLM_EXECUTE_SKILLS=true
 ```
 
-`mock-llm-service/responses/scenarios/langgraph-biz-worker-skill.yaml` 已内置一条结构化 frame 完成链路：路由到 `exception_triage`，依次调用 `mock_get_order`、`mock_get_vehicle_status`，最后调用 `submit_skill_result`。普通 Root 回合或顶层工具 smoke 可以直接用自然语言结束，不要求调用该工具。
+`mock-llm-service/responses/scenarios/langgraph-biz-worker-skill.yaml` 已内置一条结构化 frame 完成链路：路由到 `exception_triage`，依次调用 `mock_get_order`、`mock_get_vehicle_status`，最后调用 frame result 工具。新提示和 manifest 使用 `submit_frame_result`；`submit_skill_result` 仍作为旧脚本兼容别名保留。普通 Root 回合或顶层工具 smoke 可以直接用自然语言结束，不要求调用该工具。
 
 也可以通过 `BIZ_WORKER_ENV_FILE` 或启动参数切换配置：
 

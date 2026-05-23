@@ -149,7 +149,7 @@ def _build_sub_agent_base_contract_prompt(runtime_context: dict[str, Any] | None
         "invoke_business_skill 只在当前 Agent frame 内加载材料，不会创建新的 frame。"
         "只有任务确实需要更深层独立生命周期，或用户明确要求子 Agent 时，才继续调用 "
         "invoke_business_agent。完成、等待用户补充或交还父级时，优先调用 "
-        "submit_skill_result 或 handoff_to_parent 提交结构化状态、refs 和退出意图。"
+        "submit_frame_result 或 handoff_to_parent 提交结构化状态、refs 和退出意图。"
     )
 
 
@@ -161,14 +161,14 @@ def _build_completion_contract_prompt(
         return (
             "只能使用已提供的工具。当前是根会话回合：如果可以直接回答用户，"
             "可以直接输出自然语言作为本回合最终答复。普通寒暄、简单问答、"
-            "无需保留结构化状态的答复，不要调用 submit_skill_result。若需要保存结构化状态、"
-            "active_plan、artifact_refs 或 evidence_refs，才主动调用 submit_skill_result "
+            "无需保留结构化状态的答复，不要调用 submit_frame_result。若需要保存结构化状态、"
+            "active_plan、artifact_refs 或 evidence_refs，才主动调用 submit_frame_result "
             "提交本回合结果。普通业务技能请求默认加载 Skill 材料并在 Root 当前上下文继续；"
             "不要为了普通业务路由打开子 Agent frame。"
         )
     return (
         "只能使用已提供的工具。当前是子 Agent frame：完成、等待用户补充或需要返回父级时，"
-        "优先主动调用 submit_skill_result 或 handoff_to_parent，以便提交结构化状态。"
+        "优先主动调用 submit_frame_result 或 handoff_to_parent，以便提交结构化状态。"
         "如果只是自然语言完成或追问用户，也可以直接输出最终消息，运行时会将其归一化为子 Agent 结果。"
     )
 
@@ -436,7 +436,7 @@ def _build_recoverable_interruption_prompt(runtime_context: dict[str, Any] | Non
         "shelve_interrupted_frame，decision 设置为 ABANDON_PREVIOUS 或 "
         "START_UNRELATED_NEW_TASK，同时包含 intent_resolution 和 "
         "abandoned_interruption 摘要。若意图不明确且中断工作涉及审批或业务副作用，"
-        "使用 ASK_CLARIFICATION，并通过 submit_skill_result 向用户澄清。"
+        "使用 ASK_CLARIFICATION，并通过 submit_frame_result 向用户澄清。"
     )
     return "\n".join(parts)
 
@@ -501,7 +501,7 @@ def _build_active_plan_prompt(runtime_context: dict[str, Any] | None) -> str:
         (
             "规则: 将 active_plan 视为当前持久根 frame 的工作计划。"
             "结束本回合前，将预期结果与该计划对照。若计划仍有用且需要继续保留，"
-            "主动调用 submit_skill_result，并在 structured_output.active_plan 中保留或更新。"
+            "主动调用 submit_frame_result，并在 structured_output.active_plan 中保留或更新。"
             "若用户明确放弃该计划或开始无关任务，将 intent_resolution 设置为 "
             "ABANDON_PREVIOUS 或 START_UNRELATED_NEW_TASK，并总结被放弃的计划。"
         ),
@@ -516,7 +516,7 @@ def _build_root_planning_policy_prompt(
         return ""
     return (
         "持久根计划策略: 对复杂、多意图、多技能或需要外部协同的工作，"
-        "需要跨回合保留计划时，主动调用 submit_skill_result 并在 "
+        "需要跨回合保留计划时，主动调用 submit_frame_result 并在 "
         "structured_output.active_plan 中维护 active_plan。"
         "计划应简洁、结构化，并随工作推进更新；这是未来回合使用的工作状态，"
         "不是面向用户的叙述。"

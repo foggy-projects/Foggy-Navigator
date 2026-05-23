@@ -490,7 +490,7 @@ def test_llm_tool_audit_log_uses_session_directory(tmp_path):
         manifest,
         {
             "id": "call_submit",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {
                 "summary": "Audit complete.",
                 "structured_output": {"result": "success"},
@@ -514,7 +514,7 @@ def test_llm_tool_audit_requires_standard_context_id(tmp_path):
         "task_tool_audit",
         "frm_audit",
         "test_skill",
-        "submit_skill_result",
+        "submit_frame_result",
         {"summary": "done"},
         phase="request",
         session_id="legacy-session",

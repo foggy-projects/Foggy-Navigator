@@ -489,7 +489,7 @@ write_file
 - status: automated-mock-e2e-added; complete-through-java-navi-real-llm-smoke
 - 已补 Python 单测: 默认关闭配置、环境变量开启、默认隐藏、Windows 隐藏、未显式授权隐藏、workdir 越权拒绝、timeout、subprocess 调用参数、schema 文案。
 - 已补 Python mock LLM E2E: `test_command_tool_e2e.py` 固化 scripted `command -> assistant natural final` 闭环，避免真实 LLM smoke 成为唯一回归手段。
-- 2026-05-23 收口修正: 顶层 command E2E 已改为 `command -> assistant natural final`，避免误导为 `submit_skill_result` 是 command 的必需终止步骤；`submit_skill_result` 仅保留为 Root 结构化状态提交或 non-root Agent frame 结构化完成/暂停工具。
+- 2026-05-23 收口修正: 顶层 command E2E 已改为 `command -> assistant natural final`，避免误导为 frame result 工具是 command 的必需终止步骤；`submit_frame_result` 仅用于 Root 结构化状态提交或 non-root Agent frame 结构化完成/暂停，`submit_skill_result` 作为旧名兼容 alias 保留。
 - Python 全量回归通过: `tools/langgraph-biz-worker` pytest 结果为 `668 passed, 6 skipped`。
 - WSL 真实 smoke 通过: BizWorker 端口 3065，授权 workspace 内执行 `git init` / `git status --short` / `curl --version`，tool audit 已记录 `exit_code=0`。
 - Java 专项单测已补: LangGraph launcher 将 `allowed_tools=["read_file","write_file","patch_file","command"]`、`workdir`、`allowed_dirs` 写入 hidden `runtime_context.execution_policy`。
