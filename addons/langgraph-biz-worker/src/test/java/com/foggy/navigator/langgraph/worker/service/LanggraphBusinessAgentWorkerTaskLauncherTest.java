@@ -15,7 +15,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -148,6 +151,48 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertEquals("bctx_20260520_ab_allocated", formCaptor.getValue().getContextId());
         assertEquals("bctx_20260520_ab_allocated", formCaptor.getValue().getContext().get("contextId"));
         assertEquals("bctx_20260520_ab_allocated", formCaptor.getValue().getContext().get("context_id"));
+    }
+
+    @Test
+    void launch_generatesNavigatorContextWhenWorkerContextRouteMissing() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus("ENABLED");
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01")).thenReturn(List.of(member));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_01");
+        worker.setTenantId("tenant_01");
+        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+
+        LanggraphWorkerClient client = mock(LanggraphWorkerClient.class);
+        when(workerService.createClient(worker)).thenReturn(client);
+        when(client.allocateContext()).thenReturn(Mono.error(WebClientResponseException.create(
+                404,
+                "Not Found",
+                HttpHeaders.EMPTY,
+                new byte[0],
+                StandardCharsets.UTF_8
+        )));
+
+        LanggraphTaskDTO taskDTO = LanggraphTaskDTO.builder()
+                .taskId("lgt_01")
+                .workerId("worker_01")
+                .sessionId("session_01")
+                .build();
+        when(taskService.createTask(eq("actor_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class))).thenReturn(taskDTO);
+
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setContextId(null);
+
+        BusinessAgentWorkerTaskLaunchResult result = launcher.launch(request);
+
+        assertTrue(result.getContextId().matches("bctx_\\d{8}_[0-9a-f]{2}_[0-9a-f]{32}"));
+        ArgumentCaptor<CreateLanggraphTaskForm> formCaptor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
+        assertEquals(result.getContextId(), formCaptor.getValue().getContextId());
+        assertEquals(result.getContextId(), formCaptor.getValue().getContext().get("contextId"));
+        assertEquals(result.getContextId(), formCaptor.getValue().getContext().get("context_id"));
     }
 
     @Test

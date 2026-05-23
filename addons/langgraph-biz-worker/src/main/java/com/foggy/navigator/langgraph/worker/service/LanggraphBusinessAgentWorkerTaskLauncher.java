@@ -3,6 +3,7 @@ package com.foggy.navigator.langgraph.worker.service;
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolMemberEntity;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberRepository;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
+import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
@@ -11,8 +12,10 @@ import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Duration;
 import java.time.ZoneId;
@@ -25,6 +28,7 @@ import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWorkerTaskLauncher {
 
     private static final Duration CONTEXT_ALLOCATION_TIMEOUT = Duration.ofSeconds(10);
@@ -78,9 +82,17 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         if (StringUtils.hasText(requestedContextId)) {
             return requestedContextId.trim();
         }
-        Map<String, Object> response = workerService.createClient(worker)
-                .allocateContext()
-                .block(CONTEXT_ALLOCATION_TIMEOUT);
+        Map<String, Object> response;
+        try {
+            response = workerService.createClient(worker)
+                    .allocateContext()
+                    .block(CONTEXT_ALLOCATION_TIMEOUT);
+        } catch (WebClientResponseException.NotFound ex) {
+            String contextId = BusinessAgentSessionService.generateContextId();
+            log.info("LangGraph BizWorker does not expose context allocation route; generated contextId in Navi: workerId={}",
+                    worker.getWorkerId());
+            return contextId;
+        }
         Object contextId = response != null ? response.get("contextId") : null;
         if (contextId instanceof String text && StringUtils.hasText(text)) {
             return text.trim();

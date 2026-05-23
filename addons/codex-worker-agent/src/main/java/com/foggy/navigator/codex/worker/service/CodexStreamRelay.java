@@ -22,6 +22,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
@@ -69,7 +71,10 @@ public class CodexStreamRelay {
     private final ConcurrentHashMap<String, AtomicBoolean> reconnecting = new ConcurrentHashMap<>();
 
     @Async("sessionEventExecutor")
-    @EventListener(condition = "#event.providerType == 'codex-worker'")
+    @TransactionalEventListener(
+            phase = TransactionPhase.AFTER_COMMIT,
+            fallbackExecution = true,
+            condition = "#event.providerType == 'codex-worker'")
     public void onTaskStart(WorkerTaskStartEvent event) {
         String taskId = event.getTaskId();
         String sessionId = event.getSessionId();
