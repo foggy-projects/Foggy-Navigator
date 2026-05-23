@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     runtime_compaction_llm_enabled: bool = True
     runtime_compaction_request_timeout_seconds: float = 20.0
     runtime_compaction_execution_deadline_seconds: float = 30.0
+    enable_command: bool = False
 
     # Public Skill sync from GitLab (leave skill_git_repo empty to disable)
     skill_git_repo: str = ""            # GitLab repo URL, e.g. https://gitlab.example.com/foggy/foggy-skills.git

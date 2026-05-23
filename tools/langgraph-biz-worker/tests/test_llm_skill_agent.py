@@ -12,6 +12,7 @@ from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_state_for_tests
+from langgraph_biz_worker.runtime import command_tool
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
 from langgraph_biz_worker.runtime.context_memory import PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY
 from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
@@ -271,6 +272,82 @@ def test_llm_agent_does_not_expose_default_file_tools_without_account_scope(tmp_
 
     tool_names = _bound_tool_names(model)
     assert not ({"list_files", "read_file", "write_file", "patch_file"} & tool_names)
+
+
+def test_llm_agent_exposes_command_when_linux_enabled_and_explicitly_allowed(tmp_path, monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_command_tool_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    workdir = tmp_path / "delegated-workspace"
+    workdir.mkdir()
+    model = FakeToolCallModel([AIMessage(content="ok")])
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path).run(
+        task_id="task_command_tool_001",
+        frame_id=frame_id,
+        prompt="hi",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_tools": ["command", "submit_skill_result"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    tool_names = _bound_tool_names(model)
+    assert "command" in tool_names
+
+
+def test_llm_agent_hides_command_on_windows_or_without_explicit_allowlist(tmp_path, monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_command_tool_hidden_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    workdir = tmp_path / "delegated-workspace"
+    workdir.mkdir()
+    model = FakeToolCallModel([AIMessage(content="ok")])
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Windows")
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path).run(
+        task_id="task_command_tool_hidden_001",
+        frame_id=frame_id,
+        prompt="hi",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_tools": ["command", "submit_skill_result"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    assert "command" not in _bound_tool_names(model)
+
+    model = FakeToolCallModel([AIMessage(content="ok")])
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+    LlmSkillAgent(model, runtime, data_root=tmp_path).run(
+        task_id="task_command_tool_hidden_002",
+        frame_id=frame_id,
+        prompt="hi",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_tools": ["read_file", "submit_skill_result"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    assert "command" not in _bound_tool_names(model)
 
 
 def _root_with_child_runtime(child_context_visibility: str = "isolated", data_root=None) -> SkillRuntime:

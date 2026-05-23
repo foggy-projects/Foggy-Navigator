@@ -69,7 +69,7 @@ class ClientAppModelConfigGrantServiceTest {
     @Test
     void grantModelConfig_rejects_invalid_backend() {
         when(llmModelManager.getModelConfig("cfg-other"))
-                .thenReturn(Optional.of(model("cfg-other", "tenant-1", "CLAUDE_CODE")));
+                .thenReturn(Optional.of(model("cfg-other", "tenant-1", "OTHER_BACKEND")));
 
         assertThrows(IllegalArgumentException.class,
                 () -> service.grantModelConfig("tenant-1", "admin-1", "capp-1", grantForm("cfg-other", false)));

@@ -82,6 +82,42 @@ export interface BizWorkerPool {
   healthStatus: string;
 }
 
+export interface BizWorkerIdentity {
+  workerId: string;
+  workerBackend: string;
+  baseUrl: string;
+  version?: string;
+  status: string;
+  healthStatus: string;
+}
+
+export interface LanggraphWorker {
+  workerId: string;
+  name: string;
+  baseUrl: string;
+  authMode?: string;
+  status: string;
+  hostname?: string;
+  workerVersion?: string;
+}
+
+export interface LanggraphTask {
+  taskId: string;
+  sessionId: string;
+  workerId: string;
+  agentId: string;
+  userId: string;
+  prompt: string;
+  status: string;
+  model?: string;
+  modelConfigId?: string;
+  contextId?: string;
+  resultText?: string;
+  structuredOutput?: string;
+  errorMessage?: string;
+  durationMs?: number;
+}
+
 export interface Skill {
   skillId: string;
   tenantId: string;
@@ -139,6 +175,9 @@ export interface CreateBusinessAgentTaskRequest {
   requestedModelConfigId?: string;
   resumeFromTaskId?: string;
   clientContextJson?: string;
+  workdir?: string;
+  allowed_dirs?: string[];
+  allowed_tools?: string[];
 }
 
 export interface CreatedBusinessAgentTask {
@@ -159,6 +198,27 @@ export interface CreatedBusinessAgentTask {
   requestedModelConfigId?: string;
   status: string;
   taskScopedToken: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BusinessAgentTask {
+  taskId: string;
+  sessionId: string;
+  contextId?: string;
+  tenantId: string;
+  clientAppId: string;
+  upstreamUserId: string;
+  navigatorEffectiveUserId: string;
+  skillId: string;
+  workerPoolId: string;
+  workerTaskId?: string;
+  workerSessionId?: string;
+  workerId?: string;
+  workerProviderType?: string;
+  modelConfigId: string;
+  requestedModelConfigId?: string;
+  status: string;
   createdAt: string;
   updatedAt: string;
 }

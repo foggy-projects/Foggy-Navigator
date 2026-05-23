@@ -196,6 +196,40 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
     }
 
     @Test
+    void launch_preservesExplicitCommandExecutionPolicy() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus("ENABLED");
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01")).thenReturn(List.of(member));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_01");
+        worker.setTenantId("tenant_01");
+        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+
+        LanggraphTaskDTO taskDTO = LanggraphTaskDTO.builder()
+                .taskId("lgt_01")
+                .workerId("worker_01")
+                .sessionId("session_01")
+                .build();
+        when(taskService.createTask(eq("actor_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class))).thenReturn(taskDTO);
+
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setAllowedTools(List.of("read_file", "write_file", "patch_file", "command"));
+
+        launcher.launch(request);
+
+        ArgumentCaptor<CreateLanggraphTaskForm> formCaptor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
+        Map<String, Object> runtimeContext = formCaptor.getValue().getRuntimeContext();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
+        assertEquals("D:/workspace/app", executionPolicy.get("workdir"));
+        assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
+        assertEquals(List.of("read_file", "write_file", "patch_file", "command"), executionPolicy.get("allowed_tools"));
+    }
+
+    @Test
     void launch_rejectsMissingEnabledPoolMember() {
         BizWorkerPoolMemberEntity disabled = new BizWorkerPoolMemberEntity();
         disabled.setWorkerId("worker_01");

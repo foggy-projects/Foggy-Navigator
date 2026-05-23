@@ -452,6 +452,40 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "command": {
+        "type": "function",
+        "function": {
+            "name": "command",
+            "description": (
+                "Run a non-interactive Linux command inside the authorized workspace. "
+                "Use this only for trusted delegated workspace tasks that require tools "
+                "such as git, curl, tests, or build commands. Prefer file tools for "
+                "direct file reads and edits."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Linux shell command to run, e.g. git status --short.",
+                    },
+                    "workdir": {
+                        "type": "string",
+                        "description": "Optional directory under execution_policy.workdir. Defaults to '.'.",
+                    },
+                    "timeout_seconds": {
+                        "type": "number",
+                        "description": "Optional timeout in seconds. The worker enforces a hard cap.",
+                    },
+                    "max_output_chars": {
+                        "type": "integer",
+                        "description": "Optional stdout/stderr character cap. The worker enforces a hard cap.",
+                    },
+                },
+                "required": ["command"],
+            },
+        },
+    },
     "submit_skill_result": {
         "type": "function",
         "function": {

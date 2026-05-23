@@ -24,6 +24,7 @@ from .account_file_tools import AccountFileTools
 from .account_context_files import build_account_context_prompt
 from .account_workspace import resolve_account_workspace
 from .artifact_store import ArtifactStore
+from .command_tool import command_tool_available
 from .llm_call_guard import invoke_chat_model
 from .llm_agent_prompts import (
     _active_plan_context,
@@ -206,6 +207,10 @@ class LlmSkillAgent:
         manifest = _manifest_with_default_file_tools(
             manifest,
             file_tools_available=file_tools is not None,
+        )
+        manifest = _manifest_with_command_tool(
+            manifest,
+            command_available=command_tool_available(execution_policy),
         )
         account_context_prompt = (
             build_account_context_prompt(
@@ -804,6 +809,7 @@ class LlmSkillAgent:
             artifact_store=artifact_store,
             file_tools=file_tools,
             public_resource_tools=public_resource_tools,
+            execution_policy=execution_policy,
             persistent_frame=persistent_frame,
         )
         low_risk_result = self._tool_dispatcher.dispatch_low_risk(name, args, dispatch_context)
@@ -1336,6 +1342,23 @@ def _manifest_with_default_file_tools(
     if not changed:
         return manifest
     return manifest.model_copy(update={"allowed_tools": allowed})
+
+
+def _manifest_with_command_tool(
+    manifest: SkillManifest,
+    *,
+    command_available: bool,
+) -> SkillManifest:
+    allowed = list(manifest.allowed_tools or [])
+    if command_available:
+        if "command" in allowed:
+            return manifest
+        return manifest.model_copy(update={"allowed_tools": [*allowed, "command"]})
+
+    filtered = [tool_name for tool_name in allowed if tool_name != "command"]
+    if len(filtered) == len(allowed):
+        return manifest
+    return manifest.model_copy(update={"allowed_tools": filtered})
 
 
 # ---------------------------------------------------------------------------
