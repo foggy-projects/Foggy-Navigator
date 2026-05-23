@@ -134,11 +134,32 @@ TMS 在 `2026-05-23 11:21-11:26` 完成复测，结论：全部通过。
 
 ## 本地制品
 
-待执行 `tools\navigator-upstream-cli\dist\package.ps1` 后记录：
+已执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package.ps1
+```
+
+生成制品：
 
 1. `tools\navigator-upstream-cli\dist\output\navigator-upstream-cli-1.0.5-windows.zip`
 2. `tools\navigator-upstream-cli\dist\output\navigator-upstream-cli-1.0.5-windows.zip.sha256`
 3. `tools\navigator-upstream-cli\dist\output\BUILD_INFO.json`
+
+SHA256：
+
+```text
+858198298e2d5a0c682d6c75ac94418f39ee662125414ff5c2c43fde6c56aff1  navigator-upstream-cli-1.0.5-windows.zip
+```
+
+Build info：
+
+```text
+version: 1.0.5
+gitCommit: fd926d53e164f7eb8842a7441c02be79c267e482
+gitBranch: qd-win11/dev
+gitDirty: false
+```
 
 本次不默认上传 OBS / 制品库；如需外部分发，另行执行 `tools\navigator-upstream-cli\dist\upload.ps1` 或 `package.ps1 -Upload` 并记录发布 URL。
 
