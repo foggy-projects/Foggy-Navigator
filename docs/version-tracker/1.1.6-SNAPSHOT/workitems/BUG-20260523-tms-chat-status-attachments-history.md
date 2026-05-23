@@ -119,3 +119,27 @@ TMS 在 `2026-05-23 10:50-10:55` 复测确认：
 - `useNavigatorChat.ux.test.ts`：历史消息缺少 task 终态字段但带 stale report digest 时，回放状态归一为 `COMPLETED`。
 - `test_query.py` / `test_llm_skill_agent.py`：附件上下文提示保留安全 URL，同时明确 `attachmentRefs` 映射和禁止重复调用 `attachment.upload`。
 - `test_llm_tool_dispatcher.py`：覆盖已上传上游附件误调用 `attachment.upload` 时不会继续打到上游。
+
+## 2026-05-23 11:21 最终复测结论
+
+TMS 在 `2026-05-23 11:21-11:26` 重新执行 smoke，结论：全部通过。
+
+通过项：
+
+- `hi` 实时完成态为 `COMPLETED`，未卡 `RUNNING`。
+- 普通工单创建成功：`TKT2026052311223276294D8B0`。
+- 追问“刚才创建的那个工单”能正确查询该工单，多轮上下文正常。
+- 带 2 张图片附件工单创建成功：`TKT202605231124109988A4C7E`。
+- 刷新后从历史列表重新打开同一会话，用户消息里的 2 个附件仍可见。
+- 历史消息下方执行报告没有再显示 `RUNNING`，`reopenedRawRunningCount=0`。
+- 历史会话列表没有 `进行中` 残留，`reopenedHistoryGoingCount=0`。
+- 后端工单详情确认附件数量为 2：`retake3-a.png`、`retake3-b.png`。
+- 浏览器 console error / page error 为 0。
+
+证据：
+
+- 完整报告：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\report.json`
+- 刷新前附件截图：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\04-before-refresh-attachment.png`
+- 刷新后历史会话截图：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\06-reopened-history-session.png`
+
+状态：closed。
