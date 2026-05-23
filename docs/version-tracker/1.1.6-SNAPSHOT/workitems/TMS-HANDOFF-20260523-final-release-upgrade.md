@@ -91,6 +91,33 @@ TMS 已通过的真实复测证据：
 6. 后端附件：`retake3-a.png`、`retake3-b.png`。
 7. 浏览器 console error / page error 为 0。
 
+## TMS 发布升级回执
+
+TMS 已按本提示词完成升级并 push：
+
+```text
+a12f806e chore(navigator): upgrade assistant runtime baseline
+```
+
+最终验收结论：通过。
+
+1. `navigator-open-sdk` 已升级到 `1.0.5`。
+2. 真实 Playwright smoke 已覆盖 `/api/ai/frame-reports` 代理 `200` 校验。
+3. Readiness：`source=db`，`runtime/grant/preflight/ask` 全部 `passed`。
+4. 普通工单：`TKT20260523151609568940DCA`。
+5. 附件工单：`TKT20260523151655517BF8BA9`。
+6. 后端附件数：2，刷新后附件仍可见：2。
+7. `RUNNING` 残留：0，历史列表“进行中”残留：0。
+8. `/api/ai/frame-reports`：200。
+9. console error / page error：0 / 0。
+10. LLM timeout：0，B600 未出现。
+
+上游报告：
+
+```text
+x3-web-tms/test-results/navigator-assistant-real-s-69dfa-nt-and-history-replay-flows-chromium/report.json
+```
+
 ## 交付边界
 
 1. 本提示词面向 TMS / 上游发布验收，不要求上游读取 Navigator runtime session 目录。

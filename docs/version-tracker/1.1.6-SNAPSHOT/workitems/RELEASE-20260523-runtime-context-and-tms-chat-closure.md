@@ -143,6 +143,46 @@ TMS 在 `2026-05-23 11:21-11:26` 完成复测，结论：全部通过。
 - `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\04-before-refresh-attachment.png`
 - `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\06-reopened-history-session.png`
 
+### TMS 上游发布升级回执
+
+TMS 在 `2026-05-23` 完成 Navigator assistant runtime baseline 升级并 push。
+
+提交：
+
+```text
+a12f806e chore(navigator): upgrade assistant runtime baseline
+```
+
+本次上游变更：
+
+1. `navigator-open-sdk` 升级到 `1.0.5`。
+2. 真实 Playwright smoke 增加 `/api/ai/frame-reports` 代理 `200` 校验。
+3. 更新 TMS 验收文档：`D:\workspace\tms-x6-dev\docs\v3.2.0\navigator-assistant-smoke-acceptance-20260523.md`。
+
+上游验收结果：
+
+1. Navigator workspace：`qd-win11/dev d0981de1`，高于推荐 `e48987e9`。
+2. Navigator Upstream CLI：本地已验证 `1.0.5`。
+3. 重启服务：`x3-web-service:12580`、`tms-cloud-service:21200`、`query-cloud-service:21300`、TMS preview `3199`。
+4. Readiness：`source=db`，`runtime/grant/preflight/ask` 全部 `passed`。
+5. 真实 smoke：通过。
+6. 普通工单：`TKT20260523151609568940DCA`。
+7. 附件工单：`TKT20260523151655517BF8BA9`。
+8. 后端附件数：2。
+9. 刷新后附件仍可见：2。
+10. `RUNNING` 残留：0。
+11. 历史列表“进行中”残留：0。
+12. `/api/ai/frame-reports`：200。
+13. console error / page error：0 / 0。
+14. LLM timeout：0。
+15. B600：未出现。
+
+上游报告：
+
+```text
+x3-web-tms/test-results/navigator-assistant-real-s-69dfa-nt-and-history-replay-flows-chromium/report.json
+```
+
 ## 本地制品
 
 已执行：
