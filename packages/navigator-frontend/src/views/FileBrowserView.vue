@@ -184,6 +184,22 @@
           <button class="toolbar-btn" title="搜索内容 (Ctrl+Shift+F)" @click="openSearch('content')">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M11.7 8.3l3 3-.7.7-3-3c-.8.6-1.8 1-2.9 1C5.5 10 3.5 8 3.5 5.5S5.5 1 8 1s4.5 2 4.5 4.5c0 1-.3 2-.8 2.8zM8 9c1.9 0 3.5-1.6 3.5-3.5S9.9 2 8 2 4.5 3.6 4.5 5.5 6.1 9 8 9zM6 5h4v1H6V5z"/></svg>
           </button>
+          <div v-if="showHtmlViewToggle" class="html-view-toggle" role="group" aria-label="HTML 视图">
+            <button
+              type="button"
+              class="html-view-btn"
+              :class="{ active: htmlViewMode === 'source' }"
+              title="查看 HTML 源码"
+              @click="setHtmlViewMode('source')"
+            >源码</button>
+            <button
+              type="button"
+              class="html-view-btn"
+              :class="{ active: htmlViewMode === 'preview' }"
+              title="渲染 HTML 预览"
+              @click="setHtmlViewMode('preview')"
+            >预览</button>
+          </div>
           <el-tag v-if="currentLanguage !== 'plaintext'" size="small" type="info">{{ currentLanguage }}</el-tag>
           <span v-if="currentFileSize" class="file-size">{{ formatSize(currentFileSize) }}</span>
           <span v-if="currentLineCount" class="line-count">{{ currentLineCount }} 行</span>
@@ -214,6 +230,14 @@
         <div v-else-if="showImagePreview" class="image-preview-shell">
           <img :src="currentImagePreviewUrl" :alt="currentFilePath" class="image-preview-img" />
         </div>
+        <iframe
+          v-else-if="showHtmlPreview"
+          class="html-preview-frame"
+          :srcdoc="htmlPreviewSrcdoc"
+          sandbox=""
+          referrerpolicy="no-referrer"
+          title="HTML 预览"
+        ></iframe>
         <div v-else-if="!activeTabId && !diffMode" class="center-hint">选择文件查看内容</div>
         <div ref="editorEl" class="monaco-mount" :class="{ hidden: !showEditor }"></div>
         <div ref="diffEditorEl" class="monaco-mount" :class="{ hidden: !diffMode }"></div>
@@ -316,6 +340,8 @@ const editorEl = ref<HTMLElement>()
 const diffEditorEl = ref<HTMLElement>()
 
 // ---- Tab system -----------------------------------------------------------
+type HtmlViewMode = 'source' | 'preview'
+
 interface EditorTab {
   id: string        // fullPath as unique key
   label: string     // file name for display
@@ -324,6 +350,7 @@ interface EditorTab {
   language: string
   size: number
   lineCount: number
+  htmlViewMode?: HtmlViewMode
   previewUrl?: string
 }
 
@@ -333,6 +360,7 @@ const tabViewStates = new Map<string, import('monaco-editor').editor.ICodeEditor
 
 const openTabs = ref<EditorTab[]>([])
 const activeTabId = ref('')
+const htmlViewMode = ref<HtmlViewMode>('source')
 
 // ---- State ----------------------------------------------------------------
 const activeTab = ref<'files' | 'git'>('files')
@@ -352,13 +380,49 @@ const currentImagePreviewUrl = ref('')
 
 const showHidden = ref(true)
 
+const currentOpenTab = computed(() => openTabs.value.find(t => t.id === activeTabId.value))
+
+function isHtmlDocument(tab: EditorTab | undefined): boolean {
+  if (!tab || tab.kind !== 'text') return false
+  const path = tab.fullPath.toLowerCase()
+  return path.endsWith('.html')
+    || path.endsWith('.htm')
+    || path.endsWith('.xhtml')
+}
+
+const showHtmlViewToggle = computed(
+  () => !diffMode.value
+    && !editorLoading.value
+    && !showBinaryHint.value
+    && !showTooLargeHint.value
+    && isHtmlDocument(currentOpenTab.value),
+)
+
+const showHtmlPreview = computed(
+  () => showHtmlViewToggle.value && htmlViewMode.value === 'preview',
+)
+
+const htmlPreviewSrcdoc = computed(() => {
+  const model = activeTabId.value ? tabModels.get(activeTabId.value) : null
+  return model?.getValue() || ''
+})
+
+function setHtmlViewMode(mode: HtmlViewMode) {
+  const tab = currentOpenTab.value
+  if (!isHtmlDocument(tab)) return
+  htmlViewMode.value = mode
+  tab.htmlViewMode = mode
+  nextTick(() => editorInstance?.layout())
+}
+
 const showEditor = computed(
   () => !diffMode.value
-    && activeTabId.value
+    && !!activeTabId.value
     && !currentImagePreviewUrl.value
     && !showBinaryHint.value
     && !showTooLargeHint.value
-    && !editorLoading.value,
+    && !editorLoading.value
+    && !showHtmlPreview.value,
 )
 
 const showImagePreview = computed(
@@ -938,6 +1002,7 @@ function switchTab(id: string) {
 
   activeTabId.value = id
   currentImagePreviewUrl.value = ''
+  htmlViewMode.value = isHtmlDocument(tab) ? (tab.htmlViewMode || 'source') : 'source'
 
   if (tab.kind === 'image') {
     if (editorInstance) {
@@ -998,6 +1063,7 @@ function closeTab(id: string) {
       currentLanguage.value = 'plaintext'
       currentFileSize.value = 0
       currentLineCount.value = 0
+      htmlViewMode.value = 'source'
       if (editorInstance) {
         editorInstance.setModel(null)
       }
@@ -1024,6 +1090,7 @@ async function loadFile(fullPath: string) {
   }
   activeTabId.value = ''
   currentImagePreviewUrl.value = ''
+  htmlViewMode.value = 'source'
   showBinaryHint.value = false
   showTooLargeHint.value = false
   currentFilePath.value = fullPath
@@ -1054,6 +1121,7 @@ async function loadFile(fullPath: string) {
         openTabs.value.push(tab)
         activeTabId.value = tab.id
         currentImagePreviewUrl.value = previewUrl
+        htmlViewMode.value = 'source'
         editorLoading.value = false
         return
       }
@@ -1085,9 +1153,11 @@ async function loadFile(fullPath: string) {
       language: result.language,
       size: result.size,
       lineCount: result.line_count,
+      htmlViewMode: 'source',
     }
     openTabs.value.push(tab)
     activeTabId.value = tabId
+    htmlViewMode.value = isHtmlDocument(tab) ? (tab.htmlViewMode || 'source') : 'source'
 
     await nextTick()
     editorInstance.setModel(model)
@@ -1454,6 +1524,7 @@ watch(() => route.query.directoryId, async () => {
     openTabs.value = []
     activeTabId.value = ''
     currentImagePreviewUrl.value = ''
+    htmlViewMode.value = 'source'
     if (editorInstance) {
       editorInstance.setModel(null)
     }
@@ -1750,6 +1821,39 @@ watch([deepLinkFilePath, deepLinkLine], async ([newPath, newLine]) => {
   color: #fff;
 }
 
+.html-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 2px;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  background: #252526;
+}
+
+.html-view-btn {
+  min-width: 40px;
+  height: 20px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: #aaa;
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.html-view-btn:hover {
+  color: #fff;
+  background: #3c3c3c;
+}
+
+.html-view-btn.active {
+  color: #fff;
+  background: #0e639c;
+}
+
 /* ---- Tab bar ---- */
 .tab-bar {
   display: flex;
@@ -1833,6 +1937,15 @@ watch([deepLinkFilePath, deepLinkLine], async ([newPath, newLine]) => {
 
 .monaco-mount.hidden {
   display: none;
+}
+
+.html-preview-frame {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: #fff;
 }
 
 .center-hint {
