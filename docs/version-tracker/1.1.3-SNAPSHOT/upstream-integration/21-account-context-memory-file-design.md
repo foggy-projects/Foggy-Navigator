@@ -26,9 +26,9 @@
 accountId 级文件上下文采用三层模型，按权限和优先级从高到低排列：
 
 ```text
-<data_root>/accounts/<account-id>/ACCOUNT_POLICY.md
-<data_root>/accounts/<account-id>/AGENT.md
-<data_root>/accounts/<account-id>/MEMORY.md
+<data_root>/accounts/<account-id>/agent/ACCOUNT_POLICY.md
+<data_root>/accounts/<account-id>/agent/AGENT.md
+<data_root>/accounts/<account-id>/agent/MEMORY.md
 ```
 
 语义如下：
@@ -172,6 +172,22 @@ navi upstream account-context write-policy --upstream-user-id <id> --from ./ACCO
 4. 非法 accountId、跨账号路径、symlink、超大文件、二进制/异常内容均 fail-closed 或被限制。
 5. `ACCOUNT_POLICY.md` 不通过 LLM tool、前端 DTO 或通用账号文件工具写入。
 6. 后续写入 API 必须具备 grant 绑定、审计、乐观并发和敏感信息禁写约束。
+
+## 2026-05-24 路径收口
+
+为与主流 agent workspace 布局保持一致，account 级上下文和私有 skill 统一放在
+`<data_root>/accounts/<account-id>/agent/` 下：
+
+```text
+<data_root>/accounts/<account-id>/agent/ACCOUNT_POLICY.md
+<data_root>/accounts/<account-id>/agent/AGENT.md
+<data_root>/accounts/<account-id>/agent/MEMORY.md
+<data_root>/accounts/<account-id>/agent/skills/<skill-id>/SKILL.md
+```
+
+Java 控制面可以继续保存注册信息、做授权和物化请求；BizWorker 运行时最终只从
+`accountId` 私有目录、`clientAppId` 公共目录、全局 public/builtin 目录加载 skill，
+不再依赖 Java launch context 注入 `skill_markdown`。
 
 ## Progress Tracking
 

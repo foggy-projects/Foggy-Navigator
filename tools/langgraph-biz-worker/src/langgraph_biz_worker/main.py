@@ -34,8 +34,9 @@ async def lifespan(app: FastAPI):
     from .runtime.standalone_provider_config import build_standalone_service_config
 
     skills_root = Path(_DEFAULT_SKILLS_ROOT) if isinstance(_DEFAULT_SKILLS_ROOT, str) else _DEFAULT_SKILLS_ROOT
+    account_context_data_root = Path(_settings.data_root) if _settings.data_root else skills_root.parent / "data"
     standalone_config = build_standalone_service_config(_settings, default_skills_root=skills_root)
-    skills.configure(skills_root, on_sync_complete=_skill_registry.load)
+    skills.configure(skills_root, data_root=account_context_data_root, on_sync_complete=_skill_registry.load)
     standalone.configure(
         standalone_config.skills_root,
         data_root=standalone_config.data_root,
@@ -46,7 +47,6 @@ async def lifespan(app: FastAPI):
         llm_provider=standalone_config.llm_provider,
         on_change=lambda: _skill_registry.load(include_standalone=True),
     )
-    account_context_data_root = Path(_settings.data_root) if _settings.data_root else skills_root.parent / "data"
     account_context.configure(account_context_data_root)
 
     # Auto-sync public skills from GitLab on startup (Doc 34 §4.2)

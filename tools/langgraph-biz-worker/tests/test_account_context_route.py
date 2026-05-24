@@ -77,3 +77,58 @@ def test_only_account_policy_is_writable(tmp_path):
     )
 
     assert response.status_code == 403
+
+
+def test_ensure_creates_agent_workspace_and_initial_files(tmp_path):
+    response = _client(tmp_path).post(
+        "/api/v1/account-context/accounts/acct-001/ensure",
+        json={
+            "account_policy": "policy\n",
+            "agent": "agent note\n",
+            "memory": "memory note\n",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_root_exists"] is True
+    assert body["skills_root_exists"] is True
+
+    account_root = tmp_path / "data" / "accounts" / "acct-001" / "agent"
+    assert (account_root / "skills").is_dir()
+    assert (account_root / "ACCOUNT_POLICY.md").read_text(encoding="utf-8") == "policy\n"
+    assert (account_root / "AGENT.md").read_text(encoding="utf-8") == "agent note\n"
+    assert (account_root / "MEMORY.md").read_text(encoding="utf-8") == "memory note\n"
+
+
+def test_ensure_does_not_overwrite_existing_context_without_flag(tmp_path):
+    client = _client(tmp_path)
+    first = client.post(
+        "/api/v1/account-context/accounts/acct-001/ensure",
+        json={"memory": "v1\n"},
+    )
+    second = client.post(
+        "/api/v1/account-context/accounts/acct-001/ensure",
+        json={"memory": "v2\n"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    memory = tmp_path / "data" / "accounts" / "acct-001" / "agent" / "MEMORY.md"
+    assert memory.read_text(encoding="utf-8") == "v1\n"
+
+
+def test_ensure_overwrites_existing_context_with_flag(tmp_path):
+    client = _client(tmp_path)
+    client.post(
+        "/api/v1/account-context/accounts/acct-001/ensure",
+        json={"memory": "v1\n"},
+    )
+    response = client.post(
+        "/api/v1/account-context/accounts/acct-001/ensure",
+        json={"memory": "v2\n", "overwrite": True},
+    )
+
+    assert response.status_code == 200
+    memory = tmp_path / "data" / "accounts" / "acct-001" / "agent" / "MEMORY.md"
+    assert memory.read_text(encoding="utf-8") == "v2\n"

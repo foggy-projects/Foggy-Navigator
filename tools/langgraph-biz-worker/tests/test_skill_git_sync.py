@@ -189,6 +189,55 @@ class TestMaterializeEndpoint:
         assert (target / "references" / "functions" / "queryModel.md").read_text(encoding="utf-8") == "# queryModel\nUse model and payload."
         assert (target / "assets" / "schema.json").read_text(encoding="utf-8") == "{\"type\":\"object\"}"
 
+    async def test_materialize_account_scope_uses_configured_data_root(self, client, tmp_path):
+        from langgraph_biz_worker.routes import skills as skills_module
+        skills_root = tmp_path / "worker" / "skills"
+        data_root = tmp_path / "runtime-data"
+        skills_module.configure(skills_root, data_root=data_root)
+
+        resp = await client.post("/api/v1/skills/materialize", json={
+            "skill_id": "account-skill",
+            "scope": "account",
+            "account_id": "acct-001",
+            "markdown_body": "account private instructions",
+        })
+
+        assert resp.status_code == 200
+        target = data_root / "accounts" / "acct-001" / "agent" / "skills" / "account-skill"
+        assert (target / "SKILL.md").is_file()
+        assert not (skills_root.parent / "data" / "accounts" / "acct-001").exists()
+
+    async def test_resolve_reports_account_override_and_context_files(self, client, tmp_path):
+        from langgraph_biz_worker.routes import skills as skills_module
+        skills_root = tmp_path / "skills"
+        data_root = tmp_path / "data"
+        app_skill = skills_root / "public" / "apps" / "app_01" / "same-skill"
+        account_skill = data_root / "accounts" / "acct-001" / "agent" / "skills" / "same-skill"
+        app_skill.mkdir(parents=True)
+        account_skill.mkdir(parents=True)
+        (app_skill / "SKILL.md").write_text("---\nname: same-skill\ndescription: app version\n---\napp", encoding="utf-8")
+        (account_skill / "SKILL.md").write_text(
+            "---\nname: same-skill\ndescription: account version\n---\naccount",
+            encoding="utf-8",
+        )
+        account_root = data_root / "accounts" / "acct-001" / "agent"
+        (account_root / "MEMORY.md").write_text("remember sim", encoding="utf-8")
+        skills_module.configure(skills_root, data_root=data_root)
+
+        resp = await client.post("/api/v1/skills/resolve", json={
+            "skill_id": "same-skill",
+            "client_app_id": "app_01",
+            "account_id": "acct-001",
+        })
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["resolved"] is True
+        assert body["manifest"]["description"] == "account version"
+        assert body["locations"]["account_skill_exists"] is True
+        assert body["locations"]["client_app_public_skill_exists"] is True
+        assert body["account_context_files"]["MEMORY.md"] is True
+
     async def test_materialize_replaces_stale_bundle_resources(self, client, tmp_path):
         from langgraph_biz_worker.routes import skills as skills_module
         skills_root = tmp_path / "skills"

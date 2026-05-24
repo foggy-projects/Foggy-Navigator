@@ -234,3 +234,7 @@ Skill Bundle 的 `functions` 不创建 Business Function，也不扩大 ClientAp
 - LangGraph Biz Worker Java launcher 已把 `upstreamUserId` 同步写入 worker context 的 `upstreamUserId`、`accountId` 和 `account_id`。
 - Python root graph 在路由和执行 skill 时优先使用 context 中的 upstream account id，再回退到任务 `user_id`，避免 account private skill 被 Navigator 任务 owner 误路由。
 - `tools/langgraph-biz-worker/tests/test_account_skill_routing.py` 已补 account context 优先级测试，并通过项目 `.venv` 执行。
+- 2026-05-24 收口：Java launch context 不再承担 `skill_markdown` 注入职责；注册接口中的
+  `markdownBody` 只作为持久化与物化输入，BizWorker 每轮按 `accountId + clientAppId`
+  从本地目录重新 resolve skill。account private skill 目标目录统一为
+  `<data_root>/accounts/<account_id>/agent/skills/<skill_id>`。

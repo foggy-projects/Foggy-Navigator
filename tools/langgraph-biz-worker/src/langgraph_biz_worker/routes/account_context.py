@@ -49,13 +49,20 @@ class AccountContextFileWriteRequest(BaseModel):
     expected_sha256: str | None = None
 
 
+class AccountContextEnsureRequest(BaseModel):
+    account_policy: str | None = None
+    agent: str | None = None
+    memory: str | None = None
+    overwrite: bool = False
+
+
 @router.get("/accounts/{account_id}/files", dependencies=[Depends(verify_token)])
 async def list_account_context_files(account_id: str) -> dict:
     account_root = _account_root(account_id)
     return {
         "account_id": account_id,
         "files": [
-            _metadata(account_root, file_name).dict()
+            _metadata(account_root, file_name).model_dump()
             for file_name in ACCOUNT_CONTEXT_FILE_ORDER
         ],
     }
@@ -67,16 +74,16 @@ async def read_account_context_file(account_id: str, file_name: str) -> dict:
     file_name = _validate_file_name(file_name)
     metadata = _metadata(account_root, file_name)
     if not metadata.exists:
-        return AccountContextFileResponse(**metadata.dict(), content=None).dict()
+        return AccountContextFileResponse(**metadata.model_dump(), content=None).model_dump()
 
     path = _resolve_checked(account_root, file_name)
     content = path.read_text(encoding="utf-8", errors="replace")
     truncated = len(content.encode("utf-8")) > MAX_ACCOUNT_CONTEXT_FILE_BYTES
     if truncated:
         content = content.encode("utf-8")[:MAX_ACCOUNT_CONTEXT_FILE_BYTES].decode("utf-8", errors="replace")
-    data = metadata.dict()
+    data = metadata.model_dump()
     data["truncated"] = truncated
-    return AccountContextFileResponse(**data, content=content).dict()
+    return AccountContextFileResponse(**data, content=content).model_dump()
 
 
 @router.put("/accounts/{account_id}/files/{file_name}", dependencies=[Depends(verify_token)])
@@ -103,7 +110,47 @@ async def write_account_context_file(
 
     account_root.mkdir(parents=True, exist_ok=True)
     path.write_text(_normalize_text(content), encoding="utf-8")
-    return _metadata(account_root, file_name).dict()
+    return _metadata(account_root, file_name).model_dump()
+
+
+@router.post("/accounts/{account_id}/ensure", dependencies=[Depends(verify_token)])
+async def ensure_account_context(
+    account_id: str,
+    request: AccountContextEnsureRequest | None = None,
+) -> dict:
+    """Idempotently create the account agent workspace and optional context files."""
+    account_root = _account_root(account_id)
+    account_root.mkdir(parents=True, exist_ok=True)
+    skills_root = account_root / "skills"
+    if skills_root.exists() and skills_root.is_symlink():
+        raise HTTPException(status_code=400, detail="account skills root must not be a symlink")
+    skills_root.mkdir(parents=True, exist_ok=True)
+
+    request = request or AccountContextEnsureRequest()
+    requested_files = {
+        "ACCOUNT_POLICY.md": request.account_policy,
+        "AGENT.md": request.agent,
+        "MEMORY.md": request.memory,
+    }
+    for file_name, content in requested_files.items():
+        if content is None:
+            continue
+        _write_initial_context_file(
+            account_root,
+            file_name,
+            content,
+            overwrite=request.overwrite,
+        )
+
+    return {
+        "account_id": account_id,
+        "agent_root_exists": account_root.is_dir(),
+        "skills_root_exists": skills_root.is_dir(),
+        "files": [
+            _metadata(account_root, file_name).model_dump()
+            for file_name in ACCOUNT_CONTEXT_FILE_ORDER
+        ],
+    }
 
 
 def _account_root(account_id: str) -> Path:
@@ -153,3 +200,19 @@ def _metadata(account_root: Path, file_name: str) -> AccountContextFileMetadata:
 
 def _normalize_text(content: str) -> str:
     return content.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _write_initial_context_file(
+    account_root: Path,
+    file_name: str,
+    content: str,
+    *,
+    overwrite: bool,
+) -> None:
+    raw = content.encode("utf-8")
+    if len(raw) > MAX_WRITE_BYTES:
+        raise HTTPException(status_code=400, detail=f"{file_name} exceeds {MAX_WRITE_BYTES} bytes")
+    path = _resolve_checked(account_root, file_name)
+    if path.exists() and not overwrite:
+        return
+    path.write_text(_normalize_text(content), encoding="utf-8")
