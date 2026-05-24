@@ -99,14 +99,16 @@ class BusinessAgentTaskServiceTest {
                         "LANGGRAPH_BIZ",
                         null,
                         null,
+                        null,
                         "AGENT:CLIENT_APP"
                 ));
     }
 
     @Test
     void createTask_success() {
-        when(resourceResolver.resolveRequiredModelConfigIdForAgent(
-                eq("tenant_01"), eq("app_01"), any(), any(), eq(LlmModelCategory.GENERAL))).thenReturn("model_01");
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
         when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> {
@@ -168,8 +170,9 @@ class BusinessAgentTaskServiceTest {
         pool.setWorkerBackend("LANGGRAPH_BIZ");
 
         when(bizWorkerPoolService.requireAvailablePool("tenant_01", "pool_01")).thenReturn(pool);
-        when(resourceResolver.resolveRequiredModelConfigIdForAgent(
-                eq("tenant_01"), eq("app_01"), any(), any(), eq(LlmModelCategory.GENERAL))).thenReturn("model_01");
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
         when(resourceResolver.resolveOptionalWorkspaceForAgent(
                 eq("tenant_01"), eq("app_01"), eq("user_01"), any(), eq("dir_01")))
                 .thenReturn(Optional.of(new A2AgentResourceResolver.ResolvedWorkspaceResource(
@@ -247,7 +250,7 @@ class BusinessAgentTaskServiceTest {
                 () -> taskService.createTask("tenant_01", "actor_01", form));
 
         assertTrue(error.getMessage().contains("workdir/allowedDirs"));
-        verify(resourceResolver, never()).resolveRequiredModelConfigIdForAgent(any(), any(), any(), any(), any());
+        verify(resourceResolver, never()).resolveRequiredModelForAgent(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -298,7 +301,21 @@ class BusinessAgentTaskServiceTest {
 
         assertNotNull(result);
         assertEquals("model_01", result.getModelConfigId());
-        verify(resourceResolver, never()).resolveRequiredModelConfigIdForAgent(any(), any(), any(), any(), any());
+        verify(resourceResolver, never()).resolveRequiredModelForAgent(any(), any(), any(), any(), any(), any());
+    }
+
+    private A2AgentResourceResolver.ResolvedModelResource modelResource(
+            String modelConfigId,
+            String requestedModelVariant) {
+        return new A2AgentResourceResolver.ResolvedModelResource(
+                modelConfigId,
+                modelConfigId,
+                requestedModelVariant,
+                LlmModelCategory.GENERAL,
+                requestedModelVariant != null ? requestedModelVariant : "qwen-plus",
+                requestedModelVariant != null ? "REQUESTED_MODEL_VARIANT" : "MODEL_CONFIG_DEFAULT",
+                "LANGGRAPH_BIZ",
+                "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT");
     }
 
     @Test

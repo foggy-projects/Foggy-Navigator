@@ -48,8 +48,10 @@ public class A2AgentResourceResolver {
     public record ResolvedModelResource(
             String modelConfigId,
             String requestedModelConfigId,
+            String requestedModelVariant,
             LlmModelCategory category,
             String modelName,
+            String modelNameSource,
             String workerBackend,
             String source) {
     }
@@ -80,6 +82,7 @@ public class A2AgentResourceResolver {
             String workerPoolSource,
             String workerBackend,
             String defaultModelConfigId,
+            String defaultModelName,
             String defaultDirectoryId,
             String source) {
     }
@@ -118,9 +121,10 @@ public class A2AgentResourceResolver {
                 "WORKER_POOL:" + workerPool.getOwnerType(),
                 trimToNull(workerPool.getWorkerBackend()),
                 trimToNull(agent.getDefaultModelConfigId()),
+                trimToNull(agent.getDefaultModel()),
                 trimToNull(agent.getDefaultDirectoryId()),
                 "AGENT:" + agent.getOwnerType());
-        log.info("Resolved A2Agent resource: tenantId={}, clientAppId={}, upstreamUserId={}, agentId={}, ownerType={}, source={}, skillId={}, workerPoolId={}, workerPoolOwnerType={}, workerPoolSource={}, workerBackend={}, defaultModelConfigId={}, defaultDirectoryId={}",
+        log.info("Resolved A2Agent resource: tenantId={}, clientAppId={}, upstreamUserId={}, agentId={}, ownerType={}, source={}, skillId={}, workerPoolId={}, workerPoolOwnerType={}, workerPoolSource={}, workerBackend={}, defaultModelConfigId={}, defaultModelName={}, defaultDirectoryId={}",
                 tenantId,
                 clientAppId,
                 upstreamUserId,
@@ -133,6 +137,7 @@ public class A2AgentResourceResolver {
                 resolved.workerPoolSource(),
                 resolved.workerBackend(),
                 resolved.defaultModelConfigId(),
+                resolved.defaultModelName(),
                 resolved.defaultDirectoryId());
         return resolved;
     }
@@ -150,32 +155,51 @@ public class A2AgentResourceResolver {
                                                       String clientAppId,
                                                       String requestedModelConfigId,
                                                       LlmModelCategory category) {
+        return resolveRequiredModel(tenantId, clientAppId, requestedModelConfigId, null, null, category);
+    }
+
+    @Transactional(readOnly = true)
+    public ResolvedModelResource resolveRequiredModel(String tenantId,
+                                                      String clientAppId,
+                                                      String requestedModelConfigId,
+                                                      String requestedModelVariant,
+                                                      String defaultModelName,
+                                                      LlmModelCategory category) {
         requireText(tenantId, "tenantId is required");
         requireText(clientAppId, "clientAppId is required");
         String normalizedRequestedModelConfigId = trimToNull(requestedModelConfigId);
+        String normalizedRequestedModelVariant = trimToNull(requestedModelVariant);
         String resolvedModelConfigId = modelConfigGrantService.resolveEffectiveModelConfigId(
                 tenantId,
                 clientAppId,
                 normalizedRequestedModelConfigId,
                 category);
         LlmModelConfigDTO modelConfig = requireResolvedModelConfig(resolvedModelConfigId);
+        ModelNameResolution modelName = resolveModelName(
+                modelConfig,
+                normalizedRequestedModelVariant,
+                defaultModelName);
         ResolvedModelResource resolved = new ResolvedModelResource(
                 resolvedModelConfigId,
                 normalizedRequestedModelConfigId,
+                normalizedRequestedModelVariant,
                 category,
-                trimToNull(modelConfig.getModelName()),
+                modelName.modelName(),
+                modelName.source(),
                 trimToNull(modelConfig.getWorkerBackend()),
                 StringUtils.hasText(normalizedRequestedModelConfigId)
                         ? "REQUESTED_MODEL_GRANT"
                         : "DEFAULT_MODEL_GRANT");
-        log.info("Resolved A2Agent model resource: tenantId={}, clientAppId={}, category={}, source={}, modelConfigId={}, requestedModelConfigId={}, modelName={}, workerBackend={}",
+        log.info("Resolved A2Agent model resource: tenantId={}, clientAppId={}, category={}, source={}, modelConfigId={}, requestedModelConfigId={}, requestedModelVariant={}, modelName={}, modelNameSource={}, workerBackend={}",
                 tenantId,
                 clientAppId,
                 category,
                 resolved.source(),
                 resolved.modelConfigId(),
                 resolved.requestedModelConfigId(),
+                resolved.requestedModelVariant(),
                 resolved.modelName(),
+                resolved.modelNameSource(),
                 resolved.workerBackend());
         return resolved;
     }
@@ -200,11 +224,29 @@ public class A2AgentResourceResolver {
                                                               ResolvedAgentResource agentResource,
                                                               String requestedModelConfigId,
                                                               LlmModelCategory category) {
+        return resolveRequiredModelForAgent(
+                tenantId,
+                clientAppId,
+                agentResource,
+                requestedModelConfigId,
+                null,
+                category);
+    }
+
+    @Transactional(readOnly = true)
+    public ResolvedModelResource resolveRequiredModelForAgent(String tenantId,
+                                                              String clientAppId,
+                                                              ResolvedAgentResource agentResource,
+                                                              String requestedModelConfigId,
+                                                              String requestedModelVariant,
+                                                              LlmModelCategory category) {
         requireAgentResource(agentResource);
         ResolvedModelResource modelResource = resolveRequiredModel(
                 tenantId,
                 clientAppId,
                 requestedModelConfigId,
+                requestedModelVariant,
+                agentResource.defaultModelName(),
                 category);
         String source = resolveAgentModelSource(
                 tenantId,
@@ -214,15 +256,19 @@ public class A2AgentResourceResolver {
         ResolvedModelResource resolved = new ResolvedModelResource(
                 modelResource.modelConfigId(),
                 modelResource.requestedModelConfigId(),
+                modelResource.requestedModelVariant(),
                 modelResource.category(),
                 modelResource.modelName(),
+                modelResource.modelNameSource(),
                 modelResource.workerBackend(),
                 source);
-        log.info("Resolved A2Agent agent model binding: tenantId={}, clientAppId={}, agentId={}, modelConfigId={}, source={}",
+        log.info("Resolved A2Agent agent model binding: tenantId={}, clientAppId={}, agentId={}, modelConfigId={}, modelName={}, modelNameSource={}, source={}",
                 tenantId,
                 clientAppId,
                 agentResource.agentId(),
                 resolved.modelConfigId(),
+                resolved.modelName(),
+                resolved.modelNameSource(),
                 resolved.source());
         return resolved;
     }
@@ -248,8 +294,10 @@ public class A2AgentResourceResolver {
                     ResolvedModelResource resolved = new ResolvedModelResource(
                             modelConfigId,
                             null,
+                            null,
                             category,
                             trimToNull(modelConfig.getModelName()),
+                            "MODEL_CONFIG_DEFAULT",
                             trimToNull(modelConfig.getWorkerBackend()),
                             "DEFAULT_MODEL_GRANT");
                     log.info("Resolved optional A2Agent model resource: tenantId={}, clientAppId={}, category={}, source={}, modelConfigId={}, modelName={}, workerBackend={}",
@@ -281,8 +329,10 @@ public class A2AgentResourceResolver {
                         return Optional.of(new ResolvedModelResource(
                                 modelResource.modelConfigId(),
                                 modelResource.requestedModelConfigId(),
+                                modelResource.requestedModelVariant(),
                                 modelResource.category(),
                                 modelResource.modelName(),
+                                modelResource.modelNameSource(),
                                 modelResource.workerBackend(),
                                 source));
                     } catch (SecurityException e) {
@@ -596,6 +646,48 @@ public class A2AgentResourceResolver {
     private LlmModelConfigDTO requireResolvedModelConfig(String modelConfigId) {
         return llmModelManager.getModelConfig(modelConfigId)
                 .orElseThrow(() -> new IllegalStateException("resolved model config not found: " + modelConfigId));
+    }
+
+    private ModelNameResolution resolveModelName(
+            LlmModelConfigDTO modelConfig,
+            String requestedModelVariant,
+            String defaultModelName) {
+        String requested = trimToNull(requestedModelVariant);
+        String agentDefault = trimToNull(defaultModelName);
+        String configDefault = trimToNull(modelConfig.getModelName());
+        String effective = requested != null
+                ? requested
+                : (agentDefault != null ? agentDefault : configDefault);
+        String source = requested != null
+                ? "REQUESTED_MODEL_VARIANT"
+                : (agentDefault != null ? "AGENT_DEFAULT_MODEL" : "MODEL_CONFIG_DEFAULT");
+        validateModelNameAllowed(modelConfig, effective);
+        return new ModelNameResolution(effective, source);
+    }
+
+    private void validateModelNameAllowed(LlmModelConfigDTO modelConfig, String effectiveModelName) {
+        String normalized = trimToNull(effectiveModelName);
+        if (normalized == null) {
+            return;
+        }
+        List<String> availableModels = modelConfig.getAvailableModels();
+        if (availableModels == null || availableModels.isEmpty()) {
+            return;
+        }
+        boolean allowed = availableModels.stream()
+                .map(this::trimToNull)
+                .anyMatch(normalized::equals);
+        if (!allowed) {
+            String configDefault = trimToNull(modelConfig.getModelName());
+            allowed = normalized.equals(configDefault);
+        }
+        if (!allowed) {
+            throw new IllegalArgumentException("modelVariant is not allowed by model config availableModels: "
+                    + normalized);
+        }
+    }
+
+    private record ModelNameResolution(String modelName, String source) {
     }
 
     private String resolveWorkdir(WorkingDirectoryEntity directory) {

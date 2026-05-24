@@ -24,6 +24,8 @@ public class BusinessAgentTaskDTO {
     private String workerProviderType;
     private String modelConfigId;
     private String requestedModelConfigId;
+    private String model;
+    private String requestedModelVariant;
     private String status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -49,6 +51,8 @@ public class BusinessAgentTaskDTO {
         dto.setWorkerProviderType(entity.getWorkerProviderType());
         dto.setModelConfigId(entity.getModelConfigId());
         dto.setRequestedModelConfigId(entity.getRequestedModelConfigId());
+        dto.setModel(entity.getModel());
+        dto.setRequestedModelVariant(entity.getRequestedModelVariant());
         dto.setStatus(entity.getStatus());
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());

@@ -17,6 +17,7 @@ import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
@@ -817,14 +818,58 @@ class OpenApiControllerMessageMappingTest {
         ObjectProvider<ClientAppControlCredentialService> controlCredentialProvider = mock(ObjectProvider.class);
         when(controlCredentialProvider.getIfAvailable()).thenReturn(null);
         A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
-        when(resourceResolver.resolveRequiredModelConfigId(
+        when(resourceResolver.resolveRequiredAgent(
                 any(String.class),
                 any(String.class),
                 nullable(String.class),
+                any(String.class)))
+                .thenAnswer(invocation -> {
+                    String agentId = invocation.getArgument(3, String.class);
+                    return new A2AgentResourceResolver.ResolvedAgentResource(
+                            agentId,
+                            ResourceOwnerType.CLIENT_APP,
+                            "app-1",
+                            "app-1",
+                            agentId,
+                            "pool-1",
+                            ResourceOwnerType.PLATFORM,
+                            "tenant-1",
+                            "WORKER_POOL:PLATFORM",
+                            "LANGGRAPH_BIZ",
+                            "model-default",
+                            null,
+                            null,
+                            "AGENT:CLIENT_APP");
+                });
+        when(resourceResolver.resolveRequiredModelForAgent(
+                any(String.class),
+                any(String.class),
+                any(A2AgentResourceResolver.ResolvedAgentResource.class),
+                nullable(String.class),
+                nullable(String.class),
                 eq(LlmModelCategory.GENERAL)))
                 .thenAnswer(invocation -> {
-                    String requested = invocation.getArgument(2, String.class);
-                    return requested != null && !requested.isBlank() ? requested : "model-default";
+                    String requestedModelConfigId = invocation.getArgument(3, String.class);
+                    String requestedModelVariant = invocation.getArgument(4, String.class);
+                    String modelConfigId = requestedModelConfigId != null && !requestedModelConfigId.isBlank()
+                            ? requestedModelConfigId
+                            : "model-default";
+                    String modelName = requestedModelVariant != null && !requestedModelVariant.isBlank()
+                            ? requestedModelVariant
+                            : "qwen-plus";
+                    return new A2AgentResourceResolver.ResolvedModelResource(
+                            modelConfigId,
+                            requestedModelConfigId,
+                            requestedModelVariant,
+                            LlmModelCategory.GENERAL,
+                            modelName,
+                            requestedModelVariant != null && !requestedModelVariant.isBlank()
+                                    ? "REQUESTED_MODEL_VARIANT"
+                                    : "MODEL_CONFIG_DEFAULT",
+                            "LANGGRAPH_BIZ",
+                            requestedModelConfigId != null && !requestedModelConfigId.isBlank()
+                                    ? "AGENT_MODEL_BINDING:REQUESTED_MODEL_GRANT"
+                                    : "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT");
                 });
         ObjectProvider<A2AgentResourceResolver> resourceResolverProvider = mock(ObjectProvider.class);
         when(resourceResolverProvider.getIfAvailable()).thenReturn(resourceResolver);

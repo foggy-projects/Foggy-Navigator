@@ -74,15 +74,20 @@ class OpenApiAgentReadinessServiceTest {
         when(clientAppService.requireActiveClientApp("tenant_1", "capp_1")).thenReturn(app);
         when(agentResolver.resolveAgent(eq("world-sim.bug-coordinator.decision.v1"), any(AgentResolveContext.class)))
                 .thenReturn(Optional.of(mock(A2aAgent.class)));
-        when(resourceResolver.resolveRequiredModelForAgent(eq("tenant_1"), eq("capp_1"), any(), nullable(String.class), any()))
+        when(resourceResolver.resolveRequiredModelForAgent(eq("tenant_1"), eq("capp_1"), any(), nullable(String.class), nullable(String.class), any()))
                 .thenAnswer(invocation -> {
                     String requestedModelConfigId = invocation.getArgument(3, String.class);
-                    LlmModelCategory category = invocation.getArgument(4, LlmModelCategory.class);
+                    String requestedModelVariant = invocation.getArgument(4, String.class);
+                    LlmModelCategory category = invocation.getArgument(5, LlmModelCategory.class);
                     return new A2AgentResourceResolver.ResolvedModelResource(
                             requestedModelConfigId != null ? requestedModelConfigId : "model_default",
                             requestedModelConfigId,
+                            requestedModelVariant,
                             category,
-                            requestedModelConfigId != null ? requestedModelConfigId + "-name" : "model_default-name",
+                            requestedModelVariant != null
+                                    ? requestedModelVariant
+                                    : (requestedModelConfigId != null ? requestedModelConfigId + "-name" : "model_default-name"),
+                            requestedModelVariant != null ? "REQUESTED_MODEL_VARIANT" : "MODEL_CONFIG_DEFAULT",
                             "LANGGRAPH_BIZ",
                             requestedModelConfigId != null
                                     ? "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT"
@@ -103,6 +108,7 @@ class OpenApiAgentReadinessServiceTest {
                             "WORKER_POOL:UPSTREAM_SYSTEM",
                             "LANGGRAPH_BIZ",
                             "model_1",
+                            "qwen-plus",
                             null,
                             "AGENT:CLIENT_APP");
                 });

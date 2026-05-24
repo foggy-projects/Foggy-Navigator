@@ -69,6 +69,7 @@ public class OpenApiAgentReadinessService {
         result.setAgentCode(agentId);
         result.setUpstreamUserId(safeForm.getUpstreamUserId());
         result.setRequestedModelConfigId(safeForm.getModelConfigId());
+        result.setRequestedModelVariant(safeForm.getModelVariant());
 
         ClientAppEntity app = clientAppService.requireActiveClientApp(
                 credential.getTenantId(), credential.getClientAppId());
@@ -120,6 +121,7 @@ public class OpenApiAgentReadinessService {
                     credential.getClientAppId(),
                     agentResourceRef[0],
                     requestedModelConfigId,
+                    safeForm.getModelVariant(),
                     LlmModelCategory.GENERAL);
             result.setEffectiveModelConfigId(modelResource.modelConfigId());
             result.setEffectiveModelName(modelResource.modelName());
@@ -172,6 +174,7 @@ public class OpenApiAgentReadinessService {
             result.setEffectiveWorkerBackend(agentResource.workerBackend());
         }
         result.setDefaultModelConfigId(agentResource.defaultModelConfigId());
+        result.setDefaultModelName(agentResource.defaultModelName());
         result.setDefaultDirectoryId(agentResource.defaultDirectoryId());
     }
 

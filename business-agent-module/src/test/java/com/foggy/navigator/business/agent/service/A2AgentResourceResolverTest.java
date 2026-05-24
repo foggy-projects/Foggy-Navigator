@@ -81,8 +81,10 @@ class A2AgentResourceResolverTest {
 
         assertEquals("cfg-requested", result.modelConfigId());
         assertEquals("cfg-requested", result.requestedModelConfigId());
+        assertNull(result.requestedModelVariant());
         assertEquals(LlmModelCategory.GENERAL, result.category());
         assertEquals("cfg-requested-name", result.modelName());
+        assertEquals("MODEL_CONFIG_DEFAULT", result.modelNameSource());
         assertEquals("LANGGRAPH_BIZ", result.workerBackend());
         assertEquals("REQUESTED_MODEL_GRANT", result.source());
     }
@@ -99,7 +101,39 @@ class A2AgentResourceResolverTest {
         assertEquals("cfg-default", result.modelConfigId());
         assertNull(result.requestedModelConfigId());
         assertEquals("cfg-default-name", result.modelName());
+        assertEquals("MODEL_CONFIG_DEFAULT", result.modelNameSource());
         assertEquals("DEFAULT_MODEL_GRANT", result.source());
+    }
+
+    @Test
+    void resolveRequiredModel_uses_requested_model_variant_when_allowed() {
+        when(modelConfigGrantService.resolveEffectiveModelConfigId(
+                "tenant-1", "capp-1", "cfg-1", LlmModelCategory.GENERAL))
+                .thenReturn("cfg-1");
+        when(llmModelManager.getModelConfig("cfg-1"))
+                .thenReturn(Optional.of(model("cfg-1", List.of("sonnet", "opus"))));
+
+        ResolvedModelResource result = resolver.resolveRequiredModel(
+                "tenant-1", "capp-1", "cfg-1", " opus ", null, LlmModelCategory.GENERAL);
+
+        assertEquals("opus", result.modelName());
+        assertEquals("opus", result.requestedModelVariant());
+        assertEquals("REQUESTED_MODEL_VARIANT", result.modelNameSource());
+    }
+
+    @Test
+    void resolveRequiredModel_rejects_requested_model_variant_outside_available_models() {
+        when(modelConfigGrantService.resolveEffectiveModelConfigId(
+                "tenant-1", "capp-1", "cfg-1", LlmModelCategory.GENERAL))
+                .thenReturn("cfg-1");
+        when(llmModelManager.getModelConfig("cfg-1"))
+                .thenReturn(Optional.of(model("cfg-1", List.of("sonnet", "opus"))));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                resolver.resolveRequiredModel(
+                        "tenant-1", "capp-1", "cfg-1", "haiku", null, LlmModelCategory.GENERAL));
+
+        assertTrue(error.getMessage().contains("modelVariant is not allowed"));
     }
 
     @Test
@@ -496,10 +530,15 @@ class A2AgentResourceResolverTest {
     }
 
     private LlmModelConfigDTO model(String modelConfigId) {
+        return model(modelConfigId, null);
+    }
+
+    private LlmModelConfigDTO model(String modelConfigId, List<String> availableModels) {
         LlmModelConfigDTO dto = new LlmModelConfigDTO();
         dto.setId(modelConfigId);
         dto.setModelName(modelConfigId + "-name");
         dto.setWorkerBackend("LANGGRAPH_BIZ");
+        dto.setAvailableModels(availableModels);
         return dto;
     }
 
@@ -548,6 +587,7 @@ class A2AgentResourceResolverTest {
                 "WORKER_POOL:PLATFORM",
                 "LANGGRAPH_BIZ",
                 defaultModelConfigId,
+                null,
                 defaultDirectoryId,
                 "AGENT:CLIENT_APP");
     }

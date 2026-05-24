@@ -19,6 +19,8 @@ public class CreateBusinessAgentTaskForm {
     private String skillName;
     private String workerPoolId;
     private String requestedModelConfigId;
+    @JsonAlias({"model", "modelName", "model_name", "model_variant"})
+    private String modelVariant;
     private String resumeFromTaskId;
     private String clientContextJson;
     @JsonAlias({"workDir", "working_dir", "workingDirectory", "working_directory"})
@@ -46,6 +48,8 @@ public class CreateBusinessAgentTaskForm {
     public void setWorkerPoolId(String workerPoolId) { this.workerPoolId = workerPoolId; }
     public String getRequestedModelConfigId() { return requestedModelConfigId; }
     public void setRequestedModelConfigId(String requestedModelConfigId) { this.requestedModelConfigId = requestedModelConfigId; }
+    public String getModelVariant() { return modelVariant; }
+    public void setModelVariant(String modelVariant) { this.modelVariant = modelVariant; }
     public String getResumeFromTaskId() { return resumeFromTaskId; }
     public void setResumeFromTaskId(String resumeFromTaskId) { this.resumeFromTaskId = resumeFromTaskId; }
     public String getClientContextJson() { return clientContextJson; }

@@ -2140,7 +2140,7 @@ internalWorkerPoolId
 3. `A2AgentResourceResolver` 当前仍先从 Agent 默认 WorkerPool 选择 launcher，再解析模型；尚未从 `LlmConfigModel.workerBackend + WorkingDirectory.workerId` 推导 route。
 4. `owner-smoke` / readiness 已补 `effectiveModelName`、`effectiveWorkerBackend`、`effectivePhysicalWorkerId` 和 `internalWorkerPoolId`；`workerPoolId` 保留为 internal route debug 字段。
 5. 前端 Worker 页面文案已调整为“物理 Worker + backend capability”的表达，Agent 页面补充“LLM 配置决定 backend，工作目录决定物理 Worker”的提示。
-6. request-level `modelVariant` / Agent `defaultModelName` 进入 resolver 的 API 字段仍需后续单独补齐；当前 Phase 1 先输出 `LlmConfigModel.modelName` 作为 `effectiveModelName`。
+6. request-level `modelVariant` / Agent `defaultModelName` 已进入 resolver；当前任务落库会固定 `modelConfigId + effectiveModelName`，继续同一 task / context 不允许切换具体模型名。
 
 后续实施顺序建议：
 
@@ -2175,6 +2175,42 @@ internalWorkerPoolId
 3. Navigator Open SDK / CLI 同步 DTO 与输出；主帮助把 `worker-pool` 降级为 internal compatibility 命令。
 4. 前端 Worker / Agent 表单文案完成 PhysicalWorker/backend capability 口径调整。
 5. 本地 `navigator-upstream-cli` skill 已同步：标准上游 bootstrap 不再要求创建或选择 WorkerPool。
+
+## 36. Phase 24 Agent Model Variant Runtime Contract Checkpoint
+
+2026-05-24 在 Phase 23 的资源治理口径上补齐 request-level 模型变体和 Agent 默认模型名的运行时落地。
+
+上游契约：
+
+1. `LlmConfigModel` 仍是模型配置、credential、budget preset 和 backend 的边界。
+2. `modelVariant` 只表示同一个 `LlmConfigModel` 下的具体模型名，例如 `sonnet`、`opus`、`opus[1m]`、`codex-mini`。
+3. `modelVariant` 不能改变 `workerBackend`，也不能越过 `availableModels` allowlist。
+4. 新 task 首次请求可以传 `modelConfigId` / `modelVariant` 覆盖 Agent 默认值；继续同一 task / context 时不能切换。
+5. 上游常规调用仍推荐只传 `agentId`，让 Agent 作为稳定 runtime profile 绑定默认模型、默认目录和策略。
+
+解析优先级：
+
+```text
+request.modelVariant / request.model / request.modelName
+  -> Agent.defaultModelName
+  -> LlmConfigModel.modelName
+```
+
+本轮代码落地：
+
+1. `CreateBusinessAgentTaskForm`、`AgentReadinessPreflightForm`、OpenAPI `ask` form、Open SDK 和 CLI 均支持 `modelVariant`；同时兼容 `model` / `modelName` / `model_name` / `model_variant` alias。
+2. `A2AgentResourceResolver.ResolvedModelResource` 输出 `requestedModelVariant`、`modelName`、`modelNameSource`，并校验 `availableModels`。
+3. `BusinessAgentTaskEntity` / DTO 落库 `model` 与 `requestedModelVariant`，task 创建后冻结有效模型名；resume 请求若传入不同模型变体会 fail-fast。
+4. OpenAPI readiness / owner-smoke / CLI 输出补充 `requestedModelVariant`、`defaultModelName` 和有效模型名来源信息。
+5. LangGraph Biz Worker launch form 接收冻结后的 `model`，确保 Worker 侧使用 task 固定模型而不是重新根据当前默认值解析。
+
+验证：
+
+```powershell
+mvn -pl business-agent-module,addons/claude-worker-agent,addons/langgraph-biz-worker,navigator-open-sdk -am "-Dtest=A2AgentResourceResolverTest,BusinessAgentTaskServiceTest,OpenApiAgentReadinessServiceTest,OpenApiControllerMessageMappingTest,LanggraphBusinessAgentWorkerTaskLauncherTest,UpstreamCliTest,AgentApiAttachmentTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+```
+
+结果：144 tests passed，0 failures，0 errors。
 
 不进入本 checkpoint：
 

@@ -10,7 +10,9 @@ public class AgentReadiness {
     private String agentCode;
     private String upstreamUserId;
     private String requestedModelConfigId;
+    private String requestedModelVariant;
     private String defaultModelConfigId;
+    private String defaultModelName;
     private String effectiveModelConfigId;
     private String effectiveModelName;
     private String effectiveWorkerBackend;
@@ -61,8 +63,14 @@ public class AgentReadiness {
     public String getRequestedModelConfigId() { return requestedModelConfigId; }
     public void setRequestedModelConfigId(String requestedModelConfigId) { this.requestedModelConfigId = requestedModelConfigId; }
 
+    public String getRequestedModelVariant() { return requestedModelVariant; }
+    public void setRequestedModelVariant(String requestedModelVariant) { this.requestedModelVariant = requestedModelVariant; }
+
     public String getDefaultModelConfigId() { return defaultModelConfigId; }
     public void setDefaultModelConfigId(String defaultModelConfigId) { this.defaultModelConfigId = defaultModelConfigId; }
+
+    public String getDefaultModelName() { return defaultModelName; }
+    public void setDefaultModelName(String defaultModelName) { this.defaultModelName = defaultModelName; }
 
     public String getEffectiveModelConfigId() { return effectiveModelConfigId; }
     public void setEffectiveModelConfigId(String effectiveModelConfigId) { this.effectiveModelConfigId = effectiveModelConfigId; }

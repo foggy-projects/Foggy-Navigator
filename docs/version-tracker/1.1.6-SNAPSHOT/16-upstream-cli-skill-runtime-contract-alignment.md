@@ -97,7 +97,15 @@ CLI / SDK 已补齐 A2Agent 资源绑定控制面，运行时不再只依赖 Age
 1. `NAVI_ADMIN_API_KEY` 是 `UpstreamSystemPrincipal` 的可轮换凭据，用于 system-owned Agent、共享模型、共享工作目录、PhysicalWorker/backend capability，以及为其可管理 ClientApp 签发 runtime credential / control credential。
 2. `NAVI_CONTROL_API_KEY` 是 `UpstreamClientApp` 的控制面凭据，用于 ClientApp-owned Agent 和该 ClientApp 范围内的模型、目录、Agent binding。
 3. Upstream user token 只进入 runtime ask / sessions / account-context，不参与资源创建与绑定。
-4. `ask` / `clientContext` 不允许临时携带模型、目录、WorkerPool、backend route 或裸 filesystem path 作为授权绕过；只能携带业务元数据。
+4. `ask` / `clientContext` 不允许临时携带模型、目录、WorkerPool、backend route 或裸 filesystem path 作为授权绕过；只能携带业务元数据。新 task 如需选择模型，必须使用显式 `--model-config-id` / `--model-variant` 参数，而不是塞进 `clientContext`。
+
+模型变体边界：
+
+1. `NAVI_MODEL_CONFIG_ID` / `--model-config-id` 选择同一个 Agent policy 允许的模型配置。
+2. `NAVI_MODEL_VARIANT` / `--model-variant` 只选择该配置下的具体模型名，例如 `sonnet`、`opus`、`codex-mini`。
+3. `modelVariant` 不能改变 `LlmConfigModel.workerBackend`，也必须在 `availableModels` allowlist 内。
+4. 同一 task / context 继续调用时，Navigator 使用 task 已冻结的 `modelConfigId + effectiveModelName`；即使请求再次传入不同 `modelVariant` 也会 fail-fast。
+5. 推荐上游把常用组合固化成不同 Agent，正常 ask 只传 `agentId` 和用户消息。
 
 上游发布前推荐执行：
 

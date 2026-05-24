@@ -77,9 +77,11 @@ public class BusinessAgentTaskService {
         skillRegistryService.checkClientAppSkillAccess(tenantId, form.getClientAppId(), agentResource.skillId());
 
         String finalModelConfigId;
+        String finalModelName;
         String finalVisionModelConfigId;
         BusinessAgentTaskEntity existingResumeTask = null;
         String explicitRequestedModelConfigId = trimToNull(form.getRequestedModelConfigId());
+        String explicitRequestedModelVariant = trimToNull(form.getModelVariant());
         String requestedModelConfigId = resolveRequestedModelConfigId(form, agentResource);
 
         if (StringUtils.hasText(form.getResumeFromTaskId())) {
@@ -98,16 +100,25 @@ public class BusinessAgentTaskService {
                 !explicitRequestedModelConfigId.equals(existingResumeTask.getModelConfigId())) {
                 throw new IllegalArgumentException("cannot change modelConfigId when resuming task");
             }
+            if (StringUtils.hasText(explicitRequestedModelVariant) &&
+                StringUtils.hasText(existingResumeTask.getModel()) &&
+                !explicitRequestedModelVariant.equals(existingResumeTask.getModel())) {
+                throw new IllegalArgumentException("cannot change modelVariant when resuming task");
+            }
             finalModelConfigId = existingResumeTask.getModelConfigId();
+            finalModelName = existingResumeTask.getModel();
             finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId(), agentResource);
         } else {
             // 4, 5, 6. 新建 task 时必须调用 resolveEffectiveModelConfigId
-            finalModelConfigId = resourceResolver.resolveRequiredModelConfigIdForAgent(
+            A2AgentResourceResolver.ResolvedModelResource modelResource = resourceResolver.resolveRequiredModelForAgent(
                     tenantId,
                     form.getClientAppId(),
                     agentResource,
                     requestedModelConfigId,
+                    explicitRequestedModelVariant,
                     LlmModelCategory.GENERAL);
+            finalModelConfigId = modelResource.modelConfigId();
+            finalModelName = modelResource.modelName();
             finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId(), agentResource);
         }
         A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource = resolveWorkspaceResource(
@@ -130,6 +141,8 @@ public class BusinessAgentTaskService {
         task.setDirectoryId(workspaceResource != null ? workspaceResource.directoryId() : null);
         task.setModelConfigId(finalModelConfigId);
         task.setRequestedModelConfigId(form.getRequestedModelConfigId());
+        task.setModel(finalModelName);
+        task.setRequestedModelVariant(explicitRequestedModelVariant);
         task.setStatus(STATUS_CREATED);
         task = taskRepository.save(task);
 
@@ -201,6 +214,8 @@ public class BusinessAgentTaskService {
         dto.setWorkerProviderType(baseDto.getWorkerProviderType());
         dto.setModelConfigId(baseDto.getModelConfigId());
         dto.setRequestedModelConfigId(baseDto.getRequestedModelConfigId());
+        dto.setModel(baseDto.getModel());
+        dto.setRequestedModelVariant(baseDto.getRequestedModelVariant());
         dto.setStatus(baseDto.getStatus());
         dto.setCreatedAt(baseDto.getCreatedAt());
         dto.setUpdatedAt(baseDto.getUpdatedAt());
@@ -388,6 +403,7 @@ public class BusinessAgentTaskService {
                         .workerPoolId(task.getWorkerPoolId())
                         .workerBackend(workerPool.getWorkerBackend())
                         .modelConfigId(task.getModelConfigId())
+                        .model(task.getModel())
                         .visionModelConfigId(visionModelConfigId)
                         .directoryId(workspaceResource != null ? workspaceResource.directoryId() : null)
                         .workspaceScope(workspaceResource != null ? workspaceResource.workspaceScope().name() : null)

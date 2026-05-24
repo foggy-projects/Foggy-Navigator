@@ -66,6 +66,12 @@ public class BusinessAgentTaskEntity {
     @Column(length = 64)
     private String requestedModelConfigId;
 
+    @Column(length = 128)
+    private String model;
+
+    @Column(length = 128)
+    private String requestedModelVariant;
+
     @Column(length = 32, nullable = false)
     private String status;
 

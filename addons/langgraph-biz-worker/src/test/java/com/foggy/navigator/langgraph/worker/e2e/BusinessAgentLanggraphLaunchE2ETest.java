@@ -34,6 +34,7 @@ import com.foggy.navigator.common.enums.WorkspaceScope;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
@@ -46,6 +47,7 @@ import com.foggy.navigator.langgraph.worker.service.LanggraphStreamRelay;
 import com.foggy.navigator.langgraph.worker.service.LanggraphTaskService;
 import com.foggy.navigator.langgraph.worker.service.LanggraphWorkerService;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -96,6 +98,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
     @Mock private ClientAppService clientAppService;
     @Mock private BizWorkerPoolService bizWorkerPoolService;
     @Mock private ClientAppModelConfigGrantService modelGrantService;
+    @Mock private LlmModelManager llmModelManager;
     @Mock private WorkingDirectoryRepository workingDirectoryRepository;
     @Mock private BusinessCodingAgentRepository agentRepository;
     @Mock private BizWorkerPoolRepository poolRepository;
@@ -138,6 +141,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
         );
         resourceResolver = new A2AgentResourceResolver(
                 modelGrantService,
+                llmModelManager,
                 clientAppService,
                 workingDirectoryRepository,
                 agentRepository,
@@ -343,6 +347,13 @@ class BusinessAgentLanggraphLaunchE2ETest {
 
         when(modelGrantService.resolveEffectiveModelConfigId(TENANT, CLIENT_APP_ID, MODEL_CONFIG_ID, LlmModelCategory.GENERAL))
                 .thenReturn(MODEL_CONFIG_ID);
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setId(MODEL_CONFIG_ID);
+        modelConfig.setTenantId(TENANT);
+        modelConfig.setCategory(LlmModelCategory.GENERAL);
+        modelConfig.setModelName("qwen-plus");
+        modelConfig.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        when(llmModelManager.getModelConfig(MODEL_CONFIG_ID)).thenReturn(Optional.of(modelConfig));
         ClientAppEntity clientApp = new ClientAppEntity();
         clientApp.setTenantId(TENANT);
         clientApp.setClientAppId(CLIENT_APP_ID);

@@ -14,7 +14,9 @@ public class AgentReadinessDTO {
     private String agentCode;
     private String upstreamUserId;
     private String requestedModelConfigId;
+    private String requestedModelVariant;
     private String defaultModelConfigId;
+    private String defaultModelName;
     private String effectiveModelConfigId;
     private String effectiveModelName;
     private String effectiveWorkerBackend;

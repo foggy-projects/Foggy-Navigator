@@ -63,6 +63,7 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         String contextId = resolveContextId(worker, request.getContextId());
         form.setContextId(contextId);
         form.setModelConfigId(request.getModelConfigId());
+        form.setModel(request.getModel());
         form.setPrompt("Business Agent task " + request.getBusinessTaskId()
                 + ". Use the business function tools when user intent requires controlled business execution.");
         form.setContext(buildContext(request, skillName, contextId));

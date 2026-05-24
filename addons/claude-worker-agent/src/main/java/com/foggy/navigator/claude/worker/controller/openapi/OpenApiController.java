@@ -399,12 +399,25 @@ public class OpenApiController {
                 contextId,
                 requestedContextId);
 
-        String requestedModelConfigId = extractRequestedModelConfigId(form);
-        String modelConfigId = requireA2AgentResourceResolver().resolveRequiredModelConfigId(
+        A2AgentResourceResolver resourceResolver = requireA2AgentResourceResolver();
+        A2AgentResourceResolver.ResolvedAgentResource agentResource = resourceResolver.resolveRequiredAgent(
                 tenantId,
                 clientAppCredential.getClientAppId(),
-                requestedModelConfigId,
+                upstreamUserId,
+                route.agentId());
+        String requestedModelConfigId = extractRequestedModelConfigId(form);
+        String requestedModelVariant = extractRequestedModelVariant(form);
+        String effectiveRequestedModelConfigId = StringUtils.hasText(requestedModelConfigId)
+                ? requestedModelConfigId
+                : agentResource.defaultModelConfigId();
+        A2AgentResourceResolver.ResolvedModelResource modelResource = resourceResolver.resolveRequiredModelForAgent(
+                tenantId,
+                clientAppCredential.getClientAppId(),
+                agentResource,
+                effectiveRequestedModelConfigId,
+                requestedModelVariant,
                 LlmModelCategory.GENERAL);
+        String modelConfigId = modelResource.modelConfigId();
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId)
                 .modelConfigId(modelConfigId)
@@ -423,6 +436,12 @@ public class OpenApiController {
         }
         if (StringUtils.hasText(modelConfigId)) {
             metadata.put("modelConfigId", modelConfigId);
+        }
+        if (StringUtils.hasText(modelResource.modelName())) {
+            metadata.put("model", modelResource.modelName());
+        }
+        if (StringUtils.hasText(modelResource.requestedModelVariant())) {
+            metadata.put("requestedModelVariant", modelResource.requestedModelVariant());
         }
         metadata.remove("runtimeContext");
         metadata.remove("runtime_context");
@@ -484,6 +503,25 @@ public class OpenApiController {
         }
         Object value = form.getMetadata() != null ? form.getMetadata().get("modelConfigId") : null;
         return value instanceof String text && StringUtils.hasText(text) ? text : null;
+    }
+
+    private String extractRequestedModelVariant(OpenApiQueryForm form) {
+        if (form == null) {
+            return null;
+        }
+        if (StringUtils.hasText(form.getModelVariant())) {
+            return form.getModelVariant();
+        }
+        if (form.getMetadata() == null || form.getMetadata().isEmpty()) {
+            return null;
+        }
+        for (String key : List.of("modelVariant", "model", "modelName", "model_name", "model_variant")) {
+            Object value = form.getMetadata().get(key);
+            if (value instanceof String text && StringUtils.hasText(text)) {
+                return text;
+            }
+        }
+        return null;
     }
 
     private A2AgentResourceResolver requireA2AgentResourceResolver() {

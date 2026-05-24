@@ -22,6 +22,8 @@ public class CreateBusinessAgentTaskForm {
     private String skillName;
     private String workerPoolId;
     private String requestedModelConfigId;
+    @JsonAlias({"model", "modelName", "model_name", "model_variant"})
+    private String modelVariant;
     @JsonAlias({"workingDirectoryId", "working_directory_id", "directory_id"})
     private String directoryId;
     private String resumeFromTaskId;

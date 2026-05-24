@@ -21,6 +21,7 @@ public class BusinessAgentWorkerTaskLaunchRequest {
     private String workerPoolId;
     private String workerBackend;
     private String modelConfigId;
+    private String model;
     private String visionModelConfigId;
     private String directoryId;
     private String workspaceScope;

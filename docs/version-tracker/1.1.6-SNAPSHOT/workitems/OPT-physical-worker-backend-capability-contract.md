@@ -189,7 +189,7 @@ request.modelVariant / request.modelName
 3. `A2AgentResourceResolver` 当前先从 Agent 默认 WorkerPool 解析 launcher，再解析模型；尚未由 `LlmConfigModel.workerBackend + WorkingDirectory.physicalWorkerId` 推导 backend route。
 4. `ClientAppUpstreamUserGrantEntity` 当前没有 home worker / home directory 绑定；用户工作目录只能通过 WorkingDirectory scope / Agent default directory 间接表达。
 5. readiness / owner-smoke 已补 `effectiveModelName`、`effectiveWorkerBackend`、`effectivePhysicalWorkerId`；`workerPoolId` 仅保留为 internal route debug。
-6. request-level `modelVariant` / Agent `defaultModelName` 进入 resolver 的 API 字段仍需后续补齐；当前 Phase 1 先使用 `LlmConfigModel.modelName` 作为 `effectiveModelName`。
+6. request-level `modelVariant` / Agent `defaultModelName` 已进入 resolver；当前 `effectiveModelName` 由 request variant、Agent default model name、`LlmConfigModel.modelName` 三者按顺序解析。
 
 这些偏差不需要做旧数据兼容；后续局部重构可以直接按新契约调整。
 
@@ -225,6 +225,14 @@ request.modelVariant / request.modelName
 2. OpenAPI readiness / owner-smoke DTO、SDK DTO 和 CLI 输出增加 `effectiveModelName`、`effectiveWorkerBackend`、`effectivePhysicalWorkerId`。
 3. CLI 主帮助将 `worker-pool` 标记为 internal compatibility；标准 bootstrap 不再推荐上游创建或选择 WorkerPool。
 4. 前端 Worker / Agent 表单完成 PhysicalWorker/backend capability 文案调整。
+
+2026-05-24 已完成第二轮模型变体落地：
+
+1. `A2AgentResourceResolver` 输出 `requestedModelVariant`、`modelName`、`modelNameSource`，并校验 `availableModels`。
+2. OpenAPI `ask` / readiness、BusinessAgent task form、Open SDK 和 upstream CLI 支持 `modelVariant`，并兼容 `model` / `modelName` 等 alias。
+3. task 创建后落库并冻结 `modelConfigId + effectiveModelName`；继续同一 task / context 时不允许通过 `modelVariant` 切换具体模型。
+4. LangGraph Biz Worker launch request 会接收冻结后的 `model`，Worker 侧不再重新按当前默认值选择具体模型。
+5. upstream CLI skill 已补充 `NAVI_MODEL_VARIANT` / `--model-variant` 的使用边界：只用于新 task 首次选择同 config 下的模型变体，不用于 continuation。
 
 ## 10. 验收标准
 
