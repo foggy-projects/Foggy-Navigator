@@ -64,10 +64,11 @@ function Invoke-RemoteInstallSmoke {
         }
 
         $clientAppHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream client-app --help 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0
-            -or $clientAppHelpOutput -notmatch "issue-runtime-key"
-            -or $clientAppHelpOutput -notmatch "issue-runtime-credential"
-            -or $clientAppHelpOutput -notmatch "issue-control-key") {
+        $clientAppHelpOk = $LASTEXITCODE -eq 0 `
+            -and $clientAppHelpOutput -match "issue-runtime-key" `
+            -and $clientAppHelpOutput -match "issue-runtime-credential" `
+            -and $clientAppHelpOutput -match "issue-control-key"
+        if (-not $clientAppHelpOk) {
             throw "client-app help smoke failed: $clientAppHelpOutput"
         }
 
