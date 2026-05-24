@@ -505,7 +505,16 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
     @Override
     public void validateWorkerOwnership(String userId, String workerId) {
-        workerService.getWorker(userId, workerId); // throws if not found or not owned
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (worker.getUserId().equals(userId)) {
+            return;
+        }
+        if (isSameTenant(userId, worker.getTenantId())) {
+            log.debug("validateWorkerOwnership: tenant-level access granted for userId={}, workerId={}",
+                    userId, workerId);
+            return;
+        }
+        throw new IllegalArgumentException("Worker not found: " + workerId);
     }
 
     @Override

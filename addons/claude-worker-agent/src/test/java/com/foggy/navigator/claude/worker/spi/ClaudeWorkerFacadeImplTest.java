@@ -19,9 +19,11 @@ import reactor.core.publisher.Flux;
 
 import java.math.BigDecimal;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Executor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -137,6 +139,21 @@ class ClaudeWorkerFacadeImplTest {
                 2,
                 "sonnet"
         );
+    }
+
+    @Test
+    void validateWorkerOwnershipAllowsSameTenantWorker() {
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker-1");
+        worker.setUserId("owner-1");
+        worker.setTenantId("tenant-1");
+        when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
+
+        com.foggy.navigator.common.dto.UserDTO user = new com.foggy.navigator.common.dto.UserDTO();
+        user.setTenantId("tenant-1");
+        when(userAuthService.getUser("agent-owner-1")).thenReturn(Optional.of(user));
+
+        assertDoesNotThrow(() -> facade.validateWorkerOwnership("agent-owner-1", "worker-1"));
     }
 
     private void mockWorker(String workerId, String userId) {

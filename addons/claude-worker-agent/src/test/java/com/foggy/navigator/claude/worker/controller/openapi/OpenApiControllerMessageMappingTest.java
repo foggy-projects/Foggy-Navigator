@@ -648,7 +648,7 @@ class OpenApiControllerMessageMappingTest {
         var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
         verify(agent).sendTask(captor.capture());
         Map<String, Object> metadata = captor.getValue().getMetadata();
-        assertEquals("physical-worker", metadata.get("workerId"));
+        assertEquals("manifest-worker", metadata.get("workerId"));
         assertEquals("dir-default", metadata.get("directoryId"));
         assertEquals("D:/workspace/school", metadata.get("cwd"));
         assertEquals("trace-1", metadata.get("traceId"));

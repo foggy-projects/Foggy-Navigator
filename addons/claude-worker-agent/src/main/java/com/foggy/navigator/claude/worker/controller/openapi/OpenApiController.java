@@ -559,9 +559,9 @@ public class OpenApiController {
             Map<String, Object> metadata,
             A2AgentResourceResolver.ResolvedAgentResource agentResource,
             A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
-        String effectiveWorkerId = workspaceResource != null && StringUtils.hasText(workspaceResource.physicalWorkerId())
-                ? workspaceResource.physicalWorkerId()
-                : agentResource.physicalWorkerId();
+        String effectiveWorkerId = StringUtils.hasText(agentResource.physicalWorkerId())
+                ? agentResource.physicalWorkerId()
+                : workspaceResource != null ? workspaceResource.physicalWorkerId() : null;
         putText(metadata, "workerId", effectiveWorkerId);
         if (workspaceResource != null) {
             putText(metadata, "directoryId", workspaceResource.directoryId());
