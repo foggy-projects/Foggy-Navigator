@@ -2142,6 +2142,44 @@ class UpstreamCliTest {
     }
 
     @Test
+    void modelCreateAcceptsOpenAiCodexWorkerBackend() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":41,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-codex",
+                  "modelConfigName":"Upstream Codex",
+                  "workerBackend":"OPENAI_CODEX",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP_OWNED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "create",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--name", "Upstream Codex",
+                "--model-base-url", "https://codex.example/v1",
+                "--model-name", "codex-mini",
+                "--worker-backend", "OPENAI_CODEX",
+                "--api-key-env", "UPSTREAM_LLM_KEY",
+                "--set-default"}, env("UPSTREAM_LLM_KEY", "llm-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"workerBackend\":\"OPENAI_CODEX\""));
+        assertTrue(output.contains("model create ok"));
+        assertTrue(output.contains("workerBackend=OPENAI_CODEX"));
+        assertFalse(output.contains("control-key-secret"));
+        assertFalse(output.contains("llm-secret"));
+    }
+
+    @Test
     void modelRotateKeyUsesApiKeyEnvWithoutPrintingSecret() {
         responseOverride = """
                 {"code":0,"data":{
@@ -2484,6 +2522,50 @@ class UpstreamCliTest {
         assertTrue(output.contains("model system-create ok"));
         assertTrue(output.contains("modelConfig.id=model-shared"));
         assertTrue(output.contains("modelConfig.ownerType=UPSTREAM_SYSTEM"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+        assertFalse(output.contains("llm-secret"));
+    }
+
+    @Test
+    void modelSystemCreateAcceptsOpenAiCodexWorkerBackend() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":"model-shared-codex",
+                  "tenantId":"tenant-1",
+                  "name":"Upstream Codex",
+                  "modelName":"codex-mini",
+                  "workerBackend":"OPENAI_CODEX",
+                  "ownerType":"UPSTREAM_SYSTEM",
+                  "ownerId":"ups-1",
+                  "enabled":true
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "system-create",
+                "--profile", ".navigator/upstream.env",
+                "--target-tenant-id", "tenant-1",
+                "--name", "Upstream Codex",
+                "--model-base-url", "https://codex.example/v1",
+                "--model-name", "codex-mini",
+                "--worker-backend", "OPENAI_CODEX",
+                "--api-key-env", "UPSTREAM_LLM_KEY",
+                "--write-profile"}, env("UPSTREAM_LLM_KEY", "llm-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tempDir.resolve(".navigator").resolve("upstream.env"), StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/model-configs?targetTenantId=tenant-1", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"workerBackend\":\"OPENAI_CODEX\""));
+        assertTrue(profile.contains("NAVI_MODEL_CONFIG_ID=model-shared-codex"));
+        assertTrue(output.contains("model system-create ok"));
+        assertTrue(output.contains("modelConfig.workerBackend=OPENAI_CODEX"));
         assertFalse(output.contains("naa-secret-admin-key"));
         assertFalse(output.contains("llm-secret"));
     }

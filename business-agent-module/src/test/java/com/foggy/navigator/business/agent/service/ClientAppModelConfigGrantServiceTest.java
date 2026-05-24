@@ -77,6 +77,16 @@ class ClientAppModelConfigGrantServiceTest {
     }
 
     @Test
+    void grantModelConfig_accepts_openAiCodex_backend() {
+        when(llmModelManager.getModelConfig("cfg-codex"))
+                .thenReturn(Optional.of(model("cfg-codex", "tenant-1", "OPENAI_CODEX")));
+
+        service.grantModelConfig("tenant-1", "admin-1", "capp-1", grantForm("cfg-codex", true));
+
+        verify(grantRepository).save(argThat(grant -> "cfg-codex".equals(grant.getModelConfigId())));
+    }
+
+    @Test
     void grantModelConfig_accepts_same_upstream_system_owner() {
         when(llmModelManager.getModelConfig("cfg-system"))
                 .thenReturn(Optional.of(model(

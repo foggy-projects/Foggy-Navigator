@@ -255,6 +255,7 @@ public class UpstreamCli {
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
         out.println("  model create/update uses NAVI_CONTROL_API_KEY and creates ClientApp-owned models.");
         out.println("  model system-create/system-update uses NAVI_ADMIN_API_KEY and creates UpstreamSystem-owned shared models.");
+        out.println("  model create/system-create accepts --worker-backend LANGGRAPH_BIZ|OPENAI_CODEX|CLAUDE_CODE|GEMINI_CLI.");
         return 0;
     }
 
@@ -1901,6 +1902,7 @@ public class UpstreamCli {
         }
         form.setRuntimeBudgetPresetKey(args.option("runtime-budget-preset"));
         form.setRuntimeBudgetOverrideJson(args.option("runtime-budget-override-json"));
+        form.setWorkerBackend(args.option("worker-backend"));
         if (create) {
             form.setApiKey(config.required("NAVI_LLM_API_KEY", "LLM API key; pass --api-key-env <envName>"));
         }
@@ -2355,7 +2357,7 @@ public class UpstreamCli {
                 + " clientAppId=" + valueOrEmpty(grant != null ? grant.getClientAppId() : null)
                 + " modelConfigId=" + valueOrEmpty(grant != null ? grant.getModelConfigId() : null)
                 + " name=" + valueOrEmpty(grant != null ? grant.getModelConfigName() : null)
-                + " backend=" + valueOrEmpty(grant != null ? grant.getWorkerBackend() : null)
+                + " workerBackend=" + valueOrEmpty(grant != null ? grant.getWorkerBackend() : null)
                 + " status=" + valueOrEmpty(grant != null ? grant.getStatus() : null)
                 + " default=" + (grant != null && Boolean.TRUE.equals(grant.getIsDefault()))
                 + " scope=" + valueOrEmpty(grant != null ? grant.getGrantScope() : null));

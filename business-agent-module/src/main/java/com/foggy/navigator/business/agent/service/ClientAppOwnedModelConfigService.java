@@ -102,7 +102,6 @@ public class ClientAppOwnedModelConfigService {
         modelForm.setApiKey(form.getApiKey());
         modelForm.setIsDefault(false);
         modelForm.setScope(ModelAccessScope.GLOBAL);
-        modelForm.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
         return modelForm;
     }
 
@@ -118,8 +117,20 @@ public class ClientAppOwnedModelConfigService {
                 : (StringUtils.hasText(form.getModelName()) ? List.of(form.getModelName().trim()) : null));
         modelForm.setRuntimeBudgetPresetKey(trimToNull(form.getRuntimeBudgetPresetKey()));
         modelForm.setRuntimeBudgetOverrideJson(trimToNull(form.getRuntimeBudgetOverrideJson()));
-        modelForm.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        modelForm.setWorkerBackend(resolveWorkerBackend(form.getWorkerBackend(), create));
         return modelForm;
+    }
+
+    private String resolveWorkerBackend(String workerBackend, boolean create) {
+        String normalized = ClientAppModelConfigGrantService.normalizeWorkerBackend(workerBackend);
+        if (normalized == null) {
+            return create ? ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND : null;
+        }
+        if (!ClientAppModelConfigGrantService.isSupportedWorkerBackend(normalized)) {
+            throw new IllegalArgumentException(
+                    "workerBackend must be LANGGRAPH_BIZ, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
+        }
+        return normalized;
     }
 
     private Map<String, String> normalizeEnvVars(Map<String, String> envVars) {

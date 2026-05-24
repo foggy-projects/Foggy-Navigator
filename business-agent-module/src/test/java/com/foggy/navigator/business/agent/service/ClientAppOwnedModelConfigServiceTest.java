@@ -79,6 +79,35 @@ class ClientAppOwnedModelConfigServiceTest {
     }
 
     @Test
+    void create_acceptsOpenAiCodexWorkerBackend() {
+        ClientAppModelConfigForm form = createForm();
+        form.setWorkerBackend("openai-codex");
+
+        service.create("tenant-1", "actor-1", "capp-1", form);
+
+        ArgumentCaptor<LlmModelConfigForm> modelCaptor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
+        verify(llmModelManager).saveModelConfig(
+                eq("tenant-1"),
+                modelCaptor.capture(),
+                eq(ResourceOwnerType.CLIENT_APP),
+                eq("capp-1"),
+                eq(ResourceOwnerType.CLIENT_APP),
+                eq("capp-1"),
+                eq("actor-1"));
+        assertEquals(ClientAppModelConfigGrantService.OPENAI_CODEX_BACKEND, modelCaptor.getValue().getWorkerBackend());
+    }
+
+    @Test
+    void create_rejectsUnsupportedWorkerBackend() {
+        ClientAppModelConfigForm form = createForm();
+        form.setWorkerBackend("CODEX");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.create("tenant-1", "actor-1", "capp-1", form));
+        verify(llmModelManager, never()).saveModelConfig(anyString(), any(), any(), anyString(), any(), anyString(), anyString());
+    }
+
+    @Test
     void update_rejects_shared_grant() {
         ClientAppModelConfigGrantEntity grant = ownedGrant("cfg-shared");
         grant.setGrantScope("CLIENT_APP");

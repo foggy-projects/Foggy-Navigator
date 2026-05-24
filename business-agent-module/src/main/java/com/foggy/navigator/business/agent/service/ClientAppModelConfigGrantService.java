@@ -15,13 +15,23 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class ClientAppModelConfigGrantService {
 
     public static final String LANGGRAPH_BIZ_BACKEND = "LANGGRAPH_BIZ";
+    public static final String CLAUDE_CODE_BACKEND = "CLAUDE_CODE";
+    public static final String OPENAI_CODEX_BACKEND = "OPENAI_CODEX";
+    public static final String GEMINI_CLI_BACKEND = "GEMINI_CLI";
+    public static final Set<String> SUPPORTED_WORKER_BACKENDS = Set.of(
+            LANGGRAPH_BIZ_BACKEND,
+            CLAUDE_CODE_BACKEND,
+            OPENAI_CODEX_BACKEND,
+            GEMINI_CLI_BACKEND);
     public static final String STATUS_ENABLED = "ENABLED";
     public static final String STATUS_DISABLED = "DISABLED";
 
@@ -182,15 +192,24 @@ public class ClientAppModelConfigGrantService {
         if (Boolean.FALSE.equals(model.getEnabled())) {
             throw new IllegalArgumentException("model config is disabled");
         }
-        String backend = model.getWorkerBackend();
-        boolean isValidBackend = LANGGRAPH_BIZ_BACKEND.equals(backend)
-                || "CLAUDE_CODE".equals(backend)
-                || "OPENAI_CODEX".equals(backend)
-                || "GEMINI_CLI".equals(backend);
-        if (!isValidBackend) {
-            throw new IllegalArgumentException("model config worker backend must be LANGGRAPH_BIZ_BACKEND, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
+        String backend = normalizeWorkerBackend(model.getWorkerBackend());
+        if (!isSupportedWorkerBackend(backend)) {
+            throw new IllegalArgumentException("model config worker backend must be LANGGRAPH_BIZ, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
         }
         return model;
+    }
+
+    public static String normalizeWorkerBackend(String workerBackend) {
+        if (!StringUtils.hasText(workerBackend)) {
+            return null;
+        }
+        return workerBackend.trim()
+                .replace('-', '_')
+                .toUpperCase(Locale.ROOT);
+    }
+
+    public static boolean isSupportedWorkerBackend(String workerBackend) {
+        return SUPPORTED_WORKER_BACKENDS.contains(normalizeWorkerBackend(workerBackend));
     }
 
     private void requireVisibleModelOwner(ClientAppEntity clientApp, LlmModelConfigDTO model) {

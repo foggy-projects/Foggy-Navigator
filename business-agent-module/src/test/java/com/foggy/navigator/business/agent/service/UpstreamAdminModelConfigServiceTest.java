@@ -71,6 +71,54 @@ class UpstreamAdminModelConfigServiceTest {
     }
 
     @Test
+    void create_acceptsOpenAiCodexWorkerBackend() {
+        UpstreamClientAppAdminPrincipal principal = principal();
+        ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        form.setName("Shared Codex");
+        form.setBaseUrl("https://codex.example/v1");
+        form.setModelName("codex-mini");
+        form.setApiKey("secret");
+        form.setWorkerBackend("OPENAI_CODEX");
+
+        when(llmModelManager.saveModelConfig(
+                eq("tenant-1"),
+                any(LlmModelConfigForm.class),
+                eq(ResourceOwnerType.UPSTREAM_SYSTEM),
+                eq("ups-1"),
+                eq(ResourceOwnerType.UPSTREAM_SYSTEM),
+                eq("ups-1"),
+                eq("cred-1"))).thenReturn("model-codex");
+        when(llmModelManager.getModelConfig("model-codex")).thenReturn(Optional.of(model("model-codex", "ups-1")));
+
+        service.create("tenant-1", principal, form);
+
+        ArgumentCaptor<LlmModelConfigForm> formCaptor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
+        verify(llmModelManager).saveModelConfig(
+                eq("tenant-1"),
+                formCaptor.capture(),
+                eq(ResourceOwnerType.UPSTREAM_SYSTEM),
+                eq("ups-1"),
+                eq(ResourceOwnerType.UPSTREAM_SYSTEM),
+                eq("ups-1"),
+                eq("cred-1"));
+        assertEquals(ClientAppModelConfigGrantService.OPENAI_CODEX_BACKEND, formCaptor.getValue().getWorkerBackend());
+    }
+
+    @Test
+    void create_rejectsUnsupportedWorkerBackend() {
+        ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        form.setName("Shared Unknown");
+        form.setBaseUrl("https://llm.example/v1");
+        form.setModelName("unknown");
+        form.setApiKey("secret");
+        form.setWorkerBackend("CODEX");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.create("tenant-1", principal(), form));
+        verify(llmModelManager, never()).saveModelConfig(anyString(), any(), any(), anyString(), any(), anyString(), anyString());
+    }
+
+    @Test
     void update_rejectsModelOwnedByAnotherUpstreamSystem() {
         ClientAppModelConfigForm form = new ClientAppModelConfigForm();
         form.setName("Changed");

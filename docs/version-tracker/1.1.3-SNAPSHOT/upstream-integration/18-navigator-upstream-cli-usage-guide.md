@@ -628,6 +628,7 @@ $env:NAVI_LLM_API_KEY="<llm-api-key>"
   --name "tms-owned-gpt" `
   --model-base-url "https://llm.example/v1" `
   --model-name "gpt-4.1-mini" `
+  --worker-backend LANGGRAPH_BIZ `
   --provider openai `
   --api-key-env NAVI_LLM_API_KEY `
   --set-default `
@@ -643,11 +644,29 @@ $env:NAVI_LLM_API_KEY="<llm-api-key>"
   --name "shared-gpt" `
   --model-base-url "https://llm.example/v1" `
   --model-name "gpt-4.1-mini" `
+  --worker-backend LANGGRAPH_BIZ `
   --provider openai `
   --api-key-env NAVI_LLM_API_KEY `
   --write-profile
 
 .\tools\navigator-upstream\navi.ps1 upstream model grant --model-config-id <sharedModelConfigId> --set-default --write-profile
+```
+
+创建 OpenAI Codex coding Agent 的模型时，显式选择 Codex backend：
+
+```powershell
+$env:NAVI_LLM_API_KEY="<llm-api-key>"
+.\tools\navigator-upstream\navi.ps1 upstream model system-create `
+  --target-tenant-id <tenantId> `
+  --name "shared-codex" `
+  --model-base-url "https://llm.example/v1" `
+  --model-name "codex-mini" `
+  --worker-backend OPENAI_CODEX `
+  --provider openai `
+  --api-key-env NAVI_LLM_API_KEY `
+  --write-profile
+
+.\tools\navigator-upstream\navi.ps1 upstream model grant --model-config-id <sharedCodexModelConfigId> --set-default --write-profile
 ```
 
 也可以直接用 grant id 设置默认模型：
@@ -675,14 +694,15 @@ $env:NAVI_LLM_API_KEY="<new-llm-api-key>"
 1. `model grants` 列出当前 `NAVI_CLIENT_APP_ID` 下已授权的模型、状态和默认标记。
 2. `model grant` 为当前 ClientApp 授权已有 `modelConfigId`；`--set-default` 同时设为默认。
 3. `model set-default --model-config-id` 会先查当前 ClientApp 的 grant，再设置默认。
-4. `model create` 创建 `LANGGRAPH_BIZ` 模型配置，并以 `CLIENT_APP_OWNED` grant 绑定到当前 ClientApp；该命令只接受 `NAVI_CONTROL_API_KEY`。
+4. `model create` 创建模型配置，并以 `CLIENT_APP_OWNED` grant 绑定到当前 ClientApp；该命令只接受 `NAVI_CONTROL_API_KEY`。
 5. `model update` / `model rotate-key` 只允许维护 `CLIENT_APP_OWNED` 自有模型，不能修改管理员授权的共享模型。
 6. `model system-create` 创建 `UPSTREAM_SYSTEM` owner 的共享模型；该命令只接受 `NAVI_ADMIN_API_KEY`。
 7. `--model-base-url` 是上游 LLM/OpenAI-compatible 地址；`--base-url` 仍然是 Navi 服务地址。
 8. `--api-key-env` 从环境变量读取 LLM key，避免 key 进入命令历史或 CLI 输出。
 9. `--write-profile` 只把最终 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
 10. `NAVI_MODEL_CONFIG_ID` 是上游项目本地默认模型，不代表租户全局默认模型。
-11. 模型配置支持 `--runtime-budget-preset` 与 `--runtime-budget-override-json`。不要把 `contextWindowTokens`、`maxInputTokens`、`maxOutputTokens`、工具结果裁剪上限等值塞入 `clientContext` 或用户消息。
+11. `--worker-backend` 支持 `LANGGRAPH_BIZ`、`OPENAI_CODEX`、`CLAUDE_CODE`、`GEMINI_CLI`；未传时 create 默认 `LANGGRAPH_BIZ`。`modelName` / `--model-variant` 只在同一个模型配置内选择具体模型，不能改变 backend。
+12. 模型配置支持 `--runtime-budget-preset` 与 `--runtime-budget-override-json`。不要把 `contextWindowTokens`、`maxInputTokens`、`maxOutputTokens`、工具结果裁剪上限等值塞入 `clientContext` 或用户消息。
 
 ### 8.5 维护 A2Agent 与资源绑定
 
