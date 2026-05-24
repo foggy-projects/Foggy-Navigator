@@ -8,6 +8,7 @@ import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindi
 import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.AgentModelBindingEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
@@ -17,6 +18,7 @@ import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
 import com.foggy.navigator.common.enums.WorkspaceScope;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -28,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -35,6 +38,7 @@ import static org.mockito.Mockito.when;
 class A2AgentResourceResolverTest {
 
     private ClientAppModelConfigGrantService modelConfigGrantService;
+    private LlmModelManager llmModelManager;
     private ClientAppService clientAppService;
     private WorkingDirectoryRepository workingDirectoryRepository;
     private BusinessCodingAgentRepository agentRepository;
@@ -46,6 +50,7 @@ class A2AgentResourceResolverTest {
     @BeforeEach
     void setUp() {
         modelConfigGrantService = mock(ClientAppModelConfigGrantService.class);
+        llmModelManager = mock(LlmModelManager.class);
         clientAppService = mock(ClientAppService.class);
         workingDirectoryRepository = mock(WorkingDirectoryRepository.class);
         agentRepository = mock(BusinessCodingAgentRepository.class);
@@ -54,12 +59,15 @@ class A2AgentResourceResolverTest {
         agentModelBindingRepository = mock(BusinessAgentModelBindingRepository.class);
         resolver = new A2AgentResourceResolver(
                 modelConfigGrantService,
+                llmModelManager,
                 clientAppService,
                 workingDirectoryRepository,
                 agentRepository,
                 workerPoolRepository,
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
+        when(llmModelManager.getModelConfig(anyString())).thenAnswer(invocation ->
+                Optional.of(model(invocation.getArgument(0, String.class))));
     }
 
     @Test
@@ -74,6 +82,8 @@ class A2AgentResourceResolverTest {
         assertEquals("cfg-requested", result.modelConfigId());
         assertEquals("cfg-requested", result.requestedModelConfigId());
         assertEquals(LlmModelCategory.GENERAL, result.category());
+        assertEquals("cfg-requested-name", result.modelName());
+        assertEquals("LANGGRAPH_BIZ", result.workerBackend());
         assertEquals("REQUESTED_MODEL_GRANT", result.source());
     }
 
@@ -88,6 +98,7 @@ class A2AgentResourceResolverTest {
 
         assertEquals("cfg-default", result.modelConfigId());
         assertNull(result.requestedModelConfigId());
+        assertEquals("cfg-default-name", result.modelName());
         assertEquals("DEFAULT_MODEL_GRANT", result.source());
     }
 
@@ -215,6 +226,7 @@ class A2AgentResourceResolverTest {
         assertEquals("pool-1", result.workerPoolId());
         assertEquals(ResourceOwnerType.PLATFORM, result.workerPoolOwnerType());
         assertEquals("WORKER_POOL:PLATFORM", result.workerPoolSource());
+        assertEquals("LANGGRAPH_BIZ", result.workerBackend());
         assertEquals("model-1", result.defaultModelConfigId());
         assertEquals("dir-1", result.defaultDirectoryId());
         assertEquals("AGENT:CLIENT_APP", result.source());
@@ -302,6 +314,7 @@ class A2AgentResourceResolverTest {
         assertEquals(WorkingDirectoryResolverType.DELEGATED, result.resolverType());
         assertEquals("D:/workspace/user-1", result.workdir());
         assertEquals(List.of("D:/workspace"), result.allowedDirs());
+        assertEquals("worker-1", result.physicalWorkerId());
         assertEquals("WORKING_DIRECTORY:USER_PRIVATE", result.source());
     }
 
@@ -477,8 +490,17 @@ class A2AgentResourceResolverTest {
         entity.setResolverType(WorkingDirectoryResolverType.DELEGATED);
         entity.setEnabled(true);
         entity.setReadOnly(false);
+        entity.setWorkerId("worker-1");
         entity.setPath("D:/workspace/default");
         return entity;
+    }
+
+    private LlmModelConfigDTO model(String modelConfigId) {
+        LlmModelConfigDTO dto = new LlmModelConfigDTO();
+        dto.setId(modelConfigId);
+        dto.setModelName(modelConfigId + "-name");
+        dto.setWorkerBackend("LANGGRAPH_BIZ");
+        return dto;
     }
 
     private CodingAgentEntity agent(String agentId, ResourceOwnerType ownerType, String ownerId) {
@@ -524,6 +546,7 @@ class A2AgentResourceResolverTest {
                 ResourceOwnerType.PLATFORM,
                 "tenant-1",
                 "WORKER_POOL:PLATFORM",
+                "LANGGRAPH_BIZ",
                 defaultModelConfigId,
                 defaultDirectoryId,
                 "AGENT:CLIENT_APP");

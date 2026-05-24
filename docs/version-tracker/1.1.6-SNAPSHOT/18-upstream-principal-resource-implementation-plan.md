@@ -2086,3 +2086,104 @@ powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\packa
 7. 安全与噪声：
    - 全程未输出 secret 明文。
    - `SLF4J no-provider` warning 仍存在，功能不受影响，作为后续低优先级 CLI 日志噪声治理项。
+
+## 35. Phase 23 PhysicalWorker Backend Capability Contract Checkpoint
+
+2026-05-24 进一步从上游使用视角收口 Worker / WorkerPool / LlmConfigModel / WorkingDirectory / Agent 的关系。
+
+结论：
+
+1. 上游标准接入模型不应暴露 WorkerPool 作为必须创建、选择或理解的资源。
+2. `Worker` 面向上游应定义为 `PhysicalWorker`：一台物理机、一套开发环境或一个固定工作空间宿主。
+3. 一个 `PhysicalWorker` 可以同时声明多个 backend capability，例如 `CLAUDE_CODE`、`OPENAI_CODEX`、`GEMINI_CLI`、`LANGGRAPH_BIZ`。
+4. 当前阶段默认同一台 `PhysicalWorker` 对同一种 backend 只有一个 capability endpoint；不做同机同 backend 多实例调度。
+5. `WorkingDirectory` 绑定 `PhysicalWorker`，因为目录物理上存在于该机器。
+6. `LlmConfigModel.workerBackend` 决定任务使用哪类 runtime backend。
+7. `LlmConfigModel.modelName` / `availableModels` 决定同一 config 下允许选择的具体模型变体；`modelVariant` 不能改变 backend。
+8. Agent 负责绑定模型、目录、默认模型变体和 backend policy；不要求上游手动选择 WorkerPool。
+
+目标运行时解析：
+
+```text
+requested/default configModelId
+  -> LlmConfigModel.workerBackend
+  -> effectiveModelName
+
+requested/default/user-home WorkingDirectory
+  -> physicalWorkerId
+
+physicalWorkerId + workerBackend
+  -> backend capability endpoint
+  -> internal worker route / workerPoolId if still needed by current launcher
+
+Agent policy
+  -> validate model + directory + backend + tools/functions
+```
+
+新 task 创建后固定：
+
+```text
+modelConfigId
+effectiveModelName
+workerBackend
+physicalWorkerId
+directoryId
+internalWorkerPoolId
+```
+
+同一 task / context 继续调用时不得切换上述资源。若请求再次传入不同 `configModelId` 或 `modelVariant`，继续保持 fail-fast。需要切换模型或 backend 时，创建新 task，后续再单独设计 fork / escalation。
+
+当前实现偏差：
+
+1. `UpstreamAgentForm.workerId` 当前实际被当成 `workerPoolId` 使用，命名与上游心智不一致。
+2. `CodingAgentEntity.workerId` 注释仍保留旧 `ClaudeWorkerEntity` 语义，但 A2Agent resolver 已把它当成默认 WorkerPool。
+3. `A2AgentResourceResolver` 当前仍先从 Agent 默认 WorkerPool 选择 launcher，再解析模型；尚未从 `LlmConfigModel.workerBackend + WorkingDirectory.workerId` 推导 route。
+4. `owner-smoke` / readiness 已补 `effectiveModelName`、`effectiveWorkerBackend`、`effectivePhysicalWorkerId` 和 `internalWorkerPoolId`；`workerPoolId` 保留为 internal route debug 字段。
+5. 前端 Worker 页面文案已调整为“物理 Worker + backend capability”的表达，Agent 页面补充“LLM 配置决定 backend，工作目录决定物理 Worker”的提示。
+6. request-level `modelVariant` / Agent `defaultModelName` 进入 resolver 的 API 字段仍需后续单独补齐；当前 Phase 1 先输出 `LlmConfigModel.modelName` 作为 `effectiveModelName`。
+
+后续实施顺序建议：
+
+1. 文档 / SDK / CLI 先统一用语：
+   - `PhysicalWorker` 是上游资源；
+   - backend capability 是 PhysicalWorker 的能力；
+   - WorkerPool 是内部 routing artifact。
+2. resolver 层先增加新输出，不立即删除内部 WorkerPool：
+   - `effectivePhysicalWorkerId`
+   - `effectiveWorkerBackend`
+   - `effectiveDirectoryId`
+   - `effectiveModelConfigId`
+   - `internalWorkerPoolId`
+3. `owner-smoke` / readiness 增加 capability check：
+   - 目录所在 PhysicalWorker 是否支持模型要求的 backend；
+   - 具体 `effectiveModelName` 是否来自 request / Agent default / model default，且在 allowlist 内；
+   - Agent 是否允许该模型和目录；
+   - 内部 launcher route 是否存在。
+4. Agent 创建 / 更新收口：
+   - 默认模型和默认目录应能推导出唯一默认 route；
+   - 缺 workspace 的 Agent 必须显式声明 no-directory-required；
+   - 不再要求上游直接指定 WorkerPool。
+5. 前端收口：
+   - Worker 页面改为物理 Worker / 工作机器；
+   - Codex / Gemini / LangGraph Biz 显示为 backend capability；
+   - Agent 页面解释“由 LLM 配置选择 backend，由目录选择物理 Worker”。
+
+2026-05-24 本轮推进结果：
+
+1. `A2AgentResourceResolver` 新增 `modelName`、`workerBackend`、`physicalWorkerId` 和 `internalWorkerPoolId` 相关解析输出。
+2. OpenAPI readiness / owner-smoke 输出 `effectiveModelName`、`effectiveWorkerBackend`、`effectivePhysicalWorkerId`，并将 WorkerPool 标记为 `internalRoute`。
+3. Navigator Open SDK / CLI 同步 DTO 与输出；主帮助把 `worker-pool` 降级为 internal compatibility 命令。
+4. 前端 Worker / Agent 表单文案完成 PhysicalWorker/backend capability 口径调整。
+5. 本地 `navigator-upstream-cli` skill 已同步：标准上游 bootstrap 不再要求创建或选择 WorkerPool。
+
+不进入本 checkpoint：
+
+1. 同一 PhysicalWorker 同一 backend 多实例调度。
+2. WorkerPool 级别负载均衡、灰度、HA 和容量策略。
+3. 旧数据迁移和旧接口兼容。
+4. 立即删除 `BizWorkerPool` 表或 launcher 接口。
+
+跟踪文档：
+
+1. `workitems/OPT-physical-worker-backend-capability-contract.md` 作为后续实现源头。
+2. `17-upstream-principal-resource-ownership-and-visibility.md` 已同步更新资源矩阵、Agent 绑定和 resolver 输出口径。

@@ -122,8 +122,11 @@ public class OpenApiAgentReadinessService {
                     requestedModelConfigId,
                     LlmModelCategory.GENERAL);
             result.setEffectiveModelConfigId(modelResource.modelConfigId());
+            result.setEffectiveModelName(modelResource.modelName());
+            result.setEffectiveWorkerBackend(modelResource.workerBackend());
             result.setModelConfigSource(modelResource.source());
             result.setModelCategory(modelResource.category().name());
+            validateAgentBackendCompatibility(agentResourceRef[0], modelResource);
         });
         addWorkspaceResourceCheckIfPossible(result, credential, safeForm, agentResourceRef[0]);
         addRequiredUpstreamRouteChecks(result, credential, safeForm);
@@ -159,8 +162,31 @@ public class OpenApiAgentReadinessService {
                 : null);
         result.setWorkerPoolOwnerId(agentResource.workerPoolOwnerId());
         result.setWorkerPoolSource(agentResource.workerPoolSource());
+        result.setInternalWorkerPoolId(agentResource.workerPoolId());
+        result.setInternalWorkerPoolOwnerType(agentResource.workerPoolOwnerType() != null
+                ? agentResource.workerPoolOwnerType().name()
+                : null);
+        result.setInternalWorkerPoolOwnerId(agentResource.workerPoolOwnerId());
+        result.setInternalWorkerPoolSource(agentResource.workerPoolSource());
+        if (StringUtils.hasText(agentResource.workerBackend())) {
+            result.setEffectiveWorkerBackend(agentResource.workerBackend());
+        }
         result.setDefaultModelConfigId(agentResource.defaultModelConfigId());
         result.setDefaultDirectoryId(agentResource.defaultDirectoryId());
+    }
+
+    private void validateAgentBackendCompatibility(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedModelResource modelResource) {
+        if (agentResource == null || modelResource == null) {
+            return;
+        }
+        String agentBackend = trimToNull(agentResource.workerBackend());
+        String modelBackend = trimToNull(modelResource.workerBackend());
+        if (agentBackend != null && modelBackend != null && !agentBackend.equals(modelBackend)) {
+            throw new IllegalStateException("model workerBackend " + modelBackend
+                    + " does not match agent route backend " + agentBackend);
+        }
     }
 
     private String resolveRequestedModelConfigId(
@@ -201,6 +227,7 @@ public class OpenApiAgentReadinessService {
                     agentResource,
                     effectiveDirectoryId);
             result.setEffectiveDirectoryId(workspaceResource.directoryId());
+            result.setEffectivePhysicalWorkerId(workspaceResource.physicalWorkerId());
             result.setWorkspaceScope(workspaceResource.workspaceScope() != null
                     ? workspaceResource.workspaceScope().name()
                     : null);

@@ -82,6 +82,8 @@ class OpenApiAgentReadinessServiceTest {
                             requestedModelConfigId != null ? requestedModelConfigId : "model_default",
                             requestedModelConfigId,
                             category,
+                            requestedModelConfigId != null ? requestedModelConfigId + "-name" : "model_default-name",
+                            "LANGGRAPH_BIZ",
                             requestedModelConfigId != null
                                     ? "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT"
                                     : "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT");
@@ -99,6 +101,7 @@ class OpenApiAgentReadinessServiceTest {
                             ResourceOwnerType.UPSTREAM_SYSTEM,
                             "usys_1",
                             "WORKER_POOL:UPSTREAM_SYSTEM",
+                            "LANGGRAPH_BIZ",
                             "model_1",
                             null,
                             "AGENT:CLIENT_APP");
@@ -129,8 +132,11 @@ class OpenApiAgentReadinessServiceTest {
 
         assertEquals("OK", result.getOverallStatus());
         assertEquals("model_1", result.getEffectiveModelConfigId());
+        assertEquals("model_1-name", result.getEffectiveModelName());
+        assertEquals("LANGGRAPH_BIZ", result.getEffectiveWorkerBackend());
         assertEquals("CLIENT_APP", result.getAgentOwnerType());
         assertEquals("pool_1", result.getWorkerPoolId());
+        assertEquals("pool_1", result.getInternalWorkerPoolId());
         assertEquals("UPSTREAM_SYSTEM", result.getWorkerPoolOwnerType());
         assertEquals("AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT", result.getModelConfigSource());
         assertNotNull(result.getSkillArtifact());
@@ -152,6 +158,7 @@ class OpenApiAgentReadinessServiceTest {
                 eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
                 .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
                         "dir_user",
+                        "worker_1",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.MANAGED,
                         "/workspace/user",
@@ -171,6 +178,7 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals("OK", result.getOverallStatus());
         assertEquals("dir_user", result.getRequestedDirectoryId());
         assertEquals("dir_user", result.getEffectiveDirectoryId());
+        assertEquals("worker_1", result.getEffectivePhysicalWorkerId());
         assertEquals("USER_PRIVATE", result.getWorkspaceScope());
         assertEquals("MANAGED", result.getWorkspaceResolverType());
         assertEquals(Boolean.FALSE, result.getWorkspaceReadOnly());

@@ -88,16 +88,16 @@ CLI / SDK 已补齐 A2Agent 资源绑定控制面，运行时不再只依赖 Age
 
 - `defaultModelConfigId` 对应 `agent model-bindings` / `agent system-model-bindings`。
 - `defaultDirectoryId` 对应 `agent workspace-bindings` / `agent system-workspace-bindings`。
-- `workerId` 对应 `agent worker-bindings` / `agent system-worker-bindings`。
+- `workerId` 历史上对应 `agent worker-bindings` / `agent system-worker-bindings`，当前新口径中仅作为内部 route / compatibility binding；上游标准路径应优先通过 `defaultModelConfigId + defaultDirectoryId` 推导 backend 和 PhysicalWorker。
 
-创建或更新 Agent 后，服务端会把非空默认资源自动 materialize 到对应 binding 表。`set-default-*` 命令也必须先确保 binding 存在，再更新 Agent 默认字段。这样 `inspect runtime` / `verify-agent-readiness` / A2Agent resolver 后续可以用同一套 binding 数据解释“为什么这个模型、目录、WorkerPool 对当前 Agent 可见”。
+创建或更新 Agent 后，服务端会把非空默认资源自动 materialize 到对应 binding 表。`set-default-*` 命令也必须先确保 binding 存在，再更新 Agent 默认字段。这样 `inspect runtime` / `verify-agent-readiness` / A2Agent resolver 后续可以用同一套 binding 数据解释“为什么这个模型、目录、backend capability 和 PhysicalWorker 对当前 Agent 可见”。若输出 `workerPoolId`，它只表示 internal route debug。
 
 身份边界：
 
-1. `NAVI_ADMIN_API_KEY` 是 `UpstreamSystemPrincipal` 的可轮换凭据，用于 system-owned Agent、共享模型、共享工作目录、WorkerPool，以及为其可管理 ClientApp 签发 runtime credential / control credential。
+1. `NAVI_ADMIN_API_KEY` 是 `UpstreamSystemPrincipal` 的可轮换凭据，用于 system-owned Agent、共享模型、共享工作目录、PhysicalWorker/backend capability，以及为其可管理 ClientApp 签发 runtime credential / control credential。
 2. `NAVI_CONTROL_API_KEY` 是 `UpstreamClientApp` 的控制面凭据，用于 ClientApp-owned Agent 和该 ClientApp 范围内的模型、目录、Agent binding。
 3. Upstream user token 只进入 runtime ask / sessions / account-context，不参与资源创建与绑定。
-4. `ask` / `clientContext` 不允许临时携带模型、目录或 WorkerPool 作为授权绕过；只能携带业务元数据。
+4. `ask` / `clientContext` 不允许临时携带模型、目录、WorkerPool、backend route 或裸 filesystem path 作为授权绕过；只能携带业务元数据。
 
 上游发布前推荐执行：
 
@@ -110,7 +110,7 @@ CLI / SDK 已补齐 A2Agent 资源绑定控制面，运行时不再只依赖 Age
 
 `issue-runtime-key` 需要 `navigator-upstream-cli` / `navigator-open-sdk` `1.0.6` 或更高版本。
 
-该命令是只读 release gate：检查 profile gitignore、安全换取 runtime token、执行 OpenAPI readiness，并额外要求当前 `Agent + UpstreamUser + ClientApp` 组合能解析到 `effectiveModelConfigId`、`agentId`、`workerPoolId`、`effectiveDirectoryId`。如果目标 Agent 确认不需要 workspace，可显式使用 `--no-directory-required`，但这应作为例外记录在上游验收说明中。
+该命令是只读 release gate：检查 profile gitignore、安全换取 runtime token、执行 OpenAPI readiness，并额外要求当前 `Agent + UpstreamUser + ClientApp` 组合能解析到 `effectiveModelConfigId`、`effectiveModelName`、`effectiveWorkerBackend`、`agentId`、`effectiveDirectoryId`、`effectivePhysicalWorkerId`。如果目标 Agent 确认不需要 workspace，可显式使用 `--no-directory-required`，但这应作为例外记录在上游验收说明中。
 
 ### 6. Account workspace / memory 进入 Root system context
 

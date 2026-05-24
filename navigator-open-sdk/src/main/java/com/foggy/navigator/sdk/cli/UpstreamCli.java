@@ -241,7 +241,8 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, worker-pool list/create/register-worker/add-member/status, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker + directory + model + agent.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
@@ -301,6 +302,7 @@ public class UpstreamCli {
 
     private int workerPoolUsage() {
         out.println("Usage: navi upstream worker-pool <command> [options]");
+        out.println("Internal compatibility commands. Normal upstream bootstrap should use worker + directory + model + agent; WorkerPool is a Navigator routing artifact.");
         out.println("Commands: list, create, register-worker, add-member, status");
         out.println("  list [--target-tenant-id <tenantId>]");
         out.println("  create --file <json> [--target-tenant-id <tenantId>] [--write-profile]");
@@ -1023,11 +1025,14 @@ public class UpstreamCli {
         if (!hasText(readiness.getAgentId())) {
             missing.add("agentId");
         }
-        if (!hasText(readiness.getWorkerPoolId())) {
-            missing.add("workerPoolId");
+        if (!hasText(readiness.getEffectiveWorkerBackend())) {
+            missing.add("effectiveWorkerBackend");
         }
         if (requireDirectory && !hasText(readiness.getEffectiveDirectoryId())) {
             missing.add("effectiveDirectoryId");
+        }
+        if (requireDirectory && !hasText(readiness.getEffectivePhysicalWorkerId())) {
+            missing.add("effectivePhysicalWorkerId");
         }
         return missing;
     }
@@ -1060,6 +1065,8 @@ public class UpstreamCli {
         out.println("requestedModelConfigId=" + valueOrEmpty(readiness.getRequestedModelConfigId()));
         out.println("defaultModelConfigId=" + valueOrEmpty(readiness.getDefaultModelConfigId()));
         out.println("effectiveModelConfigId=" + valueOrEmpty(readiness.getEffectiveModelConfigId()));
+        out.println("effectiveModelName=" + valueOrEmpty(readiness.getEffectiveModelName()));
+        out.println("effectiveWorkerBackend=" + valueOrEmpty(readiness.getEffectiveWorkerBackend()));
         out.println("modelConfigSource=" + valueOrEmpty(readiness.getModelConfigSource()));
         out.println("modelCategory=" + valueOrEmpty(readiness.getModelCategory()));
         out.println("agent agentId=" + valueOrEmpty(readiness.getAgentId())
@@ -1067,13 +1074,17 @@ public class UpstreamCli {
                 + " ownerId=" + valueOrEmpty(readiness.getAgentOwnerId())
                 + " source=" + valueOrEmpty(readiness.getAgentSource())
                 + " skillId=" + valueOrEmpty(readiness.getSkillId()));
-        out.println("workerPool workerPoolId=" + valueOrEmpty(readiness.getWorkerPoolId())
-                + " ownerType=" + valueOrEmpty(readiness.getWorkerPoolOwnerType())
-                + " ownerId=" + valueOrEmpty(readiness.getWorkerPoolOwnerId())
-                + " source=" + valueOrEmpty(readiness.getWorkerPoolSource()));
+        out.println("physicalWorker physicalWorkerId=" + valueOrEmpty(readiness.getEffectivePhysicalWorkerId())
+                + " workerBackend=" + valueOrEmpty(readiness.getEffectiveWorkerBackend())
+                + " source=" + valueOrEmpty(readiness.getWorkspaceSource()));
+        out.println("internalRoute workerPoolId=" + valueOrEmpty(firstText(readiness.getInternalWorkerPoolId(), readiness.getWorkerPoolId()))
+                + " ownerType=" + valueOrEmpty(firstText(readiness.getInternalWorkerPoolOwnerType(), readiness.getWorkerPoolOwnerType()))
+                + " ownerId=" + valueOrEmpty(firstText(readiness.getInternalWorkerPoolOwnerId(), readiness.getWorkerPoolOwnerId()))
+                + " source=" + valueOrEmpty(firstText(readiness.getInternalWorkerPoolSource(), readiness.getWorkerPoolSource())));
         out.println("workspace requestedDirectoryId=" + valueOrEmpty(readiness.getRequestedDirectoryId())
                 + " defaultDirectoryId=" + valueOrEmpty(readiness.getDefaultDirectoryId())
                 + " effectiveDirectoryId=" + valueOrEmpty(readiness.getEffectiveDirectoryId())
+                + " physicalWorkerId=" + valueOrEmpty(readiness.getEffectivePhysicalWorkerId())
                 + " scope=" + valueOrEmpty(readiness.getWorkspaceScope())
                 + " resolverType=" + valueOrEmpty(readiness.getWorkspaceResolverType())
                 + " readOnly=" + valueOrEmpty(readiness.getWorkspaceReadOnly())
@@ -2633,6 +2644,10 @@ public class UpstreamCli {
 
     private static String valueOrEmpty(Object value) {
         return value == null ? "(empty)" : String.valueOf(value);
+    }
+
+    private static String firstText(String first, String second) {
+        return hasText(first) ? first : second;
     }
 
     private static String emptyIfNull(Object value) {

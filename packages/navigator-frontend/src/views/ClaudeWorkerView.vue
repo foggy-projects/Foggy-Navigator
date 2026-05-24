@@ -9,7 +9,7 @@
             <el-button type="primary" size="small">+ 添加</el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="worker">添加 Worker</el-dropdown-item>
+                <el-dropdown-item command="worker">添加物理 Worker</el-dropdown-item>
                 <el-dropdown-item command="directory" :disabled="!selectedWorkerId">
                   添加工作目录
                 </el-dropdown-item>
@@ -1434,12 +1434,12 @@
     </aside>
 
     <!-- Add Worker Dialog -->
-    <el-dialog v-model="showAddDialog" title="添加 Worker" width="480px">
+    <el-dialog v-model="showAddDialog" title="添加物理 Worker" width="480px">
       <el-form :model="addForm" label-position="top">
-        <el-form-item label="Worker 类型" required>
+        <el-form-item label="执行环境类型" required>
           <el-radio-group v-model="addForm.workerBackend">
-            <el-radio value="CLAUDE_CODE">Claude Code Worker</el-radio>
-            <el-radio value="LANGGRAPH_BIZ">LangGraph Biz Worker</el-radio>
+            <el-radio value="CLAUDE_CODE">Claude Code capability</el-radio>
+            <el-radio value="LANGGRAPH_BIZ">LangGraph Biz capability</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="名称" required>
@@ -1489,7 +1489,7 @@
           </el-form-item>
         </template>
         <template v-if="addForm.workerBackend !== 'LANGGRAPH_BIZ'">
-          <el-divider content-position="left">Codex 配置（可选）</el-divider>
+          <el-divider content-position="left">Codex backend capability（可选）</el-divider>
           <el-form-item label="Codex 地址">
             <el-input v-model="addForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
           </el-form-item>
@@ -1499,7 +1499,7 @@
           <el-form-item label="Codex 默认模型">
             <el-input v-model="addForm.codexModel" placeholder="如：codex-mini-latest" />
           </el-form-item>
-          <el-divider content-position="left">Gemini 配置（可选）</el-divider>
+          <el-divider content-position="left">Gemini backend capability（可选）</el-divider>
           <el-form-item label="Gemini 地址">
             <el-input v-model="addForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
           </el-form-item>
@@ -1518,11 +1518,11 @@
     </el-dialog>
 
     <!-- Edit Worker Dialog -->
-    <el-dialog v-model="showEditDialog" title="编辑 Worker" width="480px">
+    <el-dialog v-model="showEditDialog" title="编辑物理 Worker" width="480px">
       <el-form :model="editForm" label-position="top">
-        <el-form-item label="Worker 类型">
-          <el-tag v-if="selectedWorkerIsLangGraph" effect="plain">LangGraph Biz Worker</el-tag>
-          <el-tag v-else effect="plain">Claude Code Worker</el-tag>
+        <el-form-item label="执行环境类型">
+          <el-tag v-if="selectedWorkerIsLangGraph" effect="plain">LangGraph Biz capability</el-tag>
+          <el-tag v-else effect="plain">Claude Code capability</el-tag>
         </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="editForm.name" />
@@ -1579,7 +1579,7 @@
           <el-form-item label="Folder 前缀">
             <el-input v-model="editForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
           </el-form-item>
-          <el-divider content-position="left">Codex 配置（可选）</el-divider>
+          <el-divider content-position="left">Codex backend capability（可选）</el-divider>
           <el-form-item label="Codex 地址">
             <el-input v-model="editForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
           </el-form-item>
@@ -1594,7 +1594,7 @@
           <el-form-item label="Codex 默认模型">
             <el-input v-model="editForm.codexModel" placeholder="如：codex-mini-latest" />
           </el-form-item>
-          <el-divider content-position="left">Gemini 配置（可选）</el-divider>
+          <el-divider content-position="left">Gemini backend capability（可选）</el-divider>
           <el-form-item label="Gemini 地址">
             <el-input v-model="editForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
           </el-form-item>
@@ -2486,6 +2486,9 @@
           <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="选择 LLM 配置">
             <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
           </el-select>
+          <div class="form-tip" style="margin-top: 4px">
+            LLM 配置决定 backend，工作目录决定物理 Worker；二者需匹配同一种执行能力。
+          </div>
         </el-form-item>
         <el-form-item label="默认模型">
           <el-select
@@ -2530,6 +2533,9 @@
           <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="选择 LLM 配置">
             <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
           </el-select>
+          <div class="form-tip" style="margin-top: 4px">
+            LLM 配置决定 backend，工作目录决定物理 Worker；二者需匹配同一种执行能力。
+          </div>
         </el-form-item>
         <el-form-item label="默认模型">
           <el-select
@@ -6042,7 +6048,7 @@ async function doResync(taskId: string, pane?: TaskPaneState) {
         break
       }
       case 'MESSAGES_SYNCED': {
-        // 策略 B：CLI 已退出，从 Claude Code Worker 会话补齐了消息
+        // 策略 B：CLI 已退出，从 Claude backend 会话补齐了消息
         const imported = result.messageSync?.imported ?? 0
         if (pane) {
           if (pane.task.value) pane.task.value.status = 'COMPLETED'
@@ -6097,7 +6103,7 @@ async function handleResyncFromList(conv: ConversationGroup) {
 
 /**
  * 策略 B 同步后重新加载 pane 中的消息。
- * 从 Claude Code Worker 会话读取最新消息并替换 ChatPanel 显示。
+ * 从 Claude backend 会话读取最新消息并替换 ChatPanel 显示。
  */
 async function reloadPaneMessages(pane: TaskPaneState) {
   const task = pane.task.value

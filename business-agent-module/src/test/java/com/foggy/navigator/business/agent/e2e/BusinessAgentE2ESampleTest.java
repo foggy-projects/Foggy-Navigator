@@ -143,6 +143,7 @@ class BusinessAgentE2ESampleTest {
                 .thenReturn(sessionDTO);
         A2AgentResourceResolver resourceResolver = new A2AgentResourceResolver(
                 modelGrantService,
+                llmModelManager,
                 clientAppService,
                 workingDirectoryRepository,
                 agentRepository,

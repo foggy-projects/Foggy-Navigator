@@ -81,6 +81,8 @@ class UpstreamCliTest {
                           "upstreamUserId":"u-1",
                           "requestedModelConfigId":"model-env",
                           "effectiveModelConfigId":"model-env",
+                          "effectiveModelName":"qwen-plus",
+                          "effectiveWorkerBackend":"LANGGRAPH_BIZ",
                           "modelConfigSource":"REQUESTED_MODEL_GRANT",
                           "agentId":"agent-1",
                           "agentOwnerType":"CLIENT_APP",
@@ -90,8 +92,13 @@ class UpstreamCliTest {
                           "workerPoolOwnerType":"UPSTREAM_SYSTEM",
                           "workerPoolOwnerId":"usys-1",
                           "workerPoolSource":"WORKER_POOL:UPSTREAM_SYSTEM",
+                          "internalWorkerPoolId":"pool-1",
+                          "internalWorkerPoolOwnerType":"UPSTREAM_SYSTEM",
+                          "internalWorkerPoolOwnerId":"usys-1",
+                          "internalWorkerPoolSource":"WORKER_POOL:UPSTREAM_SYSTEM",
                           "requestedDirectoryId":"dir-env",
                           "effectiveDirectoryId":"dir-env",
+                          "effectivePhysicalWorkerId":"worker-1",
                           "workspaceScope":"USER_PRIVATE",
                           "workspaceSource":"WORKING_DIRECTORY:USER_PRIVATE",
                           "checks":[
@@ -1076,6 +1083,8 @@ class UpstreamCliTest {
                   "requestedModelConfigId":"model-1",
                   "defaultModelConfigId":"model-default",
                   "effectiveModelConfigId":"model-1",
+                  "effectiveModelName":"qwen-plus",
+                  "effectiveWorkerBackend":"LANGGRAPH_BIZ",
                   "modelConfigSource":"REQUESTED_MODEL_GRANT",
                   "modelCategory":"GENERAL",
                   "agentId":"agent-1",
@@ -1087,9 +1096,14 @@ class UpstreamCliTest {
                   "workerPoolOwnerType":"UPSTREAM_SYSTEM",
                   "workerPoolOwnerId":"usys-1",
                   "workerPoolSource":"WORKER_POOL:UPSTREAM_SYSTEM",
+                  "internalWorkerPoolId":"pool-1",
+                  "internalWorkerPoolOwnerType":"UPSTREAM_SYSTEM",
+                  "internalWorkerPoolOwnerId":"usys-1",
+                  "internalWorkerPoolSource":"WORKER_POOL:UPSTREAM_SYSTEM",
                   "requestedDirectoryId":"dir-override",
                   "defaultDirectoryId":"dir-default",
                   "effectiveDirectoryId":"dir-override",
+                  "effectivePhysicalWorkerId":"worker-1",
                   "workspaceScope":"USER_PRIVATE",
                   "workspaceResolverType":"STATIC_ROOT",
                   "workspaceReadOnly":false,
@@ -1123,10 +1137,13 @@ class UpstreamCliTest {
         assertTrue(lastBody.contains("\"directoryId\":\"dir-override\""));
         assertTrue(output.contains("verify-agent-readiness OK"));
         assertTrue(output.contains("defaultModelConfigId=model-default"));
+        assertTrue(output.contains("effectiveModelName=qwen-plus"));
+        assertTrue(output.contains("effectiveWorkerBackend=LANGGRAPH_BIZ"));
         assertTrue(output.contains("modelConfigSource=REQUESTED_MODEL_GRANT"));
         assertTrue(output.contains("agent agentId=agent-1 ownerType=CLIENT_APP ownerId=app-1 source=AGENT:CLIENT_APP skillId=agent-1"));
-        assertTrue(output.contains("workerPool workerPoolId=pool-1 ownerType=UPSTREAM_SYSTEM ownerId=usys-1 source=WORKER_POOL:UPSTREAM_SYSTEM"));
-        assertTrue(output.contains("workspace requestedDirectoryId=dir-override defaultDirectoryId=dir-default effectiveDirectoryId=dir-override scope=USER_PRIVATE resolverType=STATIC_ROOT readOnly=false source=WORKING_DIRECTORY:USER_PRIVATE"));
+        assertTrue(output.contains("physicalWorker physicalWorkerId=worker-1 workerBackend=LANGGRAPH_BIZ source=WORKING_DIRECTORY:USER_PRIVATE"));
+        assertTrue(output.contains("internalRoute workerPoolId=pool-1 ownerType=UPSTREAM_SYSTEM ownerId=usys-1 source=WORKER_POOL:UPSTREAM_SYSTEM"));
+        assertTrue(output.contains("workspace requestedDirectoryId=dir-override defaultDirectoryId=dir-default effectiveDirectoryId=dir-override physicalWorkerId=worker-1 scope=USER_PRIVATE resolverType=STATIC_ROOT readOnly=false source=WORKING_DIRECTORY:USER_PRIVATE"));
         assertTrue(output.contains("check AGENT_REGISTERED=OK"));
         assertTrue(output.contains("skillArtifactTreeUrl=http://localhost:8112/api/v1/open/skills/agent-1/files/tree"));
         assertFalse(output.contains("cat-runtime-secret"));
@@ -1142,6 +1159,8 @@ class UpstreamCliTest {
                   "agentCode":"agent-1",
                   "upstreamUserId":"u-1",
                   "effectiveModelConfigId":"model-default",
+                  "effectiveModelName":"qwen-plus",
+                  "effectiveWorkerBackend":"LANGGRAPH_BIZ",
                   "modelConfigSource":"DEFAULT_MODEL_GRANT",
                   "agentId":"agent-1",
                   "agentOwnerType":"CLIENT_APP",
@@ -1152,6 +1171,10 @@ class UpstreamCliTest {
                   "workerPoolOwnerType":"PLATFORM",
                   "workerPoolOwnerId":"platform",
                   "workerPoolSource":"WORKER_POOL:PLATFORM",
+                  "internalWorkerPoolId":"pool-1",
+                  "internalWorkerPoolOwnerType":"PLATFORM",
+                  "internalWorkerPoolOwnerId":"platform",
+                  "internalWorkerPoolSource":"WORKER_POOL:PLATFORM",
                   "checks":[
                     {"code":"RUNTIME_AGENT_RESOURCE","status":"OK"},
                     {"code":"MODEL_CONFIG_GRANT","status":"OK"}
@@ -1171,7 +1194,7 @@ class UpstreamCliTest {
         assertEquals("/api/v1/open/agents/agent-1/preflight", lastPath);
         assertTrue(output.contains("inspect runtime OK"));
         assertTrue(output.contains("modelConfigSource=DEFAULT_MODEL_GRANT"));
-        assertTrue(output.contains("workerPool workerPoolId=pool-1 ownerType=PLATFORM ownerId=platform source=WORKER_POOL:PLATFORM"));
+        assertTrue(output.contains("internalRoute workerPoolId=pool-1 ownerType=PLATFORM ownerId=platform source=WORKER_POOL:PLATFORM"));
         assertTrue(output.contains("check RUNTIME_AGENT_RESOURCE=OK"));
         assertFalse(output.contains("cat-runtime-secret"));
     }
@@ -1204,8 +1227,9 @@ class UpstreamCliTest {
         assertTrue(output.contains("owner-smoke readiness OK"));
         assertTrue(output.contains("modelConfigSource=REQUESTED_MODEL_GRANT"));
         assertTrue(output.contains("agent agentId=agent-1 ownerType=CLIENT_APP ownerId=app-1 source=AGENT:CLIENT_APP"));
-        assertTrue(output.contains("workerPool workerPoolId=pool-1 ownerType=UPSTREAM_SYSTEM ownerId=usys-1 source=WORKER_POOL:UPSTREAM_SYSTEM"));
-        assertTrue(output.contains("workspace requestedDirectoryId=dir-env"));
+        assertTrue(output.contains("physicalWorker physicalWorkerId=worker-1 workerBackend=LANGGRAPH_BIZ"));
+        assertTrue(output.contains("internalRoute workerPoolId=pool-1 ownerType=UPSTREAM_SYSTEM ownerId=usys-1 source=WORKER_POOL:UPSTREAM_SYSTEM"));
+        assertTrue(output.contains("workspace requestedDirectoryId=dir-env defaultDirectoryId=(empty) effectiveDirectoryId=dir-env physicalWorkerId=worker-1"));
         assertTrue(output.contains("owner-smoke resources OK"));
         assertTrue(output.contains("owner-smoke ready"));
         assertFalse(output.contains("cas-secret-value"));
@@ -1219,6 +1243,7 @@ class UpstreamCliTest {
                   "agentCode":"agent-1",
                   "upstreamUserId":"u-1",
                   "effectiveModelConfigId":"model-env",
+                  "effectiveWorkerBackend":"LANGGRAPH_BIZ",
                   "agentId":"agent-1",
                   "workerPoolId":"pool-1",
                   "checks":[{"code":"AGENT_REGISTERED","status":"OK"}]
@@ -1233,7 +1258,7 @@ class UpstreamCliTest {
                 "--upstream-user-id", "u-1"}, Map.of());
         assertEquals(2, failed);
         assertTrue(stdout.toString(StandardCharsets.UTF_8)
-                .contains("owner-smoke resources FAIL missing=effectiveDirectoryId"));
+                .contains("owner-smoke resources FAIL missing=effectiveDirectoryId,effectivePhysicalWorkerId"));
 
         reset();
         responseOverride = """
@@ -1242,6 +1267,7 @@ class UpstreamCliTest {
                   "agentCode":"agent-1",
                   "upstreamUserId":"u-1",
                   "effectiveModelConfigId":"model-env",
+                  "effectiveWorkerBackend":"LANGGRAPH_BIZ",
                   "agentId":"agent-1",
                   "workerPoolId":"pool-1",
                   "checks":[{"code":"AGENT_REGISTERED","status":"OK"}]
@@ -2081,7 +2107,7 @@ class UpstreamCliTest {
         assertEquals(0, code);
         assertTrue(output.contains("worker list/create/get/update/delete/health/processes/kill"));
         assertTrue(output.contains("directory list/init/get/delete/env/files"));
-        assertTrue(output.contains("worker-pool list/create/register-worker/add-member/status"));
+        assertTrue(output.contains("Internal compatibility: worker-pool list/create/register-worker/add-member/status"));
         assertTrue(output.contains("model system-list/system-create/system-update/system-rotate-key"));
     }
 

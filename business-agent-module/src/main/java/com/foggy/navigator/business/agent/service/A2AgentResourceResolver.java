@@ -8,6 +8,7 @@ import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindi
 import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.enums.LlmModelCategory;
@@ -15,6 +16,7 @@ import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
 import com.foggy.navigator.common.enums.WorkspaceScope;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -35,6 +37,7 @@ public class A2AgentResourceResolver {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ClientAppModelConfigGrantService modelConfigGrantService;
+    private final LlmModelManager llmModelManager;
     private final ClientAppService clientAppService;
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final BusinessCodingAgentRepository agentRepository;
@@ -46,11 +49,14 @@ public class A2AgentResourceResolver {
             String modelConfigId,
             String requestedModelConfigId,
             LlmModelCategory category,
+            String modelName,
+            String workerBackend,
             String source) {
     }
 
     public record ResolvedWorkspaceResource(
             String directoryId,
+            String physicalWorkerId,
             WorkspaceScope workspaceScope,
             WorkingDirectoryResolverType resolverType,
             String workdir,
@@ -72,6 +78,7 @@ public class A2AgentResourceResolver {
             ResourceOwnerType workerPoolOwnerType,
             String workerPoolOwnerId,
             String workerPoolSource,
+            String workerBackend,
             String defaultModelConfigId,
             String defaultDirectoryId,
             String source) {
@@ -109,10 +116,11 @@ public class A2AgentResourceResolver {
                 workerPool.getOwnerType(),
                 workerPool.getOwnerId(),
                 "WORKER_POOL:" + workerPool.getOwnerType(),
+                trimToNull(workerPool.getWorkerBackend()),
                 trimToNull(agent.getDefaultModelConfigId()),
                 trimToNull(agent.getDefaultDirectoryId()),
                 "AGENT:" + agent.getOwnerType());
-        log.info("Resolved A2Agent resource: tenantId={}, clientAppId={}, upstreamUserId={}, agentId={}, ownerType={}, source={}, skillId={}, workerPoolId={}, workerPoolOwnerType={}, workerPoolSource={}, defaultModelConfigId={}, defaultDirectoryId={}",
+        log.info("Resolved A2Agent resource: tenantId={}, clientAppId={}, upstreamUserId={}, agentId={}, ownerType={}, source={}, skillId={}, workerPoolId={}, workerPoolOwnerType={}, workerPoolSource={}, workerBackend={}, defaultModelConfigId={}, defaultDirectoryId={}",
                 tenantId,
                 clientAppId,
                 upstreamUserId,
@@ -123,6 +131,7 @@ public class A2AgentResourceResolver {
                 resolved.workerPoolId(),
                 resolved.workerPoolOwnerType(),
                 resolved.workerPoolSource(),
+                resolved.workerBackend(),
                 resolved.defaultModelConfigId(),
                 resolved.defaultDirectoryId());
         return resolved;
@@ -149,20 +158,25 @@ public class A2AgentResourceResolver {
                 clientAppId,
                 normalizedRequestedModelConfigId,
                 category);
+        LlmModelConfigDTO modelConfig = requireResolvedModelConfig(resolvedModelConfigId);
         ResolvedModelResource resolved = new ResolvedModelResource(
                 resolvedModelConfigId,
                 normalizedRequestedModelConfigId,
                 category,
+                trimToNull(modelConfig.getModelName()),
+                trimToNull(modelConfig.getWorkerBackend()),
                 StringUtils.hasText(normalizedRequestedModelConfigId)
                         ? "REQUESTED_MODEL_GRANT"
                         : "DEFAULT_MODEL_GRANT");
-        log.info("Resolved A2Agent model resource: tenantId={}, clientAppId={}, category={}, source={}, modelConfigId={}, requestedModelConfigId={}",
+        log.info("Resolved A2Agent model resource: tenantId={}, clientAppId={}, category={}, source={}, modelConfigId={}, requestedModelConfigId={}, modelName={}, workerBackend={}",
                 tenantId,
                 clientAppId,
                 category,
                 resolved.source(),
                 resolved.modelConfigId(),
-                resolved.requestedModelConfigId());
+                resolved.requestedModelConfigId(),
+                resolved.modelName(),
+                resolved.workerBackend());
         return resolved;
     }
 
@@ -201,6 +215,8 @@ public class A2AgentResourceResolver {
                 modelResource.modelConfigId(),
                 modelResource.requestedModelConfigId(),
                 modelResource.category(),
+                modelResource.modelName(),
+                modelResource.workerBackend(),
                 source);
         log.info("Resolved A2Agent agent model binding: tenantId={}, clientAppId={}, agentId={}, modelConfigId={}, source={}",
                 tenantId,
@@ -228,17 +244,22 @@ public class A2AgentResourceResolver {
         requireText(clientAppId, "clientAppId is required");
         return modelConfigGrantService.tryResolveEffectiveModelConfigId(tenantId, clientAppId, null, category)
                 .map(modelConfigId -> {
+                    LlmModelConfigDTO modelConfig = requireResolvedModelConfig(modelConfigId);
                     ResolvedModelResource resolved = new ResolvedModelResource(
                             modelConfigId,
                             null,
                             category,
+                            trimToNull(modelConfig.getModelName()),
+                            trimToNull(modelConfig.getWorkerBackend()),
                             "DEFAULT_MODEL_GRANT");
-                    log.info("Resolved optional A2Agent model resource: tenantId={}, clientAppId={}, category={}, source={}, modelConfigId={}",
+                    log.info("Resolved optional A2Agent model resource: tenantId={}, clientAppId={}, category={}, source={}, modelConfigId={}, modelName={}, workerBackend={}",
                             tenantId,
                             clientAppId,
                             category,
                             resolved.source(),
-                            resolved.modelConfigId());
+                            resolved.modelConfigId(),
+                            resolved.modelName(),
+                            resolved.workerBackend());
                     return resolved;
                 });
     }
@@ -261,6 +282,8 @@ public class A2AgentResourceResolver {
                                 modelResource.modelConfigId(),
                                 modelResource.requestedModelConfigId(),
                                 modelResource.category(),
+                                modelResource.modelName(),
+                                modelResource.workerBackend(),
                                 source));
                     } catch (SecurityException e) {
                         log.debug("Optional A2Agent model is not bound to agent: tenantId={}, clientAppId={}, agentId={}, modelConfigId={}",
@@ -338,6 +361,7 @@ public class A2AgentResourceResolver {
                 directory.getDirectoryId());
         ResolvedWorkspaceResource resolved = new ResolvedWorkspaceResource(
                 directory.getDirectoryId(),
+                trimToNull(directory.getWorkerId()),
                 directory.getWorkspaceScope(),
                 directory.getResolverType(),
                 workdir,
@@ -347,11 +371,12 @@ public class A2AgentResourceResolver {
                 retentionPolicy,
                 concurrencyPolicy,
                 "WORKING_DIRECTORY:" + directory.getWorkspaceScope());
-        log.info("Resolved A2Agent workspace resource: tenantId={}, clientAppId={}, upstreamUserId={}, directoryId={}, scope={}, resolverType={}, readOnly={}",
+        log.info("Resolved A2Agent workspace resource: tenantId={}, clientAppId={}, upstreamUserId={}, directoryId={}, physicalWorkerId={}, scope={}, resolverType={}, readOnly={}",
                 tenantId,
                 clientAppId,
                 upstreamUserId,
                 resolved.directoryId(),
+                resolved.physicalWorkerId(),
                 resolved.workspaceScope(),
                 resolved.resolverType(),
                 resolved.readOnly());
@@ -556,6 +581,7 @@ public class A2AgentResourceResolver {
     private ResolvedWorkspaceResource withWorkspaceSource(ResolvedWorkspaceResource workspaceResource, String source) {
         return new ResolvedWorkspaceResource(
                 workspaceResource.directoryId(),
+                workspaceResource.physicalWorkerId(),
                 workspaceResource.workspaceScope(),
                 workspaceResource.resolverType(),
                 workspaceResource.workdir(),
@@ -565,6 +591,11 @@ public class A2AgentResourceResolver {
                 workspaceResource.retentionPolicy(),
                 workspaceResource.concurrencyPolicy(),
                 source + ":" + workspaceResource.workspaceScope());
+    }
+
+    private LlmModelConfigDTO requireResolvedModelConfig(String modelConfigId) {
+        return llmModelManager.getModelConfig(modelConfigId)
+                .orElseThrow(() -> new IllegalStateException("resolved model config not found: " + modelConfigId));
     }
 
     private String resolveWorkdir(WorkingDirectoryEntity directory) {

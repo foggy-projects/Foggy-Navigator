@@ -96,6 +96,7 @@ class BusinessAgentTaskServiceTest {
                         com.foggy.navigator.common.enums.ResourceOwnerType.PLATFORM,
                         "tenant_01",
                         "WORKER_POOL:PLATFORM",
+                        "LANGGRAPH_BIZ",
                         null,
                         null,
                         "AGENT:CLIENT_APP"
@@ -173,6 +174,7 @@ class BusinessAgentTaskServiceTest {
                 eq("tenant_01"), eq("app_01"), eq("user_01"), any(), eq("dir_01")))
                 .thenReturn(Optional.of(new A2AgentResourceResolver.ResolvedWorkspaceResource(
                         "dir_01",
+                        "worker_01",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.DELEGATED,
                         "D:/workspace/app",

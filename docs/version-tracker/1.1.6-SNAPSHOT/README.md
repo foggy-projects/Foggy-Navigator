@@ -59,6 +59,10 @@
 
 若后续实施讨论需要兼容旧资源或旧接口，以 `18` 为当前阶段边界：本轮不做旧数据迁移，不做旧接口兼容，不保留 legacy fallback；缺少 owner / grant / workspace policy 的资源在新 runtime 路径下 fail-closed，测试环境可重建资源。
 
+若旧文档或代码注释仍把 WorkerPool 作为上游必须创建、选择或理解的一等资源，以 `17` 和 `18` 的 PhysicalWorker backend capability 口径为准：上游面对 PhysicalWorker、WorkingDirectory、LlmConfigModel 和 Agent；`LlmConfigModel.workerBackend` 选择 backend，`WorkingDirectory` 选择物理 Worker，WorkerPool 退化为 Navigator 内部 routing artifact。
+
+若旧文档只描述 `configModelId` 而未区分具体模型变体，以 `OPT-physical-worker-backend-capability-contract` 为准：`configModelId` 选择 backend / provider / credential / budget profile，`modelVariant` 或 `effectiveModelName` 只在同一 config 的 allowlist 内选择具体模型；Agent 是推荐的 runtime profile，继续同一 task / context 时不得切换已冻结资源。
+
 若后续文档讨论 `plan` 工具函数，以 `OPT-runtime-plan-tool-contract` 为当前口径：plan 是 runtime state 工具，不是普通业务工具；不暴露私有推理；Root 与 Agent frame 默认隔离；实现前先复盘 Claude Code / Codex 的 plan 行为。
 
 ## 当前条目
@@ -88,6 +92,7 @@
 - [workitems/RELEASE-20260523-runtime-context-and-tms-chat-closure.md](./workitems/RELEASE-20260523-runtime-context-and-tms-chat-closure.md) - 记录 2026-05-23 对外发布收口：SDK 1.0.5、CLI 本地包、OpenAPI frame report、TMS Chat 历史状态与附件复测通过
 - [workitems/TMS-HANDOFF-20260523-final-release-upgrade.md](./workitems/TMS-HANDOFF-20260523-final-release-upgrade.md) - 提供给 TMS / 上游的最终发布升级提示词，覆盖 SDK 1.0.5、Chat Widget 更新、重启、真实 smoke 与失败回传字段
 - [workitems/HANDOFF-20260524-upstream-owner-aware-resource-migration.md](./workitems/HANDOFF-20260524-upstream-owner-aware-resource-migration.md) - 提供给上游的 owner-aware resource governance 改造提示词，覆盖主体/credential、资源 owner、workspace、runtime context 与 `owner-smoke` 验收
+- [workitems/OPT-physical-worker-backend-capability-contract.md](./workitems/OPT-physical-worker-backend-capability-contract.md) - 收口 PhysicalWorker、backend capability、LlmConfigModel、WorkingDirectory 与 Agent 的上游契约，明确 WorkerPool 退化为内部 routing artifact
 - [workitems/OPT-runtime-prompt-window-turn-aware-pruning.md](./workitems/OPT-runtime-prompt-window-turn-aware-pruning.md) - 跟踪 prompt window 按 turn / tool protocol 裁剪、大工具结果预算和压缩触发边界参数设计
 - [workitems/OPT-runtime-plan-tool-contract.md](./workitems/OPT-runtime-plan-tool-contract.md) - 记录 BizWorker `update_plan` / plan 工具函数的初始契约、runtime state 边界和后续 Claude Code / Codex 调研项
 

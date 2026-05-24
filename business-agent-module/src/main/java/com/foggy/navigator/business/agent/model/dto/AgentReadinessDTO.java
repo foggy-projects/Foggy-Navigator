@@ -16,6 +16,8 @@ public class AgentReadinessDTO {
     private String requestedModelConfigId;
     private String defaultModelConfigId;
     private String effectiveModelConfigId;
+    private String effectiveModelName;
+    private String effectiveWorkerBackend;
     private String modelConfigSource;
     private String modelCategory;
     private String agentId;
@@ -27,9 +29,14 @@ public class AgentReadinessDTO {
     private String workerPoolOwnerType;
     private String workerPoolOwnerId;
     private String workerPoolSource;
+    private String internalWorkerPoolId;
+    private String internalWorkerPoolOwnerType;
+    private String internalWorkerPoolOwnerId;
+    private String internalWorkerPoolSource;
     private String requestedDirectoryId;
     private String defaultDirectoryId;
     private String effectiveDirectoryId;
+    private String effectivePhysicalWorkerId;
     private String workspaceScope;
     private String workspaceResolverType;
     private Boolean workspaceReadOnly;

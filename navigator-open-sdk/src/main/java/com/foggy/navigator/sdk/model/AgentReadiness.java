@@ -12,6 +12,8 @@ public class AgentReadiness {
     private String requestedModelConfigId;
     private String defaultModelConfigId;
     private String effectiveModelConfigId;
+    private String effectiveModelName;
+    private String effectiveWorkerBackend;
     private String modelConfigSource;
     private String modelCategory;
     private String agentId;
@@ -23,9 +25,14 @@ public class AgentReadiness {
     private String workerPoolOwnerType;
     private String workerPoolOwnerId;
     private String workerPoolSource;
+    private String internalWorkerPoolId;
+    private String internalWorkerPoolOwnerType;
+    private String internalWorkerPoolOwnerId;
+    private String internalWorkerPoolSource;
     private String requestedDirectoryId;
     private String defaultDirectoryId;
     private String effectiveDirectoryId;
+    private String effectivePhysicalWorkerId;
     private String workspaceScope;
     private String workspaceResolverType;
     private Boolean workspaceReadOnly;
@@ -60,6 +67,12 @@ public class AgentReadiness {
     public String getEffectiveModelConfigId() { return effectiveModelConfigId; }
     public void setEffectiveModelConfigId(String effectiveModelConfigId) { this.effectiveModelConfigId = effectiveModelConfigId; }
 
+    public String getEffectiveModelName() { return effectiveModelName; }
+    public void setEffectiveModelName(String effectiveModelName) { this.effectiveModelName = effectiveModelName; }
+
+    public String getEffectiveWorkerBackend() { return effectiveWorkerBackend; }
+    public void setEffectiveWorkerBackend(String effectiveWorkerBackend) { this.effectiveWorkerBackend = effectiveWorkerBackend; }
+
     public String getModelConfigSource() { return modelConfigSource; }
     public void setModelConfigSource(String modelConfigSource) { this.modelConfigSource = modelConfigSource; }
 
@@ -93,6 +106,18 @@ public class AgentReadiness {
     public String getWorkerPoolSource() { return workerPoolSource; }
     public void setWorkerPoolSource(String workerPoolSource) { this.workerPoolSource = workerPoolSource; }
 
+    public String getInternalWorkerPoolId() { return internalWorkerPoolId; }
+    public void setInternalWorkerPoolId(String internalWorkerPoolId) { this.internalWorkerPoolId = internalWorkerPoolId; }
+
+    public String getInternalWorkerPoolOwnerType() { return internalWorkerPoolOwnerType; }
+    public void setInternalWorkerPoolOwnerType(String internalWorkerPoolOwnerType) { this.internalWorkerPoolOwnerType = internalWorkerPoolOwnerType; }
+
+    public String getInternalWorkerPoolOwnerId() { return internalWorkerPoolOwnerId; }
+    public void setInternalWorkerPoolOwnerId(String internalWorkerPoolOwnerId) { this.internalWorkerPoolOwnerId = internalWorkerPoolOwnerId; }
+
+    public String getInternalWorkerPoolSource() { return internalWorkerPoolSource; }
+    public void setInternalWorkerPoolSource(String internalWorkerPoolSource) { this.internalWorkerPoolSource = internalWorkerPoolSource; }
+
     public String getRequestedDirectoryId() { return requestedDirectoryId; }
     public void setRequestedDirectoryId(String requestedDirectoryId) { this.requestedDirectoryId = requestedDirectoryId; }
 
@@ -101,6 +126,9 @@ public class AgentReadiness {
 
     public String getEffectiveDirectoryId() { return effectiveDirectoryId; }
     public void setEffectiveDirectoryId(String effectiveDirectoryId) { this.effectiveDirectoryId = effectiveDirectoryId; }
+
+    public String getEffectivePhysicalWorkerId() { return effectivePhysicalWorkerId; }
+    public void setEffectivePhysicalWorkerId(String effectivePhysicalWorkerId) { this.effectivePhysicalWorkerId = effectivePhysicalWorkerId; }
 
     public String getWorkspaceScope() { return workspaceScope; }
     public void setWorkspaceScope(String workspaceScope) { this.workspaceScope = workspaceScope; }
