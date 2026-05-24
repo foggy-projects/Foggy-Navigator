@@ -169,7 +169,7 @@ code_inventory:
 
 1. `list_files` 不泄漏物理路径。
 2. `read_file` 默认最多返回 200 行或 64KB，避免长文件直接进入上下文。
-3. `write_file(mode=create)` 正常创建 `<data_root>/accounts/user-001/skills/my-skill/SKILL.md`。
+3. `write_file(mode=create)` 正常创建 `<data_root>/accounts/user-001/agent/skills/my-skill/SKILL.md`。
 4. `write_file(mode=create)` 遇到已存在文件被拒绝。
 5. `write_file(mode=overwrite)` 必须显式传入，未显式传入时不能覆盖已有文件。
 6. `write_file(mode=overwrite)` 正常覆盖允许路径内的已有文件，并记录 runtime audit record。

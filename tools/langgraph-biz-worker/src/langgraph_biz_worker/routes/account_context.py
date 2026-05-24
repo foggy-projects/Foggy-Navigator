@@ -113,7 +113,7 @@ def _account_root(account_id: str) -> Path:
         _validate_account_id(account_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    root = Path(_data_root).resolve() / "accounts" / account_id
+    root = Path(_data_root).resolve() / "accounts" / account_id / "agent"
     if root.exists() and root.is_symlink():
         raise HTTPException(status_code=400, detail="account root must not be a symlink")
     return root

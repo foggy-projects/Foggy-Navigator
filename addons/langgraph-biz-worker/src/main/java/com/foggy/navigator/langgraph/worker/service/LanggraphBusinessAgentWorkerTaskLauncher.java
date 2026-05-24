@@ -132,9 +132,6 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         putText(context, "physicalWorkerId", request.getPhysicalWorkerId());
         context.put("workerBackend", request.getWorkerBackend());
         context.put("auto_inject_app_public_skills", true);
-        if (request.getMarkdownBody() != null && !request.getMarkdownBody().isBlank()) {
-            context.put("skill_markdown", request.getMarkdownBody());
-        }
         return context;
     }
 

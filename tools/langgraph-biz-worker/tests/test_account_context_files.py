@@ -10,7 +10,7 @@ from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
 
 
 def test_reads_account_context_files_in_authority_order(tmp_path):
-    account_root = tmp_path / "data" / "accounts" / "acct-001"
+    account_root = tmp_path / "data" / "accounts" / "acct-001" / "agent"
     account_root.mkdir(parents=True)
     (account_root / "MEMORY.md").write_text("memory note", encoding="utf-8")
     (account_root / "ACCOUNT_POLICY.md").write_text("policy rule", encoding="utf-8")
@@ -23,7 +23,7 @@ def test_reads_account_context_files_in_authority_order(tmp_path):
 
 
 def test_build_prompt_documents_authority_and_permissions(tmp_path):
-    account_root = tmp_path / "data" / "accounts" / "acct-001"
+    account_root = tmp_path / "data" / "accounts" / "acct-001" / "agent"
     account_root.mkdir(parents=True)
     (account_root / "ACCOUNT_POLICY.md").write_text("policy rule", encoding="utf-8")
     (account_root / "MEMORY.md").write_text("memory note", encoding="utf-8")
@@ -40,7 +40,7 @@ def test_build_prompt_documents_authority_and_permissions(tmp_path):
 
 
 def test_invalid_account_id_returns_no_context(tmp_path):
-    account_root = tmp_path / "data" / "accounts" / "acct-001"
+    account_root = tmp_path / "data" / "accounts" / "acct-001" / "agent"
     account_root.mkdir(parents=True)
     (account_root / "ACCOUNT_POLICY.md").write_text("policy rule", encoding="utf-8")
 
@@ -49,7 +49,7 @@ def test_invalid_account_id_returns_no_context(tmp_path):
 
 
 def test_long_context_file_is_truncated(tmp_path):
-    account_root = tmp_path / "data" / "accounts" / "acct-001"
+    account_root = tmp_path / "data" / "accounts" / "acct-001" / "agent"
     account_root.mkdir(parents=True)
     (account_root / "MEMORY.md").write_text("abcdef", encoding="utf-8")
 
@@ -65,9 +65,10 @@ def test_long_context_file_is_truncated(tmp_path):
 def test_reads_delegated_workspace_context_from_execution_policy(tmp_path):
     data_root = tmp_path / "data"
     workspace = tmp_path / "delegated" / "user-001"
-    workspace.mkdir(parents=True)
-    (workspace / "ACCOUNT_POLICY.md").write_text("delegated policy", encoding="utf-8")
-    (workspace / "MEMORY.md").write_text("delegated memory", encoding="utf-8")
+    agent_root = workspace / "agent"
+    agent_root.mkdir(parents=True)
+    (agent_root / "ACCOUNT_POLICY.md").write_text("delegated policy", encoding="utf-8")
+    (agent_root / "MEMORY.md").write_text("delegated memory", encoding="utf-8")
     policy = ExecutionPolicy.from_context({
         "execution_policy": {
             "workdir": str(workspace),

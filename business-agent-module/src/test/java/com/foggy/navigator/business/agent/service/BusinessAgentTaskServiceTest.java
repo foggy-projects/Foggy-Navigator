@@ -194,8 +194,6 @@ class BusinessAgentTaskServiceTest {
                 )));
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
-        when(skillRegistryService.buildMaterializedPublicSkillMarkdown("tenant_01", "skill_01", "app_01"))
-                .thenReturn("materialized skill body");
         when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
         when(workerTaskLauncher.launch(any(BusinessAgentWorkerTaskLaunchRequest.class))).thenReturn(
                 BusinessAgentWorkerTaskLaunchResult.builder()
@@ -224,7 +222,6 @@ class BusinessAgentTaskServiceTest {
         assertEquals(result.getTaskScopedToken(), requestCaptor.getValue().getTaskScopedToken());
         assertNull(requestCaptor.getValue().getContextId());
         assertEquals("agent_01", requestCaptor.getValue().getAgentId());
-        assertEquals("materialized skill body", requestCaptor.getValue().getMarkdownBody());
         assertEquals("skill_01", requestCaptor.getValue().getSkillName());
         assertEquals("pool_01", requestCaptor.getValue().getWorkerPoolId());
         assertEquals("worker_01", requestCaptor.getValue().getPhysicalWorkerId());
@@ -304,8 +301,6 @@ class BusinessAgentTaskServiceTest {
                 )));
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
-        when(skillRegistryService.buildMaterializedPublicSkillMarkdown("tenant_01", "skill_01", "app_01"))
-                .thenReturn("materialized skill body");
         when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
         when(workerTaskLauncher.launch(any(BusinessAgentWorkerTaskLaunchRequest.class))).thenReturn(
                 BusinessAgentWorkerTaskLaunchResult.builder()

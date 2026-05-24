@@ -85,7 +85,7 @@ tenantId + clientAppId + scope + accountId + skillId
 4. worker 物化到：
 
 ```text
-<data_root>/accounts/<account_id>/skills/<skill_id>
+<data_root>/accounts/<account_id>/agent/skills/<skill_id>
 ```
 
 5. runtime-token 入口只能同步当前 `X-Upstream-User-Id` 对应的 account private skill。

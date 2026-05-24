@@ -31,7 +31,6 @@ public class BusinessAgentWorkerTaskLaunchRequest {
     private Object workspaceQuotaPolicy;
     private Object workspaceRetentionPolicy;
     private Object workspaceConcurrencyPolicy;
-    private String markdownBody;
     private String taskScopedToken;
     private String workdir;
     private List<String> allowedDirs;

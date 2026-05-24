@@ -92,7 +92,7 @@ async def materialize_skill(req: MaterializeRequest) -> dict:
             account_id = _validate_account_id(req.account_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        target_dir = _skills_root.parent / "data" / "accounts" / account_id / "skills" / skill_id
+        target_dir = _skills_root.parent / "data" / "accounts" / account_id / "agent" / "skills" / skill_id
         visibility = "private"
     else:
         if req.client_app_id:
@@ -162,7 +162,7 @@ async def clear_skill(req: ClearRequest) -> dict:
             skill_id = _validate_path_segment(req.skill_id, "skill_id") if req.skill_id else None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        target_dir = _skills_root.parent / "data" / "accounts" / account_id / "skills"
+        target_dir = _skills_root.parent / "data" / "accounts" / account_id / "agent" / "skills"
     else:
         try:
             client_app_id = _validate_path_segment(req.client_app_id, "client_app_id") if req.client_app_id else None

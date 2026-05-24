@@ -362,6 +362,43 @@ def test_run_skill_passes_raw_prompt_and_runtime_attachments_to_llm_agent(monkey
     assert captured["runtime_context"]["attachments"] == state["attachments"]
 
 
+def test_run_skill_passes_local_agent_skill_manifest_to_persistent_root(monkeypatch, tmp_path):
+    _install_isolated_runtime(monkeypatch, tmp_path)
+    skill_dir = tmp_path / "skills" / "public" / "apps" / "capp_001" / "order-assistant"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: order-assistant\n"
+        "description: Order assistant from local registry.\n"
+        "allowed-tools: invoke_business_function\n"
+        "---\n"
+        "Use the local order workflow.",
+        encoding="utf-8",
+    )
+    state = _state("task_root_bound_skill_001")
+    state["context"] = {
+        "client_app_id": "capp_001",
+        "businessSkillName": "order-assistant",
+    }
+    routed = root_graph_module.route_skill(state)
+    state["active_frame_id"] = routed["active_frame_id"]
+
+    captured = {}
+
+    class FakeAgent:
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return []
+
+    monkeypatch.setattr(root_graph_module, "_llm_skill_agent_for_state", lambda current_state: FakeAgent())
+
+    root_graph_module.run_skill(state)
+
+    bound = captured["runtime_context"]["_root_bound_skill_manifest"]
+    assert bound["id"] == "order-assistant"
+    assert bound["markdown_body"] == "Use the local order workflow."
+
+
 def test_run_skill_passes_recent_conversation_to_persistent_root_agent(monkeypatch, tmp_path):
     _install_isolated_runtime(monkeypatch, tmp_path)
     state = _state("task_root_recent_prompt_001")

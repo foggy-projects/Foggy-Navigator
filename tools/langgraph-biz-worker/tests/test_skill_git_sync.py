@@ -256,7 +256,7 @@ class TestAccountSkillLoading:
         (builtin / "SKILL.md").write_text("---\nname: my_skill\ndescription: builtin version\n---\n")
 
         # Create account skill with same name
-        account = data_root / "accounts" / "user-001" / "skills" / "my-skill"
+        account = data_root / "accounts" / "user-001" / "agent" / "skills" / "my-skill"
         account.mkdir(parents=True)
         (account / "SKILL.md").write_text("---\nname: my_skill\ndescription: account version\n---\n")
 

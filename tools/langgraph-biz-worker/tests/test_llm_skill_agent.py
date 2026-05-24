@@ -13,7 +13,7 @@ from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_state_for_tests
 from langgraph_biz_worker.runtime import command_tool
-from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
+from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent, _root_manifest_with_bound_skill
 from langgraph_biz_worker.runtime.context_memory import PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY
 from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
@@ -58,6 +58,32 @@ class HangingModel:
     def invoke(self, messages):
         time.sleep(self.sleep_seconds)
         return AIMessage(content="")
+
+
+def test_root_manifest_merges_bound_agent_skill_material():
+    root = SkillManifest(
+        id="system.root",
+        name="system.root",
+        markdown_body="root instruction",
+        allowed_tools=["invoke_business_skill"],
+    )
+    bound = SkillManifest(
+        id="order-assistant",
+        name="order-assistant",
+        description="Order workflow.",
+        markdown_body="Use local order workflow.",
+        allowed_tools=["invoke_business_function"],
+    )
+
+    merged = _root_manifest_with_bound_skill(
+        root,
+        {"_root_bound_skill_manifest": bound.model_dump()},
+    )
+
+    assert "root instruction" in merged.markdown_body
+    assert "Use local order workflow." in merged.markdown_body
+    assert "invoke_business_skill" in merged.allowed_tools
+    assert "invoke_business_function" in merged.allowed_tools
 
 
 class TransientTimeoutModel:
@@ -3075,7 +3101,7 @@ def test_llm_agent_uses_frame_manifest_snapshot_after_registry_reload():
 
 def test_llm_agent_injects_account_context_before_skill_instructions(tmp_path):
     data_root = tmp_path / "data"
-    account_root = data_root / "accounts" / "acct-001"
+    account_root = data_root / "accounts" / "acct-001" / "agent"
     account_root.mkdir(parents=True)
     (account_root / "ACCOUNT_POLICY.md").write_text("policy rule", encoding="utf-8")
     (account_root / "AGENT.md").write_text("agent rule", encoding="utf-8")
@@ -3127,9 +3153,10 @@ def test_llm_agent_injects_account_context_before_skill_instructions(tmp_path):
 def test_llm_agent_injects_delegated_workspace_context_without_account_id(tmp_path):
     data_root = tmp_path / "data"
     workspace = tmp_path / "delegated" / "user-001"
-    workspace.mkdir(parents=True)
-    (workspace / "ACCOUNT_POLICY.md").write_text("delegated policy", encoding="utf-8")
-    (workspace / "MEMORY.md").write_text("delegated memory", encoding="utf-8")
+    agent_root = workspace / "agent"
+    agent_root.mkdir(parents=True)
+    (agent_root / "ACCOUNT_POLICY.md").write_text("delegated policy", encoding="utf-8")
+    (agent_root / "MEMORY.md").write_text("delegated memory", encoding="utf-8")
 
     registry = SkillRegistry()
     registry.register(SkillManifest(
@@ -3149,12 +3176,12 @@ def test_llm_agent_injects_delegated_workspace_context_without_account_id(tmp_pa
     )
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
-            "id": "call_list_files",
-            "name": "list_files",
-            "args": {
-                "relative_path": ".",
-                "recursive": False,
-            },
+                "id": "call_list_files",
+                "name": "list_files",
+                "args": {
+                    "relative_path": "agent",
+                    "recursive": False,
+                },
         }]),
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",

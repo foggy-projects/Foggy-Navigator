@@ -158,6 +158,8 @@ class LlmSkillAgent:
             else:
                 self._runtime.fail_frame(frame_id, f"Skill manifest not found: {frame.skill_id}")
                 return [QueryEvent(type="error", task_id=task_id, error="Skill manifest not found")]
+        if persistent_frame:
+            manifest = _root_manifest_with_bound_skill(manifest, runtime_context)
         if frame.frame_kind == FrameKind.AGENT:
             manifest = _agent_frame_manifest(manifest)
         try:
@@ -1434,6 +1436,44 @@ def _agent_frame_manifest(manifest: SkillManifest) -> SkillManifest:
         if tool_name not in allowed:
             allowed.append(tool_name)
     return manifest.model_copy(update={"allowed_tools": allowed})
+
+
+def _root_manifest_with_bound_skill(
+    manifest: SkillManifest,
+    runtime_context: dict[str, Any],
+) -> SkillManifest:
+    if manifest.id != "system.root":
+        return manifest
+    raw = runtime_context.get("_root_bound_skill_manifest")
+    if not isinstance(raw, dict):
+        return manifest
+    try:
+        bound = SkillManifest.model_validate(raw)
+    except Exception:
+        logger.warning("Invalid root-bound skill manifest ignored", exc_info=True)
+        return manifest
+
+    sections = [manifest.markdown_body.strip()]
+    sections.append(
+        "\n".join([
+            "当前 Root 绑定了一个来自本地 Skill Registry 的业务 Agent Skill。",
+            f"Skill ID: {bound.id}",
+            f"Skill Name: {bound.name}",
+            f"Skill Description: {bound.description}",
+            "",
+            "以下 Skill 材料是当前 Root 回合的主要业务能力说明，应按其要求处理用户请求：",
+            bound.markdown_body.strip(),
+        ]).strip()
+    )
+    allowed = list(manifest.allowed_tools or [])
+    for tool_name in bound.allowed_tools or []:
+        if tool_name not in allowed:
+            allowed.append(tool_name)
+    return manifest.model_copy(update={
+        "description": bound.description or manifest.description,
+        "markdown_body": "\n\n".join(section for section in sections if section),
+        "allowed_tools": allowed,
+    })
 
 
 def _manifest_with_default_file_tools(

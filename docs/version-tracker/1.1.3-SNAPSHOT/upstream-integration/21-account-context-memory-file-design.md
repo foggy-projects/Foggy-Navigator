@@ -61,9 +61,9 @@ Platform/System Prompt
 account private Skill 仍位于：
 
 ```text
-<data_root>/accounts/<account-id>/skills/<skill-name>/SKILL.md
-<data_root>/accounts/<account-id>/skills/<skill-name>/references/**
-<data_root>/accounts/<account-id>/skills/<skill-name>/assets/**
+<data_root>/accounts/<account-id>/agent/skills/<skill-name>/SKILL.md
+<data_root>/accounts/<account-id>/agent/skills/<skill-name>/references/**
+<data_root>/accounts/<account-id>/agent/skills/<skill-name>/assets/**
 ```
 
 SkillRegistry 继续按 `legacy < builtin < public < app-public < account` 加载。三层上下文文件用于 prompt 注入，不参与 Skill manifest 覆盖。

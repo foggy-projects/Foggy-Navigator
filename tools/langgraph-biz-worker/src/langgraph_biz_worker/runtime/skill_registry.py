@@ -12,7 +12,7 @@ Directory layout (Doc 31 §6.2)::
         public/<skill-name>/SKILL.md
         public/apps/<client-app-id>/<skill-name>/SKILL.md
       data/
-        accounts/<account-id>/skills/<skill-name>/SKILL.md
+        accounts/<account-id>/agent/skills/<skill-name>/SKILL.md
 
 Load priority: later layers overwrite earlier layers.
 """

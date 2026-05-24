@@ -14,7 +14,7 @@ def _client(tmp_path) -> TestClient:
 
 
 def test_lists_fixed_context_files(tmp_path):
-    account_root = tmp_path / "data" / "accounts" / "acct-001"
+    account_root = tmp_path / "data" / "accounts" / "acct-001" / "agent"
     account_root.mkdir(parents=True)
     (account_root / "ACCOUNT_POLICY.md").write_text("policy\n", encoding="utf-8")
 
@@ -34,7 +34,7 @@ def test_lists_fixed_context_files(tmp_path):
 
 
 def test_reads_context_file_without_exposing_paths(tmp_path):
-    account_root = tmp_path / "data" / "accounts" / "acct-001"
+    account_root = tmp_path / "data" / "accounts" / "acct-001" / "agent"
     account_root.mkdir(parents=True)
     (account_root / "MEMORY.md").write_text("remember this\n", encoding="utf-8")
 

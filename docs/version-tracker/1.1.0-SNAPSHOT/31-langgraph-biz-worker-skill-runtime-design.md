@@ -202,7 +202,7 @@ Skill 的定义与资源由 Worker 维护，不由上游在每次任务请求中
 说明：
 
 1. `accounts/<account-id>/` 本身就是账号私有根目录，不再额外引入 `private/`
-2. 账号私有 Skill 统一放在 `accounts/<account-id>/skills/`
+2. 账号私有 Skill 统一放在 `accounts/<account-id>/agent/skills/`
 3. 平台公共 Skill 放在 `skills/public/`
 4. Worker 运行时内建 Skill 放在 `skills/builtin/`
 5. `conversations/` 与 `skills/` 共处同一账号根目录，便于会话、审计、技能版本关联追踪
@@ -938,7 +938,7 @@ quality-gate → test-coverage-audit → acceptance
 
 #### 暂不做
 
-- 账号级 Skill 隔离（`accounts/<id>/skills/`）
+- 账号级 Skill 隔离（`accounts/<id>/agent/skills/`）
 - 前端 Skill 配置台
 - 真实业务系统工具适配
 - 多 Frame 并发调度优化

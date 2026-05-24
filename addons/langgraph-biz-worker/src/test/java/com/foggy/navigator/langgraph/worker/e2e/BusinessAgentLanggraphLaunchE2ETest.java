@@ -253,7 +253,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals(true, context.get("auto_inject_app_public_skills"));
         assertEquals(WORKER_POOL_ID, context.get("workerPoolId"));
         assertEquals(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND, context.get("workerBackend"));
-        assertEquals("# World Sim\nUse deterministic E2E cursor.", context.get("skill_markdown"));
+        assertFalse(context.containsKey("skill_markdown"));
         assertFalse(context.containsKey("task_scoped_token"));
 
         @SuppressWarnings("unchecked")
@@ -368,9 +368,6 @@ class BusinessAgentLanggraphLaunchE2ETest {
         doNothing().when(userGrantService).checkUpstreamUserAccess(TENANT, CLIENT_APP_ID, UPSTREAM_USER_ID);
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(TENANT, CLIENT_APP_ID, SKILL_ID);
         when(workingDirectoryRepository.findByDirectoryId(DIRECTORY_ID)).thenReturn(Optional.of(userPrivateDirectory()));
-
-        when(skillRegistryService.buildMaterializedPublicSkillMarkdown(TENANT, SKILL_ID, CLIENT_APP_ID))
-                .thenReturn("# World Sim\nUse deterministic E2E cursor.");
 
         BusinessAgentSessionDTO session = new BusinessAgentSessionDTO();
         session.setContextId(CONTEXT_ID);

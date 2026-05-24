@@ -396,12 +396,6 @@ public class BusinessAgentTaskService {
             return null;
         }
         String workerBackend = resolveWorkerBackend(agentResource, workerPool, modelResource);
-        String markdownBody = skillRegistryService.buildMaterializedPublicSkillMarkdown(
-                tenantId,
-                task.getSkillId(),
-                task.getClientAppId()
-        );
-
         return workerTaskLaunchers.stream()
                 .filter(Objects::nonNull)
                 .filter(launcher -> workerBackend.equals(launcher.getWorkerBackend()))
@@ -430,7 +424,6 @@ public class BusinessAgentTaskService {
                         .workspaceQuotaPolicy(workspaceResource != null ? workspaceResource.quotaPolicy() : null)
                         .workspaceRetentionPolicy(workspaceResource != null ? workspaceResource.retentionPolicy() : null)
                         .workspaceConcurrencyPolicy(workspaceResource != null ? workspaceResource.concurrencyPolicy() : null)
-                        .markdownBody(markdownBody)
                         .taskScopedToken(taskScopedToken)
                         .workdir(workspaceResource != null ? workspaceResource.workdir() : null)
                         .allowedDirs(workspaceResource != null ? workspaceResource.allowedDirs() : null)

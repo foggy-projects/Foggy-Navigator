@@ -119,6 +119,26 @@ def _explicit_skill_name_from_state(state: RootState) -> str | None:
     return validate_skill_name(legacy, "skill")
 
 
+def _explicit_skill_name_from_context(context: dict[str, Any]) -> str | None:
+    values = {alias: context[alias] for alias in SKILL_NAME_ALIASES if alias in context}
+    if values:
+        return normalize_skill_name(values, required=False)
+    legacy = context.get("skill")
+    if legacy is None:
+        return None
+    return validate_skill_name(legacy, "skill")
+
+
+def _agent_bound_skill_manifest(context: dict[str, Any]) -> SkillManifest | None:
+    try:
+        skill_name = _explicit_skill_name_from_context(context)
+    except SkillNameValidationError:
+        return None
+    if not skill_name:
+        return None
+    return _skill_registry.get_manifest(skill_name)
+
+
 def _skill_agent_prompt(prompt: str, context: dict[str, Any]) -> str:
     instruction = context.get("skill_instruction")
     if isinstance(instruction, str) and instruction.strip():
@@ -649,23 +669,9 @@ def route_skill(state: RootState) -> dict:
         return {"events": events, "active_frame_id": None, "context": context}
 
     # Legacy non-LLM fallback priority:
-    # 0. Dynamic skill injection via markdown
     # 1. Explicit skill in context
     # 2. Rule-based fallback (backward compat)
     skill_id = None
-
-    # Priority 0: dynamic markdown injection
-    markdown_body = context.get("skill_markdown")
-    if markdown_body and explicit_skill_name:
-        # Synthesize a temporary manifest to execute
-        manifest = SkillManifest(
-            id=explicit_skill_name,
-            name=explicit_skill_name,
-            markdown_body=markdown_body,
-            allowed_tools=[],  # Tools can be registered if needed
-        )
-        _skill_registry.register(manifest)
-        skill_id = manifest.id
 
     # Priority 1: explicit skill in context
     if not skill_id and explicit_skill_name and _skill_registry.get_manifest(explicit_skill_name):
@@ -762,6 +768,9 @@ def run_skill(state: RootState) -> dict:
         runtime_context["attachments"] = state["attachments"]
     if _is_conversation_root_frame(frame):
         runtime_context["_model_visible_business_context"] = _context_with_visible_skill_descriptions(context)
+        bound_manifest = _agent_bound_skill_manifest(context)
+        if bound_manifest is not None:
+            runtime_context["_root_bound_skill_manifest"] = bound_manifest.model_dump()
 
     llm_skill_agent = _llm_skill_agent_for_state(state)
     if llm_skill_agent:

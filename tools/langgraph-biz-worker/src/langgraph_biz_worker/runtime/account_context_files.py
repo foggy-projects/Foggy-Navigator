@@ -121,11 +121,11 @@ def _resolve_account_context_root(
     *,
     execution_policy: ExecutionPolicy | None = None,
 ) -> Path | None:
-    """Resolve the workspace root that owns account context files.
+    """Resolve the agent workspace root that owns account context files.
 
     First phase resolver:
-    - delegated mode: an upstream-authenticated ``ExecutionPolicy.workdir``;
-    - managed mode: ``<data_root>/accounts/<account_id>``.
+    - delegated mode: ``<ExecutionPolicy.workdir>/agent``;
+    - managed mode: ``<data_root>/accounts/<account_id>/agent``.
     """
 
     workspace = resolve_account_workspace(
@@ -133,7 +133,7 @@ def _resolve_account_context_root(
         account_id,
         execution_policy=execution_policy,
     )
-    return workspace.root if workspace is not None else None
+    return workspace.agent_root if workspace is not None else None
 
 
 def _resolve_context_file(account_root: Path, file_name: str) -> Path:

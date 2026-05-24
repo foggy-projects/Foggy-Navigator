@@ -63,7 +63,7 @@ def test_route_skill_loads_account_private_skill_and_snapshots_manifest(tmp_path
     data_root = tmp_path / "data"
 
     _write_skill(skills_root / "builtin" / "exception-triage", "builtin version")
-    _write_skill(data_root / "accounts" / "user-001" / "skills" / "exception-triage", "account version")
+    _write_skill(data_root / "accounts" / "user-001" / "agent" / "skills" / "exception-triage", "account version")
 
     registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
     registry.load()
@@ -103,7 +103,7 @@ def test_route_skill_prefers_upstream_user_context_over_task_owner(tmp_path, mon
     data_root = tmp_path / "data"
 
     _write_skill(skills_root / "builtin" / "exception-triage", "builtin version")
-    _write_skill(data_root / "accounts" / "upstream-001" / "skills" / "exception-triage", "upstream version")
+    _write_skill(data_root / "accounts" / "upstream-001" / "agent" / "skills" / "exception-triage", "upstream version")
 
     registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
     runtime = SkillRuntime(
@@ -142,7 +142,7 @@ def test_route_skill_loads_delegated_workspace_skill_without_account_id(tmp_path
     workspace = tmp_path / "delegated" / "worker-user"
 
     _write_skill(skills_root / "builtin" / "exception-triage", "builtin version")
-    _write_skill(workspace / "skills" / "exception-triage", "delegated version")
+    _write_skill(workspace / "agent" / "skills" / "exception-triage", "delegated version")
 
     registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
     runtime = SkillRuntime(
@@ -290,12 +290,12 @@ def test_write_skill_then_registry_reload_discovers_new_skill(tmp_path):
     skills_root.mkdir()
 
     # Pre-create the account skills directory structure
-    acct_skills = data_root / "accounts" / "user-001" / "skills" / "new-skill"
+    acct_skills = data_root / "accounts" / "user-001" / "agent" / "skills" / "new-skill"
     acct_skills.mkdir(parents=True)
 
     tools = AccountFileTools(data_root, "user-001", "t1")
     tools.write_file(
-        "skills/new-skill/SKILL.md",
+        "agent/skills/new-skill/SKILL.md",
         content="\n".join([
             "---",
             "name: new_skill",
@@ -326,12 +326,12 @@ def test_query_time_routing_reaches_new_private_skill(tmp_path, monkeypatch):
     skills_root.mkdir()
 
     # Write the skill via file tools
-    acct_skills = data_root / "accounts" / "user-001" / "skills" / "my-new-skill"
+    acct_skills = data_root / "accounts" / "user-001" / "agent" / "skills" / "my-new-skill"
     acct_skills.mkdir(parents=True)
 
     tools = AccountFileTools(data_root, "user-001", "t1")
     tools.write_file(
-        "skills/my-new-skill/SKILL.md",
+        "agent/skills/my-new-skill/SKILL.md",
         content="\n".join([
             "---",
             "name: my_new_skill",

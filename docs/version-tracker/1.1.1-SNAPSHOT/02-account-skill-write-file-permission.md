@@ -18,7 +18,7 @@
 1.1.0 已完成 Skill Registry 的只读加载链路：
 
 1. 公共 Skill GitLab 同步。
-2. 账号私有 Skill 从 `<data_root>/accounts/<account-id>/skills/` 加载。
+2. 账号私有 Skill 从 `<data_root>/accounts/<account-id>/agent/skills/` 加载。
 3. query-time 按 `userId` / `accountId` 加载账号 Skill。
 4. Frame 创建时快照 manifest，避免后续 registry reload 影响当前执行。
 
@@ -45,9 +45,9 @@
 创建私有 Skill 时只允许写入：
 
 ```text
-<data_root>/accounts/<account-id>/skills/<skill-name>/SKILL.md
-<data_root>/accounts/<account-id>/skills/<skill-name>/references/**
-<data_root>/accounts/<account-id>/skills/<skill-name>/assets/**
+<data_root>/accounts/<account-id>/agent/skills/<skill-name>/SKILL.md
+<data_root>/accounts/<account-id>/agent/skills/<skill-name>/references/**
+<data_root>/accounts/<account-id>/agent/skills/<skill-name>/assets/**
 ```
 
 禁止：
@@ -86,7 +86,7 @@ Skill Writer 负责指导 LLM 生成符合规范的 `SKILL.md` 内容、referenc
 
 ## 验收标准
 
-1. 正常创建 `<data_root>/accounts/user-001/skills/my-skill/SKILL.md` 成功。
+1. 正常创建 `<data_root>/accounts/user-001/agent/skills/my-skill/SKILL.md` 成功。
 2. 写入 `<data_root>/accounts/user-002/...` 被拒绝。
 3. 写入 `skills/public/...` 被拒绝。
 4. 写入 `../outside.txt` 被拒绝。
