@@ -65,6 +65,7 @@ $features = @(
     "upstream-route",
     "model-grant",
     "model-owned-config",
+    "model-variant",
     "runtime-budget-preset",
     "account-context",
     "deterministic-e2e",

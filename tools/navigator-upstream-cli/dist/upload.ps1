@@ -44,7 +44,7 @@ function Invoke-RemoteInstallSmoke {
         }
 
         $helpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream --help 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $helpOutput -notmatch "function import") {
+        if ($LASTEXITCODE -ne 0 -or $helpOutput -notmatch "function import" -or $helpOutput -notmatch "--model-variant") {
             throw "upstream help smoke did not list function commands: $helpOutput"
         }
 
@@ -64,7 +64,10 @@ function Invoke-RemoteInstallSmoke {
         }
 
         $clientAppHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream client-app --help 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $clientAppHelpOutput -notmatch "Commands: list, ensure, ensure-tenant, issue-control-key") {
+        if ($LASTEXITCODE -ne 0
+            -or $clientAppHelpOutput -notmatch "issue-runtime-key"
+            -or $clientAppHelpOutput -notmatch "issue-runtime-credential"
+            -or $clientAppHelpOutput -notmatch "issue-control-key") {
             throw "client-app help smoke failed: $clientAppHelpOutput"
         }
 
