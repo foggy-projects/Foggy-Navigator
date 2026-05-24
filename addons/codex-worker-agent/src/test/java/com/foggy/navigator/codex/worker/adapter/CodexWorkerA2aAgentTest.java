@@ -81,7 +81,7 @@ class CodexWorkerA2aAgentTest {
         when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
                 .taskId("task-1")
                 .sessionId("session-1")
-                .workerId("worker-1")
+                .workerId("worker-effective")
                 .directoryId("dir-requested")
                 .build());
 
@@ -90,6 +90,7 @@ class CodexWorkerA2aAgentTest {
                 .role("user")
                 .parts(List.of(A2aPart.text("hi")))
                 .metadata(Map.of(
+                        "workerId", "worker-effective",
                         "directoryId", "dir-requested",
                         "cwd", "D:\\requested",
                         "modelConfigId", "model-config-1"
@@ -101,6 +102,7 @@ class CodexWorkerA2aAgentTest {
         ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
         assertEquals("agent-1", captor.getValue().getAgentId());
+        assertEquals("worker-effective", captor.getValue().getWorkerId());
         assertEquals("dir-requested", captor.getValue().getDirectoryId());
         assertEquals("D:\\requested", captor.getValue().getCwd());
         assertEquals("model-config-1", captor.getValue().getModelConfigId());

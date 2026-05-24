@@ -60,9 +60,11 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
         String prompt = extractPrompt(message);
 
         Map<String, Object> meta = message.getMetadata() != null ? message.getMetadata() : Map.of();
+        String requestedWorkerId = stringMeta(meta, "workerId");
         String requestedCwd = stringMeta(meta, "cwd");
         String requestedDirectoryId = stringMeta(meta, "directoryId");
 
+        String effectiveWorkerId = requestedWorkerId != null ? requestedWorkerId : entity.getWorkerId();
         String effectiveCwd = requestedCwd != null ? requestedCwd : defaultCwd;
         String effectiveDirectoryId = requestedDirectoryId != null
                 ? requestedDirectoryId
@@ -70,7 +72,7 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
 
         CreateTaskForm form = new CreateTaskForm();
         form.setAgentId(entity.getAgentId());
-        form.setWorkerId(entity.getWorkerId());
+        form.setWorkerId(effectiveWorkerId);
         form.setPrompt(prompt);
         form.setCwd(effectiveCwd);
         form.setDirectoryId(effectiveDirectoryId);

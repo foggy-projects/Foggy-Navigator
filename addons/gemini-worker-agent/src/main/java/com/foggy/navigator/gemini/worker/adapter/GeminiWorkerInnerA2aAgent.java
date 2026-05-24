@@ -52,10 +52,11 @@ class GeminiWorkerInnerA2aAgent implements InnerA2aAgent {
                 .map(A2aPart::getText)
                 .collect(Collectors.joining("\n"));
         Map<String, Object> meta = message.getMetadata() != null ? message.getMetadata() : Map.of();
+        String requestedWorkerId = stringMeta(meta, "workerId");
 
         CreateGeminiTaskForm form = new CreateGeminiTaskForm();
         form.setAgentId(entity.getAgentId());
-        form.setWorkerId(entity.getWorkerId());
+        form.setWorkerId(requestedWorkerId != null ? requestedWorkerId : entity.getWorkerId());
         form.setPrompt(prompt);
         form.setCwd(stringMeta(meta, "cwd") != null ? stringMeta(meta, "cwd") : defaultCwd);
         form.setDirectoryId(stringMeta(meta, "directoryId") != null ? stringMeta(meta, "directoryId") : entity.getDefaultDirectoryId());

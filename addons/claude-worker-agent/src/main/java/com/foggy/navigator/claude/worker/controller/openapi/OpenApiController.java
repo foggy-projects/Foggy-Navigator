@@ -417,6 +417,12 @@ public class OpenApiController {
                 effectiveRequestedModelConfigId,
                 requestedModelVariant,
                 LlmModelCategory.GENERAL);
+        A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource = resolveWorkspaceResourceForAsk(
+                resourceResolver,
+                tenantId,
+                clientAppCredential,
+                upstreamUserId,
+                agentResource);
         String modelConfigId = modelResource.modelConfigId();
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId)
@@ -444,6 +450,7 @@ public class OpenApiController {
         if (StringUtils.hasText(modelResource.requestedModelVariant())) {
             metadata.put("requestedModelVariant", modelResource.requestedModelVariant());
         }
+        injectOwnerAwareLaunchMetadata(metadata, agentResource, workspaceResource);
         mergeTopLevelExecutionPolicy(metadata, form);
         Object metadataAttachments = metadata.remove("attachments");
         List<Map<String, Object>> normalizedAttachments = OpenApiAttachmentNormalizer.normalize(
@@ -529,6 +536,39 @@ public class OpenApiController {
             throw RX.throwB("A2Agent resource resolver is not available");
         }
         return resolver;
+    }
+
+    private A2AgentResourceResolver.ResolvedWorkspaceResource resolveWorkspaceResourceForAsk(
+            A2AgentResourceResolver resourceResolver,
+            String tenantId,
+            ResolvedClientAppCredentialDTO clientAppCredential,
+            String upstreamUserId,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        if (!StringUtils.hasText(agentResource.defaultDirectoryId())) {
+            return null;
+        }
+        return resourceResolver.resolveRequiredWorkspaceForAgent(
+                tenantId,
+                clientAppCredential.getClientAppId(),
+                upstreamUserId,
+                agentResource,
+                agentResource.defaultDirectoryId());
+    }
+
+    private void injectOwnerAwareLaunchMetadata(
+            Map<String, Object> metadata,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        String effectiveWorkerId = workspaceResource != null && StringUtils.hasText(workspaceResource.physicalWorkerId())
+                ? workspaceResource.physicalWorkerId()
+                : agentResource.physicalWorkerId();
+        putText(metadata, "workerId", effectiveWorkerId);
+        if (workspaceResource != null) {
+            putText(metadata, "directoryId", workspaceResource.directoryId());
+            putText(metadata, "cwd", workspaceResource.workdir());
+        } else {
+            putText(metadata, "directoryId", agentResource.defaultDirectoryId());
+        }
     }
 
     @PostMapping("/agents/{agentId}/preflight")
@@ -927,6 +967,13 @@ public class OpenApiController {
         metadata.remove("skill_markdown");
         metadata.remove("skillMarkdown");
         metadata.remove("markdownBody");
+        metadata.remove("workerId");
+        metadata.remove("worker_id");
+        metadata.remove("physicalWorkerId");
+        metadata.remove("physical_worker_id");
+        metadata.remove("directoryId");
+        metadata.remove("directory_id");
+        metadata.remove("cwd");
     }
 
     private boolean isReservedBusinessRuntimeContextKey(String key) {

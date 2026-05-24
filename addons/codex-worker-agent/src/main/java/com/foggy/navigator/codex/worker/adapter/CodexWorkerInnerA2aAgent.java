@@ -58,18 +58,20 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         Map<String, Object> meta = message.getMetadata() != null ? message.getMetadata() : Map.of();
         Integer maxTurns = meta.get("maxTurns") instanceof Number n ? n.intValue() : null;
         String model = stringMeta(meta, "model");
+        String requestedWorkerId = stringMeta(meta, "workerId");
         String requestedCwd = stringMeta(meta, "cwd");
         String requestedDirectoryId = stringMeta(meta, "directoryId");
         String modelConfigId = stringMeta(meta, "modelConfigId");
         String images = imagesMeta(meta.get("images"));
 
+        String effectiveWorkerId = requestedWorkerId != null ? requestedWorkerId : entity.getWorkerId();
         String effectiveCwd = requestedCwd != null ? requestedCwd : defaultCwd;
         String effectiveDirectoryId = requestedDirectoryId != null ? requestedDirectoryId : entity.getDefaultDirectoryId();
 
         // 通过 CodexTaskService.createTask() 创建任务并发布 WorkerTaskStartEvent
         CreateCodexTaskForm form = new CreateCodexTaskForm();
         form.setAgentId(entity.getAgentId());
-        form.setWorkerId(entity.getWorkerId());
+        form.setWorkerId(effectiveWorkerId);
         form.setPrompt(prompt);
         form.setCwd(effectiveCwd);
         form.setDirectoryId(effectiveDirectoryId);
