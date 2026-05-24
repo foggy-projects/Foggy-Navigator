@@ -94,10 +94,23 @@ CLI / SDK 已补齐 A2Agent 资源绑定控制面，运行时不再只依赖 Age
 
 身份边界：
 
-1. `NAVI_ADMIN_API_KEY` 是 `UpstreamSystemPrincipal` 的可轮换凭据，用于 system-owned Agent、共享模型、共享工作目录、WorkerPool。
+1. `NAVI_ADMIN_API_KEY` 是 `UpstreamSystemPrincipal` 的可轮换凭据，用于 system-owned Agent、共享模型、共享工作目录、WorkerPool，以及为其可管理 ClientApp 签发 runtime credential / control credential。
 2. `NAVI_CONTROL_API_KEY` 是 `UpstreamClientApp` 的控制面凭据，用于 ClientApp-owned Agent 和该 ClientApp 范围内的模型、目录、Agent binding。
 3. Upstream user token 只进入 runtime ask / sessions / account-context，不参与资源创建与绑定。
 4. `ask` / `clientContext` 不允许临时携带模型、目录或 WorkerPool 作为授权绕过；只能携带业务元数据。
+
+上游发布前推荐执行：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 version
+.\tools\navigator-upstream\navi.ps1 upstream client-app issue-runtime-key --client-app-id <clientAppId> --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream runtime-token --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream owner-smoke
+```
+
+`issue-runtime-key` 需要 `navigator-upstream-cli` / `navigator-open-sdk` `1.0.6` 或更高版本。
+
+该命令是只读 release gate：检查 profile gitignore、安全换取 runtime token、执行 OpenAPI readiness，并额外要求当前 `Agent + UpstreamUser + ClientApp` 组合能解析到 `effectiveModelConfigId`、`agentId`、`workerPoolId`、`effectiveDirectoryId`。如果目标 Agent 确认不需要 workspace，可显式使用 `--no-directory-required`，但这应作为例外记录在上游验收说明中。
 
 ### 6. Account workspace / memory 进入 Root system context
 

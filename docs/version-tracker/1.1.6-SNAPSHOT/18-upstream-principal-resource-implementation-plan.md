@@ -1826,13 +1826,6 @@ mvn -pl business-agent-module,addons/claude-worker-agent,addons/langgraph-biz-wo
 4. `navigator-open-sdk`: `UpstreamCliTest` 59 tests passed, 0 failures, 0 errors。
 5. Reactor `BUILD SUCCESS`。
 
-未进入本 checkpoint：
-
-1. Agent WorkerPool 多选策略。
-2. WorkerPool 级别 quota / concurrency / cost policy。
-3. WorkerPool binding 的批量替换 API。
-4. WorkerPool binding 前端管理页面。
-
 ## 31. Phase 20 Agent Default Binding Materialization and Upstream Docs Checkpoint
 
 2026-05-24 已补齐 Agent 默认资源字段与显式 binding 表的一致性，并同步更新上游 CLI / SDK 使用文档。
@@ -1900,3 +1893,130 @@ mvn -pl business-agent-module,addons/claude-worker-agent,addons/langgraph-biz-wo
 3. `addons/langgraph-biz-worker`: 2 tests passed, 0 failures, 0 errors。
 4. `navigator-open-sdk`: `UpstreamCliTest` 59 tests passed, 0 failures, 0 errors。
 5. Reactor `BUILD SUCCESS`。
+
+## 32. Phase 21 Upstream Owner-aware Release Gate and Handoff Checkpoint
+
+2026-05-24 已补齐上游改造前的 CLI / skill / 对外资料收口入口。
+
+目标：
+
+1. 上游在真实 `ask` 前有一条只读命令检查 `UpstreamSystemPrincipal + UpstreamClientApp + UpstreamUser + Agent` 的运行时资源闭环。
+2. 检查项同时覆盖 profile 安全、ClientApp runtime token 自动换取、Agent readiness、模型 / Agent / WorkerPool / Workspace 解析结果。
+3. 配套 `navigator-upstream-cli` skill 和对外安装/使用文档同步推荐新命令，避免上游只跑分散命令后遗漏 workspace 或 binding。
+4. 输出一份可直接交付给上游 Agent 的改造提示词，不要求上游理解 Navi 内部目录或旧数据迁移细节。
+
+实现：
+
+1. `navigator-open-sdk` 新增 `navi upstream owner-smoke`：
+   - 默认读取项目本地 `.navigator/upstream.env`。
+   - profile 存在时必须被 git ignore 覆盖。
+   - 复用现有 runtime token 自动交换逻辑。
+   - 复用 OpenAPI `preflight` / `AgentReadiness`。
+   - 额外校验 `effectiveModelConfigId`、`agentId`、`workerPoolId`、`effectiveDirectoryId`。
+   - `--no-directory-required` 只用于明确不需要 workspace 的 Agent。
+2. `UpstreamCliTest` 增加：
+   - `ownerSmokeValidatesProfileReadinessAndResolvedRuntimeResources`。
+   - `ownerSmokeRequiresDirectoryUnlessExplicitlyDisabled`。
+3. `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/18-navigator-upstream-cli-usage-guide.md` 增加 owner-aware release smoke 章节。
+4. `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/19-navigator-upstream-cli-install-update.md` 更新常用命令和故障说明。
+5. 本地 `navigator-upstream-cli` skill 增加 `owner-smoke` 推荐入口。
+6. `tools/navigator-upstream-cli/dist/package.ps1` 的 build features 增加 `owner-smoke`，便于对外包自描述。
+7. `workitems/HANDOFF-20260524-upstream-owner-aware-resource-migration.md` 提供给上游的改造提示词。
+
+边界：
+
+1. `owner-smoke` 只读，不创建 task，不调用 Worker，不创建或修改资源。
+2. 缺资源时 fail-closed；本轮仍不考虑旧数据迁移和旧接口兼容。
+3. `--no-directory-required` 是例外开关，不改变默认资源模型。
+
+验证：
+
+```powershell
+mvn -pl navigator-open-sdk -Dtest=UpstreamCliTest -DfailIfNoTests=false test
+$env:PYTHONPATH=(Resolve-Path .\src).Path; pytest tests/test_openai_api.py
+npm run typecheck
+powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package.ps1
+git diff --check
+```
+
+结果：
+
+1. `navigator-open-sdk`: `UpstreamCliTest` 61 tests passed, 0 failures, 0 errors。
+2. `tools/mock-llm-service`: `test_openai_api.py` 17 tests passed, 0 failures, 0 errors。
+3. `business-agent-module/integration-tests`: TypeScript typecheck passed。
+4. CLI package generated: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.5-windows.zip`, SHA256 `948399ee76ab8739b8875f04045571f54e157af8f76fd27c1e10ecc193c5d75c`。
+5. `git diff --check` passed; only CRLF normalization warnings were reported。
+
+未进入本 checkpoint：
+
+1. Agent WorkerPool 多选策略。
+2. WorkerPool 级别 quota / concurrency / cost policy。
+3. WorkerPool binding 的批量替换 API。
+4. WorkerPool binding 前端管理页面。
+
+## 33. Phase 22 Upstream-admin ClientApp Runtime Credential Checkpoint
+
+2026-05-24 补齐 owner-aware bootstrap 中 ClientApp runtime credential 的 upstream-admin 管理能力。
+
+目标：
+
+1. 上游系统不再需要 root 登录、租户管理员 API key 或普通租户管理 API 来生成 `NAVI_CLIENT_APP_KEY` / `NAVI_CLIENT_APP_SECRET`。
+2. `NAVI_ADMIN_API_KEY` 可以在其授权的 upstream system、namespace 和 tenant 范围内为已管理 ClientApp 签发 runtime credential。
+3. CLI 标准 bootstrap 顺序明确为：
+   - `client-app ensure`
+   - `client-app issue-runtime-key`
+   - `client-app issue-control-key`
+   - `runtime-token --write-profile`
+   - `model grant` / `ensure-grant`
+   - `owner-smoke`
+   - `ask` / `messages`
+4. 完整 runtime secret 只落到 gitignored tenant profile；控制台只输出 masked app key、credentialId、clientAppId、tenantId 和 sha256 摘要。
+
+实现：
+
+1. `UpstreamBootstrapRequestService` 增加 scope：
+   - `CLIENT_APP_RUNTIME_KEY_ISSUE`
+   - alias: `RUNTIME_KEY_ISSUE` / `RUNTIME_CREDENTIAL_ISSUE`
+   - 默认 upstream-admin approval scopes 包含该 scope。
+2. `UpstreamClientAppAdminController` 增加：
+   - `POST /api/v1/upstream-admin/client-apps/{clientAppId}/runtime-credentials`
+   - 使用 `X-Navi-Admin-Key`，要求 `CLIENT_APP_RUNTIME_KEY_ISSUE`。
+3. `UpstreamClientAppManagementService` 增加 `issueRuntimeCredential(...)`：
+   - 复用现有 `requireManagedActiveClientApp(...)` 校验 tenant / upstreamSystemId / namespace / ACTIVE。
+   - 复用 `ClientAppService.issueRuntimeCredential(...)` 生成实际 credential。
+4. `navigator-open-sdk` 增加：
+   - `BusinessAgentApi.issueUpstreamClientAppRuntimeCredential(...)`
+   - `navi upstream client-app issue-runtime-key`
+   - alias: `issue-runtime-credential`
+5. CLI profile 行为：
+   - 目标 `--tenant-profile` 必须 gitignored。
+   - 写入 `NAVI_CLIENT_APP_KEY`、`NAVI_CLIENT_APP_SECRET`。
+   - 清空 `NAVI_CLIENT_APP_ACCESS_TOKEN`，避免旧 token 与新 key/secret 混用。
+   - 支持 `--rotate-runtime-credential`；当前语义是 repeat issue，重新签发一组 runtime credential。
+6. 对外资料同步：
+   - `18-navigator-upstream-cli-usage-guide.md`
+   - `19-navigator-upstream-cli-install-update.md`
+   - 本地 `navigator-upstream-cli` skill
+   - CLI package feature list
+
+边界：
+
+1. 本 checkpoint 不实现自动 revoke 旧 runtime credential；轮换采用 repeat issue 并更新 profile。
+2. 不通过控制台输出 secret 明文，也不把 secret 写入非 gitignored 文件。
+3. 不恢复旧的 root / tenant admin 绕行流程作为标准 upstream bootstrap。
+4. 旧 ClientApp 若没有匹配 `upstreamSystemId` / namespace，继续对 upstream-admin 不可见，需要按新模型重建或补齐数据。
+
+验证：
+
+```powershell
+mvn -pl business-agent-module,navigator-open-sdk -am "-Dtest=UpstreamClientAppManagementServiceTest,UpstreamBootstrapEndToEndServiceTest,UpstreamBootstrapRequestServiceTest,UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package.ps1
+```
+
+结果：
+
+1. Business Agent targeted tests: 14 passed, 0 failures, 0 errors。
+2. `UpstreamCliTest`: 63 passed, 0 failures, 0 errors。
+3. `navigator-open-sdk`: candidate version `1.0.6`。
+4. CLI package generated: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.6-windows.zip`。
+5. SHA256: `ec8fc1b73135795d4076142375aace9132c469e90086451effc4d677628140bc`。

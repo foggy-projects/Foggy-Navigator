@@ -101,6 +101,18 @@ public class BusinessAgentApi {
                 + "/control-credentials", form, upstreamAdminApiKey, new TypeReference<>() {});
     }
 
+    public IssuedCredentialDTO issueUpstreamClientAppRuntimeCredential(String clientAppId,
+                                                                       IssueRuntimeCredentialForm form) {
+        return issueUpstreamClientAppRuntimeCredential(clientAppId, form, null);
+    }
+
+    public IssuedCredentialDTO issueUpstreamClientAppRuntimeCredential(String clientAppId,
+                                                                       IssueRuntimeCredentialForm form,
+                                                                       String upstreamAdminApiKey) {
+        return http.postWithUpstreamAdminAuth("/api/v1/upstream-admin/client-apps/" + urlEncode(clientAppId)
+                + "/runtime-credentials", form, upstreamAdminApiKey, new TypeReference<>() {});
+    }
+
     public Map<String, Object> registerUpstreamWorkerIdentity(Map<String, Object> form) {
         return http.postWithUpstreamAdminAuth("/api/v1/upstream-admin/worker-identities",
                 form, null, new TypeReference<>() {});

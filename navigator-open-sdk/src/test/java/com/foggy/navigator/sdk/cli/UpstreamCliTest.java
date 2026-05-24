@@ -75,10 +75,25 @@ class UpstreamCliTest {
                         : """
                         {"code":0,"data":{
                           "overallStatus":"OK",
+                          "baseUrl":"http://localhost:8112",
+                          "clientAppId":"app-1",
                           "agentCode":"agent-1",
                           "upstreamUserId":"u-1",
                           "requestedModelConfigId":"model-env",
                           "effectiveModelConfigId":"model-env",
+                          "modelConfigSource":"REQUESTED_MODEL_GRANT",
+                          "agentId":"agent-1",
+                          "agentOwnerType":"CLIENT_APP",
+                          "agentOwnerId":"app-1",
+                          "agentSource":"AGENT:CLIENT_APP",
+                          "workerPoolId":"pool-1",
+                          "workerPoolOwnerType":"UPSTREAM_SYSTEM",
+                          "workerPoolOwnerId":"usys-1",
+                          "workerPoolSource":"WORKER_POOL:UPSTREAM_SYSTEM",
+                          "requestedDirectoryId":"dir-env",
+                          "effectiveDirectoryId":"dir-env",
+                          "workspaceScope":"USER_PRIVATE",
+                          "workspaceSource":"WORKING_DIRECTORY:USER_PRIVATE",
                           "checks":[
                             {"code":"AGENT_REGISTERED","status":"OK","message":"agent registered"}
                           ]
@@ -783,6 +798,83 @@ class UpstreamCliTest {
     }
 
     @Test
+    void clientAppIssueRuntimeKeyUsesUpstreamAdminKeyAndStoresSecretsOnlyInTenantProfile() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Path upstreamProfile = profileDir.resolve("upstream.env");
+        Files.writeString(upstreamProfile, """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+
+        responseOverride = """
+                {"code":0,"data":{
+                  "credentialId":"runtime-cred-1",
+                  "clientAppId":"capp-tenant-a",
+                  "tenantId":"tenant-a",
+                  "appKey":"cak-secret-runtime-key",
+                  "secret":"cas-secret-runtime-secret",
+                  "expiresAt":"2026-06-01T00:00:00"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "client-app", "issue-runtime-key",
+                "--profile", ".navigator/upstream.env",
+                "--client-app-id", "capp-tenant-a",
+                "--description", "tenant runtime bootstrap",
+                "--tenant-profile", ".navigator/tenants/tms-a.env",
+                "--rotate-runtime-credential",
+                "--write-profile"}, Map.of());
+
+        Path tenantProfile = profileDir.resolve("tenants").resolve("tms-a.env");
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tenantProfile, StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/client-apps/capp-tenant-a/runtime-credentials", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastApiKeyHeader);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"description\":\"tenant runtime bootstrap\""));
+        assertTrue(profile.contains("NAVI_BASE_URL=" + baseUrl()));
+        assertTrue(profile.contains("NAVI_TENANT_ID=tenant-a"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_ID=capp-tenant-a"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_KEY=cak-secret-runtime-key"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_SECRET=cas-secret-runtime-secret"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_ACCESS_TOKEN="));
+        assertTrue(output.contains("client-app issue-runtime-key ok"));
+        assertTrue(output.contains("stored=NAVI_CLIENT_APP_KEY,NAVI_CLIENT_APP_SECRET,NAVI_CLIENT_APP_ACCESS_TOKEN"));
+        assertTrue(output.contains("credentialId=runtime-cred-1"));
+        assertTrue(output.contains("clientAppKey=cak-...-key sha256="));
+        assertTrue(output.contains("clientAppKeySha256="));
+        assertTrue(output.contains("clientAppSecretSha256="));
+        assertTrue(output.contains("rotateRuntimeCredential=true"));
+        assertFalse(output.contains("cak-secret-runtime-key"));
+        assertFalse(output.contains("cas-secret-runtime-secret"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
+    void clientAppIssueRuntimeKeyRejectsUnignoredTenantProfileBeforeIssuing() throws Exception {
+        Path upstreamProfile = tempDir.resolve("upstream.env");
+        Files.writeString(upstreamProfile, """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "client-app", "issue-runtime-key",
+                "--profile", upstreamProfile.toString(),
+                "--client-app-id", "capp-tenant-a",
+                "--tenant-profile", "tenant.env",
+                "--write-profile"}, Map.of());
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("not git-ignored"));
+        assertNull(lastPath);
+    }
+
+    @Test
     void ensureGrantUsesControlPlaneCredentialAndDoesNotPrintTokens() {
         responseOverride = "{\"clientAppId\":\"app-1\",\"upstreamUserId\":\"u-1\",\"status\":\"ENABLED\"}";
         Map<String, String> env = env("CONTROL_ENV", "control-key-secret", "USER_TOKEN_ENV", "staff-token-secret");
@@ -1082,6 +1174,89 @@ class UpstreamCliTest {
         assertTrue(output.contains("workerPool workerPoolId=pool-1 ownerType=PLATFORM ownerId=platform source=WORKER_POOL:PLATFORM"));
         assertTrue(output.contains("check RUNTIME_AGENT_RESOURCE=OK"));
         assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
+    void ownerSmokeValidatesProfileReadinessAndResolvedRuntimeResources() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Files.writeString(profileDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_CLIENT_APP_KEY=cak-test
+                NAVI_CLIENT_APP_SECRET=cas-secret-value
+                NAVI_AGENT_CODE=agent-1
+                NAVI_UPSTREAM_USER_ID=u-1
+                NAVI_MODEL_CONFIG_ID=model-env
+                NAVI_DIRECTORY_ID=dir-env
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = "__RUNTIME_THEN_READINESS__";
+
+        int code = run(new String[]{"upstream", "owner-smoke"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/preflight", lastPath);
+        assertTrue(lastBody.contains("\"upstreamUserId\":\"u-1\""));
+        assertTrue(lastBody.contains("\"modelConfigId\":\"model-env\""));
+        assertTrue(lastBody.contains("\"directoryId\":\"dir-env\""));
+        assertTrue(output.contains("owner-smoke profileGitIgnored=true"));
+        assertTrue(output.contains("owner-smoke readiness OK"));
+        assertTrue(output.contains("modelConfigSource=REQUESTED_MODEL_GRANT"));
+        assertTrue(output.contains("agent agentId=agent-1 ownerType=CLIENT_APP ownerId=app-1 source=AGENT:CLIENT_APP"));
+        assertTrue(output.contains("workerPool workerPoolId=pool-1 ownerType=UPSTREAM_SYSTEM ownerId=usys-1 source=WORKER_POOL:UPSTREAM_SYSTEM"));
+        assertTrue(output.contains("workspace requestedDirectoryId=dir-env"));
+        assertTrue(output.contains("owner-smoke resources OK"));
+        assertTrue(output.contains("owner-smoke ready"));
+        assertFalse(output.contains("cas-secret-value"));
+    }
+
+    @Test
+    void ownerSmokeRequiresDirectoryUnlessExplicitlyDisabled() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "overallStatus":"OK",
+                  "agentCode":"agent-1",
+                  "upstreamUserId":"u-1",
+                  "effectiveModelConfigId":"model-env",
+                  "agentId":"agent-1",
+                  "workerPoolId":"pool-1",
+                  "checks":[{"code":"AGENT_REGISTERED","status":"OK"}]
+                }}
+                """;
+
+        int failed = run(new String[]{"upstream", "owner-smoke",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent-code", "agent-1",
+                "--upstream-user-id", "u-1"}, Map.of());
+        assertEquals(2, failed);
+        assertTrue(stdout.toString(StandardCharsets.UTF_8)
+                .contains("owner-smoke resources FAIL missing=effectiveDirectoryId"));
+
+        reset();
+        responseOverride = """
+                {"code":0,"data":{
+                  "overallStatus":"OK",
+                  "agentCode":"agent-1",
+                  "upstreamUserId":"u-1",
+                  "effectiveModelConfigId":"model-env",
+                  "agentId":"agent-1",
+                  "workerPoolId":"pool-1",
+                  "checks":[{"code":"AGENT_REGISTERED","status":"OK"}]
+                }}
+                """;
+        int passed = run(new String[]{"upstream", "owner-smoke",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent-code", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--no-directory-required"}, Map.of());
+
+        assertEquals(0, passed);
+        assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("owner-smoke resources OK"));
     }
 
     @Test

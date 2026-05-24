@@ -58,6 +58,15 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/ins
 - SHA256: `735f574bec9989f06550348379feb956b312f5ca5f3196f711e2fd9e2451e6a6`
 - release smoke: remote installer smoke passed during `tools/navigator-upstream-cli/dist/upload.ps1 -Version 1.0.5 -AllowSameVersion`
 
+当前本地候选版本：
+
+- version: `1.0.6`
+- candidate date: `2026-05-24`
+- includes: owner-aware `upstream client-app issue-runtime-key` / `issue-runtime-credential`
+- local archive: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.6-windows.zip`
+- SHA256: `ec8fc1b73135795d4076142375aace9132c469e90086451effc4d677628140bc`
+- note: 发布到 OBS 后，远程安装入口才会自动获取该版本；发布前可使用本仓库生成的本地 archive 安装。
+
 安装脚本会：
 
 - 下载最新 `navigator-upstream-cli-<version>-windows.zip`。
@@ -130,14 +139,16 @@ BizWorker `1.1.6-SNAPSHOT` 起，新会话 `ask` 默认由 Navigator / BizWorker
 
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream config check
+.\tools\navigator-upstream\navi.ps1 upstream client-app issue-runtime-key --client-app-id <clientAppId> --write-profile
 .\tools\navigator-upstream\navi.ps1 upstream runtime-token --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream owner-smoke
 .\tools\navigator-upstream\navi.ps1 upstream verify-agent-readiness --upstream-user-id <id>
 .\tools\navigator-upstream\navi.ps1 upstream ensure-grant --upstream-user-id <id>
 .\tools\navigator-upstream\navi.ps1 upstream ask --upstream-user-id <id> --message "..."
 .\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --poll
 ```
 
-`runtime-token --write-profile` 只写入当前项目 gitignored profile，不打印完整 token。带 `NAVI_CLIENT_APP_SECRET` 的项目中，后续 runtime 命令也会自动在内存中交换 fresh runtime token，避免上游手工复制 token。
+`client-app issue-runtime-key --write-profile` 使用 upstream-admin credential 为当前 ClientApp 签发 runtime key/secret，只写入 gitignored profile，并清空旧 runtime access token。`runtime-token --write-profile` 只写入当前项目 gitignored profile，不打印完整 token。带 `NAVI_CLIENT_APP_SECRET` 的项目中，后续 runtime 命令也会自动在内存中交换 fresh runtime token，避免上游手工复制 token。`owner-smoke` 是当前推荐的发布前置检查，会验证 profile 安全、runtime auth、readiness，以及 Agent / Model / WorkerPool / Workspace 资源闭环。
 
 常规使用不需要传 `--profile`。只有临时切换配置或排查问题时才使用：
 
@@ -247,5 +258,6 @@ https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli
 - `No release URL configured`：通过远程安装脚本重新安装，或设置 `NAVI_UPSTREAM_CLI_URL`。
 - `Profile path is not git-ignored`：确认上游项目 `.gitignore` 包含 `.navigator/upstream.env`。
 - `verify-agent-readiness` 仍提示缺少 token：确认已经升级到包含 issue #104 修正的 CLI，并且 `.navigator/upstream.env` 中有 `NAVI_CLIENT_APP_KEY` 与 `NAVI_CLIENT_APP_SECRET`。
+- `owner-smoke resources FAIL missing=effectiveDirectoryId`：确认已创建 Navigator 工作目录并绑定到 Agent；只有该 Agent 确认不需要 workspace 时才使用 `--no-directory-required`。
 - `client app credential expired`：刷新当前上游项目自己的 ClientApp runtime credential。
 - `Agent not found`：确认 `.navigator/upstream.env` 中 `NAVI_AGENT_CODE` 是当前环境已注册的 agent。

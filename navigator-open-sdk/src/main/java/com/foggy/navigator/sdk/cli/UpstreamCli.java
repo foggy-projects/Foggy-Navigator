@@ -50,6 +50,7 @@ import com.foggy.navigator.sdk.model.businessagent.GrantModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
 import com.foggy.navigator.sdk.model.businessagent.ImportBusinessFunctionManifestForm;
 import com.foggy.navigator.sdk.model.businessagent.IssueControlCredentialForm;
+import com.foggy.navigator.sdk.model.businessagent.IssueRuntimeCredentialForm;
 import com.foggy.navigator.sdk.model.businessagent.IssuedCredentialDTO;
 import com.foggy.navigator.sdk.model.businessagent.LlmModelConfigDTO;
 import com.foggy.navigator.sdk.model.businessagent.RotateModelConfigKeyForm;
@@ -123,6 +124,7 @@ public class UpstreamCli {
         return switch (args.command()) {
             case "config check" -> configCheck();
             case "runtime-token" -> runtimeToken(args);
+            case "owner-smoke" -> ownerSmoke(args);
             case "verify-agent-readiness", "verify-agent-grant" -> verifyAgentReadiness(args);
             case "inspect", "inspect runtime" -> inspectRuntime(args);
             case "ensure-grant" -> ensureGrant(args);
@@ -197,6 +199,8 @@ public class UpstreamCli {
             case "client-app ensure" -> upstreamClientAppEnsure(args);
             case "client-app ensure-tenant" -> upstreamTenantClientAppEnsure(args);
             case "client-app issue-control-key" -> upstreamClientAppIssueControlKey(args);
+            case "client-app issue-runtime-key", "client-app issue-runtime-credential" ->
+                    upstreamClientAppIssueRuntimeKey(args);
             case "worker", "worker help" -> workerUsage();
             case "worker list" -> workerList(args);
             case "worker create" -> workerCreate(args);
@@ -237,7 +241,8 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-control-key, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, worker-pool list/create/register-worker/add-member/status, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, worker-pool list/create/register-worker/add-member/status, account-context list, account-context read, account-context write-policy");
+        out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
         out.println("  model create/update uses NAVI_CONTROL_API_KEY and creates ClientApp-owned models.");
@@ -260,10 +265,11 @@ public class UpstreamCli {
 
     private int clientAppUsage() {
         out.println("Usage: navi upstream client-app <command> [options]");
-        out.println("Commands: list, ensure, ensure-tenant, issue-control-key");
+        out.println("Commands: list, ensure, ensure-tenant, issue-runtime-key, issue-runtime-credential, issue-control-key");
         out.println("  list [--target-tenant-id <tenantId>]");
         out.println("  ensure --target-tenant-id <tenantId> --upstream-ref <ref> [--name <name>] [--tenant-profile <path>] [--write-profile]");
         out.println("  ensure-tenant --source-system <system> --source-tenant-id <id> [--name <name>] [--tenant-profile <path>] [--rotate-credentials] --write-profile");
+        out.println("  issue-runtime-key --client-app-id <id> [--tenant-profile <path>] [--rotate-runtime-credential] --write-profile");
         out.println("  issue-control-key --client-app-id <id> [--scopes <scope[,scope]>] [--tenant-profile <path>] --write-profile");
         return 0;
     }
@@ -647,6 +653,45 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int upstreamClientAppIssueRuntimeKey(CliArguments args) {
+        if (!args.flag("write-profile")) {
+            throw new UpstreamCliException("client-app issue-runtime-key requires --write-profile to store NAVI_CLIENT_APP_KEY and NAVI_CLIENT_APP_SECRET without printing them");
+        }
+        Path targetProfile = tenantProfilePath(args);
+        config.assertProfileWritable(targetProfile);
+
+        IssueRuntimeCredentialForm form = new IssueRuntimeCredentialForm();
+        form.setDescription(args.option("description"));
+        form.setExpiresAt(parseLocalDateTimeOption(args.option("expires-at"), "expires at"));
+
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        IssuedCredentialDTO credential = upstreamAdminApi()
+                .issueUpstreamClientAppRuntimeCredential(clientAppId, form);
+        if (credential == null || !hasText(credential.getAppKey()) || !hasText(credential.getSecret())) {
+            throw new UpstreamCliException("client-app issue-runtime-key response did not include NAVI_CLIENT_APP_KEY and NAVI_CLIENT_APP_SECRET");
+        }
+
+        config.writeProfileValue(targetProfile, "NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"));
+        config.writeProfileValue(targetProfile, "NAVI_TENANT_ID", emptyIfNull(credential.getTenantId()));
+        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_ID", emptyIfNull(credential.getClientAppId()));
+        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_KEY", credential.getAppKey());
+        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_SECRET", credential.getSecret());
+        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_ACCESS_TOKEN", "");
+
+        out.println("client-app issue-runtime-key ok");
+        out.println("profileUpdated=" + targetProfile);
+        out.println("stored=NAVI_CLIENT_APP_KEY,NAVI_CLIENT_APP_SECRET,NAVI_CLIENT_APP_ACCESS_TOKEN");
+        out.println("credentialId=" + valueOrEmpty(credential.getCredentialId()));
+        out.println("clientAppId=" + valueOrEmpty(credential.getClientAppId()));
+        out.println("tenantId=" + valueOrEmpty(credential.getTenantId()));
+        out.println("clientAppKey=" + SecretMasker.mask(credential.getAppKey()));
+        out.println("clientAppKeySha256=" + SecretMasker.sha256Hex(credential.getAppKey()));
+        out.println("clientAppSecretSha256=" + SecretMasker.sha256Hex(credential.getSecret()));
+        out.println("rotateRuntimeCredential=" + args.flag("rotate-runtime-credential"));
+        out.println("expiresAt=" + valueOrEmpty(credential.getExpiresAt()));
+        return 0;
+    }
+
     private int workerList(CliArguments args) {
         List<Worker> workers = upstreamAdminWorkerApi()
                 .listWithUpstreamAdmin(optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID"));
@@ -940,6 +985,51 @@ public class UpstreamCli {
         out.println("verify-agent-readiness " + valueOrEmpty(readiness.getOverallStatus()));
         printAgentReadiness(readiness);
         return "OK".equals(readiness.getOverallStatus()) ? 0 : 2;
+    }
+
+    private int ownerSmoke(CliArguments args) {
+        out.println("owner-smoke profile=" + (config.profilePath() == null ? "(none)" : config.profilePath()));
+        out.println("owner-smoke profileGitIgnored=" + config.profileIsGitIgnored());
+        if (!config.profileIsGitIgnored()) {
+            throw new UpstreamCliException("Profile path is not git-ignored: " + config.profilePath());
+        }
+
+        AgentReadiness readiness = fetchAgentReadiness(args);
+        String status = valueOrEmpty(readiness.getOverallStatus());
+        out.println("owner-smoke readiness " + status);
+        printAgentReadiness(readiness);
+
+        boolean requireDirectory = !args.flag("no-directory-required");
+        List<String> missing = missingOwnerSmokeResources(readiness, requireDirectory);
+        if (!missing.isEmpty()) {
+            out.println("owner-smoke resources FAIL missing=" + String.join(",", missing));
+            return 2;
+        }
+        if (!"OK".equals(readiness.getOverallStatus())) {
+            out.println("owner-smoke resources SKIPPED readiness=" + status);
+            return 2;
+        }
+
+        out.println("owner-smoke resources OK");
+        out.println("owner-smoke ready");
+        return 0;
+    }
+
+    private List<String> missingOwnerSmokeResources(AgentReadiness readiness, boolean requireDirectory) {
+        List<String> missing = new ArrayList<>();
+        if (!hasText(readiness.getEffectiveModelConfigId())) {
+            missing.add("effectiveModelConfigId");
+        }
+        if (!hasText(readiness.getAgentId())) {
+            missing.add("agentId");
+        }
+        if (!hasText(readiness.getWorkerPoolId())) {
+            missing.add("workerPoolId");
+        }
+        if (requireDirectory && !hasText(readiness.getEffectiveDirectoryId())) {
+            missing.add("effectiveDirectoryId");
+        }
+        return missing;
     }
 
     private int inspectRuntime(CliArguments args) {

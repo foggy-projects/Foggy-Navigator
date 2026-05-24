@@ -49,6 +49,7 @@ catch {
 $features = @(
     "config-check",
     "runtime-token",
+    "owner-smoke",
     "agent-readiness",
     "ask",
     "messages",
@@ -69,6 +70,7 @@ $features = @(
     "deterministic-e2e",
     "admin-key-bootstrap",
     "client-app-bootstrap",
+    "client-app-runtime-credential",
     "upstream-worker-orchestration",
     "upstream-directory-orchestration",
     "upstream-worker-pool-orchestration"

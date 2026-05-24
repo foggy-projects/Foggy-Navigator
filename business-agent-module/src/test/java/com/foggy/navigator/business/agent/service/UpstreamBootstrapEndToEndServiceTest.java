@@ -10,6 +10,7 @@ import com.foggy.navigator.business.agent.model.dto.UpstreamBootstrapRequestDTO;
 import com.foggy.navigator.business.agent.model.dto.UpstreamClientAppAdminPrincipal;
 import com.foggy.navigator.business.agent.model.entity.ClientAppControlCredentialEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
+import com.foggy.navigator.business.agent.model.entity.ClientAppRuntimeCredentialEntity;
 import com.foggy.navigator.business.agent.model.entity.UpstreamBootstrapRequestEntity;
 import com.foggy.navigator.business.agent.model.entity.UpstreamClientAppAdminCredentialEntity;
 import com.foggy.navigator.business.agent.model.form.ApproveUpstreamBootstrapRequestForm;
@@ -17,6 +18,7 @@ import com.foggy.navigator.business.agent.model.form.ClaimUpstreamAdminCredentia
 import com.foggy.navigator.business.agent.model.form.CreateUpstreamBootstrapRequestForm;
 import com.foggy.navigator.business.agent.model.form.EnsureUpstreamClientAppForm;
 import com.foggy.navigator.business.agent.model.form.IssueControlCredentialForm;
+import com.foggy.navigator.business.agent.model.form.IssueRuntimeCredentialForm;
 import com.foggy.navigator.business.agent.repository.ClientAppControlCredentialRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppProvisioningCredentialRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
@@ -107,10 +109,13 @@ class UpstreamBootstrapEndToEndServiceTest {
         ClientAppControlCredentialRepository controlCredentialRepository =
                 mock(ClientAppControlCredentialRepository.class);
         when(controlCredentialRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        ClientAppRuntimeCredentialRepository runtimeCredentialRepository =
+                mock(ClientAppRuntimeCredentialRepository.class);
+        when(runtimeCredentialRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         ClientAppService clientAppService = new ClientAppService(
                 clientAppRepository,
                 mock(ClientAppProvisioningCredentialRepository.class),
-                mock(ClientAppRuntimeCredentialRepository.class),
+                runtimeCredentialRepository,
                 controlCredentialRepository);
         UpstreamClientAppManagementService managementService = new UpstreamClientAppManagementService(
                 clientAppRepository,
@@ -129,7 +134,7 @@ class UpstreamBootstrapEndToEndServiceTest {
         ApproveUpstreamBootstrapRequestForm approveForm = new ApproveUpstreamBootstrapRequestForm();
         approveForm.setAuthorizedTenantIds(List.of("tenant-1", "tenant-2"));
         approveForm.setAuthorizedClientAppNamespace("x6");
-        approveForm.setScopes(List.of("CLIENT_APP_ADMIN", "CONTROL_KEY_ISSUE"));
+        approveForm.setScopes(List.of("CLIENT_APP_ADMIN", "CONTROL_KEY_ISSUE", "RUNTIME_KEY_ISSUE"));
         UpstreamBootstrapRequestDTO approved = requestService.approve(
                 created.getRequestCode(),
                 approveForm,
@@ -162,11 +167,21 @@ class UpstreamBootstrapEndToEndServiceTest {
                 principal,
                 clientApp.getClientAppId(),
                 controlForm);
+        UpstreamClientAppAdminPrincipal runtimePrincipal = adminCredentialService.requireAccess(
+                adminRequest,
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE);
+        IssueRuntimeCredentialForm runtimeForm = new IssueRuntimeCredentialForm();
+        runtimeForm.setDescription("tenant runtime bootstrap");
+        IssuedCredentialDTO issuedRuntimeKey = managementService.issueRuntimeCredential(
+                runtimePrincipal,
+                clientApp.getClientAppId(),
+                runtimeForm);
 
         assertEquals(UpstreamBootstrapRequestService.STATUS_APPROVED, approved.getStatus());
         assertEquals(List.of(
                 UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE,
-                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE), approved.getScopes());
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE,
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE), approved.getScopes());
         assertNotNull(approved.getAdminCredentialExpiresAt());
         assertEquals(UpstreamBootstrapRequestService.STATUS_CONSUMED,
                 requestsByCodeHash.get(SecretTokenSupport.sha256(created.getRequestCode())).getStatus());
@@ -177,8 +192,12 @@ class UpstreamBootstrapEndToEndServiceTest {
         assertEquals("tms-tenant-a", clientApp.getUpstreamRef());
         assertEquals(clientApp.getClientAppId(), issuedControlKey.getClientAppId());
         assertTrue(issuedControlKey.getControlApiKey().startsWith("cac_"));
+        assertEquals(clientApp.getClientAppId(), issuedRuntimeKey.getClientAppId());
+        assertTrue(issuedRuntimeKey.getAppKey().startsWith("cak_"));
+        assertTrue(issuedRuntimeKey.getSecret().startsWith("cas_"));
 
         verify(controlCredentialRepository).save(any(ClientAppControlCredentialEntity.class));
+        verify(runtimeCredentialRepository).save(any(ClientAppRuntimeCredentialEntity.class));
         assertThrows(SecurityException.class, () -> {
             EnsureUpstreamClientAppForm deniedForm = new EnsureUpstreamClientAppForm();
             deniedForm.setTargetTenantId("tenant-3");

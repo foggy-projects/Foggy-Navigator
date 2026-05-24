@@ -46,6 +46,7 @@ public class UpstreamBootstrapRequestService {
     public static final String CREDENTIAL_STATUS_REVOKED = "REVOKED";
     public static final String SCOPE_CLIENT_APP_MANAGE = "CLIENT_APP_MANAGE";
     public static final String SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE = "CLIENT_APP_CONTROL_KEY_ISSUE";
+    public static final String SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE = "CLIENT_APP_RUNTIME_KEY_ISSUE";
     public static final String SCOPE_CLIENT_APP_ADMIN = "CLIENT_APP_ADMIN";
     public static final String SCOPE_CONTROL_KEY_ISSUE = "CONTROL_KEY_ISSUE";
     public static final String SCOPE_WORKER_MANAGE = "WORKER_MANAGE";
@@ -480,6 +481,8 @@ public class UpstreamBootstrapRequestService {
         return switch (normalized) {
             case SCOPE_CLIENT_APP_ADMIN -> SCOPE_CLIENT_APP_MANAGE;
             case SCOPE_CONTROL_KEY_ISSUE -> SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE;
+            case "RUNTIME_KEY_ISSUE", "RUNTIME_CREDENTIAL_ISSUE", "CLIENT_APP_RUNTIME_CREDENTIAL_ISSUE" ->
+                    SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE;
             case "DIRECTORY_MANAGE", "WORKDIR_MANAGE", "WORKING_DIR_MANAGE" -> SCOPE_WORKING_DIRECTORY_MANAGE;
             case "CONFIG_MODEL_MANAGE", "CONFIGMODEL_MANAGE" -> SCOPE_MODEL_CONFIG_MANAGE;
             case "AGENT_SYNC" -> SCOPE_AGENT_BUNDLE_SYNC;
@@ -497,6 +500,7 @@ public class UpstreamBootstrapRequestService {
         return List.of(
                 SCOPE_CLIENT_APP_MANAGE,
                 SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE,
+                SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE,
                 SCOPE_WORKER_MANAGE,
                 SCOPE_WORKING_DIRECTORY_MANAGE,
                 SCOPE_WORKER_POOL_MANAGE,
