@@ -32,9 +32,9 @@ final class UpstreamCliConfig {
         values.put("NAVI_BASE_URL", DEFAULT_BASE_URL);
         values.put("TMS_WEB_BASE_URL", "http://localhost:12580");
         values.put("BASIC_BASE_URL", "http://localhost:10001");
-        values.put("NAVI_TENANT_ID", "88800");
-        values.put("NAVI_CLIENT_APP_ID", "capp_2852124a-48f7-4098-9d5e-33eb736c4375");
-        values.put("NAVI_AGENT_CODE", "tms-agent-v305");
+        values.put("NAVI_TENANT_ID", "");
+        values.put("NAVI_CLIENT_APP_ID", "");
+        values.put("NAVI_AGENT_CODE", "");
         values.put("NAVI_POLL_INTERVAL_SECONDS", "4");
         values.put("NAVI_E2E_MOCK_LLM_URL", "http://localhost:8200");
 
@@ -258,8 +258,6 @@ final class UpstreamCliConfig {
     private static boolean sourceValueShouldOverrideDefault(String target, String targetValue) {
         return switch (target) {
             case "NAVI_BASE_URL" -> DEFAULT_BASE_URL.equals(targetValue);
-            case "NAVI_TENANT_ID" -> "88800".equals(targetValue);
-            case "NAVI_CLIENT_APP_ID" -> "capp_2852124a-48f7-4098-9d5e-33eb736c4375".equals(targetValue);
             default -> false;
         };
     }

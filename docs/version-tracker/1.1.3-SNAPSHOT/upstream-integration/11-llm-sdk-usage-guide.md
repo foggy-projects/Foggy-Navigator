@@ -103,7 +103,7 @@ ClientApp 工作目录说明：
 .\tools\navigator-upstream\navi.ps1 upstream runtime-token
 .\tools\navigator-upstream\navi.ps1 upstream ensure-grant --upstream-user-id <id>
 .\tools\navigator-upstream\navi.ps1 upstream ask --upstream-user-id <id> --message "..."
-.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --poll --interval 4
+.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --agent-code <agentId> --poll --interval 4
 ```
 
 真实 token/secret 只能来自上游项目本地 gitignored `.navigator/upstream.env` 或服务端 secret store。详见 [18-navigator-upstream-cli-usage-guide.md](./18-navigator-upstream-cli-usage-guide.md)。

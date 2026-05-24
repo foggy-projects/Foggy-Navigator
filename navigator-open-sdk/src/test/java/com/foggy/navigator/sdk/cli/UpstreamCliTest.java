@@ -1036,6 +1036,26 @@ class UpstreamCliTest {
     }
 
     @Test
+    void messagesRejectsImplicitProfileAgentCode() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Files.writeString(profileDir.resolve("upstream.env"), """
+                NAVI_AGENT_CODE=tms-agent-v305
+                NAVI_CLIENT_APP_KEY=cak-test
+                NAVI_CLIENT_APP_ACCESS_TOKEN=cat-runtime-secret
+                """, StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "messages",
+                "--base-url", baseUrl(),
+                "--task-id", "task-1"}, Map.of());
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("messages requires --agent-code"));
+        assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
     void sessionsUseBusinessAgentEndpointAndProfileUpstreamUserId() throws Exception {
         responseOverride = """
                 {"code":0,"data":{

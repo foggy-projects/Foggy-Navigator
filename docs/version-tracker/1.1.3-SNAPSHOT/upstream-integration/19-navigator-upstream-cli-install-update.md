@@ -145,10 +145,10 @@ BizWorker `1.1.6-SNAPSHOT` 起，新会话 `ask` 默认由 Navigator / BizWorker
 .\tools\navigator-upstream\navi.ps1 upstream verify-agent-readiness --upstream-user-id <id>
 .\tools\navigator-upstream\navi.ps1 upstream ensure-grant --upstream-user-id <id>
 .\tools\navigator-upstream\navi.ps1 upstream ask --upstream-user-id <id> --message "..."
-.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --poll
+.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --agent-code <agentId> --poll
 ```
 
-`client-app issue-runtime-key --write-profile` 使用 upstream-admin credential 为当前 ClientApp 签发 runtime key/secret，只写入 gitignored profile，并清空旧 runtime access token。`runtime-token --write-profile` 只写入当前项目 gitignored profile，不打印完整 token。带 `NAVI_CLIENT_APP_SECRET` 的项目中，后续 runtime 命令也会自动在内存中交换 fresh runtime token，避免上游手工复制 token。`owner-smoke` 是当前推荐的发布前置检查，会验证 profile 安全、runtime auth、readiness，以及 Agent / Model / WorkerPool / Workspace 资源闭环。
+`client-app issue-runtime-key --write-profile` 使用 upstream-admin credential 为当前 ClientApp 签发 runtime key/secret，只写入 gitignored profile，并清空旧 runtime access token。`runtime-token --write-profile` 只写入当前项目 gitignored profile，不打印完整 token。带 `NAVI_CLIENT_APP_SECRET` 的项目中，后续 runtime 命令也会自动在内存中交换 fresh runtime token，避免上游手工复制 token。`owner-smoke` 是当前推荐的发布前置检查，会验证 profile 安全、runtime auth、readiness，以及 Agent / Model / PhysicalWorker backend capability / Workspace 资源闭环。
 
 常规使用不需要传 `--profile`。只有临时切换配置或排查问题时才使用：
 

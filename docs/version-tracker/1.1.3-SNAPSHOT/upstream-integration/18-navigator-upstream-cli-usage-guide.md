@@ -133,9 +133,9 @@ mvn -q -pl navigator-open-sdk exec:java '-Dexec.args=upstream config check'
 NAVI_BASE_URL=http://localhost:8112
 TMS_WEB_BASE_URL=http://localhost:12580
 BASIC_BASE_URL=http://localhost:10001
-NAVI_TENANT_ID=88800
-NAVI_CLIENT_APP_ID=capp_2852124a-48f7-4098-9d5e-33eb736c4375
-NAVI_AGENT_CODE=tms-agent-v305
+NAVI_TENANT_ID=
+NAVI_CLIENT_APP_ID=
+NAVI_AGENT_CODE=
 NAVI_MODEL_CONFIG_ID=
 NAVI_POLL_INTERVAL_SECONDS=4
 ```
@@ -554,8 +554,10 @@ owner-smoke ready
 ### 5. 轮询 Task Messages
 
 ```powershell
-.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --poll --interval 4
+.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --agent-code <agentId> --poll --interval 4
 ```
+
+`messages --task-id` 必须显式传 `--agent-code` 或 `--agent`。不要依赖 profile 中的 `NAVI_AGENT_CODE`，避免同一工作区切换多个上游时轮询到旧 Agent。
 
 停止条件：
 

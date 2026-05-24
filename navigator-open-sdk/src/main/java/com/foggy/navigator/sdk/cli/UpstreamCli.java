@@ -251,6 +251,7 @@ public class UpstreamCli {
         out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker + directory + model + agent.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--model-config-id <id>] [--model-variant <name>] [--client-context-json <json>|--client-context-file <path>]");
+        out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
         out.println("  model create/update uses NAVI_CONTROL_API_KEY and creates ClientApp-owned models.");
         out.println("  model system-create/system-update uses NAVI_ADMIN_API_KEY and creates UpstreamSystem-owned shared models.");
@@ -1132,7 +1133,7 @@ public class UpstreamCli {
     }
 
     private int messages(CliArguments args) throws InterruptedException {
-        String agent = agentCode(args);
+        String agent = explicitAgentCode(args, "messages");
         String taskId = requiredOption(args, "task-id", "task id");
         String upstreamUserId = optionalUpstreamUserId(args);
         int limit = parseInteger(args.option("limit"), 50);
@@ -2178,6 +2179,19 @@ public class UpstreamCli {
             return value;
         }
         return requiredOptionOrConfig(args, "agent", "NAVI_AGENT_CODE", "agent");
+    }
+
+    private String explicitAgentCode(CliArguments args, String commandName) {
+        String value = args.option("agent-code");
+        if (hasText(value)) {
+            return value;
+        }
+        value = args.option("agent");
+        if (hasText(value)) {
+            return value;
+        }
+        throw new UpstreamCliException(commandName + " requires --agent-code <agentId> (or --agent <agentId>). "
+                + "Task polling does not fall back to NAVI_AGENT_CODE because shared profiles can point to a stale upstream Agent.");
     }
 
     private String upstreamUserId(CliArguments args) {

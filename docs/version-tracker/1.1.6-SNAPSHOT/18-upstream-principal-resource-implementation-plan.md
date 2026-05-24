@@ -2271,3 +2271,34 @@ powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\packa
 
 1. `workitems/ACCEPTANCE-20260524-upstream-cli-107-public-smoke.md`
 2. `workitems/HANDOFF-20260524-upstream-owner-aware-resource-migration.md`
+
+## 39. Phase 27 Upstream CLI 1.0.7 Final Gate And Task Polling Guard
+
+2026-05-24 针对 Phase 26 发现的 `PhysicalWorker/backend capability` resolver 阻塞完成修复后，使用 `foggy-world-sim` 上游重新执行 clean owner-aware smoke。
+
+最终验证：
+
+1. CLI `1.0.7` 包内 `BUILD_INFO.gitCommit=0531f45cd7d5420064078d05ffb9c835e1f6f321`，`gitDirty=false`。
+2. 包 SHA256 为 `1687c018d5855291e850344b48b54d78b454e3feb005f7581cfa0b767b903c44`。
+3. Fresh bootstrap 资源：
+   - ClientApp: `capp_0b471494-4021-416a-becd-e2ffbfdbbbb1`
+   - AgentCode: `school-sim.actor.developer.107fix.v1`
+   - directoryId: `20260524-88e6`
+   - directory workerId: `2ca910a6`
+   - workspaceScope: `CLIENT_APP_SHARED`
+   - modelConfigId: `9311f5b4-81a8-4619-9dfc-58712a8da12b`
+4. `owner-smoke` 与 `verify-agent-readiness` 均通过，输出 `effectiveWorkerBackend=LANGGRAPH_BIZ`、`physicalWorkerId=2ca910a6`、`effectiveDirectoryId=20260524-88e6`。
+5. 真实 `ask/messages` 完成，taskId=`lgt_e89e306c4b294915`，contextId=`bctx_20260524_f9_f97a3e037d62458e830d2dad7b22362b`，terminal status=`COMPLETED`。
+
+本阶段额外发现 `messages --task-id` 如果不传 Agent，会从 `.navigator/upstream.env` 读取 `NAVI_AGENT_CODE`，在同一项目先后验证 TMS 与 School Sim 时可能误用旧值 `tms-agent-v305`。CLI 已调整为：
+
+1. `messages --task-id` 必须显式传 `--agent-code <agentId>` 或 `--agent <agentId>`。
+2. `messages` 不再隐式使用 profile 中的 `NAVI_AGENT_CODE`。
+3. SDK 内置默认配置不再携带 TMS tenant / ClientApp / Agent 值；这些值只能来自项目 profile、环境变量或显式参数。
+4. 对外 handoff 和本地 `navigator-upstream-cli` skill 均更新为显式 `--agent-code`。
+
+TMS 注意：
+
+1. TMS 还没有完成 owner-aware resource governance 改造，不能直接复用 School Sim 的 profile 或 Agent。
+2. TMS 侧应继续以 DB ACTIVE binding 为运行时配置来源，不从 `.navigator/upstream.env` fallback。
+3. TMS 升级应先完成 credential / Agent / Model / WorkingDirectory / PhysicalWorker readiness，再进入真实 chat、工单、附件和报告卡 smoke。

@@ -80,8 +80,10 @@ Navigator 当前资源模型已收口为三个稳定主体：
 .\tools\navigator-upstream\navi.ps1 upstream verify-agent-readiness
 .\tools\navigator-upstream\navi.ps1 upstream ensure-grant
 .\tools\navigator-upstream\navi.ps1 upstream ask --message "hi"
-.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --poll --interval 4
+.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --agent-code <agentCode> --poll --interval 4
 ```
+
+`messages --task-id` 必须显式传 `--agent-code` 或 `--agent`。不要依赖 `.navigator/upstream.env` 中的 `NAVI_AGENT_CODE` 兜底，因为同一个工作区可能先后验证 TMS、School Sim 或其他上游，旧 profile 容易把 task 轮询请求发到错误 Agent。
 
 如果 `owner-smoke` 报：
 - `missing=effectiveModelConfigId`：修复模型 grant 或 Agent 默认模型。
@@ -101,3 +103,15 @@ Navigator 当前资源模型已收口为三个稳定主体：
 
 本轮项目还未正式上线，不需要兼容旧接口或旧数据；旧 fallback 可以删除，缺少 owner/grant/binding/workspace policy 的资源应 fail-closed。
 ````
+
+## TMS 迁移注意
+
+TMS 还没有按本 owner-aware 资源模型完成改造，不能直接复用 School Sim 的 `.navigator` profile 或 `agentCode`。
+
+TMS 侧升级时应按保守顺序推进：
+
+1. 先升级 SDK / CLI 和 TMS 自身依赖，不切生产 traffic。
+2. 用新的 ClientApp credential 管理流程重新生成 runtime credential / control key，并写入 TMS DB ACTIVE binding。
+3. 确认 TMS DB binding 中的 Agent、Model、WorkingDirectory、PhysicalWorker/backend capability 都能通过 Navigator readiness 解析。
+4. TMS BFF 继续以 DB binding 为唯一运行时配置来源，不从 `.navigator/upstream.env`、环境变量或旧 yml fallback 读取 ClientApp / Agent / Model。
+5. 先跑 TMS readiness smoke，再跑真实 chat / 工单 / 附件 / 报告卡 smoke。
