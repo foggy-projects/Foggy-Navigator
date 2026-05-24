@@ -60,10 +60,10 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/ins
 
 当前本地候选版本：
 
-- version: `1.0.6`
+- version: `1.0.7`
 - candidate date: `2026-05-24`
-- includes: owner-aware `upstream client-app issue-runtime-key` / `issue-runtime-credential`
-- local archive: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.6-windows.zip`
+- includes: owner-aware `upstream client-app issue-runtime-key` / `issue-runtime-credential`、Agent `modelVariant` runtime contract
+- local archive: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.7-windows.zip`
 - SHA256: 由最终提交后执行 `dist/package.ps1` 生成；不要在提交前把候选包 SHA 固化到文档，否则包内 `BUILD_INFO.gitCommit` 会与最终提交不一致。
 - note: 发布到 OBS 后，远程安装入口才会自动获取该版本；发布前可使用本仓库最终提交后生成的本地 archive 安装。
 

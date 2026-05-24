@@ -2223,3 +2223,27 @@ mvn -pl business-agent-module,addons/claude-worker-agent,addons/langgraph-biz-wo
 
 1. `workitems/OPT-physical-worker-backend-capability-contract.md` 作为后续实现源头。
 2. `17-upstream-principal-resource-ownership-and-visibility.md` 已同步更新资源矩阵、Agent 绑定和 resolver 输出口径。
+
+## 37. Phase 25 Open SDK / Upstream CLI 1.0.7 Release Candidate
+
+2026-05-24 将 Phase 24 的 `modelVariant` runtime contract 纳入对外 SDK / CLI 发行候选。
+
+版本决策：
+
+1. `1.0.6` 已用于 `issue-runtime-key` / owner-aware fresh bootstrap 验收。
+2. `modelVariant` 新增了 OpenAPI / SDK / CLI 请求字段与 DTO 输出字段，应使用新的 patch 版本避免上游安装包与能力表混淆。
+3. 本轮候选版本：`navigator-open-sdk` / `navigator-upstream-cli` `1.0.7`。
+
+发行内容：
+
+1. CLI `upstream ask` / `owner-smoke` / `verify-agent-readiness` 支持 `--model-variant`，同时读取 `NAVI_MODEL_VARIANT` / `NAVI_MODEL`。
+2. SDK `AgentApi` 支持 top-level `modelVariant`，并在 metadata 中保留 `modelConfigId` / `modelVariant` / `model` 便于服务端和日志诊断。
+3. 安装更新文档将本地候选包指向 `navigator-upstream-cli-1.0.7-windows.zip`。
+
+验证仍沿用 Phase 24 的 144 个目标测试；打包后需确认：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package.ps1
+```
+
+并检查包内 `VERSION`、`BUILD_INFO.gitCommit` 与最终提交一致。
