@@ -140,7 +140,7 @@ describe.skipIf(!TEST_CONFIG.enableLanggraphWorkerSmoke)(
         workerPoolId,
         workdir: TEST_CONFIG.commandWorkdir,
         allowed_dirs: [TEST_CONFIG.commandWorkdir],
-        allowed_tools: ['command']
+        allowed_tools: ['read_file']
       });
       expect(created.workerTaskId).toBeTruthy();
       expect(created.workerId).toBe(workerId);

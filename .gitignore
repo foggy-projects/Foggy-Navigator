@@ -148,6 +148,8 @@ tools/codex-agent-worker/release/staging/
 !tools/gemini-agent-worker/release/bin/*
 tools/gemini-agent-worker/release/output/
 tools/gemini-agent-worker/release/staging/
+tools/langgraph-biz-worker/release/output/
+tools/langgraph-biz-worker/release/staging/
 tools/navigator-upstream-cli/dist/output/
 tools/navigator-upstream-cli/dist/staging/
 

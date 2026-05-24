@@ -188,6 +188,10 @@ def extract_latest_cursor(messages: List[ChatMessage]) -> Optional[str]:
             cursor = _find_cursor(message.content)
             if cursor:
                 return cursor
+        if message.role == "system":
+            cursor = _find_cursor(message.content)
+            if cursor:
+                return cursor
     return None
 
 

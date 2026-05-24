@@ -331,6 +331,17 @@ BIZ_WORKER_PORT=3065
 - result: returned `OK_REAL_LLM_SMOKE_20260523`
 - evidence: `tools/langgraph-biz-worker/data/runtime/sessions/by-date/2026/05/23/97/bctx_20260523_97_977ec72ad91940048d406f21427dfc2a/logs/llm-submissions/000001_conversation.root_task_real_llm_smoke_20260523_01_frm_1b9d124f82c3_iter01_attempt01.json`
 
+## WSL Real LLM Command Smoke Evidence
+
+- date: 2026-05-24
+- BizWorker: WSL `http://127.0.0.1:3065`
+- LLM config: `tools/langgraph-biz-worker/.env.local` real provider/model config; secrets are intentionally not recorded.
+- taskId: `task_real_command_smoke_20260524_b3e9dd85`
+- contextId: `bctx_20260524_ab_1fd7135bb8fd47c4a30074df9f84d915`
+- command: `printf OK_REAL_COMMAND_SMOKE_20260524; echo; git --version; curl --version | head -1`
+- result: runtime event log contains `assistant_tool_call` for `command`, `tool_result.ok=true`, `exit_code=0`, stdout marker `OK_REAL_COMMAND_SMOKE_20260524`, `git version 2.43.0`, and `curl 8.5.0`; final assistant response also contains the marker.
+- evidence: `tools/langgraph-biz-worker/data/runtime/sessions/by-date/2026/05/24/ab/bctx_20260524_ab_1fd7135bb8fd47c4a30074df9f84d915/logs/runtime-message-events/task_real_command_smoke_20260524_b3e9dd85_frm_9b16fb60b5ad.jsonl`
+
 ## Java Navi Real LLM Smoke Evidence
 
 - date: 2026-05-23
@@ -348,6 +359,18 @@ BIZ_WORKER_PORT=3065
 - result: Java `LanggraphTaskDTO.status=COMPLETED`; `resultText` returned `OK_JAVA_NAVI_REAL_LLM_SMOKE_20260523`.
 - backend evidence: `logs/backend.log` recorded `Task completed: taskId=lgt_c16ac4f9e3f948d9` and SSE stream completion.
 - worker evidence: `tools/langgraph-biz-worker/data/runtime/sessions/by-date/2026/05/23/e9/bctx_20260523_e9_e97b08d4508d4acf86832ac4d21b6414/logs/llm-submissions/000001_conversation.root_lgt_c16ac4f9e3f948d9_frm_a58e14f99abb_iter01_attempt01.json`
+
+## Java Navi Mock LLM Command Smoke Evidence
+
+- date: 2026-05-24
+- Java Navigator: local `http://localhost:8112`
+- BizWorker: WSL `http://127.0.0.1:3065`
+- Mock LLM: WSL `http://127.0.0.1:3066`
+- test: `business-agent-module/integration-tests/tests/03-langgraph-biz-worker-mock-llm.test.ts`
+- command: `git --version && curl --version | head -n 1 && printf 'next:java-navi-command-mpj8d7zp_hed64f:002\n'`
+- workspace: `workdir=/tmp`, `allowed_dirs=["/tmp"]`, `allowed_tools=["read_file"]`
+- result: Vitest passed. Runtime event log contains `assistant_tool_call` for `command`, `tool_result.ok=true`, `exit_code=0`, stdout from `git`/`curl`, and final assistant response `OK_JAVA_NAVI_COMMAND_MOCK_LLM_E2E`.
+- evidence: `tools/langgraph-biz-worker/data/runtime/sessions/by-date/2026/05/24/56/bctx_20260524_56_56e427677112492f9968356cb65a8c10/logs/runtime-message-events/lgt_01fe194020044bc4_frm_c7e22618d503.jsonl`
 
 ## 路径与安全边界
 
@@ -486,7 +509,7 @@ write_file
 
 ### Testing Progress
 
-- status: automated-mock-e2e-added; complete-through-java-navi-real-llm-smoke
+- status: automated-mock-e2e-added; complete-through-java-navi-command-smoke
 - 已补 Python 单测: 默认开启配置、环境变量关闭、Windows 隐藏、缺少 workdir 隐藏、`allowed_tools` 不含 `command` 仍可执行、workdir 越权拒绝、timeout、subprocess 调用参数、schema 文案。
 - 已补 Python mock LLM E2E: `test_command_tool_e2e.py` 固化 scripted `command -> assistant natural final` 闭环，避免真实 LLM smoke 成为唯一回归手段。
 - 2026-05-23 收口修正: 顶层 command E2E 已改为 `command -> assistant natural final`，避免误导为 frame result 工具是 command 的必需终止步骤；`submit_frame_result` 仅用于 Root 结构化状态提交或 non-root Agent frame 结构化完成/暂停，`submit_skill_result` 作为旧名兼容 alias 保留。
@@ -497,6 +520,8 @@ write_file
 - Java Maven 验证通过: `mvn -pl addons/langgraph-biz-worker -am test` 已完成。期间修正既有测试断言，将 `ClientAppModelConfigGrantServiceTest.grantModelConfig_rejects_invalid_backend` 的非法 backend 样例从已允许的 `CLAUDE_CODE` 改为 `OTHER_BACKEND`。
 - WSL 真实 LLM 直连 smoke 通过: `task_real_llm_smoke_20260523_01` 返回 `OK_REAL_LLM_SMOKE_20260523`，并生成 `llm-submissions` 证据。
 - Java Navi 真实 LLM smoke 通过: Java REST 控制面注册临时 tenant/clientApp/skill/modelConfig/workerPool 后创建 BusinessAgent task，`lgt_c16ac4f9e3f948d9` 最终 `COMPLETED` 并返回 `OK_JAVA_NAVI_REAL_LLM_SMOKE_20260523`。
+- WSL 真实 LLM command smoke 通过: `task_real_command_smoke_20260524_b3e9dd85` 在合法 workspace 内执行 `git --version` / `curl --version`，`tool_result.ok=true`，最终返回 `OK_REAL_COMMAND_SMOKE_20260524`。
+- Java Navi mock LLM command smoke 通过: `business-agent-module/integration-tests/tests/03-langgraph-biz-worker-mock-llm.test.ts` 在 `allowed_tools=["read_file"]` 时仍由 Linux BizWorker 暴露并执行 `command`，最终返回 `OK_JAVA_NAVI_COMMAND_MOCK_LLM_E2E`。
 - 外部上游联调尚未执行；下一步应交由另一个真实上游或上游模拟 CLI 使用同一 Java Navi 控制面发起任务，重点验证其凭证、clientApp 绑定、modelConfig 授权和 task 创建链路。
 
 ### Experience Progress
