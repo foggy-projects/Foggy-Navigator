@@ -44,13 +44,8 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
 
     @Override
     public BusinessAgentWorkerTaskLaunchResult launch(BusinessAgentWorkerTaskLaunchRequest request) {
-        BizWorkerPoolMemberEntity member = poolMemberRepository.findByPoolIdOrderByCreatedAtAsc(request.getWorkerPoolId())
-                .stream()
-                .filter(item -> BizWorkerPoolService.STATUS_ENABLED.equals(item.getStatus()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("worker pool has no enabled members: " + request.getWorkerPoolId()));
-
-        LanggraphWorkerEntity worker = workerService.getWorkerEntity(member.getWorkerId());
+        String workerId = resolveWorkerId(request);
+        LanggraphWorkerEntity worker = workerService.getWorkerEntity(workerId);
         if (StringUtils.hasText(worker.getTenantId()) && !Objects.equals(worker.getTenantId(), request.getTenantId())) {
             throw new SecurityException("worker tenant mismatch");
         }
@@ -58,7 +53,7 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
         String skillName = resolveSkillName(request);
         form.setAgentId(request.getAgentId());
-        form.setWorkerId(member.getWorkerId());
+        form.setWorkerId(workerId);
         form.setSessionId(request.getSessionId());
         String contextId = resolveContextId(worker, request.getContextId());
         form.setContextId(contextId);
@@ -74,9 +69,21 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
                 .workerTaskId(workerTask.getTaskId())
                 .workerSessionId(workerTask.getSessionId())
                 .contextId(contextId)
-                .workerId(member.getWorkerId())
+                .workerId(workerId)
                 .providerType(LanggraphTaskService.PROVIDER_TYPE)
                 .build();
+    }
+
+    private String resolveWorkerId(BusinessAgentWorkerTaskLaunchRequest request) {
+        if (StringUtils.hasText(request.getPhysicalWorkerId())) {
+            return request.getPhysicalWorkerId().trim();
+        }
+        BizWorkerPoolMemberEntity member = poolMemberRepository.findByPoolIdOrderByCreatedAtAsc(request.getWorkerPoolId())
+                .stream()
+                .filter(item -> BizWorkerPoolService.STATUS_ENABLED.equals(item.getStatus()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("worker pool has no enabled members: " + request.getWorkerPoolId()));
+        return member.getWorkerId();
     }
 
     private String resolveContextId(LanggraphWorkerEntity worker, String requestedContextId) {
@@ -122,6 +129,7 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
             context.put("workspaceReadOnly", request.getWorkspaceReadOnly());
         }
         context.put("workerPoolId", request.getWorkerPoolId());
+        putText(context, "physicalWorkerId", request.getPhysicalWorkerId());
         context.put("workerBackend", request.getWorkerBackend());
         context.put("auto_inject_app_public_skills", true);
         if (request.getMarkdownBody() != null && !request.getMarkdownBody().isBlank()) {

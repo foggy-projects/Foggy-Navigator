@@ -4,7 +4,7 @@
 
 - doc_type: acceptance-record
 - date: 2026-05-24
-- status: partial-pass-blocked
+- status: partial-pass-blocked-fixed-locally
 - scope: navigator-upstream-cli 1.0.7 public install, fresh ClientApp bootstrap, owner-aware resource smoke
 - purpose: 记录 1.0.7 公共安装包验证结果，以及当前上游示例 Agent 迁移到 PhysicalWorker / backend capability 口径前的阻塞点
 
@@ -83,3 +83,39 @@ Java 8 date/time type `java.time.LocalDateTime` not supported by default
 ## 安全说明
 
 本记录不包含任何真实 token、secret、api key 或 profile 内容。
+
+## 追加复测与本地修复记录
+
+2026-05-24 后续使用本地 dirty 修复包复测时，bootstrap 与绑定命令已经通过，但 `owner-smoke` / `verify-agent-readiness` 仍在 resource gate 失败：
+
+```text
+RUNTIME_AGENT_RESOURCE=FAIL
+message=agent worker reference not found as worker pool or physical worker: <physicalWorkerId>
+
+OWNER_AWARE_RUNTIME_RESOURCES=FAIL
+missing=effectiveModelConfigId,agentId,effectiveWorkerBackend,effectiveDirectoryId,effectivePhysicalWorkerId
+```
+
+根因确认：
+
+1. `upstream worker list/get/create` 管理的是 `ClaudeWorkerEntity` / 物理 Worker 目录。
+2. 旧 A2Agent runtime resolver 只查 `BizWorkerPool` 或 `BizWorkerIdentityEntity`，没有打通 `ClaudeWorkerEntity` 注册表。
+3. 因此上游 manifest 传入 `upstream worker list` 可见的物理 `workerId` 时，运行时无法解析。
+
+本地代码已完成修复，等待重新打包和上游 smoke：
+
+1. 新增 `PhysicalWorkerRuntimeRegistry` 扩展点，A2Agent resolver 可从多个物理 Worker 注册表解析 `workerId`。
+2. 增加 `ClaudeWorkerPhysicalWorkerRuntimeRegistry`，将 CLI 创建/列出的 `ClaudeWorkerEntity` 接入 runtime resolver。
+3. 保留 `BizWorkerIdentityPhysicalWorkerRuntimeRegistry` 兼容旧 BizWorker identity。
+4. `CodingAgent.workerId` 当前按 generic worker reference 解释：先尝试 WorkerPool，再尝试 PhysicalWorker。
+5. PhysicalWorker 路径下，`effectiveWorkerBackend` 由 `LlmConfigModel.workerBackend` 决定；`effectivePhysicalWorkerId` 来自 Agent worker ref 或 WorkingDirectory。
+6. task / task-scoped token 的旧 `workerPoolId` 字段短期作为 internal worker route ref 使用：WorkerPool 路径写 poolId，PhysicalWorker 路径写 physicalWorkerId，避免真实 ask/messages 在旧 not-null 字段落库时失败。
+
+已通过本地测试：
+
+```text
+mvn -pl business-agent-module -am -Dtest=A2AgentResourceResolverTest,BizWorkerIdentityPhysicalWorkerRuntimeRegistryTest,BusinessAgentTaskServiceTest,AgentDefaultBindingServiceTest,UpstreamAdminAgentServiceTest -Dsurefire.failIfNoSpecifiedTests=false test
+mvn -pl addons/langgraph-biz-worker -am -Dtest=LanggraphBusinessAgentWorkerTaskLauncherTest,BusinessAgentLanggraphLaunchE2ETest -Dsurefire.failIfNoSpecifiedTests=false test
+mvn -pl addons/claude-worker-agent -am -Dtest=OpenApiAgentReadinessServiceTest,OpenApiControllerMessageMappingTest,ClaudeWorkerPhysicalWorkerRuntimeRegistryTest -Dsurefire.failIfNoSpecifiedTests=false test
+mvn -pl navigator-open-sdk -am -Dtest=UpstreamCliTest -Dsurefire.failIfNoSpecifiedTests=false test
+```

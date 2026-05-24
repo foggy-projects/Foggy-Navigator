@@ -148,6 +148,7 @@ class BusinessAgentE2ESampleTest {
                 workingDirectoryRepository,
                 agentRepository,
                 poolRepository,
+                java.util.List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
         taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());

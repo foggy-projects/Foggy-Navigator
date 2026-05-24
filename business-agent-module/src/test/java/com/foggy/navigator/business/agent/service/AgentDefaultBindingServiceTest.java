@@ -3,6 +3,8 @@ package com.foggy.navigator.business.agent.service;
 import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindingRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentWorkerBindingRepository;
+import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.AgentModelBindingEntity;
 import com.foggy.navigator.common.entity.AgentWorkerBindingEntity;
@@ -21,6 +23,7 @@ class AgentDefaultBindingServiceTest {
     private BusinessAgentModelBindingRepository modelBindingRepository;
     private BusinessAgentDirectoryBindingRepository directoryBindingRepository;
     private BusinessAgentWorkerBindingRepository workerBindingRepository;
+    private BizWorkerPoolRepository workerPoolRepository;
     private AgentDefaultBindingService service;
 
     @BeforeEach
@@ -28,15 +31,19 @@ class AgentDefaultBindingServiceTest {
         modelBindingRepository = mock(BusinessAgentModelBindingRepository.class);
         directoryBindingRepository = mock(BusinessAgentDirectoryBindingRepository.class);
         workerBindingRepository = mock(BusinessAgentWorkerBindingRepository.class);
+        workerPoolRepository = mock(BizWorkerPoolRepository.class);
         service = new AgentDefaultBindingService(
                 modelBindingRepository,
                 directoryBindingRepository,
-                workerBindingRepository);
+                workerBindingRepository,
+                workerPoolRepository);
     }
 
     @Test
     void ensureDefaults_createsMissingModelDirectoryAndWorkerBindings() {
         CodingAgentEntity agent = agent();
+        when(workerPoolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+                .thenReturn(Optional.of(new BizWorkerPoolEntity()));
 
         service.ensureDefaults(agent);
 
@@ -63,6 +70,8 @@ class AgentDefaultBindingServiceTest {
                 .thenReturn(Optional.of(new AgentDirectoryBindingEntity()));
         when(workerBindingRepository.findByTenantIdAndAgentIdAndWorkerPoolId("tenant-1", "agent-1", "pool-1"))
                 .thenReturn(Optional.of(new AgentWorkerBindingEntity()));
+        when(workerPoolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+                .thenReturn(Optional.of(new BizWorkerPoolEntity()));
 
         service.ensureDefaults(agent);
 
@@ -74,6 +83,17 @@ class AgentDefaultBindingServiceTest {
     @Test
     void ensureDefaults_requiresAgentIdentity() {
         assertThrows(IllegalArgumentException.class, () -> service.ensureDefaults(new CodingAgentEntity()));
+    }
+
+    @Test
+    void ensureDefaults_skipsWorkerBindingWhenWorkerRefIsPhysicalWorker() {
+        CodingAgentEntity agent = agent();
+        when(workerPoolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+                .thenReturn(Optional.empty());
+
+        service.ensureDefaults(agent);
+
+        verify(workerBindingRepository, never()).save(any());
     }
 
     private CodingAgentEntity agent() {

@@ -107,6 +107,10 @@ class OpenApiAgentReadinessServiceTest {
                             "usys_1",
                             "WORKER_POOL:UPSTREAM_SYSTEM",
                             "LANGGRAPH_BIZ",
+                            null,
+                            null,
+                            null,
+                            null,
                             "model_1",
                             "qwen-plus",
                             null,
@@ -146,7 +150,7 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals("UPSTREAM_SYSTEM", result.getWorkerPoolOwnerType());
         assertEquals("AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT", result.getModelConfigSource());
         assertNotNull(result.getSkillArtifact());
-        assertEquals(7, result.getChecks().size());
+        assertEquals(8, result.getChecks().size());
         assertTrue(result.getChecks().stream().allMatch(check -> "OK".equals(check.getStatus())));
         verify(skillRegistryService).checkClientAppSkillAccess(
                 "tenant_1", "capp_1", "world-sim.bug-coordinator.decision.v1");
@@ -191,6 +195,47 @@ class OpenApiAgentReadinessServiceTest {
         assertTrue(result.getChecks().stream().anyMatch(check ->
                 "WORKSPACE_RESOURCE".equals(check.getCode())
                         && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "OWNER_AWARE_RUNTIME_RESOURCES".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+    }
+
+    @Test
+    void verify_failsOwnerAwareCheckWhenWorkspacePhysicalWorkerIsMissing() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_1");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_user",
+                        null,
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/workspace/user",
+                        List.of("/workspace/user"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKSPACE_RESOURCE".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "OWNER_AWARE_RUNTIME_RESOURCES".equals(check.getCode())
+                        && "FAIL".equals(check.getStatus())
+                        && check.getMessage().contains("effectivePhysicalWorkerId")));
     }
 
     @Test

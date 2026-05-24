@@ -6,6 +6,8 @@ import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.form.UpstreamAgentForm;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
+import com.foggy.navigator.business.agent.service.worker.PhysicalWorkerRuntimeRegistry;
+import com.foggy.navigator.business.agent.service.worker.ResolvedPhysicalWorker;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
@@ -18,6 +20,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -33,6 +36,8 @@ class UpstreamAdminAgentServiceTest {
     @Mock
     private BizWorkerPoolRepository workerPoolRepository;
     @Mock
+    private PhysicalWorkerRuntimeRegistry physicalWorkerRuntimeRegistry;
+    @Mock
     private WorkingDirectoryRepository workingDirectoryRepository;
     @Mock
     private AgentDefaultBindingService agentDefaultBindingService;
@@ -46,6 +51,7 @@ class UpstreamAdminAgentServiceTest {
         service = new UpstreamAdminAgentService(
                 agentRepository,
                 workerPoolRepository,
+                List.of(physicalWorkerRuntimeRegistry),
                 workingDirectoryRepository,
                 agentDefaultBindingService,
                 llmModelManager,
@@ -87,6 +93,27 @@ class UpstreamAdminAgentServiceTest {
 
         assertThrows(SecurityException.class, () -> service.create("tenant-1", principal("ups-1"), form));
         verify(agentRepository, never()).save(any());
+    }
+
+    @Test
+    void create_acceptsPhysicalWorkerOwnedBySystem() {
+        UpstreamAgentForm form = form();
+        form.setWorkerId("worker-1");
+        when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1")).thenReturn(Optional.empty());
+        when(workerPoolRepository.findByPoolIdAndTenantId("worker-1", "tenant-1")).thenReturn(Optional.empty());
+        when(physicalWorkerRuntimeRegistry.resolve("tenant-1", "ups-1", "worker-1"))
+                .thenReturn(Optional.of(new ResolvedPhysicalWorker(
+                        "worker-1",
+                        null,
+                        ResourceOwnerType.PLATFORM,
+                        "TENANT:tenant-1",
+                        "CLAUDE_WORKER:TENANT")));
+        when(llmModelManager.getModelConfig("model-1")).thenReturn(Optional.of(model(ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1")));
+        when(agentRepository.save(any(CodingAgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var result = service.create("tenant-1", principal("ups-1"), form);
+
+        assertEquals("worker-1", result.getWorkerId());
     }
 
     @Test

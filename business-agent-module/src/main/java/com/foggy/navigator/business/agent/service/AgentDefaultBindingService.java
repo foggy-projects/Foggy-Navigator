@@ -3,6 +3,7 @@ package com.foggy.navigator.business.agent.service;
 import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindingRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentWorkerBindingRepository;
+import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.AgentModelBindingEntity;
 import com.foggy.navigator.common.entity.AgentWorkerBindingEntity;
@@ -19,6 +20,7 @@ public class AgentDefaultBindingService {
     private final BusinessAgentModelBindingRepository modelBindingRepository;
     private final BusinessAgentDirectoryBindingRepository directoryBindingRepository;
     private final BusinessAgentWorkerBindingRepository workerBindingRepository;
+    private final BizWorkerPoolRepository workerPoolRepository;
 
     @Transactional
     public void ensureDefaults(CodingAgentEntity agent) {
@@ -71,6 +73,9 @@ public class AgentDefaultBindingService {
     private void ensureWorkerBinding(CodingAgentEntity agent) {
         String workerPoolId = trimToNull(agent.getWorkerId());
         if (workerPoolId == null) {
+            return;
+        }
+        if (workerPoolRepository.findByPoolIdAndTenantId(workerPoolId, agent.getTenantId()).isEmpty()) {
             return;
         }
         boolean exists = workerBindingRepository.findByTenantIdAndAgentIdAndWorkerPoolId(

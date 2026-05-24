@@ -19,6 +19,7 @@ public class BusinessAgentWorkerTaskLaunchRequest {
     private String skillId;
     private String skillName;
     private String workerPoolId;
+    private String physicalWorkerId;
     private String workerBackend;
     private String modelConfigId;
     private String model;

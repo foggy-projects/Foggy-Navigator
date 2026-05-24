@@ -15,6 +15,7 @@ import com.foggy.navigator.business.agent.repository.BusinessAgentTaskRepository
 import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindingRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
+import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
@@ -102,6 +103,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
     @Mock private WorkingDirectoryRepository workingDirectoryRepository;
     @Mock private BusinessCodingAgentRepository agentRepository;
     @Mock private BizWorkerPoolRepository poolRepository;
+    @Mock private BizWorkerIdentityRepository identityRepository;
     @Mock private BusinessAgentDirectoryBindingRepository agentDirectoryBindingRepository;
     @Mock private BusinessAgentModelBindingRepository agentModelBindingRepository;
     private A2AgentResourceResolver resourceResolver;
@@ -146,6 +148,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 workingDirectoryRepository,
                 agentRepository,
                 poolRepository,
+                List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
         businessAgentTaskService = new BusinessAgentTaskService(

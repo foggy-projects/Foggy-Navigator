@@ -8,6 +8,8 @@ import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindi
 import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
+import com.foggy.navigator.business.agent.service.worker.PhysicalWorkerRuntimeRegistry;
+import com.foggy.navigator.business.agent.service.worker.ResolvedPhysicalWorker;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.AgentModelBindingEntity;
@@ -43,6 +45,7 @@ class A2AgentResourceResolverTest {
     private WorkingDirectoryRepository workingDirectoryRepository;
     private BusinessCodingAgentRepository agentRepository;
     private BizWorkerPoolRepository workerPoolRepository;
+    private PhysicalWorkerRuntimeRegistry physicalWorkerRuntimeRegistry;
     private BusinessAgentDirectoryBindingRepository agentDirectoryBindingRepository;
     private BusinessAgentModelBindingRepository agentModelBindingRepository;
     private A2AgentResourceResolver resolver;
@@ -55,6 +58,7 @@ class A2AgentResourceResolverTest {
         workingDirectoryRepository = mock(WorkingDirectoryRepository.class);
         agentRepository = mock(BusinessCodingAgentRepository.class);
         workerPoolRepository = mock(BizWorkerPoolRepository.class);
+        physicalWorkerRuntimeRegistry = mock(PhysicalWorkerRuntimeRegistry.class);
         agentDirectoryBindingRepository = mock(BusinessAgentDirectoryBindingRepository.class);
         agentModelBindingRepository = mock(BusinessAgentModelBindingRepository.class);
         resolver = new A2AgentResourceResolver(
@@ -64,6 +68,7 @@ class A2AgentResourceResolverTest {
                 workingDirectoryRepository,
                 agentRepository,
                 workerPoolRepository,
+                List.of(physicalWorkerRuntimeRegistry),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
         when(llmModelManager.getModelConfig(anyString())).thenAnswer(invocation ->
@@ -264,6 +269,33 @@ class A2AgentResourceResolverTest {
         assertEquals("model-1", result.defaultModelConfigId());
         assertEquals("dir-1", result.defaultDirectoryId());
         assertEquals("AGENT:CLIENT_APP", result.source());
+    }
+
+    @Test
+    void resolveRequiredAgent_allows_physical_worker_ref() {
+        ClientAppEntity clientApp = clientApp("tenant-1", "capp-1", "system-1");
+        CodingAgentEntity agent = agent("agent-1", ResourceOwnerType.UPSTREAM_SYSTEM, "system-1");
+        agent.setWorkerId("worker-1");
+        when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp);
+        when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1")).thenReturn(Optional.of(agent));
+        when(workerPoolRepository.findByPoolIdAndTenantId("worker-1", "tenant-1"))
+                .thenReturn(Optional.empty());
+        when(physicalWorkerRuntimeRegistry.resolve("tenant-1", "system-1", "worker-1"))
+                .thenReturn(Optional.of(new ResolvedPhysicalWorker(
+                        "worker-1",
+                        "LANGGRAPH_BIZ",
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "system-1",
+                        "PHYSICAL_WORKER_IDENTITY:UPSTREAM_SYSTEM")));
+
+        A2AgentResourceResolver.ResolvedAgentResource result = resolver.resolveRequiredAgent(
+                "tenant-1", "capp-1", "user-1", "agent-1");
+
+        assertNull(result.workerPoolId());
+        assertEquals("LANGGRAPH_BIZ", result.workerBackend());
+        assertEquals("worker-1", result.physicalWorkerId());
+        assertEquals(ResourceOwnerType.UPSTREAM_SYSTEM, result.physicalWorkerOwnerType());
+        assertEquals("PHYSICAL_WORKER_IDENTITY:UPSTREAM_SYSTEM", result.physicalWorkerSource());
     }
 
     @Test
@@ -586,6 +618,10 @@ class A2AgentResourceResolverTest {
                 "tenant-1",
                 "WORKER_POOL:PLATFORM",
                 "LANGGRAPH_BIZ",
+                null,
+                null,
+                null,
+                null,
                 defaultModelConfigId,
                 null,
                 defaultDirectoryId,

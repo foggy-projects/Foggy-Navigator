@@ -8,6 +8,8 @@ import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindi
 import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
+import com.foggy.navigator.business.agent.service.worker.PhysicalWorkerRuntimeRegistry;
+import com.foggy.navigator.business.agent.service.worker.ResolvedPhysicalWorker;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
@@ -42,6 +44,7 @@ public class A2AgentResourceResolver {
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final BusinessCodingAgentRepository agentRepository;
     private final BizWorkerPoolRepository workerPoolRepository;
+    private final List<PhysicalWorkerRuntimeRegistry> physicalWorkerRuntimeRegistries;
     private final BusinessAgentDirectoryBindingRepository agentDirectoryBindingRepository;
     private final BusinessAgentModelBindingRepository agentModelBindingRepository;
 
@@ -81,6 +84,10 @@ public class A2AgentResourceResolver {
             String workerPoolOwnerId,
             String workerPoolSource,
             String workerBackend,
+            String physicalWorkerId,
+            ResourceOwnerType physicalWorkerOwnerType,
+            String physicalWorkerOwnerId,
+            String physicalWorkerSource,
             String defaultModelConfigId,
             String defaultModelName,
             String defaultDirectoryId,
@@ -103,11 +110,11 @@ public class A2AgentResourceResolver {
         validateAgentVisibility(tenantId, clientApp, agent);
 
         String skillId = resolveAgentSkillId(agent);
-        String workerPoolId = trimToNull(agent.getWorkerId());
-        if (workerPoolId == null) {
+        String workerRef = trimToNull(agent.getWorkerId());
+        if (workerRef == null) {
             throw new IllegalStateException("agent worker binding is not configured: " + agent.getAgentId());
         }
-        BizWorkerPoolEntity workerPool = requireVisibleWorkerPool(tenantId, clientApp, agent, workerPoolId);
+        ResolvedAgentWorkerRoute workerRoute = resolveAgentWorkerRoute(tenantId, clientApp, workerRef);
 
         ResolvedAgentResource resolved = new ResolvedAgentResource(
                 agent.getAgentId(),
@@ -115,16 +122,20 @@ public class A2AgentResourceResolver {
                 agent.getOwnerId(),
                 agent.getClientAppId(),
                 skillId,
-                workerPoolId,
-                workerPool.getOwnerType(),
-                workerPool.getOwnerId(),
-                "WORKER_POOL:" + workerPool.getOwnerType(),
-                trimToNull(workerPool.getWorkerBackend()),
+                workerRoute.workerPoolId(),
+                workerRoute.workerPoolOwnerType(),
+                workerRoute.workerPoolOwnerId(),
+                workerRoute.workerPoolSource(),
+                workerRoute.workerBackend(),
+                workerRoute.physicalWorkerId(),
+                workerRoute.physicalWorkerOwnerType(),
+                workerRoute.physicalWorkerOwnerId(),
+                workerRoute.physicalWorkerSource(),
                 trimToNull(agent.getDefaultModelConfigId()),
                 trimToNull(agent.getDefaultModel()),
                 trimToNull(agent.getDefaultDirectoryId()),
                 "AGENT:" + agent.getOwnerType());
-        log.info("Resolved A2Agent resource: tenantId={}, clientAppId={}, upstreamUserId={}, agentId={}, ownerType={}, source={}, skillId={}, workerPoolId={}, workerPoolOwnerType={}, workerPoolSource={}, workerBackend={}, defaultModelConfigId={}, defaultModelName={}, defaultDirectoryId={}",
+        log.info("Resolved A2Agent resource: tenantId={}, clientAppId={}, upstreamUserId={}, agentId={}, ownerType={}, source={}, skillId={}, workerRef={}, workerPoolId={}, workerPoolOwnerType={}, workerPoolSource={}, workerBackend={}, physicalWorkerId={}, physicalWorkerOwnerType={}, physicalWorkerSource={}, defaultModelConfigId={}, defaultModelName={}, defaultDirectoryId={}",
                 tenantId,
                 clientAppId,
                 upstreamUserId,
@@ -132,10 +143,14 @@ public class A2AgentResourceResolver {
                 resolved.ownerType(),
                 resolved.source(),
                 resolved.skillId(),
+                workerRef,
                 resolved.workerPoolId(),
                 resolved.workerPoolOwnerType(),
                 resolved.workerPoolSource(),
                 resolved.workerBackend(),
+                resolved.physicalWorkerId(),
+                resolved.physicalWorkerOwnerType(),
+                resolved.physicalWorkerSource(),
                 resolved.defaultModelConfigId(),
                 resolved.defaultModelName(),
                 resolved.defaultDirectoryId());
@@ -538,14 +553,62 @@ public class A2AgentResourceResolver {
         }
     }
 
-    private BizWorkerPoolEntity requireVisibleWorkerPool(String tenantId,
-                                                         ClientAppEntity clientApp,
-                                                         CodingAgentEntity agent,
-                                                         String workerPoolId) {
-        BizWorkerPoolEntity pool = workerPoolRepository.findByPoolIdAndTenantId(workerPoolId, tenantId)
-                .orElseThrow(() -> new IllegalArgumentException("agent worker pool not found: " + workerPoolId));
-        validateWorkerPoolVisibility(tenantId, clientApp, pool);
-        return pool;
+    private ResolvedAgentWorkerRoute resolveAgentWorkerRoute(String tenantId,
+                                                            ClientAppEntity clientApp,
+                                                            String workerRef) {
+        Optional<BizWorkerPoolEntity> pool = workerPoolRepository.findByPoolIdAndTenantId(workerRef, tenantId);
+        if (pool.isPresent()) {
+            BizWorkerPoolEntity entity = pool.get();
+            validateWorkerPoolVisibility(tenantId, clientApp, entity);
+            String workerBackend = trimToNull(entity.getWorkerBackend());
+            if (workerBackend == null) {
+                throw new IllegalStateException("worker pool backend is not configured: " + entity.getPoolId());
+            }
+            return new ResolvedAgentWorkerRoute(
+                    entity.getPoolId(),
+                    entity.getOwnerType(),
+                    entity.getOwnerId(),
+                    "WORKER_POOL:" + entity.getOwnerType(),
+                    workerBackend,
+                    null,
+                    null,
+                    null,
+                    null);
+        }
+
+        Optional<ResolvedPhysicalWorker> worker = resolvePhysicalWorker(
+                tenantId,
+                trimToNull(clientApp.getUpstreamSystemId()),
+                workerRef);
+        if (worker.isPresent()) {
+            ResolvedPhysicalWorker entity = worker.get();
+            return new ResolvedAgentWorkerRoute(
+                    null,
+                    null,
+                    null,
+                    null,
+                    trimToNull(entity.workerBackend()),
+                    entity.workerId(),
+                    entity.ownerType(),
+                    entity.ownerId(),
+                    entity.source());
+        }
+
+        throw new IllegalArgumentException("agent worker reference not found as worker pool or physical worker: " + workerRef);
+    }
+
+    private Optional<ResolvedPhysicalWorker> resolvePhysicalWorker(String tenantId,
+                                                                   String upstreamSystemId,
+                                                                   String workerRef) {
+        if (physicalWorkerRuntimeRegistries == null || physicalWorkerRuntimeRegistries.isEmpty()) {
+            return Optional.empty();
+        }
+        return physicalWorkerRuntimeRegistries.stream()
+                .filter(registry -> registry != null)
+                .map(registry -> registry.resolve(tenantId, upstreamSystemId, workerRef))
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .findFirst();
     }
 
     private void validateWorkerPoolVisibility(String tenantId,
@@ -688,6 +751,18 @@ public class A2AgentResourceResolver {
     }
 
     private record ModelNameResolution(String modelName, String source) {
+    }
+
+    private record ResolvedAgentWorkerRoute(
+            String workerPoolId,
+            ResourceOwnerType workerPoolOwnerType,
+            String workerPoolOwnerId,
+            String workerPoolSource,
+            String workerBackend,
+            String physicalWorkerId,
+            ResourceOwnerType physicalWorkerOwnerType,
+            String physicalWorkerOwnerId,
+            String physicalWorkerSource) {
     }
 
     private String resolveWorkdir(WorkingDirectoryEntity directory) {

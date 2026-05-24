@@ -2,6 +2,8 @@ package com.foggy.navigator.sdk.cli;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.foggy.navigator.sdk.api.AgentApi;
 import com.foggy.navigator.sdk.api.BusinessAgentApi;
 import com.foggy.navigator.sdk.api.DirectoryApi;
@@ -87,6 +89,7 @@ public class UpstreamCli {
     private final PrintStream out;
     private final PrintStream err;
     private final Path cwd;
+    private final ObjectMapper objectMapper;
     private UpstreamCliConfig config;
     private String resolvedClientAppAccessToken;
 
@@ -94,6 +97,9 @@ public class UpstreamCli {
         this.out = out;
         this.err = err;
         this.cwd = cwd;
+        this.objectMapper = new ObjectMapper()
+                .registerModule(new JavaTimeModule())
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     }
 
     public static void main(String[] args) {
@@ -1241,11 +1247,10 @@ public class UpstreamCli {
             throw new UpstreamCliException("manifest file not found: " + manifestPath);
         }
         String json = Files.readString(manifestPath, StandardCharsets.UTF_8);
-        ObjectMapper mapper = new ObjectMapper();
         SkillBundleDTO dto;
         String normalizedScope = normalizeSkillBundleScope(scope);
         if ("ACCOUNT_PRIVATE".equals(normalizedScope)) {
-            SyncAccountSkillBundleForm form = mapper.readValue(json, SyncAccountSkillBundleForm.class);
+            SyncAccountSkillBundleForm form = objectMapper.readValue(json, SyncAccountSkillBundleForm.class);
             String upstreamUserId = upstreamUserId(args);
             dto = agentApi().syncMyAccountSkillBundleWithClientAppAccessToken(
                     form,
@@ -1253,7 +1258,7 @@ public class UpstreamCli {
                     clientAppAccessToken(args),
                     upstreamUserId);
         } else {
-            SyncSkillBundleForm form = mapper.readValue(json, SyncSkillBundleForm.class);
+            SyncSkillBundleForm form = objectMapper.readValue(json, SyncSkillBundleForm.class);
             form.setScope("CLIENT_APP_PUBLIC");
             if (!hasText(form.getClientAppId())) {
                 form.setClientAppId(requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id"));
@@ -1300,7 +1305,7 @@ public class UpstreamCli {
             throw new UpstreamCliException("manifest file not found: " + manifestPath);
         }
         String json = Files.readString(manifestPath, StandardCharsets.UTF_8);
-        SyncBusinessAgentBundleForm form = new ObjectMapper().readValue(json, SyncBusinessAgentBundleForm.class);
+        SyncBusinessAgentBundleForm form = objectMapper.readValue(json, SyncBusinessAgentBundleForm.class);
         if (!hasText(form.getClientAppId())) {
             form.setClientAppId(requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id"));
         }
@@ -2228,7 +2233,7 @@ public class UpstreamCli {
             return null;
         }
         try {
-            Map<String, Object> parsed = new ObjectMapper().readValue(json, new TypeReference<>() {});
+            Map<String, Object> parsed = objectMapper.readValue(json, new TypeReference<>() {});
             return parsed != null && !parsed.isEmpty() ? parsed : null;
         } catch (Exception e) {
             throw new UpstreamCliException("clientContext must be a valid JSON object");
@@ -2503,7 +2508,7 @@ public class UpstreamCli {
         if (!Files.isRegularFile(path)) {
             throw new UpstreamCliException("json file not found: " + path);
         }
-        return new ObjectMapper().readValue(Files.readString(path, StandardCharsets.UTF_8), type);
+        return objectMapper.readValue(Files.readString(path, StandardCharsets.UTF_8), type);
     }
 
     private Map<String, Object> readJsonMap(String file) throws Exception {
@@ -2511,7 +2516,7 @@ public class UpstreamCli {
         if (!Files.isRegularFile(path)) {
             throw new UpstreamCliException("json file not found: " + path);
         }
-        return new ObjectMapper().readValue(Files.readString(path, StandardCharsets.UTF_8), new TypeReference<>() {});
+        return objectMapper.readValue(Files.readString(path, StandardCharsets.UTF_8), new TypeReference<>() {});
     }
 
     private Map<String, String> readJsonStringMap(String file) throws Exception {
@@ -2519,11 +2524,11 @@ public class UpstreamCli {
         if (!Files.isRegularFile(path)) {
             throw new UpstreamCliException("json file not found: " + path);
         }
-        return new ObjectMapper().readValue(Files.readString(path, StandardCharsets.UTF_8), new TypeReference<>() {});
+        return objectMapper.readValue(Files.readString(path, StandardCharsets.UTF_8), new TypeReference<>() {});
     }
 
     private void printJson(Object value) throws Exception {
-        String json = new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(value);
+        String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value);
         out.println(redact(json));
     }
 

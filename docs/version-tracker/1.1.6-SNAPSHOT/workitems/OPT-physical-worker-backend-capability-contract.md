@@ -184,9 +184,9 @@ request.modelVariant / request.modelName
 
 截至本记录创建时，现有实现仍存在以下偏差：
 
-1. `UpstreamAgentForm.workerId` 字段名实际被 `UpstreamAdminAgentService` 当作 `workerPoolId` 使用。
-2. `CodingAgentEntity.workerId` 注释仍是旧 ClaudeWorker 外键语义，但 A2Agent resolver 已将其作为默认 WorkerPool。
-3. `A2AgentResourceResolver` 当前先从 Agent 默认 WorkerPool 解析 launcher，再解析模型；尚未由 `LlmConfigModel.workerBackend + WorkingDirectory.physicalWorkerId` 推导 backend route。
+1. `UpstreamAgentForm.workerId` 字段名仍是历史命名，但服务端当前按 generic worker reference 解释：先尝试 WorkerPool，再尝试 PhysicalWorker。
+2. `CodingAgentEntity.workerId` 注释仍是旧 ClaudeWorker 外键语义，但 A2Agent resolver 已将其作为 generic worker reference。
+3. `A2AgentResourceResolver` 已可解析 Agent 绑定的 PhysicalWorker，并从 `LlmConfigModel.workerBackend` 得到 launcher backend；完整 backend capability 表达仍待进一步产品化。
 4. `ClientAppUpstreamUserGrantEntity` 当前没有 home worker / home directory 绑定；用户工作目录只能通过 WorkingDirectory scope / Agent default directory 间接表达。
 5. readiness / owner-smoke 已补 `effectiveModelName`、`effectiveWorkerBackend`、`effectivePhysicalWorkerId`；`workerPoolId` 仅保留为 internal route debug。
 6. request-level `modelVariant` / Agent `defaultModelName` 已进入 resolver；当前 `effectiveModelName` 由 request variant、Agent default model name、`LlmConfigModel.modelName` 三者按顺序解析。
@@ -233,6 +233,23 @@ request.modelVariant / request.modelName
 3. task 创建后落库并冻结 `modelConfigId + effectiveModelName`；继续同一 task / context 时不允许通过 `modelVariant` 切换具体模型。
 4. LangGraph Biz Worker launch request 会接收冻结后的 `model`，Worker 侧不再重新按当前默认值选择具体模型。
 5. upstream CLI skill 已补充 `NAVI_MODEL_VARIANT` / `--model-variant` 的使用边界：只用于新 task 首次选择同 config 下的模型变体，不用于 continuation。
+
+2026-05-24 已完成第三轮 PhysicalWorker runtime resolver 落地：
+
+1. 新增 `PhysicalWorkerRuntimeRegistry` / `ResolvedPhysicalWorker` 扩展点，用于把不同物理 Worker 注册表接入 A2Agent runtime resolver。
+2. `ClaudeWorkerEntity` 已通过 `ClaudeWorkerPhysicalWorkerRuntimeRegistry` 暴露给 runtime resolver；`upstream worker list/get/create` 可见的物理 `workerId` 可被 Agent 使用。
+3. 旧 `BizWorkerIdentityEntity` 已通过 `BizWorkerIdentityPhysicalWorkerRuntimeRegistry` 保留为一类 PhysicalWorker 来源。
+4. `A2AgentResourceResolver` 对 `CodingAgent.workerId` 的解析顺序调整为：
+
+```text
+workerRef
+  -> BizWorkerPool.poolId
+  -> PhysicalWorkerRuntimeRegistry.resolve(...)
+```
+
+5. PhysicalWorker 路径下，Agent route 不再携带 WorkerPool backend；`effectiveWorkerBackend` 由 `LlmConfigModel.workerBackend` 决定。
+6. `OpenApiAgentReadinessService` 与 upstream CLI owner-smoke 的 resource gate 已统一要求可解释的 `effectiveModelConfigId`、`agentId`、`effectiveWorkerBackend`、`effectiveDirectoryId` 和 `effectivePhysicalWorkerId`。
+7. `BusinessAgentTaskService` 在 PhysicalWorker 路径下会把旧 `workerPoolId` 落库字段作为 internal worker route ref 使用，写入 `physicalWorkerId`，避免旧 not-null 约束阻断真实 ask/messages。该字段仍不作为上游标准输入。
 
 ## 10. 验收标准
 

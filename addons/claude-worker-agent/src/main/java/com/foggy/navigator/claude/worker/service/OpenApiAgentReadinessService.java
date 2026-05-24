@@ -25,6 +25,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.lang.reflect.Array;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -125,7 +126,9 @@ public class OpenApiAgentReadinessService {
                     LlmModelCategory.GENERAL);
             result.setEffectiveModelConfigId(modelResource.modelConfigId());
             result.setEffectiveModelName(modelResource.modelName());
-            result.setEffectiveWorkerBackend(modelResource.workerBackend());
+            if (StringUtils.hasText(modelResource.workerBackend())) {
+                result.setEffectiveWorkerBackend(modelResource.workerBackend());
+            }
             result.setModelConfigSource(modelResource.source());
             result.setModelCategory(modelResource.category().name());
             validateAgentBackendCompatibility(agentResourceRef[0], modelResource);
@@ -133,6 +136,7 @@ public class OpenApiAgentReadinessService {
         addWorkspaceResourceCheckIfPossible(result, credential, safeForm, agentResourceRef[0]);
         addRequiredUpstreamRouteChecks(result, credential, safeForm);
         addBusinessFunctionAdapterChecks(result, credential);
+        addOwnerAwareRuntimeResourceCheck(result);
 
         if (isCheckOk(result, "CLIENT_APP_SKILL_GRANT")) {
             SkillArtifactLinkDTO link = new SkillArtifactLinkDTO();
@@ -172,6 +176,9 @@ public class OpenApiAgentReadinessService {
         result.setInternalWorkerPoolSource(agentResource.workerPoolSource());
         if (StringUtils.hasText(agentResource.workerBackend())) {
             result.setEffectiveWorkerBackend(agentResource.workerBackend());
+        }
+        if (StringUtils.hasText(agentResource.physicalWorkerId())) {
+            result.setEffectivePhysicalWorkerId(agentResource.physicalWorkerId());
         }
         result.setDefaultModelConfigId(agentResource.defaultModelConfigId());
         result.setDefaultModelName(agentResource.defaultModelName());
@@ -230,7 +237,9 @@ public class OpenApiAgentReadinessService {
                     agentResource,
                     effectiveDirectoryId);
             result.setEffectiveDirectoryId(workspaceResource.directoryId());
-            result.setEffectivePhysicalWorkerId(workspaceResource.physicalWorkerId());
+            if (StringUtils.hasText(workspaceResource.physicalWorkerId())) {
+                result.setEffectivePhysicalWorkerId(workspaceResource.physicalWorkerId());
+            }
             result.setWorkspaceScope(workspaceResource.workspaceScope() != null
                     ? workspaceResource.workspaceScope().name()
                     : null);
@@ -240,6 +249,32 @@ public class OpenApiAgentReadinessService {
             result.setWorkspaceReadOnly(workspaceResource.readOnly());
             result.setWorkspaceSource(workspaceResource.source());
         });
+    }
+
+    private void addOwnerAwareRuntimeResourceCheck(AgentReadinessDTO result) {
+        List<String> missing = new ArrayList<>();
+        if (!StringUtils.hasText(result.getAgentId())) {
+            missing.add("agentId");
+        }
+        if (!StringUtils.hasText(result.getEffectiveModelConfigId())) {
+            missing.add("effectiveModelConfigId");
+        }
+        if (!StringUtils.hasText(result.getEffectiveWorkerBackend())) {
+            missing.add("effectiveWorkerBackend");
+        }
+        if (StringUtils.hasText(result.getEffectiveDirectoryId())
+                && !StringUtils.hasText(result.getEffectivePhysicalWorkerId())) {
+            missing.add("effectivePhysicalWorkerId");
+        }
+        if (missing.isEmpty()) {
+            result.getChecks().add(AgentReadinessCheckDTO.ok(
+                    "OWNER_AWARE_RUNTIME_RESOURCES",
+                    "owner-aware runtime resources resolved"));
+            return;
+        }
+        result.getChecks().add(AgentReadinessCheckDTO.fail(
+                "OWNER_AWARE_RUNTIME_RESOURCES",
+                "missing owner-aware runtime resources: " + String.join(",", missing)));
     }
 
     private void addRequiredUpstreamRouteChecks(

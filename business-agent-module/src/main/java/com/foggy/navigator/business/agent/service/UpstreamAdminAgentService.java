@@ -8,6 +8,8 @@ import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.form.UpstreamAgentForm;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
+import com.foggy.navigator.business.agent.service.worker.PhysicalWorkerRuntimeRegistry;
+import com.foggy.navigator.business.agent.service.worker.ResolvedPhysicalWorker;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
@@ -22,6 +24,7 @@ import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -29,6 +32,7 @@ public class UpstreamAdminAgentService {
 
     private final BusinessCodingAgentRepository agentRepository;
     private final BizWorkerPoolRepository workerPoolRepository;
+    private final List<PhysicalWorkerRuntimeRegistry> physicalWorkerRuntimeRegistries;
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final AgentDefaultBindingService agentDefaultBindingService;
     private final LlmModelManager llmModelManager;
@@ -93,8 +97,8 @@ public class UpstreamAdminAgentService {
                            String agentId,
                            UpstreamAgentForm form,
                            boolean create) {
-        String workerPoolId = create || StringUtils.hasText(form.getWorkerId())
-                ? requireVisibleWorkerPool(tenantId, principal, form.getWorkerId()).getPoolId()
+        String workerRef = create || StringUtils.hasText(form.getWorkerId())
+                ? requireVisibleWorkerRef(tenantId, principal, form.getWorkerId())
                 : entity.getWorkerId();
         String defaultDirectoryId = create || StringUtils.hasText(form.getDefaultDirectoryId())
                 ? normalizeDefaultDirectoryId(tenantId, principal, form.getDefaultDirectoryId())
@@ -120,7 +124,7 @@ public class UpstreamAdminAgentService {
                     ? form.getAgentType().trim()
                     : BusinessAgentBundleService.AGENT_TYPE_LANGGRAPH);
         }
-        entity.setWorkerId(workerPoolId);
+        entity.setWorkerId(workerRef);
         entity.setDefaultDirectoryId(defaultDirectoryId);
         entity.setDefaultModelConfigId(defaultModelConfigId);
         if (create || form.getDefaultModel() != null) {
@@ -156,14 +160,20 @@ public class UpstreamAdminAgentService {
         return agent;
     }
 
-    private BizWorkerPoolEntity requireVisibleWorkerPool(String tenantId,
-                                                         UpstreamClientAppAdminPrincipal principal,
-                                                         String workerPoolId) {
-        if (!StringUtils.hasText(workerPoolId)) {
+    private String requireVisibleWorkerRef(String tenantId,
+                                           UpstreamClientAppAdminPrincipal principal,
+                                           String workerRef) {
+        if (!StringUtils.hasText(workerRef)) {
             throw new IllegalArgumentException("workerId is required");
         }
-        BizWorkerPoolEntity pool = workerPoolRepository.findByPoolIdAndTenantId(workerPoolId.trim(), tenantId)
-                .orElseThrow(() -> new IllegalArgumentException("worker pool not found: " + workerPoolId));
+        String normalizedWorkerRef = workerRef.trim();
+        return workerPoolRepository.findByPoolIdAndTenantId(normalizedWorkerRef, tenantId)
+                .map(pool -> requireVisibleWorkerPool(principal, pool).getPoolId())
+                .orElseGet(() -> requireVisiblePhysicalWorker(tenantId, principal, normalizedWorkerRef).workerId());
+    }
+
+    private BizWorkerPoolEntity requireVisibleWorkerPool(UpstreamClientAppAdminPrincipal principal,
+                                                         BizWorkerPoolEntity pool) {
         if (!BizWorkerPoolService.STATUS_ENABLED.equals(pool.getStatus())) {
             throw new IllegalStateException("worker pool is disabled: " + pool.getPoolId());
         }
@@ -175,6 +185,26 @@ public class UpstreamAdminAgentService {
             return pool;
         }
         throw new SecurityException("worker pool is not visible to this upstream system: " + pool.getPoolId());
+    }
+
+    private ResolvedPhysicalWorker requireVisiblePhysicalWorker(String tenantId,
+                                                                UpstreamClientAppAdminPrincipal principal,
+                                                                String workerId) {
+        if (physicalWorkerRuntimeRegistries != null) {
+            for (PhysicalWorkerRuntimeRegistry registry : physicalWorkerRuntimeRegistries) {
+                if (registry == null) {
+                    continue;
+                }
+                Optional<ResolvedPhysicalWorker> worker = registry.resolve(
+                        tenantId,
+                        principal.getUpstreamSystemId(),
+                        workerId);
+                if (worker.isPresent()) {
+                    return worker.get();
+                }
+            }
+        }
+        throw new IllegalArgumentException("worker not found as worker pool or physical worker: " + workerId);
     }
 
     private String normalizeDefaultDirectoryId(String tenantId,

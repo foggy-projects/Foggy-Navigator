@@ -1558,6 +1558,77 @@ class UpstreamCliTest {
     }
 
     @Test
+    void agentSetDefaultModelSerializesJavaTimeResponse() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":61,
+                  "tenantId":"tenant-1",
+                  "clientAppId":"app-1",
+                  "agentId":"agent-1",
+                  "modelConfigId":"model-1",
+                  "modelConfigName":"Qwen Plus",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "defaultModel":true,
+                  "createdAt":"2026-05-24T12:34:56"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "agent", "set-default-model",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--agent-code", "agent-1",
+                "--model-config-id", "model-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/agents/agent-1/model-bindings/default", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(output.contains("agent set-default-model ok"));
+        assertTrue(output.contains("\"createdAt\" : \"2026-05-24T12:34:56\""));
+        assertFalse(output.contains("Java 8 date/time type"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void agentSetDefaultWorkspaceSerializesJavaTimeResponse() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":62,
+                  "tenantId":"tenant-1",
+                  "clientAppId":"app-1",
+                  "agentId":"agent-1",
+                  "directoryId":"dir-1",
+                  "projectName":"School Sim",
+                  "workspaceScope":"CLIENT_APP_SHARED",
+                  "defaultDirectory":true,
+                  "enabled":true,
+                  "createdAt":"2026-05-24T12:34:56"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "agent", "set-default-workspace",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--agent-code", "agent-1",
+                "--directory-id", "dir-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/agents/agent-1/workspace-bindings/default", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(output.contains("agent set-default-workspace ok"));
+        assertTrue(output.contains("\"createdAt\" : \"2026-05-24T12:34:56\""));
+        assertFalse(output.contains("Java 8 date/time type"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
     void functionImportUsesControlPlaneCredentialAndManifest() throws Exception {
         responseOverride = "{\"code\":0,\"data\":{}}";
         Path manifest = tempDir.resolve("function-manifest.json");

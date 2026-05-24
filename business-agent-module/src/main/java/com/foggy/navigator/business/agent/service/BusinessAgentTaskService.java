@@ -70,8 +70,11 @@ public class BusinessAgentTaskService {
                 form.getAgentId());
         String skillName = resolveSkillName(agentResource.skillId(), form.getSkillName());
 
-        // 3. 由 Agent 绑定解析 workerPoolId，再校验 workerPool 属于当前 tenant、状态可用
-        BizWorkerPoolEntity workerPool = bizWorkerPoolService.requireAvailablePool(tenantId, agentResource.workerPoolId());
+        // 3. 由 Agent 绑定解析 worker route。新模型优先支持 PhysicalWorker，旧 WorkerPool 路由继续兼容。
+        BizWorkerPoolEntity workerPool = null;
+        if (StringUtils.hasText(agentResource.workerPoolId())) {
+            workerPool = bizWorkerPoolService.requireAvailablePool(tenantId, agentResource.workerPoolId());
+        }
 
         // 校验 client app skill grant
         skillRegistryService.checkClientAppSkillAccess(tenantId, form.getClientAppId(), agentResource.skillId());
@@ -79,6 +82,7 @@ public class BusinessAgentTaskService {
         String finalModelConfigId;
         String finalModelName;
         String finalVisionModelConfigId;
+        A2AgentResourceResolver.ResolvedModelResource finalModelResource;
         BusinessAgentTaskEntity existingResumeTask = null;
         String explicitRequestedModelConfigId = trimToNull(form.getRequestedModelConfigId());
         String explicitRequestedModelVariant = trimToNull(form.getModelVariant());
@@ -105,20 +109,29 @@ public class BusinessAgentTaskService {
                 !explicitRequestedModelVariant.equals(existingResumeTask.getModel())) {
                 throw new IllegalArgumentException("cannot change modelVariant when resuming task");
             }
+            finalModelResource = resourceResolver.resolveRequiredModelForAgent(
+                    tenantId,
+                    form.getClientAppId(),
+                    agentResource,
+                    existingResumeTask.getModelConfigId(),
+                    null,
+                    LlmModelCategory.GENERAL);
+            validateAgentBackendCompatibility(agentResource, finalModelResource);
             finalModelConfigId = existingResumeTask.getModelConfigId();
             finalModelName = existingResumeTask.getModel();
             finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId(), agentResource);
         } else {
             // 4, 5, 6. 新建 task 时必须调用 resolveEffectiveModelConfigId
-            A2AgentResourceResolver.ResolvedModelResource modelResource = resourceResolver.resolveRequiredModelForAgent(
+            finalModelResource = resourceResolver.resolveRequiredModelForAgent(
                     tenantId,
                     form.getClientAppId(),
                     agentResource,
                     requestedModelConfigId,
                     explicitRequestedModelVariant,
                     LlmModelCategory.GENERAL);
-            finalModelConfigId = modelResource.modelConfigId();
-            finalModelName = modelResource.modelName();
+            validateAgentBackendCompatibility(agentResource, finalModelResource);
+            finalModelConfigId = finalModelResource.modelConfigId();
+            finalModelName = finalModelResource.modelName();
             finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId(), agentResource);
         }
         A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource = resolveWorkspaceResource(
@@ -126,6 +139,7 @@ public class BusinessAgentTaskService {
                 form,
                 existingResumeTask,
                 agentResource);
+        validateWorkspacePhysicalWorkerCompatibility(agentResource, workspaceResource);
 
         // 7. task 创建后固定最终 modelConfigId
         BusinessAgentTaskEntity task = new BusinessAgentTaskEntity();
@@ -137,7 +151,7 @@ public class BusinessAgentTaskService {
         task.setNavigatorEffectiveUserId(actorUserId);
         task.setAgentId(agentResource.agentId());
         task.setSkillId(agentResource.skillId());
-        task.setWorkerPoolId(agentResource.workerPoolId());
+        task.setWorkerPoolId(resolveInternalWorkerRouteId(agentResource));
         task.setDirectoryId(workspaceResource != null ? workspaceResource.directoryId() : null);
         task.setModelConfigId(finalModelConfigId);
         task.setRequestedModelConfigId(form.getRequestedModelConfigId());
@@ -174,7 +188,7 @@ public class BusinessAgentTaskService {
                 task.getSessionId());
 
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
-                tenantId, actorUserId, task, workerPool, plainToken, finalVisionModelConfigId, contextId, skillName, form, workspaceResource);
+                tenantId, actorUserId, task, workerPool, agentResource, finalModelResource, plainToken, finalVisionModelConfigId, contextId, skillName, form, workspaceResource);
         if (launchResult != null && StringUtils.hasText(launchResult.getContextId())) {
             contextId = launchResult.getContextId();
         }
@@ -370,6 +384,8 @@ public class BusinessAgentTaskService {
             String actorUserId,
             BusinessAgentTaskEntity task,
             BizWorkerPoolEntity workerPool,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedModelResource modelResource,
             String taskScopedToken,
             String visionModelConfigId,
             String contextId,
@@ -379,6 +395,7 @@ public class BusinessAgentTaskService {
         if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
             return null;
         }
+        String workerBackend = resolveWorkerBackend(agentResource, workerPool, modelResource);
         String markdownBody = skillRegistryService.buildMaterializedPublicSkillMarkdown(
                 tenantId,
                 task.getSkillId(),
@@ -387,7 +404,7 @@ public class BusinessAgentTaskService {
 
         return workerTaskLaunchers.stream()
                 .filter(Objects::nonNull)
-                .filter(launcher -> workerPool.getWorkerBackend().equals(launcher.getWorkerBackend()))
+                .filter(launcher -> workerBackend.equals(launcher.getWorkerBackend()))
                 .findFirst()
                 .map(launcher -> launcher.launch(BusinessAgentWorkerTaskLaunchRequest.builder()
                         .tenantId(tenantId)
@@ -401,7 +418,8 @@ public class BusinessAgentTaskService {
                         .skillId(task.getSkillId())
                         .skillName(skillName)
                         .workerPoolId(task.getWorkerPoolId())
-                        .workerBackend(workerPool.getWorkerBackend())
+                        .physicalWorkerId(resolveLaunchPhysicalWorkerId(agentResource, workspaceResource))
+                        .workerBackend(workerBackend)
                         .modelConfigId(task.getModelConfigId())
                         .model(task.getModel())
                         .visionModelConfigId(visionModelConfigId)
@@ -419,6 +437,68 @@ public class BusinessAgentTaskService {
                         .allowedTools(cleanStringList(form.getAllowedTools()))
                         .build()))
                 .orElse(null);
+    }
+
+    private String resolveWorkerBackend(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            BizWorkerPoolEntity workerPool,
+            A2AgentResourceResolver.ResolvedModelResource modelResource) {
+        String workerBackend = agentResource != null ? trimToNull(agentResource.workerBackend()) : null;
+        if (workerBackend != null) {
+            return workerBackend;
+        }
+        if (workerPool != null && StringUtils.hasText(workerPool.getWorkerBackend())) {
+            return workerPool.getWorkerBackend().trim();
+        }
+        String modelWorkerBackend = modelResource != null ? trimToNull(modelResource.workerBackend()) : null;
+        if (modelWorkerBackend != null) {
+            return modelWorkerBackend;
+        }
+        throw new IllegalStateException("agent worker backend is not configured");
+    }
+
+    private String resolveLaunchPhysicalWorkerId(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        if (workspaceResource != null && StringUtils.hasText(workspaceResource.physicalWorkerId())) {
+            return workspaceResource.physicalWorkerId();
+        }
+        return agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
+    }
+
+    private String resolveInternalWorkerRouteId(A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        String workerPoolId = agentResource != null ? trimToNull(agentResource.workerPoolId()) : null;
+        if (workerPoolId != null) {
+            return workerPoolId;
+        }
+        String physicalWorkerId = agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
+        if (physicalWorkerId != null) {
+            return physicalWorkerId;
+        }
+        throw new IllegalStateException("agent worker route is not configured");
+    }
+
+    private void validateAgentBackendCompatibility(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedModelResource modelResource) {
+        String agentBackend = agentResource != null ? trimToNull(agentResource.workerBackend()) : null;
+        String modelBackend = modelResource != null ? trimToNull(modelResource.workerBackend()) : null;
+        if (agentBackend != null && modelBackend != null && !agentBackend.equals(modelBackend)) {
+            throw new IllegalStateException("model workerBackend " + modelBackend
+                    + " does not match agent route backend " + agentBackend);
+        }
+    }
+
+    private void validateWorkspacePhysicalWorkerCompatibility(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        String agentPhysicalWorkerId = agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
+        String workspacePhysicalWorkerId = workspaceResource != null ? trimToNull(workspaceResource.physicalWorkerId()) : null;
+        if (agentPhysicalWorkerId != null && workspacePhysicalWorkerId != null
+                && !agentPhysicalWorkerId.equals(workspacePhysicalWorkerId)) {
+            throw new IllegalStateException("working directory physical worker " + workspacePhysicalWorkerId
+                    + " does not match agent physical worker " + agentPhysicalWorkerId);
+        }
     }
 
     private A2AgentResourceResolver.ResolvedWorkspaceResource resolveWorkspaceResource(
