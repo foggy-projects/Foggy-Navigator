@@ -36,6 +36,9 @@
 legacy < builtin < public < client_app_public < account_private
 ```
 
+正式支持契约见：
+[39-owner-aware-agent-runtime-contract.md](./39-owner-aware-agent-runtime-contract.md)。
+
 ## Sim 侧体验步骤
 
 ### 1. 准备 ClientApp runtime token
