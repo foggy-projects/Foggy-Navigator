@@ -1,6 +1,9 @@
 package com.foggy.navigator.claude.worker.model.dto;
 
 import com.foggy.navigator.common.dto.DirectoryMilestoneDTO;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import lombok.Builder;
 import lombok.Data;
 
@@ -20,6 +23,20 @@ public class WorkingDirectoryDTO {
     private String agentId;
     /** Agent 名称（方便前端展示，可 null） */
     private String agentName;
+    private ResourceOwnerType ownerType;
+    private String ownerId;
+    private String clientAppId;
+    private String upstreamUserId;
+    private WorkspaceScope workspaceScope;
+    private WorkingDirectoryResolverType resolverType;
+    private String rootRef;
+    private String resolverKey;
+    private Boolean readOnly;
+    private List<String> allowedPathPrefixes;
+    private String quotaJson;
+    private String retentionPolicyJson;
+    private String concurrencyPolicyJson;
+    private Boolean enabled;
     private String path;
     private String gitBranch;
     private String gitRemoteUrl;

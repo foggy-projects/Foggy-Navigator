@@ -79,7 +79,7 @@ public class OpenApiAgentReadinessService {
             route = agentRouteService.resolve(agentId, credential);
             result.getChecks().add(AgentReadinessCheckDTO.ok(
                     "ROOT_AGENT_BINDING",
-                    route.legacySkillRoute() ? "legacy skill route resolved" : "root agent binding resolved"));
+                    "root agent binding resolved"));
         } catch (Exception e) {
             result.getChecks().add(AgentReadinessCheckDTO.fail(
                     "ROOT_AGENT_BINDING",
@@ -88,8 +88,21 @@ public class OpenApiAgentReadinessService {
             return result;
         }
 
+        A2AgentResourceResolver.ResolvedAgentResource[] agentResourceRef = new A2AgentResourceResolver.ResolvedAgentResource[1];
         addCheck(result, "AGENT_REGISTERED", () -> requireAgent(
                 route.agentId(), credential.getTenantId(), safeForm.getModelConfigId()));
+        addCheck(result, "RUNTIME_AGENT_RESOURCE", () -> {
+            if (!StringUtils.hasText(safeForm.getUpstreamUserId())) {
+                throw new IllegalArgumentException("upstreamUserId is required");
+            }
+            A2AgentResourceResolver.ResolvedAgentResource agentResource = resourceResolver.resolveRequiredAgent(
+                    credential.getTenantId(),
+                    credential.getClientAppId(),
+                    safeForm.getUpstreamUserId(),
+                    route.agentId());
+            agentResourceRef[0] = agentResource;
+            applyAgentResource(result, agentResource);
+        });
         addCheck(result, "CLIENT_APP_SKILL_GRANT", () -> skillRegistryService.checkClientAppSkillAccess(
                 credential.getTenantId(), credential.getClientAppId(), route.skillId()));
         if (StringUtils.hasText(safeForm.getUpstreamUserId())) {
@@ -101,13 +114,18 @@ public class OpenApiAgentReadinessService {
                     "upstreamUserId is required"));
         }
         addCheck(result, "MODEL_CONFIG_GRANT", () -> {
-            String effective = resourceResolver.resolveRequiredModelConfigId(
+            String requestedModelConfigId = resolveRequestedModelConfigId(safeForm, agentResourceRef[0]);
+            A2AgentResourceResolver.ResolvedModelResource modelResource = resourceResolver.resolveRequiredModelForAgent(
                     credential.getTenantId(),
                     credential.getClientAppId(),
-                    safeForm.getModelConfigId(),
+                    agentResourceRef[0],
+                    requestedModelConfigId,
                     LlmModelCategory.GENERAL);
-            result.setEffectiveModelConfigId(effective);
+            result.setEffectiveModelConfigId(modelResource.modelConfigId());
+            result.setModelConfigSource(modelResource.source());
+            result.setModelCategory(modelResource.category().name());
         });
+        addWorkspaceResourceCheckIfPossible(result, credential, safeForm, agentResourceRef[0]);
         addRequiredUpstreamRouteChecks(result, credential, safeForm);
         addBusinessFunctionAdapterChecks(result, credential);
 
@@ -122,6 +140,76 @@ public class OpenApiAgentReadinessService {
 
         result.refreshOverallStatus();
         return result;
+    }
+
+    private void applyAgentResource(
+            AgentReadinessDTO result,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        if (agentResource == null) {
+            throw new IllegalStateException("agent resource was not resolved");
+        }
+        result.setAgentId(agentResource.agentId());
+        result.setAgentOwnerType(agentResource.ownerType() != null ? agentResource.ownerType().name() : null);
+        result.setAgentOwnerId(agentResource.ownerId());
+        result.setAgentSource(agentResource.source());
+        result.setSkillId(agentResource.skillId());
+        result.setWorkerPoolId(agentResource.workerPoolId());
+        result.setWorkerPoolOwnerType(agentResource.workerPoolOwnerType() != null
+                ? agentResource.workerPoolOwnerType().name()
+                : null);
+        result.setWorkerPoolOwnerId(agentResource.workerPoolOwnerId());
+        result.setWorkerPoolSource(agentResource.workerPoolSource());
+        result.setDefaultModelConfigId(agentResource.defaultModelConfigId());
+        result.setDefaultDirectoryId(agentResource.defaultDirectoryId());
+    }
+
+    private String resolveRequestedModelConfigId(
+            AgentReadinessPreflightForm form,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        String requested = trimToNull(form.getModelConfigId());
+        if (requested != null) {
+            return requested;
+        }
+        return agentResource != null ? trimToNull(agentResource.defaultModelConfigId()) : null;
+    }
+
+    private void addWorkspaceResourceCheckIfPossible(
+            AgentReadinessDTO result,
+            ResolvedClientAppCredentialDTO credential,
+            AgentReadinessPreflightForm form,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        if (agentResource == null) {
+            return;
+        }
+        String requestedDirectoryId = trimToNull(form.getDirectoryId());
+        String effectiveDirectoryId = requestedDirectoryId != null
+                ? requestedDirectoryId
+                : trimToNull(agentResource.defaultDirectoryId());
+        result.setRequestedDirectoryId(requestedDirectoryId);
+        result.setEffectiveDirectoryId(effectiveDirectoryId);
+        if (!StringUtils.hasText(effectiveDirectoryId)) {
+            result.getChecks().add(AgentReadinessCheckDTO.ok(
+                    "WORKSPACE_RESOURCE",
+                    "no working directory requested or bound"));
+            return;
+        }
+        addCheck(result, "WORKSPACE_RESOURCE", () -> {
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource = resourceResolver.resolveRequiredWorkspaceForAgent(
+                    credential.getTenantId(),
+                    credential.getClientAppId(),
+                    form.getUpstreamUserId(),
+                    agentResource,
+                    effectiveDirectoryId);
+            result.setEffectiveDirectoryId(workspaceResource.directoryId());
+            result.setWorkspaceScope(workspaceResource.workspaceScope() != null
+                    ? workspaceResource.workspaceScope().name()
+                    : null);
+            result.setWorkspaceResolverType(workspaceResource.resolverType() != null
+                    ? workspaceResource.resolverType().name()
+                    : null);
+            result.setWorkspaceReadOnly(workspaceResource.readOnly());
+            result.setWorkspaceSource(workspaceResource.source());
+        });
     }
 
     private void addRequiredUpstreamRouteChecks(

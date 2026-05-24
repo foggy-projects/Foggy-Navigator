@@ -23,7 +23,13 @@ import com.foggy.navigator.sdk.model.Worker;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm;
+import com.foggy.navigator.sdk.model.businessagent.AgentModelBindingDTO;
+import com.foggy.navigator.sdk.model.businessagent.AgentWorkerBindingDTO;
+import com.foggy.navigator.sdk.model.businessagent.AgentWorkspaceBindingDTO;
 import com.foggy.navigator.sdk.model.businessagent.ApproveUpstreamBootstrapRequestForm;
+import com.foggy.navigator.sdk.model.businessagent.BindAgentModelForm;
+import com.foggy.navigator.sdk.model.businessagent.BindAgentWorkerForm;
+import com.foggy.navigator.sdk.model.businessagent.BindAgentWorkspaceForm;
 import com.foggy.navigator.sdk.model.businessagent.BusinessAgentBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.BusinessFunctionSummaryDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClaimUpstreamAdminCredentialForm;
@@ -45,6 +51,7 @@ import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
 import com.foggy.navigator.sdk.model.businessagent.ImportBusinessFunctionManifestForm;
 import com.foggy.navigator.sdk.model.businessagent.IssueControlCredentialForm;
 import com.foggy.navigator.sdk.model.businessagent.IssuedCredentialDTO;
+import com.foggy.navigator.sdk.model.businessagent.LlmModelConfigDTO;
 import com.foggy.navigator.sdk.model.businessagent.RotateModelConfigKeyForm;
 import com.foggy.navigator.sdk.model.businessagent.RotateUpstreamAdminCredentialForm;
 import com.foggy.navigator.sdk.model.businessagent.SkillClearResultDTO;
@@ -54,6 +61,7 @@ import com.foggy.navigator.sdk.model.businessagent.SyncBusinessAgentBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncSkillBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.UpstreamAdminCredentialClaimDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpstreamAdminCredentialDTO;
+import com.foggy.navigator.sdk.model.businessagent.UpstreamAgentForm;
 import com.foggy.navigator.sdk.model.businessagent.UpstreamTenantClientAppProvisioningDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpstreamBootstrapRequestCreatedDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpstreamBootstrapRequestDTO;
@@ -116,6 +124,7 @@ public class UpstreamCli {
             case "config check" -> configCheck();
             case "runtime-token" -> runtimeToken(args);
             case "verify-agent-readiness", "verify-agent-grant" -> verifyAgentReadiness(args);
+            case "inspect", "inspect runtime" -> inspectRuntime(args);
             case "ensure-grant" -> ensureGrant(args);
             case "ask" -> ask(args);
             case "messages" -> messages(args);
@@ -127,6 +136,34 @@ public class UpstreamCli {
             case "skill clear-public" -> skillClearPublic(args);
             case "skill clear-account" -> skillClearAccount(args);
             case "agent sync" -> agentSync(args);
+            case "agent model-bindings" -> agentModelBindings(args);
+            case "agent bind-model" -> agentBindModel(args);
+            case "agent unbind-model" -> agentUnbindModel(args);
+            case "agent set-default-model" -> agentSetDefaultModel(args);
+            case "agent workspace-bindings" -> agentWorkspaceBindings(args);
+            case "agent bind-workspace" -> agentBindWorkspace(args);
+            case "agent unbind-workspace" -> agentUnbindWorkspace(args);
+            case "agent set-default-workspace" -> agentSetDefaultWorkspace(args);
+            case "agent worker-bindings" -> agentWorkerBindings(args);
+            case "agent bind-worker" -> agentBindWorker(args);
+            case "agent unbind-worker" -> agentUnbindWorker(args);
+            case "agent set-default-worker" -> agentSetDefaultWorker(args);
+            case "agent system-model-bindings" -> agentSystemModelBindings(args);
+            case "agent system-bind-model" -> agentSystemBindModel(args);
+            case "agent system-unbind-model" -> agentSystemUnbindModel(args);
+            case "agent system-set-default-model" -> agentSystemSetDefaultModel(args);
+            case "agent system-workspace-bindings" -> agentSystemWorkspaceBindings(args);
+            case "agent system-bind-workspace" -> agentSystemBindWorkspace(args);
+            case "agent system-unbind-workspace" -> agentSystemUnbindWorkspace(args);
+            case "agent system-set-default-workspace" -> agentSystemSetDefaultWorkspace(args);
+            case "agent system-worker-bindings" -> agentSystemWorkerBindings(args);
+            case "agent system-bind-worker" -> agentSystemBindWorker(args);
+            case "agent system-unbind-worker" -> agentSystemUnbindWorker(args);
+            case "agent system-set-default-worker" -> agentSystemSetDefaultWorker(args);
+            case "agent system-list" -> agentSystemList(args);
+            case "agent system-create" -> agentSystemCreate(args);
+            case "agent system-get" -> agentSystemGet(args);
+            case "agent system-update" -> agentSystemUpdate(args);
             case "function", "function help" -> functionUsage();
             case "function import" -> functionImport(args);
             case "function grant" -> functionGrant(args);
@@ -142,6 +179,10 @@ public class UpstreamCli {
             case "model create" -> modelCreate(args);
             case "model update" -> modelUpdate(args);
             case "model rotate-key" -> modelRotateKey(args);
+            case "model system-list" -> modelSystemList(args);
+            case "model system-create" -> modelSystemCreate(args);
+            case "model system-update" -> modelSystemUpdate(args);
+            case "model system-rotate-key" -> modelSystemRotateKey(args);
             case "admin-key", "admin-key help" -> adminKeyUsage();
             case "admin-key request" -> adminKeyRequest(args);
             case "admin-key status" -> adminKeyStatus(args);
@@ -172,9 +213,16 @@ public class UpstreamCli {
             case "directory delete" -> directoryDelete(args);
             case "directory env" -> directoryEnv(args);
             case "directory files" -> directoryFiles(args);
+            case "directory client-list" -> directoryClientList(args);
+            case "directory client-init" -> directoryClientInit(args);
+            case "directory client-get" -> directoryClientGet(args);
+            case "directory client-delete" -> directoryClientDelete(args);
+            case "directory client-env" -> directoryClientEnv(args);
+            case "directory client-files" -> directoryClientFiles(args);
             case "worker-pool", "worker-pool help" -> workerPoolUsage();
             case "worker-pool list" -> workerPoolList(args);
             case "worker-pool create" -> workerPoolCreate(args);
+            case "worker-pool register-worker" -> workerPoolRegisterWorker(args);
             case "worker-pool add-member" -> workerPoolAddMember(args);
             case "worker-pool status" -> workerPoolStatus(args);
             case "account-context list" -> accountContextList(args);
@@ -189,10 +237,11 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-control-key, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files, worker-pool list/create/add-member/status, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-control-key, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, worker-pool list/create/register-worker/add-member/status, account-context list, account-context read, account-context write-policy");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
-        out.println("  model create/update supports --runtime-budget-preset <key> and optional --runtime-budget-override-json <json> for LangGraph Biz.");
+        out.println("  model create/update uses NAVI_CONTROL_API_KEY and creates ClientApp-owned models.");
+        out.println("  model system-create/system-update uses NAVI_ADMIN_API_KEY and creates UpstreamSystem-owned shared models.");
         return 0;
     }
 
@@ -232,20 +281,25 @@ public class UpstreamCli {
 
     private int directoryUsage() {
         out.println("Usage: navi upstream directory <command> [options]");
-        out.println("Commands: list, init, get, delete, env, files");
+        out.println("Commands: list, init, get, delete, env, files, client-list, client-init, client-get, client-delete, client-env, client-files");
         out.println("  list [--target-tenant-id <tenantId>] [--worker-id <id>]");
         out.println("  init --file <json> [--write-profile]");
         out.println("  get|delete --directory-id <id>");
         out.println("  env|files --directory-id <id> --file <json>");
+        out.println("  client-list [--client-app-id <id>] [--worker-id <id>] [--workspace-scope <scope>] [--upstream-user-id <id>]");
+        out.println("  client-init [--client-app-id <id>] --file <json> [--write-profile]");
+        out.println("  client-get|client-delete [--client-app-id <id>] --directory-id <id>");
+        out.println("  client-env|client-files [--client-app-id <id>] --directory-id <id> --file <json>");
         return 0;
     }
 
     private int workerPoolUsage() {
         out.println("Usage: navi upstream worker-pool <command> [options]");
-        out.println("Commands: list, create, add-member, status");
+        out.println("Commands: list, create, register-worker, add-member, status");
         out.println("  list [--target-tenant-id <tenantId>]");
         out.println("  create --file <json> [--target-tenant-id <tenantId>] [--write-profile]");
-        out.println("  add-member --pool-id <id> --worker-id <workerId> [--target-tenant-id <tenantId>]");
+        out.println("  register-worker --file <json> [--write-profile]");
+        out.println("  add-member --pool-id <id> [--worker-id <workerId>] [--target-tenant-id <tenantId>]");
         out.println("  status --pool-id <id> --status ENABLED|DISABLED [--target-tenant-id <tenantId>]");
         return 0;
     }
@@ -723,6 +777,71 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int directoryClientList(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        List<Directory> dirs = clientAppDirectoryApi().listWithClientAppControl(
+                clientAppId,
+                optionalOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID"),
+                args.option("workspace-scope"),
+                args.option("upstream-user-id"));
+        out.println("directoryCount=" + (dirs != null ? dirs.size() : 0));
+        if (dirs != null) {
+            dirs.forEach(this::printDirectory);
+        }
+        return 0;
+    }
+
+    private int directoryClientInit(CliArguments args) throws Exception {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        Directory dir = clientAppDirectoryApi().initWithClientAppControl(
+                clientAppId, readJsonMap(requiredOption(args, "file", "directory init json file")));
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_DIRECTORY_ID", valueOrEmpty(dir != null ? dir.getDirectoryId() : null));
+        }
+        out.println("directory client-init ok");
+        printDirectory(dir);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_DIRECTORY_ID");
+        }
+        return 0;
+    }
+
+    private int directoryClientGet(CliArguments args) {
+        printDirectory(clientAppDirectoryApi().getWithClientAppControl(
+                requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id"),
+                requiredOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID", "directory id")));
+        return 0;
+    }
+
+    private int directoryClientDelete(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String directoryId = requiredOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID", "directory id");
+        clientAppDirectoryApi().deleteWithClientAppControl(clientAppId, directoryId);
+        out.println("directory client-delete ok");
+        out.println("directoryId=" + valueOrEmpty(directoryId));
+        return 0;
+    }
+
+    private int directoryClientEnv(CliArguments args) throws Exception {
+        printJson(clientAppDirectoryApi().updateEnvVarsWithClientAppControl(
+                requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id"),
+                requiredOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID", "directory id"),
+                readJsonStringMap(requiredOption(args, "file", "env json file"))));
+        return 0;
+    }
+
+    private int directoryClientFiles(CliArguments args) throws Exception {
+        printJson(clientAppDirectoryApi().updateFilesWithClientAppControl(
+                requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id"),
+                requiredOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID", "directory id"),
+                readJsonStringMap(requiredOption(args, "file", "files json file"))));
+        return 0;
+    }
+
     private int workerPoolList(CliArguments args) throws Exception {
         printJson(upstreamAdminApi().listUpstreamWorkerPools(
                 optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID")));
@@ -748,13 +867,43 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int workerPoolRegisterWorker(CliArguments args) throws Exception {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        Map<String, Object> worker = upstreamAdminApi().registerUpstreamWorkerIdentity(
+                readJsonMap(requiredOption(args, "file", "biz worker identity json file")));
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_BIZ_WORKER_ID", valueOrEmpty(worker != null ? worker.get("workerId") : null));
+        }
+        out.println("worker-pool register-worker ok");
+        printJson(worker);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_BIZ_WORKER_ID");
+        }
+        return 0;
+    }
+
     private int workerPoolAddMember(CliArguments args) {
         upstreamAdminApi().addUpstreamWorkerPoolMember(
                 requiredOptionOrConfig(args, "pool-id", "NAVI_WORKER_POOL_ID", "worker pool id"),
-                Map.of("workerId", requiredOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID", "worker id")),
+                Map.of("workerId", workerPoolMemberWorkerId(args)),
                 optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID"));
         out.println("worker-pool add-member ok");
         return 0;
+    }
+
+    private String workerPoolMemberWorkerId(CliArguments args) {
+        String explicit = args.option("worker-id");
+        if (hasText(explicit)) {
+            return explicit;
+        }
+        String bizWorkerId = config.get("NAVI_BIZ_WORKER_ID");
+        if (hasText(bizWorkerId)) {
+            return bizWorkerId;
+        }
+        return requiredOptionOrConfig(args, "worker-id", "NAVI_WORKER_ID", "worker id");
     }
 
     private int workerPoolStatus(CliArguments args) throws Exception {
@@ -787,22 +936,58 @@ public class UpstreamCli {
     }
 
     private int verifyAgentReadiness(CliArguments args) {
+        AgentReadiness readiness = fetchAgentReadiness(args);
+        out.println("verify-agent-readiness " + valueOrEmpty(readiness.getOverallStatus()));
+        printAgentReadiness(readiness);
+        return "OK".equals(readiness.getOverallStatus()) ? 0 : 2;
+    }
+
+    private int inspectRuntime(CliArguments args) {
+        AgentReadiness readiness = fetchAgentReadiness(args);
+        out.println("inspect runtime " + valueOrEmpty(readiness.getOverallStatus()));
+        printAgentReadiness(readiness);
+        return "OK".equals(readiness.getOverallStatus()) ? 0 : 2;
+    }
+
+    private AgentReadiness fetchAgentReadiness(CliArguments args) {
         String agent = agentCode(args);
         String upstreamUserId = upstreamUserId(args);
-        AgentReadiness readiness = agentApi().verifyReadinessWithClientAppAccessToken(
+        return agentApi().verifyReadinessWithClientAppAccessToken(
                 agent,
                 upstreamUserId,
                 modelConfigId(args),
+                optionalOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID"),
                 clientAppKey(args),
                 clientAppAccessToken(args));
-        out.println("verify-agent-readiness " + valueOrEmpty(readiness.getOverallStatus()));
+    }
+
+    private void printAgentReadiness(AgentReadiness readiness) {
         out.println("baseUrl=" + valueOrEmpty(readiness.getBaseUrl()));
         out.println("clientAppId=" + valueOrEmpty(readiness.getClientAppId()));
         out.println("clientAppName=" + redact(readiness.getClientAppName()));
         out.println("agentCode=" + valueOrEmpty(readiness.getAgentCode()));
         out.println("upstreamUserId=" + valueOrEmpty(readiness.getUpstreamUserId()));
         out.println("requestedModelConfigId=" + valueOrEmpty(readiness.getRequestedModelConfigId()));
+        out.println("defaultModelConfigId=" + valueOrEmpty(readiness.getDefaultModelConfigId()));
         out.println("effectiveModelConfigId=" + valueOrEmpty(readiness.getEffectiveModelConfigId()));
+        out.println("modelConfigSource=" + valueOrEmpty(readiness.getModelConfigSource()));
+        out.println("modelCategory=" + valueOrEmpty(readiness.getModelCategory()));
+        out.println("agent agentId=" + valueOrEmpty(readiness.getAgentId())
+                + " ownerType=" + valueOrEmpty(readiness.getAgentOwnerType())
+                + " ownerId=" + valueOrEmpty(readiness.getAgentOwnerId())
+                + " source=" + valueOrEmpty(readiness.getAgentSource())
+                + " skillId=" + valueOrEmpty(readiness.getSkillId()));
+        out.println("workerPool workerPoolId=" + valueOrEmpty(readiness.getWorkerPoolId())
+                + " ownerType=" + valueOrEmpty(readiness.getWorkerPoolOwnerType())
+                + " ownerId=" + valueOrEmpty(readiness.getWorkerPoolOwnerId())
+                + " source=" + valueOrEmpty(readiness.getWorkerPoolSource()));
+        out.println("workspace requestedDirectoryId=" + valueOrEmpty(readiness.getRequestedDirectoryId())
+                + " defaultDirectoryId=" + valueOrEmpty(readiness.getDefaultDirectoryId())
+                + " effectiveDirectoryId=" + valueOrEmpty(readiness.getEffectiveDirectoryId())
+                + " scope=" + valueOrEmpty(readiness.getWorkspaceScope())
+                + " resolverType=" + valueOrEmpty(readiness.getWorkspaceResolverType())
+                + " readOnly=" + valueOrEmpty(readiness.getWorkspaceReadOnly())
+                + " source=" + valueOrEmpty(readiness.getWorkspaceSource()));
         if (readiness.getChecks() != null) {
             for (AgentReadinessCheck check : readiness.getChecks()) {
                 out.println("check " + valueOrEmpty(check.getCode())
@@ -813,7 +998,6 @@ public class UpstreamCli {
         if (readiness.getSkillArtifact() != null && readiness.getSkillArtifact().isAvailable()) {
             out.println("skillArtifactTreeUrl=" + valueOrEmpty(readiness.getSkillArtifact().getTreeUrl()));
         }
-        return "OK".equals(readiness.getOverallStatus()) ? 0 : 2;
     }
 
     private int ask(CliArguments args) {
@@ -1018,6 +1202,285 @@ public class UpstreamCli {
         BusinessAgentBundleDTO dto = businessAgentControlApi().syncBusinessAgentBundle(form);
         printBusinessAgentBundle(dto);
         return 0;
+    }
+
+    private int agentSystemList(CliArguments args) throws Exception {
+        List<BusinessAgentBundleDTO> agents = upstreamAdminApi()
+                .listUpstreamSystemAgents(args.option("target-tenant-id"));
+        out.println("agentCount=" + (agents != null ? agents.size() : 0));
+        printJson(agents);
+        return 0;
+    }
+
+    private int agentSystemCreate(CliArguments args) throws Exception {
+        UpstreamAgentForm form = readJsonFile(requiredOption(args, "file", "agent json file"), UpstreamAgentForm.class);
+        BusinessAgentBundleDTO dto = upstreamAdminApi().createUpstreamSystemAgent(form, args.option("target-tenant-id"));
+        out.println("agent system-create ok");
+        printBusinessAgentBundle(dto);
+        return 0;
+    }
+
+    private int agentSystemGet(CliArguments args) {
+        BusinessAgentBundleDTO dto = upstreamAdminApi()
+                .getUpstreamSystemAgent(agentCode(args), args.option("target-tenant-id"));
+        printBusinessAgentBundle(dto);
+        return 0;
+    }
+
+    private int agentSystemUpdate(CliArguments args) throws Exception {
+        UpstreamAgentForm form = readJsonFile(requiredOption(args, "file", "agent json file"), UpstreamAgentForm.class);
+        BusinessAgentBundleDTO dto = upstreamAdminApi()
+                .updateUpstreamSystemAgent(agentCode(args), form, args.option("target-tenant-id"));
+        out.println("agent system-update ok");
+        printBusinessAgentBundle(dto);
+        return 0;
+    }
+
+    private int agentModelBindings(CliArguments args) throws Exception {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        List<AgentModelBindingDTO> bindings = businessAgentControlApi()
+                .listAgentModelBindings(clientAppId, agentCode(args));
+        out.println("agentModelBindingCount=" + (bindings != null ? bindings.size() : 0));
+        printJson(bindings);
+        return 0;
+    }
+
+    private int agentBindModel(CliArguments args) throws Exception {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        AgentModelBindingDTO binding = businessAgentControlApi().bindAgentModel(clientAppId, agentCode(args), bindAgentModelForm(args));
+        out.println("agent bind-model ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private int agentUnbindModel(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        businessAgentControlApi().unbindAgentModel(clientAppId, agentCode(args), modelConfigId);
+        out.println("agent unbind-model ok");
+        out.println("agent=" + agentCode(args));
+        out.println("modelConfigId=" + modelConfigId);
+        return 0;
+    }
+
+    private int agentSetDefaultModel(CliArguments args) throws Exception {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        BindAgentModelForm form = bindAgentModelForm(args);
+        AgentModelBindingDTO binding = businessAgentControlApi().setDefaultAgentModel(clientAppId, agentCode(args), form);
+        out.println("agent set-default-model ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private int agentSystemModelBindings(CliArguments args) throws Exception {
+        List<AgentModelBindingDTO> bindings = upstreamAdminApi()
+                .listUpstreamSystemAgentModelBindings(agentCode(args), args.option("target-tenant-id"));
+        out.println("agentModelBindingCount=" + (bindings != null ? bindings.size() : 0));
+        printJson(bindings);
+        return 0;
+    }
+
+    private int agentSystemBindModel(CliArguments args) throws Exception {
+        AgentModelBindingDTO binding = upstreamAdminApi().bindUpstreamSystemAgentModel(
+                agentCode(args),
+                bindAgentModelForm(args),
+                args.option("target-tenant-id"));
+        out.println("agent system-bind-model ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private int agentSystemUnbindModel(CliArguments args) {
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        upstreamAdminApi().unbindUpstreamSystemAgentModel(agentCode(args), modelConfigId, args.option("target-tenant-id"));
+        out.println("agent system-unbind-model ok");
+        out.println("agent=" + agentCode(args));
+        out.println("modelConfigId=" + modelConfigId);
+        return 0;
+    }
+
+    private int agentSystemSetDefaultModel(CliArguments args) throws Exception {
+        AgentModelBindingDTO binding = upstreamAdminApi().setDefaultUpstreamSystemAgentModel(
+                agentCode(args),
+                bindAgentModelForm(args),
+                args.option("target-tenant-id"));
+        out.println("agent system-set-default-model ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private BindAgentModelForm bindAgentModelForm(CliArguments args) {
+        BindAgentModelForm form = new BindAgentModelForm();
+        form.setModelConfigId(requiredOption(args, "model-config-id", "model config id"));
+        return form;
+    }
+
+    private int agentWorkspaceBindings(CliArguments args) throws Exception {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        List<AgentWorkspaceBindingDTO> bindings = businessAgentControlApi()
+                .listAgentWorkspaceBindings(clientAppId, agentCode(args));
+        out.println("agentWorkspaceBindingCount=" + (bindings != null ? bindings.size() : 0));
+        printJson(bindings);
+        return 0;
+    }
+
+    private int agentBindWorkspace(CliArguments args) throws Exception {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        AgentWorkspaceBindingDTO binding = businessAgentControlApi().bindAgentWorkspace(
+                clientAppId,
+                agentCode(args),
+                bindAgentWorkspaceForm(args));
+        out.println("agent bind-workspace ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private int agentUnbindWorkspace(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String directoryId = requiredOption(args, "directory-id", "directory id");
+        businessAgentControlApi().unbindAgentWorkspace(clientAppId, agentCode(args), directoryId);
+        out.println("agent unbind-workspace ok");
+        out.println("agent=" + agentCode(args));
+        out.println("directoryId=" + directoryId);
+        return 0;
+    }
+
+    private int agentSetDefaultWorkspace(CliArguments args) throws Exception {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        AgentWorkspaceBindingDTO binding = businessAgentControlApi().setDefaultAgentWorkspace(
+                clientAppId,
+                agentCode(args),
+                bindAgentWorkspaceForm(args));
+        out.println("agent set-default-workspace ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private int agentSystemWorkspaceBindings(CliArguments args) throws Exception {
+        List<AgentWorkspaceBindingDTO> bindings = upstreamAdminApi()
+                .listUpstreamSystemAgentWorkspaceBindings(agentCode(args), args.option("target-tenant-id"));
+        out.println("agentWorkspaceBindingCount=" + (bindings != null ? bindings.size() : 0));
+        printJson(bindings);
+        return 0;
+    }
+
+    private int agentSystemBindWorkspace(CliArguments args) throws Exception {
+        AgentWorkspaceBindingDTO binding = upstreamAdminApi().bindUpstreamSystemAgentWorkspace(
+                agentCode(args),
+                bindAgentWorkspaceForm(args),
+                args.option("target-tenant-id"));
+        out.println("agent system-bind-workspace ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private int agentSystemUnbindWorkspace(CliArguments args) {
+        String directoryId = requiredOption(args, "directory-id", "directory id");
+        upstreamAdminApi().unbindUpstreamSystemAgentWorkspace(agentCode(args), directoryId, args.option("target-tenant-id"));
+        out.println("agent system-unbind-workspace ok");
+        out.println("agent=" + agentCode(args));
+        out.println("directoryId=" + directoryId);
+        return 0;
+    }
+
+    private int agentSystemSetDefaultWorkspace(CliArguments args) throws Exception {
+        AgentWorkspaceBindingDTO binding = upstreamAdminApi().setDefaultUpstreamSystemAgentWorkspace(
+                agentCode(args),
+                bindAgentWorkspaceForm(args),
+                args.option("target-tenant-id"));
+        out.println("agent system-set-default-workspace ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private BindAgentWorkspaceForm bindAgentWorkspaceForm(CliArguments args) {
+        BindAgentWorkspaceForm form = new BindAgentWorkspaceForm();
+        form.setDirectoryId(requiredOption(args, "directory-id", "directory id"));
+        return form;
+    }
+
+    private int agentWorkerBindings(CliArguments args) throws Exception {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        List<AgentWorkerBindingDTO> bindings = businessAgentControlApi()
+                .listAgentWorkerBindings(clientAppId, agentCode(args));
+        out.println("agentWorkerBindingCount=" + (bindings != null ? bindings.size() : 0));
+        printJson(bindings);
+        return 0;
+    }
+
+    private int agentBindWorker(CliArguments args) throws Exception {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        AgentWorkerBindingDTO binding = businessAgentControlApi().bindAgentWorker(
+                clientAppId,
+                agentCode(args),
+                bindAgentWorkerForm(args));
+        out.println("agent bind-worker ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private int agentUnbindWorker(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String workerPoolId = requiredOption(args, "worker-pool-id", "worker pool id");
+        businessAgentControlApi().unbindAgentWorker(clientAppId, agentCode(args), workerPoolId);
+        out.println("agent unbind-worker ok");
+        out.println("agent=" + agentCode(args));
+        out.println("workerPoolId=" + workerPoolId);
+        return 0;
+    }
+
+    private int agentSetDefaultWorker(CliArguments args) throws Exception {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        AgentWorkerBindingDTO binding = businessAgentControlApi().setDefaultAgentWorker(
+                clientAppId,
+                agentCode(args),
+                bindAgentWorkerForm(args));
+        out.println("agent set-default-worker ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private int agentSystemWorkerBindings(CliArguments args) throws Exception {
+        List<AgentWorkerBindingDTO> bindings = upstreamAdminApi()
+                .listUpstreamSystemAgentWorkerBindings(agentCode(args), args.option("target-tenant-id"));
+        out.println("agentWorkerBindingCount=" + (bindings != null ? bindings.size() : 0));
+        printJson(bindings);
+        return 0;
+    }
+
+    private int agentSystemBindWorker(CliArguments args) throws Exception {
+        AgentWorkerBindingDTO binding = upstreamAdminApi().bindUpstreamSystemAgentWorker(
+                agentCode(args),
+                bindAgentWorkerForm(args),
+                args.option("target-tenant-id"));
+        out.println("agent system-bind-worker ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private int agentSystemUnbindWorker(CliArguments args) {
+        String workerPoolId = requiredOption(args, "worker-pool-id", "worker pool id");
+        upstreamAdminApi().unbindUpstreamSystemAgentWorker(agentCode(args), workerPoolId, args.option("target-tenant-id"));
+        out.println("agent system-unbind-worker ok");
+        out.println("agent=" + agentCode(args));
+        out.println("workerPoolId=" + workerPoolId);
+        return 0;
+    }
+
+    private int agentSystemSetDefaultWorker(CliArguments args) throws Exception {
+        AgentWorkerBindingDTO binding = upstreamAdminApi().setDefaultUpstreamSystemAgentWorker(
+                agentCode(args),
+                bindAgentWorkerForm(args),
+                args.option("target-tenant-id"));
+        out.println("agent system-set-default-worker ok");
+        printJson(binding);
+        return 0;
+    }
+
+    private BindAgentWorkerForm bindAgentWorkerForm(CliArguments args) {
+        BindAgentWorkerForm form = new BindAgentWorkerForm();
+        form.setWorkerPoolId(requiredOption(args, "worker-pool-id", "worker pool id"));
+        return form;
     }
 
     private int functionImport(CliArguments args) throws Exception {
@@ -1247,6 +1710,69 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int modelSystemList(CliArguments args) {
+        List<LlmModelConfigDTO> models = upstreamAdminApi()
+                .listUpstreamSystemModelConfigs(args.option("target-tenant-id"));
+        out.println("modelConfigCount=" + (models != null ? models.size() : 0));
+        if (models != null) {
+            for (LlmModelConfigDTO model : models) {
+                printLlmModelConfig("modelConfig", model);
+            }
+        }
+        return 0;
+    }
+
+    private int modelSystemCreate(CliArguments args) {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        ClientAppModelConfigForm form = buildModelConfigForm(args, true);
+        LlmModelConfigDTO model = upstreamAdminApi()
+                .createUpstreamSystemModelConfig(form, args.option("target-tenant-id"));
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_MODEL_CONFIG_ID", modelConfigIdFromModel(model));
+        }
+        out.println("model system-create ok");
+        printLlmModelConfig("modelConfig", model);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_MODEL_CONFIG_ID");
+        }
+        return 0;
+    }
+
+    private int modelSystemUpdate(CliArguments args) {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        ClientAppModelConfigForm form = buildModelConfigForm(args, false);
+        LlmModelConfigDTO model = upstreamAdminApi()
+                .updateUpstreamSystemModelConfig(modelConfigId, form, args.option("target-tenant-id"));
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_MODEL_CONFIG_ID", modelConfigIdFromModelOrFallback(model, modelConfigId));
+        }
+        out.println("model system-update ok");
+        printLlmModelConfig("modelConfig", model);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_MODEL_CONFIG_ID");
+        }
+        return 0;
+    }
+
+    private int modelSystemRotateKey(CliArguments args) {
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setApiKey(config.required("NAVI_LLM_API_KEY", "LLM API key; pass --api-key-env <envName>"));
+
+        LlmModelConfigDTO model = upstreamAdminApi()
+                .rotateUpstreamSystemModelConfigKey(modelConfigId, form, args.option("target-tenant-id"));
+        out.println("model system-rotate-key ok");
+        printLlmModelConfig("modelConfig", model);
+        return 0;
+    }
+
     private ClientAppModelConfigForm buildModelConfigForm(CliArguments args, boolean create) {
         ClientAppModelConfigForm form = new ClientAppModelConfigForm();
         form.setName(create ? requiredOption(args, "name", "model name") : args.option("name"));
@@ -1269,6 +1795,21 @@ public class UpstreamCli {
         return form;
     }
 
+    private void printLlmModelConfig(String prefix, LlmModelConfigDTO model) {
+        if (model == null) {
+            return;
+        }
+        out.println(prefix + ".id=" + valueOrEmpty(model.getId()));
+        out.println(prefix + ".tenantId=" + valueOrEmpty(model.getTenantId()));
+        out.println(prefix + ".name=" + valueOrEmpty(model.getName()));
+        out.println(prefix + ".category=" + valueOrEmpty(model.getCategory()));
+        out.println(prefix + ".modelName=" + valueOrEmpty(model.getModelName()));
+        out.println(prefix + ".workerBackend=" + valueOrEmpty(model.getWorkerBackend()));
+        out.println(prefix + ".ownerType=" + valueOrEmpty(model.getOwnerType()));
+        out.println(prefix + ".ownerId=" + valueOrEmpty(model.getOwnerId()));
+        out.println(prefix + ".enabled=" + valueOrEmpty(model.getEnabled()));
+    }
+
     private String modelConfigIdFromGrant(ClientAppModelConfigGrantDTO grant) {
         String modelConfigId = grant != null ? grant.getModelConfigId() : null;
         if (!hasText(modelConfigId)) {
@@ -1279,6 +1820,19 @@ public class UpstreamCli {
 
     private String modelConfigIdFromGrantOrFallback(ClientAppModelConfigGrantDTO grant, String fallback) {
         String modelConfigId = grant != null ? grant.getModelConfigId() : null;
+        return hasText(modelConfigId) ? modelConfigId : fallback;
+    }
+
+    private String modelConfigIdFromModel(LlmModelConfigDTO model) {
+        String modelConfigId = model != null ? model.getId() : null;
+        if (!hasText(modelConfigId)) {
+            throw new UpstreamCliException("model config response did not include id");
+        }
+        return modelConfigId;
+    }
+
+    private String modelConfigIdFromModelOrFallback(LlmModelConfigDTO model, String fallback) {
+        String modelConfigId = model != null ? model.getId() : null;
         return hasText(modelConfigId) ? modelConfigId : fallback;
     }
 
@@ -1398,6 +1952,22 @@ public class UpstreamCli {
         return new DirectoryApi(upstreamAdminHttp());
     }
 
+    private DirectoryApi clientAppDirectoryApi() {
+        String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
+        if (!hasText(controlApiKey)) {
+            throw new UpstreamCliException("client app control credential is required (NAVI_CONTROL_API_KEY)");
+        }
+        return new DirectoryApi(new HttpHelper(
+                config.required("NAVI_BASE_URL", "Navigator base URL"),
+                null,
+                null,
+                config.get("NAVI_TENANT_ID"),
+                controlApiKey,
+                null,
+                null,
+                Duration.ofSeconds(30)));
+    }
+
     private HttpHelper upstreamAdminHttp() {
         String adminApiKey = config.get("NAVI_ADMIN_API_KEY");
         if (!hasText(adminApiKey)) {
@@ -1416,19 +1986,17 @@ public class UpstreamCli {
 
     private BusinessAgentApi businessAgentControlApi() {
         String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
-        String adminToken = config.get("NAVI_ADMIN_TOKEN");
-        String upstreamAdminApiKey = config.get("NAVI_ADMIN_API_KEY");
-        if (!hasText(controlApiKey) && !hasText(adminToken) && !hasText(upstreamAdminApiKey)) {
-            throw new UpstreamCliException("control-plane credential is required (NAVI_CONTROL_API_KEY; admin fallback: NAVI_ADMIN_TOKEN or NAVI_ADMIN_API_KEY)");
+        if (!hasText(controlApiKey)) {
+            throw new UpstreamCliException("client app control credential is required (NAVI_CONTROL_API_KEY)");
         }
         return new BusinessAgentApi(new HttpHelper(
                 config.required("NAVI_BASE_URL", "Navigator base URL"),
                 null,
-                adminToken,
+                null,
                 config.get("NAVI_TENANT_ID"),
                 controlApiKey,
                 null,
-                upstreamAdminApiKey,
+                null,
                 Duration.ofSeconds(30)));
     }
 
@@ -1572,8 +2140,12 @@ public class UpstreamCli {
         out.println("clientAppId=" + valueOrEmpty(dto != null ? dto.getClientAppId() : null));
         out.println("agentId=" + valueOrEmpty(dto != null ? dto.getAgentId() : null));
         out.println("skillId=" + valueOrEmpty(dto != null ? dto.getSkillId() : null));
+        out.println("ownerType=" + valueOrEmpty(dto != null ? dto.getOwnerType() : null));
+        out.println("ownerId=" + valueOrEmpty(dto != null ? dto.getOwnerId() : null));
         out.println("workerId=" + valueOrEmpty(dto != null ? dto.getWorkerId() : null));
+        out.println("defaultDirectoryId=" + valueOrEmpty(dto != null ? dto.getDefaultDirectoryId() : null));
         out.println("defaultModelConfigId=" + valueOrEmpty(dto != null ? dto.getDefaultModelConfigId() : null));
+        out.println("enabled=" + (dto != null && Boolean.TRUE.equals(dto.getEnabled())));
         if (dto != null && dto.getSkillBundle() != null) {
             out.println("skillBundleStatus=" + valueOrEmpty(dto.getSkillBundle().getStatus()));
             if (dto.getSkillBundle().getMaterializeResult() != null) {
@@ -1844,6 +2416,11 @@ public class UpstreamCli {
     private void printDirectory(Directory dir) {
         out.println("directory directoryId=" + valueOrEmpty(dir != null ? dir.getDirectoryId() : null)
                 + " workerId=" + valueOrEmpty(dir != null ? dir.getWorkerId() : null)
+                + " ownerType=" + valueOrEmpty(dir != null ? dir.getOwnerType() : null)
+                + " ownerId=" + valueOrEmpty(dir != null ? dir.getOwnerId() : null)
+                + " workspaceScope=" + valueOrEmpty(dir != null ? dir.getWorkspaceScope() : null)
+                + " resolverType=" + valueOrEmpty(dir != null ? dir.getResolverType() : null)
+                + " enabled=" + valueOrEmpty(dir != null ? dir.getEnabled() : null)
                 + " projectName=" + redact(dir != null ? dir.getProjectName() : null)
                 + " path=" + redact(dir != null ? dir.getPath() : null));
     }

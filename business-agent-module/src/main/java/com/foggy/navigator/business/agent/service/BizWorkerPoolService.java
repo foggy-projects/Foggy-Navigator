@@ -11,6 +11,7 @@ import com.foggy.navigator.business.agent.model.form.RegisterWorkerIdentityForm;
 import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +28,7 @@ public class BizWorkerPoolService {
     public static final String STATUS_DISABLED = "DISABLED";
     public static final String HEALTHY = "HEALTHY";
     public static final String UNHEALTHY = "UNHEALTHY";
+    public static final String PLATFORM_OWNER_ID = "platform";
 
     private final BizWorkerIdentityRepository workerIdentityRepository;
     private final BizWorkerPoolRepository workerPoolRepository;
@@ -34,9 +36,17 @@ public class BizWorkerPoolService {
 
     @Transactional
     public BizWorkerIdentityDTO registerWorkerIdentity(RegisterWorkerIdentityForm form) {
+        return registerWorkerIdentity(ResourceOwnerType.PLATFORM, PLATFORM_OWNER_ID, form);
+    }
+
+    @Transactional
+    public BizWorkerIdentityDTO registerWorkerIdentity(ResourceOwnerType ownerType,
+                                                       String ownerId,
+                                                       RegisterWorkerIdentityForm form) {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
+        validateWorkerOwner(ownerType, ownerId);
         requireText(form.getWorkerId(), "workerId is required");
         requireText(form.getWorkerBackend(), "workerBackend is required");
         requireText(form.getBaseUrl(), "baseUrl is required");
@@ -44,6 +54,8 @@ public class BizWorkerPoolService {
         BizWorkerIdentityEntity entity = workerIdentityRepository.findByWorkerId(form.getWorkerId())
                 .orElseGet(BizWorkerIdentityEntity::new);
         entity.setWorkerId(form.getWorkerId());
+        entity.setOwnerType(ownerType);
+        entity.setOwnerId(ownerId.trim());
         entity.setWorkerBackend(form.getWorkerBackend());
         entity.setBaseUrl(form.getBaseUrl());
         entity.setVersion(form.getVersion());
@@ -57,10 +69,19 @@ public class BizWorkerPoolService {
 
     @Transactional
     public BizWorkerPoolDTO createPool(String tenantId, CreateWorkerPoolForm form) {
+        return createPool(tenantId, ResourceOwnerType.PLATFORM, tenantId, form);
+    }
+
+    @Transactional
+    public BizWorkerPoolDTO createPool(String tenantId,
+                                       ResourceOwnerType ownerType,
+                                       String ownerId,
+                                       CreateWorkerPoolForm form) {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
         requireText(tenantId, "tenantId is required");
+        validateWorkerOwner(ownerType, ownerId);
         requireText(form.getName(), "name is required");
         requireText(form.getWorkerBackend(), "workerBackend is required");
 
@@ -72,6 +93,8 @@ public class BizWorkerPoolService {
         BizWorkerPoolEntity entity = new BizWorkerPoolEntity();
         entity.setPoolId(poolId);
         entity.setTenantId(tenantId);
+        entity.setOwnerType(ownerType);
+        entity.setOwnerId(ownerId.trim());
         entity.setName(form.getName());
         entity.setWorkerBackend(form.getWorkerBackend());
         entity.setRoutingPolicy(StringUtils.hasText(form.getRoutingPolicy()) ? form.getRoutingPolicy() : "ROUND_ROBIN");
@@ -92,6 +115,7 @@ public class BizWorkerPoolService {
         if (!pool.getWorkerBackend().equals(worker.getWorkerBackend())) {
             throw new IllegalArgumentException("worker backend mismatch");
         }
+        validateWorkerVisibleToPool(pool, worker);
         workerPoolMemberRepository.findByPoolIdAndWorkerId(poolId, form.getWorkerId()).ifPresent(existing -> {
             throw new IllegalArgumentException("worker already in pool: " + form.getWorkerId());
         });
@@ -133,6 +157,33 @@ public class BizWorkerPoolService {
         requireText(poolId, "poolId is required");
         return workerPoolRepository.findByPoolIdAndTenantId(poolId, tenantId)
                 .orElseThrow(() -> new IllegalArgumentException("worker pool not found: " + poolId));
+    }
+
+    private void validateWorkerOwner(ResourceOwnerType ownerType, String ownerId) {
+        if (ownerType == null || !StringUtils.hasText(ownerId)) {
+            throw new IllegalArgumentException("worker owner is required");
+        }
+        if (ownerType != ResourceOwnerType.PLATFORM && ownerType != ResourceOwnerType.UPSTREAM_SYSTEM) {
+            throw new IllegalArgumentException("worker ownerType is not allowed: " + ownerType);
+        }
+    }
+
+    private void validateWorkerVisibleToPool(BizWorkerPoolEntity pool, BizWorkerIdentityEntity worker) {
+        if (pool.getOwnerType() == null || !StringUtils.hasText(pool.getOwnerId())) {
+            throw new IllegalStateException("worker pool owner is not configured: " + pool.getPoolId());
+        }
+        if (worker.getOwnerType() == null || !StringUtils.hasText(worker.getOwnerId())) {
+            throw new IllegalStateException("worker identity owner is not configured: " + worker.getWorkerId());
+        }
+        validateWorkerOwner(pool.getOwnerType(), pool.getOwnerId());
+        validateWorkerOwner(worker.getOwnerType(), worker.getOwnerId());
+        if (worker.getOwnerType() == ResourceOwnerType.PLATFORM) {
+            return;
+        }
+        if (pool.getOwnerType() != ResourceOwnerType.UPSTREAM_SYSTEM
+                || !worker.getOwnerId().equals(pool.getOwnerId())) {
+            throw new SecurityException("worker identity is not visible to worker pool: " + worker.getWorkerId());
+        }
     }
 
     private void requireText(String value, String message) {

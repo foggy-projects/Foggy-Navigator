@@ -18,6 +18,9 @@ import com.foggy.navigator.claude.worker.repository.AgentTeamsConfigRepository;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -85,6 +88,14 @@ public class WorkingDirectoryService {
             }
             if (e.getWorktree() == null) {
                 e.setWorktree(false);
+                dirty = true;
+            }
+            if (e.getEnabled() == null) {
+                e.setEnabled(true);
+                dirty = true;
+            }
+            if (e.getReadOnly() == null) {
+                e.setReadOnly(false);
                 dirty = true;
             }
             if (dirty) {
@@ -161,6 +172,7 @@ public class WorkingDirectoryService {
         entity.setPath(form.getPath());
         entity.setDirectoryType(directoryType);
         entity.setParentProjectId(form.getParentProjectId());
+        applyCreateResourcePolicy(entity, form, userId);
 
         // Auth 默认配置
         if (form.getDefaultAuthMode() != null && !form.getDefaultAuthMode().isEmpty()) {
@@ -257,6 +269,7 @@ public class WorkingDirectoryService {
                 }
             }
         }
+        applyUpdateResourcePolicy(entity, form);
 
         directoryRepository.save(entity);
         log.info("Working directory updated: directoryId={}", directoryId);
@@ -408,6 +421,7 @@ public class WorkingDirectoryService {
         entity.setDefaultBaseUrl(source.getDefaultBaseUrl());
         entity.setDefaultModelConfigId(source.getDefaultModelConfigId());
         entity.setMilestonesJson(source.getMilestonesJson());
+        copyResourcePolicy(source, entity);
 
         directoryRepository.save(entity);
         log.info("Worktree created: directoryId={}, branch={}, path={}",
@@ -515,6 +529,20 @@ public class WorkingDirectoryService {
                 .directoryId(entity.getDirectoryId())
                 .workerId(entity.getWorkerId())
                 .projectName(entity.getProjectName())
+                .ownerType(entity.getOwnerType())
+                .ownerId(entity.getOwnerId())
+                .clientAppId(entity.getClientAppId())
+                .upstreamUserId(entity.getUpstreamUserId())
+                .workspaceScope(entity.getWorkspaceScope())
+                .resolverType(entity.getResolverType())
+                .rootRef(entity.getRootRef())
+                .resolverKey(entity.getResolverKey())
+                .readOnly(entity.getReadOnly())
+                .allowedPathPrefixes(parseStringList(entity.getAllowedPathPrefixesJson()))
+                .quotaJson(entity.getQuotaJson())
+                .retentionPolicyJson(entity.getRetentionPolicyJson())
+                .concurrencyPolicyJson(entity.getConcurrencyPolicyJson())
+                .enabled(entity.getEnabled())
                 .path(entity.getPath())
                 .gitBranch(entity.getGitBranch())
                 .gitRemoteUrl(entity.getGitRemoteUrl())
@@ -536,6 +564,167 @@ public class WorkingDirectoryService {
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
+    }
+
+    private void applyCreateResourcePolicy(WorkingDirectoryEntity entity,
+                                           CreateWorkingDirectoryForm form,
+                                           String fallbackOwnerId) {
+        entity.setOwnerType(form.getOwnerType() != null ? form.getOwnerType() : ResourceOwnerType.UPSTREAM_USER);
+        entity.setClientAppId(blankToNull(form.getClientAppId()));
+        entity.setUpstreamUserId(blankToNull(form.getUpstreamUserId()));
+        entity.setWorkspaceScope(form.getWorkspaceScope() != null ? form.getWorkspaceScope() : WorkspaceScope.USER_PRIVATE);
+        entity.setResolverType(form.getResolverType() != null ? form.getResolverType() : WorkingDirectoryResolverType.DELEGATED);
+        entity.setRootRef(blankToNull(form.getRootRef()));
+        entity.setResolverKey(blankToNull(form.getResolverKey()));
+        entity.setReadOnly(Boolean.TRUE.equals(form.getReadOnly()));
+        entity.setAllowedPathPrefixesJson(writeStringList(form.getAllowedPathPrefixes()));
+        entity.setQuotaJson(blankToNull(form.getQuotaJson()));
+        entity.setRetentionPolicyJson(blankToNull(form.getRetentionPolicyJson()));
+        entity.setConcurrencyPolicyJson(blankToNull(form.getConcurrencyPolicyJson()));
+        entity.setEnabled(form.getEnabled() == null || form.getEnabled());
+        String ownerId = blankToNull(form.getOwnerId());
+        if (ownerId == null) {
+            ownerId = defaultOwnerId(entity, fallbackOwnerId);
+        }
+        entity.setOwnerId(ownerId);
+        validateResourcePolicy(entity);
+    }
+
+    private void applyUpdateResourcePolicy(WorkingDirectoryEntity entity,
+                                           UpdateWorkingDirectoryForm form) {
+        if (form.getOwnerType() != null) {
+            entity.setOwnerType(form.getOwnerType());
+        }
+        if (form.getOwnerId() != null) {
+            entity.setOwnerId(blankToNull(form.getOwnerId()));
+        }
+        if (form.getClientAppId() != null) {
+            entity.setClientAppId(blankToNull(form.getClientAppId()));
+        }
+        if (form.getUpstreamUserId() != null) {
+            entity.setUpstreamUserId(blankToNull(form.getUpstreamUserId()));
+        }
+        if (form.getWorkspaceScope() != null) {
+            entity.setWorkspaceScope(form.getWorkspaceScope());
+        }
+        if (form.getResolverType() != null) {
+            entity.setResolverType(form.getResolverType());
+        }
+        if (form.getRootRef() != null) {
+            entity.setRootRef(blankToNull(form.getRootRef()));
+        }
+        if (form.getResolverKey() != null) {
+            entity.setResolverKey(blankToNull(form.getResolverKey()));
+        }
+        if (form.getReadOnly() != null) {
+            entity.setReadOnly(form.getReadOnly());
+        }
+        if (form.getAllowedPathPrefixes() != null) {
+            entity.setAllowedPathPrefixesJson(writeStringList(form.getAllowedPathPrefixes()));
+        }
+        if (form.getQuotaJson() != null) {
+            entity.setQuotaJson(blankToNull(form.getQuotaJson()));
+        }
+        if (form.getRetentionPolicyJson() != null) {
+            entity.setRetentionPolicyJson(blankToNull(form.getRetentionPolicyJson()));
+        }
+        if (form.getConcurrencyPolicyJson() != null) {
+            entity.setConcurrencyPolicyJson(blankToNull(form.getConcurrencyPolicyJson()));
+        }
+        if (form.getEnabled() != null) {
+            entity.setEnabled(form.getEnabled());
+        }
+        if (entity.getOwnerId() == null) {
+            entity.setOwnerId(defaultOwnerId(entity, entity.getUserId()));
+        }
+        validateResourcePolicy(entity);
+    }
+
+    private void copyResourcePolicy(WorkingDirectoryEntity source, WorkingDirectoryEntity target) {
+        target.setOwnerType(source.getOwnerType());
+        target.setOwnerId(source.getOwnerId());
+        target.setClientAppId(source.getClientAppId());
+        target.setUpstreamUserId(source.getUpstreamUserId());
+        target.setWorkspaceScope(source.getWorkspaceScope());
+        target.setResolverType(source.getResolverType());
+        target.setRootRef(source.getRootRef());
+        target.setResolverKey(source.getResolverKey());
+        target.setReadOnly(source.getReadOnly());
+        target.setAllowedPathPrefixesJson(source.getAllowedPathPrefixesJson());
+        target.setQuotaJson(source.getQuotaJson());
+        target.setRetentionPolicyJson(source.getRetentionPolicyJson());
+        target.setConcurrencyPolicyJson(source.getConcurrencyPolicyJson());
+        target.setEnabled(source.getEnabled());
+    }
+
+    private String defaultOwnerId(WorkingDirectoryEntity entity, String fallbackOwnerId) {
+        ResourceOwnerType ownerType = entity.getOwnerType();
+        if (ownerType == ResourceOwnerType.CLIENT_APP) {
+            return entity.getClientAppId();
+        }
+        if (ownerType == ResourceOwnerType.UPSTREAM_USER && blankToNull(entity.getUpstreamUserId()) != null) {
+            return entity.getUpstreamUserId();
+        }
+        if (ownerType == ResourceOwnerType.PLATFORM) {
+            return "platform";
+        }
+        return fallbackOwnerId;
+    }
+
+    private void validateResourcePolicy(WorkingDirectoryEntity entity) {
+        if (entity.getOwnerType() == ResourceOwnerType.PLATFORM) {
+            throw new IllegalArgumentException("WorkingDirectory cannot be owned by PLATFORM");
+        }
+        if (entity.getOwnerType() == null) {
+            throw new IllegalArgumentException("ownerType is required");
+        }
+        if (blankToNull(entity.getOwnerId()) == null) {
+            throw new IllegalArgumentException("ownerId is required");
+        }
+        if (entity.getWorkspaceScope() == null) {
+            throw new IllegalArgumentException("workspaceScope is required");
+        }
+        if (entity.getResolverType() == null) {
+            throw new IllegalArgumentException("resolverType is required");
+        }
+        if (entity.getWorkspaceScope() == WorkspaceScope.CLIENT_APP_SHARED
+                && (entity.getOwnerType() != ResourceOwnerType.CLIENT_APP || blankToNull(entity.getClientAppId()) == null)) {
+            throw new IllegalArgumentException("CLIENT_APP_SHARED workspace requires CLIENT_APP owner and clientAppId");
+        }
+        if (entity.getWorkspaceScope() == WorkspaceScope.UPSTREAM_SYSTEM_SHARED
+                && entity.getOwnerType() != ResourceOwnerType.UPSTREAM_SYSTEM) {
+            throw new IllegalArgumentException("UPSTREAM_SYSTEM_SHARED workspace requires UPSTREAM_SYSTEM owner");
+        }
+    }
+
+    private List<String> parseStringList(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            return OBJECT_MAPPER.readValue(json, new TypeReference<List<String>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse string list JSON: {}", json);
+            return List.of();
+        }
+    }
+
+    private String writeStringList(List<String> values) {
+        if (values == null) {
+            return null;
+        }
+        List<String> cleaned = values.stream()
+                .map(this::blankToNull)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (cleaned.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(cleaned);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid string list format", e);
+        }
     }
 
     private List<DirectoryMilestoneDTO> parseMilestones(String milestonesJson) {

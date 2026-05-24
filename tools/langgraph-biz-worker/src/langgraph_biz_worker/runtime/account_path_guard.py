@@ -29,6 +29,7 @@ ERR_TRAVERSAL = "path_traversal_rejected"
 ERR_FORBIDDEN = "forbidden_target"
 ERR_FILE_TYPE = "unsupported_file_type"
 ERR_SYMLINK = "symlink_rejected"
+ERR_READ_ONLY = "workspace_read_only"
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -112,6 +113,8 @@ class AccountPathGuard:
     def resolve_write(self, relative_path: str) -> Path:
         """Resolve a relative path for write operations (write_file, str_replace, edit_file, patch_file)."""
         if self._execution_policy and self._execution_policy.configured:
+            if self._execution_policy.read_only:
+                raise PathGuardError(ERR_READ_ONLY, "workspace is read-only")
             try:
                 resolved = self._execution_policy.resolve_path(relative_path)
                 return resolved

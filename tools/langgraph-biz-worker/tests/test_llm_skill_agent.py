@@ -274,7 +274,7 @@ def test_llm_agent_does_not_expose_default_file_tools_without_account_scope(tmp_
     assert not ({"list_files", "read_file", "write_file", "patch_file"} & tool_names)
 
 
-def test_llm_agent_exposes_command_when_linux_enabled_and_explicitly_allowed(tmp_path, monkeypatch):
+def test_llm_agent_exposes_command_when_linux_enabled_and_workspace_configured(tmp_path, monkeypatch):
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
         task_id="task_command_tool_001",
@@ -294,7 +294,7 @@ def test_llm_agent_exposes_command_when_linux_enabled_and_explicitly_allowed(tmp
         runtime_context={
             "execution_policy": {
                 "workdir": str(workdir),
-                "allowed_tools": ["command", "submit_skill_result"],
+                "allowed_tools": ["read_file", "submit_skill_result"],
             },
         },
         persistent_frame=True,
@@ -304,7 +304,7 @@ def test_llm_agent_exposes_command_when_linux_enabled_and_explicitly_allowed(tmp
     assert "command" in tool_names
 
 
-def test_llm_agent_hides_command_on_windows_or_without_explicit_allowlist(tmp_path, monkeypatch):
+def test_llm_agent_hides_command_on_windows_or_without_workspace(tmp_path, monkeypatch):
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
         task_id="task_command_tool_hidden_001",
@@ -324,7 +324,7 @@ def test_llm_agent_hides_command_on_windows_or_without_explicit_allowlist(tmp_pa
         runtime_context={
             "execution_policy": {
                 "workdir": str(workdir),
-                "allowed_tools": ["command", "submit_skill_result"],
+                "allowed_tools": ["read_file", "submit_skill_result"],
             },
         },
         persistent_frame=True,
@@ -340,7 +340,6 @@ def test_llm_agent_hides_command_on_windows_or_without_explicit_allowlist(tmp_pa
         prompt="hi",
         runtime_context={
             "execution_policy": {
-                "workdir": str(workdir),
                 "allowed_tools": ["read_file", "submit_skill_result"],
             },
         },

@@ -8,5 +8,6 @@ import java.util.Map;
 public class AgentReadinessPreflightForm {
     private String upstreamUserId;
     private String modelConfigId;
+    private String directoryId;
     private Map<String, Object> context;
 }

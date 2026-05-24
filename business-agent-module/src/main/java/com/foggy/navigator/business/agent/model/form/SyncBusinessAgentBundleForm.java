@@ -16,6 +16,7 @@ public class SyncBusinessAgentBundleForm {
     private String description;
     private String status;
     private String workerId;
+    private String defaultDirectoryId;
     private String defaultModelConfigId;
     private String defaultModel;
     private String markdownBody;

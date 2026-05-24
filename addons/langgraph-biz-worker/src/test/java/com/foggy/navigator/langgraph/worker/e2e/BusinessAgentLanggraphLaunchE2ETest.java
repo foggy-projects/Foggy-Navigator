@@ -13,7 +13,11 @@ import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm;
 import com.foggy.navigator.business.agent.repository.BusinessAgentTaskRepository;
 import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
+import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindingRepository;
+import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberRepository;
+import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
+import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
 import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskScopedTokenRuntimeStore;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
@@ -24,9 +28,15 @@ import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
+import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalRepository;
@@ -73,10 +83,12 @@ class BusinessAgentLanggraphLaunchE2ETest {
     private static final String UPSTREAM_USER_ID = "upstream_user_e2e";
     private static final String SESSION_ID = "session_e2e";
     private static final String CONTEXT_ID = "context_e2e";
+    private static final String AGENT_ID = "world-sim-root-agent";
     private static final String SKILL_ID = "world-sim.bug-coordinator.decision.v1";
     private static final String WORKER_POOL_ID = "pool_langgraph_e2e";
     private static final String WORKER_ID = "worker_langgraph_e2e";
     private static final String MODEL_CONFIG_ID = "model_e2e_scripted";
+    private static final String DIRECTORY_ID = "dir_e2e";
     private static final String WORKDIR = "D:/workspace/world-sim";
 
     @Mock private BusinessAgentTaskRepository businessTaskRepository;
@@ -84,6 +96,11 @@ class BusinessAgentLanggraphLaunchE2ETest {
     @Mock private ClientAppService clientAppService;
     @Mock private BizWorkerPoolService bizWorkerPoolService;
     @Mock private ClientAppModelConfigGrantService modelGrantService;
+    @Mock private WorkingDirectoryRepository workingDirectoryRepository;
+    @Mock private BusinessCodingAgentRepository agentRepository;
+    @Mock private BizWorkerPoolRepository poolRepository;
+    @Mock private BusinessAgentDirectoryBindingRepository agentDirectoryBindingRepository;
+    @Mock private BusinessAgentModelBindingRepository agentModelBindingRepository;
     private A2AgentResourceResolver resourceResolver;
     @Mock private ClientAppUserGrantService userGrantService;
     @Mock private SkillRegistryService skillRegistryService;
@@ -119,7 +136,14 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 langgraphWorkerService,
                 langgraphTaskService
         );
-        resourceResolver = new A2AgentResourceResolver(modelGrantService);
+        resourceResolver = new A2AgentResourceResolver(
+                modelGrantService,
+                clientAppService,
+                workingDirectoryRepository,
+                agentRepository,
+                poolRepository,
+                agentDirectoryBindingRepository,
+                agentModelBindingRepository);
         businessAgentTaskService = new BusinessAgentTaskService(
                 businessTaskRepository,
                 tokenRepository,
@@ -169,8 +193,10 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals(TENANT, created.getTenantId());
         assertEquals(CLIENT_APP_ID, created.getClientAppId());
         assertEquals(UPSTREAM_USER_ID, created.getUpstreamUserId());
+        assertEquals(AGENT_ID, created.getAgentId());
         assertEquals(SKILL_ID, created.getSkillId());
         assertEquals(MODEL_CONFIG_ID, created.getModelConfigId());
+        assertEquals(DIRECTORY_ID, created.getDirectoryId());
         assertEquals(CONTEXT_ID, created.getContextId());
         assertEquals(WORKER_ID, created.getWorkerId());
         assertEquals(LanggraphTaskService.PROVIDER_TYPE, created.getWorkerProviderType());
@@ -203,11 +229,17 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals(CONTEXT_ID, context.get("context_id"));
         assertEquals(SESSION_ID, context.get("session_id"));
         assertEquals(CLIENT_APP_ID, context.get("clientAppId"));
+        assertEquals(AGENT_ID, context.get("businessAgentId"));
         assertEquals(SKILL_ID, context.get("businessSkillId"));
         assertEquals(SKILL_ID, context.get("businessSkillName"));
         assertEquals(UPSTREAM_USER_ID, context.get("upstreamUserId"));
         assertEquals(UPSTREAM_USER_ID, context.get("accountId"));
         assertEquals(UPSTREAM_USER_ID, context.get("account_id"));
+        assertEquals(DIRECTORY_ID, context.get("directoryId"));
+        assertEquals(DIRECTORY_ID, context.get("workingDirectoryId"));
+        assertEquals("USER_PRIVATE", context.get("workspaceScope"));
+        assertEquals("DELEGATED", context.get("workspaceResolverType"));
+        assertEquals(false, context.get("workspaceReadOnly"));
         assertFalse(context.containsKey("skillId"));
         assertFalse(context.containsKey("skill_name"));
         assertFalse(context.containsKey("skillName"));
@@ -224,6 +256,10 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals(SKILL_ID, runtimeContext.get("skill_name"));
         Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
         assertNotNull(executionPolicy);
+        assertEquals(DIRECTORY_ID, executionPolicy.get("directory_id"));
+        assertEquals("USER_PRIVATE", executionPolicy.get("workspace_scope"));
+        assertEquals("DELEGATED", executionPolicy.get("workspace_resolver_type"));
+        assertEquals(false, executionPolicy.get("read_only"));
         assertEquals(WORKDIR, executionPolicy.get("workdir"));
         assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
         assertEquals(List.of("read_file", "invoke_business_function"), executionPolicy.get("allowed_tools"));
@@ -285,12 +321,10 @@ class BusinessAgentLanggraphLaunchE2ETest {
         form.setClientAppId(CLIENT_APP_ID);
         form.setSessionId(SESSION_ID);
         form.setContextId(CONTEXT_ID);
-        form.setWorkerPoolId(WORKER_POOL_ID);
-        form.setSkillId(SKILL_ID);
+        form.setAgentId(AGENT_ID);
         form.setSkillName(SKILL_ID);
         form.setUpstreamUserId(UPSTREAM_USER_ID);
-        form.setWorkdir(WORKDIR);
-        form.setAllowedDirs(List.of("D:/workspace"));
+        form.setDirectoryId(DIRECTORY_ID);
         form.setAllowedTools(List.of("read_file", "invoke_business_function"));
         return form;
     }
@@ -299,19 +333,27 @@ class BusinessAgentLanggraphLaunchE2ETest {
         BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
         pool.setPoolId(WORKER_POOL_ID);
         pool.setTenantId(TENANT);
+        pool.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
+        pool.setOwnerId("ups_e2e");
         pool.setStatus(BizWorkerPoolService.STATUS_ENABLED);
         pool.setHealthStatus(BizWorkerPoolService.HEALTHY);
         pool.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
         when(bizWorkerPoolService.requireAvailablePool(TENANT, WORKER_POOL_ID)).thenReturn(pool);
+        when(poolRepository.findByPoolIdAndTenantId(WORKER_POOL_ID, TENANT)).thenReturn(Optional.of(pool));
 
-        when(modelGrantService.resolveEffectiveModelConfigId(TENANT, CLIENT_APP_ID, null, LlmModelCategory.GENERAL))
+        when(modelGrantService.resolveEffectiveModelConfigId(TENANT, CLIENT_APP_ID, MODEL_CONFIG_ID, LlmModelCategory.GENERAL))
                 .thenReturn(MODEL_CONFIG_ID);
         ClientAppEntity clientApp = new ClientAppEntity();
         clientApp.setTenantId(TENANT);
         clientApp.setClientAppId(CLIENT_APP_ID);
+        clientApp.setUpstreamSystemId("ups_e2e");
         when(clientAppService.requireActiveClientApp(TENANT, CLIENT_APP_ID)).thenReturn(clientApp);
+        when(clientAppService.requireClientApp(TENANT, CLIENT_APP_ID)).thenReturn(clientApp);
+        when(agentRepository.findByAgentIdAndTenantId(AGENT_ID, TENANT))
+                .thenReturn(Optional.of(agent()));
         doNothing().when(userGrantService).checkUpstreamUserAccess(TENANT, CLIENT_APP_ID, UPSTREAM_USER_ID);
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(TENANT, CLIENT_APP_ID, SKILL_ID);
+        when(workingDirectoryRepository.findByDirectoryId(DIRECTORY_ID)).thenReturn(Optional.of(userPrivateDirectory()));
 
         when(skillRegistryService.buildMaterializedPublicSkillMarkdown(TENANT, SKILL_ID, CLIENT_APP_ID))
                 .thenReturn("# World Sim\nUse deterministic E2E cursor.");
@@ -323,6 +365,41 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 .thenReturn(CONTEXT_ID);
         when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), eq(CONTEXT_ID), isNull()))
                 .thenReturn(session);
+    }
+
+    private WorkingDirectoryEntity userPrivateDirectory() {
+        WorkingDirectoryEntity entity = new WorkingDirectoryEntity();
+        entity.setDirectoryId(DIRECTORY_ID);
+        entity.setTenantId(TENANT);
+        entity.setOwnerType(ResourceOwnerType.UPSTREAM_USER);
+        entity.setOwnerId(CLIENT_APP_ID + ":" + UPSTREAM_USER_ID);
+        entity.setClientAppId(CLIENT_APP_ID);
+        entity.setUpstreamUserId(UPSTREAM_USER_ID);
+        entity.setWorkspaceScope(WorkspaceScope.USER_PRIVATE);
+        entity.setResolverType(WorkingDirectoryResolverType.DELEGATED);
+        entity.setEnabled(true);
+        entity.setReadOnly(false);
+        entity.setPath(WORKDIR);
+        entity.setAllowedPathPrefixesJson("[\"D:/workspace\"]");
+        return entity;
+    }
+
+    private CodingAgentEntity agent() {
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setAgentId(AGENT_ID);
+        entity.setTenantId(TENANT);
+        entity.setOwnerType(ResourceOwnerType.CLIENT_APP);
+        entity.setOwnerId(CLIENT_APP_ID);
+        entity.setClientAppId(CLIENT_APP_ID);
+        entity.setUserId(ACTOR);
+        entity.setName("World Sim Root Agent");
+        entity.setAgentType("LOCAL_LANGGRAPH_WORKER");
+        entity.setWorkerId(WORKER_POOL_ID);
+        entity.setDefaultModelConfigId(MODEL_CONFIG_ID);
+        entity.setDefaultDirectoryId(DIRECTORY_ID);
+        entity.setAgentProfile("{\"skillId\":\"" + SKILL_ID + "\"}");
+        entity.setEnabled(true);
+        return entity;
     }
 
     private void stubLanggraphWorkerPool() {
@@ -342,7 +419,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 .id(SESSION_ID)
                 .userId(ACTOR)
                 .tenantId(TENANT)
-                .agentId(SKILL_ID)
+                .agentId(AGENT_ID)
                 .build());
     }
 

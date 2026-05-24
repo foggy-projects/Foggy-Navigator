@@ -32,6 +32,10 @@ public class ClientAppControlCredentialService {
     public static final String SCOPE_UPSTREAM_ROUTE_MANAGE = "UPSTREAM_ROUTE_MANAGE";
     public static final String SCOPE_MODEL_CONFIG_GRANT_MANAGE = "MODEL_CONFIG_GRANT_MANAGE";
     public static final String SCOPE_MODEL_CONFIG_MANAGE = "MODEL_CONFIG_MANAGE";
+    public static final String SCOPE_AGENT_MODEL_BINDING_MANAGE = "AGENT_MODEL_BINDING_MANAGE";
+    public static final String SCOPE_AGENT_WORKSPACE_BINDING_MANAGE = "AGENT_WORKSPACE_BINDING_MANAGE";
+    public static final String SCOPE_AGENT_WORKER_BINDING_MANAGE = "AGENT_WORKER_BINDING_MANAGE";
+    public static final String SCOPE_WORKING_DIRECTORY_MANAGE = "WORKING_DIRECTORY_MANAGE";
     public static final String SCOPE_FRAME_REPORT_READ = "FRAME_REPORT_READ";
 
     private final ClientAppControlCredentialRepository controlCredentialRepository;
@@ -108,6 +112,10 @@ public class ClientAppControlCredentialService {
                 SCOPE_UPSTREAM_ROUTE_MANAGE,
                 SCOPE_MODEL_CONFIG_GRANT_MANAGE,
                 SCOPE_MODEL_CONFIG_MANAGE,
+                SCOPE_AGENT_MODEL_BINDING_MANAGE,
+                SCOPE_AGENT_WORKSPACE_BINDING_MANAGE,
+                SCOPE_AGENT_WORKER_BINDING_MANAGE,
+                SCOPE_WORKING_DIRECTORY_MANAGE,
                 SCOPE_FRAME_REPORT_READ);
     }
 

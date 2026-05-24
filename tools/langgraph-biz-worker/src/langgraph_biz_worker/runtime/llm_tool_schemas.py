@@ -87,6 +87,7 @@ _FRAME_RESULT_TOOL_NAMES = frozenset({
 _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     _FRAME_RESULT_TOOL_NAME,
     _LEGACY_FRAME_RESULT_TOOL_NAME,
+    "command",
     "handoff_to_parent",
     "resume_recoverable_child_skill",
     "shelve_interrupted_frame",

@@ -73,6 +73,7 @@ class AccountFileTools:
         )
         self._account_id = self._guard.account_id
         self._task_id = task_id
+        self._execution_policy = execution_policy
         self._file_locks: dict[str, threading.Lock] = {}
         self._global_lock = threading.Lock()
         self.audit_records: list[dict[str, Any]] = []
@@ -191,10 +192,11 @@ class AccountFileTools:
             raise FileToolError("invalid_mode", "mode must be 'create' or 'overwrite'")
 
         content_bytes = content.encode(encoding)
-        if len(content_bytes) > MAX_WRITE_SIZE:
+        max_write_size = self._max_write_size()
+        if len(content_bytes) > max_write_size:
             raise FileToolError(
                 "file_too_large",
-                f"content size {len(content_bytes)} exceeds limit {MAX_WRITE_SIZE}",
+                f"content size {len(content_bytes)} exceeds limit {max_write_size}",
             )
 
         try:
@@ -273,6 +275,7 @@ class AccountFileTools:
 
             new_text = text.replace(old_str, new_str, 1)
             new_bytes = new_text.encode("utf-8")
+            self._check_write_size(len(new_bytes))
             sha256_after = hashlib.sha256(new_bytes).hexdigest()
 
             _atomic_write(resolved, new_bytes)
@@ -354,6 +357,7 @@ class AccountFileTools:
 
             new_text = "".join(new_lines)
             new_bytes = new_text.encode("utf-8")
+            self._check_write_size(len(new_bytes))
             sha256_after = hashlib.sha256(new_bytes).hexdigest()
 
             _atomic_write(resolved, new_bytes)
@@ -410,6 +414,7 @@ class AccountFileTools:
                 raise FileToolError("patch_conflict", str(exc)) from exc
 
             new_bytes = new_text.encode("utf-8")
+            self._check_write_size(len(new_bytes))
             sha256_after = hashlib.sha256(new_bytes).hexdigest()
 
             # Atomic write: tmp → fsync → os.replace
@@ -434,6 +439,22 @@ class AccountFileTools:
             if key not in self._file_locks:
                 self._file_locks[key] = threading.Lock()
             return self._file_locks[key]
+
+    def _max_write_size(self) -> int:
+        if self._execution_policy is None:
+            return MAX_WRITE_SIZE
+        try:
+            return self._execution_policy.max_write_bytes(MAX_WRITE_SIZE)
+        except ValueError as exc:
+            raise FileToolError("invalid_quota_policy", str(exc)) from exc
+
+    def _check_write_size(self, size: int) -> None:
+        max_write_size = self._max_write_size()
+        if size > max_write_size:
+            raise FileToolError(
+                "file_too_large",
+                f"content size {size} exceeds limit {max_write_size}",
+            )
 
     def _record_audit(
         self,

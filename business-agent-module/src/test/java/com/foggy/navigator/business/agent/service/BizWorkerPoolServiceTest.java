@@ -11,6 +11,7 @@ import com.foggy.navigator.business.agent.model.form.RegisterWorkerIdentityForm;
 import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -49,8 +50,27 @@ class BizWorkerPoolServiceTest {
         BizWorkerIdentityDTO dto = service.registerWorkerIdentity(form);
 
         assertEquals("worker-1", dto.getWorkerId());
+        assertEquals(ResourceOwnerType.PLATFORM, dto.getOwnerType());
+        assertEquals(BizWorkerPoolService.PLATFORM_OWNER_ID, dto.getOwnerId());
         assertEquals(BizWorkerPoolService.STATUS_ENABLED, dto.getStatus());
         assertEquals(BizWorkerPoolService.HEALTHY, dto.getHealthStatus());
+    }
+
+    @Test
+    void registerWorkerIdentity_withUpstreamSystemOwner_setsOwner() {
+        RegisterWorkerIdentityForm form = new RegisterWorkerIdentityForm();
+        form.setWorkerId("worker-1");
+        form.setWorkerBackend("LANGGRAPH_BIZ");
+        form.setBaseUrl("http://worker");
+
+        BizWorkerIdentityDTO dto = service.registerWorkerIdentity(
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                "ups-1",
+                form);
+
+        assertEquals("worker-1", dto.getWorkerId());
+        assertEquals(ResourceOwnerType.UPSTREAM_SYSTEM, dto.getOwnerType());
+        assertEquals("ups-1", dto.getOwnerId());
     }
 
     @Test
@@ -99,7 +119,32 @@ class BizWorkerPoolServiceTest {
         BizWorkerPoolDTO dto = service.createPool("tenant-1", createPoolForm("pool-1"));
 
         assertEquals("ROUND_ROBIN", dto.getRoutingPolicy());
+        assertEquals(ResourceOwnerType.PLATFORM, dto.getOwnerType());
+        assertEquals("tenant-1", dto.getOwnerId());
         assertEquals(BizWorkerPoolService.STATUS_ENABLED, dto.getStatus());
+    }
+
+    @Test
+    void createPool_withUpstreamSystemOwner_setsOwner() {
+        BizWorkerPoolDTO dto = service.createPool(
+                "tenant-1",
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                "ups-1",
+                createPoolForm("pool-1"));
+
+        assertEquals(ResourceOwnerType.UPSTREAM_SYSTEM, dto.getOwnerType());
+        assertEquals("ups-1", dto.getOwnerId());
+    }
+
+    @Test
+    void addMember_rejects_upstreamSystem_worker_from_other_owner() {
+        when(poolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+                .thenReturn(Optional.of(pool("tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1")));
+        BizWorkerIdentityEntity worker = worker("LANGGRAPH_BIZ", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-2");
+        when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker));
+
+        assertThrows(SecurityException.class,
+                () -> service.addMember("tenant-1", "pool-1", addMemberForm("worker-1")));
     }
 
     private CreateWorkerPoolForm createPoolForm(String poolId) {
@@ -117,9 +162,15 @@ class BizWorkerPoolServiceTest {
     }
 
     private BizWorkerPoolEntity pool(String tenantId) {
+        return pool(tenantId, ResourceOwnerType.PLATFORM, tenantId);
+    }
+
+    private BizWorkerPoolEntity pool(String tenantId, ResourceOwnerType ownerType, String ownerId) {
         BizWorkerPoolEntity entity = new BizWorkerPoolEntity();
         entity.setPoolId("pool-1");
         entity.setTenantId(tenantId);
+        entity.setOwnerType(ownerType);
+        entity.setOwnerId(ownerId);
         entity.setWorkerBackend("LANGGRAPH_BIZ");
         entity.setStatus(BizWorkerPoolService.STATUS_ENABLED);
         entity.setHealthStatus(BizWorkerPoolService.HEALTHY);
@@ -127,8 +178,14 @@ class BizWorkerPoolServiceTest {
     }
 
     private BizWorkerIdentityEntity worker(String backend) {
+        return worker(backend, ResourceOwnerType.PLATFORM, BizWorkerPoolService.PLATFORM_OWNER_ID);
+    }
+
+    private BizWorkerIdentityEntity worker(String backend, ResourceOwnerType ownerType, String ownerId) {
         BizWorkerIdentityEntity entity = new BizWorkerIdentityEntity();
         entity.setWorkerId("worker-1");
+        entity.setOwnerType(ownerType);
+        entity.setOwnerId(ownerId);
         entity.setWorkerBackend(backend);
         entity.setStatus(BizWorkerPoolService.STATUS_ENABLED);
         entity.setHealthStatus(BizWorkerPoolService.HEALTHY);

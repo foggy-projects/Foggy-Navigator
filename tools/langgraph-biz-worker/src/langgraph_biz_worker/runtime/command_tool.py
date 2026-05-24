@@ -24,7 +24,7 @@ def command_tool_available(execution_policy: ExecutionPolicy | None) -> bool:
         bool(settings.enable_command)
         and platform.system() == "Linux"
         and execution_policy is not None
-        and _explicitly_allows_command(execution_policy)
+        and not execution_policy.read_only
         and execution_policy.workdir is not None
     )
 
@@ -39,8 +39,8 @@ def run_command_tool(
         return _error("COMMAND_DISABLED", "command tool is disabled by worker configuration")
     if platform.system() != "Linux":
         return _error("COMMAND_UNSUPPORTED_OS", "command tool is only available on Linux workers")
-    if not _explicitly_allows_command(execution_policy):
-        return _error("COMMAND_NOT_AUTHORIZED", "allowed_tools must explicitly include command")
+    if execution_policy is not None and execution_policy.read_only:
+        return _error("COMMAND_READ_ONLY", "command tool is disabled for read-only workspaces")
     if execution_policy is None or execution_policy.workdir is None:
         return _error("COMMAND_WORKDIR_REQUIRED", "execution_policy.workdir is required")
 
@@ -130,14 +130,6 @@ def run_command_tool(
             "workdir": str(cwd),
             "command": command,
         }
-
-
-def _explicitly_allows_command(execution_policy: ExecutionPolicy | None) -> bool:
-    return (
-        execution_policy is not None
-        and execution_policy.allowed_tools is not None
-        and "command" in execution_policy.allowed_tools
-    )
 
 
 def _resolve_cwd(value: Any, execution_policy: ExecutionPolicy) -> Path:

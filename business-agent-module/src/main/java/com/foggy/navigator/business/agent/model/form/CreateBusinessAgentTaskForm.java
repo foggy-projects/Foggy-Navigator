@@ -14,12 +14,16 @@ public class CreateBusinessAgentTaskForm {
     private String sessionId;
     private String contextId;
     private String upstreamUserId;
+    @JsonAlias({"agent_id"})
+    private String agentId;
     private String skillId;
     @JsonProperty("skill_name")
     @JsonAlias({"skillName"})
     private String skillName;
     private String workerPoolId;
     private String requestedModelConfigId;
+    @JsonAlias({"workingDirectoryId", "working_directory_id", "directory_id"})
+    private String directoryId;
     private String resumeFromTaskId;
     private String clientContextJson;
     @JsonAlias({"workDir", "working_dir", "workingDirectory", "working_directory"})

@@ -33,9 +33,8 @@ import java.util.Map;
  *     "EMP-001", "张三", worker.getWorkerId(), "/workspace/emp-001",
  *     "my-project", Map.of("CLAUDE.md", "# Project"));
  *
- * // 设置环境变量
- * client.directories().updateEnvVars(emp.getDirectoryId(),
- *     Map.of("TMS_API_TOKEN", "xxx"));
+ * // Upstream-system shared directories are managed by the upstream admin key.
+ * // Runtime user flows should use ClientApp owner-aware grants/workspaces.
  *
  * // 发送任务并等待完成
  * AgentTask result = client.agents().askAndWait(

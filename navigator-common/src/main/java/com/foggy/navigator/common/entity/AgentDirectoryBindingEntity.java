@@ -12,14 +12,19 @@ import java.time.LocalDateTime;
 @Data
 @Entity
 @Table(name = "coding_agent_directories", indexes = {
-    @Index(name = "idx_cad_agent_id", columnList = "agentId"),
-    @Index(name = "idx_cad_directory_id", columnList = "directoryId")
+    @Index(name = "idx_cad_agent_id", columnList = "tenantId,agentId"),
+    @Index(name = "idx_cad_directory_id", columnList = "tenantId,directoryId")
+}, uniqueConstraints = {
+    @UniqueConstraint(name = "uk_cad_tenant_agent_directory", columnNames = {"tenantId", "agentId", "directoryId"})
 })
 public class AgentDirectoryBindingEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(length = 64, nullable = false)
+    private String tenantId;
 
     /** FK -> CodingAgentEntity.agentId */
     @Column(length = 64, nullable = false)

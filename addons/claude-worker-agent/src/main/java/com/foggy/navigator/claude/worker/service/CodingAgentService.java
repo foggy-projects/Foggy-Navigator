@@ -101,6 +101,7 @@ public class CodingAgentService {
         // 自动绑定 defaultDirectory
         if (form.getDefaultDirectoryId() != null) {
             AgentDirectoryBindingEntity binding = new AgentDirectoryBindingEntity();
+            binding.setTenantId(tenantId);
             binding.setAgentId(entity.getAgentId());
             binding.setDirectoryId(form.getDefaultDirectoryId());
             bindingRepository.save(binding);
@@ -163,7 +164,7 @@ public class CodingAgentService {
     public void deleteAgent(String userId, String agentId) {
         CodingAgentEntity entity = agentRepository.findByAgentIdAndUserId(agentId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
-        bindingRepository.deleteByAgentId(agentId);
+        bindingRepository.deleteByTenantIdAndAgentId(entity.getTenantId(), agentId);
         agentRepository.delete(entity);
         log.info("Agent deleted: agentId={}", agentId);
     }
@@ -197,11 +198,13 @@ public class CodingAgentService {
                 .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
 
         // 检查重复
-        if (bindingRepository.findByAgentIdAndDirectoryId(agentId, directoryId).isPresent()) {
+        if (bindingRepository.findByTenantIdAndAgentIdAndDirectoryId(
+                agent.getTenantId(), agentId, directoryId).isPresent()) {
             return; // 已绑定，幂等
         }
 
         AgentDirectoryBindingEntity binding = new AgentDirectoryBindingEntity();
+        binding.setTenantId(agent.getTenantId());
         binding.setAgentId(agentId);
         binding.setDirectoryId(directoryId);
         bindingRepository.save(binding);
@@ -213,9 +216,9 @@ public class CodingAgentService {
      */
     @Transactional
     public void unbindDirectory(String userId, String agentId, String directoryId) {
-        agentRepository.findByAgentIdAndUserId(agentId, userId)
+        CodingAgentEntity agent = agentRepository.findByAgentIdAndUserId(agentId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
-        bindingRepository.deleteByAgentIdAndDirectoryId(agentId, directoryId);
+        bindingRepository.deleteByTenantIdAndAgentIdAndDirectoryId(agent.getTenantId(), agentId, directoryId);
         log.info("Directory unbound from agent: agentId={}, directoryId={}", agentId, directoryId);
     }
 
@@ -223,9 +226,10 @@ public class CodingAgentService {
      * 获取 Agent 授权的目录列表
      */
     public List<CodingAgentDTO.DirectorySummary> getAgentDirectories(String userId, String agentId) {
-        agentRepository.findByAgentIdAndUserId(agentId, userId)
+        CodingAgentEntity agent = agentRepository.findByAgentIdAndUserId(agentId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
-        List<AgentDirectoryBindingEntity> bindings = bindingRepository.findByAgentId(agentId);
+        List<AgentDirectoryBindingEntity> bindings = bindingRepository.findByTenantIdAndAgentId(
+                agent.getTenantId(), agentId);
         return bindings.stream()
                 .map(b -> directoryRepository.findByDirectoryIdAndUserId(b.getDirectoryId(), userId).orElse(null))
                 .filter(d -> d != null)
@@ -296,7 +300,9 @@ public class CodingAgentService {
         }
 
         // 查询授权目录
-        List<CodingAgentDTO.DirectorySummary> authorizedDirs = bindingRepository.findByAgentId(entity.getAgentId())
+        List<CodingAgentDTO.DirectorySummary> authorizedDirs = bindingRepository.findByTenantIdAndAgentId(
+                        entity.getTenantId(),
+                        entity.getAgentId())
                 .stream()
                 .map(b -> directoryRepository.findByDirectoryId(b.getDirectoryId()).orElse(null))
                 .filter(d -> d != null)

@@ -16,8 +16,8 @@ def _policy(tmp_path, *, allowed_tools: list[str] | None = None) -> ExecutionPol
     return ExecutionPolicy.from_context({"execution_policy": payload})
 
 
-def test_command_tool_available_requires_linux_setting_and_explicit_allowlist(tmp_path, monkeypatch):
-    policy = _policy(tmp_path, allowed_tools=["command"])
+def test_command_tool_available_requires_linux_setting_and_workspace(tmp_path, monkeypatch):
+    policy = _policy(tmp_path, allowed_tools=["read_file"])
 
     monkeypatch.setattr(command_tool.settings, "enable_command", False)
     monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
@@ -30,8 +30,8 @@ def test_command_tool_available_requires_linux_setting_and_explicit_allowlist(tm
     assert command_tool_available(policy) is False
 
     monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
-    assert command_tool_available(_policy(tmp_path, allowed_tools=["read_file"])) is False
-    assert command_tool_available(_policy(tmp_path, allowed_tools=None)) is False
+    assert command_tool_available(_policy(tmp_path, allowed_tools=None)) is True
+    assert command_tool_available(ExecutionPolicy.from_context({"execution_policy": {"allowed_tools": ["command"]}})) is False
 
 
 def test_run_command_tool_executes_subprocess_in_policy_workdir(tmp_path, monkeypatch):
@@ -57,15 +57,42 @@ def test_run_command_tool_executes_subprocess_in_policy_workdir(tmp_path, monkey
     assert captured["kwargs"]["stdin"] is command_tool.subprocess.DEVNULL
 
 
-def test_run_command_tool_rejects_when_not_explicitly_allowed(tmp_path, monkeypatch):
+def test_run_command_tool_executes_without_command_allowlist(tmp_path, monkeypatch):
     policy = _policy(tmp_path, allowed_tools=["read_file"])
+    captured: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, stdout="ok\n", stderr="")
+
     monkeypatch.setattr(command_tool.settings, "enable_command", True)
     monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(command_tool.subprocess, "run", fake_run)
 
     result = run_command_tool({"command": "git status --short"}, policy)
 
+    assert result["ok"] is True
+    assert captured["argv"] == ["/bin/bash", "-lc", "git status --short"]
+
+
+def test_command_tool_rejects_read_only_workspace(tmp_path, monkeypatch):
+    workdir = tmp_path / "workspace"
+    workdir.mkdir(exist_ok=True)
+    policy = ExecutionPolicy.from_context({
+        "execution_policy": {
+            "workdir": str(workdir),
+            "allowed_tools": ["command"],
+            "read_only": True,
+        },
+    })
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+
+    assert command_tool_available(policy) is False
+    result = run_command_tool({"command": "git status --short"}, policy)
+
     assert result["ok"] is False
-    assert result["error_code"] == "COMMAND_NOT_AUTHORIZED"
+    assert result["error_code"] == "COMMAND_READ_ONLY"
 
 
 def test_run_command_tool_rejects_workdir_escape(tmp_path, monkeypatch):

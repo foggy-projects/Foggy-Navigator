@@ -8,6 +8,7 @@ import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppControlCredentialService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
+import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
 import com.foggy.navigator.claude.worker.model.form.OpenApiQueryForm;
@@ -15,6 +16,7 @@ import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
+import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
@@ -814,6 +816,18 @@ class OpenApiControllerMessageMappingTest {
         when(frameReportProvider.getIfAvailable()).thenReturn(null);
         ObjectProvider<ClientAppControlCredentialService> controlCredentialProvider = mock(ObjectProvider.class);
         when(controlCredentialProvider.getIfAvailable()).thenReturn(null);
+        A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
+        when(resourceResolver.resolveRequiredModelConfigId(
+                any(String.class),
+                any(String.class),
+                nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenAnswer(invocation -> {
+                    String requested = invocation.getArgument(2, String.class);
+                    return requested != null && !requested.isBlank() ? requested : "model-default";
+                });
+        ObjectProvider<A2AgentResourceResolver> resourceResolverProvider = mock(ObjectProvider.class);
+        when(resourceResolverProvider.getIfAvailable()).thenReturn(resourceResolver);
         return new OpenApiController(
                 mock(OpenApiProvisioningService.class),
                 mock(ClaudeWorkerService.class),
@@ -838,7 +852,7 @@ class OpenApiControllerMessageMappingTest {
                 sessionProvider,
                 frameReportProvider,
                 controlCredentialProvider,
-                mock(ObjectProvider.class)
+                resourceResolverProvider
         );
     }
 

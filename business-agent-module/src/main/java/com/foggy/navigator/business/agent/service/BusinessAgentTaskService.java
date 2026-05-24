@@ -51,50 +51,70 @@ public class BusinessAgentTaskService {
         requireText(actorUserId, "actorUserId is required");
         requireText(form.getClientAppId(), "clientAppId is required");
         requireText(form.getSessionId(), "sessionId is required");
-        requireText(form.getWorkerPoolId(), "workerPoolId is required");
         requireText(form.getUpstreamUserId(), "upstreamUserId is required");
-        requireText(form.getSkillId(), "skillId is required");
-        String skillName = resolveSkillName(form.getSkillId(), form.getSkillName());
+        requireText(form.getAgentId(), "agentId is required");
 
         // 2. 校验 clientAppId 存在、属于当前 tenant、状态可用
         clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
 
-        // 3. 校验 workerPoolId 存在、属于当前 tenant、状态可用
-        BizWorkerPoolEntity workerPool = bizWorkerPoolService.requireAvailablePool(tenantId, form.getWorkerPoolId());
-
         // 校验 upstream user grant
         userGrantService.checkUpstreamUserAccess(tenantId, form.getClientAppId(), form.getUpstreamUserId());
 
+        rejectLegacyRuntimeResourceSelectors(form);
+        rejectLegacyWorkspaceSelectors(form);
+
+        A2AgentResourceResolver.ResolvedAgentResource agentResource = resourceResolver.resolveRequiredAgent(
+                tenantId,
+                form.getClientAppId(),
+                form.getUpstreamUserId(),
+                form.getAgentId());
+        String skillName = resolveSkillName(agentResource.skillId(), form.getSkillName());
+
+        // 3. 由 Agent 绑定解析 workerPoolId，再校验 workerPool 属于当前 tenant、状态可用
+        BizWorkerPoolEntity workerPool = bizWorkerPoolService.requireAvailablePool(tenantId, agentResource.workerPoolId());
+
         // 校验 client app skill grant
-        skillRegistryService.checkClientAppSkillAccess(tenantId, form.getClientAppId(), form.getSkillId());
+        skillRegistryService.checkClientAppSkillAccess(tenantId, form.getClientAppId(), agentResource.skillId());
 
         String finalModelConfigId;
         String finalVisionModelConfigId;
+        BusinessAgentTaskEntity existingResumeTask = null;
+        String explicitRequestedModelConfigId = trimToNull(form.getRequestedModelConfigId());
+        String requestedModelConfigId = resolveRequestedModelConfigId(form, agentResource);
 
         if (StringUtils.hasText(form.getResumeFromTaskId())) {
-            BusinessAgentTaskEntity existingTask = taskRepository.findByTaskId(form.getResumeFromTaskId())
+            existingResumeTask = taskRepository.findByTaskId(form.getResumeFromTaskId())
                     .orElseThrow(() -> new IllegalArgumentException("resume task not found: " + form.getResumeFromTaskId()));
 
-            if (!tenantId.equals(existingTask.getTenantId()) ||
-                !form.getClientAppId().equals(existingTask.getClientAppId()) ||
-                !form.getSessionId().equals(existingTask.getSessionId())) {
+            if (!tenantId.equals(existingResumeTask.getTenantId()) ||
+                !form.getClientAppId().equals(existingResumeTask.getClientAppId()) ||
+                !form.getSessionId().equals(existingResumeTask.getSessionId())) {
                 throw new IllegalArgumentException("resume task context mismatch");
             }
-            if (StringUtils.hasText(form.getRequestedModelConfigId()) &&
-                !form.getRequestedModelConfigId().equals(existingTask.getModelConfigId())) {
+            if (!agentResource.agentId().equals(existingResumeTask.getAgentId())) {
+                throw new IllegalArgumentException("cannot change agentId when resuming task");
+            }
+            if (StringUtils.hasText(explicitRequestedModelConfigId) &&
+                !explicitRequestedModelConfigId.equals(existingResumeTask.getModelConfigId())) {
                 throw new IllegalArgumentException("cannot change modelConfigId when resuming task");
             }
-            finalModelConfigId = existingTask.getModelConfigId();
-            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId());
+            finalModelConfigId = existingResumeTask.getModelConfigId();
+            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId(), agentResource);
         } else {
             // 4, 5, 6. 新建 task 时必须调用 resolveEffectiveModelConfigId
-            finalModelConfigId = resourceResolver.resolveRequiredModelConfigId(
+            finalModelConfigId = resourceResolver.resolveRequiredModelConfigIdForAgent(
                     tenantId,
                     form.getClientAppId(),
-                    form.getRequestedModelConfigId(),
+                    agentResource,
+                    requestedModelConfigId,
                     LlmModelCategory.GENERAL);
-            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId());
+            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId(), agentResource);
         }
+        A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource = resolveWorkspaceResource(
+                tenantId,
+                form,
+                existingResumeTask,
+                agentResource);
 
         // 7. task 创建后固定最终 modelConfigId
         BusinessAgentTaskEntity task = new BusinessAgentTaskEntity();
@@ -104,8 +124,10 @@ public class BusinessAgentTaskService {
         task.setClientAppId(form.getClientAppId());
         task.setUpstreamUserId(form.getUpstreamUserId());
         task.setNavigatorEffectiveUserId(actorUserId);
-        task.setSkillId(form.getSkillId());
-        task.setWorkerPoolId(form.getWorkerPoolId());
+        task.setAgentId(agentResource.agentId());
+        task.setSkillId(agentResource.skillId());
+        task.setWorkerPoolId(agentResource.workerPoolId());
+        task.setDirectoryId(workspaceResource != null ? workspaceResource.directoryId() : null);
         task.setModelConfigId(finalModelConfigId);
         task.setRequestedModelConfigId(form.getRequestedModelConfigId());
         task.setStatus(STATUS_CREATED);
@@ -139,7 +161,7 @@ public class BusinessAgentTaskService {
                 task.getSessionId());
 
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
-                tenantId, actorUserId, task, workerPool, plainToken, finalVisionModelConfigId, contextId, skillName, form);
+                tenantId, actorUserId, task, workerPool, plainToken, finalVisionModelConfigId, contextId, skillName, form, workspaceResource);
         if (launchResult != null && StringUtils.hasText(launchResult.getContextId())) {
             contextId = launchResult.getContextId();
         }
@@ -169,8 +191,10 @@ public class BusinessAgentTaskService {
         dto.setClientAppId(baseDto.getClientAppId());
         dto.setUpstreamUserId(baseDto.getUpstreamUserId());
         dto.setNavigatorEffectiveUserId(baseDto.getNavigatorEffectiveUserId());
+        dto.setAgentId(baseDto.getAgentId());
         dto.setSkillId(baseDto.getSkillId());
         dto.setWorkerPoolId(baseDto.getWorkerPoolId());
+        dto.setDirectoryId(baseDto.getDirectoryId());
         dto.setWorkerTaskId(baseDto.getWorkerTaskId());
         dto.setWorkerSessionId(baseDto.getWorkerSessionId());
         dto.setWorkerId(baseDto.getWorkerId());
@@ -321,7 +345,7 @@ public class BusinessAgentTaskService {
         }
         String normalizedSkillName = skillName.trim();
         if (StringUtils.hasText(normalizedSkillId) && !normalizedSkillId.equals(normalizedSkillName)) {
-            throw new IllegalArgumentException("skillName must match skillId during compatibility phase");
+            throw new IllegalArgumentException("skillName must match the agent-bound skillId");
         }
         return normalizedSkillName;
     }
@@ -335,7 +359,8 @@ public class BusinessAgentTaskService {
             String visionModelConfigId,
             String contextId,
             String skillName,
-            CreateBusinessAgentTaskForm form) {
+            CreateBusinessAgentTaskForm form,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
         if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
             return null;
         }
@@ -357,19 +382,72 @@ public class BusinessAgentTaskService {
                         .contextId(contextId)
                         .clientAppId(task.getClientAppId())
                         .upstreamUserId(task.getUpstreamUserId())
+                        .agentId(task.getAgentId())
                         .skillId(task.getSkillId())
                         .skillName(skillName)
                         .workerPoolId(task.getWorkerPoolId())
                         .workerBackend(workerPool.getWorkerBackend())
                         .modelConfigId(task.getModelConfigId())
                         .visionModelConfigId(visionModelConfigId)
+                        .directoryId(workspaceResource != null ? workspaceResource.directoryId() : null)
+                        .workspaceScope(workspaceResource != null ? workspaceResource.workspaceScope().name() : null)
+                        .workspaceResolverType(workspaceResource != null ? workspaceResource.resolverType().name() : null)
+                        .workspaceReadOnly(workspaceResource != null ? workspaceResource.readOnly() : null)
+                        .workspaceQuotaPolicy(workspaceResource != null ? workspaceResource.quotaPolicy() : null)
+                        .workspaceRetentionPolicy(workspaceResource != null ? workspaceResource.retentionPolicy() : null)
+                        .workspaceConcurrencyPolicy(workspaceResource != null ? workspaceResource.concurrencyPolicy() : null)
                         .markdownBody(markdownBody)
                         .taskScopedToken(taskScopedToken)
-                        .workdir(trimToNull(form.getWorkdir()))
-                        .allowedDirs(cleanStringList(form.getAllowedDirs()))
+                        .workdir(workspaceResource != null ? workspaceResource.workdir() : null)
+                        .allowedDirs(workspaceResource != null ? workspaceResource.allowedDirs() : null)
                         .allowedTools(cleanStringList(form.getAllowedTools()))
                         .build()))
                 .orElse(null);
+    }
+
+    private A2AgentResourceResolver.ResolvedWorkspaceResource resolveWorkspaceResource(
+            String tenantId,
+            CreateBusinessAgentTaskForm form,
+            BusinessAgentTaskEntity existingResumeTask,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        String requestedDirectoryId = trimToNull(form.getDirectoryId());
+        String resumeDirectoryId = existingResumeTask != null ? trimToNull(existingResumeTask.getDirectoryId()) : null;
+        if (requestedDirectoryId != null && resumeDirectoryId != null && !requestedDirectoryId.equals(resumeDirectoryId)) {
+            throw new IllegalArgumentException("cannot change directoryId when resuming task");
+        }
+        String directoryId = requestedDirectoryId != null
+                ? requestedDirectoryId
+                : (resumeDirectoryId != null ? resumeDirectoryId : agentResource.defaultDirectoryId());
+        return resourceResolver.resolveOptionalWorkspaceForAgent(
+                        tenantId,
+                        form.getClientAppId(),
+                        form.getUpstreamUserId(),
+                        agentResource,
+                        directoryId)
+                .orElse(null);
+    }
+
+    private void rejectLegacyWorkspaceSelectors(CreateBusinessAgentTaskForm form) {
+        if (StringUtils.hasText(form.getWorkdir())
+                || (form.getAllowedDirs() != null && !form.getAllowedDirs().isEmpty())) {
+            throw new IllegalArgumentException("runtime workdir/allowedDirs are no longer accepted; use directoryId");
+        }
+    }
+
+    private void rejectLegacyRuntimeResourceSelectors(CreateBusinessAgentTaskForm form) {
+        if (StringUtils.hasText(form.getWorkerPoolId()) || StringUtils.hasText(form.getSkillId())) {
+            throw new IllegalArgumentException("runtime skillId/workerPoolId are no longer accepted; use agentId");
+        }
+    }
+
+    private String resolveRequestedModelConfigId(
+            CreateBusinessAgentTaskForm form,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        String requestedModelConfigId = trimToNull(form.getRequestedModelConfigId());
+        if (requestedModelConfigId != null) {
+            return requestedModelConfigId;
+        }
+        return agentResource.defaultModelConfigId();
     }
 
     private String trimToNull(String value) {
@@ -390,12 +468,21 @@ public class BusinessAgentTaskService {
         return cleaned.isEmpty() ? null : cleaned;
     }
 
-    private String resolveOptionalVisionModelConfigId(String tenantId, String clientAppId) {
-        String modelConfigId = resourceResolver.resolveOptionalModelConfigId(
-                tenantId, clientAppId, LlmModelCategory.VISION);
+    private String resolveOptionalVisionModelConfigId(
+            String tenantId,
+            String clientAppId,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        String modelConfigId = resourceResolver.resolveOptionalModelForAgent(
+                        tenantId,
+                        clientAppId,
+                        agentResource,
+                        LlmModelCategory.VISION)
+                .map(A2AgentResourceResolver.ResolvedModelResource::modelConfigId)
+                .orElse(null);
         if (!StringUtils.hasText(modelConfigId)) {
-            log.debug("Vision model config not resolved for clientAppId={}: default VISION model config grant is required",
-                    clientAppId);
+            log.debug("Vision model config not resolved for clientAppId={}, agentId={}: default VISION model config grant and agent model binding are required",
+                    clientAppId,
+                    agentResource != null ? agentResource.agentId() : null);
             return null;
         }
         return modelConfigId;

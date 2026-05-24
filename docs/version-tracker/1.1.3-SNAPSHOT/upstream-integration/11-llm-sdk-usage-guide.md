@@ -56,13 +56,27 @@ Get-Content navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/NavigatorCl
 | --- | --- |
 | 第三方系统注册 | `NavigatorClient.register(...)` |
 | Worker 管理 | `client.workers()` |
-| 目录环境变量 | `client.directories()` |
+| Upstream Admin 工作目录 | `client.directories().initWithUpstreamAdmin(...)`、`listWithUpstreamAdmin(...)`、`updateEnvVarsWithUpstreamAdmin(...)`、`updateFilesWithUpstreamAdmin(...)` |
+| ClientApp 工作目录 | `client.directories().initWithClientAppControl(...)`、`listWithClientAppControl(...)`、`updateEnvVarsWithClientAppControl(...)`、`updateFilesWithClientAppControl(...)` |
 | 员工 provision | `client.employees()` |
 | 普通 Agent 任务、轮询、消息、会话 | `client.agents()` |
 | Business Agent 控制面 (ClientApp/Grant/Task/Approval等) | `client.businessAgent()` |
+| UpstreamSystem-owned Agent 管理 | `client.businessAgent().listUpstreamSystemAgents(...)`、`createUpstreamSystemAgent(...)`、`getUpstreamSystemAgent(...)`、`updateUpstreamSystemAgent(...)` |
+| Agent 模型绑定 | `client.businessAgent().listAgentModelBindings(...)`、`bindAgentModel(...)`、`setDefaultAgentModel(...)`、`unbindAgentModel(...)`，以及对应 `*UpstreamSystemAgentModel*` 方法 |
+| Agent 工作目录绑定 | `client.businessAgent().listAgentWorkspaceBindings(...)`、`bindAgentWorkspace(...)`、`setDefaultAgentWorkspace(...)`、`unbindAgentWorkspace(...)`，以及对应 `*UpstreamSystemAgentWorkspace*` 方法 |
+| Agent WorkerPool 绑定 | `client.businessAgent().listAgentWorkerBindings(...)`、`bindAgentWorker(...)`、`setDefaultAgentWorker(...)`、`unbindAgentWorker(...)`，以及对应 `*UpstreamSystemAgentWorker*` 方法 |
 | 账号上下文文件读写 | `client.agents().listAccountContextFilesWithClientAppAccessToken(...)`、`readAccountContextFileWithClientAppAccessToken(...)`、`writeAccountPolicyWithClientAppAccessToken(...)` |
 
 当前已全面支持 Business Agent，无需 REST 兜底。
+
+> 说明：旧的租户级 `client.directories().init/list/get/updateEnvVars/updateFiles` 与 `/api/v1/open/directories/*` 已移除。工作目录必须通过 upstream system admin key 或 ClientApp owner-aware workspace API 管理，避免绕过 `UpstreamSystemPrincipal / UpstreamClientApp / UpstreamUser` 资源归属模型。
+
+ClientApp 工作目录说明：
+
+- `initWithClientAppControl(clientAppId, params)` 使用 `X-Client-App-Control-Key`，只允许创建当前 ClientApp 范围内的目录。
+- `workspaceScope=CLIENT_APP_SHARED` 表示该 ClientApp 共享目录，不能传 `upstreamUserId`。
+- `workspaceScope=USER_PRIVATE` 表示该 ClientApp 下某个 upstream user 私有目录，必须传 `upstreamUserId`。
+- `UPSTREAM_SYSTEM_SHARED` 目录只能由 `initWithUpstreamAdmin(...)` 创建，ClientApp 控制面不能创建或修改。
 
 账号上下文文件说明：
 
@@ -179,6 +193,14 @@ form.setProvisioningToken(provisioningToken);
 form.setName("TMS");
 ClientAppDTO app = client.businessAgent().createClientApp(form);
 ```
+
+资源 owner 与调用身份约定：
+
+1. `NAVI_ADMIN_API_KEY` 对应稳定的 `UpstreamSystemPrincipal`。它可以创建 UpstreamSystem-owned WorkerPool、LLMConfigModel、WorkingDirectory 和 Agent，并可被同一上游系统下的 ClientApp 通过 grant / binding 可见。
+2. `NAVI_CONTROL_API_KEY` 对应某个 `UpstreamClientApp` 的控制面身份。它可以创建 ClientApp-owned 模型、ClientApp shared / user private 工作目录、ClientApp-owned Agent，以及维护该 Agent 的 model / workspace / worker binding。
+3. Upstream user runtime token 只用于发起 `ask`、读取会话和账号上下文文件；不用于创建模型、目录、WorkerPool 或 Agent。
+4. Agent 的 `defaultModelConfigId`、`defaultDirectoryId`、`workerId` 只是默认值，服务端会同步确保它们出现在对应 binding 列表中。上游不要只更新字段而绕过 binding 口径。
+5. 运行时最终可见资源由 `UpstreamSystemPrincipal + UpstreamClientApp + UpstreamUser + Agent` 的交集 resolver 决定；上游不能通过 `ask` 临时传 filesystem path、模型 id 或 WorkerPool id 绕过授权。
 
 调用 REST 前必须：
 

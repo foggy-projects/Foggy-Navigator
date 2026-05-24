@@ -1,5 +1,6 @@
 package com.foggy.navigator.common.entity;
 
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -15,7 +16,9 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "coding_agents", indexes = {
     @Index(name = "idx_ca_user_id", columnList = "userId"),
-    @Index(name = "idx_ca_worker_id", columnList = "workerId")
+    @Index(name = "idx_ca_worker_id", columnList = "workerId"),
+    @Index(name = "idx_ca_owner", columnList = "ownerType,ownerId"),
+    @Index(name = "idx_ca_client_app", columnList = "tenantId,clientAppId")
 }, uniqueConstraints = {
     @UniqueConstraint(name = "uk_ca_tenant_agent_id", columnNames = {"tenantId", "agentId"})
 })
@@ -33,6 +36,16 @@ public class CodingAgentEntity {
 
     @Column(length = 64)
     private String tenantId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 32)
+    private ResourceOwnerType ownerType;
+
+    @Column(length = 128)
+    private String ownerId;
+
+    @Column(length = 64)
+    private String clientAppId;
 
     /** Agent 名称, e.g. "payment-service-agent" */
     @Column(length = 128, nullable = false)
@@ -86,6 +99,9 @@ public class CodingAgentEntity {
     @Column(columnDefinition = "TEXT")
     private String projectSummary;
 
+    @Column(nullable = false)
+    private Boolean enabled = true;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -99,10 +115,16 @@ public class CodingAgentEntity {
         if (agentType == null) {
             agentType = "LOCAL_CLAUDE_WORKER";
         }
+        if (enabled == null) {
+            enabled = true;
+        }
     }
 
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+        if (enabled == null) {
+            enabled = true;
+        }
     }
 }

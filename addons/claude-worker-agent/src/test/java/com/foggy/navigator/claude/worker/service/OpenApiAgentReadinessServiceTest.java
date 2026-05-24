@@ -13,6 +13,10 @@ import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
+import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
@@ -70,8 +74,35 @@ class OpenApiAgentReadinessServiceTest {
         when(clientAppService.requireActiveClientApp("tenant_1", "capp_1")).thenReturn(app);
         when(agentResolver.resolveAgent(eq("world-sim.bug-coordinator.decision.v1"), any(AgentResolveContext.class)))
                 .thenReturn(Optional.of(mock(A2aAgent.class)));
-        when(resourceResolver.resolveRequiredModelConfigId(eq("tenant_1"), eq("capp_1"), eq("model_1"), any()))
-                .thenReturn("model_1");
+        when(resourceResolver.resolveRequiredModelForAgent(eq("tenant_1"), eq("capp_1"), any(), nullable(String.class), any()))
+                .thenAnswer(invocation -> {
+                    String requestedModelConfigId = invocation.getArgument(3, String.class);
+                    LlmModelCategory category = invocation.getArgument(4, LlmModelCategory.class);
+                    return new A2AgentResourceResolver.ResolvedModelResource(
+                            requestedModelConfigId != null ? requestedModelConfigId : "model_default",
+                            requestedModelConfigId,
+                            category,
+                            requestedModelConfigId != null
+                                    ? "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT"
+                                    : "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT");
+                });
+        when(resourceResolver.resolveRequiredAgent(eq("tenant_1"), eq("capp_1"), eq("private_1"), anyString()))
+                .thenAnswer(invocation -> {
+                    String resolvedAgentId = invocation.getArgument(3, String.class);
+                    return new A2AgentResourceResolver.ResolvedAgentResource(
+                            resolvedAgentId,
+                            ResourceOwnerType.CLIENT_APP,
+                            "capp_1",
+                            "capp_1",
+                            resolvedAgentId,
+                            "pool_1",
+                            ResourceOwnerType.UPSTREAM_SYSTEM,
+                            "usys_1",
+                            "WORKER_POOL:UPSTREAM_SYSTEM",
+                            "model_1",
+                            null,
+                            "AGENT:CLIENT_APP");
+                });
         when(agentRouteService.resolve(eq("world-sim.bug-coordinator.decision.v1"), any()))
                 .thenReturn(new OpenApiAgentRouteService.ResolvedOpenApiAgentRoute(
                         "world-sim.bug-coordinator.decision.v1",
@@ -98,12 +129,54 @@ class OpenApiAgentReadinessServiceTest {
 
         assertEquals("OK", result.getOverallStatus());
         assertEquals("model_1", result.getEffectiveModelConfigId());
+        assertEquals("CLIENT_APP", result.getAgentOwnerType());
+        assertEquals("pool_1", result.getWorkerPoolId());
+        assertEquals("UPSTREAM_SYSTEM", result.getWorkerPoolOwnerType());
+        assertEquals("AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT", result.getModelConfigSource());
         assertNotNull(result.getSkillArtifact());
-        assertEquals(5, result.getChecks().size());
+        assertEquals(7, result.getChecks().size());
         assertTrue(result.getChecks().stream().allMatch(check -> "OK".equals(check.getStatus())));
         verify(skillRegistryService).checkClientAppSkillAccess(
                 "tenant_1", "capp_1", "world-sim.bug-coordinator.decision.v1");
         verify(userGrantService).checkUpstreamUserAccess("tenant_1", "capp_1", "private_1");
+    }
+
+    @Test
+    void verify_resolvesRequestedWorkspaceResourceForInspection() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_1");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_user",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/workspace/user",
+                        List.of("/workspace/user"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("OK", result.getOverallStatus());
+        assertEquals("dir_user", result.getRequestedDirectoryId());
+        assertEquals("dir_user", result.getEffectiveDirectoryId());
+        assertEquals("USER_PRIVATE", result.getWorkspaceScope());
+        assertEquals("MANAGED", result.getWorkspaceResolverType());
+        assertEquals(Boolean.FALSE, result.getWorkspaceReadOnly());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKSPACE_RESOURCE".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
     }
 
     @Test

@@ -78,6 +78,10 @@ export interface BizWorkerPool {
   tenantId: string;
   name: string;
   workerBackend: string;
+  ownerType?: string;
+  ownerId?: string;
+  capabilitiesJson?: string;
+  labelsJson?: string;
   status: string;
   healthStatus: string;
 }
@@ -86,6 +90,10 @@ export interface BizWorkerIdentity {
   workerId: string;
   workerBackend: string;
   baseUrl: string;
+  ownerType?: string;
+  ownerId?: string;
+  capabilitiesJson?: string;
+  labelsJson?: string;
   version?: string;
   status: string;
   healthStatus: string;

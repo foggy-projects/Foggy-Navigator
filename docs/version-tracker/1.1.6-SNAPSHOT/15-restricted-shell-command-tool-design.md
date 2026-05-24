@@ -33,7 +33,7 @@ BizWorker 当前已经有 `list_files`、`read_file`、`write_file`、`patch_fil
 3. 工具能力受限，只操作当前 account/workspace resolver 返回的文件作用域。
 4. 默认不执行真实系统 shell，不允许任意进程、网络、环境变量或系统目录访问。
 5. 输出可进入 `llm-submissions` 复盘日志，便于排查“模型看到了什么”。
-6. 对确需真实外部工具的 delegated workspace 场景，提供单独的 Linux-only `command` 能力，并通过 worker 配置、操作系统、任务 `allowed_tools` 三层显式授权。
+6. 对确需真实外部工具的 delegated workspace 场景，提供单独的 Linux-only `command` 能力；当前直接开放给具备可写 `workdir` 的 Linux worker，可通过 worker 配置关闭。
 
 ## 非目标
 
@@ -49,7 +49,7 @@ BizWorker 当前已经有 `list_files`、`read_file`、`write_file`、`patch_fil
 后续实现应把两个能力分开建模：
 
 1. `shell_command`: 受限命令解释器，面向文件观察、搜索和截取；默认不经真实宿主 shell，不开放 `git`、`curl`、`python`、`npm` 等外部工具。
-2. `command`: 真实命令执行工具，面向代码型 delegated workspace 中的 `git`、`curl`、测试、构建和轻量诊断；首期 Linux-only，默认关闭，必须显式授权。
+2. `command`: 真实命令执行工具，面向代码型 delegated workspace 中的 `git`、`curl`、测试、构建和轻量诊断；首期 Linux-only，默认开启，可用 worker 配置关闭。
 3. 文件修改仍优先使用 `patch_file` / `write_file`。除非后续另有安全设计，`command` 不作为“把文件读写都转成 shell”的默认路线。
 4. `allowed_dirs` / `workdir` 是应用层 guard，不是硬沙箱。启用真实 `command` 的 worker 应优先部署在容器、WSL、VM 或其他可隔离环境中。
 
@@ -218,15 +218,15 @@ $VAR
 
 真实 `command` 首期按以下规则推进:
 
-1. Worker 全局开关默认关闭，例如 `BIZ_WORKER_ENABLE_COMMAND=true` 后才可能暴露工具。
+1. Worker 全局开关默认开启；如需禁用，可设置 `BIZ_WORKER_ENABLE_COMMAND=false`。
 2. OS gate: 只在 Linux 环境暴露工具；Windows 环境不出现在 tool schema 中，避免 LLM 反复调用不可用工具。
-3. 任务级 gate: 必须显式传入 `allowed_tools` 且包含 `command`。即使当前 `ExecutionPolicy` 对 `allowed_tools is None` 有“允许所有工具”的兼容语义，`command` 也不得继承该宽松语义。
+3. 任务级工具 allowlist 不再单独拦截 `command`：只要满足 Linux、开关开启、非只读、合法 `workdir`，即使 `allowed_tools` 缺省或未包含 `command`，也可暴露和执行。
 4. 路径 gate: 必须存在 `workdir`，且解析后的工作目录位于 `allowed_dirs` 内；无 `workdir` 或越权时直接拒绝执行。
 5. 执行约束: 无 stdin、非交互、固定 timeout、输出截断、记录 exit code / stdout / stderr / duration。
 6. 审计约束: tool audit 记录命令、cwd、退出码、耗时和截断状态；日志输出需要按现有规则做 token / secret 脱敏。
 7. 命令面: 首期可优先覆盖 `git`、`curl`、`rg`、`python`、`node`、`npm`、`pnpm`、`pytest`、`mvn` 等开发常用工具；若 worker 未运行在强隔离环境，需再加 executable allowlist。
 8. 实现方式: 可以在 Linux worker 中使用 `/bin/bash -lc` 执行命令字符串，但这意味着 `allowed_dirs` 不是硬沙箱；生产启用前必须确认 worker 运行边界足够隔离。
-9. 上游策略: TMS 这类业务侧上游默认最多只开放文件 IO 类工具；受控强的上游如需全开能力，也必须通过任务 `allowed_tools` 显式加入 `command`。
+9. 上游策略: 只要上游提供合法 delegated workspace，真实命令能力直接可用；需要禁止命令时使用只读 workspace、不给 `workdir` 或在 worker 侧设置 `BIZ_WORKER_ENABLE_COMMAND=false`。
 
 ## Windows / WSL 调试约束
 
@@ -245,7 +245,7 @@ $VAR
 
 ## E2E Request Samples
 
-TMS 这类业务侧上游默认只开放文件 IO 类工具:
+delegated workspace 只要提供合法 `workdir` / `allowed_dirs`，Linux worker 默认暴露 `command`；`allowed_tools` 不需要包含 `command`:
 
 ```json
 {
@@ -266,7 +266,7 @@ TMS 这类业务侧上游默认只开放文件 IO 类工具:
 }
 ```
 
-受控强的 delegated workspace 上游如需开放真实命令能力，必须显式加入 `command`，并在 Linux worker 侧开启 `BIZ_WORKER_ENABLE_COMMAND=true`:
+如果需要同时开放文件工具，可继续在 `allowed_tools` 中列出文件工具；`command` 不依赖该列表:
 
 ```json
 {
@@ -280,8 +280,7 @@ TMS 这类业务侧上游默认只开放文件 IO 类工具:
         "list_files",
         "read_file",
         "write_file",
-        "patch_file",
-        "command"
+        "patch_file"
       ]
     }
   }
@@ -381,7 +380,7 @@ shell_command("rg -n \"foo\" docs")
 
 如选择调用本机 `rg` binary，也必须使用 argv 形式，不经 shell，并且执行目录锁定在 resolved workspace root 下。
 
-真实 `command` MVP 当前采用 Linux worker 中的 Python `subprocess` 调用 `/bin/bash -lc` 执行命令字符串。该路径不是 `shell_command` 的安全解释器路线，必须依赖容器、WSL、VM 或其他 worker 运行边界隔离，并继续保留 worker 开关、Linux OS gate、任务 `allowed_tools` 显式授权和 `workdir` 校验。
+真实 `command` MVP 当前采用 Linux worker 中的 Python `subprocess` 调用 `/bin/bash -lc` 执行命令字符串。该路径不是 `shell_command` 的安全解释器路线，必须依赖容器、WSL、VM 或其他 worker 运行边界隔离，并继续保留 worker 开关、Linux OS gate、非只读 `workdir` / `allowed_dirs` 校验。
 
 ## 与现有文件工具的关系
 
@@ -411,7 +410,7 @@ write_file
 2. 若上游传入 `ExecutionPolicy.allowed_tools`，仍由 allowlist 决定是否暴露。
 3. managed account mode 下，`shell_command` 只操作 `<data_root>/accounts/<accountId>` 或 resolver 返回的稳定 workspace。
 4. delegated workspace mode 下，`shell_command` 只操作上游授权的 delegated workspace。
-5. `command` 不随 account/workspace 默认暴露，必须同时满足 worker 全局开关、Linux OS gate、任务 `allowed_tools` 显式授权和合法 `workdir`。
+5. `command` 随合法 delegated workspace 直接暴露，必须同时满足 worker 全局开关、Linux OS gate、非只读和合法 `workdir`。
 
 提示词中应明确:
 
@@ -470,29 +469,30 @@ write_file
 8. 真实 `llm-submissions` body 中能看到 `shell_command` 工具 schema。
 9. 工具结果作为 runtime-visible tool protocol 进入后续上下文，直到被裁剪或压缩。
 10. Windows 宿主机上也按 Linux 命令格式解析，LLM 不需要知道底层系统是 Windows。
-11. Linux-only `command` 默认不出现在 tool schema；只有全局开关开启、OS 为 Linux、任务 `allowed_tools` 显式包含 `command` 时才暴露。
+11. Linux-only `command` 默认出现在合法可写 workspace 的 tool schema；全局开关关闭、OS 非 Linux、无 `workdir` 或 read-only 时不暴露。
 12. Windows 原生环境下 `command` 不出现在 tool schema；本机调试通过 WSL + 3065 端口完成。
 13. Linux worker 中 `command("git status --short")`、`command("curl --version")` 可在授权 workspace 内返回 exit code/stdout/stderr，并写入 tool audit。
-14. `allowed_tools` 缺省或未包含 `command` 时，即使其他工具可用，`command` 也必须返回未授权或不暴露。
+14. `allowed_tools` 缺省或未包含 `command` 时，只要 Linux worker 和 workspace gate 满足，`command` 仍可执行。
 
 ## Progress Tracking
 
 ### Development Progress
 
 - status: implemented
-- 2026-05-23 已落地 Python BizWorker `command` MVP: `BIZ_WORKER_ENABLE_COMMAND` 开关、Linux-only gate、任务 `allowed_tools` 显式授权、`workdir`/`allowed_dirs` 校验、tool schema 暴露、dispatcher 接入、`subprocess` 执行器。
-- Java 侧当前已能传递 `workdir`、`allowed_dirs`、`allowed_tools`，首期不新增 Java 执行逻辑；已补充显式 `command` allowlist 透传单测。
+- 2026-05-23 已落地 Python BizWorker `command` MVP: `BIZ_WORKER_ENABLE_COMMAND` 开关、Linux-only gate、`workdir`/`allowed_dirs` 校验、tool schema 暴露、dispatcher 接入、`subprocess` 执行器。
+- 2026-05-24 已放开 `command` 的任务 `allowed_tools` gate: 合法 Linux delegated workspace 中默认可用，`allowed_tools` 不再需要显式包含 `command`。
+- Java 侧当前已能传递 `workdir`、`allowed_dirs`、`allowed_tools`，首期不新增 Java 执行逻辑。
 - Python `subprocess` API 本身支持 Windows，但 BizWorker `command` 首期实现显式限制为 Linux-only；Windows 原生命令、PowerShell/cmd 引号规则、编码和进程树清理另立设计。
 
 ### Testing Progress
 
 - status: automated-mock-e2e-added; complete-through-java-navi-real-llm-smoke
-- 已补 Python 单测: 默认关闭配置、环境变量开启、默认隐藏、Windows 隐藏、未显式授权隐藏、workdir 越权拒绝、timeout、subprocess 调用参数、schema 文案。
+- 已补 Python 单测: 默认开启配置、环境变量关闭、Windows 隐藏、缺少 workdir 隐藏、`allowed_tools` 不含 `command` 仍可执行、workdir 越权拒绝、timeout、subprocess 调用参数、schema 文案。
 - 已补 Python mock LLM E2E: `test_command_tool_e2e.py` 固化 scripted `command -> assistant natural final` 闭环，避免真实 LLM smoke 成为唯一回归手段。
 - 2026-05-23 收口修正: 顶层 command E2E 已改为 `command -> assistant natural final`，避免误导为 frame result 工具是 command 的必需终止步骤；`submit_frame_result` 仅用于 Root 结构化状态提交或 non-root Agent frame 结构化完成/暂停，`submit_skill_result` 作为旧名兼容 alias 保留。
 - Python 全量回归通过: `tools/langgraph-biz-worker` pytest 结果为 `668 passed, 6 skipped`。
 - WSL 真实 smoke 通过: BizWorker 端口 3065，授权 workspace 内执行 `git init` / `git status --short` / `curl --version`，tool audit 已记录 `exit_code=0`。
-- Java 专项单测已补: LangGraph launcher 将 `allowed_tools=["read_file","write_file","patch_file","command"]`、`workdir`、`allowed_dirs` 写入 hidden `runtime_context.execution_policy`。
+- Java 专项单测已补: LangGraph launcher 将 `allowed_tools`、`workdir`、`allowed_dirs` 写入 hidden `runtime_context.execution_policy`；`command` 不再要求出现在 `allowed_tools` 中。
 - 已补 Java Navi 可选 L3: `business-agent-module/integration-tests` 中新增显式开关的 mock LLM command smoke，用于真实 Java 控制面 + 真实 BizWorker 的自动化回归；默认不进入常规测试。
 - Java Maven 验证通过: `mvn -pl addons/langgraph-biz-worker -am test` 已完成。期间修正既有测试断言，将 `ClientAppModelConfigGrantServiceTest.grantModelConfig_rejects_invalid_backend` 的非法 backend 样例从已允许的 `CLAUDE_CODE` 改为 `OTHER_BACKEND`。
 - WSL 真实 LLM 直连 smoke 通过: `task_real_llm_smoke_20260523_01` 返回 `OK_REAL_LLM_SMOKE_20260523`，并生成 `llm-submissions` 证据。
@@ -520,4 +520,4 @@ write_file
 - `shell_command` 不经宿主 shell；`command` 如经 `/bin/bash -lc`，必须运行在明确隔离的 Linux worker 边界内。
 - 路径经 resolver/path guard。
 - 输出可预算、可截断、可复盘。
-- 默认不获得系统管理权限；网络能力仅在 `command` 显式授权场景下按策略开启。
+- 默认不获得系统管理权限；网络能力仅在 `command` 可见的合法 Linux workspace 场景下按策略开启。

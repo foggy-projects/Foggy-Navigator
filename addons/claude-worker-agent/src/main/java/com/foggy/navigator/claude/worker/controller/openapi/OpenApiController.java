@@ -204,100 +204,26 @@ public class OpenApiController {
     @PostMapping("/directories/init")
     @RequireAuth(roles = {"TENANT_ADMIN"})
     public RX<WorkingDirectoryDTO> initDirectory(@RequestBody InitDirectoryOpenForm form) {
-        String userId = UserContext.getCurrentUserId();
-        String tenantId = UserContext.getCurrentTenantId();
-
-        // 验证 Worker 属于同租户
-        ClaudeWorkerEntity worker = workerRepository.findByWorkerId(form.getWorkerId())
-                .orElseThrow(() -> RX.throwB("Worker not found: " + form.getWorkerId()));
-        if (!tenantId.equals(worker.getTenantId())) {
-            throw RX.throwB("Worker not found: " + form.getWorkerId());
-        }
-
-        if (form.getFiles() == null || form.getFiles().isEmpty()) {
-            return RX.failB("files is required");
-        }
-
-        try {
-            String directoryId = claudeWorkerFacade.initDirectory(
-                    worker.getUserId(), form.getWorkerId(), form.getPath(),
-                    form.getFiles(), form.getProjectName());
-
-            // 获取完整 DTO 返回
-            WorkingDirectoryDTO dto = directoryService.getDirectory(worker.getUserId(), directoryId);
-            return RX.ok(dto);
-        } catch (Exception e) {
-            log.error("Directory init failed: {}", e.getMessage(), e);
-            return RX.failA("Directory initialization failed: " + e.getMessage());
-        }
+        return legacyDirectoryApiRemoved();
     }
 
     @GetMapping("/directories")
     @RequireAuth(roles = {"TENANT_ADMIN"})
     public RX<List<WorkingDirectoryDTO>> listDirectories(
             @RequestParam(required = false) String workerId) {
-        String tenantId = UserContext.getCurrentTenantId();
-
-        List<WorkingDirectoryDTO> dirs;
-        if (workerId != null && !workerId.isBlank()) {
-            // 验证 Worker 属于同租户
-            ClaudeWorkerEntity worker = workerRepository.findByWorkerId(workerId)
-                    .orElseThrow(() -> RX.throwB("Worker not found: " + workerId));
-            if (!tenantId.equals(worker.getTenantId())) {
-                throw RX.throwB("Worker not found: " + workerId);
-            }
-            dirs = directoryRepository.findByWorkerIdOrderByProjectNameAsc(workerId).stream()
-                    .map(e -> WorkingDirectoryDTO.builder()
-                            .directoryId(e.getDirectoryId())
-                            .workerId(e.getWorkerId())
-                            .projectName(e.getProjectName())
-                            .path(e.getPath())
-                            .directoryType(e.getDirectoryType())
-                            .gitBranch(e.getGitBranch())
-                            .createdAt(e.getCreatedAt())
-                            .updatedAt(e.getUpdatedAt())
-                            .build())
-                    .toList();
-        } else {
-            dirs = directoryRepository.findByTenantId(tenantId).stream()
-                    .map(e -> WorkingDirectoryDTO.builder()
-                            .directoryId(e.getDirectoryId())
-                            .workerId(e.getWorkerId())
-                            .projectName(e.getProjectName())
-                            .path(e.getPath())
-                            .directoryType(e.getDirectoryType())
-                            .gitBranch(e.getGitBranch())
-                            .createdAt(e.getCreatedAt())
-                            .updatedAt(e.getUpdatedAt())
-                            .build())
-                    .toList();
-        }
-        return RX.ok(dirs);
+        return legacyDirectoryApiRemoved();
     }
 
     @GetMapping("/directories/{directoryId}")
     @RequireAuth(roles = {"TENANT_ADMIN"})
     public RX<WorkingDirectoryDTO> getDirectory(@PathVariable String directoryId) {
-        String tenantId = UserContext.getCurrentTenantId();
-        var entity = directoryRepository.findByDirectoryId(directoryId)
-                .orElseThrow(() -> RX.throwB("Directory not found: " + directoryId));
-        if (!tenantId.equals(entity.getTenantId())) {
-            throw RX.throwB("Directory not found: " + directoryId);
-        }
-        return RX.ok(directoryService.getDirectory(entity.getUserId(), directoryId));
+        return legacyDirectoryApiRemoved();
     }
 
     @DeleteMapping("/directories/{directoryId}")
     @RequireAuth(roles = {"TENANT_ADMIN"})
     public RX<Void> deleteDirectory(@PathVariable String directoryId) {
-        String tenantId = UserContext.getCurrentTenantId();
-        var entity = directoryRepository.findByDirectoryId(directoryId)
-                .orElseThrow(() -> RX.throwB("Directory not found: " + directoryId));
-        if (!tenantId.equals(entity.getTenantId())) {
-            throw RX.throwB("Directory not found: " + directoryId);
-        }
-        directoryService.deleteDirectory(entity.getUserId(), directoryId);
-        return RX.ok(null);
+        return legacyDirectoryApiRemoved();
     }
 
     /**
@@ -312,23 +238,7 @@ public class OpenApiController {
     public RX<Map<String, String>> updateDirectoryEnvVars(
             @PathVariable String directoryId,
             @RequestBody Map<String, String> envVars) {
-        String tenantId = UserContext.getCurrentTenantId();
-        var entity = directoryRepository.findByDirectoryId(directoryId)
-                .orElseThrow(() -> RX.throwB("Directory not found: " + directoryId));
-        if (!tenantId.equals(entity.getTenantId())) {
-            throw RX.throwB("Directory not found: " + directoryId);
-        }
-        try {
-            String json = (envVars == null || envVars.isEmpty()) ? null
-                    : new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(envVars);
-            entity.setCustomEnvVars(json);
-            directoryRepository.save(entity);
-            log.info("Updated customEnvVars for directory {}: {} keys", directoryId,
-                    envVars != null ? envVars.size() : 0);
-            return RX.ok(envVars);
-        } catch (Exception e) {
-            return RX.failA("Failed to update env vars: " + e.getMessage());
-        }
+        return legacyDirectoryApiRemoved();
     }
 
     /**
@@ -342,27 +252,13 @@ public class OpenApiController {
     public RX<Map<String, Object>> updateDirectoryFiles(
             @PathVariable String directoryId,
             @RequestBody Map<String, String> files) {
-        String tenantId = UserContext.getCurrentTenantId();
-        var entity = directoryRepository.findByDirectoryId(directoryId)
-                .orElseThrow(() -> RX.throwB("Directory not found: " + directoryId));
-        if (!tenantId.equals(entity.getTenantId())) {
-            throw RX.throwB("Directory not found: " + directoryId);
-        }
-        if (files == null || files.isEmpty()) {
-            return RX.failB("files is required");
-        }
-        try {
-            ClaudeWorkerEntity worker = workerRepository.findByWorkerId(entity.getWorkerId())
-                    .orElseThrow(() -> RX.throwB("Worker not found: " + entity.getWorkerId()));
-            ClaudeWorkerClient client = workerService.createClient(worker);
-            Map<String, Object> result = client.initDirectory(entity.getPath(), files)
-                    .block(Duration.ofSeconds(30));
-            log.info("Updated {} files in directory {}", files.size(), directoryId);
-            return RX.ok(result);
-        } catch (Exception e) {
-            log.error("Failed to update files in directory {}: {}", directoryId, e.getMessage(), e);
-            return RX.failA("Failed to update files: " + e.getMessage());
-        }
+        return legacyDirectoryApiRemoved();
+    }
+
+    private <T> RX<T> legacyDirectoryApiRemoved() {
+        return RX.failB("LEGACY_API_REMOVED: /api/v1/open/directories/* has been removed. "
+                + "Use /api/v1/upstream-admin/directories with X-Navi-Admin-Key, "
+                + "or ClientApp workspace APIs for owner-aware runtime directories.");
     }
 
     // ===== 4. 员工 Provisioning =====

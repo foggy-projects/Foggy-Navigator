@@ -24,12 +24,28 @@ ALLOWED_TOOLS_KEYS = (
     "tool_allowlist",
     "toolAllowlist",
 )
+READ_ONLY_KEYS = ("read_only", "readOnly")
+QUOTA_POLICY_KEYS = ("quota_policy", "quotaPolicy", "quota")
+RETENTION_POLICY_KEYS = ("retention_policy", "retentionPolicy", "retention")
+CONCURRENCY_POLICY_KEYS = ("concurrency_policy", "concurrencyPolicy", "concurrency")
+MAX_WRITE_BYTES_KEYS = (
+    "max_write_bytes",
+    "maxWriteBytes",
+    "max_bytes",
+    "maxBytes",
+    "max_file_bytes",
+    "maxFileBytes",
+)
 
 _ALL_POLICY_KEYS = frozenset({
     *EXECUTION_POLICY_KEYS,
     *WORKDIR_KEYS,
     *ALLOWED_DIRS_KEYS,
     *ALLOWED_TOOLS_KEYS,
+    *READ_ONLY_KEYS,
+    *QUOTA_POLICY_KEYS,
+    *RETENTION_POLICY_KEYS,
+    *CONCURRENCY_POLICY_KEYS,
 })
 _SKILL_DISCOVERY_TOOL_NAMES = frozenset({
     "list_skill_resources",
@@ -48,6 +64,10 @@ class ExecutionPolicy:
     workdir: Path | None = None
     allowed_dirs: tuple[Path, ...] = ()
     allowed_tools: frozenset[str] | None = None
+    read_only: bool = False
+    quota_policy: dict[str, Any] | None = None
+    retention_policy: dict[str, Any] | None = None
+    concurrency_policy: dict[str, Any] | None = None
     configured: bool = False
 
     @classmethod
@@ -85,11 +105,16 @@ class ExecutionPolicy:
 
         allowed_tools_value = _first_value(policy_source, ALLOWED_TOOLS_KEYS)
         allowed_tools = _tool_names(allowed_tools_value) if allowed_tools_value is not None else None
+        read_only = _bool_value(_first_value(policy_source, READ_ONLY_KEYS), default=False)
 
         return cls(
             workdir=workdir,
             allowed_dirs=allowed_dirs,
             allowed_tools=allowed_tools,
+            read_only=read_only,
+            quota_policy=_policy_map(_first_value(policy_source, QUOTA_POLICY_KEYS), "quota_policy"),
+            retention_policy=_policy_map(_first_value(policy_source, RETENTION_POLICY_KEYS), "retention_policy"),
+            concurrency_policy=_policy_map(_first_value(policy_source, CONCURRENCY_POLICY_KEYS), "concurrency_policy"),
             configured=True,
         )
 
@@ -115,6 +140,24 @@ class ExecutionPolicy:
             raise ValueError("PATH_NOT_AUTHORIZED: path must be inside allowed_dirs")
         return resolved
 
+    def max_write_bytes(self, hard_limit: int) -> int:
+        """Return the effective per-write byte limit capped by the worker hard limit."""
+
+        if not self.quota_policy:
+            return hard_limit
+        for key in MAX_WRITE_BYTES_KEYS:
+            value = self.quota_policy.get(key)
+            if value is None:
+                continue
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                raise ValueError("INVALID_EXECUTION_POLICY: quota_policy max write bytes must be an integer")
+            if parsed <= 0:
+                raise ValueError("INVALID_EXECUTION_POLICY: quota_policy max write bytes must be positive")
+            return min(parsed, hard_limit)
+        return hard_limit
+
     def to_context(self) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         policy_payload: dict[str, Any] = {}
@@ -130,6 +173,18 @@ class ExecutionPolicy:
             value = sorted(self.allowed_tools)
             payload["allowed_tools"] = value
             policy_payload["allowed_tools"] = value
+        if self.read_only:
+            payload["read_only"] = True
+            policy_payload["read_only"] = True
+        if self.quota_policy is not None:
+            payload["quota_policy"] = self.quota_policy
+            policy_payload["quota_policy"] = self.quota_policy
+        if self.retention_policy is not None:
+            payload["retention_policy"] = self.retention_policy
+            policy_payload["retention_policy"] = self.retention_policy
+        if self.concurrency_policy is not None:
+            payload["concurrency_policy"] = self.concurrency_policy
+            policy_payload["concurrency_policy"] = self.concurrency_policy
         if policy_payload:
             payload["execution_policy"] = policy_payload
         return payload
@@ -171,7 +226,15 @@ def _policy_payload(context: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(value, Mapping):
             payload.update(value)
 
-    for key in (*WORKDIR_KEYS, *ALLOWED_DIRS_KEYS, *ALLOWED_TOOLS_KEYS):
+    for key in (
+        *WORKDIR_KEYS,
+        *ALLOWED_DIRS_KEYS,
+        *ALLOWED_TOOLS_KEYS,
+        *READ_ONLY_KEYS,
+        *QUOTA_POLICY_KEYS,
+        *RETENTION_POLICY_KEYS,
+        *CONCURRENCY_POLICY_KEYS,
+    ):
         if key in context:
             payload.setdefault(key, context[key])
     return payload
@@ -226,6 +289,28 @@ def _tool_names(value: Any) -> frozenset[str]:
             raise ValueError("INVALID_EXECUTION_POLICY: allowed_tools must contain non-empty strings")
         names.add(item.strip())
     return frozenset(names)
+
+
+def _bool_value(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    raise ValueError("INVALID_EXECUTION_POLICY: read_only must be a boolean")
+
+
+def _policy_map(value: Any, field_name: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError(f"INVALID_EXECUTION_POLICY: {field_name} must be an object")
+    return dict(value)
 
 
 def _split_string_list(value: str) -> list[str]:

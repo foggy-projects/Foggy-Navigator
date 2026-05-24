@@ -101,6 +101,47 @@ public class BusinessAgentApi {
                 + "/control-credentials", form, upstreamAdminApiKey, new TypeReference<>() {});
     }
 
+    public Map<String, Object> registerUpstreamWorkerIdentity(Map<String, Object> form) {
+        return http.postWithUpstreamAdminAuth("/api/v1/upstream-admin/worker-identities",
+                form, null, new TypeReference<>() {});
+    }
+
+    public List<LlmModelConfigDTO> listUpstreamSystemModelConfigs(String targetTenantId) {
+        String path = "/api/v1/upstream-admin/model-configs";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.getWithUpstreamAdminAuth(path, null, new TypeReference<>() {});
+    }
+
+    public LlmModelConfigDTO createUpstreamSystemModelConfig(ClientAppModelConfigForm form, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/model-configs";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.postWithUpstreamAdminAuth(path, form, null, new TypeReference<>() {});
+    }
+
+    public LlmModelConfigDTO updateUpstreamSystemModelConfig(String modelConfigId,
+                                                             ClientAppModelConfigForm form,
+                                                             String targetTenantId) {
+        String path = "/api/v1/upstream-admin/model-configs/" + urlEncode(modelConfigId);
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.putWithUpstreamAdminAuth(path, form, null, new TypeReference<>() {});
+    }
+
+    public LlmModelConfigDTO rotateUpstreamSystemModelConfigKey(String modelConfigId,
+                                                                RotateModelConfigKeyForm form,
+                                                                String targetTenantId) {
+        String path = "/api/v1/upstream-admin/model-configs/" + urlEncode(modelConfigId) + "/key";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.putWithUpstreamAdminAuth(path, form, null, new TypeReference<>() {});
+    }
+
     public List<Map<String, Object>> listUpstreamWorkerPools(String targetTenantId) {
         String path = "/api/v1/upstream-admin/worker-pools";
         if (targetTenantId != null && !targetTenantId.isBlank()) {
@@ -254,6 +295,196 @@ public class BusinessAgentApi {
 
     public E2eModelConfigEnsureResultDTO ensureE2eModelConfig(String clientAppId, EnsureE2eModelConfigForm form) {
         return http.post("/api/v1/business-agent/client-apps/" + clientAppId + "/e2e-model-config/ensure", form, new TypeReference<>() {});
+    }
+
+    // ===== Agent Model Binding =====
+
+    public List<AgentModelBindingDTO> listAgentModelBindings(String clientAppId, String agentId) {
+        return http.get("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/model-bindings", new TypeReference<>() {});
+    }
+
+    public AgentModelBindingDTO bindAgentModel(String clientAppId, String agentId, BindAgentModelForm form) {
+        return http.post("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/model-bindings", form, new TypeReference<>() {});
+    }
+
+    public void unbindAgentModel(String clientAppId, String agentId, String modelConfigId) {
+        http.delete("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/model-bindings/" + urlEncode(modelConfigId));
+    }
+
+    public AgentModelBindingDTO setDefaultAgentModel(String clientAppId, String agentId, BindAgentModelForm form) {
+        return http.put("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/model-bindings/default", form, new TypeReference<>() {});
+    }
+
+    public List<AgentModelBindingDTO> listUpstreamSystemAgentModelBindings(String agentId, String targetTenantId) {
+        return http.getWithUpstreamAdminAuth(upstreamSystemAgentModelBindingPath(agentId, targetTenantId),
+                null,
+                new TypeReference<>() {});
+    }
+
+    public AgentModelBindingDTO bindUpstreamSystemAgentModel(String agentId,
+                                                             BindAgentModelForm form,
+                                                             String targetTenantId) {
+        return http.postWithUpstreamAdminAuth(upstreamSystemAgentModelBindingPath(agentId, targetTenantId),
+                form,
+                null,
+                new TypeReference<>() {});
+    }
+
+    public AgentModelBindingDTO setDefaultUpstreamSystemAgentModel(String agentId,
+                                                                   BindAgentModelForm form,
+                                                                   String targetTenantId) {
+        return http.putWithUpstreamAdminAuth(upstreamSystemAgentModelBindingPath(agentId, "default", targetTenantId),
+                form,
+                null,
+                new TypeReference<>() {});
+    }
+
+    public void unbindUpstreamSystemAgentModel(String agentId, String modelConfigId, String targetTenantId) {
+        http.deleteWithUpstreamAdminAuth(upstreamSystemAgentModelBindingPath(agentId, modelConfigId, targetTenantId), null);
+    }
+
+    // ===== Agent Workspace Binding =====
+
+    public List<AgentWorkspaceBindingDTO> listAgentWorkspaceBindings(String clientAppId, String agentId) {
+        return http.get("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/workspace-bindings", new TypeReference<>() {});
+    }
+
+    public AgentWorkspaceBindingDTO bindAgentWorkspace(String clientAppId,
+                                                       String agentId,
+                                                       BindAgentWorkspaceForm form) {
+        return http.post("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/workspace-bindings", form, new TypeReference<>() {});
+    }
+
+    public AgentWorkspaceBindingDTO setDefaultAgentWorkspace(String clientAppId,
+                                                             String agentId,
+                                                             BindAgentWorkspaceForm form) {
+        return http.put("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/workspace-bindings/default", form, new TypeReference<>() {});
+    }
+
+    public void unbindAgentWorkspace(String clientAppId, String agentId, String directoryId) {
+        http.delete("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/workspace-bindings/" + urlEncode(directoryId));
+    }
+
+    public List<AgentWorkspaceBindingDTO> listUpstreamSystemAgentWorkspaceBindings(String agentId,
+                                                                                   String targetTenantId) {
+        return http.getWithUpstreamAdminAuth(upstreamSystemAgentWorkspaceBindingPath(agentId, targetTenantId),
+                null,
+                new TypeReference<>() {});
+    }
+
+    public AgentWorkspaceBindingDTO bindUpstreamSystemAgentWorkspace(String agentId,
+                                                                     BindAgentWorkspaceForm form,
+                                                                     String targetTenantId) {
+        return http.postWithUpstreamAdminAuth(upstreamSystemAgentWorkspaceBindingPath(agentId, targetTenantId),
+                form,
+                null,
+                new TypeReference<>() {});
+    }
+
+    public AgentWorkspaceBindingDTO setDefaultUpstreamSystemAgentWorkspace(String agentId,
+                                                                           BindAgentWorkspaceForm form,
+                                                                           String targetTenantId) {
+        return http.putWithUpstreamAdminAuth(upstreamSystemAgentWorkspaceBindingPath(agentId, "default", targetTenantId),
+                form,
+                null,
+                new TypeReference<>() {});
+    }
+
+    public void unbindUpstreamSystemAgentWorkspace(String agentId, String directoryId, String targetTenantId) {
+        http.deleteWithUpstreamAdminAuth(upstreamSystemAgentWorkspaceBindingPath(agentId, directoryId, targetTenantId), null);
+    }
+
+    // ===== Agent Worker Binding =====
+
+    public List<AgentWorkerBindingDTO> listAgentWorkerBindings(String clientAppId, String agentId) {
+        return http.get("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/worker-bindings", new TypeReference<>() {});
+    }
+
+    public AgentWorkerBindingDTO bindAgentWorker(String clientAppId,
+                                                 String agentId,
+                                                 BindAgentWorkerForm form) {
+        return http.post("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/worker-bindings", form, new TypeReference<>() {});
+    }
+
+    public AgentWorkerBindingDTO setDefaultAgentWorker(String clientAppId,
+                                                       String agentId,
+                                                       BindAgentWorkerForm form) {
+        return http.put("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/worker-bindings/default", form, new TypeReference<>() {});
+    }
+
+    public void unbindAgentWorker(String clientAppId, String agentId, String workerPoolId) {
+        http.delete("/api/v1/client-apps/" + urlEncode(clientAppId)
+                + "/agents/" + urlEncode(agentId) + "/worker-bindings/" + urlEncode(workerPoolId));
+    }
+
+    public List<AgentWorkerBindingDTO> listUpstreamSystemAgentWorkerBindings(String agentId,
+                                                                             String targetTenantId) {
+        return http.getWithUpstreamAdminAuth(upstreamSystemAgentWorkerBindingPath(agentId, targetTenantId),
+                null,
+                new TypeReference<>() {});
+    }
+
+    public AgentWorkerBindingDTO bindUpstreamSystemAgentWorker(String agentId,
+                                                               BindAgentWorkerForm form,
+                                                               String targetTenantId) {
+        return http.postWithUpstreamAdminAuth(upstreamSystemAgentWorkerBindingPath(agentId, targetTenantId),
+                form,
+                null,
+                new TypeReference<>() {});
+    }
+
+    public AgentWorkerBindingDTO setDefaultUpstreamSystemAgentWorker(String agentId,
+                                                                     BindAgentWorkerForm form,
+                                                                     String targetTenantId) {
+        return http.putWithUpstreamAdminAuth(upstreamSystemAgentWorkerBindingPath(agentId, "default", targetTenantId),
+                form,
+                null,
+                new TypeReference<>() {});
+    }
+
+    public void unbindUpstreamSystemAgentWorker(String agentId, String workerPoolId, String targetTenantId) {
+        http.deleteWithUpstreamAdminAuth(upstreamSystemAgentWorkerBindingPath(agentId, workerPoolId, targetTenantId), null);
+    }
+
+    // ===== Upstream System Agent =====
+
+    public List<BusinessAgentBundleDTO> listUpstreamSystemAgents(String targetTenantId) {
+        return http.getWithUpstreamAdminAuth(upstreamSystemAgentPath(null, targetTenantId),
+                null,
+                new TypeReference<>() {});
+    }
+
+    public BusinessAgentBundleDTO createUpstreamSystemAgent(UpstreamAgentForm form, String targetTenantId) {
+        return http.postWithUpstreamAdminAuth(upstreamSystemAgentPath(null, targetTenantId),
+                form,
+                null,
+                new TypeReference<>() {});
+    }
+
+    public BusinessAgentBundleDTO getUpstreamSystemAgent(String agentId, String targetTenantId) {
+        return http.getWithUpstreamAdminAuth(upstreamSystemAgentPath(agentId, targetTenantId),
+                null,
+                new TypeReference<>() {});
+    }
+
+    public BusinessAgentBundleDTO updateUpstreamSystemAgent(String agentId,
+                                                            UpstreamAgentForm form,
+                                                            String targetTenantId) {
+        return http.putWithUpstreamAdminAuth(upstreamSystemAgentPath(agentId, targetTenantId),
+                form,
+                null,
+                new TypeReference<>() {});
     }
 
     // ===== Business Agent Bundle =====
@@ -425,6 +656,62 @@ public class BusinessAgentApi {
             path.append("&clientAppId=").append(urlEncode(clientAppId));
         }
         return path.toString();
+    }
+
+    private String upstreamSystemAgentModelBindingPath(String agentId, String targetTenantId) {
+        return upstreamSystemAgentModelBindingPath(agentId, null, targetTenantId);
+    }
+
+    private String upstreamSystemAgentModelBindingPath(String agentId, String suffix, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/agents/" + urlEncode(agentId) + "/model-bindings";
+        if (suffix != null && !suffix.isBlank()) {
+            path += "/" + urlEncode(suffix);
+        }
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return path;
+    }
+
+    private String upstreamSystemAgentWorkspaceBindingPath(String agentId, String targetTenantId) {
+        return upstreamSystemAgentWorkspaceBindingPath(agentId, null, targetTenantId);
+    }
+
+    private String upstreamSystemAgentWorkspaceBindingPath(String agentId, String suffix, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/agents/" + urlEncode(agentId) + "/workspace-bindings";
+        if (suffix != null && !suffix.isBlank()) {
+            path += "/" + urlEncode(suffix);
+        }
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return path;
+    }
+
+    private String upstreamSystemAgentWorkerBindingPath(String agentId, String targetTenantId) {
+        return upstreamSystemAgentWorkerBindingPath(agentId, null, targetTenantId);
+    }
+
+    private String upstreamSystemAgentWorkerBindingPath(String agentId, String suffix, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/agents/" + urlEncode(agentId) + "/worker-bindings";
+        if (suffix != null && !suffix.isBlank()) {
+            path += "/" + urlEncode(suffix);
+        }
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return path;
+    }
+
+    private String upstreamSystemAgentPath(String agentId, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/agents";
+        if (agentId != null && !agentId.isBlank()) {
+            path += "/" + urlEncode(agentId);
+        }
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return path;
     }
 
 }

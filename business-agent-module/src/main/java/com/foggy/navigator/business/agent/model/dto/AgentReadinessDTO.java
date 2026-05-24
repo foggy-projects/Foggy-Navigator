@@ -14,7 +14,26 @@ public class AgentReadinessDTO {
     private String agentCode;
     private String upstreamUserId;
     private String requestedModelConfigId;
+    private String defaultModelConfigId;
     private String effectiveModelConfigId;
+    private String modelConfigSource;
+    private String modelCategory;
+    private String agentId;
+    private String agentOwnerType;
+    private String agentOwnerId;
+    private String agentSource;
+    private String skillId;
+    private String workerPoolId;
+    private String workerPoolOwnerType;
+    private String workerPoolOwnerId;
+    private String workerPoolSource;
+    private String requestedDirectoryId;
+    private String defaultDirectoryId;
+    private String effectiveDirectoryId;
+    private String workspaceScope;
+    private String workspaceResolverType;
+    private Boolean workspaceReadOnly;
+    private String workspaceSource;
     private List<AgentReadinessCheckDTO> checks = new ArrayList<>();
     private SkillArtifactLinkDTO skillArtifact;
 

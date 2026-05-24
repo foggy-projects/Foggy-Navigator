@@ -174,10 +174,29 @@ public class AgentApi {
             String modelConfigId,
             String clientAppKey,
             String clientAppAccessToken) {
+        return verifyReadinessWithClientAppAccessToken(
+                agentId,
+                upstreamUserId,
+                modelConfigId,
+                null,
+                clientAppKey,
+                clientAppAccessToken);
+    }
+
+    public AgentReadiness verifyReadinessWithClientAppAccessToken(
+            String agentId,
+            String upstreamUserId,
+            String modelConfigId,
+            String directoryId,
+            String clientAppKey,
+            String clientAppAccessToken) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("upstreamUserId", upstreamUserId);
         if (modelConfigId != null && !modelConfigId.isBlank()) {
             body.put("modelConfigId", modelConfigId);
+        }
+        if (directoryId != null && !directoryId.isBlank()) {
+            body.put("directoryId", directoryId);
         }
         body.put("context", Map.of("skillId", agentId));
         return http.post("/api/v1/open/agents/" + agentId + "/preflight",

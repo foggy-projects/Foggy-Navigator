@@ -239,6 +239,28 @@ class E2eCliTest {
         assertTrue(profile.contains("NAVI_MODEL_CONFIG_ID=cfg-e2e"));
     }
 
+    @Test
+    void modelEnsureRequiresClientAppControlKey() throws Exception {
+        writeProfile("""
+                NAVI_BASE_URL=http://127.0.0.1:%d
+                NAVI_TENANT_ID=tenant-1
+                NAVI_CLIENT_APP_ID=capp-1
+                NAVI_ADMIN_TOKEN=platform-admin-token
+                NAVI_E2E_MOCK_LLM_URL=http://127.0.0.1:%d
+                """.formatted(port, port));
+
+        int code = run(new String[]{
+                "model", "ensure",
+                "--set-default"
+        });
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertNull(lastPath);
+        assertTrue(error.contains("client app control credential is required"));
+        assertTrue(!error.contains("platform-admin-token"));
+    }
+
     private int run(String[] args) {
         return new E2eCli(
                 new PrintStream(stdout, true, StandardCharsets.UTF_8),

@@ -53,6 +53,10 @@ public class UpstreamBootstrapRequestService {
     public static final String SCOPE_WORKER_POOL_MANAGE = "WORKER_POOL_MANAGE";
     public static final String SCOPE_MODEL_CONFIG_MANAGE = "MODEL_CONFIG_MANAGE";
     public static final String SCOPE_AGENT_BUNDLE_SYNC = "AGENT_BUNDLE_SYNC";
+    public static final String SCOPE_AGENT_MODEL_BINDING_MANAGE = "AGENT_MODEL_BINDING_MANAGE";
+    public static final String SCOPE_AGENT_WORKSPACE_BINDING_MANAGE = "AGENT_WORKSPACE_BINDING_MANAGE";
+    public static final String SCOPE_AGENT_WORKER_BINDING_MANAGE = "AGENT_WORKER_BINDING_MANAGE";
+    public static final String SCOPE_AGENT_MANAGE = "AGENT_MANAGE";
 
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
     private static final long DEFAULT_REQUEST_TTL_MINUTES = 24 * 60;
@@ -478,7 +482,13 @@ public class UpstreamBootstrapRequestService {
             case SCOPE_CONTROL_KEY_ISSUE -> SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE;
             case "DIRECTORY_MANAGE", "WORKDIR_MANAGE", "WORKING_DIR_MANAGE" -> SCOPE_WORKING_DIRECTORY_MANAGE;
             case "CONFIG_MODEL_MANAGE", "CONFIGMODEL_MANAGE" -> SCOPE_MODEL_CONFIG_MANAGE;
-            case "AGENT_MANAGE", "AGENT_SYNC" -> SCOPE_AGENT_BUNDLE_SYNC;
+            case "AGENT_SYNC" -> SCOPE_AGENT_BUNDLE_SYNC;
+            case "SYSTEM_AGENT_MANAGE", "AGENT_ADMIN" -> SCOPE_AGENT_MANAGE;
+            case "AGENT_MODEL_MANAGE", "MODEL_BINDING_MANAGE" -> SCOPE_AGENT_MODEL_BINDING_MANAGE;
+            case "AGENT_WORKSPACE_MANAGE", "WORKSPACE_BINDING_MANAGE", "AGENT_DIRECTORY_BINDING_MANAGE" ->
+                    SCOPE_AGENT_WORKSPACE_BINDING_MANAGE;
+            case "AGENT_WORKER_MANAGE", "WORKER_BINDING_MANAGE", "AGENT_WORKER_POOL_BINDING_MANAGE" ->
+                    SCOPE_AGENT_WORKER_BINDING_MANAGE;
             default -> normalized;
         };
     }
@@ -491,6 +501,10 @@ public class UpstreamBootstrapRequestService {
                 SCOPE_WORKING_DIRECTORY_MANAGE,
                 SCOPE_WORKER_POOL_MANAGE,
                 SCOPE_MODEL_CONFIG_MANAGE,
+                SCOPE_AGENT_MANAGE,
+                SCOPE_AGENT_MODEL_BINDING_MANAGE,
+                SCOPE_AGENT_WORKSPACE_BINDING_MANAGE,
+                SCOPE_AGENT_WORKER_BINDING_MANAGE,
                 SCOPE_AGENT_BUNDLE_SYNC);
     }
 

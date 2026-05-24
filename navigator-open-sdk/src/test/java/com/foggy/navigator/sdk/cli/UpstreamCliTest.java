@@ -982,7 +982,26 @@ class UpstreamCliTest {
                   "agentCode":"agent-1",
                   "upstreamUserId":"u-1",
                   "requestedModelConfigId":"model-1",
+                  "defaultModelConfigId":"model-default",
                   "effectiveModelConfigId":"model-1",
+                  "modelConfigSource":"REQUESTED_MODEL_GRANT",
+                  "modelCategory":"GENERAL",
+                  "agentId":"agent-1",
+                  "agentOwnerType":"CLIENT_APP",
+                  "agentOwnerId":"app-1",
+                  "agentSource":"AGENT:CLIENT_APP",
+                  "skillId":"agent-1",
+                  "workerPoolId":"pool-1",
+                  "workerPoolOwnerType":"UPSTREAM_SYSTEM",
+                  "workerPoolOwnerId":"usys-1",
+                  "workerPoolSource":"WORKER_POOL:UPSTREAM_SYSTEM",
+                  "requestedDirectoryId":"dir-override",
+                  "defaultDirectoryId":"dir-default",
+                  "effectiveDirectoryId":"dir-override",
+                  "workspaceScope":"USER_PRIVATE",
+                  "workspaceResolverType":"STATIC_ROOT",
+                  "workspaceReadOnly":false,
+                  "workspaceSource":"WORKING_DIRECTORY:USER_PRIVATE",
                   "checks":[
                     {"code":"AGENT_REGISTERED","status":"OK","message":"agent registered"},
                     {"code":"UPSTREAM_USER_GRANT","status":"OK","message":"grant enabled"}
@@ -998,7 +1017,8 @@ class UpstreamCliTest {
                 "--client-app-access-token-env", "TOKEN_ENV",
                 "--agent-code", "agent-1",
                 "--upstream-user-id", "u-1",
-                "--model-config-id", "model-1"}, env);
+                "--model-config-id", "model-1",
+                "--directory-id", "dir-override"}, env);
 
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(0, code);
@@ -1008,9 +1028,59 @@ class UpstreamCliTest {
         assertEquals("cat-runtime-secret", lastClientAppAccessTokenHeader);
         assertTrue(lastBody.contains("\"upstreamUserId\":\"u-1\""));
         assertTrue(lastBody.contains("\"modelConfigId\":\"model-1\""));
+        assertTrue(lastBody.contains("\"directoryId\":\"dir-override\""));
         assertTrue(output.contains("verify-agent-readiness OK"));
+        assertTrue(output.contains("defaultModelConfigId=model-default"));
+        assertTrue(output.contains("modelConfigSource=REQUESTED_MODEL_GRANT"));
+        assertTrue(output.contains("agent agentId=agent-1 ownerType=CLIENT_APP ownerId=app-1 source=AGENT:CLIENT_APP skillId=agent-1"));
+        assertTrue(output.contains("workerPool workerPoolId=pool-1 ownerType=UPSTREAM_SYSTEM ownerId=usys-1 source=WORKER_POOL:UPSTREAM_SYSTEM"));
+        assertTrue(output.contains("workspace requestedDirectoryId=dir-override defaultDirectoryId=dir-default effectiveDirectoryId=dir-override scope=USER_PRIVATE resolverType=STATIC_ROOT readOnly=false source=WORKING_DIRECTORY:USER_PRIVATE"));
         assertTrue(output.contains("check AGENT_REGISTERED=OK"));
         assertTrue(output.contains("skillArtifactTreeUrl=http://localhost:8112/api/v1/open/skills/agent-1/files/tree"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
+    void inspectRuntimeUsesPreflightAndPrintsResolvedResourceSources() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "overallStatus":"OK",
+                  "baseUrl":"http://localhost:8112",
+                  "clientAppId":"app-1",
+                  "agentCode":"agent-1",
+                  "upstreamUserId":"u-1",
+                  "effectiveModelConfigId":"model-default",
+                  "modelConfigSource":"DEFAULT_MODEL_GRANT",
+                  "agentId":"agent-1",
+                  "agentOwnerType":"CLIENT_APP",
+                  "agentOwnerId":"app-1",
+                  "agentSource":"AGENT:CLIENT_APP",
+                  "skillId":"agent-1",
+                  "workerPoolId":"pool-1",
+                  "workerPoolOwnerType":"PLATFORM",
+                  "workerPoolOwnerId":"platform",
+                  "workerPoolSource":"WORKER_POOL:PLATFORM",
+                  "checks":[
+                    {"code":"RUNTIME_AGENT_RESOURCE","status":"OK"},
+                    {"code":"MODEL_CONFIG_GRANT","status":"OK"}
+                  ]
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "inspect", "runtime",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent-code", "agent-1",
+                "--upstream-user-id", "u-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/preflight", lastPath);
+        assertTrue(output.contains("inspect runtime OK"));
+        assertTrue(output.contains("modelConfigSource=DEFAULT_MODEL_GRANT"));
+        assertTrue(output.contains("workerPool workerPoolId=pool-1 ownerType=PLATFORM ownerId=platform source=WORKER_POOL:PLATFORM"));
+        assertTrue(output.contains("check RUNTIME_AGENT_RESOURCE=OK"));
         assertFalse(output.contains("cat-runtime-secret"));
     }
 
@@ -1195,6 +1265,76 @@ class UpstreamCliTest {
         assertTrue(output.contains("agentId=agent-1"));
         assertTrue(output.contains("skillBundleStatus=ENABLED"));
         assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void agentBindWorkerUsesControlPlaneCredential() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":51,
+                  "tenantId":"tenant-1",
+                  "clientAppId":"app-1",
+                  "agentId":"agent-1",
+                  "workerPoolId":"pool-1",
+                  "workerPoolName":"LangGraph Pool",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "workerPoolOwnerType":"UPSTREAM_SYSTEM",
+                  "defaultWorkerPool":false,
+                  "status":"ENABLED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "agent", "bind-worker",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--agent-code", "agent-1",
+                "--worker-pool-id", "pool-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/agents/agent-1/worker-bindings", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"workerPoolId\":\"pool-1\""));
+        assertTrue(output.contains("agent bind-worker ok"));
+        assertTrue(output.contains("\"workerPoolId\""));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void agentSystemSetDefaultWorkerUsesUpstreamAdminCredential() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":52,
+                  "tenantId":"tenant-2",
+                  "agentId":"agent-1",
+                  "workerPoolId":"pool-system",
+                  "workerPoolName":"System Pool",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "workerPoolOwnerType":"UPSTREAM_SYSTEM",
+                  "defaultWorkerPool":true,
+                  "status":"ENABLED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "agent", "system-set-default-worker",
+                "--base-url", baseUrl(),
+                "--admin-api-key", "admin-key-secret",
+                "--target-tenant-id", "tenant-2",
+                "--agent-code", "agent-1",
+                "--worker-pool-id", "pool-system"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/agents/agent-1/worker-bindings/default?targetTenantId=tenant-2", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("admin-key-secret", lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"workerPoolId\":\"pool-system\""));
+        assertTrue(output.contains("agent system-set-default-worker ok"));
+        assertTrue(output.contains("\"defaultWorkerPool\""));
+        assertFalse(output.contains("admin-key-secret"));
     }
 
     @Test
@@ -1766,7 +1906,8 @@ class UpstreamCliTest {
         assertEquals(0, code);
         assertTrue(output.contains("worker list/create/get/update/delete/health/processes/kill"));
         assertTrue(output.contains("directory list/init/get/delete/env/files"));
-        assertTrue(output.contains("worker-pool list/create/add-member/status"));
+        assertTrue(output.contains("worker-pool list/create/register-worker/add-member/status"));
+        assertTrue(output.contains("model system-list/system-create/system-update/system-rotate-key"));
     }
 
     @Test
@@ -1782,6 +1923,9 @@ class UpstreamCliTest {
                 """, StandardCharsets.UTF_8);
         Files.writeString(tempDir.resolve(".navigator").resolve("worker-pool.json"), """
                 {"poolId":"pool-1","name":"Coding Pool","workerBackend":"CODEX"}
+                """, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".navigator").resolve("biz-worker.json"), """
+                {"workerId":"lgw-1","workerBackend":"CODEX","baseUrl":"http://127.0.0.1:3061","version":"test"}
                 """, StandardCharsets.UTF_8);
 
         responseOverride = """
@@ -1842,38 +1986,134 @@ class UpstreamCliTest {
         assertEquals("/api/v1/upstream-admin/worker-pools?targetTenantId=tenant-a", lastPath);
         assertEquals("POST", lastMethod);
 
+        responseOverride = """
+                {"code":0,"data":{"workerId":"lgw-1","ownerType":"UPSTREAM_SYSTEM","ownerId":"ups-1","workerBackend":"CODEX","baseUrl":"http://127.0.0.1:3061","status":"ENABLED"}}
+                """;
+        assertEquals(0, run(new String[]{"upstream", "worker-pool", "register-worker",
+                "--profile", ".navigator/upstream.env",
+                "--file", ".navigator/biz-worker.json",
+                "--write-profile"}, Map.of()));
+        assertEquals("/api/v1/upstream-admin/worker-identities", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"workerId\":\"lgw-1\""));
+        assertTrue(lastBody.contains("\"workerBackend\":\"CODEX\""));
+
         responseOverride = "{\"code\":0,\"data\":null}";
         assertEquals(0, run(new String[]{"upstream", "worker-pool", "add-member",
                 "--profile", ".navigator/upstream.env",
                 "--pool-id", "pool-1",
-                "--worker-id", "w-1",
                 "--target-tenant-id", "tenant-a"}, Map.of()));
         assertEquals("/api/v1/upstream-admin/worker-pools/pool-1/members?targetTenantId=tenant-a", lastPath);
         assertEquals("POST", lastMethod);
-        assertTrue(lastBody.contains("\"workerId\":\"w-1\""));
+        assertTrue(lastBody.contains("\"workerId\":\"lgw-1\""));
 
         String profile = Files.readString(tempDir.resolve(".navigator").resolve("upstream.env"), StandardCharsets.UTF_8);
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertTrue(profile.contains("NAVI_DIRECTORY_ID=dir-1"));
         assertTrue(profile.contains("NAVI_WORKER_POOL_ID=pool-1"));
+        assertTrue(profile.contains("NAVI_BIZ_WORKER_ID=lgw-1"));
         assertFalse(output.contains("naa-secret-admin-key"));
     }
 
     @Test
-    void modelCreateCanUseUpstreamAdminKeyFallback() {
+    void directoryClientInitUsesClientAppControlKeyAndStoresDirectoryId() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_CLIENT_APP_ID=app-1
+                NAVI_CONTROL_API_KEY=control-key-secret
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".navigator").resolve("client-directory.json"), """
+                {
+                  "workerId": "worker-1",
+                  "workspaceScope": "CLIENT_APP_SHARED",
+                  "path": "D:/workspace/app-shared",
+                  "projectName": "app-shared",
+                  "files": {
+                    "CLAUDE.md": "# App"
+                  }
+                }
+                """, StandardCharsets.UTF_8);
         responseOverride = """
                 {"code":0,"data":{
-                  "id":42,
+                  "directoryId":"dir-client-1",
                   "clientAppId":"app-1",
-                  "modelConfigId":"model-owned",
-                  "modelConfigName":"Upstream GPT",
-                  "workerBackend":"LANGGRAPH_BIZ",
-                  "status":"ENABLED",
-                  "isDefault":true,
-                  "grantScope":"CLIENT_APP_OWNED"
+                  "workerId":"worker-1",
+                  "workspaceScope":"CLIENT_APP_SHARED",
+                  "path":"D:/workspace/app-shared"
                 }}
                 """;
 
+        int code = run(new String[]{"upstream", "directory", "client-init",
+                "--profile", ".navigator/upstream.env",
+                "--file", ".navigator/client-directory.json",
+                "--write-profile"}, Map.of());
+
+        String profile = Files.readString(tempDir.resolve(".navigator").resolve("upstream.env"), StandardCharsets.UTF_8);
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/directories/init", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"workspaceScope\":\"CLIENT_APP_SHARED\""));
+        assertTrue(lastBody.contains("\"path\":\"D:/workspace/app-shared\""));
+        assertTrue(profile.contains("NAVI_DIRECTORY_ID=dir-client-1"));
+        assertTrue(output.contains("directory client-init ok"));
+        assertTrue(output.contains("stored=NAVI_DIRECTORY_ID"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void directoryClientListUsesClientAppControlCredentialAndExplicitFiltersOnly() {
+        responseOverride = """
+                {"code":0,"data":[{"directoryId":"dir-client-1","workspaceScope":"USER_PRIVATE"}]}
+                """;
+        Map<String, String> env = env(
+                "NAVI_CONTROL_API_KEY", "control-key-secret",
+                "NAVI_UPSTREAM_USER_ID", "profile-user");
+
+        int code = run(new String[]{"upstream", "directory", "client-list",
+                "--base-url", baseUrl(),
+                "--client-app-id", "app-1",
+                "--worker-id", "worker-1",
+                "--workspace-scope", "USER_PRIVATE",
+                "--upstream-user-id", "explicit-user"}, env);
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/directories?workerId=worker-1"
+                + "&workspaceScope=USER_PRIVATE&upstreamUserId=explicit-user", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(output.contains("directoryCount=1"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void directoryClientListDoesNotImplicitlyFilterByProfileUpstreamUser() {
+        responseOverride = """
+                {"code":0,"data":[{"directoryId":"dir-client-1","workspaceScope":"CLIENT_APP_SHARED"}]}
+                """;
+        Map<String, String> env = env(
+                "NAVI_CONTROL_API_KEY", "control-key-secret",
+                "NAVI_UPSTREAM_USER_ID", "profile-user");
+
+        int code = run(new String[]{"upstream", "directory", "client-list",
+                "--base-url", baseUrl(),
+                "--client-app-id", "app-1",
+                "--worker-id", "worker-1",
+                "--workspace-scope", "CLIENT_APP_SHARED"}, env);
+
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/directories?workerId=worker-1"
+                + "&workspaceScope=CLIENT_APP_SHARED", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+    }
+
+    @Test
+    void modelCreateRequiresClientAppControlKey() {
         int code = run(new String[]{"upstream", "model", "create",
                 "--base-url", baseUrl(),
                 "--tenant-id", "tenant-1",
@@ -1884,14 +2124,55 @@ class UpstreamCliTest {
                 "--model-name", "gpt-test",
                 "--api-key-env", "UPSTREAM_LLM_KEY"}, env("UPSTREAM_LLM_KEY", "llm-secret"));
 
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertNull(lastPath);
+        assertTrue(error.contains("client app control credential is required"));
+        assertFalse(error.contains("naa-secret-admin-key"));
+        assertFalse(error.contains("llm-secret"));
+    }
+
+    @Test
+    void modelSystemCreateUsesUpstreamAdminKeyAndStoresModelId() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":"model-shared",
+                  "tenantId":"tenant-1",
+                  "name":"Upstream GPT",
+                  "modelName":"gpt-test",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "ownerType":"UPSTREAM_SYSTEM",
+                  "ownerId":"ups-1",
+                  "enabled":true
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "system-create",
+                "--profile", ".navigator/upstream.env",
+                "--target-tenant-id", "tenant-1",
+                "--name", "Upstream GPT",
+                "--model-base-url", "https://llm.example/v1",
+                "--model-name", "gpt-test",
+                "--api-key-env", "UPSTREAM_LLM_KEY",
+                "--write-profile"}, env("UPSTREAM_LLM_KEY", "llm-secret"));
+
         String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tempDir.resolve(".navigator").resolve("upstream.env"), StandardCharsets.UTF_8);
         assertEquals(0, code);
-        assertEquals("/api/v1/client-apps/app-1/model-configs", lastPath);
+        assertEquals("/api/v1/upstream-admin/model-configs?targetTenantId=tenant-1", lastPath);
         assertEquals("POST", lastMethod);
-        assertNull(lastClientAppControlKeyHeader);
         assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
         assertTrue(lastBody.contains("\"apiKey\":\"llm-secret\""));
-        assertTrue(output.contains("model create ok"));
+        assertTrue(profile.contains("NAVI_MODEL_CONFIG_ID=model-shared"));
+        assertTrue(output.contains("model system-create ok"));
+        assertTrue(output.contains("modelConfig.id=model-shared"));
+        assertTrue(output.contains("modelConfig.ownerType=UPSTREAM_SYSTEM"));
         assertFalse(output.contains("naa-secret-admin-key"));
         assertFalse(output.contains("llm-secret"));
     }

@@ -1,5 +1,8 @@
 package com.foggy.navigator.common.entity;
 
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -13,7 +16,9 @@ import java.time.LocalDateTime;
 @Table(name = "working_directories", indexes = {
     @Index(name = "idx_wd_worker_id", columnList = "workerId"),
     @Index(name = "idx_wd_user_id", columnList = "userId"),
-    @Index(name = "idx_wd_parent_project", columnList = "parentProjectId")
+    @Index(name = "idx_wd_parent_project", columnList = "parentProjectId"),
+    @Index(name = "idx_wd_owner", columnList = "ownerType,ownerId"),
+    @Index(name = "idx_wd_upstream_scope", columnList = "tenantId,clientAppId,upstreamUserId,workspaceScope")
 })
 public class WorkingDirectoryEntity {
 
@@ -32,6 +37,51 @@ public class WorkingDirectoryEntity {
 
     @Column(length = 64)
     private String tenantId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 32)
+    private ResourceOwnerType ownerType;
+
+    @Column(length = 256)
+    private String ownerId;
+
+    @Column(length = 64)
+    private String clientAppId;
+
+    @Column(length = 128)
+    private String upstreamUserId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 32)
+    private WorkspaceScope workspaceScope;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 32)
+    private WorkingDirectoryResolverType resolverType;
+
+    @Column(length = 512)
+    private String rootRef;
+
+    @Column(length = 128)
+    private String resolverKey;
+
+    @Column
+    private Boolean readOnly = false;
+
+    @Column(columnDefinition = "TEXT")
+    private String allowedPathPrefixesJson;
+
+    @Column(columnDefinition = "TEXT")
+    private String quotaJson;
+
+    @Column(columnDefinition = "TEXT")
+    private String retentionPolicyJson;
+
+    @Column(columnDefinition = "TEXT")
+    private String concurrencyPolicyJson;
+
+    @Column
+    private Boolean enabled = true;
 
     @Column(length = 128, nullable = false)
     private String projectName;
@@ -110,6 +160,12 @@ public class WorkingDirectoryEntity {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
+        if (readOnly == null) {
+            readOnly = false;
+        }
+        if (enabled == null) {
+            enabled = true;
+        }
     }
 
     @PreUpdate

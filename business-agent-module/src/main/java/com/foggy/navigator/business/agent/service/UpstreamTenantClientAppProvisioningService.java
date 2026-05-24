@@ -16,6 +16,7 @@ import com.foggy.navigator.business.agent.model.form.SyncSkillBundleForm;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -47,6 +48,7 @@ public class UpstreamTenantClientAppProvisioningService {
     private final ClientAppModelConfigGrantService modelConfigGrantService;
     private final BusinessCodingAgentRepository agentRepository;
     private final SkillRegistryService skillRegistryService;
+    private final AgentDefaultBindingService agentDefaultBindingService;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -297,6 +299,9 @@ public class UpstreamTenantClientAppProvisioningService {
         entity.setAgentId(rootAgentId);
         entity.setUserId(defaultText(actorUserId, "upstream-tenant-provisioning"));
         entity.setTenantId(clientApp.getTenantId());
+        entity.setOwnerType(ResourceOwnerType.CLIENT_APP);
+        entity.setOwnerId(clientApp.getClientAppId());
+        entity.setClientAppId(clientApp.getClientAppId());
         entity.setName(defaultText(form.getTenantName(), clientApp.getName() + " root agent"));
         entity.setDescription("Upstream tenant root agent for ClientApp " + clientApp.getClientAppId());
         entity.setAgentType(BusinessAgentBundleService.AGENT_TYPE_LANGGRAPH);
@@ -307,7 +312,9 @@ public class UpstreamTenantClientAppProvisioningService {
         entity.setDefaultModelConfigId(modelConfigId);
         entity.setSkills(buildSkillSummary(skillId, entity.getName(), entity.getDescription()));
         entity.setAgentProfile(buildAgentProfile(clientApp.getClientAppId(), skillId, form));
-        agentRepository.save(entity);
+        entity.setEnabled(true);
+        CodingAgentEntity saved = agentRepository.save(entity);
+        agentDefaultBindingService.ensureDefaults(saved);
         if (!StringUtils.hasText(modelConfigId)) {
             blockers.add("root agent was ensured without defaultModelConfigId; readiness will fail until a model grant is configured");
         }

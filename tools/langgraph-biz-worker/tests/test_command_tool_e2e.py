@@ -171,7 +171,7 @@ async def test_scripted_mock_llm_runs_command_tool_and_returns_natural_final(
                     "execution_policy": {
                         "workdir": str(workdir),
                         "allowed_dirs": [str(workdir)],
-                        "allowed_tools": ["command"],
+                        "allowed_tools": ["read_file"],
                     },
                 },
             },

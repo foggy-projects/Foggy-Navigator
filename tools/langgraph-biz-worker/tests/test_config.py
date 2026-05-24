@@ -44,10 +44,10 @@ class TestSettingsDefaults:
         assert s.llm_submission_log_max_files == 100
         assert s.runtime_message_event_log_enabled is True
 
-    def test_command_disabled_by_default(self):
+    def test_command_enabled_by_default(self):
         from langgraph_biz_worker.config import Settings
         s = Settings(_env_file=None)
-        assert s.enable_command is False
+        assert s.enable_command is True
 
 
 class TestSettingsEnvOverride:
@@ -94,11 +94,11 @@ class TestSettingsEnvOverride:
             assert s.llm_submission_log_max_files == 7
             assert s.runtime_message_event_log_enabled is False
 
-    def test_command_enabled_from_env(self):
+    def test_command_disabled_from_env(self):
         from langgraph_biz_worker.config import Settings
-        with patch.dict(os.environ, {"BIZ_WORKER_ENABLE_COMMAND": "true"}):
+        with patch.dict(os.environ, {"BIZ_WORKER_ENABLE_COMMAND": "false"}):
             s = Settings(_env_file=None)
-            assert s.enable_command is True
+            assert s.enable_command is False
 
     def test_biz_worker_env_file_selects_env_file(self, tmp_path):
         env_file = tmp_path / "real.env"

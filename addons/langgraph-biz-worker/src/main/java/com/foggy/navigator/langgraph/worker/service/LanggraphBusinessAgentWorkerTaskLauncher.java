@@ -57,7 +57,7 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
 
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
         String skillName = resolveSkillName(request);
-        form.setAgentId(request.getSkillId());
+        form.setAgentId(request.getAgentId());
         form.setWorkerId(member.getWorkerId());
         form.setSessionId(request.getSessionId());
         String contextId = resolveContextId(worker, request.getContextId());
@@ -107,11 +107,19 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         putText(context, "context_id", contextId);
         putText(context, "session_id", request.getSessionId());
         context.put("clientAppId", request.getClientAppId());
+        putText(context, "businessAgentId", request.getAgentId());
         putText(context, "businessSkillId", request.getSkillId());
         putText(context, "businessSkillName", skillName);
         context.put("upstreamUserId", request.getUpstreamUserId());
         context.put("accountId", request.getUpstreamUserId());
         context.put("account_id", request.getUpstreamUserId());
+        putText(context, "directoryId", request.getDirectoryId());
+        putText(context, "workingDirectoryId", request.getDirectoryId());
+        putText(context, "workspaceScope", request.getWorkspaceScope());
+        putText(context, "workspaceResolverType", request.getWorkspaceResolverType());
+        if (request.getWorkspaceReadOnly() != null) {
+            context.put("workspaceReadOnly", request.getWorkspaceReadOnly());
+        }
         context.put("workerPoolId", request.getWorkerPoolId());
         context.put("workerBackend", request.getWorkerBackend());
         context.put("auto_inject_app_public_skills", true);
@@ -157,10 +165,25 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
 
     private Map<String, Object> buildExecutionPolicy(BusinessAgentWorkerTaskLaunchRequest request) {
         Map<String, Object> policy = new LinkedHashMap<>();
+        putText(policy, "directory_id", request.getDirectoryId());
+        putText(policy, "workspace_scope", request.getWorkspaceScope());
+        putText(policy, "workspace_resolver_type", request.getWorkspaceResolverType());
+        if (request.getWorkspaceReadOnly() != null) {
+            policy.put("read_only", request.getWorkspaceReadOnly());
+        }
+        putObject(policy, "quota_policy", request.getWorkspaceQuotaPolicy());
+        putObject(policy, "retention_policy", request.getWorkspaceRetentionPolicy());
+        putObject(policy, "concurrency_policy", request.getWorkspaceConcurrencyPolicy());
         putText(policy, "workdir", request.getWorkdir());
         putStringList(policy, "allowed_dirs", request.getAllowedDirs());
         putStringList(policy, "allowed_tools", request.getAllowedTools());
         return policy;
+    }
+
+    private void putObject(Map<String, Object> target, String key, Object value) {
+        if (value != null) {
+            target.put(key, value);
+        }
     }
 
     private void putStringList(Map<String, Object> target, String key, List<String> values) {

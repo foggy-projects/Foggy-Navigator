@@ -13,6 +13,8 @@ import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTask
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -67,8 +69,7 @@ class BusinessAgentTaskServiceTest {
         form = new CreateBusinessAgentTaskForm();
         form.setClientAppId("app_01");
         form.setSessionId("session_01");
-        form.setWorkerPoolId("pool_01");
-        form.setSkillId("skill_01");
+        form.setAgentId("agent_01");
         form.setUpstreamUserId("user_01");
         lenient().when(tokenRepository.save(any(BusinessTaskScopedTokenEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
@@ -77,15 +78,34 @@ class BusinessAgentTaskServiceTest {
                     dto.setContextId("bctx_20260520_ab_ctx_01");
                     return dto;
                 });
-        lenient().when(resourceResolver.resolveOptionalModelConfigId(
-                anyString(), anyString(), eq(LlmModelCategory.VISION)))
-                .thenReturn(null);
+        lenient().when(resourceResolver.resolveOptionalModelForAgent(
+                anyString(), anyString(), any(), eq(LlmModelCategory.VISION)))
+                .thenReturn(Optional.empty());
+        lenient().when(resourceResolver.resolveOptionalWorkspaceForAgent(
+                anyString(), anyString(), anyString(), any(), any()))
+                .thenReturn(Optional.empty());
+        lenient().when(resourceResolver.resolveRequiredAgent(
+                        "tenant_01", "app_01", "user_01", "agent_01"))
+                .thenReturn(new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent_01",
+                        com.foggy.navigator.common.enums.ResourceOwnerType.CLIENT_APP,
+                        "app_01",
+                        "app_01",
+                        "skill_01",
+                        "pool_01",
+                        com.foggy.navigator.common.enums.ResourceOwnerType.PLATFORM,
+                        "tenant_01",
+                        "WORKER_POOL:PLATFORM",
+                        null,
+                        null,
+                        "AGENT:CLIENT_APP"
+                ));
     }
 
     @Test
     void createTask_success() {
-        when(resourceResolver.resolveRequiredModelConfigId(
-                "tenant_01", "app_01", null, LlmModelCategory.GENERAL)).thenReturn("model_01");
+        when(resourceResolver.resolveRequiredModelConfigIdForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), eq(LlmModelCategory.GENERAL))).thenReturn("model_01");
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
         when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> {
@@ -102,6 +122,7 @@ class BusinessAgentTaskServiceTest {
         assertEquals("app_01", result.getClientAppId());
         assertEquals("user_01", result.getUpstreamUserId());
         assertEquals("actor_01", result.getNavigatorEffectiveUserId());
+        assertEquals("agent_01", result.getAgentId());
         assertEquals("skill_01", result.getSkillId());
         assertEquals("pool_01", result.getWorkerPoolId());
         assertEquals("model_01", result.getModelConfigId());
@@ -126,8 +147,7 @@ class BusinessAgentTaskServiceTest {
 
     @Test
     void createTask_withWorkerTaskLauncher_bindsWorkerTaskAndRuntimeTokenAlias() {
-        form.setWorkdir("D:/workspace/app");
-        form.setAllowedDirs(List.of("D:/workspace"));
+        form.setDirectoryId("dir_01");
         form.setAllowedTools(List.of("read_file", "invoke_business_function"));
 
         BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
@@ -147,8 +167,22 @@ class BusinessAgentTaskServiceTest {
         pool.setWorkerBackend("LANGGRAPH_BIZ");
 
         when(bizWorkerPoolService.requireAvailablePool("tenant_01", "pool_01")).thenReturn(pool);
-        when(resourceResolver.resolveRequiredModelConfigId(
-                "tenant_01", "app_01", null, LlmModelCategory.GENERAL)).thenReturn("model_01");
+        when(resourceResolver.resolveRequiredModelConfigIdForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), eq(LlmModelCategory.GENERAL))).thenReturn("model_01");
+        when(resourceResolver.resolveOptionalWorkspaceForAgent(
+                eq("tenant_01"), eq("app_01"), eq("user_01"), any(), eq("dir_01")))
+                .thenReturn(Optional.of(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_01",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.DELEGATED,
+                        "D:/workspace/app",
+                        List.of("D:/workspace"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"
+                )));
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
         when(skillRegistryService.buildMaterializedPublicSkillMarkdown("tenant_01", "skill_01", "app_01"))
@@ -180,8 +214,13 @@ class BusinessAgentTaskServiceTest {
         verify(workerTaskLauncher).launch(requestCaptor.capture());
         assertEquals(result.getTaskScopedToken(), requestCaptor.getValue().getTaskScopedToken());
         assertNull(requestCaptor.getValue().getContextId());
+        assertEquals("agent_01", requestCaptor.getValue().getAgentId());
         assertEquals("materialized skill body", requestCaptor.getValue().getMarkdownBody());
         assertEquals("skill_01", requestCaptor.getValue().getSkillName());
+        assertEquals("dir_01", requestCaptor.getValue().getDirectoryId());
+        assertEquals("USER_PRIVATE", requestCaptor.getValue().getWorkspaceScope());
+        assertEquals("DELEGATED", requestCaptor.getValue().getWorkspaceResolverType());
+        assertEquals(false, requestCaptor.getValue().getWorkspaceReadOnly());
         assertEquals("D:/workspace/app", requestCaptor.getValue().getWorkdir());
         assertEquals(List.of("D:/workspace"), requestCaptor.getValue().getAllowedDirs());
         assertEquals(List.of("read_file", "invoke_business_function"), requestCaptor.getValue().getAllowedTools());
@@ -194,6 +233,19 @@ class BusinessAgentTaskServiceTest {
 
         verify(tokenRuntimeStore).registerToken(eq("tenant_01"), eq("session_01"), eq(result.getTaskId()), eq(result.getTaskScopedToken()), any());
         verify(tokenRuntimeStore).registerToken(eq("tenant_01"), eq("session_01"), eq("lgt_123"), eq(result.getTaskScopedToken()), any());
+    }
+
+    @Test
+    void createTask_rejects_legacy_runtime_workspace_selectors() {
+        form.setWorkdir("D:/workspace/app");
+        doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> taskService.createTask("tenant_01", "actor_01", form));
+
+        assertTrue(error.getMessage().contains("workdir/allowedDirs"));
+        verify(resourceResolver, never()).resolveRequiredModelConfigIdForAgent(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -232,6 +284,7 @@ class BusinessAgentTaskServiceTest {
         existingTask.setTenantId("tenant_01");
         existingTask.setClientAppId("app_01");
         existingTask.setSessionId("session_01");
+        existingTask.setAgentId("agent_01");
         existingTask.setModelConfigId("model_01");
 
         when(taskRepository.findByTaskId("bt_old123")).thenReturn(Optional.of(existingTask));
@@ -243,7 +296,7 @@ class BusinessAgentTaskServiceTest {
 
         assertNotNull(result);
         assertEquals("model_01", result.getModelConfigId());
-        verify(resourceResolver, never()).resolveRequiredModelConfigId(any(), any(), any(), any());
+        verify(resourceResolver, never()).resolveRequiredModelConfigIdForAgent(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -256,6 +309,7 @@ class BusinessAgentTaskServiceTest {
         existingTask.setTenantId("tenant_01");
         existingTask.setClientAppId("app_01");
         existingTask.setSessionId("session_01");
+        existingTask.setAgentId("agent_01");
         existingTask.setModelConfigId("model_01"); // different model
 
         when(taskRepository.findByTaskId("bt_old123")).thenReturn(Optional.of(existingTask));
@@ -319,18 +373,18 @@ class BusinessAgentTaskServiceTest {
     }
 
     @Test
-    void createTask_rejects_blank_skillId() {
-        form.setSkillId(null);
+    void createTask_rejects_blank_agentId() {
+        form.setAgentId(null);
         assertThrows(IllegalArgumentException.class, () -> taskService.createTask("tenant_01", "actor_01", form));
     }
 
     @Test
-    void createTask_rejectsConflictingSkillAliasDuringCompatibilityPhase() {
+    void createTask_rejectsConflictingAgentBoundSkillAlias() {
         form.setSkillName("other_skill");
         IllegalArgumentException error = assertThrows(
                 IllegalArgumentException.class,
                 () -> taskService.createTask("tenant_01", "actor_01", form));
-        assertTrue(error.getMessage().contains("skillName must match skillId"));
+        assertTrue(error.getMessage().contains("agent-bound skillId"));
     }
 
     @Test

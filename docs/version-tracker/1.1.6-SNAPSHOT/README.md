@@ -35,7 +35,7 @@
 6. `12` 是 2026-05-22 收口后的 Agent / Skill / Frame 边界准绳：Skill 工具化，Agent Frame 化。
 7. `13` 是子 Agent 默认系统提示词与 Skill discovery 授权口径：子 Agent 携带 shared platform contract，不继承 Root-specific context。
 8. `14` 是 Account Workspace Resolver 与 delegated workspace 口径：account/upstream user 身份不再等同固定物理目录。
-9. `15` 是 BizWorker 命令能力设计口径：`shell_command` 保持 workspace 受限文件观察解释器；真实外部工具执行拆为 Linux-only `command`，默认关闭并要求显式授权。
+9. `15` 是 BizWorker 命令能力设计口径：`shell_command` 保持 workspace 受限文件观察解释器；真实外部工具执行拆为 Linux-only `command`，默认开启，可通过 worker 配置关闭。
 10. `16` 是 Navigator Upstream CLI 与配套 skill 的 1.1.6 runtime contract 对齐口径，并记录模型 token 预算 preset 字段落地方式。
 11. `17` 是上游主体、credential、资源 owner 与 runtime 可见性口径：`ADMIN_KEY` / `CONTROL_KEY` / upstream user token 都是 credential，不是资源 owner；Worker / LLMConfigModel / WorkingDirectory / Agent 通过 owner + grant + resolver 统一治理。
 12. `18` 是 `17` 的实施计划：在不考虑旧数据迁移和旧接口兼容的前提下，按 LLMConfigModel、resolver、WorkingDirectory、Agent、Worker、SDK/CLI 的顺序推进。
@@ -51,7 +51,7 @@
 
 若旧文档中仍把 upstream user 记忆目录固定描述为 `<data_root>/accounts/<accountId>`，以 `14` 的 managed account mode + delegated workspace resolver 为当前设计口径。
 
-若后续文档讨论 `shell_command`，以 `15` 的 restricted shell 口径为准：命令格式向 Linux 对齐，但必须通过 allowlist、resolver/path guard 和输出预算治理，不直接执行任意系统 shell。若讨论 `git`、`curl`、测试或构建命令，以 `15` 的 Linux-only `command` 补充决策为准：只在 Linux worker 暴露，Windows 本机调试走 WSL + 3065 端口，且必须经 worker 开关、OS gate、任务 `allowed_tools` 和 `workdir` 校验。
+若后续文档讨论 `shell_command`，以 `15` 的 restricted shell 口径为准：命令格式向 Linux 对齐，但必须通过 allowlist、resolver/path guard 和输出预算治理，不直接执行任意系统 shell。若讨论 `git`、`curl`、测试或构建命令，以 `15` 的 Linux-only `command` 补充决策为准：只在 Linux worker 暴露，Windows 本机调试走 WSL + 3065 端口，且必须经 worker 开关、OS gate、非只读 `workdir` / `allowed_dirs` 校验；`allowed_tools` 不再单独拦截 `command`。
 
 若旧 CLI / skill 文档仍暗示上游自行生成 `contextId`、把 `clientContext` 当成 LLM prompt 配置、或把模型上下文窗口塞入用户消息，以 `16` 为当前口径：新会话由 BizWorker 生成 `contextId`，上游只复用返回值；`clientContext` 只保存会话元数据；模型 token 预算通过 `runtimeBudgetPresetKey` / `runtimeBudgetOverrideJson` 后端一等字段配置。
 

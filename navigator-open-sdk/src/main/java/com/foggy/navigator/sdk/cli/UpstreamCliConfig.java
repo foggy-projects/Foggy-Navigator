@@ -205,6 +205,7 @@ final class UpstreamCliConfig {
         putOption(values, args, "upstream-ref", "NAVI_UPSTREAM_REF");
         putOption(values, args, "model-profile-code", "NAVI_MODEL_PROFILE_CODE");
         putOption(values, args, "skill-id", "NAVI_SKILL_ID");
+        putOption(values, args, "biz-worker-id", "NAVI_BIZ_WORKER_ID");
         putOption(values, args, "worker-pool-id", "NAVI_WORKER_POOL_ID");
         putOption(values, args, "user-api-key", "NAVI_USER_API_KEY");
         putOption(values, args, "admin-token", "NAVI_ADMIN_TOKEN");
@@ -352,7 +353,7 @@ final class UpstreamCliConfig {
                 "NAVI_CONTROL_API_KEY", "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_REQUEST_CODE", "NAVI_ADMIN_KEY_CLAIM_TOKEN",
                 "NAVI_UPSTREAM_SYSTEM_ID", "NAVI_REQUESTED_TENANT_ID", "NAVI_TARGET_TENANT_ID",
                 "NAVI_SOURCE_TENANT_ID", "NAVI_UPSTREAM_REF", "NAVI_UPSTREAM_MULTI_TENANT",
-                "NAVI_MODEL_PROFILE_CODE", "NAVI_SKILL_ID", "NAVI_WORKER_POOL_ID",
+                "NAVI_MODEL_PROFILE_CODE", "NAVI_SKILL_ID", "NAVI_BIZ_WORKER_ID", "NAVI_WORKER_POOL_ID",
                 "NAVI_LLM_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "NAVIGATOR_BASE_URL", "NAVIGATOR_TENANT_ID",
                 "CLIENT_APP_ID", "CLIENT_APP_KEY", "CLIENT_APP_SECRET",
                 "CLIENT_APP_RUNTIME_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY", "NAVIGATOR_OPERATOR_API_KEY",

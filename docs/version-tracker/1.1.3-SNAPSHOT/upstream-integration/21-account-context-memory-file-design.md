@@ -80,9 +80,11 @@ skills/<skill-name>/assets/**
 
 首版不得把这些工具扩展为可写 `ACCOUNT_POLICY.md`。后续如果开放 `AGENT.md` 或 `MEMORY.md` 写入，需要独立工具或 OpenAPI 明确权限、审计和乐观并发。
 
-### Claude Worker Directory Files API
+### Upstream Admin Directory Files API
 
-`PUT /api/v1/open/directories/{directoryId}/files` 面向 Claude/Coding Agent 工作目录，不是 Business Agent 的 accountId context file API。上游 BFF 可以在管理员配置链路中使用它维护工作目录 `CLAUDE.md`，但不应作为普通用户对话链路能力直接暴露给浏览器或 LLM。
+旧的 `PUT /api/v1/open/directories/{directoryId}/files` 已移除。Claude/Coding Agent 工作目录文件应通过 upstream system admin key 调用 `/api/v1/upstream-admin/directories/{directoryId}/files` 维护，或后续使用 ClientApp owner-aware workspace API。
+
+该能力不是 Business Agent 的 accountId context file API。上游 BFF 可以在管理员配置链路中使用它维护工作目录 `CLAUDE.md`，但不应作为普通用户对话链路能力直接暴露给浏览器或 LLM。
 
 ## 注入策略
 

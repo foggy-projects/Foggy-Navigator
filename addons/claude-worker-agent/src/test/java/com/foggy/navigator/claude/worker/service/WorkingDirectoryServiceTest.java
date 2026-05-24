@@ -5,6 +5,9 @@ import com.foggy.navigator.claude.worker.model.dto.MilestoneDeleteResultDTO;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.DirectoryMilestoneForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
@@ -477,6 +480,13 @@ class WorkingDirectoryServiceTest {
         entity.setProjectName("test-" + directoryId);
         entity.setPath("/home/user/" + directoryId);
         entity.setDirectoryType(directoryType);
+        entity.setOwnerType(ResourceOwnerType.UPSTREAM_USER);
+        entity.setOwnerId(USER_ID);
+        entity.setUpstreamUserId(USER_ID);
+        entity.setWorkspaceScope(WorkspaceScope.USER_PRIVATE);
+        entity.setResolverType(WorkingDirectoryResolverType.DELEGATED);
+        entity.setEnabled(true);
+        entity.setReadOnly(false);
         return entity;
     }
 

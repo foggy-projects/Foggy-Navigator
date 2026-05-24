@@ -14,8 +14,10 @@ public class BusinessAgentTaskDTO {
     private String clientAppId;
     private String upstreamUserId;
     private String navigatorEffectiveUserId;
+    private String agentId;
     private String skillId;
     private String workerPoolId;
+    private String directoryId;
     private String workerTaskId;
     private String workerSessionId;
     private String workerId;
@@ -37,8 +39,10 @@ public class BusinessAgentTaskDTO {
         dto.setClientAppId(entity.getClientAppId());
         dto.setUpstreamUserId(entity.getUpstreamUserId());
         dto.setNavigatorEffectiveUserId(entity.getNavigatorEffectiveUserId());
+        dto.setAgentId(entity.getAgentId());
         dto.setSkillId(entity.getSkillId());
         dto.setWorkerPoolId(entity.getWorkerPoolId());
+        dto.setDirectoryId(entity.getDirectoryId());
         dto.setWorkerTaskId(entity.getWorkerTaskId());
         dto.setWorkerSessionId(entity.getWorkerSessionId());
         dto.setWorkerId(entity.getWorkerId());

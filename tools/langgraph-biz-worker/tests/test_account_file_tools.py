@@ -178,6 +178,40 @@ class TestWriteFile:
         assert (workspace / "skills" / "my-skill" / "SKILL.md").is_file()
         assert tools.audit_records[0]["account_id"] == "delegated"
 
+    def test_read_only_execution_policy_rejects_write(self, tmp_path: Path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        policy = ExecutionPolicy.from_context({
+            "execution_policy": {
+                "workdir": str(workspace),
+                "allowed_dirs": [str(workspace)],
+                "read_only": True,
+            },
+        })
+        tools = AccountFileTools(tmp_path / "data", None, task_id="task-001", execution_policy=policy)
+
+        with pytest.raises(FileToolError) as exc_info:
+            tools.write_file("skills/my-skill/SKILL.md", content="---\nname: my-skill\n---\n")
+
+        assert exc_info.value.code == "workspace_read_only"
+
+    def test_quota_policy_limits_write_size(self, tmp_path: Path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        policy = ExecutionPolicy.from_context({
+            "execution_policy": {
+                "workdir": str(workspace),
+                "allowed_dirs": [str(workspace)],
+                "quota_policy": {"maxBytes": 8},
+            },
+        })
+        tools = AccountFileTools(tmp_path / "data", None, task_id="task-001", execution_policy=policy)
+
+        with pytest.raises(FileToolError) as exc_info:
+            tools.write_file("skills/my-skill/SKILL.md", content="123456789")
+
+        assert exc_info.value.code == "file_too_large"
+
 
 # ---------------------------------------------------------------------------
 # expected_sha256 (optimistic concurrency)
