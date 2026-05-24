@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -468,6 +469,86 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("tms.navigator.agent", runtimeContext.get("skill_name"));
         verify(credentialResolver, never()).resolveAccessTokenForSkill(
                 nullable(String.class), nullable(String.class), eq("root-agent"));
+    }
+
+    @Test
+    void askAgent_sanitizesOwnerAwareRuntimeContextFromUntrustedMetadata() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("验证 owner-aware runtime");
+        form.setMetadata(Map.of(
+                "skill_name", "stale-direct-skill",
+                "skillName", "staleDirectSkill",
+                "skill_markdown", "# stale markdown",
+                "runtimeContext", Map.of("task_scoped_token", "caller-token", "skill_name", "caller-skill"),
+                "context", Map.of(
+                        "traceId", "trace-1",
+                        "clientAppId", "evil-app",
+                        "upstreamUserId", "evil-user",
+                        "accountId", "evil-account",
+                        "account_id", "evil-account",
+                        "businessSkillId", "evil-skill",
+                        "businessSkillName", "evil-skill",
+                        "skill_name", "evil-direct-skill",
+                        "skill_markdown", "# evil markdown",
+                        "task_scoped_token", "evil-token"
+                )));
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.issueOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class)))
+                .thenReturn("btt_owner_runtime_1");
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        Map<String, Object> metadata = captor.getValue().getMetadata();
+        assertFalse(metadata.containsKey("skill_name"));
+        assertFalse(metadata.containsKey("skillName"));
+        assertFalse(metadata.containsKey("skill_markdown"));
+        assertFalse(metadata.containsKey("runtime_context"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> runtimeContext = (Map<String, Object>) metadata.get("runtimeContext");
+        assertEquals("btt_owner_runtime_1", runtimeContext.get("task_scoped_token"));
+        assertEquals("agent-1", runtimeContext.get("skill_name"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> context = (Map<String, Object>) metadata.get("context");
+        assertEquals("trace-1", context.get("traceId"));
+        assertEquals("app-1", context.get("clientAppId"));
+        assertEquals("upstream-a", context.get("upstreamUserId"));
+        assertEquals("upstream-a", context.get("accountId"));
+        assertEquals("upstream-a", context.get("account_id"));
+        assertEquals("agent-1", context.get("businessSkillId"));
+        assertEquals("agent-1", context.get("businessSkillName"));
+        assertEquals("cred-1", context.get("credentialId"));
+        assertEquals(true, context.get("auto_inject_app_public_skills"));
+        assertFalse(context.containsKey("skill_name"));
+        assertFalse(context.containsKey("skill_markdown"));
+        assertFalse(context.containsKey("task_scoped_token"));
     }
 
     @Test

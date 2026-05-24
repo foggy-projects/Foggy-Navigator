@@ -434,6 +434,7 @@ public class OpenApiController {
         if (form.getMetadata() != null && !form.getMetadata().isEmpty()) {
             metadata.putAll(form.getMetadata());
         }
+        removeWorkerLaunchOnlyMetadata(metadata);
         if (StringUtils.hasText(modelConfigId)) {
             metadata.put("modelConfigId", modelConfigId);
         }
@@ -443,8 +444,6 @@ public class OpenApiController {
         if (StringUtils.hasText(modelResource.requestedModelVariant())) {
             metadata.put("requestedModelVariant", modelResource.requestedModelVariant());
         }
-        metadata.remove("runtimeContext");
-        metadata.remove("runtime_context");
         mergeTopLevelExecutionPolicy(metadata, form);
         Object metadataAttachments = metadata.remove("attachments");
         List<Map<String, Object>> normalizedAttachments = OpenApiAttachmentNormalizer.normalize(
@@ -877,25 +876,27 @@ public class OpenApiController {
         Object rawContext = metadata.get("context");
         if (rawContext instanceof Map<?, ?> existingContext) {
             existingContext.forEach((key, value) -> {
-                if (key instanceof String stringKey) {
+                if (key instanceof String stringKey && !isReservedBusinessRuntimeContextKey(stringKey)) {
                     context.put(stringKey, value);
                 }
             });
         }
 
-        context.putIfAbsent("clientAppId", clientAppCredential.getClientAppId());
-        context.putIfAbsent("rootAgentId", rootAgentId);
-        context.putIfAbsent("businessSkillId", skillId);
-        context.putIfAbsent("businessSkillName", skillId);
-        context.putIfAbsent("credentialId", clientAppCredential.getCredentialId());
-        context.putIfAbsent("auto_inject_app_public_skills", true);
+        context.put("clientAppId", clientAppCredential.getClientAppId());
+        context.put("rootAgentId", rootAgentId);
+        context.put("businessSkillId", skillId);
+        context.put("businessSkillName", skillId);
+        context.put("credentialId", clientAppCredential.getCredentialId());
+        context.put("auto_inject_app_public_skills", true);
 
         String upstreamUserId = firstHeader(request,
                 "X-Upstream-User-Id",
                 "X-Foggy-Upstream-User-Id",
                 "X-Client-Upstream-User-Id");
         if (StringUtils.hasText(upstreamUserId)) {
-            context.putIfAbsent("upstreamUserId", upstreamUserId);
+            context.put("upstreamUserId", upstreamUserId);
+            context.put("accountId", upstreamUserId);
+            context.put("account_id", upstreamUserId);
             String token = issueBusinessRuntimeToken(
                     tenantId,
                     clientAppCredential.getClientAppId(),
@@ -911,6 +912,45 @@ public class OpenApiController {
 
         metadata.put("context", context);
         return null;
+    }
+
+    private void removeWorkerLaunchOnlyMetadata(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return;
+        }
+        metadata.remove("runtimeContext");
+        metadata.remove("runtime_context");
+        metadata.remove("skill_name");
+        metadata.remove("skillName");
+        metadata.remove("skillId");
+        metadata.remove("skill_id");
+        metadata.remove("skill_markdown");
+        metadata.remove("skillMarkdown");
+        metadata.remove("markdownBody");
+    }
+
+    private boolean isReservedBusinessRuntimeContextKey(String key) {
+        return "clientAppId".equals(key)
+                || "client_app_id".equals(key)
+                || "rootAgentId".equals(key)
+                || "businessSkillId".equals(key)
+                || "businessSkillName".equals(key)
+                || "credentialId".equals(key)
+                || "auto_inject_app_public_skills".equals(key)
+                || "upstreamUserId".equals(key)
+                || "upstream_user_id".equals(key)
+                || "accountId".equals(key)
+                || "account_id".equals(key)
+                || "skill_name".equals(key)
+                || "skillName".equals(key)
+                || "skillId".equals(key)
+                || "skill_id".equals(key)
+                || "skill_markdown".equals(key)
+                || "skillMarkdown".equals(key)
+                || "markdownBody".equals(key)
+                || "task_scoped_token".equals(key)
+                || "runtimeContext".equals(key)
+                || "runtime_context".equals(key);
     }
 
     private void mergeTopLevelExecutionPolicy(Map<String, Object> metadata, OpenApiQueryForm form) {

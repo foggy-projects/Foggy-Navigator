@@ -109,4 +109,16 @@ Owner-aware runtime regression 必须覆盖：
 3. `ACCOUNT_POLICY.md` 注入到 LLM system prompt，并位于 skill instructions 之前。
 4. LLM skill execution 使用 frame 冻结的 account-private manifest，不受后续 registry reload 或 Java launch `skill_markdown` 影响。
 
-当前轻量覆盖放在 BizWorker Python 测试中；Java 到 Worker 的完整链路可在后续 L3/E2E 中按同一契约扩展。
+Stage 2 已补齐 Java 到 BizWorker 的关键回归：
+
+1. `OpenApiControllerMessageMappingTest` 覆盖 OpenAPI ask 入口会清理调用方 metadata 中的
+   `skill_markdown`、直传 `skill_name`、`runtimeContext`、伪造 `accountId/clientAppId`，
+   并由 Navigator 权威注入 `clientAppId`、`upstreamUserId/accountId/account_id`、
+   `businessSkillId` 和 task-scoped runtime token。
+2. `SkillRegistryServiceTest` 覆盖 ClientApp public 与 account private SkillBundle 同步时，
+   Java 控制面会向 BizWorker materialize payload 传递正确的 `scope/client_app_id/account_id`。
+3. `BusinessAgentLanggraphLaunchE2ETest` 与
+   `LanggraphBusinessAgentWorkerTaskLauncherTest` 覆盖 owner-aware Agent 解析后能进入
+   LangGraph BizWorker launch 路径。
+4. BizWorker Python 测试继续覆盖 account-private 优先级、account context 注入、
+   `agent/skills` 路径和 skill git sync 路径。
