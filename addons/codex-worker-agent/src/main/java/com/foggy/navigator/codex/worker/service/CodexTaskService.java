@@ -130,7 +130,7 @@ public class CodexTaskService implements TaskQueryProvider {
             throw new IllegalArgumentException("resume 操作必须指定 workerId");
         }
 
-        workerManagementFacade.validateWorkerOwnership(userId, form.getWorkerId());
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, form.getWorkerId());
 
         if (form.getCodexThreadId() == null || form.getCodexThreadId().isBlank()) {
             // Platform-only rewind clears the native Codex thread. Continue by starting
@@ -163,8 +163,8 @@ public class CodexTaskService implements TaskQueryProvider {
             throw new IllegalArgumentException("prompt is required");
         }
 
-        // 验证 Worker 存在且属于该用户（通过 WorkerManagementFacade SPI）
-        workerManagementFacade.validateWorkerOwnership(userId, form.getWorkerId());
+        // 验证 Worker 存在且当前 user/tenant 可访问（通过 WorkerManagementFacade SPI）
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, form.getWorkerId());
 
         String cwd = form.getCwd();
         if ((cwd == null || cwd.isBlank())

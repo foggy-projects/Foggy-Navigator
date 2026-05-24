@@ -156,6 +156,17 @@ class ClaudeWorkerFacadeImplTest {
         assertDoesNotThrow(() -> facade.validateWorkerOwnership("agent-owner-1", "worker-1"));
     }
 
+    @Test
+    void validateWorkerAccessAllowsExplicitTenantWorker() {
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker-1");
+        worker.setUserId("owner-1");
+        worker.setTenantId("tenant-1");
+        when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
+
+        assertDoesNotThrow(() -> facade.validateWorkerAccess("agent-owner-1", "tenant-1", "worker-1"));
+    }
+
     private void mockWorker(String workerId, String userId) {
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
         worker.setWorkerId(workerId);

@@ -505,12 +505,22 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
     @Override
     public void validateWorkerOwnership(String userId, String workerId) {
+        validateWorkerAccess(userId, null, workerId);
+    }
+
+    @Override
+    public void validateWorkerAccess(String userId, String tenantId, String workerId) {
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
         if (worker.getUserId().equals(userId)) {
             return;
         }
+        if (tenantId != null && !tenantId.isBlank() && tenantId.equals(worker.getTenantId())) {
+            log.debug("validateWorkerAccess: tenant access granted for userId={}, tenantId={}, workerId={}",
+                    userId, tenantId, workerId);
+            return;
+        }
         if (isSameTenant(userId, worker.getTenantId())) {
-            log.debug("validateWorkerOwnership: tenant-level access granted for userId={}, workerId={}",
+            log.debug("validateWorkerAccess: user tenant access granted for userId={}, workerId={}",
                     userId, workerId);
             return;
         }

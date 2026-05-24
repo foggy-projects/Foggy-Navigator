@@ -227,6 +227,7 @@ class CodexTaskServiceTest {
 
         // cwd 反斜杠应被转为正斜杠（Codex CLI 不接受 Windows 反斜杠）
         assertEquals("D:/projects/my-app", savedTask[0].getCwd());
+        verify(workerManagementFacade).validateWorkerAccess("user-1", "tenant-1", "worker-1");
         verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
                 "D:/projects/my-app".equals(event.getCwd())
         ));
