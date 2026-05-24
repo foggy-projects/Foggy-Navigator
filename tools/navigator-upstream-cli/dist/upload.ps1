@@ -83,7 +83,13 @@ function Invoke-RemoteInstallSmoke {
         }
 
         $workerPoolHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream worker-pool --help 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $workerPoolHelpOutput -notmatch "Commands: list, create, add-member, status") {
+        $workerPoolHelpOk = $LASTEXITCODE -eq 0 `
+            -and $workerPoolHelpOutput -match "list" `
+            -and $workerPoolHelpOutput -match "create" `
+            -and $workerPoolHelpOutput -match "register-worker" `
+            -and $workerPoolHelpOutput -match "add-member" `
+            -and $workerPoolHelpOutput -match "status"
+        if (-not $workerPoolHelpOk) {
             throw "worker-pool help smoke failed: $workerPoolHelpOutput"
         }
 
