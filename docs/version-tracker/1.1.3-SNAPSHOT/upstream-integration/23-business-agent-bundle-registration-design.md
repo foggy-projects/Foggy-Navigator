@@ -70,6 +70,8 @@ POST /api/v1/business-agent/agent-bundles/sync
 - `workerId` 指向实际执行 OpenAPI ask 的 LangGraph worker。
 - `functions` 是 Skill allowlist 引用，不承载完整 Function Manifest。同步 agent 前，上游应先用 SDK 导入 Business Function Manifest，并把这些 function grant 到当前 ClientApp；该步骤可使用 `NAVI_CONTROL_API_KEY`，不需要租户级 admin。
 
+> 2026-05-24 owner-aware resource governance 更新：本页保留的是 `agent-bundles/sync` 的早期落地记录。新接入上游不应把 `workerId` 理解成业务调用方可选择的 WorkerPool。Agent 应作为稳定 runtime profile，默认绑定 `LlmConfigModel`、`WorkingDirectory` 和 backend policy；`WorkerPool` 仅作为 Navigator 内部 routing artifact 或短期兼容字段。真实发布前以 `owner-smoke resources OK` 为准，不能只看 Agent / Skill 注册成功。
+
 ## CLI 与 SDK
 
 SDK 增加：

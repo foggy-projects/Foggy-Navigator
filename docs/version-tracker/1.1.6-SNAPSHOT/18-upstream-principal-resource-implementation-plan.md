@@ -2247,3 +2247,27 @@ powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\packa
 ```
 
 并检查包内 `VERSION`、`BUILD_INFO.gitCommit` 与最终提交一致。
+
+## 38. Phase 26 Upstream CLI 1.0.7 Public Smoke And Migration Gate
+
+2026-05-24 使用 OBS 公共安装入口在 `foggy-world-sim` 上游项目重跑 clean ClientApp bootstrap，验证 `1.0.7` 对外包不是本地候选包。
+
+验证结论：
+
+1. 公共安装包可用，安装后 `navigator-upstream-cli 1.0.7` 指向 commit `bc705bab3bdd353cbee2ad505dea33ad381584a7`。
+2. 包 SHA256 为 `f8a98300c727e0055ef3c2d00f3f88cd91f9b28cacc11f88ac04aef859d811fb`。
+3. 覆盖安装后未出现旧 SDK jar 抢先加载。
+4. fresh ClientApp `capp_ec57540a-a33a-4ca5-a4fc-70468f941a1c` 的 `issue-runtime-key`、`issue-control-key`、`runtime-token`、`model grant`、`skill sync`、`agent sync`、`ensure-grant` 均通过。
+5. 旧目录 manifest 缺 `workspaceScope` 会被拒绝；补齐 `workspaceScope=CLIENT_APP_SHARED` 后，`directory client-init` 和 `agent set-default-workspace` 通过。
+6. owner-smoke readiness 通过，但 resource gate 仍 fail：`missing=effectiveWorkerBackend,effectivePhysicalWorkerId`。
+
+该结果说明 credential/bootstrap 链路已收口，当前阻塞转为资源模型迁移：
+
+1. 上游示例 Agent 仍依赖 `internalRoute.workerPoolId=foggy-world-sim-codex-pool`。
+2. runtime resolver 仍未从 Agent 默认模型、workspace worker 与 PhysicalWorker backend capability 中输出完整 `effectiveWorkerBackend` / `effectivePhysicalWorkerId`。
+3. 绑定命令服务端成功，但 CLI 打印 DTO 时触发 `LocalDateTime` 序列化错误，后续需为 CLI ObjectMapper 补 `JavaTimeModule`。
+
+本阶段不继续真实 `ask/messages`，因为 owner-aware resource smoke 未达到 `resources OK`。详细记录见：
+
+1. `workitems/ACCEPTANCE-20260524-upstream-cli-107-public-smoke.md`
+2. `workitems/HANDOFF-20260524-upstream-owner-aware-resource-migration.md`

@@ -23,7 +23,7 @@ Navigator 当前资源模型已收口为三个稳定主体：
 请按以下方向改造：
 
 1. 升级 Navigator Open SDK / CLI
-- 使用 Navigator 提供的 navigator-open-sdk 与 navigator-upstream CLI `1.0.6` 或更高版本。
+- 使用 Navigator 提供的 navigator-open-sdk 与 navigator-upstream CLI `1.0.7` 或更高版本。
 - 确认上游项目存在 gitignored `.navigator/upstream.env`。
 - 不要把真实 token、secret、api key 写入代码、日志、截图或提交。
 - 覆盖安装时不需要手工删除旧 SDK jar；`1.0.6` 后安装器和 wrapper 会避免旧 `navigator-open-sdk-*.jar` 抢先加载。
@@ -47,11 +47,13 @@ Navigator 当前资源模型已收口为三个稳定主体：
 - 使用 CLI/SDK 的 agent model/workspace binding 能力维护可见资源；WorkerPool 如仍出现在诊断输出中，只能视为 internal route。
 - 不要在 ask 的 clientContext 中传模型 id、裸文件系统路径、WorkerPool id 或 prompt 配置。
 - 新任务如确需切换模型配置或模型变体，应通过显式 `configModelId` / `modelVariant` 参数进入 runtime resolver；同一 task/context 一旦创建，不应再切换冻结的模型配置、有效模型名、工作目录或 backend。
+- `configModelId` 决定使用 Claude Code、OpenAI Codex、Gemini CLI 或 LangGraph Biz 等 runtime backend；`modelVariant` 只在同一个 config 的 `availableModels` / 允许模型集合内选择具体模型名，例如 `sonnet`、`opus`、`qwen3.5-plus`。不要用 `modelVariant` 切 backend、切 provider credential 或切 workspace。
 
 4. 工作目录
 - 需要 workspace 的 Agent 必须解析到 Navigator directory id。
 - 上游可选择 UpstreamSystem shared、ClientApp shared 或 user private directory，具体由上游业务边界决定。
 - 不要把裸 filesystem path 作为 ask 参数传入。
+- `directory client-init` 的 manifest 必须显式包含 `workspaceScope`，例如 `CLIENT_APP_SHARED` 或 `USER_PRIVATE`。缺少 `workspaceScope` 的旧 manifest 应直接迁移，不要依赖默认值。
 
 5. 运行时上下文
 - 新会话不要自行生成 contextId；首次 ask 不传 contextId，由 Navigator/BizWorker 返回。
@@ -69,6 +71,11 @@ Navigator 当前资源模型已收口为三个稳定主体：
 .\tools\navigator-upstream\navi.ps1 upstream client-app issue-runtime-key --client-app-id <clientAppId> --write-profile
 .\tools\navigator-upstream\navi.ps1 upstream client-app issue-control-key --client-app-id <clientAppId> --write-profile
 .\tools\navigator-upstream\navi.ps1 upstream runtime-token --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream model grant --model-config-id <modelConfigId> --set-default --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream directory client-init --file .\.navigator\client-directory.json --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream agent sync --manifest .\.navigator\agent.json
+.\tools\navigator-upstream\navi.ps1 upstream agent set-default-model --agent-code <agentCode> --model-config-id <modelConfigId>
+.\tools\navigator-upstream\navi.ps1 upstream agent set-default-workspace --agent-code <agentCode> --directory-id <directoryId>
 .\tools\navigator-upstream\navi.ps1 upstream owner-smoke
 .\tools\navigator-upstream\navi.ps1 upstream verify-agent-readiness
 .\tools\navigator-upstream\navi.ps1 upstream ensure-grant
@@ -80,8 +87,10 @@ Navigator 当前资源模型已收口为三个稳定主体：
 - `missing=effectiveModelConfigId`：修复模型 grant 或 Agent 默认模型。
 - `missing=agentId`：修复 Agent 注册或 Agent owner/tenant。
 - `missing=effectiveWorkerBackend`：修复模型配置的 backend 或 Agent backend policy。
-- `missing=effectivePhysicalWorkerId`：修复工作目录绑定的 PhysicalWorker。
+- `missing=effectivePhysicalWorkerId`：修复工作目录绑定的 PhysicalWorker / backend capability 映射。
 - `missing=effectiveDirectoryId`：创建/绑定工作目录。只有该 Agent 明确不需要 workspace 时，才使用 `--no-directory-required` 并在验收记录中说明。
+
+如果 `owner-smoke` 已经能看到 `internalRoute.workerPoolId`，但仍缺 `effectiveWorkerBackend` 或 `effectivePhysicalWorkerId`，说明当前上游 manifest 仍是旧 WorkerPool-only 路径。请迁移到 Agent 默认模型 + Agent 默认工作目录 + PhysicalWorker/backend capability 的组合，不要把 WorkerPool 当作上游可传资源。
 
 7. 交付结果
 请回传：

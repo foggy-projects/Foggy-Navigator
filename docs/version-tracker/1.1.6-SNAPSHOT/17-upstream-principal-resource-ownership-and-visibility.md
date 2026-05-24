@@ -215,6 +215,18 @@ Agent 不应要求上游直接选择 WorkerPool。Agent 可以绑定默认模型
 
 从上游使用方式看，Agent 应被视为稳定 runtime profile：它固定默认 `LlmConfigModel`、默认 `WorkingDirectory`、可选默认 `modelVariant`、工具 / Skill / function policy。上游可以创建多个 Agent 来表达不同业务入口，运行时大多数场景只传 `agentId`；首次任务可在 Agent policy 允许范围内传 `configModelId` / `modelVariant` 覆盖默认值，但同一 task / context 后续不得切换。
 
+### 6.1 上游推荐使用方式
+
+上游接入时建议把 Agent 当成面向业务的稳定入口，而不是每次请求临时拼 `workerId + modelConfigId + directoryId`：
+
+1. 为不同业务入口创建多个 Agent，例如 `ticket-agent`、`school-sim.developer`、`data-analysis-agent`。
+2. 每个 Agent 绑定默认 `LlmConfigModel`、默认 `WorkingDirectory`、可见工具 / Skill / function，以及可用 backend policy。
+3. 运行时优先只传 `agentId` / `agentCode` 和用户消息。
+4. 新任务确实需要切换模型配置时，只在首次 ask 传 `configModelId`；同一 task / context 创建后，后续续聊即使再次传入也不得改变已冻结的 effective config。
+5. `modelVariant` 只用于在同一个 `LlmConfigModel` 允许的模型集合内选择具体模型，例如同一 Claude Code config 下的 `sonnet` / `opus`，或同一兼容 provider config 下的 `qwen3.5-plus` / `qwen-max`。它不应改变 `workerBackend`、provider credential、workspace 或 physical worker。
+
+因此，`configModelId` 决定 runtime backend 类型，`modelVariant` 决定同一 backend/config 内的具体模型名，`WorkingDirectory` 决定物理工作目录所在 worker。resolver 必须把三者解析为唯一可执行路线；无法唯一解析时 fail-fast。
+
 ## 7. Runtime Resolver
 
 A2Agent 调用时，最终可见资源应取交集，不应只看某个 credential：
