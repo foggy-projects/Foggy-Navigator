@@ -2053,3 +2053,36 @@ powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\packa
 mvn -pl business-agent-module,navigator-open-sdk -am "-Dtest=UpstreamClientAppAdminCredentialServiceTest,UpstreamClientAppManagementServiceTest,UpstreamBootstrapEndToEndServiceTest,UpstreamBootstrapRequestServiceTest,UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
 powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package.ps1
 ```
+
+上游 clean profile 验收结果：
+
+1. 使用包：
+   - `navigator-upstream-cli 1.0.6`
+   - SHA256 `216f309d42356e9e66ebce71c4a45dede4d57e000634b630c355568d286fbda8`
+   - `BUILD_INFO.gitCommit=097ddbeb7c6d42a8f51521e96258ca8319a9447d`
+2. 安装结果：
+   - project-local `tools/navigator-upstream/lib` 仅剩 `navigator-open-sdk-1.0.6.jar`。
+   - `upstream client-app --help` 包含 `issue-runtime-key`。
+3. 新 profile：
+   - `.navigator/tenants/school-owner-smoke-107.env`
+   - profile 位于 `.navigator/` 且已被 git ignore 覆盖。
+4. 新 ClientApp：
+   - `clientAppId=capp_ee98641a-e91f-4538-97d2-97e24c7c1cc9`
+5. bootstrap 命令链：
+   - `client-app ensure`: passed
+   - `issue-runtime-key`: passed，确认旧 admin key 兼容桥生效
+   - `issue-control-key`: passed
+   - `runtime-token`: passed
+   - `model grant`: passed，默认模型 `9311f5b4-81a8-4619-9dfc-58712a8da12b`
+   - `skill sync`: passed，`skillId=school-sim.developer.codex.v1`
+   - `ensure-grant`: passed，`upstreamUserId=sim-upstream-user-local`
+   - `owner-smoke`: readiness OK / resources OK / ready
+   - `verify-agent-readiness`: OK
+6. 真实 ask/messages smoke：
+   - `taskId=lgt_4c5dc5f6fdd5446d`
+   - `contextId=bctx_20260524_b3_b3349fad68e44e5d9bd0397699a2442e`
+   - terminal status `COMPLETED`
+   - assistant response `Hello! How can I assist you today?`
+7. 安全与噪声：
+   - 全程未输出 secret 明文。
+   - `SLF4J no-provider` warning 仍存在，功能不受影响，作为后续低优先级 CLI 日志噪声治理项。
