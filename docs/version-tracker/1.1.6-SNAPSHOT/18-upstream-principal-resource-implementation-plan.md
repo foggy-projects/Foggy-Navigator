@@ -2019,4 +2019,37 @@ powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\packa
 2. `UpstreamCliTest`: 63 passed, 0 failures, 0 errors。
 3. `navigator-open-sdk`: candidate version `1.0.6`。
 4. CLI package generated: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.6-windows.zip`。
-5. SHA256: `ec8fc1b73135795d4076142375aace9132c469e90086451effc4d677628140bc`。
+5. 候选包 SHA 由最终提交后执行 `dist/package.ps1` 生成；不要在提交前固化 SHA，避免包内 `BUILD_INFO.gitCommit` 与最终提交不一致。
+
+## 34. Phase 22 Follow-up 1.0.6 Bootstrap Smoke Feedback
+
+2026-05-24 上游 School Sim owner-aware smoke 反馈了 `1.0.6` fresh bootstrap 的三个收口问题。
+
+问题：
+
+1. 本地提供的 `1.0.6` zip 不是最终提交后构建，包内 `BUILD_INFO.gitCommit` 仍指向旧提交，导致 `issue-runtime-key` 不存在。
+2. 上游项目覆盖安装时 `tools/navigator-upstream/lib` 中残留旧 `navigator-open-sdk-1.0.5.jar`，wrapper 把所有 jar 放进 classpath 后加载了旧 CLI。
+3. 既有 `NAVI_ADMIN_API_KEY` 是 `1.0.6` 之前签发，缺少新增 `CLIENT_APP_RUNTIME_KEY_ISSUE` scope，导致 `issue-runtime-key` 返回 403；项目尚未上线，但已接入的本地 upstream-admin profile 需要低成本继续验证。
+
+调整：
+
+1. `navi.ps1` classpath 只选择一份 `navigator-open-sdk` jar：
+   - 优先匹配安装目录 `VERSION`。
+   - 找不到时选择最新 jar 作为 fallback。
+   - 其他 `navigator-open-sdk-*.jar` 不进入 classpath。
+2. `install.ps1` 复制完成后按 `VERSION` 清理旧 `navigator-open-sdk-*.jar`，降低手工覆盖安装遗留风险。
+3. upstream-admin scope 校验增加兼容桥：
+   - `CLIENT_APP_ADMIN_ALL` 仍覆盖全部。
+   - 显式 `CLIENT_APP_RUNTIME_KEY_ISSUE` 仍是新标准。
+   - 旧 `CLIENT_APP_MANAGE` 可覆盖 `CLIENT_APP_RUNTIME_KEY_ISSUE`，但 controller 仍会继续校验 tenant / upstreamSystemId / namespace / ClientApp ACTIVE。
+4. 文档和本地 `navigator-upstream-cli` skill 说明：
+   - 新申请或重新审批应显式包含 `CLIENT_APP_RUNTIME_KEY_ISSUE`。
+   - 旧 admin key 的 `CLIENT_APP_MANAGE` 仅作为兼容期 runtime key 签发覆盖。
+   - 候选包 SHA 在最终提交后生成并随交付说明提供，不提前写入设计文档。
+
+验证要求：
+
+```powershell
+mvn -pl business-agent-module,navigator-open-sdk -am "-Dtest=UpstreamClientAppAdminCredentialServiceTest,UpstreamClientAppManagementServiceTest,UpstreamBootstrapEndToEndServiceTest,UpstreamBootstrapRequestServiceTest,UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package.ps1
+```

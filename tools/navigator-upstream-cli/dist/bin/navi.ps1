@@ -180,7 +180,18 @@ function Invoke-JavaCli {
         $effectiveArgs += @("--profile", $profile)
     }
 
-    $classpath = (Get-ChildItem -Path $libDir -Filter "*.jar" -File | ForEach-Object { $_.FullName }) -join [System.IO.Path]::PathSeparator
+    $sdkJars = @(Get-ChildItem -Path $libDir -Filter "navigator-open-sdk-*.jar" -File)
+    $preferredSdkJar = $sdkJars | Where-Object { $_.Name -eq "navigator-open-sdk-$Version.jar" } | Select-Object -First 1
+    if (-not $preferredSdkJar) {
+        $preferredSdkJar = $sdkJars | Sort-Object LastWriteTimeUtc, Name -Descending | Select-Object -First 1
+    }
+    if (-not $preferredSdkJar) {
+        Write-Host "Navigator Open SDK jar not found in $libDir" -ForegroundColor Red
+        exit 1
+    }
+    $dependencyJars = @(Get-ChildItem -Path $libDir -Filter "*.jar" -File | Where-Object { $_.Name -notlike "navigator-open-sdk-*.jar" } | Sort-Object Name)
+    $classpathEntries = @($preferredSdkJar.FullName) + @($dependencyJars | ForEach-Object { $_.FullName })
+    $classpath = $classpathEntries -join [System.IO.Path]::PathSeparator
     if (-not $classpath) {
         Write-Host "No jar files found in $libDir" -ForegroundColor Red
         exit 1

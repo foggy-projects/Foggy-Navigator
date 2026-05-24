@@ -194,6 +194,8 @@ UPSTREAM_USER_ID -> NAVI_UPSTREAM_USER_ID
 
 `client-app issue-runtime-key` / `issue-runtime-credential` 需要 `navigator-upstream-cli` / `navigator-open-sdk` `1.0.6` 或更高版本。
 
+兼容说明：`1.0.6` 上线前签发的 `NAVI_ADMIN_API_KEY` 可能只有 `CLIENT_APP_MANAGE`，没有新增的 `CLIENT_APP_RUNTIME_KEY_ISSUE`。服务端在兼容期允许 `CLIENT_APP_MANAGE` 覆盖 `issue-runtime-key`，但新申请或重新审批的 upstream admin key 仍应显式包含 `CLIENT_APP_RUNTIME_KEY_ISSUE`。
+
 上游侧提交申请、查询状态、领取已批准凭证：
 
 ```powershell

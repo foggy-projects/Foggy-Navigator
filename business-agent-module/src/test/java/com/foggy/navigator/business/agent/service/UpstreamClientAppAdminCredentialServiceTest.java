@@ -77,6 +77,23 @@ class UpstreamClientAppAdminCredentialServiceTest {
     }
 
     @Test
+    void requireAccessAllowsLegacyClientAppManageForRuntimeKeyIssue() {
+        when(repository.findByCredentialKeyHash(anyString()))
+                .thenReturn(Optional.of(activeCredential("[\"tenant-1\"]",
+                        "[\"CLIENT_APP_MANAGE\"]")));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader(UpstreamClientAppAdminCredentialService.HEADER_ADMIN_KEY, "admin-key");
+
+        UpstreamClientAppAdminPrincipal principal = service.requireAccess(
+                request,
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE);
+
+        assertEquals("x6-tms", principal.getUpstreamSystemId());
+        assertTrue(principal.getScopes().contains(UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE));
+        verify(repository).save(any());
+    }
+
+    @Test
     void requireAccessRejectsRevokedCredential() {
         UpstreamClientAppAdminCredentialEntity credential = activeCredential("[\"tenant-1\"]",
                 "[\"CLIENT_APP_ADMIN_ALL\"]");

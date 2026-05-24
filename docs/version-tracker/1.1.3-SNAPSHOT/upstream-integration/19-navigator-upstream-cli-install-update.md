@@ -64,8 +64,8 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/ins
 - candidate date: `2026-05-24`
 - includes: owner-aware `upstream client-app issue-runtime-key` / `issue-runtime-credential`
 - local archive: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.6-windows.zip`
-- SHA256: `ec8fc1b73135795d4076142375aace9132c469e90086451effc4d677628140bc`
-- note: 发布到 OBS 后，远程安装入口才会自动获取该版本；发布前可使用本仓库生成的本地 archive 安装。
+- SHA256: 由最终提交后执行 `dist/package.ps1` 生成；不要在提交前把候选包 SHA 固化到文档，否则包内 `BUILD_INFO.gitCommit` 会与最终提交不一致。
+- note: 发布到 OBS 后，远程安装入口才会自动获取该版本；发布前可使用本仓库最终提交后生成的本地 archive 安装。
 
 安装脚本会：
 
@@ -183,6 +183,7 @@ E2E 回归使用独立 wrapper，仍读取同一个 project-local `.navigator/up
 - 同版本也会比较本地 `RELEASE_MANIFEST.json` 中的包 SHA256；SHA 不一致时会刷新安装。
 - 重新运行安装脚本覆盖 `tools/navigator-upstream/`。
 - 保留项目自己的 `.navigator/upstream.env`。
+- 清理旧 `navigator-open-sdk-*.jar`；wrapper 运行时也只会选择与 `VERSION` 匹配的一份 SDK jar，避免覆盖安装后旧 jar 抢先加载旧 CLI。
 
 ## Navigator 侧打包发布
 

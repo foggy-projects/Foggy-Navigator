@@ -26,12 +26,14 @@ Navigator 当前资源模型已收口为三个稳定主体：
 - 使用 Navigator 提供的 navigator-open-sdk 与 navigator-upstream CLI `1.0.6` 或更高版本。
 - 确认上游项目存在 gitignored `.navigator/upstream.env`。
 - 不要把真实 token、secret、api key 写入代码、日志、截图或提交。
+- 覆盖安装时不需要手工删除旧 SDK jar；`1.0.6` 后安装器和 wrapper 会避免旧 `navigator-open-sdk-*.jar` 抢先加载。
 
 2. 梳理身份与资源创建边界
 - NAVI_ADMIN_API_KEY：
   - 创建或维护 UpstreamSystem-owned WorkerPool、共享 LLMConfigModel、共享 WorkingDirectory、system-owned Agent。
   - 为目标租户/ClientApp 做 bootstrap 或 ensure-tenant。
   - 为当前 ClientApp 签发 runtime credential 和 control credential。
+  - 新申请或重新审批的 admin key 应显式包含 `CLIENT_APP_RUNTIME_KEY_ISSUE`；旧 admin key 如已有 `CLIENT_APP_MANAGE`，Navigator 会兼容允许签发 runtime credential。
 - NAVI_CONTROL_API_KEY：
   - 创建或维护当前 ClientApp-owned LLMConfigModel、ClientApp shared/user private WorkingDirectory、ClientApp-owned Agent。
   - 维护当前 ClientApp 的 model/workspace/worker binding 和 upstream user grant。

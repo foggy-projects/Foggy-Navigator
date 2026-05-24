@@ -77,6 +77,15 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
 Copy-Item -Path (Join-Path $SourceRoot "*") -Destination $InstallDir -Recurse -Force
 
+$versionFile = Join-Path $InstallDir "VERSION"
+$installedVersion = if (Test-Path $versionFile) { (Get-Content $versionFile -Raw).Trim() } else { "" }
+$installedLibDir = Join-Path $InstallDir "lib"
+if ($installedVersion -and (Test-Path $installedLibDir)) {
+    Get-ChildItem -Path $installedLibDir -Filter "navigator-open-sdk-*.jar" -File |
+            Where-Object { $_.Name -ne "navigator-open-sdk-$installedVersion.jar" } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+}
+
 $rootWrapper = Join-Path $InstallDir "navi.ps1"
 if (-not (Test-Path $rootWrapper)) {
     $binWrapper = Join-Path $InstallDir "bin\navi.ps1"

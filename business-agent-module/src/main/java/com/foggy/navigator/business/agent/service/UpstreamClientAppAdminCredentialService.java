@@ -135,7 +135,15 @@ public class UpstreamClientAppAdminCredentialService {
     }
 
     private boolean hasScope(Set<String> scopes, String requiredScope) {
-        return scopes.contains(SCOPE_CLIENT_APP_ADMIN_ALL) || scopes.contains(requiredScope);
+        if (scopes.contains(SCOPE_CLIENT_APP_ADMIN_ALL) || scopes.contains(requiredScope)) {
+            return true;
+        }
+        // Compatibility bridge for pre-1.0.6 upstream admin credentials. Existing admin
+        // keys with ClientApp manage authority may issue a runtime key for the ClientApp
+        // they are already allowed to manage; the controller still validates tenant and
+        // upstream-system ownership before creating the credential.
+        return UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE.equals(requiredScope)
+                && scopes.contains(UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE);
     }
 
     private Set<String> parseStringSet(String json) {
