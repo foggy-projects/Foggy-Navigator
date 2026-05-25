@@ -7,6 +7,7 @@ import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
 import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
+import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -165,6 +166,21 @@ class ClaudeWorkerFacadeImplTest {
         when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
 
         assertDoesNotThrow(() -> facade.validateWorkerAccess("agent-owner-1", "tenant-1", "worker-1"));
+    }
+
+    @Test
+    void getCodexConfigFallsBackToWorkerConnectionForDedicatedCodexWorker() {
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker-1");
+        worker.setBaseUrl("http://127.0.0.1:3051");
+        when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
+        when(workerService.getDecryptedCodexConfig(worker)).thenReturn(null);
+        when(workerService.getDecryptedToken(worker)).thenReturn("plain-worker-token");
+
+        CodexConfig result = facade.getCodexConfig("worker-1");
+
+        assertEquals("http://127.0.0.1:3051", result.getBaseUrl());
+        assertEquals("plain-worker-token", result.getAuthToken());
     }
 
     private void mockWorker(String workerId, String userId) {

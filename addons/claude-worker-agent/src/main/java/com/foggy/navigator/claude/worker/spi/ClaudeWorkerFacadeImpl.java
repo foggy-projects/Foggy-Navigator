@@ -530,7 +530,15 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     @Override
     public CodexConfig getCodexConfig(String workerId) {
         ClaudeWorkerEntity entity = workerService.getWorkerEntity(workerId);
-        return workerService.getDecryptedCodexConfig(entity);
+        CodexConfig codexConfig = workerService.getDecryptedCodexConfig(entity);
+        if (codexConfig != null && codexConfig.getBaseUrl() != null && !codexConfig.getBaseUrl().isBlank()) {
+            return codexConfig;
+        }
+        log.debug("getCodexConfig: using worker base URL for dedicated Codex worker: workerId={}", workerId);
+        return CodexConfig.builder()
+                .baseUrl(entity.getBaseUrl())
+                .authToken(workerService.getDecryptedToken(entity))
+                .build();
     }
 
     private Map<String, Object> workerToMap(WorkerDTO dto) {
