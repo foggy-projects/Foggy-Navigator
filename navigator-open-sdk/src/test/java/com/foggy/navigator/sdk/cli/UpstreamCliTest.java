@@ -2604,9 +2604,10 @@ class UpstreamCliTest {
         assertTrue(decodedWslScript(commands.get(2)).contains("BIZ_WORKER_PORT=3161"));
         assertTrue(decodedWslScript(commands.get(3)).contains(".claude-worker}/bin/claude-worker"));
         assertTrue(decodedWslScript(commands.get(4)).contains("node dist/index.js"));
+        assertTrue(decodedWslScript(commands.get(4)).contains("setsid -f"));
+        assertTrue(decodedWslScript(commands.get(4)).contains("logs/worker.pid"));
         assertTrue(decodedWslScript(commands.get(4)).contains("Codex Worker READY http://localhost:3151"));
         assertTrue(decodedWslScript(commands.get(4)).contains("sleep 3"));
-        assertFalse(decodedWslScript(commands.get(4)).contains("setsid"));
         assertTrue(decodedWslScript(commands.get(5)).contains("LangGraph BizWorker READY http://localhost:3161"));
         assertFalse(decodedWslScript(commands.get(5)).contains("&;"));
         assertTrue(output.contains("script=set -e; curl -fsSL"));
