@@ -77,6 +77,14 @@ function Invoke-RemoteInstallSmoke {
             throw "worker help smoke failed: $workerHelpOutput"
         }
 
+        $workerHostHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream worker-host --help 2>&1 | Out-String
+        $workerHostHelpOk = $LASTEXITCODE -eq 0 `
+            -and $workerHostHelpOutput -match "Commands: apply, update, verify, install" `
+            -and $workerHostHelpOutput -match "Codex is Navi-routed through claudeCode.codexConfig"
+        if (-not $workerHostHelpOk) {
+            throw "worker-host help smoke failed: $workerHostHelpOutput"
+        }
+
         $directoryHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream directory --help 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0 -or $directoryHelpOutput -notmatch "Commands: list, init, get, delete, env, files") {
             throw "directory help smoke failed: $directoryHelpOutput"

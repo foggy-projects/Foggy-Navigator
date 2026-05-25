@@ -74,7 +74,11 @@ $features = @(
     "client-app-runtime-credential",
     "upstream-worker-orchestration",
     "upstream-directory-orchestration",
-    "upstream-worker-pool-orchestration"
+    "upstream-worker-pool-orchestration",
+    "task-diagnostics",
+    "physical-worker-diagnostics",
+    "worker-host-suite",
+    "navi-routed-codex-config"
 )
 
 Push-Location $RepoRoot
