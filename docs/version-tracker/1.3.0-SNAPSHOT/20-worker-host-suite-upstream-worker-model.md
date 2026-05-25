@@ -20,13 +20,14 @@ School Sim 准备把执行环境统一迁到 WSL。当前本机已经有 WSL Cla
 
 1. 对普通上游暴露 WorkerHost suite 模型：一台 host 下声明一组标准 worker 进程。
 2. 收紧上游可配置项：只允许标准 worker key，不暴露 backend、capability、worker-pool 等内部路由概念。
-3. 保持现有运行时兼容：短期仍可将 Codex 写入 Claude worker 的 `codexConfig`，BizWorker 仍可走现有 identity 注册。
-4. 为后续真实 `OPENAI_CODEX` / `LANGGRAPH_BIZ` PhysicalWorker identity 留出不改外部 manifest 的演进空间。
+3. 保持现有运行时兼容：Codex 先统一走 Navi，通过 Claude worker 的 `codexConfig` 路由；BizWorker 仍可走现有 identity 注册。
+4. 为后续真实 `OPENAI_CODEX` PhysicalWorker identity 留出不改外部 manifest 的演进空间，但本阶段不启用 Codex worker direct HTTP 调用。
 5. 增强 CLI 与 `owner-smoke`，让上游能看到 host suite 下各 role 的最终脱敏 endpoint。
 
 ## 非目标
 
-- 本阶段不强制迁移所有 Codex Agent 到独立 `OPENAI_CODEX` physical worker。
+- 本阶段不迁移 Codex Agent 到独立 `OPENAI_CODEX` physical worker。
+- 本阶段不允许普通上游在 manifest 中声明 `workers.codex.workerId`；Codex role 只表达 Codex worker endpoint，由 Claude worker `codexConfig` 承载。
 - 本阶段不移除现有 `worker create`、`worker update`、`worker-pool register-worker` 命令。
 - 本阶段不允许普通上游自定义任意 worker 类型或 backend 名称。
 - 本阶段不把内部 capability、pool member、launcher adapter 细节写入上游 manifest。
@@ -67,6 +68,7 @@ School Sim 准备把执行环境统一迁到 WSL。当前本机已经有 WSL Cla
 - `workers.codex`: 可选；启用时必须能解析出端口或完整 endpoint。
 - `workers.biz`: 可选；启用时必须能解析出端口或完整 endpoint。
 - 普通上游不得提交非标准 worker key。平台管理员高级模式另行保留裸 worker/identity 注册能力。
+- `workers.codex.workerId` 当前禁止填写。Codex Agent 的 worker id 仍使用 `claudeCode` worker id，Codex role 只配置 `port` / `baseUrlOverride` / `model` / token 引用。
 
 ### 派生规则
 
@@ -83,7 +85,7 @@ biz.baseUrl        = hostUrl + ":" + workers.biz.port
 | 外部 worker key | 当前内部映射 | 当前行为 | 目标行为 |
 | --- | --- | --- | --- |
 | `claudeCode` | ClaudeWorkerEntity | 通过 upstream worker create/update 注册，承担目录与 Claude Code 执行 | 保持为 host suite 的必需 anchor worker |
-| `codex` | ClaudeWorkerEntity.codexConfig | 写入 `codexConfig.baseUrl`，Codex Agent 仍绑定 Claude worker id | 迁移为独立 `OPENAI_CODEX` physical worker identity，外部 manifest 不变 |
+| `codex` | ClaudeWorkerEntity.codexConfig | 写入 `codexConfig.baseUrl`，Codex Agent 仍绑定 Claude worker id；不注册独立 `OPENAI_CODEX` identity | 后续可迁移为独立 `OPENAI_CODEX` physical worker identity，外部 manifest 不变 |
 | `biz` | BizWorkerIdentityEntity / LanggraphWorkerEntity 兼容链路 | 通过 worker identity 注册，必要时保持旧 Langgraph worker 可 launch | 统一为标准 physical worker identity，worker-pool 只作内部路由兼容 |
 
 ## CLI 设计
@@ -113,6 +115,7 @@ upstream worker-host install --file worker-host.json
   - `NAVI_WORKER_ID`，指向 `claudeCode` worker id
   - `NAVI_BIZ_WORKER_ID`，当启用 `biz` 时写入
 - 不把 worker auth token 打印到 stdout。
+- CLI 必须拒绝 `workers.codex.workerId`，避免上游误以为当前支持直接绑定 `OPENAI_CODEX` identity。
 
 ## Agent 与 Directory 绑定口径
 
@@ -194,7 +197,14 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 - fallback 会校验 identity `ENABLED`、`HEALTHY`、`baseUrl` 非空；旧 `LanggraphWorkerEntity` 仍优先，兼容现有部署。
 - 已加回归测试，避免 identity 注册成功但运行失败。
 
-### Phase 4: 独立 Codex PhysicalWorker
+### Phase 4A: Navi-routed Codex 收口
+
+- Codex 不做 direct HTTP 调用，不注册独立 `OPENAI_CODEX` physical worker identity。
+- `worker-host` CLI 禁止 `workers.codex.workerId`，Codex role 输出使用 Claude worker id。
+- `verify/install/apply` 对 Codex role 统一输出 `source=CLAUDE_WORKER_CODEX_CONFIG`，用于诊断实际 Codex endpoint。
+- 上游 Agent manifest 中 Codex Agent 的 `workerId/workerRef` 继续填写 `claudeCode` worker id。
+
+### Deferred Phase 4B: 独立 Codex PhysicalWorker
 
 - 引入或复用标准 physical worker identity 注册接口支持 `OPENAI_CODEX`。
 - Codex Agent 支持 execution worker 指向独立 Codex identity。
@@ -206,7 +216,8 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 - 已落地 Phase 2 诊断主体：readiness 响应保留旧 `physicalWorkerDiagnostic`，同时新增 `physicalWorkerDiagnostics` role 列表；CLI 在旧 `physicalWorker` 行后输出 `workerRole` 行。
 - Codex 兼容模型已能通过 `role=codex source=CLAUDE_WORKER_CODEX_CONFIG` 输出脱敏后的 `codexConfig.baseUrl`，用于确认真实执行 endpoint 是否为 WSL `3151`。
 - 已落地 Phase 3 Biz identity launch 闭环：Biz Agent 或 worker pool member 绑定 Biz worker identity id 时，不再要求同步创建旧 `LanggraphWorkerEntity`。
-- 尚未落地真实本机/WSL installer、独立 `OPENAI_CODEX` physical worker identity 直连；这些仍属于后续 Phase。
+- 已按“所有 worker 调用先走 Navi”的口径收紧 Phase 4A：CLI 不接受 `workers.codex.workerId`，Codex role 诊断固定显示 `CLAUDE_WORKER_CODEX_CONFIG`，并使用 `claudeCode` worker id 作为绑定入口。
+- 尚未落地真实本机/WSL installer、独立 `OPENAI_CODEX` physical worker identity 直连；这些仍属于后续 Deferred Phase。
 
 ## 验收标准
 
@@ -222,7 +233,7 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 
 ## 风险与约束
 
-- 当前 Codex 实现仍以 Claude worker id 作为入口，不能在 Phase 1 直接承诺独立 Codex identity 可执行。
+- 当前 Codex 实现仍以 Claude worker id 作为入口；普通上游不得配置独立 Codex worker id，不能承诺独立 Codex identity 可执行。
 - Biz identity 直连当前使用 identity 的 `baseUrl` 作为运行时 endpoint；`identityToken` 只保存 hash，不作为 worker 调用 token。需要远程 Worker 鉴权时，应补 secret ref 或受控 token 材料模型。
 - `hostUrl=http://127.0.0.1` 的含义是 Navigator 服务视角可达；当 Navigator 不在同一 host/WSL 网络命名空间时，上游必须填可被 Navigator 访问的地址。
 - `install=ensure` 涉及本机/WSL 操作，CLI 应先以显式 dry-run/提示方式推进，避免隐式改动用户环境。

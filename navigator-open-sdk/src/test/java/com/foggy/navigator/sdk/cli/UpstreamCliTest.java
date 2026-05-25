@@ -2456,17 +2456,50 @@ class UpstreamCliTest {
         assertTrue(requestBodies.get(1).contains("\"workerBackend\":\"LANGGRAPH_BIZ\""));
         assertTrue(requestBodies.get(1).contains("\"baseUrl\":\"http://127.0.0.1:3161\""));
         assertTrue(requestBodies.get(1).contains("\"identityToken\":\"biz-worker-secret\""));
+        assertFalse(String.join("\n", requestBodies).contains("OPENAI_CODEX"));
         assertTrue(profile.contains("NAVI_WORKER_HOST_ID=school-sim-wsl"));
         assertTrue(profile.contains("NAVI_WORKER_ID=school-sim-wsl-claude"));
         assertTrue(profile.contains("NAVI_BIZ_WORKER_ID=school-sim-wsl-biz"));
         assertTrue(output.contains("worker-host apply ok"));
         assertTrue(output.contains("workerRole role=claudeCode"));
-        assertTrue(output.contains("workerRole role=codex"));
+        assertTrue(output.contains("workerRole role=codex workerId=school-sim-wsl-claude baseUrl=http://127.0.0.1:3151 source=CLAUDE_WORKER_CODEX_CONFIG"));
         assertTrue(output.contains("workerRole role=biz"));
         assertFalse(output.contains("naa-secret-admin-key"));
         assertFalse(output.contains("claude-worker-secret"));
         assertFalse(output.contains("codex-worker-secret"));
         assertFalse(output.contains("biz-worker-secret"));
+    }
+
+    @Test
+    void workerHostVerifyReportsCodexThroughClaudeCodexConfig() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("upstream.env"), """
+                NAVI_WORKER_ID=school-sim-wsl-claude
+                """, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".navigator").resolve("worker-host.json"), """
+                {
+                  "workerHostId": "school-sim-wsl",
+                  "hostUrl": "http://127.0.0.1",
+                  "port": 3131,
+                  "workers": {
+                    "claudeCode": {"enabled": true},
+                    "codex": {"enabled": true, "port": 3151},
+                    "biz": {"enabled": true, "port": 3161}
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "worker-host", "verify",
+                "--profile", ".navigator/upstream.env",
+                "--file", ".navigator/worker-host.json"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastPath);
+        assertTrue(output.contains("workerRole role=claudeCode workerId=school-sim-wsl-claude baseUrl=http://127.0.0.1:3131 source=CLAUDE_WORKER"));
+        assertTrue(output.contains("workerRole role=codex workerId=school-sim-wsl-claude baseUrl=http://127.0.0.1:3151 source=CLAUDE_WORKER_CODEX_CONFIG"));
+        assertTrue(output.contains("workerRole role=biz workerId=school-sim-wsl-biz baseUrl=http://127.0.0.1:3161 source=BIZ_WORKER_IDENTITY"));
     }
 
     @Test
@@ -2491,6 +2524,30 @@ class UpstreamCliTest {
         assertNull(lastPath);
         assertTrue(stderr.toString(StandardCharsets.UTF_8)
                 .contains("unsupported worker-host worker key: custom"));
+    }
+
+    @Test
+    void workerHostVerifyRejectsCodexWorkerIdBeforeHttpCall() throws Exception {
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("worker-host.json"), """
+                {
+                  "workerHostId": "school-sim-wsl",
+                  "hostUrl": "http://127.0.0.1",
+                  "port": 3131,
+                  "workers": {
+                    "claudeCode": {"enabled": true},
+                    "codex": {"enabled": true, "port": 3151, "workerId": "school-sim-wsl-codex"}
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "worker-host", "verify",
+                "--file", ".navigator/worker-host.json"}, Map.of());
+
+        assertEquals(2, code);
+        assertNull(lastPath);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("workers.codex.workerId is not supported in Navi-routed mode"));
     }
 
     @Test

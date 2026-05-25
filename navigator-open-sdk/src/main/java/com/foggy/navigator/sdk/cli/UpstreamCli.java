@@ -314,6 +314,7 @@ public class UpstreamCli {
         out.println("  verify --file <json>");
         out.println("  install --file <json>");
         out.println("WorkerHost is the normal upstream bootstrap entry; worker and worker-pool commands remain low-level compatibility commands.");
+        out.println("Codex is Navi-routed through claudeCode.codexConfig; workers.codex.workerId/direct OPENAI_CODEX identity is not supported yet.");
         return 0;
     }
 
@@ -870,18 +871,17 @@ public class UpstreamCli {
     private int workerHostVerify(CliArguments args) throws Exception {
         WorkerHostPlan plan = normalizeWorkerHostManifest(readJsonFile(
                 requiredOption(args, "file", "worker host json file"), WorkerHostManifest.class));
+        String claudeWorkerId = firstNonBlank(plan.claudeCode.workerId, config.get("NAVI_WORKER_ID"));
         out.println("worker-host verify ok");
         out.println("workerHost workerHostId=" + valueOrEmpty(plan.workerHostId)
                 + " hostUrl=" + redact(plan.hostUrl)
                 + " install=" + valueOrEmpty(plan.install));
-        printWorkerHostRole("claudeCode", firstNonBlank(plan.claudeCode.workerId, config.get("NAVI_WORKER_ID")),
-                plan.claudeCode.baseUrl, "MANIFEST");
+        printWorkerHostRole("claudeCode", claudeWorkerId, plan.claudeCode.baseUrl, "CLAUDE_WORKER");
         if (plan.codex != null) {
-            printWorkerHostRole("codex", firstNonBlank(plan.codex.workerId, config.get("NAVI_WORKER_ID")),
-                    plan.codex.baseUrl, "MANIFEST");
+            printWorkerHostRole("codex", claudeWorkerId, plan.codex.baseUrl, "CLAUDE_WORKER_CODEX_CONFIG");
         }
         if (plan.biz != null) {
-            printWorkerHostRole("biz", plan.biz.workerId, plan.biz.baseUrl, "MANIFEST");
+            printWorkerHostRole("biz", plan.biz.workerId, plan.biz.baseUrl, "BIZ_WORKER_IDENTITY");
         }
         return 0;
     }
@@ -893,12 +893,12 @@ public class UpstreamCli {
         out.println("workerHost workerHostId=" + valueOrEmpty(plan.workerHostId)
                 + " hostUrl=" + redact(plan.hostUrl)
                 + " install=" + valueOrEmpty(plan.install));
-        printWorkerHostRole("claudeCode", plan.claudeCode.workerId, plan.claudeCode.baseUrl, "INSTALL_PLAN");
+        printWorkerHostRole("claudeCode", plan.claudeCode.workerId, plan.claudeCode.baseUrl, "CLAUDE_WORKER");
         if (plan.codex != null) {
-            printWorkerHostRole("codex", plan.codex.workerId, plan.codex.baseUrl, "INSTALL_PLAN");
+            printWorkerHostRole("codex", plan.claudeCode.workerId, plan.codex.baseUrl, "CLAUDE_WORKER_CODEX_CONFIG");
         }
         if (plan.biz != null) {
-            printWorkerHostRole("biz", plan.biz.workerId, plan.biz.baseUrl, "INSTALL_PLAN");
+            printWorkerHostRole("biz", plan.biz.workerId, plan.biz.baseUrl, "BIZ_WORKER_IDENTITY");
         }
         out.println("automaticInstall=false");
         out.println("message=worker-host install currently validates the manifest and prints the install plan; installer execution will be wired in a later phase");
@@ -2780,8 +2780,11 @@ public class UpstreamCli {
         WorkerRolePlan codex = null;
         WorkerHostManifest.WorkerSpec codexSpec = workers.get("codex");
         if (codexSpec != null && Boolean.TRUE.equals(codexSpec.getEnabled())) {
+            if (hasText(codexSpec.getWorkerId())) {
+                throw new UpstreamCliException("workers.codex.workerId is not supported in Navi-routed mode; set workers.claudeCode.workerId or --worker-id and configure workers.codex.port/baseUrlOverride");
+            }
             codex = new WorkerRolePlan(
-                    codexSpec.getWorkerId(),
+                    claude.workerId,
                     workerBaseUrl(hostUrl, codexSpec.getBaseUrlOverride(), requireRolePort(codexSpec, "codex")),
                     codexSpec);
         }
