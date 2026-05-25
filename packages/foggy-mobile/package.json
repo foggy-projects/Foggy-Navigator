@@ -1,6 +1,6 @@
 {
   "name": "@foggy/mobile",
-  "version": "1.0.37",
+  "version": "1.0.38",
   "private": true,
   "scripts": {
     "dev:h5": "uni -p h5",
