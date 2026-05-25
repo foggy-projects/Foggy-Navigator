@@ -23,6 +23,7 @@
 - [17-biz-worker-complex-task-plan-observer-design.md](./17-biz-worker-complex-task-plan-observer-design.md) - BizWorker complex task active_plan and read-only plan observer design
 - [18-biz-worker-complex-task-session-sample-audit.md](./18-biz-worker-complex-task-session-sample-audit.md) - Desensitized Codex/Claude session sample audit for complex task planning
 - [19-biz-worker-frame-execution-report-design.md](./19-biz-worker-frame-execution-report-design.md) - BizWorker frame execution report and provenance markdown design
+- [20-worker-host-suite-upstream-worker-model.md](./20-worker-host-suite-upstream-worker-model.md) - WorkerHost suite manifest and upstream worker creation model
 - [workitems/BUG-021-follow-up-3-langgraph-terminal-status-after-approval-result.md](./workitems/BUG-021-follow-up-3-langgraph-terminal-status-after-approval-result.md) - BUG-021 follow-up terminal status persistence after approval result
 - [workitems/BUG-022-materialize-bootstrap-non-blocking.md](./workitems/BUG-022-materialize-bootstrap-non-blocking.md) - materialize should not block first bootstrap when Skill/Function resources are not ready
 - [workitems/BUG-023-frame-execution-report-approval-resume-propagation.md](./workitems/BUG-023-frame-execution-report-approval-resume-propagation.md) - frame execution report propagation and terminal convergence after approval resume
@@ -44,6 +45,7 @@
 - [workitems/BUG-038-multi-image-ticket-submits-only-one-attachment.md](./workitems/BUG-038-multi-image-ticket-submits-only-one-attachment.md) - multi-image TMS ticket creation reaches BusinessFunction with only one attachment
 - [workitems/BUG-039-chat-attachments-lost-after-session-reopen.md](./workitems/BUG-039-chat-attachments-lost-after-session-reopen.md) - chat message attachments are lost after refresh or session reopen
 - [workitems/BUG-040-concise-mode-shows-tool-events-after-session-reopen.md](./workitems/BUG-040-concise-mode-shows-tool-events-after-session-reopen.md) - concise mode renders raw tool events after session reopen
+- [workitems/BUG-041-upstream-task-diagnostics-gap.md](./workitems/BUG-041-upstream-task-diagnostics-gap.md) - upstream task/messages diagnostics gap and School Sim M2 recheck follow-up
 - [workitems/REQ-126-mobile-agent-chat-component.md](./workitems/REQ-126-mobile-agent-chat-component.md) - mobile-ready public Agent chat component for upstream Vue 3 apps
 - [workitems/BUG-issue-115-world-sim-route-smoke-blocked.md](./workitems/BUG-issue-115-world-sim-route-smoke-blocked.md) - issue #115 live smoke is blocked by CLI release and control credential scope
 - [acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md](./acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md)

@@ -39,6 +39,8 @@ public class AgentReadiness {
     private String workspaceResolverType;
     private Boolean workspaceReadOnly;
     private String workspaceSource;
+    private PhysicalWorkerDiagnostic physicalWorkerDiagnostic;
+    private List<PhysicalWorkerDiagnostic> physicalWorkerDiagnostics;
     private List<AgentReadinessCheck> checks;
     private SkillArtifactLink skillArtifact;
 
@@ -149,6 +151,12 @@ public class AgentReadiness {
 
     public String getWorkspaceSource() { return workspaceSource; }
     public void setWorkspaceSource(String workspaceSource) { this.workspaceSource = workspaceSource; }
+
+    public PhysicalWorkerDiagnostic getPhysicalWorkerDiagnostic() { return physicalWorkerDiagnostic; }
+    public void setPhysicalWorkerDiagnostic(PhysicalWorkerDiagnostic physicalWorkerDiagnostic) { this.physicalWorkerDiagnostic = physicalWorkerDiagnostic; }
+
+    public List<PhysicalWorkerDiagnostic> getPhysicalWorkerDiagnostics() { return physicalWorkerDiagnostics; }
+    public void setPhysicalWorkerDiagnostics(List<PhysicalWorkerDiagnostic> physicalWorkerDiagnostics) { this.physicalWorkerDiagnostics = physicalWorkerDiagnostics; }
 
     public List<AgentReadinessCheck> getChecks() { return checks; }
     public void setChecks(List<AgentReadinessCheck> checks) { this.checks = checks; }

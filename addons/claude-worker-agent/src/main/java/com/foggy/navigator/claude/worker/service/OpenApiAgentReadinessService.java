@@ -6,18 +6,24 @@ import com.foggy.navigator.business.agent.model.dto.AgentReadinessCheckDTO;
 import com.foggy.navigator.business.agent.model.dto.AgentReadinessDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionSummaryDTO;
+import com.foggy.navigator.business.agent.model.dto.PhysicalWorkerDiagnosticDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillArtifactLinkDTO;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerIdentityEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
+import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService;
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
+import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
+import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.env.Environment;
@@ -25,6 +31,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.lang.reflect.Array;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.LinkedHashSet;
@@ -39,6 +46,13 @@ public class OpenApiAgentReadinessService {
 
     private static final String UPSTREAM_PROPERTY_PREFIX = "foggy.navigator.business.agent.upstreams.";
     private static final Pattern UPSTREAM_REF_PATTERN = Pattern.compile("[A-Za-z0-9._-]{1,128}");
+    private static final String BACKEND_CLAUDE_CODE = "CLAUDE_CODE";
+    private static final String BACKEND_OPENAI_CODEX = "OPENAI_CODEX";
+    private static final String BACKEND_LANGGRAPH_BIZ = "LANGGRAPH_BIZ";
+    private static final String ROLE_CLAUDE_CODE = "claudeCode";
+    private static final String ROLE_CODEX = "codex";
+    private static final String ROLE_BIZ = "biz";
+    private static final String SOURCE_CLAUDE_CODEX_CONFIG = "CLAUDE_WORKER_CODEX_CONFIG";
 
     private final UnifiedAgentResolver agentResolver;
     private final ClientAppService clientAppService;
@@ -48,6 +62,8 @@ public class OpenApiAgentReadinessService {
     private final ClientAppUpstreamRouteService upstreamRouteService;
     private final BusinessFunctionRegistryService functionRegistryService;
     private final OpenApiAgentRouteService agentRouteService;
+    private final BizWorkerIdentityRepository workerIdentityRepository;
+    private final ClaudeWorkerRepository claudeWorkerRepository;
     private final Environment environment;
     private final ObjectMapper objectMapper;
 
@@ -90,7 +106,10 @@ public class OpenApiAgentReadinessService {
             return result;
         }
 
-        A2AgentResourceResolver.ResolvedAgentResource[] agentResourceRef = new A2AgentResourceResolver.ResolvedAgentResource[1];
+        A2AgentResourceResolver.ResolvedAgentResource[] agentResourceRef =
+                new A2AgentResourceResolver.ResolvedAgentResource[1];
+        A2AgentResourceResolver.ResolvedWorkspaceResource[] workspaceResourceRef =
+                new A2AgentResourceResolver.ResolvedWorkspaceResource[1];
         addCheck(result, "AGENT_REGISTERED", () -> requireAgent(
                 route.agentId(), credential.getTenantId(), safeForm.getModelConfigId()));
         addCheck(result, "RUNTIME_AGENT_RESOURCE", () -> {
@@ -133,7 +152,8 @@ public class OpenApiAgentReadinessService {
             result.setModelCategory(modelResource.category().name());
             validateAgentBackendCompatibility(agentResourceRef[0], modelResource);
         });
-        addWorkspaceResourceCheckIfPossible(result, credential, safeForm, agentResourceRef[0]);
+        addWorkspaceResourceCheckIfPossible(result, credential, safeForm, agentResourceRef[0], workspaceResourceRef);
+        applyPhysicalWorkerDiagnostic(result, agentResourceRef[0], workspaceResourceRef[0]);
         addRequiredUpstreamRouteChecks(result, credential, safeForm);
         addBusinessFunctionAdapterChecks(result, credential);
         addOwnerAwareRuntimeResourceCheck(result);
@@ -213,7 +233,8 @@ public class OpenApiAgentReadinessService {
             AgentReadinessDTO result,
             ResolvedClientAppCredentialDTO credential,
             AgentReadinessPreflightForm form,
-            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource[] workspaceResourceRef) {
         if (agentResource == null) {
             return;
         }
@@ -236,6 +257,7 @@ public class OpenApiAgentReadinessService {
                     form.getUpstreamUserId(),
                     agentResource,
                     effectiveDirectoryId);
+            workspaceResourceRef[0] = workspaceResource;
             result.setEffectiveDirectoryId(workspaceResource.directoryId());
             if (StringUtils.hasText(workspaceResource.physicalWorkerId())) {
                 result.setEffectivePhysicalWorkerId(workspaceResource.physicalWorkerId());
@@ -249,6 +271,315 @@ public class OpenApiAgentReadinessService {
             result.setWorkspaceReadOnly(workspaceResource.readOnly());
             result.setWorkspaceSource(workspaceResource.source());
         });
+    }
+
+    private void applyPhysicalWorkerDiagnostic(
+            AgentReadinessDTO result,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        String workerId = trimToNull(result.getEffectivePhysicalWorkerId());
+        PhysicalWorkerDiagnosticDTO diagnostic = null;
+        if (workerId != null) {
+            diagnostic = buildPhysicalWorkerDiagnostic(
+                    workerId,
+                    firstNonBlank(result.getEffectiveWorkerBackend(),
+                            agentResource != null ? agentResource.workerBackend() : null),
+                    resolvePhysicalWorkerSource(workerId, agentResource, workspaceResource, result),
+                    isExecutionWorker(workerId, agentResource, workspaceResource),
+                    workspaceResource != null && workerId.equals(trimToNull(workspaceResource.physicalWorkerId())));
+            result.setPhysicalWorkerDiagnostic(diagnostic);
+        }
+        result.setPhysicalWorkerDiagnostics(buildPhysicalWorkerRoleDiagnostics(
+                result, agentResource, workspaceResource, diagnostic));
+    }
+
+    private PhysicalWorkerDiagnosticDTO buildPhysicalWorkerDiagnostic(
+            String workerId,
+            String workerBackend,
+            String source,
+            boolean executionWorker,
+            boolean directoryWorker) {
+        PhysicalWorkerDiagnosticDTO diagnostic = new PhysicalWorkerDiagnosticDTO();
+        diagnostic.setPhysicalWorkerId(workerId);
+        diagnostic.setWorkerBackend(workerBackend);
+        diagnostic.setSource(source);
+        diagnostic.setExecutionWorker(executionWorker);
+        diagnostic.setDirectoryWorker(directoryWorker);
+        enrichFromWorkerIdentity(diagnostic, workerId);
+        enrichFromClaudeWorker(diagnostic, workerId);
+        return diagnostic;
+    }
+
+    private List<PhysicalWorkerDiagnosticDTO> buildPhysicalWorkerRoleDiagnostics(
+            AgentReadinessDTO result,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
+            PhysicalWorkerDiagnosticDTO primaryDiagnostic) {
+        List<PhysicalWorkerDiagnosticDTO> diagnostics = new ArrayList<>();
+        String directoryWorkerId = workspaceResource != null
+                ? trimToNull(workspaceResource.physicalWorkerId())
+                : null;
+        if (directoryWorkerId != null) {
+            appendDirectoryWorkerDiagnostic(diagnostics, result, agentResource, workspaceResource, directoryWorkerId);
+        }
+
+        String executionWorkerId = agentResource != null
+                ? trimToNull(agentResource.physicalWorkerId())
+                : null;
+        if (executionWorkerId == null) {
+            executionWorkerId = trimToNull(result.getEffectivePhysicalWorkerId());
+        }
+        if (executionWorkerId != null) {
+            appendExecutionWorkerDiagnostic(diagnostics, result, agentResource, workspaceResource, executionWorkerId);
+        }
+
+        if (diagnostics.isEmpty() && primaryDiagnostic != null) {
+            PhysicalWorkerDiagnosticDTO fallback = copyDiagnostic(primaryDiagnostic);
+            fallback.setRole(resolveRole(fallback));
+            appendOrMergeDiagnostic(diagnostics, fallback);
+        }
+        return diagnostics;
+    }
+
+    private void appendDirectoryWorkerDiagnostic(
+            List<PhysicalWorkerDiagnosticDTO> diagnostics,
+            AgentReadinessDTO result,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
+            String workerId) {
+        PhysicalWorkerDiagnosticDTO diagnostic = buildPhysicalWorkerDiagnostic(
+                workerId,
+                null,
+                resolvePhysicalWorkerSource(workerId, agentResource, workspaceResource, result),
+                false,
+                true);
+        diagnostic.setRole(resolveRole(diagnostic));
+        if (ROLE_CLAUDE_CODE.equals(diagnostic.getRole())) {
+            diagnostic.setWorkerBackend(BACKEND_CLAUDE_CODE);
+        }
+        appendOrMergeDiagnostic(diagnostics, diagnostic);
+    }
+
+    private void appendExecutionWorkerDiagnostic(
+            List<PhysicalWorkerDiagnosticDTO> diagnostics,
+            AgentReadinessDTO result,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
+            String workerId) {
+        String workerBackend = firstNonBlank(result.getEffectiveWorkerBackend(),
+                agentResource != null ? agentResource.workerBackend() : null);
+        if (isBackend(workerBackend, BACKEND_OPENAI_CODEX)
+                && appendCodexConfigDiagnostic(diagnostics, workerId)) {
+            return;
+        }
+        PhysicalWorkerDiagnosticDTO diagnostic = buildPhysicalWorkerDiagnostic(
+                workerId,
+                workerBackend,
+                resolvePhysicalWorkerSource(workerId, agentResource, workspaceResource, result),
+                true,
+                workspaceResource != null && workerId.equals(trimToNull(workspaceResource.physicalWorkerId())));
+        diagnostic.setRole(resolveRole(diagnostic));
+        appendOrMergeDiagnostic(diagnostics, diagnostic);
+    }
+
+    private boolean appendCodexConfigDiagnostic(List<PhysicalWorkerDiagnosticDTO> diagnostics, String workerId) {
+        Optional<ClaudeWorkerEntity> worker = claudeWorkerRepository.findByWorkerId(workerId);
+        if (worker.isEmpty()) {
+            return false;
+        }
+        CodexConfig codexConfig = worker.get().getCodexConfig();
+        if (codexConfig == null || !StringUtils.hasText(codexConfig.getBaseUrl())) {
+            return false;
+        }
+        PhysicalWorkerDiagnosticDTO diagnostic = buildPhysicalWorkerDiagnostic(
+                workerId,
+                BACKEND_OPENAI_CODEX,
+                SOURCE_CLAUDE_CODEX_CONFIG,
+                true,
+                false);
+        diagnostic.setRole(ROLE_CODEX);
+        diagnostic.setBaseUrl(scrubUrl(codexConfig.getBaseUrl()));
+        appendOrMergeDiagnostic(diagnostics, diagnostic);
+        return true;
+    }
+
+    private void appendOrMergeDiagnostic(
+            List<PhysicalWorkerDiagnosticDTO> diagnostics,
+            PhysicalWorkerDiagnosticDTO candidate) {
+        for (PhysicalWorkerDiagnosticDTO existing : diagnostics) {
+            if (sameText(existing.getRole(), candidate.getRole())
+                    && sameText(existing.getPhysicalWorkerId(), candidate.getPhysicalWorkerId())
+                    && sameNullableText(existing.getBaseUrl(), candidate.getBaseUrl())) {
+                existing.setExecutionWorker(Boolean.TRUE.equals(existing.getExecutionWorker())
+                        || Boolean.TRUE.equals(candidate.getExecutionWorker()));
+                existing.setDirectoryWorker(Boolean.TRUE.equals(existing.getDirectoryWorker())
+                        || Boolean.TRUE.equals(candidate.getDirectoryWorker()));
+                existing.setWorkerBackend(firstNonBlank(existing.getWorkerBackend(), candidate.getWorkerBackend()));
+                existing.setWorkerName(firstNonBlank(existing.getWorkerName(), candidate.getWorkerName()));
+                existing.setBaseUrl(firstNonBlank(existing.getBaseUrl(), candidate.getBaseUrl()));
+                existing.setStatus(firstNonBlank(existing.getStatus(), candidate.getStatus()));
+                existing.setHealthStatus(firstNonBlank(existing.getHealthStatus(), candidate.getHealthStatus()));
+                existing.setVersion(firstNonBlank(existing.getVersion(), candidate.getVersion()));
+                existing.setHostname(firstNonBlank(existing.getHostname(), candidate.getHostname()));
+                existing.setLastHeartbeat(firstNonBlank(existing.getLastHeartbeat(), candidate.getLastHeartbeat()));
+                existing.setSource(firstNonBlank(existing.getSource(), candidate.getSource()));
+                return;
+            }
+        }
+        diagnostics.add(candidate);
+    }
+
+    private String resolveRole(PhysicalWorkerDiagnosticDTO diagnostic) {
+        String backend = trimToNull(diagnostic.getWorkerBackend());
+        if (isBackend(backend, BACKEND_OPENAI_CODEX)) {
+            return ROLE_CODEX;
+        }
+        if (isBackend(backend, BACKEND_LANGGRAPH_BIZ)) {
+            return ROLE_BIZ;
+        }
+        if (isBackend(backend, BACKEND_CLAUDE_CODE)
+                || claudeWorkerRepository.findByWorkerId(diagnostic.getPhysicalWorkerId()).isPresent()) {
+            return ROLE_CLAUDE_CODE;
+        }
+        return "physicalWorker";
+    }
+
+    private PhysicalWorkerDiagnosticDTO copyDiagnostic(PhysicalWorkerDiagnosticDTO source) {
+        PhysicalWorkerDiagnosticDTO copy = new PhysicalWorkerDiagnosticDTO();
+        copy.setRole(source.getRole());
+        copy.setPhysicalWorkerId(source.getPhysicalWorkerId());
+        copy.setWorkerName(source.getWorkerName());
+        copy.setWorkerBackend(source.getWorkerBackend());
+        copy.setBaseUrl(source.getBaseUrl());
+        copy.setStatus(source.getStatus());
+        copy.setHealthStatus(source.getHealthStatus());
+        copy.setVersion(source.getVersion());
+        copy.setHostname(source.getHostname());
+        copy.setLastHeartbeat(source.getLastHeartbeat());
+        copy.setSource(source.getSource());
+        copy.setExecutionWorker(source.getExecutionWorker());
+        copy.setDirectoryWorker(source.getDirectoryWorker());
+        return copy;
+    }
+
+    private boolean isBackend(String actual, String expected) {
+        return expected.equalsIgnoreCase(trimToNull(actual));
+    }
+
+    private boolean sameText(String left, String right) {
+        String normalizedLeft = trimToNull(left);
+        String normalizedRight = trimToNull(right);
+        return normalizedLeft != null && normalizedLeft.equals(normalizedRight);
+    }
+
+    private boolean sameNullableText(String left, String right) {
+        String normalizedLeft = trimToNull(left);
+        String normalizedRight = trimToNull(right);
+        if (normalizedLeft == null || normalizedRight == null) {
+            return true;
+        }
+        return normalizedLeft.equals(normalizedRight);
+    }
+
+    private void enrichFromWorkerIdentity(PhysicalWorkerDiagnosticDTO diagnostic, String workerId) {
+        Optional<BizWorkerIdentityEntity> identity = workerIdentityRepository.findByWorkerId(workerId);
+        if (identity.isEmpty()) {
+            return;
+        }
+        BizWorkerIdentityEntity entity = identity.get();
+        diagnostic.setWorkerBackend(firstNonBlank(diagnostic.getWorkerBackend(), entity.getWorkerBackend()));
+        diagnostic.setBaseUrl(scrubUrl(entity.getBaseUrl()));
+        diagnostic.setStatus(entity.getStatus());
+        diagnostic.setHealthStatus(entity.getHealthStatus());
+        diagnostic.setVersion(entity.getVersion());
+        diagnostic.setWorkerName(firstNonBlank(
+                diagnostic.getWorkerName(),
+                labelValue(entity.getLabelsJson(), "workerName", "name")));
+        diagnostic.setHostname(firstNonBlank(
+                diagnostic.getHostname(),
+                labelValue(entity.getLabelsJson(), "hostname", "host")));
+    }
+
+    private void enrichFromClaudeWorker(PhysicalWorkerDiagnosticDTO diagnostic, String workerId) {
+        Optional<ClaudeWorkerEntity> worker = claudeWorkerRepository.findByWorkerId(workerId);
+        if (worker.isEmpty()) {
+            return;
+        }
+        ClaudeWorkerEntity entity = worker.get();
+        diagnostic.setWorkerName(firstNonBlank(diagnostic.getWorkerName(), entity.getName()));
+        diagnostic.setBaseUrl(firstNonBlank(diagnostic.getBaseUrl(), scrubUrl(entity.getBaseUrl())));
+        diagnostic.setStatus(firstNonBlank(diagnostic.getStatus(), entity.getStatus()));
+        diagnostic.setVersion(firstNonBlank(diagnostic.getVersion(), entity.getWorkerVersion()));
+        diagnostic.setHostname(firstNonBlank(diagnostic.getHostname(), entity.getHostname()));
+        if (entity.getLastHeartbeat() != null) {
+            diagnostic.setLastHeartbeat(entity.getLastHeartbeat().toString());
+        }
+    }
+
+    private String resolvePhysicalWorkerSource(
+            String workerId,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
+            AgentReadinessDTO result) {
+        if (workspaceResource != null && workerId.equals(trimToNull(workspaceResource.physicalWorkerId()))) {
+            return workspaceResource.source();
+        }
+        if (agentResource != null && workerId.equals(trimToNull(agentResource.physicalWorkerId()))) {
+            return agentResource.physicalWorkerSource();
+        }
+        return result.getWorkspaceSource();
+    }
+
+    private boolean isExecutionWorker(
+            String workerId,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        String agentWorkerId = agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
+        if (agentWorkerId != null) {
+            return workerId.equals(agentWorkerId);
+        }
+        return workspaceResource != null && workerId.equals(trimToNull(workspaceResource.physicalWorkerId()));
+    }
+
+    private String labelValue(String labelsJson, String... keys) {
+        if (!StringUtils.hasText(labelsJson)) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(labelsJson);
+            for (String key : keys) {
+                String value = root.path(key).asText(null);
+                if (StringUtils.hasText(value)) {
+                    return value.trim();
+                }
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
+        return null;
+    }
+
+    private String scrubUrl(String rawUrl) {
+        String value = trimToNull(rawUrl);
+        if (value == null) {
+            return null;
+        }
+        try {
+            URI uri = URI.create(value);
+            URI safe = new URI(
+                    uri.getScheme(),
+                    null,
+                    uri.getHost(),
+                    uri.getPort(),
+                    uri.getPath(),
+                    null,
+                    null);
+            return safe.toString();
+        } catch (Exception e) {
+            return value
+                    .replaceAll("(?i)(://)[^/@\\s]+@", "$1")
+                    .replaceAll("(?i)([?&](?:token|access_token|api_key|key|secret|authorization)=)[^&#\\s]+", "$1[REDACTED]");
+        }
     }
 
     private void addOwnerAwareRuntimeResourceCheck(AgentReadinessDTO result) {
@@ -519,6 +850,19 @@ public class OpenApiAgentReadinessService {
 
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            String normalized = trimToNull(value);
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+        return null;
     }
 
     private record RequiredUpstreamRoute(String baseUrl, String userTokenHeader, String source) {

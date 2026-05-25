@@ -38,6 +38,7 @@ class UpstreamCliTest {
     private static String lastUpstreamUserIdHeader;
     private static String responseOverride;
     private static List<String> requestPaths;
+    private static List<String> requestBodies;
 
     @TempDir
     Path tempDir;
@@ -54,6 +55,7 @@ class UpstreamCliTest {
             requestPaths.add(lastPath);
             lastMethod = exchange.getRequestMethod();
             lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            requestBodies.add(lastBody);
             lastApiKeyHeader = exchange.getRequestHeaders().getFirst("X-API-Key");
             lastAuthorizationHeader = exchange.getRequestHeaders().getFirst("Authorization");
             lastOperatorKeyHeader = exchange.getRequestHeaders().getFirst("X-Navi-Operator-Key");
@@ -69,6 +71,51 @@ class UpstreamCliTest {
                 response = lastPath.contains("/messages")
                         ? "{\"code\":0,\"data\":{\"messages\":[{\"messageId\":\"m-1\",\"role\":\"assistant\",\"type\":\"text\",\"content\":\"done cat-runtime-secret\"}]}}"
                         : "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"COMPLETED\"}}";
+            } else if ("__MESSAGES_FAILED_DIAGNOSTICS__".equals(responseOverride)) {
+                response = lastPath.contains("/messages")
+                        ? """
+                        {"code":0,"data":{
+                          "taskId":"task-1",
+                          "status":"FAILED",
+                          "terminal":true,
+                          "terminalStatus":"FAILED",
+                          "providerTaskId":"wt-1",
+                          "workerTaskId":"wt-1",
+                          "lastAckedSeq":0,
+                          "modelConfigId":"model-codex",
+                          "modelConfigSource":"REQUESTED_MODEL_GRANT",
+                          "workerBackend":"OPENAI_CODEX",
+                          "providerType":"codex-worker",
+                          "taskSource":"PLATFORM",
+                          "workerSource":"WORKING_DIRECTORY:USER_PRIVATE",
+                          "backendSource":"MODEL_CONFIG_GRANT",
+                          "failureStage":"PROVIDER_API",
+                          "failureSummary":"Provider API rejected api_key=cat-runtime-secret",
+                          "messages":[]
+                        }}
+                        """
+                        : """
+                        {"code":0,"data":{
+                          "taskId":"task-1",
+                          "status":"FAILED",
+                          "providerTaskId":"wt-1",
+                          "workerTaskId":"wt-1",
+                          "lastAckedSeq":0,
+                          "modelConfigId":"model-codex",
+                          "modelConfigSource":"REQUESTED_MODEL_GRANT",
+                          "workerBackend":"OPENAI_CODEX",
+                          "providerType":"codex-worker",
+                          "taskSource":"PLATFORM",
+                          "workerSource":"WORKING_DIRECTORY:USER_PRIVATE",
+                          "backendSource":"MODEL_CONFIG_GRANT",
+                          "failureStage":"PROVIDER_API",
+                          "failureSummary":"Provider API rejected api_key=cat-runtime-secret"
+                        }}
+                        """;
+            } else if ("__WORKER_HOST_APPLY__".equals(responseOverride)) {
+                response = lastPath.contains("/worker-identities")
+                        ? "{\"code\":0,\"data\":{\"workerId\":\"school-sim-wsl-biz\",\"ownerType\":\"UPSTREAM_SYSTEM\",\"workerBackend\":\"LANGGRAPH_BIZ\",\"baseUrl\":\"http://127.0.0.1:3161\",\"status\":\"ENABLED\"}}"
+                        : "{\"code\":0,\"data\":{\"workerId\":\"school-sim-wsl-claude\",\"name\":\"school-sim-wsl Claude Code Worker\",\"baseUrl\":\"http://127.0.0.1:3131\",\"status\":\"ONLINE\"}}";
             } else if ("__RUNTIME_THEN_READINESS__".equals(responseOverride)) {
                 response = lastPath.contains("/runtime-token")
                         ? "{\"accessToken\":\"cat-auto-secret\",\"appKey\":\"cak-test\",\"clientAppId\":\"app-1\",\"expiresInSeconds\":1800}"
@@ -169,6 +216,7 @@ class UpstreamCliTest {
         lastClientAppControlKeyHeader = null;
         lastUpstreamUserIdHeader = null;
         requestPaths = new ArrayList<>();
+        requestBodies = new ArrayList<>();
         responseOverride = "{\"code\":0,\"data\":{}}";
         stdout = new ByteArrayOutputStream();
         stderr = new ByteArrayOutputStream();
@@ -1036,6 +1084,39 @@ class UpstreamCliTest {
     }
 
     @Test
+    void messagesPollPrintsFailedDiagnosticsAndRedactsSecrets() {
+        responseOverride = "__MESSAGES_FAILED_DIAGNOSTICS__";
+
+        Map<String, String> env = env("TOKEN_ENV", "cat-runtime-secret");
+        int code = run(new String[]{"upstream", "messages",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token-env", "TOKEN_ENV",
+                "--agent", "agent-1",
+                "--task-id", "task-1",
+                "--poll",
+                "--interval", "1"}, env);
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertTrue(output.contains("messages=0"));
+        assertTrue(output.contains("taskStatus=FAILED"));
+        assertTrue(output.contains("providerTaskId=wt-1"));
+        assertTrue(output.contains("workerTaskId=wt-1"));
+        assertTrue(output.contains("lastAckedSeq=0"));
+        assertTrue(output.contains("modelConfigId=model-codex"));
+        assertTrue(output.contains("modelConfigSource=REQUESTED_MODEL_GRANT"));
+        assertTrue(output.contains("workerBackend=OPENAI_CODEX"));
+        assertTrue(output.contains("providerType=codex-worker"));
+        assertTrue(output.contains("taskSource=PLATFORM"));
+        assertTrue(output.contains("workerSource=WORKING_DIRECTORY:USER_PRIVATE"));
+        assertTrue(output.contains("backendSource=MODEL_CONFIG_GRANT"));
+        assertTrue(output.contains("failureStage=PROVIDER_API"));
+        assertTrue(output.contains("failureSummary=Provider API rejected api_key=[REDACTED]"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
     void messagesRejectsImplicitProfileAgentCode() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
         Path profileDir = tempDir.resolve(".navigator");
@@ -1147,6 +1228,63 @@ class UpstreamCliTest {
                   "workspaceResolverType":"STATIC_ROOT",
                   "workspaceReadOnly":false,
                   "workspaceSource":"WORKING_DIRECTORY:USER_PRIVATE",
+                  "physicalWorkerDiagnostic":{
+                    "physicalWorkerId":"worker-1",
+                    "workerName":"wsl-codex-worker",
+                    "workerBackend":"LANGGRAPH_BIZ",
+                    "baseUrl":"http://127.0.0.1:3065/runtime",
+                    "status":"ENABLED",
+                    "healthStatus":"HEALTHY",
+                    "version":"1.2.3",
+                    "hostname":"dev-wsl",
+                    "lastHeartbeat":"2026-05-25T10:00:00",
+                    "source":"WORKING_DIRECTORY:USER_PRIVATE",
+                    "executionWorker":true,
+                    "directoryWorker":true
+                  },
+                  "physicalWorkerDiagnostics":[
+                    {
+                      "role":"biz",
+                      "physicalWorkerId":"worker-1",
+                      "workerName":"wsl-biz-worker",
+                      "workerBackend":"LANGGRAPH_BIZ",
+                      "baseUrl":"http://127.0.0.1:3161/runtime",
+                      "status":"ENABLED",
+                      "healthStatus":"HEALTHY",
+                      "version":"1.2.3",
+                      "hostname":"dev-wsl",
+                      "lastHeartbeat":"2026-05-25T10:00:00",
+                      "source":"BIZ_WORKER_IDENTITY",
+                      "executionWorker":true,
+                      "directoryWorker":false
+                    },
+                    {
+                      "role":"claudeCode",
+                      "physicalWorkerId":"worker-claude",
+                      "workerName":"wsl-claude-worker",
+                      "workerBackend":"CLAUDE_CODE",
+                      "baseUrl":"http://127.0.0.1:3131",
+                      "status":"ONLINE",
+                      "version":"1.0.8",
+                      "hostname":"dev-wsl",
+                      "source":"WORKING_DIRECTORY:USER_PRIVATE",
+                      "executionWorker":false,
+                      "directoryWorker":true
+                    },
+                    {
+                      "role":"codex",
+                      "physicalWorkerId":"worker-claude",
+                      "workerName":"wsl-claude-worker",
+                      "workerBackend":"OPENAI_CODEX",
+                      "baseUrl":"http://127.0.0.1:3151/runtime",
+                      "status":"ONLINE",
+                      "version":"1.0.8",
+                      "hostname":"dev-wsl",
+                      "source":"CLAUDE_WORKER_CODEX_CONFIG",
+                      "executionWorker":true,
+                      "directoryWorker":false
+                    }
+                  ],
                   "checks":[
                     {"code":"AGENT_REGISTERED","status":"OK","message":"agent registered"},
                     {"code":"UPSTREAM_USER_GRANT","status":"OK","message":"grant enabled"}
@@ -1181,6 +1319,17 @@ class UpstreamCliTest {
         assertTrue(output.contains("modelConfigSource=REQUESTED_MODEL_GRANT"));
         assertTrue(output.contains("agent agentId=agent-1 ownerType=CLIENT_APP ownerId=app-1 source=AGENT:CLIENT_APP skillId=agent-1"));
         assertTrue(output.contains("physicalWorker physicalWorkerId=worker-1 workerBackend=LANGGRAPH_BIZ source=WORKING_DIRECTORY:USER_PRIVATE"));
+        assertTrue(output.contains("workerName=wsl-codex-worker"));
+        assertTrue(output.contains("baseUrl=http://127.0.0.1:3065/runtime"));
+        assertTrue(output.contains("healthStatus=HEALTHY"));
+        assertTrue(output.contains("version=1.2.3"));
+        assertTrue(output.contains("hostname=dev-wsl"));
+        assertTrue(output.contains("usedAs=execution,directory"));
+        assertTrue(output.contains("workerRole role=biz physicalWorkerId=worker-1 workerBackend=LANGGRAPH_BIZ source=BIZ_WORKER_IDENTITY"));
+        assertTrue(output.contains("workerRole role=claudeCode physicalWorkerId=worker-claude workerBackend=CLAUDE_CODE source=WORKING_DIRECTORY:USER_PRIVATE"));
+        assertTrue(output.contains("workerRole role=codex physicalWorkerId=worker-claude workerBackend=OPENAI_CODEX source=CLAUDE_WORKER_CODEX_CONFIG"));
+        assertTrue(output.contains("baseUrl=http://127.0.0.1:3151/runtime"));
+        assertTrue(output.contains("baseUrl=http://127.0.0.1:3131"));
         assertTrue(output.contains("internalRoute workerPoolId=pool-1 ownerType=UPSTREAM_SYSTEM ownerId=usys-1 source=WORKER_POOL:UPSTREAM_SYSTEM"));
         assertTrue(output.contains("workspace requestedDirectoryId=dir-override defaultDirectoryId=dir-default effectiveDirectoryId=dir-override physicalWorkerId=worker-1 scope=USER_PRIVATE resolverType=STATIC_ROOT readOnly=false source=WORKING_DIRECTORY:USER_PRIVATE"));
         assertTrue(output.contains("check AGENT_REGISTERED=OK"));
@@ -2248,11 +2397,109 @@ class UpstreamCliTest {
     }
 
     @Test
+    void workerHostApplyCreatesClaudeSuiteAndRegistersBizIdentity() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".navigator").resolve("worker-host.json"), """
+                {
+                  "workerHostId": "school-sim-wsl",
+                  "hostUrl": "http://127.0.0.1",
+                  "port": 3131,
+                  "install": "ensure",
+                  "workers": {
+                    "claudeCode": {
+                      "enabled": true,
+                      "authTokenEnv": "CLAUDE_WORKER_TOKEN"
+                    },
+                    "codex": {
+                      "enabled": true,
+                      "port": 3151,
+                      "authTokenEnv": "CODEX_WORKER_TOKEN",
+                      "model": "gpt-5.5"
+                    },
+                    "biz": {
+                      "enabled": true,
+                      "port": 3161,
+                      "identityTokenEnv": "BIZ_WORKER_TOKEN",
+                      "version": "1.0.2"
+                    }
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+        responseOverride = "__WORKER_HOST_APPLY__";
+
+        int code = run(new String[]{"upstream", "worker-host", "apply",
+                "--profile", ".navigator/upstream.env",
+                "--file", ".navigator/worker-host.json",
+                "--target-tenant-id", "tenant-a",
+                "--write-profile"}, env(
+                "CLAUDE_WORKER_TOKEN", "claude-worker-secret",
+                "CODEX_WORKER_TOKEN", "codex-worker-secret",
+                "BIZ_WORKER_TOKEN", "biz-worker-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tempDir.resolve(".navigator").resolve("upstream.env"), StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals(List.of(
+                "/api/v1/upstream-admin/workers?targetTenantId=tenant-a",
+                "/api/v1/upstream-admin/worker-identities"), requestPaths);
+        assertTrue(requestBodies.get(0).contains("\"baseUrl\":\"http://127.0.0.1:3131\""));
+        assertTrue(requestBodies.get(0).contains("\"codexConfig\""));
+        assertTrue(requestBodies.get(0).contains("\"baseUrl\":\"http://127.0.0.1:3151\""));
+        assertTrue(requestBodies.get(0).contains("\"authToken\":\"claude-worker-secret\""));
+        assertTrue(requestBodies.get(0).contains("\"authToken\":\"codex-worker-secret\""));
+        assertTrue(requestBodies.get(1).contains("\"workerId\":\"school-sim-wsl-biz\""));
+        assertTrue(requestBodies.get(1).contains("\"workerBackend\":\"LANGGRAPH_BIZ\""));
+        assertTrue(requestBodies.get(1).contains("\"baseUrl\":\"http://127.0.0.1:3161\""));
+        assertTrue(requestBodies.get(1).contains("\"identityToken\":\"biz-worker-secret\""));
+        assertTrue(profile.contains("NAVI_WORKER_HOST_ID=school-sim-wsl"));
+        assertTrue(profile.contains("NAVI_WORKER_ID=school-sim-wsl-claude"));
+        assertTrue(profile.contains("NAVI_BIZ_WORKER_ID=school-sim-wsl-biz"));
+        assertTrue(output.contains("worker-host apply ok"));
+        assertTrue(output.contains("workerRole role=claudeCode"));
+        assertTrue(output.contains("workerRole role=codex"));
+        assertTrue(output.contains("workerRole role=biz"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+        assertFalse(output.contains("claude-worker-secret"));
+        assertFalse(output.contains("codex-worker-secret"));
+        assertFalse(output.contains("biz-worker-secret"));
+    }
+
+    @Test
+    void workerHostVerifyRejectsUnknownWorkerKeyBeforeHttpCall() throws Exception {
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("worker-host.json"), """
+                {
+                  "workerHostId": "school-sim-wsl",
+                  "hostUrl": "http://127.0.0.1",
+                  "port": 3131,
+                  "workers": {
+                    "claudeCode": {"enabled": true},
+                    "custom": {"enabled": true, "port": 3999}
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "worker-host", "verify",
+                "--file", ".navigator/worker-host.json"}, Map.of());
+
+        assertEquals(2, code);
+        assertNull(lastPath);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8)
+                .contains("unsupported worker-host worker key: custom"));
+    }
+
+    @Test
     void upstreamUsageAdvertisesProgrammingProjectOrchestrationCommands() {
         int code = run(new String[]{"upstream", "--help"}, Map.of());
 
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(0, code);
+        assertTrue(output.contains("worker-host apply/update/verify/install"));
         assertTrue(output.contains("worker list/create/get/update/delete/health/processes/kill"));
         assertTrue(output.contains("directory list/init/get/delete/env/files"));
         assertTrue(output.contains("Internal compatibility: worker-pool list/create/register-worker/add-member/status"));

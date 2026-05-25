@@ -43,6 +43,8 @@ public class AgentReadinessDTO {
     private String workspaceResolverType;
     private Boolean workspaceReadOnly;
     private String workspaceSource;
+    private PhysicalWorkerDiagnosticDTO physicalWorkerDiagnostic;
+    private List<PhysicalWorkerDiagnosticDTO> physicalWorkerDiagnostics = new ArrayList<>();
     private List<AgentReadinessCheckDTO> checks = new ArrayList<>();
     private SkillArtifactLinkDTO skillArtifact;
 

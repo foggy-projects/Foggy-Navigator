@@ -13,6 +13,7 @@ import com.foggy.navigator.sdk.model.AgentTask;
 import com.foggy.navigator.sdk.model.AgentReadiness;
 import com.foggy.navigator.sdk.model.AgentReadinessCheck;
 import com.foggy.navigator.sdk.model.Directory;
+import com.foggy.navigator.sdk.model.PhysicalWorkerDiagnostic;
 import com.foggy.navigator.sdk.model.SessionListPage;
 import com.foggy.navigator.sdk.model.SessionMessage;
 import com.foggy.navigator.sdk.model.SessionMessagesPage;
@@ -69,8 +70,10 @@ import com.foggy.navigator.sdk.model.businessagent.UpstreamTenantClientAppProvis
 import com.foggy.navigator.sdk.model.businessagent.UpstreamBootstrapRequestCreatedDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpstreamBootstrapRequestDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpsertClientAppUpstreamRouteForm;
+import com.foggy.navigator.sdk.model.businessagent.WorkerHostManifest;
 
 import java.io.PrintStream;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -80,8 +83,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class UpstreamCli {
     private static final String CREDENTIALS_NOT_REPLAYABLE = "CREDENTIALS_NOT_REPLAYABLE";
@@ -92,6 +97,7 @@ public class UpstreamCli {
     private final ObjectMapper objectMapper;
     private UpstreamCliConfig config;
     private String resolvedClientAppAccessToken;
+    private Map<String, String> env = Map.of();
 
     public UpstreamCli(PrintStream out, PrintStream err, Path cwd) {
         this.out = out;
@@ -113,6 +119,7 @@ public class UpstreamCli {
     public int run(String[] args, Map<String, String> env) {
         CliArguments parsed = CliArguments.parse(args);
         try {
+            this.env = env != null ? env : Map.of();
             config = UpstreamCliConfig.load(parsed, env, cwd);
             return dispatch(parsed);
         } catch (UpstreamCliException e) {
@@ -216,6 +223,11 @@ public class UpstreamCli {
             case "worker health" -> workerHealth(args);
             case "worker processes" -> workerProcesses(args);
             case "worker kill" -> workerKill(args);
+            case "worker-host", "worker-host help" -> workerHostUsage();
+            case "worker-host apply" -> workerHostApply(args);
+            case "worker-host update" -> workerHostUpdate(args);
+            case "worker-host verify" -> workerHostVerify(args);
+            case "worker-host install" -> workerHostInstall(args);
             case "directory", "directory help" -> directoryUsage();
             case "directory list" -> directoryList(args);
             case "directory init" -> directoryInit(args);
@@ -247,8 +259,8 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
-        out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker + directory + model + agent.");
+        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker-host apply.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--model-config-id <id>] [--model-variant <name>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
@@ -291,6 +303,17 @@ public class UpstreamCli {
         out.println("  get|delete|health|processes --worker-id <id>");
         out.println("  update --worker-id <id> --file <json>");
         out.println("  kill --worker-id <id> --pid <pid> [--force]");
+        return 0;
+    }
+
+    private int workerHostUsage() {
+        out.println("Usage: navi upstream worker-host <command> [options]");
+        out.println("Commands: apply, update, verify, install");
+        out.println("  apply  --file <json> [--target-tenant-id <tenantId>] [--worker-id <claudeWorkerId>] [--write-profile]");
+        out.println("  update --file <json> [--worker-id <claudeWorkerId>] [--write-profile]");
+        out.println("  verify --file <json>");
+        out.println("  install --file <json>");
+        out.println("WorkerHost is the normal upstream bootstrap entry; worker and worker-pool commands remain low-level compatibility commands.");
         return 0;
     }
 
@@ -775,6 +798,113 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int workerHostApply(CliArguments args) throws Exception {
+        return workerHostApplyOrUpdate(args, true);
+    }
+
+    private int workerHostUpdate(CliArguments args) throws Exception {
+        return workerHostApplyOrUpdate(args, false);
+    }
+
+    private int workerHostApplyOrUpdate(CliArguments args, boolean createIfMissing) throws Exception {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        WorkerHostPlan plan = normalizeWorkerHostManifest(readJsonFile(
+                requiredOption(args, "file", "worker host json file"), WorkerHostManifest.class));
+        WorkerApi workerApi = upstreamAdminWorkerApi();
+        String workerId = firstNonBlank(
+                args.option("worker-id"),
+                plan.claudeCode.workerId,
+                config.get("NAVI_WORKER_ID"));
+        Worker claudeWorker;
+        boolean created = !hasText(workerId);
+        if (created) {
+            if (!createIfMissing) {
+                throw new UpstreamCliException("claudeCode worker id is required for worker-host update (--worker-id or NAVI_WORKER_ID)");
+            }
+            claudeWorker = workerApi.createWithUpstreamAdmin(
+                    buildClaudeWorkerBody(plan),
+                    optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID"));
+            workerId = claudeWorker != null ? claudeWorker.getWorkerId() : null;
+        } else {
+            claudeWorker = workerApi.updateWithUpstreamAdmin(workerId, buildClaudeWorkerBody(plan));
+            if (claudeWorker != null && hasText(claudeWorker.getWorkerId())) {
+                workerId = claudeWorker.getWorkerId();
+            }
+        }
+
+        Map<String, Object> bizWorker = null;
+        if (plan.biz != null) {
+            bizWorker = upstreamAdminApi().registerUpstreamWorkerIdentity(buildBizWorkerIdentityBody(plan));
+        }
+
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_WORKER_HOST_ID", valueOrEmpty(plan.workerHostId));
+            config.writeProfileValue("NAVI_WORKER_ID", valueOrEmpty(workerId));
+            if (bizWorker != null) {
+                config.writeProfileValue("NAVI_BIZ_WORKER_ID", valueOrEmpty(bizWorker.get("workerId")));
+            }
+        }
+
+        out.println("worker-host " + (createIfMissing ? "apply" : "update") + " ok");
+        out.println("workerHost workerHostId=" + valueOrEmpty(plan.workerHostId)
+                + " hostUrl=" + redact(plan.hostUrl)
+                + " install=" + valueOrEmpty(plan.install)
+                + " claudeCodeAction=" + (created ? "create" : "update"));
+        printWorkerHostRole("claudeCode", workerId, plan.claudeCode.baseUrl, "CLAUDE_WORKER");
+        if (plan.codex != null) {
+            printWorkerHostRole("codex", workerId, plan.codex.baseUrl, "CLAUDE_WORKER_CODEX_CONFIG");
+        }
+        if (plan.biz != null) {
+            Object bizWorkerId = bizWorker != null ? bizWorker.get("workerId") : plan.biz.workerId;
+            printWorkerHostRole("biz", valueOrEmpty(bizWorkerId), plan.biz.baseUrl, "BIZ_WORKER_IDENTITY");
+        }
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_WORKER_HOST_ID,NAVI_WORKER_ID" + (plan.biz != null ? ",NAVI_BIZ_WORKER_ID" : ""));
+        }
+        return 0;
+    }
+
+    private int workerHostVerify(CliArguments args) throws Exception {
+        WorkerHostPlan plan = normalizeWorkerHostManifest(readJsonFile(
+                requiredOption(args, "file", "worker host json file"), WorkerHostManifest.class));
+        out.println("worker-host verify ok");
+        out.println("workerHost workerHostId=" + valueOrEmpty(plan.workerHostId)
+                + " hostUrl=" + redact(plan.hostUrl)
+                + " install=" + valueOrEmpty(plan.install));
+        printWorkerHostRole("claudeCode", firstNonBlank(plan.claudeCode.workerId, config.get("NAVI_WORKER_ID")),
+                plan.claudeCode.baseUrl, "MANIFEST");
+        if (plan.codex != null) {
+            printWorkerHostRole("codex", firstNonBlank(plan.codex.workerId, config.get("NAVI_WORKER_ID")),
+                    plan.codex.baseUrl, "MANIFEST");
+        }
+        if (plan.biz != null) {
+            printWorkerHostRole("biz", plan.biz.workerId, plan.biz.baseUrl, "MANIFEST");
+        }
+        return 0;
+    }
+
+    private int workerHostInstall(CliArguments args) throws Exception {
+        WorkerHostPlan plan = normalizeWorkerHostManifest(readJsonFile(
+                requiredOption(args, "file", "worker host json file"), WorkerHostManifest.class));
+        out.println("worker-host install plan ok");
+        out.println("workerHost workerHostId=" + valueOrEmpty(plan.workerHostId)
+                + " hostUrl=" + redact(plan.hostUrl)
+                + " install=" + valueOrEmpty(plan.install));
+        printWorkerHostRole("claudeCode", plan.claudeCode.workerId, plan.claudeCode.baseUrl, "INSTALL_PLAN");
+        if (plan.codex != null) {
+            printWorkerHostRole("codex", plan.codex.workerId, plan.codex.baseUrl, "INSTALL_PLAN");
+        }
+        if (plan.biz != null) {
+            printWorkerHostRole("biz", plan.biz.workerId, plan.biz.baseUrl, "INSTALL_PLAN");
+        }
+        out.println("automaticInstall=false");
+        out.println("message=worker-host install currently validates the manifest and prints the install plan; installer execution will be wired in a later phase");
+        return 0;
+    }
+
     private int directoryList(CliArguments args) {
         List<Directory> dirs = upstreamAdminDirectoryApi().listWithUpstreamAdmin(
                 optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID"),
@@ -1085,9 +1215,7 @@ public class UpstreamCli {
                 + " ownerId=" + valueOrEmpty(readiness.getAgentOwnerId())
                 + " source=" + valueOrEmpty(readiness.getAgentSource())
                 + " skillId=" + valueOrEmpty(readiness.getSkillId()));
-        out.println("physicalWorker physicalWorkerId=" + valueOrEmpty(readiness.getEffectivePhysicalWorkerId())
-                + " workerBackend=" + valueOrEmpty(readiness.getEffectiveWorkerBackend())
-                + " source=" + valueOrEmpty(readiness.getWorkspaceSource()));
+        printPhysicalWorkerReadiness(readiness);
         out.println("internalRoute workerPoolId=" + valueOrEmpty(firstText(readiness.getInternalWorkerPoolId(), readiness.getWorkerPoolId()))
                 + " ownerType=" + valueOrEmpty(firstText(readiness.getInternalWorkerPoolOwnerType(), readiness.getWorkerPoolOwnerType()))
                 + " ownerId=" + valueOrEmpty(firstText(readiness.getInternalWorkerPoolOwnerId(), readiness.getWorkerPoolOwnerId()))
@@ -1110,6 +1238,83 @@ public class UpstreamCli {
         if (readiness.getSkillArtifact() != null && readiness.getSkillArtifact().isAvailable()) {
             out.println("skillArtifactTreeUrl=" + valueOrEmpty(readiness.getSkillArtifact().getTreeUrl()));
         }
+    }
+
+    private void printPhysicalWorkerReadiness(AgentReadiness readiness) {
+        PhysicalWorkerDiagnostic diagnostic = readiness.getPhysicalWorkerDiagnostic();
+        String physicalWorkerId = firstText(
+                diagnostic != null ? diagnostic.getPhysicalWorkerId() : null,
+                readiness.getEffectivePhysicalWorkerId());
+        String workerBackend = firstText(
+                diagnostic != null ? diagnostic.getWorkerBackend() : null,
+                readiness.getEffectiveWorkerBackend());
+        String source = firstText(
+                diagnostic != null ? diagnostic.getSource() : null,
+                readiness.getWorkspaceSource());
+        StringBuilder line = new StringBuilder("physicalWorker physicalWorkerId=")
+                .append(valueOrEmpty(physicalWorkerId))
+                .append(" workerBackend=")
+                .append(valueOrEmpty(workerBackend))
+                .append(" source=")
+                .append(valueOrEmpty(source));
+        if (diagnostic != null) {
+            line.append(" workerName=").append(redact(diagnostic.getWorkerName()))
+                    .append(" baseUrl=").append(redact(diagnostic.getBaseUrl()))
+                    .append(" status=").append(valueOrEmpty(diagnostic.getStatus()))
+                    .append(" healthStatus=").append(valueOrEmpty(diagnostic.getHealthStatus()))
+                    .append(" version=").append(valueOrEmpty(diagnostic.getVersion()))
+                    .append(" hostname=").append(redact(diagnostic.getHostname()))
+                    .append(" lastHeartbeat=").append(valueOrEmpty(diagnostic.getLastHeartbeat()))
+                    .append(" usedAs=").append(workerUsage(diagnostic));
+        }
+        out.println(line);
+        if (readiness.getPhysicalWorkerDiagnostics() != null) {
+            for (PhysicalWorkerDiagnostic roleDiagnostic : readiness.getPhysicalWorkerDiagnostics()) {
+                if (roleDiagnostic == null) {
+                    continue;
+                }
+                out.println(formatWorkerRoleReadiness(roleDiagnostic));
+            }
+        }
+    }
+
+    private String formatWorkerRoleReadiness(PhysicalWorkerDiagnostic diagnostic) {
+        return new StringBuilder("workerRole role=")
+                .append(valueOrEmpty(diagnostic.getRole()))
+                .append(" physicalWorkerId=")
+                .append(valueOrEmpty(diagnostic.getPhysicalWorkerId()))
+                .append(" workerBackend=")
+                .append(valueOrEmpty(diagnostic.getWorkerBackend()))
+                .append(" source=")
+                .append(valueOrEmpty(diagnostic.getSource()))
+                .append(" workerName=")
+                .append(redact(diagnostic.getWorkerName()))
+                .append(" baseUrl=")
+                .append(redact(diagnostic.getBaseUrl()))
+                .append(" status=")
+                .append(valueOrEmpty(diagnostic.getStatus()))
+                .append(" healthStatus=")
+                .append(valueOrEmpty(diagnostic.getHealthStatus()))
+                .append(" version=")
+                .append(valueOrEmpty(diagnostic.getVersion()))
+                .append(" hostname=")
+                .append(redact(diagnostic.getHostname()))
+                .append(" lastHeartbeat=")
+                .append(valueOrEmpty(diagnostic.getLastHeartbeat()))
+                .append(" usedAs=")
+                .append(workerUsage(diagnostic))
+                .toString();
+    }
+
+    private String workerUsage(PhysicalWorkerDiagnostic diagnostic) {
+        List<String> usages = new ArrayList<>();
+        if (Boolean.TRUE.equals(diagnostic.getExecutionWorker())) {
+            usages.add("execution");
+        }
+        if (Boolean.TRUE.equals(diagnostic.getDirectoryWorker())) {
+            usages.add("directory");
+        }
+        return usages.isEmpty() ? "(empty)" : String.join(",", usages);
     }
 
     private int ask(CliArguments args) {
@@ -1150,6 +1355,7 @@ public class UpstreamCli {
             AgentTask task = api.getTaskWithClientAppAccessToken(
                     agent, taskId, clientAppKey(args), clientAppAccessToken(args), upstreamUserId);
             out.println("taskStatus=" + valueOrEmpty(task.getStatus()));
+            printTaskDiagnostics(page, task);
             if (task.isTerminal() || !args.flag("poll")) {
                 break;
             }
@@ -2260,6 +2466,7 @@ public class UpstreamCli {
         out.println("taskId=" + valueOrEmpty(task.getTaskId()));
         out.println("status=" + valueOrEmpty(task.getStatus()));
         out.println("contextId=" + valueOrEmpty(task.getContextId()));
+        printTaskDiagnostics(task);
         if (hasText(task.getErrorMessage())) {
             out.println("errorMessage=" + redact(task.getErrorMessage()));
         }
@@ -2543,6 +2750,170 @@ public class UpstreamCli {
         return objectMapper.readValue(Files.readString(path, StandardCharsets.UTF_8), new TypeReference<>() {});
     }
 
+    private WorkerHostPlan normalizeWorkerHostManifest(WorkerHostManifest manifest) {
+        if (manifest == null) {
+            throw new UpstreamCliException("worker host manifest is empty");
+        }
+        String workerHostId = requiredValue(manifest.getWorkerHostId(), "workerHostId is required");
+        String hostUrl = normalizeWorkerHostUrl(requiredValue(manifest.getHostUrl(), "hostUrl is required"));
+        Integer defaultPort = requireValidPort(manifest.getPort(), "port");
+        Map<String, WorkerHostManifest.WorkerSpec> workers = manifest.getWorkers() != null
+                ? manifest.getWorkers()
+                : Map.of();
+        Set<String> allowedKeys = Set.of("claudeCode", "codex", "biz");
+        for (String key : workers.keySet()) {
+            if (!allowedKeys.contains(key)) {
+                throw new UpstreamCliException("unsupported worker-host worker key: " + key);
+            }
+        }
+
+        WorkerHostManifest.WorkerSpec claudeSpec = workerSpec(workers, "claudeCode");
+        if (Boolean.FALSE.equals(claudeSpec.getEnabled())) {
+            throw new UpstreamCliException("workers.claudeCode is required and cannot be disabled");
+        }
+        WorkerRolePlan claude = new WorkerRolePlan(
+                claudeSpec.getWorkerId(),
+                workerBaseUrl(hostUrl, firstNonBlank(claudeSpec.getBaseUrlOverride(), null),
+                        claudeSpec.getPort() != null ? requireValidPort(claudeSpec.getPort(), "workers.claudeCode.port") : defaultPort),
+                claudeSpec);
+
+        WorkerRolePlan codex = null;
+        WorkerHostManifest.WorkerSpec codexSpec = workers.get("codex");
+        if (codexSpec != null && Boolean.TRUE.equals(codexSpec.getEnabled())) {
+            codex = new WorkerRolePlan(
+                    codexSpec.getWorkerId(),
+                    workerBaseUrl(hostUrl, codexSpec.getBaseUrlOverride(), requireRolePort(codexSpec, "codex")),
+                    codexSpec);
+        }
+
+        WorkerRolePlan biz = null;
+        WorkerHostManifest.WorkerSpec bizSpec = workers.get("biz");
+        if (bizSpec != null && Boolean.TRUE.equals(bizSpec.getEnabled())) {
+            biz = new WorkerRolePlan(
+                    firstNonBlank(bizSpec.getWorkerId(), defaultRoleWorkerId(workerHostId, "biz")),
+                    workerBaseUrl(hostUrl, bizSpec.getBaseUrlOverride(), requireRolePort(bizSpec, "biz")),
+                    bizSpec);
+        }
+
+        return new WorkerHostPlan(workerHostId, hostUrl,
+                hasText(manifest.getInstall()) ? manifest.getInstall() : "none",
+                claude, codex, biz);
+    }
+
+    private WorkerHostManifest.WorkerSpec workerSpec(Map<String, WorkerHostManifest.WorkerSpec> workers, String key) {
+        WorkerHostManifest.WorkerSpec spec = workers.get(key);
+        return spec != null ? spec : new WorkerHostManifest.WorkerSpec();
+    }
+
+    private String normalizeWorkerHostUrl(String hostUrl) {
+        String value = hostUrl.trim();
+        URI uri;
+        try {
+            uri = URI.create(value);
+        } catch (IllegalArgumentException e) {
+            throw new UpstreamCliException("hostUrl is invalid: " + hostUrl);
+        }
+        if (!hasText(uri.getScheme()) || !hasText(uri.getHost())) {
+            throw new UpstreamCliException("hostUrl must include scheme and host");
+        }
+        if (uri.getPort() >= 0) {
+            throw new UpstreamCliException("hostUrl must not include a port; use top-level port or worker port");
+        }
+        String path = uri.getRawPath();
+        if (hasText(path) && !"/".equals(path)) {
+            throw new UpstreamCliException("hostUrl must not include a path; use baseUrlOverride for advanced routing");
+        }
+        while (value.endsWith("/")) {
+            value = value.substring(0, value.length() - 1);
+        }
+        return value;
+    }
+
+    private Integer requireRolePort(WorkerHostManifest.WorkerSpec spec, String role) {
+        if (hasText(spec.getBaseUrlOverride())) {
+            return spec.getPort();
+        }
+        return requireValidPort(spec.getPort(), "workers." + role + ".port");
+    }
+
+    private Integer requireValidPort(Integer port, String field) {
+        if (port == null) {
+            throw new UpstreamCliException(field + " is required");
+        }
+        if (port < 1 || port > 65535) {
+            throw new UpstreamCliException(field + " must be between 1 and 65535");
+        }
+        return port;
+    }
+
+    private String workerBaseUrl(String hostUrl, String baseUrlOverride, Integer port) {
+        if (hasText(baseUrlOverride)) {
+            return baseUrlOverride.trim();
+        }
+        return hostUrl + ":" + port;
+    }
+
+    private String defaultRoleWorkerId(String workerHostId, String role) {
+        return workerHostId + "-" + role;
+    }
+
+    private Map<String, Object> buildClaudeWorkerBody(WorkerHostPlan plan) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        WorkerHostManifest.WorkerSpec spec = plan.claudeCode.spec;
+        body.put("name", firstNonBlank(spec.getName(), plan.workerHostId + " Claude Code Worker"));
+        body.put("baseUrl", plan.claudeCode.baseUrl);
+        putIfHasText(body, "authMode", spec.getAuthMode());
+        putIfHasText(body, "authToken", resolveWorkerSecret(spec.getAuthToken(), spec.getAuthTokenEnv()));
+        if (plan.codex != null) {
+            Map<String, Object> codexConfig = new LinkedHashMap<>();
+            codexConfig.put("baseUrl", plan.codex.baseUrl);
+            putIfHasText(codexConfig, "authToken", resolveWorkerSecret(
+                    plan.codex.spec.getAuthToken(), plan.codex.spec.getAuthTokenEnv()));
+            putIfHasText(codexConfig, "model", plan.codex.spec.getModel());
+            body.put("codexConfig", codexConfig);
+        }
+        return body;
+    }
+
+    private Map<String, Object> buildBizWorkerIdentityBody(WorkerHostPlan plan) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("workerId", plan.biz.workerId);
+        body.put("workerBackend", "LANGGRAPH_BIZ");
+        body.put("baseUrl", plan.biz.baseUrl);
+        putIfHasText(body, "version", plan.biz.spec.getVersion());
+        putIfHasText(body, "identityToken", resolveWorkerSecret(
+                firstNonBlank(plan.biz.spec.getIdentityToken(), plan.biz.spec.getAuthToken()),
+                firstNonBlank(plan.biz.spec.getIdentityTokenEnv(), plan.biz.spec.getAuthTokenEnv())));
+        return body;
+    }
+
+    private String resolveWorkerSecret(String inlineSecret, String envName) {
+        if (hasText(inlineSecret)) {
+            return inlineSecret;
+        }
+        if (!hasText(envName)) {
+            return null;
+        }
+        String value = env.get(envName);
+        if (!hasText(value)) {
+            throw new UpstreamCliException("environment variable " + envName + " is required");
+        }
+        return value;
+    }
+
+    private void putIfHasText(Map<String, Object> body, String key, String value) {
+        if (hasText(value)) {
+            body.put(key, value);
+        }
+    }
+
+    private void printWorkerHostRole(String role, String workerId, String baseUrl, String source) {
+        out.println("workerRole role=" + role
+                + " workerId=" + valueOrEmpty(workerId)
+                + " baseUrl=" + redact(baseUrl)
+                + " source=" + source);
+    }
+
     private void printJson(Object value) throws Exception {
         String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value);
         out.println(redact(json));
@@ -2582,7 +2953,83 @@ public class UpstreamCli {
     }
 
     private String redact(String text) {
-        return SecretMasker.redactKnownSecrets(valueOrEmpty(text), config.sensitiveValues());
+        String redacted = SecretMasker.redactKnownSecrets(valueOrEmpty(text), config.sensitiveValues());
+        return redacted
+                .replaceAll("(?i)(authorization\\s*[:=]\\s*)(bearer\\s+)?[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(api[_-]?key\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(access[_-]?token\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(token\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(client[_-]?secret\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(secret\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)bearer\\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]")
+                .replaceAll("sk-[A-Za-z0-9_-]{12,}", "sk-[REDACTED]");
+    }
+
+    private void printTaskDiagnostics(AgentTask task) {
+        printTaskDiagnostics(null, task);
+    }
+
+    private void printTaskDiagnostics(TaskMessagesPage page, AgentTask task) {
+        printDiagnostic("providerTaskId", firstNonBlank(
+                page != null ? page.getProviderTaskId() : null,
+                task != null ? task.getProviderTaskId() : null));
+        printDiagnostic("workerTaskId", firstNonBlank(
+                page != null ? page.getWorkerTaskId() : null,
+                task != null ? task.getWorkerTaskId() : null));
+        Integer lastAckedSeq = page != null && page.getLastAckedSeq() != null
+                ? page.getLastAckedSeq()
+                : task != null ? task.getLastAckedSeq() : null;
+        if (lastAckedSeq != null) {
+            out.println("lastAckedSeq=" + lastAckedSeq);
+        }
+        printDiagnostic("modelConfigId", firstNonBlank(
+                page != null ? page.getModelConfigId() : null,
+                task != null ? task.getModelConfigId() : null));
+        printDiagnostic("modelConfigSource", firstNonBlank(
+                page != null ? page.getModelConfigSource() : null,
+                task != null ? task.getModelConfigSource() : null));
+        printDiagnostic("workerBackend", firstNonBlank(
+                page != null ? page.getWorkerBackend() : null,
+                task != null ? task.getWorkerBackend() : null));
+        printDiagnostic("providerType", firstNonBlank(
+                page != null ? page.getProviderType() : null,
+                task != null ? task.getProviderType() : null));
+        printDiagnostic("taskSource", firstNonBlank(
+                page != null ? page.getTaskSource() : null,
+                task != null ? task.getTaskSource() : null));
+        printDiagnostic("workerSource", firstNonBlank(
+                page != null ? page.getWorkerSource() : null,
+                task != null ? task.getWorkerSource() : null));
+        printDiagnostic("backendSource", firstNonBlank(
+                page != null ? page.getBackendSource() : null,
+                task != null ? task.getBackendSource() : null));
+        printDiagnostic("failureStage", firstNonBlank(
+                page != null ? page.getFailureStage() : null,
+                task != null ? task.getFailureStage() : null));
+        String failureSummary = firstNonBlank(
+                page != null ? page.getFailureSummary() : null,
+                task != null ? task.getFailureSummary() : null);
+        if (hasText(failureSummary)) {
+            out.println("failureSummary=" + redact(truncate(failureSummary, 500)));
+        }
+    }
+
+    private void printDiagnostic(String key, String value) {
+        if (hasText(value)) {
+            out.println(key + "=" + redact(value));
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (hasText(value)) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String requiredOption(CliArguments args, String option, String description) {
@@ -2677,6 +3124,41 @@ public class UpstreamCli {
             throw new UpstreamCliException(message);
         }
         return value;
+    }
+
+    private static class WorkerHostPlan {
+        private final String workerHostId;
+        private final String hostUrl;
+        private final String install;
+        private final WorkerRolePlan claudeCode;
+        private final WorkerRolePlan codex;
+        private final WorkerRolePlan biz;
+
+        private WorkerHostPlan(String workerHostId,
+                               String hostUrl,
+                               String install,
+                               WorkerRolePlan claudeCode,
+                               WorkerRolePlan codex,
+                               WorkerRolePlan biz) {
+            this.workerHostId = workerHostId;
+            this.hostUrl = hostUrl;
+            this.install = install;
+            this.claudeCode = claudeCode;
+            this.codex = codex;
+            this.biz = biz;
+        }
+    }
+
+    private static class WorkerRolePlan {
+        private final String workerId;
+        private final String baseUrl;
+        private final WorkerHostManifest.WorkerSpec spec;
+
+        private WorkerRolePlan(String workerId, String baseUrl, WorkerHostManifest.WorkerSpec spec) {
+            this.workerId = workerId;
+            this.baseUrl = baseUrl;
+            this.spec = spec;
+        }
     }
 
     private static boolean isSensitiveKey(String key) {
