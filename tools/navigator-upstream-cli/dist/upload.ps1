@@ -42,6 +42,22 @@ function Invoke-RemoteInstallSmoke {
         if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($ExpectedVersion)) {
             throw "version smoke failed: $versionOutput"
         }
+        $versionMetadataOk = $versionOutput -match "released=" `
+            -and $versionOutput -match "packageSha256=" `
+            -and $versionOutput -match "buildId=" `
+            -and $versionOutput -match "releaseGitDirty="
+        if (-not $versionMetadataOk) {
+            throw "version smoke did not print release metadata: $versionOutput"
+        }
+
+        $releaseManifestPath = Join-Path $tmpRoot "tools\navigator-upstream\RELEASE_MANIFEST.json"
+        if (-not (Test-Path $releaseManifestPath)) {
+            throw "remote install smoke did not create $releaseManifestPath"
+        }
+        $releaseManifest = Get-Content -Path $releaseManifestPath -Raw | ConvertFrom-Json
+        if ([string]$releaseManifest.version -ne $ExpectedVersion -or -not $releaseManifest.sha256.windows) {
+            throw "remote install smoke wrote invalid release manifest"
+        }
 
         $helpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream --help 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0 -or $helpOutput -notmatch "function import" -or $helpOutput -notmatch "--model-variant") {

@@ -154,10 +154,14 @@ function Invoke-SelfUpdate {
         throw "No install.ps1 found in downloaded archive"
     }
 
+    $releaseManifestPath = Join-Path $tmpDir "latest.json"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($releaseManifestPath, ($latest | ConvertTo-Json -Depth 8), $utf8NoBom)
+
     & powershell -ExecutionPolicy Bypass -File $installScript.FullName `
         -ProjectRoot (Get-ProjectRoot) `
         -ReleaseBaseUrl $baseUrl `
-        -ReleaseManifestJson ($latest | ConvertTo-Json -Depth 8 -Compress) `
+        -ReleaseManifestPath $releaseManifestPath `
         -Upgrade
     Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
 }

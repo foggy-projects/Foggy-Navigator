@@ -8,6 +8,7 @@ param(
     [string]$InstallDir = "",
     [string]$ReleaseBaseUrl = "",
     [string]$ReleaseManifestJson = "",
+    [string]$ReleaseManifestPath = "",
     [switch]$Upgrade
 )
 
@@ -26,6 +27,28 @@ function Add-GitIgnoreLine {
     if ($existingLines -notcontains $Line) {
         $prefix = if ($existingText -and -not $existingText.EndsWith("`n")) { "`n" } else { "" }
         Write-Utf8NoBom -Path $GitIgnorePath -Content ($existingText + $prefix + $Line + "`n")
+    }
+}
+
+function Resolve-ReleaseManifestContent {
+    param([string]$Json, [string]$Path)
+    if ($Path) {
+        if (-not (Test-Path $Path)) {
+            throw "ReleaseManifestPath does not exist: $Path"
+        }
+        $content = Get-Content -Path $Path -Raw
+    }
+    elseif ($Json) {
+        $content = $Json
+    }
+    else {
+        return ""
+    }
+    try {
+        return ($content | ConvertFrom-Json | ConvertTo-Json -Depth 8)
+    }
+    catch {
+        throw "Release manifest is not valid JSON. Pass -ReleaseManifestPath to avoid shell quoting issues."
     }
 }
 
@@ -143,8 +166,9 @@ if (-not $ReleaseBaseUrl -and $env:NAVI_UPSTREAM_CLI_URL) {
 if ($ReleaseBaseUrl) {
     Write-Utf8NoBom -Path (Join-Path $InstallDir "RELEASE_URL") -Content $ReleaseBaseUrl
 }
-if ($ReleaseManifestJson) {
-    Write-Utf8NoBom -Path (Join-Path $InstallDir "RELEASE_MANIFEST.json") -Content $ReleaseManifestJson
+$releaseManifestContent = Resolve-ReleaseManifestContent -Json $ReleaseManifestJson -Path $ReleaseManifestPath
+if ($releaseManifestContent) {
+    Write-Utf8NoBom -Path (Join-Path $InstallDir "RELEASE_MANIFEST.json") -Content $releaseManifestContent
 }
 
 Write-Host ""
