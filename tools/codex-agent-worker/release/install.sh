@@ -103,7 +103,10 @@ rm -rf "$INSTALL_DIR/dist" "$INSTALL_DIR/docs" "$INSTALL_DIR/bin"
 
 cp -r "$SCRIPT_DIR/dist" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/package.json" "$INSTALL_DIR/"
-cp "$SCRIPT_DIR/package-lock.json" "$INSTALL_DIR/"
+rm -f "$INSTALL_DIR/package-lock.json"
+if [ -f "$SCRIPT_DIR/package-lock.json" ]; then
+    cp "$SCRIPT_DIR/package-lock.json" "$INSTALL_DIR/"
+fi
 cp "$SCRIPT_DIR/.env.example" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/VERSION" "$INSTALL_DIR/"
 

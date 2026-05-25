@@ -100,7 +100,13 @@ function Build-ForOS {
 
     Copy-Item (Join-Path $WorkerDir "dist") (Join-Path $StageDir "dist") -Recurse
     Copy-Item (Join-Path $WorkerDir "package.json") $StageDir
-    Copy-Item (Join-Path $WorkerDir "package-lock.json") $StageDir
+    $PackageLockPath = Join-Path $WorkerDir "package-lock.json"
+    if (Test-Path $PackageLockPath) {
+        Copy-Item $PackageLockPath $StageDir
+    }
+    else {
+        Write-Host "  package-lock.json not found; installer will use npm install." -ForegroundColor Yellow
+    }
     Copy-Item (Join-Path $WorkerDir ".env.example") $StageDir
 
     $DocsDir = Join-Path $WorkerDir "docs"

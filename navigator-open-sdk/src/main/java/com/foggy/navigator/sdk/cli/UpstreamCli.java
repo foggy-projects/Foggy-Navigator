@@ -1071,8 +1071,7 @@ public class UpstreamCli {
                 "CLAUDE_WORKER_HOME", ".claude-worker", "claude-worker",
                 portFromBaseUrl(plan.claudeCode.baseUrl), wslOptions));
         if (plan.codex != null) {
-            commands.add(buildWorkerStartCommand("codex", installShell,
-                    "CODEX_WORKER_HOME", ".codex-worker", "codex-worker",
+            commands.add(buildCodexWorkerStartCommand(installShell,
                     portFromBaseUrl(plan.codex.baseUrl), wslOptions));
         }
         if (plan.biz != null) {
@@ -1101,6 +1100,22 @@ public class UpstreamCli {
         };
     }
 
+    private StartCommand buildCodexWorkerStartCommand(String installShell,
+                                                      Integer port,
+                                                      WslInstallOptions wslOptions) {
+        int resolvedPort = port != null ? port : 3051;
+        String bashScript = buildBashCodexWorkerStartScript(resolvedPort);
+        return switch (installShell) {
+            case "powershell" -> new StartCommand("codex",
+                    buildPowerShellCodexWorkerStartCommand(resolvedPort), null);
+            case "bash" -> new StartCommand("codex",
+                    List.of("bash", "-lc", bashScript), null);
+            case "wsl" -> new StartCommand("codex",
+                    buildWslCommand(bashScript, wslOptions), bashScript);
+            default -> throw new UpstreamCliException("unsupported install shell: " + installShell);
+        };
+    }
+
     private StartCommand buildBizWorkerStartCommand(String installShell,
                                                     Integer port,
                                                     WslInstallOptions wslOptions) {
@@ -1121,6 +1136,35 @@ public class UpstreamCli {
                                              String defaultHomeDir,
                                              String cliName) {
         return "set -e; \"${" + homeEnvName + ":-$HOME/" + defaultHomeDir + "}/bin/" + cliName + "\" start";
+    }
+
+    private String buildBashCodexWorkerStartScript(int port) {
+        return String.join("\n",
+                "set -e",
+                "dir=\"${CODEX_WORKER_HOME:-$HOME/.codex-worker}\"",
+                "cd \"$dir\"",
+                "mkdir -p logs",
+                "pids=\"$(lsof -ti:" + port + " 2>/dev/null || true)\"",
+                "if [ -n \"$pids\" ]; then kill -9 $pids 2>/dev/null || true; sleep 1; fi",
+                "if [ -f dist/index.js ]; then run_cmd='node dist/index.js'; else run_cmd='npx tsx src/index.ts'; fi",
+                "nohup sh -c \"exec $run_cmd\" > logs/worker.log 2> logs/worker-error.log < /dev/null &",
+                "pid=$!",
+                "disown \"$pid\" 2>/dev/null || true",
+                "for i in $(seq 1 30); do",
+                "  sleep 1",
+                "  if curl -fsS --max-time 2 http://localhost:" + port + "/health >/dev/null 2>&1; then break; fi",
+                "  if ! kill -0 \"$pid\" 2>/dev/null; then echo \"Codex Worker exited\"; "
+                        + "tail -20 logs/worker-error.log 2>/dev/null || true; exit 1; fi",
+                "  if [ \"$i\" = \"30\" ]; then echo \"Codex Worker failed to start on port " + port + "\"; "
+                        + "tail -20 logs/worker-error.log 2>/dev/null || true; exit 1; fi",
+                "done",
+                "sleep 3",
+                "if ! kill -0 \"$pid\" 2>/dev/null; then echo \"Codex Worker exited after readiness\"; "
+                        + "tail -20 logs/worker-error.log 2>/dev/null || true; exit 1; fi",
+                "if ! curl -fsS --max-time 2 http://localhost:" + port + "/health >/dev/null 2>&1; then "
+                        + "echo \"Codex Worker health failed after readiness\"; "
+                        + "tail -20 logs/worker-error.log 2>/dev/null || true; exit 1; fi",
+                "echo \"Codex Worker READY http://localhost:" + port + "\"");
     }
 
     private List<String> buildPowerShellWorkerStartCommand(String homeEnvName,
@@ -1146,32 +1190,84 @@ public class UpstreamCli {
         return command;
     }
 
+    private List<String> buildPowerShellCodexWorkerStartCommand(int port) {
+        String executable = isWindows() ? "powershell" : "pwsh";
+        String script = "$ErrorActionPreference='Stop'; "
+                + "$dir=if ($env:CODEX_WORKER_HOME) { $env:CODEX_WORKER_HOME } else { Join-Path $HOME '.codex-worker' }; "
+                + "Set-Location $dir; "
+                + "$existing=(netstat -ano | Select-String ':" + port + "\\s+.*LISTENING' | Select-Object -First 1); "
+                + "if ($existing) { $pidText=($existing.ToString() -split '\\s+')[-1]; "
+                + "taskkill /F /PID $pidText 2>$null | Out-Null; Start-Sleep -Milliseconds 500 }; "
+                + "$logDir=Join-Path $dir 'logs'; "
+                + "if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }; "
+                + "if (Test-Path (Join-Path $dir 'dist\\index.js')) { "
+                + "$file='node'; $arguments=@('dist/index.js') "
+                + "} else { "
+                + "$file=if ($env:OS -eq 'Windows_NT') { 'npx.cmd' } else { 'npx' }; "
+                + "$arguments=@('tsx','src/index.ts') "
+                + "}; "
+                + "$process=Start-Process -FilePath $file -ArgumentList $arguments -WorkingDirectory $dir "
+                + "-RedirectStandardOutput (Join-Path $logDir 'worker.log') "
+                + "-RedirectStandardError (Join-Path $logDir 'worker-error.log') -WindowStyle Hidden -PassThru; "
+                + "$ok=$false; "
+                + "for ($i=0; $i -lt 30; $i++) { "
+                + "Start-Sleep -Seconds 1; "
+                + "if ($process.HasExited) { "
+                + "Get-Content (Join-Path $logDir 'worker-error.log') -Tail 20 -ErrorAction SilentlyContinue; "
+                + "throw 'Codex Worker exited' "
+                + "}; "
+                + "try { Invoke-RestMethod -Uri 'http://localhost:" + port + "/health' -TimeoutSec 2 -ErrorAction Stop | Out-Null; "
+                + "$ok=$true; break } catch { } "
+                + "}; "
+                + "if (-not $ok) { "
+                + "Get-Content (Join-Path $logDir 'worker-error.log') -Tail 20 -ErrorAction SilentlyContinue; "
+                + "throw 'Codex Worker failed to start' "
+                + "}; "
+                + "Start-Sleep -Seconds 3; "
+                + "if ($process.HasExited) { "
+                + "Get-Content (Join-Path $logDir 'worker-error.log') -Tail 20 -ErrorAction SilentlyContinue; "
+                + "throw 'Codex Worker exited after readiness' "
+                + "}; "
+                + "Invoke-RestMethod -Uri 'http://localhost:" + port + "/health' -TimeoutSec 2 -ErrorAction Stop | Out-Null; "
+                + "Write-Host 'Codex Worker READY http://localhost:" + port + "'";
+        List<String> command = new ArrayList<>();
+        command.add(executable);
+        command.add("-NoProfile");
+        if (isWindows()) {
+            command.add("-ExecutionPolicy");
+            command.add("Bypass");
+        }
+        command.add("-Command");
+        command.add(script);
+        return command;
+    }
+
     private String buildBashBizWorkerStartScript(int port) {
-        return "set -e"
-                + "; dir=\"${LANGGRAPH_BIZ_WORKER_HOME:-$HOME/.langgraph-biz-worker}\""
-                + "; cd \"$dir\""
-                + "; mkdir -p logs"
-                + "; pids=\"$(lsof -ti:" + port + " 2>/dev/null || true)\""
-                + "; if [ -n \"$pids\" ]; then kill -9 $pids 2>/dev/null || true; sleep 1; fi"
-                + "; py=\".venv/bin/python\""
-                + "; if [ ! -x \"$py\" ]; then py=\"$(command -v python3 || command -v python)\"; fi"
-                + "; export PYTHONPATH=\"$dir/src\""
-                + "; export BIZ_WORKER_ENV_FILE=\"${BIZ_WORKER_ENV_FILE:-$dir/.env}\""
-                + "; nohup \"$py\" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port " + port
-                + " > logs/worker.log 2> logs/worker-error.log &"
-                + "; pid=$!"
-                + "; for i in $(seq 1 30); do "
-                + "sleep 1; "
-                + "if curl -fsS --max-time 2 http://localhost:" + port + "/health >/dev/null 2>&1; then "
-                + "echo \"LangGraph BizWorker READY http://localhost:" + port + "\"; exit 0; "
-                + "fi; "
-                + "if ! kill -0 \"$pid\" 2>/dev/null; then "
-                + "echo \"LangGraph BizWorker exited\"; tail -20 logs/worker-error.log 2>/dev/null || true; exit 1; "
-                + "fi; "
-                + "done"
-                + "; echo \"LangGraph BizWorker failed to start on port " + port + "\""
-                + "; tail -20 logs/worker-error.log 2>/dev/null || true"
-                + "; exit 1";
+        return String.join("\n",
+                "set -e",
+                "dir=\"${LANGGRAPH_BIZ_WORKER_HOME:-$HOME/.langgraph-biz-worker}\"",
+                "cd \"$dir\"",
+                "mkdir -p logs",
+                "pids=\"$(lsof -ti:" + port + " 2>/dev/null || true)\"",
+                "if [ -n \"$pids\" ]; then kill -9 $pids 2>/dev/null || true; sleep 1; fi",
+                "py=\".venv/bin/python\"",
+                "if [ ! -x \"$py\" ]; then py=\"$(command -v python3 || command -v python)\"; fi",
+                "export PYTHONPATH=\"$dir/src\"",
+                "export BIZ_WORKER_ENV_FILE=\"${BIZ_WORKER_ENV_FILE:-$dir/.env}\"",
+                "nohup \"$py\" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port " + port
+                        + " > logs/worker.log 2> logs/worker-error.log < /dev/null &",
+                "pid=$!",
+                "disown \"$pid\" 2>/dev/null || true",
+                "for i in $(seq 1 30); do",
+                "  sleep 1",
+                "  if curl -fsS --max-time 2 http://localhost:" + port + "/health >/dev/null 2>&1; then "
+                        + "echo \"LangGraph BizWorker READY http://localhost:" + port + "\"; exit 0; fi",
+                "  if ! kill -0 \"$pid\" 2>/dev/null; then echo \"LangGraph BizWorker exited\"; "
+                        + "tail -20 logs/worker-error.log 2>/dev/null || true; exit 1; fi",
+                "done",
+                "echo \"LangGraph BizWorker failed to start on port " + port + "\"",
+                "tail -20 logs/worker-error.log 2>/dev/null || true",
+                "exit 1");
     }
 
     private List<String> buildPowerShellBizWorkerStartCommand(int port) {

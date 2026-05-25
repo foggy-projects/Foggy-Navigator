@@ -74,13 +74,16 @@ while ($waited -lt $maxWait) {
     Start-Sleep -Seconds 1
     $waited++
 
-    $listening = netstat -ano | Select-String ":$PORT\s.*LISTENING"
-    if ($listening) {
+    try {
+        Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction Stop | Out-Null
         $ready = $true
         break
     }
+    catch {
+    }
 
     # 检查进程是否崩溃
+    $process.Refresh()
     if ($process.HasExited) {
         Write-Host "`n  Worker process exited unexpectedly!" -ForegroundColor Red
         if (Test-Path $errFile) {
@@ -94,6 +97,27 @@ while ($waited -lt $maxWait) {
 }
 
 if ($ready) {
+    Start-Sleep -Seconds 3
+    $process.Refresh()
+    if ($process.HasExited) {
+        Write-Host "`n  Worker exited after readiness!" -ForegroundColor Red
+        if (Test-Path $errFile) {
+            Write-Host "`n  Error log:" -ForegroundColor Red
+            Get-Content $errFile | Select-Object -Last 20 | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        }
+        exit 1
+    }
+    try {
+        Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction Stop | Out-Null
+    }
+    catch {
+        Write-Host "`n  Worker health failed after readiness!" -ForegroundColor Red
+        if (Test-Path $errFile) {
+            Write-Host "`n  Error log:" -ForegroundColor Red
+            Get-Content $errFile | Select-Object -Last 20 | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        }
+        exit 1
+    }
     Write-Host "`n========================================" -ForegroundColor Green
     Write-Host "  Codex Worker is READY!" -ForegroundColor Green
     Write-Host "  URL: http://localhost:$PORT" -ForegroundColor Green

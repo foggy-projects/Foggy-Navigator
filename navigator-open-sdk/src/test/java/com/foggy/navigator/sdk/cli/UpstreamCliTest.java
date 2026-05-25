@@ -2545,7 +2545,7 @@ class UpstreamCliTest {
         assertTrue(output.contains("codex-worker/install.sh"));
         assertTrue(output.contains("CODEX_WORKER_PORT=3151"));
         assertTrue(output.contains("starter role=codex"));
-        assertTrue(output.contains(".codex-worker}/bin/codex-worker"));
+        assertTrue(output.contains("Codex Worker READY"));
         assertTrue(output.contains("installer role=biz"));
         assertTrue(output.contains("langgraph-biz-worker/install.sh"));
         assertTrue(output.contains("BIZ_WORKER_PORT=3161"));
@@ -2603,8 +2603,12 @@ class UpstreamCliTest {
         assertTrue(decodedWslScript(commands.get(2)).contains("langgraph-biz-worker/install.sh"));
         assertTrue(decodedWslScript(commands.get(2)).contains("BIZ_WORKER_PORT=3161"));
         assertTrue(decodedWslScript(commands.get(3)).contains(".claude-worker}/bin/claude-worker"));
-        assertTrue(decodedWslScript(commands.get(4)).contains(".codex-worker}/bin/codex-worker"));
+        assertTrue(decodedWslScript(commands.get(4)).contains("node dist/index.js"));
+        assertTrue(decodedWslScript(commands.get(4)).contains("Codex Worker READY http://localhost:3151"));
+        assertTrue(decodedWslScript(commands.get(4)).contains("sleep 3"));
+        assertFalse(decodedWslScript(commands.get(4)).contains("setsid"));
         assertTrue(decodedWslScript(commands.get(5)).contains("LangGraph BizWorker READY http://localhost:3161"));
+        assertFalse(decodedWslScript(commands.get(5)).contains("&;"));
         assertTrue(output.contains("script=set -e; curl -fsSL"));
         assertTrue(output.contains("wslDistro=Ubuntu"));
         assertTrue(output.contains("wslUser=navigator"));
