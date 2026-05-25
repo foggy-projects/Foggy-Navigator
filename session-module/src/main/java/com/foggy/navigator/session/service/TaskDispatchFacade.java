@@ -13,6 +13,7 @@ import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -104,6 +105,29 @@ public class TaskDispatchFacade {
         DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, providerType, request);
         persistTaskRequestFields(dto.getTaskId(), request);
         return dto;
+    }
+
+    /**
+     * Submit an application-level Agent task and return the A2A task view.
+     * <p>
+     * This is the implementation backing {@code TaskSubmittingA2aAgent}. It
+     * intentionally delegates to {@link #createTask(TaskDispatchRequest, AgentResolveContext)}
+     * so complex entry points share the same session projection, provider routing
+     * and task persistence path.
+     */
+    public A2aTask submitTask(AgentTaskSubmitRequest request) {
+        return toA2aTask(submitTaskDispatch(request));
+    }
+
+    public DispatchTaskDTO submitTaskDispatch(AgentTaskSubmitRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("submit request is required");
+        }
+        AgentResolveContext context = request.getResolveContext();
+        if (context == null) {
+            context = AgentResolveContext.builder().requestSource("A2A_SUBMIT").build();
+        }
+        return createTask(toTaskDispatchRequest(request), context);
     }
 
     /**
@@ -651,6 +675,53 @@ public class TaskDispatchFacade {
                 .build();
     }
 
+    private TaskDispatchRequest toTaskDispatchRequest(AgentTaskSubmitRequest request) {
+        A2aMessage message = request.getMessage();
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (message != null && message.getMetadata() != null) {
+            metadata.putAll(message.getMetadata());
+        }
+        if (request.getMetadata() != null) {
+            metadata.putAll(request.getMetadata());
+        }
+        String contextId = firstNonBlank(request.getContextId(), message != null ? message.getContextId() : null);
+        String contextAlias = firstNonBlank(request.getContextAlias(), message != null ? message.getContextAlias() : null);
+        return TaskDispatchRequest.builder()
+                .agentId(request.getAgentId())
+                .providerType(request.getProviderType())
+                .sessionId(request.getSessionId())
+                .workerId(request.getWorkerId())
+                .prompt(firstNonBlank(request.getPrompt(), extractTextPrompt(message)))
+                .cwd(request.getCwd())
+                .directoryId(request.getDirectoryId())
+                .model(request.getModel())
+                .modelConfigId(request.getModelConfigId())
+                .maxTurns(request.getMaxTurns())
+                .permissionMode(request.getPermissionMode())
+                .images(request.getImages())
+                .attachments(request.getAttachments())
+                .agentTeamsConfigId(request.getAgentTeamsConfigId())
+                .agentTeamsJson(request.getAgentTeamsJson())
+                .contextId(contextId)
+                .context(request.getContext())
+                .metadata(metadata.isEmpty() ? null : metadata)
+                .contextAlias(contextAlias)
+                .build();
+    }
+
+    private String extractTextPrompt(A2aMessage message) {
+        if (message == null || message.getParts() == null) {
+            return null;
+        }
+        return message.getParts().stream()
+                .filter(Objects::nonNull)
+                .filter(part -> "text".equals(part.getType()))
+                .map(A2aPart::getText)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+    }
+
     private DispatchTaskDTO toDispatchDTO(A2aTask a2aTask, String agentId, String providerType,
                                            TaskDispatchRequest request) {
         DispatchTaskDTO.DispatchTaskDTOBuilder builder = DispatchTaskDTO.builder()
@@ -742,6 +813,62 @@ public class TaskDispatchFacade {
             case FAILED -> "FAILED";
             case CANCELED -> "ABORTED";
         };
+    }
+
+    public A2aTask toA2aTask(DispatchTaskDTO dto) {
+        if (dto == null) {
+            throw new IllegalStateException("Task submit pipeline returned no task");
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        putIfNotBlank(metadata, "sessionId", dto.getSessionId());
+        putIfNotBlank(metadata, "workerId", dto.getWorkerId());
+        putIfNotBlank(metadata, "workerTaskId", dto.getWorkerTaskId());
+        putIfNotBlank(metadata, "directoryId", dto.getDirectoryId());
+        putIfNotBlank(metadata, "model", dto.getModel());
+        putIfNotBlank(metadata, "modelConfigId", dto.getModelConfigId());
+        putIfNotBlank(metadata, "claudeSessionId", dto.getClaudeSessionId());
+        putIfNotBlank(metadata, "codexThreadId", dto.getCodexThreadId());
+        putIfNotBlank(metadata, "geminiSessionId", dto.getGeminiSessionId());
+        if (dto.getDurationMs() != null) {
+            metadata.put("durationMs", dto.getDurationMs());
+        }
+        if (dto.getCostUsd() != null) {
+            metadata.put("costUsd", dto.getCostUsd());
+        }
+        return A2aTask.builder()
+                .id(dto.getTaskId())
+                .contextId(dto.getContextId())
+                .status(A2aTaskStatus.builder()
+                        .state(toA2aState(dto.getStatus()))
+                        .description(dto.getErrorMessage())
+                        .build())
+                .artifacts(buildArtifacts(dto.getResultText()))
+                .metadata(metadata.isEmpty() ? null : metadata)
+                .build();
+    }
+
+    private A2aTaskState toA2aState(String status) {
+        if (status == null || status.isBlank()) {
+            return A2aTaskState.SUBMITTED;
+        }
+        return switch (status) {
+            case "PENDING" -> A2aTaskState.SUBMITTED;
+            case "RUNNING" -> A2aTaskState.WORKING;
+            case "AWAITING_INPUT", "AWAITING_PERMISSION" -> A2aTaskState.INPUT_REQUIRED;
+            case "COMPLETED" -> A2aTaskState.COMPLETED;
+            case "FAILED" -> A2aTaskState.FAILED;
+            case "ABORTED", "CANCELLED", "CANCELED" -> A2aTaskState.CANCELED;
+            default -> A2aTaskState.WORKING;
+        };
+    }
+
+    private List<A2aArtifact> buildArtifacts(String resultText) {
+        if (resultText == null || resultText.isBlank()) {
+            return null;
+        }
+        return List.of(A2aArtifact.builder()
+                .parts(List.of(A2aPart.text(resultText)))
+                .build());
     }
 
     private void putIfNotBlank(Map<String, Object> map, String key, String value) {
@@ -1519,6 +1646,9 @@ public class TaskDispatchFacade {
     @SuppressWarnings("deprecation")
     private Map<String, Object> toCommonParams(TaskDispatchRequest request) {
         Map<String, Object> params = new LinkedHashMap<>();
+        if (request.getMetadata() != null && !request.getMetadata().isEmpty()) {
+            params.putAll(request.getMetadata());
+        }
         putIfNotBlank(params, "agentId", request.getAgentId());
         putIfNotBlank(params, "providerType", request.getProviderType());
         putIfNotBlank(params, "sessionId", request.getSessionId());

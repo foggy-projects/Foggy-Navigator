@@ -3,9 +3,12 @@ package com.foggy.navigator.session.controller;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
+import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.TaskDispatchRequest;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +31,7 @@ import java.util.Set;
 public class TaskController {
 
     private final TaskDispatchFacade taskDispatchFacade;
+    private final AgentSubmitPipeline agentSubmitPipeline;
 
     /**
      * 创建任务（统一入口）
@@ -45,8 +49,37 @@ public class TaskController {
                 .requestSource("UI")
                 .build();
 
-        DispatchTaskDTO result = taskDispatchFacade.createTask(request, context);
+        AgentTaskSubmitResult submitResult = agentSubmitPipeline.submit(toSubmitRequest(request, context));
+        DispatchTaskDTO result = submitResult.getDispatchTask();
+        if (result == null) {
+            throw new IllegalStateException("Agent submit pipeline did not return dispatch task");
+        }
         return RX.ok(result);
+    }
+
+    private AgentTaskSubmitRequest toSubmitRequest(TaskDispatchRequest request, AgentResolveContext context) {
+        return AgentTaskSubmitRequest.builder()
+                .agentId(request.getAgentId())
+                .providerType(request.getProviderType())
+                .resolveContext(context)
+                .sessionId(request.getSessionId())
+                .workerId(request.getWorkerId())
+                .prompt(request.getPrompt())
+                .cwd(request.getCwd())
+                .directoryId(request.getDirectoryId())
+                .model(request.getModel())
+                .modelConfigId(request.getModelConfigId())
+                .maxTurns(request.getMaxTurns())
+                .permissionMode(request.getPermissionMode())
+                .images(request.getImages())
+                .attachments(request.getAttachments())
+                .agentTeamsConfigId(request.getAgentTeamsConfigId())
+                .agentTeamsJson(request.getAgentTeamsJson())
+                .contextId(request.getContextId())
+                .context(request.getContext())
+                .metadata(request.getMetadata())
+                .contextAlias(request.getContextAlias())
+                .build();
     }
 
     /**

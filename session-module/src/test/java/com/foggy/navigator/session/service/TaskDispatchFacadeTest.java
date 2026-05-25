@@ -16,6 +16,7 @@ import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -141,6 +142,60 @@ class TaskDispatchFacadeTest {
         assertInstanceOf(String.class, imagesValue,
                 "images in A2aMessage metadata must be String, not List, to avoid ClassCastException in downstream consumers");
         assertEquals(imageJson, imagesValue);
+    }
+
+    @Test
+    void submitTask_routesThroughCreateTaskAndPreservesA2aMetadata() {
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(com.foggy.navigator.common.dto.a2a.A2aPart.text("run smoke")))
+                .contextId("ctx-1")
+                .metadata(Map.of(
+                        "runtimeContext", Map.of("task_scoped_token", "token-1"),
+                        "modelConfigId", "cfg-1"))
+                .build();
+        AgentTaskSubmitRequest request = AgentTaskSubmitRequest.builder()
+                .agentId("agent-1")
+                .resolveContext(AgentResolveContext.builder()
+                        .userId("user-1")
+                        .tenantId("tenant-1")
+                        .modelConfigId("cfg-1")
+                        .requestSource("OPEN_API")
+                        .build())
+                .message(message)
+                .prompt("run smoke")
+                .workerId("worker-1")
+                .directoryId("dir-1")
+                .modelConfigId("cfg-1")
+                .model("codex-latest")
+                .build();
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("OPENAI_CODEX");
+
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agentResolver.getProviderType(eq("agent-1"), any())).thenReturn(Optional.of("codex-worker"));
+        when(agent.getAgentCard()).thenReturn(A2aAgentCard.builder().id("agent-1").build());
+        when(llmModelManager.getModelConfig("cfg-1")).thenReturn(Optional.of(modelConfig));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .metadata(Map.of("sessionId", "session-1", "modelConfigId", "cfg-1"))
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        A2aTask result = facade.submitTask(request);
+
+        assertEquals("task-1", result.getId());
+        assertEquals("ctx-1", result.getContextId());
+        assertEquals("session-1", result.getMetadata().get("sessionId"));
+        assertEquals("cfg-1", result.getMetadata().get("modelConfigId"));
+        var messageCaptor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(messageCaptor.capture());
+        assertEquals("token-1",
+                ((Map<?, ?>) messageCaptor.getValue().getMetadata().get("runtimeContext")).get("task_scoped_token"));
+        assertEquals("worker-1", messageCaptor.getValue().getMetadata().get("workerId"));
+        assertEquals("dir-1", messageCaptor.getValue().getMetadata().get("directoryId"));
     }
 
     @Test

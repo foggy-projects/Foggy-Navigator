@@ -43,10 +43,14 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
+import com.foggy.navigator.session.agent.TaskSubmittingA2aAgentDecorator;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.service.OpenApiSessionQueryService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
+import com.foggy.navigator.spi.agent.TaskSubmittingA2aAgent;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggyframework.core.ex.RX;
 import jakarta.servlet.http.HttpServletRequest;
@@ -86,6 +90,7 @@ public class OpenApiController {
     private final WorkerHealthChecker healthChecker;
     private final UnifiedAgentResolver agentResolver;
     private final TaskDispatchFacade taskDispatchFacade;
+    private final AgentSubmitPipeline agentSubmitPipeline;
     private final TaskStateReconciler reconciler;
     private final OpenApiSessionQueryService sessionQueryService;
     private final ObjectMapper objectMapper;
@@ -474,7 +479,23 @@ public class OpenApiController {
             message.setMetadata(metadata);
         }
 
-        A2aTask task = agent.sendTask(message);
+        TaskSubmittingA2aAgent submittingAgent = new TaskSubmittingA2aAgentDecorator(
+                agent, agentSubmitPipeline, route.agentId(), ctx);
+        A2aTask task = submittingAgent.submitTask(AgentTaskSubmitRequest.builder()
+                .agentId(route.agentId())
+                .resolveContext(ctx)
+                .message(message)
+                .prompt(messageContent)
+                .contextId(contextId)
+                .metadata(metadata)
+                .modelConfigId(modelConfigId)
+                .model(modelResource.modelName())
+                .workerId(stringValue(metadata.get("workerId")))
+                .directoryId(stringValue(metadata.get("directoryId")))
+                .cwd(stringValue(metadata.get("cwd")))
+                .maxTurns(form.getMaxTurns())
+                .attachments(normalizedAttachments.isEmpty() ? null : normalizedAttachments)
+                .build());
         if (task != null && !StringUtils.hasText(task.getContextId())) {
             task.setContextId(contextId);
         }
@@ -1164,6 +1185,14 @@ public class OpenApiController {
             }
         }
         return null;
+    }
+
+    private String stringValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString();
+        return StringUtils.hasText(text) ? text : null;
     }
 
     private String resolveBaseUrl(HttpServletRequest request) {

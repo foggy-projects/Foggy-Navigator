@@ -7,9 +7,13 @@ import com.foggy.navigator.common.entity.AgentConsultationEntity;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.session.repository.AgentConsultationRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
+import com.foggy.navigator.session.agent.TaskSubmittingA2aAgentDecorator;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
+import com.foggy.navigator.spi.agent.TaskSubmittingA2aAgent;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.common.util.IdGenerator;
@@ -34,6 +38,7 @@ public class AgentDiscoveryController {
     private final AgentConsultationRepository consultationRepository;
     private final SessionRepository sessionRepository;
     private final ObjectMapper objectMapper;
+    private final AgentSubmitPipeline agentSubmitPipeline;
 
     @GetMapping
     public RX<List<A2aAgentCard>> listAgents(
@@ -107,7 +112,19 @@ public class AgentDiscoveryController {
             message.setMetadata(metadata);
         }
 
-        A2aTask task = agent.sendTask(message);  // ← 立即返回 SUBMITTED
+        TaskSubmittingA2aAgent submittingAgent = new TaskSubmittingA2aAgentDecorator(
+                agent, agentSubmitPipeline, agentId, context);
+        A2aTask task = submittingAgent.submitTask(AgentTaskSubmitRequest.builder()
+                .agentId(agentId)
+                .resolveContext(context)
+                .message(message)
+                .prompt(question)
+                .sessionId(sessionId)
+                .contextId(contextId)
+                .contextAlias(contextAlias)
+                .modelConfigId(body.get("modelConfigId"))
+                .metadata(metadata.isEmpty() ? null : metadata)
+                .build());
 
         // 确保返回值包含 contextId
         if (task.getContextId() == null) {

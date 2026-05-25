@@ -3,9 +3,12 @@ package com.foggy.navigator.session.controller;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
+import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.TaskDispatchRequest;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggyframework.core.ex.RX;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,12 +34,14 @@ class TaskControllerTest {
 
     @Mock
     private TaskDispatchFacade taskDispatchFacade;
+    @Mock
+    private AgentSubmitPipeline agentSubmitPipeline;
 
     private TaskController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new TaskController(taskDispatchFacade);
+        controller = new TaskController(taskDispatchFacade, agentSubmitPipeline);
         UserContext.setCurrentUser(CurrentUser.builder()
                 .userId(USER_ID)
                 .tenantId(TENANT_ID)
@@ -62,12 +67,20 @@ class TaskControllerTest {
                 .providerType("claude-worker")
                 .build();
 
-        when(taskDispatchFacade.createTask(eq(request), any(AgentResolveContext.class))).thenReturn(dto);
+        when(agentSubmitPipeline.submit(any(AgentTaskSubmitRequest.class)))
+                .thenReturn(AgentTaskSubmitResult.of(null, dto));
 
         RX<DispatchTaskDTO> result = controller.createTask(request);
 
         assertNotNull(result.getData());
         assertEquals("task-1", result.getData().getTaskId());
+        verify(agentSubmitPipeline).submit(argThat(submitRequest ->
+                "session-1".equals(submitRequest.getSessionId())
+                        && "worker-1".equals(submitRequest.getWorkerId())
+                        && "hello".equals(submitRequest.getPrompt())
+                        && submitRequest.getResolveContext() != null
+                        && "UI".equals(submitRequest.getResolveContext().getRequestSource())));
+        verify(taskDispatchFacade, never()).createTask(any(), any());
     }
 
     @Test

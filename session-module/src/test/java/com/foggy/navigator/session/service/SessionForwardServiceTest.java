@@ -8,6 +8,7 @@ import com.foggy.navigator.common.entity.SessionRelationEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.dto.SessionForwardCreateRequest;
 import com.foggy.navigator.session.dto.SessionForwardCreateResponse;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
@@ -51,6 +52,8 @@ class SessionForwardServiceTest {
     private SessionManager sessionManager;
     @Mock
     private TaskDispatchFacade taskDispatchFacade;
+    @Mock
+    private AgentSubmitPipeline agentSubmitPipeline;
 
     private SessionForwardService service;
 
@@ -63,7 +66,8 @@ class SessionForwardServiceTest {
                 sessionTaskRepository,
                 workingDirectoryRepository,
                 sessionManager,
-                taskDispatchFacade
+                taskDispatchFacade,
+                agentSubmitPipeline
         );
     }
 

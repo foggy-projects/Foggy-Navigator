@@ -28,9 +28,13 @@ import com.foggy.navigator.claude.worker.service.*;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
+import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.service.OpenApiSessionQueryService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.spi.agent.A2aAgent;
+import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.business.agent.service.AccountContextFileService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -1033,6 +1037,7 @@ class OpenApiControllerMessageMappingTest {
                 : defaultResourceResolver();
         ObjectProvider<A2AgentResourceResolver> resourceResolverProvider = mock(ObjectProvider.class);
         when(resourceResolverProvider.getIfAvailable()).thenReturn(resourceResolver);
+        TaskDispatchFacade taskDispatchFacade = defaultTaskDispatchFacade(agentResolver);
         return new OpenApiController(
                 mock(OpenApiProvisioningService.class),
                 mock(ClaudeWorkerService.class),
@@ -1043,7 +1048,8 @@ class OpenApiControllerMessageMappingTest {
                 mock(WorkingDirectoryRepository.class),
                 mock(WorkerHealthChecker.class),
                 agentResolver,
-                mock(TaskDispatchFacade.class),
+                taskDispatchFacade,
+                defaultAgentSubmitPipeline(taskDispatchFacade),
                 mock(TaskStateReconciler.class),
                 sessionQueryService,
                 new ObjectMapper(),
@@ -1059,6 +1065,29 @@ class OpenApiControllerMessageMappingTest {
                 controlCredentialProvider,
                 resourceResolverProvider
         );
+    }
+
+    private TaskDispatchFacade defaultTaskDispatchFacade(UnifiedAgentResolver agentResolver) {
+        TaskDispatchFacade facade = mock(TaskDispatchFacade.class);
+        when(facade.submitTask(any(AgentTaskSubmitRequest.class))).thenAnswer(invocation -> {
+            AgentTaskSubmitRequest submitRequest = invocation.getArgument(0, AgentTaskSubmitRequest.class);
+            AgentResolveContext context = submitRequest.getResolveContext() != null
+                    ? submitRequest.getResolveContext()
+                    : AgentResolveContext.builder().requestSource("TEST").build();
+            A2aAgent agent = agentResolver.resolveAgent(submitRequest.getAgentId(), context)
+                    .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + submitRequest.getAgentId()));
+            A2aMessage message = submitRequest.getMessage();
+            A2aTask task = agent.sendTask(message);
+            if (task != null && task.getContextId() == null && message != null) {
+                task.setContextId(message.getContextId());
+            }
+            return task;
+        });
+        return facade;
+    }
+
+    private AgentSubmitPipeline defaultAgentSubmitPipeline(TaskDispatchFacade taskDispatchFacade) {
+        return request -> AgentTaskSubmitResult.of(taskDispatchFacade.submitTask(request));
     }
 
     private A2AgentResourceResolver defaultResourceResolver() {

@@ -9,6 +9,8 @@ import com.foggy.navigator.common.entity.SharingKeyEntity;
 import com.foggy.navigator.common.form.SharedAskForm;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConsultationRepository;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
+import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.service.SharingKeyService;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggyframework.core.ex.RX;
@@ -43,7 +45,7 @@ class SharedAskControllerTest {
     @Test
     void ask_usesUnifiedResolverAndSendsSharedMetadata() {
         SharedAskController controller = new SharedAskController(
-                sharingKeyService, agentResolver, consultationRepository);
+                sharingKeyService, agentResolver, consultationRepository, defaultPipeline());
         SharingKeyEntity keyEntity = new SharingKeyEntity();
         keyEntity.setId("key-1");
         keyEntity.setAgentId("agent-1");
@@ -84,7 +86,7 @@ class SharedAskControllerTest {
     @Test
     void ask_returnsFailWhenAgentUnavailable() {
         SharedAskController controller = new SharedAskController(
-                sharingKeyService, agentResolver, consultationRepository);
+                sharingKeyService, agentResolver, consultationRepository, defaultPipeline());
         SharingKeyEntity keyEntity = new SharingKeyEntity();
         keyEntity.setAgentId("agent-1");
         keyEntity.setOwnerUserId("owner-1");
@@ -99,5 +101,9 @@ class SharedAskControllerTest {
 
         assertNull(result.getData());
         assertEquals("Shared agent not available", result.getMsg());
+    }
+
+    private AgentSubmitPipeline defaultPipeline() {
+        return request -> AgentTaskSubmitResult.of(agent.sendTask(request.getMessage()));
     }
 }

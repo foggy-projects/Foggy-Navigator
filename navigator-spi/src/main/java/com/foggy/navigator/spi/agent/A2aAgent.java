@@ -14,7 +14,13 @@ public interface A2aAgent {
     /** Agent identity card */
     A2aAgentCard getAgentCard();
 
-    /** Send a task — returns Task in current state (WORKING or COMPLETED) */
+    /**
+     * Send a simple A2A task.
+     * <p>
+     * This is the runtime-level primitive: caller has already resolved the
+     * Agent, access policy, launch worker, workspace, model and task
+     * projection semantics.
+     */
     A2aTask sendTask(A2aMessage message);
 
     /** Query task status */

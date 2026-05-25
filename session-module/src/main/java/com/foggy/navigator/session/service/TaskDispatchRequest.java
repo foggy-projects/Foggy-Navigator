@@ -71,6 +71,9 @@ public class TaskDispatchRequest {
     /** Provider-specific structured context, e.g. LangGraph FSScript execution hints */
     private Map<String, Object> context;
 
+    /** Additional A2A metadata preserved by complex Agent submit paths. */
+    private Map<String, Object> metadata;
+
     /** 上下文别名（用于按别名复用会话） */
     private String contextAlias;
 
