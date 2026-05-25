@@ -988,7 +988,7 @@ public class UpstreamCli {
                     List.of("bash", "-lc", buildBashInstallScript(releaseBaseUrl + "/install.sh",
                             homeEnvName, defaultHomeDir, portEnvName, port)));
             case "wsl" -> new InstallerCommand(role, releaseBaseUrl,
-                    List.of("wsl.exe", "bash", "-lc",
+                    List.of("wsl.exe", "--exec", "bash", "-lc",
                             buildBashInstallScript(releaseBaseUrl + "/install.sh",
                                     homeEnvName, defaultHomeDir, portEnvName, port)));
             default -> throw new UpstreamCliException("unsupported install shell: " + installShell);

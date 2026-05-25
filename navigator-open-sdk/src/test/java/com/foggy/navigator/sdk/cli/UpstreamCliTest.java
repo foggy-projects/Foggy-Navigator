@@ -2580,6 +2580,9 @@ class UpstreamCliTest {
         assertEquals(3, commands.size());
         assertEquals(List.of(7L, 7L, 7L), timeouts);
         assertEquals("wsl.exe", commands.get(0).get(0));
+        assertEquals("--exec", commands.get(0).get(1));
+        assertEquals("bash", commands.get(0).get(2));
+        assertEquals("-lc", commands.get(0).get(3));
         assertTrue(String.join(" ", commands.get(0)).contains("claude-worker/install.sh"));
         assertTrue(String.join(" ", commands.get(0)).contains("AGENT_WORKER_PORT=3131"));
         assertTrue(String.join(" ", commands.get(1)).contains("codex-worker/install.sh"));
