@@ -31,7 +31,7 @@ function Add-GitIgnoreLine {
 }
 
 function Resolve-ReleaseManifestContent {
-    param([string]$Json, [string]$Path)
+    param([string]$Json, [string]$Path, [string]$BaseUrl)
     if ($Path) {
         if (-not (Test-Path $Path)) {
             throw "ReleaseManifestPath does not exist: $Path"
@@ -48,6 +48,11 @@ function Resolve-ReleaseManifestContent {
         return ($content | ConvertFrom-Json | ConvertTo-Json -Depth 8)
     }
     catch {
+        if ($BaseUrl) {
+            Write-Host "Release manifest argument was not valid JSON; refreshing from $BaseUrl/latest.json" -ForegroundColor Yellow
+            $latest = Invoke-RestMethod -Uri "$BaseUrl/latest.json?ts=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())" -Headers @{ "Cache-Control" = "no-cache" } -TimeoutSec 20
+            return ($latest | ConvertTo-Json -Depth 8)
+        }
         throw "Release manifest is not valid JSON. Pass -ReleaseManifestPath to avoid shell quoting issues."
     }
 }
@@ -166,7 +171,7 @@ if (-not $ReleaseBaseUrl -and $env:NAVI_UPSTREAM_CLI_URL) {
 if ($ReleaseBaseUrl) {
     Write-Utf8NoBom -Path (Join-Path $InstallDir "RELEASE_URL") -Content $ReleaseBaseUrl
 }
-$releaseManifestContent = Resolve-ReleaseManifestContent -Json $ReleaseManifestJson -Path $ReleaseManifestPath
+$releaseManifestContent = Resolve-ReleaseManifestContent -Json $ReleaseManifestJson -Path $ReleaseManifestPath -BaseUrl $ReleaseBaseUrl
 if ($releaseManifestContent) {
     Write-Utf8NoBom -Path (Join-Path $InstallDir "RELEASE_MANIFEST.json") -Content $releaseManifestContent
 }

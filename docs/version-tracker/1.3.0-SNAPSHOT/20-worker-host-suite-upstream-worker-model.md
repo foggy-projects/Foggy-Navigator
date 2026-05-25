@@ -232,7 +232,7 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 - 已落地 Phase 3 Biz identity launch 闭环：Biz Agent 或 worker pool member 绑定 Biz worker identity id 时，不再要求同步创建旧 `LanggraphWorkerEntity`。
 - 已按“所有 worker 调用先走 Navi”的口径收紧 Phase 4A：CLI 不接受 `workers.codex.workerId`，Codex role 诊断固定显示 `CLAUDE_WORKER_CODEX_CONFIG`，并使用 `claudeCode` worker id 作为绑定入口。
 - 已落地 Phase 4B 显式安装入口：`worker-host install` 会真实执行 OBS worker 安装器，`--dry-run` 可用于只看计划；`apply/update` 仍不隐式安装。
-- `navigator-upstream-cli` 发布版本目标升为 `1.0.13`，避免在远端已发布版本上同版本覆盖 worker-host installer 行为；`1.0.11` 使用 `wsl.exe --exec` + base64 bash payload 修正 WSL install 参数转义问题；`1.0.12` 增加 WSL 用户/发行版选择，并让 `worker-host install` 默认安装后启动 worker；`1.0.13` 修复远端安装/自更新写回 `RELEASE_MANIFEST.json` 时 JSON 被 PowerShell 参数转义破坏的问题。
+- `navigator-upstream-cli` 发布版本目标升为 `1.0.14`，避免在远端已发布版本上同版本覆盖 worker-host installer 行为；`1.0.11` 使用 `wsl.exe --exec` + base64 bash payload 修正 WSL install 参数转义问题；`1.0.12` 增加 WSL 用户/发行版选择，并让 `worker-host install` 默认安装后启动 worker；`1.0.13` 修复远端安装/自更新写回 `RELEASE_MANIFEST.json` 时 JSON 被 PowerShell 参数转义破坏的问题；`1.0.14` 补齐旧 wrapper 自更新时的兼容 fallback，旧参数中的 manifest 损坏时会从 `latest.json` 重新拉取合法 release metadata。
 - 尚未落地独立 `OPENAI_CODEX` physical worker identity 直连；该项仍属于后续 Deferred Phase。
 
 ## 验收标准
