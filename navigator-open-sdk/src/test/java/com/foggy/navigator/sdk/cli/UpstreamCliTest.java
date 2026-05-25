@@ -2503,6 +2503,98 @@ class UpstreamCliTest {
     }
 
     @Test
+    void workerHostInstallDryRunPrintsInstallerCommandsWithoutRunningThem() throws Exception {
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("worker-host.json"), """
+                {
+                  "workerHostId": "school-sim-wsl",
+                  "hostUrl": "http://127.0.0.1",
+                  "port": 3131,
+                  "install": "ensure",
+                  "workers": {
+                    "claudeCode": {"enabled": true},
+                    "codex": {"enabled": true, "port": 3151},
+                    "biz": {"enabled": true, "port": 3161}
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+        boolean[] invoked = {false};
+
+        int code = run(new String[]{"upstream", "worker-host", "install",
+                "--file", ".navigator/worker-host.json",
+                "--install-shell", "bash",
+                "--dry-run"}, Map.of(), (command, timeout) -> {
+            invoked[0] = true;
+            return new UpstreamCli.CommandResult(0, "");
+        });
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertFalse(invoked[0]);
+        assertNull(lastPath);
+        assertTrue(output.contains("worker-host install plan ok"));
+        assertTrue(output.contains("installShell=bash"));
+        assertTrue(output.contains("installer role=claudeCode"));
+        assertTrue(output.contains("claude-worker/install.sh"));
+        assertTrue(output.contains("AGENT_WORKER_PORT=3131"));
+        assertTrue(output.contains("installer role=codex"));
+        assertTrue(output.contains("codex-worker/install.sh"));
+        assertTrue(output.contains("CODEX_WORKER_PORT=3151"));
+        assertTrue(output.contains("installer role=biz"));
+        assertTrue(output.contains("langgraph-biz-worker/install.sh"));
+        assertTrue(output.contains("BIZ_WORKER_PORT=3161"));
+        assertTrue(output.contains("automaticInstall=false"));
+    }
+
+    @Test
+    void workerHostInstallRunsEnabledInstallersWithRequestedShell() throws Exception {
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("worker-host.json"), """
+                {
+                  "workerHostId": "school-sim-wsl",
+                  "hostUrl": "http://127.0.0.1",
+                  "port": 3131,
+                  "install": "ensure",
+                  "workers": {
+                    "claudeCode": {"enabled": true},
+                    "codex": {"enabled": true, "port": 3151},
+                    "biz": {"enabled": true, "port": 3161}
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+        List<List<String>> commands = new ArrayList<>();
+        List<Long> timeouts = new ArrayList<>();
+
+        int code = run(new String[]{"upstream", "worker-host", "install",
+                "--file", ".navigator/worker-host.json",
+                "--install-shell", "wsl",
+                "--timeout-seconds", "7"}, Map.of(), (command, timeout) -> {
+            commands.add(command);
+            timeouts.add(timeout.toSeconds());
+            return new UpstreamCli.CommandResult(0, "installed token=installer-secret\n");
+        });
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastPath);
+        assertEquals(3, commands.size());
+        assertEquals(List.of(7L, 7L, 7L), timeouts);
+        assertEquals("wsl.exe", commands.get(0).get(0));
+        assertTrue(String.join(" ", commands.get(0)).contains("claude-worker/install.sh"));
+        assertTrue(String.join(" ", commands.get(0)).contains("AGENT_WORKER_PORT=3131"));
+        assertTrue(String.join(" ", commands.get(1)).contains("codex-worker/install.sh"));
+        assertTrue(String.join(" ", commands.get(1)).contains("CODEX_WORKER_PORT=3151"));
+        assertTrue(String.join(" ", commands.get(2)).contains("langgraph-biz-worker/install.sh"));
+        assertTrue(String.join(" ", commands.get(2)).contains("BIZ_WORKER_PORT=3161"));
+        assertTrue(output.contains("automaticInstall=true"));
+        assertTrue(output.contains("install role=claudeCode status=OK exitCode=0"));
+        assertTrue(output.contains("install role=codex status=OK exitCode=0"));
+        assertTrue(output.contains("install role=biz status=OK exitCode=0"));
+        assertTrue(output.contains("worker-host install ok"));
+        assertFalse(output.contains("installer-secret"));
+    }
+
+    @Test
     void workerHostVerifyRejectsUnknownWorkerKeyBeforeHttpCall() throws Exception {
         Files.createDirectories(tempDir.resolve(".navigator"));
         Files.writeString(tempDir.resolve(".navigator").resolve("worker-host.json"), """
@@ -2879,6 +2971,15 @@ class UpstreamCliTest {
                 new PrintStream(stdout, true, StandardCharsets.UTF_8),
                 new PrintStream(stderr, true, StandardCharsets.UTF_8),
                 tempDir)
+                .run(args, env);
+    }
+
+    private int run(String[] args, Map<String, String> env, UpstreamCli.CommandRunner commandRunner) {
+        return new UpstreamCli(
+                new PrintStream(stdout, true, StandardCharsets.UTF_8),
+                new PrintStream(stderr, true, StandardCharsets.UTF_8),
+                tempDir,
+                commandRunner)
                 .run(args, env);
     }
 

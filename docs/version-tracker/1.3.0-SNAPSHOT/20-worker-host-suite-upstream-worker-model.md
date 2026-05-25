@@ -96,15 +96,15 @@ biz.baseUrl        = hostUrl + ":" + workers.biz.port
 upstream worker-host apply --file worker-host.json [--target-tenant-id <tenantId>] [--write-profile]
 upstream worker-host update --file worker-host.json [--target-tenant-id <tenantId>] [--write-profile]
 upstream worker-host verify --worker-host-id <id>
-upstream worker-host install --file worker-host.json
+upstream worker-host install --file worker-host.json [--install-shell auto|powershell|bash|wsl] [--timeout-seconds <seconds>] [--dry-run]
 ```
 
 ### 命令语义
 
-- `apply`: 一站式安装引导、健康检查、注册/更新 Claude worker、写入 Codex 配置、注册 Biz worker identity。
+- `apply`: 注册/更新 Claude worker、写入 Codex 配置、注册 Biz worker identity；当前不隐式执行本机安装。
 - `update`: 仅做注册信息与端口更新，不执行安装。
 - `verify`: 按 host suite 输出当前解析到的 worker role、脱敏 endpoint 与健康状态。
-- `install`: 仅处理本机/WSL worker 安装或安装引导，不改 Navigator 资源。
+- `install`: 显式执行本机/WSL worker 安装或更新，不改 Navigator 资源。默认根据 CLI 所在系统选择 PowerShell 或 Bash；Windows 上可用 `--install-shell wsl` 安装到默认 WSL distro；安装后会把 manifest 端口写入对应 worker `.env`；`--dry-run` 只打印将执行的命令。
 
 ### 兼容要求
 
@@ -154,7 +154,7 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 | `addons/claude-worker-agent` | 增强 readiness / owner-smoke 数据，暴露 Codex delegated endpoint 的非敏感诊断 |
 | `business-agent-module` | 维持 Biz worker identity 注册；补齐 identity 与 launcher 的一致性，避免 identity-only 不可 launch |
 | `addons/codex-worker-agent` | 保持短期 `codexConfig` 兼容；为后续独立 `OPENAI_CODEX` identity 预留接口 |
-| worker installers | 后续承接 `worker-host install` 的本机/WSL 安装实现 |
+| worker installers | 提供 Claude/Codex/Biz 的稳定 OBS 安装脚本，供 `worker-host install` 显式调用 |
 
 ## Code Inventory
 
@@ -162,7 +162,7 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 | --- | --- | --- | --- | --- |
 | root | `docs/version-tracker/1.3.0-SNAPSHOT/20-worker-host-suite-upstream-worker-model.md` | design | create | 本文档 |
 | root | `docs/version-tracker/1.3.0-SNAPSHOT/README.md` | index | update | 增加文档索引 |
-| root | `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/UpstreamCli.java` | CLI entry | update | 增加 `worker-host` 命令分发、manifest apply/update/verify |
+| root | `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/UpstreamCli.java` | CLI entry | update | 增加 `worker-host` 命令分发、manifest apply/update/verify/install |
 | root | `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/model/businessagent/WorkerHostManifest.java` | CLI model | create | 外部 manifest 结构 |
 | root | `navigator-open-sdk/src/test/java/com/foggy/navigator/sdk/cli/UpstreamCliTest.java` | CLI tests | update | 覆盖 manifest 派生、禁止未知 worker key、兼容 API 调用 |
 | root | `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/OpenApiAgentReadinessService.java` | readiness | update | 添加 role 级 worker 诊断 |
@@ -204,7 +204,15 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 - `verify/install/apply` 对 Codex role 统一输出 `source=CLAUDE_WORKER_CODEX_CONFIG`，用于诊断实际 Codex endpoint。
 - 上游 Agent manifest 中 Codex Agent 的 `workerId/workerRef` 继续填写 `claudeCode` worker id。
 
-### Deferred Phase 4B: 独立 Codex PhysicalWorker
+### Phase 4B: 显式 WorkerHost 安装入口
+
+- `worker-host install --file <manifest>` 按标准 role 顺序调用 OBS 安装器：`claudeCode`、`codex`、`biz`。
+- 支持 `--install-shell auto|powershell|bash|wsl`，其中 `wsl` 用于 Windows CLI 调用默认 WSL distro 内的 bash 安装脚本。
+- 支持 `--dry-run` 输出安装命令但不执行，支持 `--timeout-seconds` 控制每个安装器的最长运行时间。
+- 安装后按 role 写入端口配置：`AGENT_WORKER_PORT`、`CODEX_WORKER_PORT`、`BIZ_WORKER_PORT`。
+- 安装命令只负责安装或更新本机 worker 包，不注册或修改 Navigator 资源；注册仍由 `worker-host apply/update` 执行。
+
+### Deferred Phase 4C: 独立 Codex PhysicalWorker
 
 - 引入或复用标准 physical worker identity 注册接口支持 `OPENAI_CODEX`。
 - Codex Agent 支持 execution worker 指向独立 Codex identity。
@@ -217,7 +225,8 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 - Codex 兼容模型已能通过 `role=codex source=CLAUDE_WORKER_CODEX_CONFIG` 输出脱敏后的 `codexConfig.baseUrl`，用于确认真实执行 endpoint 是否为 WSL `3151`。
 - 已落地 Phase 3 Biz identity launch 闭环：Biz Agent 或 worker pool member 绑定 Biz worker identity id 时，不再要求同步创建旧 `LanggraphWorkerEntity`。
 - 已按“所有 worker 调用先走 Navi”的口径收紧 Phase 4A：CLI 不接受 `workers.codex.workerId`，Codex role 诊断固定显示 `CLAUDE_WORKER_CODEX_CONFIG`，并使用 `claudeCode` worker id 作为绑定入口。
-- 尚未落地真实本机/WSL installer、独立 `OPENAI_CODEX` physical worker identity 直连；这些仍属于后续 Deferred Phase。
+- 已落地 Phase 4B 显式安装入口：`worker-host install` 会真实执行 OBS worker 安装器，`--dry-run` 可用于只看计划；`apply/update` 仍不隐式安装。
+- 尚未落地独立 `OPENAI_CODEX` physical worker identity 直连；该项仍属于后续 Deferred Phase。
 
 ## 验收标准
 
@@ -236,4 +245,4 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 - 当前 Codex 实现仍以 Claude worker id 作为入口；普通上游不得配置独立 Codex worker id，不能承诺独立 Codex identity 可执行。
 - Biz identity 直连当前使用 identity 的 `baseUrl` 作为运行时 endpoint；`identityToken` 只保存 hash，不作为 worker 调用 token。需要远程 Worker 鉴权时，应补 secret ref 或受控 token 材料模型。
 - `hostUrl=http://127.0.0.1` 的含义是 Navigator 服务视角可达；当 Navigator 不在同一 host/WSL 网络命名空间时，上游必须填可被 Navigator 访问的地址。
-- `install=ensure` 涉及本机/WSL 操作，CLI 应先以显式 dry-run/提示方式推进，避免隐式改动用户环境。
+- `worker-host install` 是显式本机/WSL 操作；`apply/update` 当前不会隐式执行安装。执行前可先用 `--dry-run` 审核命令，尤其是 Windows 调 WSL 的场景。

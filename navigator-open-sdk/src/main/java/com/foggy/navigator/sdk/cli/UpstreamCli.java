@@ -72,6 +72,9 @@ import com.foggy.navigator.sdk.model.businessagent.UpstreamBootstrapRequestDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpsertClientAppUpstreamRouteForm;
 import com.foggy.navigator.sdk.model.businessagent.WorkerHostManifest;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -87,22 +90,35 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 public class UpstreamCli {
     private static final String CREDENTIALS_NOT_REPLAYABLE = "CREDENTIALS_NOT_REPLAYABLE";
+    private static final String CLAUDE_WORKER_INSTALL_BASE_URL =
+            "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/claude-worker";
+    private static final String CODEX_WORKER_INSTALL_BASE_URL =
+            "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-worker";
+    private static final String BIZ_WORKER_INSTALL_BASE_URL =
+            "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/langgraph-biz-worker";
 
     private final PrintStream out;
     private final PrintStream err;
     private final Path cwd;
     private final ObjectMapper objectMapper;
+    private final CommandRunner commandRunner;
     private UpstreamCliConfig config;
     private String resolvedClientAppAccessToken;
     private Map<String, String> env = Map.of();
 
     public UpstreamCli(PrintStream out, PrintStream err, Path cwd) {
+        this(out, err, cwd, new ProcessCommandRunner());
+    }
+
+    UpstreamCli(PrintStream out, PrintStream err, Path cwd, CommandRunner commandRunner) {
         this.out = out;
         this.err = err;
         this.cwd = cwd;
+        this.commandRunner = commandRunner;
         this.objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -312,7 +328,7 @@ public class UpstreamCli {
         out.println("  apply  --file <json> [--target-tenant-id <tenantId>] [--worker-id <claudeWorkerId>] [--write-profile]");
         out.println("  update --file <json> [--worker-id <claudeWorkerId>] [--write-profile]");
         out.println("  verify --file <json>");
-        out.println("  install --file <json>");
+        out.println("  install --file <json> [--install-shell auto|powershell|bash|wsl] [--timeout-seconds <seconds>] [--dry-run]");
         out.println("WorkerHost is the normal upstream bootstrap entry; worker and worker-pool commands remain low-level compatibility commands.");
         out.println("Codex is Navi-routed through claudeCode.codexConfig; workers.codex.workerId/direct OPENAI_CODEX identity is not supported yet.");
         return 0;
@@ -889,10 +905,19 @@ public class UpstreamCli {
     private int workerHostInstall(CliArguments args) throws Exception {
         WorkerHostPlan plan = normalizeWorkerHostManifest(readJsonFile(
                 requiredOption(args, "file", "worker host json file"), WorkerHostManifest.class));
-        out.println("worker-host install plan ok");
+        String installShell = normalizeInstallShell(firstNonBlank(args.option("install-shell"), "auto"));
+        Duration timeout = Duration.ofSeconds(parseInteger(args.option("timeout-seconds"), 1800));
+        if (timeout.isZero() || timeout.isNegative()) {
+            throw new UpstreamCliException("timeout-seconds must be greater than 0");
+        }
+        List<InstallerCommand> installerCommands = buildInstallerCommands(plan, installShell);
+
+        out.println("worker-host install " + (args.flag("dry-run") ? "plan ok" : "start"));
         out.println("workerHost workerHostId=" + valueOrEmpty(plan.workerHostId)
                 + " hostUrl=" + redact(plan.hostUrl)
                 + " install=" + valueOrEmpty(plan.install));
+        out.println("installShell=" + installShell);
+        out.println("timeoutSeconds=" + timeout.toSeconds());
         printWorkerHostRole("claudeCode", plan.claudeCode.workerId, plan.claudeCode.baseUrl, "CLAUDE_WORKER");
         if (plan.codex != null) {
             printWorkerHostRole("codex", plan.claudeCode.workerId, plan.codex.baseUrl, "CLAUDE_WORKER_CODEX_CONFIG");
@@ -900,9 +925,161 @@ public class UpstreamCli {
         if (plan.biz != null) {
             printWorkerHostRole("biz", plan.biz.workerId, plan.biz.baseUrl, "BIZ_WORKER_IDENTITY");
         }
-        out.println("automaticInstall=false");
-        out.println("message=worker-host install currently validates the manifest and prints the install plan; installer execution will be wired in a later phase");
+        for (InstallerCommand installerCommand : installerCommands) {
+            out.println("installer role=" + installerCommand.role()
+                    + " url=" + installerCommand.releaseBaseUrl()
+                    + " command=" + redact(String.join(" ", installerCommand.command())));
+        }
+        if (args.flag("dry-run")) {
+            out.println("automaticInstall=false");
+            out.println("message=dry-run; installer commands were not executed");
+            return 0;
+        }
+
+        out.println("automaticInstall=true");
+        for (InstallerCommand installerCommand : installerCommands) {
+            out.println("install role=" + installerCommand.role()
+                    + " status=STARTED"
+                    + " url=" + installerCommand.releaseBaseUrl());
+            CommandResult result = commandRunner.run(installerCommand.command(), timeout);
+            printInstallerOutput(installerCommand.role(), result.output());
+            if (result.exitCode() != 0) {
+                throw new UpstreamCliException("worker-host install failed role="
+                        + installerCommand.role() + " exitCode=" + result.exitCode());
+            }
+            out.println("install role=" + installerCommand.role()
+                    + " status=OK"
+                    + " exitCode=" + result.exitCode());
+        }
+        out.println("worker-host install ok");
         return 0;
+    }
+
+    private List<InstallerCommand> buildInstallerCommands(WorkerHostPlan plan, String installShell) {
+        List<InstallerCommand> commands = new ArrayList<>();
+        commands.add(buildInstallerCommand("claudeCode", CLAUDE_WORKER_INSTALL_BASE_URL, installShell,
+                "CLAUDE_WORKER_HOME", ".claude-worker", "AGENT_WORKER_PORT",
+                portFromBaseUrl(plan.claudeCode.baseUrl)));
+        if (plan.codex != null) {
+            commands.add(buildInstallerCommand("codex", CODEX_WORKER_INSTALL_BASE_URL, installShell,
+                    "CODEX_WORKER_HOME", ".codex-worker", "CODEX_WORKER_PORT",
+                    portFromBaseUrl(plan.codex.baseUrl)));
+        }
+        if (plan.biz != null) {
+            commands.add(buildInstallerCommand("biz", BIZ_WORKER_INSTALL_BASE_URL, installShell,
+                    "LANGGRAPH_BIZ_WORKER_HOME", ".langgraph-biz-worker", "BIZ_WORKER_PORT",
+                    portFromBaseUrl(plan.biz.baseUrl)));
+        }
+        return commands;
+    }
+
+    private InstallerCommand buildInstallerCommand(String role,
+                                                   String releaseBaseUrl,
+                                                   String installShell,
+                                                   String homeEnvName,
+                                                   String defaultHomeDir,
+                                                   String portEnvName,
+                                                   Integer port) {
+        return switch (installShell) {
+            case "powershell" -> new InstallerCommand(role, releaseBaseUrl,
+                    buildPowerShellInstallCommand(releaseBaseUrl + "/install.ps1",
+                            homeEnvName, defaultHomeDir, portEnvName, port));
+            case "bash" -> new InstallerCommand(role, releaseBaseUrl,
+                    List.of("bash", "-lc", buildBashInstallScript(releaseBaseUrl + "/install.sh",
+                            homeEnvName, defaultHomeDir, portEnvName, port)));
+            case "wsl" -> new InstallerCommand(role, releaseBaseUrl,
+                    List.of("wsl.exe", "bash", "-lc",
+                            buildBashInstallScript(releaseBaseUrl + "/install.sh",
+                                    homeEnvName, defaultHomeDir, portEnvName, port)));
+            default -> throw new UpstreamCliException("unsupported install shell: " + installShell);
+        };
+    }
+
+    private List<String> buildPowerShellInstallCommand(String installUrl,
+                                                       String homeEnvName,
+                                                       String defaultHomeDir,
+                                                       String portEnvName,
+                                                       Integer port) {
+        String executable = isWindows() ? "powershell" : "pwsh";
+        String script = "$ErrorActionPreference='Stop'; irm " + powerShellSingleQuote(installUrl) + " | iex";
+        if (port != null) {
+            script += "; " + buildPowerShellPortConfigScript(homeEnvName, defaultHomeDir, portEnvName, port);
+        }
+        List<String> command = new ArrayList<>();
+        command.add(executable);
+        command.add("-NoProfile");
+        if (isWindows()) {
+            command.add("-ExecutionPolicy");
+            command.add("Bypass");
+        }
+        command.add("-Command");
+        command.add(script);
+        return command;
+    }
+
+    private String buildBashInstallScript(String installUrl,
+                                          String homeEnvName,
+                                          String defaultHomeDir,
+                                          String portEnvName,
+                                          Integer port) {
+        String script = "set -e; curl -fsSL " + shellQuote(installUrl) + " | bash";
+        if (port == null) {
+            return script;
+        }
+        return script
+                + "; env_file=\"${" + homeEnvName + ":-$HOME/" + defaultHomeDir + "}/.env\""
+                + "; mkdir -p \"$(dirname \"$env_file\")\""
+                + "; touch \"$env_file\""
+                + "; if grep -q '^" + portEnvName + "=' \"$env_file\"; then "
+                + "sed -i.bak 's|^" + portEnvName + "=.*|" + portEnvName + "=" + port + "|' \"$env_file\""
+                + "; rm -f \"$env_file.bak\""
+                + "; else printf '\\n" + portEnvName + "=" + port + "\\n' >> \"$env_file\""
+                + "; fi";
+    }
+
+    private String buildPowerShellPortConfigScript(String homeEnvName,
+                                                   String defaultHomeDir,
+                                                   String portEnvName,
+                                                   Integer port) {
+        String line = portEnvName + "=" + port;
+        return "$dir=if ($env:" + homeEnvName + ") { $env:" + homeEnvName + " } else { Join-Path $HOME "
+                + powerShellSingleQuote(defaultHomeDir) + " }; "
+                + "$envFile=Join-Path $dir '.env'; "
+                + "if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }; "
+                + "if (-not (Test-Path $envFile)) { New-Item -ItemType File -Force -Path $envFile | Out-Null }; "
+                + "$content=Get-Content $envFile -Raw -ErrorAction SilentlyContinue; "
+                + "if ($null -eq $content) { $content='' }; "
+                + "if ($content -match '(?m)^" + portEnvName + "=') { "
+                + "$content=$content -replace '(?m)^" + portEnvName + "=.*',"
+                + powerShellSingleQuote(line)
+                + " } else { $content=$content.TrimEnd()+\"`n" + line + "`n\" }; "
+                + "$utf8=New-Object System.Text.UTF8Encoding($false); "
+                + "[System.IO.File]::WriteAllText($envFile,$content,$utf8)";
+    }
+
+    private String normalizeInstallShell(String installShell) {
+        String value = hasText(installShell) ? installShell.trim().toLowerCase() : "auto";
+        if ("auto".equals(value)) {
+            return isWindows() ? "powershell" : "bash";
+        }
+        if (!Set.of("powershell", "bash", "wsl").contains(value)) {
+            throw new UpstreamCliException("install-shell must be one of auto,powershell,bash,wsl");
+        }
+        if ("wsl".equals(value) && !isWindows()) {
+            throw new UpstreamCliException("install-shell=wsl is only supported when running the CLI on Windows");
+        }
+        return value;
+    }
+
+    private void printInstallerOutput(String role, String output) {
+        if (!hasText(output)) {
+            return;
+        }
+        out.println("installOutput role=" + role);
+        out.print(redact(output));
+        if (!output.endsWith("\n") && !output.endsWith("\r")) {
+            out.println();
+        }
     }
 
     private int directoryList(CliArguments args) {
@@ -3127,6 +3304,77 @@ public class UpstreamCli {
             throw new UpstreamCliException(message);
         }
         return value;
+    }
+
+    private static String shellQuote(String value) {
+        return "'" + value.replace("'", "'\"'\"'") + "'";
+    }
+
+    private static String powerShellSingleQuote(String value) {
+        return "'" + value.replace("'", "''") + "'";
+    }
+
+    private static Integer portFromBaseUrl(String baseUrl) {
+        if (!hasText(baseUrl)) {
+            return null;
+        }
+        try {
+            int port = URI.create(baseUrl).getPort();
+            return port >= 0 ? port : null;
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static boolean isWindows() {
+        String osName = System.getProperty("os.name", "");
+        return osName.toLowerCase().contains("win");
+    }
+
+    private record InstallerCommand(String role, String releaseBaseUrl, List<String> command) {
+    }
+
+    record CommandResult(int exitCode, String output) {
+    }
+
+    @FunctionalInterface
+    interface CommandRunner {
+        CommandResult run(List<String> command, Duration timeout) throws Exception;
+    }
+
+    private static final class ProcessCommandRunner implements CommandRunner {
+        @Override
+        public CommandResult run(List<String> command, Duration timeout) throws Exception {
+            Process process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .start();
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            Thread outputReader = new Thread(() -> drain(process.getInputStream(), output),
+                    "navi-upstream-installer-output");
+            outputReader.setDaemon(true);
+            outputReader.start();
+            try {
+                boolean completed = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
+                if (!completed) {
+                    process.destroyForcibly();
+                    throw new UpstreamCliException("installer timed out after " + timeout.toSeconds() + " seconds");
+                }
+                outputReader.join(TimeUnit.SECONDS.toMillis(5));
+                return new CommandResult(process.exitValue(), output.toString(StandardCharsets.UTF_8));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                process.destroyForcibly();
+                throw new UpstreamCliException("installer interrupted", e);
+            }
+        }
+
+        private static void drain(InputStream input, ByteArrayOutputStream output) {
+            try (InputStream in = input) {
+                in.transferTo(output);
+            } catch (IOException ignored) {
+                // Best-effort process output capture.
+            }
+        }
     }
 
     private static class WorkerHostPlan {
