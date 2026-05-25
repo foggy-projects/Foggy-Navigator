@@ -28,7 +28,10 @@ function makeGroup(
       authBound: false,
     },
     firstPrompt: `prompt-${sessionId}`,
+    taskCount: 1,
     totalCost: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
     createdAt: '2026-04-11T00:00:00',
     updatedAt: '2026-04-11T00:00:00',
   }

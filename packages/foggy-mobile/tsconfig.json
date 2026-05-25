@@ -14,8 +14,7 @@
       "@/*": ["./src/*"]
     },
     "types": [
-      "@dcloudio/types",
-      "wot-design-uni/global.d.ts"
+      "@dcloudio/types"
     ]
   },
   "include": ["src/**/*.ts", "src/**/*.vue"],
