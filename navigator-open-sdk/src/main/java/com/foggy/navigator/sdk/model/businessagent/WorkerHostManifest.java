@@ -11,6 +11,8 @@ public class WorkerHostManifest {
     private String hostUrl;
     private Integer port;
     private String install;
+    private String wslUser;
+    private String wslDistro;
     private Map<String, WorkerSpec> workers = new LinkedHashMap<>();
 
     public String getWorkerHostId() {
@@ -43,6 +45,22 @@ public class WorkerHostManifest {
 
     public void setInstall(String install) {
         this.install = install;
+    }
+
+    public String getWslUser() {
+        return wslUser;
+    }
+
+    public void setWslUser(String wslUser) {
+        this.wslUser = wslUser;
+    }
+
+    public String getWslDistro() {
+        return wslDistro;
+    }
+
+    public void setWslDistro(String wslDistro) {
+        this.wslDistro = wslDistro;
     }
 
     public Map<String, WorkerSpec> getWorkers() {

@@ -2535,20 +2535,27 @@ class UpstreamCliTest {
         assertNull(lastPath);
         assertTrue(output.contains("worker-host install plan ok"));
         assertTrue(output.contains("installShell=bash"));
+        assertTrue(output.contains("startAfterInstall=true"));
         assertTrue(output.contains("installer role=claudeCode"));
         assertTrue(output.contains("claude-worker/install.sh"));
         assertTrue(output.contains("AGENT_WORKER_PORT=3131"));
+        assertTrue(output.contains("starter role=claudeCode"));
+        assertTrue(output.contains(".claude-worker}/bin/claude-worker"));
         assertTrue(output.contains("installer role=codex"));
         assertTrue(output.contains("codex-worker/install.sh"));
         assertTrue(output.contains("CODEX_WORKER_PORT=3151"));
+        assertTrue(output.contains("starter role=codex"));
+        assertTrue(output.contains(".codex-worker}/bin/codex-worker"));
         assertTrue(output.contains("installer role=biz"));
         assertTrue(output.contains("langgraph-biz-worker/install.sh"));
         assertTrue(output.contains("BIZ_WORKER_PORT=3161"));
+        assertTrue(output.contains("starter role=biz"));
+        assertTrue(output.contains("LangGraph BizWorker READY"));
         assertTrue(output.contains("automaticInstall=false"));
     }
 
     @Test
-    void workerHostInstallRunsEnabledInstallersWithRequestedShell() throws Exception {
+    void workerHostInstallRunsEnabledInstallersAndStartersWithRequestedWslUser() throws Exception {
         Files.createDirectories(tempDir.resolve(".navigator"));
         Files.writeString(tempDir.resolve(".navigator").resolve("worker-host.json"), """
                 {
@@ -2569,6 +2576,8 @@ class UpstreamCliTest {
         int code = run(new String[]{"upstream", "worker-host", "install",
                 "--file", ".navigator/worker-host.json",
                 "--install-shell", "wsl",
+                "--wsl-distro", "Ubuntu",
+                "--wsl-user", "navigator",
                 "--timeout-seconds", "7"}, Map.of(), (command, timeout) -> {
             commands.add(command);
             timeouts.add(timeout.toSeconds());
@@ -2578,26 +2587,68 @@ class UpstreamCliTest {
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(0, code);
         assertNull(lastPath);
-        assertEquals(3, commands.size());
-        assertEquals(List.of(7L, 7L, 7L), timeouts);
+        assertEquals(6, commands.size());
+        assertEquals(List.of(7L, 7L, 7L, 7L, 7L, 7L), timeouts);
         assertEquals("wsl.exe", commands.get(0).get(0));
-        assertEquals("--exec", commands.get(0).get(1));
-        assertEquals("bash", commands.get(0).get(2));
-        assertEquals("-lc", commands.get(0).get(3));
-        assertTrue(commands.get(0).get(4).contains("base64 -d | bash"));
+        assertTrue(commands.get(0).contains("--distribution"));
+        assertTrue(commands.get(0).contains("Ubuntu"));
+        assertTrue(commands.get(0).contains("--user"));
+        assertTrue(commands.get(0).contains("navigator"));
+        assertTrue(commands.get(0).contains("--exec"));
+        assertTrue(commands.get(0).get(commands.get(0).size() - 1).contains("base64 -d | bash"));
         assertTrue(decodedWslScript(commands.get(0)).contains("claude-worker/install.sh"));
         assertTrue(decodedWslScript(commands.get(0)).contains("AGENT_WORKER_PORT=3131"));
         assertTrue(decodedWslScript(commands.get(1)).contains("codex-worker/install.sh"));
         assertTrue(decodedWslScript(commands.get(1)).contains("CODEX_WORKER_PORT=3151"));
         assertTrue(decodedWslScript(commands.get(2)).contains("langgraph-biz-worker/install.sh"));
         assertTrue(decodedWslScript(commands.get(2)).contains("BIZ_WORKER_PORT=3161"));
+        assertTrue(decodedWslScript(commands.get(3)).contains(".claude-worker}/bin/claude-worker"));
+        assertTrue(decodedWslScript(commands.get(4)).contains(".codex-worker}/bin/codex-worker"));
+        assertTrue(decodedWslScript(commands.get(5)).contains("LangGraph BizWorker READY http://localhost:3161"));
         assertTrue(output.contains("script=set -e; curl -fsSL"));
+        assertTrue(output.contains("wslDistro=Ubuntu"));
+        assertTrue(output.contains("wslUser=navigator"));
         assertTrue(output.contains("automaticInstall=true"));
         assertTrue(output.contains("install role=claudeCode status=OK exitCode=0"));
         assertTrue(output.contains("install role=codex status=OK exitCode=0"));
         assertTrue(output.contains("install role=biz status=OK exitCode=0"));
+        assertTrue(output.contains("start role=claudeCode status=OK exitCode=0"));
+        assertTrue(output.contains("start role=codex status=OK exitCode=0"));
+        assertTrue(output.contains("start role=biz status=OK exitCode=0"));
         assertTrue(output.contains("worker-host install ok"));
         assertFalse(output.contains("installer-secret"));
+    }
+
+    @Test
+    void workerHostInstallNoStartSkipsStarterCommands() throws Exception {
+        Files.createDirectories(tempDir.resolve(".navigator"));
+        Files.writeString(tempDir.resolve(".navigator").resolve("worker-host.json"), """
+                {
+                  "workerHostId": "school-sim-wsl",
+                  "hostUrl": "http://127.0.0.1",
+                  "port": 3131,
+                  "workers": {
+                    "claudeCode": {"enabled": true},
+                    "codex": {"enabled": true, "port": 3151}
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+        List<List<String>> commands = new ArrayList<>();
+
+        int code = run(new String[]{"upstream", "worker-host", "install",
+                "--file", ".navigator/worker-host.json",
+                "--install-shell", "bash",
+                "--no-start"}, Map.of(), (command, timeout) -> {
+            commands.add(command);
+            return new UpstreamCli.CommandResult(0, "installed\n");
+        });
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals(2, commands.size());
+        assertTrue(output.contains("startAfterInstall=false"));
+        assertFalse(output.contains("starter role="));
+        assertFalse(output.contains("start role="));
     }
 
     @Test
@@ -2990,7 +3041,7 @@ class UpstreamCliTest {
     }
 
     private String decodedWslScript(List<String> command) {
-        String wrapper = command.get(4);
+        String wrapper = command.get(command.size() - 1);
         String prefix = "printf %s '";
         String suffix = "' | base64 -d | bash";
         assertTrue(wrapper.startsWith(prefix));

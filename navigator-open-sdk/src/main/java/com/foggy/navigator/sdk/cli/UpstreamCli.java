@@ -329,7 +329,7 @@ public class UpstreamCli {
         out.println("  apply  --file <json> [--target-tenant-id <tenantId>] [--worker-id <claudeWorkerId>] [--write-profile]");
         out.println("  update --file <json> [--worker-id <claudeWorkerId>] [--write-profile]");
         out.println("  verify --file <json>");
-        out.println("  install --file <json> [--install-shell auto|powershell|bash|wsl] [--timeout-seconds <seconds>] [--dry-run]");
+        out.println("  install --file <json> [--install-shell auto|powershell|bash|wsl] [--wsl-user <user>] [--wsl-distro <name>] [--timeout-seconds <seconds>] [--no-start] [--dry-run]");
         out.println("WorkerHost is the normal upstream bootstrap entry; worker and worker-pool commands remain low-level compatibility commands.");
         out.println("Codex is Navi-routed through claudeCode.codexConfig; workers.codex.workerId/direct OPENAI_CODEX identity is not supported yet.");
         return 0;
@@ -907,18 +907,28 @@ public class UpstreamCli {
         WorkerHostPlan plan = normalizeWorkerHostManifest(readJsonFile(
                 requiredOption(args, "file", "worker host json file"), WorkerHostManifest.class));
         String installShell = normalizeInstallShell(firstNonBlank(args.option("install-shell"), "auto"));
+        WslInstallOptions wslOptions = resolveWslInstallOptions(args, plan, installShell);
+        boolean startAfterInstall = !args.flag("no-start");
         Duration timeout = Duration.ofSeconds(parseInteger(args.option("timeout-seconds"), 1800));
         if (timeout.isZero() || timeout.isNegative()) {
             throw new UpstreamCliException("timeout-seconds must be greater than 0");
         }
-        List<InstallerCommand> installerCommands = buildInstallerCommands(plan, installShell);
+        List<InstallerCommand> installerCommands = buildInstallerCommands(plan, installShell, wslOptions);
+        List<StartCommand> startCommands = startAfterInstall
+                ? buildWorkerHostStartCommands(plan, installShell, wslOptions)
+                : List.of();
 
         out.println("worker-host install " + (args.flag("dry-run") ? "plan ok" : "start"));
         out.println("workerHost workerHostId=" + valueOrEmpty(plan.workerHostId)
                 + " hostUrl=" + redact(plan.hostUrl)
                 + " install=" + valueOrEmpty(plan.install));
         out.println("installShell=" + installShell);
+        if ("wsl".equals(installShell)) {
+            out.println("wslDistro=" + firstNonBlank(wslOptions.distro(), "default"));
+            out.println("wslUser=" + firstNonBlank(wslOptions.user(), "default"));
+        }
         out.println("timeoutSeconds=" + timeout.toSeconds());
+        out.println("startAfterInstall=" + startAfterInstall);
         printWorkerHostRole("claudeCode", plan.claudeCode.workerId, plan.claudeCode.baseUrl, "CLAUDE_WORKER");
         if (plan.codex != null) {
             printWorkerHostRole("codex", plan.claudeCode.workerId, plan.codex.baseUrl, "CLAUDE_WORKER_CODEX_CONFIG");
@@ -932,6 +942,13 @@ public class UpstreamCli {
                     + " command=" + redact(String.join(" ", installerCommand.command()))
                     + (hasText(installerCommand.scriptPreview())
                     ? " script=" + redact(installerCommand.scriptPreview())
+                    : ""));
+        }
+        for (StartCommand startCommand : startCommands) {
+            out.println("starter role=" + startCommand.role()
+                    + " command=" + redact(String.join(" ", startCommand.command()))
+                    + (hasText(startCommand.scriptPreview())
+                    ? " script=" + redact(startCommand.scriptPreview())
                     : ""));
         }
         if (args.flag("dry-run")) {
@@ -955,24 +972,52 @@ public class UpstreamCli {
                     + " status=OK"
                     + " exitCode=" + result.exitCode());
         }
+        if (startAfterInstall) {
+            for (StartCommand startCommand : startCommands) {
+                out.println("start role=" + startCommand.role() + " status=STARTED");
+                CommandResult result = commandRunner.run(startCommand.command(), timeout);
+                printInstallerOutput(startCommand.role(), result.output());
+                if (result.exitCode() != 0) {
+                    throw new UpstreamCliException("worker-host start failed role="
+                            + startCommand.role() + " exitCode=" + result.exitCode());
+                }
+                out.println("start role=" + startCommand.role()
+                        + " status=OK"
+                        + " exitCode=" + result.exitCode());
+            }
+        }
         out.println("worker-host install ok");
         return 0;
     }
 
-    private List<InstallerCommand> buildInstallerCommands(WorkerHostPlan plan, String installShell) {
+    private WslInstallOptions resolveWslInstallOptions(CliArguments args,
+                                                       WorkerHostPlan plan,
+                                                       String installShell) {
+        String wslUser = firstNonBlank(args.option("wsl-user"), plan.wslUser, env.get("NAVI_WSL_USER"));
+        String wslDistro = firstNonBlank(args.option("wsl-distro"), plan.wslDistro, env.get("NAVI_WSL_DISTRO"));
+        if (!"wsl".equals(installShell)
+                && (hasText(args.option("wsl-user")) || hasText(args.option("wsl-distro")))) {
+            throw new UpstreamCliException("--wsl-user/--wsl-distro require --install-shell wsl");
+        }
+        return new WslInstallOptions(wslDistro, wslUser);
+    }
+
+    private List<InstallerCommand> buildInstallerCommands(WorkerHostPlan plan,
+                                                          String installShell,
+                                                          WslInstallOptions wslOptions) {
         List<InstallerCommand> commands = new ArrayList<>();
         commands.add(buildInstallerCommand("claudeCode", CLAUDE_WORKER_INSTALL_BASE_URL, installShell,
                 "CLAUDE_WORKER_HOME", ".claude-worker", "AGENT_WORKER_PORT",
-                portFromBaseUrl(plan.claudeCode.baseUrl)));
+                portFromBaseUrl(plan.claudeCode.baseUrl), wslOptions));
         if (plan.codex != null) {
             commands.add(buildInstallerCommand("codex", CODEX_WORKER_INSTALL_BASE_URL, installShell,
                     "CODEX_WORKER_HOME", ".codex-worker", "CODEX_WORKER_PORT",
-                    portFromBaseUrl(plan.codex.baseUrl)));
+                    portFromBaseUrl(plan.codex.baseUrl), wslOptions));
         }
         if (plan.biz != null) {
             commands.add(buildInstallerCommand("biz", BIZ_WORKER_INSTALL_BASE_URL, installShell,
                     "LANGGRAPH_BIZ_WORKER_HOME", ".langgraph-biz-worker", "BIZ_WORKER_PORT",
-                    portFromBaseUrl(plan.biz.baseUrl)));
+                    portFromBaseUrl(plan.biz.baseUrl), wslOptions));
         }
         return commands;
     }
@@ -983,7 +1028,8 @@ public class UpstreamCli {
                                                    String homeEnvName,
                                                    String defaultHomeDir,
                                                    String portEnvName,
-                                                   Integer port) {
+                                                   Integer port,
+                                                   WslInstallOptions wslOptions) {
         String bashScript = buildBashInstallScript(releaseBaseUrl + "/install.sh",
                 homeEnvName, defaultHomeDir, portEnvName, port);
         return switch (installShell) {
@@ -993,15 +1039,177 @@ public class UpstreamCli {
             case "bash" -> new InstallerCommand(role, releaseBaseUrl,
                     List.of("bash", "-lc", bashScript), null);
             case "wsl" -> new InstallerCommand(role, releaseBaseUrl,
-                    buildWslInstallCommand(bashScript), bashScript);
+                    buildWslCommand(bashScript, wslOptions), bashScript);
             default -> throw new UpstreamCliException("unsupported install shell: " + installShell);
         };
     }
 
-    private List<String> buildWslInstallCommand(String bashScript) {
+    private List<String> buildWslCommand(String bashScript, WslInstallOptions wslOptions) {
         String encoded = Base64.getEncoder().encodeToString(bashScript.getBytes(StandardCharsets.UTF_8));
-        return List.of("wsl.exe", "--exec", "bash", "-lc",
-                "printf %s " + shellQuote(encoded) + " | base64 -d | bash");
+        List<String> command = new ArrayList<>();
+        command.add("wsl.exe");
+        if (hasText(wslOptions.distro())) {
+            command.add("--distribution");
+            command.add(wslOptions.distro());
+        }
+        if (hasText(wslOptions.user())) {
+            command.add("--user");
+            command.add(wslOptions.user());
+        }
+        command.add("--exec");
+        command.add("bash");
+        command.add("-lc");
+        command.add("printf %s " + shellQuote(encoded) + " | base64 -d | bash");
+        return command;
+    }
+
+    private List<StartCommand> buildWorkerHostStartCommands(WorkerHostPlan plan,
+                                                            String installShell,
+                                                            WslInstallOptions wslOptions) {
+        List<StartCommand> commands = new ArrayList<>();
+        commands.add(buildWorkerStartCommand("claudeCode", installShell,
+                "CLAUDE_WORKER_HOME", ".claude-worker", "claude-worker",
+                portFromBaseUrl(plan.claudeCode.baseUrl), wslOptions));
+        if (plan.codex != null) {
+            commands.add(buildWorkerStartCommand("codex", installShell,
+                    "CODEX_WORKER_HOME", ".codex-worker", "codex-worker",
+                    portFromBaseUrl(plan.codex.baseUrl), wslOptions));
+        }
+        if (plan.biz != null) {
+            commands.add(buildBizWorkerStartCommand(installShell,
+                    portFromBaseUrl(plan.biz.baseUrl), wslOptions));
+        }
+        return commands;
+    }
+
+    private StartCommand buildWorkerStartCommand(String role,
+                                                 String installShell,
+                                                 String homeEnvName,
+                                                 String defaultHomeDir,
+                                                 String cliName,
+                                                 Integer port,
+                                                 WslInstallOptions wslOptions) {
+        String bashScript = buildBashWorkerStartScript(homeEnvName, defaultHomeDir, cliName);
+        return switch (installShell) {
+            case "powershell" -> new StartCommand(role,
+                    buildPowerShellWorkerStartCommand(homeEnvName, defaultHomeDir, cliName), null);
+            case "bash" -> new StartCommand(role,
+                    List.of("bash", "-lc", bashScript), null);
+            case "wsl" -> new StartCommand(role,
+                    buildWslCommand(bashScript, wslOptions), bashScript);
+            default -> throw new UpstreamCliException("unsupported install shell: " + installShell);
+        };
+    }
+
+    private StartCommand buildBizWorkerStartCommand(String installShell,
+                                                    Integer port,
+                                                    WslInstallOptions wslOptions) {
+        int resolvedPort = port != null ? port : 3065;
+        String bashScript = buildBashBizWorkerStartScript(resolvedPort);
+        return switch (installShell) {
+            case "powershell" -> new StartCommand("biz",
+                    buildPowerShellBizWorkerStartCommand(resolvedPort), null);
+            case "bash" -> new StartCommand("biz",
+                    List.of("bash", "-lc", bashScript), null);
+            case "wsl" -> new StartCommand("biz",
+                    buildWslCommand(bashScript, wslOptions), bashScript);
+            default -> throw new UpstreamCliException("unsupported install shell: " + installShell);
+        };
+    }
+
+    private String buildBashWorkerStartScript(String homeEnvName,
+                                             String defaultHomeDir,
+                                             String cliName) {
+        return "set -e; \"${" + homeEnvName + ":-$HOME/" + defaultHomeDir + "}/bin/" + cliName + "\" start";
+    }
+
+    private List<String> buildPowerShellWorkerStartCommand(String homeEnvName,
+                                                           String defaultHomeDir,
+                                                           String cliName) {
+        String executable = isWindows() ? "powershell" : "pwsh";
+        String script = "$ErrorActionPreference='Stop'; "
+                + "$dir=if ($env:" + homeEnvName + ") { $env:" + homeEnvName + " } else { Join-Path $HOME "
+                + powerShellSingleQuote(defaultHomeDir) + " }; "
+                + "$cli=Join-Path $dir " + powerShellSingleQuote("bin/" + cliName + ".ps1") + "; "
+                + "if (-not (Test-Path $cli)) { throw ('worker cli not found: ' + $cli) }; "
+                + "& powershell -ExecutionPolicy Bypass -File $cli start; "
+                + "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }";
+        List<String> command = new ArrayList<>();
+        command.add(executable);
+        command.add("-NoProfile");
+        if (isWindows()) {
+            command.add("-ExecutionPolicy");
+            command.add("Bypass");
+        }
+        command.add("-Command");
+        command.add(script);
+        return command;
+    }
+
+    private String buildBashBizWorkerStartScript(int port) {
+        return "set -e"
+                + "; dir=\"${LANGGRAPH_BIZ_WORKER_HOME:-$HOME/.langgraph-biz-worker}\""
+                + "; cd \"$dir\""
+                + "; mkdir -p logs"
+                + "; pids=\"$(lsof -ti:" + port + " 2>/dev/null || true)\""
+                + "; if [ -n \"$pids\" ]; then kill -9 $pids 2>/dev/null || true; sleep 1; fi"
+                + "; py=\".venv/bin/python\""
+                + "; if [ ! -x \"$py\" ]; then py=\"$(command -v python3 || command -v python)\"; fi"
+                + "; export PYTHONPATH=\"$dir/src\""
+                + "; export BIZ_WORKER_ENV_FILE=\"${BIZ_WORKER_ENV_FILE:-$dir/.env}\""
+                + "; nohup \"$py\" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port " + port
+                + " > logs/worker.log 2> logs/worker-error.log &"
+                + "; pid=$!"
+                + "; for i in $(seq 1 30); do "
+                + "sleep 1; "
+                + "if curl -fsS --max-time 2 http://localhost:" + port + "/health >/dev/null 2>&1; then "
+                + "echo \"LangGraph BizWorker READY http://localhost:" + port + "\"; exit 0; "
+                + "fi; "
+                + "if ! kill -0 \"$pid\" 2>/dev/null; then "
+                + "echo \"LangGraph BizWorker exited\"; tail -20 logs/worker-error.log 2>/dev/null || true; exit 1; "
+                + "fi; "
+                + "done"
+                + "; echo \"LangGraph BizWorker failed to start on port " + port + "\""
+                + "; tail -20 logs/worker-error.log 2>/dev/null || true"
+                + "; exit 1";
+    }
+
+    private List<String> buildPowerShellBizWorkerStartCommand(int port) {
+        String executable = isWindows() ? "powershell" : "pwsh";
+        String script = "$ErrorActionPreference='Stop'; "
+                + "$dir=if ($env:LANGGRAPH_BIZ_WORKER_HOME) { $env:LANGGRAPH_BIZ_WORKER_HOME } else { Join-Path $HOME '.langgraph-biz-worker' }; "
+                + "Set-Location $dir; "
+                + "$existing=(netstat -ano | Select-String ':" + port + "\\s+.*LISTENING' | Select-Object -First 1); "
+                + "if ($existing) { $pidText=($existing.ToString() -split '\\s+')[-1]; taskkill /F /PID $pidText 2>$null | Out-Null; Start-Sleep -Milliseconds 500 }; "
+                + "$venvPython=Join-Path $dir '.venv\\Scripts\\python.exe'; "
+                + "if (-not (Test-Path $venvPython)) { throw ('venv python not found: ' + $venvPython) }; "
+                + "$logDir=Join-Path $dir 'logs'; "
+                + "if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }; "
+                + "$env:PYTHONPATH=Join-Path $dir 'src'; "
+                + "$env:BIZ_WORKER_ENV_FILE=Join-Path $dir '.env'; "
+                + "Start-Process $venvPython -ArgumentList '-m','uvicorn','langgraph_biz_worker.main:app','--host','0.0.0.0','--port','" + port + "' "
+                + "-WorkingDirectory $dir -RedirectStandardOutput (Join-Path $logDir 'worker.log') "
+                + "-RedirectStandardError (Join-Path $logDir 'worker-error.log') -WindowStyle Hidden; "
+                + "$ok=$false; "
+                + "for ($i=0; $i -lt 30; $i++) { "
+                + "Start-Sleep -Seconds 1; "
+                + "try { Invoke-RestMethod -Uri 'http://localhost:" + port + "/health' -TimeoutSec 2 -ErrorAction Stop | Out-Null; $ok=$true; break } catch { } "
+                + "}; "
+                + "if (-not $ok) { "
+                + "Get-Content (Join-Path $logDir 'worker-error.log') -Tail 20 -ErrorAction SilentlyContinue; "
+                + "throw 'LangGraph BizWorker failed to start' "
+                + "}; "
+                + "Write-Host 'LangGraph BizWorker READY http://localhost:" + port + "'";
+        List<String> command = new ArrayList<>();
+        command.add(executable);
+        command.add("-NoProfile");
+        if (isWindows()) {
+            command.add("-ExecutionPolicy");
+            command.add("Bypass");
+        }
+        command.add("-Command");
+        command.add(script);
+        return command;
     }
 
     private List<String> buildPowerShellInstallCommand(String installUrl,
@@ -2986,6 +3194,8 @@ public class UpstreamCli {
 
         return new WorkerHostPlan(workerHostId, hostUrl,
                 hasText(manifest.getInstall()) ? manifest.getInstall() : "none",
+                manifest.getWslDistro(),
+                manifest.getWslUser(),
                 claude, codex, biz);
     }
 
@@ -3343,6 +3553,12 @@ public class UpstreamCli {
     private record InstallerCommand(String role, String releaseBaseUrl, List<String> command, String scriptPreview) {
     }
 
+    private record StartCommand(String role, List<String> command, String scriptPreview) {
+    }
+
+    private record WslInstallOptions(String distro, String user) {
+    }
+
     record CommandResult(int exitCode, String output) {
     }
 
@@ -3390,6 +3606,8 @@ public class UpstreamCli {
         private final String workerHostId;
         private final String hostUrl;
         private final String install;
+        private final String wslDistro;
+        private final String wslUser;
         private final WorkerRolePlan claudeCode;
         private final WorkerRolePlan codex;
         private final WorkerRolePlan biz;
@@ -3397,12 +3615,16 @@ public class UpstreamCli {
         private WorkerHostPlan(String workerHostId,
                                String hostUrl,
                                String install,
+                               String wslDistro,
+                               String wslUser,
                                WorkerRolePlan claudeCode,
                                WorkerRolePlan codex,
                                WorkerRolePlan biz) {
             this.workerHostId = workerHostId;
             this.hostUrl = hostUrl;
             this.install = install;
+            this.wslDistro = wslDistro;
+            this.wslUser = wslUser;
             this.claudeCode = claudeCode;
             this.codex = codex;
             this.biz = biz;

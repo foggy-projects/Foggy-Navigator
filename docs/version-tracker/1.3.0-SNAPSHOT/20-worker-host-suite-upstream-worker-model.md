@@ -42,6 +42,7 @@ School Sim 准备把执行环境统一迁到 WSL。当前本机已经有 WSL Cla
   "hostUrl": "http://127.0.0.1",
   "port": 3131,
   "install": "ensure",
+  "wslUser": "navigator",
   "workers": {
     "claudeCode": {
       "enabled": true
@@ -64,6 +65,8 @@ School Sim 准备把执行环境统一迁到 WSL。当前本机已经有 WSL Cla
 - `hostUrl`: Navigator 访问该 host 的 scheme + host，不带端口。
 - `port`: 顶层默认端口，等价于 `workers.claudeCode.port`。
 - `install`: CLI 行为开关。`ensure` 表示本机/WSL 缺少标准 worker 时可尝试安装或给出安装引导；`none` 表示只做注册/更新。
+- `wslUser`: 可选，仅 `worker-host install --install-shell wsl` 使用；用于指定 WSL 内实际安装/启动用户，避免默认 root 绕开已有 Claude/Codex 登录态。也可用命令行 `--wsl-user` 或环境变量 `NAVI_WSL_USER` 覆盖。
+- `wslDistro`: 可选，仅 `worker-host install --install-shell wsl` 使用；用于指定 WSL 发行版。也可用命令行 `--wsl-distro` 或环境变量 `NAVI_WSL_DISTRO` 覆盖。
 - `workers.claudeCode`: 默认存在、默认启用、必需；端口默认取顶层 `port`。
 - `workers.codex`: 可选；启用时必须能解析出端口或完整 endpoint。
 - `workers.biz`: 可选；启用时必须能解析出端口或完整 endpoint。
@@ -96,7 +99,7 @@ biz.baseUrl        = hostUrl + ":" + workers.biz.port
 upstream worker-host apply --file worker-host.json [--target-tenant-id <tenantId>] [--write-profile]
 upstream worker-host update --file worker-host.json [--target-tenant-id <tenantId>] [--write-profile]
 upstream worker-host verify --worker-host-id <id>
-upstream worker-host install --file worker-host.json [--install-shell auto|powershell|bash|wsl] [--timeout-seconds <seconds>] [--dry-run]
+upstream worker-host install --file worker-host.json [--install-shell auto|powershell|bash|wsl] [--wsl-user <user>] [--wsl-distro <name>] [--timeout-seconds <seconds>] [--no-start] [--dry-run]
 ```
 
 ### 命令语义
@@ -104,7 +107,7 @@ upstream worker-host install --file worker-host.json [--install-shell auto|power
 - `apply`: 注册/更新 Claude worker、写入 Codex 配置、注册 Biz worker identity；当前不隐式执行本机安装。
 - `update`: 仅做注册信息与端口更新，不执行安装。
 - `verify`: 按 host suite 输出当前解析到的 worker role、脱敏 endpoint 与健康状态。
-- `install`: 显式执行本机/WSL worker 安装或更新，不改 Navigator 资源。默认根据 CLI 所在系统选择 PowerShell 或 Bash；Windows 上可用 `--install-shell wsl` 安装到默认 WSL distro；安装后会把 manifest 端口写入对应 worker `.env`；`--dry-run` 只打印将执行的命令。
+- `install`: 显式执行本机/WSL worker 安装或更新，不改 Navigator 资源。默认根据 CLI 所在系统选择 PowerShell 或 Bash；Windows 上可用 `--install-shell wsl` 安装到指定或默认 WSL distro；安装后会把 manifest 端口写入对应 worker `.env`，并默认按 role 启动 worker；`--no-start` 可只安装不启动，`--dry-run` 只打印将执行的命令。
 
 ### 兼容要求
 
@@ -207,9 +210,12 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 ### Phase 4B: 显式 WorkerHost 安装入口
 
 - `worker-host install --file <manifest>` 按标准 role 顺序调用 OBS 安装器：`claudeCode`、`codex`、`biz`。
-- 支持 `--install-shell auto|powershell|bash|wsl`，其中 `wsl` 用于 Windows CLI 调用默认 WSL distro 内的 bash 安装脚本。
+- 支持 `--install-shell auto|powershell|bash|wsl`，其中 `wsl` 用于 Windows CLI 调用 WSL 内的 bash 安装脚本。
+- 支持 `--wsl-user` / manifest `wslUser` / `NAVI_WSL_USER` 指定 WSL 内实际用户，避免安装到 `/root` 并绕开已有 Codex 登录态。
+- 支持 `--wsl-distro` / manifest `wslDistro` / `NAVI_WSL_DISTRO` 指定 WSL 发行版；不指定时使用 `wsl.exe` 默认发行版。
 - 支持 `--dry-run` 输出安装命令但不执行，支持 `--timeout-seconds` 控制每个安装器的最长运行时间。
 - 安装后按 role 写入端口配置：`AGENT_WORKER_PORT`、`CODEX_WORKER_PORT`、`BIZ_WORKER_PORT`。
+- 默认安装后按 role 启动 worker，并等待 BizWorker health 就绪；如只想升级文件和 `.env`，使用 `--no-start`。
 - 安装命令只负责安装或更新本机 worker 包，不注册或修改 Navigator 资源；注册仍由 `worker-host apply/update` 执行。
 
 ### Deferred Phase 4C: 独立 Codex PhysicalWorker
@@ -226,7 +232,7 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 - 已落地 Phase 3 Biz identity launch 闭环：Biz Agent 或 worker pool member 绑定 Biz worker identity id 时，不再要求同步创建旧 `LanggraphWorkerEntity`。
 - 已按“所有 worker 调用先走 Navi”的口径收紧 Phase 4A：CLI 不接受 `workers.codex.workerId`，Codex role 诊断固定显示 `CLAUDE_WORKER_CODEX_CONFIG`，并使用 `claudeCode` worker id 作为绑定入口。
 - 已落地 Phase 4B 显式安装入口：`worker-host install` 会真实执行 OBS worker 安装器，`--dry-run` 可用于只看计划；`apply/update` 仍不隐式安装。
-- `navigator-upstream-cli` 发布版本目标升为 `1.0.11`，避免在远端已发布版本上同版本覆盖 worker-host installer 行为；`1.0.11` 使用 `wsl.exe --exec` + base64 bash payload 修正 WSL install 参数转义问题。
+- `navigator-upstream-cli` 发布版本目标升为 `1.0.12`，避免在远端已发布版本上同版本覆盖 worker-host installer 行为；`1.0.11` 使用 `wsl.exe --exec` + base64 bash payload 修正 WSL install 参数转义问题；`1.0.12` 增加 WSL 用户/发行版选择，并让 `worker-host install` 默认安装后启动 worker。
 - 尚未落地独立 `OPENAI_CODEX` physical worker identity 直连；该项仍属于后续 Deferred Phase。
 
 ## 验收标准
@@ -246,4 +252,4 @@ workerRole role=biz workerId=... baseUrl=http://127.0.0.1:3161 usedAs=bizExecuti
 - 当前 Codex 实现仍以 Claude worker id 作为入口；普通上游不得配置独立 Codex worker id，不能承诺独立 Codex identity 可执行。
 - Biz identity 直连当前使用 identity 的 `baseUrl` 作为运行时 endpoint；`identityToken` 只保存 hash，不作为 worker 调用 token。需要远程 Worker 鉴权时，应补 secret ref 或受控 token 材料模型。
 - `hostUrl=http://127.0.0.1` 的含义是 Navigator 服务视角可达；当 Navigator 不在同一 host/WSL 网络命名空间时，上游必须填可被 Navigator 访问的地址。
-- `worker-host install` 是显式本机/WSL 操作；`apply/update` 当前不会隐式执行安装。执行前可先用 `--dry-run` 审核命令，尤其是 Windows 调 WSL 的场景。
+- `worker-host install` 是显式本机/WSL 操作；`apply/update` 当前不会隐式执行安装。执行前可先用 `--dry-run` 审核命令，尤其是 Windows 调 WSL 的场景；WSL Codex 登录态依赖用户 home，开发机应显式传 `--wsl-user <login-user>` 或在 manifest/profile 中配置对应用户。
