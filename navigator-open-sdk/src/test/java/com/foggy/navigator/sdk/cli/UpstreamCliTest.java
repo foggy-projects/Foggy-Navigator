@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -2583,12 +2584,14 @@ class UpstreamCliTest {
         assertEquals("--exec", commands.get(0).get(1));
         assertEquals("bash", commands.get(0).get(2));
         assertEquals("-lc", commands.get(0).get(3));
-        assertTrue(String.join(" ", commands.get(0)).contains("claude-worker/install.sh"));
-        assertTrue(String.join(" ", commands.get(0)).contains("AGENT_WORKER_PORT=3131"));
-        assertTrue(String.join(" ", commands.get(1)).contains("codex-worker/install.sh"));
-        assertTrue(String.join(" ", commands.get(1)).contains("CODEX_WORKER_PORT=3151"));
-        assertTrue(String.join(" ", commands.get(2)).contains("langgraph-biz-worker/install.sh"));
-        assertTrue(String.join(" ", commands.get(2)).contains("BIZ_WORKER_PORT=3161"));
+        assertTrue(commands.get(0).get(4).contains("base64 -d | bash"));
+        assertTrue(decodedWslScript(commands.get(0)).contains("claude-worker/install.sh"));
+        assertTrue(decodedWslScript(commands.get(0)).contains("AGENT_WORKER_PORT=3131"));
+        assertTrue(decodedWslScript(commands.get(1)).contains("codex-worker/install.sh"));
+        assertTrue(decodedWslScript(commands.get(1)).contains("CODEX_WORKER_PORT=3151"));
+        assertTrue(decodedWslScript(commands.get(2)).contains("langgraph-biz-worker/install.sh"));
+        assertTrue(decodedWslScript(commands.get(2)).contains("BIZ_WORKER_PORT=3161"));
+        assertTrue(output.contains("script=set -e; curl -fsSL"));
         assertTrue(output.contains("automaticInstall=true"));
         assertTrue(output.contains("install role=claudeCode status=OK exitCode=0"));
         assertTrue(output.contains("install role=codex status=OK exitCode=0"));
@@ -2984,6 +2987,16 @@ class UpstreamCliTest {
                 tempDir,
                 commandRunner)
                 .run(args, env);
+    }
+
+    private String decodedWslScript(List<String> command) {
+        String wrapper = command.get(4);
+        String prefix = "printf %s '";
+        String suffix = "' | base64 -d | bash";
+        assertTrue(wrapper.startsWith(prefix));
+        assertTrue(wrapper.endsWith(suffix));
+        String encoded = wrapper.substring(prefix.length(), wrapper.length() - suffix.length());
+        return new String(Base64.getDecoder().decode(encoded), StandardCharsets.UTF_8);
     }
 
     private static String baseUrl() {

@@ -85,6 +85,7 @@ import java.time.format.DateTimeParseException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -928,7 +929,10 @@ public class UpstreamCli {
         for (InstallerCommand installerCommand : installerCommands) {
             out.println("installer role=" + installerCommand.role()
                     + " url=" + installerCommand.releaseBaseUrl()
-                    + " command=" + redact(String.join(" ", installerCommand.command())));
+                    + " command=" + redact(String.join(" ", installerCommand.command()))
+                    + (hasText(installerCommand.scriptPreview())
+                    ? " script=" + redact(installerCommand.scriptPreview())
+                    : ""));
         }
         if (args.flag("dry-run")) {
             out.println("automaticInstall=false");
@@ -980,19 +984,24 @@ public class UpstreamCli {
                                                    String defaultHomeDir,
                                                    String portEnvName,
                                                    Integer port) {
+        String bashScript = buildBashInstallScript(releaseBaseUrl + "/install.sh",
+                homeEnvName, defaultHomeDir, portEnvName, port);
         return switch (installShell) {
             case "powershell" -> new InstallerCommand(role, releaseBaseUrl,
                     buildPowerShellInstallCommand(releaseBaseUrl + "/install.ps1",
-                            homeEnvName, defaultHomeDir, portEnvName, port));
+                            homeEnvName, defaultHomeDir, portEnvName, port), null);
             case "bash" -> new InstallerCommand(role, releaseBaseUrl,
-                    List.of("bash", "-lc", buildBashInstallScript(releaseBaseUrl + "/install.sh",
-                            homeEnvName, defaultHomeDir, portEnvName, port)));
+                    List.of("bash", "-lc", bashScript), null);
             case "wsl" -> new InstallerCommand(role, releaseBaseUrl,
-                    List.of("wsl.exe", "--exec", "bash", "-lc",
-                            buildBashInstallScript(releaseBaseUrl + "/install.sh",
-                                    homeEnvName, defaultHomeDir, portEnvName, port)));
+                    buildWslInstallCommand(bashScript), bashScript);
             default -> throw new UpstreamCliException("unsupported install shell: " + installShell);
         };
+    }
+
+    private List<String> buildWslInstallCommand(String bashScript) {
+        String encoded = Base64.getEncoder().encodeToString(bashScript.getBytes(StandardCharsets.UTF_8));
+        return List.of("wsl.exe", "--exec", "bash", "-lc",
+                "printf %s " + shellQuote(encoded) + " | base64 -d | bash");
     }
 
     private List<String> buildPowerShellInstallCommand(String installUrl,
@@ -3331,7 +3340,7 @@ public class UpstreamCli {
         return osName.toLowerCase().contains("win");
     }
 
-    private record InstallerCommand(String role, String releaseBaseUrl, List<String> command) {
+    private record InstallerCommand(String role, String releaseBaseUrl, List<String> command, String scriptPreview) {
     }
 
     record CommandResult(int exitCode, String output) {
