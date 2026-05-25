@@ -829,6 +829,9 @@ public class TaskDispatchFacade {
         putIfNotBlank(metadata, "claudeSessionId", dto.getClaudeSessionId());
         putIfNotBlank(metadata, "codexThreadId", dto.getCodexThreadId());
         putIfNotBlank(metadata, "geminiSessionId", dto.getGeminiSessionId());
+        if (dto.getLastAckedSeq() != null) {
+            metadata.put("lastAckedSeq", dto.getLastAckedSeq());
+        }
         if (dto.getDurationMs() != null) {
             metadata.put("durationMs", dto.getDurationMs());
         }

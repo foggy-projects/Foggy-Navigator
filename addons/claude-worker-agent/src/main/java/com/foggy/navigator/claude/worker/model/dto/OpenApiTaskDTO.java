@@ -27,6 +27,15 @@ public class OpenApiTaskDTO {
     /** 多轮会话标识 */
     private String contextId;
 
+    /** Worker 侧任务 ID */
+    private String workerTaskId;
+
+    /** Provider 侧任务 ID（当前等同 workerTaskId，便于上游统一诊断） */
+    private String providerTaskId;
+
+    /** 已同步的 Worker 事件序号 */
+    private Integer lastAckedSeq;
+
     /** 执行结果（仅 COMPLETED 时返回） */
     private String result;
 

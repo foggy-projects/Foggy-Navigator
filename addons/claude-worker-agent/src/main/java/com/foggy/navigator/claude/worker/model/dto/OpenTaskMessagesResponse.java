@@ -18,6 +18,15 @@ public class OpenTaskMessagesResponse {
     /** 所属会话上下文 */
     private String contextId;
 
+    /** Worker 侧任务 ID */
+    private String workerTaskId;
+
+    /** Provider 侧任务 ID（当前等同 workerTaskId，便于上游统一诊断） */
+    private String providerTaskId;
+
+    /** 已同步的 Worker 事件序号 */
+    private Integer lastAckedSeq;
+
     /** 消息列表（按时间升序） */
     private List<OpenSessionMessageDTO> messages;
 

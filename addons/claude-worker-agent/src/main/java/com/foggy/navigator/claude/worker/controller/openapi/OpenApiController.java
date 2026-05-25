@@ -1283,6 +1283,9 @@ public class OpenApiController {
                         .agentId(agentId)
                         .status(mapTaskStatus(dto.getStatus()))
                         .contextId(dto.getContextId())
+                        .workerTaskId(dto.getWorkerTaskId())
+                        .providerTaskId(dto.getWorkerTaskId())
+                        .lastAckedSeq(dto.getLastAckedSeq())
                         .createdAt(dto.getCreatedAt())
                         .build())
                 .toList();
@@ -1341,6 +1344,9 @@ public class OpenApiController {
         return RX.ok(OpenTaskMessagesResponse.builder()
                 .taskId(taskId)
                 .contextId(contextId)
+                .workerTaskId(taskEntity.getProviderTaskId())
+                .providerTaskId(taskEntity.getProviderTaskId())
+                .lastAckedSeq(taskEntity.getLastAckedSeq())
                 .messages(dtos)
                 .status(status)
                 .terminal(terminalStatus != null)
@@ -1621,6 +1627,14 @@ public class OpenApiController {
 
         // 提取元信息
         if (task.getMetadata() != null) {
+            Object workerTaskId = task.getMetadata().get("workerTaskId");
+            if (workerTaskId instanceof String s && StringUtils.hasText(s)) {
+                builder.workerTaskId(s).providerTaskId(s);
+            }
+            Object lastAckedSeq = task.getMetadata().get("lastAckedSeq");
+            if (lastAckedSeq instanceof Number n) {
+                builder.lastAckedSeq(n.intValue());
+            }
             Object durationMs = task.getMetadata().get("durationMs");
             if (durationMs instanceof Number) {
                 builder.durationMs(((Number) durationMs).longValue());

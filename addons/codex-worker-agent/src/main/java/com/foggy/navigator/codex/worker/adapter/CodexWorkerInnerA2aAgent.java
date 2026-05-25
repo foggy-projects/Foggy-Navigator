@@ -166,6 +166,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         taskMeta.put("workerId", dto.getWorkerId());
         taskMeta.put("workerTaskId", dto.getWorkerTaskId());
         taskMeta.put("codexThreadId", dto.getCodexThreadId());
+        taskMeta.put("lastAckedSeq", dto.getLastAckedSeq());
 
         A2aTask.A2aTaskBuilder builder = A2aTask.builder()
                 .id(dto.getTaskId())
