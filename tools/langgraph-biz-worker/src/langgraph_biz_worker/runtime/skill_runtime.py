@@ -782,15 +782,24 @@ class SkillRuntime:
                 summary,
                 intent_resolution,
             )
+            submitted_at = datetime.now(timezone.utc).isoformat()
             turn_results = frame.private_working_state.setdefault("turn_results", [])
             turn_entry = {
                 "summary": summary,
                 "structured_output": structured_output,
                 "artifact_refs": artifact_refs or [],
                 "evidence_refs": evidence_refs or [],
-                "submitted_at": datetime.now(timezone.utc).isoformat(),
+                "status": _persistent_turn_report_status(structured_output),
+                "submitted_at": submitted_at,
+                "ended_at": submitted_at,
             }
             turn_results.append(turn_entry)
+            frame.private_working_state["current_turn_report"] = {
+                "task_id": frame.current_task_id or frame.task_id,
+                "status": turn_entry["status"],
+                "ended_at": submitted_at,
+                "summary": summary,
+            }
             self._compact_persistent_frame_context(frame, turn_entry)
             if interruption_entry and not keep_recoverable_focus:
                 _append_interruption_history(frame, interruption_entry)
@@ -2366,6 +2375,19 @@ def _execution_report_digest_from_payload(payload: dict[str, Any]) -> dict[str, 
     return _compact_execution_report_digest(value) if isinstance(value, dict) else None
 
 
+def _persistent_turn_report_status(structured_output: dict[str, Any]) -> str:
+    value = str(
+        structured_output.get("turn_status")
+        or structured_output.get("status")
+        or ""
+    ).strip().upper()
+    if value in {"WAITING_FOR_USER_INPUT", "AWAITING_USER", "PENDING_INFO"}:
+        return FrameStatus.AWAITING_USER.value
+    if value in {"FAILED", "ERROR"}:
+        return FrameStatus.FAILED.value
+    return FrameStatus.COMPLETED.value
+
+
 def _compact_execution_report_digest(digest: dict[str, Any]) -> dict[str, Any]:
     child_reports = digest.get("child_reports")
     compact_child_reports = child_reports[-10:] if isinstance(child_reports, list) else None
@@ -2376,6 +2398,7 @@ def _compact_execution_report_digest(digest: dict[str, Any]) -> dict[str, Any]:
         "skill_id": digest.get("skill_id"),
         "frame_kind": digest.get("frame_kind"),
         "status": digest.get("status"),
+        "frame_status": digest.get("frame_status"),
         "summary": digest.get("summary"),
         "started_at": digest.get("started_at"),
         "ended_at": digest.get("ended_at"),

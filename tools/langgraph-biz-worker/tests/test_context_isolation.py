@@ -225,7 +225,7 @@ class TestE2EContextIsolation:
         resp = await client.post("/api/v1/query", json={
             "prompt": "context isolation check",
             "taskId": "ctx_iso_001",
-            "context": {"order_id": "ORD-ISO-001"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-ISO-001"},
         })
         events = _parse_sse_events(resp.text)
 
@@ -246,7 +246,7 @@ class TestE2EContextIsolation:
         resp = await client.post("/api/v1/query", json={
             "prompt": "check grandchild cleanup",
             "taskId": "ctx_iso_002",
-            "context": {"order_id": "ORD-ISO-002"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-ISO-002"},
         })
         events = _parse_sse_events(resp.text)
 

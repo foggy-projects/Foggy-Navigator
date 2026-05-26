@@ -1461,7 +1461,9 @@ def _root_manifest_with_bound_skill(
             f"Skill Name: {bound.name}",
             f"Skill Description: {bound.description}",
             "",
-            "以下 Skill 材料是当前 Root 回合的主要业务能力说明，应按其要求处理用户请求：",
+            "以下 Skill 材料是当前 Root 回合的主要业务能力说明，应按其要求处理用户请求。",
+            "当用户明确指定该 Skill 或 Root 已绑定该 Skill 时，优先执行该 Skill 的职责；"
+            "不要因为上下文中存在其他业务字段而改走不相关的默认业务流程。",
             bound.markdown_body.strip(),
         ]).strip()
     )

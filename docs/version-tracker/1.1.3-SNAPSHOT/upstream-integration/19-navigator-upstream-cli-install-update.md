@@ -135,6 +135,8 @@ NAVI_POLL_INTERVAL_SECONDS=4
 
 BizWorker `1.1.6-SNAPSHOT` 起，新会话 `ask` 默认由 Navigator / BizWorker 生成 `contextId`，上游只保存返回值用于续聊。不要在 profile 中预置一个固定 `contextId`，也不要把完整 UI transcript 或模型 token 预算放进 `clientContext`。当前 runtime context、Skill/Agent 边界和模型预算缺口见 `docs/version-tracker/1.1.6-SNAPSHOT/16-upstream-cli-skill-runtime-contract-alignment.md`。
 
+BizWorker 会把当前 account/private 与 public skill catalog 的 `id`、`name`、`description` 放入 Root system prompt；`allowed_skills` 只作为非空时的 catalog 过滤器。Biz actor/skill live smoke 不使用隐藏上下文字段做技能路由。需要指定某个 actor skill 时，把要求写进 `--message`，例如“请使用 `school-sim.actor.pm.m2.v1` 技能完成 ...”。不要在 `.navigator/upstream.env`、`clientContext` 或 metadata 中写 `businessSkillName`、`businessSkillId`、`skill_name` 等 prompt 路由字段。
+
 ## 常用命令
 
 ```powershell

@@ -187,6 +187,19 @@ Worker 会根据任务 runtime context 中的 `accountId/upstreamUserId` 和 `cl
 3. account context files。
 4. 全局 public/builtin skill。
 
+BizWorker 会把已加载且对当前 account/ClientApp 可见的 skill id、名称和描述放入 Root system prompt。Worker 不解析用户 prompt 来做隐藏路由；LLM 只是在这个可见目录内根据用户消息自行选择是否调用对应 skill。如果目录里没有该 skill，Worker 不应凭空调用它。
+
+如果 sim live smoke 要验证某个明确 actor skill，A2A ask 不要求上游透传 `businessSkillName`、`businessSkillId`、`skill_name` 或其他隐藏路由字段。上游应把目标技能写进用户消息本身，例如：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream ask `
+  --agent-code school-sim.actor.pm.m2.v1 `
+  --upstream-user-id <id> `
+  --message "请使用 school-sim.actor.pm.m2.v1 技能，完成 School Sim M2 PM live ask smoke。请写入 <marker-path>，内容必须严格为 <marker-content>。完成后只返回 marker 路径和 marker 内容。"
+```
+
+验收字段至少包含 `taskId`、`contextId`、`providerTaskId`、`workerTaskId`、final status、messages count、`failureStage/failureSummary`、marker path/content，以及是否进入旧的订单诊断流程。不得输出任何 API key、token、Authorization header 或 provider credential。
+
 ## 交付边界
 
 1. sim 侧不需要直接写 Worker 目录。

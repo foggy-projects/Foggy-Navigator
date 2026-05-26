@@ -3297,6 +3297,7 @@ async def test_scripted_api_root_plain_final_commits_runtime_memory_without_retr
 async def test_scripted_root_prompt_contract_ignores_skill_alias_and_keeps_user_message_clean(
     monkeypatch,
     mock_llm_server,
+    tmp_path,
 ):
     """Explicit skill aliases must not revive the removed root.agentic_routing prompt path."""
     run_id = uuid.uuid4().hex[:8]
@@ -3305,6 +3306,23 @@ async def test_scripted_root_prompt_contract_ignores_skill_alias_and_keeps_user_
     task_id = f"task_e2e_root_prompt_contract_{run_id}"
     prompt = f"hi prompt contract next:{trace_id}:001"
     answer = "你好，我可以帮你处理 TMS 业务。"
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "tms-ticket-agent.yaml").write_text(
+        """
+id: tms-ticket-agent
+name: TMS 工单 Agent
+description: 创建工单和查询工单。
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
 
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
         await mock_client.delete(f"/__e2e/scripts/{trace_id}")
@@ -3345,7 +3363,6 @@ async def test_scripted_root_prompt_contract_ignores_skill_alias_and_keeps_user_
                 },
                 "context": {
                     "contextId": context_id,
-                    "businessSkillName": "tms-ticket-agent",
                     "allowed_skills": [
                         {
                             "id": "tms-ticket-agent",

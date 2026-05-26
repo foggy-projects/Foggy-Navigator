@@ -433,8 +433,8 @@ async def test_query_allowed_skills(client):
 
 
 @pytest.mark.asyncio
-async def test_query_auto_inject_public_skills(client):
-    """When auto_inject_public_skills is True, the LLM should receive public skills."""
+async def test_query_public_skill_catalog_legacy_flag_is_accepted(client):
+    """Legacy auto_inject_public_skills context flag remains accepted."""
     context = {
         "auto_inject_public_skills": True
     }

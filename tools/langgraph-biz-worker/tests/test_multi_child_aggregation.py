@@ -12,7 +12,7 @@ async def test_two_child_skills_invoked(client):
     """Both order_evidence_collect and rule_check child skills should fire."""
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "full analysis", "context": {"order_id": "500"}},
+        json={"prompt": "full analysis", "context": {"skill": "exception_triage", "order_id": "500"}},
     )
     events = _parse_sse_events(resp.text)
 
@@ -29,7 +29,7 @@ async def test_frame_sequence_correct(client):
     """Frame open/close sequence: parent open → child1 open/close → child2 open/close → parent close."""
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "sequence test", "context": {"order_id": "501"}},
+        json={"prompt": "sequence test", "context": {"skill": "exception_triage", "order_id": "501"}},
     )
     events = _parse_sse_events(resp.text)
 
@@ -53,7 +53,7 @@ async def test_root_only_sees_parent_aggregated_result(client):
     """The final result event should contain parent's aggregated output, not child details."""
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "aggregate", "context": {"order_id": "502"}},
+        json={"prompt": "aggregate", "context": {"skill": "exception_triage", "order_id": "502"}},
     )
     events = _parse_sse_events(resp.text)
 
@@ -81,7 +81,7 @@ async def test_all_child_frames_closed(client):
 
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "cleanup", "context": {"order_id": "503"}},
+        json={"prompt": "cleanup", "context": {"skill": "exception_triage", "order_id": "503"}},
     )
     events = _parse_sse_events(resp.text)
 
@@ -108,7 +108,7 @@ async def test_child_scratchpad_not_in_root_public_state(client):
     """Root's structured_output should not contain any child's private data."""
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "isolation", "context": {"order_id": "504"}},
+        json={"prompt": "isolation", "context": {"skill": "exception_triage", "order_id": "504"}},
     )
     events = _parse_sse_events(resp.text)
 

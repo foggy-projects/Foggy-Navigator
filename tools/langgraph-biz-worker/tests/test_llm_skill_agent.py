@@ -280,6 +280,88 @@ def test_llm_agent_exposes_default_file_tools_when_account_scope_available(tmp_p
     assert "edit_file" not in tool_names
 
 
+def test_llm_agent_prompts_delegated_workspace_file_contract(tmp_path):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_delegated_workspace_file_contract_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    workdir = tmp_path / "delegated-workspace"
+    workdir.mkdir()
+    model = FakeToolCallModel([AIMessage(content="ok")])
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path / "data").run(
+        task_id="task_delegated_workspace_file_contract_001",
+        frame_id=frame_id,
+        prompt="write actors/pm/biz-m2-live-smoke.txt",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_dirs": [str(workdir)],
+                "allowed_tools": [
+                    "list_files",
+                    "read_file",
+                    "write_file",
+                    "patch_file",
+                    "submit_frame_result",
+                ],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert "Delegated workspace 文件契约" in system_prompt
+    assert "只传文件名或该根目录下的相对路径" in system_prompt
+    assert "不要因为上下文提到 private workspace" in system_prompt
+    assert "不要把普通任务产物或 smoke marker 写到那里" in system_prompt
+
+    write_schema = next(
+        tool["function"]
+        for tool in model.bound_tools
+        if tool["function"]["name"] == "write_file"
+    )
+    assert "delegated workspace root" in write_schema["description"]
+    assert "actors/pm/biz-m2-live-smoke.txt" in write_schema["description"]
+
+
+def test_llm_agent_prompts_actor_workspace_without_duplicate_prefix(tmp_path):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_actor_workspace_file_contract_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    workdir = tmp_path / "actors" / "pm"
+    workdir.mkdir(parents=True)
+    model = FakeToolCallModel([AIMessage(content="ok")])
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path / "data").run(
+        task_id="task_actor_workspace_file_contract_001",
+        frame_id=frame_id,
+        prompt="create biz-m2-live-smoke.txt in bound private workspace",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_dirs": [str(workdir)],
+                "allowed_tools": [
+                    "list_files",
+                    "read_file",
+                    "write_file",
+                    "patch_file",
+                    "submit_frame_result",
+                ],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert "当前 delegated workspace 根目录已经是 `actors/pm/`" in system_prompt
+    assert "不要再加 `actors/pm/` 前缀" in system_prompt
+
+
 def test_llm_agent_does_not_expose_default_file_tools_without_account_scope(tmp_path):
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(

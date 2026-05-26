@@ -10,11 +10,11 @@ from langgraph_biz_worker.models import SkillManifest
 
 
 @pytest.mark.asyncio
-async def test_skill_triggered_with_order_id(client):
-    """Query with context.order_id should trigger exception_triage skill."""
+async def test_skill_triggered_with_explicit_skill_context(client):
+    """Explicit context.skill should trigger exception_triage skill."""
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "analyze delay", "context": {"order_id": "123"}},
+        json={"prompt": "analyze delay", "context": {"skill": "exception_triage", "order_id": "123"}},
     )
     assert resp.status_code == 200
     events = _parse_sse_events(resp.text)
@@ -39,7 +39,7 @@ async def test_skill_frame_open_close_events(client):
     """skill_frame_open and skill_frame_close events carry frame/skill IDs."""
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "analyze", "context": {"order_id": "456"}},
+        json={"prompt": "analyze", "context": {"skill": "exception_triage", "order_id": "456"}},
     )
     events = _parse_sse_events(resp.text)
 
@@ -56,8 +56,8 @@ async def test_skill_frame_open_close_events(client):
 
 
 @pytest.mark.asyncio
-async def test_no_skill_without_context(client):
-    """Query without order_id should fall back to no-skill response."""
+async def test_no_skill_without_explicit_context(client):
+    """Query without explicit skill context should fall back to no-skill response."""
     resp = await client.post(
         "/api/v1/query",
         json={"prompt": "general question"},
@@ -77,7 +77,7 @@ async def test_result_has_evidence_in_summary(client):
     """The assistant_text should mention gathered evidence."""
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "check", "context": {"order_id": "789"}},
+        json={"prompt": "check", "context": {"skill": "exception_triage", "order_id": "789"}},
     )
     events = _parse_sse_events(resp.text)
     text_events = [e for e in events if e["type"] == "assistant_text"]

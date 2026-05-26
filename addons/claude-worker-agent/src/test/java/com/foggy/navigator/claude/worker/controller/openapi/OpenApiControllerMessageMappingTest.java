@@ -454,7 +454,7 @@ class OpenApiControllerMessageMappingTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> runtimeContext = (Map<String, Object>) captor.getValue().getMetadata().get("runtimeContext");
         assertEquals("btt_open_api_1", runtimeContext.get("task_scoped_token"));
-        assertEquals("agent-1", runtimeContext.get("skill_name"));
+        assertFalse(runtimeContext.containsKey("skill_name"));
         verify(taskService).bindOpenApiTaskScopedTokenToWorkerTask(
                 "tenant-1",
                 "btt_open_api_1",
@@ -516,12 +516,12 @@ class OpenApiControllerMessageMappingTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> context = (Map<String, Object>) captor.getValue().getMetadata().get("context");
         assertEquals("root-agent", context.get("rootAgentId"));
-        assertEquals("tms.navigator.agent", context.get("businessSkillId"));
-        assertEquals("tms.navigator.agent", context.get("businessSkillName"));
+        assertFalse(context.containsKey("businessSkillId"));
+        assertFalse(context.containsKey("businessSkillName"));
         assertNull(captor.getValue().getMetadata().get("skill_name"));
         @SuppressWarnings("unchecked")
         Map<String, Object> runtimeContext = (Map<String, Object>) captor.getValue().getMetadata().get("runtimeContext");
-        assertEquals("tms.navigator.agent", runtimeContext.get("skill_name"));
+        assertFalse(runtimeContext.containsKey("skill_name"));
         verify(credentialResolver, never()).resolveAccessTokenForSkill(
                 nullable(String.class), nullable(String.class), eq("root-agent"));
     }
@@ -588,7 +588,7 @@ class OpenApiControllerMessageMappingTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> runtimeContext = (Map<String, Object>) metadata.get("runtimeContext");
         assertEquals("btt_owner_runtime_1", runtimeContext.get("task_scoped_token"));
-        assertEquals("agent-1", runtimeContext.get("skill_name"));
+        assertFalse(runtimeContext.containsKey("skill_name"));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> context = (Map<String, Object>) metadata.get("context");
@@ -597,8 +597,8 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("upstream-a", context.get("upstreamUserId"));
         assertEquals("upstream-a", context.get("accountId"));
         assertEquals("upstream-a", context.get("account_id"));
-        assertEquals("agent-1", context.get("businessSkillId"));
-        assertEquals("agent-1", context.get("businessSkillName"));
+        assertFalse(context.containsKey("businessSkillId"));
+        assertFalse(context.containsKey("businessSkillName"));
         assertEquals("cred-1", context.get("credentialId"));
         assertEquals(true, context.get("auto_inject_app_public_skills"));
         assertFalse(context.containsKey("skill_name"));
@@ -848,8 +848,8 @@ class OpenApiControllerMessageMappingTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> context = (Map<String, Object>) metadata.get("context");
         assertEquals("trace-1", context.get("traceId"));
-        assertEquals("agent-1", context.get("businessSkillId"));
-        assertEquals("agent-1", context.get("businessSkillName"));
+        assertFalse(context.containsKey("businessSkillId"));
+        assertFalse(context.containsKey("businessSkillName"));
         @SuppressWarnings("unchecked")
         Map<String, Object> executionPolicy = (Map<String, Object>) context.get("execution_policy");
         assertEquals("D:/workspace/app", executionPolicy.get("workdir"));

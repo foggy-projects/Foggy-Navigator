@@ -1011,8 +1011,6 @@ public class OpenApiController {
 
         context.put("clientAppId", clientAppCredential.getClientAppId());
         context.put("rootAgentId", rootAgentId);
-        context.put("businessSkillId", skillId);
-        context.put("businessSkillName", skillId);
         context.put("credentialId", clientAppCredential.getCredentialId());
         context.put("auto_inject_app_public_skills", true);
 
@@ -1201,7 +1199,6 @@ public class OpenApiController {
             });
         }
         runtimeContext.put("task_scoped_token", token);
-        runtimeContext.put("skill_name", skillId);
         metadata.put("runtimeContext", runtimeContext);
         return token;
     }

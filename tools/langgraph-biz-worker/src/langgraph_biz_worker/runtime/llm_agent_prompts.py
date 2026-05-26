@@ -86,6 +86,10 @@ def _build_system_prompt(
         "如果已提供 list_files、read_file、write_file 或 patch_file，可在当前账号/"
         "工作目录文件作用域内读取或维护文件；优先 list_files/read_file 观察现状，"
         "修改现有文件优先使用 patch_file，整文件创建或覆盖才使用 write_file。"
+        "如果运行时提供了 delegated workspace，文件工具的 relative_path 以 delegated "
+        "workspace 根目录为基准；用户要求写入 `actors/pm/example.txt` 时，"
+        "write_file 的 relative_path 就传 `actors/pm/example.txt`。"
+        "`agent/skills/.../assets` 只用于明确维护 Skill 资源，不用于普通任务产物或 smoke marker。"
         "不要臆造真实路径，不要访问未授权目录。"
         "Skill 是当前 frame 内的能力材料，使用 invoke_business_skill 不会打开 child frame。"
         "普通业务领域请求默认先用 invoke_business_skill 加载 Skill 材料，并在当前 frame "
@@ -201,6 +205,7 @@ def _build_runtime_system_context_prompt(
         _build_root_planning_policy_prompt(runtime_context, skill_id),
         _build_child_handoff_policy_prompt(runtime_context, skill_id),
         _build_frame_result_contract_prompt(runtime_context),
+        _build_delegated_workspace_file_contract_prompt(runtime_context),
         _build_model_visible_skill_input_prompt(business_context),
         _build_attachment_context_prompt(_runtime_attachments(runtime_context)),
         _build_visible_context_prompt(runtime_context),
@@ -487,6 +492,32 @@ def _build_frame_result_contract_prompt(runtime_context: dict[str, Any] | None) 
         "只有当用户询问 frame 如何运行、需要调试/审计执行过程，或提升结果/续跑摘要缺少"
         "下一步业务决策所需字段时，才使用 read_frame_execution_report。"
     )
+
+
+def _build_delegated_workspace_file_contract_prompt(runtime_context: dict[str, Any] | None) -> str:
+    policy = (runtime_context or {}).get("execution_policy")
+    if not isinstance(policy, dict) or not policy.get("workdir"):
+        return ""
+    workdir = str(policy.get("workdir") or "")
+    normalized = workdir.replace("\\", "/").rstrip("/")
+    actor_suffix = ""
+    parts = [part for part in normalized.split("/") if part]
+    if len(parts) >= 2 and parts[-2] == "actors":
+        actor_suffix = f"actors/{parts[-1]}"
+    return "\n".join([
+        "Delegated workspace 文件契约:",
+        "- list_files/read_file/write_file/patch_file 的 relative_path 以 delegated workspace 根目录为基准。",
+        "- 如果任务要求在已绑定/当前/私有工作目录内创建文件，只传文件名或该根目录下的相对路径。",
+        "- Skill 或账号上下文中的 private workspace（例如 `actors/pm/`）是逻辑说明，不一定是 file tool 前缀。",
+        "- 不要因为上下文提到 private workspace 就自动给 relative_path 加 `actors/<role>/` 前缀。",
+        (
+            f"- 当前 delegated workspace 根目录已经是 `{actor_suffix}/`；写入该私有目录内文件时"
+            f"不要再加 `{actor_suffix}/` 前缀。"
+            if actor_suffix
+            else "- 当用户明确给出 delegated workspace 根目录下的子路径时，才按该子路径写入。"
+        ),
+        "- `agent/skills/.../assets` 只用于明确编辑 Skill bundle 资源；不要把普通任务产物或 smoke marker 写到那里。",
+    ])
 
 
 def _build_active_plan_prompt(runtime_context: dict[str, Any] | None) -> str:

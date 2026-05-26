@@ -730,6 +730,8 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "list_files",
             "description": (
                 "List files under the current account/workspace file scope. "
+                "With execution_policy.workdir, relative_path is relative to "
+                "the delegated workspace root. "
                 "When no explicit execution policy is supplied, this is limited "
                 "to the account skill directory."
             ),
@@ -738,7 +740,7 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "properties": {
                     "relative_path": {
                         "type": "string",
-                        "description": "Directory to list, relative to the current file scope.",
+                        "description": "Directory to list, relative to the delegated workspace root when configured.",
                     },
                     "recursive": {"type": "boolean"},
                     "max_entries": {"type": "integer"},
@@ -753,7 +755,8 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "read_file",
             "description": (
                 "Read a text file from the current account/workspace file scope "
-                "with line and byte limits."
+                "with line and byte limits. With execution_policy.workdir, "
+                "relative_path is relative to the delegated workspace root."
             ),
             "parameters": {
                 "type": "object",
@@ -773,7 +776,12 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "description": (
                 "Create or overwrite a text file in the current account/workspace "
                 "file scope. Use mode=create by default; use mode=overwrite with "
-                "expected_sha256 when replacing known existing content."
+                "expected_sha256 when replacing known existing content. With "
+                "execution_policy.workdir, relative_path is relative to the "
+                "delegated workspace root; use the user's requested path such as "
+                "actors/pm/biz-m2-live-smoke.txt directly. Do not write ordinary "
+                "task outputs to agent/skills/.../assets unless the user explicitly "
+                "asks to edit Skill resources."
             ),
             "parameters": {
                 "type": "object",
@@ -827,7 +835,9 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "patch_file",
             "description": (
                 "Apply a single-file unified diff patch in the current "
-                "account/workspace file scope. Conflicts cause full rejection."
+                "account/workspace file scope. Conflicts cause full rejection. "
+                "With execution_policy.workdir, relative_path is relative to the "
+                "delegated workspace root."
             ),
             "parameters": {
                 "type": "object",

@@ -148,24 +148,76 @@ def _skill_agent_prompt(prompt: str, context: dict[str, Any]) -> str:
 
 def _context_with_visible_skill_descriptions(context: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(context)
-    allowed_skills = context.get("allowed_skills")
-    if not isinstance(allowed_skills, list):
+    allowed_skill_ids = _allowed_skill_ids_from_context(context)
+    if allowed_skill_ids is None:
+        allowed_skills = _allowed_skills_from_registry()
+        if allowed_skills:
+            enriched["allowed_skills"] = allowed_skills
         return enriched
-    enriched_skills: list[Any] = []
-    for item in allowed_skills:
-        if not isinstance(item, dict):
-            enriched_skills.append(item)
+
+    visible_skills: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for skill_id in allowed_skill_ids:
+        manifest = _skill_registry.get_manifest(skill_id)
+        if not manifest or manifest.id == ROOT_SKILL_ID or manifest.visibility == "builtin":
             continue
-        skill = dict(item)
-        skill_id = skill.get("id")
-        manifest = _skill_registry.get_manifest(skill_id) if isinstance(skill_id, str) else None
-        if manifest:
-            skill.setdefault("name", manifest.name or manifest.id)
-            if getattr(manifest, "description", ""):
-                skill.setdefault("description", manifest.description)
-        enriched_skills.append(skill)
-    enriched["allowed_skills"] = enriched_skills
+        if manifest.id in seen:
+            continue
+        seen.add(manifest.id)
+        visible_skills.append(_skill_catalog_entry(manifest))
+    enriched["allowed_skills"] = visible_skills
     return enriched
+
+
+def _allowed_skill_ids_from_context(context: dict[str, Any]) -> list[str] | None:
+    allowed_skills = context.get("allowed_skills")
+    if not isinstance(allowed_skills, list) or not allowed_skills:
+        return None
+    ids: list[str] = []
+    for item in allowed_skills:
+        skill_id = item.get("id") if isinstance(item, dict) else item
+        if isinstance(skill_id, str) and skill_id.strip():
+            ids.append(skill_id.strip())
+    return ids or None
+
+
+def _allowed_skills_from_registry() -> list[dict[str, str]]:
+    skills: list[dict[str, str]] = []
+    for manifest in sorted(_skill_registry.list_skills(), key=lambda item: item.id):
+        if manifest.id == ROOT_SKILL_ID or manifest.visibility == "builtin":
+            continue
+        skills.append(_skill_catalog_entry(manifest))
+    return skills
+
+
+def _skill_catalog_entry(manifest: SkillManifest) -> dict[str, str]:
+    skill = {"id": manifest.id, "name": manifest.name or manifest.id}
+    if manifest.description:
+        skill["description"] = manifest.description
+    return skill
+
+
+def _legacy_programmatic_subgraph_for_frame(frame: Any) -> str | None:
+    manifest = _manifest_snapshot_for_frame(frame)
+    subgraph = getattr(manifest, "subgraph", None) if manifest is not None else None
+    if isinstance(subgraph, str) and subgraph.strip():
+        return subgraph.strip()
+    skill_id = getattr(frame, "skill_id", None)
+    if skill_id == "exception_triage":
+        return "exception_triage"
+    return None
+
+
+def _manifest_snapshot_for_frame(frame: Any) -> SkillManifest | None:
+    working_state = getattr(frame, "private_working_state", {}) or {}
+    snapshot = working_state.get("_skill_manifest") if isinstance(working_state, dict) else None
+    if isinstance(snapshot, dict):
+        try:
+            return SkillManifest(**snapshot)
+        except Exception:
+            return None
+    skill_id = getattr(frame, "skill_id", None)
+    return _skill_registry.get_manifest(skill_id) if isinstance(skill_id, str) else None
 
 
 def _sync_memory_limits_from_runtime_context(memory: Any, runtime_context: dict[str, Any] | None) -> None:
@@ -383,7 +435,7 @@ def _ensure_system_root_skill() -> None:
 
 
 def _should_use_system_root_skill(state: RootState) -> bool:
-    if not settings.llm_execute_skills:
+    if not _llm_execution_enabled_for_state(state):
         return False
     return _chat_model_for_state(state) is not None
 
@@ -501,16 +553,16 @@ def _get_or_create_system_root_frame(
 
 
 def _chat_model_for_state(state: RootState):
-    llm_config = state.get("llm_config")
+    llm_config = _request_llm_config(state)
     if llm_config:
         return create_chat_model_from_config(llm_config)
     return _chat_model
 
 
 def _llm_skill_agent_for_state(state: RootState) -> LlmSkillAgent | None:
-    if not settings.llm_execute_skills:
+    if not _llm_execution_enabled_for_state(state):
         return None
-    llm_config = state.get("llm_config")
+    llm_config = _request_llm_config(state)
     max_iterations = _llm_skill_max_iterations_for_state(state)
     if not llm_config:
         if max_iterations == settings.llm_skill_max_iterations:
@@ -522,6 +574,17 @@ def _llm_skill_agent_for_state(state: RootState) -> LlmSkillAgent | None:
     if not chat_model:
         return None
     return LlmSkillAgent(chat_model, _runtime, max_iterations, data_root=Path(_data_root))
+
+
+def _llm_execution_enabled_for_state(state: RootState) -> bool:
+    return settings.llm_execute_skills or _request_llm_config(state) is not None
+
+
+def _request_llm_config(state: RootState) -> dict[str, Any] | None:
+    llm_config = state.get("llm_config")
+    if not isinstance(llm_config, dict) or not llm_config:
+        return None
+    return llm_config
 
 
 def _llm_skill_max_iterations_for_state(state: RootState) -> int:
@@ -668,20 +731,13 @@ def route_skill(state: RootState) -> dict:
         events.append(QueryEvent(type="error", task_id=task_id, error=str(exc)))
         return {"events": events, "active_frame_id": None, "context": context}
 
-    # Legacy non-LLM fallback priority:
-    # 1. Explicit skill in context
-    # 2. Rule-based fallback (backward compat)
+    # Legacy non-LLM fallback only honors explicit trusted skill context.
+    # User prompt text is not parsed for routing; visible skill metadata is
+    # passed to the LLM root agent when LLM execution is enabled.
     skill_id = None
 
-    # Priority 1: explicit skill in context
-    if not skill_id and explicit_skill_name and _skill_registry.get_manifest(explicit_skill_name):
+    if explicit_skill_name and _skill_registry.get_manifest(explicit_skill_name):
         skill_id = explicit_skill_name
-
-    # Priority 2: rule-based fallback (takes precedence over LLM routing to preserve
-    # deterministic test behaviour and backward-compat triggers like order_id → exception_triage)
-    if not skill_id:
-        if context.get("order_id"):
-            skill_id = "exception_triage"
 
     if skill_id:
         # Create an Agent Frame via Runtime. Older tool names may still pass a
@@ -806,6 +862,23 @@ def run_skill(state: RootState) -> dict:
                 persistent_frame=is_root_frame,
             )
         }
+
+    subgraph = _legacy_programmatic_subgraph_for_frame(frame)
+    if subgraph != "exception_triage":
+        skill_id = frame.agent_id or frame.skill_id or frame.frame_id
+        error = (
+            f"Skill '{skill_id}' requires LLM execution; "
+            "legacy fallback only supports exception_triage."
+        )
+        _runtime.fail_frame(frame_id, error)
+        return {"events": [QueryEvent(
+            type="error",
+            task_id=task_id,
+            skill_frame_id=frame_id,
+            skill_id=skill_id,
+            error=error,
+            presentation_hint="agent_frame" if frame.frame_kind == FrameKind.AGENT else None,
+        )]}
 
     # Build skill subgraph state and run steps sequentially
     triage_state: TriageState = {

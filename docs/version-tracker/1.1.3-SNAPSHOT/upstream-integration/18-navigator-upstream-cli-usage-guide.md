@@ -549,6 +549,19 @@ owner-smoke ready
 
 `clientContext` 是 `POST /ask` 的顶层字段，只写入 Navigator 会话摘要和上游关联元数据，不是 LLM runtime prompt、模型配置或 workspace 配置。不要用它传完整 UI transcript、`recentConversation`、模型 token 预算、system prompt 覆盖、Skill/Function 私有配置或临时文件系统路径。
 
+BizWorker 会把当前 account/private 与 public skill catalog 的 `id`、`name`、`description` 放入 Root system prompt。`allowed_skills` 未传或为空时表示使用默认 catalog；非空时只作为这个 catalog 的过滤器。
+
+如果 live smoke 要验证某个明确的 Biz actor/skill，不要通过 `clientContext`、metadata、profile env 或隐藏字段传 `businessSkillName` / `businessSkillId` / `skill_name`。把“使用哪个技能”写进用户消息，让根 Agent 按自然语言任务语义执行。例如：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream ask `
+  --agent-code school-sim.actor.pm.m2.v1 `
+  --upstream-user-id <id> `
+  --message "请使用 school-sim.actor.pm.m2.v1 技能，完成 School Sim M2 PM live ask smoke。请写入指定 marker，并只回传 marker 路径和内容。"
+```
+
+验收时检查 marker 和消息内容是否体现目标 actor/skill。如果任务到达 Biz Worker 且终态 `COMPLETED`，但仍走旧的订单诊断或其他无关流程，记录为 Biz prompt/skill handoff 问题，而不是让上游补传隐藏 skill 字段。
+
 上游仍负责保存完整 UI transcript。BizWorker 只维护下一轮模型推理需要的 bounded runtime context，包括 Root-visible user / assistant / tool protocol、压缩摘要和 focus / interruption control state。CLI 的 `messages` / `session-messages` 用于查看展示态消息，不是下一轮提交给 LLM 的事实来源。
 
 ### 5. 轮询 Task Messages

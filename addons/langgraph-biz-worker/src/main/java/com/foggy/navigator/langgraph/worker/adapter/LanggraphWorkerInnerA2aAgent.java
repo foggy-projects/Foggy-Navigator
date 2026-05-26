@@ -5,9 +5,7 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import com.foggy.navigator.langgraph.worker.service.LanggraphTaskService;
-import com.foggy.navigator.langgraph.worker.support.LanggraphSkillNameContract;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
-import lombok.extern.slf4j.Slf4j;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -20,8 +18,16 @@ import java.util.Optional;
  * <p>
  * Phase 1: simplified — no dedup, no session-busy check.
  */
-@Slf4j
 class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
+
+    private static final List<String> A2A_SKILL_ROUTING_KEYS = List.of(
+            "skill_name",
+            "skillName",
+            "skill_id",
+            "skillId",
+            "businessSkillName",
+            "businessSkillId"
+    );
 
     private final CodingAgentEntity entity;
     private final LanggraphTaskService taskService;
@@ -50,7 +56,6 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
 
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
         form.setAgentId(entity.getAgentId());
-        form.setSkillName(resolveSkillName(meta, "A2A metadata"));
         form.setWorkerId(workerId);
         form.setPrompt(prompt);
         form.setDirectoryId(entity.getDefaultDirectoryId());
@@ -61,15 +66,11 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setContextId(context.getContextId());
         form.setSessionId(context.getNavigatorSessionId());
         if (meta.get("context") instanceof Map<?, ?> ctx) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> contextMap = (Map<String, Object>) ctx;
-            form.setContext(contextMap);
+            form.setContext(clientContextWithoutSkillRouting(ctx));
         }
         Object rawRuntimeContext = meta.get("runtimeContext");
         if (rawRuntimeContext instanceof Map<?, ?> runtimeCtx) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> runtimeContextMap = (Map<String, Object>) runtimeCtx;
-            form.setRuntimeContext(runtimeContextMap);
+            form.setRuntimeContext(clientContextWithoutSkillRouting(runtimeCtx));
         }
 
         LanggraphTaskDTO task = taskService.createTask(
@@ -82,7 +83,7 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
                         .state(A2aTaskState.SUBMITTED)
                         .timestamp(Instant.now())
                         .build())
-                .history(List.of(message))
+                .history(List.of(messageWithoutSkillRoutingMetadata(message)))
                 .metadata(taskMetadata(task))
                 .build();
     }
@@ -158,11 +159,6 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         return fallback;
     }
 
-    private String resolveSkillName(Map<String, Object> values, String source) {
-        return LanggraphSkillNameContract.resolve(values, (key, ignored) ->
-                log.warn("Deprecated LangGraph skill alias '{}' received from {}; use 'skill_name'", key, source));
-    }
-
     private Object firstPresent(Map<String, Object> meta, String... keys) {
         for (String key : keys) {
             if (meta.containsKey(key)) {
@@ -186,6 +182,51 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
             }
         }
         return null;
+    }
+
+    private Map<String, Object> clientContextWithoutSkillRouting(Map<?, ?> source) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : source.entrySet()) {
+            if (entry.getKey() instanceof String key && !A2A_SKILL_ROUTING_KEYS.contains(key)) {
+                context.put(key, entry.getValue());
+            }
+        }
+        return context;
+    }
+
+    private A2aMessage messageWithoutSkillRoutingMetadata(A2aMessage message) {
+        Map<String, Object> metadata = a2aMetadataWithoutSkillRouting(message.getMetadata());
+        return A2aMessage.builder()
+                .role(message.getRole())
+                .parts(message.getParts())
+                .taskId(message.getTaskId())
+                .contextId(message.getContextId())
+                .contextAlias(message.getContextAlias())
+                .metadata(metadata.isEmpty() ? null : metadata)
+                .build();
+    }
+
+    private Map<String, Object> a2aMetadataWithoutSkillRouting(Map<String, Object> source) {
+        if (source == null || source.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+            String key = entry.getKey();
+            if (A2A_SKILL_ROUTING_KEYS.contains(key)) {
+                continue;
+            }
+            Object value = entry.getValue();
+            if (("context".equals(key) || "runtimeContext".equals(key)) && value instanceof Map<?, ?> nested) {
+                Map<String, Object> sanitized = clientContextWithoutSkillRouting(nested);
+                if (!sanitized.isEmpty()) {
+                    metadata.put(key, sanitized);
+                }
+            } else {
+                metadata.put(key, value);
+            }
+        }
+        return metadata;
     }
 
     private Map<String, Object> taskMetadata(LanggraphTaskDTO task) {

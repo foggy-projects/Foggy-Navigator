@@ -177,6 +177,8 @@ class FrameExecutionReportGenerator:
         generated_at: str,
         source_path: Path,
     ) -> dict[str, Any]:
+        report_status = _report_status(frame)
+        report_ended_at = _report_ended_at(frame)
         return {
             "report_ref": _report_ref(frame.task_id, frame.frame_id),
             "frame_id": frame.frame_id,
@@ -189,10 +191,11 @@ class FrameExecutionReportGenerator:
             "agent_id": frame.agent_id,
             "frame_name": frame.frame_name,
             "frame_kind": frame.frame_kind.value,
-            "status": frame.status.value,
+            "status": report_status,
+            "frame_status": frame.status.value,
             "summary": _summary_text(frame),
             "started_at": frame.started_at,
-            "ended_at": frame.ended_at,
+            "ended_at": report_ended_at,
             "tool_call_count": len(_tool_events(frame)),
             "child_frame_count": len(frame.child_frame_ids),
             "approval_required": frame.approval_request is not None,
@@ -221,14 +224,15 @@ class FrameExecutionReportGenerator:
             f"- report_ref: `{_md_text(digest['report_ref'])}`",
             f"- skill_id: `{_md_text(frame.skill_id)}`",
             f"- frame_kind: `{_md_text(frame.frame_kind.value)}`",
-            f"- status: `{_md_text(frame.status.value)}`",
+            f"- status: `{_md_text(digest['status'])}`",
+            f"- frame_status: `{_md_text(frame.status.value)}`",
             f"- task_id: `{_md_text(frame.task_id)}`",
             f"- conversation_id: `{_md_text(frame.conversation_id or '')}`",
             f"- parent_frame_id: `{_md_text(frame.parent_frame_id or '')}`",
             f"- agent_id: `{_md_text(frame.agent_id or '')}`",
             f"- frame_name: `{_md_text(frame.frame_name or '')}`",
             f"- started_at: `{_md_text(frame.started_at)}`",
-            f"- ended_at: `{_md_text(frame.ended_at)}`",
+            f"- ended_at: `{_md_text(digest.get('ended_at') or '')}`",
             f"- result_summary: {_md_text(digest['summary'])}",
             "",
             "## Instruction And Input",
@@ -550,10 +554,29 @@ def _child_report_digest(digest: dict[str, Any]) -> dict[str, Any]:
         "frame_name": digest.get("frame_name"),
         "frame_kind": digest.get("frame_kind"),
         "status": digest.get("status"),
+        "frame_status": digest.get("frame_status"),
         "summary": digest.get("summary"),
         "artifact_refs": digest.get("artifact_refs", []),
         "evidence_refs": digest.get("evidence_refs", []),
     }
+
+
+def _report_status(frame: SkillFrameState) -> str:
+    current_turn = _current_turn_report(frame)
+    status = current_turn.get("status") if current_turn else None
+    return str(status or frame.status.value)
+
+
+def _report_ended_at(frame: SkillFrameState) -> str:
+    current_turn = _current_turn_report(frame)
+    ended_at = current_turn.get("ended_at") if current_turn else None
+    return str(ended_at or frame.ended_at or "")
+
+
+def _current_turn_report(frame: SkillFrameState) -> dict[str, Any]:
+    state = frame.private_working_state if isinstance(frame.private_working_state, dict) else {}
+    value = state.get("current_turn_report")
+    return value if isinstance(value, dict) else {}
 
 
 def _summary_text(frame: SkillFrameState) -> str:
