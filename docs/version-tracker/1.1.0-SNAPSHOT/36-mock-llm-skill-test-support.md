@@ -49,7 +49,7 @@
 
 1. `LlmSkillAgent`：负责 LLM tool-call loop。
 2. `BIZ_WORKER_LLM_EXECUTE_SKILLS=false`：默认关闭，不影响现有程序化 Skill 子图。
-3. `BIZ_WORKER_LLM_SKILL_MAX_ITERATIONS=6`：限制单 Skill 最大模型轮次。
+3. `BIZ_WORKER_LLM_SKILL_MAX_ITERATIONS=20`：限制单 Skill 最大模型轮次。
 4. `root_graph.run_skill()`：当开关开启且 LLM 已配置时，使用 `LlmSkillAgent` 执行当前 Frame。
 
 ## 3. 关键设计约束

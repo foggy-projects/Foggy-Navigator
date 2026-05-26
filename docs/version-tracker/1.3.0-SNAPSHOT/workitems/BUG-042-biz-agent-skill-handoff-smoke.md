@@ -102,6 +102,28 @@ R6 runtime inspection found the remaining root cause: live tasks were routed to 
 
 R9 runtime logs showed the remaining root cause: Navigator resolved and forwarded an LLM model config with provider `openai-compatible`, but the Python BizWorker LLM router only accepted exact `openai` or `anthropic` provider names. The worker logged `Unknown llm_provider: openai-compatible. LLM routing disabled.`, then skipped Root LLM skill selection and emitted the static non-LLM fallback response.
 
+### R10
+
+- Agent: `school-sim.actor.pm.m2.v1`
+- Task: `lgt_98984edaae614c52`
+- Context: `bctx_20260526_1e_1e3a7d5e12ab43f783bc6065f0699bd1`
+- Final status: `FAILED`
+- `providerTaskId`: `lgt_98984edaae614c52`
+- `workerTaskId`: `lgt_98984edaae614c52`
+- Messages count: `2`
+- `failureStage`: `RUNTIME`
+- `failureSummary`: `LLM skill agent reached max iterations without valid submit`
+- `3161 active_tasks`: observed `1`
+- Backend log: `Created langgraph task` used `workerId=school-sim-wsl-biz`
+- 3161 log: corresponding `POST /api/v1/query HTTP/1.1 200 OK`
+- `worker-3161-error.log`: no new `Unknown llm_provider: openai-compatible`
+- Static fallback `未能识别出与请求匹配的业务技能`: not present
+- Legacy order diagnostic flow: not entered
+- Marker: generated
+- Marker content: `SCHOOL_SIM_M2_BIZ_20260526_R10_OK`
+
+R10 proved the provider alias fix worked and the Root frame loaded `school-sim.actor.pm.m2.v1`, then used file tools to create the marker. The remaining failure was not skill handoff or routing; the worker default `BIZ_WORKER_LLM_SKILL_MAX_ITERATIONS=6` was too low. Runtime logs show the sixth model iteration successfully called `write_file`, leaving no additional iteration for a natural-language final answer or explicit turn-result submit.
+
 ## Decision
 
 A2A direct ask should not require upstream callers to populate hidden skill routing fields such as `businessSkillName`, `businessSkillId`, `skill_name`, or `skillId` in `clientContext`, metadata, or profile env files.
@@ -132,6 +154,7 @@ If the task reaches Biz Worker and completes but still follows an unrelated lega
 - Materialize responses now keep the legacy `workerUrl` / `workerStatusCode` summary and also include per-target `targets[]` results with `workerId`, `workerUrl`, `source`, `status`, and worker response. If no Biz Worker target can be resolved and no explicit dev fallback is configured, the status is `SKIPPED_UNRESOLVED_WORKER_TARGET` instead of silently posting to `3061`.
 - LangGraph A2A adapter now honors the internally resolved task-level `metadata.workerId` when present, so OpenAPI owner-aware routing can submit live asks to the Biz Worker identity selected by WorkerHost resolution instead of the Agent's stale provider-resolved default worker.
 - Python BizWorker LLM router now normalizes OpenAI-compatible provider aliases such as `openai-compatible`, `openai-compatible-api`, `compatible-openai`, and `openai-api` to the OpenAI-compatible ChatOpenAI path, so Navigator model configs can enable Root LLM skill selection.
+- Python BizWorker default LLM skill loop budget is increased from 6 to 20 iterations across code defaults, local `.env.example`, README, and KVM deployment templates.
 
 ## Documentation Updates
 

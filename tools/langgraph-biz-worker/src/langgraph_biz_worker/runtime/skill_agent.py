@@ -38,7 +38,7 @@ class SkillAgent:
         model_provider: Any | Callable[[], Any] | None = None,
         runtime: SkillRuntime | None = None,
         data_root: str | Path | None = None,
-        max_iterations: int = 6,
+        max_iterations: int = 20,
     ) -> None:
         self._skills_root = Path(skills_root)
         self._data_root = Path(data_root) if data_root else self._skills_root.parent / "data"

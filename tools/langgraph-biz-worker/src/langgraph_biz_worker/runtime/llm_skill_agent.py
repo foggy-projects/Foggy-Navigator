@@ -103,7 +103,7 @@ class LlmSkillAgent:
         self,
         chat_model: BaseChatModel,
         runtime: SkillRuntime,
-        max_iterations: int = 6,
+        max_iterations: int = 20,
         data_root: Path | None = None,
         tool_provider: ToolProvider | None = None,
     ) -> None:

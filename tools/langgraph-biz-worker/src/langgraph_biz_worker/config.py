@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.0
     llm_max_tokens: int = 4096
     llm_execute_skills: bool = False  # when true, Skill frames run through LLM tool-call loop
-    llm_skill_max_iterations: int = 6
+    llm_skill_max_iterations: int = 20
     llm_request_timeout_seconds: float = 120.0
     llm_execution_deadline_seconds: float = 240.0
     llm_max_retries: int = 1

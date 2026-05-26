@@ -33,6 +33,7 @@ class TestSettingsDefaults:
         s = Settings(_env_file=None)
         assert s.llm_request_timeout_seconds == 120.0
         assert s.llm_execution_deadline_seconds == 240.0
+        assert s.llm_skill_max_iterations == 20
         assert s.llm_max_retries == 1
         assert s.llm_provider_max_retries == 0
         assert s.llm_circuit_failure_threshold == 3

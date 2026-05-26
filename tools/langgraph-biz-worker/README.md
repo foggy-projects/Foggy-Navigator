@@ -81,7 +81,7 @@ curl http://localhost:3061/health
 | `BIZ_WORKER_LLM_PROVIDER` | （空） | `openai` / `anthropic`，空=禁用 LLM |
 | `BIZ_WORKER_LLM_BASE_URL` | （空） | 自定义 LLM API 地址，可指向 `tools/mock-llm-service` |
 | `BIZ_WORKER_LLM_EXECUTE_SKILLS` | false | 启用 LLM tool-call loop 执行 Skill |
-| `BIZ_WORKER_LLM_SKILL_MAX_ITERATIONS` | 6 | 单个 Skill 最大模型轮次 |
+| `BIZ_WORKER_LLM_SKILL_MAX_ITERATIONS` | 20 | 单个 Skill 最大模型轮次 |
 | `BIZ_WORKER_ENABLE_COMMAND` | true | Linux worker 上启用真实 `command` 工具；仍需可写 delegated workspace、合法 `workdir` 和 `allowed_dirs` |
 | `BIZ_WORKER_NAVIGATOR_API_BASE` | http://localhost:8112 | Navigator 平台地址 |
 
