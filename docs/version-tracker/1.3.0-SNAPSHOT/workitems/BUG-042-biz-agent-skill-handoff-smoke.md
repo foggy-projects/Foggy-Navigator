@@ -94,6 +94,8 @@ If the task reaches Biz Worker and completes but still follows an unrelated lega
 - `start-launcher.ps1` now defaults `BUSINESS_AGENT_DEV_SYNC_WORKER_URL` to `http://127.0.0.1:3161` when the env var is not set, so local Skill sync materializes into the same Biz Worker used by live routing.
 - Added `tools/langgraph-biz-worker/restart-wsl-3161.ps1` for WSL Biz Worker restart and optional source sync.
 - Request-scoped `llm_config` from Navigator now enables Root LLM execution even when the WSL worker-local `.env` has `BIZ_WORKER_LLM_EXECUTE_SKILLS=false`. The global flag only controls worker-local default LLM execution; a Navigator-resolved model config is an explicit per-task execution config.
+- `SkillRegistryService` no longer has an implicit `http://localhost:3061` materialize fallback. For `skill sync --scope client-app-public` and account-private sync, materialization now resolves Biz Worker targets from the current ClientApp: visible ClientApp/UpstreamSystem Agent worker routes first, pool members fan-out when the route points to a Biz WorkerPool, and enabled/healthy UpstreamSystem Biz Worker identities as the no-agent route fallback. `BUSINESS_AGENT_DEV_SYNC_WORKER_URL` remains an explicit local-dev fallback only.
+- Materialize responses now keep the legacy `workerUrl` / `workerStatusCode` summary and also include per-target `targets[]` results with `workerId`, `workerUrl`, `source`, `status`, and worker response. If no Biz Worker target can be resolved and no explicit dev fallback is configured, the status is `SKIPPED_UNRESOLVED_WORKER_TARGET` instead of silently posting to `3061`.
 
 ## Documentation Updates
 

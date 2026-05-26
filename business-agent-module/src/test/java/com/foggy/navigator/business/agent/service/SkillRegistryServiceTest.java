@@ -394,6 +394,110 @@ class SkillRegistryServiceTest {
     }
 
     @Test
+    void syncSkillBundle_materializesToResolvedWorkerTargetsWithoutDevFallback() throws Exception {
+        AtomicReference<String> firstBodyRef = new AtomicReference<>();
+        AtomicReference<String> secondBodyRef = new AtomicReference<>();
+        HttpServer firstServer = HttpServer.create(new InetSocketAddress(0), 0);
+        firstServer.createContext("/api/v1/skills/materialize", exchange -> {
+            firstBodyRef.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = "{\"status\":\"success\",\"worker\":\"one\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response);
+            }
+        });
+        HttpServer secondServer = HttpServer.create(new InetSocketAddress(0), 0);
+        secondServer.createContext("/api/v1/skills/materialize", exchange -> {
+            secondBodyRef.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = "{\"status\":\"success\",\"worker\":\"two\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response);
+            }
+        });
+        firstServer.start();
+        secondServer.start();
+        try {
+            ReflectionTestUtils.setField(skillRegistryService, "devSyncWorkerUrl", "");
+            SkillMaterializeTargetResolver resolver = mock(SkillMaterializeTargetResolver.class);
+            ReflectionTestUtils.setField(skillRegistryService, "materializeTargetResolver", resolver);
+            when(resolver.resolveTargets("tenant_1", "tms_app")).thenReturn(List.of(
+                    new SkillMaterializeTargetResolver.Target(
+                            "worker-one",
+                            "http://localhost:" + firstServer.getAddress().getPort(),
+                            "AGENT_ROUTE:pm:WORKER_POOL:pool-1"),
+                    new SkillMaterializeTargetResolver.Target(
+                            "worker-two",
+                            "http://localhost:" + secondServer.getAddress().getPort(),
+                            "AGENT_ROUTE:pm:WORKER_POOL:pool-1")));
+
+            SyncSkillBundleForm form = new SyncSkillBundleForm();
+            form.setClientAppId("tms_app");
+            form.setScope("client-app-public");
+            form.setSkillId("tms_skill");
+            form.setName("TMS Skill");
+            form.setMarkdownBody("Use this skill for TMS.");
+            form.setMaterialize(true);
+
+            when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+            when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
+                    "tenant_1", "tms_app", "CLIENT_APP_PUBLIC", "", "tms_skill")).thenReturn(Optional.empty());
+            when(skillBundleRepository.save(any(SkillBundleEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(skillRepository.findByTenantIdAndSkillId("tenant_1", "tms_skill")).thenReturn(Optional.empty());
+            when(skillRepository.save(any(SkillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(grantRepository.findByTenantIdAndClientAppIdAndSkillId("tenant_1", "tms_app", "tms_skill")).thenReturn(Optional.empty());
+            when(grantRepository.save(any(ClientAppSkillGrantEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            var dto = skillRegistryService.syncSkillBundle("tenant_1", "user_1", form);
+
+            assertEquals("MATERIALIZED", dto.getMaterializeResult().getStatus());
+            assertEquals(2, dto.getMaterializeResult().getTargets().size());
+            assertEquals("worker-one", dto.getMaterializeResult().getWorkerId());
+            assertEquals("AGENT_ROUTE:pm:WORKER_POOL:pool-1", dto.getMaterializeResult().getTargetSource());
+            assertNotNull(firstBodyRef.get());
+            assertNotNull(secondBodyRef.get());
+            assertTrue(firstBodyRef.get().contains("\"client_app_id\":\"tms_app\""));
+            assertTrue(secondBodyRef.get().contains("\"client_app_id\":\"tms_app\""));
+        } finally {
+            firstServer.stop(0);
+            secondServer.stop(0);
+        }
+    }
+
+    @Test
+    void syncSkillBundle_skipsMaterializeWhenNoTargetAndNoDevFallback() {
+        ReflectionTestUtils.setField(skillRegistryService, "devSyncWorkerUrl", "");
+        SkillMaterializeTargetResolver resolver = mock(SkillMaterializeTargetResolver.class);
+        ReflectionTestUtils.setField(skillRegistryService, "materializeTargetResolver", resolver);
+        when(resolver.resolveTargets("tenant_1", "tms_app")).thenReturn(List.of());
+
+        SyncSkillBundleForm form = new SyncSkillBundleForm();
+        form.setClientAppId("tms_app");
+        form.setScope("client-app-public");
+        form.setSkillId("tms_skill");
+        form.setName("TMS Skill");
+        form.setMarkdownBody("Use this skill for TMS.");
+        form.setMaterialize(true);
+
+        when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+        when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
+                "tenant_1", "tms_app", "CLIENT_APP_PUBLIC", "", "tms_skill")).thenReturn(Optional.empty());
+        when(skillBundleRepository.save(any(SkillBundleEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(skillRepository.findByTenantIdAndSkillId("tenant_1", "tms_skill")).thenReturn(Optional.empty());
+        when(skillRepository.save(any(SkillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(grantRepository.findByTenantIdAndClientAppIdAndSkillId("tenant_1", "tms_app", "tms_skill")).thenReturn(Optional.empty());
+        when(grantRepository.save(any(ClientAppSkillGrantEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var dto = skillRegistryService.syncSkillBundle("tenant_1", "user_1", form);
+
+        assertEquals("SKIPPED_UNRESOLVED_WORKER_TARGET", dto.getMaterializeResult().getStatus());
+        assertNull(dto.getMaterializeResult().getWorkerUrl());
+        assertTrue(dto.getMaterializeResult().getWorkerResponse().contains("no Biz Worker materialize target"));
+    }
+
+    @Test
     void syncSkillBundle_materializesSchemaPlaceholdersAsPublicContracts() throws Exception {
         AtomicReference<String> bodyRef = new AtomicReference<>();
         HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
