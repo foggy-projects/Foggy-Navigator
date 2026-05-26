@@ -259,6 +259,40 @@ class LanggraphWorkerInnerA2aAgentTest {
     }
 
     @Test
+    void sendTask_usesRuntimeWorkerIdFromMetadataWhenPresent() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        when(taskService.createTask(eq("admin_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class)))
+                .thenReturn(LanggraphTaskDTO.builder()
+                        .taskId("lgt_01")
+                        .sessionId("session_01")
+                        .workerId("school-sim-wsl-biz")
+                        .build());
+
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setAgentId("school-sim.actor.pm.m2.v1");
+        entity.setName("PM");
+        entity.setUserId("admin_01");
+        entity.setTenantId("tenant_01");
+        entity.setWorkerId("2ca910a6");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(
+                entity, taskService, "dev-langgraph-worker-20260504123547");
+        A2aMessage message = A2aMessage.user(List.of(A2aPart.text("write marker")));
+        message.setMetadata(Map.of(
+                "workerId", "school-sim-wsl-biz",
+                "workerSource", "BIZ_WORKER_IDENTITY"));
+
+        agent.sendTask(A2aContext.builder()
+                .message(message)
+                .contextId("ctx_01")
+                .build());
+
+        ArgumentCaptor<CreateLanggraphTaskForm> captor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("admin_01"), eq("tenant_01"), captor.capture());
+        assertEquals("school-sim-wsl-biz", captor.getValue().getWorkerId());
+    }
+
+    @Test
     void cancelTask_recordsRecoverableInterruptionThroughTaskService() {
         LanggraphTaskService taskService = mock(LanggraphTaskService.class);
         CodingAgentEntity entity = new CodingAgentEntity();

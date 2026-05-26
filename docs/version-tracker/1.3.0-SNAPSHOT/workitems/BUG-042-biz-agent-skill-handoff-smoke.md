@@ -68,6 +68,21 @@ School Sim Biz live ask 已证明 provider credential、Agent routing 和 Worker
 
 R6 runtime inspection found the remaining root cause: live tasks were routed to Biz Worker `3161`, but the launcher default for BusinessAgent skill materialization still pointed to `http://localhost:3061`. As a result, the PM skill was not present in the actual worker-side catalog used by the live task.
 
+### R8
+
+- Agent: `school-sim.actor.pm.m2.v1`
+- Task: `lgt_d8aee3d5350342f4`
+- Context: `bctx_20260526_a1_a19de1524fd9427c85e8a8050bd588c7`
+- Final status: `COMPLETED`
+- `providerTaskId`: `lgt_d8aee3d5350342f4`
+- `workerTaskId`: `lgt_d8aee3d5350342f4`
+- Messages count: `3`
+- `failureStage/failureSummary`: empty
+- Marker: `simulations/school/runs/2026-05-24-m2-owner-aware-001/actors/pm/biz-m2-live-20260526-r8.txt`
+- Marker content: not generated
+- Legacy order diagnostic flow: not entered
+- Observed behavior: Java OpenAPI metadata resolved `workerId=school-sim-wsl-biz`, but `LanggraphWorkerInnerA2aAgent` still submitted the task with the provider-resolved default worker. Backend log evidence showed `Created langgraph task ... workerId=dev-langgraph-worker-20260504123547`, so 3161 never received the task. The fallback message `未能识别出与请求匹配的业务技能` is the Python worker's static non-LLM fallback response, not LLM-generated text.
+
 ## Decision
 
 A2A direct ask should not require upstream callers to populate hidden skill routing fields such as `businessSkillName`, `businessSkillId`, `skill_name`, or `skillId` in `clientContext`, metadata, or profile env files.
@@ -96,6 +111,7 @@ If the task reaches Biz Worker and completes but still follows an unrelated lega
 - Request-scoped `llm_config` from Navigator now enables Root LLM execution even when the WSL worker-local `.env` has `BIZ_WORKER_LLM_EXECUTE_SKILLS=false`. The global flag only controls worker-local default LLM execution; a Navigator-resolved model config is an explicit per-task execution config.
 - `SkillRegistryService` no longer has an implicit `http://localhost:3061` materialize fallback. For `skill sync --scope client-app-public` and account-private sync, materialization now resolves Biz Worker targets from the current ClientApp: visible ClientApp/UpstreamSystem Agent worker routes first, pool members fan-out when the route points to a Biz WorkerPool, and enabled/healthy UpstreamSystem Biz Worker identities as the no-agent route fallback. `BUSINESS_AGENT_DEV_SYNC_WORKER_URL` remains an explicit local-dev fallback only.
 - Materialize responses now keep the legacy `workerUrl` / `workerStatusCode` summary and also include per-target `targets[]` results with `workerId`, `workerUrl`, `source`, `status`, and worker response. If no Biz Worker target can be resolved and no explicit dev fallback is configured, the status is `SKIPPED_UNRESOLVED_WORKER_TARGET` instead of silently posting to `3061`.
+- LangGraph A2A adapter now honors the internally resolved task-level `metadata.workerId` when present, so OpenAPI owner-aware routing can submit live asks to the Biz Worker identity selected by WorkerHost resolution instead of the Agent's stale provider-resolved default worker.
 
 ## Documentation Updates
 

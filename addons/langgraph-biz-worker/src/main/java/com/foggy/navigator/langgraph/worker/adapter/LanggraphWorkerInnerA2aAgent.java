@@ -56,7 +56,7 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
 
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
         form.setAgentId(entity.getAgentId());
-        form.setWorkerId(workerId);
+        form.setWorkerId(firstText(meta.get("workerId"), workerId));
         form.setPrompt(prompt);
         form.setDirectoryId(entity.getDefaultDirectoryId());
         form.setModel(firstText(meta.get("model"), entity.getDefaultModel()));
