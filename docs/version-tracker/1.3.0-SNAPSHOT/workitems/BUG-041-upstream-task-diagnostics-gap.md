@@ -110,6 +110,7 @@ Biz provider key / routing / worker execution 已恢复：
 - `20260525-a732` / `20260525-5ee1` 不再作为是否恢复的验收证据，只用于验证历史任务诊断兼容性。
 - `20260526-c348` 作为 pre-fix hanging 现场证据保留，不再作为恢复验收任务。
 - `lgt_468350fcdeac400b` 证明 Biz provider key/routing/worker execution 已恢复；marker 未生成转入 [BUG-042](./BUG-042-biz-agent-skill-handoff-smoke.md)。
+- [BUG-042](./BUG-042-biz-agent-skill-handoff-smoke.md) 已由 R11 live smoke 关闭：Biz PM task `lgt_143f2daba8f74c55` 终态 `COMPLETED`，生成 `SCHOOL_SIM_M2_BIZ_20260526_R11_OK` marker，未进入旧订单诊断流程。
 
 ## Regression Evidence
 

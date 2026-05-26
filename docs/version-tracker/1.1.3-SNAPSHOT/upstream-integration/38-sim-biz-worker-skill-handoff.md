@@ -4,7 +4,7 @@
 
 - doc_type: handoff
 - version: 1.1.3-SNAPSHOT
-- status: ready-for-sim-trial
+- status: live-validated
 - date: 2026-05-24
 - priority: P1
 - source_type: issue-129-followup
@@ -201,6 +201,24 @@ BizWorker 会把已加载且对当前 account/ClientApp 可见的 skill id、名
 验收字段至少包含 `taskId`、`contextId`、`providerTaskId`、`workerTaskId`、final status、messages count、`failureStage/failureSummary`、marker path/content，以及是否进入旧的订单诊断流程。不得输出任何 API key、token、Authorization header 或 provider credential。
 
 如果 marker 已写入但任务因 `failureStage=RUNTIME`、`LLM skill agent reached max iterations without valid submit` 等可恢复中断结束，sim / 上游可以自行判断是否继续。继续方式是用同一个 `contextId` 新发一个 ask，例如消息为 `继续` 或 `continue`，然后轮询新的 `taskId`；不要复用旧 `taskId`，也不要补传 `skill_name`、`skillId`、`businessSkillName` 或 `businessSkillId` 这类隐藏字段。
+
+### 7. 2026-05-26 R11 live validation
+
+School Sim PM Biz live ask 已通过：
+
+- Task: `lgt_143f2daba8f74c55`
+- Context: `bctx_20260526_40_4047d29666804c1a8ff7338bfe07d337`
+- Final status: `COMPLETED`
+- `providerTaskId` / `workerTaskId`: `lgt_143f2daba8f74c55`
+- Messages count: `2`
+- `failureStage/failureSummary`: empty
+- `3161 active_tasks`: observed `1`
+- Marker: `simulations/school/runs/2026-05-24-m2-owner-aware-001/actors/pm/biz-m2-live-20260526-r11.txt`
+- Marker content: `SCHOOL_SIM_M2_BIZ_20260526_R11_OK`
+- Legacy order diagnostic flow: not entered
+- Continue: not triggered
+
+结论：Biz materialize、runtime routing、Root skill selection、file write handoff 和终态回传均已通过；School Sim M2 可以进入结果物化。
 
 ## 交付边界
 

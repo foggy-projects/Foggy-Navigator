@@ -4,9 +4,9 @@ bug_source: live-smoke
 version: 1.3.0-SNAPSHOT
 ticket: BUG-042
 severity: major
-status: fixed-pending-live-validation
-reproduction_status: observed
-test_strategy: live-smoke
+status: closed-live-validated
+reproduction_status: fixed
+test_strategy: live-smoke-passed
 automation_decision: required
 ---
 
@@ -14,7 +14,7 @@ automation_decision: required
 
 ## Summary
 
-School Sim Biz live ask 已证明 provider credential、Agent routing 和 Worker execution 恢复，但 PM actor smoke 没有写 marker，而是进入旧的订单诊断流程。
+School Sim Biz live ask 曾证明 provider credential、Agent routing 和 Worker execution 已恢复，但 PM actor smoke 没有写 marker，而是进入旧的订单诊断流程。R11 复测已直接通过：Biz Worker 命中 3161、识别并执行 `school-sim.actor.pm.m2.v1`、写入 marker、终态 `COMPLETED`，未进入旧订单诊断流程。
 
 这不是 `BUG-041` 的 provider/transport/diagnostics 问题。`BUG-041` 已解决“任务是否到达 worker、providerTaskId/workerTaskId 是否可见、失败阶段是否可诊断”。本问题单独跟踪 Biz actor live smoke 的 prompt/skill handoff 口径和验证。
 
@@ -124,6 +124,25 @@ R9 runtime logs showed the remaining root cause: Navigator resolved and forwarde
 
 R10 proved the provider alias fix worked and the Root frame loaded `school-sim.actor.pm.m2.v1`, then used file tools to create the marker. The remaining failure was not skill handoff or routing; the worker default `BIZ_WORKER_LLM_SKILL_MAX_ITERATIONS=6` was too low. Runtime logs show the sixth model iteration successfully called `write_file`, leaving no additional iteration for a natural-language final answer or explicit turn-result submit.
 
+### R11
+
+- Agent: `school-sim.actor.pm.m2.v1`
+- Task: `lgt_143f2daba8f74c55`
+- Context: `bctx_20260526_40_4047d29666804c1a8ff7338bfe07d337`
+- Final status: `COMPLETED`
+- `providerTaskId`: `lgt_143f2daba8f74c55`
+- `workerTaskId`: `lgt_143f2daba8f74c55`
+- Messages count: `2`
+- `failureStage/failureSummary`: empty
+- `3161 active_tasks`: observed `1`
+- Marker: `simulations/school/runs/2026-05-24-m2-owner-aware-001/actors/pm/biz-m2-live-20260526-r11.txt`
+- Marker content: `SCHOOL_SIM_M2_BIZ_20260526_R11_OK`
+- Legacy order diagnostic flow: not entered
+- Unrelated default flow in messages: not present
+- Continue: not triggered
+
+R11 is the closing live validation. It proves the materialize target fix, runtime worker routing, provider alias normalization, Root skill catalog selection, file write handoff, increased iteration budget, and account context prompt annotation work together for the PM Biz live ask path.
+
 ## Decision
 
 A2A direct ask should not require upstream callers to populate hidden skill routing fields such as `businessSkillName`, `businessSkillId`, `skill_name`, or `skillId` in `clientContext`, metadata, or profile env files.
@@ -155,6 +174,8 @@ If the task reaches Biz Worker and completes but still follows an unrelated lega
 - LangGraph A2A adapter now honors the internally resolved task-level `metadata.workerId` when present, so OpenAPI owner-aware routing can submit live asks to the Biz Worker identity selected by WorkerHost resolution instead of the Agent's stale provider-resolved default worker.
 - Python BizWorker LLM router now normalizes OpenAI-compatible provider aliases such as `openai-compatible`, `openai-compatible-api`, `compatible-openai`, and `openai-api` to the OpenAI-compatible ChatOpenAI path, so Navigator model configs can enable Root LLM skill selection.
 - Python BizWorker default LLM skill loop budget is increased from 6 to 20 iterations across code defaults, local `.env.example`, README, and KVM deployment templates.
+- Account context prompt injection now explicitly marks each injected file source, for example `ACCOUNT_POLICY.md`, and tells the model not to reread that file just to confirm content that is already present in the prompt.
+- Upstream CLI / SDK / skill docs now state that recoverable runtime interruptions can be continued by creating a new ask with the same `contextId` and a short `继续` / `continue` prompt.
 
 ## Documentation Updates
 
@@ -162,7 +183,11 @@ If the task reaches Biz Worker and completes but still follows an unrelated lega
 - `C:/Users/oldse/.claude/skills/navigator-upstream-llm-integration/SKILL.md`
 - `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/18-navigator-upstream-cli-usage-guide.md`
 - `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/19-navigator-upstream-cli-install-update.md`
+- `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/11-llm-sdk-usage-guide.md`
+- `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/21-account-context-memory-file-design.md`
 - `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/38-sim-biz-worker-skill-handoff.md`
+- `docs/version-tracker/1.1.6-SNAPSHOT/14-account-workspace-resolver-and-delegated-mode.md`
+- `docs/version-tracker/1.1.6-SNAPSHOT/16-upstream-cli-skill-runtime-contract-alignment.md`
 
 ## Prompt Hardcoding Scan
 
@@ -173,9 +198,9 @@ If the task reaches Biz Worker and completes but still follows an unrelated lega
 - Java A2A direct ask now forwards the user prompt without hidden skill metadata. Java does not construct the Root system prompt.
 - `LanggraphBusinessAgentWorkerTaskLauncher` still contains a fixed task prompt (`Business Agent task ... Use the business function tools ...`) and context fields for `businessSkillId`/`businessSkillName`. That is the BusinessAgent launcher path, not the A2A live-ask path; track it separately if that API must preserve caller wording.
 
-## Next Live Validation
+## Live Validation Prompt
 
-Ask payload should include the actor skill instruction in the message:
+Ask payload should include the actor skill instruction in the message. R11 used the same contract and passed without hidden skill metadata:
 
 ```text
 请使用 school-sim.actor.pm.m2.v1 技能，完成 School Sim M2 PM live ask smoke R10。
@@ -235,11 +260,12 @@ Result:
 - 8112 restarted with `start-launcher.ps1`; `/actuator/health` returned `UP`.
 - PM public and account-private skill sync returned `materializeStatus=MATERIALIZED`, `workerStatusCode=200`.
 - Direct 3161 `/api/v1/skills/resolve` returned `resolved=true`, `account_skill_exists=true`, `client_app_public_skill_exists=true` for `school-sim.actor.pm.m2.v1`.
+- Live R11 task `lgt_143f2daba8f74c55` completed, generated marker `SCHOOL_SIM_M2_BIZ_20260526_R11_OK`, observed 3161 `active_tasks=1`, and did not enter the legacy order diagnostic flow.
 
 ## Acceptance Criteria
 
-- Biz PM live ask produces the requested marker.
-- Task exposes `providerTaskId` and `workerTaskId`.
-- Messages are non-empty and terminal status is explicit.
-- No secrets appear in reports, prompts, docs, logs, or screenshots.
-- If the marker is still missing, the report clearly separates worker/provider success from prompt/skill handoff failure.
+- [x] Biz PM live ask produces the requested marker.
+- [x] Task exposes `providerTaskId` and `workerTaskId`.
+- [x] Messages are non-empty and terminal status is explicit.
+- [x] No secrets appear in reports, prompts, docs, logs, or screenshots.
+- [x] Legacy order diagnostic flow is not entered.
