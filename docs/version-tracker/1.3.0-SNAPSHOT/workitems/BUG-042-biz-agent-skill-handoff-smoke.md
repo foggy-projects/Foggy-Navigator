@@ -83,6 +83,25 @@ R6 runtime inspection found the remaining root cause: live tasks were routed to 
 - Legacy order diagnostic flow: not entered
 - Observed behavior: Java OpenAPI metadata resolved `workerId=school-sim-wsl-biz`, but `LanggraphWorkerInnerA2aAgent` still submitted the task with the provider-resolved default worker. Backend log evidence showed `Created langgraph task ... workerId=dev-langgraph-worker-20260504123547`, so 3161 never received the task. The fallback message `未能识别出与请求匹配的业务技能` is the Python worker's static non-LLM fallback response, not LLM-generated text.
 
+### R9
+
+- Agent: `school-sim.actor.pm.m2.v1`
+- Task: `lgt_cc9f18a1e87c4b9a`
+- Context: `bctx_20260526_21_2126ccabd92548eeb9de0ee14bb09b54`
+- Final status: `COMPLETED`
+- `providerTaskId`: `lgt_cc9f18a1e87c4b9a`
+- `workerTaskId`: `lgt_cc9f18a1e87c4b9a`
+- Messages count: `3`
+- `failureStage/failureSummary`: empty
+- `3161 active_tasks`: observed `1`
+- Backend log: `Created langgraph task` used `workerId=school-sim-wsl-biz`
+- 3161 log: corresponding `POST /api/v1/query HTTP/1.1 200 OK`
+- Marker: not generated
+- Legacy order diagnostic flow: not entered
+- Observed behavior: task routing and delivery to 3161 were correct, but BizWorker still returned the static fallback `未能识别出与请求匹配的业务技能`.
+
+R9 runtime logs showed the remaining root cause: Navigator resolved and forwarded an LLM model config with provider `openai-compatible`, but the Python BizWorker LLM router only accepted exact `openai` or `anthropic` provider names. The worker logged `Unknown llm_provider: openai-compatible. LLM routing disabled.`, then skipped Root LLM skill selection and emitted the static non-LLM fallback response.
+
 ## Decision
 
 A2A direct ask should not require upstream callers to populate hidden skill routing fields such as `businessSkillName`, `businessSkillId`, `skill_name`, or `skillId` in `clientContext`, metadata, or profile env files.
@@ -112,6 +131,7 @@ If the task reaches Biz Worker and completes but still follows an unrelated lega
 - `SkillRegistryService` no longer has an implicit `http://localhost:3061` materialize fallback. For `skill sync --scope client-app-public` and account-private sync, materialization now resolves Biz Worker targets from the current ClientApp: visible ClientApp/UpstreamSystem Agent worker routes first, pool members fan-out when the route points to a Biz WorkerPool, and enabled/healthy UpstreamSystem Biz Worker identities as the no-agent route fallback. `BUSINESS_AGENT_DEV_SYNC_WORKER_URL` remains an explicit local-dev fallback only.
 - Materialize responses now keep the legacy `workerUrl` / `workerStatusCode` summary and also include per-target `targets[]` results with `workerId`, `workerUrl`, `source`, `status`, and worker response. If no Biz Worker target can be resolved and no explicit dev fallback is configured, the status is `SKIPPED_UNRESOLVED_WORKER_TARGET` instead of silently posting to `3061`.
 - LangGraph A2A adapter now honors the internally resolved task-level `metadata.workerId` when present, so OpenAPI owner-aware routing can submit live asks to the Biz Worker identity selected by WorkerHost resolution instead of the Agent's stale provider-resolved default worker.
+- Python BizWorker LLM router now normalizes OpenAI-compatible provider aliases such as `openai-compatible`, `openai-compatible-api`, `compatible-openai`, and `openai-api` to the OpenAI-compatible ChatOpenAI path, so Navigator model configs can enable Root LLM skill selection.
 
 ## Documentation Updates
 
@@ -135,14 +155,14 @@ If the task reaches Biz Worker and completes but still follows an unrelated lega
 Ask payload should include the actor skill instruction in the message:
 
 ```text
-请使用 school-sim.actor.pm.m2.v1 技能，完成 School Sim M2 PM live ask smoke R7。
+请使用 school-sim.actor.pm.m2.v1 技能，完成 School Sim M2 PM live ask smoke R10。
 不要执行订单诊断，不要改走旧的订单诊断流程，不要输出任何密钥、token、API key 或 credential。
 
 请写入 marker：
-simulations/school/runs/2026-05-24-m2-owner-aware-001/actors/pm/biz-m2-live-20260526-r7.txt
+simulations/school/runs/2026-05-24-m2-owner-aware-001/actors/pm/biz-m2-live-20260526-r10.txt
 
 文件内容必须严格为：
-SCHOOL_SIM_M2_BIZ_PM_20260526_R7_OK
+SCHOOL_SIM_M2_BIZ_20260526_R10_OK
 
 完成后只返回 marker 路径和 marker 内容。
 ```
@@ -159,6 +179,7 @@ Report required:
 - marker path
 - marker content
 - whether the legacy order diagnostic flow appeared
+- whether `worker-3161-error.log` still contains `Unknown llm_provider: openai-compatible`
 
 ## Verification
 

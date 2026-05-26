@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def create_chat_model(settings: Settings) -> BaseChatModel | None:
     """Create a LangChain chat model from settings. Returns None if not configured."""
-    provider = settings.llm_provider.lower().strip()
+    provider = _normalize_provider(settings.llm_provider)
     if not provider:
         return None
 
@@ -61,7 +61,7 @@ def create_chat_model_from_config(config: dict[str, Any] | None) -> BaseChatMode
     if not config:
         return None
 
-    provider = _text(config.get("provider")).lower()
+    provider = _normalize_provider(config.get("provider"))
     if not provider:
         return None
 
@@ -98,6 +98,21 @@ def create_chat_model_from_config(config: dict[str, Any] | None) -> BaseChatMode
 
     request_settings = Settings(**settings_kwargs)
     return create_chat_model(request_settings)
+
+
+def _normalize_provider(value: Any) -> str:
+    provider = _text(value).lower().replace("_", "-")
+    if provider in {
+        "openai",
+        "openai-compatible",
+        "openai-compatible-api",
+        "compatible-openai",
+        "openai-api",
+    }:
+        return "openai"
+    if provider in {"anthropic", "claude"}:
+        return "anthropic"
+    return provider
 
 
 def _text(value: Any) -> str:

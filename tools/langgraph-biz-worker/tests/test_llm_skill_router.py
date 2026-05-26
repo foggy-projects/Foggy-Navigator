@@ -67,6 +67,21 @@ class TestCreateChatModel:
         assert kwargs["max_retries"] == 0
 
     @patch("langchain_openai.ChatOpenAI")
+    def test_request_config_openai_compatible_provider(self, mock_cls):
+        result = create_chat_model_from_config({
+            "provider": "openai-compatible",
+            "api_key": "sk-test",
+            "base_url": "https://llm.example.com/v1",
+            "model": "gemini-3.5-flash-low",
+        })
+
+        assert result is not None
+        mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["base_url"] == "https://llm.example.com/v1"
+        assert kwargs["model"] == "gemini-3.5-flash-low"
+
+    @patch("langchain_openai.ChatOpenAI")
     def test_request_config_uses_runtime_budget_preset_for_max_tokens(self, mock_cls):
         result = create_chat_model_from_config({
             "provider": "openai",
