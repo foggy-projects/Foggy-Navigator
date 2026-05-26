@@ -17,6 +17,10 @@ export type {
   ChatMessage,
   ConnectionStatus,
   ExecutionReportDigest,
+  NavigatorUiAction,
+  NavigatorUiArtifact,
+  NavigatorUiArtifactKind,
+  NavigatorUiArtifactOpenMode,
   ExecutionReportMarkdownLoader,
   ExecutionReportMarkdownPayload,
 } from './types/chat'
@@ -42,6 +46,7 @@ export { default as MessageInput } from './components/MessageInput.vue'
 export { default as ToolCallBlock } from './components/ToolCallBlock.vue'
 export { default as ToolCallGroup } from './components/ToolCallGroup.vue'
 export { default as ExecutionReportInline } from './components/ExecutionReportInline.vue'
+export { default as ArtifactActionList } from './components/ArtifactActionList.vue'
 export { default as ThinkingIndicator } from './components/ThinkingIndicator.vue'
 export { default as ErrorBlock } from './components/ErrorBlock.vue'
 export { default as StatusBadge } from './components/StatusBadge.vue'

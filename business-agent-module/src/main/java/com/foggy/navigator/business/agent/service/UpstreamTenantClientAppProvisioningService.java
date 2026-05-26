@@ -64,7 +64,7 @@ public class UpstreamTenantClientAppProvisioningService {
                 sourceSystem, sourceTenantId, navigatorTenantId, form.getRotateCredentials(),
                 credentialId(principal), upstreamSystemId(principal), authorizedNamespace(principal),
                 authorizedTenantCount(principal));
-        requirePrincipal(principal, sourceSystem, navigatorTenantId);
+        requirePrincipal(principal, sourceSystem, sourceTenantId, navigatorTenantId);
         String upstreamNamespace = requireIdentifier(principal.getAuthorizedClientAppNamespace(), "authorizedClientAppNamespace");
         String actorUserId = actorUserId(principal);
 
@@ -122,6 +122,7 @@ public class UpstreamTenantClientAppProvisioningService {
 
     private void requirePrincipal(UpstreamClientAppAdminPrincipal principal,
                                   String sourceSystem,
+                                  String sourceTenantId,
                                   String navigatorTenantId) {
         if (principal == null
                 || !StringUtils.hasText(principal.getCredentialId())
@@ -137,12 +138,26 @@ public class UpstreamTenantClientAppProvisioningService {
                     sourceSystem, principal.getUpstreamSystemId(), navigatorTenantId, principal.getCredentialId());
             throw new SecurityException("upstream admin credential sourceSystem mismatch");
         }
-        if (principal.getAuthorizedTenantIds() == null
-                || !principal.getAuthorizedTenantIds().contains(navigatorTenantId)) {
+        if (!isTenantProvisioningAuthorized(principal, sourceSystem, sourceTenantId, navigatorTenantId)) {
             log.warn("Upstream tenant ClientApp provisioning rejected: reason=tenant mismatch, sourceSystem={}, navigatorTenantId={}, credentialId={}, authorizedTenantCount={}",
                     sourceSystem, navigatorTenantId, principal.getCredentialId(), authorizedTenantCount(principal));
             throw new SecurityException("upstream admin credential tenant mismatch");
         }
+    }
+
+    private boolean isTenantProvisioningAuthorized(UpstreamClientAppAdminPrincipal principal,
+                                                   String sourceSystem,
+                                                   String sourceTenantId,
+                                                   String navigatorTenantId) {
+        Set<String> authorizedTenantIds = principal == null ? null : principal.getAuthorizedTenantIds();
+        if (authorizedTenantIds == null || authorizedTenantIds.isEmpty()) {
+            return false;
+        }
+        // ensure-tenant accepts aggregate upstream bootstrap credentials as well
+        // as the legacy exact Navigator tenant scope.
+        return authorizedTenantIds.contains(navigatorTenantId)
+                || authorizedTenantIds.contains(sourceTenantId)
+                || authorizedTenantIds.contains(sourceSystem);
     }
 
     private String credentialId(UpstreamClientAppAdminPrincipal principal) {

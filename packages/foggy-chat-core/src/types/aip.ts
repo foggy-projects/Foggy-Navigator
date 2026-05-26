@@ -70,7 +70,7 @@ export interface ToolCallResultPayload {
   output?: string
   exitCode?: number
   /** Backend sends result as 'data' field */
-  data?: string
+  data?: unknown
   /** Backend sends success boolean */
   success?: boolean
 }

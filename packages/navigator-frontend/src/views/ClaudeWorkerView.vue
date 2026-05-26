@@ -472,6 +472,7 @@
           @reconnect="handlePaneReconnect"
           @forward="handlePaneForward"
           @link-click="handleLinkClick"
+          @artifact-open="handleArtifactOpen"
           @focus="focusedPaneId = $event"
         >
           <template #header-extra="{ paneState }">
@@ -922,6 +923,40 @@
         />
       </SshTerminalPanel>
     </main>
+
+    <el-drawer
+      v-model="artifactPanel.visible"
+      :title="artifactPanel.title"
+      direction="rtl"
+      size="52%"
+      destroy-on-close
+      class="artifact-drawer"
+    >
+      <iframe
+        v-if="artifactPanel.url"
+        :src="artifactPanel.url"
+        :sandbox="artifactPanel.sandbox"
+        class="artifact-frame"
+        referrerpolicy="strict-origin-when-cross-origin"
+      />
+    </el-drawer>
+
+    <el-dialog
+      v-model="artifactDialog.visible"
+      :title="artifactDialog.title"
+      width="82vw"
+      top="5vh"
+      destroy-on-close
+      class="artifact-dialog"
+    >
+      <iframe
+        v-if="artifactDialog.url"
+        :src="artifactDialog.url"
+        :sandbox="artifactDialog.sandbox"
+        class="artifact-dialog-frame"
+        referrerpolicy="strict-origin-when-cross-origin"
+      />
+    </el-dialog>
 
     <!-- Right Panel: Task History -->
     <aside v-if="selectedWorkerId || workerState.activeTasks.value.length > 0" :class="['worker-history', { collapsed: prefs.rightPanelCollapsed }]">
@@ -2703,18 +2738,27 @@ import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
-import { ALL_MODEL_OPTIONS, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
+import { ALL_MODEL_OPTIONS, isModelConfigCompatibleWithWorker, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
 import { inferTaskWorkerBackend, isClaudeCodeTask, providerTypeFromWorkerBackend, taskSessionRefLabel } from '@/utils/workerBackend'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone, WorkerBackend } from '@/types'
-import type { AipMessageType, ChatMessage } from '@foggy/chat'
+import type { AipMessageType, ChatMessage, NavigatorUiAction, NavigatorUiArtifact } from '@foggy/chat'
 
 const MAX_PANES = 1
 const BASE_DOCUMENT_TITLE = '道同'
 type RegisterableWorkerBackend = Extract<WorkerBackend, 'CLAUDE_CODE' | 'LANGGRAPH_BIZ'>
+type ArtifactFrameState = {
+  visible: boolean
+  title: string
+  url: string
+  sandbox: string
+}
 
 const router = useRouter()
 const workerState = useClaudeWorker()
 const agentState = useCodingAgent()
+const DEFAULT_ARTIFACT_SANDBOX = 'allow-forms allow-scripts allow-popups allow-downloads'
+const artifactPanel = ref<ArtifactFrameState>({ visible: false, title: '', url: '', sandbox: DEFAULT_ARTIFACT_SANDBOX })
+const artifactDialog = ref<ArtifactFrameState>({ visible: false, title: '', url: '', sandbox: DEFAULT_ARTIFACT_SANDBOX })
 
 // --- Agent management state ---
 const showAgentRegisterDialog = ref(false)
@@ -3605,7 +3649,9 @@ async function loadPlatformModelConfig() {
     ])
     // 防止竞态：如果在 await 期间又发起了新的调用，丢弃本次过期结果
     if (seq !== loadPlatformModelConfigSeq) return
-    platformModels.value = models.filter(isSelectablePlatformModel)
+    platformModels.value = models
+      .filter(isSelectablePlatformModel)
+      .filter((model) => isModelConfigCompatibleWithWorker(model, selectedWorkerEntity.value))
     if (restoreFocusedPaneModelSelection()) return
     // 如果在 await 期间已发生会话级恢复，跳过模型选择（会话优先级高于 Worker 级默认）
     if (restoreVer !== sessionRestoreVersion) return
@@ -4937,6 +4983,152 @@ async function handleLinkClick(paneId: string, payload: { href: string; text: st
     console.error('Failed to resolve chat link:', error)
     ElMessage.warning('链接定位失败，请稍后重试')
   }
+}
+
+function handleArtifactOpen(_paneId: string, action: NavigatorUiAction) {
+  const artifact = action.artifact
+  if (artifact.kind === 'route') {
+    openRouteArtifact(artifact)
+    return
+  }
+
+  const resolved = resolveArtifactUrl(artifact.uri || artifact.fallbackUrl || '')
+  if (!resolved) {
+    ElMessage.warning('Artifact URL 无效')
+    return
+  }
+
+  if (artifact.kind === 'iframe') {
+    if (!isAllowedArtifactFrameUrl(resolved)) {
+      openArtifactFallback(artifact, resolved)
+      return
+    }
+    openFrameArtifact(action, resolved)
+    return
+  }
+
+  if (artifact.kind === 'link') {
+    openArtifactUrl(resolved, artifact.openMode)
+    return
+  }
+
+  ElMessage.warning('不支持的 Artifact 类型')
+}
+
+function openRouteArtifact(artifact: NavigatorUiArtifact) {
+  const routeName = typeof artifact.routeName === 'string' ? artifact.routeName : ''
+  const routePath = typeof artifact.routePath === 'string' ? artifact.routePath : ''
+  if (routeName) {
+    router.push({ name: routeName, query: objectQuery(artifact.query) }).catch(() => {})
+    return
+  }
+
+  const target = routePath || artifact.uri || artifact.fallbackUrl || ''
+  if (!target) {
+    ElMessage.warning('Artifact 路由无效')
+    return
+  }
+
+  const resolved = resolveArtifactUrl(target)
+  if (!resolved || resolved.origin !== window.location.origin) {
+    ElMessage.warning('只允许跳转到 NAVI 内部路由')
+    return
+  }
+
+  router.push(resolved.hash || `${resolved.pathname}${resolved.search}`).catch(() => {
+    window.location.assign(resolved.toString())
+  })
+}
+
+function openFrameArtifact(action: NavigatorUiAction, url: URL) {
+  const title = action.artifact.title || action.label || '业务产物'
+  const sandbox = artifactSandbox()
+  const mode = action.artifact.openMode || 'side_panel'
+
+  if (mode === 'new_tab' || mode === 'current_page') {
+    openArtifactUrl(url, mode)
+    return
+  }
+
+  if (mode === 'dialog') {
+    artifactDialog.value = { visible: true, title, url: url.toString(), sandbox }
+    return
+  }
+
+  artifactPanel.value = { visible: true, title, url: url.toString(), sandbox }
+}
+
+function openArtifactFallback(artifact: NavigatorUiArtifact, blockedUrl: URL) {
+  const fallback = resolveArtifactUrl(artifact.fallbackUrl || artifact.uri || '')
+  if (fallback && isAllowedExternalArtifactUrl(fallback)) {
+    window.open(fallback.toString(), '_blank', 'noopener,noreferrer')
+    ElMessage.warning('该页面不在 iframe 白名单内，已降级为新页签打开')
+    return
+  }
+  ElMessage.warning(`Artifact URL 未加入白名单: ${blockedUrl.origin}`)
+}
+
+function openArtifactUrl(url: URL, mode?: NavigatorUiArtifact['openMode']) {
+  if (!isAllowedExternalArtifactUrl(url)) {
+    ElMessage.warning(`Artifact URL 未加入白名单: ${url.origin}`)
+    return
+  }
+  if (mode === 'current_page') {
+    window.location.assign(url.toString())
+  } else {
+    window.open(url.toString(), '_blank', 'noopener,noreferrer')
+  }
+}
+
+function resolveArtifactUrl(value: string): URL | null {
+  if (!value || /^\s*javascript:/i.test(value)) return null
+  try {
+    return new URL(value, window.location.origin)
+  } catch {
+    return null
+  }
+}
+
+function isAllowedArtifactFrameUrl(url: URL): boolean {
+  if (!['http:', 'https:'].includes(url.protocol)) return false
+  return allowedArtifactOrigins().has(url.origin)
+}
+
+function isAllowedExternalArtifactUrl(url: URL): boolean {
+  if (!['http:', 'https:'].includes(url.protocol)) return false
+  return url.origin === window.location.origin || allowedArtifactOrigins().has(url.origin)
+}
+
+function allowedArtifactOrigins(): Set<string> {
+  const raw = import.meta.env.VITE_NAVIGATOR_ARTIFACT_ALLOWED_ORIGINS || ''
+  const origins = new Set<string>([window.location.origin])
+  for (const item of String(raw).split(',')) {
+    const trimmed = item.trim()
+    if (!trimmed) continue
+    try {
+      origins.add(new URL(trimmed).origin)
+    } catch {
+      // Ignore invalid operator-provided origins.
+    }
+  }
+  return origins
+}
+
+function artifactSandbox(): string {
+  const configured = import.meta.env.VITE_NAVIGATOR_ARTIFACT_IFRAME_SANDBOX
+  return typeof configured === 'string' && configured.trim()
+    ? configured.trim()
+    : DEFAULT_ARTIFACT_SANDBOX
+}
+
+function objectQuery(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const query: Record<string, string> = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (raw == null) continue
+    query[key] = String(raw)
+  }
+  return query
 }
 
 async function openCodeServer(network: 'internal' | 'public') {
@@ -7665,6 +7857,26 @@ function handlePopOutTerminal() {
   border-radius: 16px;
   padding: 0 20px;
   height: 32px;
+}
+
+:deep(.artifact-drawer .el-drawer__body),
+:deep(.artifact-dialog .el-dialog__body) {
+  padding: 0;
+}
+
+.artifact-frame,
+.artifact-dialog-frame {
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.artifact-frame {
+  height: calc(100vh - 56px);
+}
+
+.artifact-dialog-frame {
+  height: 78vh;
 }
 
 .toolbar-select {

@@ -1,5 +1,29 @@
 import type { AipMessageType, UserQuestionItem, AllowedPrompt } from './aip'
 
+export type NavigatorUiArtifactKind = 'route' | 'iframe' | 'link'
+export type NavigatorUiArtifactOpenMode = 'side_panel' | 'dialog' | 'new_tab' | 'current_page'
+
+export interface NavigatorUiArtifact {
+  kind: NavigatorUiArtifactKind
+  id?: string
+  title?: string
+  uri?: string
+  routeName?: string
+  routePath?: string
+  openMode?: NavigatorUiArtifactOpenMode
+  fallbackUrl?: string
+  sandbox?: string
+  [key: string]: unknown
+}
+
+export interface NavigatorUiAction {
+  type: string
+  label?: string
+  artifact: NavigatorUiArtifact
+  context?: Record<string, unknown>
+  raw?: unknown
+}
+
 export interface ChatMessage {
   id: string
   type: AipMessageType
@@ -35,6 +59,8 @@ export interface ChatMessage {
   executionReportRef?: string
   /** Compact Frame Execution Report digest for audit/debug display */
   executionReportDigest?: ExecutionReportDigest
+  /** Generic business UI actions returned by tools or agents. */
+  uiActions?: NavigatorUiAction[]
 }
 
 export interface ExecutionReportDigest {

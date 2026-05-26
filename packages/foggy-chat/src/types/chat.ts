@@ -1,4 +1,12 @@
-export type { ChatMessage, ConnectionStatus, ExecutionReportDigest } from '@foggy/chat-core'
+export type {
+  ChatMessage,
+  ConnectionStatus,
+  ExecutionReportDigest,
+  NavigatorUiAction,
+  NavigatorUiArtifact,
+  NavigatorUiArtifactKind,
+  NavigatorUiArtifactOpenMode,
+} from '@foggy/chat-core'
 
 export interface ExecutionReportMarkdownPayload {
   ok?: boolean

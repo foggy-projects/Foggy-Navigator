@@ -1,4 +1,4 @@
-import type { LlmModelConfig, WorkerBackend } from '@/types'
+import type { ClaudeWorker, LlmModelConfig, WorkerBackend } from '@/types'
 
 export type SelectableModelOption = {
   value: string
@@ -65,6 +65,29 @@ function supportsSubscriptionSelection(backend: WorkerBackend | undefined): bool
 
 export function isSelectablePlatformModel(model: LlmModelConfig): boolean {
   return model.hasApiKey || supportsSubscriptionSelection(model.workerBackend)
+}
+
+export function isModelConfigCompatibleWithWorker(
+  model: LlmModelConfig,
+  worker: ClaudeWorker | null | undefined,
+): boolean {
+  if (!worker) return true
+  const backend = model.workerBackend ?? 'CLAUDE_CODE'
+  const workerBackend = worker.workerBackend ?? 'CLAUDE_CODE'
+
+  if (backend === 'CLAUDE_CODE') {
+    return workerBackend === 'CLAUDE_CODE'
+  }
+  if (backend === 'OPENAI_CODEX') {
+    return workerBackend === 'OPENAI_CODEX' || Boolean(worker.codexBaseUrl?.trim())
+  }
+  if (backend === 'GEMINI_CLI') {
+    return workerBackend === 'GEMINI_CLI' || Boolean(worker.geminiBaseUrl?.trim())
+  }
+  if (backend === 'LANGGRAPH_BIZ') {
+    return workerBackend === 'LANGGRAPH_BIZ'
+  }
+  return false
 }
 
 /**

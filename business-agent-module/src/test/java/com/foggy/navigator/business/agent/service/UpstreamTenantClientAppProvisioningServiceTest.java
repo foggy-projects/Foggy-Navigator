@@ -210,6 +210,23 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         assertThrows(SecurityException.class, () -> service.ensure(form(false), principal("nav_tms_4")));
     }
 
+    @Test
+    void ensureAllowsUpstreamSystemScopedAdminCredentialForDerivedTenant() {
+        var result = service.ensure(form(false), principal("TMS"));
+
+        assertTrue(result.isCreated());
+        assertEquals("nav_tms_3", result.getNavigatorTenantId());
+        assertEquals("tms-tenant-3", result.getClientAppName());
+    }
+
+    @Test
+    void ensureAllowsSourceTenantScopedAdminCredentialForDerivedTenant() {
+        var result = service.ensure(form(false), principal("3"));
+
+        assertTrue(result.isCreated());
+        assertEquals("nav_tms_3", result.getNavigatorTenantId());
+    }
+
     private EnsureUpstreamTenantClientAppForm form(boolean rotateCredentials) {
         EnsureUpstreamTenantClientAppForm form = new EnsureUpstreamTenantClientAppForm();
         form.setSourceSystem("TMS");

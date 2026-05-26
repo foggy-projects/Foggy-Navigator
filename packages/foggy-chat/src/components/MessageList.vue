@@ -133,6 +133,11 @@
               :message="item.msg"
               @link-click="(payload) => emit('link-click', payload)"
             />
+            <ArtifactActionList
+              v-if="item.msg.uiActions?.length"
+              :actions="item.msg.uiActions"
+              @open="(action) => emit('artifact-open', action)"
+            />
           </template>
           </div>
         </DynamicScrollerItem>
@@ -176,6 +181,7 @@ import PermissionRequestCard from './PermissionRequestCard.vue'
 import SkillApprovalCard from './SkillApprovalCard.vue'
 import UserQuestionCard from './UserQuestionCard.vue'
 import PlanReviewCard from './PlanReviewCard.vue'
+import ArtifactActionList from './ArtifactActionList.vue'
 
 interface GroupedSingle {
   kind: 'single'
@@ -223,6 +229,7 @@ const emit = defineEmits<{
   (e: 'forward', message: ChatMessage): void
   (e: 'skillApprovalRespond', taskId: string, decision: string, comment: string): void
   (e: 'link-click', payload: { href: string; text: string }): void
+  (e: 'artifact-open', action: NonNullable<ChatMessage['uiActions']>[number]): void
 }>()
 
 function isSkillApprovalRequest(msg: ChatMessage): boolean {

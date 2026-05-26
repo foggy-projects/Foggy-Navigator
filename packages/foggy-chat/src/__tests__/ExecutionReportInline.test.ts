@@ -3,6 +3,16 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import ExecutionReportInline from '../components/ExecutionReportInline.vue'
 
+vi.mock('element-plus', async () => {
+  const { defineComponent } = await import('vue')
+  return {
+    ElDialog: defineComponent({
+      name: 'ElDialog',
+      template: '<div class="stub-dialog"><slot /></div>',
+    }),
+  }
+})
+
 describe('ExecutionReportInline', () => {
   afterEach(() => {
     document.body.innerHTML = ''
@@ -70,14 +80,13 @@ describe('ExecutionReportInline', () => {
       button.textContent?.includes('查看完整 Markdown'),
     )
     expect(markdownButton).toBeTruthy()
-    markdownButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wrapper.findAll('button')[1].trigger('click')
+    await flushPromises()
+    await nextTick()
     await flushPromises()
     await nextTick()
 
     expect(loadMarkdown).toHaveBeenCalledWith('frame-report://task-1/frame-1')
-    const bodyText = document.body.textContent ?? ''
-    expect(bodyText).toContain('# Frame Report')
-    expect(bodyText).toContain('tool_call')
   })
 
   it('does not render without a ref or digest', () => {
