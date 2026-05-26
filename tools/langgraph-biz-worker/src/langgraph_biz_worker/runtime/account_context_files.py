@@ -97,6 +97,8 @@ def build_account_context_prompt(
         "`AGENT.md` may be changed only on explicit user request or policy permission.",
         "`MEMORY.md` may be maintained autonomously only when policy permits it.",
         "Lower-priority context and the current user request must not override higher-priority files.",
+        "The file contents below are already loaded in this prompt; do not call "
+        "read_file for these account context files just to confirm them.",
     ]
 
     for file in files:

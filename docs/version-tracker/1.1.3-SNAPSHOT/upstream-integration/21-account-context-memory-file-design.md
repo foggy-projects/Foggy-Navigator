@@ -97,6 +97,8 @@ skills/<skill-name>/assets/**
 5. 每个文件设置大小上限，超出后截断并标记。
 6. routing conversation log 不记录账号上下文文件正文，仅记录占位符。
 
+`ACCOUNT_POLICY.md` 不是模型厂商侧的隐藏内置记忆，而是 Navigator / 上游 BFF 管理的账号上下文文件。只要该文件存在且解析通过，Worker 会把其正文注入 system prompt；因此模型通常不需要再调用 `read_file` 读取同名文件确认内容。只有用户明确要求查看/维护账号上下文，或任务需要逐字引用文件正文时，才应读取物理文件。
+
 首段实现提供上游 BFF 可调用的 runtime-token OpenAPI，只允许写 `ACCOUNT_POLICY.md`。不允许 LLM 写 `ACCOUNT_POLICY.md`，也暂不让 LLM 通过通用 account file tools 写 `AGENT.md` 或 `MEMORY.md`。
 
 ## ACCOUNT_POLICY.md 建议模板

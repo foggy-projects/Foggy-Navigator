@@ -81,6 +81,7 @@ ClientApp 工作目录说明：
 账号上下文文件说明：
 
 - `ACCOUNT_POLICY.md` / `AGENT.md` / `MEMORY.md` 按账号注入给 Worker。
+- `ACCOUNT_POLICY.md` 是上游受控账号策略文件，不是模型隐藏内置记忆；Worker 已把存在的文件注入 system prompt，模型通常不需要再通过文件工具读取同名文件确认。
 - SDK 只允许上游 BFF 通过 runtime access token 和 `upstreamUserId` 读取三层文件、写 `ACCOUNT_POLICY.md`。
 - `AGENT.md` / `MEMORY.md` 暂不提供 SDK 写入方法。
 - 不要把 token、secret、`task_scoped_token`、`adapterConfigJson`、`manifestJson` 写入这些文件。
@@ -182,6 +183,12 @@ SessionMessagesPage messages = client.agents()
 该读模型按 `tenantId + clientAppId + upstreamUserId + contextId` 校验归属；`ask --context-id` 续聊同样会在派发任务前校验归属。
 
 `clientContext` 是顶层 `POST /ask` 字段，只在会话摘要中持久化和返回，不进入 Worker metadata 或 LLM prompt。
+
+可恢复 runtime 失败处理：
+
+- 如果 task 终态为 `FAILED`，但 `failureStage=RUNTIME` 且摘要类似 `LLM skill agent reached max iterations without valid submit`，可以把它视为可恢复中断而不是必须重开会话。
+- 继续时创建新的 `ask`，传同一个 `contextId` 和同一 upstream user / ClientApp / agent，消息使用 `继续`、`continue` 或用户补充说明。
+- 不要复用旧 `taskId`，也不要把完整 UI transcript、旧 messages 或隐藏 skill 字段放进 `clientContext`；轮询新的 `taskId` 即可。
 
 ### 3. Business Agent 接入
 

@@ -581,6 +581,20 @@ BizWorker 会把当前 account/private 与 public skill catalog 的 `id`、`name
 
 如果后续 message API 提供 `terminal=true`，它只能作为补充信号，不能替代 task status 终态判断。
 
+### 5.1 可恢复失败与继续
+
+如果 BizWorker task 以 `FAILED` 结束，但 `failureStage=RUNTIME` 且错误属于可恢复中断，例如 `LLM skill agent reached max iterations without valid submit`，上游 UI / BFF 可以自行决策是否继续。继续时不要复用旧 `taskId`，而是使用同一个 `contextId` 发起新的 `ask`，提示词可以是 `继续`、`continue`，或更具体的业务补充说明：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream ask `
+  --agent-code <agentId> `
+  --upstream-user-id <id> `
+  --context-id <returnedContextId> `
+  --message "继续"
+```
+
+随后按新的 `taskId` 执行 `messages --poll`。如果用户明确改做无关任务，优先新建会话或让用户明确放弃上一段可恢复工作；不要把完整 UI transcript、隐藏 skill metadata 或旧 task messages 重新塞进 `clientContext`。
+
 ### 6. 查询会话
 
 ```powershell
@@ -827,6 +841,8 @@ next:4f6c0a7e-7d7b-4f1d-91af-7c7f60d0b2d1:002
 ```
 
 `account-context` 命令使用 ClientApp runtime access token 和 `X-Upstream-User-Id`，Navigator 服务端校验当前 upstream user grant。首段只支持写 `ACCOUNT_POLICY.md`；`AGENT.md` / `MEMORY.md` 可以读取但不能通过 CLI 写入。
+
+`ACCOUNT_POLICY.md` 是上游受控账号上下文文件，不是模型的隐藏内置记忆。BizWorker 会按 `ACCOUNT_POLICY.md > AGENT.md > MEMORY.md` 顺序把存在的文件注入 Worker system prompt。delegated workspace 的文件工具仍可能列出这些文件，但模型应把 Account Context 区块视为已加载事实；只有用户要求查看/维护账号上下文，或确实需要逐字内容时，才需要再次读取物理文件。
 
 ## 安全红线
 

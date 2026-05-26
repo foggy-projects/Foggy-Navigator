@@ -178,6 +178,8 @@ MEMORY.md
 
 并把内容注入 system prompt 的 Account Context 区块。用户当前消息仍保持原文为主，最多追加当前请求时间，不混入 workspace metadata 或 skill 列表。
 
+Account Context 区块中的文件正文已经是模型可见事实。即使 delegated workspace 文件工具能列出 `ACCOUNT_POLICY.md`、`AGENT.md`、`MEMORY.md`，模型也不应为了确认内容再次读取；只有用户要求查看/维护这些账号上下文文件，或任务必须逐字引用文件内容时才读取物理文件。
+
 如果 delegated workspace 未提供这些文件，则不注入空块，也不作为错误处理。只有显式要求必须存在的 ClientApp 策略才 fail fast。
 
 ## LLM 文件工具默认暴露策略
