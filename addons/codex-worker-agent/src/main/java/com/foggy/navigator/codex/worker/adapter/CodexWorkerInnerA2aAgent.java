@@ -80,6 +80,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setImages(images);
         form.setAttachments(attachmentsMeta(meta.get("attachments")));
         form.setModelConfigId(modelConfigId);
+        form.setContextId(context.getContextId());
 
         // 多轮会话：从已解析上下文获取 codexThreadId（使 Worker 恢复 Codex session）
         form.setCodexThreadId(context.getAgentSessionRef());
@@ -98,6 +99,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         taskMeta.put("workerId", task.getWorkerId());
         taskMeta.put("directoryId", task.getDirectoryId());
         taskMeta.put("codexThreadId", task.getCodexThreadId());
+        taskMeta.put("contextId", context.getContextId());
 
         return A2aTask.builder()
                 .id(task.getTaskId())

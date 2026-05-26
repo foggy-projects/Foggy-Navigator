@@ -207,6 +207,7 @@ class CodexWorkerA2aAgentTest {
             assertEquals("thread-existing", captor.getValue().getCodexThreadId(),
                     "contextStore 查到的 codexThreadId 应通过 A2aContext 传给 CreateCodexTaskForm");
             assertEquals("nav-sess-existing", captor.getValue().getSessionId());
+            assertEquals("ctx-1", captor.getValue().getContextId());
             assertEquals("ctx-1", result.getContextId());
         }
 

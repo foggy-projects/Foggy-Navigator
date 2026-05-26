@@ -1505,13 +1505,59 @@ public class TaskDispatchFacade {
         String modelConfigId = request.getModelConfigId();
         boolean hasModel = model != null && !model.isBlank();
         boolean hasModelConfigId = modelConfigId != null && !modelConfigId.isBlank();
-        if (!hasModel && !hasModelConfigId) return;
+        boolean hasContextId = request.getContextId() != null && !request.getContextId().isBlank();
+        boolean hasDiagnostics = hasDiagnosticMetadata(request.getMetadata());
+        if (!hasModel && !hasModelConfigId && !hasContextId && !hasDiagnostics) return;
 
         sessionTaskRepository.findByTaskId(taskId).ifPresent(st -> {
             if (hasModel) st.setModel(model);
             if (hasModelConfigId) st.setModelConfigId(modelConfigId);
+            if (hasContextId || hasDiagnostics) {
+                Map<String, Object> state = new LinkedHashMap<>(parseJsonObject(st.getTaskStateJson()));
+                if (hasContextId) {
+                    state.put("contextId", request.getContextId().trim());
+                }
+                copyDiagnosticMetadata(state, request.getMetadata());
+                st.setTaskStateJson(writeJson(state));
+            }
             sessionTaskRepository.save(st);
         });
+    }
+
+    private boolean hasDiagnosticMetadata(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return false;
+        }
+        for (String key : diagnosticMetadataKeys()) {
+            if (metadata.containsKey(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void copyDiagnosticMetadata(Map<String, Object> state, Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return;
+        }
+        for (String key : diagnosticMetadataKeys()) {
+            Object value = metadata.get(key);
+            if (value instanceof String text && !text.isBlank()) {
+                state.put(key, text.trim());
+            }
+        }
+    }
+
+    private List<String> diagnosticMetadataKeys() {
+        return List.of(
+                "modelConfigId",
+                "modelConfigSource",
+                "workerBackend",
+                "agentSource",
+                "workerSource",
+                "backendSource",
+                "taskSource",
+                "contextId");
     }
 
     private String asString(Object value) {
@@ -1655,6 +1701,7 @@ public class TaskDispatchFacade {
         putIfNotBlank(params, "agentId", request.getAgentId());
         putIfNotBlank(params, "providerType", request.getProviderType());
         putIfNotBlank(params, "sessionId", request.getSessionId());
+        putIfNotBlank(params, "contextId", request.getContextId());
         putIfNotBlank(params, "workerId", request.getWorkerId());
         putIfNotBlank(params, "prompt", request.getPrompt());
         putIfNotBlank(params, "cwd", request.getCwd());
