@@ -178,7 +178,7 @@ class RestAdapterUpstreamE2ETest {
                 java.util.List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, identityRepository, java.util.List.of());
         BusinessFunctionAuthorizationService authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService1, skillRegistryService, functionRegistryService);
 
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);

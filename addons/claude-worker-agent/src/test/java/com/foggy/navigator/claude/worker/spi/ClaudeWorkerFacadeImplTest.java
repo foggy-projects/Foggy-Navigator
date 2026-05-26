@@ -169,7 +169,24 @@ class ClaudeWorkerFacadeImplTest {
     }
 
     @Test
-    void getCodexConfigFallsBackToWorkerConnectionForDedicatedCodexWorker() {
+    void getCodexConfigReturnsConfiguredCodexEndpoint() {
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker-1");
+        CodexConfig configured = CodexConfig.builder()
+                .baseUrl("http://127.0.0.1:3051")
+                .authToken("plain-codex-token")
+                .build();
+        when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
+        when(workerService.getDecryptedCodexConfig(worker)).thenReturn(configured);
+
+        CodexConfig result = facade.getCodexConfig("worker-1");
+
+        assertEquals("http://127.0.0.1:3051", result.getBaseUrl());
+        assertEquals("plain-codex-token", result.getAuthToken());
+    }
+
+    @Test
+    void getCodexConfigFallsBackToLegacyWorkerConnection() {
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
         worker.setWorkerId("worker-1");
         worker.setBaseUrl("http://127.0.0.1:3051");

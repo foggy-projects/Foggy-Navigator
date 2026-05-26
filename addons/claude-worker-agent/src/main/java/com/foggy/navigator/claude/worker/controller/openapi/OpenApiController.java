@@ -66,6 +66,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -79,6 +80,9 @@ import java.util.Map;
 @Slf4j
 @RequiredArgsConstructor
 public class OpenApiController {
+
+    private static final String BACKEND_OPENAI_CODEX = "OPENAI_CODEX";
+    private static final String BACKEND_LANGGRAPH_BIZ = "LANGGRAPH_BIZ";
 
     private final OpenApiProvisioningService provisioningService;
     private final ClaudeWorkerService workerService;
@@ -455,7 +459,16 @@ public class OpenApiController {
         if (StringUtils.hasText(modelResource.requestedModelVariant())) {
             metadata.put("requestedModelVariant", modelResource.requestedModelVariant());
         }
-        injectOwnerAwareLaunchMetadata(metadata, agentResource, workspaceResource);
+        putText(metadata, "modelConfigSource", modelResource.source());
+        putText(metadata, "workerBackend", firstNonBlank(modelResource.workerBackend(), agentResource.workerBackend()));
+        putText(metadata, "agentSource", agentResource.source());
+        putText(metadata, "workerSource", firstNonBlank(
+                workspaceResource != null ? workspaceResource.source() : null,
+                agentResource.physicalWorkerSource(),
+                agentResource.workerPoolSource()));
+        putText(metadata, "backendSource", firstNonBlank(modelResource.source(), agentResource.workerPoolSource()));
+        injectOwnerAwareLaunchMetadata(metadata, agentResource, modelResource, workspaceResource);
+        injectWorkspaceExecutionPolicy(metadata, workspaceResource);
         mergeTopLevelExecutionPolicy(metadata, form);
         Object metadataAttachments = metadata.remove("attachments");
         List<Map<String, Object>> normalizedAttachments = OpenApiAttachmentNormalizer.normalize(
@@ -518,7 +531,8 @@ public class OpenApiController {
         log.info("Open API askAgent: agentId={}, skillId={}, taskId={}, tenantId={}",
                 route.agentId(), route.skillId(), task.getId(), tenantId);
 
-        return RX.ok(toOpenApiTaskDTO(task, route.agentId()));
+        SessionTaskEntity taskEntity = sessionQueryService.findTask(task.getId()).orElse(null);
+        return RX.ok(toOpenApiTaskDTO(task, route.agentId(), taskEntity));
     }
 
     private String extractRequestedModelConfigId(OpenApiQueryForm form) {
@@ -579,16 +593,68 @@ public class OpenApiController {
     private void injectOwnerAwareLaunchMetadata(
             Map<String, Object> metadata,
             A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedModelResource modelResource,
             A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
-        String effectiveWorkerId = StringUtils.hasText(agentResource.physicalWorkerId())
-                ? agentResource.physicalWorkerId()
-                : workspaceResource != null ? workspaceResource.physicalWorkerId() : null;
+        String effectiveWorkerId = resolveOwnerAwareLaunchWorkerId(agentResource, modelResource, workspaceResource);
         putText(metadata, "workerId", effectiveWorkerId);
         if (workspaceResource != null) {
             putText(metadata, "directoryId", workspaceResource.directoryId());
             putText(metadata, "cwd", workspaceResource.workdir());
         } else {
             putText(metadata, "directoryId", agentResource.defaultDirectoryId());
+        }
+    }
+
+    private String resolveOwnerAwareLaunchWorkerId(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedModelResource modelResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        String workerBackend = firstNonBlank(
+                modelResource != null ? modelResource.workerBackend() : null,
+                agentResource != null ? agentResource.workerBackend() : null);
+        String workspaceWorkerId = workspaceResource != null ? stringValue(workspaceResource.physicalWorkerId()) : null;
+        String agentWorkerId = agentResource != null ? stringValue(agentResource.physicalWorkerId()) : null;
+        if (isBackend(workerBackend, BACKEND_OPENAI_CODEX) && StringUtils.hasText(workspaceWorkerId)) {
+            return workspaceWorkerId;
+        }
+        if (StringUtils.hasText(agentWorkerId)) {
+            return agentWorkerId;
+        }
+        if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ)) {
+            return null;
+        }
+        return workspaceWorkerId;
+    }
+
+    private boolean isBackend(String actual, String expected) {
+        return StringUtils.hasText(actual) && expected.equalsIgnoreCase(actual.trim());
+    }
+
+    private void injectWorkspaceExecutionPolicy(
+            Map<String, Object> metadata,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        if (workspaceResource == null) {
+            return;
+        }
+
+        Map<String, Object> runtimeContext = mutableStringMap(metadata.get("runtimeContext"));
+        Map<String, Object> executionPolicy = mutableStringMap(runtimeContext.get("execution_policy"));
+        putText(executionPolicy, "directory_id", workspaceResource.directoryId());
+        if (workspaceResource.workspaceScope() != null) {
+            executionPolicy.put("workspace_scope", workspaceResource.workspaceScope().name());
+        }
+        if (workspaceResource.resolverType() != null) {
+            executionPolicy.put("workspace_resolver_type", workspaceResource.resolverType().name());
+        }
+        executionPolicy.put("read_only", workspaceResource.readOnly());
+        putObject(executionPolicy, "quota_policy", workspaceResource.quotaPolicy());
+        putObject(executionPolicy, "retention_policy", workspaceResource.retentionPolicy());
+        putObject(executionPolicy, "concurrency_policy", workspaceResource.concurrencyPolicy());
+        putText(executionPolicy, "workdir", workspaceResource.workdir());
+        putStringList(executionPolicy, "allowed_dirs", workspaceResource.allowedDirs());
+        if (!executionPolicy.isEmpty()) {
+            runtimeContext.put("execution_policy", executionPolicy);
+            metadata.put("runtimeContext", runtimeContext);
         }
     }
 
@@ -995,6 +1061,18 @@ public class OpenApiController {
         metadata.remove("directoryId");
         metadata.remove("directory_id");
         metadata.remove("cwd");
+        metadata.remove("modelConfigSource");
+        metadata.remove("model_config_source");
+        metadata.remove("workerBackend");
+        metadata.remove("worker_backend");
+        metadata.remove("agentSource");
+        metadata.remove("agent_source");
+        metadata.remove("workerSource");
+        metadata.remove("worker_source");
+        metadata.remove("backendSource");
+        metadata.remove("backend_source");
+        metadata.remove("taskSource");
+        metadata.remove("task_source");
     }
 
     private boolean isReservedBusinessRuntimeContextKey(String key) {
@@ -1058,6 +1136,24 @@ public class OpenApiController {
         if (StringUtils.hasText(value)) {
             target.put(key, value.trim());
         }
+    }
+
+    private void putObject(Map<String, Object> target, String key, Object value) {
+        if (value != null) {
+            target.put(key, value);
+        }
+    }
+
+    private Map<String, Object> mutableStringMap(Object value) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (value instanceof Map<?, ?> source) {
+            source.forEach((key, item) -> {
+                if (key instanceof String stringKey) {
+                    result.put(stringKey, item);
+                }
+            });
+        }
+        return result;
     }
 
     private void putStringList(Map<String, Object> target, String key, List<String> values) {
@@ -1187,6 +1283,18 @@ public class OpenApiController {
         return null;
     }
 
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     private String stringValue(Object value) {
         if (value == null) {
             return null;
@@ -1232,9 +1340,17 @@ public class OpenApiController {
         A2aAgent agent = agentResolver.resolveAgent(route.agentId(), ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + route.agentId()));
 
-        A2aTask task = agent.getTask(taskId)
-                .orElseThrow(() -> RX.throwB("Task not found: " + taskId));
-        return RX.ok(toOpenApiTaskDTO(task, route.agentId()));
+        SessionTaskEntity taskEntity = sessionQueryService.findTask(taskId)
+                .filter(entity -> tenantId.equals(entity.getTenantId()) && route.agentId().equals(entity.getAgentId()))
+                .orElse(null);
+        A2aTask task = agent.getTask(taskId).orElse(null);
+        if (task == null && taskEntity == null) {
+            throw RX.throwB("Task not found: " + taskId);
+        }
+        if (task == null) {
+            return RX.ok(toOpenApiTaskDTO(taskEntity, route.agentId(), resolveContextIdFromSession(taskEntity.getSessionId())));
+        }
+        return RX.ok(toOpenApiTaskDTO(task, route.agentId(), taskEntity));
     }
 
     /**
@@ -1286,6 +1402,10 @@ public class OpenApiController {
                         .workerTaskId(dto.getWorkerTaskId())
                         .providerTaskId(dto.getWorkerTaskId())
                         .lastAckedSeq(dto.getLastAckedSeq())
+                        .modelConfigId(dto.getModelConfigId())
+                        .providerType(dto.getProviderType())
+                        .taskSource(dto.getSource())
+                        .workerBackend(workerBackendFromProviderType(dto.getProviderType()))
                         .createdAt(dto.getCreatedAt())
                         .build())
                 .toList();
@@ -1340,6 +1460,14 @@ public class OpenApiController {
 
         String status = mapTaskStatus(taskEntity.getStatus());
         String terminalStatus = terminalStatusFromTaskStatus(status);
+        Map<String, Object> taskState = parseJsonMap(taskEntity.getTaskStateJson());
+        String failureSummary = failureSummary(taskEntity, dtos);
+        String failureStage = inferFailureStage(taskEntity, failureSummary);
+        if (dtos.isEmpty() && "FAILED".equals(terminalStatus)) {
+            dtos = List.of(toSyntheticTaskErrorMessage(taskEntity, contextId, status, terminalStatus,
+                    failureSummary, failureStage));
+            nextCursor = "task-error:" + taskEntity.getTaskId();
+        }
 
         return RX.ok(OpenTaskMessagesResponse.builder()
                 .taskId(taskId)
@@ -1347,6 +1475,16 @@ public class OpenApiController {
                 .workerTaskId(taskEntity.getProviderTaskId())
                 .providerTaskId(taskEntity.getProviderTaskId())
                 .lastAckedSeq(taskEntity.getLastAckedSeq())
+                .modelConfigId(firstNonBlank(taskEntity.getModelConfigId(), stringValue(taskState.get("modelConfigId"))))
+                .modelConfigSource(stringValue(taskState.get("modelConfigSource")))
+                .workerBackend(firstNonBlank(stringValue(taskState.get("workerBackend")),
+                        workerBackendFromProviderType(taskEntity.getProviderType())))
+                .providerType(taskEntity.getProviderType())
+                .taskSource(firstNonBlank(taskEntity.getSource(), stringValue(taskState.get("taskSource"))))
+                .workerSource(stringValue(taskState.get("workerSource")))
+                .backendSource(stringValue(taskState.get("backendSource")))
+                .failureStage(failureStage)
+                .failureSummary(failureSummary)
                 .messages(dtos)
                 .status(status)
                 .terminal(terminalStatus != null)
@@ -1599,15 +1737,21 @@ public class OpenApiController {
      * A2aTask → OpenApiTaskDTO 转换（简化面向第三方的响应）
      */
     private OpenApiTaskDTO toOpenApiTaskDTO(A2aTask task, String agentId) {
+        return toOpenApiTaskDTO(task, agentId, null);
+    }
+
+    private OpenApiTaskDTO toOpenApiTaskDTO(A2aTask task, String agentId, SessionTaskEntity taskEntity) {
         OpenApiTaskDTO.OpenApiTaskDTOBuilder builder = OpenApiTaskDTO.builder()
                 .taskId(task.getId())
                 .agentId(agentId)
                 .contextId(task.getContextId());
 
+        String status = null;
         if (task.getStatus() != null) {
-            builder.status(mapA2aState(task.getStatus().getState()));
+            status = mapA2aState(task.getStatus().getState());
+            builder.status(status);
             if (task.getStatus().getState() == A2aTaskState.FAILED) {
-                builder.errorMessage(task.getStatus().getDescription());
+                builder.errorMessage(sanitizeDiagnosticText(task.getStatus().getDescription()));
             }
         }
 
@@ -1626,6 +1770,7 @@ public class OpenApiController {
         }
 
         // 提取元信息
+        Map<String, Object> metadata = task.getMetadata();
         if (task.getMetadata() != null) {
             Object workerTaskId = task.getMetadata().get("workerTaskId");
             if (workerTaskId instanceof String s && StringUtils.hasText(s)) {
@@ -1645,9 +1790,217 @@ public class OpenApiController {
             } else if (costUsd instanceof Number) {
                 builder.costUsd(BigDecimal.valueOf(((Number) costUsd).doubleValue()));
             }
+            builder.modelConfigId(stringValue(metadata.get("modelConfigId")))
+                    .modelConfigSource(stringValue(metadata.get("modelConfigSource")))
+                    .workerBackend(stringValue(metadata.get("workerBackend")))
+                    .providerType(stringValue(metadata.get("providerType")))
+                    .taskSource(firstNonBlank(stringValue(metadata.get("taskSource")), stringValue(metadata.get("source"))))
+                    .workerSource(stringValue(metadata.get("workerSource")))
+                    .backendSource(stringValue(metadata.get("backendSource")));
         }
 
+        if (taskEntity != null) {
+            Map<String, Object> taskState = parseJsonMap(taskEntity.getTaskStateJson());
+            builder.providerType(taskEntity.getProviderType())
+                    .modelConfigId(firstNonBlank(taskEntity.getModelConfigId(), stringValue(taskState.get("modelConfigId"))))
+                    .modelConfigSource(firstNonBlank(stringValue(taskState.get("modelConfigSource")),
+                            stringValue(metadata != null ? metadata.get("modelConfigSource") : null)))
+                    .workerBackend(firstNonBlank(stringValue(taskState.get("workerBackend")),
+                            stringValue(metadata != null ? metadata.get("workerBackend") : null),
+                            workerBackendFromProviderType(taskEntity.getProviderType())))
+                    .taskSource(firstNonBlank(taskEntity.getSource(), stringValue(taskState.get("taskSource"))))
+                    .workerSource(firstNonBlank(stringValue(taskState.get("workerSource")),
+                            stringValue(metadata != null ? metadata.get("workerSource") : null)))
+                    .backendSource(firstNonBlank(stringValue(taskState.get("backendSource")),
+                            stringValue(metadata != null ? metadata.get("backendSource") : null)));
+            if (StringUtils.hasText(taskEntity.getProviderTaskId())) {
+                builder.workerTaskId(taskEntity.getProviderTaskId()).providerTaskId(taskEntity.getProviderTaskId());
+            }
+            if (taskEntity.getLastAckedSeq() != null) {
+                builder.lastAckedSeq(taskEntity.getLastAckedSeq());
+            }
+            if (StringUtils.hasText(taskEntity.getErrorMessage())) {
+                builder.errorMessage(sanitizeDiagnosticText(taskEntity.getErrorMessage()));
+            }
+            if (StringUtils.hasText(taskEntity.getStatus())) {
+                status = mapTaskStatus(taskEntity.getStatus());
+                builder.status(status);
+            }
+        }
+
+        String error = taskEntity != null ? taskEntity.getErrorMessage()
+                : task.getStatus() != null ? task.getStatus().getDescription() : null;
+        String failureSummary = "FAILED".equals(status) ? sanitizeDiagnosticText(error) : null;
+        if ("FAILED".equals(status) && !StringUtils.hasText(failureSummary)) {
+            failureSummary = "Task failed without persisted runtime messages.";
+        }
+        builder.failureSummary(failureSummary)
+                .failureStage(taskEntity != null ? inferFailureStage(taskEntity, failureSummary)
+                        : inferFailureStageFromText(status, null, null, failureSummary));
+
         return builder.build();
+    }
+
+    private OpenApiTaskDTO toOpenApiTaskDTO(SessionTaskEntity taskEntity, String agentId, String contextId) {
+        Map<String, Object> taskState = parseJsonMap(taskEntity.getTaskStateJson());
+        String status = mapTaskStatus(taskEntity.getStatus());
+        String failureSummary = "FAILED".equals(status) ? failureSummary(taskEntity, null) : null;
+        String failureStage = inferFailureStage(taskEntity, failureSummary);
+        return OpenApiTaskDTO.builder()
+                .taskId(taskEntity.getTaskId())
+                .agentId(agentId)
+                .status(status)
+                .contextId(contextId)
+                .workerTaskId(taskEntity.getProviderTaskId())
+                .providerTaskId(taskEntity.getProviderTaskId())
+                .lastAckedSeq(taskEntity.getLastAckedSeq())
+                .modelConfigId(firstNonBlank(taskEntity.getModelConfigId(), stringValue(taskState.get("modelConfigId"))))
+                .modelConfigSource(stringValue(taskState.get("modelConfigSource")))
+                .workerBackend(firstNonBlank(stringValue(taskState.get("workerBackend")),
+                        workerBackendFromProviderType(taskEntity.getProviderType())))
+                .providerType(taskEntity.getProviderType())
+                .taskSource(firstNonBlank(taskEntity.getSource(), stringValue(taskState.get("taskSource"))))
+                .workerSource(stringValue(taskState.get("workerSource")))
+                .backendSource(stringValue(taskState.get("backendSource")))
+                .failureStage(failureStage)
+                .failureSummary(failureSummary)
+                .errorMessage(sanitizeDiagnosticText(taskEntity.getErrorMessage()))
+                .result(taskEntity.getResultText())
+                .durationMs(taskEntity.getDurationMs())
+                .costUsd(taskEntity.getCostUsd())
+                .createdAt(taskEntity.getCreatedAt())
+                .updatedAt(taskEntity.getUpdatedAt())
+                .build();
+    }
+
+    private String inferFailureStage(String errorMessage) {
+        if (!StringUtils.hasText(errorMessage)) {
+            return null;
+        }
+        String text = errorMessage.toLowerCase(Locale.ROOT);
+        if (text.contains("api key") || text.contains("apikey") || text.contains("authorization")
+                || text.contains("unauthorized") || text.contains("401") || text.contains("403")
+                || text.contains("429") || text.contains("quota") || text.contains("rate limit")
+                || text.contains("insufficient_quota") || text.contains("model_not_found")
+                || text.contains("provider api") || text.contains("openai")
+                || text.contains("anthropic") || text.contains("gemini api")) {
+            return "PROVIDER_API";
+        }
+        if (text.contains("codex not configured")
+                || text.contains("failed to connect to codex worker")
+                || text.contains("connection refused")
+                || text.contains("timeout")
+                || text.contains("timed out")
+                || text.contains("econnrefused")
+                || text.contains("sse")
+                || text.contains("stream")
+                || text.contains("transport")
+                || text.contains("worker")) {
+            return "WORKER_TRANSPORT";
+        }
+        return null;
+    }
+
+    private String inferFailureStageFromText(
+            String status,
+            String providerType,
+            String workerBackend,
+            String failureSummary) {
+        if (!"FAILED".equals(status)) {
+            return null;
+        }
+        String stage = inferFailureStage(failureSummary);
+        if (stage != null) {
+            return stage;
+        }
+        if ("OPENAI_CODEX".equalsIgnoreCase(providerType) || "OPENAI_CODEX".equalsIgnoreCase(workerBackend)
+                || "codex-worker".equalsIgnoreCase(providerType)) {
+            return "RUNTIME";
+        }
+        return "DISPATCH";
+    }
+
+    private String sanitizeDiagnosticText(String text) {
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        String sanitized = text.replace('\n', ' ').replace('\r', ' ').trim()
+                .replaceAll("(?i)(authorization\\s*[:=]\\s*)(bearer\\s+)?[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(api[_-]?key\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(access[_-]?token\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(token\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(client[_-]?secret\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(secret\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)(password\\s*[:=]\\s*)[^\\s,;]+", "$1[REDACTED]")
+                .replaceAll("(?i)bearer\\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]")
+                .replaceAll("sk-[A-Za-z0-9_-]{12,}", "sk-[REDACTED]");
+        return truncate(sanitized, 500);
+    }
+
+    private String inferFailureStage(SessionTaskEntity taskEntity, String failureSummary) {
+        String stage = inferFailureStage(failureSummary);
+        if (stage != null) {
+            return stage;
+        }
+        if (taskEntity == null || !"FAILED".equals(mapTaskStatus(taskEntity.getStatus()))) {
+            return null;
+        }
+        if (StringUtils.hasText(taskEntity.getProviderTaskId())
+                || (taskEntity.getLastAckedSeq() != null && taskEntity.getLastAckedSeq() > 0)) {
+            return "RUNTIME";
+        }
+        String text = failureSummary != null ? failureSummary.toLowerCase(Locale.ROOT) : "";
+        if (text.contains("modelconfig") || text.contains("model config") || text.contains("grant")
+                || text.contains("not found") || text.contains("not available")
+                || text.contains("route") || text.contains("resolve")
+                || text.contains("permission") || text.contains("access")) {
+            return "DISPATCH";
+        }
+        return "DISPATCH";
+    }
+
+    private String workerBackendFromProviderType(String providerType) {
+        if (!StringUtils.hasText(providerType)) {
+            return null;
+        }
+        String normalized = providerType.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "CODEX-WORKER", "OPENAI_CODEX", "CODEX" -> "OPENAI_CODEX";
+            case "CLAUDE-WORKER", "CLAUDE", "CLAUDE_CODE" -> "CLAUDE_CODE";
+            case "GEMINI-WORKER", "GEMINI", "GEMINI_CLI" -> "GEMINI_CLI";
+            case "LANGGRAPH-BIZ-WORKER", "LANGGRAPH", "LANGGRAPH_BIZ" -> "LANGGRAPH_BIZ";
+            default -> normalized;
+        };
+    }
+
+    private Map<String, Object> parseJsonMap(String json) {
+        if (!StringUtils.hasText(json)) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            log.debug("Failed to parse task state json: {}", e.getMessage());
+            return Map.of();
+        }
+    }
+
+    private String failureSummary(SessionTaskEntity taskEntity, List<OpenSessionMessageDTO> messages) {
+        if (messages != null) {
+            for (OpenSessionMessageDTO message : messages) {
+                if (message != null && "ERROR".equalsIgnoreCase(message.getType())
+                        && StringUtils.hasText(message.getContent())) {
+                    return sanitizeDiagnosticText(message.getContent());
+                }
+            }
+        }
+        if (taskEntity != null && StringUtils.hasText(taskEntity.getErrorMessage())) {
+            return sanitizeDiagnosticText(taskEntity.getErrorMessage());
+        }
+        if (taskEntity != null && "FAILED".equals(mapTaskStatus(taskEntity.getStatus()))) {
+            return "Task failed without persisted runtime messages.";
+        }
+        return null;
     }
 
     // ── 上游接入首版辅助方法 ──
@@ -1691,13 +2044,62 @@ public class OpenApiController {
                 .taskId(entity.getTaskId())
                 .role(entity.getRole() != null ? entity.getRole().toLowerCase() : null)
                 .type(type)
-                .content(entity.getContent())
+                .content(sanitizeDiagnosticText(entity.getContent()))
                 .status(status)
                 .terminal(terminalStatus != null)
                 .terminalStatus(terminalStatus)
                 .metadata(metadata)
                 .attachments(attachments)
                 .createdAt(entity.getCreatedAt())
+                .build();
+    }
+
+    private OpenSessionMessageDTO toSyntheticTaskErrorMessage(
+            SessionTaskEntity taskEntity,
+            String contextId,
+            String status,
+            String terminalStatus) {
+        return toSyntheticTaskErrorMessage(
+                taskEntity,
+                contextId,
+                status,
+                terminalStatus,
+                taskEntity.getErrorMessage(),
+                inferFailureStage(taskEntity.getErrorMessage()));
+    }
+
+    private OpenSessionMessageDTO toSyntheticTaskErrorMessage(
+            SessionTaskEntity taskEntity,
+            String contextId,
+            String status,
+            String terminalStatus,
+            String failureSummary,
+            String failureStage) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("type", "ERROR");
+        metadata.put("source", "task_state");
+        metadata.put("synthetic", true);
+        if (StringUtils.hasText(failureStage)) {
+            metadata.put("failureStage", failureStage);
+        }
+        if (StringUtils.hasText(taskEntity.getWorkerId())) {
+            metadata.put("workerId", taskEntity.getWorkerId());
+        }
+        if (StringUtils.hasText(taskEntity.getProviderType())) {
+            metadata.put("providerType", taskEntity.getProviderType());
+        }
+        return OpenSessionMessageDTO.builder()
+                .messageId("task-error:" + taskEntity.getTaskId())
+                .contextId(contextId)
+                .taskId(taskEntity.getTaskId())
+                .role("assistant")
+                .type("ERROR")
+                .content(firstNonBlank(failureSummary, "Task failed without persisted runtime messages."))
+                .status(status)
+                .terminal(true)
+                .terminalStatus(terminalStatus)
+                .metadata(metadata)
+                .createdAt(taskEntity.getUpdatedAt() != null ? taskEntity.getUpdatedAt() : taskEntity.getCreatedAt())
                 .build();
     }
 

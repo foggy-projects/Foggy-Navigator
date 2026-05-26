@@ -149,6 +149,16 @@ class UpstreamCliTest {
                           "effectivePhysicalWorkerId":"worker-1",
                           "workspaceScope":"USER_PRIVATE",
                           "workspaceSource":"WORKING_DIRECTORY:USER_PRIVATE",
+                          "physicalWorkerDiagnostics":[
+                            {
+                              "role":"biz",
+                              "physicalWorkerId":"worker-1",
+                              "workerBackend":"LANGGRAPH_BIZ",
+                              "source":"BIZ_WORKER_IDENTITY",
+                              "executionWorker":true,
+                              "directoryWorker":false
+                            }
+                          ],
                           "checks":[
                             {"code":"AGENT_REGISTERED","status":"OK","message":"agent registered"}
                           ]
@@ -1472,6 +1482,44 @@ class UpstreamCliTest {
 
         assertEquals(0, passed);
         assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("owner-smoke resources OK"));
+    }
+
+    @Test
+    void ownerSmokeFailsWhenWorkerHostExecutionRoleDoesNotMatchBackend() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "overallStatus":"OK",
+                  "agentCode":"agent-1",
+                  "upstreamUserId":"u-1",
+                  "effectiveModelConfigId":"model-env",
+                  "effectiveWorkerBackend":"LANGGRAPH_BIZ",
+                  "agentId":"agent-1",
+                  "effectiveDirectoryId":"dir-env",
+                  "effectivePhysicalWorkerId":"worker-1",
+                  "physicalWorkerDiagnostics":[
+                    {
+                      "role":"biz",
+                      "physicalWorkerId":"worker-1",
+                      "workerBackend":"LANGGRAPH_BIZ",
+                      "source":"AGENT_DEFAULT_DIRECTORY:CLIENT_APP_SHARED",
+                      "executionWorker":true,
+                      "directoryWorker":true
+                    }
+                  ],
+                  "checks":[{"code":"AGENT_REGISTERED","status":"OK"}]
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "owner-smoke",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent-code", "agent-1",
+                "--upstream-user-id", "u-1"}, Map.of());
+
+        assertEquals(2, code);
+        assertTrue(stdout.toString(StandardCharsets.UTF_8)
+                .contains("owner-smoke resources FAIL missing=workerRole:biz:BIZ_WORKER_IDENTITY"));
     }
 
     @Test

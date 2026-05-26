@@ -58,7 +58,7 @@ public class BizWorkerIdentityPhysicalWorkerRuntimeRegistry implements PhysicalW
                 workerBackend,
                 worker.getOwnerType(),
                 worker.getOwnerId(),
-                "PHYSICAL_WORKER_IDENTITY:" + worker.getOwnerType());
+                "BIZ_WORKER_IDENTITY");
     }
 
     private String trimToNull(String value) {

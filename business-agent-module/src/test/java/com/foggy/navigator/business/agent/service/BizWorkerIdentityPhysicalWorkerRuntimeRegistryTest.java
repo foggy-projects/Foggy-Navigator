@@ -34,7 +34,7 @@ class BizWorkerIdentityPhysicalWorkerRuntimeRegistryTest {
         assertEquals("worker-1", result.get().workerId());
         assertEquals("LANGGRAPH_BIZ", result.get().workerBackend());
         assertEquals(ResourceOwnerType.UPSTREAM_SYSTEM, result.get().ownerType());
-        assertEquals("PHYSICAL_WORKER_IDENTITY:UPSTREAM_SYSTEM", result.get().source());
+        assertEquals("BIZ_WORKER_IDENTITY", result.get().source());
     }
 
     @Test

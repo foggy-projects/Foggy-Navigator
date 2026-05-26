@@ -2,15 +2,19 @@ package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.BusinessAgentTaskDTO;
 import com.foggy.navigator.business.agent.model.dto.CreatedBusinessAgentTaskDTO;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerIdentityEntity;
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessAgentTaskEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
+import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm;
+import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentTaskRepository;
 import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +34,8 @@ public class BusinessAgentTaskService {
 
     public static final String STATUS_CREATED = "CREATED";
     public static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String BACKEND_LANGGRAPH_BIZ = "LANGGRAPH_BIZ";
+    private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
 
     private final BusinessAgentTaskRepository taskRepository;
     private final BusinessTaskScopedTokenRepository tokenRepository;
@@ -40,6 +46,7 @@ public class BusinessAgentTaskService {
     private final SkillRegistryService skillRegistryService;
     private final BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
     private final BusinessAgentSessionService businessAgentSessionService;
+    private final BizWorkerIdentityRepository workerIdentityRepository;
     private final List<BusinessAgentWorkerTaskLauncher> workerTaskLaunchers;
 
     @Transactional
@@ -55,7 +62,7 @@ public class BusinessAgentTaskService {
         requireText(form.getAgentId(), "agentId is required");
 
         // 2. 校验 clientAppId 存在、属于当前 tenant、状态可用
-        clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
+        ClientAppEntity clientApp = clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
 
         // 校验 upstream user grant
         userGrantService.checkUpstreamUserAccess(tenantId, form.getClientAppId(), form.getUpstreamUserId());
@@ -139,7 +146,6 @@ public class BusinessAgentTaskService {
                 form,
                 existingResumeTask,
                 agentResource);
-        validateWorkspacePhysicalWorkerCompatibility(agentResource, workspaceResource);
 
         // 7. task 创建后固定最终 modelConfigId
         BusinessAgentTaskEntity task = new BusinessAgentTaskEntity();
@@ -188,7 +194,8 @@ public class BusinessAgentTaskService {
                 task.getSessionId());
 
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
-                tenantId, actorUserId, task, workerPool, agentResource, finalModelResource, plainToken, finalVisionModelConfigId, contextId, skillName, form, workspaceResource);
+                tenantId, actorUserId, task, workerPool, agentResource, finalModelResource, plainToken,
+                finalVisionModelConfigId, contextId, skillName, form, workspaceResource, clientApp);
         if (launchResult != null && StringUtils.hasText(launchResult.getContextId())) {
             contextId = launchResult.getContextId();
         }
@@ -391,7 +398,8 @@ public class BusinessAgentTaskService {
             String contextId,
             String skillName,
             CreateBusinessAgentTaskForm form,
-            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
+            ClientAppEntity clientApp) {
         if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
             return null;
         }
@@ -412,7 +420,7 @@ public class BusinessAgentTaskService {
                         .skillId(task.getSkillId())
                         .skillName(skillName)
                         .workerPoolId(task.getWorkerPoolId())
-                        .physicalWorkerId(resolveLaunchPhysicalWorkerId(agentResource, workspaceResource))
+                        .physicalWorkerId(resolveLaunchPhysicalWorkerId(agentResource, modelResource, clientApp))
                         .workerBackend(workerBackend)
                         .modelConfigId(task.getModelConfigId())
                         .model(task.getModel())
@@ -452,11 +460,46 @@ public class BusinessAgentTaskService {
 
     private String resolveLaunchPhysicalWorkerId(
             A2AgentResourceResolver.ResolvedAgentResource agentResource,
-            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
-        if (workspaceResource != null && StringUtils.hasText(workspaceResource.physicalWorkerId())) {
-            return workspaceResource.physicalWorkerId();
+            A2AgentResourceResolver.ResolvedModelResource modelResource,
+            ClientAppEntity clientApp) {
+        String agentWorkerId = agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
+        String workerBackend = firstNonBlank(
+                agentResource != null ? agentResource.workerBackend() : null,
+                modelResource != null ? modelResource.workerBackend() : null);
+        if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ)
+                && agentResource != null
+                && !StringUtils.hasText(agentResource.workerPoolId())
+                && StringUtils.hasText(agentWorkerId)
+                && !SOURCE_BIZ_WORKER_IDENTITY.equals(trimToNull(agentResource.physicalWorkerSource()))) {
+            String workerHostBizWorkerId = resolveLatestWorkerHostBizIdentity(clientApp);
+            if (StringUtils.hasText(workerHostBizWorkerId)) {
+                return workerHostBizWorkerId;
+            }
         }
-        return agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
+        // The workspace worker owns filesystem access. Execution routing must come from the agent route.
+        return agentWorkerId;
+    }
+
+    private String resolveLatestWorkerHostBizIdentity(ClientAppEntity clientApp) {
+        if (clientApp == null || !StringUtils.hasText(clientApp.getUpstreamSystemId())) {
+            return null;
+        }
+        List<BizWorkerIdentityEntity> identities = workerIdentityRepository
+                .findByOwnerTypeAndOwnerIdAndWorkerBackendAndStatusAndHealthStatusOrderByUpdatedAtDesc(
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        clientApp.getUpstreamSystemId(),
+                        BACKEND_LANGGRAPH_BIZ,
+                        BizWorkerPoolService.STATUS_ENABLED,
+                        BizWorkerPoolService.HEALTHY);
+        if (identities == null) {
+            return null;
+        }
+        return identities.stream()
+                .map(BizWorkerIdentityEntity::getWorkerId)
+                .map(this::trimToNull)
+                .filter(StringUtils::hasText)
+                .findFirst()
+                .orElse(null);
     }
 
     private String resolveInternalWorkerRouteId(A2AgentResourceResolver.ResolvedAgentResource agentResource) {
@@ -479,18 +522,6 @@ public class BusinessAgentTaskService {
         if (agentBackend != null && modelBackend != null && !agentBackend.equals(modelBackend)) {
             throw new IllegalStateException("model workerBackend " + modelBackend
                     + " does not match agent route backend " + agentBackend);
-        }
-    }
-
-    private void validateWorkspacePhysicalWorkerCompatibility(
-            A2AgentResourceResolver.ResolvedAgentResource agentResource,
-            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
-        String agentPhysicalWorkerId = agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
-        String workspacePhysicalWorkerId = workspaceResource != null ? trimToNull(workspaceResource.physicalWorkerId()) : null;
-        if (agentPhysicalWorkerId != null && workspacePhysicalWorkerId != null
-                && !agentPhysicalWorkerId.equals(workspacePhysicalWorkerId)) {
-            throw new IllegalStateException("working directory physical worker " + workspacePhysicalWorkerId
-                    + " does not match agent physical worker " + agentPhysicalWorkerId);
         }
     }
 
@@ -544,6 +575,23 @@ public class BusinessAgentTaskService {
             return null;
         }
         return value.trim();
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            String normalized = trimToNull(value);
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+        return null;
+    }
+
+    private boolean isBackend(String actual, String expected) {
+        return expected.equalsIgnoreCase(trimToNull(actual));
     }
 
     private List<String> cleanStringList(List<String> values) {

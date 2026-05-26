@@ -151,7 +151,7 @@ class BusinessAgentE2ESampleTest {
                 java.util.List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, identityRepository, java.util.List.of());
         authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService, skillRegistryService, functionRegistryService);
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
         com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker adapterInvoker = new com.foggy.navigator.business.agent.service.adapter.LocalEchoBusinessFunctionAdapterInvoker(objectMapper);

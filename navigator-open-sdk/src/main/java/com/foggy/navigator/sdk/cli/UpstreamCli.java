@@ -1676,7 +1676,49 @@ public class UpstreamCli {
         if (requireDirectory && !hasText(readiness.getEffectivePhysicalWorkerId())) {
             missing.add("effectivePhysicalWorkerId");
         }
+        if (requireDirectory && hasText(readiness.getEffectiveDirectoryId())) {
+            String expectedRole = expectedWorkerHostRole(readiness.getEffectiveWorkerBackend());
+            String expectedSource = expectedWorkerHostRoleSource(readiness.getEffectiveWorkerBackend());
+            if (hasText(expectedRole) && !hasExecutionWorkerRole(readiness, expectedRole, expectedSource)) {
+                missing.add("workerRole:" + expectedRole + ":" + expectedSource);
+            }
+        }
         return missing;
+    }
+
+    private String expectedWorkerHostRole(String workerBackend) {
+        if ("OPENAI_CODEX".equalsIgnoreCase(valueOrEmpty(workerBackend))) {
+            return "codex";
+        }
+        if ("LANGGRAPH_BIZ".equalsIgnoreCase(valueOrEmpty(workerBackend))) {
+            return "biz";
+        }
+        return null;
+    }
+
+    private String expectedWorkerHostRoleSource(String workerBackend) {
+        if ("OPENAI_CODEX".equalsIgnoreCase(valueOrEmpty(workerBackend))) {
+            return "CLAUDE_WORKER_CODEX_CONFIG";
+        }
+        if ("LANGGRAPH_BIZ".equalsIgnoreCase(valueOrEmpty(workerBackend))) {
+            return "BIZ_WORKER_IDENTITY";
+        }
+        return null;
+    }
+
+    private boolean hasExecutionWorkerRole(AgentReadiness readiness, String expectedRole, String expectedSource) {
+        if (readiness.getPhysicalWorkerDiagnostics() == null) {
+            return false;
+        }
+        for (PhysicalWorkerDiagnostic diagnostic : readiness.getPhysicalWorkerDiagnostics()) {
+            if (diagnostic != null
+                    && expectedRole.equals(valueOrEmpty(diagnostic.getRole()))
+                    && expectedSource.equals(valueOrEmpty(diagnostic.getSource()))
+                    && Boolean.TRUE.equals(diagnostic.getExecutionWorker())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private int inspectRuntime(CliArguments args) {

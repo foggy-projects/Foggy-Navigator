@@ -15,6 +15,7 @@ import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm
 import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService;
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
+import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
@@ -23,6 +24,7 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import lombok.RequiredArgsConstructor;
@@ -53,6 +55,7 @@ public class OpenApiAgentReadinessService {
     private static final String ROLE_CODEX = "codex";
     private static final String ROLE_BIZ = "biz";
     private static final String SOURCE_CLAUDE_CODEX_CONFIG = "CLAUDE_WORKER_CODEX_CONFIG";
+    private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
 
     private final UnifiedAgentResolver agentResolver;
     private final ClientAppService clientAppService;
@@ -153,7 +156,9 @@ public class OpenApiAgentReadinessService {
             validateAgentBackendCompatibility(agentResourceRef[0], modelResource);
         });
         addWorkspaceResourceCheckIfPossible(result, credential, safeForm, agentResourceRef[0], workspaceResourceRef);
+        applyWorkerHostExecutionPreference(result, app, agentResourceRef[0], workspaceResourceRef[0]);
         applyPhysicalWorkerDiagnostic(result, agentResourceRef[0], workspaceResourceRef[0]);
+        addWorkerHostRoleRoutingCheck(result);
         addRequiredUpstreamRouteChecks(result, credential, safeForm);
         addBusinessFunctionAdapterChecks(result, credential);
         addOwnerAwareRuntimeResourceCheck(result);
@@ -259,7 +264,8 @@ public class OpenApiAgentReadinessService {
                     effectiveDirectoryId);
             workspaceResourceRef[0] = workspaceResource;
             result.setEffectiveDirectoryId(workspaceResource.directoryId());
-            if (StringUtils.hasText(workspaceResource.physicalWorkerId())) {
+            if (!StringUtils.hasText(result.getEffectivePhysicalWorkerId())
+                    && StringUtils.hasText(workspaceResource.physicalWorkerId())) {
                 result.setEffectivePhysicalWorkerId(workspaceResource.physicalWorkerId());
             }
             result.setWorkspaceScope(workspaceResource.workspaceScope() != null
@@ -271,6 +277,31 @@ public class OpenApiAgentReadinessService {
             result.setWorkspaceReadOnly(workspaceResource.readOnly());
             result.setWorkspaceSource(workspaceResource.source());
         });
+    }
+
+    private void applyWorkerHostExecutionPreference(
+            AgentReadinessDTO result,
+            ClientAppEntity app,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        String workerBackend = firstNonBlank(
+                result.getEffectiveWorkerBackend(),
+                agentResource != null ? agentResource.workerBackend() : null);
+        if (isBackend(workerBackend, BACKEND_OPENAI_CODEX)) {
+            String directoryWorkerId = workspaceResource != null ? trimToNull(workspaceResource.physicalWorkerId()) : null;
+            if (hasClaudeCodexConfig(directoryWorkerId)) {
+                result.setEffectivePhysicalWorkerId(directoryWorkerId);
+            }
+            return;
+        }
+        if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ)
+                && shouldPreferWorkerHostBizIdentity(agentResource)) {
+            resolveLatestWorkerHostBizIdentity(app)
+                    .map(BizWorkerIdentityEntity::getWorkerId)
+                    .map(this::trimToNull)
+                    .filter(StringUtils::hasText)
+                    .ifPresent(result::setEffectivePhysicalWorkerId);
+        }
     }
 
     private void applyPhysicalWorkerDiagnostic(
@@ -285,7 +316,7 @@ public class OpenApiAgentReadinessService {
                     firstNonBlank(result.getEffectiveWorkerBackend(),
                             agentResource != null ? agentResource.workerBackend() : null),
                     resolvePhysicalWorkerSource(workerId, agentResource, workspaceResource, result),
-                    isExecutionWorker(workerId, agentResource, workspaceResource),
+                    isExecutionWorker(workerId, agentResource, workspaceResource, result.getEffectiveWorkerBackend()),
                     workspaceResource != null && workerId.equals(trimToNull(workspaceResource.physicalWorkerId())));
             result.setPhysicalWorkerDiagnostic(diagnostic);
         }
@@ -323,12 +354,7 @@ public class OpenApiAgentReadinessService {
             appendDirectoryWorkerDiagnostic(diagnostics, result, agentResource, workspaceResource, directoryWorkerId);
         }
 
-        String executionWorkerId = agentResource != null
-                ? trimToNull(agentResource.physicalWorkerId())
-                : null;
-        if (executionWorkerId == null) {
-            executionWorkerId = trimToNull(result.getEffectivePhysicalWorkerId());
-        }
+        String executionWorkerId = resolveExecutionWorkerId(result, agentResource, workspaceResource);
         if (executionWorkerId != null) {
             appendExecutionWorkerDiagnostic(diagnostics, result, agentResource, workspaceResource, executionWorkerId);
         }
@@ -339,6 +365,30 @@ public class OpenApiAgentReadinessService {
             appendOrMergeDiagnostic(diagnostics, fallback);
         }
         return diagnostics;
+    }
+
+    private String resolveExecutionWorkerId(
+            AgentReadinessDTO result,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        String workerBackend = firstNonBlank(
+                result.getEffectiveWorkerBackend(),
+                agentResource != null ? agentResource.workerBackend() : null);
+        String effectiveWorkerId = trimToNull(result.getEffectivePhysicalWorkerId());
+        if (isBackend(workerBackend, BACKEND_OPENAI_CODEX) && hasClaudeCodexConfig(effectiveWorkerId)) {
+            return effectiveWorkerId;
+        }
+        if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ) && isBizWorkerIdentity(effectiveWorkerId)) {
+            return effectiveWorkerId;
+        }
+        String agentWorkerId = agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
+        if (agentWorkerId != null) {
+            return agentWorkerId;
+        }
+        if (shouldUseEffectivePhysicalWorkerAsExecution(result, workspaceResource)) {
+            return effectiveWorkerId;
+        }
+        return null;
     }
 
     private void appendDirectoryWorkerDiagnostic(
@@ -483,7 +533,7 @@ public class OpenApiAgentReadinessService {
 
     private void enrichFromWorkerIdentity(PhysicalWorkerDiagnosticDTO diagnostic, String workerId) {
         Optional<BizWorkerIdentityEntity> identity = workerIdentityRepository.findByWorkerId(workerId);
-        if (identity.isEmpty()) {
+        if (identity == null || identity.isEmpty()) {
             return;
         }
         BizWorkerIdentityEntity entity = identity.get();
@@ -516,11 +566,70 @@ public class OpenApiAgentReadinessService {
         }
     }
 
+    private boolean shouldPreferWorkerHostBizIdentity(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        if (agentResource == null || StringUtils.hasText(agentResource.workerPoolId())) {
+            return false;
+        }
+        String agentWorkerId = trimToNull(agentResource.physicalWorkerId());
+        return agentWorkerId == null
+                || !SOURCE_BIZ_WORKER_IDENTITY.equals(trimToNull(agentResource.physicalWorkerSource()));
+    }
+
+    private Optional<BizWorkerIdentityEntity> resolveLatestWorkerHostBizIdentity(ClientAppEntity app) {
+        if (app == null || !StringUtils.hasText(app.getUpstreamSystemId())) {
+            return Optional.empty();
+        }
+        List<BizWorkerIdentityEntity> identities = workerIdentityRepository
+                .findByOwnerTypeAndOwnerIdAndWorkerBackendAndStatusAndHealthStatusOrderByUpdatedAtDesc(
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        app.getUpstreamSystemId(),
+                        BACKEND_LANGGRAPH_BIZ,
+                        BizWorkerPoolService.STATUS_ENABLED,
+                        BizWorkerPoolService.HEALTHY);
+        if (identities == null) {
+            return Optional.empty();
+        }
+        return identities.stream()
+                .filter(identity -> identity != null && StringUtils.hasText(identity.getWorkerId()))
+                .findFirst();
+    }
+
+    private boolean hasClaudeCodexConfig(String workerId) {
+        String normalizedWorkerId = trimToNull(workerId);
+        if (normalizedWorkerId == null) {
+            return false;
+        }
+        return claudeWorkerRepository.findByWorkerId(normalizedWorkerId)
+                .map(ClaudeWorkerEntity::getCodexConfig)
+                .map(CodexConfig::getBaseUrl)
+                .filter(StringUtils::hasText)
+                .isPresent();
+    }
+
+    private boolean isBizWorkerIdentity(String workerId) {
+        String normalizedWorkerId = trimToNull(workerId);
+        if (normalizedWorkerId == null) {
+            return false;
+        }
+        Optional<BizWorkerIdentityEntity> identity = workerIdentityRepository.findByWorkerId(normalizedWorkerId);
+        if (identity == null) {
+            return false;
+        }
+        return identity
+                .map(BizWorkerIdentityEntity::getWorkerBackend)
+                .filter(workerBackend -> isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ))
+                .isPresent();
+    }
+
     private String resolvePhysicalWorkerSource(
             String workerId,
             A2AgentResourceResolver.ResolvedAgentResource agentResource,
             A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
             AgentReadinessDTO result) {
+        if (isBizWorkerIdentity(workerId)) {
+            return SOURCE_BIZ_WORKER_IDENTITY;
+        }
         if (workspaceResource != null && workerId.equals(trimToNull(workspaceResource.physicalWorkerId()))) {
             return workspaceResource.source();
         }
@@ -533,12 +642,38 @@ public class OpenApiAgentReadinessService {
     private boolean isExecutionWorker(
             String workerId,
             A2AgentResourceResolver.ResolvedAgentResource agentResource,
-            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
+            String workerBackend) {
+        if (isBackend(workerBackend, BACKEND_OPENAI_CODEX)
+                && workspaceResource != null
+                && workerId.equals(trimToNull(workspaceResource.physicalWorkerId()))
+                && hasClaudeCodexConfig(workerId)) {
+            return true;
+        }
+        if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ) && isBizWorkerIdentity(workerId)) {
+            return true;
+        }
         String agentWorkerId = agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
         if (agentWorkerId != null) {
             return workerId.equals(agentWorkerId);
         }
-        return workspaceResource != null && workerId.equals(trimToNull(workspaceResource.physicalWorkerId()));
+        return isBackend(workerBackend, BACKEND_OPENAI_CODEX)
+                && workspaceResource != null
+                && workerId.equals(trimToNull(workspaceResource.physicalWorkerId()));
+    }
+
+    private boolean shouldUseEffectivePhysicalWorkerAsExecution(
+            AgentReadinessDTO result,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        String workerId = trimToNull(result.getEffectivePhysicalWorkerId());
+        if (workerId == null) {
+            return false;
+        }
+        if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX)) {
+            return true;
+        }
+        String directoryWorkerId = workspaceResource != null ? trimToNull(workspaceResource.physicalWorkerId()) : null;
+        return directoryWorkerId == null || !workerId.equals(directoryWorkerId);
     }
 
     private String labelValue(String labelsJson, String... keys) {
@@ -606,6 +741,60 @@ public class OpenApiAgentReadinessService {
         result.getChecks().add(AgentReadinessCheckDTO.fail(
                 "OWNER_AWARE_RUNTIME_RESOURCES",
                 "missing owner-aware runtime resources: " + String.join(",", missing)));
+    }
+
+    private void addWorkerHostRoleRoutingCheck(AgentReadinessDTO result) {
+        if (!hasPhysicalRoutingContext(result)) {
+            return;
+        }
+        if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX)) {
+            addExpectedExecutionRoleCheck(result, ROLE_CODEX, SOURCE_CLAUDE_CODEX_CONFIG);
+        } else if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_LANGGRAPH_BIZ)) {
+            addExpectedExecutionRoleCheck(result, ROLE_BIZ, SOURCE_BIZ_WORKER_IDENTITY);
+        }
+    }
+
+    private boolean hasPhysicalRoutingContext(AgentReadinessDTO result) {
+        return StringUtils.hasText(result.getEffectiveDirectoryId())
+                || StringUtils.hasText(result.getEffectivePhysicalWorkerId());
+    }
+
+    private void addExpectedExecutionRoleCheck(
+            AgentReadinessDTO result,
+            String expectedRole,
+            String expectedSource) {
+        List<PhysicalWorkerDiagnosticDTO> diagnostics = result.getPhysicalWorkerDiagnostics() != null
+                ? result.getPhysicalWorkerDiagnostics()
+                : List.of();
+        List<PhysicalWorkerDiagnosticDTO> executionRoles = diagnostics.stream()
+                .filter(diagnostic -> diagnostic != null
+                        && sameText(expectedRole, diagnostic.getRole())
+                        && Boolean.TRUE.equals(diagnostic.getExecutionWorker()))
+                .toList();
+        Optional<PhysicalWorkerDiagnosticDTO> matched = executionRoles.stream()
+                .filter(diagnostic -> sameText(expectedSource, diagnostic.getSource()))
+                .findFirst();
+        if (matched.isPresent()) {
+            result.getChecks().add(AgentReadinessCheckDTO.ok(
+                    "WORKER_HOST_ROLE_ROUTING",
+                    "workerRole role=" + expectedRole + " source=" + expectedSource + " resolved"));
+            return;
+        }
+        if (executionRoles.isEmpty()) {
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    "WORKER_HOST_ROLE_ROUTING",
+                    "missing execution workerRole role=" + expectedRole + " source=" + expectedSource));
+            return;
+        }
+        String actualSource = executionRoles.stream()
+                .map(PhysicalWorkerDiagnosticDTO::getSource)
+                .filter(StringUtils::hasText)
+                .findFirst()
+                .orElse("(empty)");
+        result.getChecks().add(AgentReadinessCheckDTO.fail(
+                "WORKER_HOST_ROLE_ROUTING",
+                "expected workerRole role=" + expectedRole + " source=" + expectedSource
+                        + " but resolved source=" + actualSource));
     }
 
     private void addRequiredUpstreamRouteChecks(

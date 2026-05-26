@@ -161,6 +161,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 skillRegistryService,
                 tokenRuntimeStore,
                 businessAgentSessionService,
+                identityRepository,
                 List.of(launcher)
         );
 
