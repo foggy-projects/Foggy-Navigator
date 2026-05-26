@@ -106,6 +106,10 @@ def build_account_context_prompt(
             "",
             f"### {file.name}",
             _DESCRIPTIONS[file.name],
+            (
+                f"Content source: `{file.name}`. This content is already included here; "
+                f"do not call read_file for `{file.name}` just to confirm it."
+            ),
             "",
             "```markdown",
             file.content,

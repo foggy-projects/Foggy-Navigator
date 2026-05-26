@@ -33,6 +33,8 @@ def test_build_prompt_documents_authority_and_permissions(tmp_path):
     assert "## Account Context" in prompt
     assert "`ACCOUNT_POLICY.md` is upstream-controlled and read-only to you." in prompt
     assert "already loaded in this prompt" in prompt
+    assert "Content source: `ACCOUNT_POLICY.md`" in prompt
+    assert "do not call read_file for `ACCOUNT_POLICY.md` just to confirm it" in prompt
     assert "### ACCOUNT_POLICY.md" in prompt
     assert "policy rule" in prompt
     assert "### MEMORY.md" in prompt
