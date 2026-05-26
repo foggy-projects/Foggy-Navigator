@@ -175,6 +175,7 @@ class RestAdapterUpstreamE2ETest {
                 workingDirectoryRepository,
                 agentRepository,
                 poolRepository,
+                identityRepository,
                 java.util.List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);

@@ -816,6 +816,105 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void askAgent_usesWorkerHostBizIdentityForLanggraphWhenAgentWorkerIsCodingWorker() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                null,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                defaultRouteService(),
+                resourceResolver);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        A2AgentResourceResolver.ResolvedAgentResource agentResource =
+                new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent-1",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app-1",
+                        "app-1",
+                        "school-sim.actor.pm.m2.v1",
+                        null,
+                        null,
+                        null,
+                        null,
+                        "OPENAI_CODEX",
+                        "2ca910a6",
+                        ResourceOwnerType.PLATFORM,
+                        "tenant-1",
+                        "CLAUDE_WORKER:TENANT",
+                        "model-default",
+                        null,
+                        "dir-default",
+                        "AGENT:CLIENT_APP");
+        when(resourceResolver.resolveRequiredAgent(
+                eq("tenant-1"), eq("app-1"), eq("upstream-a"), eq("agent-1")))
+                .thenReturn(agentResource);
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq(agentResource),
+                eq("model-default"),
+                nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(new A2AgentResourceResolver.ResolvedModelResource(
+                        "model-default",
+                        "model-default",
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "gemini-3.5-flash-low",
+                        "MODEL_CONFIG_DEFAULT",
+                        "LANGGRAPH_BIZ",
+                        "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant-1"), eq("app-1"), eq("upstream-a"), eq(agentResource), eq("dir-default")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir-default",
+                        "2ca910a6",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/home/navigator/school",
+                        List.of("/home/navigator/school"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+        when(resourceResolver.resolveLatestHealthyBizWorkerIdentityId("tenant-1", "app-1"))
+                .thenReturn(Optional.of("school-sim-wsl-biz"));
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("请使用 school-sim.actor.pm.m2.v1 技能，写入 smoke marker");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        Map<String, Object> metadata = captor.getValue().getMetadata();
+        assertEquals("school-sim-wsl-biz", metadata.get("workerId"));
+        assertEquals("BIZ_WORKER_IDENTITY", metadata.get("workerSource"));
+        assertEquals("LANGGRAPH_BIZ", metadata.get("workerBackend"));
+        assertEquals("dir-default", metadata.get("directoryId"));
+        assertEquals("/home/navigator/school", metadata.get("cwd"));
+    }
+
+    @Test
     void askAgent_forwardsTopLevelExecutionPolicyWithoutDirectSkillName() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);

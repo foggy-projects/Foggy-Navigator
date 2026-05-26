@@ -148,6 +148,7 @@ class BusinessAgentE2ESampleTest {
                 workingDirectoryRepository,
                 agentRepository,
                 poolRepository,
+                identityRepository,
                 java.util.List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);

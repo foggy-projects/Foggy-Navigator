@@ -148,6 +148,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 workingDirectoryRepository,
                 agentRepository,
                 poolRepository,
+                identityRepository,
                 List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);

@@ -2,10 +2,12 @@ package com.foggy.navigator.business.agent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerIdentityEntity;
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindingRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
+import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
 import com.foggy.navigator.business.agent.service.worker.PhysicalWorkerRuntimeRegistry;
@@ -37,6 +39,7 @@ import java.util.Optional;
 public class A2AgentResourceResolver {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String BACKEND_LANGGRAPH_BIZ = ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND;
 
     private final ClientAppModelConfigGrantService modelConfigGrantService;
     private final LlmModelManager llmModelManager;
@@ -44,6 +47,7 @@ public class A2AgentResourceResolver {
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final BusinessCodingAgentRepository agentRepository;
     private final BizWorkerPoolRepository workerPoolRepository;
+    private final BizWorkerIdentityRepository workerIdentityRepository;
     private final List<PhysicalWorkerRuntimeRegistry> physicalWorkerRuntimeRegistries;
     private final BusinessAgentDirectoryBindingRepository agentDirectoryBindingRepository;
     private final BusinessAgentModelBindingRepository agentModelBindingRepository;
@@ -155,6 +159,31 @@ public class A2AgentResourceResolver {
                 resolved.defaultModelName(),
                 resolved.defaultDirectoryId());
         return resolved;
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<String> resolveLatestHealthyBizWorkerIdentityId(String tenantId, String clientAppId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(clientAppId, "clientAppId is required");
+        ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
+        if (!StringUtils.hasText(clientApp.getUpstreamSystemId())) {
+            return Optional.empty();
+        }
+        List<BizWorkerIdentityEntity> identities = workerIdentityRepository
+                .findByOwnerTypeAndOwnerIdAndWorkerBackendAndStatusAndHealthStatusOrderByUpdatedAtDesc(
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        clientApp.getUpstreamSystemId(),
+                        BACKEND_LANGGRAPH_BIZ,
+                        BizWorkerPoolService.STATUS_ENABLED,
+                        BizWorkerPoolService.HEALTHY);
+        if (identities == null) {
+            return Optional.empty();
+        }
+        return identities.stream()
+                .map(BizWorkerIdentityEntity::getWorkerId)
+                .map(this::trimToNull)
+                .filter(StringUtils::hasText)
+                .findFirst();
     }
 
     @Transactional(readOnly = true)

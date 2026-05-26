@@ -68,6 +68,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Open API Controller — 面向第三方系统的集成接口
@@ -83,6 +84,7 @@ public class OpenApiController {
 
     private static final String BACKEND_OPENAI_CODEX = "OPENAI_CODEX";
     private static final String BACKEND_LANGGRAPH_BIZ = "LANGGRAPH_BIZ";
+    private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
 
     private final OpenApiProvisioningService provisioningService;
     private final ClaudeWorkerService workerService;
@@ -467,7 +469,14 @@ public class OpenApiController {
                 agentResource.physicalWorkerSource(),
                 agentResource.workerPoolSource()));
         putText(metadata, "backendSource", firstNonBlank(modelResource.source(), agentResource.workerPoolSource()));
-        injectOwnerAwareLaunchMetadata(metadata, agentResource, modelResource, workspaceResource);
+        injectOwnerAwareLaunchMetadata(
+                metadata,
+                tenantId,
+                clientAppCredential.getClientAppId(),
+                resourceResolver,
+                agentResource,
+                modelResource,
+                workspaceResource);
         injectWorkspaceExecutionPolicy(metadata, workspaceResource);
         mergeTopLevelExecutionPolicy(metadata, form);
         Object metadataAttachments = metadata.remove("attachments");
@@ -592,11 +601,21 @@ public class OpenApiController {
 
     private void injectOwnerAwareLaunchMetadata(
             Map<String, Object> metadata,
+            String tenantId,
+            String clientAppId,
+            A2AgentResourceResolver resourceResolver,
             A2AgentResourceResolver.ResolvedAgentResource agentResource,
             A2AgentResourceResolver.ResolvedModelResource modelResource,
             A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
-        String effectiveWorkerId = resolveOwnerAwareLaunchWorkerId(agentResource, modelResource, workspaceResource);
-        putText(metadata, "workerId", effectiveWorkerId);
+        OwnerAwareLaunchWorker launchWorker = resolveOwnerAwareLaunchWorker(
+                tenantId,
+                clientAppId,
+                resourceResolver,
+                agentResource,
+                modelResource,
+                workspaceResource);
+        putText(metadata, "workerId", launchWorker.workerId());
+        putText(metadata, "workerSource", launchWorker.workerSource());
         if (workspaceResource != null) {
             putText(metadata, "directoryId", workspaceResource.directoryId());
             putText(metadata, "cwd", workspaceResource.workdir());
@@ -605,7 +624,10 @@ public class OpenApiController {
         }
     }
 
-    private String resolveOwnerAwareLaunchWorkerId(
+    private OwnerAwareLaunchWorker resolveOwnerAwareLaunchWorker(
+            String tenantId,
+            String clientAppId,
+            A2AgentResourceResolver resourceResolver,
             A2AgentResourceResolver.ResolvedAgentResource agentResource,
             A2AgentResourceResolver.ResolvedModelResource modelResource,
             A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
@@ -613,17 +635,45 @@ public class OpenApiController {
                 modelResource != null ? modelResource.workerBackend() : null,
                 agentResource != null ? agentResource.workerBackend() : null);
         String workspaceWorkerId = workspaceResource != null ? stringValue(workspaceResource.physicalWorkerId()) : null;
+        String workspaceWorkerSource = workspaceResource != null ? stringValue(workspaceResource.source()) : null;
         String agentWorkerId = agentResource != null ? stringValue(agentResource.physicalWorkerId()) : null;
+        String agentWorkerSource = agentResource != null ? stringValue(agentResource.physicalWorkerSource()) : null;
         if (isBackend(workerBackend, BACKEND_OPENAI_CODEX) && StringUtils.hasText(workspaceWorkerId)) {
-            return workspaceWorkerId;
-        }
-        if (StringUtils.hasText(agentWorkerId)) {
-            return agentWorkerId;
+            return new OwnerAwareLaunchWorker(workspaceWorkerId, workspaceWorkerSource);
         }
         if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ)) {
-            return null;
+            if (agentResource != null && StringUtils.hasText(agentResource.workerPoolId())) {
+                return OwnerAwareLaunchWorker.empty();
+            }
+            if (StringUtils.hasText(agentWorkerId)
+                    && SOURCE_BIZ_WORKER_IDENTITY.equals(agentWorkerSource)) {
+                return new OwnerAwareLaunchWorker(agentWorkerId, agentWorkerSource);
+            }
+            Optional<String> workerHostBizWorkerId = resourceResolver.resolveLatestHealthyBizWorkerIdentityId(
+                    tenantId,
+                    clientAppId);
+            if (workerHostBizWorkerId != null && workerHostBizWorkerId.isPresent()) {
+                log.info("Resolved Open API LangGraph Biz launch worker from worker host identity: tenantId={}, clientAppId={}, agentId={}, originalWorkerId={}, workerId={}",
+                        tenantId,
+                        clientAppId,
+                        agentResource != null ? agentResource.agentId() : null,
+                        agentWorkerId,
+                        workerHostBizWorkerId.get());
+                return new OwnerAwareLaunchWorker(workerHostBizWorkerId.get(), SOURCE_BIZ_WORKER_IDENTITY);
+            }
+            return OwnerAwareLaunchWorker.empty();
         }
-        return workspaceWorkerId;
+        if (StringUtils.hasText(agentWorkerId)) {
+            return new OwnerAwareLaunchWorker(agentWorkerId, agentWorkerSource);
+        }
+        return new OwnerAwareLaunchWorker(workspaceWorkerId, workspaceWorkerSource);
+    }
+
+    private record OwnerAwareLaunchWorker(String workerId, String workerSource) {
+
+        private static OwnerAwareLaunchWorker empty() {
+            return new OwnerAwareLaunchWorker(null, null);
+        }
     }
 
     private boolean isBackend(String actual, String expected) {

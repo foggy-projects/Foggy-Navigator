@@ -2,10 +2,12 @@ package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver.ResolvedModelResource;
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver.ResolvedWorkspaceResource;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerIdentityEntity;
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindingRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
+import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
 import com.foggy.navigator.business.agent.service.worker.PhysicalWorkerRuntimeRegistry;
@@ -45,6 +47,7 @@ class A2AgentResourceResolverTest {
     private WorkingDirectoryRepository workingDirectoryRepository;
     private BusinessCodingAgentRepository agentRepository;
     private BizWorkerPoolRepository workerPoolRepository;
+    private BizWorkerIdentityRepository workerIdentityRepository;
     private PhysicalWorkerRuntimeRegistry physicalWorkerRuntimeRegistry;
     private BusinessAgentDirectoryBindingRepository agentDirectoryBindingRepository;
     private BusinessAgentModelBindingRepository agentModelBindingRepository;
@@ -58,6 +61,7 @@ class A2AgentResourceResolverTest {
         workingDirectoryRepository = mock(WorkingDirectoryRepository.class);
         agentRepository = mock(BusinessCodingAgentRepository.class);
         workerPoolRepository = mock(BizWorkerPoolRepository.class);
+        workerIdentityRepository = mock(BizWorkerIdentityRepository.class);
         physicalWorkerRuntimeRegistry = mock(PhysicalWorkerRuntimeRegistry.class);
         agentDirectoryBindingRepository = mock(BusinessAgentDirectoryBindingRepository.class);
         agentModelBindingRepository = mock(BusinessAgentModelBindingRepository.class);
@@ -68,6 +72,7 @@ class A2AgentResourceResolverTest {
                 workingDirectoryRepository,
                 agentRepository,
                 workerPoolRepository,
+                workerIdentityRepository,
                 List.of(physicalWorkerRuntimeRegistry),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
@@ -108,6 +113,28 @@ class A2AgentResourceResolverTest {
         assertEquals("cfg-default-name", result.modelName());
         assertEquals("MODEL_CONFIG_DEFAULT", result.modelNameSource());
         assertEquals("DEFAULT_MODEL_GRANT", result.source());
+    }
+
+    @Test
+    void resolveLatestHealthyBizWorkerIdentityId_returns_latest_upstream_langgraph_worker() {
+        ClientAppEntity clientApp = new ClientAppEntity();
+        clientApp.setTenantId("tenant-1");
+        clientApp.setClientAppId("capp-1");
+        clientApp.setUpstreamSystemId("ups-1");
+        BizWorkerIdentityEntity identity = new BizWorkerIdentityEntity();
+        identity.setWorkerId(" school-sim-wsl-biz ");
+
+        when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp);
+        when(workerIdentityRepository.findByOwnerTypeAndOwnerIdAndWorkerBackendAndStatusAndHealthStatusOrderByUpdatedAtDesc(
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                "ups-1",
+                "LANGGRAPH_BIZ",
+                BizWorkerPoolService.STATUS_ENABLED,
+                BizWorkerPoolService.HEALTHY))
+                .thenReturn(List.of(identity));
+
+        assertEquals(Optional.of("school-sim-wsl-biz"),
+                resolver.resolveLatestHealthyBizWorkerIdentityId("tenant-1", "capp-1"));
     }
 
     @Test
