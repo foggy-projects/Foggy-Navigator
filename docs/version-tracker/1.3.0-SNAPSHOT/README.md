@@ -48,7 +48,7 @@
 
 - [workitems/BUG-041-upstream-task-diagnostics-gap.md](./workitems/BUG-041-upstream-task-diagnostics-gap.md) - upstream task/messages diagnostics gap and School Sim M2 recheck follow-up
 - [workitems/BUG-042-biz-agent-skill-handoff-smoke.md](./workitems/BUG-042-biz-agent-skill-handoff-smoke.md) - School Sim Biz actor live smoke prompt/skill handoff validation, closed by R11
-
+- [workitems/OPT-043-tms-new-tenant-ensure-flow.md](./workitems/OPT-043-tms-new-tenant-ensure-flow.md) - TMS new-tenant ensure flow activation-ready payload, default policy, admin credential UX, and structured provisioning errors
 - [workitems/REQ-126-mobile-agent-chat-component.md](./workitems/REQ-126-mobile-agent-chat-component.md) - mobile-ready public Agent chat component for upstream Vue 3 apps
 - [workitems/BUG-issue-115-world-sim-route-smoke-blocked.md](./workitems/BUG-issue-115-world-sim-route-smoke-blocked.md) - issue #115 live smoke is blocked by CLI release and control credential scope
 - [acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md](./acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md)
