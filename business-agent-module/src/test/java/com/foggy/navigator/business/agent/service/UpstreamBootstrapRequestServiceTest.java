@@ -123,6 +123,33 @@ class UpstreamBootstrapRequestServiceTest {
     }
 
     @Test
+    void approveWithNoExpirySentinelIssuesNoExpiryAdminKey() {
+        UpstreamBootstrapRequestEntity request = pendingRequest("request-code", "claim-token", "tenant-1");
+        when(requestRepository.findByRequestCodeHashForUpdate(SecretTokenSupport.sha256("request-code")))
+                .thenReturn(Optional.of(request));
+
+        ApproveUpstreamBootstrapRequestForm approveForm = new ApproveUpstreamBootstrapRequestForm();
+        approveForm.setClaimTtlMinutes(-1L);
+
+        UpstreamBootstrapRequestDTO approved = service.approve("request-code", approveForm, operatorActor());
+
+        assertEquals(UpstreamBootstrapRequestService.STATUS_APPROVED, approved.getStatus());
+        assertNull(approved.getAdminCredentialExpiresAt());
+        assertNotNull(approved.getClaimExpiresAt());
+        assertTrue(approved.getClaimExpiresAt().isAfter(LocalDateTime.now().plusHours(23)));
+
+        ClaimUpstreamAdminCredentialForm claimForm = new ClaimUpstreamAdminCredentialForm();
+        claimForm.setClaimToken("claim-token");
+
+        UpstreamAdminCredentialClaimDTO claimed = service.claim("request-code", claimForm);
+
+        assertNull(claimed.getExpiresAt());
+        verify(adminCredentialRepository).save(argThat(credential ->
+                UpstreamBootstrapRequestService.CREDENTIAL_STATUS_ACTIVE.equals(credential.getStatus())
+                        && credential.getExpiresAt() == null));
+    }
+
+    @Test
     void claimRejectsWrongTokenWithoutIssuingCredential() {
         UpstreamBootstrapRequestEntity request = approvedRequest("request-code", "claim-token", "tenant-1");
         when(requestRepository.findByRequestCodeHashForUpdate(SecretTokenSupport.sha256("request-code")))

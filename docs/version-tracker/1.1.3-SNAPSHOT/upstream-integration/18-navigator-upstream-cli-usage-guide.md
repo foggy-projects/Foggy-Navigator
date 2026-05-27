@@ -213,11 +213,12 @@ Navigator 管理员或 operator Agent 审批申请时使用 `NAVI_OPERATOR_API_K
   --authorized-tenant-ids <tenantId> `
   --namespace <namespace> `
   --scopes CLIENT_APP_ADMIN,RUNTIME_KEY_ISSUE,CONTROL_KEY_ISSUE `
+  --claim-ttl-minutes 1440 `
   --credential-expires-at 2026-05-19T10:00:00
 .\tools\navigator-upstream\navi.ps1 upstream admin-key deny --request-code <requestCode> --reason "<reason>"
 ```
 
-`--scopes CLIENT_APP_ADMIN,RUNTIME_KEY_ISSUE,CONTROL_KEY_ISSUE` 是面向 operator 的别名，服务端会规范化为后端实际校验的 `CLIENT_APP_MANAGE,CLIENT_APP_RUNTIME_KEY_ISSUE,CLIENT_APP_CONTROL_KEY_ISSUE`。`--credential-expires-at` 省略时，`NAVI_ADMIN_API_KEY` 默认 24 小时过期；长期有效必须显式审批。
+`--scopes CLIENT_APP_ADMIN,RUNTIME_KEY_ISSUE,CONTROL_KEY_ISSUE` 是面向 operator 的别名，服务端会规范化为后端实际校验的 `CLIENT_APP_MANAGE,CLIENT_APP_RUNTIME_KEY_ISSUE,CLIENT_APP_CONTROL_KEY_ISSUE`。`--credential-expires-at` 省略时，`NAVI_ADMIN_API_KEY` 默认 24 小时过期；长期有效必须显式审批。阶段性允许 operator 用 `--claim-ttl-minutes 0` 或 `--claim-ttl-minutes -1` 表示审批确认签发无到期时间的 `NAVI_ADMIN_API_KEY`；这只影响 admin key 的有效期，claim token 的领取窗口仍使用默认 TTL。
 
 Navigator 管理员或 operator Agent 撤销、轮换上游系统级 admin key 时仍使用 `NAVI_OPERATOR_API_KEY` 或 `NAVI_ADMIN_TOKEN`，不能使用被维护的 `NAVI_ADMIN_API_KEY` 自管：
 

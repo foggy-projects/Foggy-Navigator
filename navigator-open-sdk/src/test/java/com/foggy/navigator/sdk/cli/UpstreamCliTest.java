@@ -533,6 +533,47 @@ class UpstreamCliTest {
     }
 
     @Test
+    void adminKeyApprovePassesNoExpirySentinel() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "requestId":"req-1",
+                  "requestCodeSuffix":"code",
+                  "upstreamSystemId":"x6-tms",
+                  "requestedTenantId":"tenant-1",
+                  "multiTenant":true,
+                  "status":"APPROVED",
+                  "authorizedTenantIds":["tenant-1"],
+                  "authorizedClientAppNamespace":"tms",
+                  "scopes":["CLIENT_APP_MANAGE"],
+                  "claimExpiresAt":"2026-05-18T11:00:00",
+                  "adminCredentialExpiresAt":null
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "approve",
+                "--base-url", baseUrl(),
+                "--request-code", "nabr-secret-code",
+                "--authorized-tenant-ids", "tenant-1",
+                "--namespace", "tms",
+                "--claim-ttl-minutes", "-1"}, env(
+                "NAVI_OPERATOR_API_KEY", "operator-secret-key"));
+
+        assertEquals(0, code);
+        assertTrue(lastBody.contains("\"claimTtlMinutes\":-1"));
+        assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("admin-key approve ok"));
+    }
+
+    @Test
+    void adminKeyHelpDocumentsNoExpirySentinel() {
+        int code = run(new String[]{"upstream", "admin-key"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertTrue(output.contains("[--claim-ttl-minutes <minutes|0|-1>]"));
+        assertTrue(output.contains("no-expiry NAVI_ADMIN_API_KEY"));
+    }
+
+    @Test
     void adminKeyRevokeUsesOperatorKeyAndNotUpstreamAdminKey() {
         responseOverride = """
                 {"code":0,"data":{

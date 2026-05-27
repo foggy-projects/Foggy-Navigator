@@ -400,8 +400,12 @@ public class UpstreamBootstrapRequestService {
         if (ttl == null) {
             return DEFAULT_CLAIM_TTL_MINUTES;
         }
-        if (ttl <= 0 || ttl > MAX_CLAIM_TTL_MINUTES) {
-            throw new IllegalArgumentException("claimTtlMinutes must be between 1 and " + MAX_CLAIM_TTL_MINUTES);
+        if (isNoExpiryAdminKeyRequest(ttl)) {
+            return DEFAULT_CLAIM_TTL_MINUTES;
+        }
+        if (ttl < 0 || ttl > MAX_CLAIM_TTL_MINUTES) {
+            throw new IllegalArgumentException("claimTtlMinutes must be between 1 and " + MAX_CLAIM_TTL_MINUTES
+                    + ", or 0/-1 for a no-expiry admin key approval");
         }
         return ttl;
     }
@@ -412,7 +416,15 @@ public class UpstreamBootstrapRequestService {
         if (expiresAt != null) {
             return expiresAt;
         }
+        Long claimTtlMinutes = form == null ? null : form.getClaimTtlMinutes();
+        if (isNoExpiryAdminKeyRequest(claimTtlMinutes)) {
+            return null;
+        }
         return now.plusMinutes(DEFAULT_ADMIN_CREDENTIAL_TTL_MINUTES);
+    }
+
+    private boolean isNoExpiryAdminKeyRequest(Long claimTtlMinutes) {
+        return claimTtlMinutes != null && (claimTtlMinutes == 0L || claimTtlMinutes == -1L);
     }
 
     private LocalDateTime resolveRotatedCredentialExpiresAt(UpstreamClientAppAdminCredentialEntity oldCredential,

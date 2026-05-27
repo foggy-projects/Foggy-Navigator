@@ -294,7 +294,8 @@ public class UpstreamCli {
         out.println("  request --upstream-system-id <id> --requested-tenant-id <tenantId> [--multi-tenant] --write-profile");
         out.println("  status  [--request-code <code>]");
         out.println("  claim   [--request-code <code>] [--claim-token-env <env>] --write-profile");
-        out.println("  approve --request-code <code> --authorized-tenant-ids <tenantId[,tenantId]> [--namespace <prefix>] [--scopes <scope[,scope]>] [--credential-expires-at <yyyy-MM-ddTHH:mm:ss>]");
+        out.println("  approve --request-code <code> --authorized-tenant-ids <tenantId[,tenantId]> [--namespace <prefix>] [--scopes <scope[,scope]>] [--claim-ttl-minutes <minutes|0|-1>] [--credential-expires-at <yyyy-MM-ddTHH:mm:ss>]");
+        out.println("           claim ttl 0 or -1 means the Navigator approver confirms a no-expiry NAVI_ADMIN_API_KEY; the claim window still uses the default TTL.");
         out.println("  deny    --request-code <code> --reason <text>");
         out.println("  revoke  --credential-id <id>");
         out.println("  rotate  --credential-id <id> [--credential-expires-at <yyyy-MM-ddTHH:mm:ss>] --write-profile");
