@@ -12,7 +12,8 @@ from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_state_for_tests
-from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
+from langgraph_biz_worker.runtime import command_tool
+from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent, _root_manifest_with_bound_skill
 from langgraph_biz_worker.runtime.context_memory import PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY
 from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
@@ -57,6 +58,32 @@ class HangingModel:
     def invoke(self, messages):
         time.sleep(self.sleep_seconds)
         return AIMessage(content="")
+
+
+def test_root_manifest_merges_bound_agent_skill_material():
+    root = SkillManifest(
+        id="system.root",
+        name="system.root",
+        markdown_body="root instruction",
+        allowed_tools=["invoke_business_skill"],
+    )
+    bound = SkillManifest(
+        id="order-assistant",
+        name="order-assistant",
+        description="Order workflow.",
+        markdown_body="Use local order workflow.",
+        allowed_tools=["invoke_business_function"],
+    )
+
+    merged = _root_manifest_with_bound_skill(
+        root,
+        {"_root_bound_skill_manifest": bound.model_dump()},
+    )
+
+    assert "root instruction" in merged.markdown_body
+    assert "Use local order workflow." in merged.markdown_body
+    assert "invoke_business_skill" in merged.allowed_tools
+    assert "invoke_business_function" in merged.allowed_tools
 
 
 class TransientTimeoutModel:
@@ -219,7 +246,7 @@ def _root_runtime() -> SkillRuntime:
         description="Persistent root skill.",
         markdown_body="根 Agent 负责当前用户回合的业务编排。",
         output_schema={"type": "object"},
-        allowed_tools=["submit_skill_result"],
+        allowed_tools=["submit_frame_result"],
         promote_to_parent=["result_summary", "structured_output"],
         visibility="builtin",
     ))
@@ -253,6 +280,88 @@ def test_llm_agent_exposes_default_file_tools_when_account_scope_available(tmp_p
     assert "edit_file" not in tool_names
 
 
+def test_llm_agent_prompts_delegated_workspace_file_contract(tmp_path):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_delegated_workspace_file_contract_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    workdir = tmp_path / "delegated-workspace"
+    workdir.mkdir()
+    model = FakeToolCallModel([AIMessage(content="ok")])
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path / "data").run(
+        task_id="task_delegated_workspace_file_contract_001",
+        frame_id=frame_id,
+        prompt="write actors/pm/biz-m2-live-smoke.txt",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_dirs": [str(workdir)],
+                "allowed_tools": [
+                    "list_files",
+                    "read_file",
+                    "write_file",
+                    "patch_file",
+                    "submit_frame_result",
+                ],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert "Delegated workspace 文件契约" in system_prompt
+    assert "只传文件名或该根目录下的相对路径" in system_prompt
+    assert "不要因为上下文提到 private workspace" in system_prompt
+    assert "不要把普通任务产物或 smoke marker 写到那里" in system_prompt
+
+    write_schema = next(
+        tool["function"]
+        for tool in model.bound_tools
+        if tool["function"]["name"] == "write_file"
+    )
+    assert "delegated workspace root" in write_schema["description"]
+    assert "actors/pm/biz-m2-live-smoke.txt" in write_schema["description"]
+
+
+def test_llm_agent_prompts_actor_workspace_without_duplicate_prefix(tmp_path):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_actor_workspace_file_contract_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    workdir = tmp_path / "actors" / "pm"
+    workdir.mkdir(parents=True)
+    model = FakeToolCallModel([AIMessage(content="ok")])
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path / "data").run(
+        task_id="task_actor_workspace_file_contract_001",
+        frame_id=frame_id,
+        prompt="create biz-m2-live-smoke.txt in bound private workspace",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_dirs": [str(workdir)],
+                "allowed_tools": [
+                    "list_files",
+                    "read_file",
+                    "write_file",
+                    "patch_file",
+                    "submit_frame_result",
+                ],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert "当前 delegated workspace 根目录已经是 `actors/pm/`" in system_prompt
+    assert "不要再加 `actors/pm/` 前缀" in system_prompt
+
+
 def test_llm_agent_does_not_expose_default_file_tools_without_account_scope(tmp_path):
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
@@ -271,6 +380,81 @@ def test_llm_agent_does_not_expose_default_file_tools_without_account_scope(tmp_
 
     tool_names = _bound_tool_names(model)
     assert not ({"list_files", "read_file", "write_file", "patch_file"} & tool_names)
+
+
+def test_llm_agent_exposes_command_when_linux_enabled_and_workspace_configured(tmp_path, monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_command_tool_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    workdir = tmp_path / "delegated-workspace"
+    workdir.mkdir()
+    model = FakeToolCallModel([AIMessage(content="ok")])
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path).run(
+        task_id="task_command_tool_001",
+        frame_id=frame_id,
+        prompt="hi",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_tools": ["read_file", "submit_skill_result"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    tool_names = _bound_tool_names(model)
+    assert "command" in tool_names
+
+
+def test_llm_agent_hides_command_on_windows_or_without_workspace(tmp_path, monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_command_tool_hidden_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    workdir = tmp_path / "delegated-workspace"
+    workdir.mkdir()
+    model = FakeToolCallModel([AIMessage(content="ok")])
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Windows")
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path).run(
+        task_id="task_command_tool_hidden_001",
+        frame_id=frame_id,
+        prompt="hi",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_tools": ["read_file", "submit_skill_result"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    assert "command" not in _bound_tool_names(model)
+
+    model = FakeToolCallModel([AIMessage(content="ok")])
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+    LlmSkillAgent(model, runtime, data_root=tmp_path).run(
+        task_id="task_command_tool_hidden_002",
+        frame_id=frame_id,
+        prompt="hi",
+        runtime_context={
+            "execution_policy": {
+                "allowed_tools": ["read_file", "submit_skill_result"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    assert "command" not in _bound_tool_names(model)
 
 
 def _root_with_child_runtime(child_context_visibility: str = "isolated", data_root=None) -> SkillRuntime:
@@ -339,7 +523,7 @@ def test_llm_agent_loads_business_skill_material_without_child_frame():
         }]),
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {
                 "summary": "Need ticket fields.",
                 "structured_output": {"message": "Need ticket fields."},
@@ -377,7 +561,7 @@ def test_llm_agent_invokes_client_app_public_skill_from_runtime_context(tmp_path
 ---
 name: tms-ticket-agent
 description: Ticket skill.
-allowed-tools: submit_skill_result
+allowed-tools: submit_frame_result
 metadata:
   display_name: TMS Ticket Agent
   visibility: public
@@ -448,7 +632,7 @@ metadata:
     assert not any("Skill manifest not found" in (event.error or "") for event in events)
 
 
-def test_llm_agent_completes_skill_via_submit_tool():
+def test_llm_agent_completes_skill_via_submit_frame_result_tool():
     runtime = _runtime()
     frame_id = runtime.invoke_skill(
         task_id="task_llm_agent_001",
@@ -468,7 +652,7 @@ def test_llm_agent_completes_skill_via_submit_tool():
         }]),
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {
                 "summary": "Order diagnosed as vehicle_delay.",
                 "structured_output": {
@@ -490,12 +674,50 @@ def test_llm_agent_completes_skill_via_submit_tool():
     frame = runtime.get_frame(frame_id)
     assert frame.status == FrameStatus.COMPLETED
     assert frame.output["classification"] == "vehicle_delay"
-    assert "submit_skill_result" in {t["function"]["name"] for t in model.bound_tools}
+    assert "submit_frame_result" in {t["function"]["name"] for t in model.bound_tools}
     assert events[-1].type == "skill_result_submit"
 
     promoted = runtime.close_frame(frame_id)
     assert promoted["structured_output"]["recommended_action"] == "manual_dispatch"
     assert runtime.get_frame(frame_id).private_messages == []
+
+
+def test_llm_agent_accepts_legacy_submit_skill_result_alias():
+    runtime = _runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_llm_agent_legacy_submit_001",
+        skill_id="exception_triage",
+        skill_input={"order_id": "ORD-LEGACY-SUBMIT"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Legacy submit alias accepted.",
+                "structured_output": {
+                    "classification": "other",
+                    "recommended_action": "ignore",
+                    "confidence": 0.8,
+                },
+                "evidence_refs": ["legacy:submit_skill_result"],
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_llm_agent_legacy_submit_001",
+        frame_id=frame_id,
+        prompt="legacy submit",
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert frame.status == FrameStatus.COMPLETED
+    assert frame.output["recommended_action"] == "ignore"
+    assert "submit_frame_result" in {t["function"]["name"] for t in model.bound_tools}
+    assert "submit_skill_result" not in {t["function"]["name"] for t in model.bound_tools}
+    assert events[-1].tool_name == "submit_skill_result"
+    assert events[-1].type == "skill_result_submit"
 
 
 def test_llm_agent_times_out_hung_model_and_fails_frame():
@@ -952,7 +1174,7 @@ def test_llm_agent_persistent_frame_prompt_includes_active_plan():
     assert "deliver complex task" in system_prompt
     assert "step-1" in system_prompt
     assert "持久根计划策略:" in system_prompt
-    assert "主动调用 submit_skill_result" in system_prompt
+    assert "主动调用 submit_frame_result" in system_prompt
     assert "structured_output.active_plan" in system_prompt
     assert "intent_resolution" in system_prompt
 
@@ -1972,6 +2194,76 @@ def test_llm_agent_records_submitted_summary_without_backend_rewrite(monkeypatch
     assert frame.output == structured_output
 
 
+def test_llm_agent_auto_submits_business_function_action_output(monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_tms_draft_auto_submit_001",
+        skill_id="system.root",
+        skill_input={"request": "create opening draft"},
+    )
+    draft_id = "afd_f5a0cbbc0c1044f380fbfe9e47611e1e"
+    structured_output = {
+        "type": "OPEN_TMS_PAGE",
+        "label": "去下单",
+        "routeName": "OrderWorkbench",
+        "query": {"aiDraftId": draft_id},
+    }
+
+    def fake_invoke(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        return {
+            "functionId": function_id,
+            "version": version,
+            "status": "SUCCESS",
+            "approvalRequired": False,
+            "message": "Adapter execution successful",
+            "outputJson": json.dumps({
+                "code": 200,
+                "data": {
+                    "draftId": draft_id,
+                    "summary": "已生成开单草稿，可点击打开补齐并确认。",
+                    "structured_output": structured_output,
+                },
+            }, ensure_ascii=False),
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_function",
+            "name": "invoke_business_function",
+            "args": {
+                "function_id": "tms.order.createOpeningDraft",
+                "version": "v1",
+                "input": {
+                    "customerPhone": "18911897361",
+                    "cargoWeightKg": 100,
+                },
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime, max_iterations=3).run(
+        task_id="task_tms_draft_auto_submit_001",
+        frame_id=frame_id,
+        prompt="创建开单草稿",
+        runtime_context={"task_scoped_token": "runtime-token"},
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert model.calls == 1
+    assert [event.type for event in events] == ["tool_use", "tool_result", "skill_result_submit"]
+    assert events[-1].tool_call_id == "call_function:auto_submit"
+    assert frame.status == FrameStatus.RUNNING
+    assert frame.result_summary == "已生成开单草稿，可点击打开补齐并确认。"
+    assert frame.output == structured_output
+    assert not any(event.type == "error" for event in events)
+
+
 def test_llm_agent_allows_explicit_order_number_field_in_final_summary():
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
@@ -2786,7 +3078,7 @@ def test_llm_agent_writes_runtime_message_event_jsonl(monkeypatch, tmp_path):
         name="event_log_skill",
         description="Writes event log.",
         output_schema={"type": "object"},
-        allowed_tools=["submit_skill_result"],
+        allowed_tools=["submit_frame_result"],
         promote_to_parent=["result_summary", "structured_output"],
     ))
     runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
@@ -2799,7 +3091,7 @@ def test_llm_agent_writes_runtime_message_event_jsonl(monkeypatch, tmp_path):
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {
                 "summary": "Done.",
                 "structured_output": {"ok": True},
@@ -2830,7 +3122,7 @@ def test_llm_agent_writes_runtime_message_event_jsonl(monkeypatch, tmp_path):
     assert events[1]["message"]["role"] == "user"
     assert events[1]["message"]["content"] == "hi"
     tool_call_event = next(event for event in events if event["eventType"] == "assistant_tool_call")
-    assert tool_call_event["toolCall"]["name"] == "submit_skill_result"
+    assert tool_call_event["toolCall"]["name"] == "submit_frame_result"
     tool_result_event = next(event for event in events if event["eventType"] == "tool_result")
     assert tool_result_event["message"]["role"] == "tool"
     assert tool_result_event["message"]["toolCallId"] == "call_submit"
@@ -2891,7 +3183,7 @@ def test_llm_agent_uses_frame_manifest_snapshot_after_registry_reload():
 
 def test_llm_agent_injects_account_context_before_skill_instructions(tmp_path):
     data_root = tmp_path / "data"
-    account_root = data_root / "accounts" / "acct-001"
+    account_root = data_root / "accounts" / "acct-001" / "agent"
     account_root.mkdir(parents=True)
     (account_root / "ACCOUNT_POLICY.md").write_text("policy rule", encoding="utf-8")
     (account_root / "AGENT.md").write_text("agent rule", encoding="utf-8")
@@ -2943,9 +3235,10 @@ def test_llm_agent_injects_account_context_before_skill_instructions(tmp_path):
 def test_llm_agent_injects_delegated_workspace_context_without_account_id(tmp_path):
     data_root = tmp_path / "data"
     workspace = tmp_path / "delegated" / "user-001"
-    workspace.mkdir(parents=True)
-    (workspace / "ACCOUNT_POLICY.md").write_text("delegated policy", encoding="utf-8")
-    (workspace / "MEMORY.md").write_text("delegated memory", encoding="utf-8")
+    agent_root = workspace / "agent"
+    agent_root.mkdir(parents=True)
+    (agent_root / "ACCOUNT_POLICY.md").write_text("delegated policy", encoding="utf-8")
+    (agent_root / "MEMORY.md").write_text("delegated memory", encoding="utf-8")
 
     registry = SkillRegistry()
     registry.register(SkillManifest(
@@ -2965,12 +3258,12 @@ def test_llm_agent_injects_delegated_workspace_context_without_account_id(tmp_pa
     )
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
-            "id": "call_list_files",
-            "name": "list_files",
-            "args": {
-                "relative_path": ".",
-                "recursive": False,
-            },
+                "id": "call_list_files",
+                "name": "list_files",
+                "args": {
+                    "relative_path": "agent",
+                    "recursive": False,
+                },
         }]),
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",

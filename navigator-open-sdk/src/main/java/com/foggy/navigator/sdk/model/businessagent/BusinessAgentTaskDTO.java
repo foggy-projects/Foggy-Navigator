@@ -16,6 +16,8 @@ public class BusinessAgentTaskDTO {
     private String workerPoolId;
     private String modelConfigId;
     private String requestedModelConfigId;
+    private String model;
+    private String requestedModelVariant;
     private String status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -40,6 +42,10 @@ public class BusinessAgentTaskDTO {
     public void setModelConfigId(String modelConfigId) { this.modelConfigId = modelConfigId; }
     public String getRequestedModelConfigId() { return requestedModelConfigId; }
     public void setRequestedModelConfigId(String requestedModelConfigId) { this.requestedModelConfigId = requestedModelConfigId; }
+    public String getModel() { return model; }
+    public void setModel(String model) { this.model = model; }
+    public String getRequestedModelVariant() { return requestedModelVariant; }
+    public void setRequestedModelVariant(String requestedModelVariant) { this.requestedModelVariant = requestedModelVariant; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public LocalDateTime getCreatedAt() { return createdAt; }

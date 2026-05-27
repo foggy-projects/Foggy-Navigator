@@ -6,6 +6,7 @@ import com.foggy.navigator.business.agent.model.form.SyncBusinessAgentBundleForm
 import com.foggy.navigator.business.agent.model.form.SyncSkillBundleForm;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,6 +31,8 @@ class BusinessAgentBundleServiceTest {
     private ClientAppService clientAppService;
     @Mock
     private ClientAppModelConfigGrantService modelConfigGrantService;
+    @Mock
+    private AgentDefaultBindingService agentDefaultBindingService;
 
     private BusinessAgentBundleService service;
 
@@ -40,6 +43,7 @@ class BusinessAgentBundleServiceTest {
                 skillRegistryService,
                 clientAppService,
                 modelConfigGrantService,
+                agentDefaultBindingService,
                 new ObjectMapper());
     }
 
@@ -51,6 +55,7 @@ class BusinessAgentBundleServiceTest {
         form.setName("World Sim Bug Coordinator");
         form.setDescription("Decision agent");
         form.setWorkerId("worker_01");
+        form.setDefaultDirectoryId("dir_01");
         form.setDefaultModelConfigId("model_01");
         form.setMarkdownBody("# Agent");
         form.setContextVisibility("summary");
@@ -81,13 +86,19 @@ class BusinessAgentBundleServiceTest {
         CodingAgentEntity agent = agentCaptor.getValue();
         assertEquals("tenant_01", agent.getTenantId());
         assertEquals("admin_01", agent.getUserId());
+        assertEquals(ResourceOwnerType.CLIENT_APP, agent.getOwnerType());
+        assertEquals("app_01", agent.getOwnerId());
+        assertEquals("app_01", agent.getClientAppId());
         assertEquals("worker_01", agent.getWorkerId());
+        assertEquals("dir_01", agent.getDefaultDirectoryId());
         assertEquals("LOCAL_LANGGRAPH_WORKER", agent.getAgentType());
+        assertEquals(true, agent.getEnabled());
         assertTrue(agent.getSkills().contains("world-sim.bug-coordinator.decision.v1"));
         assertTrue(agent.getAgentProfile().contains("\"domain\":\"BUSINESS_AGENT\""));
         assertTrue(agent.getAgentProfile().contains("\"clientAppId\":\"app_01\""));
         assertTrue(agent.getAgentProfile().contains("\"skillId\":\"world-sim.bug-coordinator.decision.v1\""));
         assertEquals(agent.getAgentProfile(), result.getAgentProfile());
+        verify(agentDefaultBindingService).ensureDefaults(agent);
 
         ArgumentCaptor<SyncSkillBundleForm> skillCaptor = ArgumentCaptor.forClass(SyncSkillBundleForm.class);
         verify(skillRegistryService).syncSkillBundle(eq("tenant_01"), eq("admin_01"), skillCaptor.capture());

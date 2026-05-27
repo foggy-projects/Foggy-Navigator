@@ -70,7 +70,7 @@ human(new user input or resume instruction)
 3. 如需业务 Skill，先调用 `list_skill_resources` 查看当前 ClientApp 可见技能，再调用 `read_skill_resource` 或 `invoke_business_skill` 读取 Skill 材料。
 4. `invoke_business_skill` 只在当前 Agent frame 内加载 Skill 材料，不会再创建新的 frame。
 5. 只有当任务确实需要更深层独立生命周期或用户明确要求子 Agent 时，才调用 `invoke_business_agent`。
-6. 完成、等待用户补充或需要交还父级时，优先调用 `submit_skill_result` 或 `handoff_to_parent`，以提交结构化状态、refs 和退出意图。
+6. 完成、等待用户补充或需要交还父级时，优先调用 `submit_frame_result` 或 `handoff_to_parent`，以提交结构化状态、refs 和退出意图。
 7. 如果只输出自然语言，运行时会按子 Agent 风格归一化为完成或等待用户，但这不应替代需要 refs/状态的结构化结果。
 
 ### 4. Skill discovery 工具授权分组
@@ -113,7 +113,7 @@ Skill discovery tools:
 3. 子 Agent system prompt 不包含 Root `allowed_skills` 目录，不包含 Root 完整历史。
 4. 当 Agent manifest / execution policy 允许 `invoke_business_skill` 或 `invoke_business_agent` 时，LLM body 的 tool schema 中包含 `list_skill_resources` 和 `read_skill_resource`。
 5. 当 execution policy 只允许无关业务工具时，Skill discovery 工具不被额外放行。
-6. 子 Agent 仍可用 `submit_skill_result` / `handoff_to_parent` 退出；自然语言最终消息仍可被运行时归一化。
+6. 子 Agent 仍可用 `submit_frame_result` / `handoff_to_parent` 退出；自然语言最终消息仍可被运行时归一化。`submit_skill_result` 作为旧名兼容 alias 保留。
 
 ## 实施项
 

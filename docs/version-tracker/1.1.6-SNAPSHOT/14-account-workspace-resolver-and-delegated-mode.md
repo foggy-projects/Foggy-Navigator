@@ -178,6 +178,8 @@ MEMORY.md
 
 并把内容注入 system prompt 的 Account Context 区块。用户当前消息仍保持原文为主，最多追加当前请求时间，不混入 workspace metadata 或 skill 列表。
 
+Account Context 区块中的文件正文已经是模型可见事实。即使 delegated workspace 文件工具能列出 `ACCOUNT_POLICY.md`、`AGENT.md`、`MEMORY.md`，模型也不应为了确认内容再次读取；只有用户要求查看/维护这些账号上下文文件，或任务必须逐字引用文件内容时才读取物理文件。
+
 如果 delegated workspace 未提供这些文件，则不注入空块，也不作为错误处理。只有显式要求必须存在的 ClientApp 策略才 fail fast。
 
 ## LLM 文件工具默认暴露策略
@@ -205,13 +207,14 @@ patch_file
 
 `submit_skill_result` 早期来源于 Skill frame 设计。当前架构下，Skill 默认只是当前 frame 内的材料加载工具，只有显式子 Agent 才打开 frame，因此该工具名称已经不完全准确。
 
-第一阶段不直接重命名，原因是:
+第一阶段采用兼容别名迁移:
 
-1. 历史 frame、测试、日志和工具调用事件已大量使用 `submit_skill_result`。
-2. 它的运行时语义仍然有效: 提交当前 frame 的结构化结果、等待用户状态、artifact/evidence refs。
-3. 直接改名会带来兼容性和回放日志解析风险。
+1. 新工具名为 `submit_frame_result`，新提示、新 manifest 和新 scripted LLM response 优先使用它。
+2. `submit_skill_result` 保留为 runtime 兼容 alias，旧 frame、测试、日志和上游调用仍可执行。
+3. 二者运行时语义一致: 提交当前 frame 的结构化结果、等待用户状态、artifact/evidence refs。
+4. 不在本阶段删除旧名，避免回放日志解析和上游兼容风险。
 
-后续可引入别名并逐步迁移到更准确的 frame-oriented 名称，例如 `submit_frame_result` 或 `complete_frame`。迁移期保留 `submit_skill_result` 作为兼容别名，直到旧日志和上游调用不再依赖。
+后续可统计旧名调用量，待旧日志和上游调用不再依赖后再考虑隐藏或移除 `submit_skill_result`。
 
 ## 安全边界
 

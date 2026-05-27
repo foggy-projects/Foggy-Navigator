@@ -88,7 +88,14 @@ foreach ($pathName in @("dist", "docs", "bin")) {
 
 Copy-Item (Join-Path $ScriptDir "dist") (Join-Path $InstallDir "dist") -Recurse -Force
 Copy-Item (Join-Path $ScriptDir "package.json") $InstallDir -Force
-Copy-Item (Join-Path $ScriptDir "package-lock.json") $InstallDir -Force
+$InstalledPackageLock = Join-Path $InstallDir "package-lock.json"
+if (Test-Path $InstalledPackageLock) {
+    Remove-Item $InstalledPackageLock -Force
+}
+$PackageLock = Join-Path $ScriptDir "package-lock.json"
+if (Test-Path $PackageLock) {
+    Copy-Item $PackageLock $InstallDir -Force
+}
 Copy-Item (Join-Path $ScriptDir ".env.example") $InstallDir -Force
 Copy-Item (Join-Path $ScriptDir "VERSION") $InstallDir -Force
 

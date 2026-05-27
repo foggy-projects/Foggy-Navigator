@@ -2,6 +2,7 @@ package com.foggy.navigator.common.entity;
 
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ModelAccessScope;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -124,6 +125,29 @@ public class LlmModelConfigEntity {
     private String runtimeBudgetOverrideJson;
 
     /**
+     * Stable owner of this model config. Credentials are not owners.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 32, nullable = false)
+    private ResourceOwnerType ownerType;
+
+    @Column(length = 128, nullable = false)
+    private String ownerId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 32)
+    private ResourceOwnerType createdByPrincipalType;
+
+    @Column(length = 128)
+    private String createdByPrincipalId;
+
+    @Column(length = 128)
+    private String createdByCredentialId;
+
+    @Column(nullable = false)
+    private Boolean enabled;
+
+    /**
      * 更新时间
      */
     @Column(nullable = false)
@@ -141,6 +165,15 @@ public class LlmModelConfigEntity {
         }
         if (sortOrder == null) {
             sortOrder = 0;
+        }
+        if (ownerType == null) {
+            ownerType = ResourceOwnerType.PLATFORM;
+        }
+        if (ownerId == null || ownerId.isBlank()) {
+            ownerId = "platform";
+        }
+        if (enabled == null) {
+            enabled = true;
         }
     }
 

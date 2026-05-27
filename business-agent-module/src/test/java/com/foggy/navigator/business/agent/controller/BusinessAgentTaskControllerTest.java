@@ -31,6 +31,7 @@ class BusinessAgentTaskControllerTest {
     private static final String SESSION_ID = "biz-session-001";
     private static final String CONTEXT_ID = "bctx_20260520_ab_ctx_001";
     private static final String UPSTREAM_USER_ID = "upstream-001";
+    private static final String AGENT_ID = "agent-001";
     private static final String SKILL_ID = "skill-001";
     private static final String WORKER_POOL_ID = "pool-001";
 
@@ -56,6 +57,7 @@ class BusinessAgentTaskControllerTest {
         createdTask.setSessionId(SESSION_ID);
         createdTask.setContextId(CONTEXT_ID);
         createdTask.setUpstreamUserId(UPSTREAM_USER_ID);
+        createdTask.setAgentId(AGENT_ID);
         createdTask.setSkillId(SKILL_ID);
         createdTask.setWorkerPoolId(WORKER_POOL_ID);
         createdTask.setStatus("RUNNING");
@@ -69,8 +71,7 @@ class BusinessAgentTaskControllerTest {
         requestBody.put("sessionId", SESSION_ID);
         requestBody.put("contextId", CONTEXT_ID);
         requestBody.put("upstreamUserId", UPSTREAM_USER_ID);
-        requestBody.put("skillId", SKILL_ID);
-        requestBody.put("workerPoolId", WORKER_POOL_ID);
+        requestBody.put("agentId", AGENT_ID);
         requestBody.put("clientContextJson", "{\"screen\":\"tickets\"}");
 
         mockMvc.perform(post("/api/v1/business-agent/tasks")
@@ -93,8 +94,7 @@ class BusinessAgentTaskControllerTest {
         assertEquals(SESSION_ID, capturedForm.getSessionId());
         assertEquals(CONTEXT_ID, capturedForm.getContextId());
         assertEquals(UPSTREAM_USER_ID, capturedForm.getUpstreamUserId());
-        assertEquals(SKILL_ID, capturedForm.getSkillId());
-        assertEquals(WORKER_POOL_ID, capturedForm.getWorkerPoolId());
+        assertEquals(AGENT_ID, capturedForm.getAgentId());
         assertEquals("{\"screen\":\"tickets\"}", capturedForm.getClientContextJson());
     }
 }

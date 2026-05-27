@@ -32,9 +32,9 @@ final class UpstreamCliConfig {
         values.put("NAVI_BASE_URL", DEFAULT_BASE_URL);
         values.put("TMS_WEB_BASE_URL", "http://localhost:12580");
         values.put("BASIC_BASE_URL", "http://localhost:10001");
-        values.put("NAVI_TENANT_ID", "88800");
-        values.put("NAVI_CLIENT_APP_ID", "capp_2852124a-48f7-4098-9d5e-33eb736c4375");
-        values.put("NAVI_AGENT_CODE", "tms-agent-v305");
+        values.put("NAVI_TENANT_ID", "");
+        values.put("NAVI_CLIENT_APP_ID", "");
+        values.put("NAVI_AGENT_CODE", "");
         values.put("NAVI_POLL_INTERVAL_SECONDS", "4");
         values.put("NAVI_E2E_MOCK_LLM_URL", "http://localhost:8200");
 
@@ -205,6 +205,7 @@ final class UpstreamCliConfig {
         putOption(values, args, "upstream-ref", "NAVI_UPSTREAM_REF");
         putOption(values, args, "model-profile-code", "NAVI_MODEL_PROFILE_CODE");
         putOption(values, args, "skill-id", "NAVI_SKILL_ID");
+        putOption(values, args, "biz-worker-id", "NAVI_BIZ_WORKER_ID");
         putOption(values, args, "worker-pool-id", "NAVI_WORKER_POOL_ID");
         putOption(values, args, "user-api-key", "NAVI_USER_API_KEY");
         putOption(values, args, "admin-token", "NAVI_ADMIN_TOKEN");
@@ -257,8 +258,6 @@ final class UpstreamCliConfig {
     private static boolean sourceValueShouldOverrideDefault(String target, String targetValue) {
         return switch (target) {
             case "NAVI_BASE_URL" -> DEFAULT_BASE_URL.equals(targetValue);
-            case "NAVI_TENANT_ID" -> "88800".equals(targetValue);
-            case "NAVI_CLIENT_APP_ID" -> "capp_2852124a-48f7-4098-9d5e-33eb736c4375".equals(targetValue);
             default -> false;
         };
     }
@@ -347,12 +346,13 @@ final class UpstreamCliConfig {
     private static List<String> envKeys() {
         return List.of("NAVI_BASE_URL", "TMS_WEB_BASE_URL", "BASIC_BASE_URL", "NAVI_TENANT_ID",
                 "NAVI_CLIENT_APP_ID", "NAVI_CLIENT_APP_KEY", "NAVI_AGENT_CODE",
-                "NAVI_MODEL_CONFIG_ID", "NAVI_POLL_INTERVAL_SECONDS", "NAVI_E2E_MOCK_LLM_URL", "NAVI_CLIENT_APP_SECRET",
+                "NAVI_MODEL_CONFIG_ID", "NAVI_MODEL_VARIANT", "NAVI_MODEL",
+                "NAVI_POLL_INTERVAL_SECONDS", "NAVI_E2E_MOCK_LLM_URL", "NAVI_CLIENT_APP_SECRET",
                 "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN", "NAVI_ADMIN_API_KEY", "NAVI_OPERATOR_API_KEY",
                 "NAVI_CONTROL_API_KEY", "NAVI_USER_API_KEY", "NAVI_ADMIN_KEY_REQUEST_CODE", "NAVI_ADMIN_KEY_CLAIM_TOKEN",
                 "NAVI_UPSTREAM_SYSTEM_ID", "NAVI_REQUESTED_TENANT_ID", "NAVI_TARGET_TENANT_ID",
                 "NAVI_SOURCE_TENANT_ID", "NAVI_UPSTREAM_REF", "NAVI_UPSTREAM_MULTI_TENANT",
-                "NAVI_MODEL_PROFILE_CODE", "NAVI_SKILL_ID", "NAVI_WORKER_POOL_ID",
+                "NAVI_MODEL_PROFILE_CODE", "NAVI_SKILL_ID", "NAVI_BIZ_WORKER_ID", "NAVI_WORKER_POOL_ID",
                 "NAVI_LLM_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "NAVIGATOR_BASE_URL", "NAVIGATOR_TENANT_ID",
                 "CLIENT_APP_ID", "CLIENT_APP_KEY", "CLIENT_APP_SECRET",
                 "CLIENT_APP_RUNTIME_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY", "NAVIGATOR_OPERATOR_API_KEY",

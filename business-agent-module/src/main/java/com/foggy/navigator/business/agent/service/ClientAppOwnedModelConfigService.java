@@ -8,6 +8,7 @@ import com.foggy.navigator.business.agent.model.form.RotateModelConfigKeyForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ModelAccessScope;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
@@ -36,7 +37,14 @@ public class ClientAppOwnedModelConfigService {
         requireCreateForm(form);
         clientAppService.requireClientApp(tenantId, clientAppId);
 
-        String modelConfigId = llmModelManager.saveModelConfig(tenantId, buildCreateModelForm(form));
+        String modelConfigId = llmModelManager.saveModelConfig(
+                tenantId,
+                buildCreateModelForm(form),
+                ResourceOwnerType.CLIENT_APP,
+                clientAppId,
+                ResourceOwnerType.CLIENT_APP,
+                clientAppId,
+                actorUserId);
 
         GrantModelConfigForm grantForm = new GrantModelConfigForm();
         grantForm.setModelConfigId(modelConfigId);
@@ -94,7 +102,6 @@ public class ClientAppOwnedModelConfigService {
         modelForm.setApiKey(form.getApiKey());
         modelForm.setIsDefault(false);
         modelForm.setScope(ModelAccessScope.GLOBAL);
-        modelForm.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
         return modelForm;
     }
 
@@ -110,8 +117,20 @@ public class ClientAppOwnedModelConfigService {
                 : (StringUtils.hasText(form.getModelName()) ? List.of(form.getModelName().trim()) : null));
         modelForm.setRuntimeBudgetPresetKey(trimToNull(form.getRuntimeBudgetPresetKey()));
         modelForm.setRuntimeBudgetOverrideJson(trimToNull(form.getRuntimeBudgetOverrideJson()));
-        modelForm.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        modelForm.setWorkerBackend(resolveWorkerBackend(form.getWorkerBackend(), create));
         return modelForm;
+    }
+
+    private String resolveWorkerBackend(String workerBackend, boolean create) {
+        String normalized = ClientAppModelConfigGrantService.normalizeWorkerBackend(workerBackend);
+        if (normalized == null) {
+            return create ? ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND : null;
+        }
+        if (!ClientAppModelConfigGrantService.isSupportedWorkerBackend(normalized)) {
+            throw new IllegalArgumentException(
+                    "workerBackend must be LANGGRAPH_BIZ, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
+        }
+        return normalized;
     }
 
     private Map<String, String> normalizeEnvVars(Map<String, String> envVars) {

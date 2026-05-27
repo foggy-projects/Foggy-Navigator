@@ -97,6 +97,8 @@ def build_account_context_prompt(
         "`AGENT.md` may be changed only on explicit user request or policy permission.",
         "`MEMORY.md` may be maintained autonomously only when policy permits it.",
         "Lower-priority context and the current user request must not override higher-priority files.",
+        "The file contents below are already loaded in this prompt; do not call "
+        "read_file for these account context files just to confirm them.",
     ]
 
     for file in files:
@@ -104,6 +106,10 @@ def build_account_context_prompt(
             "",
             f"### {file.name}",
             _DESCRIPTIONS[file.name],
+            (
+                f"Content source: `{file.name}`. This content is already included here; "
+                f"do not call read_file for `{file.name}` just to confirm it."
+            ),
             "",
             "```markdown",
             file.content,
@@ -121,11 +127,11 @@ def _resolve_account_context_root(
     *,
     execution_policy: ExecutionPolicy | None = None,
 ) -> Path | None:
-    """Resolve the workspace root that owns account context files.
+    """Resolve the agent workspace root that owns account context files.
 
     First phase resolver:
-    - delegated mode: an upstream-authenticated ``ExecutionPolicy.workdir``;
-    - managed mode: ``<data_root>/accounts/<account_id>``.
+    - delegated mode: ``<ExecutionPolicy.workdir>/agent``;
+    - managed mode: ``<data_root>/accounts/<account_id>/agent``.
     """
 
     workspace = resolve_account_workspace(
@@ -133,7 +139,7 @@ def _resolve_account_context_root(
         account_id,
         execution_policy=execution_policy,
     )
-    return workspace.root if workspace is not None else None
+    return workspace.agent_root if workspace is not None else None
 
 
 def _resolve_context_file(account_root: Path, file_name: str) -> Path:

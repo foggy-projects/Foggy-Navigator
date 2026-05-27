@@ -507,6 +507,14 @@ export async function runQuery(
   }
   taskRegistry.set(taskId, entry)
 
+  emitWorkerEvent(broadcast, {
+    type: 'assistant_text',
+    task_id: taskId,
+    session_id: threadId,
+    subtype: 'sync_checkpoint',
+    content: '',
+  })
+
   const startTime = Date.now()
   let numTurns = 0
   let lastAssistantText = ''

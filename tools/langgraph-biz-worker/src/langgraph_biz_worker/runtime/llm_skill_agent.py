@@ -24,6 +24,7 @@ from .account_file_tools import AccountFileTools
 from .account_context_files import build_account_context_prompt
 from .account_workspace import resolve_account_workspace
 from .artifact_store import ArtifactStore
+from .command_tool import command_tool_available
 from .llm_call_guard import invoke_chat_model
 from .llm_agent_prompts import (
     _active_plan_context,
@@ -63,6 +64,8 @@ from .llm_tool_dispatcher import (
 )
 from .llm_tool_schemas import (
     _DEFAULT_FILE_TOOL_NAMES,
+    _FRAME_RESULT_TOOL_NAME,
+    _FRAME_RESULT_TOOL_NAMES,
     _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES,
     _bind_tools,
     _tool_specs,
@@ -100,7 +103,7 @@ class LlmSkillAgent:
         self,
         chat_model: BaseChatModel,
         runtime: SkillRuntime,
-        max_iterations: int = 6,
+        max_iterations: int = 20,
         data_root: Path | None = None,
         tool_provider: ToolProvider | None = None,
     ) -> None:
@@ -155,6 +158,8 @@ class LlmSkillAgent:
             else:
                 self._runtime.fail_frame(frame_id, f"Skill manifest not found: {frame.skill_id}")
                 return [QueryEvent(type="error", task_id=task_id, error="Skill manifest not found")]
+        if persistent_frame:
+            manifest = _root_manifest_with_bound_skill(manifest, runtime_context)
         if frame.frame_kind == FrameKind.AGENT:
             manifest = _agent_frame_manifest(manifest)
         try:
@@ -206,6 +211,10 @@ class LlmSkillAgent:
         manifest = _manifest_with_default_file_tools(
             manifest,
             file_tools_available=file_tools is not None,
+        )
+        manifest = _manifest_with_command_tool(
+            manifest,
+            command_available=command_tool_available(execution_policy),
         )
         account_context_prompt = (
             build_account_context_prompt(
@@ -735,8 +744,9 @@ class LlmSkillAgent:
             result=result,
         )
 
-        event_type = "skill_result_submit" if name == "submit_skill_result" and result.get("ok") else "tool_result"
-        if name == "submit_skill_result" and not result.get("ok"):
+        is_frame_result_tool = name in _FRAME_RESULT_TOOL_NAMES
+        event_type = "skill_result_submit" if is_frame_result_tool and result.get("ok") else "tool_result"
+        if is_frame_result_tool and not result.get("ok"):
             event_type = "skill_result_reject"
 
         report_payload = _execution_report_payload_from_result(result)
@@ -763,7 +773,51 @@ class LlmSkillAgent:
             _emit_progress_event(runtime_context, extra_event)
 
         ret: dict[str, Any] = {"events": events, "tool_result": result}
-        if name in {"submit_skill_result", "shelve_interrupted_frame"} and persistent_frame and result.get("ok"):
+        auto_submit = None
+        if persistent_frame and not suspended:
+            auto_submit = _auto_submit_payload_from_business_function_result(name, result)
+        if auto_submit is not None:
+            summary = auto_submit["summary"]
+            structured_output = auto_submit["structured_output"]
+            validation = self._runtime.submit_persistent_turn_result(
+                frame_id=frame_id,
+                summary=summary,
+                structured_output=structured_output,
+            )
+            auto_submit_result = {
+                "ok": validation.ok,
+                "errors": validation.errors,
+                "auto_submitted": True,
+                "summary": summary,
+                "structured_output": structured_output,
+                **report_payload,
+            }
+            auto_event_type = "skill_result_submit" if validation.ok else "skill_result_reject"
+            auto_submit_event = QueryEvent(
+                type=auto_event_type,
+                task_id=task_id,
+                skill_frame_id=frame_id,
+                parent_frame_id=parent_frame_id,
+                skill_id=event_skill_id,
+                presentation_hint=event_presentation_hint,
+                content=json.dumps(auto_submit_result, ensure_ascii=False),
+                error="; ".join(validation.errors) if not validation.ok else None,
+                tool_call_id=f"{call.get('id')}:auto_submit" if call.get("id") else None,
+                tool_name=_FRAME_RESULT_TOOL_NAME,
+                function_id=_tool_function_id(name, safe_args, result),
+                args={
+                    "summary": summary,
+                    "structured_output": structured_output,
+                    "auto_submitted_from": name,
+                },
+                execution_report_ref=report_payload.get("execution_report_ref"),
+                execution_report_digest=report_payload.get("execution_report_digest"),
+            )
+            events.append(auto_submit_event)
+            _emit_progress_event(runtime_context, auto_submit_event)
+            if validation.ok:
+                ret["persistent_turn_completed"] = True
+        if name in {*_FRAME_RESULT_TOOL_NAMES, "shelve_interrupted_frame"} and persistent_frame and result.get("ok"):
             ret["persistent_turn_completed"] = True
         if suspended:
             ret["suspended"] = True
@@ -804,6 +858,7 @@ class LlmSkillAgent:
             artifact_store=artifact_store,
             file_tools=file_tools,
             public_resource_tools=public_resource_tools,
+            execution_policy=execution_policy,
             persistent_frame=persistent_frame,
         )
         low_risk_result = self._tool_dispatcher.dispatch_low_risk(name, args, dispatch_context)
@@ -907,7 +962,7 @@ class LlmSkillAgent:
                 **_execution_report_payload_from_frame(frame),
             }
 
-        if name == "submit_skill_result":
+        if name in _FRAME_RESULT_TOOL_NAMES:
             structured_output = args.get("structured_output") or {}
             summary = args.get("summary", "")
             if not isinstance(summary, str):
@@ -1152,12 +1207,75 @@ def _is_non_recoverable_tool_error(result: Any) -> bool:
     )
 
 
+def _auto_submit_payload_from_business_function_result(
+    tool_name: str,
+    result: Any,
+) -> dict[str, Any] | None:
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        return None
+    if result.get("approval_wait") is True or result.get("suspend_id"):
+        return None
+    if tool_name != "invoke_business_function" and not _tool_function_id(tool_name, {}, result):
+        return None
+
+    gateway_result = result.get("result") if isinstance(result.get("result"), dict) else {}
+    if not gateway_result:
+        return None
+
+    payloads = _business_function_result_payload_candidates(gateway_result)
+    structured_output = _first_structured_action(payloads)
+    if structured_output is None:
+        return None
+
+    summary = _first_summary(payloads)
+    if not summary:
+        message = gateway_result.get("message")
+        summary = message if isinstance(message, str) and message.strip() else "业务函数已完成。"
+    return {
+        "summary": summary.strip(),
+        "structured_output": structured_output,
+    }
+
+
+def _business_function_result_payload_candidates(gateway_result: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    output_json = gateway_result.get("outputJson") or gateway_result.get("output_json")
+    if isinstance(output_json, str) and output_json.strip():
+        try:
+            decoded = json.loads(output_json)
+        except Exception:
+            decoded = None
+        if isinstance(decoded, dict):
+            candidates.append(decoded)
+            data = decoded.get("data")
+            if isinstance(data, dict):
+                candidates.append(data)
+    return candidates
+
+
+def _first_structured_action(payloads: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for payload in payloads:
+        for key in ("structured_output", "structuredOutput"):
+            value = payload.get(key)
+            if isinstance(value, dict) and isinstance(value.get("type"), str) and value.get("type").strip():
+                return _safe_content(value)
+    return None
+
+
+def _first_summary(payloads: list[dict[str, Any]]) -> str:
+    for payload in payloads:
+        value = payload.get("summary") or payload.get("message")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _has_runtime_memory_terminal_tool_call(tool_calls: list[dict[str, Any]]) -> bool:
     return any(_is_runtime_memory_terminal_tool_call(call) for call in tool_calls)
 
 
 def _is_runtime_memory_terminal_tool_call(call: dict[str, Any]) -> bool:
-    return call.get("name") in {"submit_skill_result", "shelve_interrupted_frame", "handoff_to_parent"}
+    return call.get("name") in {*_FRAME_RESULT_TOOL_NAMES, "shelve_interrupted_frame", "handoff_to_parent"}
 
 
 def _assistant_response_text(response: Any) -> str:
@@ -1303,7 +1421,7 @@ def _generic_agent_manifest(frame: Any) -> SkillManifest:
             "invoke_business_function",
             "analyze_attachment",
             "analyze_spreadsheet",
-            "submit_skill_result",
+            _FRAME_RESULT_TOOL_NAME,
             "handoff_to_parent",
             "read_frame_execution_report",
         ],
@@ -1318,6 +1436,46 @@ def _agent_frame_manifest(manifest: SkillManifest) -> SkillManifest:
         if tool_name not in allowed:
             allowed.append(tool_name)
     return manifest.model_copy(update={"allowed_tools": allowed})
+
+
+def _root_manifest_with_bound_skill(
+    manifest: SkillManifest,
+    runtime_context: dict[str, Any],
+) -> SkillManifest:
+    if manifest.id != "system.root":
+        return manifest
+    raw = runtime_context.get("_root_bound_skill_manifest")
+    if not isinstance(raw, dict):
+        return manifest
+    try:
+        bound = SkillManifest.model_validate(raw)
+    except Exception:
+        logger.warning("Invalid root-bound skill manifest ignored", exc_info=True)
+        return manifest
+
+    sections = [manifest.markdown_body.strip()]
+    sections.append(
+        "\n".join([
+            "当前 Root 绑定了一个来自本地 Skill Registry 的业务 Agent Skill。",
+            f"Skill ID: {bound.id}",
+            f"Skill Name: {bound.name}",
+            f"Skill Description: {bound.description}",
+            "",
+            "以下 Skill 材料是当前 Root 回合的主要业务能力说明，应按其要求处理用户请求。",
+            "当用户明确指定该 Skill 或 Root 已绑定该 Skill 时，优先执行该 Skill 的职责；"
+            "不要因为上下文中存在其他业务字段而改走不相关的默认业务流程。",
+            bound.markdown_body.strip(),
+        ]).strip()
+    )
+    allowed = list(manifest.allowed_tools or [])
+    for tool_name in bound.allowed_tools or []:
+        if tool_name not in allowed:
+            allowed.append(tool_name)
+    return manifest.model_copy(update={
+        "description": bound.description or manifest.description,
+        "markdown_body": "\n\n".join(section for section in sections if section),
+        "allowed_tools": allowed,
+    })
 
 
 def _manifest_with_default_file_tools(
@@ -1336,6 +1494,23 @@ def _manifest_with_default_file_tools(
     if not changed:
         return manifest
     return manifest.model_copy(update={"allowed_tools": allowed})
+
+
+def _manifest_with_command_tool(
+    manifest: SkillManifest,
+    *,
+    command_available: bool,
+) -> SkillManifest:
+    allowed = list(manifest.allowed_tools or [])
+    if command_available:
+        if "command" in allowed:
+            return manifest
+        return manifest.model_copy(update={"allowed_tools": [*allowed, "command"]})
+
+    filtered = [tool_name for tool_name in allowed if tool_name != "command"]
+    if len(filtered) == len(allowed):
+        return manifest
+    return manifest.model_copy(update={"allowed_tools": filtered})
 
 
 # ---------------------------------------------------------------------------

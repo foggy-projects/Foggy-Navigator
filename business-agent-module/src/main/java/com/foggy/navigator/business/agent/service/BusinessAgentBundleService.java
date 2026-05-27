@@ -8,6 +8,7 @@ import com.foggy.navigator.business.agent.model.form.SyncBusinessAgentBundleForm
 import com.foggy.navigator.business.agent.model.form.SyncSkillBundleForm;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +28,7 @@ public class BusinessAgentBundleService {
     private final SkillRegistryService skillRegistryService;
     private final ClientAppService clientAppService;
     private final ClientAppModelConfigGrantService modelConfigGrantService;
+    private final AgentDefaultBindingService agentDefaultBindingService;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -53,15 +55,21 @@ public class BusinessAgentBundleService {
         entity.setAgentId(agentId);
         entity.setUserId(actorUserId);
         entity.setTenantId(tenantId);
+        entity.setOwnerType(ResourceOwnerType.CLIENT_APP);
+        entity.setOwnerId(clientAppId);
+        entity.setClientAppId(clientAppId);
         entity.setName(form.getName().trim());
         entity.setDescription(blankToNull(form.getDescription()));
         entity.setAgentType(AGENT_TYPE_LANGGRAPH);
         entity.setWorkerId(form.getWorkerId().trim());
+        entity.setDefaultDirectoryId(blankToNull(form.getDefaultDirectoryId()));
         entity.setDefaultModelConfigId(defaultModelConfigId);
         entity.setDefaultModel(blankToNull(form.getDefaultModel()));
         entity.setSkills(buildSkillSummary(skillId, form.getName(), form.getDescription()));
         entity.setAgentProfile(buildBusinessAgentProfile(clientAppId, skillId));
+        entity.setEnabled(true);
         CodingAgentEntity saved = agentRepository.save(entity);
+        agentDefaultBindingService.ensureDefaults(saved);
 
         SkillBundleDTO skillBundle = syncPublicSkillBundle(tenantId, actorUserId, form, clientAppId, skillId);
         return BusinessAgentBundleDTO.fromEntity(saved, clientAppId, skillId, skillBundle);

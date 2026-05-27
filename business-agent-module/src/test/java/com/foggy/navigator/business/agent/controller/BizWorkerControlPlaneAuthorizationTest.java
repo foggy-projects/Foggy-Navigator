@@ -33,6 +33,16 @@ class BizWorkerControlPlaneAuthorizationTest {
     }
 
     @Test
+    void upstreamAdminWorkerIdentityController_uses_upstream_admin_key_guard() {
+        assertNull(UpstreamAdminWorkerIdentityController.class.getAnnotation(RequireAuth.class));
+    }
+
+    @Test
+    void upstreamAdminModelConfigController_uses_upstream_admin_key_guard() {
+        assertNull(UpstreamAdminModelConfigController.class.getAnnotation(RequireAuth.class));
+    }
+
+    @Test
     void adminUpstreamAdminCredentialController_uses_operator_or_admin_guard() {
         assertNull(AdminUpstreamAdminCredentialController.class.getAnnotation(RequireAuth.class));
     }

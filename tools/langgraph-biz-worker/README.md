@@ -5,8 +5,8 @@
 与编程型 Worker（claude-worker / codex-worker）不同，Biz Worker 专注于：
 
 - 受控工具调用与结构化结果
-- Skill 按需加载、独立 Frame 隔离执行
-- 显式交卷协议（`submit_skill_result`）
+- Skill 按需加载并进入当前 frame 的 tool protocol
+- 显式 Agent frame 的独立生命周期、`submit_frame_result` 结构化完成与 handoff
 - 审批中断与恢复（Phase 6）
 - 可审计的执行痕迹
 
@@ -20,19 +20,13 @@ Navigator (Java)
 LangGraph Biz Worker (FastAPI + LangGraph)
   │
   ├─ Root Graph ─────────────────────────────────────────┐
-  │   route_skill → open_frame → run_skill → close_frame │
-  │                                  │                    │
-  │                    ┌─────────────┘                    │
-  │                    ▼                                  │
-  │              Skill Subgraph                           │
-  │   ┌──────────────────────────────────┐               │
-  │   │ gather_evidence → analyze        │               │
-  │   │   ├── child_skill_1 (Frame B)   │               │
-  │   │   ├── child_skill_2 (Frame C)   │               │
-  │   │   └── aggregate → submit_result │               │
-  │   └──────────────────────────────────┘               │
+  │   persistent root frame                               │
+  │     ├─ invoke_business_skill → load Skill material    │
+  │     ├─ invoke_business_function / command / files     │
+  │     ├─ natural final for ordinary turns               │
+  │     └─ invoke_business_agent → isolated Agent frame   │
   │                                                       │
-  │  SkillRuntime ← 状态机 + 完成协议 + 上下文隔离       │
+  │  SkillRuntime ← Frame 状态机 + 完成/暂停 + 上下文隔离 │
   │  FrameStore   ← Frame 持久化（首版内存）              │
   │  SkillRegistry← Manifest 加载（YAML）                │
   │  OutputContract← 三层校验（schema/business/state）    │
@@ -87,7 +81,8 @@ curl http://localhost:3061/health
 | `BIZ_WORKER_LLM_PROVIDER` | （空） | `openai` / `anthropic`，空=禁用 LLM |
 | `BIZ_WORKER_LLM_BASE_URL` | （空） | 自定义 LLM API 地址，可指向 `tools/mock-llm-service` |
 | `BIZ_WORKER_LLM_EXECUTE_SKILLS` | false | 启用 LLM tool-call loop 执行 Skill |
-| `BIZ_WORKER_LLM_SKILL_MAX_ITERATIONS` | 6 | 单个 Skill 最大模型轮次 |
+| `BIZ_WORKER_LLM_SKILL_MAX_ITERATIONS` | 20 | 单个 Skill 最大模型轮次 |
+| `BIZ_WORKER_ENABLE_COMMAND` | true | Linux worker 上启用真实 `command` 工具；仍需可写 delegated workspace、合法 `workdir` 和 `allowed_dirs` |
 | `BIZ_WORKER_NAVIGATOR_API_BASE` | http://localhost:8112 | Navigator 平台地址 |
 
 ## API
@@ -138,7 +133,7 @@ BIZ_WORKER_LLM_MODEL=mock-model
 BIZ_WORKER_LLM_EXECUTE_SKILLS=true
 ```
 
-`mock-llm-service/responses/scenarios/langgraph-biz-worker-skill.yaml` 已内置一条完整链路：路由到 `exception_triage`，依次调用 `mock_get_order`、`mock_get_vehicle_status`，最后调用 `submit_skill_result`。
+`mock-llm-service/responses/scenarios/langgraph-biz-worker-skill.yaml` 已内置一条结构化 frame 完成链路：路由到 `exception_triage`，依次调用 `mock_get_order`、`mock_get_vehicle_status`，最后调用 frame result 工具。新提示和 manifest 使用 `submit_frame_result`；`submit_skill_result` 仍作为旧脚本兼容别名保留。普通 Root 回合或顶层工具 smoke 可以直接用自然语言结束，不要求调用该工具。
 
 也可以通过 `BIZ_WORKER_ENV_FILE` 或启动参数切换配置：
 

@@ -1,11 +1,13 @@
 package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.ClientAppModelConfigGrantDTO;
+import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppModelConfigGrantEntity;
 import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -13,13 +15,23 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class ClientAppModelConfigGrantService {
 
     public static final String LANGGRAPH_BIZ_BACKEND = "LANGGRAPH_BIZ";
+    public static final String CLAUDE_CODE_BACKEND = "CLAUDE_CODE";
+    public static final String OPENAI_CODEX_BACKEND = "OPENAI_CODEX";
+    public static final String GEMINI_CLI_BACKEND = "GEMINI_CLI";
+    public static final Set<String> SUPPORTED_WORKER_BACKENDS = Set.of(
+            LANGGRAPH_BIZ_BACKEND,
+            CLAUDE_CODE_BACKEND,
+            OPENAI_CODEX_BACKEND,
+            GEMINI_CLI_BACKEND);
     public static final String STATUS_ENABLED = "ENABLED";
     public static final String STATUS_DISABLED = "DISABLED";
 
@@ -42,8 +54,8 @@ public class ClientAppModelConfigGrantService {
             throw new IllegalArgumentException("form is required");
         }
         requireText(form.getModelConfigId(), "modelConfigId is required");
-        clientAppService.requireClientApp(tenantId, clientAppId);
-        LlmModelConfigDTO model = requireModelConfig(tenantId, form.getModelConfigId());
+        ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
+        LlmModelConfigDTO model = requireModelConfig(tenantId, clientApp, form.getModelConfigId());
 
         ClientAppModelConfigGrantEntity existing = grantRepository
                 .findByClientAppIdAndModelConfigId(clientAppId, form.getModelConfigId())
@@ -106,7 +118,7 @@ public class ClientAppModelConfigGrantService {
 
     @Transactional
     public ClientAppModelConfigGrantDTO setDefault(String tenantId, String clientAppId, Long grantId) {
-        clientAppService.requireClientApp(tenantId, clientAppId);
+        ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
         ClientAppModelConfigGrantEntity grant = requireGrant(clientAppId, grantId);
         if (!tenantId.equals(grant.getTenantId())) {
             throw new IllegalArgumentException("grant tenant mismatch");
@@ -114,7 +126,7 @@ public class ClientAppModelConfigGrantService {
         if (!STATUS_ENABLED.equals(grant.getStatus())) {
             throw new IllegalArgumentException("disabled grant cannot be default");
         }
-        LlmModelConfigDTO model = requireModelConfig(tenantId, grant.getModelConfigId());
+        LlmModelConfigDTO model = requireModelConfig(tenantId, clientApp, grant.getModelConfigId());
         clearDefaults(clientAppId, model.getCategory());
         grant.setIsDefault(true);
         return toDTO(grantRepository.save(grant));
@@ -129,13 +141,13 @@ public class ClientAppModelConfigGrantService {
     public String resolveEffectiveModelConfigId(String tenantId, String clientAppId,
                                                 String requestedModelConfigId,
                                                 LlmModelCategory category) {
-        clientAppService.requireClientApp(tenantId, clientAppId);
+        ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
         ClientAppModelConfigGrantEntity grant;
         if (StringUtils.hasText(requestedModelConfigId)) {
             grant = grantRepository.findByClientAppIdAndModelConfigIdAndStatus(
                             clientAppId, requestedModelConfigId, STATUS_ENABLED)
                     .orElseThrow(() -> new IllegalArgumentException("requested model config is not granted"));
-            LlmModelConfigDTO model = requireModelConfig(tenantId, grant.getModelConfigId());
+            LlmModelConfigDTO model = requireModelConfig(tenantId, clientApp, grant.getModelConfigId());
             requireCategory(model, category);
             return grant.getModelConfigId();
         } else {
@@ -147,7 +159,7 @@ public class ClientAppModelConfigGrantService {
                     .findFirst()
                     .orElseThrow(() -> new IllegalArgumentException(defaultModelRequiredMessage(category)));
         }
-        requireModelConfig(tenantId, grant.getModelConfigId());
+        requireModelConfig(tenantId, clientApp, grant.getModelConfigId());
         return grant.getModelConfigId();
     }
 
@@ -170,21 +182,53 @@ public class ClientAppModelConfigGrantService {
                 .orElseThrow(() -> new IllegalArgumentException("grant not found: " + grantId));
     }
 
-    private LlmModelConfigDTO requireModelConfig(String tenantId, String modelConfigId) {
+    private LlmModelConfigDTO requireModelConfig(String tenantId, ClientAppEntity clientApp, String modelConfigId) {
         LlmModelConfigDTO model = llmModelManager.getModelConfig(modelConfigId)
                 .orElseThrow(() -> new IllegalArgumentException("model config not found: " + modelConfigId));
         if (!tenantId.equals(model.getTenantId())) {
             throw new IllegalArgumentException("model config tenant mismatch");
         }
-        String backend = model.getWorkerBackend();
-        boolean isValidBackend = LANGGRAPH_BIZ_BACKEND.equals(backend)
-                || "CLAUDE_CODE".equals(backend)
-                || "OPENAI_CODEX".equals(backend)
-                || "GEMINI_CLI".equals(backend);
-        if (!isValidBackend) {
-            throw new IllegalArgumentException("model config worker backend must be LANGGRAPH_BIZ_BACKEND, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
+        requireVisibleModelOwner(clientApp, model);
+        if (Boolean.FALSE.equals(model.getEnabled())) {
+            throw new IllegalArgumentException("model config is disabled");
+        }
+        String backend = normalizeWorkerBackend(model.getWorkerBackend());
+        if (!isSupportedWorkerBackend(backend)) {
+            throw new IllegalArgumentException("model config worker backend must be LANGGRAPH_BIZ, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
         }
         return model;
+    }
+
+    public static String normalizeWorkerBackend(String workerBackend) {
+        if (!StringUtils.hasText(workerBackend)) {
+            return null;
+        }
+        return workerBackend.trim()
+                .replace('-', '_')
+                .toUpperCase(Locale.ROOT);
+    }
+
+    public static boolean isSupportedWorkerBackend(String workerBackend) {
+        return SUPPORTED_WORKER_BACKENDS.contains(normalizeWorkerBackend(workerBackend));
+    }
+
+    private void requireVisibleModelOwner(ClientAppEntity clientApp, LlmModelConfigDTO model) {
+        ResourceOwnerType ownerType = model.getOwnerType();
+        if (ownerType == null) {
+            throw new IllegalArgumentException("model config ownerType is required");
+        }
+        if (ownerType == ResourceOwnerType.PLATFORM) {
+            return;
+        }
+        if (ownerType == ResourceOwnerType.UPSTREAM_SYSTEM
+                && StringUtils.hasText(clientApp.getUpstreamSystemId())
+                && clientApp.getUpstreamSystemId().equals(model.getOwnerId())) {
+            return;
+        }
+        if (ownerType == ResourceOwnerType.CLIENT_APP && clientApp.getClientAppId().equals(model.getOwnerId())) {
+            return;
+        }
+        throw new IllegalArgumentException("model config is not visible to this ClientApp");
     }
 
     private void clearDefaults(String clientAppId, LlmModelCategory category) {
@@ -215,7 +259,8 @@ public class ClientAppModelConfigGrantService {
 
     private boolean matchesDefaultBucket(String tenantId, ClientAppModelConfigGrantEntity grant, LlmModelCategory category) {
         try {
-            LlmModelConfigDTO model = requireModelConfig(tenantId, grant.getModelConfigId());
+            ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, grant.getClientAppId());
+            LlmModelConfigDTO model = requireModelConfig(tenantId, clientApp, grant.getModelConfigId());
             if (category == LlmModelCategory.VISION) {
                 return model.getCategory() == LlmModelCategory.VISION;
             }

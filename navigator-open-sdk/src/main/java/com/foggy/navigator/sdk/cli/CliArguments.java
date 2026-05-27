@@ -73,6 +73,7 @@ final class CliArguments {
         }
         if (words.size() >= 2 && ("worker".equals(words.get(0))
                 || "directory".equals(words.get(0))
+                || "worker-host".equals(words.get(0))
                 || "worker-pool".equals(words.get(0)))) {
             return words.get(0) + " " + words.get(1);
         }

@@ -24,7 +24,7 @@ def _manifest() -> SkillManifest:
         description="Root agent.",
         markdown_body="根 Agent 指令。",
         output_schema={"type": "object"},
-        allowed_tools=["submit_skill_result"],
+        allowed_tools=["submit_frame_result"],
         promote_to_parent=["result_summary", "structured_output"],
     )
 
@@ -114,7 +114,7 @@ def test_build_initial_llm_messages_restores_runtime_protocol_messages(monkeypat
     record_assistant_runtime_message(
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {"summary": "A1"},
         }]),
         runtime_context,
@@ -175,7 +175,7 @@ def test_build_initial_llm_messages_ignores_invalid_open_tool_call_recovery(monk
     record_assistant_runtime_message(
         AIMessage(content="", tool_calls=[{
             "id": "call_open",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {"summary": "A1"},
         }]),
         runtime_context,

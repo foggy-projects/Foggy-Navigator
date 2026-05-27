@@ -9,7 +9,7 @@
             <el-button type="primary" size="small">+ 添加</el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="worker">添加 Worker</el-dropdown-item>
+                <el-dropdown-item command="worker">添加物理 Worker</el-dropdown-item>
                 <el-dropdown-item command="directory" :disabled="!selectedWorkerId">
                   添加工作目录
                 </el-dropdown-item>
@@ -472,6 +472,7 @@
           @reconnect="handlePaneReconnect"
           @forward="handlePaneForward"
           @link-click="handleLinkClick"
+          @artifact-open="handleArtifactOpen"
           @focus="focusedPaneId = $event"
         >
           <template #header-extra="{ paneState }">
@@ -922,6 +923,40 @@
         />
       </SshTerminalPanel>
     </main>
+
+    <el-drawer
+      v-model="artifactPanel.visible"
+      :title="artifactPanel.title"
+      direction="rtl"
+      size="52%"
+      destroy-on-close
+      class="artifact-drawer"
+    >
+      <iframe
+        v-if="artifactPanel.url"
+        :src="artifactPanel.url"
+        :sandbox="artifactPanel.sandbox"
+        class="artifact-frame"
+        referrerpolicy="strict-origin-when-cross-origin"
+      />
+    </el-drawer>
+
+    <el-dialog
+      v-model="artifactDialog.visible"
+      :title="artifactDialog.title"
+      width="82vw"
+      top="5vh"
+      destroy-on-close
+      class="artifact-dialog"
+    >
+      <iframe
+        v-if="artifactDialog.url"
+        :src="artifactDialog.url"
+        :sandbox="artifactDialog.sandbox"
+        class="artifact-dialog-frame"
+        referrerpolicy="strict-origin-when-cross-origin"
+      />
+    </el-dialog>
 
     <!-- Right Panel: Task History -->
     <aside v-if="selectedWorkerId || workerState.activeTasks.value.length > 0" :class="['worker-history', { collapsed: prefs.rightPanelCollapsed }]">
@@ -1434,12 +1469,12 @@
     </aside>
 
     <!-- Add Worker Dialog -->
-    <el-dialog v-model="showAddDialog" title="添加 Worker" width="480px">
+    <el-dialog v-model="showAddDialog" title="添加物理 Worker" width="480px">
       <el-form :model="addForm" label-position="top">
-        <el-form-item label="Worker 类型" required>
+        <el-form-item label="执行环境类型" required>
           <el-radio-group v-model="addForm.workerBackend">
-            <el-radio value="CLAUDE_CODE">Claude Code Worker</el-radio>
-            <el-radio value="LANGGRAPH_BIZ">LangGraph Biz Worker</el-radio>
+            <el-radio value="CLAUDE_CODE">Claude Code capability</el-radio>
+            <el-radio value="LANGGRAPH_BIZ">LangGraph Biz capability</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="名称" required>
@@ -1489,7 +1524,7 @@
           </el-form-item>
         </template>
         <template v-if="addForm.workerBackend !== 'LANGGRAPH_BIZ'">
-          <el-divider content-position="left">Codex 配置（可选）</el-divider>
+          <el-divider content-position="left">Codex backend capability（可选）</el-divider>
           <el-form-item label="Codex 地址">
             <el-input v-model="addForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
           </el-form-item>
@@ -1499,7 +1534,7 @@
           <el-form-item label="Codex 默认模型">
             <el-input v-model="addForm.codexModel" placeholder="如：codex-mini-latest" />
           </el-form-item>
-          <el-divider content-position="left">Gemini 配置（可选）</el-divider>
+          <el-divider content-position="left">Gemini backend capability（可选）</el-divider>
           <el-form-item label="Gemini 地址">
             <el-input v-model="addForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
           </el-form-item>
@@ -1518,11 +1553,11 @@
     </el-dialog>
 
     <!-- Edit Worker Dialog -->
-    <el-dialog v-model="showEditDialog" title="编辑 Worker" width="480px">
+    <el-dialog v-model="showEditDialog" title="编辑物理 Worker" width="480px">
       <el-form :model="editForm" label-position="top">
-        <el-form-item label="Worker 类型">
-          <el-tag v-if="selectedWorkerIsLangGraph" effect="plain">LangGraph Biz Worker</el-tag>
-          <el-tag v-else effect="plain">Claude Code Worker</el-tag>
+        <el-form-item label="执行环境类型">
+          <el-tag v-if="selectedWorkerIsLangGraph" effect="plain">LangGraph Biz capability</el-tag>
+          <el-tag v-else effect="plain">Claude Code capability</el-tag>
         </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="editForm.name" />
@@ -1579,7 +1614,7 @@
           <el-form-item label="Folder 前缀">
             <el-input v-model="editForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
           </el-form-item>
-          <el-divider content-position="left">Codex 配置（可选）</el-divider>
+          <el-divider content-position="left">Codex backend capability（可选）</el-divider>
           <el-form-item label="Codex 地址">
             <el-input v-model="editForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
           </el-form-item>
@@ -1594,7 +1629,7 @@
           <el-form-item label="Codex 默认模型">
             <el-input v-model="editForm.codexModel" placeholder="如：codex-mini-latest" />
           </el-form-item>
-          <el-divider content-position="left">Gemini 配置（可选）</el-divider>
+          <el-divider content-position="left">Gemini backend capability（可选）</el-divider>
           <el-form-item label="Gemini 地址">
             <el-input v-model="editForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
           </el-form-item>
@@ -2486,6 +2521,9 @@
           <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="选择 LLM 配置">
             <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
           </el-select>
+          <div class="form-tip" style="margin-top: 4px">
+            LLM 配置决定 backend，工作目录决定物理 Worker；二者需匹配同一种执行能力。
+          </div>
         </el-form-item>
         <el-form-item label="默认模型">
           <el-select
@@ -2530,6 +2568,9 @@
           <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="选择 LLM 配置">
             <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
           </el-select>
+          <div class="form-tip" style="margin-top: 4px">
+            LLM 配置决定 backend，工作目录决定物理 Worker；二者需匹配同一种执行能力。
+          </div>
         </el-form-item>
         <el-form-item label="默认模型">
           <el-select
@@ -2697,18 +2738,27 @@ import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
-import { ALL_MODEL_OPTIONS, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
+import { ALL_MODEL_OPTIONS, isModelConfigCompatibleWithWorker, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
 import { inferTaskWorkerBackend, isClaudeCodeTask, providerTypeFromWorkerBackend, taskSessionRefLabel } from '@/utils/workerBackend'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone, WorkerBackend } from '@/types'
-import type { AipMessageType, ChatMessage } from '@foggy/chat'
+import type { AipMessageType, ChatMessage, NavigatorUiAction, NavigatorUiArtifact } from '@foggy/chat'
 
 const MAX_PANES = 1
 const BASE_DOCUMENT_TITLE = '道同'
 type RegisterableWorkerBackend = Extract<WorkerBackend, 'CLAUDE_CODE' | 'LANGGRAPH_BIZ'>
+type ArtifactFrameState = {
+  visible: boolean
+  title: string
+  url: string
+  sandbox: string
+}
 
 const router = useRouter()
 const workerState = useClaudeWorker()
 const agentState = useCodingAgent()
+const DEFAULT_ARTIFACT_SANDBOX = 'allow-forms allow-scripts allow-popups allow-downloads'
+const artifactPanel = ref<ArtifactFrameState>({ visible: false, title: '', url: '', sandbox: DEFAULT_ARTIFACT_SANDBOX })
+const artifactDialog = ref<ArtifactFrameState>({ visible: false, title: '', url: '', sandbox: DEFAULT_ARTIFACT_SANDBOX })
 
 // --- Agent management state ---
 const showAgentRegisterDialog = ref(false)
@@ -3599,7 +3649,9 @@ async function loadPlatformModelConfig() {
     ])
     // 防止竞态：如果在 await 期间又发起了新的调用，丢弃本次过期结果
     if (seq !== loadPlatformModelConfigSeq) return
-    platformModels.value = models.filter(isSelectablePlatformModel)
+    platformModels.value = models
+      .filter(isSelectablePlatformModel)
+      .filter((model) => isModelConfigCompatibleWithWorker(model, selectedWorkerEntity.value))
     if (restoreFocusedPaneModelSelection()) return
     // 如果在 await 期间已发生会话级恢复，跳过模型选择（会话优先级高于 Worker 级默认）
     if (restoreVer !== sessionRestoreVersion) return
@@ -4933,6 +4985,152 @@ async function handleLinkClick(paneId: string, payload: { href: string; text: st
   }
 }
 
+function handleArtifactOpen(_paneId: string, action: NavigatorUiAction) {
+  const artifact = action.artifact
+  if (artifact.kind === 'route') {
+    openRouteArtifact(artifact)
+    return
+  }
+
+  const resolved = resolveArtifactUrl(artifact.uri || artifact.fallbackUrl || '')
+  if (!resolved) {
+    ElMessage.warning('Artifact URL 无效')
+    return
+  }
+
+  if (artifact.kind === 'iframe') {
+    if (!isAllowedArtifactFrameUrl(resolved)) {
+      openArtifactFallback(artifact, resolved)
+      return
+    }
+    openFrameArtifact(action, resolved)
+    return
+  }
+
+  if (artifact.kind === 'link') {
+    openArtifactUrl(resolved, artifact.openMode)
+    return
+  }
+
+  ElMessage.warning('不支持的 Artifact 类型')
+}
+
+function openRouteArtifact(artifact: NavigatorUiArtifact) {
+  const routeName = typeof artifact.routeName === 'string' ? artifact.routeName : ''
+  const routePath = typeof artifact.routePath === 'string' ? artifact.routePath : ''
+  if (routeName) {
+    router.push({ name: routeName, query: objectQuery(artifact.query) }).catch(() => {})
+    return
+  }
+
+  const target = routePath || artifact.uri || artifact.fallbackUrl || ''
+  if (!target) {
+    ElMessage.warning('Artifact 路由无效')
+    return
+  }
+
+  const resolved = resolveArtifactUrl(target)
+  if (!resolved || resolved.origin !== window.location.origin) {
+    ElMessage.warning('只允许跳转到 NAVI 内部路由')
+    return
+  }
+
+  router.push(resolved.hash || `${resolved.pathname}${resolved.search}`).catch(() => {
+    window.location.assign(resolved.toString())
+  })
+}
+
+function openFrameArtifact(action: NavigatorUiAction, url: URL) {
+  const title = action.artifact.title || action.label || '业务产物'
+  const sandbox = artifactSandbox()
+  const mode = action.artifact.openMode || 'side_panel'
+
+  if (mode === 'new_tab' || mode === 'current_page') {
+    openArtifactUrl(url, mode)
+    return
+  }
+
+  if (mode === 'dialog') {
+    artifactDialog.value = { visible: true, title, url: url.toString(), sandbox }
+    return
+  }
+
+  artifactPanel.value = { visible: true, title, url: url.toString(), sandbox }
+}
+
+function openArtifactFallback(artifact: NavigatorUiArtifact, blockedUrl: URL) {
+  const fallback = resolveArtifactUrl(artifact.fallbackUrl || artifact.uri || '')
+  if (fallback && isAllowedExternalArtifactUrl(fallback)) {
+    window.open(fallback.toString(), '_blank', 'noopener,noreferrer')
+    ElMessage.warning('该页面不在 iframe 白名单内，已降级为新页签打开')
+    return
+  }
+  ElMessage.warning(`Artifact URL 未加入白名单: ${blockedUrl.origin}`)
+}
+
+function openArtifactUrl(url: URL, mode?: NavigatorUiArtifact['openMode']) {
+  if (!isAllowedExternalArtifactUrl(url)) {
+    ElMessage.warning(`Artifact URL 未加入白名单: ${url.origin}`)
+    return
+  }
+  if (mode === 'current_page') {
+    window.location.assign(url.toString())
+  } else {
+    window.open(url.toString(), '_blank', 'noopener,noreferrer')
+  }
+}
+
+function resolveArtifactUrl(value: string): URL | null {
+  if (!value || /^\s*javascript:/i.test(value)) return null
+  try {
+    return new URL(value, window.location.origin)
+  } catch {
+    return null
+  }
+}
+
+function isAllowedArtifactFrameUrl(url: URL): boolean {
+  if (!['http:', 'https:'].includes(url.protocol)) return false
+  return allowedArtifactOrigins().has(url.origin)
+}
+
+function isAllowedExternalArtifactUrl(url: URL): boolean {
+  if (!['http:', 'https:'].includes(url.protocol)) return false
+  return url.origin === window.location.origin || allowedArtifactOrigins().has(url.origin)
+}
+
+function allowedArtifactOrigins(): Set<string> {
+  const raw = import.meta.env.VITE_NAVIGATOR_ARTIFACT_ALLOWED_ORIGINS || ''
+  const origins = new Set<string>([window.location.origin])
+  for (const item of String(raw).split(',')) {
+    const trimmed = item.trim()
+    if (!trimmed) continue
+    try {
+      origins.add(new URL(trimmed).origin)
+    } catch {
+      // Ignore invalid operator-provided origins.
+    }
+  }
+  return origins
+}
+
+function artifactSandbox(): string {
+  const configured = import.meta.env.VITE_NAVIGATOR_ARTIFACT_IFRAME_SANDBOX
+  return typeof configured === 'string' && configured.trim()
+    ? configured.trim()
+    : DEFAULT_ARTIFACT_SANDBOX
+}
+
+function objectQuery(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const query: Record<string, string> = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (raw == null) continue
+    query[key] = String(raw)
+  }
+  return query
+}
+
 async function openCodeServer(network: 'internal' | 'public') {
   if (!selectedDirectoryId.value) return
   const worker = selectedWorkerEntity.value
@@ -6042,7 +6240,7 @@ async function doResync(taskId: string, pane?: TaskPaneState) {
         break
       }
       case 'MESSAGES_SYNCED': {
-        // 策略 B：CLI 已退出，从 Claude Code Worker 会话补齐了消息
+        // 策略 B：CLI 已退出，从 Claude backend 会话补齐了消息
         const imported = result.messageSync?.imported ?? 0
         if (pane) {
           if (pane.task.value) pane.task.value.status = 'COMPLETED'
@@ -6097,7 +6295,7 @@ async function handleResyncFromList(conv: ConversationGroup) {
 
 /**
  * 策略 B 同步后重新加载 pane 中的消息。
- * 从 Claude Code Worker 会话读取最新消息并替换 ChatPanel 显示。
+ * 从 Claude backend 会话读取最新消息并替换 ChatPanel 显示。
  */
 async function reloadPaneMessages(pane: TaskPaneState) {
   const task = pane.task.value
@@ -7659,6 +7857,26 @@ function handlePopOutTerminal() {
   border-radius: 16px;
   padding: 0 20px;
   height: 32px;
+}
+
+:deep(.artifact-drawer .el-drawer__body),
+:deep(.artifact-dialog .el-dialog__body) {
+  padding: 0;
+}
+
+.artifact-frame,
+.artifact-dialog-frame {
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.artifact-frame {
+  height: calc(100vh - 56px);
+}
+
+.artifact-dialog-frame {
+  height: 78vh;
 }
 
 .toolbar-select {

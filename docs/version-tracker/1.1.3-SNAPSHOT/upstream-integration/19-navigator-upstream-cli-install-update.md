@@ -49,14 +49,23 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/ins
 
 当前已发布版本：
 
-- version: `1.0.4`
-- released: `2026-05-18`
-- buildId: `1.0.4+354ba23aed93.dirty`
-- gitCommit: `354ba23aed93bb894c332a5268850ec0555f00c1`
+- version: `1.0.5`
+- released: `2026-05-23`
+- buildId: `1.0.5+ad6b0ba6a8df.dirty`
+- gitCommit: `ad6b0ba6a8df137f1129d2cbcfd6045518cfa03a`
 - gitDirty: `true`
-- Windows archive: `1.0.4/navigator-upstream-cli-1.0.4-windows.zip`
-- SHA256: `3b7737d28a1ab9654fe07e76f4c6821f417a21432a8fb786502298aab7286113`
-- release smoke: `docs/version-tracker/1.1.3-SNAPSHOT/coverage/upstream-client-app-admin-key-cli-release-smoke.md`
+- Windows archive: `1.0.5/navigator-upstream-cli-1.0.5-windows.zip`
+- SHA256: `735f574bec9989f06550348379feb956b312f5ca5f3196f711e2fd9e2451e6a6`
+- release smoke: remote installer smoke passed during `tools/navigator-upstream-cli/dist/upload.ps1 -Version 1.0.5 -AllowSameVersion`
+
+当前本地候选版本：
+
+- version: `1.0.7`
+- candidate date: `2026-05-24`
+- includes: owner-aware `upstream client-app issue-runtime-key` / `issue-runtime-credential`、Agent `modelVariant` runtime contract
+- local archive: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.7-windows.zip`
+- SHA256: 由最终提交后执行 `dist/package.ps1` 生成；不要在提交前把候选包 SHA 固化到文档，否则包内 `BUILD_INFO.gitCommit` 会与最终提交不一致。
+- note: 发布到 OBS 后，远程安装入口才会自动获取该版本；发布前可使用本仓库最终提交后生成的本地 archive 安装。
 
 安装脚本会：
 
@@ -126,18 +135,22 @@ NAVI_POLL_INTERVAL_SECONDS=4
 
 BizWorker `1.1.6-SNAPSHOT` 起，新会话 `ask` 默认由 Navigator / BizWorker 生成 `contextId`，上游只保存返回值用于续聊。不要在 profile 中预置一个固定 `contextId`，也不要把完整 UI transcript 或模型 token 预算放进 `clientContext`。当前 runtime context、Skill/Agent 边界和模型预算缺口见 `docs/version-tracker/1.1.6-SNAPSHOT/16-upstream-cli-skill-runtime-contract-alignment.md`。
 
+BizWorker 会把当前 account/private 与 public skill catalog 的 `id`、`name`、`description` 放入 Root system prompt；`allowed_skills` 只作为非空时的 catalog 过滤器。Biz actor/skill live smoke 不使用隐藏上下文字段做技能路由。需要指定某个 actor skill 时，把要求写进 `--message`，例如“请使用 `school-sim.actor.pm.m2.v1` 技能完成 ...”。不要在 `.navigator/upstream.env`、`clientContext` 或 metadata 中写 `businessSkillName`、`businessSkillId`、`skill_name` 等 prompt 路由字段。
+
 ## 常用命令
 
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream config check
+.\tools\navigator-upstream\navi.ps1 upstream client-app issue-runtime-key --client-app-id <clientAppId> --write-profile
 .\tools\navigator-upstream\navi.ps1 upstream runtime-token --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream owner-smoke
 .\tools\navigator-upstream\navi.ps1 upstream verify-agent-readiness --upstream-user-id <id>
 .\tools\navigator-upstream\navi.ps1 upstream ensure-grant --upstream-user-id <id>
 .\tools\navigator-upstream\navi.ps1 upstream ask --upstream-user-id <id> --message "..."
-.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --poll
+.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --agent-code <agentId> --poll
 ```
 
-`runtime-token --write-profile` 只写入当前项目 gitignored profile，不打印完整 token。带 `NAVI_CLIENT_APP_SECRET` 的项目中，后续 runtime 命令也会自动在内存中交换 fresh runtime token，避免上游手工复制 token。
+`client-app issue-runtime-key --write-profile` 使用 upstream-admin credential 为当前 ClientApp 签发 runtime key/secret，只写入 gitignored profile，并清空旧 runtime access token。`runtime-token --write-profile` 只写入当前项目 gitignored profile，不打印完整 token。带 `NAVI_CLIENT_APP_SECRET` 的项目中，后续 runtime 命令也会自动在内存中交换 fresh runtime token，避免上游手工复制 token。`owner-smoke` 是当前推荐的发布前置检查，会验证 profile 安全、runtime auth、readiness，以及 Agent / Model / PhysicalWorker backend capability / Workspace 资源闭环。
 
 常规使用不需要传 `--profile`。只有临时切换配置或排查问题时才使用：
 
@@ -172,6 +185,7 @@ E2E 回归使用独立 wrapper，仍读取同一个 project-local `.navigator/up
 - 同版本也会比较本地 `RELEASE_MANIFEST.json` 中的包 SHA256；SHA 不一致时会刷新安装。
 - 重新运行安装脚本覆盖 `tools/navigator-upstream/`。
 - 保留项目自己的 `.navigator/upstream.env`。
+- 清理旧 `navigator-open-sdk-*.jar`；wrapper 运行时也只会选择与 `VERSION` 匹配的一份 SDK jar，避免覆盖安装后旧 jar 抢先加载旧 CLI。
 
 ## Navigator 侧打包发布
 
@@ -247,5 +261,6 @@ https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli
 - `No release URL configured`：通过远程安装脚本重新安装，或设置 `NAVI_UPSTREAM_CLI_URL`。
 - `Profile path is not git-ignored`：确认上游项目 `.gitignore` 包含 `.navigator/upstream.env`。
 - `verify-agent-readiness` 仍提示缺少 token：确认已经升级到包含 issue #104 修正的 CLI，并且 `.navigator/upstream.env` 中有 `NAVI_CLIENT_APP_KEY` 与 `NAVI_CLIENT_APP_SECRET`。
+- `owner-smoke resources FAIL missing=effectiveDirectoryId`：确认已创建 Navigator 工作目录并绑定到 Agent；只有该 Agent 确认不需要 workspace 时才使用 `--no-directory-required`。
 - `client app credential expired`：刷新当前上游项目自己的 ClientApp runtime credential。
 - `Agent not found`：确认 `.navigator/upstream.env` 中 `NAVI_AGENT_CODE` 是当前环境已注册的 agent。

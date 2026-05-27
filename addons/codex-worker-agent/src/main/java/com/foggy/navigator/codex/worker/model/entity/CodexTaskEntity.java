@@ -50,6 +50,10 @@ public class CodexTaskEntity {
     @Transient
     private String resolvedAgentId;
 
+    /** OpenAPI/A2A contextId（不持久化到 codex_tasks，sync 到统一 SessionTask task_state_json） */
+    @Transient
+    private String contextId;
+
     @Column(columnDefinition = "TEXT")
     private String prompt;
 

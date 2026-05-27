@@ -108,6 +108,7 @@ public class CodexTaskService implements TaskQueryProvider {
         form.setDirectoryId((String) params.get("directoryId"));
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setContextId((String) params.get("contextId"));
         form.setImages((String) params.get("images"));
         form.setAttachments(attachmentsParam(params.get("attachments")));
         if (params.get("maxTurns") instanceof Number n) {
@@ -130,7 +131,7 @@ public class CodexTaskService implements TaskQueryProvider {
             throw new IllegalArgumentException("resume 操作必须指定 workerId");
         }
 
-        workerManagementFacade.validateWorkerOwnership(userId, form.getWorkerId());
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, form.getWorkerId());
 
         if (form.getCodexThreadId() == null || form.getCodexThreadId().isBlank()) {
             // Platform-only rewind clears the native Codex thread. Continue by starting
@@ -163,8 +164,8 @@ public class CodexTaskService implements TaskQueryProvider {
             throw new IllegalArgumentException("prompt is required");
         }
 
-        // 验证 Worker 存在且属于该用户（通过 WorkerManagementFacade SPI）
-        workerManagementFacade.validateWorkerOwnership(userId, form.getWorkerId());
+        // 验证 Worker 存在且当前 user/tenant 可访问（通过 WorkerManagementFacade SPI）
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, form.getWorkerId());
 
         String cwd = form.getCwd();
         if ((cwd == null || cwd.isBlank())
@@ -196,6 +197,7 @@ public class CodexTaskService implements TaskQueryProvider {
         entity.setUserId(userId);
         entity.setTenantId(tenantId);
         entity.setResolvedAgentId(effectiveAgentId);
+        entity.setContextId(form.getContextId());
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setModel(effectiveModelResolution.model());
@@ -483,6 +485,8 @@ public class CodexTaskService implements TaskQueryProvider {
         form.setDirectoryId((String) params.get("directoryId"));
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setSessionId((String) params.get("sessionId"));
+        form.setContextId((String) params.get("contextId"));
         form.setImages((String) params.get("images"));
         form.setAttachments(attachmentsParam(params.get("attachments")));
         form.setCodexThreadId((String) params.get("codexThreadId"));
@@ -589,6 +593,7 @@ public class CodexTaskService implements TaskQueryProvider {
                 .updatedAt(entity.getUpdatedAt())
                 // Codex-specific
                 .codexThreadId(entity.getCodexThreadId())
+                .contextId(resolveTaskContextId(entity))
                 .build();
     }
 
@@ -832,7 +837,7 @@ public class CodexTaskService implements TaskQueryProvider {
         sessionTask.setLastAliveAt(entity.getLastAliveAt());
         sessionTask.setCreatedAt(entity.getCreatedAt());
         sessionTask.setUpdatedAt(entity.getUpdatedAt());
-        sessionTask.setTaskStateJson(buildCodexTaskStateJson(entity));
+        sessionTask.setTaskStateJson(buildCodexTaskStateJson(entity, sessionTask.getTaskStateJson()));
         sessionTaskRepository.save(sessionTask);
     }
 
@@ -875,9 +880,10 @@ public class CodexTaskService implements TaskQueryProvider {
         return session;
     }
 
-    private String buildCodexTaskStateJson(CodexTaskEntity entity) {
-        Map<String, Object> state = new LinkedHashMap<>();
+    private String buildCodexTaskStateJson(CodexTaskEntity entity, String existingJson) {
+        Map<String, Object> state = parseTaskStateJson(existingJson);
         putIfNotBlank(state, "codexThreadId", entity.getCodexThreadId());
+        putIfNotBlank(state, "contextId", entity.getContextId());
         if (state.isEmpty()) {
             return null;
         }
@@ -886,6 +892,33 @@ public class CodexTaskService implements TaskQueryProvider {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize Codex task state", e);
         }
+    }
+
+    private Map<String, Object> parseTaskStateJson(String json) {
+        Map<String, Object> state = new LinkedHashMap<>();
+        if (json == null || json.isBlank()) {
+            return state;
+        }
+        try {
+            state.putAll(OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {}));
+        } catch (Exception e) {
+            log.debug("Failed to parse codex task state JSON: {}", e.getMessage());
+        }
+        return state;
+    }
+
+    private String resolveTaskContextId(CodexTaskEntity entity) {
+        if (entity.getContextId() != null && !entity.getContextId().isBlank()) {
+            return entity.getContextId();
+        }
+        if (sessionTaskRepository == null || entity.getTaskId() == null || entity.getTaskId().isBlank()) {
+            return null;
+        }
+        return sessionTaskRepository.findByTaskId(entity.getTaskId())
+                .map(SessionTaskEntity::getTaskStateJson)
+                .map(json -> readJsonValue(json, "contextId"))
+                .filter(contextId -> contextId != null && !contextId.isBlank())
+                .orElse(null);
     }
 
     private String mergeJsonValue(String json, String key, String value) {

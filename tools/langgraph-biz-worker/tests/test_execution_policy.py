@@ -30,6 +30,29 @@ def test_execution_policy_normalizes_aliases(tmp_path):
     assert policy.allows_tool("delete_order") is False
 
 
+def test_execution_policy_normalizes_workspace_governance_payloads(tmp_path):
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+
+    policy = ExecutionPolicy.from_context({
+        "execution_policy": {
+            "workdir": str(workdir),
+            "readOnly": "true",
+            "quotaPolicy": {"maxBytes": 128},
+            "retentionPolicy": {"days": 7},
+            "concurrencyPolicy": {"maxWriters": 1},
+        }
+    })
+
+    assert policy.read_only is True
+    assert policy.quota_policy == {"maxBytes": 128}
+    assert policy.retention_policy == {"days": 7}
+    assert policy.concurrency_policy == {"maxWriters": 1}
+    assert policy.max_write_bytes(1024) == 128
+    assert policy.to_context()["execution_policy"]["read_only"] is True
+    assert policy.to_context()["execution_policy"]["quota_policy"] == {"maxBytes": 128}
+
+
 def test_execution_policy_defaults_allowed_dirs_to_workdir(tmp_path):
     workdir = tmp_path / "project"
     workdir.mkdir()

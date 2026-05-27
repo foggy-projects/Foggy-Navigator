@@ -1,6 +1,11 @@
 package com.foggy.navigator.claude.worker.model.form;
 
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import lombok.Data;
+
+import java.util.List;
 
 /**
  * 创建工作目录表单
@@ -20,4 +25,29 @@ public class CreateWorkingDirectoryForm {
     private String defaultAuthToken;
     /** optional, 默认 Base URL */
     private String defaultBaseUrl;
+    /** optional, resource owner type for upstream-facing directory resources */
+    private ResourceOwnerType ownerType;
+    /** optional, resource owner id. USER_PRIVATE usually uses upstreamUserId. */
+    private String ownerId;
+    /** optional, upstream ClientApp boundary. */
+    private String clientAppId;
+    /** optional, upstream user boundary under clientAppId. */
+    private String upstreamUserId;
+    /** optional, default USER_PRIVATE. */
+    private WorkspaceScope workspaceScope;
+    /** optional, default DELEGATED. */
+    private WorkingDirectoryResolverType resolverType;
+    /** optional, resolved root reference. Defaults to path when omitted. */
+    private String rootRef;
+    /** optional, external resolver key. */
+    private String resolverKey;
+    /** optional, default false. */
+    private Boolean readOnly;
+    /** optional, allowed path prefixes. Defaults to resolved root when omitted at runtime. */
+    private List<String> allowedPathPrefixes;
+    private String quotaJson;
+    private String retentionPolicyJson;
+    private String concurrencyPolicyJson;
+    /** optional, default true. */
+    private Boolean enabled;
 }

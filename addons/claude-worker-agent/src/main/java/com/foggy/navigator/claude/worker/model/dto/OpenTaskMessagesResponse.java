@@ -18,6 +18,42 @@ public class OpenTaskMessagesResponse {
     /** 所属会话上下文 */
     private String contextId;
 
+    /** Worker 侧任务 ID */
+    private String workerTaskId;
+
+    /** Provider 侧任务 ID（当前等同 workerTaskId，便于上游统一诊断） */
+    private String providerTaskId;
+
+    /** 已同步的 Worker 事件序号 */
+    private Integer lastAckedSeq;
+
+    /** 模型配置 ID */
+    private String modelConfigId;
+
+    /** 模型配置来源 */
+    private String modelConfigSource;
+
+    /** Worker 后端类型 */
+    private String workerBackend;
+
+    /** Provider 类型 */
+    private String providerType;
+
+    /** 任务来源 */
+    private String taskSource;
+
+    /** Worker 来源 */
+    private String workerSource;
+
+    /** 后端来源 */
+    private String backendSource;
+
+    /** 失败阶段：DISPATCH | WORKER_TRANSPORT | RUNTIME | PROVIDER_API */
+    private String failureStage;
+
+    /** 脱敏失败摘要 */
+    private String failureSummary;
+
     /** 消息列表（按时间升序） */
     private List<OpenSessionMessageDTO> messages;
 

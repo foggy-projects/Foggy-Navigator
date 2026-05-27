@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  getToken: vi.fn(() => null),
+  getToken: vi.fn<[], string | null>(() => null),
   clearAuth: vi.fn(),
   getApiBaseUrl: vi.fn(() => '/api/v1'),
   createUniAppAxiosAdapter: vi.fn(() => 'adapter'),
@@ -63,8 +63,8 @@ describe('mobile api client', () => {
     state.requestSuccessHandler = undefined
     state.responseSuccessHandler = undefined
     state.responseErrorHandler = undefined
-    ;(globalThis.uni.showToast as any).mockClear()
-    ;(globalThis.uni.reLaunch as any).mockClear()
+    ;(uni.showToast as any).mockClear()
+    ;(uni.reLaunch as any).mockClear()
     client = (await import('../client')).default
   })
 
@@ -93,12 +93,12 @@ describe('mobile api client', () => {
     }
 
     await expect(state.responseErrorHandler?.(error)).rejects.toBe(error)
-    expect(globalThis.uni.showToast).toHaveBeenCalledWith({
+    expect(uni.showToast).toHaveBeenCalledWith({
       title: '登录已过期，请重新登录',
       icon: 'none',
     })
     expect(mocks.clearAuth).toHaveBeenCalled()
-    expect(globalThis.uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/login/index' })
+    expect(uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/login/index' })
   })
 
   it('shows backend message for generic request failures', async () => {
@@ -111,7 +111,7 @@ describe('mobile api client', () => {
     }
 
     await expect(state.responseErrorHandler?.(error)).rejects.toBe(error)
-    expect(globalThis.uni.showToast).toHaveBeenCalledWith({
+    expect(uni.showToast).toHaveBeenCalledWith({
       title: 'resume failed',
       icon: 'none',
     })

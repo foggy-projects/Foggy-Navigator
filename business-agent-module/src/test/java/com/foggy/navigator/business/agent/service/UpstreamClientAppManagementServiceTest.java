@@ -6,6 +6,7 @@ import com.foggy.navigator.business.agent.model.dto.UpstreamClientAppAdminPrinci
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.EnsureUpstreamClientAppForm;
 import com.foggy.navigator.business.agent.model.form.IssueControlCredentialForm;
+import com.foggy.navigator.business.agent.model.form.IssueRuntimeCredentialForm;
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.business.agent.repository.UpstreamClientAppAdminCredentialRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -96,6 +97,27 @@ class UpstreamClientAppManagementServiceTest {
                 new IssueControlCredentialForm());
 
         assertEquals("cac-secret", dto.getControlApiKey());
+    }
+
+    @Test
+    void issueRuntimeCredentialDelegatesForManagedClientApp() {
+        ClientAppEntity app = activeApp("tenant-1", "capp-1", "x6-tms", "x6", "tms-tenant-a");
+        when(clientAppRepository.findByClientAppId("capp-1")).thenReturn(Optional.of(app));
+        IssuedCredentialDTO issued = new IssuedCredentialDTO();
+        issued.setClientAppId("capp-1");
+        issued.setAppKey("cak-secret");
+        issued.setSecret("cas-secret");
+        when(clientAppService.issueRuntimeCredential(eq("tenant-1"), eq("capp-1"),
+                any(IssueRuntimeCredentialForm.class)))
+                .thenReturn(issued);
+
+        IssuedCredentialDTO dto = service.issueRuntimeCredential(
+                principal("tenant-1"),
+                "capp-1",
+                new IssueRuntimeCredentialForm());
+
+        assertEquals("cak-secret", dto.getAppKey());
+        assertEquals("cas-secret", dto.getSecret());
     }
 
     @Test

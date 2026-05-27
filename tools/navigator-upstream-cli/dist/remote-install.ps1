@@ -48,9 +48,13 @@ if (-not $installScript) {
     throw "No install.ps1 found in archive"
 }
 
+$releaseManifestPath = Join-Path $tmpDir "latest.json"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($releaseManifestPath, ($latest | ConvertTo-Json -Depth 8), $utf8NoBom)
+
 & powershell -ExecutionPolicy Bypass -File $installScript.FullName `
     -ProjectRoot (Get-Location).Path `
     -ReleaseBaseUrl $ReleaseBaseUrl `
-    -ReleaseManifestJson ($latest | ConvertTo-Json -Depth 8 -Compress)
+    -ReleaseManifestPath $releaseManifestPath
 
 Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue

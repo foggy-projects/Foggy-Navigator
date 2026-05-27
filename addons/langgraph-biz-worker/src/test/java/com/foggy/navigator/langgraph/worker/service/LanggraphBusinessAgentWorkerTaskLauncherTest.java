@@ -15,7 +15,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -76,7 +79,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         ArgumentCaptor<CreateLanggraphTaskForm> formCaptor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
         verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
         CreateLanggraphTaskForm form = formCaptor.getValue();
-        assertEquals("skill_01", form.getAgentId());
+        assertEquals("agent_01", form.getAgentId());
         assertNull(form.getSkillName());
         assertEquals("worker_01", form.getWorkerId());
         assertEquals("session_01", form.getSessionId());
@@ -88,11 +91,17 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertEquals("ctx_01", form.getContext().get("context_id"));
         assertEquals("session_01", form.getContext().get("session_id"));
         assertEquals("app_01", form.getContext().get("clientAppId"));
+        assertEquals("agent_01", form.getContext().get("businessAgentId"));
         assertEquals("skill_01", form.getContext().get("businessSkillId"));
         assertEquals("skill_01", form.getContext().get("businessSkillName"));
         assertEquals("user_01", form.getContext().get("upstreamUserId"));
         assertEquals("user_01", form.getContext().get("accountId"));
         assertEquals("user_01", form.getContext().get("account_id"));
+        assertEquals("dir_01", form.getContext().get("directoryId"));
+        assertEquals("dir_01", form.getContext().get("workingDirectoryId"));
+        assertEquals("USER_PRIVATE", form.getContext().get("workspaceScope"));
+        assertEquals("DELEGATED", form.getContext().get("workspaceResolverType"));
+        assertEquals(false, form.getContext().get("workspaceReadOnly"));
         assertEquals(true, form.getContext().get("auto_inject_app_public_skills"));
         assertFalse(form.getContext().containsKey("task_scoped_token"));
         assertFalse(form.getContext().containsKey("skillId"));
@@ -104,6 +113,10 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertEquals("vision_model_01", runtimeContext.get("vision_model_config_id"));
         @SuppressWarnings("unchecked")
         Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
+        assertEquals("dir_01", executionPolicy.get("directory_id"));
+        assertEquals("USER_PRIVATE", executionPolicy.get("workspace_scope"));
+        assertEquals("DELEGATED", executionPolicy.get("workspace_resolver_type"));
+        assertEquals(false, executionPolicy.get("read_only"));
         assertEquals("D:/workspace/app", executionPolicy.get("workdir"));
         assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
         assertEquals(List.of("read_file", "invoke_business_function"), executionPolicy.get("allowed_tools"));
@@ -151,6 +164,119 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
     }
 
     @Test
+    void launch_generatesNavigatorContextWhenWorkerContextRouteMissing() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus("ENABLED");
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01")).thenReturn(List.of(member));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_01");
+        worker.setTenantId("tenant_01");
+        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+
+        LanggraphWorkerClient client = mock(LanggraphWorkerClient.class);
+        when(workerService.createClient(worker)).thenReturn(client);
+        when(client.allocateContext()).thenReturn(Mono.error(WebClientResponseException.create(
+                404,
+                "Not Found",
+                HttpHeaders.EMPTY,
+                new byte[0],
+                StandardCharsets.UTF_8
+        )));
+
+        LanggraphTaskDTO taskDTO = LanggraphTaskDTO.builder()
+                .taskId("lgt_01")
+                .workerId("worker_01")
+                .sessionId("session_01")
+                .build();
+        when(taskService.createTask(eq("actor_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class))).thenReturn(taskDTO);
+
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setContextId(null);
+
+        BusinessAgentWorkerTaskLaunchResult result = launcher.launch(request);
+
+        assertTrue(result.getContextId().matches("bctx_\\d{8}_[0-9a-f]{2}_[0-9a-f]{32}"));
+        ArgumentCaptor<CreateLanggraphTaskForm> formCaptor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
+        assertEquals(result.getContextId(), formCaptor.getValue().getContextId());
+        assertEquals(result.getContextId(), formCaptor.getValue().getContext().get("contextId"));
+        assertEquals(result.getContextId(), formCaptor.getValue().getContext().get("context_id"));
+    }
+
+    @Test
+    void launch_preservesExplicitCommandExecutionPolicy() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus("ENABLED");
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01")).thenReturn(List.of(member));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_01");
+        worker.setTenantId("tenant_01");
+        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+
+        LanggraphTaskDTO taskDTO = LanggraphTaskDTO.builder()
+                .taskId("lgt_01")
+                .workerId("worker_01")
+                .sessionId("session_01")
+                .build();
+        when(taskService.createTask(eq("actor_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class))).thenReturn(taskDTO);
+
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setAllowedTools(List.of("read_file", "write_file", "patch_file", "command"));
+
+        launcher.launch(request);
+
+        ArgumentCaptor<CreateLanggraphTaskForm> formCaptor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
+        Map<String, Object> runtimeContext = formCaptor.getValue().getRuntimeContext();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
+        assertEquals("dir_01", executionPolicy.get("directory_id"));
+        assertEquals("D:/workspace/app", executionPolicy.get("workdir"));
+        assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
+        assertEquals(List.of("read_file", "write_file", "patch_file", "command"), executionPolicy.get("allowed_tools"));
+    }
+
+    @Test
+    void launch_preservesWorkspacePolicyPayloads() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus("ENABLED");
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01")).thenReturn(List.of(member));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_01");
+        worker.setTenantId("tenant_01");
+        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+
+        LanggraphTaskDTO taskDTO = LanggraphTaskDTO.builder()
+                .taskId("lgt_01")
+                .workerId("worker_01")
+                .sessionId("session_01")
+                .build();
+        when(taskService.createTask(eq("actor_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class))).thenReturn(taskDTO);
+
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setWorkspaceQuotaPolicy(Map.of("maxBytes", 1048576));
+        request.setWorkspaceRetentionPolicy(Map.of("days", 7));
+        request.setWorkspaceConcurrencyPolicy(Map.of("maxWriters", 1));
+
+        launcher.launch(request);
+
+        ArgumentCaptor<CreateLanggraphTaskForm> formCaptor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
+        Map<String, Object> runtimeContext = formCaptor.getValue().getRuntimeContext();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
+        assertEquals(Map.of("maxBytes", 1048576), executionPolicy.get("quota_policy"));
+        assertEquals(Map.of("days", 7), executionPolicy.get("retention_policy"));
+        assertEquals(Map.of("maxWriters", 1), executionPolicy.get("concurrency_policy"));
+    }
+
+    @Test
     void launch_rejectsMissingEnabledPoolMember() {
         BizWorkerPoolMemberEntity disabled = new BizWorkerPoolMemberEntity();
         disabled.setWorkerId("worker_01");
@@ -186,12 +312,17 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
                 .contextId("ctx_01")
                 .clientAppId("app_01")
                 .upstreamUserId("user_01")
+                .agentId("agent_01")
                 .skillId("skill_01")
                 .skillName("skill_01")
                 .workerPoolId("pool_01")
                 .workerBackend("LANGGRAPH_BIZ")
                 .modelConfigId("model_01")
                 .visionModelConfigId("vision_model_01")
+                .directoryId("dir_01")
+                .workspaceScope("USER_PRIVATE")
+                .workspaceResolverType("DELEGATED")
+                .workspaceReadOnly(false)
                 .taskScopedToken("rt_token")
                 .workdir("D:/workspace/app")
                 .allowedDirs(List.of("D:/workspace"))

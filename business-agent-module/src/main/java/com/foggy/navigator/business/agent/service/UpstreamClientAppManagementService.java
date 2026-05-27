@@ -6,6 +6,7 @@ import com.foggy.navigator.business.agent.model.dto.UpstreamClientAppAdminPrinci
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.EnsureUpstreamClientAppForm;
 import com.foggy.navigator.business.agent.model.form.IssueControlCredentialForm;
+import com.foggy.navigator.business.agent.model.form.IssueRuntimeCredentialForm;
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -74,6 +75,14 @@ public class UpstreamClientAppManagementService {
                 "upstream-admin:" + principal.getCredentialId(),
                 app.getClientAppId(),
                 form);
+    }
+
+    @Transactional
+    public IssuedCredentialDTO issueRuntimeCredential(UpstreamClientAppAdminPrincipal principal,
+                                                      String clientAppId,
+                                                      IssueRuntimeCredentialForm form) {
+        ClientAppEntity app = requireManagedActiveClientApp(principal, clientAppId);
+        return clientAppService.issueRuntimeCredential(app.getTenantId(), app.getClientAppId(), form);
     }
 
     private ClientAppEntity createClientApp(UpstreamClientAppAdminPrincipal principal,

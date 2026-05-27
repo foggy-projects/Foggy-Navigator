@@ -12,7 +12,7 @@ async def test_child_skill_frame_appears_in_events(client):
     """Child skill frame open/close events should appear in SSE stream."""
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "analyze", "context": {"order_id": "100"}},
+        json={"prompt": "analyze", "context": {"skill": "exception_triage", "order_id": "100"}},
     )
     events = _parse_sse_events(resp.text)
 
@@ -51,7 +51,7 @@ async def test_child_frame_completed_and_closed(client):
 
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "test", "context": {"order_id": "200"}},
+        json={"prompt": "test", "context": {"skill": "exception_triage", "order_id": "200"}},
     )
     events = _parse_sse_events(resp.text)
 
@@ -75,7 +75,7 @@ async def test_parent_receives_child_result(client):
     """The final result should contain data from child skill's evidence."""
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "check", "context": {"order_id": "300"}},
+        json={"prompt": "check", "context": {"skill": "exception_triage", "order_id": "300"}},
     )
     events = _parse_sse_events(resp.text)
 
@@ -92,7 +92,7 @@ async def test_child_scratchpad_not_in_root_result(client):
     """Root result should NOT contain child's private messages or working state."""
     resp = await client.post(
         "/api/v1/query",
-        json={"prompt": "verify", "context": {"order_id": "400"}},
+        json={"prompt": "verify", "context": {"skill": "exception_triage", "order_id": "400"}},
     )
     events = _parse_sse_events(resp.text)
 

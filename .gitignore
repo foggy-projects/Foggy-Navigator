@@ -67,6 +67,8 @@ bin/
 !tools/codex-agent-worker/release/bin/
 !tools/navigator-upstream-cli/dist/bin/
 !tools/navigator-upstream-cli/dist/bin/*
+!tools/navigator-upstream/bin/
+!tools/navigator-upstream/bin/*
 
 # NetBeans
 /nbproject/private/
@@ -148,8 +150,12 @@ tools/codex-agent-worker/release/staging/
 !tools/gemini-agent-worker/release/bin/*
 tools/gemini-agent-worker/release/output/
 tools/gemini-agent-worker/release/staging/
+tools/langgraph-biz-worker/release/output/
+tools/langgraph-biz-worker/release/staging/
 tools/navigator-upstream-cli/dist/output/
 tools/navigator-upstream-cli/dist/staging/
+!tools/navigator-upstream/lib/
+!tools/navigator-upstream/lib/*.jar
 
 # Docker
 docker-compose.override.yml
@@ -186,6 +192,9 @@ temp/
 cache/
 .foggy-attachments/
 /.agents/skills
+
+# Local agent notes
+CLAUDE.local.md
 
 # Backup files
 *.bak

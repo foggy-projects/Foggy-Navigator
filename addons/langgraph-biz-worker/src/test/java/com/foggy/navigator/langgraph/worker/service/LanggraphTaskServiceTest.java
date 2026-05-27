@@ -43,6 +43,7 @@ class LanggraphTaskServiceTest {
     private SessionMessageRepository sessionMessageRepository;
     private LanggraphWorkerService workerService;
     private LanggraphWorkerClient workerClient;
+    private LanggraphWorkerEntity workerEntity;
     private SessionManager sessionManager;
     private ApplicationEventPublisher eventPublisher;
     private LanggraphTaskService service;
@@ -68,6 +69,10 @@ class LanggraphTaskServiceTest {
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
         when(sessionTaskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        workerEntity = new LanggraphWorkerEntity();
+        workerEntity.setWorkerId(WORKER_ID);
+        workerEntity.setTenantId(TENANT_ID);
+        when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(workerEntity);
 
         service = new LanggraphTaskService(
                 taskRepository, approvalRepository, workerService,
@@ -239,6 +244,31 @@ class LanggraphTaskServiceTest {
                     projection.getTaskStateJson() != null
                             && projection.getTaskStateJson().contains("\"taskDeadlineAt\":\"2026-05-18T10:00:00Z\"")
             ));
+        }
+
+        @Test
+        void rejects_worker_tenant_mismatch_before_persisting_task() {
+            workerEntity.setTenantId("tenant-other");
+
+            SecurityException error = assertThrows(SecurityException.class,
+                    () -> service.createTask(USER_ID, TENANT_ID, makeForm()));
+
+            assertEquals("LangGraph worker tenant mismatch", error.getMessage());
+            verify(taskRepository, never()).save(any());
+            verify(sessionManager, never()).createSession(any());
+            verify(eventPublisher, never()).publishEvent(any());
+        }
+
+        @Test
+        void allows_shared_worker_without_tenant() {
+            workerEntity.setTenantId(null);
+
+            service.createTask(USER_ID, TENANT_ID, makeForm());
+
+            verify(taskRepository).save(argThat((LanggraphTaskEntity task) ->
+                    WORKER_ID.equals(task.getWorkerId()) && TENANT_ID.equals(task.getTenantId())
+            ));
+            verify(eventPublisher).publishEvent(any(WorkerTaskStartEvent.class));
         }
 
         @Test

@@ -25,7 +25,7 @@ The child model then returned a normal assistant clarification:
 
 `请告诉我您想创建哪种类型的工单？`
 
-BizWorker treated the absence of `submit_skill_result` or `handoff_to_parent` as a hard protocol failure and surfaced:
+BizWorker treated the absence of the frame-result tool or `handoff_to_parent` as a hard protocol failure and surfaced:
 
 `Child skill returned a final assistant message without submit_skill_result or handoff_to_parent`
 
@@ -33,7 +33,7 @@ BizWorker treated the absence of `submit_skill_result` or `handoff_to_parent` as
 
 The child frame protocol was stricter than Codex / Claude Code style subagent behavior.
 
-Earlier design made `submit_skill_result` / `handoff_to_parent` mandatory for every child final response. That was useful for structured frame lifecycle control, but it rejected a common subagent pattern: the child agent can answer naturally, and the orchestrator/runtime normalizes the child response into either a final result or a wait-for-user state.
+Earlier design made the frame-result tool / `handoff_to_parent` mandatory for every child final response. That was useful for structured frame lifecycle control, but it rejected a common subagent pattern: the child agent can answer naturally, and the orchestrator/runtime normalizes the child response into either a final result or a wait-for-user state.
 
 ## Expected Behavior
 
@@ -55,7 +55,7 @@ If a child frame returns natural language without tool calls:
 
 The child prompt was also softened:
 
-- `submit_skill_result` / `handoff_to_parent` are still recommended for structured state
+- `submit_frame_result` / `handoff_to_parent` are still recommended for structured state; `submit_skill_result` is the legacy alias
 - direct natural language final messages are allowed and normalized by runtime
 
 ## Regression Coverage

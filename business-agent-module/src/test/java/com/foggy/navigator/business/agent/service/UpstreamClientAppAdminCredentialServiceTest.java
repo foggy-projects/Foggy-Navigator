@@ -41,6 +41,7 @@ class UpstreamClientAppAdminCredentialServiceTest {
                 UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE);
 
         assertEquals("ucaac-1", principal.getCredentialId());
+        assertEquals("x6-tms", principal.getPrincipalId());
         assertEquals("x6-tms", principal.getUpstreamSystemId());
         assertEquals("x6", principal.getAuthorizedClientAppNamespace());
         assertTrue(principal.getAuthorizedTenantIds().contains("tenant-1"));
@@ -49,16 +50,47 @@ class UpstreamClientAppAdminCredentialServiceTest {
     }
 
     @Test
+    void requireAccessRejectsOldAdminApiKeyHeader() {
+        when(repository.findByCredentialKeyHash(anyString()))
+                .thenReturn(Optional.of(activeCredential("[\"tenant-1\"]",
+                        "[\"CLIENT_APP_ADMIN_ALL\"]")));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Navi-Admin-Api-Key", "admin-key");
+
+        assertThrows(SecurityException.class, () -> service.requireAccess(
+                request,
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE));
+        verify(repository, never()).findByCredentialKeyHash(anyString());
+    }
+
+    @Test
     void requireAccessRejectsMissingScope() {
         when(repository.findByCredentialKeyHash(anyString()))
                 .thenReturn(Optional.of(activeCredential("[\"tenant-1\"]",
                         "[\"CLIENT_APP_CONTROL_KEY_ISSUE\"]")));
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader(UpstreamClientAppAdminCredentialService.HEADER_ADMIN_API_KEY, "admin-key");
+        request.addHeader(UpstreamClientAppAdminCredentialService.HEADER_ADMIN_KEY, "admin-key");
 
         assertThrows(SecurityException.class, () -> service.requireAccess(
                 request,
                 UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE));
+    }
+
+    @Test
+    void requireAccessAllowsLegacyClientAppManageForRuntimeKeyIssue() {
+        when(repository.findByCredentialKeyHash(anyString()))
+                .thenReturn(Optional.of(activeCredential("[\"tenant-1\"]",
+                        "[\"CLIENT_APP_MANAGE\"]")));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader(UpstreamClientAppAdminCredentialService.HEADER_ADMIN_KEY, "admin-key");
+
+        UpstreamClientAppAdminPrincipal principal = service.requireAccess(
+                request,
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE);
+
+        assertEquals("x6-tms", principal.getUpstreamSystemId());
+        assertTrue(principal.getScopes().contains(UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE));
+        verify(repository).save(any());
     }
 
     @Test

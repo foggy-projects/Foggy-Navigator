@@ -36,11 +36,17 @@ public class BusinessAgentTaskEntity {
     @Column(length = 64, nullable = false)
     private String navigatorEffectiveUserId;
 
+    @Column(length = 64, nullable = false)
+    private String agentId;
+
     @Column(length = 128)
     private String skillId;
 
     @Column(length = 64, nullable = false)
     private String workerPoolId;
+
+    @Column(length = 64)
+    private String directoryId;
 
     @Column(length = 64)
     private String workerTaskId;
@@ -59,6 +65,12 @@ public class BusinessAgentTaskEntity {
 
     @Column(length = 64)
     private String requestedModelConfigId;
+
+    @Column(length = 128)
+    private String model;
+
+    @Column(length = 128)
+    private String requestedModelVariant;
 
     @Column(length = 32, nullable = false)
     private String status;

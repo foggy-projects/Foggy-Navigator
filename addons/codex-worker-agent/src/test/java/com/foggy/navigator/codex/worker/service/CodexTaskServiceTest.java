@@ -227,9 +227,36 @@ class CodexTaskServiceTest {
 
         // cwd 反斜杠应被转为正斜杠（Codex CLI 不接受 Windows 反斜杠）
         assertEquals("D:/projects/my-app", savedTask[0].getCwd());
+        verify(workerManagementFacade).validateWorkerAccess("user-1", "tenant-1", "worker-1");
         verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
                 "D:/projects/my-app".equals(event.getCwd())
         ));
+    }
+
+    @Test
+    void createTaskDirect_persistsContextIdInUnifiedTaskState() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        SessionTaskEntity[] savedSessionTask = new SessionTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+        when(sessionManager.createSession(any())).thenReturn("session-ctx");
+        when(sessionTaskRepository.save(any(SessionTaskEntity.class))).thenAnswer(invocation -> {
+            savedSessionTask[0] = invocation.getArgument(0);
+            return savedSessionTask[0];
+        });
+
+        DispatchTaskDTO result = service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "contextId", "bctx-1"
+        ), "user-1", "tenant-1");
+
+        assertEquals("bctx-1", result.getContextId());
+        assertNotNull(savedSessionTask[0].getTaskStateJson());
+        assertTrue(savedSessionTask[0].getTaskStateJson().contains("\"contextId\":\"bctx-1\""));
     }
 
     @Test

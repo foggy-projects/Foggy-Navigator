@@ -42,9 +42,25 @@ function Invoke-RemoteInstallSmoke {
         if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($ExpectedVersion)) {
             throw "version smoke failed: $versionOutput"
         }
+        $versionMetadataOk = $versionOutput -match "released=" `
+            -and $versionOutput -match "packageSha256=" `
+            -and $versionOutput -match "buildId=" `
+            -and $versionOutput -match "releaseGitDirty="
+        if (-not $versionMetadataOk) {
+            throw "version smoke did not print release metadata: $versionOutput"
+        }
+
+        $releaseManifestPath = Join-Path $tmpRoot "tools\navigator-upstream\RELEASE_MANIFEST.json"
+        if (-not (Test-Path $releaseManifestPath)) {
+            throw "remote install smoke did not create $releaseManifestPath"
+        }
+        $releaseManifest = Get-Content -Path $releaseManifestPath -Raw | ConvertFrom-Json
+        if ([string]$releaseManifest.version -ne $ExpectedVersion -or -not $releaseManifest.sha256.windows) {
+            throw "remote install smoke wrote invalid release manifest"
+        }
 
         $helpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream --help 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $helpOutput -notmatch "function import") {
+        if ($LASTEXITCODE -ne 0 -or $helpOutput -notmatch "function import" -or $helpOutput -notmatch "--model-variant") {
             throw "upstream help smoke did not list function commands: $helpOutput"
         }
 
@@ -64,8 +80,41 @@ function Invoke-RemoteInstallSmoke {
         }
 
         $clientAppHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream client-app --help 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $clientAppHelpOutput -notmatch "Commands: list, ensure, issue-control-key") {
+        $clientAppHelpOk = $LASTEXITCODE -eq 0 `
+            -and $clientAppHelpOutput -match "issue-runtime-key" `
+            -and $clientAppHelpOutput -match "issue-runtime-credential" `
+            -and $clientAppHelpOutput -match "issue-control-key"
+        if (-not $clientAppHelpOk) {
             throw "client-app help smoke failed: $clientAppHelpOutput"
+        }
+
+        $workerHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream worker --help 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $workerHelpOutput -notmatch "Commands: list, create, get, update, delete, health, processes, kill") {
+            throw "worker help smoke failed: $workerHelpOutput"
+        }
+
+        $workerHostHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream worker-host --help 2>&1 | Out-String
+        $workerHostHelpOk = $LASTEXITCODE -eq 0 `
+            -and $workerHostHelpOutput -match "Commands: apply, update, verify, install" `
+            -and $workerHostHelpOutput -match "Codex is Navi-routed through claudeCode.codexConfig"
+        if (-not $workerHostHelpOk) {
+            throw "worker-host help smoke failed: $workerHostHelpOutput"
+        }
+
+        $directoryHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream directory --help 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $directoryHelpOutput -notmatch "Commands: list, init, get, delete, env, files") {
+            throw "directory help smoke failed: $directoryHelpOutput"
+        }
+
+        $workerPoolHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream worker-pool --help 2>&1 | Out-String
+        $workerPoolHelpOk = $LASTEXITCODE -eq 0 `
+            -and $workerPoolHelpOutput -match "list" `
+            -and $workerPoolHelpOutput -match "create" `
+            -and $workerPoolHelpOutput -match "register-worker" `
+            -and $workerPoolHelpOutput -match "add-member" `
+            -and $workerPoolHelpOutput -match "status"
+        if (-not $workerPoolHelpOk) {
+            throw "worker-pool help smoke failed: $workerPoolHelpOutput"
         }
 
         Write-Host "Remote install smoke passed." -ForegroundColor Green

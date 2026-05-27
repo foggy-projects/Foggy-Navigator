@@ -26,6 +26,8 @@ from ..tools.mock_biz_tools import (
 )
 from .account_file_tools import AccountFileTools, FileToolError
 from .artifact_store import ArtifactError, ArtifactStore
+from .command_tool import run_command_tool
+from .execution_policy import ExecutionPolicy
 from .file_layout import date_parts_for_now, optional_standard_context_id, safe_path_segment, session_data_dir
 from .frame_execution_report import read_frame_execution_report
 from .llm_business_function_adapter import (
@@ -58,6 +60,7 @@ class LlmToolDispatchContext:
     artifact_store: ArtifactStore | None = None
     file_tools: AccountFileTools | None = None
     public_resource_tools: PublicSkillResourceTools | None = None
+    execution_policy: ExecutionPolicy | None = None
     persistent_frame: bool = False
 
 
@@ -121,6 +124,9 @@ class LlmToolDispatcher:
                 mode=args.get("mode", "summary"),
                 max_chars=args.get("max_chars") or args.get("maxChars") or 6000,
             )
+
+        if name == "command":
+            return run_command_tool(args, context.execution_policy)
 
         if name == "create_artifact":
             if not context.artifact_store or not context.account_id:

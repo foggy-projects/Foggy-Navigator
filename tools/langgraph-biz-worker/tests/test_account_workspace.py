@@ -24,7 +24,8 @@ def test_resolves_managed_account_workspace(tmp_path: Path):
     assert workspace.account_id == "acct-001"
     assert workspace.storage_account_id == "acct-001"
     assert workspace.root == (tmp_path / "data" / "accounts" / "acct-001").resolve()
-    assert workspace.skills_root == workspace.root / "skills"
+    assert workspace.agent_root == workspace.root / "agent"
+    assert workspace.skills_root == workspace.root / "agent" / "skills"
     assert workspace.artifacts_root == workspace.root / "artifacts"
 
 

@@ -36,6 +36,10 @@ if (Test-Path $ENV_FILE) {
     Write-Host "Warning: $ENV_FILE not found, using defaults" -ForegroundColor Yellow
 }
 
+if (-not $env:BUSINESS_AGENT_DEV_SYNC_WORKER_URL) {
+    $env:BUSINESS_AGENT_DEV_SYNC_WORKER_URL = "http://127.0.0.1:3161"
+}
+
 # Resolve Java path: env > system PATH
 if (-not $JAVA_PATH) {
     $JAVA_PATH = (Get-Command java -ErrorAction SilentlyContinue).Source
@@ -118,6 +122,7 @@ Write-Host "  JAR: $JAR_PATH" -ForegroundColor Gray
 Write-Host "  Profile: $SPRING_PROFILES_ACTIVE" -ForegroundColor Gray
 Write-Host "  Port: $BACKEND_PORT" -ForegroundColor Gray
 Write-Host "  Root User: $ROOT_USERNAME" -ForegroundColor Gray
+Write-Host "  Biz Skill Sync Worker: $env:BUSINESS_AGENT_DEV_SYNC_WORKER_URL" -ForegroundColor Gray
 Write-Host ""
 
 # JVM tuning: 4-8G heap, G1GC, better throughput

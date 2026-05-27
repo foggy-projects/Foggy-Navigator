@@ -1,7 +1,9 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { TEST_CONFIG } from './config.js';
 import type {
+  BizWorkerIdentity,
   BizWorkerPool,
+  BusinessAgentTask,
   ClientApp,
   ClientAppModelConfigGrant,
   ClientAppSkillGrant,
@@ -10,6 +12,8 @@ import type {
   CreatedBusinessAgentTask,
   E2eModelConfigEnsureResult,
   IssuedCredential,
+  LanggraphTask,
+  LanggraphWorker,
   LoginResultDTO,
   RXResponse,
   Skill,
@@ -152,6 +156,31 @@ export class BusinessAgentClient {
     return unwrapData<BizWorkerPool>(response.data);
   }
 
+  async registerWorkerIdentity(body: RequestBody): Promise<BizWorkerIdentity> {
+    const response = await this.client.post('/api/v1/business-agent/worker-identities', body);
+    return unwrapData<BizWorkerIdentity>(response.data);
+  }
+
+  async addWorkerPoolMember(poolId: string, body: RequestBody): Promise<void> {
+    const response = await this.client.post(
+      `/api/v1/business-agent/worker-pools/${encodeURIComponent(poolId)}/members`,
+      body
+    );
+    unwrapVoid(response.data);
+  }
+
+  async registerLanggraphWorker(body: RequestBody): Promise<LanggraphWorker> {
+    const response = await this.client.post('/api/v1/langgraph-workers', body);
+    return unwrapData<LanggraphWorker>(response.data);
+  }
+
+  async healthCheckLanggraphWorker(workerId: string): Promise<LanggraphWorker> {
+    const response = await this.client.post(
+      `/api/v1/langgraph-workers/${encodeURIComponent(workerId)}/health-check`
+    );
+    return unwrapData<LanggraphWorker>(response.data);
+  }
+
   async createSkill(body: RequestBody): Promise<Skill> {
     const response = await this.client.post('/api/v1/business-agent/skills', body);
     return unwrapData<Skill>(response.data);
@@ -201,6 +230,21 @@ export class BusinessAgentClient {
     const response = await this.client.post('/api/v1/business-agent/tasks', body);
     return unwrapData<CreatedBusinessAgentTask>(response.data);
   }
+
+  async getBusinessTask(taskId: string): Promise<BusinessAgentTask> {
+    const response = await this.client.get(
+      `/api/v1/business-agent/tasks/${encodeURIComponent(taskId)}`
+    );
+    return unwrapData<BusinessAgentTask>(response.data);
+  }
+
+  async getLanggraphTask(taskId: string, userId: string): Promise<LanggraphTask> {
+    const response = await this.client.get(
+      `/api/v1/langgraph-tasks/${encodeURIComponent(taskId)}`,
+      { params: { userId } }
+    );
+    return unwrapData<LanggraphTask>(response.data);
+  }
 }
 
 export function createClient(baseURL?: string): BusinessAgentClient {
@@ -228,6 +272,12 @@ function unwrapData<T>(payload: unknown): T {
     return payload.data;
   }
   return payload as T;
+}
+
+function unwrapVoid(payload: unknown): void {
+  if (isRXResponse(payload) && payload.code !== 200) {
+    throw new Error(`API returned code ${payload.code}: ${payload.msg ?? 'unknown error'}`);
+  }
 }
 
 function isRXResponse<T>(payload: unknown): payload is RXResponse<T> {

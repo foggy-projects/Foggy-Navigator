@@ -9,6 +9,7 @@ import com.foggy.navigator.business.agent.model.form.EnsureUpstreamTenantClientA
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -29,6 +30,7 @@ class UpstreamTenantClientAppProvisioningServiceTest {
     private ClientAppService clientAppService;
     private ClientAppModelConfigGrantService modelConfigGrantService;
     private SkillRegistryService skillRegistryService;
+    private AgentDefaultBindingService agentDefaultBindingService;
     private UpstreamTenantClientAppProvisioningService service;
 
     @BeforeEach
@@ -57,6 +59,7 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         clientAppService = mock(ClientAppService.class);
         modelConfigGrantService = mock(ClientAppModelConfigGrantService.class);
         skillRegistryService = mock(SkillRegistryService.class);
+        agentDefaultBindingService = mock(AgentDefaultBindingService.class);
         when(modelConfigGrantService.listGrants(anyString(), anyString()))
                 .thenReturn(List.of(defaultModelGrant()));
         when(clientAppService.issueRuntimeCredential(anyString(), anyString(), any())).thenAnswer(inv -> {
@@ -81,6 +84,7 @@ class UpstreamTenantClientAppProvisioningServiceTest {
                 modelConfigGrantService,
                 agentRepository,
                 skillRegistryService,
+                agentDefaultBindingService,
                 new ObjectMapper());
     }
 
@@ -104,6 +108,13 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         assertEquals("tms-root-agent", result.getRootAgentId());
         assertEquals("tms.navigator.agent", result.getSkillId());
         assertTrue(result.getBlockers().isEmpty());
+        CodingAgentEntity rootAgent = agentsByKey.get(agentKey("tms-root-agent", "nav_tms_3"));
+        assertNotNull(rootAgent);
+        assertEquals(ResourceOwnerType.CLIENT_APP, rootAgent.getOwnerType());
+        assertEquals(result.getClientAppId(), rootAgent.getOwnerId());
+        assertEquals(result.getClientAppId(), rootAgent.getClientAppId());
+        assertTrue(rootAgent.getEnabled());
+        verify(agentDefaultBindingService).ensureDefaults(rootAgent);
         verify(skillRegistryService).syncSkillBundle(eq("nav_tms_3"), eq("upstream-admin:ucaac-1"), any());
     }
 
@@ -197,6 +208,23 @@ class UpstreamTenantClientAppProvisioningServiceTest {
     @Test
     void ensureRejectsUnauthorizedDerivedNavigatorTenant() {
         assertThrows(SecurityException.class, () -> service.ensure(form(false), principal("nav_tms_4")));
+    }
+
+    @Test
+    void ensureAllowsUpstreamSystemScopedAdminCredentialForDerivedTenant() {
+        var result = service.ensure(form(false), principal("TMS"));
+
+        assertTrue(result.isCreated());
+        assertEquals("nav_tms_3", result.getNavigatorTenantId());
+        assertEquals("tms-tenant-3", result.getClientAppName());
+    }
+
+    @Test
+    void ensureAllowsSourceTenantScopedAdminCredentialForDerivedTenant() {
+        var result = service.ensure(form(false), principal("3"));
+
+        assertTrue(result.isCreated());
+        assertEquals("nav_tms_3", result.getNavigatorTenantId());
     }
 
     private EnsureUpstreamTenantClientAppForm form(boolean rotateCredentials) {

@@ -24,13 +24,15 @@ router = APIRouter(prefix="/api/v1/skills", tags=["skills"])
 
 # Resolved once at import; may be overridden via configure()
 _skills_root: Path | None = None
+_data_root: Path | None = None
 _on_sync_complete = None  # callback: () -> None (reload registry)
 
 
-def configure(skills_root: Path, on_sync_complete=None) -> None:
+def configure(skills_root: Path, data_root: Path | None = None, on_sync_complete=None) -> None:
     """Wire the skills root directory and post-sync callback."""
-    global _skills_root, _on_sync_complete
+    global _skills_root, _data_root, _on_sync_complete
     _skills_root = skills_root
+    _data_root = data_root or skills_root.parent / "data"
     _on_sync_complete = on_sync_complete
 
 
@@ -67,10 +69,16 @@ class ClearRequest(BaseModel):
     dry_run: bool = False
 
 
+class ResolveRequest(BaseModel):
+    skill_id: str
+    account_id: str | None = None
+    client_app_id: str | None = None
+
+
 @router.post("/materialize", dependencies=[Depends(verify_token)])
 async def materialize_skill(req: MaterializeRequest) -> dict:
     """Materialize a dynamically registered skill to the local filesystem."""
-    if not _skills_root:
+    if not _skills_root or not _data_root:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Skills route not configured",
@@ -92,7 +100,7 @@ async def materialize_skill(req: MaterializeRequest) -> dict:
             account_id = _validate_account_id(req.account_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        target_dir = _skills_root.parent / "data" / "accounts" / account_id / "skills" / skill_id
+        target_dir = _account_skills_root(account_id) / skill_id
         visibility = "private"
     else:
         if req.client_app_id:
@@ -162,7 +170,7 @@ async def clear_skill(req: ClearRequest) -> dict:
             skill_id = _validate_path_segment(req.skill_id, "skill_id") if req.skill_id else None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        target_dir = _skills_root.parent / "data" / "accounts" / account_id / "skills"
+        target_dir = _account_skills_root(account_id)
     else:
         try:
             client_app_id = _validate_path_segment(req.client_app_id, "client_app_id") if req.client_app_id else None
@@ -174,7 +182,7 @@ async def clear_skill(req: ClearRequest) -> dict:
     if skill_id:
         target_dir = target_dir / skill_id
 
-    root = (_skills_root.parent if req.scope == "account" else _skills_root).resolve()
+    root = (Path(_data_root).resolve() if req.scope == "account" else _skills_root.resolve())
     resolved = target_dir.resolve()
     if root not in [resolved, *resolved.parents]:
         raise HTTPException(status_code=400, detail="skill clear target escapes skills root")
@@ -199,12 +207,91 @@ async def clear_skill(req: ClearRequest) -> dict:
     }
 
 
+@router.post("/resolve", dependencies=[Depends(verify_token)])
+async def resolve_skill(req: ResolveRequest) -> dict:
+    """Resolve a skill exactly as BizWorker will for an account/clientApp turn."""
+    if not _skills_root or not _data_root:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Skills route not configured",
+        )
+
+    from ..runtime.account_context_files import ACCOUNT_CONTEXT_FILE_ORDER
+    from ..runtime.account_workspace import resolve_account_workspace
+    from ..runtime.skill_registry import SkillRegistry, _validate_account_id, _validate_path_segment
+
+    try:
+        skill_id = _validate_path_segment(req.skill_id, "skill_id")
+        account_id = _validate_account_id(req.account_id) if req.account_id else None
+        client_app_id = _validate_path_segment(req.client_app_id, "client_app_id") if req.client_app_id else None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    registry = SkillRegistry(skills_root=_skills_root, data_root=_data_root)
+    registry.load(account_id=account_id, client_app_id=client_app_id)
+    manifest = registry.get_manifest(skill_id)
+
+    account_workspace = resolve_account_workspace(_data_root, account_id) if account_id else None
+    context_files = {}
+    if account_workspace:
+        for file_name in ACCOUNT_CONTEXT_FILE_ORDER:
+            context_files[file_name] = (account_workspace.agent_root / file_name).is_file()
+
+    return {
+        "status": "resolved" if manifest else "missing",
+        "resolved": manifest is not None,
+        "skill_id": skill_id,
+        "client_app_id": client_app_id,
+        "account_id": account_id,
+        "manifest": _manifest_summary(manifest) if manifest else None,
+        "locations": {
+            "account_agent_root_exists": account_workspace.agent_root.is_dir() if account_workspace else False,
+            "account_skills_root_exists": account_workspace.skills_root.is_dir() if account_workspace else False,
+            "account_skill_exists": (
+                account_workspace.skills_root / skill_id / "SKILL.md"
+            ).is_file()
+            if account_workspace
+            else False,
+            "client_app_public_skill_exists": (
+                _skills_root / "public" / "apps" / client_app_id / skill_id / "SKILL.md"
+            ).is_file()
+            if client_app_id
+            else False,
+            "global_public_skill_exists": (_skills_root / "public" / skill_id / "SKILL.md").is_file(),
+            "builtin_skill_exists": (_skills_root / "builtin" / skill_id / "SKILL.md").is_file(),
+        },
+        "account_context_files": context_files,
+    }
+
+
 def _count_skill_dirs(target_dir: Path, target_is_skill: bool) -> int:
     if target_is_skill:
         return 1 if (target_dir / "SKILL.md").exists() else 0
     if not target_dir.is_dir():
         return 0
     return sum(1 for child in target_dir.iterdir() if child.is_dir() and (child / "SKILL.md").exists())
+
+
+def _account_skills_root(account_id: str) -> Path:
+    if _data_root is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Skills route not configured",
+        )
+    return Path(_data_root).resolve() / "accounts" / account_id / "agent" / "skills"
+
+
+def _manifest_summary(manifest) -> dict:
+    return {
+        "id": manifest.id,
+        "name": manifest.name,
+        "description": manifest.description,
+        "visibility": manifest.visibility,
+        "context_visibility": manifest.context_visibility,
+        "client_app_id": manifest.client_app_id,
+        "allowed_tools": list(manifest.allowed_tools or []),
+        "has_markdown_body": bool((manifest.markdown_body or "").strip()),
+    }
 
 
 def _replace_bundle_resources(target_dir: Path, resources: list[SkillResource]) -> None:

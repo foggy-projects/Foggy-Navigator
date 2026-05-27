@@ -72,6 +72,33 @@ def test_llm_skill_max_iterations_uses_runtime_context(monkeypatch):
     assert root_graph_module._llm_skill_max_iterations_for_state(state) == 14
 
 
+def test_request_llm_config_enables_system_root_when_global_execute_disabled(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", False)
+    monkeypatch.setattr(root_graph_module, "_chat_model_for_state", lambda state: object())
+    state = _state("task_request_llm_config_root_001")
+    state["llm_config"] = {"provider": "openai", "model": "request-model"}
+
+    routed = root_graph_module.route_skill(state)
+
+    assert routed["active_frame_id"] is not None
+    frame = runtime.get_frame(routed["active_frame_id"])
+    assert frame is not None
+    assert frame.skill_id == root_graph_module.ROOT_SKILL_ID
+    assert routed["events"][-1].content == root_graph_module.ROOT_FRAME_OPEN_CONTENT
+
+
+def test_request_llm_config_creates_agent_when_global_execute_disabled(monkeypatch):
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", False)
+    monkeypatch.setattr(root_graph_module, "create_chat_model_from_config", lambda config: object())
+    state = _state("task_request_llm_config_agent_001")
+    state["llm_config"] = {"provider": "openai", "model": "request-model"}
+
+    agent = root_graph_module._llm_skill_agent_for_state(state)
+
+    assert agent is not None
+
+
 def test_sync_memory_limits_sets_tool_result_projection_tail():
     memory = ContextRuntimeMemory(context_id="bctx_20260523_ab_ctx-budget-sync")
 
@@ -152,15 +179,15 @@ def test_system_root_manifest_allows_plain_final_and_discourages_submit_for_simp
     body = root_graph_module._system_root_manifest().markdown_body
 
     assert "直接用自然语言回复用户" in body
-    assert "普通寒暄、简单问答、无需保留结构化状态的答复，不要调用 submit_skill_result" in body
+    assert "普通寒暄、简单问答、无需保留结构化状态的答复，不要调用 submit_frame_result" in body
     assert "只有需要保存 active_plan" in body
     assert "默认使用 invoke_business_skill" in body
     assert "不要仅因为技能或目录名称包含 agent 就打开子 Agent frame" in body
     assert "只有用户明确要求使用子 Agent/独立代理" in body
-    assert "自然语言最终消息或 submit_skill_result 都只完成当前用户回合" in body
-    assert "必须通过 submit_skill_result" not in body
+    assert "自然语言最终消息或 submit_frame_result 都只完成当前用户回合" in body
+    assert "必须通过 submit_frame_result" not in body
     assert "不要直接输出自然语言" not in body
-    assert "当前用户回合可以答复时，调用 submit_skill_result" not in body
+    assert "当前用户回合可以答复时，调用 submit_frame_result" not in body
 
 
 def test_route_skill_creates_and_reuses_persistent_system_root_frame(monkeypatch, tmp_path):
@@ -241,7 +268,7 @@ def test_legacy_fallback_agent_frame_uses_standard_conversation_directory(monkey
 
     state = _state("task_legacy_bctx_001", CTX_SHARED)
     state["context"]["contextId"] = CTX_SHARED
-    state["context"]["order_id"] = "ORD-001"
+    state["context"]["businessSkillName"] = "exception_triage"
 
     routed = root_graph_module.route_skill(state)
     frame = runtime.get_frame(routed["active_frame_id"])
@@ -360,6 +387,169 @@ def test_run_skill_passes_raw_prompt_and_runtime_attachments_to_llm_agent(monkey
 
     assert captured["prompt"] == "handle the request"
     assert captured["runtime_context"]["attachments"] == state["attachments"]
+
+
+def test_run_skill_passes_local_agent_skill_manifest_to_persistent_root(monkeypatch, tmp_path):
+    _install_isolated_runtime(monkeypatch, tmp_path)
+    skill_dir = tmp_path / "skills" / "public" / "apps" / "capp_001" / "order-assistant"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: order-assistant\n"
+        "description: Order assistant from local registry.\n"
+        "allowed-tools: invoke_business_function\n"
+        "---\n"
+        "Use the local order workflow.",
+        encoding="utf-8",
+    )
+    state = _state("task_root_bound_skill_001")
+    state["context"] = {
+        "client_app_id": "capp_001",
+        "businessSkillName": "order-assistant",
+    }
+    routed = root_graph_module.route_skill(state)
+    state["active_frame_id"] = routed["active_frame_id"]
+
+    captured = {}
+
+    class FakeAgent:
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return []
+
+    monkeypatch.setattr(root_graph_module, "_llm_skill_agent_for_state", lambda current_state: FakeAgent())
+
+    root_graph_module.run_skill(state)
+
+    bound = captured["runtime_context"]["_root_bound_skill_manifest"]
+    assert bound["id"] == "order-assistant"
+    assert bound["markdown_body"] == "Use the local order workflow."
+
+
+def test_route_skill_injects_registry_skills_by_default(monkeypatch, tmp_path):
+    _install_isolated_runtime(monkeypatch, tmp_path)
+    skill_dir = tmp_path / "skills" / "public" / "apps" / "capp_001" / "school-sim.actor.pm.m2.v1"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: school-sim.actor.pm.m2.v1\n"
+        "description: School Sim PM actor.\n"
+        "---\n"
+        "Use the PM actor workspace.",
+        encoding="utf-8",
+    )
+    state = _state("task_root_visible_skill_catalog_001")
+
+    routed = root_graph_module.route_skill(state)
+
+    assert {
+        "id": "school-sim.actor.pm.m2.v1",
+        "name": "school-sim.actor.pm.m2.v1",
+        "description": "School Sim PM actor.",
+    } in routed["context"]["allowed_skills"]
+
+
+def test_route_skill_uses_default_registry_skills_when_allowed_skills_empty(monkeypatch, tmp_path):
+    _install_isolated_runtime(monkeypatch, tmp_path)
+    skill_dir = tmp_path / "skills" / "public" / "apps" / "capp_001" / "school-sim.actor.pm.m2.v1"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: school-sim.actor.pm.m2.v1\n"
+        "description: School Sim PM actor.\n"
+        "---\n"
+        "Use the PM actor workspace.",
+        encoding="utf-8",
+    )
+    state = _state("task_root_empty_allowed_skill_catalog_001")
+    state["context"]["allowed_skills"] = []
+
+    routed = root_graph_module.route_skill(state)
+
+    assert {
+        "id": "school-sim.actor.pm.m2.v1",
+        "name": "school-sim.actor.pm.m2.v1",
+        "description": "School Sim PM actor.",
+    } in routed["context"]["allowed_skills"]
+
+
+def test_route_skill_filters_registry_skills_with_allowed_skills(monkeypatch, tmp_path):
+    _install_isolated_runtime(monkeypatch, tmp_path)
+    school_dir = tmp_path / "skills" / "public" / "apps" / "capp_001" / "school-sim.actor.pm.m2.v1"
+    school_dir.mkdir(parents=True)
+    (school_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: school-sim.actor.pm.m2.v1\n"
+        "description: School Sim PM actor.\n"
+        "---\n"
+        "Use the PM actor workspace.",
+        encoding="utf-8",
+    )
+    other_dir = tmp_path / "skills" / "public" / "apps" / "capp_001" / "other-skill"
+    other_dir.mkdir(parents=True)
+    (other_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: other-skill\n"
+        "description: Other skill.\n"
+        "---\n"
+        "Use another workflow.",
+        encoding="utf-8",
+    )
+    state = _state("task_root_filtered_skill_catalog_001")
+    state["context"]["allowed_skills"] = [{"id": "school-sim.actor.pm.m2.v1"}]
+
+    routed = root_graph_module.route_skill(state)
+
+    assert routed["context"]["allowed_skills"] == [{
+        "id": "school-sim.actor.pm.m2.v1",
+        "name": "school-sim.actor.pm.m2.v1",
+        "description": "School Sim PM actor.",
+    }]
+
+
+def test_route_skill_does_not_use_order_id_default_fallback(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    root_graph_module._skill_registry.register(
+        SkillManifest(id="school-sim.actor.pm.m2.v1", name="School PM", allowed_tools=[]),
+    )
+    root_graph_module._skill_registry.register(
+        SkillManifest(id="exception_triage", name="Exception Triage", allowed_tools=[]),
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "load", lambda **kwargs: None)
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", False)
+    state = _state("task_prompt_skill_before_order_001")
+    state["prompt"] = "请使用 school-sim.actor.pm.m2.v1 技能，完成 marker smoke。"
+    state["context"]["order_id"] = "ORD-001"
+
+    routed = root_graph_module.route_skill(state)
+
+    assert routed["active_frame_id"] is None
+    assert runtime.store.list_all() == []
+    assert routed["events"][-1].type == "result"
+    assert "未能识别" in routed["events"][-1].content
+
+
+def test_non_llm_fallback_rejects_non_programmatic_skill_instead_of_order_triage(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    root_graph_module._skill_registry.register(
+        SkillManifest(id="school-sim.actor.pm.m2.v1", name="School PM", allowed_tools=[]),
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "load", lambda **kwargs: None)
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", False)
+    state = _state("task_prompt_skill_non_llm_reject_001")
+    state["context"]["businessSkillName"] = "school-sim.actor.pm.m2.v1"
+    state["context"]["order_id"] = "ORD-001"
+
+    routed = root_graph_module.route_skill(state)
+    state["active_frame_id"] = routed["active_frame_id"]
+    result = root_graph_module.run_skill(state)
+
+    frame = runtime.get_frame(routed["active_frame_id"])
+    assert result["events"][0].type == "error"
+    assert "legacy fallback only supports exception_triage" in result["events"][0].error
+    assert all("Opening child frame" not in (event.content or "") for event in result["events"])
+    assert frame is not None
+    assert frame.status.value == "FAILED"
 
 
 def test_run_skill_passes_recent_conversation_to_persistent_root_agent(monkeypatch, tmp_path):

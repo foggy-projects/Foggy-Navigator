@@ -41,7 +41,7 @@ class TestThreeLevelNesting:
         resp = await client.post("/api/v1/query", json={
             "prompt": "三层嵌套测试",
             "taskId": "nest3_001",
-            "context": {"order_id": "ORD-NEST3"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-NEST3"},
         })
         assert resp.status_code == 200
 
@@ -58,7 +58,7 @@ class TestThreeLevelNesting:
         resp = await client.post("/api/v1/query", json={
             "prompt": "三层嵌套测试",
             "taskId": "nest3_002",
-            "context": {"order_id": "ORD-NEST3"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-NEST3"},
         })
         events = _parse_sse_events(resp.text)
 
@@ -71,7 +71,7 @@ class TestThreeLevelNesting:
         resp = await client.post("/api/v1/query", json={
             "prompt": "三层嵌套测试",
             "taskId": "nest3_003",
-            "context": {"order_id": "ORD-NEST3"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-NEST3"},
         })
         events = _parse_sse_events(resp.text)
         result = next((e for e in events if e.type == "result"), None)
@@ -83,7 +83,7 @@ class TestThreeLevelNesting:
         resp = await client.post("/api/v1/query", json={
             "prompt": "三层嵌套测试",
             "taskId": "nest3_004",
-            "context": {"order_id": "ORD-NEST3"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-NEST3"},
         })
         events = _parse_sse_events(resp.text)
         frame_opens = [e.skill_id for e in events if e.type == "skill_frame_open"]
@@ -105,7 +105,7 @@ class TestThreeLevelNesting:
         resp = await client.post("/api/v1/query", json={
             "prompt": "三层嵌套测试",
             "taskId": "nest3_parent_001",
-            "context": {"order_id": "ORD-NEST3"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-NEST3"},
         })
         events = _parse_sse_events(resp.text)
 
@@ -135,7 +135,7 @@ class TestThreeLevelNesting:
         resp = await client.post("/api/v1/query", json={
             "prompt": "三层嵌套测试",
             "taskId": "nest3_005",
-            "context": {"order_id": "ORD-NEST3"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-NEST3"},
         })
         events = _parse_sse_events(resp.text)
         frame_opens = [e for e in events if e.type == "skill_frame_open"]

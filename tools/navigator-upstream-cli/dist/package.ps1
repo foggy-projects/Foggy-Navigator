@@ -49,6 +49,7 @@ catch {
 $features = @(
     "config-check",
     "runtime-token",
+    "owner-smoke",
     "agent-readiness",
     "ask",
     "messages",
@@ -64,11 +65,20 @@ $features = @(
     "upstream-route",
     "model-grant",
     "model-owned-config",
+    "model-variant",
     "runtime-budget-preset",
     "account-context",
     "deterministic-e2e",
     "admin-key-bootstrap",
-    "client-app-bootstrap"
+    "client-app-bootstrap",
+    "client-app-runtime-credential",
+    "upstream-worker-orchestration",
+    "upstream-directory-orchestration",
+    "upstream-worker-pool-orchestration",
+    "task-diagnostics",
+    "physical-worker-diagnostics",
+    "worker-host-suite",
+    "navi-routed-codex-config"
 )
 
 Push-Location $RepoRoot

@@ -3,7 +3,20 @@
     <!-- 用户消息 -->
     <view v-if="message.sender === 'user'" class="copyable-group">
       <view class="bubble user-bubble" @longpress="handleCopy">
-        <rich-text :nodes="message.content" />
+        <template v-for="(part, index) in renderedParts" :key="index">
+          <rich-text v-if="part.type === 'markdown'" :nodes="part.html" />
+          <view v-else class="message-code-block" @tap.stop>
+            <view class="code-toolbar">
+              <text class="code-lang">{{ part.lang || 'code' }}</text>
+              <text class="code-copy-action" @tap.stop="handleCopyCode(part.code, index)">
+                {{ copiedCodeIndex === index ? '已复制' : '复制代码' }}
+              </text>
+            </view>
+            <scroll-view scroll-x class="message-code-scroll">
+              <text class="message-code-text">{{ part.code }}</text>
+            </scroll-view>
+          </view>
+        </template>
       </view>
       <text v-if="copyable" class="copy-action" @tap.stop="handleCopy">{{ copyLabel }}</text>
     </view>
@@ -11,7 +24,20 @@
     <!-- 助手消息 -->
     <view v-else-if="message.sender === 'assistant'" class="copyable-group">
       <view class="bubble assistant-bubble" @longpress="handleCopy">
-        <rich-text :nodes="renderedContent" />
+        <template v-for="(part, index) in renderedParts" :key="index">
+          <rich-text v-if="part.type === 'markdown'" :nodes="part.html" />
+          <view v-else class="message-code-block" @tap.stop>
+            <view class="code-toolbar">
+              <text class="code-lang">{{ part.lang || 'code' }}</text>
+              <text class="code-copy-action" @tap.stop="handleCopyCode(part.code, index)">
+                {{ copiedCodeIndex === index ? '已复制' : '复制代码' }}
+              </text>
+            </view>
+            <scroll-view scroll-x class="message-code-scroll">
+              <text class="message-code-text">{{ part.code }}</text>
+            </scroll-view>
+          </view>
+        </template>
       </view>
       <text v-if="copyable" class="copy-action" @tap.stop="handleCopy">{{ copyLabel }}</text>
     </view>
@@ -73,7 +99,7 @@ import ToolCallCard from './ToolCallCard.vue'
 import PlanReviewCard from './PlanReviewCard.vue'
 import PermissionRequestCard from './PermissionRequestCard.vue'
 import UserQuestionCard from './UserQuestionCard.vue'
-import { renderMarkdown } from '@/utils/markdown'
+import { hasMarkdownSyntax, renderMarkdownParts } from '@/utils/markdown'
 import { copyTextToClipboard } from '@/utils/clipboard'
 
 const props = defineProps<{
@@ -88,10 +114,11 @@ defineEmits<{
 
 const senderClass = computed(() => `sender-${props.message.sender}`)
 const isCopied = ref(false)
+const copiedCodeIndex = ref<number | null>(null)
 
-const renderedContent = computed(() => {
-  if (!props.message.content) return ''
-  return renderMarkdown(props.message.content)
+const renderedParts = computed(() => {
+  if (!props.message.content) return []
+  return renderMarkdownParts(props.message.content)
 })
 
 const isTaskCompleted = computed(() => props.message.type === AipMessageType.TASK_COMPLETED)
@@ -115,9 +142,14 @@ const copyText = computed(() => {
 })
 
 const copyable = computed(() => copyText.value.length > 0)
-const copyLabel = computed(() => (isCopied.value ? '已复制' : '复制'))
+const hasFormattedContent = computed(() => hasMarkdownSyntax(copyText.value))
+const copyLabel = computed(() => {
+  if (isCopied.value) return '已复制'
+  return hasFormattedContent.value ? '复制 Markdown' : '复制'
+})
 
 let copyTimer: ReturnType<typeof setTimeout> | null = null
+let codeCopyTimer: ReturnType<typeof setTimeout> | null = null
 
 async function handleCopy() {
   if (!copyable.value) return
@@ -137,10 +169,30 @@ async function handleCopy() {
   }
 }
 
+async function handleCopyCode(code: string, index: number) {
+  try {
+    await copyTextToClipboard(code)
+    copiedCodeIndex.value = index
+    uni.showToast({ title: '已复制代码', icon: 'none' })
+    if (codeCopyTimer) clearTimeout(codeCopyTimer)
+    codeCopyTimer = setTimeout(() => {
+      copiedCodeIndex.value = null
+      codeCopyTimer = null
+    }, 1500)
+  } catch (error) {
+    console.error('Failed to copy code block:', error)
+    uni.showToast({ title: '复制失败', icon: 'none' })
+  }
+}
+
 onBeforeUnmount(() => {
   if (copyTimer) {
     clearTimeout(copyTimer)
     copyTimer = null
+  }
+  if (codeCopyTimer) {
+    clearTimeout(codeCopyTimer)
+    codeCopyTimer = null
   }
 })
 </script>
@@ -288,5 +340,84 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: pre-wrap;
+}
+.bubble :deep(p) {
+  margin: 0 0 12rpx;
+}
+.bubble :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.bubble :deep(ul),
+.bubble :deep(ol) {
+  margin: 12rpx 0;
+  padding-left: 36rpx;
+}
+.bubble :deep(li) {
+  margin: 6rpx 0;
+}
+.bubble :deep(blockquote) {
+  margin: 12rpx 0;
+  padding-left: 18rpx;
+  border-left: 6rpx solid rgba(96, 98, 102, 0.25);
+  color: #606266;
+}
+.user-bubble :deep(blockquote) {
+  color: rgba(255, 255, 255, 0.88);
+  border-left-color: rgba(255, 255, 255, 0.42);
+}
+.bubble :deep(code) {
+  background: rgba(0, 0, 0, 0.07);
+  border-radius: 6rpx;
+  padding: 2rpx 8rpx;
+  font-family: monospace;
+  font-size: 0.92em;
+}
+.user-bubble :deep(code) {
+  background: rgba(255, 255, 255, 0.2);
+}
+.message-code-block {
+  margin: 14rpx 0;
+  border-radius: 12rpx;
+  overflow: hidden;
+  background: #1f2937;
+  border: 1rpx solid rgba(255, 255, 255, 0.08);
+}
+.message-code-block:first-child {
+  margin-top: 0;
+}
+.message-code-block:last-child {
+  margin-bottom: 0;
+}
+.code-toolbar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48rpx;
+  padding: 0 16rpx;
+  background: rgba(255, 255, 255, 0.06);
+}
+.code-lang {
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.62);
+  font-family: monospace;
+  text-transform: uppercase;
+}
+.code-copy-action {
+  font-size: 22rpx;
+  color: #dbeafe;
+  padding: 8rpx 0 8rpx 20rpx;
+}
+.message-code-scroll {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 16rpx;
+}
+.message-code-text {
+  font-size: 24rpx;
+  line-height: 1.55;
+  font-family: monospace;
+  color: #f9fafb;
+  white-space: pre;
 }
 </style>

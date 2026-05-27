@@ -33,7 +33,7 @@ metadata:
     - structured_output
   business-rules: {}
   subgraph: rule_check
-allowed-tools: mock_search_incidents submit_skill_result
+allowed-tools: mock_search_incidents submit_frame_result
 ---
 
 # 规则核验
@@ -45,4 +45,4 @@ Use this skill when the parent skill needs to verify whether the recommended act
 1. Search for related incidents via `mock_search_incidents`.
 2. Check each applicable rule against the classification and action.
 3. Report which rules passed and which were violated.
-4. When finished, call `submit_skill_result`.
+4. Return the checked rules and pass/fail decision. If this run needs structured output or is inside an Agent frame, call `submit_frame_result`; otherwise a root/top-level caller may finish with a natural-language answer.

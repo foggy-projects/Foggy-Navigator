@@ -153,7 +153,7 @@ grantScope: app
 约束：
 
 - `modelConfigId` 必须存在且属于同一 `tenantId`
-- `workerBackend` 必须为 `LANGGRAPH_BIZ`
+- `workerBackend` 必须为 `LANGGRAPH_BIZ`、`OPENAI_CODEX`、`CLAUDE_CODE` 或 `GEMINI_CLI`
 - 同一 ClientApp 不能重复授权同一 `modelConfigId`
 
 ### 查询可用模型

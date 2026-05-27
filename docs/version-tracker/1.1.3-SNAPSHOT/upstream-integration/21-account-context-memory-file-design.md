@@ -26,9 +26,9 @@
 accountId 级文件上下文采用三层模型，按权限和优先级从高到低排列：
 
 ```text
-<data_root>/accounts/<account-id>/ACCOUNT_POLICY.md
-<data_root>/accounts/<account-id>/AGENT.md
-<data_root>/accounts/<account-id>/MEMORY.md
+<data_root>/accounts/<account-id>/agent/ACCOUNT_POLICY.md
+<data_root>/accounts/<account-id>/agent/AGENT.md
+<data_root>/accounts/<account-id>/agent/MEMORY.md
 ```
 
 语义如下：
@@ -61,9 +61,9 @@ Platform/System Prompt
 account private Skill 仍位于：
 
 ```text
-<data_root>/accounts/<account-id>/skills/<skill-name>/SKILL.md
-<data_root>/accounts/<account-id>/skills/<skill-name>/references/**
-<data_root>/accounts/<account-id>/skills/<skill-name>/assets/**
+<data_root>/accounts/<account-id>/agent/skills/<skill-name>/SKILL.md
+<data_root>/accounts/<account-id>/agent/skills/<skill-name>/references/**
+<data_root>/accounts/<account-id>/agent/skills/<skill-name>/assets/**
 ```
 
 SkillRegistry 继续按 `legacy < builtin < public < app-public < account` 加载。三层上下文文件用于 prompt 注入，不参与 Skill manifest 覆盖。
@@ -80,9 +80,11 @@ skills/<skill-name>/assets/**
 
 首版不得把这些工具扩展为可写 `ACCOUNT_POLICY.md`。后续如果开放 `AGENT.md` 或 `MEMORY.md` 写入，需要独立工具或 OpenAPI 明确权限、审计和乐观并发。
 
-### Claude Worker Directory Files API
+### Upstream Admin Directory Files API
 
-`PUT /api/v1/open/directories/{directoryId}/files` 面向 Claude/Coding Agent 工作目录，不是 Business Agent 的 accountId context file API。上游 BFF 可以在管理员配置链路中使用它维护工作目录 `CLAUDE.md`，但不应作为普通用户对话链路能力直接暴露给浏览器或 LLM。
+旧的 `PUT /api/v1/open/directories/{directoryId}/files` 已移除。Claude/Coding Agent 工作目录文件应通过 upstream system admin key 调用 `/api/v1/upstream-admin/directories/{directoryId}/files` 维护，或后续使用 ClientApp owner-aware workspace API。
+
+该能力不是 Business Agent 的 accountId context file API。上游 BFF 可以在管理员配置链路中使用它维护工作目录 `CLAUDE.md`，但不应作为普通用户对话链路能力直接暴露给浏览器或 LLM。
 
 ## 注入策略
 
@@ -94,6 +96,8 @@ skills/<skill-name>/assets/**
 4. 非法 accountId、路径逃逸、symlink、读取异常 fail-closed，不向 LLM 暴露物理路径或错误细节。
 5. 每个文件设置大小上限，超出后截断并标记。
 6. routing conversation log 不记录账号上下文文件正文，仅记录占位符。
+
+`ACCOUNT_POLICY.md` 不是模型厂商侧的隐藏内置记忆，而是 Navigator / 上游 BFF 管理的账号上下文文件。只要该文件存在且解析通过，Worker 会把其正文注入 system prompt；因此模型通常不需要再调用 `read_file` 读取同名文件确认内容。只有用户明确要求查看/维护账号上下文，或任务需要逐字引用文件正文时，才应读取物理文件。
 
 首段实现提供上游 BFF 可调用的 runtime-token OpenAPI，只允许写 `ACCOUNT_POLICY.md`。不允许 LLM 写 `ACCOUNT_POLICY.md`，也暂不让 LLM 通过通用 account file tools 写 `AGENT.md` 或 `MEMORY.md`。
 
@@ -170,6 +174,22 @@ navi upstream account-context write-policy --upstream-user-id <id> --from ./ACCO
 4. 非法 accountId、跨账号路径、symlink、超大文件、二进制/异常内容均 fail-closed 或被限制。
 5. `ACCOUNT_POLICY.md` 不通过 LLM tool、前端 DTO 或通用账号文件工具写入。
 6. 后续写入 API 必须具备 grant 绑定、审计、乐观并发和敏感信息禁写约束。
+
+## 2026-05-24 路径收口
+
+为与主流 agent workspace 布局保持一致，account 级上下文和私有 skill 统一放在
+`<data_root>/accounts/<account-id>/agent/` 下：
+
+```text
+<data_root>/accounts/<account-id>/agent/ACCOUNT_POLICY.md
+<data_root>/accounts/<account-id>/agent/AGENT.md
+<data_root>/accounts/<account-id>/agent/MEMORY.md
+<data_root>/accounts/<account-id>/agent/skills/<skill-id>/SKILL.md
+```
+
+Java 控制面可以继续保存注册信息、做授权和物化请求；BizWorker 运行时最终只从
+`accountId` 私有目录、`clientAppId` 公共目录、全局 public/builtin 目录加载 skill，
+不再依赖 Java launch context 注入 `skill_markdown`。
 
 ## Progress Tracking
 

@@ -84,7 +84,7 @@ class CodingAgentServiceTest {
 
         @Test
         void registerAgent_success() {
-            when(bindingRepository.findByAgentId(anyString())).thenReturn(List.of());
+            when(bindingRepository.findByTenantIdAndAgentId(anyString(), anyString())).thenReturn(List.of());
             when(directoryRepository.findByDirectoryId(DIR_ID)).thenReturn(Optional.of(createDirectory(DIR_ID)));
 
             RegisterAgentForm form = new RegisterAgentForm();
@@ -112,7 +112,7 @@ class CodingAgentServiceTest {
 
         @Test
         void registerAgent_autoBindsDefaultDirectory() {
-            when(bindingRepository.findByAgentId(anyString())).thenReturn(List.of());
+            when(bindingRepository.findByTenantIdAndAgentId(anyString(), anyString())).thenReturn(List.of());
             when(directoryRepository.findByDirectoryId(DIR_ID)).thenReturn(Optional.of(createDirectory(DIR_ID)));
 
             RegisterAgentForm form = new RegisterAgentForm();
@@ -126,6 +126,7 @@ class CodingAgentServiceTest {
             ArgumentCaptor<AgentDirectoryBindingEntity> captor =
                     ArgumentCaptor.forClass(AgentDirectoryBindingEntity.class);
             verify(bindingRepository).save(captor.capture());
+            assertEquals(TENANT_ID, captor.getValue().getTenantId());
             assertEquals(DIR_ID, captor.getValue().getDirectoryId());
         }
 
@@ -170,7 +171,7 @@ class CodingAgentServiceTest {
 
         @Test
         void registerAgent_withDefaultModelConfigId_persists() {
-            when(bindingRepository.findByAgentId(anyString())).thenReturn(List.of());
+            when(bindingRepository.findByTenantIdAndAgentId(anyString(), anyString())).thenReturn(List.of());
             when(directoryRepository.findByDirectoryId(DIR_ID)).thenReturn(Optional.of(createDirectory(DIR_ID)));
 
             RegisterAgentForm form = new RegisterAgentForm();
@@ -238,7 +239,7 @@ class CodingAgentServiceTest {
             CodingAgentEntity existing = createAgentEntity(AGENT_ID);
             when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
                     .thenReturn(Optional.of(existing));
-            when(bindingRepository.findByAgentId(AGENT_ID)).thenReturn(List.of());
+            when(bindingRepository.findByTenantIdAndAgentId(TENANT_ID, AGENT_ID)).thenReturn(List.of());
             when(directoryRepository.findByDirectoryId(DIR_ID)).thenReturn(Optional.of(createDirectory(DIR_ID)));
 
             UpdateAgentForm form = new UpdateAgentForm();
@@ -259,7 +260,7 @@ class CodingAgentServiceTest {
             CodingAgentEntity existing = createAgentEntity(AGENT_ID);
             when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
                     .thenReturn(Optional.of(existing));
-            when(bindingRepository.findByAgentId(AGENT_ID)).thenReturn(List.of());
+            when(bindingRepository.findByTenantIdAndAgentId(TENANT_ID, AGENT_ID)).thenReturn(List.of());
 
             UpdateAgentForm form = new UpdateAgentForm();
             form.setDefaultModelConfigId("new-llm-config");
@@ -277,7 +278,7 @@ class CodingAgentServiceTest {
             existing.setDefaultModelConfigId("old-config");
             when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
                     .thenReturn(Optional.of(existing));
-            when(bindingRepository.findByAgentId(AGENT_ID)).thenReturn(List.of());
+            when(bindingRepository.findByTenantIdAndAgentId(TENANT_ID, AGENT_ID)).thenReturn(List.of());
 
             UpdateAgentForm form = new UpdateAgentForm();
             form.setDefaultModelConfigId("");
@@ -293,7 +294,7 @@ class CodingAgentServiceTest {
             existing.setDefaultModelConfigId("keep-this");
             when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
                     .thenReturn(Optional.of(existing));
-            when(bindingRepository.findByAgentId(AGENT_ID)).thenReturn(List.of());
+            when(bindingRepository.findByTenantIdAndAgentId(TENANT_ID, AGENT_ID)).thenReturn(List.of());
 
             UpdateAgentForm form = new UpdateAgentForm();
             form.setName("updated-name");
@@ -330,7 +331,7 @@ class CodingAgentServiceTest {
 
         service.deleteAgent(USER_ID, AGENT_ID);
 
-        verify(bindingRepository).deleteByAgentId(AGENT_ID);
+        verify(bindingRepository).deleteByTenantIdAndAgentId(TENANT_ID, AGENT_ID);
         verify(agentRepository).delete(existing);
     }
 
@@ -344,7 +345,7 @@ class CodingAgentServiceTest {
             CodingAgentEntity agent = createAgentEntity(AGENT_ID);
             when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
                     .thenReturn(Optional.of(agent));
-            when(bindingRepository.findByAgentIdAndDirectoryId(AGENT_ID, DIR_ID))
+            when(bindingRepository.findByTenantIdAndAgentIdAndDirectoryId(TENANT_ID, AGENT_ID, DIR_ID))
                     .thenReturn(Optional.empty());
 
             service.bindDirectory(USER_ID, AGENT_ID, DIR_ID);
@@ -352,6 +353,7 @@ class CodingAgentServiceTest {
             ArgumentCaptor<AgentDirectoryBindingEntity> captor =
                     ArgumentCaptor.forClass(AgentDirectoryBindingEntity.class);
             verify(bindingRepository).save(captor.capture());
+            assertEquals(TENANT_ID, captor.getValue().getTenantId());
             assertEquals(AGENT_ID, captor.getValue().getAgentId());
             assertEquals(DIR_ID, captor.getValue().getDirectoryId());
         }
@@ -362,9 +364,10 @@ class CodingAgentServiceTest {
             when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
                     .thenReturn(Optional.of(agent));
             AgentDirectoryBindingEntity existingBinding = new AgentDirectoryBindingEntity();
+            existingBinding.setTenantId(TENANT_ID);
             existingBinding.setAgentId(AGENT_ID);
             existingBinding.setDirectoryId(DIR_ID);
-            when(bindingRepository.findByAgentIdAndDirectoryId(AGENT_ID, DIR_ID))
+            when(bindingRepository.findByTenantIdAndAgentIdAndDirectoryId(TENANT_ID, AGENT_ID, DIR_ID))
                     .thenReturn(Optional.of(existingBinding));
 
             service.bindDirectory(USER_ID, AGENT_ID, DIR_ID);
@@ -381,7 +384,7 @@ class CodingAgentServiceTest {
 
             service.unbindDirectory(USER_ID, AGENT_ID, DIR_ID);
 
-            verify(bindingRepository).deleteByAgentIdAndDirectoryId(AGENT_ID, DIR_ID);
+            verify(bindingRepository).deleteByTenantIdAndAgentIdAndDirectoryId(TENANT_ID, AGENT_ID, DIR_ID);
         }
     }
 
@@ -396,9 +399,10 @@ class CodingAgentServiceTest {
                 .thenReturn(Optional.of(createDirectory(DIR_ID)));
 
         AgentDirectoryBindingEntity binding = new AgentDirectoryBindingEntity();
+        binding.setTenantId(TENANT_ID);
         binding.setAgentId(AGENT_ID);
         binding.setDirectoryId(DIR_ID);
-        when(bindingRepository.findByAgentId(AGENT_ID)).thenReturn(List.of(binding));
+        when(bindingRepository.findByTenantIdAndAgentId(TENANT_ID, AGENT_ID)).thenReturn(List.of(binding));
 
         List<CodingAgentDTO> result = service.listAgents(USER_ID);
 

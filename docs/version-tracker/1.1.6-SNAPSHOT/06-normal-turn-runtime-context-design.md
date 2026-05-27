@@ -357,7 +357,7 @@ assistantVisibleContent
 
 1. Root / Skill 明确返回的 user-facing final message。
 2. structured output 中声明为用户可见的 `message` / `userMessage` / `finalResponse` 等字段。
-3. `submit_skill_result.summary` 或 promoted result 的 compact user-facing summary。
+3. `submit_frame_result.summary` 或 promoted result 的 compact user-facing summary。
 4. 不可恢复错误时的标准化 user-visible error message。
 
 不应作为 `assistantVisibleContent` 的内容：

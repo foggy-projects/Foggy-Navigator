@@ -209,6 +209,43 @@ async def test_scripted_cursor_tool_call_and_debug_requests(client):
 
 
 @pytest.mark.anyio
+async def test_scripted_cursor_can_start_from_system_message(client):
+    """测试系统上下文中的首轮 cursor 可驱动 Java Navi -> BizWorker scripted smoke。"""
+    trace_id = "e2e-script-system-cursor-001"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    register = await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "scenarioId": "system-context-script",
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:001",
+                    "response": {
+                        "content": "OK_SYSTEM_CURSOR"
+                    },
+                }
+            ],
+        },
+    )
+    assert register.status_code == 200
+
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "navigator-e2e-scripted",
+            "messages": [
+                {"role": "system", "content": f"script starts at next:{trace_id}:001"},
+                {"role": "user", "content": "Business Agent task bt_001"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "OK_SYSTEM_CURSOR"
+
+
+@pytest.mark.anyio
 async def test_scripted_duplicate_cursor_uses_registered_sequence(client):
     """同一用户消息触发多个 LLM 调用时，可按注册顺序返回不同响应。"""
     trace_id = "e2e-script-duplicate-cursor-001"

@@ -13,7 +13,15 @@ import type {
   ConfirmationRequestPayload,
   ConfirmationResponsePayload,
 } from '../types/aip'
-import type { ChatMessage, ConnectionStatus, ExecutionReportDigest } from '../types/chat'
+import type {
+  ChatMessage,
+  ConnectionStatus,
+  ExecutionReportDigest,
+  NavigatorUiAction,
+  NavigatorUiArtifact,
+  NavigatorUiArtifactKind,
+  NavigatorUiArtifactOpenMode,
+} from '../types/chat'
 
 let _msgSeq = 0
 function nextId(): string {
@@ -203,6 +211,148 @@ function firstNullableString(...values: unknown[]): string | null | undefined {
   return undefined
 }
 
+const UI_ACTION_TYPES = new Set(['OPEN_ARTIFACT', 'OPEN_TMS_PAGE'])
+const ARTIFACT_KINDS = new Set<NavigatorUiArtifactKind>(['route', 'iframe', 'link'])
+const ARTIFACT_OPEN_MODES = new Set<NavigatorUiArtifactOpenMode>([
+  'side_panel',
+  'dialog',
+  'new_tab',
+  'current_page',
+])
+const UI_ACTION_CONTAINER_KEYS = [
+  'action',
+  'actions',
+  'uiAction',
+  'ui_action',
+  'uiActions',
+  'ui_actions',
+  'result',
+  'data',
+  'payload',
+  'output',
+]
+
+function extractUiActions(...sources: unknown[]): NavigatorUiAction[] {
+  const actions: NavigatorUiAction[] = []
+  const seen = new WeakSet<object>()
+  const seenKeys = new Set<string>()
+
+  function visit(value: unknown) {
+    const parsed = parseMaybeJson(value)
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) visit(item)
+      return
+    }
+    const source = objectValue(parsed)
+    if (!source || seen.has(source)) return
+    seen.add(source)
+
+    const action = normalizeUiAction(source)
+    if (action) {
+      const key = action.artifact.id
+        || `${action.type}:${action.artifact.kind}:${action.artifact.uri || action.artifact.routeName || action.artifact.routePath || action.label || ''}`
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key)
+        actions.push(action)
+      }
+    }
+
+    for (const key of UI_ACTION_CONTAINER_KEYS) {
+      visit(source[key])
+    }
+  }
+
+  for (const source of sources) visit(source)
+  return actions
+}
+
+function normalizeUiAction(source: Record<string, unknown>): NavigatorUiAction | undefined {
+  const type = firstString(source.type, source.action)
+  const hasArtifact = objectValue(source.artifact) != null
+  if (!type && !hasArtifact) return undefined
+  const actionType = type || 'OPEN_ARTIFACT'
+  if (!UI_ACTION_TYPES.has(actionType) && !hasArtifact) return undefined
+
+  const artifactSource = objectValue(source.artifact)
+  const artifact = normalizeArtifact(artifactSource ?? source, actionType)
+  if (!artifact) return undefined
+
+  return {
+    type: hasArtifact ? actionType : 'OPEN_ARTIFACT',
+    label: firstString(source.label, artifact.title, source.title),
+    artifact,
+    context: objectValue(source.context),
+    raw: source,
+  }
+}
+
+function normalizeArtifact(
+  source: Record<string, unknown>,
+  actionType: string,
+): NavigatorUiArtifact | undefined {
+  const kindValue = firstString(source.kind)
+  const fallbackKind = actionType === 'OPEN_TMS_PAGE' ? 'route' : undefined
+  const kind = ARTIFACT_KINDS.has(kindValue as NavigatorUiArtifactKind)
+    ? kindValue as NavigatorUiArtifactKind
+    : fallbackKind
+  if (!kind) return undefined
+
+  const openModeValue = firstString(source.openMode, source.open_mode)
+  const openMode = ARTIFACT_OPEN_MODES.has(openModeValue as NavigatorUiArtifactOpenMode)
+    ? openModeValue as NavigatorUiArtifactOpenMode
+    : undefined
+  const uri = firstString(source.uri, source.url, source.href, source.path, source.fallbackUrl, source.fallback_url)
+  const artifact: NavigatorUiArtifact = {
+    ...source,
+    kind,
+    ...(firstString(source.id, source.artifactId, source.artifact_id) ? {
+      id: firstString(source.id, source.artifactId, source.artifact_id),
+    } : {}),
+    ...(firstString(source.title, source.label, source.name) ? {
+      title: firstString(source.title, source.label, source.name),
+    } : {}),
+    ...(uri ? { uri } : {}),
+    ...(firstString(source.routeName, source.route_name) ? {
+      routeName: firstString(source.routeName, source.route_name),
+    } : {}),
+    ...(firstString(source.routePath, source.route_path) ? {
+      routePath: firstString(source.routePath, source.route_path),
+    } : {}),
+    ...(openMode ? { openMode } : {}),
+    ...(firstString(source.fallbackUrl, source.fallback_url) ? {
+      fallbackUrl: firstString(source.fallbackUrl, source.fallback_url),
+    } : {}),
+    ...(firstString(source.sandbox) ? { sandbox: firstString(source.sandbox) } : {}),
+  }
+
+  if (artifact.kind === 'route' && !artifact.routeName && !artifact.routePath && !artifact.uri) return undefined
+  if ((artifact.kind === 'iframe' || artifact.kind === 'link') && !artifact.uri && !artifact.fallbackUrl) return undefined
+  return artifact
+}
+
+function uiActionProps(actions: NavigatorUiAction[]): Partial<ChatMessage> {
+  return actions.length ? { uiActions: actions } : {}
+}
+
+function mergeUiActions(target: ChatMessage, actions: NavigatorUiAction[]) {
+  if (!actions.length) return
+  const existing = target.uiActions ?? []
+  const keys = new Set(existing.map(actionKey))
+  for (const action of actions) {
+    const key = actionKey(action)
+    if (!keys.has(key)) {
+      existing.push(action)
+      keys.add(key)
+    }
+  }
+  target.uiActions = existing
+}
+
+function actionKey(action: NavigatorUiAction): string {
+  return action.artifact.id
+    || `${action.type}:${action.artifact.kind}:${action.artifact.uri || action.artifact.routeName || action.artifact.routePath || action.label || ''}`
+}
+
 export function createChatState(): ChatState {
   const messages = ref<ChatMessage[]>([])
   const connectionStatus = ref<ConnectionStatus>('disconnected')
@@ -224,6 +374,7 @@ export function createChatState(): ChatState {
     // Clear waiting hint when a real event arrives (except STATE_SYNC/waiting itself)
     const raw = aip.payload as Record<string, unknown> | undefined
     const report = extractExecutionReport(undefined, raw)
+    const uiActions = extractUiActions(raw)
     if (!(aip.type === AipMessageType.STATE_SYNC && raw?.subtype === 'waiting')) {
       removeWaitingHint()
     }
@@ -246,6 +397,7 @@ export function createChatState(): ChatState {
             content: p.content,
             timestamp: aip.timestamp,
             ...executionReportProps(report),
+            ...uiActionProps(uiActions),
           })
         }
         break
@@ -275,6 +427,7 @@ export function createChatState(): ChatState {
             content: p.content,
             timestamp: aip.timestamp,
             ...executionReportProps(report),
+            ...uiActionProps(extractUiActions(raw, p.content)),
           })
         }
         break
@@ -326,8 +479,9 @@ export function createChatState(): ChatState {
       case AipMessageType.TOOL_CALL_RESULT: {
         const p = aip.payload as ToolCallResultPayload
         // Map backend fields: data → output fallback
-        const output = p.output ?? p.data ?? ''
+        const output = p.output ?? (typeof p.data === 'string' ? p.data : p.data ? formatArguments(p.data) : '')
         const success = p.success !== false
+        const toolUiActions = extractUiActions(raw, p.output, p.data)
         const existing = messages.value.find(
           (m) => m.toolCallId === p.toolCallId && m.type === AipMessageType.TOOL_CALL_START,
         )
@@ -335,6 +489,7 @@ export function createChatState(): ChatState {
           existing.toolOutput = output
           existing.toolSuccess = success
           applyExecutionReport(existing, report)
+          mergeUiActions(existing, toolUiActions)
         } else {
           messages.value.push({
             id: aip.messageId,
@@ -347,6 +502,7 @@ export function createChatState(): ChatState {
             toolSuccess: success,
             timestamp: aip.timestamp,
             ...executionReportProps(report),
+            ...uiActionProps(toolUiActions),
           })
         }
         break
@@ -388,6 +544,7 @@ export function createChatState(): ChatState {
             raw: { subtype },
             timestamp: aip.timestamp,
             ...executionReportProps(report),
+            ...uiActionProps(uiActions),
           })
           break
         }
@@ -410,6 +567,7 @@ export function createChatState(): ChatState {
             raw: taskId ? { subtype, taskId } : { subtype },
             timestamp: aip.timestamp,
             ...executionReportProps(report),
+            ...uiActionProps(uiActions),
           })
           break
         }
@@ -450,6 +608,7 @@ export function createChatState(): ChatState {
             raw: { subtype, elapsedSeconds: elapsed, timeoutSeconds: timeout },
             timestamp: aip.timestamp,
             ...executionReportProps(report),
+            ...uiActionProps(uiActions),
           }
           if (existingIdx >= 0) {
             messages.value[existingIdx] = msg
@@ -473,6 +632,7 @@ export function createChatState(): ChatState {
           content: p.status ? `状态变更: ${p.status}` : statusText,
           timestamp: aip.timestamp,
           ...executionReportProps(report),
+          ...uiActionProps(uiActions),
         })
         break
       }
@@ -504,6 +664,7 @@ export function createChatState(): ChatState {
           raw: p,
           timestamp: aip.timestamp,
           ...executionReportProps(report),
+          ...uiActionProps(uiActions),
         })
         break
       }
@@ -518,6 +679,7 @@ export function createChatState(): ChatState {
             content,
             timestamp: aip.timestamp,
             ...executionReportProps(report),
+            ...uiActionProps(uiActions),
           })
         } else {
           appendExecutionReportMessage(aip, report)

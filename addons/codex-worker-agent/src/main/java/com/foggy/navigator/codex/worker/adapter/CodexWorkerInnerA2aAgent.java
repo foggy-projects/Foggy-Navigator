@@ -58,18 +58,20 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         Map<String, Object> meta = message.getMetadata() != null ? message.getMetadata() : Map.of();
         Integer maxTurns = meta.get("maxTurns") instanceof Number n ? n.intValue() : null;
         String model = stringMeta(meta, "model");
+        String requestedWorkerId = stringMeta(meta, "workerId");
         String requestedCwd = stringMeta(meta, "cwd");
         String requestedDirectoryId = stringMeta(meta, "directoryId");
         String modelConfigId = stringMeta(meta, "modelConfigId");
         String images = imagesMeta(meta.get("images"));
 
+        String effectiveWorkerId = requestedWorkerId != null ? requestedWorkerId : entity.getWorkerId();
         String effectiveCwd = requestedCwd != null ? requestedCwd : defaultCwd;
         String effectiveDirectoryId = requestedDirectoryId != null ? requestedDirectoryId : entity.getDefaultDirectoryId();
 
         // 通过 CodexTaskService.createTask() 创建任务并发布 WorkerTaskStartEvent
         CreateCodexTaskForm form = new CreateCodexTaskForm();
         form.setAgentId(entity.getAgentId());
-        form.setWorkerId(entity.getWorkerId());
+        form.setWorkerId(effectiveWorkerId);
         form.setPrompt(prompt);
         form.setCwd(effectiveCwd);
         form.setDirectoryId(effectiveDirectoryId);
@@ -78,6 +80,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setImages(images);
         form.setAttachments(attachmentsMeta(meta.get("attachments")));
         form.setModelConfigId(modelConfigId);
+        form.setContextId(context.getContextId());
 
         // 多轮会话：从已解析上下文获取 codexThreadId（使 Worker 恢复 Codex session）
         form.setCodexThreadId(context.getAgentSessionRef());
@@ -96,6 +99,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         taskMeta.put("workerId", task.getWorkerId());
         taskMeta.put("directoryId", task.getDirectoryId());
         taskMeta.put("codexThreadId", task.getCodexThreadId());
+        taskMeta.put("contextId", context.getContextId());
 
         return A2aTask.builder()
                 .id(task.getTaskId())
@@ -164,6 +168,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         taskMeta.put("workerId", dto.getWorkerId());
         taskMeta.put("workerTaskId", dto.getWorkerTaskId());
         taskMeta.put("codexThreadId", dto.getCodexThreadId());
+        taskMeta.put("lastAckedSeq", dto.getLastAckedSeq());
 
         A2aTask.A2aTaskBuilder builder = A2aTask.builder()
                 .id(dto.getTaskId())

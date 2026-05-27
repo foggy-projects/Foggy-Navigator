@@ -3,8 +3,11 @@ package com.foggy.navigator.claude.worker.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
+import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
+import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
@@ -18,6 +21,7 @@ import java.util.Map;
 public class OpenApiAgentRouteService {
 
     private final CodingAgentRepository codingAgentRepository;
+    private final ClientAppService clientAppService;
     private final ObjectMapper objectMapper;
 
     public ResolvedOpenApiAgentRoute resolve(String routeAgentId, ResolvedClientAppCredentialDTO credential) {
@@ -26,17 +30,20 @@ public class OpenApiAgentRouteService {
             throw new IllegalArgumentException("client app access token is required");
         }
 
-        return codingAgentRepository.findByAgentIdAndTenantId(routeAgentId, credential.getTenantId())
-                .map(agent -> resolveFromAgent(routeAgentId, credential, agent))
-                .orElseGet(() -> ResolvedOpenApiAgentRoute.legacy(
-                        routeAgentId,
-                        credential.getClientAppId()));
+        CodingAgentEntity agent = codingAgentRepository.findByAgentIdAndTenantId(routeAgentId, credential.getTenantId())
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + routeAgentId));
+        ClientAppEntity clientApp = clientAppService.requireClientApp(
+                credential.getTenantId(),
+                credential.getClientAppId());
+        return resolveFromAgent(routeAgentId, credential, clientApp, agent);
     }
 
     private ResolvedOpenApiAgentRoute resolveFromAgent(
             String routeAgentId,
             ResolvedClientAppCredentialDTO credential,
+            ClientAppEntity clientApp,
             CodingAgentEntity agent) {
+        validateAgentVisibility(routeAgentId, credential, clientApp, agent);
         String boundClientAppId = resolveProfileText(agent.getAgentProfile(), "clientAppId", "client_app_id");
         if (StringUtils.hasText(boundClientAppId) && !boundClientAppId.equals(credential.getClientAppId())) {
             throw new IllegalArgumentException("Agent is not bound to this ClientApp: " + routeAgentId);
@@ -52,6 +59,39 @@ public class OpenApiAgentRouteService {
                 StringUtils.hasText(boundClientAppId) ? boundClientAppId : credential.getClientAppId(),
                 true,
                 false);
+    }
+
+    private void validateAgentVisibility(
+            String routeAgentId,
+            ResolvedClientAppCredentialDTO credential,
+            ClientAppEntity clientApp,
+            CodingAgentEntity agent) {
+        if (!Boolean.TRUE.equals(agent.getEnabled())) {
+            throw new IllegalArgumentException("Agent is disabled: " + routeAgentId);
+        }
+        if (!credential.getTenantId().equals(agent.getTenantId())) {
+            throw new IllegalArgumentException("Agent not found: " + routeAgentId);
+        }
+        ResourceOwnerType ownerType = agent.getOwnerType();
+        String ownerId = agent.getOwnerId();
+        if (ownerType == null || !StringUtils.hasText(ownerId)) {
+            throw new IllegalArgumentException("Agent owner is not configured: " + routeAgentId);
+        }
+        if (ownerType == ResourceOwnerType.CLIENT_APP) {
+            if (!ownerId.equals(credential.getClientAppId())
+                    || (StringUtils.hasText(agent.getClientAppId())
+                    && !agent.getClientAppId().equals(credential.getClientAppId()))) {
+                throw new IllegalArgumentException("Agent is not bound to this ClientApp: " + routeAgentId);
+            }
+            return;
+        }
+        if (ownerType == ResourceOwnerType.UPSTREAM_SYSTEM) {
+            if (clientApp == null || !ownerId.equals(clientApp.getUpstreamSystemId())) {
+                throw new IllegalArgumentException("Agent is not visible to this ClientApp: " + routeAgentId);
+            }
+            return;
+        }
+        throw new IllegalArgumentException("Agent owner is not visible to ClientApp runtime tokens: " + routeAgentId);
     }
 
     private String resolveProfileText(String profileJson, String... keys) {
@@ -129,9 +169,5 @@ public class OpenApiAgentRouteService {
             String clientAppId,
             boolean agentFound,
             boolean legacySkillRoute) {
-
-        private static ResolvedOpenApiAgentRoute legacy(String agentId, String clientAppId) {
-            return new ResolvedOpenApiAgentRoute(agentId, agentId, clientAppId, false, true);
-        }
     }
 }

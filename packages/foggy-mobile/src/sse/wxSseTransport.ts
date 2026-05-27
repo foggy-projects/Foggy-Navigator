@@ -16,7 +16,6 @@ export function createWxSseTransport(options: SseTransportOptions): SseTransport
       'Cache-Control': 'no-cache',
       ...(options.headers ?? {}),
     },
-    // @ts-expect-error enableChunkedTransfer is a WeChat-specific option
     enableChunkedTransfer: true,
     success: () => {
       options.onClose()
@@ -28,10 +27,11 @@ export function createWxSseTransport(options: SseTransportOptions): SseTransport
   })
 
   // Listen for chunked data
-  // @ts-expect-error onChunkReceived is a WeChat-specific API
-  if (requestTask.onChunkReceived) {
-    // @ts-expect-error onChunkReceived is a WeChat-specific API
-    requestTask.onChunkReceived((res: { data: ArrayBuffer }) => {
+  const chunkedRequestTask = requestTask as typeof requestTask & {
+    onChunkReceived?: (callback: (res: { data: ArrayBuffer }) => void) => void
+  }
+  if (chunkedRequestTask.onChunkReceived) {
+    chunkedRequestTask.onChunkReceived((res: { data: ArrayBuffer }) => {
       const decoder = new TextDecoder()
       const chunk = decoder.decode(res.data)
       buffer += chunk

@@ -50,7 +50,7 @@ class TestE2ESmoke:
         resp = await client.post("/api/v1/query", json={
             "prompt": "分析订单异常",
             "taskId": "e2e_smoke_001",
-            "context": {"order_id": "ORD-E2E-001"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-E2E-001"},
         })
         assert resp.status_code == 200
 
@@ -106,7 +106,7 @@ class TestE2ESmoke:
         resp = await client.post("/api/v1/query", json={
             "prompt": "处理异常订单",
             "taskId": "e2e_smoke_003",
-            "context": {"order_id": "ORD-E2E-003"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-E2E-003"},
         })
         events = _parse_sse_events(resp.text)
         event_types = [e.type for e in events]
@@ -123,7 +123,7 @@ class TestE2ESmoke:
         resp = await client.post("/api/v1/query", json={
             "prompt": "异常分诊",
             "taskId": "e2e_smoke_004",
-            "context": {"order_id": "ORD-E2E-004"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-E2E-004"},
         })
         events = _parse_sse_events(resp.text)
 
@@ -144,7 +144,7 @@ class TestE2ESmoke:
         resp = await client.post("/api/v1/query", json={
             "prompt": "分析异常",
             "taskId": task_id,
-            "context": {"order_id": "ORD-E2E-005"},
+            "context": {"skill": "exception_triage", "order_id": "ORD-E2E-005"},
         })
         events = _parse_sse_events(resp.text)
 

@@ -4,15 +4,25 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.AgentReadinessDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionSummaryDTO;
+import com.foggy.navigator.business.agent.model.dto.PhysicalWorkerDiagnosticDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerIdentityEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
+import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
+import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService;
-import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
+import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
+import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
+import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
+import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
@@ -34,10 +44,12 @@ class OpenApiAgentReadinessServiceTest {
     private ClientAppService clientAppService;
     private SkillRegistryService skillRegistryService;
     private ClientAppUserGrantService userGrantService;
-    private ClientAppModelConfigGrantService modelConfigGrantService;
+    private A2AgentResourceResolver resourceResolver;
     private ClientAppUpstreamRouteService upstreamRouteService;
     private BusinessFunctionRegistryService functionRegistryService;
     private OpenApiAgentRouteService agentRouteService;
+    private BizWorkerIdentityRepository workerIdentityRepository;
+    private ClaudeWorkerRepository claudeWorkerRepository;
     private Environment environment;
     private OpenApiAgentReadinessService service;
 
@@ -47,20 +59,24 @@ class OpenApiAgentReadinessServiceTest {
         clientAppService = mock(ClientAppService.class);
         skillRegistryService = mock(SkillRegistryService.class);
         userGrantService = mock(ClientAppUserGrantService.class);
-        modelConfigGrantService = mock(ClientAppModelConfigGrantService.class);
+        resourceResolver = mock(A2AgentResourceResolver.class);
         upstreamRouteService = mock(ClientAppUpstreamRouteService.class);
         functionRegistryService = mock(BusinessFunctionRegistryService.class);
         agentRouteService = mock(OpenApiAgentRouteService.class);
+        workerIdentityRepository = mock(BizWorkerIdentityRepository.class);
+        claudeWorkerRepository = mock(ClaudeWorkerRepository.class);
         environment = mock(Environment.class);
         service = new OpenApiAgentReadinessService(
                 agentResolver,
                 clientAppService,
                 skillRegistryService,
                 userGrantService,
-                modelConfigGrantService,
+                resourceResolver,
                 upstreamRouteService,
                 functionRegistryService,
                 agentRouteService,
+                workerIdentityRepository,
+                claudeWorkerRepository,
                 environment,
                 new ObjectMapper());
 
@@ -70,8 +86,48 @@ class OpenApiAgentReadinessServiceTest {
         when(clientAppService.requireActiveClientApp("tenant_1", "capp_1")).thenReturn(app);
         when(agentResolver.resolveAgent(eq("world-sim.bug-coordinator.decision.v1"), any(AgentResolveContext.class)))
                 .thenReturn(Optional.of(mock(A2aAgent.class)));
-        when(modelConfigGrantService.resolveEffectiveModelConfigId("tenant_1", "capp_1", "model_1"))
-                .thenReturn("model_1");
+        when(resourceResolver.resolveRequiredModelForAgent(eq("tenant_1"), eq("capp_1"), any(), nullable(String.class), nullable(String.class), any()))
+                .thenAnswer(invocation -> {
+                    String requestedModelConfigId = invocation.getArgument(3, String.class);
+                    String requestedModelVariant = invocation.getArgument(4, String.class);
+                    LlmModelCategory category = invocation.getArgument(5, LlmModelCategory.class);
+                    return new A2AgentResourceResolver.ResolvedModelResource(
+                            requestedModelConfigId != null ? requestedModelConfigId : "model_default",
+                            requestedModelConfigId,
+                            requestedModelVariant,
+                            category,
+                            requestedModelVariant != null
+                                    ? requestedModelVariant
+                                    : (requestedModelConfigId != null ? requestedModelConfigId + "-name" : "model_default-name"),
+                            requestedModelVariant != null ? "REQUESTED_MODEL_VARIANT" : "MODEL_CONFIG_DEFAULT",
+                            "LANGGRAPH_BIZ",
+                            requestedModelConfigId != null
+                                    ? "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT"
+                                    : "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT");
+                });
+        when(resourceResolver.resolveRequiredAgent(eq("tenant_1"), eq("capp_1"), eq("private_1"), anyString()))
+                .thenAnswer(invocation -> {
+                    String resolvedAgentId = invocation.getArgument(3, String.class);
+                    return new A2AgentResourceResolver.ResolvedAgentResource(
+                            resolvedAgentId,
+                            ResourceOwnerType.CLIENT_APP,
+                            "capp_1",
+                            "capp_1",
+                            resolvedAgentId,
+                            "pool_1",
+                            ResourceOwnerType.UPSTREAM_SYSTEM,
+                            "usys_1",
+                            "WORKER_POOL:UPSTREAM_SYSTEM",
+                            "LANGGRAPH_BIZ",
+                            null,
+                            null,
+                            null,
+                            null,
+                            "model_1",
+                            "qwen-plus",
+                            null,
+                            "AGENT:CLIENT_APP");
+                });
         when(agentRouteService.resolve(eq("world-sim.bug-coordinator.decision.v1"), any()))
                 .thenReturn(new OpenApiAgentRouteService.ResolvedOpenApiAgentRoute(
                         "world-sim.bug-coordinator.decision.v1",
@@ -98,12 +154,491 @@ class OpenApiAgentReadinessServiceTest {
 
         assertEquals("OK", result.getOverallStatus());
         assertEquals("model_1", result.getEffectiveModelConfigId());
+        assertEquals("model_1-name", result.getEffectiveModelName());
+        assertEquals("LANGGRAPH_BIZ", result.getEffectiveWorkerBackend());
+        assertEquals("CLIENT_APP", result.getAgentOwnerType());
+        assertEquals("pool_1", result.getWorkerPoolId());
+        assertEquals("pool_1", result.getInternalWorkerPoolId());
+        assertEquals("UPSTREAM_SYSTEM", result.getWorkerPoolOwnerType());
+        assertEquals("AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT", result.getModelConfigSource());
         assertNotNull(result.getSkillArtifact());
-        assertEquals(5, result.getChecks().size());
+        assertEquals(8, result.getChecks().size());
         assertTrue(result.getChecks().stream().allMatch(check -> "OK".equals(check.getStatus())));
         verify(skillRegistryService).checkClientAppSkillAccess(
                 "tenant_1", "capp_1", "world-sim.bug-coordinator.decision.v1");
         verify(userGrantService).checkUpstreamUserAccess("tenant_1", "capp_1", "private_1");
+    }
+
+    @Test
+    void verify_resolvesRequestedWorkspaceAndBizExecutionWorkerSeparately() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_1");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        when(resourceResolver.resolveRequiredAgent(eq("tenant_1"), eq("capp_1"), eq("private_1"), anyString()))
+                .thenAnswer(invocation -> {
+                    String resolvedAgentId = invocation.getArgument(3, String.class);
+                    return new A2AgentResourceResolver.ResolvedAgentResource(
+                            resolvedAgentId,
+                            ResourceOwnerType.CLIENT_APP,
+                            "capp_1",
+                            "capp_1",
+                            resolvedAgentId,
+                            null,
+                            null,
+                            null,
+                            null,
+                            "LANGGRAPH_BIZ",
+                            "worker_biz",
+                            ResourceOwnerType.UPSTREAM_SYSTEM,
+                            "usys_1",
+                            "BIZ_WORKER_IDENTITY",
+                            "model_1",
+                            "qwen-plus",
+                            "dir_user",
+                            "AGENT:CLIENT_APP");
+                });
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_user",
+                        "worker_claude",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/workspace/user",
+                        List.of("/workspace/user"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+        BizWorkerIdentityEntity bizWorker = new BizWorkerIdentityEntity();
+        bizWorker.setWorkerId("worker_biz");
+        bizWorker.setWorkerBackend("LANGGRAPH_BIZ");
+        bizWorker.setBaseUrl("http://worker-token@127.0.0.1:3161/runtime?token=secret");
+        bizWorker.setVersion("1.2.3");
+        bizWorker.setStatus("ENABLED");
+        bizWorker.setHealthStatus("HEALTHY");
+        bizWorker.setLabelsJson("{\"workerName\":\"wsl-biz-worker\",\"hostname\":\"dev-wsl\"}");
+        when(workerIdentityRepository.findByWorkerId("worker_biz")).thenReturn(Optional.of(bizWorker));
+        ClaudeWorkerEntity directoryWorker = new ClaudeWorkerEntity();
+        directoryWorker.setWorkerId("worker_claude");
+        directoryWorker.setName("wsl-claude-worker");
+        directoryWorker.setBaseUrl("http://127.0.0.1:3131");
+        directoryWorker.setStatus("ONLINE");
+        directoryWorker.setWorkerVersion("1.0.8");
+        directoryWorker.setHostname("dev-wsl");
+        when(claudeWorkerRepository.findByWorkerId("worker_claude")).thenReturn(Optional.of(directoryWorker));
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("OK", result.getOverallStatus());
+        assertEquals("dir_user", result.getRequestedDirectoryId());
+        assertEquals("dir_user", result.getEffectiveDirectoryId());
+        assertEquals("worker_biz", result.getEffectivePhysicalWorkerId());
+        assertEquals("USER_PRIVATE", result.getWorkspaceScope());
+        assertEquals("MANAGED", result.getWorkspaceResolverType());
+        assertEquals(Boolean.FALSE, result.getWorkspaceReadOnly());
+        assertNotNull(result.getPhysicalWorkerDiagnostic());
+        assertEquals("worker_biz", result.getPhysicalWorkerDiagnostic().getPhysicalWorkerId());
+        assertEquals("wsl-biz-worker", result.getPhysicalWorkerDiagnostic().getWorkerName());
+        assertEquals("http://127.0.0.1:3161/runtime", result.getPhysicalWorkerDiagnostic().getBaseUrl());
+        assertEquals("HEALTHY", result.getPhysicalWorkerDiagnostic().getHealthStatus());
+        assertEquals("1.2.3", result.getPhysicalWorkerDiagnostic().getVersion());
+        assertEquals("dev-wsl", result.getPhysicalWorkerDiagnostic().getHostname());
+        assertEquals("BIZ_WORKER_IDENTITY", result.getPhysicalWorkerDiagnostic().getSource());
+        assertEquals(Boolean.TRUE, result.getPhysicalWorkerDiagnostic().getExecutionWorker());
+        assertEquals(Boolean.FALSE, result.getPhysicalWorkerDiagnostic().getDirectoryWorker());
+        PhysicalWorkerDiagnosticDTO bizRole = result.getPhysicalWorkerDiagnostics().stream()
+                .filter(diagnostic -> "biz".equals(diagnostic.getRole()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("biz", bizRole.getRole());
+        assertEquals("worker_biz", bizRole.getPhysicalWorkerId());
+        assertEquals("LANGGRAPH_BIZ", bizRole.getWorkerBackend());
+        assertEquals("BIZ_WORKER_IDENTITY", bizRole.getSource());
+        assertEquals("http://127.0.0.1:3161/runtime", bizRole.getBaseUrl());
+        assertEquals(Boolean.TRUE, bizRole.getExecutionWorker());
+        assertEquals(Boolean.FALSE, bizRole.getDirectoryWorker());
+        PhysicalWorkerDiagnosticDTO claudeRole = result.getPhysicalWorkerDiagnostics().stream()
+                .filter(diagnostic -> "claudeCode".equals(diagnostic.getRole()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("worker_claude", claudeRole.getPhysicalWorkerId());
+        assertEquals("http://127.0.0.1:3131", claudeRole.getBaseUrl());
+        assertEquals(Boolean.FALSE, claudeRole.getExecutionWorker());
+        assertEquals(Boolean.TRUE, claudeRole.getDirectoryWorker());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKSPACE_RESOURCE".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKER_HOST_ROLE_ROUTING".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "OWNER_AWARE_RUNTIME_RESOURCES".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+    }
+
+    @Test
+    void verify_failsBizWorkerHostRoutingWhenOnlyDirectoryWorkerIsResolved() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_1");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_user",
+                        "worker_claude",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/workspace/user",
+                        List.of("/workspace/user"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "AGENT_DEFAULT_DIRECTORY:CLIENT_APP_SHARED"));
+        ClaudeWorkerEntity directoryWorker = new ClaudeWorkerEntity();
+        directoryWorker.setWorkerId("worker_claude");
+        directoryWorker.setName("wsl-claude-worker");
+        directoryWorker.setBaseUrl("http://127.0.0.1:3131");
+        directoryWorker.setStatus("ONLINE");
+        when(claudeWorkerRepository.findByWorkerId("worker_claude")).thenReturn(Optional.of(directoryWorker));
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKER_HOST_ROLE_ROUTING".equals(check.getCode())
+                        && "FAIL".equals(check.getStatus())
+                        && check.getMessage().contains("workerRole role=biz source=BIZ_WORKER_IDENTITY")));
+    }
+
+    @Test
+    void verify_prefersWorkerHostBizIdentityWhenAgentStillPointsAtDirectoryWorker() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_1");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+
+        ClientAppEntity app = new ClientAppEntity();
+        app.setClientAppId("capp_1");
+        app.setName("external-llm-agent-dev");
+        app.setUpstreamSystemId("school-sim");
+        when(clientAppService.requireActiveClientApp("tenant_1", "capp_1")).thenReturn(app);
+        when(resourceResolver.resolveRequiredAgent(eq("tenant_1"), eq("capp_1"), eq("private_1"), anyString()))
+                .thenAnswer(invocation -> {
+                    String resolvedAgentId = invocation.getArgument(3, String.class);
+                    return new A2AgentResourceResolver.ResolvedAgentResource(
+                            resolvedAgentId,
+                            ResourceOwnerType.CLIENT_APP,
+                            "capp_1",
+                            "capp_1",
+                            resolvedAgentId,
+                            null,
+                            null,
+                            null,
+                            null,
+                            "LANGGRAPH_BIZ",
+                            "worker_claude",
+                            ResourceOwnerType.CLIENT_APP,
+                            "capp_1",
+                            "AGENT_DEFAULT_DIRECTORY:CLIENT_APP_SHARED",
+                            "model_1",
+                            "qwen-plus",
+                            "dir_user",
+                            "AGENT:CLIENT_APP");
+                });
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_user",
+                        "worker_claude",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/workspace/user",
+                        List.of("/workspace/user"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "AGENT_DEFAULT_DIRECTORY:CLIENT_APP_SHARED"));
+        BizWorkerIdentityEntity bizWorker = new BizWorkerIdentityEntity();
+        bizWorker.setWorkerId("school-sim-wsl-biz");
+        bizWorker.setWorkerBackend("LANGGRAPH_BIZ");
+        bizWorker.setBaseUrl("http://127.0.0.1:3161");
+        bizWorker.setStatus("ENABLED");
+        bizWorker.setHealthStatus("HEALTHY");
+        when(workerIdentityRepository.findByOwnerTypeAndOwnerIdAndWorkerBackendAndStatusAndHealthStatusOrderByUpdatedAtDesc(
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                "school-sim",
+                "LANGGRAPH_BIZ",
+                "ENABLED",
+                "HEALTHY"))
+                .thenReturn(List.of(bizWorker));
+        when(workerIdentityRepository.findByWorkerId("school-sim-wsl-biz")).thenReturn(Optional.of(bizWorker));
+        ClaudeWorkerEntity directoryWorker = new ClaudeWorkerEntity();
+        directoryWorker.setWorkerId("worker_claude");
+        directoryWorker.setBaseUrl("http://127.0.0.1:3131");
+        directoryWorker.setStatus("ONLINE");
+        when(claudeWorkerRepository.findByWorkerId("worker_claude")).thenReturn(Optional.of(directoryWorker));
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("OK", result.getOverallStatus());
+        assertEquals("school-sim-wsl-biz", result.getEffectivePhysicalWorkerId());
+        PhysicalWorkerDiagnosticDTO bizRole = result.getPhysicalWorkerDiagnostics().stream()
+                .filter(diagnostic -> "biz".equals(diagnostic.getRole()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("school-sim-wsl-biz", bizRole.getPhysicalWorkerId());
+        assertEquals("BIZ_WORKER_IDENTITY", bizRole.getSource());
+        assertEquals("http://127.0.0.1:3161", bizRole.getBaseUrl());
+        assertEquals(Boolean.TRUE, bizRole.getExecutionWorker());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKER_HOST_ROLE_ROUTING".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+    }
+
+    @Test
+    void verify_reportsCodexConfigExecutionEndpointSeparatelyFromClaudeDirectoryWorker() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_codex");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        when(resourceResolver.resolveRequiredAgent(eq("tenant_1"), eq("capp_1"), eq("private_1"), anyString()))
+                .thenAnswer(invocation -> {
+                    String resolvedAgentId = invocation.getArgument(3, String.class);
+                    return new A2AgentResourceResolver.ResolvedAgentResource(
+                            resolvedAgentId,
+                            ResourceOwnerType.CLIENT_APP,
+                            "capp_1",
+                            "capp_1",
+                            resolvedAgentId,
+                            "pool_codex",
+                            ResourceOwnerType.UPSTREAM_SYSTEM,
+                            "usys_1",
+                            "WORKER_POOL:UPSTREAM_SYSTEM",
+                            "OPENAI_CODEX",
+                            null,
+                            null,
+                            null,
+                            null,
+                            "model_codex",
+                            "gpt-5.5",
+                            null,
+                            "AGENT:CLIENT_APP");
+                });
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_1"), eq("capp_1"), any(), nullable(String.class), nullable(String.class), any()))
+                .thenReturn(new A2AgentResourceResolver.ResolvedModelResource(
+                        "model_codex",
+                        "model_codex",
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "gpt-5.5",
+                        "MODEL_CONFIG_DEFAULT",
+                        "OPENAI_CODEX",
+                        "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_user",
+                        "worker_codex_host",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/workspace/user",
+                        List.of("/workspace/user"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker_codex_host");
+        worker.setName("school-sim-wsl-claude");
+        worker.setBaseUrl("http://127.0.0.1:3131");
+        worker.setStatus("ONLINE");
+        worker.setWorkerVersion("1.0.8");
+        worker.setHostname("dev-wsl");
+        worker.setCodexConfig(CodexConfig.builder()
+                .baseUrl("http://codex-token@127.0.0.1:3151/runtime?token=secret")
+                .model("gpt-5.5")
+                .build());
+        when(claudeWorkerRepository.findByWorkerId("worker_codex_host")).thenReturn(Optional.of(worker));
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("OK", result.getOverallStatus());
+        assertEquals("OPENAI_CODEX", result.getEffectiveWorkerBackend());
+        assertEquals("worker_codex_host", result.getEffectivePhysicalWorkerId());
+        assertNotNull(result.getPhysicalWorkerDiagnostic());
+        assertEquals("http://127.0.0.1:3131", result.getPhysicalWorkerDiagnostic().getBaseUrl());
+
+        PhysicalWorkerDiagnosticDTO claudeRole = result.getPhysicalWorkerDiagnostics().stream()
+                .filter(diagnostic -> "claudeCode".equals(diagnostic.getRole()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("CLAUDE_CODE", claudeRole.getWorkerBackend());
+        assertEquals("http://127.0.0.1:3131", claudeRole.getBaseUrl());
+        assertEquals(Boolean.FALSE, claudeRole.getExecutionWorker());
+        assertEquals(Boolean.TRUE, claudeRole.getDirectoryWorker());
+
+        PhysicalWorkerDiagnosticDTO codexRole = result.getPhysicalWorkerDiagnostics().stream()
+                .filter(diagnostic -> "codex".equals(diagnostic.getRole()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("OPENAI_CODEX", codexRole.getWorkerBackend());
+        assertEquals("CLAUDE_WORKER_CODEX_CONFIG", codexRole.getSource());
+        assertEquals("http://127.0.0.1:3151/runtime", codexRole.getBaseUrl());
+        assertEquals(Boolean.TRUE, codexRole.getExecutionWorker());
+        assertEquals(Boolean.FALSE, codexRole.getDirectoryWorker());
+    }
+
+    @Test
+    void verify_prefersDirectoryClaudeCodexConfigWhenAgentStillPointsAtTenantCodexWorker() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_codex");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        when(resourceResolver.resolveRequiredAgent(eq("tenant_1"), eq("capp_1"), eq("private_1"), anyString()))
+                .thenAnswer(invocation -> {
+                    String resolvedAgentId = invocation.getArgument(3, String.class);
+                    return new A2AgentResourceResolver.ResolvedAgentResource(
+                            resolvedAgentId,
+                            ResourceOwnerType.CLIENT_APP,
+                            "capp_1",
+                            "capp_1",
+                            resolvedAgentId,
+                            null,
+                            null,
+                            null,
+                            null,
+                            "OPENAI_CODEX",
+                            "tenant_codex_worker",
+                            ResourceOwnerType.PLATFORM,
+                            "tenant_1",
+                            "CLAUDE_WORKER:TENANT",
+                            "model_codex",
+                            "gpt-5.5",
+                            "dir_user",
+                            "AGENT:CLIENT_APP");
+                });
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_1"), eq("capp_1"), any(), nullable(String.class), nullable(String.class), any()))
+                .thenReturn(new A2AgentResourceResolver.ResolvedModelResource(
+                        "model_codex",
+                        "model_codex",
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "gpt-5.5",
+                        "MODEL_CONFIG_DEFAULT",
+                        "OPENAI_CODEX",
+                        "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_user",
+                        "worker_codex_host",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/workspace/user",
+                        List.of("/workspace/user"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker_codex_host");
+        worker.setName("school-sim-wsl-claude");
+        worker.setBaseUrl("http://127.0.0.1:3131");
+        worker.setStatus("ONLINE");
+        worker.setCodexConfig(CodexConfig.builder()
+                .baseUrl("http://127.0.0.1:3151")
+                .model("gpt-5.5")
+                .build());
+        when(claudeWorkerRepository.findByWorkerId("worker_codex_host")).thenReturn(Optional.of(worker));
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("OK", result.getOverallStatus());
+        assertEquals("worker_codex_host", result.getEffectivePhysicalWorkerId());
+        PhysicalWorkerDiagnosticDTO codexRole = result.getPhysicalWorkerDiagnostics().stream()
+                .filter(diagnostic -> "codex".equals(diagnostic.getRole()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("worker_codex_host", codexRole.getPhysicalWorkerId());
+        assertEquals("CLAUDE_WORKER_CODEX_CONFIG", codexRole.getSource());
+        assertEquals("http://127.0.0.1:3151", codexRole.getBaseUrl());
+        assertEquals(Boolean.TRUE, codexRole.getExecutionWorker());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKER_HOST_ROLE_ROUTING".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+    }
+
+    @Test
+    void verify_failsOwnerAwareCheckWhenWorkspacePhysicalWorkerIsMissing() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_1");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_user",
+                        null,
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/workspace/user",
+                        List.of("/workspace/user"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKSPACE_RESOURCE".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "OWNER_AWARE_RUNTIME_RESOURCES".equals(check.getCode())
+                        && "FAIL".equals(check.getStatus())
+                        && check.getMessage().contains("effectivePhysicalWorkerId")));
     }
 
     @Test
@@ -152,7 +687,7 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals("FAIL", result.getOverallStatus());
         assertEquals("ROOT_AGENT_BINDING", result.getChecks().get(0).getCode());
         assertTrue(result.getChecks().get(0).getMessage().contains("not bound"));
-        verifyNoInteractions(agentResolver, skillRegistryService, userGrantService, modelConfigGrantService);
+        verifyNoInteractions(agentResolver, skillRegistryService, userGrantService, resourceResolver);
     }
 
     @Test

@@ -86,6 +86,10 @@ def _build_system_prompt(
         "如果已提供 list_files、read_file、write_file 或 patch_file，可在当前账号/"
         "工作目录文件作用域内读取或维护文件；优先 list_files/read_file 观察现状，"
         "修改现有文件优先使用 patch_file，整文件创建或覆盖才使用 write_file。"
+        "如果运行时提供了 delegated workspace，文件工具的 relative_path 以 delegated "
+        "workspace 根目录为基准；用户要求写入 `actors/pm/example.txt` 时，"
+        "write_file 的 relative_path 就传 `actors/pm/example.txt`。"
+        "`agent/skills/.../assets` 只用于明确维护 Skill 资源，不用于普通任务产物或 smoke marker。"
         "不要臆造真实路径，不要访问未授权目录。"
         "Skill 是当前 frame 内的能力材料，使用 invoke_business_skill 不会打开 child frame。"
         "普通业务领域请求默认先用 invoke_business_skill 加载 Skill 材料，并在当前 frame "
@@ -149,7 +153,7 @@ def _build_sub_agent_base_contract_prompt(runtime_context: dict[str, Any] | None
         "invoke_business_skill 只在当前 Agent frame 内加载材料，不会创建新的 frame。"
         "只有任务确实需要更深层独立生命周期，或用户明确要求子 Agent 时，才继续调用 "
         "invoke_business_agent。完成、等待用户补充或交还父级时，优先调用 "
-        "submit_skill_result 或 handoff_to_parent 提交结构化状态、refs 和退出意图。"
+        "submit_frame_result 或 handoff_to_parent 提交结构化状态、refs 和退出意图。"
     )
 
 
@@ -161,14 +165,14 @@ def _build_completion_contract_prompt(
         return (
             "只能使用已提供的工具。当前是根会话回合：如果可以直接回答用户，"
             "可以直接输出自然语言作为本回合最终答复。普通寒暄、简单问答、"
-            "无需保留结构化状态的答复，不要调用 submit_skill_result。若需要保存结构化状态、"
-            "active_plan、artifact_refs 或 evidence_refs，才主动调用 submit_skill_result "
+            "无需保留结构化状态的答复，不要调用 submit_frame_result。若需要保存结构化状态、"
+            "active_plan、artifact_refs 或 evidence_refs，才主动调用 submit_frame_result "
             "提交本回合结果。普通业务技能请求默认加载 Skill 材料并在 Root 当前上下文继续；"
             "不要为了普通业务路由打开子 Agent frame。"
         )
     return (
         "只能使用已提供的工具。当前是子 Agent frame：完成、等待用户补充或需要返回父级时，"
-        "优先主动调用 submit_skill_result 或 handoff_to_parent，以便提交结构化状态。"
+        "优先主动调用 submit_frame_result 或 handoff_to_parent，以便提交结构化状态。"
         "如果只是自然语言完成或追问用户，也可以直接输出最终消息，运行时会将其归一化为子 Agent 结果。"
     )
 
@@ -201,6 +205,7 @@ def _build_runtime_system_context_prompt(
         _build_root_planning_policy_prompt(runtime_context, skill_id),
         _build_child_handoff_policy_prompt(runtime_context, skill_id),
         _build_frame_result_contract_prompt(runtime_context),
+        _build_delegated_workspace_file_contract_prompt(runtime_context),
         _build_model_visible_skill_input_prompt(business_context),
         _build_attachment_context_prompt(_runtime_attachments(runtime_context)),
         _build_visible_context_prompt(runtime_context),
@@ -436,7 +441,7 @@ def _build_recoverable_interruption_prompt(runtime_context: dict[str, Any] | Non
         "shelve_interrupted_frame，decision 设置为 ABANDON_PREVIOUS 或 "
         "START_UNRELATED_NEW_TASK，同时包含 intent_resolution 和 "
         "abandoned_interruption 摘要。若意图不明确且中断工作涉及审批或业务副作用，"
-        "使用 ASK_CLARIFICATION，并通过 submit_skill_result 向用户澄清。"
+        "使用 ASK_CLARIFICATION，并通过 submit_frame_result 向用户澄清。"
     )
     return "\n".join(parts)
 
@@ -489,6 +494,32 @@ def _build_frame_result_contract_prompt(runtime_context: dict[str, Any] | None) 
     )
 
 
+def _build_delegated_workspace_file_contract_prompt(runtime_context: dict[str, Any] | None) -> str:
+    policy = (runtime_context or {}).get("execution_policy")
+    if not isinstance(policy, dict) or not policy.get("workdir"):
+        return ""
+    workdir = str(policy.get("workdir") or "")
+    normalized = workdir.replace("\\", "/").rstrip("/")
+    actor_suffix = ""
+    parts = [part for part in normalized.split("/") if part]
+    if len(parts) >= 2 and parts[-2] == "actors":
+        actor_suffix = f"actors/{parts[-1]}"
+    return "\n".join([
+        "Delegated workspace 文件契约:",
+        "- list_files/read_file/write_file/patch_file 的 relative_path 以 delegated workspace 根目录为基准。",
+        "- 如果任务要求在已绑定/当前/私有工作目录内创建文件，只传文件名或该根目录下的相对路径。",
+        "- Skill 或账号上下文中的 private workspace（例如 `actors/pm/`）是逻辑说明，不一定是 file tool 前缀。",
+        "- 不要因为上下文提到 private workspace 就自动给 relative_path 加 `actors/<role>/` 前缀。",
+        (
+            f"- 当前 delegated workspace 根目录已经是 `{actor_suffix}/`；写入该私有目录内文件时"
+            f"不要再加 `{actor_suffix}/` 前缀。"
+            if actor_suffix
+            else "- 当用户明确给出 delegated workspace 根目录下的子路径时，才按该子路径写入。"
+        ),
+        "- `agent/skills/.../assets` 只用于明确编辑 Skill bundle 资源；不要把普通任务产物或 smoke marker 写到那里。",
+    ])
+
+
 def _build_active_plan_prompt(runtime_context: dict[str, Any] | None) -> str:
     if not runtime_context:
         return ""
@@ -501,7 +532,7 @@ def _build_active_plan_prompt(runtime_context: dict[str, Any] | None) -> str:
         (
             "规则: 将 active_plan 视为当前持久根 frame 的工作计划。"
             "结束本回合前，将预期结果与该计划对照。若计划仍有用且需要继续保留，"
-            "主动调用 submit_skill_result，并在 structured_output.active_plan 中保留或更新。"
+            "主动调用 submit_frame_result，并在 structured_output.active_plan 中保留或更新。"
             "若用户明确放弃该计划或开始无关任务，将 intent_resolution 设置为 "
             "ABANDON_PREVIOUS 或 START_UNRELATED_NEW_TASK，并总结被放弃的计划。"
         ),
@@ -516,7 +547,7 @@ def _build_root_planning_policy_prompt(
         return ""
     return (
         "持久根计划策略: 对复杂、多意图、多技能或需要外部协同的工作，"
-        "需要跨回合保留计划时，主动调用 submit_skill_result 并在 "
+        "需要跨回合保留计划时，主动调用 submit_frame_result 并在 "
         "structured_output.active_plan 中维护 active_plan。"
         "计划应简洁、结构化，并随工作推进更新；这是未来回合使用的工作状态，"
         "不是面向用户的叙述。"

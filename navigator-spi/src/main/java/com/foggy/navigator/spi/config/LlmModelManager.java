@@ -2,6 +2,7 @@ package com.foggy.navigator.spi.config;
 
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.AgentModelOverrideForm;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 
@@ -24,7 +25,27 @@ public interface LlmModelManager {
      * @param form 配置表单
      * @return 保存后的配置ID
      */
-    String saveModelConfig(String tenantId, LlmModelConfigForm form);
+    default String saveModelConfig(String tenantId, LlmModelConfigForm form) {
+        return saveModelConfig(
+                tenantId,
+                form,
+                ResourceOwnerType.PLATFORM,
+                "platform",
+                null,
+                null,
+                null);
+    }
+
+    /**
+     * 保存 LLM 模型配置，并记录稳定资源 owner。
+     */
+    String saveModelConfig(String tenantId,
+                           LlmModelConfigForm form,
+                           ResourceOwnerType ownerType,
+                           String ownerId,
+                           ResourceOwnerType createdByPrincipalType,
+                           String createdByPrincipalId,
+                           String createdByCredentialId);
 
     /**
      * 更新 LLM 模型配置

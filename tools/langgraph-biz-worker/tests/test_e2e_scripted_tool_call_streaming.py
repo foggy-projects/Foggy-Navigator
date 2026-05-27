@@ -3297,6 +3297,7 @@ async def test_scripted_api_root_plain_final_commits_runtime_memory_without_retr
 async def test_scripted_root_prompt_contract_ignores_skill_alias_and_keeps_user_message_clean(
     monkeypatch,
     mock_llm_server,
+    tmp_path,
 ):
     """Explicit skill aliases must not revive the removed root.agentic_routing prompt path."""
     run_id = uuid.uuid4().hex[:8]
@@ -3305,6 +3306,23 @@ async def test_scripted_root_prompt_contract_ignores_skill_alias_and_keeps_user_
     task_id = f"task_e2e_root_prompt_contract_{run_id}"
     prompt = f"hi prompt contract next:{trace_id}:001"
     answer = "你好，我可以帮你处理 TMS 业务。"
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "tms-ticket-agent.yaml").write_text(
+        """
+id: tms-ticket-agent
+name: TMS 工单 Agent
+description: 创建工单和查询工单。
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
 
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
         await mock_client.delete(f"/__e2e/scripts/{trace_id}")
@@ -3345,7 +3363,6 @@ async def test_scripted_root_prompt_contract_ignores_skill_alias_and_keeps_user_
                 },
                 "context": {
                     "contextId": context_id,
-                    "businessSkillName": "tms-ticket-agent",
                     "allowed_skills": [
                         {
                             "id": "tms-ticket-agent",
@@ -3375,10 +3392,10 @@ async def test_scripted_root_prompt_contract_ignores_skill_alias_and_keeps_user_
     human_text = _submission_texts(payload, "human")[0]
     assert "你是当前业务会话的根编排 Agent" in system_text
     assert "可以直接输出自然语言作为本回合最终答复" in system_text
-    assert "普通寒暄、简单问答、无需保留结构化状态的答复，不要调用 submit_skill_result" in system_text
+    assert "普通寒暄、简单问答、无需保留结构化状态的答复，不要调用 submit_frame_result" in system_text
     assert "普通业务技能请求默认加载 Skill 材料并在 Root 当前上下文继续" in system_text
     assert "不要仅因为 bundle 名称包含 agent 就调用 invoke_business_agent" in system_text
-    assert "必须通过 submit_skill_result" not in system_text
+    assert "必须通过 submit_frame_result" not in system_text
     assert "不要直接输出自然语言" not in system_text
     assert "可用业务技能:" in system_text
     assert "`tms-ticket-agent`（TMS 工单 Agent）: 创建工单和查询工单。" in system_text
@@ -3536,7 +3553,7 @@ async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch
     assert any("当前活动任务计划:" in content for content in second_system_messages)
     assert any("handle multi-skill shipment issue" in content for content in second_system_messages)
     assert any("持久根计划策略:" in content for content in second_system_messages)
-    assert any("主动调用 submit_skill_result" in content for content in second_system_messages)
+    assert any("主动调用 submit_frame_result" in content for content in second_system_messages)
     assert any("structured_output.active_plan" in content for content in second_system_messages)
 
 

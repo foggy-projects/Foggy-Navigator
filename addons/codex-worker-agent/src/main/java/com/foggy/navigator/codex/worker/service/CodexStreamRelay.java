@@ -22,6 +22,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
@@ -69,7 +71,10 @@ public class CodexStreamRelay {
     private final ConcurrentHashMap<String, AtomicBoolean> reconnecting = new ConcurrentHashMap<>();
 
     @Async("sessionEventExecutor")
-    @EventListener(condition = "#event.providerType == 'codex-worker'")
+    @TransactionalEventListener(
+            phase = TransactionPhase.AFTER_COMMIT,
+            fallbackExecution = true,
+            condition = "#event.providerType == 'codex-worker'")
     public void onTaskStart(WorkerTaskStartEvent event) {
         String taskId = event.getTaskId();
         String sessionId = event.getSessionId();
@@ -118,7 +123,7 @@ public class CodexStreamRelay {
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedCodexThreadId, 0);
 
-            activeStreams.put(taskId, subscription);
+            registerActiveStream(taskId, subscription);
 
             // 发布跨 Agent 任务开始事件
             eventPublisher.publishEvent(TaskStartedEvent.builder()
@@ -130,9 +135,9 @@ public class CodexStreamRelay {
 
         } catch (Exception e) {
             log.error("Failed to start Codex stream relay: taskId={}", taskId, e);
-            taskService.failTask(taskId, null, null, e.getMessage());
+            taskService.failTask(taskId, null, null, connectionFailureMessage(e));
             publishMessage(sessionId, MessageType.ERROR,
-                    Map.of("content", "Failed to connect to Codex worker: " + e.getMessage(), "taskId", taskId));
+                    Map.of("content", "Failed to connect to Codex worker: " + connectionFailureMessage(e), "taskId", taskId));
         }
     }
 
@@ -140,6 +145,10 @@ public class CodexStreamRelay {
      * 重连已在 Worker 上运行的任务
      */
     public void reconnectTask(String taskId, String sessionId, String workerId) {
+        reconnectTask(taskId, sessionId, workerId, 0);
+    }
+
+    private void reconnectTask(String taskId, String sessionId, String workerId, int reconnectAttempt) {
         if (activeStreams.containsKey(taskId)) {
             log.debug("reconnectTask: task {} already has active stream, skipping", taskId);
             return;
@@ -176,9 +185,9 @@ public class CodexStreamRelay {
             Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(entity.getWorkerTaskId(), ackSeq);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
-                    detectedModel, detectedCodexThreadId, 0);
+                    detectedModel, detectedCodexThreadId, reconnectAttempt);
 
-            activeStreams.put(taskId, subscription);
+            registerActiveStream(taskId, subscription);
 
         } catch (Exception e) {
             log.warn("Failed to reconnect Codex task {}: {}", taskId, e.getMessage());
@@ -264,6 +273,13 @@ public class CodexStreamRelay {
                             taskId, reconnectAttempt, error.getMessage());
                     activeStreams.remove(taskId);
 
+                    if (!hasAcceptedWorkerTask(taskId)) {
+                        failStreamTask(taskId, sessionId, detectedCodexThreadId,
+                                "Codex worker stream failed before worker task was accepted: "
+                                        + connectionFailureMessage(error));
+                        return;
+                    }
+
                     if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
                         long delay = (long) Math.pow(2, reconnectAttempt) * RECONNECT_BASE_DELAY_MS;
                         log.info("Scheduling Codex stream reconnection in {}ms: taskId={}", delay, taskId);
@@ -273,13 +289,12 @@ public class CodexStreamRelay {
                             Thread.currentThread().interrupt();
                             return;
                         }
-                        reconnectTask(taskId, sessionId, workerId);
+                        reconnectTask(taskId, sessionId, workerId, reconnectAttempt + 1);
                     } else {
                         log.error("Max reconnection attempts reached for Codex task {}", taskId);
-                        taskService.failTask(taskId, null, detectedCodexThreadId.get(),
-                                "SSE stream disconnected after " + MAX_RECONNECT_ATTEMPTS + " reconnection attempts");
-                        publishMessage(sessionId, MessageType.ERROR,
-                                Map.of("content", "Connection to Codex worker lost", "taskId", taskId));
+                        failStreamTask(taskId, sessionId, detectedCodexThreadId,
+                                "SSE stream disconnected after " + MAX_RECONNECT_ATTEMPTS
+                                        + " reconnection attempts: " + connectionFailureMessage(error));
                     }
                 },
                 () -> {
@@ -289,6 +304,43 @@ public class CodexStreamRelay {
                     reconnecting.remove(taskId);
                 }
         );
+    }
+
+    private void registerActiveStream(String taskId, Disposable subscription) {
+        if (subscription != null && !subscription.isDisposed()) {
+            activeStreams.put(taskId, subscription);
+        }
+    }
+
+    private boolean hasAcceptedWorkerTask(String taskId) {
+        return taskRepository.findByTaskId(taskId)
+                .map(CodexTaskEntity::getWorkerTaskId)
+                .map(workerTaskId -> !workerTaskId.isBlank())
+                .orElse(false);
+    }
+
+    private void failStreamTask(String taskId, String sessionId,
+                                AtomicReference<String> detectedCodexThreadId,
+                                String errorMessage) {
+        taskService.failTask(taskId, null, detectedCodexThreadId.get(), errorMessage);
+        publishMessage(sessionId, MessageType.ERROR,
+                Map.of("content", errorMessage, "taskId", taskId));
+        lastAckedSeq.remove(taskId);
+        reconnecting.remove(taskId);
+        eventPublisher.publishEvent(TaskCompletionEvent.builder()
+                .externalTaskId(taskId)
+                .parentSessionId(sessionId)
+                .targetAgentId(AGENT_ID)
+                .resultSummary(truncateResult(errorMessage))
+                .status("FAILED")
+                .build());
+    }
+
+    private String connectionFailureMessage(Throwable error) {
+        if (error == null || error.getMessage() == null || error.getMessage().isBlank()) {
+            return "unknown error";
+        }
+        return error.getMessage();
     }
 
     private void handleSseEvent(ServerSentEvent<String> sse, String taskId, String sessionId,

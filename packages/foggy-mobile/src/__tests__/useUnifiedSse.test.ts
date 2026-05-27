@@ -35,7 +35,7 @@ describe('useUnifiedSse', () => {
     vi.resetModules()
     vi.clearAllMocks()
     capturedOptions = null
-    ;(globalThis.uni.request as any).mockClear()
+    ;(uni.request as any).mockClear()
   })
 
   it('auto-connects and subscribes when first session listener is added', async () => {
@@ -51,7 +51,7 @@ describe('useUnifiedSse', () => {
         headers: { Authorization: 'Bearer test-token' },
       }),
     )
-    expect(globalThis.uni.request).toHaveBeenCalledWith(expect.objectContaining({
+    expect(uni.request).toHaveBeenCalledWith(expect.objectContaining({
       url: '/api/v1/sse/subscribe',
       method: 'POST',
       data: { sessionIds: ['session-1'] },
@@ -60,7 +60,7 @@ describe('useUnifiedSse', () => {
     unsubscribe()
     await Promise.resolve()
 
-    expect(globalThis.uni.request).toHaveBeenCalledWith(expect.objectContaining({
+    expect(uni.request).toHaveBeenCalledWith(expect.objectContaining({
       url: '/api/v1/sse/unsubscribe',
       method: 'POST',
       data: { sessionIds: ['session-1'] },
@@ -80,7 +80,7 @@ describe('useUnifiedSse', () => {
     await Promise.resolve()
 
     expect(connected.value).toBe(true)
-    expect(globalThis.uni.request).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(uni.request).toHaveBeenLastCalledWith(expect.objectContaining({
       url: '/api/v1/sse/subscribe',
       data: { sessionIds: ['session-1'] },
     }))

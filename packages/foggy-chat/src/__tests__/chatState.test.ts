@@ -234,6 +234,70 @@ describe('createChatState', () => {
       expect(state.messages.value).toHaveLength(1)
       expect(state.messages.value[0].type).toBe(AipMessageType.TOOL_CALL_RESULT)
     })
+
+    it('extracts OPEN_ARTIFACT actions from tool result JSON', () => {
+      state.processAipMessage(makeAip(AipMessageType.TOOL_CALL_RESULT, {
+        toolCallId: 'tc-artifact',
+        toolName: 'invoke_business_function',
+        output: JSON.stringify({
+          type: 'OPEN_ARTIFACT',
+          label: '查看模板预览',
+          artifact: {
+            kind: 'iframe',
+            id: 'print-template-preview:xxx',
+            title: '面单模板预览',
+            uri: '/print-template-preview?templateId=xxx',
+            openMode: 'side_panel',
+            fallbackUrl: '/print-template-preview?templateId=xxx',
+          },
+          context: {
+            businessDomain: 'tms.print',
+            templateId: 'xxx',
+          },
+        }),
+      }))
+
+      expect(state.messages.value[0].uiActions).toHaveLength(1)
+      expect(state.messages.value[0].uiActions?.[0]).toMatchObject({
+        type: 'OPEN_ARTIFACT',
+        label: '查看模板预览',
+        artifact: {
+          kind: 'iframe',
+          id: 'print-template-preview:xxx',
+          uri: '/print-template-preview?templateId=xxx',
+          openMode: 'side_panel',
+        },
+        context: {
+          businessDomain: 'tms.print',
+        },
+      })
+    })
+
+    it('prefers generic artifact when legacy OPEN_TMS_PAGE carries artifact', () => {
+      state.processAipMessage(makeAip(AipMessageType.TOOL_CALL_RESULT, {
+        toolCallId: 'tc-legacy',
+        toolName: 'invoke_business_function',
+        data: {
+          type: 'OPEN_TMS_PAGE',
+          label: '查看模板预览',
+          routeName: 'PrintTemplatePreview',
+          artifact: {
+            kind: 'iframe',
+            uri: '/print-template-preview?templateId=legacy',
+            openMode: 'dialog',
+          },
+        },
+      }))
+
+      expect(state.messages.value[0].uiActions?.[0]).toMatchObject({
+        type: 'OPEN_TMS_PAGE',
+        artifact: {
+          kind: 'iframe',
+          uri: '/print-template-preview?templateId=legacy',
+          openMode: 'dialog',
+        },
+      })
+    })
   })
 
   // ========== TOOL_CALL_ERROR ==========

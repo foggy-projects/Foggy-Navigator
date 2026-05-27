@@ -21,6 +21,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
     "com.foggy.navigator.session.event",
     "com.foggy.navigator.session.filter",
     "com.foggy.navigator.session.registry",
+    "com.foggy.navigator.session.agent",
     "com.foggy.navigator.session.util"
 })
 @EntityScan(basePackages = {"com.foggy.navigator.common.entity"})

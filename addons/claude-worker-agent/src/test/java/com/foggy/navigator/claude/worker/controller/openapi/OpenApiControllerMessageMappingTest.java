@@ -8,24 +8,35 @@ import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppControlCredentialService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
+import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
+import com.foggy.navigator.claude.worker.model.dto.OpenTaskMessagesResponse;
 import com.foggy.navigator.claude.worker.model.form.OpenApiQueryForm;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
+import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.service.*;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
+import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.service.OpenApiSessionQueryService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.spi.agent.A2aAgent;
+import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.business.agent.service.AccountContextFileService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -40,6 +51,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -153,6 +165,53 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("FAILED", terminalStatusFromTaskStatus(controller, "FAILED"));
         assertEquals("CANCELLED", terminalStatusFromTaskStatus(controller, "CANCELLED"));
         assertNull(terminalStatusFromTaskStatus(controller, "RUNNING"));
+    }
+
+    @Test
+    void getTaskMessagesReturnsSyntheticErrorWhenFailedTaskHasNoPersistedMessages() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                mock(CodingAgentRepository.class),
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        SessionTaskEntity task = new SessionTaskEntity();
+        task.setTaskId("task-failed");
+        task.setSessionId("session-1");
+        task.setTenantId("tenant-1");
+        task.setAgentId("agent-1");
+        task.setWorkerId("worker-1");
+        task.setProviderType("OPENAI_CODEX");
+        task.setStatus("FAILED");
+        task.setErrorMessage("Codex not configured for worker: worker-1");
+        task.setCreatedAt(LocalDateTime.now());
+        task.setUpdatedAt(task.getCreatedAt());
+
+        when(credentialResolver.resolveAccessToken(nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(sessionQueryService.findTask("task-failed")).thenReturn(Optional.of(task));
+        when(sessionQueryService.resolveContextId("session-1")).thenReturn(Optional.of("ctx-1"));
+        when(sessionQueryService.getTaskMessages("task-failed", null, 51)).thenReturn(List.of());
+
+        OpenTaskMessagesResponse response = controller.getTaskMessages(
+                "agent-1", "task-failed", null, 50, false, request).getData();
+
+        assertEquals("FAILED", response.getStatus());
+        assertTrue(response.isTerminal());
+        assertEquals("FAILED", response.getTerminalStatus());
+        assertEquals(1, response.getMessages().size());
+        OpenSessionMessageDTO message = response.getMessages().get(0);
+        assertEquals("task-error:task-failed", message.getMessageId());
+        assertEquals("ERROR", message.getType());
+        assertEquals("Codex not configured for worker: worker-1", message.getContent());
+        assertEquals("task_state", message.getMetadata().get("source"));
     }
 
     @Test
@@ -395,7 +454,7 @@ class OpenApiControllerMessageMappingTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> runtimeContext = (Map<String, Object>) captor.getValue().getMetadata().get("runtimeContext");
         assertEquals("btt_open_api_1", runtimeContext.get("task_scoped_token"));
-        assertEquals("agent-1", runtimeContext.get("skill_name"));
+        assertFalse(runtimeContext.containsKey("skill_name"));
         verify(taskService).bindOpenApiTaskScopedTokenToWorkerTask(
                 "tenant-1",
                 "btt_open_api_1",
@@ -457,14 +516,402 @@ class OpenApiControllerMessageMappingTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> context = (Map<String, Object>) captor.getValue().getMetadata().get("context");
         assertEquals("root-agent", context.get("rootAgentId"));
-        assertEquals("tms.navigator.agent", context.get("businessSkillId"));
-        assertEquals("tms.navigator.agent", context.get("businessSkillName"));
+        assertFalse(context.containsKey("businessSkillId"));
+        assertFalse(context.containsKey("businessSkillName"));
         assertNull(captor.getValue().getMetadata().get("skill_name"));
         @SuppressWarnings("unchecked")
         Map<String, Object> runtimeContext = (Map<String, Object>) captor.getValue().getMetadata().get("runtimeContext");
-        assertEquals("tms.navigator.agent", runtimeContext.get("skill_name"));
+        assertFalse(runtimeContext.containsKey("skill_name"));
         verify(credentialResolver, never()).resolveAccessTokenForSkill(
                 nullable(String.class), nullable(String.class), eq("root-agent"));
+    }
+
+    @Test
+    void askAgent_sanitizesOwnerAwareRuntimeContextFromUntrustedMetadata() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("验证 owner-aware runtime");
+        form.setMetadata(Map.of(
+                "skill_name", "stale-direct-skill",
+                "skillName", "staleDirectSkill",
+                "skill_markdown", "# stale markdown",
+                "runtimeContext", Map.of("task_scoped_token", "caller-token", "skill_name", "caller-skill"),
+                "context", Map.of(
+                        "traceId", "trace-1",
+                        "clientAppId", "evil-app",
+                        "upstreamUserId", "evil-user",
+                        "accountId", "evil-account",
+                        "account_id", "evil-account",
+                        "businessSkillId", "evil-skill",
+                        "businessSkillName", "evil-skill",
+                        "skill_name", "evil-direct-skill",
+                        "skill_markdown", "# evil markdown",
+                        "task_scoped_token", "evil-token"
+                )));
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.issueOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class)))
+                .thenReturn("btt_owner_runtime_1");
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        Map<String, Object> metadata = captor.getValue().getMetadata();
+        assertFalse(metadata.containsKey("skill_name"));
+        assertFalse(metadata.containsKey("skillName"));
+        assertFalse(metadata.containsKey("skill_markdown"));
+        assertFalse(metadata.containsKey("runtime_context"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> runtimeContext = (Map<String, Object>) metadata.get("runtimeContext");
+        assertEquals("btt_owner_runtime_1", runtimeContext.get("task_scoped_token"));
+        assertFalse(runtimeContext.containsKey("skill_name"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> context = (Map<String, Object>) metadata.get("context");
+        assertEquals("trace-1", context.get("traceId"));
+        assertEquals("app-1", context.get("clientAppId"));
+        assertEquals("upstream-a", context.get("upstreamUserId"));
+        assertEquals("upstream-a", context.get("accountId"));
+        assertEquals("upstream-a", context.get("account_id"));
+        assertFalse(context.containsKey("businessSkillId"));
+        assertFalse(context.containsKey("businessSkillName"));
+        assertEquals("cred-1", context.get("credentialId"));
+        assertEquals(true, context.get("auto_inject_app_public_skills"));
+        assertFalse(context.containsKey("skill_name"));
+        assertFalse(context.containsKey("skill_markdown"));
+        assertFalse(context.containsKey("task_scoped_token"));
+    }
+
+    @Test
+    void askAgent_injectsResolvedWorkspaceLaunchMetadataAndIgnoresCallerLaunchFields() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                null,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                defaultRouteService(),
+                resourceResolver);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        A2AgentResourceResolver.ResolvedAgentResource agentResource =
+                new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent-1",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app-1",
+                        "app-1",
+                        "agent-1",
+                        "pool-1",
+                        ResourceOwnerType.PLATFORM,
+                        "tenant-1",
+                        "WORKER_POOL:PLATFORM",
+                        "OPENAI_CODEX",
+                        "manifest-worker",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app-1",
+                        "AGENT_WORKER_REF",
+                        "model-default",
+                        null,
+                        "dir-default",
+                        "AGENT:CLIENT_APP");
+        when(resourceResolver.resolveRequiredAgent(
+                eq("tenant-1"), eq("app-1"), eq("upstream-a"), eq("agent-1")))
+                .thenReturn(agentResource);
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq(agentResource),
+                eq("model-default"),
+                nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(new A2AgentResourceResolver.ResolvedModelResource(
+                        "model-default",
+                        "model-default",
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "codex-mini",
+                        "MODEL_CONFIG_DEFAULT",
+                        "OPENAI_CODEX",
+                        "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant-1"), eq("app-1"), eq("upstream-a"), eq(agentResource), eq("dir-default")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir-default",
+                        "physical-worker",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "D:/workspace/school",
+                        List.of("D:/workspace/school"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("run codex smoke");
+        form.setMetadata(Map.of(
+                "workerId", "caller-worker",
+                "directoryId", "caller-dir",
+                "cwd", "D:/caller",
+                "traceId", "trace-1"));
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        Map<String, Object> metadata = captor.getValue().getMetadata();
+        assertEquals("physical-worker", metadata.get("workerId"));
+        assertEquals("dir-default", metadata.get("directoryId"));
+        assertEquals("D:/workspace/school", metadata.get("cwd"));
+        assertEquals("trace-1", metadata.get("traceId"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> runtimeContext = (Map<String, Object>) metadata.get("runtimeContext");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
+        assertEquals("dir-default", executionPolicy.get("directory_id"));
+        assertEquals("USER_PRIVATE", executionPolicy.get("workspace_scope"));
+        assertEquals("MANAGED", executionPolicy.get("workspace_resolver_type"));
+        assertEquals(false, executionPolicy.get("read_only"));
+        assertEquals("D:/workspace/school", executionPolicy.get("workdir"));
+        assertEquals(List.of("D:/workspace/school"), executionPolicy.get("allowed_dirs"));
+        verify(resourceResolver).resolveRequiredWorkspaceForAgent(
+                "tenant-1", "app-1", "upstream-a", agentResource, "dir-default");
+    }
+
+    @Test
+    void askAgent_doesNotUseDirectoryWorkerAsLanggraphBizExecutionWorker() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                null,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                defaultRouteService(),
+                resourceResolver);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        A2AgentResourceResolver.ResolvedAgentResource agentResource =
+                new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent-1",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app-1",
+                        "app-1",
+                        "agent-1",
+                        "pool-1",
+                        ResourceOwnerType.PLATFORM,
+                        "tenant-1",
+                        "WORKER_POOL:PLATFORM",
+                        "LANGGRAPH_BIZ",
+                        null,
+                        null,
+                        null,
+                        null,
+                        "model-default",
+                        null,
+                        "dir-default",
+                        "AGENT:CLIENT_APP");
+        when(resourceResolver.resolveRequiredAgent(
+                eq("tenant-1"), eq("app-1"), eq("upstream-a"), eq("agent-1")))
+                .thenReturn(agentResource);
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq(agentResource),
+                eq("model-default"),
+                nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(new A2AgentResourceResolver.ResolvedModelResource(
+                        "model-default",
+                        "model-default",
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "qwen-plus",
+                        "MODEL_CONFIG_DEFAULT",
+                        "LANGGRAPH_BIZ",
+                        "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant-1"), eq("app-1"), eq("upstream-a"), eq(agentResource), eq("dir-default")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir-default",
+                        "directory-worker",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "D:/workspace/school",
+                        List.of("D:/workspace/school"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("run biz smoke");
+        form.setMetadata(Map.of("workerId", "caller-worker"));
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        Map<String, Object> metadata = captor.getValue().getMetadata();
+        assertFalse(metadata.containsKey("workerId"));
+        assertEquals("dir-default", metadata.get("directoryId"));
+        assertEquals("D:/workspace/school", metadata.get("cwd"));
+    }
+
+    @Test
+    void askAgent_usesWorkerHostBizIdentityForLanggraphWhenAgentWorkerIsCodingWorker() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                null,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                defaultRouteService(),
+                resourceResolver);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        A2AgentResourceResolver.ResolvedAgentResource agentResource =
+                new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent-1",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app-1",
+                        "app-1",
+                        "school-sim.actor.pm.m2.v1",
+                        null,
+                        null,
+                        null,
+                        null,
+                        "OPENAI_CODEX",
+                        "2ca910a6",
+                        ResourceOwnerType.PLATFORM,
+                        "tenant-1",
+                        "CLAUDE_WORKER:TENANT",
+                        "model-default",
+                        null,
+                        "dir-default",
+                        "AGENT:CLIENT_APP");
+        when(resourceResolver.resolveRequiredAgent(
+                eq("tenant-1"), eq("app-1"), eq("upstream-a"), eq("agent-1")))
+                .thenReturn(agentResource);
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq(agentResource),
+                eq("model-default"),
+                nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(new A2AgentResourceResolver.ResolvedModelResource(
+                        "model-default",
+                        "model-default",
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "gemini-3.5-flash-low",
+                        "MODEL_CONFIG_DEFAULT",
+                        "LANGGRAPH_BIZ",
+                        "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant-1"), eq("app-1"), eq("upstream-a"), eq(agentResource), eq("dir-default")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir-default",
+                        "2ca910a6",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/home/navigator/school",
+                        List.of("/home/navigator/school"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+        when(resourceResolver.resolveLatestHealthyBizWorkerIdentityId("tenant-1", "app-1"))
+                .thenReturn(Optional.of("school-sim-wsl-biz"));
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("请使用 school-sim.actor.pm.m2.v1 技能，写入 smoke marker");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        Map<String, Object> metadata = captor.getValue().getMetadata();
+        assertEquals("school-sim-wsl-biz", metadata.get("workerId"));
+        assertEquals("BIZ_WORKER_IDENTITY", metadata.get("workerSource"));
+        assertEquals("LANGGRAPH_BIZ", metadata.get("workerBackend"));
+        assertEquals("dir-default", metadata.get("directoryId"));
+        assertEquals("/home/navigator/school", metadata.get("cwd"));
     }
 
     @Test
@@ -500,8 +947,8 @@ class OpenApiControllerMessageMappingTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> context = (Map<String, Object>) metadata.get("context");
         assertEquals("trace-1", context.get("traceId"));
-        assertEquals("agent-1", context.get("businessSkillId"));
-        assertEquals("agent-1", context.get("businessSkillName"));
+        assertFalse(context.containsKey("businessSkillId"));
+        assertFalse(context.containsKey("businessSkillName"));
         @SuppressWarnings("unchecked")
         Map<String, Object> executionPolicy = (Map<String, Object>) context.get("execution_policy");
         assertEquals("D:/workspace/app", executionPolicy.get("workdir"));
@@ -773,6 +1220,17 @@ class OpenApiControllerMessageMappingTest {
             BusinessAgentTaskService taskService,
             CodingAgentRepository codingAgentRepository,
             OpenApiSessionQueryService sessionQueryService) {
+        return newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                taskService,
+                codingAgentRepository,
+                sessionQueryService,
+                defaultRouteService());
+    }
+
+    private OpenApiAgentRouteService defaultRouteService() {
         OpenApiAgentRouteService routeService = mock(OpenApiAgentRouteService.class);
         when(routeService.resolve(any(String.class), any(ResolvedClientAppCredentialDTO.class)))
                 .thenAnswer(invocation -> {
@@ -785,14 +1243,7 @@ class OpenApiControllerMessageMappingTest {
                             false,
                             true);
                 });
-        return newController(
-                agentResolver,
-                credentialResolver,
-                sessionService,
-                taskService,
-                codingAgentRepository,
-                sessionQueryService,
-                routeService);
+        return routeService;
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -804,6 +1255,27 @@ class OpenApiControllerMessageMappingTest {
             CodingAgentRepository codingAgentRepository,
             OpenApiSessionQueryService sessionQueryService,
             OpenApiAgentRouteService routeService) {
+        return newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                taskService,
+                codingAgentRepository,
+                sessionQueryService,
+                routeService,
+                null);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private OpenApiController newController(
+            UnifiedAgentResolver agentResolver,
+            ClientAppRuntimeCredentialResolver credentialResolver,
+            BusinessAgentSessionService sessionService,
+            BusinessAgentTaskService taskService,
+            CodingAgentRepository codingAgentRepository,
+            OpenApiSessionQueryService sessionQueryService,
+            OpenApiAgentRouteService routeService,
+            A2AgentResourceResolver resourceResolverOverride) {
         ObjectProvider<ClientAppRuntimeCredentialResolver> credentialProvider = mock(ObjectProvider.class);
         when(credentialProvider.getIfAvailable()).thenReturn(credentialResolver);
         ObjectProvider<BusinessAgentTaskService> taskProvider = mock(ObjectProvider.class);
@@ -814,6 +1286,12 @@ class OpenApiControllerMessageMappingTest {
         when(frameReportProvider.getIfAvailable()).thenReturn(null);
         ObjectProvider<ClientAppControlCredentialService> controlCredentialProvider = mock(ObjectProvider.class);
         when(controlCredentialProvider.getIfAvailable()).thenReturn(null);
+        A2AgentResourceResolver resourceResolver = resourceResolverOverride != null
+                ? resourceResolverOverride
+                : defaultResourceResolver();
+        ObjectProvider<A2AgentResourceResolver> resourceResolverProvider = mock(ObjectProvider.class);
+        when(resourceResolverProvider.getIfAvailable()).thenReturn(resourceResolver);
+        TaskDispatchFacade taskDispatchFacade = defaultTaskDispatchFacade(agentResolver);
         return new OpenApiController(
                 mock(OpenApiProvisioningService.class),
                 mock(ClaudeWorkerService.class),
@@ -824,7 +1302,8 @@ class OpenApiControllerMessageMappingTest {
                 mock(WorkingDirectoryRepository.class),
                 mock(WorkerHealthChecker.class),
                 agentResolver,
-                mock(TaskDispatchFacade.class),
+                taskDispatchFacade,
+                defaultAgentSubmitPipeline(taskDispatchFacade),
                 mock(TaskStateReconciler.class),
                 sessionQueryService,
                 new ObjectMapper(),
@@ -837,8 +1316,94 @@ class OpenApiControllerMessageMappingTest {
                 mock(ObjectProvider.class),
                 sessionProvider,
                 frameReportProvider,
-                controlCredentialProvider
+                controlCredentialProvider,
+                resourceResolverProvider
         );
+    }
+
+    private TaskDispatchFacade defaultTaskDispatchFacade(UnifiedAgentResolver agentResolver) {
+        TaskDispatchFacade facade = mock(TaskDispatchFacade.class);
+        when(facade.submitTask(any(AgentTaskSubmitRequest.class))).thenAnswer(invocation -> {
+            AgentTaskSubmitRequest submitRequest = invocation.getArgument(0, AgentTaskSubmitRequest.class);
+            AgentResolveContext context = submitRequest.getResolveContext() != null
+                    ? submitRequest.getResolveContext()
+                    : AgentResolveContext.builder().requestSource("TEST").build();
+            A2aAgent agent = agentResolver.resolveAgent(submitRequest.getAgentId(), context)
+                    .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + submitRequest.getAgentId()));
+            A2aMessage message = submitRequest.getMessage();
+            A2aTask task = agent.sendTask(message);
+            if (task != null && task.getContextId() == null && message != null) {
+                task.setContextId(message.getContextId());
+            }
+            return task;
+        });
+        return facade;
+    }
+
+    private AgentSubmitPipeline defaultAgentSubmitPipeline(TaskDispatchFacade taskDispatchFacade) {
+        return request -> AgentTaskSubmitResult.of(taskDispatchFacade.submitTask(request));
+    }
+
+    private A2AgentResourceResolver defaultResourceResolver() {
+        A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
+        when(resourceResolver.resolveRequiredAgent(
+                any(String.class),
+                any(String.class),
+                nullable(String.class),
+                any(String.class)))
+                .thenAnswer(invocation -> {
+                    String agentId = invocation.getArgument(3, String.class);
+                    return new A2AgentResourceResolver.ResolvedAgentResource(
+                            agentId,
+                            ResourceOwnerType.CLIENT_APP,
+                            "app-1",
+                            "app-1",
+                            agentId,
+                            "pool-1",
+                            ResourceOwnerType.PLATFORM,
+                            "tenant-1",
+                            "WORKER_POOL:PLATFORM",
+                            "LANGGRAPH_BIZ",
+                            null,
+                            null,
+                            null,
+                            null,
+                            "model-default",
+                            null,
+                            null,
+                            "AGENT:CLIENT_APP");
+                });
+        when(resourceResolver.resolveRequiredModelForAgent(
+                any(String.class),
+                any(String.class),
+                any(A2AgentResourceResolver.ResolvedAgentResource.class),
+                nullable(String.class),
+                nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenAnswer(invocation -> {
+                    String requestedModelConfigId = invocation.getArgument(3, String.class);
+                    String requestedModelVariant = invocation.getArgument(4, String.class);
+                    String modelConfigId = requestedModelConfigId != null && !requestedModelConfigId.isBlank()
+                            ? requestedModelConfigId
+                            : "model-default";
+                    String modelName = requestedModelVariant != null && !requestedModelVariant.isBlank()
+                            ? requestedModelVariant
+                            : "qwen-plus";
+                    return new A2AgentResourceResolver.ResolvedModelResource(
+                            modelConfigId,
+                            requestedModelConfigId,
+                            requestedModelVariant,
+                            LlmModelCategory.GENERAL,
+                            modelName,
+                            requestedModelVariant != null && !requestedModelVariant.isBlank()
+                                    ? "REQUESTED_MODEL_VARIANT"
+                                    : "MODEL_CONFIG_DEFAULT",
+                            "LANGGRAPH_BIZ",
+                            requestedModelConfigId != null && !requestedModelConfigId.isBlank()
+                                    ? "AGENT_MODEL_BINDING:REQUESTED_MODEL_GRANT"
+                                    : "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT");
+                });
+        return resourceResolver;
     }
 
     private ResolvedClientAppCredentialDTO credential() {

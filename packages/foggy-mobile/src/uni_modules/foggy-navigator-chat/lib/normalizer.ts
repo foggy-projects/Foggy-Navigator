@@ -140,6 +140,25 @@ export function createFoggyMessageIngestor(options: NormalizeOptions = {}) {
 
       if (openMessage.type === 'STATE') {
         const subtype = firstString(payload.subtype, payload.stateType, payload.state_type)
+        if (isApprovalStatePayload(payload) && actions.length > 0) {
+          const mergedActions = mergeActions(pendingActions, actions)
+          pendingActions = []
+          append({
+            id,
+            role: 'assistant',
+            content: approvalStateContent(content, payload, display.mode),
+            timestamp,
+            taskId: messageTaskId,
+            status,
+            messageType: openMessage.type,
+            terminal: openMessage.terminal,
+            terminalStatus: openMessage.terminalStatus ?? null,
+            actions: mergedActions,
+            executionReportRef: report.ref,
+            executionReportDigest: report.digest,
+          })
+          continue
+        }
         if (actions.length > 0) pendingActions = mergeActions(pendingActions, actions)
         if (display.showRuntimeEvents) {
           append({
@@ -353,6 +372,7 @@ export function extractNavigatorActions(message: FoggyNavigatorOpenMessage): Fog
   ]
   const actions: FoggyNavigatorAction[] = []
   for (const candidate of candidates) collectActions(candidate, actions)
+  collectApprovalAction(normalizedPayload(message), actions)
   const seen = new Set<string>()
   return actions.filter((action) => {
     const key = `${action.type}:${action.url ?? ''}:${action.label}:${stringifySafe(action.payload)}`
@@ -374,6 +394,51 @@ const ACTION_CONTAINER_KEYS = [
   'payload',
   'args',
 ]
+
+function collectApprovalAction(payload: Record<string, unknown>, actions: FoggyNavigatorAction[]) {
+  if (!isApprovalStatePayload(payload)) return
+  const approval = objectValue(payload.approval)
+  const suspendId = firstString(
+    payload.suspendId,
+    payload.suspend_id,
+    approval?.suspendId,
+    approval?.suspend_id,
+  )
+  if (!suspendId) return
+
+  const suspensionType = firstString(
+    payload.suspensionType,
+    payload.suspension_type,
+    payload.approvalType,
+    payload.approval_type,
+    approval?.suspensionType,
+    approval?.suspension_type,
+    approval?.approvalType,
+    approval?.approval_type,
+  ) ?? 'APPROVAL_REQUIRED'
+  const taskId = firstString(payload.taskId, payload.task_id)
+  const functionId = firstString(payload.functionId, payload.function_id, approval?.functionId, approval?.function_id)
+  const scriptRunId = firstString(payload.scriptRunId, payload.script_run_id, approval?.scriptRunId, approval?.script_run_id)
+  const skillFrameId = firstString(payload.skillFrameId, payload.skill_frame_id, approval?.skillFrameId, approval?.skill_frame_id)
+  const status = firstString(payload.status, approval?.status)
+
+  actions.push({
+    id: `suspension-${suspendId}`,
+    type: 'BUSINESS_SUSPENSION',
+    label: firstString(payload.actionLabel, payload.action_label, payload.label, payload.title) ?? '去确认',
+    payload: objectValue(sanitizeValue({
+      suspendId,
+      suspensionType,
+      approvalType: suspensionType,
+      taskId,
+      functionId,
+      scriptRunId,
+      skillFrameId,
+      status,
+    })),
+    raw: sanitizeValue(payload),
+  })
+}
 
 function collectActions(value: unknown, actions: FoggyNavigatorAction[], seen = new WeakSet<object>()) {
   const parsed = parseMaybeJson(value)
@@ -405,7 +470,7 @@ function collectActions(value: unknown, actions: FoggyNavigatorAction[], seen = 
 }
 
 function isActionType(type: string): boolean {
-  return /OPEN_TMS_PAGE|OPEN_.*PAGE|DOWNLOAD|REPORT|DETAIL|LINK/i.test(type)
+  return /OPEN_TMS_PAGE|OPEN_.*PAGE|DOWNLOAD|REPORT|DETAIL|LINK|BUSINESS_SUSPENSION|OPEN_.*SUSPENSION/i.test(type)
 }
 
 function actionLabel(type: string, action?: Record<string, unknown>): string {
@@ -669,6 +734,13 @@ function stateDisplayContent(content: string, mode: FoggyNavigatorChatMode, subt
   return sanitizeNavigatorText(content)
 }
 
+function approvalStateContent(content: string, payload: Record<string, unknown>, mode: FoggyNavigatorChatMode): string {
+  if (mode === 'debug') return stateDisplayContent(content || stringifySafe(payload), mode)
+  const text = firstString(payload.summary, payload.message, payload.reason, content)
+  if (text && !/^approval_required$/i.test(text) && !/^approval required\b/i.test(text)) return sanitizeNavigatorText(text)
+  return '需要确认：'
+}
+
 function userFacingMessageContent(content: string, mode: FoggyNavigatorChatMode): string {
   if (mode === 'debug') return sanitizeNavigatorText(content)
   const connectionText = userFacingConnectionText(content)
@@ -822,4 +894,11 @@ function numberValue(...values: unknown[]): number | undefined {
     if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) return Number(value)
   }
   return undefined
+}
+
+function isApprovalStatePayload(payload: Record<string, unknown>): boolean {
+  const subtype = firstString(payload.subtype, payload.stateType, payload.state_type, payload.type)
+  if (subtype === 'approval_required' || subtype === 'skill_approval_request') return true
+  if (payload.approvalRequired === true || payload.approval_required === true) return true
+  return Boolean(firstString(payload.suspendId, payload.suspend_id)) && /approval|suspend/i.test(subtype ?? '')
 }

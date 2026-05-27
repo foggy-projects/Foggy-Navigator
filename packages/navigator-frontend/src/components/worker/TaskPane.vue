@@ -61,6 +61,7 @@
         @load-all="(limit?: number) => paneState.loadAllHistory(limit)"
         @forward="(message) => emit('forward', props.paneState.paneId, message)"
         @link-click="(payload) => emit('link-click', props.paneState.paneId, payload)"
+        @artifact-open="(action) => emit('artifactOpen', props.paneState.paneId, action)"
       >
         <template #empty>
           <div class="waiting-hint">
@@ -116,6 +117,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
+import type { NavigatorUiAction } from '@foggy/chat'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import { useInputMemory } from '@/composables/useInputMemory'
 import type { SkillInfo } from '@/types'
@@ -144,6 +146,7 @@ const emit = defineEmits<{
   (e: 'reconnect', paneId: string, taskId: string): void
   (e: 'forward', paneId: string, message: { id: string; content: string }): void
   (e: 'link-click', paneId: string, payload: { href: string; text: string }): void
+  (e: 'artifactOpen', paneId: string, action: NavigatorUiAction): void
   (e: 'focus'): void
 }>()
 

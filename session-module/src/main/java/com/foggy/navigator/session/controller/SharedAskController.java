@@ -9,11 +9,15 @@ import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.entity.AgentConsultationEntity;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
 import com.foggy.navigator.common.form.SharedAskForm;
+import com.foggy.navigator.session.agent.TaskSubmittingA2aAgentDecorator;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConsultationRepository;
 import com.foggy.navigator.session.service.SharingKeyService;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
+import com.foggy.navigator.spi.agent.TaskSubmittingA2aAgent;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +44,7 @@ public class SharedAskController {
     private final SharingKeyService sharingKeyService;
     private final UnifiedAgentResolver agentResolver;
     private final AgentConsultationRepository consultationRepository;
+    private final AgentSubmitPipeline agentSubmitPipeline;
 
     @PostMapping("/ask")
     public RX<A2aTask> ask(
@@ -92,7 +97,18 @@ public class SharedAskController {
         message.setMetadata(metadata);
 
         long start = System.currentTimeMillis();
-        A2aTask task = agent.sendTask(message);
+        TaskSubmittingA2aAgent submittingAgent = new TaskSubmittingA2aAgentDecorator(
+                agent, agentSubmitPipeline, keyEntity.getAgentId(), context);
+        A2aTask task = submittingAgent.submitTask(AgentTaskSubmitRequest.builder()
+                .agentId(keyEntity.getAgentId())
+                .resolveContext(context)
+                .message(message)
+                .prompt(question)
+                .maxTurns(keyEntity.getMaxTurns())
+                .contextId(contextId)
+                .contextAlias(form.getContextAlias())
+                .metadata(metadata)
+                .build());
         long durationMs = System.currentTimeMillis() - start;
 
         if (task.getContextId() == null && contextId != null && !contextId.isBlank()) {

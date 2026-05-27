@@ -2,6 +2,12 @@
 
 Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 
+## 本机私有补充
+
+- 本机环境规则见 [CLAUDE.local.md](./CLAUDE.local.md)。
+- `CLAUDE.local.md` 是本机私有文件，不提交到 Git。
+- 如果当前 LLM/Agent 没有加载该文件，先重新读取 `CLAUDE.local.md` 后再继续本机联调、Worker 更新或 `dev-kvm-x3` 发布相关操作。
+
 ## 模块结构
 
 ### 后端模块（Maven）
@@ -55,6 +61,15 @@ tools/
 | `tools/gemini-agent-worker/stop.ps1` | 停止 Gemini Worker | - |
 | `tools/langgraph-biz-worker/start.ps1` | LangGraph Biz Worker | 3061 |
 | `tools/langgraph-biz-worker/stop.ps1` | 停止 LangGraph Biz Worker | - |
+
+### Worker 更新边界
+
+当前工作区路径为 `D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev`。当需要更新、重启或排查 Worker 时，只处理以下实例：
+
+- 当前 Windows 工作区内的 Worker：`D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev\tools\...`
+- WSL 中对应的 Worker，例如 `/home/navigator/.codex-worker`
+
+不要停止、重启或升级其他 Windows 工作区的 Worker，例如 `D:\foggy-projects\Foggy-Navigator` 下的进程或端口 `3052`。如果端口或进程归属不明确，先用进程命令行确认工作区路径，再执行操作。
 
 ### 后端启动
 

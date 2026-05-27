@@ -18,7 +18,15 @@ export type {
   AllowedPrompt,
 } from './types/aip'
 export type { EventAdapter } from './types/adapter'
-export type { ChatMessage, ConnectionStatus, ExecutionReportDigest } from './types/chat'
+export type {
+  ChatMessage,
+  ConnectionStatus,
+  ExecutionReportDigest,
+  NavigatorUiAction,
+  NavigatorUiArtifact,
+  NavigatorUiArtifactKind,
+  NavigatorUiArtifactOpenMode,
+} from './types/chat'
 
 // Store
 export { createChatState } from './store/chatState'

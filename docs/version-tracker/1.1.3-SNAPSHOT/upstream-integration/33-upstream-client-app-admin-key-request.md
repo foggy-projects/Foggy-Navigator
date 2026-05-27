@@ -120,7 +120,7 @@ navi upstream admin-key revoke --credential-id <credentialId>
 navi upstream admin-key rotate --credential-id <credentialId> --write-profile
 ```
 
-`CLIENT_APP_ADMIN` 与 `CONTROL_KEY_ISSUE` 是 operator/CLI 侧友好别名，服务端保存前会规范化为实际鉴权 scope：`CLIENT_APP_MANAGE` 与 `CLIENT_APP_CONTROL_KEY_ISSUE`。若审批时未显式设置 `--credential-expires-at`，服务端默认按 24 小时 TTL 签发 `NAVI_ADMIN_API_KEY`；长期有效必须由 operator 显式传入到期时间。
+`CLIENT_APP_ADMIN` 与 `CONTROL_KEY_ISSUE` 是 operator/CLI 侧友好别名，服务端保存前会规范化为实际鉴权 scope：`CLIENT_APP_MANAGE` 与 `CLIENT_APP_CONTROL_KEY_ISSUE`。若审批时未显式设置 `--credential-expires-at`，服务端默认按 24 小时 TTL 签发 `NAVI_ADMIN_API_KEY`；长期有效必须由 operator 显式传入到期时间。阶段性允许 operator 用 `--claim-ttl-minutes 0` 或 `--claim-ttl-minutes -1` 表示审批确认签发无到期时间的 `NAVI_ADMIN_API_KEY`；这只影响 admin key 的有效期，claim token 的领取窗口仍使用默认 TTL。
 
 对应后端 API 应位于 Navigator admin/control plane，例如：
 

@@ -226,14 +226,13 @@ public class E2eCli {
 
     private BusinessAgentApi businessAgentControlApi() {
         String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
-        String adminToken = config.get("NAVI_ADMIN_TOKEN");
-        if (!hasText(controlApiKey) && !hasText(adminToken)) {
-            throw new UpstreamCliException("control-plane credential is required (NAVI_CONTROL_API_KEY; admin fallback: NAVI_ADMIN_TOKEN)");
+        if (!hasText(controlApiKey)) {
+            throw new UpstreamCliException("client app control credential is required (NAVI_CONTROL_API_KEY)");
         }
         return new BusinessAgentApi(new HttpHelper(
                 config.required("NAVI_BASE_URL", "Navigator base URL"),
                 null,
-                adminToken,
+                null,
                 config.get("NAVI_TENANT_ID"),
                 controlApiKey,
                 Duration.ofSeconds(30)));

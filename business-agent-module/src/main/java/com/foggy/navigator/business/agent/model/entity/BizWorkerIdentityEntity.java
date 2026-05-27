@@ -1,5 +1,6 @@
 package com.foggy.navigator.business.agent.model.entity;
 
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -9,7 +10,8 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "biz_worker_identity", indexes = {
         @Index(name = "idx_bwi_backend", columnList = "workerBackend"),
-        @Index(name = "idx_bwi_status", columnList = "status")
+        @Index(name = "idx_bwi_status", columnList = "status"),
+        @Index(name = "idx_bwi_owner", columnList = "ownerType,ownerId")
 })
 public class BizWorkerIdentityEntity {
 
@@ -19,6 +21,13 @@ public class BizWorkerIdentityEntity {
 
     @Column(length = 64, nullable = false, unique = true)
     private String workerId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 32, nullable = false)
+    private ResourceOwnerType ownerType;
+
+    @Column(length = 128, nullable = false)
+    private String ownerId;
 
     @Column(length = 64, nullable = false)
     private String workerBackend;
@@ -37,6 +46,12 @@ public class BizWorkerIdentityEntity {
 
     @Column(length = 128)
     private String tokenHash;
+
+    @Column(columnDefinition = "TEXT")
+    private String capabilitiesJson;
+
+    @Column(columnDefinition = "TEXT")
+    private String labelsJson;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime registeredAt;

@@ -2,15 +2,19 @@ package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.BusinessAgentTaskDTO;
 import com.foggy.navigator.business.agent.model.dto.CreatedBusinessAgentTaskDTO;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerIdentityEntity;
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessAgentTaskEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
+import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm;
+import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentTaskRepository;
 import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,7 +25,6 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -31,16 +34,19 @@ public class BusinessAgentTaskService {
 
     public static final String STATUS_CREATED = "CREATED";
     public static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String BACKEND_LANGGRAPH_BIZ = "LANGGRAPH_BIZ";
+    private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
 
     private final BusinessAgentTaskRepository taskRepository;
     private final BusinessTaskScopedTokenRepository tokenRepository;
     private final ClientAppService clientAppService;
     private final BizWorkerPoolService bizWorkerPoolService;
-    private final ClientAppModelConfigGrantService grantService;
+    private final A2AgentResourceResolver resourceResolver;
     private final ClientAppUserGrantService userGrantService;
     private final SkillRegistryService skillRegistryService;
     private final BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
     private final BusinessAgentSessionService businessAgentSessionService;
+    private final BizWorkerIdentityRepository workerIdentityRepository;
     private final List<BusinessAgentWorkerTaskLauncher> workerTaskLaunchers;
 
     @Transactional
@@ -52,46 +58,94 @@ public class BusinessAgentTaskService {
         requireText(actorUserId, "actorUserId is required");
         requireText(form.getClientAppId(), "clientAppId is required");
         requireText(form.getSessionId(), "sessionId is required");
-        requireText(form.getWorkerPoolId(), "workerPoolId is required");
         requireText(form.getUpstreamUserId(), "upstreamUserId is required");
-        requireText(form.getSkillId(), "skillId is required");
-        String skillName = resolveSkillName(form.getSkillId(), form.getSkillName());
+        requireText(form.getAgentId(), "agentId is required");
 
         // 2. 校验 clientAppId 存在、属于当前 tenant、状态可用
-        clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
-
-        // 3. 校验 workerPoolId 存在、属于当前 tenant、状态可用
-        BizWorkerPoolEntity workerPool = bizWorkerPoolService.requireAvailablePool(tenantId, form.getWorkerPoolId());
+        ClientAppEntity clientApp = clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
 
         // 校验 upstream user grant
         userGrantService.checkUpstreamUserAccess(tenantId, form.getClientAppId(), form.getUpstreamUserId());
 
+        rejectLegacyRuntimeResourceSelectors(form);
+        rejectLegacyWorkspaceSelectors(form);
+
+        A2AgentResourceResolver.ResolvedAgentResource agentResource = resourceResolver.resolveRequiredAgent(
+                tenantId,
+                form.getClientAppId(),
+                form.getUpstreamUserId(),
+                form.getAgentId());
+        String skillName = resolveSkillName(agentResource.skillId(), form.getSkillName());
+
+        // 3. 由 Agent 绑定解析 worker route。新模型优先支持 PhysicalWorker，旧 WorkerPool 路由继续兼容。
+        BizWorkerPoolEntity workerPool = null;
+        if (StringUtils.hasText(agentResource.workerPoolId())) {
+            workerPool = bizWorkerPoolService.requireAvailablePool(tenantId, agentResource.workerPoolId());
+        }
+
         // 校验 client app skill grant
-        skillRegistryService.checkClientAppSkillAccess(tenantId, form.getClientAppId(), form.getSkillId());
+        skillRegistryService.checkClientAppSkillAccess(tenantId, form.getClientAppId(), agentResource.skillId());
 
         String finalModelConfigId;
+        String finalModelName;
         String finalVisionModelConfigId;
+        A2AgentResourceResolver.ResolvedModelResource finalModelResource;
+        BusinessAgentTaskEntity existingResumeTask = null;
+        String explicitRequestedModelConfigId = trimToNull(form.getRequestedModelConfigId());
+        String explicitRequestedModelVariant = trimToNull(form.getModelVariant());
+        String requestedModelConfigId = resolveRequestedModelConfigId(form, agentResource);
 
         if (StringUtils.hasText(form.getResumeFromTaskId())) {
-            BusinessAgentTaskEntity existingTask = taskRepository.findByTaskId(form.getResumeFromTaskId())
+            existingResumeTask = taskRepository.findByTaskId(form.getResumeFromTaskId())
                     .orElseThrow(() -> new IllegalArgumentException("resume task not found: " + form.getResumeFromTaskId()));
 
-            if (!tenantId.equals(existingTask.getTenantId()) ||
-                !form.getClientAppId().equals(existingTask.getClientAppId()) ||
-                !form.getSessionId().equals(existingTask.getSessionId())) {
+            if (!tenantId.equals(existingResumeTask.getTenantId()) ||
+                !form.getClientAppId().equals(existingResumeTask.getClientAppId()) ||
+                !form.getSessionId().equals(existingResumeTask.getSessionId())) {
                 throw new IllegalArgumentException("resume task context mismatch");
             }
-            if (StringUtils.hasText(form.getRequestedModelConfigId()) &&
-                !form.getRequestedModelConfigId().equals(existingTask.getModelConfigId())) {
+            if (!agentResource.agentId().equals(existingResumeTask.getAgentId())) {
+                throw new IllegalArgumentException("cannot change agentId when resuming task");
+            }
+            if (StringUtils.hasText(explicitRequestedModelConfigId) &&
+                !explicitRequestedModelConfigId.equals(existingResumeTask.getModelConfigId())) {
                 throw new IllegalArgumentException("cannot change modelConfigId when resuming task");
             }
-            finalModelConfigId = existingTask.getModelConfigId();
-            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId());
+            if (StringUtils.hasText(explicitRequestedModelVariant) &&
+                StringUtils.hasText(existingResumeTask.getModel()) &&
+                !explicitRequestedModelVariant.equals(existingResumeTask.getModel())) {
+                throw new IllegalArgumentException("cannot change modelVariant when resuming task");
+            }
+            finalModelResource = resourceResolver.resolveRequiredModelForAgent(
+                    tenantId,
+                    form.getClientAppId(),
+                    agentResource,
+                    existingResumeTask.getModelConfigId(),
+                    null,
+                    LlmModelCategory.GENERAL);
+            validateAgentBackendCompatibility(agentResource, finalModelResource);
+            finalModelConfigId = existingResumeTask.getModelConfigId();
+            finalModelName = existingResumeTask.getModel();
+            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId(), agentResource);
         } else {
             // 4, 5, 6. 新建 task 时必须调用 resolveEffectiveModelConfigId
-            finalModelConfigId = grantService.resolveEffectiveModelConfigId(tenantId, form.getClientAppId(), form.getRequestedModelConfigId());
-            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId());
+            finalModelResource = resourceResolver.resolveRequiredModelForAgent(
+                    tenantId,
+                    form.getClientAppId(),
+                    agentResource,
+                    requestedModelConfigId,
+                    explicitRequestedModelVariant,
+                    LlmModelCategory.GENERAL);
+            validateAgentBackendCompatibility(agentResource, finalModelResource);
+            finalModelConfigId = finalModelResource.modelConfigId();
+            finalModelName = finalModelResource.modelName();
+            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId(), agentResource);
         }
+        A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource = resolveWorkspaceResource(
+                tenantId,
+                form,
+                existingResumeTask,
+                agentResource);
 
         // 7. task 创建后固定最终 modelConfigId
         BusinessAgentTaskEntity task = new BusinessAgentTaskEntity();
@@ -101,10 +155,14 @@ public class BusinessAgentTaskService {
         task.setClientAppId(form.getClientAppId());
         task.setUpstreamUserId(form.getUpstreamUserId());
         task.setNavigatorEffectiveUserId(actorUserId);
-        task.setSkillId(form.getSkillId());
-        task.setWorkerPoolId(form.getWorkerPoolId());
+        task.setAgentId(agentResource.agentId());
+        task.setSkillId(agentResource.skillId());
+        task.setWorkerPoolId(resolveInternalWorkerRouteId(agentResource));
+        task.setDirectoryId(workspaceResource != null ? workspaceResource.directoryId() : null);
         task.setModelConfigId(finalModelConfigId);
         task.setRequestedModelConfigId(form.getRequestedModelConfigId());
+        task.setModel(finalModelName);
+        task.setRequestedModelVariant(explicitRequestedModelVariant);
         task.setStatus(STATUS_CREATED);
         task = taskRepository.save(task);
 
@@ -136,7 +194,8 @@ public class BusinessAgentTaskService {
                 task.getSessionId());
 
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
-                tenantId, actorUserId, task, workerPool, plainToken, finalVisionModelConfigId, contextId, skillName, form);
+                tenantId, actorUserId, task, workerPool, agentResource, finalModelResource, plainToken,
+                finalVisionModelConfigId, contextId, skillName, form, workspaceResource, clientApp);
         if (launchResult != null && StringUtils.hasText(launchResult.getContextId())) {
             contextId = launchResult.getContextId();
         }
@@ -166,14 +225,18 @@ public class BusinessAgentTaskService {
         dto.setClientAppId(baseDto.getClientAppId());
         dto.setUpstreamUserId(baseDto.getUpstreamUserId());
         dto.setNavigatorEffectiveUserId(baseDto.getNavigatorEffectiveUserId());
+        dto.setAgentId(baseDto.getAgentId());
         dto.setSkillId(baseDto.getSkillId());
         dto.setWorkerPoolId(baseDto.getWorkerPoolId());
+        dto.setDirectoryId(baseDto.getDirectoryId());
         dto.setWorkerTaskId(baseDto.getWorkerTaskId());
         dto.setWorkerSessionId(baseDto.getWorkerSessionId());
         dto.setWorkerId(baseDto.getWorkerId());
         dto.setWorkerProviderType(baseDto.getWorkerProviderType());
         dto.setModelConfigId(baseDto.getModelConfigId());
         dto.setRequestedModelConfigId(baseDto.getRequestedModelConfigId());
+        dto.setModel(baseDto.getModel());
+        dto.setRequestedModelVariant(baseDto.getRequestedModelVariant());
         dto.setStatus(baseDto.getStatus());
         dto.setCreatedAt(baseDto.getCreatedAt());
         dto.setUpdatedAt(baseDto.getUpdatedAt());
@@ -202,9 +265,11 @@ public class BusinessAgentTaskService {
         userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
         skillRegistryService.checkClientAppSkillAccess(tenantId, clientAppId, skillId);
 
-        String finalModelConfigId = StringUtils.hasText(requestedModelConfigId)
-                ? grantService.resolveEffectiveModelConfigId(tenantId, clientAppId, requestedModelConfigId)
-                : grantService.resolveEffectiveModelConfigId(tenantId, clientAppId, null);
+        String finalModelConfigId = resourceResolver.resolveRequiredModelConfigId(
+                tenantId,
+                clientAppId,
+                requestedModelConfigId,
+                LlmModelCategory.GENERAL);
 
         String taskId = "obt_" + UUID.randomUUID().toString().replace("-", "");
         String plainToken = "btt_" + UUID.randomUUID().toString().replace("-", "");
@@ -316,7 +381,7 @@ public class BusinessAgentTaskService {
         }
         String normalizedSkillName = skillName.trim();
         if (StringUtils.hasText(normalizedSkillId) && !normalizedSkillId.equals(normalizedSkillName)) {
-            throw new IllegalArgumentException("skillName must match skillId during compatibility phase");
+            throw new IllegalArgumentException("skillName must match the agent-bound skillId");
         }
         return normalizedSkillName;
     }
@@ -326,23 +391,22 @@ public class BusinessAgentTaskService {
             String actorUserId,
             BusinessAgentTaskEntity task,
             BizWorkerPoolEntity workerPool,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedModelResource modelResource,
             String taskScopedToken,
             String visionModelConfigId,
             String contextId,
             String skillName,
-            CreateBusinessAgentTaskForm form) {
+            CreateBusinessAgentTaskForm form,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
+            ClientAppEntity clientApp) {
         if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
             return null;
         }
-        String markdownBody = skillRegistryService.buildMaterializedPublicSkillMarkdown(
-                tenantId,
-                task.getSkillId(),
-                task.getClientAppId()
-        );
-
+        String workerBackend = resolveWorkerBackend(agentResource, workerPool, modelResource);
         return workerTaskLaunchers.stream()
                 .filter(Objects::nonNull)
-                .filter(launcher -> workerPool.getWorkerBackend().equals(launcher.getWorkerBackend()))
+                .filter(launcher -> workerBackend.equals(launcher.getWorkerBackend()))
                 .findFirst()
                 .map(launcher -> launcher.launch(BusinessAgentWorkerTaskLaunchRequest.builder()
                         .tenantId(tenantId)
@@ -352,19 +416,158 @@ public class BusinessAgentTaskService {
                         .contextId(contextId)
                         .clientAppId(task.getClientAppId())
                         .upstreamUserId(task.getUpstreamUserId())
+                        .agentId(task.getAgentId())
                         .skillId(task.getSkillId())
                         .skillName(skillName)
                         .workerPoolId(task.getWorkerPoolId())
-                        .workerBackend(workerPool.getWorkerBackend())
+                        .physicalWorkerId(resolveLaunchPhysicalWorkerId(agentResource, modelResource, clientApp))
+                        .workerBackend(workerBackend)
                         .modelConfigId(task.getModelConfigId())
+                        .model(task.getModel())
                         .visionModelConfigId(visionModelConfigId)
-                        .markdownBody(markdownBody)
+                        .directoryId(workspaceResource != null ? workspaceResource.directoryId() : null)
+                        .workspaceScope(workspaceResource != null ? workspaceResource.workspaceScope().name() : null)
+                        .workspaceResolverType(workspaceResource != null ? workspaceResource.resolverType().name() : null)
+                        .workspaceReadOnly(workspaceResource != null ? workspaceResource.readOnly() : null)
+                        .workspaceQuotaPolicy(workspaceResource != null ? workspaceResource.quotaPolicy() : null)
+                        .workspaceRetentionPolicy(workspaceResource != null ? workspaceResource.retentionPolicy() : null)
+                        .workspaceConcurrencyPolicy(workspaceResource != null ? workspaceResource.concurrencyPolicy() : null)
                         .taskScopedToken(taskScopedToken)
-                        .workdir(trimToNull(form.getWorkdir()))
-                        .allowedDirs(cleanStringList(form.getAllowedDirs()))
+                        .workdir(workspaceResource != null ? workspaceResource.workdir() : null)
+                        .allowedDirs(workspaceResource != null ? workspaceResource.allowedDirs() : null)
                         .allowedTools(cleanStringList(form.getAllowedTools()))
                         .build()))
                 .orElse(null);
+    }
+
+    private String resolveWorkerBackend(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            BizWorkerPoolEntity workerPool,
+            A2AgentResourceResolver.ResolvedModelResource modelResource) {
+        String workerBackend = agentResource != null ? trimToNull(agentResource.workerBackend()) : null;
+        if (workerBackend != null) {
+            return workerBackend;
+        }
+        if (workerPool != null && StringUtils.hasText(workerPool.getWorkerBackend())) {
+            return workerPool.getWorkerBackend().trim();
+        }
+        String modelWorkerBackend = modelResource != null ? trimToNull(modelResource.workerBackend()) : null;
+        if (modelWorkerBackend != null) {
+            return modelWorkerBackend;
+        }
+        throw new IllegalStateException("agent worker backend is not configured");
+    }
+
+    private String resolveLaunchPhysicalWorkerId(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedModelResource modelResource,
+            ClientAppEntity clientApp) {
+        String agentWorkerId = agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
+        String workerBackend = firstNonBlank(
+                agentResource != null ? agentResource.workerBackend() : null,
+                modelResource != null ? modelResource.workerBackend() : null);
+        if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ)
+                && agentResource != null
+                && !StringUtils.hasText(agentResource.workerPoolId())
+                && StringUtils.hasText(agentWorkerId)
+                && !SOURCE_BIZ_WORKER_IDENTITY.equals(trimToNull(agentResource.physicalWorkerSource()))) {
+            String workerHostBizWorkerId = resolveLatestWorkerHostBizIdentity(clientApp);
+            if (StringUtils.hasText(workerHostBizWorkerId)) {
+                return workerHostBizWorkerId;
+            }
+        }
+        // The workspace worker owns filesystem access. Execution routing must come from the agent route.
+        return agentWorkerId;
+    }
+
+    private String resolveLatestWorkerHostBizIdentity(ClientAppEntity clientApp) {
+        if (clientApp == null || !StringUtils.hasText(clientApp.getUpstreamSystemId())) {
+            return null;
+        }
+        List<BizWorkerIdentityEntity> identities = workerIdentityRepository
+                .findByOwnerTypeAndOwnerIdAndWorkerBackendAndStatusAndHealthStatusOrderByUpdatedAtDesc(
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        clientApp.getUpstreamSystemId(),
+                        BACKEND_LANGGRAPH_BIZ,
+                        BizWorkerPoolService.STATUS_ENABLED,
+                        BizWorkerPoolService.HEALTHY);
+        if (identities == null) {
+            return null;
+        }
+        return identities.stream()
+                .map(BizWorkerIdentityEntity::getWorkerId)
+                .map(this::trimToNull)
+                .filter(StringUtils::hasText)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private String resolveInternalWorkerRouteId(A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        String workerPoolId = agentResource != null ? trimToNull(agentResource.workerPoolId()) : null;
+        if (workerPoolId != null) {
+            return workerPoolId;
+        }
+        String physicalWorkerId = agentResource != null ? trimToNull(agentResource.physicalWorkerId()) : null;
+        if (physicalWorkerId != null) {
+            return physicalWorkerId;
+        }
+        throw new IllegalStateException("agent worker route is not configured");
+    }
+
+    private void validateAgentBackendCompatibility(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedModelResource modelResource) {
+        String agentBackend = agentResource != null ? trimToNull(agentResource.workerBackend()) : null;
+        String modelBackend = modelResource != null ? trimToNull(modelResource.workerBackend()) : null;
+        if (agentBackend != null && modelBackend != null && !agentBackend.equals(modelBackend)) {
+            throw new IllegalStateException("model workerBackend " + modelBackend
+                    + " does not match agent route backend " + agentBackend);
+        }
+    }
+
+    private A2AgentResourceResolver.ResolvedWorkspaceResource resolveWorkspaceResource(
+            String tenantId,
+            CreateBusinessAgentTaskForm form,
+            BusinessAgentTaskEntity existingResumeTask,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        String requestedDirectoryId = trimToNull(form.getDirectoryId());
+        String resumeDirectoryId = existingResumeTask != null ? trimToNull(existingResumeTask.getDirectoryId()) : null;
+        if (requestedDirectoryId != null && resumeDirectoryId != null && !requestedDirectoryId.equals(resumeDirectoryId)) {
+            throw new IllegalArgumentException("cannot change directoryId when resuming task");
+        }
+        String directoryId = requestedDirectoryId != null
+                ? requestedDirectoryId
+                : (resumeDirectoryId != null ? resumeDirectoryId : agentResource.defaultDirectoryId());
+        return resourceResolver.resolveOptionalWorkspaceForAgent(
+                        tenantId,
+                        form.getClientAppId(),
+                        form.getUpstreamUserId(),
+                        agentResource,
+                        directoryId)
+                .orElse(null);
+    }
+
+    private void rejectLegacyWorkspaceSelectors(CreateBusinessAgentTaskForm form) {
+        if (StringUtils.hasText(form.getWorkdir())
+                || (form.getAllowedDirs() != null && !form.getAllowedDirs().isEmpty())) {
+            throw new IllegalArgumentException("runtime workdir/allowedDirs are no longer accepted; use directoryId");
+        }
+    }
+
+    private void rejectLegacyRuntimeResourceSelectors(CreateBusinessAgentTaskForm form) {
+        if (StringUtils.hasText(form.getWorkerPoolId()) || StringUtils.hasText(form.getSkillId())) {
+            throw new IllegalArgumentException("runtime skillId/workerPoolId are no longer accepted; use agentId");
+        }
+    }
+
+    private String resolveRequestedModelConfigId(
+            CreateBusinessAgentTaskForm form,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        String requestedModelConfigId = trimToNull(form.getRequestedModelConfigId());
+        if (requestedModelConfigId != null) {
+            return requestedModelConfigId;
+        }
+        return agentResource.defaultModelConfigId();
     }
 
     private String trimToNull(String value) {
@@ -372,6 +575,23 @@ public class BusinessAgentTaskService {
             return null;
         }
         return value.trim();
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            String normalized = trimToNull(value);
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+        return null;
+    }
+
+    private boolean isBackend(String actual, String expected) {
+        return expected.equalsIgnoreCase(trimToNull(actual));
     }
 
     private List<String> cleanStringList(List<String> values) {
@@ -385,14 +605,23 @@ public class BusinessAgentTaskService {
         return cleaned.isEmpty() ? null : cleaned;
     }
 
-    private String resolveOptionalVisionModelConfigId(String tenantId, String clientAppId) {
-        Optional<String> modelConfigId = grantService.tryResolveEffectiveModelConfigId(
-                tenantId, clientAppId, null, LlmModelCategory.VISION);
-        if (modelConfigId == null || modelConfigId.isEmpty()) {
-            log.debug("Vision model config not resolved for clientAppId={}: default VISION model config grant is required",
-                    clientAppId);
+    private String resolveOptionalVisionModelConfigId(
+            String tenantId,
+            String clientAppId,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
+        String modelConfigId = resourceResolver.resolveOptionalModelForAgent(
+                        tenantId,
+                        clientAppId,
+                        agentResource,
+                        LlmModelCategory.VISION)
+                .map(A2AgentResourceResolver.ResolvedModelResource::modelConfigId)
+                .orElse(null);
+        if (!StringUtils.hasText(modelConfigId)) {
+            log.debug("Vision model config not resolved for clientAppId={}, agentId={}: default VISION model config grant and agent model binding are required",
+                    clientAppId,
+                    agentResource != null ? agentResource.agentId() : null);
             return null;
         }
-        return modelConfigId.get();
+        return modelConfigId;
     }
 }

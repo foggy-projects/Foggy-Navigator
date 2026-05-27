@@ -238,7 +238,7 @@ async function handleAbort() {
 
 async function handleResume(prompt: string) {
   const task = taskStream.task.value
-  if (!canResumeTask(task)) return
+  if (!task || !canResumeTask(task)) return
 
   // Get cached model selection for this session
   const cached = getSessionModel(task.sessionId)

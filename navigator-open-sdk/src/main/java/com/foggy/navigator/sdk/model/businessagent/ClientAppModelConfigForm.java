@@ -14,6 +14,7 @@ public class ClientAppModelConfigForm {
     private List<String> availableModels;
     private String runtimeBudgetPresetKey;
     private String runtimeBudgetOverrideJson;
+    private String workerBackend;
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
@@ -35,4 +36,6 @@ public class ClientAppModelConfigForm {
     public void setRuntimeBudgetPresetKey(String runtimeBudgetPresetKey) { this.runtimeBudgetPresetKey = runtimeBudgetPresetKey; }
     public String getRuntimeBudgetOverrideJson() { return runtimeBudgetOverrideJson; }
     public void setRuntimeBudgetOverrideJson(String runtimeBudgetOverrideJson) { this.runtimeBudgetOverrideJson = runtimeBudgetOverrideJson; }
+    public String getWorkerBackend() { return workerBackend; }
+    public void setWorkerBackend(String workerBackend) { this.workerBackend = workerBackend; }
 }

@@ -28,6 +28,7 @@
       @load-all="(limit?: number) => emit('loadAll', limit)"
       @forward="(message) => emit('forward', message)"
       @link-click="(payload) => emit('link-click', payload)"
+      @artifact-open="(action) => emit('artifact-open', action)"
     >
       <template #empty>
         <slot name="empty">
@@ -47,7 +48,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ChatMessage, ConnectionStatus } from '../types/chat'
+import type { ChatMessage, ConnectionStatus, NavigatorUiAction } from '../types/chat'
 import MessageList from './MessageList.vue'
 import MessageInput from './MessageInput.vue'
 import StatusBadge from './StatusBadge.vue'
@@ -86,6 +87,7 @@ const emit = defineEmits<{
   (e: 'loadAll', limit?: number): void
   (e: 'forward', message: ChatMessage): void
   (e: 'link-click', payload: { href: string; text: string }): void
+  (e: 'artifact-open', action: NavigatorUiAction): void
 }>()
 
 const connectionLabel = computed(() => {

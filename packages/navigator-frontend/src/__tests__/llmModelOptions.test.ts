@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   ALL_MODEL_OPTIONS,
   getModelOptionsByBackend,
+  isModelConfigCompatibleWithWorker,
   isSelectablePlatformModel,
   resolveModelOptions,
 } from '@/utils/llmModelOptions'
-import type { LlmModelConfig, LlmModelCategory, ModelAccessScope, WorkerBackend } from '@/types'
+import type { ClaudeWorker, LlmModelConfig, LlmModelCategory, ModelAccessScope, WorkerBackend } from '@/types'
 
 function createModelConfig(overrides: Partial<LlmModelConfig> = {}): LlmModelConfig {
   return {
@@ -21,6 +22,18 @@ function createModelConfig(overrides: Partial<LlmModelConfig> = {}): LlmModelCon
     sortOrder: 0,
     createdAt: '2026-04-22T00:00:00Z',
     updatedAt: '2026-04-22T00:00:00Z',
+    ...overrides,
+  }
+}
+
+function createWorker(overrides: Partial<ClaudeWorker> = {}): ClaudeWorker {
+  return {
+    workerId: 'worker-1',
+    name: 'worker-1',
+    baseUrl: 'http://127.0.0.1:3050',
+    authMode: 'API_KEY',
+    status: 'ONLINE',
+    createdAt: '2026-04-22T00:00:00Z',
     ...overrides,
   }
 }
@@ -112,5 +125,22 @@ describe('llmModelOptions', () => {
     })
     const result = resolveModelOptions(config).map((m) => m.value)
     expect(result).toEqual(['codex-latest', 'codex-fast', 'codex-deep', 'codex-xhigh', 'codex-mini'])
+  })
+
+  it('rejects Codex configs for workers without a Codex endpoint', () => {
+    const config = createModelConfig({ workerBackend: 'OPENAI_CODEX' as WorkerBackend })
+    const worker = createWorker({ workerBackend: 'CLAUDE_CODE' as WorkerBackend })
+
+    expect(isModelConfigCompatibleWithWorker(config, worker)).toBe(false)
+  })
+
+  it('allows Codex configs when the selected worker has a Codex endpoint', () => {
+    const config = createModelConfig({ workerBackend: 'OPENAI_CODEX' as WorkerBackend })
+    const worker = createWorker({
+      workerBackend: 'CLAUDE_CODE' as WorkerBackend,
+      codexBaseUrl: 'http://127.0.0.1:3051',
+    })
+
+    expect(isModelConfigCompatibleWithWorker(config, worker)).toBe(true)
   })
 })

@@ -21,15 +21,16 @@ def _tool_specs(
             continue
         if not _tool_enabled(name, enabled_tool_names):
             continue
-        if name in _KNOWN_TOOL_SCHEMAS:
-            specs.append(_KNOWN_TOOL_SCHEMAS[name])
+        schema_name = _preferred_tool_schema_name(name)
+        if schema_name in _KNOWN_TOOL_SCHEMAS:
+            specs.append(_KNOWN_TOOL_SCHEMAS[schema_name])
     specs.extend(
         spec
         for spec in (extra_tool_specs or [])
         if _tool_enabled(spec["function"]["name"], enabled_tool_names)
     )
-    if "submit_skill_result" not in {s["function"]["name"] for s in specs}:
-        specs.append(_KNOWN_TOOL_SCHEMAS["submit_skill_result"])
+    if _FRAME_RESULT_TOOL_NAME not in {s["function"]["name"] for s in specs}:
+        specs.append(_KNOWN_TOOL_SCHEMAS[_FRAME_RESULT_TOOL_NAME])
     if persistent_frame:
         if _tool_enabled("resume_recoverable_child_skill", enabled_tool_names):
             specs.append(_KNOWN_TOOL_SCHEMAS["resume_recoverable_child_skill"])
@@ -76,8 +77,17 @@ _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES = {
     "get_business_function_schema",
 }
 
+_FRAME_RESULT_TOOL_NAME = "submit_frame_result"
+_LEGACY_FRAME_RESULT_TOOL_NAME = "submit_skill_result"
+_FRAME_RESULT_TOOL_NAMES = frozenset({
+    _FRAME_RESULT_TOOL_NAME,
+    _LEGACY_FRAME_RESULT_TOOL_NAME,
+})
+
 _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
-    "submit_skill_result",
+    _FRAME_RESULT_TOOL_NAME,
+    _LEGACY_FRAME_RESULT_TOOL_NAME,
+    "command",
     "handoff_to_parent",
     "resume_recoverable_child_skill",
     "shelve_interrupted_frame",
@@ -103,6 +113,12 @@ def _tool_enabled(
     if name in _SKILL_DISCOVERY_TOOL_NAMES and enabled_tool_names & _SKILL_MATERIAL_TOOL_NAMES:
         return True
     return name in enabled_tool_names or name in _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES
+
+
+def _preferred_tool_schema_name(name: str) -> str:
+    if name == _LEGACY_FRAME_RESULT_TOOL_NAME:
+        return _FRAME_RESULT_TOOL_NAME
+    return name
 
 
 def _dedupe_tool_specs(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -452,10 +468,44 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
-    "submit_skill_result": {
+    "command": {
         "type": "function",
         "function": {
-            "name": "submit_skill_result",
+            "name": "command",
+            "description": (
+                "Run a non-interactive Linux command inside the authorized workspace. "
+                "Use this only for trusted delegated workspace tasks that require tools "
+                "such as git, curl, tests, or build commands. Prefer file tools for "
+                "direct file reads and edits."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Linux shell command to run, e.g. git status --short.",
+                    },
+                    "workdir": {
+                        "type": "string",
+                        "description": "Optional directory under execution_policy.workdir. Defaults to '.'.",
+                    },
+                    "timeout_seconds": {
+                        "type": "number",
+                        "description": "Optional timeout in seconds. The worker enforces a hard cap.",
+                    },
+                    "max_output_chars": {
+                        "type": "integer",
+                        "description": "Optional stdout/stderr character cap. The worker enforces a hard cap.",
+                    },
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    "submit_frame_result": {
+        "type": "function",
+        "function": {
+            "name": "submit_frame_result",
             "description": (
                 "Submit a frame result to the runtime. For ordinary child Agent "
                 "completion, return the final business result. If this child "
@@ -466,6 +516,35 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "ordinary greetings, simple Q&A, or natural-language answers; "
                 "use it only when preserving structured state such as active_plan, "
                 "artifact_refs, evidence_refs, or structured_output."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "structured_output": {
+                        "type": "object",
+                        "description": (
+                            "Frame result payload. Persistent root may include "
+                            "active_plan for compact multi-turn working state "
+                            "and intent_resolution for interruption handling."
+                        ),
+                    },
+                    "artifact_refs": {"type": "array", "items": {"type": "string"}},
+                    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["summary", "structured_output"],
+            },
+        },
+    },
+    "submit_skill_result": {
+        "type": "function",
+        "function": {
+            "name": "submit_skill_result",
+            "description": (
+                "Deprecated compatibility alias for submit_frame_result. Prefer "
+                "submit_frame_result for new prompts, manifests, and scripted "
+                "LLM responses. The runtime still accepts this legacy name for "
+                "old logs, tests, and upstream callers."
             ),
             "parameters": {
                 "type": "object",
@@ -651,6 +730,8 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "list_files",
             "description": (
                 "List files under the current account/workspace file scope. "
+                "With execution_policy.workdir, relative_path is relative to "
+                "the delegated workspace root. "
                 "When no explicit execution policy is supplied, this is limited "
                 "to the account skill directory."
             ),
@@ -659,7 +740,7 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "properties": {
                     "relative_path": {
                         "type": "string",
-                        "description": "Directory to list, relative to the current file scope.",
+                        "description": "Directory to list, relative to the delegated workspace root when configured.",
                     },
                     "recursive": {"type": "boolean"},
                     "max_entries": {"type": "integer"},
@@ -674,7 +755,8 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "read_file",
             "description": (
                 "Read a text file from the current account/workspace file scope "
-                "with line and byte limits."
+                "with line and byte limits. With execution_policy.workdir, "
+                "relative_path is relative to the delegated workspace root."
             ),
             "parameters": {
                 "type": "object",
@@ -694,7 +776,12 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "description": (
                 "Create or overwrite a text file in the current account/workspace "
                 "file scope. Use mode=create by default; use mode=overwrite with "
-                "expected_sha256 when replacing known existing content."
+                "expected_sha256 when replacing known existing content. With "
+                "execution_policy.workdir, relative_path is relative to the "
+                "delegated workspace root; use the user's requested path such as "
+                "actors/pm/biz-m2-live-smoke.txt directly. Do not write ordinary "
+                "task outputs to agent/skills/.../assets unless the user explicitly "
+                "asks to edit Skill resources."
             ),
             "parameters": {
                 "type": "object",
@@ -748,7 +835,9 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "patch_file",
             "description": (
                 "Apply a single-file unified diff patch in the current "
-                "account/workspace file scope. Conflicts cause full rejection."
+                "account/workspace file scope. Conflicts cause full rejection. "
+                "With execution_policy.workdir, relative_path is relative to the "
+                "delegated workspace root."
             ),
             "parameters": {
                 "type": "object",

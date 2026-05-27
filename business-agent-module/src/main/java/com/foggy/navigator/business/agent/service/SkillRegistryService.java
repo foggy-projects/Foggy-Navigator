@@ -10,6 +10,7 @@ import com.foggy.navigator.business.agent.model.dto.SkillBundleDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillFunctionAllowlistDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillMaterializeResultDTO;
+import com.foggy.navigator.business.agent.model.dto.SkillMaterializeTargetResultDTO;
 import com.foggy.navigator.business.agent.model.entity.BusinessFunctionEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessFunctionVersionEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
@@ -35,6 +36,7 @@ import com.foggy.navigator.business.agent.repository.SkillFunctionAllowlistRepos
 import com.foggy.navigator.business.agent.repository.SkillRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -94,11 +96,18 @@ public class SkillRegistryService {
     private final ClientAppUserGrantService userGrantService;
     private final ObjectMapper objectMapper;
 
-    @Value("${foggy.navigator.business.agent.dev-sync-worker-url:http://localhost:3061}")
+    @Value("${foggy.navigator.business.agent.dev-sync-worker-url:}")
     private String devSyncWorkerUrl;
 
     @Value("${foggy.navigator.business.agent.dev-sync-worker-token:}")
     private String devSyncWorkerToken;
+
+    private SkillMaterializeTargetResolver materializeTargetResolver;
+
+    @Autowired(required = false)
+    public void setMaterializeTargetResolver(SkillMaterializeTargetResolver materializeTargetResolver) {
+        this.materializeTargetResolver = materializeTargetResolver;
+    }
 
     @Transactional
     public SkillDTO createSkill(String tenantId, String actorUserId, CreateSkillForm form) {
@@ -573,13 +582,6 @@ public class SkillRegistryService {
         result.setSkillId(skill.getSkillId());
         result.setScope("public");
         result.setClientAppId(clientAppId);
-        result.setWorkerUrl(devSyncWorkerUrl);
-
-        if (!StringUtils.hasText(devSyncWorkerUrl)) {
-            result.setStatus("SKIPPED");
-            result.setWorkerResponse("dev-sync-worker-url is not configured");
-            return result;
-        }
 
         try {
             List<Map<String, Object>> resources = parseResourcesJson(skill.getResourcesJson());
@@ -597,37 +599,8 @@ public class SkillRegistryService {
                 payload.put("client_app_id", clientAppId);
             }
 
-            String json = objectMapper.writeValueAsString(payload);
-            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(devSyncWorkerUrl + "/api/v1/skills/materialize"))
-                    .version(HttpClient.Version.HTTP_1_1)
-                    .timeout(Duration.ofSeconds(10))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(json));
-
-            if (StringUtils.hasText(devSyncWorkerToken)) {
-                requestBuilder.header("Authorization", "Bearer " + devSyncWorkerToken);
-            }
-
-            HttpResponse<String> response = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(3))
-                    .version(HttpClient.Version.HTTP_1_1)
-                    .build()
-                    .send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
-
-            result.setWorkerStatusCode(response.statusCode());
-            result.setWorkerResponse(response.body());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                result.setStatus("FAILED");
-                throw new IllegalStateException("Worker skill materialize failed: HTTP " + response.statusCode() + " " + response.body());
-            }
-
-            result.setStatus("MATERIALIZED");
-            log.info("Materialized public skill {} to worker {}", skill.getSkillId(), devSyncWorkerUrl);
-            return result;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Worker skill materialize interrupted", e);
+            return dispatchMaterializePayload(tenantId, clientAppId, result, payload,
+                    "public skill " + skill.getSkillId());
         } catch (Exception e) {
             if (e instanceof IllegalStateException) {
                 throw (IllegalStateException) e;
@@ -647,13 +620,6 @@ public class SkillRegistryService {
         result.setScope(accountScope ? "account" : "public");
         result.setClientAppId(bundle.getClientAppId());
         result.setAccountId(accountScope ? bundle.getAccountId() : null);
-        result.setWorkerUrl(devSyncWorkerUrl);
-
-        if (!StringUtils.hasText(devSyncWorkerUrl)) {
-            result.setStatus("SKIPPED");
-            result.setWorkerResponse("dev-sync-worker-url is not configured");
-            return result;
-        }
 
         try {
             List<Map<String, Object>> resources = parseResourcesJson(bundle.getResourcesJson());
@@ -672,39 +638,8 @@ public class SkillRegistryService {
                 payload.put("account_id", bundle.getAccountId());
             }
 
-            String json = objectMapper.writeValueAsString(payload);
-            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(devSyncWorkerUrl + "/api/v1/skills/materialize"))
-                    .version(HttpClient.Version.HTTP_1_1)
-                    .timeout(Duration.ofSeconds(10))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(json));
-
-            if (StringUtils.hasText(devSyncWorkerToken)) {
-                requestBuilder.header("Authorization", "Bearer " + devSyncWorkerToken);
-            }
-
-            HttpResponse<String> response = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(3))
-                    .version(HttpClient.Version.HTTP_1_1)
-                    .build()
-                    .send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
-
-            result.setWorkerStatusCode(response.statusCode());
-            result.setWorkerResponse(response.body());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                result.setStatus("FAILED");
-                throw new MaterializeFailedException(
-                        "Worker skill materialize failed: HTTP " + response.statusCode() + " " + response.body(),
-                        result);
-            }
-
-            result.setStatus("MATERIALIZED");
-            log.info("Materialized skill bundle {} scope={} to worker {}", bundle.getSkillId(), bundle.getScope(), devSyncWorkerUrl);
-            return result;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Worker skill materialize interrupted", e);
+            return dispatchMaterializePayload(tenantId, bundle.getClientAppId(), result, payload,
+                    "skill bundle " + bundle.getSkillId() + " scope=" + bundle.getScope());
         } catch (Exception e) {
             if (e instanceof IllegalStateException) {
                 throw (IllegalStateException) e;
@@ -736,6 +671,129 @@ public class SkillRegistryService {
                     bundle.getSkillId(), bundle.getClientAppId(), bundle.getScope(), e.getMessage());
             return failedBundleMaterializeResult(bundle, e.getMessage());
         }
+    }
+
+    private SkillMaterializeResultDTO dispatchMaterializePayload(
+            String tenantId,
+            String clientAppId,
+            SkillMaterializeResultDTO result,
+            Map<String, Object> payload,
+            String materializeLabel) throws JsonProcessingException {
+        List<SkillMaterializeTargetResolver.Target> targets = resolveMaterializeTargets(tenantId, clientAppId);
+        if (targets.isEmpty()) {
+            result.setStatus("SKIPPED_UNRESOLVED_WORKER_TARGET");
+            result.setWorkerResponse("no Biz Worker materialize target resolved for clientAppId=" + clientAppId);
+            return result;
+        }
+
+        String json = objectMapper.writeValueAsString(payload);
+        List<SkillMaterializeTargetResultDTO> targetResults = new ArrayList<>();
+        for (SkillMaterializeTargetResolver.Target target : targets) {
+            targetResults.add(postMaterializeToTarget(target, json));
+        }
+        result.setTargets(targetResults);
+        copyLegacyMaterializeSummary(result, targetResults);
+
+        long failedCount = targetResults.stream()
+                .filter(target -> !"MATERIALIZED".equals(target.getStatus()))
+                .count();
+        if (failedCount > 0) {
+            result.setStatus("FAILED");
+            throw new MaterializeFailedException(
+                    "Worker skill materialize failed for " + failedCount + " target(s)",
+                    result);
+        }
+
+        result.setStatus("MATERIALIZED");
+        log.info("Materialized {} to {} worker target(s)", materializeLabel, targetResults.size());
+        return result;
+    }
+
+    private List<SkillMaterializeTargetResolver.Target> resolveMaterializeTargets(String tenantId, String clientAppId) {
+        List<SkillMaterializeTargetResolver.Target> targets = List.of();
+        if (StringUtils.hasText(clientAppId) && materializeTargetResolver != null) {
+            List<SkillMaterializeTargetResolver.Target> resolved =
+                    materializeTargetResolver.resolveTargets(tenantId, clientAppId);
+            if (resolved != null) {
+                targets = resolved.stream()
+                        .filter(target -> target != null && StringUtils.hasText(target.baseUrl()))
+                        .toList();
+            }
+        }
+        if (!targets.isEmpty()) {
+            return targets;
+        }
+        if (StringUtils.hasText(devSyncWorkerUrl)) {
+            return List.of(new SkillMaterializeTargetResolver.Target(
+                    null,
+                    devSyncWorkerUrl,
+                    "DEV_SYNC_WORKER_URL"));
+        }
+        return List.of();
+    }
+
+    private SkillMaterializeTargetResultDTO postMaterializeToTarget(
+            SkillMaterializeTargetResolver.Target target,
+            String json) {
+        SkillMaterializeTargetResultDTO result = new SkillMaterializeTargetResultDTO();
+        result.setWorkerId(target.workerId());
+        result.setWorkerUrl(target.baseUrl());
+        result.setSource(target.source());
+
+        try {
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(workerEndpoint(target.baseUrl(), "/api/v1/skills/materialize")))
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(json));
+
+            if (StringUtils.hasText(devSyncWorkerToken)) {
+                requestBuilder.header("Authorization", "Bearer " + devSyncWorkerToken);
+            }
+
+            HttpResponse<String> response = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(3))
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .build()
+                    .send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
+
+            result.setWorkerStatusCode(response.statusCode());
+            result.setWorkerResponse(response.body());
+            result.setStatus(response.statusCode() >= 200 && response.statusCode() < 300
+                    ? "MATERIALIZED"
+                    : "FAILED");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            result.setStatus("FAILED");
+            result.setWorkerResponse("Worker skill materialize interrupted");
+        } catch (Exception e) {
+            result.setStatus("FAILED");
+            result.setWorkerResponse(e.getMessage());
+        }
+        return result;
+    }
+
+    private void copyLegacyMaterializeSummary(
+            SkillMaterializeResultDTO result,
+            List<SkillMaterializeTargetResultDTO> targetResults) {
+        if (targetResults == null || targetResults.isEmpty()) {
+            return;
+        }
+        SkillMaterializeTargetResultDTO selected = targetResults.stream()
+                .filter(target -> !"MATERIALIZED".equals(target.getStatus()))
+                .findFirst()
+                .orElse(targetResults.get(0));
+        result.setWorkerId(selected.getWorkerId());
+        result.setWorkerUrl(selected.getWorkerUrl());
+        result.setTargetSource(selected.getSource());
+        result.setWorkerStatusCode(selected.getWorkerStatusCode());
+        result.setWorkerResponse(selected.getWorkerResponse());
+    }
+
+    private String workerEndpoint(String baseUrl, String path) {
+        String normalizedBase = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        return normalizedBase + path;
     }
 
     private boolean hasMaterializableBundlePayload(SkillBundleEntity bundle) {

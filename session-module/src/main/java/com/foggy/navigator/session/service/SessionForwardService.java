@@ -16,10 +16,13 @@ import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.DirectoryAgentId;
 import com.foggy.navigator.session.dto.SessionForwardCreateRequest;
 import com.foggy.navigator.session.dto.SessionForwardCreateResponse;
+import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
+import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.session.repository.SessionRelationRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -45,6 +48,7 @@ public class SessionForwardService {
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final SessionManager sessionManager;
     private final TaskDispatchFacade taskDispatchFacade;
+    private final AgentSubmitPipeline agentSubmitPipeline;
 
     @Transactional
     public SessionForwardCreateResponse forwardToNewSession(
@@ -115,7 +119,11 @@ public class SessionForwardService {
                 .build();
 
         AgentResolveContext context = buildContext(userId, tenantId, targetSessionId, request.getModelConfigId());
-        DispatchTaskDTO task = taskDispatchFacade.createTask(dispatchRequest, context);
+        AgentTaskSubmitResult submitResult = agentSubmitPipeline.submit(toSubmitRequest(dispatchRequest, context));
+        DispatchTaskDTO task = submitResult.getDispatchTask();
+        if (task == null) {
+            throw new IllegalStateException("Agent submit pipeline did not return dispatch task");
+        }
 
         SessionRelationEntity relation = saveRelation(
                 "NEW_SESSION",
@@ -220,6 +228,31 @@ public class SessionForwardService {
                 .sessionId(sessionId)
                 .modelConfigId(blankToNull(modelConfigId))
                 .requestSource("UI_FORWARD")
+                .build();
+    }
+
+    private AgentTaskSubmitRequest toSubmitRequest(TaskDispatchRequest request, AgentResolveContext context) {
+        return AgentTaskSubmitRequest.builder()
+                .agentId(request.getAgentId())
+                .providerType(request.getProviderType())
+                .resolveContext(context)
+                .sessionId(request.getSessionId())
+                .workerId(request.getWorkerId())
+                .prompt(request.getPrompt())
+                .cwd(request.getCwd())
+                .directoryId(request.getDirectoryId())
+                .model(request.getModel())
+                .modelConfigId(request.getModelConfigId())
+                .maxTurns(request.getMaxTurns())
+                .permissionMode(request.getPermissionMode())
+                .images(request.getImages())
+                .attachments(request.getAttachments())
+                .agentTeamsConfigId(request.getAgentTeamsConfigId())
+                .agentTeamsJson(request.getAgentTeamsJson())
+                .contextId(request.getContextId())
+                .context(request.getContext())
+                .metadata(request.getMetadata())
+                .contextAlias(request.getContextAlias())
                 .build();
     }
 

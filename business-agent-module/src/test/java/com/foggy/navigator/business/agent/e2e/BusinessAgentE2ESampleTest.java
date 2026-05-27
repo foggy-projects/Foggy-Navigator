@@ -6,6 +6,10 @@ import com.foggy.navigator.business.agent.model.form.*;
 import com.foggy.navigator.business.agent.repository.*;
 import com.foggy.navigator.business.agent.service.*;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,6 +52,7 @@ class BusinessAgentE2ESampleTest {
     static final String ADMIN = "admin_stage6";
     static final String APP_ID = "capp_stage6_fixed";
     static final String USER_ID = "upstream_user_stage6";
+    static final String AGENT_ID = "stage6_root_agent";
     static final String SKILL_ID = "stage6_order_skill";
     static final String FUNCTION_ID = "stage6.order.close_apply.submit";
     static final String VERSION = "v1";
@@ -77,6 +82,10 @@ class BusinessAgentE2ESampleTest {
     @Mock BizWorkerIdentityRepository identityRepository;
     @Mock BusinessFunctionSuspensionRepository suspensionRepository;
     @Mock BusinessFunctionRuntimeAuditRepository auditRepository;
+    @Mock BusinessAgentDirectoryBindingRepository agentDirectoryBindingRepository;
+    @Mock BusinessAgentModelBindingRepository agentModelBindingRepository;
+    @Mock WorkingDirectoryRepository workingDirectoryRepository;
+    @Mock BusinessCodingAgentRepository agentRepository;
 
     // ---- external deps ----
     @Mock LlmModelManager llmModelManager;
@@ -132,7 +141,18 @@ class BusinessAgentE2ESampleTest {
         sessionDTO.setContextId("bctx_20260520_cd_ctx_stage6");
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
                 .thenReturn(sessionDTO);
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
+        A2AgentResourceResolver resourceResolver = new A2AgentResourceResolver(
+                modelGrantService,
+                llmModelManager,
+                clientAppService,
+                workingDirectoryRepository,
+                agentRepository,
+                poolRepository,
+                identityRepository,
+                java.util.List.of(),
+                agentDirectoryBindingRepository,
+                agentModelBindingRepository);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, identityRepository, java.util.List.of());
         authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService, skillRegistryService, functionRegistryService);
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
         com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker adapterInvoker = new com.foggy.navigator.business.agent.service.adapter.LocalEchoBusinessFunctionAdapterInvoker(objectMapper);
@@ -156,6 +176,10 @@ class BusinessAgentE2ESampleTest {
         model.setTenantId(TENANT);
         model.setWorkerBackend("LANGGRAPH_BIZ");
         model.setName("Stage6 LangGraph Model");
+        model.setCategory(LlmModelCategory.GENERAL);
+        model.setOwnerType(ResourceOwnerType.PLATFORM);
+        model.setOwnerId("platform");
+        model.setEnabled(true);
         when(llmModelManager.getModelConfig(MODEL_ID)).thenReturn(Optional.of(model));
 
         modelGrantEntity = new ClientAppModelConfigGrantEntity();
@@ -254,10 +278,27 @@ class BusinessAgentE2ESampleTest {
         BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
         pool.setPoolId(POOL_ID);
         pool.setTenantId(TENANT);
+        pool.setOwnerType(ResourceOwnerType.PLATFORM);
+        pool.setOwnerId(TENANT);
         pool.setStatus("ENABLED");
         pool.setHealthStatus("HEALTHY");
         pool.setWorkerBackend("LANGGRAPH_BIZ");
         when(poolRepository.findByPoolIdAndTenantId(POOL_ID, TENANT)).thenReturn(Optional.of(pool));
+
+        CodingAgentEntity agent = new CodingAgentEntity();
+        agent.setAgentId(AGENT_ID);
+        agent.setTenantId(TENANT);
+        agent.setOwnerType(ResourceOwnerType.CLIENT_APP);
+        agent.setOwnerId(APP_ID);
+        agent.setClientAppId(APP_ID);
+        agent.setUserId(ADMIN);
+        agent.setName("Stage6 Root Agent");
+        agent.setAgentType(BusinessAgentBundleService.AGENT_TYPE_LANGGRAPH);
+        agent.setWorkerId(POOL_ID);
+        agent.setDefaultModelConfigId(MODEL_ID);
+        agent.setAgentProfile("{\"skillId\":\"" + SKILL_ID + "\"}");
+        agent.setEnabled(true);
+        when(agentRepository.findByAgentIdAndTenantId(AGENT_ID, TENANT)).thenReturn(Optional.of(agent));
 
         when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(inv -> {
             taskEntity = inv.getArgument(0);
@@ -321,9 +362,8 @@ class BusinessAgentE2ESampleTest {
         CreateBusinessAgentTaskForm taskForm = new CreateBusinessAgentTaskForm();
         taskForm.setClientAppId(APP_ID);
         taskForm.setSessionId("session_stage6");
-        taskForm.setWorkerPoolId(POOL_ID);
+        taskForm.setAgentId(AGENT_ID);
         taskForm.setUpstreamUserId(USER_ID);
-        taskForm.setSkillId(SKILL_ID);
 
         CreatedBusinessAgentTaskDTO created = taskService.createTask(TENANT, ADMIN, taskForm);
 
@@ -446,9 +486,8 @@ class BusinessAgentE2ESampleTest {
         CreateBusinessAgentTaskForm taskForm = new CreateBusinessAgentTaskForm();
         taskForm.setClientAppId(APP_ID);
         taskForm.setSessionId("session_neg1");
-        taskForm.setWorkerPoolId(POOL_ID);
+        taskForm.setAgentId(AGENT_ID);
         taskForm.setUpstreamUserId(USER_ID);
-        taskForm.setSkillId(SKILL_ID);
         CreatedBusinessAgentTaskDTO created = taskService.createTask(TENANT, ADMIN, taskForm);
         String token = created.getTaskScopedToken();
         tokenEntity.setStatus("ACTIVE");

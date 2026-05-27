@@ -21,6 +21,7 @@
       @reconnect="(paneId, taskId) => emit('reconnect', paneId, taskId)"
       @forward="(paneId, message) => emit('forward', paneId, message)"
       @link-click="(paneId, payload) => emit('link-click', paneId, payload)"
+      @artifact-open="(paneId, action) => emit('artifactOpen', paneId, action)"
       @focus="emit('focus', pane.paneId)"
     >
       <template v-if="$slots['header-extra']" #header-extra="slotProps">
@@ -32,6 +33,7 @@
 
 <script setup lang="ts">
 import TaskPane from './TaskPane.vue'
+import type { NavigatorUiAction } from '@foggy/chat'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import type { SkillInfo } from '@/types'
 import type { AgentItem } from './SlashCommandInput.vue'
@@ -57,6 +59,7 @@ const emit = defineEmits<{
   (e: 'reconnect', paneId: string, taskId: string): void
   (e: 'forward', paneId: string, message: { id: string; content: string }): void
   (e: 'link-click', paneId: string, payload: { href: string; text: string }): void
+  (e: 'artifactOpen', paneId: string, action: NavigatorUiAction): void
   (e: 'focus', paneId: string): void
 }>()
 </script>

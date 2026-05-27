@@ -67,6 +67,23 @@ def _runtime_with_journal(data_root) -> SkillRuntime:
     )
 
 
+def _root_runtime_with_journal(data_root) -> SkillRuntime:
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="system.root",
+        name="system.root",
+        output_schema={"type": "object"},
+        allowed_tools=["submit_frame_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+        visibility="builtin",
+    ))
+    return SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(data_root),
+    )
+
+
 class _NoopModel:
     def bind_tools(self, tools):
         return self
@@ -472,6 +489,40 @@ def test_llm_tool_reads_frame_execution_report(tmp_path):
     assert result["digest"]["summary"] == "tool readable"
 
 
+def test_persistent_root_turn_report_is_completed_while_frame_remains_running(tmp_path):
+    runtime = _root_runtime_with_journal(tmp_path)
+    frame_id = runtime.invoke_skill(
+        "task_root_turn_report",
+        "system.root",
+        conversation_id=REPORT_CONTEXT_ID,
+        session_id=REPORT_CONTEXT_ID,
+        frame_kind=FrameKind.ROOT,
+    )
+
+    result = runtime.submit_persistent_turn_result(
+        frame_id=frame_id,
+        summary="Root turn finished.",
+        structured_output={
+            "turn_status": "FINAL_FOR_USER",
+            "message": "Root turn finished.",
+        },
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert result.ok
+    assert frame.status == FrameStatus.RUNNING
+
+    report = FrameExecutionReportGenerator(tmp_path).generate_for_frame(
+        "task_root_turn_report",
+        frame_id,
+        conversation_id=REPORT_CONTEXT_ID,
+    )
+
+    assert report.digest["status"] == "COMPLETED"
+    assert report.digest["frame_status"] == "RUNNING"
+    assert report.digest["ended_at"] == frame.private_working_state["current_turn_report"]["ended_at"]
+
+
 def test_llm_tool_audit_log_uses_session_directory(tmp_path):
     runtime = _runtime_with_journal(tmp_path)
     frame_id = runtime.invoke_skill(
@@ -490,7 +541,7 @@ def test_llm_tool_audit_log_uses_session_directory(tmp_path):
         manifest,
         {
             "id": "call_submit",
-            "name": "submit_skill_result",
+            "name": "submit_frame_result",
             "args": {
                 "summary": "Audit complete.",
                 "structured_output": {"result": "success"},
@@ -514,7 +565,7 @@ def test_llm_tool_audit_requires_standard_context_id(tmp_path):
         "task_tool_audit",
         "frm_audit",
         "test_skill",
-        "submit_skill_result",
+        "submit_frame_result",
         {"summary": "done"},
         phase="request",
         session_id="legacy-session",

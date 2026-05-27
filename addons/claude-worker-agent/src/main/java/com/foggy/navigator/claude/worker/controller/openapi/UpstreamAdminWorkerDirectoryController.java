@@ -16,6 +16,9 @@ import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
 import com.foggy.navigator.claude.worker.service.WorkerHealthChecker;
 import com.foggy.navigator.claude.worker.service.WorkingDirectoryService;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggyframework.core.ex.RX;
@@ -140,10 +143,15 @@ public class UpstreamAdminWorkerDirectoryController {
         }
         ClaudeWorkerEntity worker = resolveWorkerForPrincipal(principal, form.getWorkerId());
         try {
+            rejectExistingDirectoryOwnedByOtherPrincipal(
+                    principal, form.getWorkerId(), worker.getUserId(), form.getPath());
             String directoryId = claudeWorkerFacade.initDirectory(
                     worker.getUserId(), form.getWorkerId(), form.getPath(),
                     form.getFiles(), form.getProjectName());
-            return RX.ok(directoryService.getDirectory(worker.getUserId(), directoryId));
+            WorkingDirectoryEntity entity = directoryRepository.findByDirectoryId(directoryId)
+                    .orElseThrow(() -> RX.throwB("Directory not found after initialization: " + directoryId));
+            stampUpstreamSystemDirectory(principal, worker, entity);
+            return RX.ok(toDirectoryDTO(entity));
         } catch (Exception e) {
             log.error("Upstream-admin directory init failed: {}", e.getMessage(), e);
             return RX.failA("Directory initialization failed: " + e.getMessage());
@@ -156,13 +164,16 @@ public class UpstreamAdminWorkerDirectoryController {
                                                         @RequestParam(required = false) String workerId) {
         UpstreamClientAppAdminPrincipal principal = requireDirectoryManage(request);
         if (StringUtils.hasText(workerId)) {
-            resolveWorkerForPrincipal(principal, workerId);
+            ClaudeWorkerEntity worker = resolveWorkerForPrincipal(principal, workerId);
             return RX.ok(directoryRepository.findByWorkerIdOrderByProjectNameAsc(workerId).stream()
+                    .filter(entity -> worker.getTenantId().equals(entity.getTenantId()))
+                    .filter(entity -> isOwnedByPrincipal(entity, principal))
                     .map(this::toDirectoryDTO)
                     .toList());
         }
         String tenantId = resolveTargetTenantId(principal, request, targetTenantId);
         return RX.ok(directoryRepository.findByTenantId(tenantId).stream()
+                .filter(entity -> isOwnedByPrincipal(entity, principal))
                 .map(this::toDirectoryDTO)
                 .toList());
     }
@@ -238,11 +249,23 @@ public class UpstreamAdminWorkerDirectoryController {
         return worker;
     }
 
+    private void rejectExistingDirectoryOwnedByOtherPrincipal(UpstreamClientAppAdminPrincipal principal,
+                                                              String workerId,
+                                                              String userId,
+                                                              String path) {
+        if (!StringUtils.hasText(path)) {
+            return;
+        }
+        directoryRepository.findByWorkerIdAndPathAndUserId(workerId, path, userId)
+                .ifPresent(existing -> requireDirectoryOwnedByPrincipal(principal, existing));
+    }
+
     private WorkingDirectoryEntity resolveDirectoryForAdmin(HttpServletRequest request, String directoryId) {
         UpstreamClientAppAdminPrincipal principal = requireDirectoryManage(request);
         var entity = directoryRepository.findByDirectoryId(directoryId)
                 .orElseThrow(() -> RX.throwB("Directory not found: " + directoryId));
         adminCredentialService.requireTenant(principal, entity.getTenantId());
+        requireDirectoryOwnedByPrincipal(principal, entity);
         return entity;
     }
 
@@ -265,11 +288,80 @@ public class UpstreamAdminWorkerDirectoryController {
                 .directoryId(entity.getDirectoryId())
                 .workerId(entity.getWorkerId())
                 .projectName(entity.getProjectName())
+                .ownerType(entity.getOwnerType())
+                .ownerId(entity.getOwnerId())
+                .clientAppId(entity.getClientAppId())
+                .upstreamUserId(entity.getUpstreamUserId())
+                .workspaceScope(entity.getWorkspaceScope())
+                .resolverType(entity.getResolverType())
+                .rootRef(entity.getRootRef())
+                .resolverKey(entity.getResolverKey())
+                .readOnly(entity.getReadOnly())
+                .quotaJson(entity.getQuotaJson())
+                .retentionPolicyJson(entity.getRetentionPolicyJson())
+                .concurrencyPolicyJson(entity.getConcurrencyPolicyJson())
+                .enabled(entity.getEnabled())
                 .path(entity.getPath())
                 .directoryType(entity.getDirectoryType())
+                .parentProjectId(entity.getParentProjectId())
+                .worktree(entity.getWorktree())
+                .sourceDirectoryId(entity.getSourceDirectoryId())
                 .gitBranch(entity.getGitBranch())
+                .gitRemoteUrl(entity.getGitRemoteUrl())
+                .gitProvider(entity.getGitProvider())
+                .gitStatus(entity.getGitStatus())
+                .defaultAuthMode(entity.getDefaultAuthMode())
+                .defaultBaseUrl(entity.getDefaultBaseUrl())
+                .defaultModelConfigId(entity.getDefaultModelConfigId())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
+    }
+
+    private void stampUpstreamSystemDirectory(UpstreamClientAppAdminPrincipal principal,
+                                              ClaudeWorkerEntity worker,
+                                              WorkingDirectoryEntity entity) {
+        adminCredentialService.requireTenant(principal, worker.getTenantId());
+        if (StringUtils.hasText(entity.getTenantId())) {
+            adminCredentialService.requireTenant(principal, entity.getTenantId());
+        }
+        if (entity.getOwnerType() != null && !isOwnedByPrincipal(entity, principal)) {
+            throw new SecurityException("directory is not owned by this upstream system");
+        }
+        entity.setTenantId(worker.getTenantId());
+        entity.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
+        entity.setOwnerId(principal.getUpstreamSystemId());
+        entity.setClientAppId(null);
+        entity.setUpstreamUserId(null);
+        entity.setWorkspaceScope(WorkspaceScope.UPSTREAM_SYSTEM_SHARED);
+        if (entity.getResolverType() == null) {
+            entity.setResolverType(WorkingDirectoryResolverType.DELEGATED);
+        }
+        if (!StringUtils.hasText(entity.getRootRef())) {
+            entity.setRootRef(entity.getPath());
+        }
+        if (entity.getReadOnly() == null) {
+            entity.setReadOnly(false);
+        }
+        if (entity.getEnabled() == null) {
+            entity.setEnabled(true);
+        }
+        directoryRepository.save(entity);
+    }
+
+    private void requireDirectoryOwnedByPrincipal(UpstreamClientAppAdminPrincipal principal,
+                                                  WorkingDirectoryEntity entity) {
+        if (!isOwnedByPrincipal(entity, principal)) {
+            throw new SecurityException("directory is not owned by this upstream system");
+        }
+    }
+
+    private boolean isOwnedByPrincipal(WorkingDirectoryEntity entity,
+                                       UpstreamClientAppAdminPrincipal principal) {
+        return entity != null
+                && entity.getOwnerType() == ResourceOwnerType.UPSTREAM_SYSTEM
+                && principal != null
+                && StringUtils.hasText(principal.getUpstreamSystemId())
+                && principal.getUpstreamSystemId().equals(entity.getOwnerId());
     }
 }

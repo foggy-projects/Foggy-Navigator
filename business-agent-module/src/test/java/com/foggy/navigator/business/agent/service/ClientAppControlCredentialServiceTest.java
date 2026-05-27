@@ -3,7 +3,6 @@ package com.foggy.navigator.business.agent.service;
 import com.foggy.navigator.business.agent.model.dto.ClientAppControlPlanePrincipal;
 import com.foggy.navigator.business.agent.model.entity.ClientAppControlCredentialEntity;
 import com.foggy.navigator.business.agent.repository.ClientAppControlCredentialRepository;
-import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
 import org.junit.jupiter.api.AfterEach;
@@ -20,17 +19,13 @@ import static org.mockito.Mockito.*;
 class ClientAppControlCredentialServiceTest {
 
     private ClientAppControlCredentialRepository repository;
-    private UpstreamClientAppAdminCredentialService upstreamAdminCredentialService;
-    private ClientAppRepository clientAppRepository;
     private ClientAppControlCredentialService service;
 
     @BeforeEach
     void setUp() {
         repository = mock(ClientAppControlCredentialRepository.class);
-        upstreamAdminCredentialService = mock(UpstreamClientAppAdminCredentialService.class);
-        clientAppRepository = mock(ClientAppRepository.class);
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        service = new ClientAppControlCredentialService(repository, upstreamAdminCredentialService, clientAppRepository);
+        service = new ClientAppControlCredentialService(repository);
     }
 
     @AfterEach
@@ -54,6 +49,8 @@ class ClientAppControlCredentialServiceTest {
         assertTrue(principal.isAdmin());
         assertEquals("tenant-1", principal.getTenantId());
         assertEquals("admin-1", principal.getActorUserId());
+        assertEquals("PLATFORM", principal.getPrincipalType());
+        assertEquals("admin-1", principal.getPrincipalId());
         verify(repository, never()).findByControlKeyHash(anyString());
     }
 
@@ -75,6 +72,8 @@ class ClientAppControlCredentialServiceTest {
         assertEquals("tenant-1", principal.getTenantId());
         assertEquals("capp-1", principal.getClientAppId());
         assertEquals("client-app-control:cacc-1", principal.getActorUserId());
+        assertEquals("CLIENT_APP", principal.getPrincipalType());
+        assertEquals("capp-1", principal.getPrincipalId());
         verify(repository).save(argThat(entity -> entity.getLastUsedAt() != null));
     }
 
@@ -107,37 +106,31 @@ class ClientAppControlCredentialServiceTest {
     }
 
     @Test
-    void requireAccess_acceptsLegacyAgentBundleScopeForFunctionDelivery() {
+    void requireAccess_rejectsAgentBundleScopeForFunctionDelivery() {
         when(repository.findByControlKeyHash(anyString()))
                 .thenReturn(Optional.of(activeCredential("tenant-1", "capp-1",
                         ClientAppControlCredentialService.SCOPE_AGENT_BUNDLE_SYNC)));
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader(ClientAppControlCredentialService.HEADER_CONTROL_KEY, "cac_test");
 
-        ClientAppControlPlanePrincipal principal = service.requireAccess(
+        assertThrows(SecurityException.class, () -> service.requireAccess(
                 request,
                 ClientAppControlCredentialService.SCOPE_FUNCTION_GRANT_MANAGE,
-                "capp-1");
-
-        assertFalse(principal.isAdmin());
-        assertEquals("capp-1", principal.getClientAppId());
+                "capp-1"));
     }
 
     @Test
-    void requireAccess_acceptsModelGrantScopeForOwnedModelConfigManagement() {
+    void requireAccess_rejectsModelGrantScopeForOwnedModelConfigManagement() {
         when(repository.findByControlKeyHash(anyString()))
                 .thenReturn(Optional.of(activeCredential("tenant-1", "capp-1",
                         ClientAppControlCredentialService.SCOPE_MODEL_CONFIG_GRANT_MANAGE)));
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader(ClientAppControlCredentialService.HEADER_CONTROL_KEY, "cac_test");
 
-        ClientAppControlPlanePrincipal principal = service.requireAccess(
+        assertThrows(SecurityException.class, () -> service.requireAccess(
                 request,
                 ClientAppControlCredentialService.SCOPE_MODEL_CONFIG_MANAGE,
-                "capp-1");
-
-        assertFalse(principal.isAdmin());
-        assertEquals("capp-1", principal.getClientAppId());
+                "capp-1"));
     }
 
     @Test
@@ -155,6 +148,14 @@ class ClientAppControlCredentialServiceTest {
 
         assertFalse(principal.isAdmin());
         assertEquals("capp-1", principal.getClientAppId());
+    }
+
+    @Test
+    void requireAccess_rejectsMissingControlPlaneCredentialWhenNoAdminUser() {
+        assertThrows(SecurityException.class, () -> service.requireAccess(
+                new MockHttpServletRequest(),
+                ClientAppControlCredentialService.SCOPE_AGENT_BUNDLE_SYNC,
+                "capp-1"));
     }
 
     private ClientAppControlCredentialEntity activeCredential(String tenantId, String clientAppId, String scopes) {

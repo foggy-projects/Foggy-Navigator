@@ -6,6 +6,7 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.util.StringUtils;
 import org.springframework.web.util.UriBuilder;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -47,12 +48,14 @@ public class LanggraphWorkerClient {
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMillis)
                 .responseTimeout(effectiveResponseTimeout);
-        this.webClient = WebClient.builder()
+        WebClient.Builder builder = WebClient.builder()
                 .baseUrl(baseUrl)
-                .defaultHeader("Authorization", "Bearer " + (authToken != null ? authToken : ""))
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
-                .codecs(c -> c.defaultCodecs().maxInMemorySize(16 * 1024 * 1024))
-                .build();
+                .codecs(c -> c.defaultCodecs().maxInMemorySize(16 * 1024 * 1024));
+        if (StringUtils.hasText(authToken)) {
+            builder.defaultHeader("Authorization", "Bearer " + authToken.trim());
+        }
+        this.webClient = builder.build();
     }
 
     /**

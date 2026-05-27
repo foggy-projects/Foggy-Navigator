@@ -5,6 +5,7 @@ import com.foggy.navigator.business.agent.model.dto.IssuedCredentialDTO;
 import com.foggy.navigator.business.agent.model.dto.UpstreamClientAppAdminPrincipal;
 import com.foggy.navigator.business.agent.model.form.EnsureUpstreamClientAppForm;
 import com.foggy.navigator.business.agent.model.form.IssueControlCredentialForm;
+import com.foggy.navigator.business.agent.model.form.IssueRuntimeCredentialForm;
 import com.foggy.navigator.business.agent.service.UpstreamBootstrapRequestService;
 import com.foggy.navigator.business.agent.service.UpstreamClientAppAdminCredentialService;
 import com.foggy.navigator.business.agent.service.UpstreamClientAppManagementService;
@@ -49,5 +50,15 @@ public class UpstreamClientAppAdminController {
                 request,
                 UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE);
         return RX.ok(clientAppManagementService.issueControlCredential(principal, clientAppId, form));
+    }
+
+    @PostMapping("/{clientAppId}/runtime-credentials")
+    public RX<IssuedCredentialDTO> issueRuntimeCredential(HttpServletRequest request,
+                                                          @PathVariable String clientAppId,
+                                                          @RequestBody IssueRuntimeCredentialForm form) {
+        UpstreamClientAppAdminPrincipal principal = adminCredentialService.requireAccess(
+                request,
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE);
+        return RX.ok(clientAppManagementService.issueRuntimeCredential(principal, clientAppId, form));
     }
 }

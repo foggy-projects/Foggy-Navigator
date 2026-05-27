@@ -24,7 +24,6 @@ import java.util.Set;
 public class UpstreamClientAppAdminCredentialService {
 
     public static final String HEADER_ADMIN_KEY = "X-Navi-Admin-Key";
-    public static final String HEADER_ADMIN_API_KEY = "X-Navi-Admin-Api-Key";
     public static final String SCOPE_CLIENT_APP_ADMIN_ALL = "CLIENT_APP_ADMIN_ALL";
 
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
@@ -36,15 +35,12 @@ public class UpstreamClientAppAdminCredentialService {
     @Transactional
     public UpstreamClientAppAdminPrincipal requireAccess(HttpServletRequest request, String requiredScope) {
         String primaryHeaderValue = request == null ? null : request.getHeader(HEADER_ADMIN_KEY);
-        String fallbackHeaderValue = request == null ? null : request.getHeader(HEADER_ADMIN_API_KEY);
         boolean primaryHeaderPresent = StringUtils.hasText(primaryHeaderValue);
-        boolean fallbackHeaderPresent = StringUtils.hasText(fallbackHeaderValue);
-        String adminApiKey = primaryHeaderPresent ? primaryHeaderValue : fallbackHeaderValue;
-        String headerName = primaryHeaderPresent ? HEADER_ADMIN_KEY : fallbackHeaderPresent ? HEADER_ADMIN_API_KEY : null;
+        String adminApiKey = primaryHeaderValue;
         if (!StringUtils.hasText(adminApiKey)) {
-            log.warn("Upstream admin credential missing: method={}, path={}, remoteAddr={}, requiredScope={}, {}Present={}, {}Present={}",
+            log.warn("Upstream admin credential missing: method={}, path={}, remoteAddr={}, requiredScope={}, {}Present={}",
                     requestMethod(request), requestUri(request), remoteAddr(request), requiredScope,
-                    HEADER_ADMIN_KEY, primaryHeaderPresent, HEADER_ADMIN_API_KEY, fallbackHeaderPresent);
+                    HEADER_ADMIN_KEY, primaryHeaderPresent);
             throw new SecurityException("upstream admin credential is required");
         }
 
@@ -54,7 +50,7 @@ public class UpstreamClientAppAdminCredentialService {
                 .orElseThrow(() -> {
                     log.warn("Upstream admin credential not found: method={}, path={}, remoteAddr={}, requiredScope={}, header={}, keyHashPrefix={}",
                             requestMethod(request), requestUri(request), remoteAddr(request), requiredScope,
-                            headerName, hashPrefix(credentialKeyHash));
+                            HEADER_ADMIN_KEY, hashPrefix(credentialKeyHash));
                     return new SecurityException("invalid upstream admin credential");
                 });
         String invalidMessage = invalidCredentialMessage(credential);
@@ -79,6 +75,7 @@ public class UpstreamClientAppAdminCredentialService {
 
         return UpstreamClientAppAdminPrincipal.builder()
                 .credentialId(credential.getCredentialId())
+                .principalId(credential.getUpstreamSystemId())
                 .upstreamSystemId(credential.getUpstreamSystemId())
                 .authorizedClientAppNamespace(credential.getAuthorizedClientAppNamespace())
                 .authorizedTenantIds(parseStringSet(credential.getAuthorizedTenantIdsJson()))
@@ -138,7 +135,15 @@ public class UpstreamClientAppAdminCredentialService {
     }
 
     private boolean hasScope(Set<String> scopes, String requiredScope) {
-        return scopes.contains(SCOPE_CLIENT_APP_ADMIN_ALL) || scopes.contains(requiredScope);
+        if (scopes.contains(SCOPE_CLIENT_APP_ADMIN_ALL) || scopes.contains(requiredScope)) {
+            return true;
+        }
+        // Compatibility bridge for pre-1.0.6 upstream admin credentials. Existing admin
+        // keys with ClientApp manage authority may issue a runtime key for the ClientApp
+        // they are already allowed to manage; the controller still validates tenant and
+        // upstream-system ownership before creating the credential.
+        return UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE.equals(requiredScope)
+                && scopes.contains(UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE);
     }
 
     private Set<String> parseStringSet(String json) {

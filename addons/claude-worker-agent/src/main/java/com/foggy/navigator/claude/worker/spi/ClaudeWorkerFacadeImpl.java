@@ -505,13 +505,44 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
     @Override
     public void validateWorkerOwnership(String userId, String workerId) {
-        workerService.getWorker(userId, workerId); // throws if not found or not owned
+        validateWorkerAccess(userId, null, workerId);
+    }
+
+    @Override
+    public void validateWorkerAccess(String userId, String tenantId, String workerId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (worker.getUserId().equals(userId)) {
+            return;
+        }
+        if (tenantId != null && !tenantId.isBlank() && tenantId.equals(worker.getTenantId())) {
+            log.debug("validateWorkerAccess: tenant access granted for userId={}, tenantId={}, workerId={}",
+                    userId, tenantId, workerId);
+            return;
+        }
+        if (isSameTenant(userId, worker.getTenantId())) {
+            log.debug("validateWorkerAccess: user tenant access granted for userId={}, workerId={}",
+                    userId, workerId);
+            return;
+        }
+        throw new IllegalArgumentException("Worker not found: " + workerId);
     }
 
     @Override
     public CodexConfig getCodexConfig(String workerId) {
         ClaudeWorkerEntity entity = workerService.getWorkerEntity(workerId);
-        return workerService.getDecryptedCodexConfig(entity);
+        CodexConfig codexConfig = workerService.getDecryptedCodexConfig(entity);
+        if (codexConfig != null && codexConfig.getBaseUrl() != null && !codexConfig.getBaseUrl().isBlank()) {
+            return codexConfig;
+        }
+        if (entity.getBaseUrl() != null && !entity.getBaseUrl().isBlank()) {
+            log.debug("getCodexConfig: using legacy worker baseUrl for workerId={}", workerId);
+            return CodexConfig.builder()
+                    .baseUrl(entity.getBaseUrl())
+                    .authToken(workerService.getDecryptedToken(entity))
+                    .build();
+        }
+        log.debug("getCodexConfig: no Codex endpoint configured for workerId={}", workerId);
+        return null;
     }
 
     private Map<String, Object> workerToMap(WorkerDTO dto) {

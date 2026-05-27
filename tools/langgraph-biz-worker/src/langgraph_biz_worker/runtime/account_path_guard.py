@@ -29,12 +29,13 @@ ERR_TRAVERSAL = "path_traversal_rejected"
 ERR_FORBIDDEN = "forbidden_target"
 ERR_FILE_TYPE = "unsupported_file_type"
 ERR_SYMLINK = "symlink_rejected"
+ERR_READ_ONLY = "workspace_read_only"
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-# File extensions allowed inside skills/<name>/references/** and assets/**
+# File extensions allowed inside agent/skills/<name>/references/** and assets/**
 _ALLOWED_EXTENSIONS: frozenset[str] = frozenset({
     ".md", ".txt", ".json", ".yaml", ".yml", ".fsscript",
 })
@@ -112,6 +113,8 @@ class AccountPathGuard:
     def resolve_write(self, relative_path: str) -> Path:
         """Resolve a relative path for write operations (write_file, str_replace, edit_file, patch_file)."""
         if self._execution_policy and self._execution_policy.configured:
+            if self._execution_policy.read_only:
+                raise PathGuardError(ERR_READ_ONLY, "workspace is read-only")
             try:
                 resolved = self._execution_policy.resolve_path(relative_path)
                 return resolved
@@ -132,10 +135,10 @@ class AccountPathGuard:
         """Resolve a relative path for list_files — allows directory targets.
 
         Allowed targets:
-        - ``skills/``
-        - ``skills/<skill-name>/``
-        - ``skills/<skill-name>/references/``
-        - ``skills/<skill-name>/assets/``
+        - ``agent/skills/``
+        - ``agent/skills/<skill-name>/``
+        - ``agent/skills/<skill-name>/references/``
+        - ``agent/skills/<skill-name>/assets/``
         """
         if self._execution_policy and self._execution_policy.configured:
             try:
@@ -184,32 +187,32 @@ class AccountPathGuard:
     def _check_allowed_file_path(self, segments: list[str]) -> None:
         """Check that segments match the allowed file paths for skills."""
         # Expected patterns:
-        #   skills/<name>/SKILL.md
-        #   skills/<name>/references/<...path...>
-        #   skills/<name>/assets/<...path...>
-        if len(segments) < 3 or segments[0] != "skills":
+        #   agent/skills/<name>/SKILL.md
+        #   agent/skills/<name>/references/<...path...>
+        #   agent/skills/<name>/assets/<...path...>
+        if len(segments) < 4 or segments[0] != "agent" or segments[1] != "skills":
             raise PathGuardError(
                 ERR_FORBIDDEN,
-                f"path must start with 'skills/<skill-name>/': got '{'/'.join(segments)}'",
+                f"path must start with 'agent/skills/<skill-name>/': got '{'/'.join(segments)}'",
             )
 
-        skill_name = segments[1]
+        skill_name = segments[2]
         self._validate_skill_name(skill_name)
 
-        sub = segments[2]
+        sub = segments[3]
 
-        if sub == "SKILL.md" and len(segments) == 3:
-            # skills/<name>/SKILL.md — always allowed
+        if sub == "SKILL.md" and len(segments) == 4:
+            # agent/skills/<name>/SKILL.md — always allowed
             return
 
         if sub in ("references", "assets"):
-            if len(segments) < 4:
+            if len(segments) < 5:
                 raise PathGuardError(
                     ERR_FORBIDDEN,
                     f"'{sub}/' requires a file target beneath it",
                 )
             # Validate all remaining sub-segments are safe
-            for s in segments[3:]:
+            for s in segments[4:]:
                 if not _SAFE_SEGMENT_RE.match(s):
                     raise PathGuardError(ERR_INVALID_PATH, f"unsafe path segment: '{s}'")
             # Check file extension on the last segment
@@ -230,28 +233,28 @@ class AccountPathGuard:
 
     def _check_allowed_list_path(self, segments: list[str]) -> None:
         """Check that segments are valid list-directory targets."""
-        if segments[0] != "skills":
-            raise PathGuardError(ERR_FORBIDDEN, "list_files only allowed under 'skills/'")
-
-        if len(segments) == 1:
-            # skills/
-            return
-
-        skill_name = segments[1]
-        self._validate_skill_name(skill_name)
+        if len(segments) < 2 or segments[0] != "agent" or segments[1] != "skills":
+            raise PathGuardError(ERR_FORBIDDEN, "list_files only allowed under 'agent/skills/'")
 
         if len(segments) == 2:
-            # skills/<name>/
+            # agent/skills/
             return
 
-        if len(segments) == 3 and segments[2] in ("references", "assets"):
-            # skills/<name>/references/ or assets/
+        skill_name = segments[2]
+        self._validate_skill_name(skill_name)
+
+        if len(segments) == 3:
+            # agent/skills/<name>/
+            return
+
+        if len(segments) == 4 and segments[3] in ("references", "assets"):
+            # agent/skills/<name>/references/ or assets/
             return
 
         raise PathGuardError(
             ERR_FORBIDDEN,
-            "list_files only allowed at: skills/, skills/<name>/, "
-            "skills/<name>/references/, skills/<name>/assets/",
+            "list_files only allowed at: agent/skills/, agent/skills/<name>/, "
+            "agent/skills/<name>/references/, agent/skills/<name>/assets/",
         )
 
     def _validate_skill_name(self, name: str) -> None:

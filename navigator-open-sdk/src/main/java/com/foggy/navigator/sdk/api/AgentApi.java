@@ -102,8 +102,17 @@ public class AgentApi {
                                         Map<String, Object> clientContext,
                                         String modelConfigId,
                                         List<Map<String, Object>> attachments) {
+        return askWithAttachments(agentId, question, contextId, maxTurns,
+                clientContext, modelConfigId, null, attachments);
+    }
+
+    public AgentTask askWithAttachments(String agentId, String question, String contextId, Integer maxTurns,
+                                        Map<String, Object> clientContext,
+                                        String modelConfigId,
+                                        String modelVariant,
+                                        List<Map<String, Object>> attachments) {
         Map<String, Object> body = buildAskBody(question, contextId, maxTurns,
-                null, null, clientContext, modelConfigId, attachments);
+                null, null, clientContext, modelConfigId, modelVariant, attachments);
         return http.post("/api/v1/open/agents/" + agentId + "/ask",
                 body, new TypeReference<>() {});
     }
@@ -158,8 +167,24 @@ public class AgentApi {
             String clientAppKey,
             String clientAppAccessToken,
             String upstreamUserId) {
+        return askWithClientAppAccessToken(agentId, question, contextId, maxTurns,
+                clientContext, modelConfigId, null, attachments, clientAppKey, clientAppAccessToken, upstreamUserId);
+    }
+
+    public AgentTask askWithClientAppAccessToken(
+            String agentId,
+            String question,
+            String contextId,
+            Integer maxTurns,
+            Map<String, Object> clientContext,
+            String modelConfigId,
+            String modelVariant,
+            List<Map<String, Object>> attachments,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
         Map<String, Object> body = buildAskBody(question, contextId, maxTurns,
-                null, null, clientContext, modelConfigId, attachments);
+                null, null, clientContext, modelConfigId, modelVariant, attachments);
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("X-Client-App-Key", clientAppKey);
         headers.put("X-Client-App-Access-Token", clientAppAccessToken);
@@ -174,10 +199,50 @@ public class AgentApi {
             String modelConfigId,
             String clientAppKey,
             String clientAppAccessToken) {
+        return verifyReadinessWithClientAppAccessToken(
+                agentId,
+                upstreamUserId,
+                modelConfigId,
+                null,
+                clientAppKey,
+                clientAppAccessToken);
+    }
+
+    public AgentReadiness verifyReadinessWithClientAppAccessToken(
+            String agentId,
+            String upstreamUserId,
+            String modelConfigId,
+            String directoryId,
+            String clientAppKey,
+            String clientAppAccessToken) {
+        return verifyReadinessWithClientAppAccessToken(
+                agentId,
+                upstreamUserId,
+                modelConfigId,
+                null,
+                directoryId,
+                clientAppKey,
+                clientAppAccessToken);
+    }
+
+    public AgentReadiness verifyReadinessWithClientAppAccessToken(
+            String agentId,
+            String upstreamUserId,
+            String modelConfigId,
+            String modelVariant,
+            String directoryId,
+            String clientAppKey,
+            String clientAppAccessToken) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("upstreamUserId", upstreamUserId);
         if (modelConfigId != null && !modelConfigId.isBlank()) {
             body.put("modelConfigId", modelConfigId);
+        }
+        if (modelVariant != null && !modelVariant.isBlank()) {
+            body.put("modelVariant", modelVariant);
+        }
+        if (directoryId != null && !directoryId.isBlank()) {
+            body.put("directoryId", directoryId);
         }
         body.put("context", Map.of("skillId", agentId));
         return http.post("/api/v1/open/agents/" + agentId + "/preflight",
@@ -325,13 +390,23 @@ public class AgentApi {
                                              Map<String, Object> clientContext,
                                              String modelConfigId) {
         return buildAskBody(question, contextId, maxTurns, systemPrompt, firstMsg,
-                clientContext, modelConfigId, null);
+                clientContext, modelConfigId, null, null);
     }
 
     private Map<String, Object> buildAskBody(String question, String contextId, Integer maxTurns,
                                              String systemPrompt, String firstMsg,
                                              Map<String, Object> clientContext,
                                              String modelConfigId,
+                                             List<Map<String, Object>> attachments) {
+        return buildAskBody(question, contextId, maxTurns, systemPrompt, firstMsg,
+                clientContext, modelConfigId, null, attachments);
+    }
+
+    private Map<String, Object> buildAskBody(String question, String contextId, Integer maxTurns,
+                                             String systemPrompt, String firstMsg,
+                                             Map<String, Object> clientContext,
+                                             String modelConfigId,
+                                             String modelVariant,
                                              List<Map<String, Object>> attachments) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("message", question);    // 合同字段
@@ -341,9 +416,18 @@ public class AgentApi {
         if (systemPrompt != null) body.put("systemPrompt", systemPrompt);
         if (firstMsg != null) body.put("firstMsg", firstMsg);
         if (clientContext != null && !clientContext.isEmpty()) body.put("clientContext", clientContext);
+        Map<String, Object> metadata = new LinkedHashMap<>();
         if (modelConfigId != null && !modelConfigId.isBlank()) {
             body.put("modelConfigId", modelConfigId);
-            body.put("metadata", Map.of("modelConfigId", modelConfigId));
+            metadata.put("modelConfigId", modelConfigId);
+        }
+        if (modelVariant != null && !modelVariant.isBlank()) {
+            body.put("modelVariant", modelVariant);
+            metadata.put("modelVariant", modelVariant);
+            metadata.put("model", modelVariant);
+        }
+        if (!metadata.isEmpty()) {
+            body.put("metadata", metadata);
         }
         if (attachments != null && !attachments.isEmpty()) {
             body.put("attachments", attachments);

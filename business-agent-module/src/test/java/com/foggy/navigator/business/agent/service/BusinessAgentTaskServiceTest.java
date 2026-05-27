@@ -2,17 +2,23 @@ package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.CreatedBusinessAgentTaskDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionDTO;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerIdentityEntity;
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessAgentTaskEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
+import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.entity.SkillEntity;
 import com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm;
+import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentTaskRepository;
 import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,7 +51,7 @@ class BusinessAgentTaskServiceTest {
     private BizWorkerPoolService bizWorkerPoolService;
 
     @Mock
-    private ClientAppModelConfigGrantService grantService;
+    private A2AgentResourceResolver resourceResolver;
     @Mock
     private ClientAppUserGrantService userGrantService;
     @Mock
@@ -54,6 +60,8 @@ class BusinessAgentTaskServiceTest {
     private BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
     @Mock
     private BusinessAgentSessionService businessAgentSessionService;
+    @Mock
+    private BizWorkerIdentityRepository workerIdentityRepository;
     @Mock
     private BusinessAgentWorkerTaskLauncher workerTaskLauncher;
 
@@ -67,8 +75,7 @@ class BusinessAgentTaskServiceTest {
         form = new CreateBusinessAgentTaskForm();
         form.setClientAppId("app_01");
         form.setSessionId("session_01");
-        form.setWorkerPoolId("pool_01");
-        form.setSkillId("skill_01");
+        form.setAgentId("agent_01");
         form.setUpstreamUserId("user_01");
         lenient().when(tokenRepository.save(any(BusinessTaskScopedTokenEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
@@ -77,14 +84,41 @@ class BusinessAgentTaskServiceTest {
                     dto.setContextId("bctx_20260520_ab_ctx_01");
                     return dto;
                 });
-        lenient().when(grantService.tryResolveEffectiveModelConfigId(
-                anyString(), anyString(), isNull(), eq(LlmModelCategory.VISION)))
+        lenient().when(resourceResolver.resolveOptionalModelForAgent(
+                anyString(), anyString(), any(), eq(LlmModelCategory.VISION)))
                 .thenReturn(Optional.empty());
+        lenient().when(resourceResolver.resolveOptionalWorkspaceForAgent(
+                anyString(), anyString(), anyString(), any(), any()))
+                .thenReturn(Optional.empty());
+        lenient().when(resourceResolver.resolveRequiredAgent(
+                        "tenant_01", "app_01", "user_01", "agent_01"))
+                .thenReturn(new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent_01",
+                        com.foggy.navigator.common.enums.ResourceOwnerType.CLIENT_APP,
+                        "app_01",
+                        "app_01",
+                        "skill_01",
+                        "pool_01",
+                        com.foggy.navigator.common.enums.ResourceOwnerType.PLATFORM,
+                        "tenant_01",
+                        "WORKER_POOL:PLATFORM",
+                        "LANGGRAPH_BIZ",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "AGENT:CLIENT_APP"
+                ));
     }
 
     @Test
     void createTask_success() {
-        when(grantService.resolveEffectiveModelConfigId("tenant_01", "app_01", null)).thenReturn("model_01");
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
         when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> {
@@ -101,6 +135,7 @@ class BusinessAgentTaskServiceTest {
         assertEquals("app_01", result.getClientAppId());
         assertEquals("user_01", result.getUpstreamUserId());
         assertEquals("actor_01", result.getNavigatorEffectiveUserId());
+        assertEquals("agent_01", result.getAgentId());
         assertEquals("skill_01", result.getSkillId());
         assertEquals("pool_01", result.getWorkerPoolId());
         assertEquals("model_01", result.getModelConfigId());
@@ -125,8 +160,7 @@ class BusinessAgentTaskServiceTest {
 
     @Test
     void createTask_withWorkerTaskLauncher_bindsWorkerTaskAndRuntimeTokenAlias() {
-        form.setWorkdir("D:/workspace/app");
-        form.setAllowedDirs(List.of("D:/workspace"));
+        form.setDirectoryId("dir_01");
         form.setAllowedTools(List.of("read_file", "invoke_business_function"));
 
         BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
@@ -134,11 +168,12 @@ class BusinessAgentTaskServiceTest {
                 tokenRepository,
                 clientAppService,
                 bizWorkerPoolService,
-                grantService,
+                resourceResolver,
                 userGrantService,
                 skillRegistryService,
                 tokenRuntimeStore,
                 businessAgentSessionService,
+                workerIdentityRepository,
                 List.of(workerTaskLauncher));
 
         BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
@@ -146,11 +181,26 @@ class BusinessAgentTaskServiceTest {
         pool.setWorkerBackend("LANGGRAPH_BIZ");
 
         when(bizWorkerPoolService.requireAvailablePool("tenant_01", "pool_01")).thenReturn(pool);
-        when(grantService.resolveEffectiveModelConfigId("tenant_01", "app_01", null)).thenReturn("model_01");
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        when(resourceResolver.resolveOptionalWorkspaceForAgent(
+                eq("tenant_01"), eq("app_01"), eq("user_01"), any(), eq("dir_01")))
+                .thenReturn(Optional.of(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_01",
+                        "worker_01",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.DELEGATED,
+                        "D:/workspace/app",
+                        List.of("D:/workspace"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"
+                )));
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
-        when(skillRegistryService.buildMaterializedPublicSkillMarkdown("tenant_01", "skill_01", "app_01"))
-                .thenReturn("materialized skill body");
         when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
         when(workerTaskLauncher.launch(any(BusinessAgentWorkerTaskLaunchRequest.class))).thenReturn(
                 BusinessAgentWorkerTaskLaunchResult.builder()
@@ -178,8 +228,14 @@ class BusinessAgentTaskServiceTest {
         verify(workerTaskLauncher).launch(requestCaptor.capture());
         assertEquals(result.getTaskScopedToken(), requestCaptor.getValue().getTaskScopedToken());
         assertNull(requestCaptor.getValue().getContextId());
-        assertEquals("materialized skill body", requestCaptor.getValue().getMarkdownBody());
+        assertEquals("agent_01", requestCaptor.getValue().getAgentId());
         assertEquals("skill_01", requestCaptor.getValue().getSkillName());
+        assertEquals("pool_01", requestCaptor.getValue().getWorkerPoolId());
+        assertNull(requestCaptor.getValue().getPhysicalWorkerId());
+        assertEquals("dir_01", requestCaptor.getValue().getDirectoryId());
+        assertEquals("USER_PRIVATE", requestCaptor.getValue().getWorkspaceScope());
+        assertEquals("DELEGATED", requestCaptor.getValue().getWorkspaceResolverType());
+        assertEquals(false, requestCaptor.getValue().getWorkspaceReadOnly());
         assertEquals("D:/workspace/app", requestCaptor.getValue().getWorkdir());
         assertEquals(List.of("D:/workspace"), requestCaptor.getValue().getAllowedDirs());
         assertEquals(List.of("read_file", "invoke_business_function"), requestCaptor.getValue().getAllowedTools());
@@ -192,6 +248,221 @@ class BusinessAgentTaskServiceTest {
 
         verify(tokenRuntimeStore).registerToken(eq("tenant_01"), eq("session_01"), eq(result.getTaskId()), eq(result.getTaskScopedToken()), any());
         verify(tokenRuntimeStore).registerToken(eq("tenant_01"), eq("session_01"), eq("lgt_123"), eq(result.getTaskScopedToken()), any());
+    }
+
+    @Test
+    void createTask_withDirectPhysicalWorkerAgent_launchesWithoutWorkerPoolLookup() {
+        form.setDirectoryId("dir_01");
+
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                tokenRuntimeStore,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                List.of(workerTaskLauncher));
+
+        when(resourceResolver.resolveRequiredAgent(
+                        "tenant_01", "app_01", "user_01", "agent_01"))
+                .thenReturn(new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent_01",
+                        com.foggy.navigator.common.enums.ResourceOwnerType.CLIENT_APP,
+                        "app_01",
+                        "app_01",
+                        "skill_01",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "worker_01",
+                        com.foggy.navigator.common.enums.ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "foggy-world-sim",
+                        "PHYSICAL_WORKER:UPSTREAM_SYSTEM",
+                        "model_01",
+                        null,
+                        "dir_01",
+                        "AGENT:CLIENT_APP"
+                ));
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        when(resourceResolver.resolveOptionalWorkspaceForAgent(
+                eq("tenant_01"), eq("app_01"), eq("user_01"), any(), eq("dir_01")))
+                .thenReturn(Optional.of(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_01",
+                        "directory_worker_01",
+                        WorkspaceScope.CLIENT_APP_SHARED,
+                        WorkingDirectoryResolverType.DELEGATED,
+                        "D:/workspace/app",
+                        List.of("D:/workspace"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:CLIENT_APP_SHARED"
+                )));
+        doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
+        doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.launch(any(BusinessAgentWorkerTaskLaunchRequest.class))).thenReturn(
+                BusinessAgentWorkerTaskLaunchResult.builder()
+                        .workerTaskId("lgt_456")
+                        .workerSessionId("worker_session_456")
+                        .contextId("bctx_20260524_ab_ctx_02")
+                        .workerId("worker_01")
+                        .providerType("langgraph-biz-worker")
+                        .build());
+        when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> {
+            BusinessAgentTaskEntity entity = invocation.getArgument(0);
+            entity.setId(1L);
+            return entity;
+        });
+
+        CreatedBusinessAgentTaskDTO result = serviceWithLauncher.createTask("tenant_01", "actor_01", form);
+
+        assertEquals("lgt_456", result.getWorkerTaskId());
+        assertEquals("worker_01", result.getWorkerPoolId());
+        assertEquals("worker_01", result.getWorkerId());
+        verify(bizWorkerPoolService, never()).requireAvailablePool(anyString(), anyString());
+
+        ArgumentCaptor<BusinessAgentWorkerTaskLaunchRequest> requestCaptor =
+                ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
+        verify(workerTaskLauncher).launch(requestCaptor.capture());
+        assertEquals("worker_01", requestCaptor.getValue().getWorkerPoolId());
+        assertEquals("worker_01", requestCaptor.getValue().getPhysicalWorkerId());
+        assertEquals("LANGGRAPH_BIZ", requestCaptor.getValue().getWorkerBackend());
+        assertEquals("dir_01", requestCaptor.getValue().getDirectoryId());
+        assertEquals("CLIENT_APP_SHARED", requestCaptor.getValue().getWorkspaceScope());
+
+        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
+                ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
+        verify(tokenRepository, atLeastOnce()).save(tokenCaptor.capture());
+        assertEquals("worker_01", tokenCaptor.getAllValues().get(tokenCaptor.getAllValues().size() - 1).getWorkerPoolId());
+    }
+
+    @Test
+    void createTask_withStaleBizPhysicalWorker_prefersWorkerHostBizIdentityForLaunch() {
+        form.setDirectoryId("dir_01");
+
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                tokenRuntimeStore,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                List.of(workerTaskLauncher));
+
+        ClientAppEntity clientApp = new ClientAppEntity();
+        clientApp.setClientAppId("app_01");
+        clientApp.setTenantId("tenant_01");
+        clientApp.setUpstreamSystemId("school-sim");
+        when(clientAppService.requireActiveClientApp("tenant_01", "app_01")).thenReturn(clientApp);
+        when(resourceResolver.resolveRequiredAgent(
+                        "tenant_01", "app_01", "user_01", "agent_01"))
+                .thenReturn(new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent_01",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app_01",
+                        "app_01",
+                        "skill_01",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "directory_worker_01",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app_01",
+                        "AGENT_DEFAULT_DIRECTORY:CLIENT_APP_SHARED",
+                        "model_01",
+                        null,
+                        "dir_01",
+                        "AGENT:CLIENT_APP"
+                ));
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        when(resourceResolver.resolveOptionalWorkspaceForAgent(
+                eq("tenant_01"), eq("app_01"), eq("user_01"), any(), eq("dir_01")))
+                .thenReturn(Optional.of(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_01",
+                        "directory_worker_01",
+                        WorkspaceScope.CLIENT_APP_SHARED,
+                        WorkingDirectoryResolverType.DELEGATED,
+                        "D:/workspace/app",
+                        List.of("D:/workspace"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:CLIENT_APP_SHARED"
+                )));
+        BizWorkerIdentityEntity identity = new BizWorkerIdentityEntity();
+        identity.setWorkerId("school-sim-wsl-biz");
+        identity.setWorkerBackend("LANGGRAPH_BIZ");
+        identity.setStatus(BizWorkerPoolService.STATUS_ENABLED);
+        identity.setHealthStatus(BizWorkerPoolService.HEALTHY);
+        when(workerIdentityRepository.findByOwnerTypeAndOwnerIdAndWorkerBackendAndStatusAndHealthStatusOrderByUpdatedAtDesc(
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                "school-sim",
+                "LANGGRAPH_BIZ",
+                BizWorkerPoolService.STATUS_ENABLED,
+                BizWorkerPoolService.HEALTHY))
+                .thenReturn(List.of(identity));
+        doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
+        doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.launch(any(BusinessAgentWorkerTaskLaunchRequest.class))).thenReturn(
+                BusinessAgentWorkerTaskLaunchResult.builder()
+                        .workerTaskId("lgt_789")
+                        .workerSessionId("worker_session_789")
+                        .contextId("bctx_20260524_ab_ctx_03")
+                        .workerId("school-sim-wsl-biz")
+                        .providerType("langgraph-biz-worker")
+                        .build());
+        when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> {
+            BusinessAgentTaskEntity entity = invocation.getArgument(0);
+            entity.setId(1L);
+            return entity;
+        });
+
+        CreatedBusinessAgentTaskDTO result = serviceWithLauncher.createTask("tenant_01", "actor_01", form);
+
+        assertEquals("lgt_789", result.getWorkerTaskId());
+        assertEquals("directory_worker_01", result.getWorkerPoolId());
+        assertEquals("school-sim-wsl-biz", result.getWorkerId());
+        ArgumentCaptor<BusinessAgentWorkerTaskLaunchRequest> requestCaptor =
+                ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
+        verify(workerTaskLauncher).launch(requestCaptor.capture());
+        assertEquals("directory_worker_01", requestCaptor.getValue().getWorkerPoolId());
+        assertEquals("school-sim-wsl-biz", requestCaptor.getValue().getPhysicalWorkerId());
+        assertEquals("dir_01", requestCaptor.getValue().getDirectoryId());
+        assertEquals("CLIENT_APP_SHARED", requestCaptor.getValue().getWorkspaceScope());
+        verify(bizWorkerPoolService, never()).requireAvailablePool(anyString(), anyString());
+    }
+
+    @Test
+    void createTask_rejects_legacy_runtime_workspace_selectors() {
+        form.setWorkdir("D:/workspace/app");
+        doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> taskService.createTask("tenant_01", "actor_01", form));
+
+        assertTrue(error.getMessage().contains("workdir/allowedDirs"));
+        verify(resourceResolver, never()).resolveRequiredModelForAgent(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -230,9 +501,13 @@ class BusinessAgentTaskServiceTest {
         existingTask.setTenantId("tenant_01");
         existingTask.setClientAppId("app_01");
         existingTask.setSessionId("session_01");
+        existingTask.setAgentId("agent_01");
         existingTask.setModelConfigId("model_01");
 
         when(taskRepository.findByTaskId("bt_old123")).thenReturn(Optional.of(existingTask));
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), eq("model_01"), nullable(String.class), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
         when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -241,7 +516,22 @@ class BusinessAgentTaskServiceTest {
 
         assertNotNull(result);
         assertEquals("model_01", result.getModelConfigId());
-        verify(grantService, never()).resolveEffectiveModelConfigId(any(), any(), any());
+        verify(resourceResolver).resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), eq("model_01"), nullable(String.class), eq(LlmModelCategory.GENERAL));
+    }
+
+    private A2AgentResourceResolver.ResolvedModelResource modelResource(
+            String modelConfigId,
+            String requestedModelVariant) {
+        return new A2AgentResourceResolver.ResolvedModelResource(
+                modelConfigId,
+                modelConfigId,
+                requestedModelVariant,
+                LlmModelCategory.GENERAL,
+                requestedModelVariant != null ? requestedModelVariant : "qwen-plus",
+                requestedModelVariant != null ? "REQUESTED_MODEL_VARIANT" : "MODEL_CONFIG_DEFAULT",
+                "LANGGRAPH_BIZ",
+                "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT");
     }
 
     @Test
@@ -254,6 +544,7 @@ class BusinessAgentTaskServiceTest {
         existingTask.setTenantId("tenant_01");
         existingTask.setClientAppId("app_01");
         existingTask.setSessionId("session_01");
+        existingTask.setAgentId("agent_01");
         existingTask.setModelConfigId("model_01"); // different model
 
         when(taskRepository.findByTaskId("bt_old123")).thenReturn(Optional.of(existingTask));
@@ -317,18 +608,18 @@ class BusinessAgentTaskServiceTest {
     }
 
     @Test
-    void createTask_rejects_blank_skillId() {
-        form.setSkillId(null);
+    void createTask_rejects_blank_agentId() {
+        form.setAgentId(null);
         assertThrows(IllegalArgumentException.class, () -> taskService.createTask("tenant_01", "actor_01", form));
     }
 
     @Test
-    void createTask_rejectsConflictingSkillAliasDuringCompatibilityPhase() {
+    void createTask_rejectsConflictingAgentBoundSkillAlias() {
         form.setSkillName("other_skill");
         IllegalArgumentException error = assertThrows(
                 IllegalArgumentException.class,
                 () -> taskService.createTask("tenant_01", "actor_01", form));
-        assertTrue(error.getMessage().contains("skillName must match skillId"));
+        assertTrue(error.getMessage().contains("agent-bound skillId"));
     }
 
     @Test

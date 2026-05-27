@@ -50,6 +50,44 @@ def test_read_frame_execution_report_schema_is_not_default_business_flow():
     assert "markdown returns capped human-readable execution details" in mode_description
 
 
+def test_command_schema_declares_linux_workspace_contract():
+    schema = _KNOWN_TOOL_SCHEMAS["command"]["function"]
+    description = schema["description"]
+    properties = schema["parameters"]["properties"]
+
+    assert "non-interactive Linux command" in description
+    assert "authorized workspace" in description
+    assert "git" in description
+    assert "curl" in description
+    assert "tests" in description
+    assert "build commands" in description
+    assert schema["parameters"]["required"] == ["command"]
+    assert "hard cap" in properties["timeout_seconds"]["description"]
+    assert "hard cap" in properties["max_output_chars"]["description"]
+
+
+def test_submit_frame_result_is_default_frame_result_tool_name():
+    schema = _KNOWN_TOOL_SCHEMAS["submit_frame_result"]["function"]
+    description = schema["description"]
+
+    assert schema["name"] == "submit_frame_result"
+    assert "Submit a frame result" in description
+    assert "Persistent root should not use this tool for ordinary greetings" in description
+
+
+def test_tool_specs_prefers_submit_frame_result_over_legacy_skill_name():
+    manifest = SkillManifest(
+        id="legacy-skill",
+        name="Legacy Skill",
+        allowed_tools=["submit_skill_result"],
+    )
+
+    names = [spec["function"]["name"] for spec in _tool_specs(manifest)]
+
+    assert "submit_frame_result" in names
+    assert "submit_skill_result" not in names
+
+
 def test_analyze_spreadsheet_schema_keeps_one_tool_entry():
     schema = _KNOWN_TOOL_SCHEMAS["analyze_spreadsheet"]["function"]
     description = schema["description"]

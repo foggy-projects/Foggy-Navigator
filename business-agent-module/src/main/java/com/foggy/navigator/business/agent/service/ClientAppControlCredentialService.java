@@ -1,11 +1,8 @@
 package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.ClientAppControlPlanePrincipal;
-import com.foggy.navigator.business.agent.model.dto.UpstreamClientAppAdminPrincipal;
 import com.foggy.navigator.business.agent.model.entity.ClientAppControlCredentialEntity;
-import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.repository.ClientAppControlCredentialRepository;
-import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
 import jakarta.servlet.http.HttpServletRequest;
@@ -35,11 +32,13 @@ public class ClientAppControlCredentialService {
     public static final String SCOPE_UPSTREAM_ROUTE_MANAGE = "UPSTREAM_ROUTE_MANAGE";
     public static final String SCOPE_MODEL_CONFIG_GRANT_MANAGE = "MODEL_CONFIG_GRANT_MANAGE";
     public static final String SCOPE_MODEL_CONFIG_MANAGE = "MODEL_CONFIG_MANAGE";
+    public static final String SCOPE_AGENT_MODEL_BINDING_MANAGE = "AGENT_MODEL_BINDING_MANAGE";
+    public static final String SCOPE_AGENT_WORKSPACE_BINDING_MANAGE = "AGENT_WORKSPACE_BINDING_MANAGE";
+    public static final String SCOPE_AGENT_WORKER_BINDING_MANAGE = "AGENT_WORKER_BINDING_MANAGE";
+    public static final String SCOPE_WORKING_DIRECTORY_MANAGE = "WORKING_DIRECTORY_MANAGE";
     public static final String SCOPE_FRAME_REPORT_READ = "FRAME_REPORT_READ";
 
     private final ClientAppControlCredentialRepository controlCredentialRepository;
-    private final UpstreamClientAppAdminCredentialService upstreamAdminCredentialService;
-    private final ClientAppRepository clientAppRepository;
 
     @Transactional
     public ClientAppControlPlanePrincipal requireAccess(HttpServletRequest request, String requiredScope, String clientAppId) {
@@ -50,13 +49,15 @@ public class ClientAppControlCredentialService {
                     .tenantId(resolveTenantId(user))
                     .clientAppId(clientAppId)
                     .actorUserId(user.getUserId())
+                    .principalType("PLATFORM")
+                    .principalId(user.getUserId())
                     .scopes(Set.of(SCOPE_ALL))
                     .build();
         }
 
         String controlKey = request == null ? null : request.getHeader(HEADER_CONTROL_KEY);
         if (!StringUtils.hasText(controlKey)) {
-            return requireUpstreamAdminAccess(request, requiredScope, clientAppId);
+            throw new SecurityException("control-plane credential is required");
         }
 
         ClientAppControlCredentialEntity credential = controlCredentialRepository
@@ -74,47 +75,10 @@ public class ClientAppControlCredentialService {
                 .actorUserId(StringUtils.hasText(credential.getEffectiveUserId())
                         ? credential.getEffectiveUserId()
                         : "client-app-control:" + credential.getCredentialId())
+                .principalType("CLIENT_APP")
+                .principalId(credential.getClientAppId())
                 .scopes(parseScopes(credential.getScopes()))
                 .build();
-    }
-
-    private ClientAppControlPlanePrincipal requireUpstreamAdminAccess(HttpServletRequest request,
-                                                                      String requiredControlScope,
-                                                                      String clientAppId) {
-        String requiredAdminScope = mapControlScopeToAdminScope(requiredControlScope);
-        UpstreamClientAppAdminPrincipal principal = upstreamAdminCredentialService.requireAccess(request, requiredAdminScope);
-        if (!StringUtils.hasText(clientAppId)) {
-            throw new SecurityException("clientAppId is required for upstream admin credential");
-        }
-        ClientAppEntity app = clientAppRepository.findByClientAppId(clientAppId)
-                .orElseThrow(() -> new SecurityException("client app not found: " + clientAppId));
-        upstreamAdminCredentialService.requireTenant(principal, app.getTenantId());
-        if (!principal.getUpstreamSystemId().equals(app.getUpstreamSystemId())
-                || !principal.getAuthorizedClientAppNamespace().equals(app.getUpstreamClientAppNamespace())) {
-            throw new SecurityException("upstream admin credential clientApp mismatch");
-        }
-        if (!ClientAppService.STATUS_ACTIVE.equals(app.getStatus())) {
-            throw new SecurityException("client app is not active: " + clientAppId);
-        }
-        return ClientAppControlPlanePrincipal.builder()
-                .admin(true)
-                .tenantId(app.getTenantId())
-                .clientAppId(app.getClientAppId())
-                .credentialId(principal.getCredentialId())
-                .actorUserId("upstream-admin:" + principal.getCredentialId())
-                .scopes(Set.of(requiredControlScope))
-                .build();
-    }
-
-    private String mapControlScopeToAdminScope(String requiredControlScope) {
-        if (SCOPE_AGENT_BUNDLE_SYNC.equals(requiredControlScope)) {
-            return UpstreamBootstrapRequestService.SCOPE_AGENT_BUNDLE_SYNC;
-        }
-        if (SCOPE_MODEL_CONFIG_MANAGE.equals(requiredControlScope)
-                || SCOPE_MODEL_CONFIG_GRANT_MANAGE.equals(requiredControlScope)) {
-            return UpstreamBootstrapRequestService.SCOPE_MODEL_CONFIG_MANAGE;
-        }
-        throw new SecurityException("control-plane credential is required");
     }
 
     private void validateCredential(ClientAppControlCredentialEntity credential, String requiredScope, String clientAppId) {
@@ -134,16 +98,7 @@ public class ClientAppControlCredentialService {
     }
 
     private boolean hasRequiredScope(Set<String> scopes, String requiredScope) {
-        if (scopes.contains(SCOPE_ALL) || scopes.contains(requiredScope)) {
-            return true;
-        }
-        if (SCOPE_MODEL_CONFIG_MANAGE.equals(requiredScope)
-                && scopes.contains(SCOPE_MODEL_CONFIG_GRANT_MANAGE)) {
-            return true;
-        }
-        // Compatibility for credentials issued before function-specific scopes were introduced.
-        return (SCOPE_FUNCTION_MANIFEST_IMPORT.equals(requiredScope) || SCOPE_FUNCTION_GRANT_MANAGE.equals(requiredScope))
-                && scopes.contains(SCOPE_AGENT_BUNDLE_SYNC);
+        return scopes.contains(SCOPE_ALL) || scopes.contains(requiredScope);
     }
 
     public static Set<String> defaultScopes() {
@@ -157,6 +112,10 @@ public class ClientAppControlCredentialService {
                 SCOPE_UPSTREAM_ROUTE_MANAGE,
                 SCOPE_MODEL_CONFIG_GRANT_MANAGE,
                 SCOPE_MODEL_CONFIG_MANAGE,
+                SCOPE_AGENT_MODEL_BINDING_MANAGE,
+                SCOPE_AGENT_WORKSPACE_BINDING_MANAGE,
+                SCOPE_AGENT_WORKER_BINDING_MANAGE,
+                SCOPE_WORKING_DIRECTORY_MANAGE,
                 SCOPE_FRAME_REPORT_READ);
     }
 

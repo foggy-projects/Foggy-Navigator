@@ -46,6 +46,7 @@ public class UpstreamBootstrapRequestService {
     public static final String CREDENTIAL_STATUS_REVOKED = "REVOKED";
     public static final String SCOPE_CLIENT_APP_MANAGE = "CLIENT_APP_MANAGE";
     public static final String SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE = "CLIENT_APP_CONTROL_KEY_ISSUE";
+    public static final String SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE = "CLIENT_APP_RUNTIME_KEY_ISSUE";
     public static final String SCOPE_CLIENT_APP_ADMIN = "CLIENT_APP_ADMIN";
     public static final String SCOPE_CONTROL_KEY_ISSUE = "CONTROL_KEY_ISSUE";
     public static final String SCOPE_WORKER_MANAGE = "WORKER_MANAGE";
@@ -53,6 +54,10 @@ public class UpstreamBootstrapRequestService {
     public static final String SCOPE_WORKER_POOL_MANAGE = "WORKER_POOL_MANAGE";
     public static final String SCOPE_MODEL_CONFIG_MANAGE = "MODEL_CONFIG_MANAGE";
     public static final String SCOPE_AGENT_BUNDLE_SYNC = "AGENT_BUNDLE_SYNC";
+    public static final String SCOPE_AGENT_MODEL_BINDING_MANAGE = "AGENT_MODEL_BINDING_MANAGE";
+    public static final String SCOPE_AGENT_WORKSPACE_BINDING_MANAGE = "AGENT_WORKSPACE_BINDING_MANAGE";
+    public static final String SCOPE_AGENT_WORKER_BINDING_MANAGE = "AGENT_WORKER_BINDING_MANAGE";
+    public static final String SCOPE_AGENT_MANAGE = "AGENT_MANAGE";
 
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
     private static final long DEFAULT_REQUEST_TTL_MINUTES = 24 * 60;
@@ -395,8 +400,12 @@ public class UpstreamBootstrapRequestService {
         if (ttl == null) {
             return DEFAULT_CLAIM_TTL_MINUTES;
         }
-        if (ttl <= 0 || ttl > MAX_CLAIM_TTL_MINUTES) {
-            throw new IllegalArgumentException("claimTtlMinutes must be between 1 and " + MAX_CLAIM_TTL_MINUTES);
+        if (isNoExpiryAdminKeyRequest(ttl)) {
+            return DEFAULT_CLAIM_TTL_MINUTES;
+        }
+        if (ttl < 0 || ttl > MAX_CLAIM_TTL_MINUTES) {
+            throw new IllegalArgumentException("claimTtlMinutes must be between 1 and " + MAX_CLAIM_TTL_MINUTES
+                    + ", or 0/-1 for a no-expiry admin key approval");
         }
         return ttl;
     }
@@ -407,7 +416,15 @@ public class UpstreamBootstrapRequestService {
         if (expiresAt != null) {
             return expiresAt;
         }
+        Long claimTtlMinutes = form == null ? null : form.getClaimTtlMinutes();
+        if (isNoExpiryAdminKeyRequest(claimTtlMinutes)) {
+            return null;
+        }
         return now.plusMinutes(DEFAULT_ADMIN_CREDENTIAL_TTL_MINUTES);
+    }
+
+    private boolean isNoExpiryAdminKeyRequest(Long claimTtlMinutes) {
+        return claimTtlMinutes != null && (claimTtlMinutes == 0L || claimTtlMinutes == -1L);
     }
 
     private LocalDateTime resolveRotatedCredentialExpiresAt(UpstreamClientAppAdminCredentialEntity oldCredential,
@@ -476,9 +493,17 @@ public class UpstreamBootstrapRequestService {
         return switch (normalized) {
             case SCOPE_CLIENT_APP_ADMIN -> SCOPE_CLIENT_APP_MANAGE;
             case SCOPE_CONTROL_KEY_ISSUE -> SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE;
+            case "RUNTIME_KEY_ISSUE", "RUNTIME_CREDENTIAL_ISSUE", "CLIENT_APP_RUNTIME_CREDENTIAL_ISSUE" ->
+                    SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE;
             case "DIRECTORY_MANAGE", "WORKDIR_MANAGE", "WORKING_DIR_MANAGE" -> SCOPE_WORKING_DIRECTORY_MANAGE;
             case "CONFIG_MODEL_MANAGE", "CONFIGMODEL_MANAGE" -> SCOPE_MODEL_CONFIG_MANAGE;
-            case "AGENT_MANAGE", "AGENT_SYNC" -> SCOPE_AGENT_BUNDLE_SYNC;
+            case "AGENT_SYNC" -> SCOPE_AGENT_BUNDLE_SYNC;
+            case "SYSTEM_AGENT_MANAGE", "AGENT_ADMIN" -> SCOPE_AGENT_MANAGE;
+            case "AGENT_MODEL_MANAGE", "MODEL_BINDING_MANAGE" -> SCOPE_AGENT_MODEL_BINDING_MANAGE;
+            case "AGENT_WORKSPACE_MANAGE", "WORKSPACE_BINDING_MANAGE", "AGENT_DIRECTORY_BINDING_MANAGE" ->
+                    SCOPE_AGENT_WORKSPACE_BINDING_MANAGE;
+            case "AGENT_WORKER_MANAGE", "WORKER_BINDING_MANAGE", "AGENT_WORKER_POOL_BINDING_MANAGE" ->
+                    SCOPE_AGENT_WORKER_BINDING_MANAGE;
             default -> normalized;
         };
     }
@@ -487,10 +512,15 @@ public class UpstreamBootstrapRequestService {
         return List.of(
                 SCOPE_CLIENT_APP_MANAGE,
                 SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE,
+                SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE,
                 SCOPE_WORKER_MANAGE,
                 SCOPE_WORKING_DIRECTORY_MANAGE,
                 SCOPE_WORKER_POOL_MANAGE,
                 SCOPE_MODEL_CONFIG_MANAGE,
+                SCOPE_AGENT_MANAGE,
+                SCOPE_AGENT_MODEL_BINDING_MANAGE,
+                SCOPE_AGENT_WORKSPACE_BINDING_MANAGE,
+                SCOPE_AGENT_WORKER_BINDING_MANAGE,
                 SCOPE_AGENT_BUNDLE_SYNC);
     }
 

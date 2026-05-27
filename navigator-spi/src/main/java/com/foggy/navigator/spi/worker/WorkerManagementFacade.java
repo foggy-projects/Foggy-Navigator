@@ -34,6 +34,18 @@ public interface WorkerManagementFacade {
     }
 
     /**
+     * 验证用户可访问指定 Worker。
+     * <p>
+     * OpenAPI/A2A 等 owner-aware 场景会先解析出 tenant-scoped 的物理 Worker，
+     * 这类 Worker 不一定直属于最终执行用户。
+     *
+     * @throws IllegalArgumentException 若 Worker 不存在或当前 user/tenant 不可访问
+     */
+    default void validateWorkerAccess(String userId, String tenantId, String workerId) {
+        validateWorkerOwnership(userId, workerId);
+    }
+
+    /**
      * 在 Worker 上初始化目录并注册为工作目录
      *
      * @param files 文件相对路径 → 内容 的映射

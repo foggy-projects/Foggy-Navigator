@@ -48,7 +48,7 @@ class TestSkillRegistry:
     def test_loads_delegated_workspace_account_skills_without_account_id(self, tmp_path: Path):
         skills_root = tmp_path / "skills"
         workspace_root = tmp_path / "workspace"
-        skill_dir = workspace_root / "skills" / "delegated-skill"
+        skill_dir = workspace_root / "agent" / "skills" / "delegated-skill"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
             "---\n"

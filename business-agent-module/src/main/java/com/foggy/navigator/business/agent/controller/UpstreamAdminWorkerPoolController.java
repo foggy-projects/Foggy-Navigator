@@ -8,6 +8,7 @@ import com.foggy.navigator.business.agent.model.form.UpdateStatusForm;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
 import com.foggy.navigator.business.agent.service.UpstreamBootstrapRequestService;
 import com.foggy.navigator.business.agent.service.UpstreamClientAppAdminCredentialService;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggyframework.core.ex.RX;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -36,7 +37,11 @@ public class UpstreamAdminWorkerPoolController {
                                            @RequestParam(required = false) String targetTenantId,
                                            @RequestBody CreateWorkerPoolForm form) {
         UpstreamClientAppAdminPrincipal principal = requireAccess(request);
-        return RX.ok(workerPoolService.createPool(resolveTargetTenantId(principal, request, targetTenantId), form));
+        return RX.ok(workerPoolService.createPool(
+                resolveTargetTenantId(principal, request, targetTenantId),
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                principal.getUpstreamSystemId(),
+                form));
     }
 
     @PostMapping("/{poolId}/members")

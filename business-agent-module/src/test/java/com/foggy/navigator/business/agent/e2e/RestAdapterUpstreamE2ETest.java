@@ -10,6 +10,10 @@ import com.foggy.navigator.business.agent.service.*;
 import com.foggy.navigator.business.agent.service.adapter.*;
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -54,6 +58,7 @@ class RestAdapterUpstreamE2ETest {
     static final String ADMIN = "admin_rest_e2e";
     static final String APP_ID = "capp_rest_e2e";
     static final String USER_ID = "upstream_user_rest_e2e";
+    static final String AGENT_ID = "rest_e2e_agent";
     static final String SKILL_ID = "rest_e2e_skill";
     static final String FUNCTION_ID = "rest_e2e.order.submit";
     static final String VERSION = "v1";
@@ -83,6 +88,10 @@ class RestAdapterUpstreamE2ETest {
     @Mock BizWorkerIdentityRepository identityRepository;
     @Mock BusinessFunctionSuspensionRepository suspensionRepository;
     @Mock BusinessFunctionRuntimeAuditRepository auditRepository;
+    @Mock BusinessAgentDirectoryBindingRepository agentDirectoryBindingRepository;
+    @Mock BusinessAgentModelBindingRepository agentModelBindingRepository;
+    @Mock WorkingDirectoryRepository workingDirectoryRepository;
+    @Mock BusinessCodingAgentRepository agentRepository;
 
     @Mock LlmModelManager llmModelManager;
     @Mock ApplicationEventPublisher eventPublisher;
@@ -159,7 +168,18 @@ class RestAdapterUpstreamE2ETest {
         sessionDTO.setContextId("bctx_20260520_ab_ctx_rest_e2e");
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
                 .thenReturn(sessionDTO);
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
+        A2AgentResourceResolver resourceResolver = new A2AgentResourceResolver(
+                modelGrantService,
+                llmModelManager,
+                clientAppService,
+                workingDirectoryRepository,
+                agentRepository,
+                poolRepository,
+                identityRepository,
+                java.util.List.of(),
+                agentDirectoryBindingRepository,
+                agentModelBindingRepository);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, identityRepository, java.util.List.of());
         BusinessFunctionAuthorizationService authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService1, skillRegistryService, functionRegistryService);
 
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
@@ -202,9 +222,8 @@ class RestAdapterUpstreamE2ETest {
         CreateBusinessAgentTaskForm taskForm = new CreateBusinessAgentTaskForm();
         taskForm.setClientAppId(APP_ID);
         taskForm.setSessionId("session_rest_e2e");
-        taskForm.setWorkerPoolId(POOL_ID);
+        taskForm.setAgentId(AGENT_ID);
         taskForm.setUpstreamUserId(USER_ID);
-        taskForm.setSkillId(SKILL_ID);
 
         CreatedBusinessAgentTaskDTO created = taskService.createTask(TENANT, ADMIN, taskForm);
         assertNotNull(created.getTaskScopedToken());
@@ -289,9 +308,8 @@ class RestAdapterUpstreamE2ETest {
         CreateBusinessAgentTaskForm taskForm = new CreateBusinessAgentTaskForm();
         taskForm.setClientAppId(APP_ID);
         taskForm.setSessionId("session_rest_approval_e2e");
-        taskForm.setWorkerPoolId(POOL_ID);
+        taskForm.setAgentId(AGENT_ID);
         taskForm.setUpstreamUserId(USER_ID);
-        taskForm.setSkillId(SKILL_ID);
 
         CreatedBusinessAgentTaskDTO created = taskService.createTask(TENANT, ADMIN, taskForm);
         String plainToken = created.getTaskScopedToken();
@@ -368,6 +386,10 @@ class RestAdapterUpstreamE2ETest {
         model.setTenantId(TENANT);
         model.setWorkerBackend("LANGGRAPH_BIZ");
         model.setName("REST E2E Model");
+        model.setCategory(LlmModelCategory.GENERAL);
+        model.setOwnerType(ResourceOwnerType.PLATFORM);
+        model.setOwnerId("platform");
+        model.setEnabled(true);
         when(llmModelManager.getModelConfig(MODEL_ID)).thenReturn(Optional.of(model));
 
         ClientAppModelConfigGrantEntity grant = new ClientAppModelConfigGrantEntity();
@@ -379,6 +401,8 @@ class RestAdapterUpstreamE2ETest {
         grant.setIsDefault(true);
         when(modelGrantRepository.findByClientAppIdAndStatusAndIsDefaultTrueOrderByUpdatedAtDesc(APP_ID, "ENABLED"))
                 .thenReturn(List.of(grant));
+        when(modelGrantRepository.findByClientAppIdAndModelConfigIdAndStatus(APP_ID, MODEL_ID, "ENABLED"))
+                .thenReturn(Optional.of(grant));
     }
 
     private void stubUserGrant() {
@@ -523,10 +547,27 @@ class RestAdapterUpstreamE2ETest {
         BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
         pool.setPoolId(POOL_ID);
         pool.setTenantId(TENANT);
+        pool.setOwnerType(ResourceOwnerType.PLATFORM);
+        pool.setOwnerId(TENANT);
         pool.setStatus("ENABLED");
         pool.setHealthStatus("HEALTHY");
         pool.setWorkerBackend("LANGGRAPH_BIZ");
         when(poolRepository.findByPoolIdAndTenantId(POOL_ID, TENANT)).thenReturn(Optional.of(pool));
+
+        CodingAgentEntity agent = new CodingAgentEntity();
+        agent.setAgentId(AGENT_ID);
+        agent.setTenantId(TENANT);
+        agent.setOwnerType(ResourceOwnerType.CLIENT_APP);
+        agent.setOwnerId(APP_ID);
+        agent.setClientAppId(APP_ID);
+        agent.setUserId(ADMIN);
+        agent.setName("REST E2E Agent");
+        agent.setAgentType(BusinessAgentBundleService.AGENT_TYPE_LANGGRAPH);
+        agent.setWorkerId(POOL_ID);
+        agent.setDefaultModelConfigId(MODEL_ID);
+        agent.setAgentProfile("{\"skillId\":\"" + SKILL_ID + "\"}");
+        agent.setEnabled(true);
+        when(agentRepository.findByAgentIdAndTenantId(AGENT_ID, TENANT)).thenReturn(Optional.of(agent));
 
         when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(inv -> {
             taskEntity = inv.getArgument(0);

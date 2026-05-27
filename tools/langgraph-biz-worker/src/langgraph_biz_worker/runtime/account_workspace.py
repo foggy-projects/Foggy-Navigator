@@ -29,7 +29,11 @@ class AccountWorkspace:
 
     @property
     def skills_root(self) -> Path:
-        return self.root / "skills"
+        return self.agent_root / "skills"
+
+    @property
+    def agent_root(self) -> Path:
+        return self.root / "agent"
 
     @property
     def artifacts_root(self) -> Path:

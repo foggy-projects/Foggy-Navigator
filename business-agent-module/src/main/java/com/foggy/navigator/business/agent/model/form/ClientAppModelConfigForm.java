@@ -18,4 +18,5 @@ public class ClientAppModelConfigForm {
     private List<String> availableModels;
     private String runtimeBudgetPresetKey;
     private String runtimeBudgetOverrideJson;
+    private String workerBackend;
 }

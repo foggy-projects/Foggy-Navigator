@@ -55,6 +55,7 @@ class AgentApiAttachmentTest {
                 3,
                 Map.of("source", "observer"),
                 "model-1",
+                "opus",
                 List.of(Map.of(
                         "id", "att-1",
                         "name", "photo.png",
@@ -77,6 +78,11 @@ class AgentApiAttachmentTest {
         assertEquals("检查附件", body.get("question"));
         assertEquals("ctx-1", body.get("contextId"));
         assertEquals("model-1", body.get("modelConfigId"));
+        assertEquals("opus", body.get("modelVariant"));
+        Map<?, ?> metadata = (Map<?, ?>) body.get("metadata");
+        assertEquals("model-1", metadata.get("modelConfigId"));
+        assertEquals("opus", metadata.get("modelVariant"));
+        assertEquals("opus", metadata.get("model"));
 
         List<?> attachments = (List<?>) body.get("attachments");
         assertEquals(1, attachments.size());

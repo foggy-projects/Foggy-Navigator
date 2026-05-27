@@ -1,0 +1,48 @@
+{
+    "version":  "1.0.16",
+    "released":  "2026-05-26",
+    "buildTimeUtc":  "2026-05-25T16:27:04Z",
+    "buildId":  "1.0.16+bebdf4a2e3c4",
+    "gitCommit":  "bebdf4a2e3c43a1bceba28a0d2025da079afbc33",
+    "gitDirty":  false,
+    "features":  [
+                     "config-check",
+                     "runtime-token",
+                     "owner-smoke",
+                     "agent-readiness",
+                     "ask",
+                     "messages",
+                     "sessions",
+                     "skill-artifact-read",
+                     "skill-sync",
+                     "skill-clear",
+                     "agent-sync",
+                     "function-import",
+                     "function-grant",
+                     "function-grant-status",
+                     "function-visible",
+                     "upstream-route",
+                     "model-grant",
+                     "model-owned-config",
+                     "model-variant",
+                     "runtime-budget-preset",
+                     "account-context",
+                     "deterministic-e2e",
+                     "admin-key-bootstrap",
+                     "client-app-bootstrap",
+                     "client-app-runtime-credential",
+                     "upstream-worker-orchestration",
+                     "upstream-directory-orchestration",
+                     "upstream-worker-pool-orchestration",
+                     "task-diagnostics",
+                     "physical-worker-diagnostics",
+                     "worker-host-suite",
+                     "navi-routed-codex-config"
+                 ],
+    "files":  {
+                  "windows":  "1.0.16/navigator-upstream-cli-1.0.16-windows.zip"
+              },
+    "sha256":  {
+                   "windows":  "f4b1a928178e2de1f09c8d4b0effd31703a5504c6375bb666df3846097ebcbfb"
+               }
+}
