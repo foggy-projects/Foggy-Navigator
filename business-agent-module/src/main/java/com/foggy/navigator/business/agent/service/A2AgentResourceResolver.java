@@ -98,7 +98,13 @@ public class A2AgentResourceResolver {
             String source) {
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(
+            readOnly = true,
+            noRollbackFor = {
+                    IllegalArgumentException.class,
+                    IllegalStateException.class,
+                    SecurityException.class
+            })
     public ResolvedAgentResource resolveRequiredAgent(String tenantId,
                                                      String clientAppId,
                                                      String upstreamUserId,

@@ -25,7 +25,9 @@ import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -78,6 +80,22 @@ class A2AgentResourceResolverTest {
                 agentModelBindingRepository);
         when(llmModelManager.getModelConfig(anyString())).thenAnswer(invocation ->
                 Optional.of(model(invocation.getArgument(0, String.class))));
+    }
+
+    @Test
+    void resolveRequiredAgentDoesNotMarkCallerTransactionRollbackOnlyForReadinessExceptions() throws Exception {
+        Method method = A2AgentResourceResolver.class.getMethod(
+                "resolveRequiredAgent",
+                String.class,
+                String.class,
+                String.class,
+                String.class);
+        Transactional transactional = method.getAnnotation(Transactional.class);
+
+        assertTrue(transactional.readOnly());
+        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalArgumentException.class));
+        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalStateException.class));
+        assertTrue(List.of(transactional.noRollbackFor()).contains(SecurityException.class));
     }
 
     @Test
