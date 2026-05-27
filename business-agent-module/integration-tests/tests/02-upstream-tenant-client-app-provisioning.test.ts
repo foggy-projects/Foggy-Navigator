@@ -119,13 +119,16 @@ describe('02 - Upstream tenant ClientApp provisioning', () => {
     expect(first.bindingVersion).toBeTruthy();
     expect(first.modelConfigId).toBeFalsy();
     expect(first.activationReady).toBe(false);
+    expect(first.errorCode).toBe('WORKSPACE_RESOURCE');
     expect(first.missingFields).toContain('modelConfigId');
+    expect(first.missingFields).toContain('directoryId');
     expect(first.requiredScopes).toContain('CLIENT_APP_MANAGE');
     expect(first.requiredScopes).toContain('CLIENT_APP_CONTROL_KEY_ISSUE');
     expect(first.actualScopes).toContain('CLIENT_APP_MANAGE');
     expect(first.actualScopes).toContain('CLIENT_APP_CONTROL_KEY_ISSUE');
     expect(first.authorizedTenantIds).toContain(navigatorTenantId);
     expect(first.blockers.some(item => item.includes('modelConfigId is missing'))).toBe(true);
+    expect(first.blockers.some(item => item.includes(`working directory not found: ${directoryId}`))).toBe(true);
 
     if (!first.controlApiKey) {
       throw new Error('ClientApp control key is required for model config provisioning');
@@ -188,9 +191,10 @@ describe('02 - Upstream tenant ClientApp provisioning', () => {
     expect(second.missingFields).not.toContain('modelConfigId');
     expect(second.missingFields).not.toContain('workerBackend');
     expect(second.missingFields).not.toContain('physicalWorkerId');
-    expect(second.missingFields).not.toContain('directoryId');
+    expect(second.missingFields).toContain('directoryId');
     expect(second.blockers.some(item => item.includes('modelConfigId'))).toBe(false);
     expect(second.blockers.some(item => item.includes('defaultModelConfigId'))).toBe(false);
+    expect(second.blockers.some(item => item.includes(`working directory not found: ${directoryId}`))).toBe(true);
 
     const rotated = await client.ensureUpstreamTenantClientApp({
       ...provisioningPayload,
@@ -208,8 +212,12 @@ describe('02 - Upstream tenant ClientApp provisioning', () => {
     expect(rotated.clientAppSecret).toBeTruthy();
     expect(rotated.controlApiKey).toBeTruthy();
     expect(rotated.modelConfigId).toBe(modelGrant.modelConfigId);
-    expect(rotated.activationReady).toBe(true);
-    expect(rotated.missingFields).toHaveLength(0);
+    expect(rotated.activationReady).toBe(false);
+    expect(rotated.errorCode).toBe('WORKSPACE_RESOURCE');
+    expect(rotated.missingFields).toEqual(['directoryId']);
+    expect(rotated.blockers.some(item => item.includes(`working directory not found: ${directoryId}`))).toBe(true);
+    expect(rotated.remediationHint).toContain(directoryId);
+    expect(rotated.remediationHint).toContain(navigatorTenantId);
     expect(rotated.upstreamRef).toBe(upstreamRef);
     expect(rotated.workerBackend).toBe(workerBackend);
     expect(rotated.physicalWorkerId).toBe(physicalWorkerId);

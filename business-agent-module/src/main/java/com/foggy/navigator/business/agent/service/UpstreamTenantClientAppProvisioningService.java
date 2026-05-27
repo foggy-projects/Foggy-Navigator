@@ -39,6 +39,7 @@ public class UpstreamTenantClientAppProvisioningService {
     public static final String STATUS_READY = "READY";
     public static final String STATUS_CREDENTIALS_NOT_REPLAYABLE = "CREDENTIALS_NOT_REPLAYABLE";
     public static final String ERROR_RUNTIME_AGENT_RESOURCE = "RUNTIME_AGENT_RESOURCE";
+    public static final String ERROR_WORKSPACE_RESOURCE = "WORKSPACE_RESOURCE";
 
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
     private static final String DEFAULT_SKILL_ID = "tms.navigator.agent";
@@ -142,6 +143,7 @@ public class UpstreamTenantClientAppProvisioningService {
         result.setSkillId(skillId);
         ensureRootSkillBundle(clientApp, actorUserId, skillId, rootAgentId, form);
         validateRuntimeAgentResource(clientApp, actorUserId, result);
+        validateWorkspaceResource(clientApp, actorUserId, result);
         populateActivationReadiness(result);
         log.info("Upstream tenant ClientApp provisioning finished: sourceSystem={}, sourceTenantId={}, navigatorTenantId={}, clientAppId={}, created={}, rotated={}, status={}, credentialsReplayable={}, modelConfigId={}, rootAgentId={}, skillId={}, blockers={}",
                 sourceSystem, sourceTenantId, result.getNavigatorTenantId(), result.getClientAppId(),
@@ -460,6 +462,40 @@ public class UpstreamTenantClientAppProvisioningService {
         }
     }
 
+    private void validateWorkspaceResource(ClientAppDTO clientApp,
+                                           String actorUserId,
+                                           UpstreamTenantClientAppProvisioningDTO result) {
+        if (ERROR_RUNTIME_AGENT_RESOURCE.equals(result.getErrorCode())
+                || !StringUtils.hasText(result.getRootAgentId())
+                || !StringUtils.hasText(result.getDirectoryId())) {
+            return;
+        }
+        try {
+            A2AgentResourceResolver.ResolvedAgentResource agentResource = agentResourceResolver.resolveRequiredAgent(
+                    clientApp.getTenantId(),
+                    clientApp.getClientAppId(),
+                    actorUserId,
+                    result.getRootAgentId());
+            agentResourceResolver.resolveRequiredWorkspaceForAgent(
+                    clientApp.getTenantId(),
+                    clientApp.getClientAppId(),
+                    actorUserId,
+                    agentResource,
+                    result.getDirectoryId());
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            String message = e.getMessage();
+            String detail = StringUtils.hasText(message) ? message : e.getClass().getSimpleName();
+            result.getBlockers().add("workspace resource is not activation-ready: " + detail);
+            if (!StringUtils.hasText(result.getErrorCode())) {
+                result.setErrorCode(ERROR_WORKSPACE_RESOURCE);
+            }
+            addMissingField(result, classifyWorkspaceResourceField(detail));
+            if (!StringUtils.hasText(result.getRemediationHint())) {
+                result.setRemediationHint(buildWorkspaceRemediationHint(result, detail));
+            }
+        }
+    }
+
     private String classifyRuntimeAgentResourceField(String detail) {
         if (detail != null && detail.contains("owner is not configured")) {
             return "physicalWorker.owner";
@@ -477,6 +513,47 @@ public class UpstreamTenantClientAppProvisioningService {
             return "physicalWorker.visibility";
         }
         return "runtimeAgentResource";
+    }
+
+    private String classifyWorkspaceResourceField(String detail) {
+        if (detail != null && detail.contains("tenant mismatch")) {
+            return "directory.tenant";
+        }
+        if (detail != null && detail.contains("owner is not configured")) {
+            return "directory.owner";
+        }
+        if (detail != null && detail.contains("workspaceScope is not configured")) {
+            return "directory.workspaceScope";
+        }
+        if (detail != null && detail.contains("disabled")) {
+            return "directory.status";
+        }
+        if (detail != null && detail.contains("not bound to agent")) {
+            return "directory.agentBinding";
+        }
+        if (detail != null && detail.contains("not found")) {
+            return "directoryId";
+        }
+        return "workspaceResource";
+    }
+
+    private String buildWorkspaceRemediationHint(UpstreamTenantClientAppProvisioningDTO result, String detail) {
+        if (detail != null && detail.contains("tenant mismatch")) {
+            return "provide or create a working directory owned by navigator tenant "
+                    + result.getNavigatorTenantId()
+                    + " and bind it to rootAgentId="
+                    + result.getRootAgentId()
+                    + ", or migrate directory "
+                    + result.getDirectoryId()
+                    + " to that tenant before rerunning ensure-tenant with rotateCredentials=true";
+        }
+        return "repair working directory "
+                + result.getDirectoryId()
+                + " for navigator tenant "
+                + result.getNavigatorTenantId()
+                + " and rootAgentId="
+                + result.getRootAgentId()
+                + ", then rerun ensure-tenant with rotateCredentials=true";
     }
 
     private void addMissingField(UpstreamTenantClientAppProvisioningDTO result, String fieldName) {

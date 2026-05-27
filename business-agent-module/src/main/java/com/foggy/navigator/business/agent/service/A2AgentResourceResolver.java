@@ -396,7 +396,13 @@ public class A2AgentResourceResolver {
                 });
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(
+            readOnly = true,
+            noRollbackFor = {
+                    IllegalArgumentException.class,
+                    IllegalStateException.class,
+                    SecurityException.class
+            })
     public Optional<ResolvedWorkspaceResource> resolveOptionalWorkspace(String tenantId,
                                                                        String clientAppId,
                                                                        String upstreamUserId,
@@ -411,7 +417,13 @@ public class A2AgentResourceResolver {
         return Optional.of(resolveRequiredWorkspace(tenantId, clientAppId, upstreamUserId, normalizedDirectoryId));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(
+            readOnly = true,
+            noRollbackFor = {
+                    IllegalArgumentException.class,
+                    IllegalStateException.class,
+                    SecurityException.class
+            })
     public Optional<ResolvedWorkspaceResource> resolveOptionalWorkspaceForAgent(String tenantId,
                                                                                String clientAppId,
                                                                                String upstreamUserId,
@@ -433,7 +445,13 @@ public class A2AgentResourceResolver {
                 normalizedDirectoryId));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(
+            readOnly = true,
+            noRollbackFor = {
+                    IllegalArgumentException.class,
+                    IllegalStateException.class,
+                    SecurityException.class
+            })
     public ResolvedWorkspaceResource resolveRequiredWorkspace(String tenantId,
                                                              String clientAppId,
                                                              String upstreamUserId,
@@ -483,7 +501,13 @@ public class A2AgentResourceResolver {
         return resolved;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(
+            readOnly = true,
+            noRollbackFor = {
+                    IllegalArgumentException.class,
+                    IllegalStateException.class,
+                    SecurityException.class
+            })
     public ResolvedWorkspaceResource resolveRequiredWorkspaceForAgent(String tenantId,
                                                                      String clientAppId,
                                                                      String upstreamUserId,

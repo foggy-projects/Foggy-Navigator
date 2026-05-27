@@ -310,6 +310,26 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         assertTrue(result.getRemediationHint().contains("ownerType=UPSTREAM_SYSTEM ownerId=TMS"));
     }
 
+    @Test
+    void ensureMarksActivationNotReadyWhenWorkingDirectoryTenantMismatch() {
+        EnsureUpstreamTenantClientAppForm form = form(false);
+        form.setDirectoryId("20260525-8fa8");
+        when(agentResourceResolver.resolveRequiredWorkspaceForAgent(
+                anyString(), anyString(), anyString(), any(), anyString()))
+                .thenThrow(new SecurityException("working directory tenant mismatch: 20260525-8fa8"));
+
+        var result = service.ensure(form, principal("nav_tms_3"));
+
+        assertFalse(result.isActivationReady());
+        assertEquals(UpstreamTenantClientAppProvisioningService.ERROR_WORKSPACE_RESOURCE, result.getErrorCode());
+        assertTrue(result.getMissingFields().contains("directory.tenant"));
+        assertTrue(result.getBlockers().stream()
+                .anyMatch(item -> item.contains("working directory tenant mismatch: 20260525-8fa8")));
+        assertTrue(result.getRemediationHint().contains("nav_tms_3"));
+        assertTrue(result.getRemediationHint().contains("rootAgentId=tms-root-agent"));
+        assertTrue(result.getRemediationHint().contains("20260525-8fa8"));
+    }
+
     private EnsureUpstreamTenantClientAppForm form(boolean rotateCredentials) {
         EnsureUpstreamTenantClientAppForm form = new EnsureUpstreamTenantClientAppForm();
         form.setSourceSystem("TMS");

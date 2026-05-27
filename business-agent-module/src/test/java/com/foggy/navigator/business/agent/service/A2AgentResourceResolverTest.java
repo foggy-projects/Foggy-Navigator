@@ -99,6 +99,45 @@ class A2AgentResourceResolverTest {
     }
 
     @Test
+    void workspaceResolversDoNotMarkCallerTransactionRollbackOnlyForReadinessExceptions() throws Exception {
+        assertReadinessNoRollbackFor(A2AgentResourceResolver.class.getMethod(
+                "resolveOptionalWorkspace",
+                String.class,
+                String.class,
+                String.class,
+                String.class));
+        assertReadinessNoRollbackFor(A2AgentResourceResolver.class.getMethod(
+                "resolveOptionalWorkspaceForAgent",
+                String.class,
+                String.class,
+                String.class,
+                A2AgentResourceResolver.ResolvedAgentResource.class,
+                String.class));
+        assertReadinessNoRollbackFor(A2AgentResourceResolver.class.getMethod(
+                "resolveRequiredWorkspace",
+                String.class,
+                String.class,
+                String.class,
+                String.class));
+        assertReadinessNoRollbackFor(A2AgentResourceResolver.class.getMethod(
+                "resolveRequiredWorkspaceForAgent",
+                String.class,
+                String.class,
+                String.class,
+                A2AgentResourceResolver.ResolvedAgentResource.class,
+                String.class));
+    }
+
+    private void assertReadinessNoRollbackFor(Method method) {
+        Transactional transactional = method.getAnnotation(Transactional.class);
+
+        assertTrue(transactional.readOnly());
+        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalArgumentException.class));
+        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalStateException.class));
+        assertTrue(List.of(transactional.noRollbackFor()).contains(SecurityException.class));
+    }
+
+    @Test
     void resolveRequiredModel_reports_requested_model_grant_source() {
         when(modelConfigGrantService.resolveEffectiveModelConfigId(
                 "tenant-1", "capp-1", "cfg-requested", LlmModelCategory.GENERAL))
