@@ -3,6 +3,7 @@ package com.foggy.navigator.business.agent.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.business.agent.model.dto.UpstreamAdminCredentialDTO;
 import com.foggy.navigator.business.agent.model.dto.UpstreamClientAppAdminPrincipal;
 import com.foggy.navigator.business.agent.model.entity.UpstreamClientAppAdminCredentialEntity;
 import com.foggy.navigator.business.agent.repository.UpstreamClientAppAdminCredentialRepository;
@@ -81,6 +82,41 @@ public class UpstreamClientAppAdminCredentialService {
                 .authorizedTenantIds(parseStringSet(credential.getAuthorizedTenantIdsJson()))
                 .scopes(scopes)
                 .build();
+    }
+
+    @Transactional
+    public UpstreamAdminCredentialDTO inspectCurrentCredential(HttpServletRequest request) {
+        String adminApiKey = request == null ? null : request.getHeader(HEADER_ADMIN_KEY);
+        if (!StringUtils.hasText(adminApiKey)) {
+            throw new SecurityException("upstream admin credential is required");
+        }
+        String credentialKeyHash = SecretTokenSupport.sha256(adminApiKey);
+        UpstreamClientAppAdminCredentialEntity credential = adminCredentialRepository
+                .findByCredentialKeyHash(credentialKeyHash)
+                .orElseThrow(() -> new SecurityException("invalid upstream admin credential"));
+        String invalidMessage = invalidCredentialMessage(credential);
+        if (invalidMessage != null) {
+            throw new SecurityException(invalidMessage);
+        }
+        credential.setLastUsedAt(LocalDateTime.now());
+        adminCredentialRepository.save(credential);
+        UpstreamAdminCredentialDTO dto = new UpstreamAdminCredentialDTO();
+        dto.setCredentialId(credential.getCredentialId());
+        dto.setPrincipalId(credential.getUpstreamSystemId());
+        dto.setCredentialKeyPrefix(credential.getCredentialKeyPrefix());
+        dto.setCredentialKeySuffix(credential.getCredentialKeySuffix());
+        dto.setUpstreamSystemId(credential.getUpstreamSystemId());
+        dto.setAuthorizedTenantIds(parseStringSet(credential.getAuthorizedTenantIdsJson()).stream().toList());
+        dto.setAuthorizedClientAppNamespace(credential.getAuthorizedClientAppNamespace());
+        dto.setScopes(parseScopeSet(credential.getScopesJson()).stream().toList());
+        dto.setStatus(credential.getStatus());
+        dto.setExpiresAt(credential.getExpiresAt());
+        dto.setRevokedAt(credential.getRevokedAt());
+        dto.setLastUsedAt(credential.getLastUsedAt());
+        dto.setSourceRequestId(credential.getSourceRequestId());
+        dto.setCreatedAt(credential.getCreatedAt());
+        dto.setUpdatedAt(credential.getUpdatedAt());
+        return dto;
     }
 
     public void requireTenant(UpstreamClientAppAdminPrincipal principal, String tenantId) {

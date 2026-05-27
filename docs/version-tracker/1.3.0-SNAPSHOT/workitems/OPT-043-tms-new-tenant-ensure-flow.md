@@ -3,8 +3,8 @@ type: optimization
 version: 1.3.0-SNAPSHOT
 ticket: OPT-043
 severity: major
-status: proposed
-source: pending GitHub issue
+status: ready-for-verification
+source: GitHub issue #137 https://github.com/foggy-projects/Foggy-Navigator/issues/137
 title: Optimize upstream tenant ensure flow for TMS new-tenant onboarding
 owner: business-agent-module + navigator-open-sdk + upstream-cli
 delivery_mode: single-root-delivery
@@ -198,3 +198,18 @@ After this, new TMS tenant creation should not require manual data patching acro
 - Prefer Option A as the API contract baseline because it gives TMS a deterministic activation payload.
 - Option B can be layered as policy-driven default resolution for missing request fields.
 - The implementation must preserve the issue `#133` security boundary: upstream-system scoped credentials may provision matching TMS source tenants, but mismatched upstream systems or unauthorized tenants still fail closed.
+
+## Implementation Progress
+
+- 2026-05-27: Extended `ensure-tenant` request/response contract with activation metadata: `upstreamRef`, capability domain, namespace, agent/root agent, worker backend, physical worker, directory, and business worker URL.
+- Added activation readiness fields to the provisioning response: `activationReady`, `missingFields`, `remediationHint`, `requiredScopes`, `actualScopes`, `authorizedTenantIds`, and target/upstream tenant identifiers.
+- Added TMS default worker backend fallback to `LANGGRAPH_BIZ` while preserving explicit request overrides and model-grant-derived worker backend where available.
+- Added upstream admin credential self-inspection API and CLI support through `GET /api/v1/upstream-admin/admin-credential/current` and `navi upstream admin-key inspect`.
+- Updated SDK models, Java CLI output, and tenant profile writing for the expanded provisioning payload.
+
+## Test Record
+
+| Time | Scope | Command | Result |
+| --- | --- | --- | --- |
+| 2026-05-27 17:42 +08:00 | Targeted Java unit tests | `mvn -pl business-agent-module,navigator-open-sdk -am "-Dtest=UpstreamTenantClientAppProvisioningServiceTest,BizWorkerControlPlaneAuthorizationTest,UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test` | PASS: 115 tests passed across provisioning service, control-plane auth, and upstream CLI suites. |
+| 2026-05-27 17:47 +08:00 | Full Maven reactor unit tests | `mvn test` | PASS: 240 Surefire report files, 1650 tests, 0 failures, 0 errors, 0 skipped. |

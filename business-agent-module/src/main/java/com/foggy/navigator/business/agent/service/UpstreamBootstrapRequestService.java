@@ -565,6 +565,9 @@ public class UpstreamBootstrapRequestService {
     private UpstreamAdminCredentialDTO toAdminCredentialDTO(UpstreamClientAppAdminCredentialEntity credential) {
         UpstreamAdminCredentialDTO dto = new UpstreamAdminCredentialDTO();
         dto.setCredentialId(credential.getCredentialId());
+        dto.setPrincipalId(credential.getUpstreamSystemId());
+        dto.setCredentialKeyPrefix(credential.getCredentialKeyPrefix());
+        dto.setCredentialKeySuffix(credential.getCredentialKeySuffix());
         dto.setUpstreamSystemId(credential.getUpstreamSystemId());
         dto.setAuthorizedTenantIds(fromJson(credential.getAuthorizedTenantIdsJson()));
         dto.setAuthorizedClientAppNamespace(credential.getAuthorizedClientAppNamespace());

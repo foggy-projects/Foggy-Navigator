@@ -451,6 +451,44 @@ class UpstreamCliTest {
     }
 
     @Test
+    void adminKeyInspectPrintsCurrentCredentialWithoutSecret() throws Exception {
+        Files.writeString(tempDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "credentialId":"ucaac-1",
+                  "principalId":"TMS",
+                  "credentialKeyPrefix":"naa_",
+                  "credentialKeySuffix":"-key",
+                  "upstreamSystemId":"TMS",
+                  "authorizedTenantIds":["TMS"],
+                  "authorizedClientAppNamespace":"TMS",
+                  "scopes":["CLIENT_APP_MANAGE","CLIENT_APP_CONTROL_KEY_ISSUE"],
+                  "status":"ACTIVE",
+                  "expiresAt":"2026-06-01T00:00:00",
+                  "sourceRequestId":"uabr-1"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "inspect",
+                "--profile", "upstream.env"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/admin-credential/current", lastPath);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(output.contains("admin-key inspect ok"));
+        assertTrue(output.contains("credential credentialId=ucaac-1 principalId=TMS upstreamSystemId=TMS status=ACTIVE"));
+        assertTrue(output.contains("credential authorizedTenantIds=TMS"));
+        assertTrue(output.contains("credential scopes=CLIENT_APP_MANAGE,CLIENT_APP_CONTROL_KEY_ISSUE"));
+        assertTrue(output.contains("credential sourceRequestId=uabr-1"));
+        assertTrue(output.contains("rotation=use admin-key rotate --credential-id ucaac-1"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
     void adminKeyClaimWritesAdminKeyAndClearsClaimTokenWithoutPrintingIt() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
         Path profileDir = tempDir.resolve(".navigator");
@@ -722,18 +760,33 @@ class UpstreamCliTest {
                   "clientAppId":"capp-tms-3",
                   "clientAppName":"TMS 3",
                   "capabilityDomain":"tms.ops",
+                  "clientAppCapabilityDomain":"tms.ops",
+                  "upstreamSystemId":"TMS",
+                  "sourceTenantId":"3",
+                  "upstreamRef":"TMS-3",
+                  "upstreamNamespace":"TMS",
                   "clientAppKey":"cak-secret-key",
                   "clientAppSecret":"cas-secret-value",
                   "controlApiKey":"cac-secret-control-key",
+                  "agentCode":"tms-root-agent",
                   "rootAgentId":"tms-root-agent",
                   "modelConfigId":"model-live",
                   "skillId":"tms.navigator.agent",
                   "workerPoolId":"pool-1",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "physicalWorkerId":"worker-1",
+                  "directoryId":"dir-1",
+                  "bizWorkerBaseUrl":"http://127.0.0.1:3161",
                   "bindingVersion":"bind-v1",
                   "status":"READY",
+                  "activationReady":true,
                   "credentialsReplayable":true,
                   "created":true,
                   "rotated":true,
+                  "missingFields":[],
+                  "requiredScopes":["CLIENT_APP_MANAGE","CLIENT_APP_CONTROL_KEY_ISSUE"],
+                  "actualScopes":["CLIENT_APP_MANAGE","CLIENT_APP_CONTROL_KEY_ISSUE"],
+                  "authorizedTenantIds":["TMS"],
                   "blockers":["worker route should be verified"]
                 }}
                 """;
@@ -743,9 +796,14 @@ class UpstreamCliTest {
                 "--source-tenant-id", "3",
                 "--name", "TMS 3",
                 "--capability-domain", "tms.ops",
+                "--upstream-ref", "TMS-3",
                 "--model-config-id", "model-live",
                 "--skill-id", "tms.navigator.agent",
                 "--worker-pool-id", "pool-1",
+                "--worker-backend", "LANGGRAPH_BIZ",
+                "--physical-worker-id", "worker-1",
+                "--directory-id", "dir-1",
+                "--biz-worker-base-url", "http://127.0.0.1:3161",
                 "--rotate-credentials",
                 "--tenant-profile", ".navigator/tenants/tms-3.env",
                 "--write-profile"}, Map.of());
@@ -762,6 +820,10 @@ class UpstreamCliTest {
         assertTrue(lastBody.contains("\"sourceSystem\":\"TMS\""));
         assertTrue(lastBody.contains("\"sourceTenantId\":\"3\""));
         assertTrue(lastBody.contains("\"clientAppName\":\"TMS 3\""));
+        assertTrue(lastBody.contains("\"upstreamRef\":\"TMS-3\""));
+        assertTrue(lastBody.contains("\"workerBackend\":\"LANGGRAPH_BIZ\""));
+        assertTrue(lastBody.contains("\"physicalWorkerId\":\"worker-1\""));
+        assertTrue(lastBody.contains("\"directoryId\":\"dir-1\""));
         assertTrue(lastBody.contains("\"rotateCredentials\":true"));
         assertTrue(profile.contains("NAVI_BASE_URL=" + baseUrl()));
         assertTrue(profile.contains("NAVI_TENANT_ID=nav_tms_3"));

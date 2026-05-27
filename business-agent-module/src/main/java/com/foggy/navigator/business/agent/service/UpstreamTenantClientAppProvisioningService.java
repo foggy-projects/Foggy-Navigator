@@ -42,6 +42,7 @@ public class UpstreamTenantClientAppProvisioningService {
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
     private static final String DEFAULT_SKILL_ID = "tms.navigator.agent";
     private static final String DEFAULT_AGENT_SUFFIX = "root-agent";
+    private static final String DEFAULT_TMS_WORKER_BACKEND = ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND;
 
     private final ClientAppRepository clientAppRepository;
     private final ClientAppService clientAppService;
@@ -59,6 +60,9 @@ public class UpstreamTenantClientAppProvisioningService {
         }
         String sourceSystem = requireIdentifier(form.getSourceSystem(), "sourceSystem");
         String sourceTenantId = requireIdentifier(form.getSourceTenantId(), "sourceTenantId");
+        String upstreamRef = StringUtils.hasText(form.getUpstreamRef())
+                ? requireIdentifier(form.getUpstreamRef(), "upstreamRef")
+                : sourceTenantId;
         String navigatorTenantId = deriveNavigatorTenantId(sourceSystem, sourceTenantId);
         log.info("Upstream tenant ClientApp provisioning started: sourceSystem={}, sourceTenantId={}, navigatorTenantId={}, rotateCredentials={}, credentialId={}, principalUpstreamSystemId={}, authorizedNamespace={}, authorizedTenantCount={}",
                 sourceSystem, sourceTenantId, navigatorTenantId, form.getRotateCredentials(),
@@ -70,9 +74,9 @@ public class UpstreamTenantClientAppProvisioningService {
 
         boolean appExists = clientAppRepository
                 .findByTenantIdAndUpstreamSystemIdAndUpstreamClientAppNamespaceAndUpstreamRef(
-                        navigatorTenantId, sourceSystem, upstreamNamespace, sourceTenantId)
+                        navigatorTenantId, sourceSystem, upstreamNamespace, upstreamRef)
                 .isPresent();
-        ClientAppDTO clientApp = ensureClientApp(form, sourceSystem, sourceTenantId, navigatorTenantId, upstreamNamespace, actorUserId);
+        ClientAppDTO clientApp = ensureClientApp(form, sourceSystem, sourceTenantId, navigatorTenantId, upstreamNamespace, upstreamRef, actorUserId);
         boolean created = !appExists;
 
         IssuedCredentialDTO runtimeCredential = null;
@@ -85,12 +89,25 @@ public class UpstreamTenantClientAppProvisioningService {
 
         UpstreamTenantClientAppProvisioningDTO result = new UpstreamTenantClientAppProvisioningDTO();
         result.setNavigatorTenantId(clientApp.getTenantId());
+        result.setTargetNavigatorTenantId(navigatorTenantId);
         result.setClientAppId(clientApp.getClientAppId());
         result.setClientAppName(clientApp.getName());
         result.setCapabilityDomain(clientApp.getCapabilityDomain());
+        result.setClientAppCapabilityDomain(clientApp.getCapabilityDomain());
+        result.setUpstreamSystemId(sourceSystem);
+        result.setSourceTenantId(sourceTenantId);
+        result.setUpstreamRef(upstreamRef);
+        result.setUpstreamNamespace(upstreamNamespace);
         result.setClientAppKey(runtimeCredential == null ? null : runtimeCredential.getAppKey());
         result.setClientAppSecret(runtimeCredential == null ? null : runtimeCredential.getSecret());
         result.setControlApiKey(controlCredential == null ? null : controlCredential.getControlApiKey());
+        result.setRequiredScopes(List.of(
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE,
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE));
+        result.setActualScopes(principal.getScopes() == null ? List.of() : List.copyOf(principal.getScopes()));
+        result.setAuthorizedTenantIds(principal.getAuthorizedTenantIds() == null
+                ? List.of()
+                : List.copyOf(principal.getAuthorizedTenantIds()));
         result.setCreated(created);
         result.setRotated(!created && Boolean.TRUE.equals(form.getRotateCredentials()));
         result.setCredentialsReplayable(shouldIssueCredentials);
@@ -102,17 +119,27 @@ public class UpstreamTenantClientAppProvisioningService {
                     sourceSystem, sourceTenantId, clientApp.getTenantId(), clientApp.getClientAppId(),
                     principal.getCredentialId());
         }
-        result.setWorkerPoolId(trimToNull(form.getWorkerPoolId(), 64));
+        String workerPoolId = trimToNull(form.getWorkerPoolId(), 64);
+        String physicalWorkerId = defaultText(form.getPhysicalWorkerId(), workerPoolId);
+        String directoryId = trimToNull(form.getDirectoryId(), 64);
+        String bizWorkerBaseUrl = trimToNull(form.getBizWorkerBaseUrl(), 512);
+        result.setWorkerPoolId(workerPoolId);
+        result.setPhysicalWorkerId(physicalWorkerId);
+        result.setDirectoryId(directoryId);
+        result.setBizWorkerBaseUrl(bizWorkerBaseUrl);
         result.setBindingVersion(UUID.randomUUID().toString());
 
-        String modelConfigId = ensureModelConfigGrant(clientApp.getTenantId(), clientApp.getClientAppId(), form, actorUserId, result.getBlockers());
-        result.setModelConfigId(modelConfigId);
+        ModelGrantSelection modelGrant = ensureModelConfigGrant(clientApp.getTenantId(), clientApp.getClientAppId(), form, actorUserId, result.getBlockers());
+        result.setModelConfigId(modelGrant.modelConfigId());
+        result.setWorkerBackend(resolveWorkerBackend(form, modelGrant.workerBackend(), sourceSystem));
 
         String skillId = defaultText(form.getSkillId(), DEFAULT_SKILL_ID);
-        String rootAgentId = ensureRootAgent(clientApp, form, actorUserId, modelConfigId, skillId, result.getBlockers());
+        String rootAgentId = ensureRootAgent(clientApp, form, actorUserId, modelGrant.modelConfigId(), skillId, result.getBlockers());
+        result.setAgentCode(rootAgentId);
         result.setRootAgentId(rootAgentId);
         result.setSkillId(skillId);
         ensureRootSkillBundle(clientApp, actorUserId, skillId, rootAgentId, form);
+        populateActivationReadiness(result);
         log.info("Upstream tenant ClientApp provisioning finished: sourceSystem={}, sourceTenantId={}, navigatorTenantId={}, clientAppId={}, created={}, rotated={}, status={}, credentialsReplayable={}, modelConfigId={}, rootAgentId={}, skillId={}, blockers={}",
                 sourceSystem, sourceTenantId, result.getNavigatorTenantId(), result.getClientAppId(),
                 result.isCreated(), result.isRotated(), result.getStatus(), result.isCredentialsReplayable(),
@@ -186,14 +213,15 @@ public class UpstreamTenantClientAppProvisioningService {
                                          String sourceTenantId,
                                          String navigatorTenantId,
                                          String upstreamNamespace,
+                                         String upstreamRef,
                                          String actorUserId) {
         return clientAppRepository
                 .findByTenantIdAndUpstreamSystemIdAndUpstreamClientAppNamespaceAndUpstreamRef(
-                        navigatorTenantId, sourceSystem, upstreamNamespace, sourceTenantId)
+                        navigatorTenantId, sourceSystem, upstreamNamespace, upstreamRef)
                 .map(app -> updateExistingClientApp(app, form))
                 .map(ClientAppDTO::fromEntity)
                 .orElseGet(() -> ClientAppDTO.fromEntity(createClientApp(form, sourceSystem, sourceTenantId,
-                        navigatorTenantId, upstreamNamespace, actorUserId)));
+                        navigatorTenantId, upstreamNamespace, upstreamRef, actorUserId)));
     }
 
     private ClientAppEntity createClientApp(EnsureUpstreamTenantClientAppForm form,
@@ -201,6 +229,7 @@ public class UpstreamTenantClientAppProvisioningService {
                                             String sourceTenantId,
                                             String navigatorTenantId,
                                             String upstreamNamespace,
+                                            String upstreamRef,
                                             String actorUserId) {
         ClientAppEntity entity = new ClientAppEntity();
         entity.setClientAppId("capp_" + UUID.randomUUID());
@@ -210,7 +239,7 @@ public class UpstreamTenantClientAppProvisioningService {
         entity.setCapabilityDomain(defaultCapabilityDomain(form, sourceSystem, sourceTenantId));
         entity.setUpstreamSystemId(sourceSystem);
         entity.setUpstreamClientAppNamespace(upstreamNamespace);
-        entity.setUpstreamRef(sourceTenantId);
+        entity.setUpstreamRef(upstreamRef);
         entity.setStatus(ClientAppService.STATUS_ACTIVE);
         entity.setCreatedBy(defaultText(actorUserId, "upstream-tenant-provisioning"));
         return clientAppRepository.save(entity);
@@ -253,22 +282,23 @@ public class UpstreamTenantClientAppProvisioningService {
                 credentialForm);
     }
 
-    private String ensureModelConfigGrant(String tenantId,
-                                          String clientAppId,
-                                          EnsureUpstreamTenantClientAppForm form,
-                                          String actorUserId,
-                                          List<String> blockers) {
+    private ModelGrantSelection ensureModelConfigGrant(String tenantId,
+                                                       String clientAppId,
+                                                       EnsureUpstreamTenantClientAppForm form,
+                                                       String actorUserId,
+                                                       List<String> blockers) {
         if (StringUtils.hasText(form.getModelConfigId())) {
             String modelConfigId = form.getModelConfigId().trim();
             Optional<ClientAppModelConfigGrantDTO> existing = modelConfigGrantService.listGrants(tenantId, clientAppId).stream()
                     .filter(grant -> modelConfigId.equals(grant.getModelConfigId()))
                     .findFirst();
+            ClientAppModelConfigGrantDTO ensuredGrant;
             if (existing.isEmpty()) {
                 GrantModelConfigForm grantForm = new GrantModelConfigForm();
                 grantForm.setModelConfigId(modelConfigId);
                 grantForm.setIsDefault(true);
                 grantForm.setGrantScope("APP");
-                modelConfigGrantService.grantModelConfig(tenantId, actorUserId, clientAppId, grantForm);
+                ensuredGrant = modelConfigGrantService.grantModelConfig(tenantId, actorUserId, clientAppId, grantForm);
             } else {
                 ClientAppModelConfigGrantDTO grant = existing.get();
                 if (!ClientAppModelConfigGrantService.STATUS_ENABLED.equals(grant.getStatus())) {
@@ -278,8 +308,9 @@ public class UpstreamTenantClientAppProvisioningService {
                 if (!Boolean.TRUE.equals(grant.getIsDefault())) {
                     modelConfigGrantService.setDefault(tenantId, clientAppId, grant.getId());
                 }
+                ensuredGrant = grant;
             }
-            return modelConfigId;
+            return new ModelGrantSelection(modelConfigId, ensuredGrant == null ? null : ensuredGrant.getWorkerBackend());
         }
 
         Optional<ClientAppModelConfigGrantDTO> defaultGrant = modelConfigGrantService.listGrants(tenantId, clientAppId).stream()
@@ -294,12 +325,13 @@ public class UpstreamTenantClientAppProvisioningService {
                 })
                 .findFirst();
         if (defaultGrant.isPresent()) {
-            return defaultGrant.get().getModelConfigId();
+            ClientAppModelConfigGrantDTO grant = defaultGrant.get();
+            return new ModelGrantSelection(grant.getModelConfigId(), grant.getWorkerBackend());
         }
 
         String profile = StringUtils.hasText(form.getModelProfileCode()) ? form.getModelProfileCode().trim() : "default";
         blockers.add("modelConfigId is missing and no default ClientApp model grant exists for profile: " + profile);
-        return null;
+        return new ModelGrantSelection(null, null);
     }
 
     private String ensureRootAgent(ClientAppDTO clientApp,
@@ -320,9 +352,13 @@ public class UpstreamTenantClientAppProvisioningService {
         entity.setName(defaultText(form.getTenantName(), clientApp.getName() + " root agent"));
         entity.setDescription("Upstream tenant root agent for ClientApp " + clientApp.getClientAppId());
         entity.setAgentType(BusinessAgentBundleService.AGENT_TYPE_LANGGRAPH);
-        String explicitWorkerId = trimToNull(form.getWorkerPoolId(), 64);
+        String explicitWorkerId = trimToNull(defaultText(form.getPhysicalWorkerId(), form.getWorkerPoolId()), 64);
         if (StringUtils.hasText(explicitWorkerId)) {
             entity.setWorkerId(explicitWorkerId);
+        }
+        String explicitDirectoryId = trimToNull(form.getDirectoryId(), 64);
+        if (StringUtils.hasText(explicitDirectoryId)) {
+            entity.setDefaultDirectoryId(explicitDirectoryId);
         }
         entity.setDefaultModelConfigId(modelConfigId);
         entity.setSkills(buildSkillSummary(skillId, entity.getName(), entity.getDescription()));
@@ -353,6 +389,53 @@ public class UpstreamTenantClientAppProvisioningService {
         skillRegistryService.syncSkillBundle(clientApp.getTenantId(), actorUserId, skillForm);
     }
 
+    private String resolveWorkerBackend(EnsureUpstreamTenantClientAppForm form,
+                                        String modelWorkerBackend,
+                                        String sourceSystem) {
+        String explicit = ClientAppModelConfigGrantService.normalizeWorkerBackend(form.getWorkerBackend());
+        if (StringUtils.hasText(explicit)) {
+            return explicit;
+        }
+        String fromGrant = ClientAppModelConfigGrantService.normalizeWorkerBackend(modelWorkerBackend);
+        if (StringUtils.hasText(fromGrant)) {
+            return fromGrant;
+        }
+        if ("TMS".equalsIgnoreCase(sourceSystem)) {
+            return DEFAULT_TMS_WORKER_BACKEND;
+        }
+        return null;
+    }
+
+    private void populateActivationReadiness(UpstreamTenantClientAppProvisioningDTO result) {
+        requireActivationField(result, "navigatorTenantId", result.getNavigatorTenantId());
+        requireActivationField(result, "clientAppId", result.getClientAppId());
+        requireActivationField(result, "clientAppName", result.getClientAppName());
+        requireActivationField(result, "clientAppCapabilityDomain", result.getClientAppCapabilityDomain());
+        requireActivationField(result, "upstreamRef", result.getUpstreamRef());
+        requireActivationField(result, "runtimeCredential.clientAppKey", result.getClientAppKey());
+        requireActivationField(result, "runtimeCredential.clientAppSecret", result.getClientAppSecret());
+        requireActivationField(result, "controlCredential.controlApiKey", result.getControlApiKey());
+        requireActivationField(result, "agentCode", result.getAgentCode());
+        requireActivationField(result, "rootAgentId", result.getRootAgentId());
+        requireActivationField(result, "skillId", result.getSkillId());
+        requireActivationField(result, "modelConfigId", result.getModelConfigId());
+        requireActivationField(result, "workerBackend", result.getWorkerBackend());
+        requireActivationField(result, "physicalWorkerId", result.getPhysicalWorkerId());
+        requireActivationField(result, "directoryId", result.getDirectoryId());
+        result.setActivationReady(result.getMissingFields().isEmpty());
+        if (!result.isActivationReady() && !StringUtils.hasText(result.getRemediationHint())) {
+            result.setRemediationHint("rerun ensure-tenant with rotateCredentials=true and provide missing activation policy fields");
+        }
+    }
+
+    private void requireActivationField(UpstreamTenantClientAppProvisioningDTO result,
+                                        String fieldName,
+                                        String value) {
+        if (!StringUtils.hasText(value)) {
+            result.getMissingFields().add(fieldName);
+        }
+    }
+
     private String buildSkillSummary(String skillId, String name, String description) {
         try {
             return objectMapper.writeValueAsString(List.of(Map.of(
@@ -381,6 +464,9 @@ public class UpstreamTenantClientAppProvisioningService {
     }
 
     private String defaultRootAgentId(EnsureUpstreamTenantClientAppForm form, ClientAppDTO clientApp) {
+        if (StringUtils.hasText(form.getAgentCode())) {
+            return trimToLength(form.getAgentCode(), 64);
+        }
         if (StringUtils.hasText(form.getAgentBundleCode())) {
             return trimToLength(form.getAgentBundleCode(), 64);
         }
@@ -437,5 +523,8 @@ public class UpstreamTenantClientAppProvisioningService {
     private String trimToLength(String value, int maxLength) {
         String trimmed = value.trim();
         return trimmed.length() <= maxLength ? trimmed : trimmed.substring(0, maxLength);
+    }
+
+    private record ModelGrantSelection(String modelConfigId, String workerBackend) {
     }
 }

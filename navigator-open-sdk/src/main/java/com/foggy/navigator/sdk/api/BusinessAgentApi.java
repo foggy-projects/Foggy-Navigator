@@ -203,6 +203,15 @@ public class BusinessAgentApi {
                 + urlEncode(requestCode) + "/claim", form, new TypeReference<>() {});
     }
 
+    public UpstreamAdminCredentialDTO inspectCurrentUpstreamAdminCredential() {
+        return inspectCurrentUpstreamAdminCredential(null);
+    }
+
+    public UpstreamAdminCredentialDTO inspectCurrentUpstreamAdminCredential(String upstreamAdminApiKey) {
+        return http.getWithUpstreamAdminAuth("/api/v1/upstream-admin/admin-credential/current",
+                upstreamAdminApiKey, new TypeReference<>() {});
+    }
+
     public List<UpstreamBootstrapRequestDTO> listUpstreamBootstrapRequests(String status) {
         return listUpstreamBootstrapRequests(status, null);
     }
