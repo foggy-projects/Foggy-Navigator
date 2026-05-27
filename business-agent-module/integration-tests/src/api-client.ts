@@ -167,6 +167,11 @@ export class BusinessAgentClient {
     return unwrapData<BizWorkerIdentity>(response.data);
   }
 
+  async registerUpstreamWorkerIdentity(body: RequestBody): Promise<BizWorkerIdentity> {
+    const response = await this.client.post('/api/v1/upstream-admin/worker-identities', body);
+    return unwrapData<BizWorkerIdentity>(response.data);
+  }
+
   async addWorkerPoolMember(poolId: string, body: RequestBody): Promise<void> {
     const response = await this.client.post(
       `/api/v1/business-agent/worker-pools/${encodeURIComponent(poolId)}/members`,

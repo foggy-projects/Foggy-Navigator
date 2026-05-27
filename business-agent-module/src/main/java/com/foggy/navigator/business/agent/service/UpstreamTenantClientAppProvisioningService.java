@@ -38,6 +38,7 @@ public class UpstreamTenantClientAppProvisioningService {
 
     public static final String STATUS_READY = "READY";
     public static final String STATUS_CREDENTIALS_NOT_REPLAYABLE = "CREDENTIALS_NOT_REPLAYABLE";
+    public static final String ERROR_RUNTIME_AGENT_RESOURCE = "RUNTIME_AGENT_RESOURCE";
 
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
     private static final String DEFAULT_SKILL_ID = "tms.navigator.agent";
@@ -50,6 +51,7 @@ public class UpstreamTenantClientAppProvisioningService {
     private final BusinessCodingAgentRepository agentRepository;
     private final SkillRegistryService skillRegistryService;
     private final AgentDefaultBindingService agentDefaultBindingService;
+    private final A2AgentResourceResolver agentResourceResolver;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -139,6 +141,7 @@ public class UpstreamTenantClientAppProvisioningService {
         result.setRootAgentId(rootAgentId);
         result.setSkillId(skillId);
         ensureRootSkillBundle(clientApp, actorUserId, skillId, rootAgentId, form);
+        validateRuntimeAgentResource(clientApp, actorUserId, result);
         populateActivationReadiness(result);
         log.info("Upstream tenant ClientApp provisioning finished: sourceSystem={}, sourceTenantId={}, navigatorTenantId={}, clientAppId={}, created={}, rotated={}, status={}, credentialsReplayable={}, modelConfigId={}, rootAgentId={}, skillId={}, blockers={}",
                 sourceSystem, sourceTenantId, result.getNavigatorTenantId(), result.getClientAppId(),
@@ -425,6 +428,60 @@ public class UpstreamTenantClientAppProvisioningService {
         result.setActivationReady(result.getMissingFields().isEmpty());
         if (!result.isActivationReady() && !StringUtils.hasText(result.getRemediationHint())) {
             result.setRemediationHint("rerun ensure-tenant with rotateCredentials=true and provide missing activation policy fields");
+        }
+    }
+
+    private void validateRuntimeAgentResource(ClientAppDTO clientApp,
+                                              String actorUserId,
+                                              UpstreamTenantClientAppProvisioningDTO result) {
+        if (!StringUtils.hasText(result.getRootAgentId()) || !StringUtils.hasText(result.getPhysicalWorkerId())) {
+            return;
+        }
+        try {
+            agentResourceResolver.resolveRequiredAgent(
+                    clientApp.getTenantId(),
+                    clientApp.getClientAppId(),
+                    actorUserId,
+                    result.getRootAgentId());
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            String message = e.getMessage();
+            String detail = StringUtils.hasText(message) ? message : e.getClass().getSimpleName();
+            result.getBlockers().add("runtime agent resource is not activation-ready: " + detail);
+            if (!StringUtils.hasText(result.getErrorCode())) {
+                result.setErrorCode(ERROR_RUNTIME_AGENT_RESOURCE);
+            }
+            addMissingField(result, classifyRuntimeAgentResourceField(detail));
+            if (!StringUtils.hasText(result.getRemediationHint())) {
+                result.setRemediationHint("configure physical worker owner for " + result.getPhysicalWorkerId()
+                        + ": use ownerType=PLATFORM ownerId=platform for shared runtime infrastructure, or ownerType=UPSTREAM_SYSTEM ownerId="
+                        + result.getUpstreamSystemId()
+                        + " for an upstream-system dedicated worker; then rerun ensure-tenant with rotateCredentials=true");
+            }
+        }
+    }
+
+    private String classifyRuntimeAgentResourceField(String detail) {
+        if (detail != null && detail.contains("owner is not configured")) {
+            return "physicalWorker.owner";
+        }
+        if (detail != null && detail.contains("backend is not configured")) {
+            return "physicalWorker.workerBackend";
+        }
+        if (detail != null && detail.contains("not healthy")) {
+            return "physicalWorker.healthStatus";
+        }
+        if (detail != null && detail.contains("disabled")) {
+            return "physicalWorker.status";
+        }
+        if (detail != null && detail.contains("not visible")) {
+            return "physicalWorker.visibility";
+        }
+        return "runtimeAgentResource";
+    }
+
+    private void addMissingField(UpstreamTenantClientAppProvisioningDTO result, String fieldName) {
+        if (!result.getMissingFields().contains(fieldName)) {
+            result.getMissingFields().add(fieldName);
         }
     }
 

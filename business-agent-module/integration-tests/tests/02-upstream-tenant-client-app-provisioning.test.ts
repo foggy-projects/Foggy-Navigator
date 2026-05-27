@@ -38,7 +38,7 @@ describe('02 - Upstream tenant ClientApp provisioning', () => {
     await adminClient.approveUpstreamAdminKeyRequest(adminKeyRequest.requestCode, {
       authorizedTenantIds: [navigatorTenantId],
       authorizedClientAppNamespace: sourceSystem,
-      scopes: ['CLIENT_APP_MANAGE', 'CLIENT_APP_CONTROL_KEY_ISSUE']
+      scopes: ['CLIENT_APP_MANAGE', 'CLIENT_APP_CONTROL_KEY_ISSUE', 'WORKER_POOL_MANAGE']
     });
 
     const claimed = await bootstrapClient.claimUpstreamAdminKey(adminKeyRequest.requestCode, {
@@ -57,7 +57,21 @@ describe('02 - Upstream tenant ClientApp provisioning', () => {
     expect(inspected.authorizedClientAppNamespace).toBe(sourceSystem);
     expect(inspected.scopes).toContain('CLIENT_APP_MANAGE');
     expect(inspected.scopes).toContain('CLIENT_APP_CONTROL_KEY_ISSUE');
+    expect(inspected.scopes).toContain('WORKER_POOL_MANAGE');
     expect(inspected.status).toBe('ACTIVE');
+
+    const workerIdentity = await client.registerUpstreamWorkerIdentity({
+      workerId: physicalWorkerId,
+      workerBackend,
+      baseUrl: bizWorkerBaseUrl,
+      version: `e2e-${suffix}`
+    });
+    expect(workerIdentity.workerId).toBe(physicalWorkerId);
+    expect(workerIdentity.ownerType).toBe('UPSTREAM_SYSTEM');
+    expect(workerIdentity.ownerId).toBe(sourceSystem);
+    expect(workerIdentity.workerBackend).toBe(workerBackend);
+    expect(workerIdentity.status).toBe('ENABLED');
+    expect(workerIdentity.healthStatus).toBe('HEALTHY');
 
     const provisioningPayload = {
       sourceSystem,

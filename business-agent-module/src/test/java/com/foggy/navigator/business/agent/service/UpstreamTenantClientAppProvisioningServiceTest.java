@@ -31,6 +31,7 @@ class UpstreamTenantClientAppProvisioningServiceTest {
     private ClientAppModelConfigGrantService modelConfigGrantService;
     private SkillRegistryService skillRegistryService;
     private AgentDefaultBindingService agentDefaultBindingService;
+    private A2AgentResourceResolver agentResourceResolver;
     private UpstreamTenantClientAppProvisioningService service;
 
     @BeforeEach
@@ -60,8 +61,29 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         modelConfigGrantService = mock(ClientAppModelConfigGrantService.class);
         skillRegistryService = mock(SkillRegistryService.class);
         agentDefaultBindingService = mock(AgentDefaultBindingService.class);
+        agentResourceResolver = mock(A2AgentResourceResolver.class);
         when(modelConfigGrantService.listGrants(anyString(), anyString()))
                 .thenReturn(List.of(defaultModelGrant()));
+        when(agentResourceResolver.resolveRequiredAgent(anyString(), anyString(), anyString(), anyString()))
+                .thenAnswer(inv -> new A2AgentResourceResolver.ResolvedAgentResource(
+                        inv.getArgument(3),
+                        ResourceOwnerType.CLIENT_APP,
+                        inv.getArgument(1),
+                        inv.getArgument(1),
+                        "tms.navigator.agent",
+                        null,
+                        null,
+                        null,
+                        null,
+                        ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND,
+                        "biz-worker",
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "TMS",
+                        "PHYSICAL_WORKER_IDENTITY:UPSTREAM_SYSTEM",
+                        "model-1",
+                        null,
+                        "dir-tms-3",
+                        "AGENT:CLIENT_APP"));
         when(clientAppService.issueRuntimeCredential(anyString(), anyString(), any())).thenAnswer(inv -> {
             IssuedCredentialDTO dto = new IssuedCredentialDTO();
             dto.setTenantId(inv.getArgument(0));
@@ -85,6 +107,7 @@ class UpstreamTenantClientAppProvisioningServiceTest {
                 agentRepository,
                 skillRegistryService,
                 agentDefaultBindingService,
+                agentResourceResolver,
                 new ObjectMapper());
     }
 
@@ -266,6 +289,25 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         CodingAgentEntity rootAgent = agentsByKey.get(agentKey("tms.ops-root-agent", "nav_tms_3"));
         assertEquals("worker-physical-1", rootAgent.getWorkerId());
         assertEquals("dir-override", rootAgent.getDefaultDirectoryId());
+    }
+
+    @Test
+    void ensureMarksActivationNotReadyWhenPhysicalWorkerOwnerIsMissing() {
+        EnsureUpstreamTenantClientAppForm form = form(false);
+        form.setPhysicalWorkerId("dev-langgraph-worker-20260504123547");
+        when(agentResourceResolver.resolveRequiredAgent(anyString(), anyString(), anyString(), anyString()))
+                .thenThrow(new IllegalStateException(
+                        "physical worker owner is not configured: dev-langgraph-worker-20260504123547"));
+
+        var result = service.ensure(form, principal("nav_tms_3"));
+
+        assertFalse(result.isActivationReady());
+        assertEquals(UpstreamTenantClientAppProvisioningService.ERROR_RUNTIME_AGENT_RESOURCE, result.getErrorCode());
+        assertTrue(result.getMissingFields().contains("physicalWorker.owner"));
+        assertTrue(result.getBlockers().stream()
+                .anyMatch(item -> item.contains("physical worker owner is not configured")));
+        assertTrue(result.getRemediationHint().contains("ownerType=PLATFORM ownerId=platform"));
+        assertTrue(result.getRemediationHint().contains("ownerType=UPSTREAM_SYSTEM ownerId=TMS"));
     }
 
     private EnsureUpstreamTenantClientAppForm form(boolean rotateCredentials) {
