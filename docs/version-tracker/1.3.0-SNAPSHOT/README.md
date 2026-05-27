@@ -45,8 +45,10 @@
 - [workitems/BUG-038-multi-image-ticket-submits-only-one-attachment.md](./workitems/BUG-038-multi-image-ticket-submits-only-one-attachment.md) - multi-image TMS ticket creation reaches BusinessFunction with only one attachment
 - [workitems/BUG-039-chat-attachments-lost-after-session-reopen.md](./workitems/BUG-039-chat-attachments-lost-after-session-reopen.md) - chat message attachments are lost after refresh or session reopen
 - [workitems/BUG-040-concise-mode-shows-tool-events-after-session-reopen.md](./workitems/BUG-040-concise-mode-shows-tool-events-after-session-reopen.md) - concise mode renders raw tool events after session reopen
+
 - [workitems/BUG-041-upstream-task-diagnostics-gap.md](./workitems/BUG-041-upstream-task-diagnostics-gap.md) - upstream task/messages diagnostics gap and School Sim M2 recheck follow-up
 - [workitems/BUG-042-biz-agent-skill-handoff-smoke.md](./workitems/BUG-042-biz-agent-skill-handoff-smoke.md) - School Sim Biz actor live smoke prompt/skill handoff validation, closed by R11
+
 - [workitems/REQ-126-mobile-agent-chat-component.md](./workitems/REQ-126-mobile-agent-chat-component.md) - mobile-ready public Agent chat component for upstream Vue 3 apps
 - [workitems/BUG-issue-115-world-sim-route-smoke-blocked.md](./workitems/BUG-issue-115-world-sim-route-smoke-blocked.md) - issue #115 live smoke is blocked by CLI release and control credential scope
 - [acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md](./acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md)
