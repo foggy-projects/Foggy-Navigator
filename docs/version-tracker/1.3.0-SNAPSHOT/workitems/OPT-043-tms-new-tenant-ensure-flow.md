@@ -206,6 +206,7 @@ After this, new TMS tenant creation should not require manual data patching acro
 - Added TMS default worker backend fallback to `LANGGRAPH_BIZ` while preserving explicit request overrides and model-grant-derived worker backend where available.
 - Added upstream admin credential self-inspection API and CLI support through `GET /api/v1/upstream-admin/admin-credential/current` and `navi upstream admin-key inspect`.
 - Updated SDK models, Java CLI output, and tenant profile writing for the expanded provisioning payload.
+- Added a real local HTTP smoke / mock E2E regression in `business-agent-module/integration-tests/tests/02-upstream-tenant-client-app-provisioning.test.ts`. The test exercises bootstrap admin-key request/approve/claim, admin credential inspect, `ensure-tenant`, model grant creation, non-replayable credential reuse, and activation-ready credential rotation.
 
 ## Test Record
 
@@ -213,3 +214,7 @@ After this, new TMS tenant creation should not require manual data patching acro
 | --- | --- | --- | --- |
 | 2026-05-27 17:42 +08:00 | Targeted Java unit tests | `mvn -pl business-agent-module,navigator-open-sdk -am "-Dtest=UpstreamTenantClientAppProvisioningServiceTest,BizWorkerControlPlaneAuthorizationTest,UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test` | PASS: 115 tests passed across provisioning service, control-plane auth, and upstream CLI suites. |
 | 2026-05-27 17:47 +08:00 | Full Maven reactor unit tests | `mvn test` | PASS: 240 Surefire report files, 1650 tests, 0 failures, 0 errors, 0 skipped. |
+| 2026-05-27 18:24 +08:00 | Integration test typecheck | `npm run typecheck` in `business-agent-module/integration-tests` | PASS: TypeScript integration client and tests compile. |
+| 2026-05-27 18:27 +08:00 | Local launcher rebuild and restart | `.\start-launcher.ps1` | PASS: rebuilt `launcher/target/launcher-1.0.0-SNAPSHOT.jar`, restarted local Navigator on `http://localhost:8112`; `/actuator/health` returned `UP` with MySQL and Rabbit `UP`. |
+| 2026-05-27 18:28 +08:00 | Real local HTTP smoke / mock E2E regression | `npx vitest run tests/02-upstream-tenant-client-app-provisioning.test.ts` in `business-agent-module/integration-tests` | PASS: 1 test passed. Covered admin key request/approve/claim, current admin credential inspect, first `ensure-tenant` activation payload with missing `modelConfigId`, ClientApp model grant creation, non-replayable repeated ensure, and rotate ensure returning `activationReady=true`. |
+| 2026-05-27 18:31 +08:00 | Full Maven reactor unit tests | `mvn test` | PASS: 240 Surefire report files, 1650 tests, 0 failures, 0 errors, 0 skipped. |

@@ -28,24 +28,41 @@ export interface IssuedCredential {
 
 export interface UpstreamTenantClientAppProvisioning {
   navigatorTenantId: string;
+  targetNavigatorTenantId?: string;
   clientAppId: string;
   clientAppName: string;
   capabilityDomain: string;
+  clientAppCapabilityDomain?: string;
+  upstreamSystemId?: string;
+  sourceTenantId?: string;
+  upstreamRef?: string;
+  upstreamNamespace?: string;
   clientAppKey?: string;
   clientAppSecret?: string;
   controlApiKey?: string;
+  agentCode?: string;
   rootAgentId?: string;
   modelConfigId?: string;
   skillId?: string;
   workerPoolId?: string;
+  workerBackend?: string;
+  physicalWorkerId?: string;
+  directoryId?: string;
+  bizWorkerBaseUrl?: string;
   bindingVersion: string;
   status?: string;
   errorCode?: string;
   message?: string;
+  remediationHint?: string;
   credentialsReplayable?: boolean;
   created: boolean;
   rotated: boolean;
+  activationReady?: boolean;
   blockers: string[];
+  missingFields?: string[];
+  requiredScopes?: string[];
+  actualScopes?: string[];
+  authorizedTenantIds?: string[];
 }
 
 export interface UpstreamBootstrapRequestCreated {
@@ -64,6 +81,24 @@ export interface UpstreamAdminCredentialClaim {
   authorizedClientAppNamespace: string;
   scopes: string[];
   expiresAt?: string;
+}
+
+export interface UpstreamAdminCredential {
+  credentialId: string;
+  principalId?: string;
+  credentialKeyPrefix?: string;
+  credentialKeySuffix?: string;
+  upstreamSystemId: string;
+  authorizedTenantIds: string[];
+  authorizedClientAppNamespace: string;
+  scopes: string[];
+  status: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  lastUsedAt?: string;
+  sourceRequestId?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ClientApp {

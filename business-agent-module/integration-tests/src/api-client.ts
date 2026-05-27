@@ -17,6 +17,7 @@ import type {
   LoginResultDTO,
   RXResponse,
   Skill,
+  UpstreamAdminCredential,
   UpstreamAdminCredentialClaim,
   UpstreamBootstrapRequestCreated,
   UpstreamTenantClientAppProvisioning
@@ -136,6 +137,11 @@ export class BusinessAgentClient {
       body
     );
     return unwrapData<UpstreamAdminCredentialClaim>(response.data);
+  }
+
+  async inspectCurrentUpstreamAdminCredential(): Promise<UpstreamAdminCredential> {
+    const response = await this.client.get('/api/v1/upstream-admin/admin-credential/current');
+    return unwrapData<UpstreamAdminCredential>(response.data);
   }
 
   async ensureUpstreamTenantClientApp(body: RequestBody): Promise<UpstreamTenantClientAppProvisioning> {
