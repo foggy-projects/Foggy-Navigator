@@ -123,6 +123,23 @@ class UpstreamBootstrapRequestServiceTest {
     }
 
     @Test
+    void approveSplitsWhitespaceJoinedScopeArgument() {
+        UpstreamBootstrapRequestEntity request = pendingRequest("request-code", "claim-token", "tenant-1");
+        when(requestRepository.findByRequestCodeHashForUpdate(SecretTokenSupport.sha256("request-code")))
+                .thenReturn(Optional.of(request));
+
+        ApproveUpstreamBootstrapRequestForm approveForm = new ApproveUpstreamBootstrapRequestForm();
+        approveForm.setScopes(List.of("CLIENT_APP_MANAGE CLIENT_APP_CONTROL_KEY_ISSUE CLIENT_APP_RUNTIME_KEY_ISSUE"));
+
+        UpstreamBootstrapRequestDTO approved = service.approve("request-code", approveForm, operatorActor());
+
+        assertEquals(List.of(
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE,
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE,
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE), approved.getScopes());
+    }
+
+    @Test
     void approveWithNoExpirySentinelIssuesNoExpiryAdminKey() {
         UpstreamBootstrapRequestEntity request = pendingRequest("request-code", "claim-token", "tenant-1");
         when(requestRepository.findByRequestCodeHashForUpdate(SecretTokenSupport.sha256("request-code")))

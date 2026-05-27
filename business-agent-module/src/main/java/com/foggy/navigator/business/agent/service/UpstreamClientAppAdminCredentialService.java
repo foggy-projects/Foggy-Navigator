@@ -210,9 +210,11 @@ public class UpstreamClientAppAdminCredentialService {
         }
         Set<String> result = new LinkedHashSet<>();
         for (String value : values) {
-            String canonical = UpstreamBootstrapRequestService.canonicalizeScope(value);
-            if (StringUtils.hasText(canonical)) {
-                result.add(canonical);
+            for (String token : value.split("[,\\s]+")) {
+                String canonical = UpstreamBootstrapRequestService.canonicalizeScope(token);
+                if (StringUtils.hasText(canonical)) {
+                    result.add(canonical);
+                }
             }
         }
         return result;

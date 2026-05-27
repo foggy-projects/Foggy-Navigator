@@ -375,9 +375,11 @@ public class UpstreamBootstrapRequestService {
         }
         Set<String> normalized = new LinkedHashSet<>();
         for (String scope : scopes) {
-            String canonical = canonicalizeScope(scope);
-            if (StringUtils.hasText(canonical)) {
-                normalized.add(canonical);
+            for (String token : scope.split("[,\\s]+")) {
+                String canonical = canonicalizeScope(token);
+                if (StringUtils.hasText(canonical)) {
+                    normalized.add(canonical);
+                }
             }
         }
         if (normalized.isEmpty()) {
