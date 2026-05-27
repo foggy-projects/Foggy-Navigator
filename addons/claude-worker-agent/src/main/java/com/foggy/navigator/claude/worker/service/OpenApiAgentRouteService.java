@@ -31,7 +31,10 @@ public class OpenApiAgentRouteService {
         }
 
         CodingAgentEntity agent = codingAgentRepository.findByAgentIdAndTenantId(routeAgentId, credential.getTenantId())
-                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + routeAgentId));
+                .orElseThrow(() -> bindingFailure(
+                        "ROOT_AGENT_NOT_FOUND",
+                        "Agent not found: " + routeAgentId,
+                        "Register or resync the ClientApp root agent with `upstream agent sync --manifest <agent-manifest.json>`, then rerun verify-agent-readiness."));
         ClientAppEntity clientApp = clientAppService.requireClientApp(
                 credential.getTenantId(),
                 credential.getClientAppId());
@@ -46,7 +49,12 @@ public class OpenApiAgentRouteService {
         validateAgentVisibility(routeAgentId, credential, clientApp, agent);
         String boundClientAppId = resolveProfileText(agent.getAgentProfile(), "clientAppId", "client_app_id");
         if (StringUtils.hasText(boundClientAppId) && !boundClientAppId.equals(credential.getClientAppId())) {
-            throw new IllegalArgumentException("Agent is not bound to this ClientApp: " + routeAgentId);
+            throw bindingFailure(
+                    "ROOT_AGENT_PROFILE_CLIENT_APP_MISMATCH",
+                    "Agent profile ClientApp binding mismatch: agentId=" + routeAgentId
+                            + " expectedClientAppId=" + credential.getClientAppId()
+                            + " profileClientAppId=" + boundClientAppId,
+                    "Update the root agent profile for this ClientApp or resync the agent bundle with `upstream agent sync --manifest <agent-manifest.json>`.");
         }
 
         String skillId = firstText(
@@ -67,31 +75,60 @@ public class OpenApiAgentRouteService {
             ClientAppEntity clientApp,
             CodingAgentEntity agent) {
         if (!Boolean.TRUE.equals(agent.getEnabled())) {
-            throw new IllegalArgumentException("Agent is disabled: " + routeAgentId);
+            throw bindingFailure(
+                    "ROOT_AGENT_DISABLED",
+                    "Agent is disabled: " + routeAgentId,
+                    "Enable or resync the root agent for this profile, then rerun verify-agent-readiness.");
         }
         if (!credential.getTenantId().equals(agent.getTenantId())) {
-            throw new IllegalArgumentException("Agent not found: " + routeAgentId);
+            throw bindingFailure(
+                    "ROOT_AGENT_TENANT_MISMATCH",
+                    "Agent tenant mismatch: agentId=" + routeAgentId
+                            + " expectedTenantId=" + credential.getTenantId()
+                            + " actualTenantId=" + agent.getTenantId(),
+                    "Use a profile for the same Navigator tenant as the root agent, or recreate the profile/agent pair.");
         }
         ResourceOwnerType ownerType = agent.getOwnerType();
         String ownerId = agent.getOwnerId();
         if (ownerType == null || !StringUtils.hasText(ownerId)) {
-            throw new IllegalArgumentException("Agent owner is not configured: " + routeAgentId);
+            throw bindingFailure(
+                    "ROOT_AGENT_OWNER_MISSING",
+                    "Agent owner is not configured: " + routeAgentId,
+                    "Recreate or resync the root agent so it is owned by this ClientApp or its upstream system.");
         }
         if (ownerType == ResourceOwnerType.CLIENT_APP) {
             if (!ownerId.equals(credential.getClientAppId())
                     || (StringUtils.hasText(agent.getClientAppId())
                     && !agent.getClientAppId().equals(credential.getClientAppId()))) {
-                throw new IllegalArgumentException("Agent is not bound to this ClientApp: " + routeAgentId);
+                throw bindingFailure(
+                        "ROOT_AGENT_CLIENT_APP_MISMATCH",
+                        "Agent ClientApp binding mismatch: agentId=" + routeAgentId
+                                + " expectedClientAppId=" + credential.getClientAppId()
+                                + " ownerType=" + ownerType
+                                + " ownerId=" + ownerId
+                                + " agentClientAppId=" + valueOrEmpty(agent.getClientAppId()),
+                        "Use the profile whose NAVI_CLIENT_APP_ID owns this agent, or resync/register this root agent for the current ClientApp with `upstream agent sync --manifest <agent-manifest.json>`.");
             }
             return;
         }
         if (ownerType == ResourceOwnerType.UPSTREAM_SYSTEM) {
             if (clientApp == null || !ownerId.equals(clientApp.getUpstreamSystemId())) {
-                throw new IllegalArgumentException("Agent is not visible to this ClientApp: " + routeAgentId);
+                throw bindingFailure(
+                        "ROOT_AGENT_UPSTREAM_SYSTEM_MISMATCH",
+                        "Agent upstream-system visibility mismatch: agentId=" + routeAgentId
+                                + " expectedUpstreamSystemId=" + valueOrEmpty(clientApp != null ? clientApp.getUpstreamSystemId() : null)
+                                + " ownerType=" + ownerType
+                                + " ownerId=" + ownerId,
+                        "Use a ClientApp from the same upstream system as this root agent, or create an upstream-system root agent for the current system.");
             }
             return;
         }
-        throw new IllegalArgumentException("Agent owner is not visible to ClientApp runtime tokens: " + routeAgentId);
+        throw bindingFailure(
+                "ROOT_AGENT_OWNER_NOT_VISIBLE",
+                "Agent owner is not visible to ClientApp runtime tokens: agentId=" + routeAgentId
+                        + " ownerType=" + ownerType
+                        + " ownerId=" + ownerId,
+                "Use a ClientApp-owned or upstream-system-owned root agent for ClientApp runtime-token access.");
     }
 
     private String resolveProfileText(String profileJson, String... keys) {
@@ -161,6 +198,33 @@ public class OpenApiAgentRouteService {
             }
         }
         return null;
+    }
+
+    private RootAgentBindingException bindingFailure(String errorCode, String message, String action) {
+        return new RootAgentBindingException(errorCode, message, action);
+    }
+
+    private String valueOrEmpty(String value) {
+        return StringUtils.hasText(value) ? value.trim() : "(empty)";
+    }
+
+    public static class RootAgentBindingException extends IllegalArgumentException {
+        private final String errorCode;
+        private final String action;
+
+        public RootAgentBindingException(String errorCode, String message, String action) {
+            super(message);
+            this.errorCode = errorCode;
+            this.action = action;
+        }
+
+        public String getErrorCode() {
+            return errorCode;
+        }
+
+        public String getAction() {
+            return action;
+        }
     }
 
     public record ResolvedOpenApiAgentRoute(

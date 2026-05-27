@@ -84,11 +84,31 @@ class OpenApiAgentRouteServiceTest {
         when(repository.findByAgentIdAndTenantId("root-agent", "tenant-1"))
                 .thenReturn(Optional.of(agent));
 
-        IllegalArgumentException error = assertThrows(
-                IllegalArgumentException.class,
+        OpenApiAgentRouteService.RootAgentBindingException error = assertThrows(
+                OpenApiAgentRouteService.RootAgentBindingException.class,
                 () -> service.resolve("root-agent", credential()));
 
-        assertTrue(error.getMessage().contains("not bound"));
+        assertEquals("ROOT_AGENT_PROFILE_CLIENT_APP_MISMATCH", error.getErrorCode());
+        assertTrue(error.getMessage().contains("expectedClientAppId=app-1"));
+        assertTrue(error.getMessage().contains("profileClientAppId=other-app"));
+        assertTrue(error.getAction().contains("upstream agent sync"));
+    }
+
+    @Test
+    void resolve_reportsClientAppOwnerMismatch() {
+        CodingAgentEntity agent = agent("root-agent");
+        agent.setOwnerId("other-app");
+        agent.setClientAppId("other-app");
+        when(repository.findByAgentIdAndTenantId("root-agent", "tenant-1"))
+                .thenReturn(Optional.of(agent));
+
+        OpenApiAgentRouteService.RootAgentBindingException error = assertThrows(
+                OpenApiAgentRouteService.RootAgentBindingException.class,
+                () -> service.resolve("root-agent", credential()));
+
+        assertEquals("ROOT_AGENT_CLIENT_APP_MISMATCH", error.getErrorCode());
+        assertTrue(error.getMessage().contains("expectedClientAppId=app-1"));
+        assertTrue(error.getMessage().contains("ownerId=other-app"));
     }
 
     @Test

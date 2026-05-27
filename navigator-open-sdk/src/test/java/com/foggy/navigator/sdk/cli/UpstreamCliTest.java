@@ -1657,6 +1657,7 @@ class UpstreamCliTest {
                   "agentCode":"agent-1",
                   "upstreamUserId":"u-1",
                   "checks":[
+                    {"code":"ROOT_AGENT_BINDING","status":"FAIL","errorCode":"ROOT_AGENT_CLIENT_APP_MISMATCH","message":"Agent ClientApp binding mismatch: agentId=agent-1 expectedClientAppId=app-1 ownerType=CLIENT_APP ownerId=app-2 agentClientAppId=app-2","action":"Use the profile whose NAVI_CLIENT_APP_ID owns this agent, or resync/register this root agent for the current ClientApp with `upstream agent sync --manifest <agent-manifest.json>`."},
                     {"code":"UPSTREAM_USER_GRANT","status":"FAIL","message":"grant missing"}
                   ]
                 }}
@@ -1672,6 +1673,9 @@ class UpstreamCliTest {
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(2, code);
         assertTrue(output.contains("verify-agent-readiness FAIL"));
+        assertTrue(output.contains("check ROOT_AGENT_BINDING=FAIL errorCode=ROOT_AGENT_CLIENT_APP_MISMATCH"));
+        assertTrue(output.contains("expectedClientAppId=app-1"));
+        assertTrue(output.contains("action=Use the profile whose NAVI_CLIENT_APP_ID owns this agent"));
         assertTrue(output.contains("check UPSTREAM_USER_GRANT=FAIL message=grant missing"));
         assertFalse(output.contains("cat-runtime-secret"));
     }

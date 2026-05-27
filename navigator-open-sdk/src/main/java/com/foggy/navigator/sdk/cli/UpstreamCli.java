@@ -1800,7 +1800,9 @@ public class UpstreamCli {
             for (AgentReadinessCheck check : readiness.getChecks()) {
                 out.println("check " + valueOrEmpty(check.getCode())
                         + "=" + valueOrEmpty(check.getStatus())
-                        + (hasText(check.getMessage()) ? " message=" + redact(check.getMessage()) : ""));
+                        + (hasText(check.getErrorCode()) ? " errorCode=" + valueOrEmpty(check.getErrorCode()) : "")
+                        + (hasText(check.getMessage()) ? " message=" + redact(check.getMessage()) : "")
+                        + (hasText(check.getAction()) ? " action=" + redact(check.getAction()) : ""));
             }
         }
         if (readiness.getSkillArtifact() != null && readiness.getSkillArtifact().isAvailable()) {
