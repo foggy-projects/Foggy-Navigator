@@ -63,3 +63,36 @@ After Navi deployment, tenant `138` should return structured not-ready instead o
 - `remediationHint` is populated
 
 The remaining blockers are legacy data/resource repair items, not admin key or ClientApp secret failures.
+
+## TMS Retest Result
+
+TMS verified Navi commit `82803dce`: direct Navi admin ensure and TMS BFF ensure both return HTTP 200 structured not-ready. The rollback-only HTTP 500 regression is fixed.
+
+Latest remaining blocker is legacy tenant `138` resource ownership/visibility:
+
+- model config `576d04e5-a99a-49c8-a219-7924a262f3c6` is not visible to ClientApp `capp_fe18fc28-9130-4ed5-9fac-5c85eb75d539`
+- directory `20260525-8fa8` has a tenant mismatch and must be repaired to `nav_tms_138`
+- root agent `tms-tenant-138-root-agent` needs a default model config and valid default bindings after repair
+
+## Resource Repair Follow-up
+
+Directory repair already has a controlled operator/super-admin API:
+
+```text
+POST /api/v1/admin/working-directories/{directoryId}/repair-upstream-system
+```
+
+Model config owner repair now has a matching controlled operator/super-admin API:
+
+```text
+POST /api/v1/admin/model-configs/{modelConfigId}/repair-owner
+```
+
+The model repair endpoint only updates model visibility metadata (`ownerType`, `ownerId`, optional `enabled`) and returns the previous/new owner metadata. It does not update runtime model fields or credentials.
+
+Tenant `138` repair plan after deployment:
+
+1. Repair model config `576d04e5-a99a-49c8-a219-7924a262f3c6` to `UPSTREAM_SYSTEM/TMS` or `CLIENT_APP/capp_fe18fc28-9130-4ed5-9fac-5c85eb75d539`.
+2. Repair directory `20260525-8fa8` to `tenantId=nav_tms_138`, `ownerType=UPSTREAM_SYSTEM`, `ownerId=TMS`, `workspaceScope=UPSTREAM_SYSTEM_SHARED`, and set it as root agent default directory.
+3. Rerun `ensure-tenant rotateCredentials=true`; ensure should grant the now-visible model config and set `tms-tenant-138-root-agent.defaultModelConfigId`.
+4. Rerun readiness `none -> runtime -> grant -> preflight -> ask`.

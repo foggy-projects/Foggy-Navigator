@@ -1,10 +1,12 @@
 package com.foggy.navigator.spi.config;
 
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.dto.LlmModelConfigOwnerRepairResultDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.AgentModelOverrideForm;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
+import com.foggy.navigator.common.form.LlmModelConfigOwnerRepairForm;
 
 import java.util.List;
 import java.util.Optional;
@@ -53,6 +55,12 @@ public interface LlmModelManager {
      * @param form 配置表单（仅更新非 null 字段）
      */
     void updateModelConfig(String id, LlmModelConfigForm form);
+
+    /**
+     * Operator-only repair for legacy model config ownership metadata.
+     * This must not update runtime model fields or credentials.
+     */
+    LlmModelConfigOwnerRepairResultDTO repairModelConfigOwner(String id, LlmModelConfigOwnerRepairForm form);
 
     /**
      * 删除 LLM 模型配置
