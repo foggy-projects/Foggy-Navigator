@@ -4,7 +4,7 @@ bug_source: user-report
 version: 1.3.0-SNAPSHOT
 ticket: BUG-137
 severity: major
-status: ready-for-verification
+status: closed
 reproduction_status: confirmed
 test_strategy: unit-test
 automation_decision: required
@@ -96,3 +96,36 @@ Tenant `138` repair plan after deployment:
 2. Repair directory `20260525-8fa8` to `tenantId=nav_tms_138`, `ownerType=UPSTREAM_SYSTEM`, `ownerId=TMS`, `workspaceScope=UPSTREAM_SYSTEM_SHARED`, and set it as root agent default directory.
 3. Rerun `ensure-tenant rotateCredentials=true`; ensure should grant the now-visible model config and set `tms-tenant-138-root-agent.defaultModelConfigId`.
 4. Rerun readiness `none -> runtime -> grant -> preflight -> ask`.
+
+## Closure Verification
+
+TMS completed final retest after Navi `9fe16ccb`.
+
+Self-healing ensure:
+
+```text
+POST /bff/navigator/admin/integration-bindings/ensure-tenant
+body={"rotateCredentials":true}
+```
+
+Result:
+
+- `code=200`
+- `activationReady=true`
+- `status=ACTIVE`
+- `rotatedCredentials=true`
+- `navigatorTenantId=nav_tms_138`
+- `missingFields=[]`
+- `blockers=[]`
+
+Readiness result:
+
+```text
+none: ready=true, dbBacked=true
+runtime: ready=true, dbBacked=true
+grant: ready=true, dbBacked=true
+preflight: ready=true, dbBacked=true
+ask: ready=true, dbBacked=true
+```
+
+Conclusion: rollback-only HTTP 500 regression and tenant `138` legacy model/directory/root-agent blockers are verified fixed. Tenant `138` can now activate via TMS self-healing ensure and pass the full readiness chain.
