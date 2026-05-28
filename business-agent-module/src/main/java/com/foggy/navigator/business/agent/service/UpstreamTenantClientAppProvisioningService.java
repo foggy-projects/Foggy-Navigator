@@ -15,12 +15,13 @@ import com.foggy.navigator.business.agent.model.form.IssueRuntimeCredentialForm;
 import com.foggy.navigator.business.agent.model.form.SyncSkillBundleForm;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
+import com.foggy.navigator.business.agent.transaction.ReadinessTransactional;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
@@ -56,7 +57,7 @@ public class UpstreamTenantClientAppProvisioningService {
     private final A2AgentResourceResolver agentResourceResolver;
     private final ObjectMapper objectMapper;
 
-    @Transactional
+    @ReadinessTransactional(propagation = Propagation.NOT_SUPPORTED)
     public UpstreamTenantClientAppProvisioningDTO ensure(EnsureUpstreamTenantClientAppForm form,
                                                          UpstreamClientAppAdminPrincipal principal) {
         if (form == null) {

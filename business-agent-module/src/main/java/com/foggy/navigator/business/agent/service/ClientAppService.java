@@ -14,6 +14,7 @@ import com.foggy.navigator.business.agent.repository.ClientAppControlCredentialR
 import com.foggy.navigator.business.agent.repository.ClientAppProvisioningCredentialRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppRuntimeCredentialRepository;
+import com.foggy.navigator.business.agent.transaction.ReadinessTransactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -170,7 +171,7 @@ public class ClientAppService {
         return dto;
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public List<ClientAppDTO> listClientApps(String tenantId) {
         requireText(tenantId, "tenantId is required");
         return clientAppRepository.findByTenantIdOrderByCreatedAtDesc(tenantId).stream()
@@ -178,7 +179,7 @@ public class ClientAppService {
                 .toList();
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public ClientAppEntity requireClientApp(String tenantId, String clientAppId) {
         requireText(tenantId, "tenantId is required");
         requireText(clientAppId, "clientAppId is required");
@@ -186,7 +187,7 @@ public class ClientAppService {
                 .orElseThrow(() -> new IllegalArgumentException("client app not found: " + clientAppId));
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public ClientAppEntity requireActiveClientApp(String tenantId, String clientAppId) {
         ClientAppEntity app = requireClientApp(tenantId, clientAppId);
         if (!STATUS_ACTIVE.equals(app.getStatus())) {

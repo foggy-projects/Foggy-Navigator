@@ -4,13 +4,13 @@ import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppModelConfigGrantEntity;
 import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
+import com.foggy.navigator.business.agent.transaction.ReadinessTransactional;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -49,6 +49,10 @@ class ClientAppModelConfigGrantServiceTest {
     @Test
     void modelGrantMutationsDoNotMarkCallerTransactionRollbackOnlyForVisibilityExceptions() throws Exception {
         assertNoRollbackForReadinessException(ClientAppModelConfigGrantService.class.getMethod(
+                "listGrants",
+                String.class,
+                String.class));
+        assertNoRollbackForReadinessException(ClientAppModelConfigGrantService.class.getMethod(
                 "grantModelConfig",
                 String.class,
                 String.class,
@@ -65,15 +69,30 @@ class ClientAppModelConfigGrantServiceTest {
                 String.class,
                 String.class,
                 Long.class));
+        assertNoRollbackForReadinessException(ClientAppModelConfigGrantService.class.getMethod(
+                "resolveEffectiveModelConfigId",
+                String.class,
+                String.class,
+                String.class,
+                LlmModelCategory.class));
+        assertNoRollbackForReadinessException(ClientAppModelConfigGrantService.class.getMethod(
+                "tryResolveEffectiveModelConfigId",
+                String.class,
+                String.class,
+                String.class,
+                LlmModelCategory.class));
     }
 
     private void assertNoRollbackForReadinessException(Method method) {
-        Transactional transactional = method.getAnnotation(Transactional.class);
+        ReadinessTransactional transactional = method.getAnnotation(ReadinessTransactional.class);
+        org.springframework.transaction.annotation.Transactional springTransactional =
+                ReadinessTransactional.class.getAnnotation(org.springframework.transaction.annotation.Transactional.class);
 
         assertNotNull(transactional);
-        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalArgumentException.class));
-        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalStateException.class));
-        assertTrue(List.of(transactional.noRollbackFor()).contains(SecurityException.class));
+        assertNotNull(springTransactional);
+        assertTrue(List.of(springTransactional.noRollbackFor()).contains(IllegalArgumentException.class));
+        assertTrue(List.of(springTransactional.noRollbackFor()).contains(IllegalStateException.class));
+        assertTrue(List.of(springTransactional.noRollbackFor()).contains(SecurityException.class));
     }
 
     @Test

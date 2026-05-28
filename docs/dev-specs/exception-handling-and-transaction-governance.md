@@ -97,11 +97,18 @@ try {
 
 ### 5.2 可预期校验异常使用 noRollbackFor
 
-凡是 service 方法可能被 readiness / ensure / preflight 调用，并且会抛出可预期资源异常，必须显式声明：
+凡是 service 方法可能被 readiness / ensure / preflight 调用，并且会抛出可预期资源异常，必须使用统一元注解：
+
+```java
+@ReadinessTransactional(readOnly = true)
+```
+
+该注解位于 `business-agent-module` 的 `com.foggy.navigator.business.agent.transaction.ReadinessTransactional`，统一声明 `readOnly` / `propagation` 与兼容期 `noRollbackFor` 策略。不要在同一类方法里继续散落手写 `@Transactional(noRollbackFor = ...)`。
+
+非 `business-agent-module` 暂未引入该注解时，等价策略必须显式声明：
 
 ```java
 @Transactional(noRollbackFor = {
-        NavigatorDomainException.class,
         IllegalArgumentException.class,
         IllegalStateException.class,
         SecurityException.class
@@ -112,14 +119,13 @@ read-only resolver 方法同理：
 
 ```java
 @Transactional(readOnly = true, noRollbackFor = {
-        NavigatorDomainException.class,
         IllegalArgumentException.class,
         IllegalStateException.class,
         SecurityException.class
 })
 ```
 
-兼容期保留三类 JDK 运行时异常是为了不让历史代码继续制造 rollback-only。新代码应逐步收敛到 `NavigatorDomainException` 及其派生类。
+兼容期保留三类 JDK 运行时异常是为了不让历史代码继续制造 rollback-only。新代码应逐步收敛到 `NavigatorDomainException` 及其派生类；引入领域异常后，应先加入统一元注解，而不是在各 service 重复维护异常列表。
 
 ### 5.3 写入与 readiness 校验分阶段
 
@@ -132,6 +138,7 @@ read-only resolver 方法同理：
 
 - read-only 或只做幂等修复；
 - 可预期异常 `noRollbackFor`；
+- 对 self-healing / readiness 聚合类入口，优先使用 `@ReadinessTransactional(propagation = Propagation.NOT_SUPPORTED)`，避免一个大外层事务被某个下游资源校验标记为 rollback-only；
 - 不在校验失败后继续执行依赖已失败资源的危险写入；
 - response 中明确 `activationReady=false`、`errorCode`、`missingFields`、`blockers`、`remediationHint`。
 

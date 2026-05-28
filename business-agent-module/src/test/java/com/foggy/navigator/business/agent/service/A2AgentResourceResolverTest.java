@@ -10,6 +10,7 @@ import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRe
 import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
+import com.foggy.navigator.business.agent.transaction.ReadinessTransactional;
 import com.foggy.navigator.business.agent.service.worker.PhysicalWorkerRuntimeRegistry;
 import com.foggy.navigator.business.agent.service.worker.ResolvedPhysicalWorker;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
@@ -25,7 +26,6 @@ import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -90,12 +91,11 @@ class A2AgentResourceResolverTest {
                 String.class,
                 String.class,
                 String.class);
-        Transactional transactional = method.getAnnotation(Transactional.class);
+        ReadinessTransactional transactional = method.getAnnotation(ReadinessTransactional.class);
 
+        assertNotNull(transactional);
         assertTrue(transactional.readOnly());
-        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalArgumentException.class));
-        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalStateException.class));
-        assertTrue(List.of(transactional.noRollbackFor()).contains(SecurityException.class));
+        assertReadinessNoRollbackFor(method);
     }
 
     @Test
@@ -129,12 +129,16 @@ class A2AgentResourceResolverTest {
     }
 
     private void assertReadinessNoRollbackFor(Method method) {
-        Transactional transactional = method.getAnnotation(Transactional.class);
+        ReadinessTransactional transactional = method.getAnnotation(ReadinessTransactional.class);
+        org.springframework.transaction.annotation.Transactional springTransactional =
+                ReadinessTransactional.class.getAnnotation(org.springframework.transaction.annotation.Transactional.class);
 
+        assertNotNull(transactional);
+        assertNotNull(springTransactional);
         assertTrue(transactional.readOnly());
-        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalArgumentException.class));
-        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalStateException.class));
-        assertTrue(List.of(transactional.noRollbackFor()).contains(SecurityException.class));
+        assertTrue(List.of(springTransactional.noRollbackFor()).contains(IllegalArgumentException.class));
+        assertTrue(List.of(springTransactional.noRollbackFor()).contains(IllegalStateException.class));
+        assertTrue(List.of(springTransactional.noRollbackFor()).contains(SecurityException.class));
     }
 
     @Test

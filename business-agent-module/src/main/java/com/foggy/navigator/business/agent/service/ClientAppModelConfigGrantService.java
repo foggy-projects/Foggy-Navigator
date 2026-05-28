@@ -5,13 +5,13 @@ import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppModelConfigGrantEntity;
 import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
+import com.foggy.navigator.business.agent.transaction.ReadinessTransactional;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
@@ -39,11 +39,7 @@ public class ClientAppModelConfigGrantService {
     private final ClientAppService clientAppService;
     private final LlmModelManager llmModelManager;
 
-    @Transactional(readOnly = true, noRollbackFor = {
-            IllegalArgumentException.class,
-            IllegalStateException.class,
-            SecurityException.class
-    })
+    @ReadinessTransactional(readOnly = true)
     public List<ClientAppModelConfigGrantDTO> listGrants(String tenantId, String clientAppId) {
         clientAppService.requireClientApp(tenantId, clientAppId);
         return grantRepository.findByClientAppIdOrderByCreatedAtDesc(clientAppId).stream()
@@ -51,11 +47,7 @@ public class ClientAppModelConfigGrantService {
                 .toList();
     }
 
-    @Transactional(noRollbackFor = {
-            IllegalArgumentException.class,
-            IllegalStateException.class,
-            SecurityException.class
-    })
+    @ReadinessTransactional
     public ClientAppModelConfigGrantDTO grantModelConfig(String tenantId, String actorUserId,
                                                          String clientAppId, GrantModelConfigForm form) {
         if (form == null) {
@@ -107,11 +99,7 @@ public class ClientAppModelConfigGrantService {
         return toDTO(changed ? grantRepository.save(existing) : existing);
     }
 
-    @Transactional(noRollbackFor = {
-            IllegalArgumentException.class,
-            IllegalStateException.class,
-            SecurityException.class
-    })
+    @ReadinessTransactional
     public ClientAppModelConfigGrantDTO updateStatus(String tenantId, String clientAppId, Long grantId, String status) {
         if (!STATUS_ENABLED.equals(status) && !STATUS_DISABLED.equals(status)) {
             throw new IllegalArgumentException("unsupported grant status: " + status);
@@ -128,11 +116,7 @@ public class ClientAppModelConfigGrantService {
         return toDTO(grantRepository.save(grant));
     }
 
-    @Transactional(noRollbackFor = {
-            IllegalArgumentException.class,
-            IllegalStateException.class,
-            SecurityException.class
-    })
+    @ReadinessTransactional
     public ClientAppModelConfigGrantDTO setDefault(String tenantId, String clientAppId, Long grantId) {
         ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
         ClientAppModelConfigGrantEntity grant = requireGrant(clientAppId, grantId);
@@ -148,12 +132,12 @@ public class ClientAppModelConfigGrantService {
         return toDTO(grantRepository.save(grant));
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public String resolveEffectiveModelConfigId(String tenantId, String clientAppId, String requestedModelConfigId) {
         return resolveEffectiveModelConfigId(tenantId, clientAppId, requestedModelConfigId, null);
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public String resolveEffectiveModelConfigId(String tenantId, String clientAppId,
                                                 String requestedModelConfigId,
                                                 LlmModelCategory category) {
@@ -179,7 +163,7 @@ public class ClientAppModelConfigGrantService {
         return grant.getModelConfigId();
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public Optional<String> tryResolveEffectiveModelConfigId(String tenantId, String clientAppId,
                                                             String requestedModelConfigId,
                                                             LlmModelCategory category) {
