@@ -236,6 +236,28 @@ class UpstreamTenantClientAppProvisioningServiceTest {
     }
 
     @Test
+    void ensureReturnsStructuredBlockerWhenExplicitModelConfigIsInvisible() {
+        EnsureUpstreamTenantClientAppForm form = form(true);
+        form.setModelConfigId("foreign-model");
+        when(modelConfigGrantService.grantModelConfig(eq("nav_tms_3"), anyString(), anyString(), any()))
+                .thenThrow(new IllegalArgumentException("model config is not visible to this ClientApp"));
+
+        var result = service.ensure(form, principal("nav_tms_3"));
+
+        assertFalse(result.isActivationReady());
+        assertEquals(UpstreamTenantClientAppProvisioningService.ERROR_MODEL_CONFIG_RESOURCE, result.getErrorCode());
+        assertNull(result.getModelConfigId());
+        assertTrue(result.getMissingFields().contains("modelConfig.visibility"));
+        assertTrue(result.getBlockers().stream()
+                .anyMatch(item -> item.contains("model config is not visible to this ClientApp")));
+        assertTrue(result.getRemediationHint().contains("UPSTREAM_SYSTEM/TMS"));
+        CodingAgentEntity rootAgent = agentsByKey.get(agentKey("tms-root-agent", "nav_tms_3"));
+        assertNotNull(rootAgent);
+        assertEquals("biz-worker", rootAgent.getWorkerId());
+        assertNull(rootAgent.getDefaultModelConfigId());
+    }
+
+    @Test
     void ensureRejectsMismatchedSourceSystemForAdminCredential() {
         assertThrows(SecurityException.class, () -> service.ensure(form(false), UpstreamClientAppAdminPrincipal.builder()
                 .credentialId("ucaac-1")

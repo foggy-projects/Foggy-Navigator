@@ -38,6 +38,7 @@ public class UpstreamTenantClientAppProvisioningService {
 
     public static final String STATUS_READY = "READY";
     public static final String STATUS_CREDENTIALS_NOT_REPLAYABLE = "CREDENTIALS_NOT_REPLAYABLE";
+    public static final String ERROR_MODEL_CONFIG_RESOURCE = "MODEL_CONFIG_RESOURCE";
     public static final String ERROR_RUNTIME_AGENT_RESOURCE = "RUNTIME_AGENT_RESOURCE";
     public static final String ERROR_WORKSPACE_RESOURCE = "WORKSPACE_RESOURCE";
 
@@ -132,7 +133,7 @@ public class UpstreamTenantClientAppProvisioningService {
         result.setBizWorkerBaseUrl(bizWorkerBaseUrl);
         result.setBindingVersion(UUID.randomUUID().toString());
 
-        ModelGrantSelection modelGrant = ensureModelConfigGrant(clientApp.getTenantId(), clientApp.getClientAppId(), form, actorUserId, result.getBlockers());
+        ModelGrantSelection modelGrant = ensureModelConfigGrant(clientApp.getTenantId(), clientApp.getClientAppId(), form, actorUserId, result);
         result.setModelConfigId(modelGrant.modelConfigId());
         result.setWorkerBackend(resolveWorkerBackend(form, modelGrant.workerBackend(), sourceSystem));
 
@@ -291,31 +292,38 @@ public class UpstreamTenantClientAppProvisioningService {
                                                        String clientAppId,
                                                        EnsureUpstreamTenantClientAppForm form,
                                                        String actorUserId,
-                                                       List<String> blockers) {
+                                                       UpstreamTenantClientAppProvisioningDTO result) {
         if (StringUtils.hasText(form.getModelConfigId())) {
             String modelConfigId = form.getModelConfigId().trim();
-            Optional<ClientAppModelConfigGrantDTO> existing = modelConfigGrantService.listGrants(tenantId, clientAppId).stream()
-                    .filter(grant -> modelConfigId.equals(grant.getModelConfigId()))
-                    .findFirst();
-            ClientAppModelConfigGrantDTO ensuredGrant;
-            if (existing.isEmpty()) {
-                GrantModelConfigForm grantForm = new GrantModelConfigForm();
-                grantForm.setModelConfigId(modelConfigId);
-                grantForm.setIsDefault(true);
-                grantForm.setGrantScope("APP");
-                ensuredGrant = modelConfigGrantService.grantModelConfig(tenantId, actorUserId, clientAppId, grantForm);
-            } else {
-                ClientAppModelConfigGrantDTO grant = existing.get();
-                if (!ClientAppModelConfigGrantService.STATUS_ENABLED.equals(grant.getStatus())) {
-                    grant = modelConfigGrantService.updateStatus(
-                            tenantId, clientAppId, grant.getId(), ClientAppModelConfigGrantService.STATUS_ENABLED);
+            try {
+                Optional<ClientAppModelConfigGrantDTO> existing = modelConfigGrantService.listGrants(tenantId, clientAppId).stream()
+                        .filter(grant -> modelConfigId.equals(grant.getModelConfigId()))
+                        .findFirst();
+                ClientAppModelConfigGrantDTO ensuredGrant;
+                if (existing.isEmpty()) {
+                    GrantModelConfigForm grantForm = new GrantModelConfigForm();
+                    grantForm.setModelConfigId(modelConfigId);
+                    grantForm.setIsDefault(true);
+                    grantForm.setGrantScope("APP");
+                    ensuredGrant = modelConfigGrantService.grantModelConfig(tenantId, actorUserId, clientAppId, grantForm);
+                } else {
+                    ClientAppModelConfigGrantDTO grant = existing.get();
+                    if (!ClientAppModelConfigGrantService.STATUS_ENABLED.equals(grant.getStatus())) {
+                        grant = modelConfigGrantService.updateStatus(
+                                tenantId, clientAppId, grant.getId(), ClientAppModelConfigGrantService.STATUS_ENABLED);
+                    }
+                    if (!Boolean.TRUE.equals(grant.getIsDefault())) {
+                        modelConfigGrantService.setDefault(tenantId, clientAppId, grant.getId());
+                    }
+                    ensuredGrant = grant;
                 }
-                if (!Boolean.TRUE.equals(grant.getIsDefault())) {
-                    modelConfigGrantService.setDefault(tenantId, clientAppId, grant.getId());
-                }
-                ensuredGrant = grant;
+                return new ModelGrantSelection(modelConfigId, ensuredGrant == null ? null : ensuredGrant.getWorkerBackend());
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                String message = e.getMessage();
+                String detail = StringUtils.hasText(message) ? message : e.getClass().getSimpleName();
+                markModelConfigResourceNotReady(result, detail);
+                return new ModelGrantSelection(null, null);
             }
-            return new ModelGrantSelection(modelConfigId, ensuredGrant == null ? null : ensuredGrant.getWorkerBackend());
         }
 
         Optional<ClientAppModelConfigGrantDTO> defaultGrant = modelConfigGrantService.listGrants(tenantId, clientAppId).stream()
@@ -335,7 +343,8 @@ public class UpstreamTenantClientAppProvisioningService {
         }
 
         String profile = StringUtils.hasText(form.getModelProfileCode()) ? form.getModelProfileCode().trim() : "default";
-        blockers.add("modelConfigId is missing and no default ClientApp model grant exists for profile: " + profile);
+        markModelConfigResourceNotReady(result,
+                "modelConfigId is missing and no default ClientApp model grant exists for profile: " + profile);
         return new ModelGrantSelection(null, null);
     }
 
@@ -515,6 +524,44 @@ public class UpstreamTenantClientAppProvisioningService {
         return "runtimeAgentResource";
     }
 
+    private void markModelConfigResourceNotReady(UpstreamTenantClientAppProvisioningDTO result, String detail) {
+        result.getBlockers().add("model config resource is not activation-ready: " + detail);
+        if (!StringUtils.hasText(result.getErrorCode())) {
+            result.setErrorCode(ERROR_MODEL_CONFIG_RESOURCE);
+        }
+        addMissingField(result, classifyModelConfigResourceField(detail));
+        if (!StringUtils.hasText(result.getRemediationHint())) {
+            result.setRemediationHint(buildModelConfigRemediationHint(result));
+        }
+    }
+
+    private String classifyModelConfigResourceField(String detail) {
+        String normalized = detail == null ? "" : detail.toLowerCase(Locale.ROOT);
+        if (normalized.contains("not visible")) {
+            return "modelConfig.visibility";
+        }
+        if (normalized.contains("tenant mismatch")) {
+            return "modelConfig.tenant";
+        }
+        if (normalized.contains("disabled")) {
+            return "modelConfig.status";
+        }
+        if (normalized.contains("worker backend")) {
+            return "modelConfig.workerBackend";
+        }
+        return "modelConfigId";
+    }
+
+    private String buildModelConfigRemediationHint(UpstreamTenantClientAppProvisioningDTO result) {
+        return "grant a model config owned by PLATFORM/platform, UPSTREAM_SYSTEM/"
+                + result.getUpstreamSystemId()
+                + ", or CLIENT_APP/"
+                + result.getClientAppId()
+                + " for navigator tenant "
+                + result.getNavigatorTenantId()
+                + "; if this is a legacy model owner mismatch, repair model config owner/visibility through Navigator operator/super-admin, then rerun ensure-tenant with rotateCredentials=true";
+    }
+
     private String classifyWorkspaceResourceField(String detail) {
         if (detail != null && detail.contains("tenant mismatch")) {
             return "directory.tenant";
@@ -566,7 +613,7 @@ public class UpstreamTenantClientAppProvisioningService {
                                         String fieldName,
                                         String value) {
         if (!StringUtils.hasText(value)) {
-            result.getMissingFields().add(fieldName);
+            addMissingField(result, fieldName);
         }
     }
 

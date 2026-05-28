@@ -10,7 +10,9 @@ import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Optional;
 
@@ -42,6 +44,36 @@ class ClientAppModelConfigGrantServiceTest {
         when(grantRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
         when(llmModelManager.getModelConfig("cfg-1")).thenReturn(Optional.of(model("cfg-1", "tenant-1", "LANGGRAPH_BIZ")));
         when(llmModelManager.getModelConfig("cfg-2")).thenReturn(Optional.of(model("cfg-2", "tenant-1", "LANGGRAPH_BIZ")));
+    }
+
+    @Test
+    void modelGrantMutationsDoNotMarkCallerTransactionRollbackOnlyForVisibilityExceptions() throws Exception {
+        assertNoRollbackForReadinessException(ClientAppModelConfigGrantService.class.getMethod(
+                "grantModelConfig",
+                String.class,
+                String.class,
+                String.class,
+                GrantModelConfigForm.class));
+        assertNoRollbackForReadinessException(ClientAppModelConfigGrantService.class.getMethod(
+                "updateStatus",
+                String.class,
+                String.class,
+                Long.class,
+                String.class));
+        assertNoRollbackForReadinessException(ClientAppModelConfigGrantService.class.getMethod(
+                "setDefault",
+                String.class,
+                String.class,
+                Long.class));
+    }
+
+    private void assertNoRollbackForReadinessException(Method method) {
+        Transactional transactional = method.getAnnotation(Transactional.class);
+
+        assertNotNull(transactional);
+        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalArgumentException.class));
+        assertTrue(List.of(transactional.noRollbackFor()).contains(IllegalStateException.class));
+        assertTrue(List.of(transactional.noRollbackFor()).contains(SecurityException.class));
     }
 
     @Test

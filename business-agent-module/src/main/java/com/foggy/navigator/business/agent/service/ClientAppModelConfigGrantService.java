@@ -39,7 +39,11 @@ public class ClientAppModelConfigGrantService {
     private final ClientAppService clientAppService;
     private final LlmModelManager llmModelManager;
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = {
+            IllegalArgumentException.class,
+            IllegalStateException.class,
+            SecurityException.class
+    })
     public List<ClientAppModelConfigGrantDTO> listGrants(String tenantId, String clientAppId) {
         clientAppService.requireClientApp(tenantId, clientAppId);
         return grantRepository.findByClientAppIdOrderByCreatedAtDesc(clientAppId).stream()
@@ -47,7 +51,11 @@ public class ClientAppModelConfigGrantService {
                 .toList();
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = {
+            IllegalArgumentException.class,
+            IllegalStateException.class,
+            SecurityException.class
+    })
     public ClientAppModelConfigGrantDTO grantModelConfig(String tenantId, String actorUserId,
                                                          String clientAppId, GrantModelConfigForm form) {
         if (form == null) {
@@ -99,7 +107,11 @@ public class ClientAppModelConfigGrantService {
         return toDTO(changed ? grantRepository.save(existing) : existing);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = {
+            IllegalArgumentException.class,
+            IllegalStateException.class,
+            SecurityException.class
+    })
     public ClientAppModelConfigGrantDTO updateStatus(String tenantId, String clientAppId, Long grantId, String status) {
         if (!STATUS_ENABLED.equals(status) && !STATUS_DISABLED.equals(status)) {
             throw new IllegalArgumentException("unsupported grant status: " + status);
@@ -116,7 +128,11 @@ public class ClientAppModelConfigGrantService {
         return toDTO(grantRepository.save(grant));
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = {
+            IllegalArgumentException.class,
+            IllegalStateException.class,
+            SecurityException.class
+    })
     public ClientAppModelConfigGrantDTO setDefault(String tenantId, String clientAppId, Long grantId) {
         ClientAppEntity clientApp = clientAppService.requireClientApp(tenantId, clientAppId);
         ClientAppModelConfigGrantEntity grant = requireGrant(clientAppId, grantId);
