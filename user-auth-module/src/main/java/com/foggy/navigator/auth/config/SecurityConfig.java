@@ -118,6 +118,8 @@ public class SecurityConfig {
                                 "/api/v1/admin/upstream-tenants/**").permitAll()
                         .requestMatchers("/api/v1/admin/working-directories",
                                 "/api/v1/admin/working-directories/**").permitAll()
+                        .requestMatchers("/api/v1/admin/model-configs",
+                                "/api/v1/admin/model-configs/**").permitAll()
                         .requestMatchers("/api/v1/admin/client-apps", "/api/v1/admin/client-apps/**").permitAll()
                         .requestMatchers("/api/v1/client-apps", "/api/v1/client-apps/**").permitAll()
                         .requestMatchers("/api/v1/business-agent", "/api/v1/business-agent/**").permitAll()
