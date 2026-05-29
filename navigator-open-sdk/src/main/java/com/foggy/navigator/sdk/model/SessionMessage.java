@@ -3,6 +3,7 @@ package com.foggy.navigator.sdk.model;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -17,10 +18,16 @@ public class SessionMessage {
     private String taskId;
     private String role;
     private String type;
+    private String eventKind;
+    private String progressType;
     private String content;
+    private String status;
     private Boolean terminal;
     private String terminalStatus;
     private Map<String, Object> metadata;
+    private Object structuredOutput;
+    private List<TaskEvidence.ReportRef> reportRefs;
+    private List<TaskEvidence.ArtifactRef> artifactRefs;
     private String createdAt;
 
     public String getMessageId() { return messageId; }
@@ -33,8 +40,14 @@ public class SessionMessage {
     public void setRole(String role) { this.role = role; }
     public String getType() { return type; }
     public void setType(String type) { this.type = type; }
+    public String getEventKind() { return eventKind; }
+    public void setEventKind(String eventKind) { this.eventKind = eventKind; }
+    public String getProgressType() { return progressType; }
+    public void setProgressType(String progressType) { this.progressType = progressType; }
     public String getContent() { return content; }
     public void setContent(String content) { this.content = content; }
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
     public Boolean getTerminal() { return terminal; }
     public void setTerminal(Boolean terminal) { this.terminal = terminal; }
     public String getTerminalStatus() { return terminalStatus; }
@@ -54,12 +67,18 @@ public class SessionMessage {
             }
         }
     }
+    public Object getStructuredOutput() { return structuredOutput; }
+    public void setStructuredOutput(Object structuredOutput) { this.structuredOutput = structuredOutput; }
+    public List<TaskEvidence.ReportRef> getReportRefs() { return reportRefs; }
+    public void setReportRefs(List<TaskEvidence.ReportRef> reportRefs) { this.reportRefs = reportRefs; }
+    public List<TaskEvidence.ArtifactRef> getArtifactRefs() { return artifactRefs; }
+    public void setArtifactRefs(List<TaskEvidence.ArtifactRef> artifactRefs) { this.artifactRefs = artifactRefs; }
     public String getCreatedAt() { return createdAt; }
     public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
 
     @Override
     public String toString() {
         return "SessionMessage{messageId='" + messageId + "', role='" + role +
-                "', type='" + type + "', taskId='" + taskId + "'}";
+                "', type='" + type + "', eventKind='" + eventKind + "', taskId='" + taskId + "'}";
     }
 }

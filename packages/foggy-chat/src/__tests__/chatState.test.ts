@@ -273,6 +273,48 @@ describe('createChatState', () => {
       })
     })
 
+    it('extracts OPEN_ARTIFACT actions from structured_output containers', () => {
+      state.processAipMessage(makeAip(AipMessageType.TOOL_CALL_RESULT, {
+        toolCallId: 'tc-structured-output',
+        toolName: 'tms.print.createTemplateDraft',
+        data: {
+          summary: '已生成打印模板草稿，可打开预览、调整并发布。',
+          structured_output: {
+            type: 'OPEN_ARTIFACT',
+            label: '查看模板预览',
+            artifact: {
+              kind: 'iframe',
+              id: 'print-template-preview:tpl_123',
+              title: '面单模板预览',
+              uri: '/print-template-preview?templateId=tpl_123',
+              openMode: 'side_panel',
+              fallbackUrl: '/print-templates?templateId=tpl_123',
+            },
+            context: {
+              businessDomain: 'tms.print',
+              templateId: 'tpl_123',
+            },
+          },
+        },
+      }))
+
+      expect(state.messages.value[0].uiActions).toHaveLength(1)
+      expect(state.messages.value[0].uiActions?.[0]).toMatchObject({
+        type: 'OPEN_ARTIFACT',
+        label: '查看模板预览',
+        artifact: {
+          kind: 'iframe',
+          id: 'print-template-preview:tpl_123',
+          uri: '/print-template-preview?templateId=tpl_123',
+          fallbackUrl: '/print-templates?templateId=tpl_123',
+        },
+        context: {
+          businessDomain: 'tms.print',
+          templateId: 'tpl_123',
+        },
+      })
+    })
+
     it('prefers generic artifact when legacy OPEN_TMS_PAGE carries artifact', () => {
       state.processAipMessage(makeAip(AipMessageType.TOOL_CALL_RESULT, {
         toolCallId: 'tc-legacy',

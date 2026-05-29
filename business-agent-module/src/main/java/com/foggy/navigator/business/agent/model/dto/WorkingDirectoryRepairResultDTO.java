@@ -15,5 +15,7 @@ public class WorkingDirectoryRepairResultDTO {
     private ResourceOwnerType rootAgentOwnerType;
     private String rootAgentOwnerId;
     private Boolean rootAgentOwnerRepaired;
+    private Boolean rootAgentClientAppBindingRepaired;
+    private Boolean rootAgentProfileClientAppBindingRepaired;
     private Boolean defaultDirectory;
 }

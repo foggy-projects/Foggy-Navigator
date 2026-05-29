@@ -14,7 +14,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -143,6 +145,31 @@ public class OpenApiSessionQueryService {
             return messageRepository.findByTaskIdOrderByCreatedAtAsc(taskId, pageable);
         }
         return messageRepository.findByTaskIdAfterTime(taskId, afterTime, pageable);
+    }
+
+    /**
+     * 统计某个任务已落库的消息数量。
+     */
+    public long countTaskMessages(String taskId) {
+        return messageRepository.countByTaskId(taskId);
+    }
+
+    /**
+     * 查找某个任务最近一条消息，用于 lastObservedAt 诊断时间。
+     */
+    public Optional<SessionMessageEntity> findLatestTaskMessage(String taskId) {
+        return messageRepository.findFirstByTaskIdOrderByCreatedAtDesc(taskId);
+    }
+
+    /**
+     * 查询最近的 task messages，并按 createdAt 升序返回。
+     */
+    public List<SessionMessageEntity> getLatestTaskMessages(String taskId, int limit) {
+        Pageable pageable = PageRequest.of(0, Math.max(limit, 1));
+        List<SessionMessageEntity> messages = new ArrayList<>(
+                messageRepository.findByTaskIdOrderByCreatedAtDesc(taskId, pageable));
+        Collections.reverse(messages);
+        return messages;
     }
 
     /**

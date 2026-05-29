@@ -152,7 +152,7 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
         doAnswer(invocation -> {
             messagesAtComplete.set(queryService.getTaskMessages(taskId, null, 50));
             return null;
-        }).when(taskService).completeTask(eq(taskId), eq("done"), eq("{\"ok\":true}"), eq(123L));
+        }).when(taskService).completeTask(eq(taskId), eq("done"), eq("{\"type\":\"OPEN_ARTIFACT\",\"label\":\"查看模板预览\"}"), eq(123L));
 
         invokeEvent("""
                 {
@@ -168,7 +168,7 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
                   "type": "result",
                   "content": "done",
                   "duration_ms": 123,
-                  "structured_output": {"ok": true}
+                  "structured_output": {"type":"OPEN_ARTIFACT","label":"查看模板预览"}
                 }
                 """);
 
@@ -206,6 +206,8 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
 
     private boolean isTaskCompleted(SessionMessageEntity message) {
         return message.getMetadata() != null
-                && message.getMetadata().contains("\"type\":\"TASK_COMPLETED\"");
+                && message.getMetadata().contains("\"type\":\"TASK_COMPLETED\"")
+                && message.getMetadata().contains("\"structuredOutput\"")
+                && message.getMetadata().contains("\"OPEN_ARTIFACT\"");
     }
 }

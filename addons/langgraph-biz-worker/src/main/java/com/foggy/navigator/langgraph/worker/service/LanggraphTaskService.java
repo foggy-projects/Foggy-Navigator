@@ -1,6 +1,7 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
@@ -550,7 +551,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         sessionTask.setSource("PLATFORM");
         sessionTask.setCreatedAt(entity.getCreatedAt());
         sessionTask.setUpdatedAt(entity.getUpdatedAt());
-        sessionTask.setTaskStateJson(buildTaskStateJson(entity));
+        sessionTask.setTaskStateJson(buildTaskStateJson(entity, sessionTask.getTaskStateJson()));
         sessionTaskRepository.save(sessionTask);
     }
 
@@ -595,8 +596,8 @@ public class LanggraphTaskService implements TaskQueryProvider {
         });
     }
 
-    private String buildTaskStateJson(LanggraphTaskEntity entity) {
-        Map<String, Object> state = new LinkedHashMap<>();
+    private String buildTaskStateJson(LanggraphTaskEntity entity, String existingJson) {
+        Map<String, Object> state = parseTaskStateJson(existingJson);
         putIfNotBlank(state, "contextId", entity.getContextId());
         putIfNotBlank(state, "structuredOutput", entity.getStructuredOutput());
         putIfNotBlank(state, "taskSubStatus", entity.getTaskSubStatus());
@@ -615,6 +616,19 @@ public class LanggraphTaskService implements TaskQueryProvider {
             log.warn("Failed to serialize langgraph task state: taskId={}", entity.getTaskId(), e);
             return null;
         }
+    }
+
+    private Map<String, Object> parseTaskStateJson(String json) {
+        Map<String, Object> state = new LinkedHashMap<>();
+        if (!StringUtils.hasText(json)) {
+            return state;
+        }
+        try {
+            state.putAll(OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {}));
+        } catch (Exception e) {
+            log.debug("Failed to parse langgraph task state JSON: {}", e.getMessage());
+        }
+        return state;
     }
 
     private String resolveAgentId(CreateLanggraphTaskForm form) {

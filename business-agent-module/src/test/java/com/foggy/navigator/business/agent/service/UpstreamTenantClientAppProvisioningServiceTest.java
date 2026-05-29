@@ -149,9 +149,9 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         assertTrue(result.getBlockers().isEmpty());
         CodingAgentEntity rootAgent = agentsByKey.get(agentKey("tms-root-agent", "nav_tms_3"));
         assertNotNull(rootAgent);
-        assertEquals(ResourceOwnerType.CLIENT_APP, rootAgent.getOwnerType());
-        assertEquals(result.getClientAppId(), rootAgent.getOwnerId());
-        assertEquals(result.getClientAppId(), rootAgent.getClientAppId());
+        assertEquals(ResourceOwnerType.UPSTREAM_SYSTEM, rootAgent.getOwnerType());
+        assertEquals("TMS", rootAgent.getOwnerId());
+        assertNull(rootAgent.getClientAppId());
         assertTrue(rootAgent.getEnabled());
         verify(agentDefaultBindingService).ensureDefaults(rootAgent);
         verify(skillRegistryService).syncSkillBundle(eq("nav_tms_3"), eq("upstream-admin:ucaac-1"), any());

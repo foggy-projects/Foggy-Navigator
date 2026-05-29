@@ -1544,6 +1544,8 @@ public class TaskDispatchFacade {
             Object value = metadata.get(key);
             if (value instanceof String text && !text.isBlank()) {
                 state.put(key, text.trim());
+            } else if (value instanceof Number || value instanceof Boolean) {
+                state.put(key, value);
             }
         }
     }
@@ -1557,7 +1559,20 @@ public class TaskDispatchFacade {
                 "workerSource",
                 "backendSource",
                 "taskSource",
-                "contextId");
+                "contextId",
+                "originalTaskId",
+                "original_task_id",
+                "sourceTaskId",
+                "source_task_id",
+                "recoveryCorrelationKey",
+                "recovery_correlation_key",
+                "correlationKey",
+                "correlation_key",
+                "attemptNumber",
+                "attempt_number",
+                "attempt",
+                "idempotencyKey",
+                "idempotency_key");
     }
 
     private String asString(Object value) {

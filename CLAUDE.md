@@ -2,6 +2,11 @@
 
 Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 
+## 项目称呼
+
+- 用户或上下文中提到 `navi`、`Navi`、`NAVI` 时，默认指当前项目 Foggy Navigator，也就是本仓库/当前工作区。
+- 如同时出现其他 Navigator 环境，先按工作区路径、端口和进程命令行确认具体目标，避免误操作其他环境。
+
 ## 本机私有补充
 
 - 本机环境规则见 [CLAUDE.local.md](./CLAUDE.local.md)。

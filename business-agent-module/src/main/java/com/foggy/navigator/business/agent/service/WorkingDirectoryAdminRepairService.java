@@ -1,5 +1,8 @@
 package com.foggy.navigator.business.agent.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.WorkingDirectoryRepairResultDTO;
 import com.foggy.navigator.business.agent.model.form.RepairUpstreamSystemWorkingDirectoryForm;
 import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindingRepository;
@@ -16,6 +19,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 @Service
 @RequiredArgsConstructor
 public class WorkingDirectoryAdminRepairService {
@@ -23,6 +29,7 @@ public class WorkingDirectoryAdminRepairService {
     private final WorkingDirectoryRepository directoryRepository;
     private final BusinessCodingAgentRepository agentRepository;
     private final BusinessAgentDirectoryBindingRepository bindingRepository;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public WorkingDirectoryRepairResultDTO repairUpstreamSystemDirectory(String directoryId,
@@ -43,6 +50,8 @@ public class WorkingDirectoryAdminRepairService {
             throw new IllegalStateException("agent is disabled: " + rootAgentId);
         }
         boolean rootAgentOwnerRepaired = false;
+        boolean rootAgentClientAppBindingRepaired = false;
+        boolean rootAgentProfileClientAppBindingRepaired = false;
         if (agent.getOwnerType() != ResourceOwnerType.UPSTREAM_SYSTEM
                 || !upstreamSystemId.equals(agent.getOwnerId())) {
             if (!Boolean.TRUE.equals(form.getRepairRootAgentOwner())) {
@@ -52,6 +61,15 @@ public class WorkingDirectoryAdminRepairService {
             agent.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
             agent.setOwnerId(upstreamSystemId);
             rootAgentOwnerRepaired = true;
+        }
+        if (StringUtils.hasText(agent.getClientAppId())) {
+            agent.setClientAppId(null);
+            rootAgentClientAppBindingRepaired = true;
+        }
+        String repairedProfile = removeProfileClientAppBinding(agent.getAgentProfile());
+        if (!equalsNullable(agent.getAgentProfile(), repairedProfile)) {
+            agent.setAgentProfile(repairedProfile);
+            rootAgentProfileClientAppBindingRepaired = true;
         }
 
         directory.setTenantId(tenantId);
@@ -79,7 +97,10 @@ public class WorkingDirectoryAdminRepairService {
         if (setDefault) {
             agent.setDefaultDirectoryId(normalizedDirectoryId);
         }
-        if (setDefault || rootAgentOwnerRepaired) {
+        if (setDefault
+                || rootAgentOwnerRepaired
+                || rootAgentClientAppBindingRepaired
+                || rootAgentProfileClientAppBindingRepaired) {
             agentRepository.save(agent);
         }
 
@@ -93,8 +114,29 @@ public class WorkingDirectoryAdminRepairService {
         dto.setRootAgentOwnerType(agent.getOwnerType());
         dto.setRootAgentOwnerId(agent.getOwnerId());
         dto.setRootAgentOwnerRepaired(rootAgentOwnerRepaired);
+        dto.setRootAgentClientAppBindingRepaired(rootAgentClientAppBindingRepaired);
+        dto.setRootAgentProfileClientAppBindingRepaired(rootAgentProfileClientAppBindingRepaired);
         dto.setDefaultDirectory(setDefault);
         return dto;
+    }
+
+    private String removeProfileClientAppBinding(String profileJson) {
+        if (!StringUtils.hasText(profileJson)) {
+            return profileJson;
+        }
+        try {
+            Map<String, Object> profile = objectMapper.readValue(profileJson, new TypeReference<LinkedHashMap<String, Object>>() {
+            });
+            boolean removed = profile.remove("clientAppId") != null;
+            removed = profile.remove("client_app_id") != null || removed;
+            return removed ? objectMapper.writeValueAsString(profile) : profileJson;
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("invalid root agent profile", e);
+        }
+    }
+
+    private boolean equalsNullable(String left, String right) {
+        return left == null ? right == null : left.equals(right);
     }
 
     private AgentDirectoryBindingEntity upsertBinding(String tenantId, String agentId, String directoryId) {

@@ -155,18 +155,15 @@ class BizWorkerControlPlaneAuthorizationTest {
 
     @Test
     void testBusinessObjectController() throws Exception {
-        assertMethodRole(
-                BusinessObjectController.class.getMethod("createBusinessObject", String.class, String.class, CreateBusinessObjectForm.class),
-                "TENANT_ADMIN"
-        );
-        assertMethodRole(
-                BusinessObjectController.class.getMethod("getBusinessObject", String.class, String.class),
-                "TENANT_ADMIN"
-        );
-        assertMethodRole(
-                BusinessObjectController.class.getMethod("updateBusinessObject", String.class, String.class, String.class, UpdateBusinessObjectForm.class),
-                "TENANT_ADMIN"
-        );
+        assertNull(BusinessObjectController.class
+                .getMethod("createBusinessObject", jakarta.servlet.http.HttpServletRequest.class, CreateBusinessObjectForm.class)
+                .getAnnotation(RequireAuth.class));
+        assertNull(BusinessObjectController.class
+                .getMethod("getBusinessObject", jakarta.servlet.http.HttpServletRequest.class, String.class)
+                .getAnnotation(RequireAuth.class));
+        assertNull(BusinessObjectController.class
+                .getMethod("updateBusinessObject", jakarta.servlet.http.HttpServletRequest.class, String.class, UpdateBusinessObjectForm.class)
+                .getAnnotation(RequireAuth.class));
     }
 
     @Test

@@ -53,6 +53,7 @@ public class UpstreamBootstrapRequestService {
     public static final String SCOPE_WORKING_DIRECTORY_MANAGE = "WORKING_DIRECTORY_MANAGE";
     public static final String SCOPE_WORKER_POOL_MANAGE = "WORKER_POOL_MANAGE";
     public static final String SCOPE_MODEL_CONFIG_MANAGE = "MODEL_CONFIG_MANAGE";
+    public static final String SCOPE_BUSINESS_OBJECT_MANAGE = "BUSINESS_OBJECT_MANAGE";
     public static final String SCOPE_AGENT_BUNDLE_SYNC = "AGENT_BUNDLE_SYNC";
     public static final String SCOPE_AGENT_MODEL_BINDING_MANAGE = "AGENT_MODEL_BINDING_MANAGE";
     public static final String SCOPE_AGENT_WORKSPACE_BINDING_MANAGE = "AGENT_WORKSPACE_BINDING_MANAGE";
@@ -284,7 +285,7 @@ public class UpstreamBootstrapRequestService {
         newCredential.setUpstreamSystemId(oldCredential.getUpstreamSystemId());
         newCredential.setAuthorizedTenantIdsJson(oldCredential.getAuthorizedTenantIdsJson());
         newCredential.setAuthorizedClientAppNamespace(oldCredential.getAuthorizedClientAppNamespace());
-        newCredential.setScopesJson(oldCredential.getScopesJson());
+        newCredential.setScopesJson(resolveRotatedScopesJson(oldCredential, form));
         newCredential.setStatus(CREDENTIAL_STATUS_ACTIVE);
         newCredential.setExpiresAt(resolveRotatedCredentialExpiresAt(oldCredential, form, now));
         validateCredentialExpiry(newCredential.getExpiresAt(), now);
@@ -299,6 +300,14 @@ public class UpstreamBootstrapRequestService {
                         + ";newCredentialId=" + newCredential.getCredentialId());
 
         return toClaimDTO(newCredential, adminApiKey);
+    }
+
+    private String resolveRotatedScopesJson(UpstreamClientAppAdminCredentialEntity oldCredential,
+                                            RotateUpstreamAdminCredentialForm form) {
+        if (form == null || form.getScopes() == null) {
+            return oldCredential.getScopesJson();
+        }
+        return toJson(normalizeScopes(form.getScopes()));
     }
 
     private UpstreamBootstrapRequestEntity requireRequestByCode(String requestCode, boolean forUpdate) {
@@ -499,6 +508,8 @@ public class UpstreamBootstrapRequestService {
                     SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE;
             case "DIRECTORY_MANAGE", "WORKDIR_MANAGE", "WORKING_DIR_MANAGE" -> SCOPE_WORKING_DIRECTORY_MANAGE;
             case "CONFIG_MODEL_MANAGE", "CONFIGMODEL_MANAGE" -> SCOPE_MODEL_CONFIG_MANAGE;
+            case "BUSINESS_OBJECT_UPSERT", "BUSINESS_OBJECT_QUERY", "BUSINESS_OBJECT_ADMIN" ->
+                    SCOPE_BUSINESS_OBJECT_MANAGE;
             case "AGENT_SYNC" -> SCOPE_AGENT_BUNDLE_SYNC;
             case "SYSTEM_AGENT_MANAGE", "AGENT_ADMIN" -> SCOPE_AGENT_MANAGE;
             case "AGENT_MODEL_MANAGE", "MODEL_BINDING_MANAGE" -> SCOPE_AGENT_MODEL_BINDING_MANAGE;
@@ -519,6 +530,7 @@ public class UpstreamBootstrapRequestService {
                 SCOPE_WORKING_DIRECTORY_MANAGE,
                 SCOPE_WORKER_POOL_MANAGE,
                 SCOPE_MODEL_CONFIG_MANAGE,
+                SCOPE_BUSINESS_OBJECT_MANAGE,
                 SCOPE_AGENT_MANAGE,
                 SCOPE_AGENT_MODEL_BINDING_MANAGE,
                 SCOPE_AGENT_WORKSPACE_BINDING_MANAGE,

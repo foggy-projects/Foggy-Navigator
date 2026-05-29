@@ -11,6 +11,7 @@ import com.foggy.navigator.business.agent.model.entity.UpstreamClientAppAdminCre
 import com.foggy.navigator.business.agent.model.form.ApproveUpstreamBootstrapRequestForm;
 import com.foggy.navigator.business.agent.model.form.ClaimUpstreamAdminCredentialForm;
 import com.foggy.navigator.business.agent.model.form.CreateUpstreamBootstrapRequestForm;
+import com.foggy.navigator.business.agent.model.form.RotateUpstreamAdminCredentialForm;
 import com.foggy.navigator.business.agent.repository.UpstreamBootstrapAuditRepository;
 import com.foggy.navigator.business.agent.repository.UpstreamBootstrapRequestRepository;
 import com.foggy.navigator.business.agent.repository.UpstreamClientAppAdminCredentialRepository;
@@ -246,6 +247,27 @@ class UpstreamBootstrapRequestServiceTest {
                         && !saved.getCredentialKeyHash().equals(rotated.getNaviAdminApiKey())
                         && "ubreq-1".equals(saved.getSourceRequestId())));
         verify(auditRepository).save(argThat(audit -> "ADMIN_CREDENTIAL_ROTATED".equals(audit.getEventType())));
+    }
+
+    @Test
+    void rotateAdminCredentialCanReplaceScopesForNewCredential() {
+        UpstreamBootstrapRequestEntity request = approvedRequest("request-code", "claim-token", "tenant-1");
+        UpstreamClientAppAdminCredentialEntity oldCredential = activeCredential();
+        RotateUpstreamAdminCredentialForm form = new RotateUpstreamAdminCredentialForm();
+        form.setScopes(List.of("client_app_manage", "business_object_upsert", "directory_manage"));
+        when(adminCredentialRepository.findByCredentialIdForUpdate("ucaac-1")).thenReturn(Optional.of(oldCredential));
+        when(requestRepository.findByRequestId("ubreq-1")).thenReturn(Optional.of(request));
+
+        UpstreamAdminCredentialClaimDTO rotated = service.rotateAdminCredential("ucaac-1", form, operatorActor());
+
+        assertEquals(List.of(
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE,
+                UpstreamBootstrapRequestService.SCOPE_BUSINESS_OBJECT_MANAGE,
+                UpstreamBootstrapRequestService.SCOPE_WORKING_DIRECTORY_MANAGE), rotated.getScopes());
+        verify(adminCredentialRepository).save(argThat(saved ->
+                !"ucaac-1".equals(saved.getCredentialId())
+                        && saved.getScopesJson().contains("\"BUSINESS_OBJECT_MANAGE\"")
+                        && saved.getScopesJson().contains("\"WORKING_DIRECTORY_MANAGE\"")));
     }
 
     private UpstreamBootstrapRequestEntity pendingRequest(String requestCode, String claimToken, String tenantId) {

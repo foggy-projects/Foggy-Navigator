@@ -361,11 +361,11 @@ public class UpstreamTenantClientAppProvisioningService {
         entity.setAgentId(rootAgentId);
         entity.setUserId(defaultText(actorUserId, "upstream-tenant-provisioning"));
         entity.setTenantId(clientApp.getTenantId());
-        entity.setOwnerType(ResourceOwnerType.CLIENT_APP);
-        entity.setOwnerId(clientApp.getClientAppId());
-        entity.setClientAppId(clientApp.getClientAppId());
+        entity.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
+        entity.setOwnerId(clientApp.getUpstreamSystemId());
+        entity.setClientAppId(null);
         entity.setName(defaultText(form.getTenantName(), clientApp.getName() + " root agent"));
-        entity.setDescription("Upstream tenant root agent for ClientApp " + clientApp.getClientAppId());
+        entity.setDescription("Upstream tenant root agent for upstream system " + clientApp.getUpstreamSystemId());
         entity.setAgentType(BusinessAgentBundleService.AGENT_TYPE_LANGGRAPH);
         String explicitWorkerId = trimToNull(defaultText(form.getPhysicalWorkerId(), form.getWorkerPoolId()), 64);
         if (StringUtils.hasText(explicitWorkerId)) {

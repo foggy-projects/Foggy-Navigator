@@ -95,6 +95,25 @@ class OpenApiAgentRouteServiceTest {
     }
 
     @Test
+    void resolve_ignoresLegacyProfileClientAppBindingForUpstreamSystemOwnedAgent() {
+        CodingAgentEntity agent = agent("root-agent");
+        agent.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
+        agent.setOwnerId("upstream-system-1");
+        agent.setClientAppId(null);
+        agent.setAgentProfile("""
+                {"clientAppId":"old-app","skillId":"tms.navigator.agent"}
+                """);
+        when(repository.findByAgentIdAndTenantId("root-agent", "tenant-1"))
+                .thenReturn(Optional.of(agent));
+
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                service.resolve("root-agent", credential());
+
+        assertEquals("tms.navigator.agent", route.skillId());
+        assertEquals("app-1", route.clientAppId());
+    }
+
+    @Test
     void resolve_reportsClientAppOwnerMismatch() {
         CodingAgentEntity agent = agent("root-agent");
         agent.setOwnerId("other-app");

@@ -70,7 +70,21 @@ class UpstreamCliTest {
             String response;
             if ("__MESSAGES_TERMINAL__".equals(responseOverride)) {
                 response = lastPath.contains("/messages")
-                        ? "{\"code\":0,\"data\":{\"messages\":[{\"messageId\":\"m-1\",\"role\":\"assistant\",\"type\":\"text\",\"content\":\"done cat-runtime-secret\"}]}}"
+                        ? """
+                        {"code":0,"data":{"messages":[{
+                          "messageId":"m-1",
+                          "role":"assistant",
+                          "type":"RESULT",
+                          "eventKind":"final_marker",
+                          "progressType":"final",
+                          "status":"COMPLETED",
+                          "terminal":true,
+                          "terminalStatus":"COMPLETED",
+                          "content":"done cat-runtime-secret",
+                          "reportRefs":[{"type":"frame_report","ref":"frame-report://task-1/frame-1","frameId":"frame-1"}],
+                          "artifactRefs":[{"path":"outputs/result.json?token=cat-runtime-secret"}]
+                        }]}}
+                        """
                         : "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"COMPLETED\"}}";
             } else if ("__MESSAGES_FAILED_DIAGNOSTICS__".equals(responseOverride)) {
                 response = lastPath.contains("/messages")
@@ -671,6 +685,7 @@ class UpstreamCliTest {
         int code = run(new String[]{"upstream", "admin-key", "rotate",
                 "--profile", ".navigator/upstream.env",
                 "--credential-id", "ucaac-1",
+                "--scopes", "CLIENT_APP_MANAGE,BUSINESS_OBJECT_MANAGE,WORKING_DIRECTORY_MANAGE",
                 "--write-profile"}, env("NAVI_OPERATOR_API_KEY", "operator-secret-key"));
 
         String output = stdout.toString(StandardCharsets.UTF_8);
@@ -678,6 +693,7 @@ class UpstreamCliTest {
         assertEquals(0, code);
         assertEquals("/api/v1/admin/upstream-admin-credentials/ucaac-1/rotate", lastPath);
         assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"scopes\":[\"CLIENT_APP_MANAGE\",\"BUSINESS_OBJECT_MANAGE\",\"WORKING_DIRECTORY_MANAGE\"]"));
         assertNull(lastApiKeyHeader);
         assertNull(lastAuthorizationHeader);
         assertEquals("operator-secret-key", lastOperatorKeyHeader);
@@ -835,13 +851,23 @@ class UpstreamCliTest {
         assertTrue(profile.contains("NAVI_MODEL_CONFIG_ID=model-live"));
         assertTrue(profile.contains("NAVI_SKILL_ID=tms.navigator.agent"));
         assertTrue(profile.contains("NAVI_WORKER_POOL_ID=pool-1"));
+        assertTrue(profile.contains("NAVI_WORKER_BACKEND=LANGGRAPH_BIZ"));
+        assertTrue(profile.contains("NAVI_PHYSICAL_WORKER_ID=worker-1"));
+        assertTrue(profile.contains("NAVI_DIRECTORY_ID=dir-1"));
+        assertTrue(profile.contains("NAVI_BIZ_WORKER_BASE_URL=http://127.0.0.1:3161"));
         assertTrue(profile.contains("NAVI_SOURCE_TENANT_ID=3"));
-        assertTrue(profile.contains("NAVI_UPSTREAM_REF=3"));
+        assertTrue(profile.contains("NAVI_UPSTREAM_REF=TMS-3"));
+        assertTrue(profile.contains("NAVI_UPSTREAM_NAMESPACE=TMS"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_CAPABILITY_DOMAIN=tms.ops"));
         assertTrue(output.contains("client-app ensure-tenant ok"));
         assertTrue(output.contains("stored=NAVI_BASE_URL"));
         assertTrue(output.contains("created=true"));
         assertTrue(output.contains("rotated=true"));
         assertTrue(output.contains("status=READY"));
+        assertTrue(output.contains("activationReady=true"));
+        assertTrue(output.contains("workerBackend=LANGGRAPH_BIZ"));
+        assertTrue(output.contains("physicalWorkerId=worker-1"));
+        assertTrue(output.contains("directoryId=dir-1"));
         assertTrue(output.contains("credentialsReplayable=true"));
         assertTrue(output.contains("blocker=worker route should be verified"));
         assertFalse(output.contains("naa-secret-admin-key"));
@@ -1140,6 +1166,24 @@ class UpstreamCliTest {
     }
 
     @Test
+    void askSendsMaxTurnsWhenProvided() {
+        responseOverride = "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUBMITTED\",\"contextId\":\"ctx-1\"}}";
+
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "hello",
+                "--max-turns", "1"}, Map.of());
+
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
+        assertTrue(lastBody.contains("\"maxTurns\":1"));
+    }
+
+    @Test
     void askSendsModelConfigIdFromEnvInTopLevelAndMetadata() {
         responseOverride = "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUBMITTED\",\"contextId\":\"ctx-1\"}}";
 
@@ -1194,6 +1238,11 @@ class UpstreamCliTest {
         assertEquals(0, code);
         assertEquals("cat-runtime-secret", lastClientAppAccessTokenHeader);
         assertTrue(output.contains("taskStatus=COMPLETED"));
+        assertTrue(output.contains("eventKind=final_marker"));
+        assertTrue(output.contains("progressType=final"));
+        assertTrue(output.contains("terminalStatus=COMPLETED"));
+        assertTrue(output.contains("messageReportRef messageId=m-1 type=frame_report ref=frame-report://task-1/frame-1"));
+        assertTrue(output.contains("messageArtifactRef messageId=m-1 path=outputs/result.json?token=[REDACTED]"));
         assertFalse(output.contains("cat-runtime-secret"));
     }
 
@@ -1248,6 +1297,98 @@ class UpstreamCliTest {
         assertEquals(2, code);
         assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("messages requires --agent-code"));
         assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void diagnosticsUsesRuntimeHeadersAndRedactsSecrets() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "taskId":"task-1",
+                  "agentId":"agent-1",
+                  "contextId":"ctx-1",
+                  "status":"FAILED",
+                  "terminal":true,
+                  "terminalStatus":"FAILED",
+                  "submittedAt":"2026-05-27T08:00:00",
+                  "lastObservedAt":"2026-05-27T08:01:00",
+                  "messagesCount":3,
+                  "providerTaskId":"wt-1",
+                  "workerTaskId":"wt-1",
+                  "lastAckedSeq":2,
+                  "workerBackend":"OPENAI_CODEX",
+                  "providerType":"codex-worker",
+                  "failureStage":"PROVIDER_API",
+                  "failureSummary":"Provider rejected token=cat-runtime-secret",
+                  "cancelCapability":{
+                    "cancelSupported":false,
+                    "cancelMode":"admin_only",
+                    "cleanupSupported":false,
+                    "backendLimitations":["runtime_client_app_cancel_not_exposed"]
+                  },
+                  "correlation":{"originalTaskId":"task-0","attemptNumber":2}
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "diagnostics",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--task-id", "task-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/tasks/task-1/diagnostics", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("cak-test", lastClientAppKeyHeader);
+        assertEquals("cat-runtime-secret", lastClientAppAccessTokenHeader);
+        assertEquals("u-1", lastUpstreamUserIdHeader);
+        assertTrue(output.contains("taskId=task-1"));
+        assertTrue(output.contains("messagesCount=3"));
+        assertTrue(output.contains("cancelMode=admin_only"));
+        assertTrue(output.contains("backendLimitations=runtime_client_app_cancel_not_exposed"));
+        assertTrue(output.contains("failureSummary=Provider rejected token=[REDACTED]"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
+    void evidenceUsesRuntimeHeadersAndPrintsRefs() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "taskId":"task-1",
+                  "agentId":"agent-1",
+                  "contextId":"ctx-1",
+                  "status":"COMPLETED",
+                  "terminal":true,
+                  "terminalStatus":"COMPLETED",
+                  "finalAnswer":{"available":true,"summary":"done cat-runtime-secret","source":"task_result"},
+                  "structuredOutput":{"available":true,"source":"task_state","value":{"ok":true}},
+                  "reportRefs":[{"type":"frame_report","ref":"frame-report://task-1/frame-1","frameId":"frame-1"}],
+                  "artifactRefs":[{"path":"outputs/result.json","hash":"abc"}]
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "evidence",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--task-id", "task-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/tasks/task-1/evidence", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("cat-runtime-secret", lastClientAppAccessTokenHeader);
+        assertEquals("u-1", lastUpstreamUserIdHeader);
+        assertTrue(output.contains("finalAnswer.available=true"));
+        assertTrue(output.contains("finalAnswer.summary=done [REDACTED]"));
+        assertTrue(output.contains("structuredOutput.value={\"ok\":true}"));
+        assertTrue(output.contains("reportRef type=frame_report ref=frame-report://task-1/frame-1"));
+        assertTrue(output.contains("artifactRef path=outputs/result.json"));
+        assertFalse(output.contains("cat-runtime-secret"));
     }
 
     @Test
@@ -2870,6 +3011,7 @@ class UpstreamCliTest {
         assertTrue(output.contains("directory list/init/get/delete/env/files"));
         assertTrue(output.contains("Internal compatibility: worker-pool list/create/register-worker/add-member/status"));
         assertTrue(output.contains("model system-list/system-create/system-update/system-rotate-key"));
+        assertTrue(output.contains("[--max-turns <n>]"));
     }
 
     @Test

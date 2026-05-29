@@ -12,6 +12,8 @@ import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenTaskMessagesResponse;
+import com.foggy.navigator.claude.worker.model.dto.OpenTaskDiagnosticsDTO;
+import com.foggy.navigator.claude.worker.model.dto.OpenTaskEvidenceDTO;
 import com.foggy.navigator.claude.worker.model.form.OpenApiQueryForm;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
@@ -52,6 +54,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -83,9 +86,50 @@ class OpenApiControllerMessageMappingTest {
         OpenSessionMessageDTO dto = mapMessage(controller, entity);
 
         assertEquals("RESULT", dto.getType());
+        assertEquals("final_marker", dto.getEventKind());
         assertTrue(dto.getTerminal());
         assertEquals("COMPLETED", dto.getTerminalStatus());
         assertEquals("task-1", dto.getTaskId());
+    }
+
+    @Test
+    void taskCompletedMessageExposesStructuredOutputAtTopLevel() throws Exception {
+        OpenApiController controller = newController();
+        SessionMessageEntity entity = new SessionMessageEntity();
+        entity.setId("msg-open-artifact");
+        entity.setSessionId("session-1");
+        entity.setTaskId("task-1");
+        entity.setRole("ASSISTANT");
+        entity.setContent("已生成打印模板草稿");
+        entity.setMetadata("""
+                {
+                  "type": "TASK_COMPLETED",
+                  "taskId": "task-1",
+                  "structuredOutput": {
+                    "type": "OPEN_ARTIFACT",
+                    "label": "查看模板预览",
+                    "artifact": {
+                      "kind": "iframe",
+                      "uri": "http://localhost:3199/tms/print-template-preview?templateId=tpl-1"
+                    }
+                  }
+                }
+                """);
+        entity.setCreatedAt(LocalDateTime.now());
+
+        OpenSessionMessageDTO dto = mapMessage(controller, entity);
+
+        assertEquals("RESULT", dto.getType());
+        assertEquals("final_marker", dto.getEventKind());
+        assertEquals("COMPLETED", dto.getTerminalStatus());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> structuredOutput = (Map<String, Object>) dto.getStructuredOutput();
+        assertEquals("OPEN_ARTIFACT", structuredOutput.get("type"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> artifact = (Map<String, Object>) structuredOutput.get("artifact");
+        assertEquals("iframe", artifact.get("kind"));
+        assertNull(dto.getMetadata().get("taskId"));
+        assertNotNull(dto.getMetadata().get("structuredOutput"));
     }
 
     @Test
@@ -103,6 +147,7 @@ class OpenApiControllerMessageMappingTest {
         OpenSessionMessageDTO dto = mapMessage(controller, entity);
 
         assertEquals("TOOL_CALL", dto.getType());
+        assertEquals("tool_call_summary", dto.getEventKind());
         assertEquals(false, dto.getTerminal());
     }
 
@@ -155,6 +200,42 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("smoke-a.png", dto.getAttachments().get(0).get("name"));
         assertEquals("smoke-b.png", dto.getAttachments().get(1).get("name"));
         assertNull(dto.getMetadata().get("taskId"));
+    }
+
+    @Test
+    void messageEventContractExposesProgressTypeAndEvidenceRefs() throws Exception {
+        OpenApiController controller = newController();
+        SessionMessageEntity entity = new SessionMessageEntity();
+        entity.setId("msg-progress");
+        entity.setSessionId("session-1");
+        entity.setTaskId("task-1");
+        entity.setRole("ASSISTANT");
+        entity.setContent("Opening execution frame");
+        entity.setMetadata("""
+                {
+                  "type": "STATE_SYNC",
+                  "subtype": "skill_frame_open",
+                  "taskId": "task-1",
+                  "reportRefs": ["frame-report://worker-task-1/frame-1"],
+                  "artifactRefs": [
+                    {"path": "D:/workspace/report.md?signature=secret", "summary": "report ready"}
+                  ]
+                }
+                """);
+        entity.setCreatedAt(LocalDateTime.now());
+
+        OpenSessionMessageDTO dto = mapMessage(controller, entity, "RUNNING");
+
+        assertEquals("STATE", dto.getType());
+        assertEquals("progress", dto.getEventKind());
+        assertEquals("skill_frame_open", dto.getProgressType());
+        assertEquals("RUNNING", dto.getStatus());
+        assertEquals(1, dto.getReportRefs().size());
+        assertEquals("frame_report", dto.getReportRefs().get(0).getType());
+        assertEquals("frame-1", dto.getReportRefs().get(0).getFrameId());
+        assertEquals(1, dto.getArtifactRefs().size());
+        assertEquals("D:/workspace/report.md", dto.getArtifactRefs().get(0).getPath());
+        assertFalse(dto.getArtifactRefs().get(0).getPath().contains("signature=secret"));
     }
 
     @Test
@@ -460,6 +541,43 @@ class OpenApiControllerMessageMappingTest {
                 "btt_open_api_1",
                 "lgt_visible_1",
                 "worker_session_1");
+    }
+
+    @Test
+    void askAgent_rejectsMissingUpstreamUserGrantBeforeSubmittingTask() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("创建车辆并走审批");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-missing-grant");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.issueOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-missing-grant"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class)))
+                .thenThrow(new IllegalStateException("Upstream user is not granted access to this Client App"));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+
+        RuntimeException error = assertThrows(
+                RuntimeException.class,
+                () -> controller.askAgent("agent-1", form, request));
+
+        assertTrue(error.getMessage().contains("Upstream user is not granted access to this Client App"));
+        verify(agent, never()).sendTask(any());
+        verify(taskService, never()).bindOpenApiTaskScopedTokenToWorkerTask(
+                any(), any(), any(), any());
     }
 
     @Test
@@ -1111,6 +1229,207 @@ class OpenApiControllerMessageMappingTest {
                 .toList());
     }
 
+    @Test
+    void getTaskDiagnosticsReturnsFactSnapshotForOwnedTask() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                mock(CodingAgentRepository.class),
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        LocalDateTime createdAt = LocalDateTime.of(2026, 5, 27, 9, 0);
+        LocalDateTime startedAt = LocalDateTime.of(2026, 5, 27, 9, 1);
+        LocalDateTime latestMessageAt = LocalDateTime.of(2026, 5, 27, 9, 3);
+        SessionTaskEntity task = openApiTask("task-1", "tenant-1", "agent-1", "RUNNING");
+        task.setCreatedAt(createdAt);
+        task.setUpdatedAt(LocalDateTime.of(2026, 5, 27, 9, 2));
+        task.setLastAliveAt(LocalDateTime.of(2026, 5, 27, 9, 2, 30));
+        task.setLastAckedSeq(7);
+        task.setProviderTaskId("worker-task-1");
+        task.setWorkerId("worker-1");
+        task.setModelConfigId("model-1");
+        task.setTaskStateJson("""
+                {
+                  "workerStartedAt": "2026-05-27T09:01:00",
+                  "workerBackend": "claude-worker",
+                  "modelConfigSource": "agent_default",
+                  "originalTaskId": "task-original",
+                  "recoveryCorrelationKey": "corr-1",
+                  "attemptNumber": 2,
+                  "idempotencyKey": "Bearer abcdefgh123456"
+                }
+                """);
+        SessionMessageEntity latestMessage = message(
+                "msg-latest", "session-1", "ASSISTANT", "working", "{\"type\":\"TEXT\"}");
+        latestMessage.setCreatedAt(latestMessageAt);
+
+        when(credentialResolver.resolveAccessToken(nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(sessionQueryService.findTask("task-1")).thenReturn(Optional.of(task));
+        when(sessionQueryService.resolveContextId("session-1")).thenReturn(Optional.of("ctx-1"));
+        when(sessionQueryService.findLatestTaskMessage("task-1")).thenReturn(Optional.of(latestMessage));
+        when(sessionQueryService.countTaskMessages("task-1")).thenReturn(2L);
+
+        OpenTaskDiagnosticsDTO diagnostics = controller.getTaskDiagnostics("agent-1", "task-1", request).getData();
+
+        assertEquals("task-1", diagnostics.getTaskId());
+        assertEquals("agent-1", diagnostics.getAgentId());
+        assertEquals("ctx-1", diagnostics.getContextId());
+        assertEquals("RUNNING", diagnostics.getStatus());
+        assertEquals(false, diagnostics.getTerminal());
+        assertNull(diagnostics.getTerminalStatus());
+        assertEquals(createdAt, diagnostics.getSubmittedAt());
+        assertEquals(startedAt, diagnostics.getWorkerStartedAt());
+        assertEquals(latestMessageAt, diagnostics.getLastObservedAt());
+        assertEquals(2L, diagnostics.getMessagesCount());
+        assertEquals("worker-task-1", diagnostics.getWorkerTaskId());
+        assertEquals(7L, diagnostics.getLastAckedSeq());
+        assertEquals("model-1", diagnostics.getModelConfigId());
+        assertEquals("agent_default", diagnostics.getModelConfigSource());
+        assertEquals("claude-worker", diagnostics.getWorkerBackend());
+        assertEquals("worker-1", diagnostics.getSafeWorkerRef());
+        assertNotNull(diagnostics.getCancelCapability());
+        assertEquals(false, diagnostics.getCancelCapability().getCancelSupported());
+        assertEquals("admin_only", diagnostics.getCancelCapability().getCancelMode());
+        assertNotNull(diagnostics.getCorrelation());
+        assertEquals("task-original", diagnostics.getCorrelation().getOriginalTaskId());
+        assertEquals("corr-1", diagnostics.getCorrelation().getRecoveryCorrelationKey());
+        assertEquals(2, diagnostics.getCorrelation().getAttemptNumber());
+        assertFalse(diagnostics.getCorrelation().getIdempotencyKey().contains("abcdefgh123456"));
+    }
+
+    @Test
+    void getTaskDiagnosticsReturnsSubmittedFactsWhenTaskNotPickedUp() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                mock(CodingAgentRepository.class),
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        LocalDateTime submittedAt = LocalDateTime.of(2026, 5, 27, 9, 0);
+        SessionTaskEntity task = openApiTask("task-1", "tenant-1", "agent-1", "SUBMITTED");
+        task.setCreatedAt(submittedAt);
+        task.setUpdatedAt(submittedAt);
+        task.setProviderTaskId(null);
+        task.setWorkerId(null);
+        task.setTaskStateJson("{}");
+
+        when(credentialResolver.resolveAccessToken(nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(sessionQueryService.findTask("task-1")).thenReturn(Optional.of(task));
+        when(sessionQueryService.resolveContextId("session-1")).thenReturn(Optional.of("ctx-1"));
+        when(sessionQueryService.findLatestTaskMessage("task-1")).thenReturn(Optional.empty());
+        when(sessionQueryService.countTaskMessages("task-1")).thenReturn(0L);
+
+        OpenTaskDiagnosticsDTO diagnostics = controller.getTaskDiagnostics("agent-1", "task-1", request).getData();
+
+        assertEquals("SUBMITTED", diagnostics.getStatus());
+        assertEquals(false, diagnostics.getTerminal());
+        assertEquals(submittedAt, diagnostics.getSubmittedAt());
+        assertNull(diagnostics.getWorkerStartedAt());
+        assertEquals(submittedAt, diagnostics.getLastObservedAt());
+        assertEquals(0L, diagnostics.getMessagesCount());
+        assertNull(diagnostics.getWorkerTaskId());
+        assertNull(diagnostics.getSafeWorkerRef());
+        assertEquals("admin_only", diagnostics.getCancelCapability().getCancelMode());
+        assertTrue(diagnostics.getCancelCapability().getBackendLimitations()
+                .contains("runtime_client_app_cancel_not_exposed"));
+    }
+
+    @Test
+    void getTaskEvidenceReturnsSanitizedSummariesAndRefs() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                mock(CodingAgentRepository.class),
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        SessionTaskEntity task = openApiTask("task-1", "tenant-1", "agent-1", "COMPLETED");
+        task.setResultText("done api_key=sk-secret-token");
+        task.setTaskStateJson("""
+                {
+                  "structuredOutput": {"status":"ok","token":"sk-secret-token"},
+                  "reportRefs": ["frame-report://lgt_1/frm_2"],
+                  "artifactRefs": [{"path":"D:/workspace/report.md?signature=secret","summary":"final report"}]
+                }
+                """);
+
+        when(credentialResolver.resolveAccessToken(nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(sessionQueryService.findTask("task-1")).thenReturn(Optional.of(task));
+        when(sessionQueryService.resolveContextId("session-1")).thenReturn(Optional.of("ctx-1"));
+        when(sessionQueryService.getLatestTaskMessages("task-1", 200)).thenReturn(List.of(
+                message("msg-1", "session-1", "ASSISTANT", "ignored",
+                        "{\"type\":\"TEXT\",\"artifactRefs\":[\"D:/workspace/log.txt?token=secret\"]}")));
+
+        OpenTaskEvidenceDTO evidence = controller.getTaskEvidence("agent-1", "task-1", request).getData();
+
+        assertEquals("COMPLETED", evidence.getStatus());
+        assertEquals(true, evidence.getTerminal());
+        assertEquals("COMPLETED", evidence.getTerminalStatus());
+        assertEquals(true, evidence.getFinalAnswer().getAvailable());
+        assertFalse(evidence.getFinalAnswer().getSummary().contains("sk-secret-token"));
+        assertEquals("task_result", evidence.getFinalAnswer().getSource());
+        assertEquals(true, evidence.getStructuredOutput().getAvailable());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> structured = (Map<String, Object>) evidence.getStructuredOutput().getValue();
+        assertEquals("ok", structured.get("status"));
+        assertFalse(String.valueOf(structured.get("token")).contains("sk-secret-token"));
+        assertEquals(1, evidence.getReportRefs().size());
+        assertEquals("frame_report", evidence.getReportRefs().get(0).getType());
+        assertEquals("frm_2", evidence.getReportRefs().get(0).getFrameId());
+        assertEquals(2, evidence.getArtifactRefs().size());
+        assertEquals("D:/workspace/report.md", evidence.getArtifactRefs().get(0).getPath());
+        assertEquals("D:/workspace/log.txt", evidence.getArtifactRefs().get(1).getPath());
+    }
+
+    @Test
+    void getTaskDiagnosticsRejectsTaskOwnedByAnotherAgent() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                mock(CodingAgentRepository.class),
+                sessionQueryService);
+
+        when(credentialResolver.resolveAccessToken(nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(sessionQueryService.findTask("task-1"))
+                .thenReturn(Optional.of(openApiTask("task-1", "tenant-1", "other-agent", "RUNNING")));
+
+        RuntimeException error = assertThrows(
+                RuntimeException.class,
+                () -> controller.getTaskDiagnostics("agent-1", "task-1", mock(HttpServletRequest.class)));
+
+        assertTrue(error.getMessage().contains("Task not found: task-1"));
+    }
+
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity)
             throws Exception {
         Method method = OpenApiController.class.getDeclaredMethod(
@@ -1153,6 +1472,20 @@ class OpenApiControllerMessageMappingTest {
         entity.setMetadata(metadata);
         entity.setCreatedAt(LocalDateTime.now());
         return entity;
+    }
+
+    private SessionTaskEntity openApiTask(String taskId, String tenantId, String agentId, String status) {
+        SessionTaskEntity task = new SessionTaskEntity();
+        task.setTaskId(taskId);
+        task.setSessionId("session-1");
+        task.setTenantId(tenantId);
+        task.setAgentId(agentId);
+        task.setUserId("owner-1");
+        task.setStatus(status);
+        task.setProviderType("CLAUDE_WORKER");
+        task.setCreatedAt(LocalDateTime.of(2026, 5, 27, 9, 0));
+        task.setUpdatedAt(LocalDateTime.of(2026, 5, 27, 9, 0));
+        return task;
     }
 
     private String terminalStatusFromTaskStatus(OpenApiController controller, String status) throws Exception {

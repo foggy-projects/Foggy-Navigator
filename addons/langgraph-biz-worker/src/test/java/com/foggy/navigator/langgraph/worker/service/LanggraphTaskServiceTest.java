@@ -392,6 +392,34 @@ class LanggraphTaskServiceTest {
         }
 
         @Test
+        void completeTask_preserves_existing_session_task_state_metadata() {
+            existingTask.setSessionId(SESSION_ID);
+            existingTask.setContextId("bctx_20260527_ab_task");
+            SessionTaskEntity projection = new SessionTaskEntity();
+            projection.setTaskStateJson("""
+                    {
+                      "originalTaskId": "task-original",
+                      "recoveryCorrelationKey": "corr-1",
+                      "attemptNumber": 2,
+                      "idempotencyKey": "idem-1"
+                    }
+                    """);
+            when(sessionTaskRepository.findByTaskId("lgt_existing")).thenReturn(Optional.of(projection));
+
+            service.completeTask("lgt_existing", "result text", "{\"key\":\"val\"}", 1234L);
+
+            verify(sessionTaskRepository).save(argThat((SessionTaskEntity saved) ->
+                    saved.getTaskStateJson() != null
+                            && saved.getTaskStateJson().contains("\"originalTaskId\":\"task-original\"")
+                            && saved.getTaskStateJson().contains("\"recoveryCorrelationKey\":\"corr-1\"")
+                            && saved.getTaskStateJson().contains("\"attemptNumber\":2")
+                            && saved.getTaskStateJson().contains("\"idempotencyKey\":\"idem-1\"")
+                            && saved.getTaskStateJson().contains("\"contextId\":\"bctx_20260527_ab_task\"")
+                            && saved.getTaskStateJson().contains("\"structuredOutput\":\"{\\\"key\\\":\\\"val\\\"}\"")
+            ));
+        }
+
+        @Test
         void failTask_sets_failed_with_error() {
             service.failTask("lgt_existing", "connection timeout");
 

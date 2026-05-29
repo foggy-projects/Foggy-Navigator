@@ -981,6 +981,14 @@
               size="small"
               text
               :disabled="selectedConvIds.size === 0"
+              @click="handleBatchArchive"
+            >
+              归档({{ selectedConvIds.size }})
+            </el-button>
+            <el-button
+              size="small"
+              text
+              :disabled="selectedConvIds.size === 0"
               @click="handleBatchAuthConfig"
             >
               &#128273; Auth
@@ -5598,6 +5606,31 @@ async function handleBatchDelete() {
   } catch (e) {
     if (e !== 'cancel') {
       ElMessage.error('删除失败')
+    }
+  }
+}
+
+async function handleBatchArchive() {
+  const sessionIds = [...selectedConvIds.value]
+  const count = sessionIds.length
+  if (count === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确认归档选中的 ${count} 个会话？归档后默认不在列表中显示，可通过"已归档"筛选查看。`,
+      '归档会话',
+      { type: 'info', confirmButtonText: '确认归档', cancelButtonText: '取消' },
+    )
+    let archived = 0
+    for (const sessionId of sessionIds) {
+      await workerState.archiveConversation(sessionId)
+      archived++
+    }
+    ElMessage.success(`已归档 ${archived} 个会话`)
+    exitBatchSelectMode()
+    reloadFilteredTasks()
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('归档失败')
     }
   }
 }

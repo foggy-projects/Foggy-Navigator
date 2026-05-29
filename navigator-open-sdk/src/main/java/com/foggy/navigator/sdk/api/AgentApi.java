@@ -455,6 +455,44 @@ public class AgentApi {
     }
 
     /**
+     * 获取任务诊断事实快照。
+     */
+    public TaskDiagnostics getTaskDiagnostics(String agentId, String taskId) {
+        return http.get("/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/diagnostics",
+                new TypeReference<>() {});
+    }
+
+    public TaskDiagnostics getTaskDiagnosticsWithClientAppAccessToken(
+            String agentId,
+            String taskId,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.get("/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/diagnostics",
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
+    /**
+     * 获取任务完成证据引用。
+     */
+    public TaskEvidence getTaskEvidence(String agentId, String taskId) {
+        return http.get("/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/evidence",
+                new TypeReference<>() {});
+    }
+
+    public TaskEvidence getTaskEvidenceWithClientAppAccessToken(
+            String agentId,
+            String taskId,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.get("/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/evidence",
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
+    /**
      * 取消任务
      */
     public void cancelTask(String agentId, String taskId) {

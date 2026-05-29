@@ -21,6 +21,8 @@ import com.foggy.navigator.sdk.model.SessionSummary;
 import com.foggy.navigator.sdk.model.SkillArtifactFile;
 import com.foggy.navigator.sdk.model.SkillArtifactSlice;
 import com.foggy.navigator.sdk.model.SkillArtifactTree;
+import com.foggy.navigator.sdk.model.TaskDiagnostics;
+import com.foggy.navigator.sdk.model.TaskEvidence;
 import com.foggy.navigator.sdk.model.TaskMessagesPage;
 import com.foggy.navigator.sdk.model.Worker;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO;
@@ -160,6 +162,8 @@ public class UpstreamCli {
             case "ensure-grant" -> ensureGrant(args);
             case "ask" -> ask(args);
             case "messages" -> messages(args);
+            case "diagnostics" -> diagnostics(args);
+            case "evidence" -> evidence(args);
             case "sessions" -> sessions(args);
             case "session-messages" -> sessionMessages(args);
             case "skill tree" -> skillTree(args);
@@ -277,11 +281,13 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker-host apply.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
-        out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--model-config-id <id>] [--model-variant <name>] [--client-context-json <json>|--client-context-file <path>]");
+        out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
+        out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
+        out.println("  evidence --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
         out.println("  model create/update uses NAVI_CONTROL_API_KEY and creates ClientApp-owned models.");
         out.println("  model system-create/system-update uses NAVI_ADMIN_API_KEY and creates UpstreamSystem-owned shared models.");
@@ -297,6 +303,7 @@ public class UpstreamCli {
         out.println("  status  [--request-code <code>]");
         out.println("  claim   [--request-code <code>] [--claim-token-env <env>] --write-profile");
         out.println("  approve --request-code <code> --authorized-tenant-ids <tenantId[,tenantId]> [--namespace <prefix>] [--scopes <scope[,scope]>] [--claim-ttl-minutes <minutes|0|-1>] [--credential-expires-at <yyyy-MM-ddTHH:mm:ss>]");
+        out.println("  rotate --credential-id <id> --write-profile [--scopes <scope[,scope]>] [--credential-expires-at <yyyy-MM-ddTHH:mm:ss>]");
         out.println("           claim ttl 0 or -1 means the Navigator approver confirms a no-expiry NAVI_ADMIN_API_KEY; the claim window still uses the default TTL.");
         out.println("  deny    --request-code <code> --reason <text>");
         out.println("  revoke  --credential-id <id>");
@@ -571,6 +578,7 @@ public class UpstreamCli {
 
         RotateUpstreamAdminCredentialForm form = new RotateUpstreamAdminCredentialForm();
         form.setCredentialExpiresAt(parseLocalDateTimeOption(args.option("credential-expires-at"), "credential expires at"));
+        form.setScopes(parseCsv(args.option("scopes")));
         UpstreamAdminCredentialClaimDTO claim = operatorOrAdminApi()
                 .rotateUpstreamAdminCredential(requiredOption(args, "credential-id", "credential id"), form);
         if (claim == null || !hasText(claim.getNaviAdminApiKey())) {
@@ -1934,6 +1942,26 @@ public class UpstreamCli {
             }
             Thread.sleep(config.pollIntervalSeconds() * 1000L);
         } while (true);
+        return 0;
+    }
+
+    private int diagnostics(CliArguments args) {
+        String agent = explicitAgentCode(args, "diagnostics");
+        String taskId = requiredOption(args, "task-id", "task id");
+        String upstreamUserId = optionalUpstreamUserId(args);
+        TaskDiagnostics diagnostics = agentApi().getTaskDiagnosticsWithClientAppAccessToken(
+                agent, taskId, clientAppKey(args), clientAppAccessToken(args), upstreamUserId);
+        printTaskDiagnostics(diagnostics);
+        return 0;
+    }
+
+    private int evidence(CliArguments args) throws Exception {
+        String agent = explicitAgentCode(args, "evidence");
+        String taskId = requiredOption(args, "task-id", "task id");
+        String upstreamUserId = optionalUpstreamUserId(args);
+        TaskEvidence evidence = agentApi().getTaskEvidenceWithClientAppAccessToken(
+                agent, taskId, clientAppKey(args), clientAppAccessToken(args), upstreamUserId);
+        printTaskEvidence(evidence);
         return 0;
     }
 
@@ -3565,7 +3593,27 @@ public class UpstreamCli {
             out.println("message id=" + valueOrEmpty(message.getMessageId())
                     + " role=" + valueOrEmpty(message.getRole())
                     + " type=" + valueOrEmpty(message.getType())
+                    + " eventKind=" + valueOrEmpty(message.getEventKind())
+                    + " progressType=" + valueOrEmpty(message.getProgressType())
+                    + " status=" + valueOrEmpty(message.getStatus())
+                    + " terminal=" + Boolean.TRUE.equals(message.getTerminal())
+                    + " terminalStatus=" + valueOrEmpty(message.getTerminalStatus())
                     + " content=" + redact(truncate(message.getContent(), 500)));
+            if (message.getReportRefs() != null) {
+                for (TaskEvidence.ReportRef ref : message.getReportRefs()) {
+                    out.println("messageReportRef messageId=" + valueOrEmpty(message.getMessageId())
+                            + " type=" + valueOrEmpty(ref != null ? ref.getType() : null)
+                            + " ref=" + redact(valueOrEmpty(ref != null ? ref.getRef() : null))
+                            + " frameId=" + redact(valueOrEmpty(ref != null ? ref.getFrameId() : null)));
+                }
+            }
+            if (message.getArtifactRefs() != null) {
+                for (TaskEvidence.ArtifactRef ref : message.getArtifactRefs()) {
+                    out.println("messageArtifactRef messageId=" + valueOrEmpty(message.getMessageId())
+                            + " path=" + redact(valueOrEmpty(ref != null ? ref.getPath() : null))
+                            + " ref=" + redact(valueOrEmpty(ref != null ? ref.getRef() : null)));
+                }
+            }
         }
     }
 
@@ -3584,6 +3632,105 @@ public class UpstreamCli {
 
     private void printTaskDiagnostics(AgentTask task) {
         printTaskDiagnostics(null, task);
+    }
+
+    private void printTaskDiagnostics(TaskDiagnostics diagnostics) {
+        if (diagnostics == null) {
+            return;
+        }
+        out.println("taskId=" + valueOrEmpty(diagnostics.getTaskId()));
+        out.println("contextId=" + valueOrEmpty(diagnostics.getContextId()));
+        out.println("status=" + valueOrEmpty(diagnostics.getStatus()));
+        out.println("terminal=" + diagnostics.isTerminal());
+        printDiagnostic("terminalStatus", diagnostics.getTerminalStatus());
+        printDiagnostic("submittedAt", diagnostics.getSubmittedAt() != null ? diagnostics.getSubmittedAt().toString() : null);
+        printDiagnostic("workerStartedAt", diagnostics.getWorkerStartedAt() != null ? diagnostics.getWorkerStartedAt().toString() : null);
+        printDiagnostic("lastObservedAt", diagnostics.getLastObservedAt() != null ? diagnostics.getLastObservedAt().toString() : null);
+        if (diagnostics.getMessagesCount() != null) {
+            out.println("messagesCount=" + diagnostics.getMessagesCount());
+        }
+        printDiagnostic("providerTaskId", diagnostics.getProviderTaskId());
+        printDiagnostic("workerTaskId", diagnostics.getWorkerTaskId());
+        if (diagnostics.getLastAckedSeq() != null) {
+            out.println("lastAckedSeq=" + diagnostics.getLastAckedSeq());
+        }
+        printDiagnostic("modelConfigId", diagnostics.getModelConfigId());
+        printDiagnostic("modelConfigSource", diagnostics.getModelConfigSource());
+        printDiagnostic("workerBackend", diagnostics.getWorkerBackend());
+        printDiagnostic("providerType", diagnostics.getProviderType());
+        printDiagnostic("taskSource", diagnostics.getTaskSource());
+        printDiagnostic("workerSource", diagnostics.getWorkerSource());
+        printDiagnostic("backendSource", diagnostics.getBackendSource());
+        printDiagnostic("safeWorkerRef", diagnostics.getSafeWorkerRef());
+        printDiagnostic("failureStage", diagnostics.getFailureStage());
+        if (hasText(diagnostics.getFailureSummary())) {
+            out.println("failureSummary=" + redact(truncate(diagnostics.getFailureSummary(), 500)));
+        }
+        TaskDiagnostics.CancelCapability cancel = diagnostics.getCancelCapability();
+        if (cancel != null) {
+            out.println("cancelSupported=" + Boolean.TRUE.equals(cancel.getCancelSupported()));
+            printDiagnostic("cancelMode", cancel.getCancelMode());
+            out.println("cleanupSupported=" + Boolean.TRUE.equals(cancel.getCleanupSupported()));
+            if (cancel.getBackendLimitations() != null && !cancel.getBackendLimitations().isEmpty()) {
+                out.println("backendLimitations=" + String.join(",", cancel.getBackendLimitations()));
+            }
+        }
+        TaskDiagnostics.Correlation correlation = diagnostics.getCorrelation();
+        if (correlation != null) {
+            printDiagnostic("originalTaskId", correlation.getOriginalTaskId());
+            printDiagnostic("recoveryCorrelationKey", correlation.getRecoveryCorrelationKey());
+            if (correlation.getAttemptNumber() != null) {
+                out.println("attemptNumber=" + correlation.getAttemptNumber());
+            }
+            printDiagnostic("idempotencyKey", correlation.getIdempotencyKey());
+        }
+    }
+
+    private void printTaskEvidence(TaskEvidence evidence) throws Exception {
+        if (evidence == null) {
+            return;
+        }
+        out.println("taskId=" + valueOrEmpty(evidence.getTaskId()));
+        out.println("contextId=" + valueOrEmpty(evidence.getContextId()));
+        out.println("status=" + valueOrEmpty(evidence.getStatus()));
+        out.println("terminal=" + evidence.isTerminal());
+        printDiagnostic("terminalStatus", evidence.getTerminalStatus());
+        TaskEvidence.FinalAnswer finalAnswer = evidence.getFinalAnswer();
+        if (finalAnswer != null) {
+            out.println("finalAnswer.available=" + Boolean.TRUE.equals(finalAnswer.getAvailable()));
+            printDiagnostic("finalAnswer.source", finalAnswer.getSource());
+            printDiagnostic("finalAnswer.messageId", finalAnswer.getMessageId());
+            if (hasText(finalAnswer.getSummary())) {
+                out.println("finalAnswer.summary=" + redact(truncate(finalAnswer.getSummary(), 500)));
+            }
+        }
+        TaskEvidence.StructuredOutput structuredOutput = evidence.getStructuredOutput();
+        if (structuredOutput != null) {
+            out.println("structuredOutput.available=" + Boolean.TRUE.equals(structuredOutput.getAvailable()));
+            printDiagnostic("structuredOutput.source", structuredOutput.getSource());
+            if (structuredOutput.getValue() != null) {
+                out.println("structuredOutput.value=" + redact(objectMapper.writeValueAsString(structuredOutput.getValue())));
+            }
+        }
+        if (evidence.getReportRefs() != null) {
+            for (TaskEvidence.ReportRef ref : evidence.getReportRefs()) {
+                out.println("reportRef"
+                        + " type=" + valueOrEmpty(ref != null ? ref.getType() : null)
+                        + " ref=" + redact(valueOrEmpty(ref != null ? ref.getRef() : null))
+                        + " frameId=" + redact(valueOrEmpty(ref != null ? ref.getFrameId() : null))
+                        + " summary=" + redact(valueOrEmpty(ref != null ? ref.getSummary() : null)));
+            }
+        }
+        if (evidence.getArtifactRefs() != null) {
+            for (TaskEvidence.ArtifactRef ref : evidence.getArtifactRefs()) {
+                out.println("artifactRef"
+                        + " path=" + redact(valueOrEmpty(ref != null ? ref.getPath() : null))
+                        + " ref=" + redact(valueOrEmpty(ref != null ? ref.getRef() : null))
+                        + " hash=" + redact(valueOrEmpty(ref != null ? ref.getHash() : null))
+                        + " mtime=" + redact(valueOrEmpty(ref != null ? ref.getMtime() : null))
+                        + " summary=" + redact(valueOrEmpty(ref != null ? ref.getSummary() : null)));
+            }
+        }
     }
 
     private void printTaskDiagnostics(TaskMessagesPage page, AgentTask task) {

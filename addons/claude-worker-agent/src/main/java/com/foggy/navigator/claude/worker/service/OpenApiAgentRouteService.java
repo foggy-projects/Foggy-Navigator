@@ -48,7 +48,10 @@ public class OpenApiAgentRouteService {
             CodingAgentEntity agent) {
         validateAgentVisibility(routeAgentId, credential, clientApp, agent);
         String boundClientAppId = resolveProfileText(agent.getAgentProfile(), "clientAppId", "client_app_id");
-        if (StringUtils.hasText(boundClientAppId) && !boundClientAppId.equals(credential.getClientAppId())) {
+        boolean enforceProfileClientApp = agent.getOwnerType() == ResourceOwnerType.CLIENT_APP;
+        if (enforceProfileClientApp
+                && StringUtils.hasText(boundClientAppId)
+                && !boundClientAppId.equals(credential.getClientAppId())) {
             throw bindingFailure(
                     "ROOT_AGENT_PROFILE_CLIENT_APP_MISMATCH",
                     "Agent profile ClientApp binding mismatch: agentId=" + routeAgentId
@@ -61,10 +64,13 @@ public class OpenApiAgentRouteService {
                 resolveProfileText(agent.getAgentProfile(), "skillId", "skill_id"),
                 resolveFirstSkillId(agent.getSkills()),
                 routeAgentId);
+        String resolvedClientAppId = enforceProfileClientApp && StringUtils.hasText(boundClientAppId)
+                ? boundClientAppId
+                : credential.getClientAppId();
         return new ResolvedOpenApiAgentRoute(
                 agent.getAgentId(),
                 skillId,
-                StringUtils.hasText(boundClientAppId) ? boundClientAppId : credential.getClientAppId(),
+                resolvedClientAppId,
                 true,
                 false);
     }

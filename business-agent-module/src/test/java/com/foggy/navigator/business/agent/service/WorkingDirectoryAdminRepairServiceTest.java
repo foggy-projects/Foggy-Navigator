@@ -1,5 +1,6 @@
 package com.foggy.navigator.business.agent.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.form.RepairUpstreamSystemWorkingDirectoryForm;
 import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindingRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
@@ -29,7 +30,7 @@ class WorkingDirectoryAdminRepairServiceTest {
         directoryRepository = mock(WorkingDirectoryRepository.class);
         agentRepository = mock(BusinessCodingAgentRepository.class);
         bindingRepository = mock(BusinessAgentDirectoryBindingRepository.class);
-        service = new WorkingDirectoryAdminRepairService(directoryRepository, agentRepository, bindingRepository);
+        service = new WorkingDirectoryAdminRepairService(directoryRepository, agentRepository, bindingRepository, new ObjectMapper());
     }
 
     @Test
@@ -44,6 +45,8 @@ class WorkingDirectoryAdminRepairServiceTest {
         agent.setAgentId("tms.ops-root-agent");
         agent.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
         agent.setOwnerId("TMS");
+        agent.setClientAppId("capp_old");
+        agent.setAgentProfile("{\"clientAppId\":\"capp_old\",\"skillId\":\"tms.navigator.agent\"}");
         agent.setEnabled(true);
 
         when(directoryRepository.findByDirectoryId("20260525-8fa8")).thenReturn(Optional.of(directory));
@@ -66,6 +69,8 @@ class WorkingDirectoryAdminRepairServiceTest {
         assertEquals(ResourceOwnerType.UPSTREAM_SYSTEM, result.getRootAgentOwnerType());
         assertEquals("TMS", result.getRootAgentOwnerId());
         assertFalse(result.getRootAgentOwnerRepaired());
+        assertTrue(result.getRootAgentClientAppBindingRepaired());
+        assertTrue(result.getRootAgentProfileClientAppBindingRepaired());
         assertTrue(result.getDefaultDirectory());
         verify(directoryRepository).save(argThat(saved ->
                 "nav_tms_110".equals(saved.getTenantId())
@@ -79,6 +84,10 @@ class WorkingDirectoryAdminRepairServiceTest {
                         && "tms.ops-root-agent".equals(binding.getAgentId())
                         && "20260525-8fa8".equals(binding.getDirectoryId())));
         verify(agentRepository).save(argThat(saved -> "20260525-8fa8".equals(saved.getDefaultDirectoryId())));
+        verify(agentRepository).save(argThat(saved ->
+                saved.getClientAppId() == null
+                        && !saved.getAgentProfile().contains("clientAppId")
+                        && saved.getAgentProfile().contains("tms.navigator.agent")));
     }
 
     @Test

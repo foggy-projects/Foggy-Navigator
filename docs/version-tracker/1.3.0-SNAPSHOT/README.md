@@ -49,16 +49,22 @@
 - [workitems/BUG-041-upstream-task-diagnostics-gap.md](./workitems/BUG-041-upstream-task-diagnostics-gap.md) - upstream task/messages diagnostics gap and School Sim M2 recheck follow-up
 - [workitems/BUG-042-biz-agent-skill-handoff-smoke.md](./workitems/BUG-042-biz-agent-skill-handoff-smoke.md) - School Sim Biz actor live smoke prompt/skill handoff validation, closed by R11
 - [workitems/OPT-043-tms-new-tenant-ensure-flow.md](./workitems/OPT-043-tms-new-tenant-ensure-flow.md) - TMS new-tenant ensure flow activation-ready payload, default policy, admin credential UX, and structured provisioning errors
+- [workitems/REQ-041-world-sim-task-diagnostics-contract.md](./workitems/REQ-041-world-sim-task-diagnostics-contract.md) - world-sim task diagnostics / evidence facts-only contract for issue #134
+- [workitems/REQ-041-world-sim-upstream-contract-handoff.md](./workitems/REQ-041-world-sim-upstream-contract-handoff.md) - world-sim upstream integration handoff, CLI usage, and real smoke checklist
 - [workitems/REQ-126-mobile-agent-chat-component.md](./workitems/REQ-126-mobile-agent-chat-component.md) - mobile-ready public Agent chat component for upstream Vue 3 apps
 - [workitems/BUG-issue-115-world-sim-route-smoke-blocked.md](./workitems/BUG-issue-115-world-sim-route-smoke-blocked.md) - issue #115 live smoke is blocked by CLI release and control credential scope
 - [acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md](./acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md)
 - [acceptance/OPT-029-upstream-timeout-governance-acceptance.md](./acceptance/OPT-029-upstream-timeout-governance-acceptance.md)
 - [acceptance/OPT-032-attachment-preprocessing-governance-acceptance.md](./acceptance/OPT-032-attachment-preprocessing-governance-acceptance.md)
+- [acceptance/req-041-world-sim-task-diagnostics-acceptance.md](./acceptance/req-041-world-sim-task-diagnostics-acceptance.md)
 - [quality/OPT-031-llm-skill-agent-module-governance-implementation-quality.md](./quality/OPT-031-llm-skill-agent-module-governance-implementation-quality.md)
 - [quality/OPT-029-upstream-timeout-governance-implementation-quality.md](./quality/OPT-029-upstream-timeout-governance-implementation-quality.md)
 - [quality/OPT-032-attachment-preprocessing-governance-implementation-quality.md](./quality/OPT-032-attachment-preprocessing-governance-implementation-quality.md)
 - [quality/biz-worker-root-skill-implementation-quality.md](./quality/biz-worker-root-skill-implementation-quality.md)
+- [quality/req-041-world-sim-task-diagnostics-implementation-quality.md](./quality/req-041-world-sim-task-diagnostics-implementation-quality.md)
 - [coverage/OPT-031-llm-skill-agent-module-governance-coverage-audit.md](./coverage/OPT-031-llm-skill-agent-module-governance-coverage-audit.md)
 - [coverage/OPT-029-upstream-timeout-governance-coverage-audit.md](./coverage/OPT-029-upstream-timeout-governance-coverage-audit.md)
 - [coverage/OPT-032-attachment-preprocessing-governance-coverage-audit.md](./coverage/OPT-032-attachment-preprocessing-governance-coverage-audit.md)
 - [coverage/biz-worker-root-skill-coverage-audit.md](./coverage/biz-worker-root-skill-coverage-audit.md)
+- [coverage/req-041-world-sim-task-diagnostics-coverage-audit.md](./coverage/req-041-world-sim-task-diagnostics-coverage-audit.md)
+- [test-records/req-041-openapi-diagnostics-evidence-smoke-20260527.md](./test-records/req-041-openapi-diagnostics-evidence-smoke-20260527.md)
