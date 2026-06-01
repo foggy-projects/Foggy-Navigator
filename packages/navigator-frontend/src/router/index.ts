@@ -25,8 +25,7 @@ const routes = [
       },
       {
         path: 'chat',
-        name: 'Home',
-        component: () => import('@/views/ChatView.vue'),
+        redirect: '/',
       },
       {
         path: 'c/:id',

@@ -49,23 +49,15 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/ins
 
 当前已发布版本：
 
-- version: `1.0.5`
-- released: `2026-05-23`
-- buildId: `1.0.5+ad6b0ba6a8df.dirty`
-- gitCommit: `ad6b0ba6a8df137f1129d2cbcfd6045518cfa03a`
+- version: `1.0.17`
+- released: `2026-05-31`
+- buildId: `1.0.17+0ceebc4ed26b.dirty`
+- gitCommit: `0ceebc4ed26bede758da9ca7790f34e9114e7ca3`
 - gitDirty: `true`
-- Windows archive: `1.0.5/navigator-upstream-cli-1.0.5-windows.zip`
-- SHA256: `735f574bec9989f06550348379feb956b312f5ca5f3196f711e2fd9e2451e6a6`
-- release smoke: remote installer smoke passed during `tools/navigator-upstream-cli/dist/upload.ps1 -Version 1.0.5 -AllowSameVersion`
-
-当前本地候选版本：
-
-- version: `1.0.7`
-- candidate date: `2026-05-24`
-- includes: owner-aware `upstream client-app issue-runtime-key` / `issue-runtime-credential`、Agent `modelVariant` runtime contract
-- local archive: `tools/navigator-upstream-cli/dist/output/navigator-upstream-cli-1.0.7-windows.zip`
-- SHA256: 由最终提交后执行 `dist/package.ps1` 生成；不要在提交前把候选包 SHA 固化到文档，否则包内 `BUILD_INFO.gitCommit` 会与最终提交不一致。
-- note: 发布到 OBS 后，远程安装入口才会自动获取该版本；发布前可使用本仓库最终提交后生成的本地 archive 安装。
+- Windows archive: `1.0.17/navigator-upstream-cli-1.0.17-windows.zip`
+- SHA256: `396edea74ecd9ecc4971a41293ff59c8d781e029c11e6880e59107f91dd26ac9`
+- includes: `session-directory-diagnostics`
+- release smoke: remote installer smoke passed during `tools/navigator-upstream-cli/dist/upload.ps1 -Version 1.0.17 -AllowSameVersion`
 
 安装脚本会：
 

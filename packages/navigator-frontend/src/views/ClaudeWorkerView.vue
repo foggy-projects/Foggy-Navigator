@@ -161,11 +161,6 @@
           暂无 Worker，点击上方添加
         </div>
       </div>
-      <div class="sidebar-footer">
-        <el-button text size="small" @click="router.push('/chat')">
-          <el-icon><Back /></el-icon> 返回会话
-        </el-button>
-      </div>
     </aside>
 
     <!-- Middle Panel: Main Content Area -->
@@ -2701,7 +2696,7 @@
 import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Back, Loading } from '@element-plus/icons-vue'
+import { ArrowDown, Loading } from '@element-plus/icons-vue'
 import { DEFAULT_TASK_PAGE_SIZE, useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useCodingAgent } from '@/composables/useCodingAgent'
 import { useInputMemory } from '@/composables/useInputMemory'
@@ -7724,11 +7719,6 @@ function handlePopOutTerminal() {
   padding: 8px 12px 8px 40px;
   font-size: 12px;
   color: #c0c4cc;
-}
-
-.sidebar-footer {
-  padding: 10px 12px;
-  border-top: 1px solid #e4e7ed;
 }
 
 /* Main content area (middle column) */

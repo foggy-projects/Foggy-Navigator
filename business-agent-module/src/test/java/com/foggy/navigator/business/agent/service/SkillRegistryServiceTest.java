@@ -575,10 +575,14 @@ class SkillRegistryServiceTest {
             assertEquals("MATERIALIZED", dto.getMaterializeResult().getStatus());
             assertNotNull(bodyRef.get());
             assertTrue(bodyRef.get().contains("### tms.order.createOpeningDraft@v1"));
+            assertTrue(bodyRef.get().contains("#### Input JSON Schema"));
+            assertTrue(bodyRef.get().contains("```json"));
             assertTrue(bodyRef.get().contains("requestIntent"));
             assertTrue(bodyRef.get().contains("PREFILL_FROM_CLUES"));
-            assertTrue(bodyRef.get().contains("attachmentRefs[].attachmentUrl"));
-            assertTrue(bodyRef.get().contains("attachmentRefs[].attachmentType"));
+            assertTrue(bodyRef.get().contains("attachmentRefs"));
+            assertTrue(bodyRef.get().contains("#/definitions/attachmentRef"));
+            assertFalse(bodyRef.get().contains("attachmentRefs[].attachmentUrl"));
+            assertFalse(bodyRef.get().contains("attachmentRefs[].attachmentType"));
             assertTrue(bodyRef.get().contains("structured_output"));
             assertTrue(bodyRef.get().contains("Use PREFILL_FROM_CLUES when order clues exist."));
             assertFalse(bodyRef.get().contains("${@schema."));
@@ -589,6 +593,89 @@ class SkillRegistryServiceTest {
             assertTrue(payload.get("resources").get(0).get("content").asText()
                     .contains("### tms.order.createOpeningDraft@v1"));
             assertNotEquals("placeholder-hash", payload.get("resources").get(0).get("sha256").asText());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void syncSkillBundle_materializesNestedQueryModelSchemaAsJsonSchemaContract() throws Exception {
+        AtomicReference<String> bodyRef = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/api/v1/skills/materialize", exchange -> {
+            bodyRef.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = "{\"status\":\"success\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response);
+            }
+        });
+        server.start();
+        try {
+            ReflectionTestUtils.setField(skillRegistryService, "devSyncWorkerUrl", "http://localhost:" + server.getAddress().getPort());
+
+            SyncSkillBundleForm form = new SyncSkillBundleForm();
+            form.setClientAppId("tms_app");
+            form.setScope("client-app-public");
+            form.setSkillId("foggy-query-agent");
+            form.setName("Foggy Query Agent");
+            form.setMarkdownBody("## Function Contracts\n\n${@schema.tms.dataset.queryModel}");
+            form.setMaterialize(true);
+            SkillBundleFunctionForm functionForm = new SkillBundleFunctionForm();
+            functionForm.setFunctionId("tms.dataset.queryModel");
+            functionForm.setVersion("v1");
+            form.setFunctions(List.of(functionForm));
+
+            when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+            BusinessFunctionEntity function = new BusinessFunctionEntity();
+            function.setFunctionId("tms.dataset.queryModel");
+            function.setCurrentVersion("v1");
+            function.setName("Dataset query model");
+            function.setDescription("Execute a Foggy dataset queryModel request.");
+            function.setStatus("ENABLED");
+            when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "tms.dataset.queryModel")).thenReturn(Optional.of(function));
+            ClientAppFunctionGrantEntity functionGrant = new ClientAppFunctionGrantEntity();
+            functionGrant.setFunctionId("tms.dataset.queryModel");
+            functionGrant.setVersion("v1");
+            functionGrant.setStatus("ENABLED");
+            when(functionGrantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion(
+                    "tenant_1", "tms_app", "tms.dataset.queryModel", "v1")).thenReturn(Optional.of(functionGrant));
+            BusinessFunctionVersionEntity version = new BusinessFunctionVersionEntity();
+            version.setStatus("ENABLED");
+            version.setInputSchemaJson("""
+                    {"type":"object","properties":{"model":{"type":"string"},"payload":{"type":"object","properties":{"columns":{"type":"array","items":{"type":"string"}},"slice":{"type":"array","items":{"oneOf":[{"$ref":"#/definitions/filterObject"},{"type":"object","properties":{"$or":{"type":"array","items":{"$ref":"#/definitions/filterObject"}},"$and":{"type":"array","items":{"$ref":"#/definitions/filterObject"}}},"additionalProperties":false}]}},"limit":{"type":"integer"}},"required":["slice"]},"mode":{"type":"string","enum":["execute","validate"]}},"required":["model","payload"],"definitions":{"filterObject":{"type":"object","properties":{"field":{"type":"string"},"op":{"type":"string"},"value":{}},"required":["field","op","value"],"additionalProperties":false}}}
+                    """);
+            version.setSchemaVisibleSummary("Use standard filter objects; legacy shorthand is compatibility only.");
+            when(versionRepository.findByTenantIdAndFunctionIdAndVersion(
+                    "tenant_1", "tms.dataset.queryModel", "v1")).thenReturn(Optional.of(version));
+            when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
+                    "tenant_1", "tms_app", "CLIENT_APP_PUBLIC", "", "foggy-query-agent")).thenReturn(Optional.empty());
+            when(skillBundleRepository.save(any(SkillBundleEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(skillRepository.findByTenantIdAndSkillId("tenant_1", "foggy-query-agent")).thenReturn(Optional.empty());
+            when(skillRepository.save(any(SkillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(grantRepository.findByTenantIdAndClientAppIdAndSkillId("tenant_1", "tms_app", "foggy-query-agent")).thenReturn(Optional.empty());
+            when(grantRepository.save(any(ClientAppSkillGrantEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(allowlistRepository.findByTenantIdAndSkillIdAndFunctionId(
+                    "tenant_1", "foggy-query-agent", "tms.dataset.queryModel")).thenReturn(Optional.empty());
+            when(allowlistRepository.save(any(SkillFunctionAllowlistEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            var dto = skillRegistryService.syncSkillBundle("tenant_1", "user_1", form);
+
+            assertEquals("MATERIALIZED", dto.getMaterializeResult().getStatus());
+            assertNotNull(bodyRef.get());
+            JsonNode payload = objectMapper.readTree(bodyRef.get());
+            String markdown = payload.get("markdown_body").asText();
+            assertTrue(markdown.contains("#### Input JSON Schema"));
+            assertTrue(markdown.contains("\"payload\""));
+            assertTrue(markdown.contains("\"slice\""));
+            assertTrue(markdown.contains("\"items\""));
+            assertTrue(markdown.contains("\"$or\""));
+            assertTrue(markdown.contains("\"$and\""));
+            assertTrue(markdown.contains("\"additionalProperties\""));
+            assertFalse(markdown.contains("payload.slice[].field"));
+            assertFalse(markdown.contains("payload.slice[].$or"));
+            assertFalse(markdown.contains("\r"));
         } finally {
             server.stop(0);
         }

@@ -11,7 +11,6 @@
 
 主业务能力
   -> Workers
-  -> 会话
   -> 任务
   -> 跨项目
 
@@ -24,6 +23,7 @@
   -> SSE
   -> Agent 发现与分发
   -> Open API / SDK
+  -> 上游接入 / 嵌入式组件 / 移动端
 ```
 
 ## 2. 一级功能域拆解
@@ -40,16 +40,16 @@
 - 文件浏览、全文搜索、Git diff、Git history
 - 终端、代码服务入口、附件与绘图辅助
 - 目录授权 Agent 与 Agent Team 配置
+- Claude / Codex / Gemini / LangGraph Biz Worker 接入
 
-### 2.2 会话
+### 2.2 会话底座
 
-目标：把普通用户消息、Agent 回复、委派跳转统一进一个会话体验中。
+目标：为 Worker 任务、跨项目阶段和开放集成提供统一的 Session、消息历史、SSE 与 Agent/Provider 绑定能力。它不再作为 PC 顶部主导航里的独立入口。
 
 包含能力：
 
 - Session 创建、删除、切换
 - 消息历史与实时流式回复
-- Guide Cards
 - Agent 委派与返回路由
 - 会话绑定 Agent / provider / 模型配置
 - 分享 Key 与公开提问
@@ -89,6 +89,7 @@
 - 用户记忆管理
 - API 凭证管理
 - Claude Worker 管理
+- 业务 Agent 与上游接入资源管理
 - 任务助手配置
 
 ### 2.6 用户
@@ -121,13 +122,13 @@
 - Agent 发现与问答接口
 - Claude Worker Open API
 - Java SDK 封装
+- 上游 CLI、嵌入式聊天组件、移动端入口
 
 ## 3. 功能边界判断
 
 ### 3.1 主业务能力
 
 - Workers
-- 会话
 - 任务
 - 跨项目
 
@@ -143,8 +144,23 @@
 - A2A Agent 发现
 - SSE
 - Open API / SDK
+- 上游接入与嵌入入口
 
-## 4. 推荐阅读顺序
+## 4. 工程模块映射
+
+| 工程层 | 当前模块 |
+|------|------|
+| 聚合启动 | `launcher` |
+| 平台底座 | `navigator-common`、`navigator-spi`、`agent-framework` |
+| 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module`、`metadata-query-module`、`monitoring-module` |
+| Worker / Agent Addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/task-assistant`、`addons/echo-agent` |
+| 开放集成 | `navigator-open-sdk`、`tools/navigator-upstream`、`tools/navigator-upstream-cli`、`tools/navigator-chat-observer-bff` |
+| 前端与多端 | `packages/navigator-frontend`、`packages/foggy-chat`、`packages/foggy-chat-core`、`packages/navigator-chat-widget`、`packages/foggy-mobile` |
+| Worker 运行时工具 | `tools/claude-agent-worker`、`tools/codex-agent-worker`、`tools/gemini-agent-worker`、`tools/langgraph-biz-worker`、`tools/mock-llm-service` |
+
+`tutor-agent` 源码目录暂保留作历史参考，但已从根 `pom.xml` 与 `launcher` 运行时依赖中摘除；它对应的是旧独立会话入口的引导能力，不属于当前主线功能模块。
+
+## 5. 推荐阅读顺序
 
 1. [系统架构概览](../00-system-overview.md)
 2. [工作区与 Worker 中心](./worker-workspace-center.md)

@@ -8,8 +8,8 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 
 系统当前主轴有三条：
 
-1. 以会话为中心的 Agent 交互入口  
-   用户通过统一会话界面与 Tutor Agent、Claude Worker Agent、Codex Worker Agent 等能力交互。
+1. 以 Worker 任务会话为中心的 Agent 交互入口
+   用户主要从 Workers 工作台发起、继续和查看 Claude / Codex / Gemini / LangGraph Biz 等任务会话；旧独立 `/chat` 入口不再作为主导航入口。
 2. 以 Worker 和目录为中心的远程编程工作台  
    用户可以管理远程 Worker、工作目录、Git 状态、Worktree、文件浏览、终端与编程任务。
 3. 以任务和事件为中心的平台治理能力  
@@ -21,20 +21,21 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 
 | 功能域 | 用户可见入口 | 核心目标 | 主要模块 |
 |------|------|------|------|
-| 工作区与 Worker 中心 | `Workers` | 管理远程 Worker、目录、文件、Git 与编程执行环境 | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`packages/navigator-frontend` |
-| 会话协作中心 | `会话` | 统一承接用户与 Agent 的对话、消息流和委派跳转 | `session-module`、`tutor-agent`、`agent-framework` |
+| 工作区与 Worker 中心 | `Workers` | 管理远程 Worker、目录、文件、Git 与编程执行环境 | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`packages/navigator-frontend` |
+| 会话协作中心 | `Workers` 内任务会话、`/c/:id` 深链 | 统一承接 Worker 任务会话、消息流、SSE、绑定与委派跳转 | `session-module`、`agent-framework` |
 | 任务治理中心 | `任务` | 统一查看和治理平台侧 Agent Task / Worker Task | `session-module` |
 | 跨项目编排 | `跨项目` | 把一个目标拆成多阶段、多目录、多 Agent 的串行协作流程 | `addons/claude-worker-agent` |
-| 平台设置与资源治理 | `设置` | 管理 Git、LLM、Worker、凭证、记忆、Agent 模型覆盖等 | `metadata-config-module`、`addons/task-assistant`、`addons/claude-worker-agent` |
+| 平台设置与资源治理 | `设置` | 管理 Git、LLM、Worker、凭证、记忆、业务 Agent、Agent 模型覆盖等 | `metadata-config-module`、`business-agent-module`、`addons/task-assistant`、`addons/claude-worker-agent` |
 | 用户与访问控制 | `登录`、`用户` | 登录认证、用户管理、角色状态、API Key 管理 | `user-auth-module` |
-| 监控、通知与开放集成 | `监控`、SSE、Open API | 提供事件面板、通知流和对外集成接口 | `monitoring-module`、`session-module`、`navigator-open-sdk`、`addons/claude-worker-agent` |
+| 监控、通知与开放集成 | `监控`、SSE、Open API | 提供事件面板、通知流、对外 SDK、上游接入与嵌入式聊天入口 | `monitoring-module`、`session-module`、`navigator-open-sdk`、`business-agent-module`、`tools/navigator-chat-observer-bff`、`addons/claude-worker-agent` |
 
 ### 2.2 前端功能地图
 
 当前主前端 `packages/navigator-frontend` 的路由直接对应产品功能面：
 
 - `/`：Workers，主工作台
-- `/chat`、`/c/:id`：会话中心
+- `/chat`：旧独立会话入口，当前重定向到 Workers
+- `/c/:id`：会话深链兼容入口，主要用于跨项目阶段回跳等历史路径
 - `/tasks`：任务看板
 - `/cross-tasks`：跨项目任务
 - `/monitoring`：监控事件
@@ -42,7 +43,18 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 - `/settings`：平台设置
 - `/files`：文件浏览器
 
-### 2.3 后端分层
+### 2.3 多端与嵌入入口
+
+除主前端外，当前仓库还包含面向不同集成场景的前端与客户端包：
+
+| 包 | 定位 |
+|------|------|
+| `packages/foggy-chat` | 独立聊天体验与调试入口 |
+| `packages/foggy-chat-core` | 聊天 UI 与协议复用核心 |
+| `packages/navigator-chat-widget` | 嵌入第三方页面的聊天组件 |
+| `packages/foggy-mobile` | 移动端 uni-app 入口 |
+
+### 2.4 后端分层
 
 ```text
 Navigator Frontend (Vue 3)
@@ -53,15 +65,18 @@ Launcher
 
 业务能力层
   -> session-module
+  -> business-agent-module
   -> user-auth-module
   -> metadata-config-module
   -> metadata-query-module
   -> monitoring-module
-  -> tutor-agent
+  -> tutor-agent (旧引导 Agent，源码归档，不随 launcher 启动)
   -> addons/claude-worker-agent
   -> addons/codex-worker-agent
   -> addons/gemini-worker-agent
+  -> addons/langgraph-biz-worker
   -> addons/task-assistant
+  -> addons/echo-agent
 
 平台底座层
   -> agent-framework
@@ -70,6 +85,7 @@ Launcher
 
 对外集成层
   -> navigator-open-sdk
+  -> tools/navigator-chat-observer-bff
   -> Open API / Worker API / SSE
 ```
 
@@ -89,11 +105,13 @@ Launcher
 | 模块 | 职责 |
 |------|------|
 | `session-module` | 会话、消息、统一任务分发、SSE、分享与 Agent 发现 |
+| `business-agent-module` | 业务 Agent、上游接入资源、业务动作与开放集成治理 |
 | `user-auth-module` | 登录认证、用户管理、API Key 管理 |
 | `metadata-config-module` | 平台配置写接口，管理 Git/LLM/凭证/记忆/覆盖配置 |
 | `metadata-query-module` | 平台配置读接口与查询能力 |
 | `monitoring-module` | 监控事件与统计接口 |
-| `tutor-agent` | 默认引导型 Agent，承接统一会话入口 |
+
+`tutor-agent` 源码目录暂保留作历史参考，但已从根 `pom.xml` 与 `launcher` 运行时依赖中摘除；当前主线不再启动旧引导 Agent。
 
 ### 3.3 Addon 能力模块
 
@@ -102,21 +120,22 @@ Launcher
 | `addons/claude-worker-agent` | 远程 Claude Worker、目录、文件浏览、跨项目任务、Open API |
 | `addons/codex-worker-agent` | Codex Worker 任务和进程治理 |
 | `addons/gemini-worker-agent` | Gemini Worker 任务和进程治理 |
+| `addons/langgraph-biz-worker` | LangGraph Biz Worker 接入与业务 Agent 执行通道 |
 | `addons/task-assistant` | 针对任务生命周期生成通知和摘要的助手能力 |
 | `addons/echo-agent` | 示例/测试型 Agent |
 
 ## 4. 当前核心业务流程
 
-### 4.1 会话驱动流程
+### 4.1 Worker 任务会话流程
 
 ```text
-用户进入会话页
-  -> 创建或打开 Session
-  -> 发送消息
-  -> session-module 路由到目标 Agent
+用户进入 Workers
+  -> 创建任务或打开历史会话
+  -> session-module 建立 / 读取 Session
+  -> TaskDispatchFacade 路由到目标 Worker / Agent
   -> Agent 执行并产生消息/任务/委派
-  -> SSE 持续推送消息、状态、通知
-  -> 前端实时更新会话内容
+  -> SSE 持续推送消息、状态、通知到任务面板
+  -> 前端实时更新会话内容与任务状态
 ```
 
 ### 4.2 Worker 驱动流程
@@ -156,18 +175,21 @@ Launcher
 
 ### 5.1 当前已经落地的重点
 
-- 统一会话入口与 SSE 实时通信
+- Worker 内任务会话与 SSE 实时通信
 - 统一任务分发与任务面板
-- Claude Worker 工作区管理
+- Claude / Codex / Gemini / LangGraph Biz Worker 接入与工作区管理
 - 文件浏览、Git diff、Git history、搜索
 - 跨项目阶段式任务编排
 - 平台级 Git/LLM/凭证/记忆治理
 - 用户管理与 API Key
 - 监控事件与统计
-- 对外 Open API / SDK
+- 对外 Open API / SDK / 上游 CLI
+- 嵌入式聊天组件与移动端入口
 
 ### 5.2 当前不是主轴或仍偏支撑的能力
 
+- PC 顶部独立 `/chat` 会话入口已下线；`/c/:id` 暂作为深链兼容入口，不是主导航入口
+- `tutor-agent` 属于旧独立会话入口配套能力，源码归档保留，不再随 `launcher` 启动
 - `echo-agent` 属于示例/测试能力
 - 历史文档中的“语义层管理、数据分析 Agent、权限建模平台”不再是当前产品主线
 
@@ -198,6 +220,6 @@ Launcher
 
 ---
 
-**文档版本**: 4.0.0  
-**更新日期**: 2026-03-31  
-**基准**: 当前仓库代码结构、前端路由、控制器接口与模块依赖
+**文档版本**: 4.1.0
+**更新日期**: 2026-05-31
+**基准**: 当前仓库代码结构、前端路由、Provider 实现、控制器接口与模块依赖

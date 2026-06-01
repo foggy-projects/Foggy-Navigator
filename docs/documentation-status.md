@@ -40,6 +40,7 @@
 | [会话模块](./02-modules/session-module.md) | 当前有效 | 已对齐当前产品口径，可作为会话与任务路由实现参考 |
 | [可观测性系统](./02-modules/observability-system.md) | 当前有效 | 已区分当前实现与规划能力 |
 | [工具能力模块](./02-modules/tool-module.md) | 部分有效 | 已改为当前 `agent-framework` 工具能力说明，但后续仍可继续拆分“现状”与“演进草案” |
+| [模块与文档过时项 Review（2026-05-31）](./02-modules/module-review-2026-05-31.md) | 当前有效 | 本轮模块与文档漂移盘点，作为后续逐模块 review 入口 |
 
 ## 4. 历史参考文档
 
@@ -55,11 +56,21 @@
 
 ## 5. 待后续修订文档
 
-这些文档没有明显错误，但仍可以继续做第二轮精修：
+这些文档不建议直接作为当前实现依据，后续应结合代码做第二轮复核：
 
 | 文档 | 建议 |
 |------|------|
 | [02-modules/tool-module.md](./02-modules/tool-module.md) | 后续可拆成“当前工具运行时能力说明”和“工具体系演进草案”两份 |
+| [02-modules/memory-system.md](./02-modules/memory-system.md) | 早期规划色彩较重，需确认当前用户记忆能力的真实边界 |
+| [02-modules/memory-adapter-layer.md](./02-modules/memory-adapter-layer.md) | 早期规划色彩较重，需确认是否仍存在对应适配层职责 |
+| [02-modules/rag-module.md](./02-modules/rag-module.md) | 与当前主轴不完全一致，需确认是否仍为当前产品能力 |
+| [02-modules/orchestration-layer.md](./02-modules/orchestration-layer.md) | 早期编排抽象可能已被当前 TaskDispatch/A2A 链路替代 |
+| [02-modules/task-orchestration-module.md](./02-modules/task-orchestration-module.md) | 与当前任务治理/跨项目编排文档存在重叠，需合并或归档 |
+| [02-modules/claude-agent-teams-guide.md](./02-modules/claude-agent-teams-guide.md) | 仍可能有局部价值，但 Worker 类型已扩展，需避免只按 Claude Teams 口径理解 |
+| [02-modules/claude-agent-teams-internals.md](./02-modules/claude-agent-teams-internals.md) | 仍可能有局部价值，但需按当前 Provider 与 Worker 实现复核 |
+| [agent-framework-guide.md](./agent-framework-guide.md) | 较早的底座说明，需按当前 Provider/TaskDispatch/Skill 实现重审 |
+| [agent-framework-requirements.md](./agent-framework-requirements.md) | 较早的需求说明，需确认是否仍反映当前建设方向 |
+| [tutor-agent-design.md](./tutor-agent-design.md) | 历史参考；Tutor 已从当前主构建与 `launcher` 运行时摘除 |
 
 ## 6. 推荐引用方式
 

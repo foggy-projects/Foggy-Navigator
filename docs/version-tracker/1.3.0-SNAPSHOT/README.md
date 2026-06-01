@@ -49,6 +49,7 @@
 - [workitems/BUG-041-upstream-task-diagnostics-gap.md](./workitems/BUG-041-upstream-task-diagnostics-gap.md) - upstream task/messages diagnostics gap and School Sim M2 recheck follow-up
 - [workitems/BUG-042-biz-agent-skill-handoff-smoke.md](./workitems/BUG-042-biz-agent-skill-handoff-smoke.md) - School Sim Biz actor live smoke prompt/skill handoff validation, closed by R11
 - [workitems/OPT-043-tms-new-tenant-ensure-flow.md](./workitems/OPT-043-tms-new-tenant-ensure-flow.md) - TMS new-tenant ensure flow activation-ready payload, default policy, admin credential UX, and structured provisioning errors
+- [workitems/BUG-044-public-skill-querymodel-schema-rendering.md](./workitems/BUG-044-public-skill-querymodel-schema-rendering.md) - public skill / BusinessFunction queryModel schema rendering should preserve nested JSON Schema and exact `$or` / `$and`
 - [workitems/REQ-041-world-sim-task-diagnostics-contract.md](./workitems/REQ-041-world-sim-task-diagnostics-contract.md) - world-sim task diagnostics / evidence facts-only contract for issue #134
 - [workitems/REQ-041-world-sim-upstream-contract-handoff.md](./workitems/REQ-041-world-sim-upstream-contract-handoff.md) - world-sim upstream integration handoff, CLI usage, and real smoke checklist
 - [workitems/REQ-126-mobile-agent-chat-component.md](./workitems/REQ-126-mobile-agent-chat-component.md) - mobile-ready public Agent chat component for upstream Vue 3 apps

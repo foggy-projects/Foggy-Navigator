@@ -1353,6 +1353,87 @@ class UpstreamCliTest {
     }
 
     @Test
+    void diagnosticsSessionDirHelpDocumentsInputsAndSafety() {
+        int code = run(new String[]{"upstream", "diagnostics", "session-dir", "--help"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastPath);
+        assertTrue(output.contains("Usage: navi upstream diagnostics"));
+        assertTrue(output.contains("diagnostics session-dir --context-id <contextId>"));
+        assertTrue(output.contains("[--data-root <bizWorkerDataRoot>]"));
+        assertTrue(output.contains("does not print tokens, headers, credentials, or log contents"));
+    }
+
+    @Test
+    void diagnosticsSessionDirLocatesLocalBizWorkerSession() throws Exception {
+        String contextId = "bctx_20260531_f1_f14f789ea7034a99967b98fce27e2b81";
+        String taskId = "lgt_bf909fc73fa64e90";
+        Path dataRoot = tempDir.resolve("biz-worker-data");
+        Path sessionDir = dataRoot.resolve("runtime").resolve("sessions").resolve("by-date")
+                .resolve("2026").resolve("05").resolve("31").resolve("f1").resolve(contextId);
+        Path skillToolCallsFile = sessionDir.resolve("logs").resolve("skill-tool-calls")
+                .resolve(taskId + ".jsonl");
+        Files.createDirectories(skillToolCallsFile.getParent());
+        Files.createDirectories(sessionDir.resolve("logs").resolve("llm-submissions"));
+        Files.writeString(skillToolCallsFile, "{\"toolName\":\"tms.dataset.queryModel\"}\n", StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "diagnostics", "session-dir",
+                "--context-id", contextId,
+                "--task-id", taskId,
+                "--data-root", dataRoot.toString(),
+                "--physical-worker-id", "worker-biz-1"}, env("NAVI_CLIENT_APP_ACCESS_TOKEN", "cat-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastPath);
+        assertTrue(output.contains("contextId=" + contextId));
+        assertTrue(output.contains("taskId=" + taskId));
+        assertTrue(output.contains("exists=true"));
+        assertTrue(output.contains("workerBackend=LANGGRAPH_BIZ"));
+        assertTrue(output.contains("physicalWorkerId=worker-biz-1"));
+        assertTrue(output.contains("sessionDirectory=" + sessionDir.toAbsolutePath().normalize()));
+        assertTrue(output.contains("logsDirectory=" + sessionDir.resolve("logs").toAbsolutePath().normalize()));
+        assertTrue(output.contains("skillToolCallsDirectory="
+                + sessionDir.resolve("logs").resolve("skill-tool-calls").toAbsolutePath().normalize()));
+        assertTrue(output.contains("skillToolCallsFile=" + skillToolCallsFile.toAbsolutePath().normalize()));
+        assertTrue(output.contains("llmSubmissionsDirectory="
+                + sessionDir.resolve("logs").resolve("llm-submissions").toAbsolutePath().normalize()));
+        assertTrue(output.contains("accessHint=local"));
+        assertFalse(output.contains("notFoundReason="));
+        assertFalse(output.contains("cat-runtime-secret"));
+        assertFalse(output.contains("tms.dataset.queryModel"));
+    }
+
+    @Test
+    void diagnosticsSessionDirReportsMissingContextWithReason() throws Exception {
+        String contextId = "bctx_20260531_f1_f14f789ea7034a99967b98fce27e2b81";
+        String taskId = "lgt_bf909fc73fa64e90";
+        Path dataRoot = tempDir.resolve("biz-worker-data");
+        Path shardDir = dataRoot.resolve("runtime").resolve("sessions").resolve("by-date")
+                .resolve("2026").resolve("05").resolve("31").resolve("f1");
+        Files.createDirectories(shardDir);
+        Path expectedSessionDir = shardDir.resolve(contextId);
+
+        int code = run(new String[]{"upstream", "diagnostics", "session-dir",
+                "--context-id", contextId,
+                "--task-id", taskId,
+                "--data-root", dataRoot.toString()}, env("NAVI_CLIENT_APP_ACCESS_TOKEN", "cat-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastPath);
+        assertTrue(output.contains("exists=false"));
+        assertTrue(output.contains("sessionDirectory=" + expectedSessionDir.toAbsolutePath().normalize()));
+        assertTrue(output.contains("skillToolCallsFile="
+                + expectedSessionDir.resolve("logs").resolve("skill-tool-calls").resolve(taskId + ".jsonl")
+                .toAbsolutePath().normalize()));
+        assertTrue(output.contains("accessHint=unavailable"));
+        assertTrue(output.contains("notFoundReason=context-not-found"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
     void evidenceUsesRuntimeHeadersAndPrintsRefs() {
         responseOverride = """
                 {"code":0,"data":{

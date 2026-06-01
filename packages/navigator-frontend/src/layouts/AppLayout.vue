@@ -10,7 +10,6 @@
         router
       >
         <el-menu-item index="/">Workers</el-menu-item>
-        <el-menu-item index="/chat">会话</el-menu-item>
         <el-menu-item index="/tasks">任务</el-menu-item>
         <el-menu-item index="/cross-tasks">跨项目</el-menu-item>
         <el-menu-item index="/monitoring">监控</el-menu-item>
@@ -62,15 +61,13 @@ const { isSessionFullscreen } = useSessionFullscreen()
 
 const activeMenu = computed(() => {
   const path = route.path
-  // For /c/:id routes, highlight the chat menu item
-  if (path.startsWith('/c/')) return '/chat'
+  if (path.startsWith('/c/')) return ''
   return path
 })
 
-// Home and Chat both use ChatView — share one cache key so keep-alive reuses the same instance
 const routeCacheKey = computed(() => {
   const name = route.name as string
-  if (name === 'Home' || name === 'Chat') return 'ChatView'
+  if (name === 'Chat') return 'ChatView'
   return name
 })
 
