@@ -34,7 +34,7 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 
 `addons/code-review-agent` 目前存在源码目录，但未纳入根 `pom.xml`，开发前先确认是否仍为实验模块或待接入模块。
 
-`tutor-agent` 是旧独立“会话”入口配套模块，源码目录暂保留作历史参考，但已从根 `pom.xml` 与 `launcher` 运行时依赖中摘除；不要再把它当作当前主线模块设计新能力。
+旧独立“会话”入口及其配套 `tutor-agent` 模块已移除；不要再把它当作当前主线模块设计新能力。
 
 ### 前端与移动端
 

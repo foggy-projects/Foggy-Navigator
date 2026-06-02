@@ -70,7 +70,6 @@
 | [02-modules/claude-agent-teams-internals.md](./02-modules/claude-agent-teams-internals.md) | 仍可能有局部价值，但需按当前 Provider 与 Worker 实现复核 |
 | [agent-framework-guide.md](./agent-framework-guide.md) | 较早的底座说明，需按当前 Provider/TaskDispatch/Skill 实现重审 |
 | [agent-framework-requirements.md](./agent-framework-requirements.md) | 较早的需求说明，需确认是否仍反映当前建设方向 |
-| [tutor-agent-design.md](./tutor-agent-design.md) | 历史参考；Tutor 已从当前主构建与 `launcher` 运行时摘除 |
 
 ## 6. 推荐引用方式
 

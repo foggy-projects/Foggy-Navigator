@@ -7,7 +7,7 @@
 1. 系统级一层模块/功能架构文档已经存在，主入口是 [系统架构概览](../00-system-overview.md) 与 [功能架构说明](./functional-architecture.md)，本轮不需要另起一套总览文档。
 2. `CLAUDE.md`、系统总览与功能架构说明此前仍停留在 2026-03 左右的模块口径，已补齐当前仓库中的 `business-agent-module`、Codex/Gemini/LangGraph Biz Worker、Open SDK、上游 CLI、嵌入式聊天组件与移动端入口。
 3. `docs/01-overview/*` 已被标记为历史参考，定位正确；`docs/02-modules` 下仍有一批早期规划文档需要显式标注“待复核/部分过时”，避免后续误用为当前实现。
-4. PC 顶部旧独立“会话”入口已下线，`/chat` 只做回到 Workers 的兼容跳转；`/c/:id` 暂保留给跨项目阶段回跳等深链场景，兼容页不再提供新建旧 tutor 会话入口。
+4. PC 顶部旧独立“会话”入口已下线，`/chat` 只做回到 Workers 的兼容跳转；`/c/:id` 暂保留给跨项目阶段回跳等深链场景，兼容页不再提供新建旧独立会话入口。
 5. 后续逐模块 review 应优先看“任务分发/会话/Worker/开放集成”这条主链路，再看平台治理、监控与历史规划类模块。
 
 ## 2. 本轮核对依据
@@ -31,7 +31,7 @@
 | `user-auth-module` | 与用户、角色、API Key 管理一致 | 低风险，按访问控制文档核对即可 |
 | `metadata-config-module`、`metadata-query-module` | 平台设置读写底座，仍在使用 | 后续 review 配置项归属，避免设置页说明散落 |
 | `monitoring-module` | 监控事件与统计仍是平台治理能力 | 与通知、SSE、Observer BFF 一起核对 |
-| `tutor-agent` | 旧独立会话入口的引导 Agent，源码目录保留作历史参考，已从 `launcher` 与根 `pom.xml` 摘除 | 后续如需彻底删除目录，先迁移或废弃 `tutor-agent` 下的历史测试与设计文档 |
+| `tutor-agent` | 旧独立会话入口的引导 Agent，已从源码目录、根 `pom.xml` 与 `launcher` 摘除 | 无需继续按当前模块 review |
 | `addons/claude-worker-agent` | Worker 工作区、目录、文件、跨项目、Open API 主模块 | 优先 review，模块职责很宽，建议拆清“Worker API / 文件 / Git / 跨项目”边界 |
 | `addons/codex-worker-agent` | 当前已作为 Provider/Worker 接入 | 需要核对文档是否只停留在 Claude Worker 口径 |
 | `addons/gemini-worker-agent` | 当前已作为 Provider/Worker 接入 | 需要补齐与 Codex/Claude 的差异说明 |
@@ -66,7 +66,7 @@
 | `docs/02-modules/task-orchestration-module.md` | 与当前任务治理/跨项目编排可能重叠 | 标为待复核，后续合并或归档 |
 | `docs/02-modules/claude-agent-teams-guide.md`、`docs/02-modules/claude-agent-teams-internals.md` | 仍可能有局部价值，但 Worker 类型已扩展 | 标为待复核，避免只按 Claude Teams 口径理解 |
 | `docs/agent-framework-guide.md`、`docs/agent-framework-requirements.md` | 早期底座说明 | 后续按当前 Provider/TaskDispatch/Skill 实现重审 |
-| `docs/tutor-agent-design.md` | 早期 Tutor 设计 | 后续确认 Tutor 是否仍承担原设计范围 |
+| `docs/tutor-agent-design.md` | 早期 Tutor 设计，已随旧模块删除 | 不再作为当前或历史入口维护 |
 
 ## 5. 建议的逐模块 Review 顺序
 

@@ -70,7 +70,6 @@ Launcher
   -> metadata-config-module
   -> metadata-query-module
   -> monitoring-module
-  -> tutor-agent (旧引导 Agent，源码归档，不随 launcher 启动)
   -> addons/claude-worker-agent
   -> addons/codex-worker-agent
   -> addons/gemini-worker-agent
@@ -111,7 +110,7 @@ Launcher
 | `metadata-query-module` | 平台配置读接口与查询能力 |
 | `monitoring-module` | 监控事件与统计接口 |
 
-`tutor-agent` 源码目录暂保留作历史参考，但已从根 `pom.xml` 与 `launcher` 运行时依赖中摘除；当前主线不再启动旧引导 Agent。
+旧独立“会话”入口配套的 `tutor-agent` 已从源码目录、根 `pom.xml` 与 `launcher` 运行时依赖中移除；当前主线不再保留旧引导 Agent。
 
 ### 3.3 Addon 能力模块
 
@@ -189,7 +188,7 @@ Launcher
 ### 5.2 当前不是主轴或仍偏支撑的能力
 
 - PC 顶部独立 `/chat` 会话入口已下线；`/c/:id` 暂作为深链兼容入口，不是主导航入口
-- `tutor-agent` 属于旧独立会话入口配套能力，源码归档保留，不再随 `launcher` 启动
+- 旧独立会话入口及其配套 `tutor-agent` 已移除
 - `echo-agent` 属于示例/测试能力
 - 历史文档中的“语义层管理、数据分析 Agent、权限建模平台”不再是当前产品主线
 

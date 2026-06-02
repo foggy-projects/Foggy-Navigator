@@ -158,7 +158,7 @@
 | 前端与多端 | `packages/navigator-frontend`、`packages/foggy-chat`、`packages/foggy-chat-core`、`packages/navigator-chat-widget`、`packages/foggy-mobile` |
 | Worker 运行时工具 | `tools/claude-agent-worker`、`tools/codex-agent-worker`、`tools/gemini-agent-worker`、`tools/langgraph-biz-worker`、`tools/mock-llm-service` |
 
-`tutor-agent` 源码目录暂保留作历史参考，但已从根 `pom.xml` 与 `launcher` 运行时依赖中摘除；它对应的是旧独立会话入口的引导能力，不属于当前主线功能模块。
+旧独立会话入口及其配套 `tutor-agent` 已从源码目录、根 `pom.xml` 与 `launcher` 运行时依赖中移除；当前主线功能模块不再保留旧引导 Agent。
 
 ## 5. 推荐阅读顺序
 

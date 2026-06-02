@@ -172,7 +172,7 @@ describe('useSession', () => {
       capturedSessionCallback!({
         messageId: 'r1',
         sessionId: 's1',
-        agentId: 'tutor-agent',
+        agentId: 'test-agent',
         timestamp: Date.now(),
         version: '1.0',
         type: 'ROUTE_REQUEST',
@@ -189,7 +189,7 @@ describe('useSession', () => {
       capturedSessionCallback!({
         messageId: 'r1',
         sessionId: 's1',
-        agentId: 'tutor-agent',
+        agentId: 'test-agent',
         timestamp: Date.now(),
         version: '1.0',
         type: 'ROUTE_REQUEST',
@@ -201,7 +201,7 @@ describe('useSession', () => {
       capturedSessionCallback!({
         messageId: 't1',
         sessionId: 's1',
-        agentId: 'tutor-agent',
+        agentId: 'test-agent',
         timestamp: Date.now(),
         version: '1.0',
         type: 'TASK_COMPLETED',
@@ -229,7 +229,7 @@ describe('useSession', () => {
       capturedSessionCallback!({
         messageId: 't2',
         sessionId: 's1',
-        agentId: 'tutor-agent',
+        agentId: 'test-agent',
         timestamp: Date.now(),
         version: '1.0',
         type: 'TASK_COMPLETED',
@@ -248,7 +248,7 @@ describe('useSession', () => {
       capturedSessionCallback!({
         messageId: 't3',
         sessionId: 's1',
-        agentId: 'tutor-agent',
+        agentId: 'test-agent',
         timestamp: Date.now(),
         version: '1.0',
         type: 'TASK_COMPLETED',
