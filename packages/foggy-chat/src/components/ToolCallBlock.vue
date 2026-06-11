@@ -42,8 +42,15 @@
 
     <!-- Default: standard tool call with collapse/expand -->
     <template v-else>
-      <div class="tool-header tool-header-clickable" @click="toggleCollapse">
-        <span class="tool-toggle">{{ collapsed ? '\u25B6' : '\u25BC' }}</span>
+      <div class="tool-header">
+        <button
+          class="tool-toggle-btn"
+          type="button"
+          :title="collapseViewState.isCollapsed ? '展开工具调用' : '收起工具调用'"
+          @click="toggleCollapse"
+        >
+          {{ collapseViewState.isCollapsed ? '\u25B6' : '\u25BC' }}
+        </button>
         <span class="tool-icon">&#9881;</span>
         <span class="tool-name">{{ props.message.toolName || 'Tool' }}</span>
         <span v-if="props.message.content" class="tool-actions" @click.stop>
@@ -54,7 +61,7 @@
             查看
           </button>
         </span>
-        <span v-if="collapsed && commandSummary" class="tool-summary">{{ commandSummary }}</span>
+        <span v-if="collapseViewState.isCollapsed && commandSummary" class="tool-summary">{{ commandSummary }}</span>
         <span v-if="props.message.thought" class="tool-thought">{{ props.message.thought }}</span>
         <span class="tool-status-indicator">
           <span v-if="isRunning" class="status-dot running"></span>
@@ -76,7 +83,7 @@
         </template>
         <pre class="json-viewer-content"><code>{{ formattedContent }}</code></pre>
       </ElDialog>
-      <template v-if="!collapsed">
+      <div v-if="!collapseViewState.isCollapsed" class="tool-content">
         <div v-if="props.message.content" class="tool-command">
           <div class="code-label">command</div>
           <pre class="code-block"><code>{{ props.message.content }}</code></pre>
@@ -89,7 +96,7 @@
           <div class="code-label">error</div>
           <pre class="code-block error"><code>{{ props.message.error }}</code></pre>
         </div>
-      </template>
+      </div>
     </template>
     <ExecutionReportInline
       :report-ref="props.message.executionReportRef"
@@ -98,17 +105,41 @@
   </div>
 </template>
 
-<script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { ElDialog } from 'element-plus'
+<script lang="ts">
 import type { ChatMessage } from '../types/chat'
+
+const MAX_COLLAPSE_STATE = 500
+const collapseStateByMessage = new Map<string, boolean>()
+
+function collapseKey(message: ChatMessage): string {
+  return message.id || message.toolCallId || `${message.toolName || 'tool'}:${message.timestamp}`
+}
+
+function rememberCollapseState(key: string, value: boolean): void {
+  if (collapseStateByMessage.has(key)) {
+    collapseStateByMessage.delete(key)
+  } else if (collapseStateByMessage.size >= MAX_COLLAPSE_STATE) {
+    const oldestKey = collapseStateByMessage.keys().next().value
+    if (oldestKey !== undefined) collapseStateByMessage.delete(oldestKey)
+  }
+  collapseStateByMessage.set(key, value)
+}
+</script>
+
+<script setup lang="ts">
+import { computed, getCurrentInstance, reactive, ref, watch } from 'vue'
+import { ElDialog } from 'element-plus'
 import ExecutionReportInline from './ExecutionReportInline.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   message: ChatMessage
   defaultCollapsed?: boolean
   forceCollapsed?: boolean | null
-}>()
+}>(), {
+  defaultCollapsed: false,
+  forceCollapsed: null,
+})
+const instance = getCurrentInstance()
 
 const isTodoWrite = computed(() => props.message.toolName === 'TodoWrite')
 const isSubagent = computed(() => props.message.toolName === 'Task')
@@ -119,24 +150,38 @@ const specialClass = computed(() => {
   return ''
 })
 
-// Collapse state: completed tools default collapsed, running default expanded
 const hasResult = computed(() =>
   props.message.toolOutput !== undefined || props.message.error !== undefined
 )
 const isRunning = computed(() => !hasResult.value)
 
-const collapsed = ref(
-  props.defaultCollapsed !== undefined ? props.defaultCollapsed : hasResult.value
-)
+function defaultCollapseState(): boolean {
+  return collapseStateByMessage.get(collapseKey(props.message)) ?? props.defaultCollapsed
+}
+
+const collapseViewState = reactive({
+  isCollapsed: defaultCollapseState(),
+})
+
+watch([() => collapseKey(props.message), () => props.defaultCollapsed], () => {
+  collapseViewState.isCollapsed = defaultCollapseState()
+})
 
 watch(() => props.forceCollapsed, (val) => {
   if (val !== null && val !== undefined) {
-    collapsed.value = val
+    setCollapsed(val)
   }
 })
 
+function setCollapsed(value: boolean) {
+  collapseViewState.isCollapsed = value
+  rememberCollapseState(collapseKey(props.message), value)
+  // Tool blocks can be reused by the chat scroller; force this local repaint after manual collapse changes.
+  instance?.proxy?.$forceUpdate()
+}
+
 function toggleCollapse() {
-  collapsed.value = !collapsed.value
+  setCollapsed(!collapseViewState.isCollapsed)
 }
 
 // Short summary for collapsed state
@@ -319,21 +364,28 @@ async function copyFormatted() {
   font-size: 13px;
 }
 
-.tool-header-clickable {
-  cursor: pointer;
-  user-select: none;
-  transition: background-color 0.15s;
-}
-
-.tool-header-clickable:hover {
-  background-color: #f0f2f5;
-}
-
-.tool-toggle {
+.tool-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
   font-size: 10px;
   color: #909399;
-  width: 12px;
   flex-shrink: 0;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.tool-toggle-btn:hover {
+  border-color: #c6e2ff;
+  background: #ecf5ff;
+  color: #409eff;
 }
 
 .tool-icon { font-size: 14px; }
