@@ -134,6 +134,8 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     status: 'ONLINE',
     hostname: 'localhost',
     authMode: 'SUBSCRIPTION',
+    codexBaseUrl: 'http://localhost:3051',
+    geminiBaseUrl: 'http://localhost:3071',
     createdAt: '2026-02-16T00:00:00Z',
     updatedAt: '2026-02-16T00:00:00Z',
   }
