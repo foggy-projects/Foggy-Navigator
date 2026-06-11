@@ -47,6 +47,14 @@ final class CliArguments {
         if (words.size() >= 2 && "config".equals(words.get(0)) && "check".equals(words.get(1))) {
             return "config check";
         }
+        if (words.size() >= 2 && "diagnostics".equals(words.get(0))) {
+            if ("session-dir".equals(words.get(1))) {
+                return "diagnostics session-dir";
+            }
+            if ("help".equals(words.get(1))) {
+                return "diagnostics help";
+            }
+        }
         if (words.size() >= 3 && "tms".equals(words.get(0))) {
             return String.join(" ", words.subList(0, Math.min(words.size(), 3)));
         }

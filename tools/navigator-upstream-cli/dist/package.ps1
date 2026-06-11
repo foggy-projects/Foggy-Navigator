@@ -76,6 +76,9 @@ $features = @(
     "upstream-directory-orchestration",
     "upstream-worker-pool-orchestration",
     "task-diagnostics",
+    "session-directory-diagnostics",
+    "task-evidence",
+    "message-event-contract",
     "physical-worker-diagnostics",
     "worker-host-suite",
     "navi-routed-codex-config"

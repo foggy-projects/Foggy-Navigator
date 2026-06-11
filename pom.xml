@@ -36,7 +36,6 @@
         <module>metadata-query-module</module>
         <module>session-module</module>
         <module>business-agent-module</module>
-        <module>tutor-agent</module>
         <module>addons/claude-worker-agent</module>
         <module>addons/langgraph-biz-worker</module>
         <module>addons/codex-worker-agent</module>

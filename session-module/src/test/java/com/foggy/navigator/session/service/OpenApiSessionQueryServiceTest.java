@@ -306,6 +306,26 @@ class OpenApiSessionQueryServiceTest {
         assertTrue(messages.isEmpty());
     }
 
+    @Test
+    void taskDiagnosticsMessageHelpers_shouldCountAndReturnLatestMessagesInAscendingOrder() {
+        String taskId = "task-" + UUID.randomUUID().toString().substring(0, 8);
+        saveMessage("msg-a-" + taskId, sessionId, taskId, MessageRole.ASSISTANT, "first",
+                LocalDateTime.of(2026, 5, 27, 9, 0));
+        saveMessage("msg-b-" + taskId, sessionId, taskId, MessageRole.ASSISTANT, "second",
+                LocalDateTime.of(2026, 5, 27, 9, 1));
+        saveMessage("msg-c-" + taskId, sessionId, taskId, MessageRole.ASSISTANT, "third",
+                LocalDateTime.of(2026, 5, 27, 9, 2));
+
+        assertEquals(3L, queryService.countTaskMessages(taskId));
+        assertEquals("third", queryService.findLatestTaskMessage(taskId).orElseThrow().getContent());
+
+        List<SessionMessageEntity> latestTwo = queryService.getLatestTaskMessages(taskId, 2);
+
+        assertEquals(2, latestTwo.size());
+        assertEquals("second", latestTwo.get(0).getContent());
+        assertEquals("third", latestTwo.get(1).getContent());
+    }
+
     // ── contextId → sessionId 一对一约束 ──
 
     @Test
@@ -337,6 +357,24 @@ class OpenApiSessionQueryServiceTest {
                 .metadata(metadata)
                 .build();
         return sessionManager.addMessage(sessionId, msg);
+    }
+
+    private void saveMessage(
+            String id,
+            String sessionId,
+            String taskId,
+            MessageRole role,
+            String content,
+            LocalDateTime createdAt) {
+        SessionMessageEntity entity = new SessionMessageEntity();
+        entity.setId(id);
+        entity.setSessionId(sessionId);
+        entity.setTaskId(taskId);
+        entity.setRole(role.name());
+        entity.setContent(content);
+        entity.setMetadata("{\"type\":\"TEXT\"}");
+        entity.setCreatedAt(createdAt);
+        messageRepository.save(entity);
     }
 
     private SessionTaskEntity taskEntity(String taskId, String status) {

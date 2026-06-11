@@ -94,6 +94,24 @@ class UpstreamClientAppAdminCredentialServiceTest {
     }
 
     @Test
+    void requireAccessSplitsWhitespaceJoinedStoredScopes() {
+        when(repository.findByCredentialKeyHash(anyString()))
+                .thenReturn(Optional.of(activeCredential("[\"tenant-1\"]",
+                        "[\"CLIENT_APP_MANAGE CLIENT_APP_CONTROL_KEY_ISSUE CLIENT_APP_RUNTIME_KEY_ISSUE\"]")));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader(UpstreamClientAppAdminCredentialService.HEADER_ADMIN_KEY, "admin-key");
+
+        UpstreamClientAppAdminPrincipal principal = service.requireAccess(
+                request,
+                UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE);
+
+        assertTrue(principal.getScopes().contains(UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE));
+        assertTrue(principal.getScopes().contains(UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE));
+        assertTrue(principal.getScopes().contains(UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_RUNTIME_KEY_ISSUE));
+        verify(repository).save(any());
+    }
+
+    @Test
     void requireAccessRejectsRevokedCredential() {
         UpstreamClientAppAdminCredentialEntity credential = activeCredential("[\"tenant-1\"]",
                 "[\"CLIENT_APP_ADMIN_ALL\"]");

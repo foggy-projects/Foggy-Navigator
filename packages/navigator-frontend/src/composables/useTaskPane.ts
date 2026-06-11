@@ -1,7 +1,7 @@
 import { ref, type Ref } from 'vue'
 import { createChatState, AipMessageType } from '@foggy/chat'
 import type { ChatState, ChatMessage } from '@foggy/chat'
-import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
+import { agentMessageAdapter } from '@/adapters/AgentMessageAdapter'
 import * as sessionApi from '@/api/session'
 import * as workerApi from '@/api/claudeWorker'
 import { getTaskUnified } from '@/api/unifiedTask'
@@ -174,7 +174,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   /** SSE event handler — shared by connect and resumeInPlace */
   function handleSseEvent(raw: AgentMessage) {
     // 1. Pass through adapter for chat messages
-    const msgs = tutorAgentAdapter.convert(raw, raw.sessionId)
+    const msgs = agentMessageAdapter.convert(raw, raw.sessionId)
     for (const msg of msgs) {
       chatState.processAipMessage(msg)
     }

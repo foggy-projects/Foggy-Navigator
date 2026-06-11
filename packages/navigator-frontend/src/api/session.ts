@@ -6,7 +6,7 @@ export async function listSessions(): Promise<Session[]> {
   return rx.data
 }
 
-export async function createSession(title: string, agentId = 'tutor-agent'): Promise<Session> {
+export async function createSession(title: string, agentId: string): Promise<Session> {
   const rx = (await client.post('/sessions', { title, agentId })) as unknown as RX<Session>
   return rx.data
 }

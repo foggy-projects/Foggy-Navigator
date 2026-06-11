@@ -19,8 +19,8 @@ vi.mock('@/api/unifiedTask', () => ({
   getTaskUnified: mockGetTaskUnified,
 }))
 
-vi.mock('@/adapters/TutorAgentAdapter', () => ({
-  tutorAgentAdapter: {
+vi.mock('@/adapters/AgentMessageAdapter', () => ({
+  agentMessageAdapter: {
     convert: mockConvert,
   },
 }))

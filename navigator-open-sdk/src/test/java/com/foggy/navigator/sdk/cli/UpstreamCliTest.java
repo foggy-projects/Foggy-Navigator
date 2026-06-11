@@ -70,7 +70,21 @@ class UpstreamCliTest {
             String response;
             if ("__MESSAGES_TERMINAL__".equals(responseOverride)) {
                 response = lastPath.contains("/messages")
-                        ? "{\"code\":0,\"data\":{\"messages\":[{\"messageId\":\"m-1\",\"role\":\"assistant\",\"type\":\"text\",\"content\":\"done cat-runtime-secret\"}]}}"
+                        ? """
+                        {"code":0,"data":{"messages":[{
+                          "messageId":"m-1",
+                          "role":"assistant",
+                          "type":"RESULT",
+                          "eventKind":"final_marker",
+                          "progressType":"final",
+                          "status":"COMPLETED",
+                          "terminal":true,
+                          "terminalStatus":"COMPLETED",
+                          "content":"done cat-runtime-secret",
+                          "reportRefs":[{"type":"frame_report","ref":"frame-report://task-1/frame-1","frameId":"frame-1"}],
+                          "artifactRefs":[{"path":"outputs/result.json?token=cat-runtime-secret"}]
+                        }]}}
+                        """
                         : "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"COMPLETED\"}}";
             } else if ("__MESSAGES_FAILED_DIAGNOSTICS__".equals(responseOverride)) {
                 response = lastPath.contains("/messages")
@@ -451,6 +465,44 @@ class UpstreamCliTest {
     }
 
     @Test
+    void adminKeyInspectPrintsCurrentCredentialWithoutSecret() throws Exception {
+        Files.writeString(tempDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "credentialId":"ucaac-1",
+                  "principalId":"TMS",
+                  "credentialKeyPrefix":"naa_",
+                  "credentialKeySuffix":"-key",
+                  "upstreamSystemId":"TMS",
+                  "authorizedTenantIds":["TMS"],
+                  "authorizedClientAppNamespace":"TMS",
+                  "scopes":["CLIENT_APP_MANAGE","CLIENT_APP_CONTROL_KEY_ISSUE"],
+                  "status":"ACTIVE",
+                  "expiresAt":"2026-06-01T00:00:00",
+                  "sourceRequestId":"uabr-1"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "inspect",
+                "--profile", "upstream.env"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/admin-credential/current", lastPath);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(output.contains("admin-key inspect ok"));
+        assertTrue(output.contains("credential credentialId=ucaac-1 principalId=TMS upstreamSystemId=TMS status=ACTIVE"));
+        assertTrue(output.contains("credential authorizedTenantIds=TMS"));
+        assertTrue(output.contains("credential scopes=CLIENT_APP_MANAGE,CLIENT_APP_CONTROL_KEY_ISSUE"));
+        assertTrue(output.contains("credential sourceRequestId=uabr-1"));
+        assertTrue(output.contains("rotation=use admin-key rotate --credential-id ucaac-1"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
     void adminKeyClaimWritesAdminKeyAndClearsClaimTokenWithoutPrintingIt() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
         Path profileDir = tempDir.resolve(".navigator");
@@ -633,6 +685,7 @@ class UpstreamCliTest {
         int code = run(new String[]{"upstream", "admin-key", "rotate",
                 "--profile", ".navigator/upstream.env",
                 "--credential-id", "ucaac-1",
+                "--scopes", "CLIENT_APP_MANAGE,BUSINESS_OBJECT_MANAGE,WORKING_DIRECTORY_MANAGE",
                 "--write-profile"}, env("NAVI_OPERATOR_API_KEY", "operator-secret-key"));
 
         String output = stdout.toString(StandardCharsets.UTF_8);
@@ -640,6 +693,7 @@ class UpstreamCliTest {
         assertEquals(0, code);
         assertEquals("/api/v1/admin/upstream-admin-credentials/ucaac-1/rotate", lastPath);
         assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"scopes\":[\"CLIENT_APP_MANAGE\",\"BUSINESS_OBJECT_MANAGE\",\"WORKING_DIRECTORY_MANAGE\"]"));
         assertNull(lastApiKeyHeader);
         assertNull(lastAuthorizationHeader);
         assertEquals("operator-secret-key", lastOperatorKeyHeader);
@@ -722,18 +776,33 @@ class UpstreamCliTest {
                   "clientAppId":"capp-tms-3",
                   "clientAppName":"TMS 3",
                   "capabilityDomain":"tms.ops",
+                  "clientAppCapabilityDomain":"tms.ops",
+                  "upstreamSystemId":"TMS",
+                  "sourceTenantId":"3",
+                  "upstreamRef":"TMS-3",
+                  "upstreamNamespace":"TMS",
                   "clientAppKey":"cak-secret-key",
                   "clientAppSecret":"cas-secret-value",
                   "controlApiKey":"cac-secret-control-key",
+                  "agentCode":"tms-root-agent",
                   "rootAgentId":"tms-root-agent",
                   "modelConfigId":"model-live",
                   "skillId":"tms.navigator.agent",
                   "workerPoolId":"pool-1",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "physicalWorkerId":"worker-1",
+                  "directoryId":"dir-1",
+                  "bizWorkerBaseUrl":"http://127.0.0.1:3161",
                   "bindingVersion":"bind-v1",
                   "status":"READY",
+                  "activationReady":true,
                   "credentialsReplayable":true,
                   "created":true,
                   "rotated":true,
+                  "missingFields":[],
+                  "requiredScopes":["CLIENT_APP_MANAGE","CLIENT_APP_CONTROL_KEY_ISSUE"],
+                  "actualScopes":["CLIENT_APP_MANAGE","CLIENT_APP_CONTROL_KEY_ISSUE"],
+                  "authorizedTenantIds":["TMS"],
                   "blockers":["worker route should be verified"]
                 }}
                 """;
@@ -743,9 +812,14 @@ class UpstreamCliTest {
                 "--source-tenant-id", "3",
                 "--name", "TMS 3",
                 "--capability-domain", "tms.ops",
+                "--upstream-ref", "TMS-3",
                 "--model-config-id", "model-live",
                 "--skill-id", "tms.navigator.agent",
                 "--worker-pool-id", "pool-1",
+                "--worker-backend", "LANGGRAPH_BIZ",
+                "--physical-worker-id", "worker-1",
+                "--directory-id", "dir-1",
+                "--biz-worker-base-url", "http://127.0.0.1:3161",
                 "--rotate-credentials",
                 "--tenant-profile", ".navigator/tenants/tms-3.env",
                 "--write-profile"}, Map.of());
@@ -762,6 +836,10 @@ class UpstreamCliTest {
         assertTrue(lastBody.contains("\"sourceSystem\":\"TMS\""));
         assertTrue(lastBody.contains("\"sourceTenantId\":\"3\""));
         assertTrue(lastBody.contains("\"clientAppName\":\"TMS 3\""));
+        assertTrue(lastBody.contains("\"upstreamRef\":\"TMS-3\""));
+        assertTrue(lastBody.contains("\"workerBackend\":\"LANGGRAPH_BIZ\""));
+        assertTrue(lastBody.contains("\"physicalWorkerId\":\"worker-1\""));
+        assertTrue(lastBody.contains("\"directoryId\":\"dir-1\""));
         assertTrue(lastBody.contains("\"rotateCredentials\":true"));
         assertTrue(profile.contains("NAVI_BASE_URL=" + baseUrl()));
         assertTrue(profile.contains("NAVI_TENANT_ID=nav_tms_3"));
@@ -773,13 +851,23 @@ class UpstreamCliTest {
         assertTrue(profile.contains("NAVI_MODEL_CONFIG_ID=model-live"));
         assertTrue(profile.contains("NAVI_SKILL_ID=tms.navigator.agent"));
         assertTrue(profile.contains("NAVI_WORKER_POOL_ID=pool-1"));
+        assertTrue(profile.contains("NAVI_WORKER_BACKEND=LANGGRAPH_BIZ"));
+        assertTrue(profile.contains("NAVI_PHYSICAL_WORKER_ID=worker-1"));
+        assertTrue(profile.contains("NAVI_DIRECTORY_ID=dir-1"));
+        assertTrue(profile.contains("NAVI_BIZ_WORKER_BASE_URL=http://127.0.0.1:3161"));
         assertTrue(profile.contains("NAVI_SOURCE_TENANT_ID=3"));
-        assertTrue(profile.contains("NAVI_UPSTREAM_REF=3"));
+        assertTrue(profile.contains("NAVI_UPSTREAM_REF=TMS-3"));
+        assertTrue(profile.contains("NAVI_UPSTREAM_NAMESPACE=TMS"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_CAPABILITY_DOMAIN=tms.ops"));
         assertTrue(output.contains("client-app ensure-tenant ok"));
         assertTrue(output.contains("stored=NAVI_BASE_URL"));
         assertTrue(output.contains("created=true"));
         assertTrue(output.contains("rotated=true"));
         assertTrue(output.contains("status=READY"));
+        assertTrue(output.contains("activationReady=true"));
+        assertTrue(output.contains("workerBackend=LANGGRAPH_BIZ"));
+        assertTrue(output.contains("physicalWorkerId=worker-1"));
+        assertTrue(output.contains("directoryId=dir-1"));
         assertTrue(output.contains("credentialsReplayable=true"));
         assertTrue(output.contains("blocker=worker route should be verified"));
         assertFalse(output.contains("naa-secret-admin-key"));
@@ -1078,6 +1166,24 @@ class UpstreamCliTest {
     }
 
     @Test
+    void askSendsMaxTurnsWhenProvided() {
+        responseOverride = "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUBMITTED\",\"contextId\":\"ctx-1\"}}";
+
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "hello",
+                "--max-turns", "1"}, Map.of());
+
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
+        assertTrue(lastBody.contains("\"maxTurns\":1"));
+    }
+
+    @Test
     void askSendsModelConfigIdFromEnvInTopLevelAndMetadata() {
         responseOverride = "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUBMITTED\",\"contextId\":\"ctx-1\"}}";
 
@@ -1132,6 +1238,11 @@ class UpstreamCliTest {
         assertEquals(0, code);
         assertEquals("cat-runtime-secret", lastClientAppAccessTokenHeader);
         assertTrue(output.contains("taskStatus=COMPLETED"));
+        assertTrue(output.contains("eventKind=final_marker"));
+        assertTrue(output.contains("progressType=final"));
+        assertTrue(output.contains("terminalStatus=COMPLETED"));
+        assertTrue(output.contains("messageReportRef messageId=m-1 type=frame_report ref=frame-report://task-1/frame-1"));
+        assertTrue(output.contains("messageArtifactRef messageId=m-1 path=outputs/result.json?token=[REDACTED]"));
         assertFalse(output.contains("cat-runtime-secret"));
     }
 
@@ -1186,6 +1297,179 @@ class UpstreamCliTest {
         assertEquals(2, code);
         assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("messages requires --agent-code"));
         assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void diagnosticsUsesRuntimeHeadersAndRedactsSecrets() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "taskId":"task-1",
+                  "agentId":"agent-1",
+                  "contextId":"ctx-1",
+                  "status":"FAILED",
+                  "terminal":true,
+                  "terminalStatus":"FAILED",
+                  "submittedAt":"2026-05-27T08:00:00",
+                  "lastObservedAt":"2026-05-27T08:01:00",
+                  "messagesCount":3,
+                  "providerTaskId":"wt-1",
+                  "workerTaskId":"wt-1",
+                  "lastAckedSeq":2,
+                  "workerBackend":"OPENAI_CODEX",
+                  "providerType":"codex-worker",
+                  "failureStage":"PROVIDER_API",
+                  "failureSummary":"Provider rejected token=cat-runtime-secret",
+                  "cancelCapability":{
+                    "cancelSupported":false,
+                    "cancelMode":"admin_only",
+                    "cleanupSupported":false,
+                    "backendLimitations":["runtime_client_app_cancel_not_exposed"]
+                  },
+                  "correlation":{"originalTaskId":"task-0","attemptNumber":2}
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "diagnostics",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--task-id", "task-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/tasks/task-1/diagnostics", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("cak-test", lastClientAppKeyHeader);
+        assertEquals("cat-runtime-secret", lastClientAppAccessTokenHeader);
+        assertEquals("u-1", lastUpstreamUserIdHeader);
+        assertTrue(output.contains("taskId=task-1"));
+        assertTrue(output.contains("messagesCount=3"));
+        assertTrue(output.contains("cancelMode=admin_only"));
+        assertTrue(output.contains("backendLimitations=runtime_client_app_cancel_not_exposed"));
+        assertTrue(output.contains("failureSummary=Provider rejected token=[REDACTED]"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
+    void diagnosticsSessionDirHelpDocumentsInputsAndSafety() {
+        int code = run(new String[]{"upstream", "diagnostics", "session-dir", "--help"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastPath);
+        assertTrue(output.contains("Usage: navi upstream diagnostics"));
+        assertTrue(output.contains("diagnostics session-dir --context-id <contextId>"));
+        assertTrue(output.contains("[--data-root <bizWorkerDataRoot>]"));
+        assertTrue(output.contains("does not print tokens, headers, credentials, or log contents"));
+    }
+
+    @Test
+    void diagnosticsSessionDirLocatesLocalBizWorkerSession() throws Exception {
+        String contextId = "bctx_20260531_f1_f14f789ea7034a99967b98fce27e2b81";
+        String taskId = "lgt_bf909fc73fa64e90";
+        Path dataRoot = tempDir.resolve("biz-worker-data");
+        Path sessionDir = dataRoot.resolve("runtime").resolve("sessions").resolve("by-date")
+                .resolve("2026").resolve("05").resolve("31").resolve("f1").resolve(contextId);
+        Path skillToolCallsFile = sessionDir.resolve("logs").resolve("skill-tool-calls")
+                .resolve(taskId + ".jsonl");
+        Files.createDirectories(skillToolCallsFile.getParent());
+        Files.createDirectories(sessionDir.resolve("logs").resolve("llm-submissions"));
+        Files.writeString(skillToolCallsFile, "{\"toolName\":\"tms.dataset.queryModel\"}\n", StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "diagnostics", "session-dir",
+                "--context-id", contextId,
+                "--task-id", taskId,
+                "--data-root", dataRoot.toString(),
+                "--physical-worker-id", "worker-biz-1"}, env("NAVI_CLIENT_APP_ACCESS_TOKEN", "cat-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastPath);
+        assertTrue(output.contains("contextId=" + contextId));
+        assertTrue(output.contains("taskId=" + taskId));
+        assertTrue(output.contains("exists=true"));
+        assertTrue(output.contains("workerBackend=LANGGRAPH_BIZ"));
+        assertTrue(output.contains("physicalWorkerId=worker-biz-1"));
+        assertTrue(output.contains("sessionDirectory=" + sessionDir.toAbsolutePath().normalize()));
+        assertTrue(output.contains("logsDirectory=" + sessionDir.resolve("logs").toAbsolutePath().normalize()));
+        assertTrue(output.contains("skillToolCallsDirectory="
+                + sessionDir.resolve("logs").resolve("skill-tool-calls").toAbsolutePath().normalize()));
+        assertTrue(output.contains("skillToolCallsFile=" + skillToolCallsFile.toAbsolutePath().normalize()));
+        assertTrue(output.contains("llmSubmissionsDirectory="
+                + sessionDir.resolve("logs").resolve("llm-submissions").toAbsolutePath().normalize()));
+        assertTrue(output.contains("accessHint=local"));
+        assertFalse(output.contains("notFoundReason="));
+        assertFalse(output.contains("cat-runtime-secret"));
+        assertFalse(output.contains("tms.dataset.queryModel"));
+    }
+
+    @Test
+    void diagnosticsSessionDirReportsMissingContextWithReason() throws Exception {
+        String contextId = "bctx_20260531_f1_f14f789ea7034a99967b98fce27e2b81";
+        String taskId = "lgt_bf909fc73fa64e90";
+        Path dataRoot = tempDir.resolve("biz-worker-data");
+        Path shardDir = dataRoot.resolve("runtime").resolve("sessions").resolve("by-date")
+                .resolve("2026").resolve("05").resolve("31").resolve("f1");
+        Files.createDirectories(shardDir);
+        Path expectedSessionDir = shardDir.resolve(contextId);
+
+        int code = run(new String[]{"upstream", "diagnostics", "session-dir",
+                "--context-id", contextId,
+                "--task-id", taskId,
+                "--data-root", dataRoot.toString()}, env("NAVI_CLIENT_APP_ACCESS_TOKEN", "cat-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastPath);
+        assertTrue(output.contains("exists=false"));
+        assertTrue(output.contains("sessionDirectory=" + expectedSessionDir.toAbsolutePath().normalize()));
+        assertTrue(output.contains("skillToolCallsFile="
+                + expectedSessionDir.resolve("logs").resolve("skill-tool-calls").resolve(taskId + ".jsonl")
+                .toAbsolutePath().normalize()));
+        assertTrue(output.contains("accessHint=unavailable"));
+        assertTrue(output.contains("notFoundReason=context-not-found"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
+    void evidenceUsesRuntimeHeadersAndPrintsRefs() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "taskId":"task-1",
+                  "agentId":"agent-1",
+                  "contextId":"ctx-1",
+                  "status":"COMPLETED",
+                  "terminal":true,
+                  "terminalStatus":"COMPLETED",
+                  "finalAnswer":{"available":true,"summary":"done cat-runtime-secret","source":"task_result"},
+                  "structuredOutput":{"available":true,"source":"task_state","value":{"ok":true}},
+                  "reportRefs":[{"type":"frame_report","ref":"frame-report://task-1/frame-1","frameId":"frame-1"}],
+                  "artifactRefs":[{"path":"outputs/result.json","hash":"abc"}]
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "evidence",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--task-id", "task-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/tasks/task-1/evidence", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("cat-runtime-secret", lastClientAppAccessTokenHeader);
+        assertEquals("u-1", lastUpstreamUserIdHeader);
+        assertTrue(output.contains("finalAnswer.available=true"));
+        assertTrue(output.contains("finalAnswer.summary=done [REDACTED]"));
+        assertTrue(output.contains("structuredOutput.value={\"ok\":true}"));
+        assertTrue(output.contains("reportRef type=frame_report ref=frame-report://task-1/frame-1"));
+        assertTrue(output.contains("artifactRef path=outputs/result.json"));
+        assertFalse(output.contains("cat-runtime-secret"));
     }
 
     @Test
@@ -1595,6 +1879,7 @@ class UpstreamCliTest {
                   "agentCode":"agent-1",
                   "upstreamUserId":"u-1",
                   "checks":[
+                    {"code":"ROOT_AGENT_BINDING","status":"FAIL","errorCode":"ROOT_AGENT_CLIENT_APP_MISMATCH","message":"Agent ClientApp binding mismatch: agentId=agent-1 expectedClientAppId=app-1 ownerType=CLIENT_APP ownerId=app-2 agentClientAppId=app-2","action":"Use the profile whose NAVI_CLIENT_APP_ID owns this agent, or resync/register this root agent for the current ClientApp with `upstream agent sync --manifest <agent-manifest.json>`."},
                     {"code":"UPSTREAM_USER_GRANT","status":"FAIL","message":"grant missing"}
                   ]
                 }}
@@ -1610,6 +1895,9 @@ class UpstreamCliTest {
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(2, code);
         assertTrue(output.contains("verify-agent-readiness FAIL"));
+        assertTrue(output.contains("check ROOT_AGENT_BINDING=FAIL errorCode=ROOT_AGENT_CLIENT_APP_MISMATCH"));
+        assertTrue(output.contains("expectedClientAppId=app-1"));
+        assertTrue(output.contains("action=Use the profile whose NAVI_CLIENT_APP_ID owns this agent"));
         assertTrue(output.contains("check UPSTREAM_USER_GRANT=FAIL message=grant missing"));
         assertFalse(output.contains("cat-runtime-secret"));
     }
@@ -2804,6 +3092,7 @@ class UpstreamCliTest {
         assertTrue(output.contains("directory list/init/get/delete/env/files"));
         assertTrue(output.contains("Internal compatibility: worker-pool list/create/register-worker/add-member/status"));
         assertTrue(output.contains("model system-list/system-create/system-update/system-rotate-key"));
+        assertTrue(output.contains("[--max-turns <n>]"));
     }
 
     @Test

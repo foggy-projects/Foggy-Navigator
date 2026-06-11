@@ -14,7 +14,7 @@ export const TEST_CONFIG = {
   autoCleanup: true,
 
   // 默认测试 agentId
-  defaultAgentId: 'tutor-agent'
+  defaultAgentId: 'test-agent'
 } as const;
 
 export function generateTestSessionTitle(): string {

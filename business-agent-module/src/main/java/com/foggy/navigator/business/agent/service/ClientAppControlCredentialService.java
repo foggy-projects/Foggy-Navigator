@@ -27,6 +27,7 @@ public class ClientAppControlCredentialService {
     public static final String SCOPE_SKILL_BUNDLE_SYNC = "SKILL_BUNDLE_SYNC";
     public static final String SCOPE_FUNCTION_MANIFEST_IMPORT = "FUNCTION_MANIFEST_IMPORT";
     public static final String SCOPE_FUNCTION_GRANT_MANAGE = "FUNCTION_GRANT_MANAGE";
+    public static final String SCOPE_BUSINESS_OBJECT_MANAGE = "BUSINESS_OBJECT_MANAGE";
     public static final String SCOPE_E2E_MODEL_ENSURE = "E2E_MODEL_ENSURE";
     public static final String SCOPE_UPSTREAM_USER_GRANT = "UPSTREAM_USER_GRANT";
     public static final String SCOPE_UPSTREAM_ROUTE_MANAGE = "UPSTREAM_ROUTE_MANAGE";
@@ -107,6 +108,7 @@ public class ClientAppControlCredentialService {
                 SCOPE_SKILL_BUNDLE_SYNC,
                 SCOPE_FUNCTION_MANIFEST_IMPORT,
                 SCOPE_FUNCTION_GRANT_MANAGE,
+                SCOPE_BUSINESS_OBJECT_MANAGE,
                 SCOPE_E2E_MODEL_ENSURE,
                 SCOPE_UPSTREAM_USER_GRANT,
                 SCOPE_UPSTREAM_ROUTE_MANAGE,

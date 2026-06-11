@@ -1,6 +1,7 @@
 package com.foggy.navigator.claude.worker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.business.agent.model.dto.AgentReadinessCheckDTO;
 import com.foggy.navigator.business.agent.model.dto.AgentReadinessDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionSummaryDTO;
@@ -676,7 +677,10 @@ class OpenApiAgentReadinessServiceTest {
     void verify_reportsRootAgentBindingFailure() {
         AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
         when(agentRouteService.resolve(eq("root-agent"), any()))
-                .thenThrow(new IllegalArgumentException("Agent is not bound to this ClientApp: root-agent"));
+                .thenThrow(new OpenApiAgentRouteService.RootAgentBindingException(
+                        "ROOT_AGENT_CLIENT_APP_MISMATCH",
+                        "Agent ClientApp binding mismatch: agentId=root-agent expectedClientAppId=capp_1 ownerType=CLIENT_APP ownerId=capp_2 agentClientAppId=capp_2",
+                        "Use the profile whose NAVI_CLIENT_APP_ID owns this agent, or resync/register this root agent for the current ClientApp with `upstream agent sync --manifest <agent-manifest.json>`."));
 
         AgentReadinessDTO result = service.verify(
                 "root-agent",
@@ -686,8 +690,40 @@ class OpenApiAgentReadinessServiceTest {
 
         assertEquals("FAIL", result.getOverallStatus());
         assertEquals("ROOT_AGENT_BINDING", result.getChecks().get(0).getCode());
-        assertTrue(result.getChecks().get(0).getMessage().contains("not bound"));
+        assertEquals("ROOT_AGENT_CLIENT_APP_MISMATCH", result.getChecks().get(0).getErrorCode());
+        assertTrue(result.getChecks().get(0).getMessage().contains("expectedClientAppId=capp_1"));
+        assertTrue(result.getChecks().get(0).getAction().contains("upstream agent sync"));
         verifyNoInteractions(agentResolver, skillRegistryService, userGrantService, resourceResolver);
+    }
+
+    @Test
+    void verify_reportsWorkspaceNotBoundWithAction() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_1");
+        form.setDirectoryId("dir_user");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_user")))
+                .thenThrow(new SecurityException("working directory is not bound to agent: dir_user"));
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        AgentReadinessCheckDTO check = result.getChecks().stream()
+                .filter(item -> "WORKSPACE_RESOURCE".equals(item.getCode()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("FAIL", result.getOverallStatus());
+        assertEquals("FAIL", check.getStatus());
+        assertEquals("WORKSPACE_NOT_BOUND_TO_AGENT", check.getErrorCode());
+        assertTrue(check.getMessage().contains("dir_user"));
+        assertTrue(check.getAction().contains("upstream agent bind-workspace"));
+        assertTrue(check.getAction().contains("--agent-code world-sim.bug-coordinator.decision.v1"));
+        assertTrue(check.getAction().contains("--directory-id dir_user"));
     }
 
     @Test

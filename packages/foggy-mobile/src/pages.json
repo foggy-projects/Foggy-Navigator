@@ -8,20 +8,6 @@
       }
     },
     {
-      "path": "pages/chat/index",
-      "style": {
-        "navigationBarTitleText": "会话",
-        "enablePullDownRefresh": true
-      }
-    },
-    {
-      "path": "pages/chat/detail",
-      "style": {
-        "navigationBarTitleText": "对话",
-        "enablePullDownRefresh": false
-      }
-    },
-    {
       "path": "pages/worker/tasks",
       "style": {
         "navigationBarTitleText": "会话列表",
@@ -66,12 +52,6 @@
         "text": "Workers",
         "iconPath": "static/tab-worker.png",
         "selectedIconPath": "static/tab-worker-active.png"
-      },
-      {
-        "pagePath": "pages/chat/index",
-        "text": "会话",
-        "iconPath": "static/tab-chat.png",
-        "selectedIconPath": "static/tab-chat-active.png"
       },
       {
         "pagePath": "pages/settings/index",

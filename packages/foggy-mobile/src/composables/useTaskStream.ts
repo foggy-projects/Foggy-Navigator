@@ -1,7 +1,7 @@
 import { ref, watch } from 'vue'
 import { createChatState, AipMessageType } from '@foggy/chat-core'
 import type { ChatState, ChatMessage } from '@foggy/chat-core'
-import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
+import { agentMessageAdapter } from '@/adapters/AgentMessageAdapter'
 import { useUnifiedSse } from '@/composables/useUnifiedSse'
 import * as sessionApi from '@/api/session'
 import { getTaskUnified } from '@/api/unifiedTask'
@@ -48,7 +48,7 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
 
   function handleSseEvent(raw: AgentMessage) {
     // Pass through adapter for chat messages
-    const msgs = tutorAgentAdapter.convert(raw, raw.sessionId)
+    const msgs = agentMessageAdapter.convert(raw, raw.sessionId)
     for (const msg of msgs) {
       // Deduplicate across DB-loaded history and live SSE events using the shared messageId.
       const messageId = msg.messageId

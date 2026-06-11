@@ -7,11 +7,12 @@ export const TEST_CONFIG = {
     password: process.env.TEST_PASSWORD || 'root123'
   },
 
-  mockBaseURL: process.env.BIZ_AGENT_E2E_MOCK_BASE_URL || 'http://localhost:18080/v1',
-  mockAdminBaseURL: mockAdminBaseURL(process.env.BIZ_AGENT_E2E_MOCK_BASE_URL || 'http://localhost:18080/v1'),
+  mockBaseURL: process.env.BIZ_AGENT_E2E_MOCK_BASE_URL || 'http://127.0.0.1:3066/v1',
+  mockAdminBaseURL: mockAdminBaseURL(process.env.BIZ_AGENT_E2E_MOCK_BASE_URL || 'http://127.0.0.1:3066/v1'),
   workerBackend: process.env.BIZ_AGENT_E2E_WORKER_BACKEND || 'NAVI_E2E_NO_WORKER',
   langgraphWorkerBaseURL: process.env.BIZ_AGENT_E2E_LANGGRAPH_WORKER_BASE_URL || 'http://localhost:3065',
   enableLanggraphWorkerSmoke: process.env.BIZ_AGENT_E2E_LANGGRAPH_WORKER_SMOKE === 'true',
+  enableOpenApiDiagnosticsSmoke: process.env.BIZ_AGENT_E2E_OPENAPI_DIAGNOSTICS_SMOKE === 'true',
   commandWorkdir: process.env.BIZ_AGENT_E2E_COMMAND_WORKDIR || '/tmp'
 } as const;
 

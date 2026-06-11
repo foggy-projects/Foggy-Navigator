@@ -6,6 +6,68 @@
 # anthropic_stream.fixture_file 可指定 JSONL fixture 文件路径（相对于 MOCK_LLM_FIXTURES_DIR）
 
 responses:
+  # ========== NAVI / TMS 打印模板链路 ==========
+
+  - name: "tms-print-template-upstream-token-missing"
+    match:
+      message_role: "tool"
+      keywords: ["Upstream user token is not configured"]
+    response:
+      content: |
+        tms.print.createTemplateDraft 调用失败：Upstream user token is not configured。
+        需要 TMS 启用 NAVI_FORWARD_UPSTREAM_USER_TOKEN=true，并重新 ensure upstream user grant 后再重跑。
+
+  - name: "tms-print-template-final"
+    match:
+      message_role: "tool"
+      keywords: ["OPEN_ARTIFACT", "print-template-preview"]
+    response:
+      content: |
+        已调用 tms.print.createTemplateDraft 创建打印模板草稿。
+        函数返回 structured_output.type=OPEN_ARTIFACT，可打开 print-template-preview: 预览。
+        预览地址包含 /tms/print-template-preview，context.businessDomain=tms.print。
+
+  - name: "tms-print-template-create-draft"
+    match:
+      keywords: ["tms.print.createTemplateDraft", "电子面单模板技能", "NAV_PRINT_E2E"]
+    response:
+      content: "我会直接调用 tms.print.createTemplateDraft 创建电子面单模板草稿。"
+      tool_calls:
+        - id: "call_tms_print_create_template_draft"
+          type: "function"
+          function:
+            name: "invoke_business_function"
+            arguments:
+              function_id: "tms.print.createTemplateDraft"
+              version: "v1"
+              input:
+                sceneCode: "WAYBILL_LABEL"
+                templateCode: "NAV_PRINT_E2E_MOCK"
+                templateName: "NAV_PRINT_E2E_MOCK 电子面单"
+                category: "LABEL"
+                functionName: "render"
+                scriptBody: |
+                  export function render(ctx) {
+                    const view = ctx.data.view || {};
+                    const order = view.order || {};
+                    const consignee = view.consignee || {};
+                    const goods = view.goods || {};
+                    const h = helper.html;
+                    return { html: '<main><h1>' + h(order.no || 'EO-NAV-PRINT-E2E') + '</h1><p>' + h(consignee.fullAddress || '') + '</p><p>' + h(goods.packageText || '') + '</p></main>' };
+                  }
+                sampleData:
+                  view:
+                    order:
+                      "no": "EO-NAV-PRINT-E2E"
+                    consignee:
+                      name: "测试收货人"
+                      fullAddress: "上海市浦东新区测试路2号"
+                    goods:
+                      packageText: "纸箱 x1"
+                sourceText: "Navigator E2E mock print template smoke"
+                idempotencyContext: "navigator-print-template-skill-mock"
+              idempotency_key: "navigator-print-template-skill-mock"
+
   # ========== 纯文本场景 ==========
 
   - name: "anthropic-simple-text"

@@ -11,8 +11,8 @@ export const useSessionStore = defineStore('navigator-session', () => {
     sessions.value = await sessionApi.listSessions()
   }
 
-  async function createSession(title: string): Promise<Session> {
-    const session = await sessionApi.createSession(title)
+  async function createSession(title: string, agentId: string): Promise<Session> {
+    const session = await sessionApi.createSession(title, agentId)
     sessions.value.unshift(session)
     return session
   }

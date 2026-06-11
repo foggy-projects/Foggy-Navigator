@@ -101,6 +101,14 @@ public class OpenApiAgentReadinessService {
             result.getChecks().add(AgentReadinessCheckDTO.ok(
                     "ROOT_AGENT_BINDING",
                     "root agent binding resolved"));
+        } catch (OpenApiAgentRouteService.RootAgentBindingException e) {
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    "ROOT_AGENT_BINDING",
+                    sanitize(e.getMessage()),
+                    sanitize(e.getErrorCode()),
+                    sanitize(e.getAction())));
+            result.refreshOverallStatus();
+            return result;
         } catch (Exception e) {
             result.getChecks().add(AgentReadinessCheckDTO.fail(
                     "ROOT_AGENT_BINDING",
@@ -255,7 +263,7 @@ public class OpenApiAgentReadinessService {
                     "no working directory requested or bound"));
             return;
         }
-        addCheck(result, "WORKSPACE_RESOURCE", () -> {
+        try {
             A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource = resourceResolver.resolveRequiredWorkspaceForAgent(
                     credential.getTenantId(),
                     credential.getClientAppId(),
@@ -276,7 +284,86 @@ public class OpenApiAgentReadinessService {
                     : null);
             result.setWorkspaceReadOnly(workspaceResource.readOnly());
             result.setWorkspaceSource(workspaceResource.source());
-        });
+            result.getChecks().add(AgentReadinessCheckDTO.ok("WORKSPACE_RESOURCE"));
+        } catch (Exception e) {
+            WorkspaceResourceDiagnostic diagnostic = workspaceResourceDiagnostic(
+                    e,
+                    agentResource,
+                    effectiveDirectoryId);
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    "WORKSPACE_RESOURCE",
+                    sanitize(e.getMessage()),
+                    diagnostic.errorCode(),
+                    diagnostic.action()));
+        }
+    }
+
+    private WorkspaceResourceDiagnostic workspaceResourceDiagnostic(
+            Exception exception,
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            String directoryId) {
+        String message = exception != null ? exception.getMessage() : null;
+        String normalizedMessage = message != null ? message : "";
+        String agentId = agentResource != null && StringUtils.hasText(agentResource.agentId())
+                ? agentResource.agentId()
+                : "<agentCode>";
+        String safeDirectoryId = StringUtils.hasText(directoryId) ? directoryId : "<directoryId>";
+        String bindCommand = "upstream agent bind-workspace --agent-code " + agentId
+                + " --directory-id " + safeDirectoryId;
+        String defaultCommand = "upstream agent set-default-workspace --agent-code " + agentId
+                + " --directory-id " + safeDirectoryId;
+
+        if (normalizedMessage.contains("working directory is not bound to agent")) {
+            return new WorkspaceResourceDiagnostic(
+                    "WORKSPACE_NOT_BOUND_TO_AGENT",
+                    "Bind the requested directory to this agent with `" + bindCommand
+                            + "`, or make it the agent default with `" + defaultCommand
+                            + "`, then rerun verify-agent-readiness.");
+        }
+        if (normalizedMessage.contains("working directory not found")) {
+            return new WorkspaceResourceDiagnostic(
+                    "WORKSPACE_NOT_FOUND",
+                    "Create or select a visible working directory with `upstream directory client-init` or "
+                            + "`upstream directory client-list`, then bind it with `" + bindCommand + "`.");
+        }
+        if (normalizedMessage.contains("working directory is disabled")) {
+            return new WorkspaceResourceDiagnostic(
+                    "WORKSPACE_DISABLED",
+                    "Select an enabled working directory with `upstream directory client-list`, then bind it with `"
+                            + bindCommand + "`.");
+        }
+        if (normalizedMessage.contains("working directory tenant mismatch")) {
+            return new WorkspaceResourceDiagnostic(
+                    "WORKSPACE_TENANT_MISMATCH",
+                    "Use a profile and working directory from the same Navigator tenant, then rerun verify-agent-readiness.");
+        }
+        if (normalizedMessage.contains("workspaceScope is not configured")) {
+            return new WorkspaceResourceDiagnostic(
+                    "WORKSPACE_SCOPE_NOT_CONFIGURED",
+                    "Recreate or update the working directory with an explicit workspaceScope, then bind it to the agent.");
+        }
+        if (normalizedMessage.contains("resolverType is not configured")) {
+            return new WorkspaceResourceDiagnostic(
+                    "WORKSPACE_RESOLVER_NOT_CONFIGURED",
+                    "Recreate or update the working directory with a resolverType, then bind it to the agent.");
+        }
+        if (normalizedMessage.contains("working directory owner is not configured")
+                || normalizedMessage.contains("working directory owner mismatch")) {
+            return new WorkspaceResourceDiagnostic(
+                    "WORKSPACE_OWNER_MISMATCH",
+                    "Use a working directory owned by the current ClientApp or upstream user, then bind it to the agent.");
+        }
+        if (normalizedMessage.contains("working directory is not visible")) {
+            return new WorkspaceResourceDiagnostic(
+                    "WORKSPACE_NOT_VISIBLE_TO_CLIENT_APP",
+                    "Use `upstream directory client-list` to select a directory visible to this ClientApp and upstream user, "
+                            + "then bind it with `" + bindCommand + "`.");
+        }
+        return new WorkspaceResourceDiagnostic(
+                "WORKSPACE_RESOURCE_INVALID",
+                "Inspect visible directories with `upstream directory client-list` and current bindings with "
+                        + "`upstream agent workspace-bindings --agent-code " + agentId
+                        + "`, then bind or set the correct default workspace.");
     }
 
     private void applyWorkerHostExecutionPreference(
@@ -1023,6 +1110,9 @@ public class OpenApiAgentReadinessService {
         } catch (Exception e) {
             result.getChecks().add(AgentReadinessCheckDTO.fail(code, sanitize(e.getMessage())));
         }
+    }
+
+    private record WorkspaceResourceDiagnostic(String errorCode, String action) {
     }
 
     private boolean isCheckOk(AgentReadinessDTO result, String code) {

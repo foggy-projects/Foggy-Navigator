@@ -190,20 +190,10 @@ public class SessionController {
     @GetMapping("/guide-cards")
     public RX<List<Map<String, Object>>> getGuideCards(
             @RequestParam(required = false) String agentId) {
-        // 初期硬编码规则返回
-        List<Map<String, Object>> cards;
-        if ("tutor-agent".equals(agentId)) {
-            cards = List.of(
-                    Map.of("title", "数据查询", "description", "帮你查询和分析数据", "icon", "search"),
-                    Map.of("title", "报表生成", "description", "快速生成各类报表", "icon", "chart"),
-                    Map.of("title", "数据建模", "description", "辅助数据模型设计", "icon", "model")
-            );
-        } else {
-            cards = List.of(
-                    Map.of("title", "开始对话", "description", "与AI助手开始新对话", "icon", "chat"),
-                    Map.of("title", "查看帮助", "description", "了解系统功能和使用方法", "icon", "help")
-            );
-        }
+        List<Map<String, Object>> cards = List.of(
+                Map.of("title", "开始对话", "description", "与AI助手开始新对话", "icon", "chat"),
+                Map.of("title", "查看帮助", "description", "了解系统功能和使用方法", "icon", "help")
+        );
         return RX.ok(cards);
     }
 

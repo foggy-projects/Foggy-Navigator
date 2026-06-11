@@ -8,7 +8,7 @@ Foggy Navigator 是一个个人 AI Agent 编排系统，将多种 AI 能力统�
 
 ### 核心能力
 
-- **导师 Agent**：统一对话入口，引导用户、分派任务到专业 Agent
+- **Workers 工作台**：统一发起和继续 Claude、Codex、Gemini、LangGraph Biz 等任务会话
 - **远程编程**：通过 Claude、Codex、Gemini Worker 在多台主机上执行编程任务
 - **语义层服务**（计划中）：集成 foggy-data-mcp-bridge 进行 TM/QM 语义层建模
 - **AI 分身**（计划中）：提供 AI 替身回答同事/朋友的常见问题
@@ -22,7 +22,6 @@ Navigator Frontend (Vue 3)
    Spring Boot Launcher (port 8112)
    ├── agent-framework (LLM调用、Skill、工具执行)
    ├── session-module (会话、SSE)
-   ├── tutor-agent (导师Agent、6个Skill)
    ├── addons/claude-worker-agent (远程 Claude Code)
    ├── addons/codex-worker-agent (远程 Codex)
    └── addons/gemini-worker-agent (远程 Gemini)
@@ -43,7 +42,6 @@ Foggy-Navigator/
 ├── metadata-config-module/     # Skill 配置管理
 ├── metadata-query-module/      # 元数据查询服务
 ├── session-module/             # 会话管理 + SSE
-├── tutor-agent/                # 导师 Agent
 ├── addons/claude-worker-agent/ # Claude Code 工人 Agent
 ├── addons/codex-worker-agent/  # Codex Worker Agent
 ├── addons/gemini-worker-agent/ # Gemini Worker Agent

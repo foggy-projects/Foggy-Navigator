@@ -63,6 +63,8 @@ import org.springframework.web.bind.annotation.*;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -1230,14 +1232,19 @@ public class OpenApiController {
         if (service == null) {
             return null;
         }
-        String token = service.issueOpenApiTaskScopedToken(
-                tenantId,
-                actorUserId,
-                clientAppId,
-                upstreamUserId,
-                skillId,
-                sessionId,
-                requestedModelConfigId instanceof String value ? value : null);
+        String token;
+        try {
+            token = service.issueOpenApiTaskScopedToken(
+                    tenantId,
+                    actorUserId,
+                    clientAppId,
+                    upstreamUserId,
+                    skillId,
+                    sessionId,
+                    requestedModelConfigId instanceof String value ? value : null);
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            throw openApiRequestRejected(e);
+        }
 
         Map<String, Object> runtimeContext = new LinkedHashMap<>();
         Object existingRuntimeContext = metadata.get("runtimeContext");
@@ -1251,6 +1258,14 @@ public class OpenApiController {
         runtimeContext.put("task_scoped_token", token);
         metadata.put("runtimeContext", runtimeContext);
         return token;
+    }
+
+    private RuntimeException openApiRequestRejected(Exception e) {
+        String message = sanitizeDiagnosticText(e != null ? e.getMessage() : null);
+        if (!StringUtils.hasText(message)) {
+            message = "open api request rejected";
+        }
+        return RX.throwB(message);
     }
 
     private void bindBusinessRuntimeTokenToWorkerTaskIfPossible(
@@ -1350,6 +1365,78 @@ public class OpenApiController {
         return StringUtils.hasText(text) ? text : null;
     }
 
+    @SafeVarargs
+    private final <T> T firstNonNull(T... values) {
+        if (values == null) {
+            return null;
+        }
+        for (T value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private Object firstPresent(Map<String, Object> map, String... keys) {
+        if (map == null || map.isEmpty() || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            if (map.containsKey(key)) {
+                return map.get(key);
+            }
+        }
+        return null;
+    }
+
+    private Integer integerValue(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text && StringUtils.hasText(text)) {
+            try {
+                return Integer.parseInt(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private LocalDateTime latestTime(LocalDateTime... values) {
+        LocalDateTime latest = null;
+        if (values == null) {
+            return null;
+        }
+        for (LocalDateTime value : values) {
+            if (value != null && (latest == null || value.isAfter(latest))) {
+                latest = value;
+            }
+        }
+        return latest;
+    }
+
+    private LocalDateTime localDateTimeValue(Map<String, Object> map, String... keys) {
+        Object value = firstPresent(map, keys);
+        if (value instanceof LocalDateTime localDateTime) {
+            return localDateTime;
+        }
+        if (!(value instanceof String text) || !StringUtils.hasText(text)) {
+            return null;
+        }
+        String normalized = text.trim();
+        try {
+            return LocalDateTime.parse(normalized);
+        } catch (Exception ignored) {
+            try {
+                return LocalDateTime.ofInstant(Instant.parse(normalized), ZoneOffset.UTC);
+            } catch (Exception ignoredAgain) {
+                return null;
+            }
+        }
+    }
+
     private String resolveBaseUrl(HttpServletRequest request) {
         if (request == null) {
             return null;
@@ -1398,6 +1485,49 @@ public class OpenApiController {
             return RX.ok(toOpenApiTaskDTO(taskEntity, route.agentId(), resolveContextIdFromSession(taskEntity.getSessionId())));
         }
         return RX.ok(toOpenApiTaskDTO(task, route.agentId(), taskEntity));
+    }
+
+    /**
+     * 获取任务诊断事实快照。
+     * <p>
+     * 该接口只暴露可观测事实，不进行恢复状态裁决。
+     */
+    @GetMapping("/agents/{agentId}/tasks/{taskId}/diagnostics")
+    public RX<OpenTaskDiagnosticsDTO> getTaskDiagnostics(
+            @PathVariable String agentId,
+            @PathVariable String taskId,
+            HttpServletRequest request) {
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppRuntimeToken(request);
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                requireOpenApiAgentRoute(agentId, clientAppCredential);
+        String tenantId = clientAppCredential.getTenantId();
+        resolveOpenApiAgent(route.agentId(), tenantId);
+
+        SessionTaskEntity taskEntity = requireOpenApiTask(taskId, tenantId, route.agentId());
+        String contextId = resolveContextIdFromSession(taskEntity.getSessionId());
+        return RX.ok(toOpenTaskDiagnosticsDTO(taskEntity, route.agentId(), contextId));
+    }
+
+    /**
+     * 获取任务完成证据引用。
+     * <p>
+     * 只返回摘要和引用，不返回原始执行报告或完整 artifact 内容。
+     */
+    @GetMapping("/agents/{agentId}/tasks/{taskId}/evidence")
+    public RX<OpenTaskEvidenceDTO> getTaskEvidence(
+            @PathVariable String agentId,
+            @PathVariable String taskId,
+            HttpServletRequest request) {
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppRuntimeToken(request);
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                requireOpenApiAgentRoute(agentId, clientAppCredential);
+        String tenantId = clientAppCredential.getTenantId();
+        resolveOpenApiAgent(route.agentId(), tenantId);
+
+        SessionTaskEntity taskEntity = requireOpenApiTask(taskId, tenantId, route.agentId());
+        String contextId = resolveContextIdFromSession(taskEntity.getSessionId());
+        List<SessionMessageEntity> messages = sessionQueryService.getLatestTaskMessages(taskId, 200);
+        return RX.ok(toOpenTaskEvidenceDTO(taskEntity, route.agentId(), contextId, messages));
     }
 
     /**
@@ -1920,6 +2050,242 @@ public class OpenApiController {
                 .build();
     }
 
+    private OpenTaskDiagnosticsDTO toOpenTaskDiagnosticsDTO(
+            SessionTaskEntity taskEntity,
+            String agentId,
+            String contextId) {
+        Map<String, Object> taskState = parseJsonMap(taskEntity.getTaskStateJson());
+        String status = mapTaskStatus(taskEntity.getStatus());
+        String terminalStatus = terminalStatusFromTaskStatus(status);
+        String failureSummary = "FAILED".equals(status) ? failureSummary(taskEntity, null) : null;
+        String workerBackend = firstNonBlank(stringValue(taskState.get("workerBackend")),
+                workerBackendFromProviderType(taskEntity.getProviderType()));
+        LocalDateTime lastMessageAt = sessionQueryService.findLatestTaskMessage(taskEntity.getTaskId())
+                .map(SessionMessageEntity::getCreatedAt)
+                .orElse(null);
+        LocalDateTime lastObservedAt = latestTime(
+                taskEntity.getLastAliveAt(),
+                lastMessageAt,
+                taskEntity.getUpdatedAt(),
+                taskEntity.getCreatedAt());
+
+        return OpenTaskDiagnosticsDTO.builder()
+                .taskId(taskEntity.getTaskId())
+                .agentId(agentId)
+                .contextId(contextId)
+                .status(status)
+                .terminal(terminalStatus != null)
+                .terminalStatus(terminalStatus)
+                .submittedAt(firstNonNull(taskEntity.getCreatedAt(),
+                        localDateTimeValue(taskState, "submittedAt", "submitted_at")))
+                .workerStartedAt(localDateTimeValue(taskState,
+                        "workerStartedAt", "worker_started_at", "workerAcceptedAt",
+                        "worker_accepted_at", "startedAt", "started_at"))
+                .lastObservedAt(lastObservedAt)
+                .messagesCount(sessionQueryService.countTaskMessages(taskEntity.getTaskId()))
+                .workerTaskId(taskEntity.getProviderTaskId())
+                .providerTaskId(taskEntity.getProviderTaskId())
+                .lastAckedSeq(taskEntity.getLastAckedSeq() != null ? taskEntity.getLastAckedSeq().longValue() : null)
+                .modelConfigId(firstNonBlank(taskEntity.getModelConfigId(), stringValue(taskState.get("modelConfigId"))))
+                .modelConfigSource(stringValue(taskState.get("modelConfigSource")))
+                .workerBackend(workerBackend)
+                .providerType(taskEntity.getProviderType())
+                .taskSource(firstNonBlank(taskEntity.getSource(), stringValue(taskState.get("taskSource"))))
+                .workerSource(stringValue(taskState.get("workerSource")))
+                .backendSource(stringValue(taskState.get("backendSource")))
+                .safeWorkerRef(sanitizeDiagnosticText(taskEntity.getWorkerId()))
+                .failureStage(inferFailureStage(taskEntity, failureSummary))
+                .failureSummary(failureSummary)
+                .cancelCapability(buildCancelCapability(status, workerBackend))
+                .correlation(buildTaskCorrelation(taskState))
+                .createdAt(taskEntity.getCreatedAt())
+                .updatedAt(taskEntity.getUpdatedAt())
+                .build();
+    }
+
+    private OpenTaskEvidenceDTO toOpenTaskEvidenceDTO(
+            SessionTaskEntity taskEntity,
+            String agentId,
+            String contextId,
+            List<SessionMessageEntity> messages) {
+        Map<String, Object> taskState = parseJsonMap(taskEntity.getTaskStateJson());
+        String status = mapTaskStatus(taskEntity.getStatus());
+        String terminalStatus = terminalStatusFromTaskStatus(status);
+        List<OpenTaskReportRefDTO> reportRefs = new ArrayList<>();
+        List<OpenTaskArtifactRefDTO> artifactRefs = new ArrayList<>();
+
+        collectReportRefs(reportRefs, firstPresent(taskState,
+                "reportRef", "report_ref", "frameReportRef", "frame_report_ref",
+                "executionReportRef", "execution_report_ref", "reportRefs", "report_refs"));
+        collectArtifactRefs(artifactRefs, firstPresent(taskState,
+                "artifactRefs", "artifact_refs", "artifacts"));
+
+        if (messages != null) {
+            for (SessionMessageEntity message : messages) {
+                Map<String, Object> metadata = parseMessageMetadata(message);
+                collectReportRefs(reportRefs, firstPresent(metadata,
+                        "reportRef", "report_ref", "frameReportRef", "frame_report_ref",
+                        "executionReportRef", "execution_report_ref", "reportRefs", "report_refs"));
+                collectArtifactRefs(artifactRefs, firstPresent(metadata,
+                        "artifactRefs", "artifact_refs", "artifacts"));
+            }
+        }
+
+        return OpenTaskEvidenceDTO.builder()
+                .taskId(taskEntity.getTaskId())
+                .agentId(agentId)
+                .contextId(contextId)
+                .status(status)
+                .terminal(terminalStatus != null)
+                .terminalStatus(terminalStatus)
+                .finalAnswer(buildFinalAnswer(taskEntity, messages))
+                .structuredOutput(buildStructuredOutput(taskState, messages))
+                .reportRefs(reportRefs)
+                .artifactRefs(artifactRefs)
+                .build();
+    }
+
+    private OpenTaskCancelCapabilityDTO buildCancelCapability(String status, String workerBackend) {
+        List<String> limitations = new ArrayList<>();
+        String terminalStatus = terminalStatusFromTaskStatus(status);
+        if (terminalStatus != null) {
+            limitations.add("terminal_task");
+        }
+        limitations.add("runtime_client_app_cancel_not_exposed");
+        if (!StringUtils.hasText(workerBackend)) {
+            limitations.add("backend_cancel_capability_not_declared");
+        }
+        return OpenTaskCancelCapabilityDTO.builder()
+                .cancelSupported(false)
+                .cancelMode(terminalStatus != null ? "none" : "admin_only")
+                .cleanupSupported(false)
+                .backendLimitations(limitations)
+                .build();
+    }
+
+    private OpenTaskCorrelationDTO buildTaskCorrelation(Map<String, Object> taskState) {
+        if (taskState == null || taskState.isEmpty()) {
+            return null;
+        }
+        String originalTaskId = stringValue(firstPresent(taskState,
+                "originalTaskId", "original_task_id", "sourceTaskId", "source_task_id"));
+        String recoveryCorrelationKey = stringValue(firstPresent(taskState,
+                "recoveryCorrelationKey", "recovery_correlation_key", "correlationKey", "correlation_key"));
+        Integer attemptNumber = integerValue(firstPresent(taskState,
+                "attemptNumber", "attempt_number", "attempt"));
+        String idempotencyKey = stringValue(firstPresent(taskState,
+                "idempotencyKey", "idempotency_key"));
+        if (!StringUtils.hasText(originalTaskId)
+                && !StringUtils.hasText(recoveryCorrelationKey)
+                && !StringUtils.hasText(idempotencyKey)
+                && attemptNumber == null) {
+            return null;
+        }
+        return OpenTaskCorrelationDTO.builder()
+                .originalTaskId(sanitizeDiagnosticText(originalTaskId))
+                .recoveryCorrelationKey(sanitizeDiagnosticText(recoveryCorrelationKey))
+                .attemptNumber(attemptNumber)
+                .idempotencyKey(sanitizeDiagnosticText(idempotencyKey))
+                .build();
+    }
+
+    private OpenTaskFinalAnswerDTO buildFinalAnswer(
+            SessionTaskEntity taskEntity,
+            List<SessionMessageEntity> messages) {
+        if (StringUtils.hasText(taskEntity.getResultText())) {
+            return OpenTaskFinalAnswerDTO.builder()
+                    .available(true)
+                    .summary(sanitizeDiagnosticText(taskEntity.getResultText()))
+                    .source("task_result")
+                    .createdAt(firstNonNull(taskEntity.getUpdatedAt(), taskEntity.getCreatedAt()))
+                    .build();
+        }
+        if (messages != null) {
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                SessionMessageEntity message = messages.get(i);
+                if (!BusinessAgentSessionMessageVisibility.isVisibleByDefault(message)
+                        || !StringUtils.hasText(message.getContent())) {
+                    continue;
+                }
+                Map<String, Object> metadata = parseMessageMetadata(message);
+                String type = inferMessageType(message.getRole(), metadata);
+                if ("RESULT".equals(type) || "TEXT".equals(type)) {
+                    return OpenTaskFinalAnswerDTO.builder()
+                            .available(true)
+                            .summary(sanitizeDiagnosticText(message.getContent()))
+                            .messageId(message.getId())
+                            .source("message")
+                            .createdAt(message.getCreatedAt())
+                            .build();
+                }
+            }
+        }
+        return OpenTaskFinalAnswerDTO.builder()
+                .available(false)
+                .build();
+    }
+
+    private OpenTaskStructuredOutputDTO buildStructuredOutput(
+            Map<String, Object> taskState,
+            List<SessionMessageEntity> messages) {
+        Object value = firstPresent(taskState,
+                "structuredOutput", "structured_output", "outputJson", "output_json");
+        if (value != null) {
+            return OpenTaskStructuredOutputDTO.builder()
+                    .available(true)
+                    .value(sanitizeEvidenceValue(value))
+                    .source("task_state")
+                    .build();
+        }
+        if (messages != null) {
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                Map<String, Object> metadata = parseMessageMetadata(messages.get(i));
+                value = firstPresent(metadata,
+                        "structuredOutput", "structured_output", "outputJson", "output_json");
+                if (value != null) {
+                    return OpenTaskStructuredOutputDTO.builder()
+                            .available(true)
+                            .value(sanitizeEvidenceValue(value))
+                            .source("message_metadata")
+                            .build();
+                }
+            }
+        }
+        return OpenTaskStructuredOutputDTO.builder()
+                .available(false)
+                .build();
+    }
+
+    private SessionTaskEntity requireOpenApiTask(String taskId, String tenantId, String agentId) {
+        SessionTaskEntity taskEntity = sessionQueryService.findTask(taskId)
+                .orElseThrow(() -> RX.throwB("Task not found: " + taskId));
+        if (!tenantId.equals(taskEntity.getTenantId()) || !agentId.equals(taskEntity.getAgentId())) {
+            throw RX.throwB("Task not found: " + taskId);
+        }
+        return taskEntity;
+    }
+
+    private Object sanitizeEvidenceValue(Object value) {
+        if (value instanceof String text) {
+            return sanitizeDiagnosticText(text);
+        }
+        if (value instanceof Map<?, ?> rawMap) {
+            Map<String, Object> sanitized = new LinkedHashMap<>();
+            rawMap.forEach((key, childValue) -> {
+                if (key instanceof String keyText) {
+                    sanitized.put(keyText, sanitizeEvidenceValue(childValue));
+                }
+            });
+            return sanitized;
+        }
+        if (value instanceof List<?> rawList) {
+            return rawList.stream()
+                    .map(this::sanitizeEvidenceValue)
+                    .toList();
+        }
+        return value;
+    }
+
     private String inferFailureStage(String errorMessage) {
         if (!StringUtils.hasText(errorMessage)) {
             return null;
@@ -2032,6 +2398,127 @@ public class OpenApiController {
         }
     }
 
+    private Map<String, Object> parseMessageMetadata(SessionMessageEntity message) {
+        if (message == null || !StringUtils.hasText(message.getMetadata())) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(message.getMetadata(), new TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            log.debug("Failed to parse message metadata: {}", e.getMessage());
+            return Map.of();
+        }
+    }
+
+    private void collectReportRefs(List<OpenTaskReportRefDTO> refs, Object raw) {
+        if (raw == null) {
+            return;
+        }
+        if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                collectReportRefs(refs, item);
+            }
+            return;
+        }
+        OpenTaskReportRefDTO dto = null;
+        if (raw instanceof Map<?, ?> rawMap) {
+            Map<String, Object> map = toStringObjectMap(rawMap);
+            String ref = stringValue(firstPresent(map,
+                    "ref", "reportRef", "report_ref", "executionReportRef", "execution_report_ref"));
+            dto = OpenTaskReportRefDTO.builder()
+                    .type(firstNonBlank(stringValue(map.get("type")), inferReportRefType(ref)))
+                    .ref(sanitizeDiagnosticText(ref))
+                    .frameId(sanitizeDiagnosticText(firstNonBlank(stringValue(map.get("frameId")), inferFrameId(ref))))
+                    .summary(sanitizeDiagnosticText(stringValue(map.get("summary"))))
+                    .build();
+        } else if (raw instanceof String text && StringUtils.hasText(text)) {
+            dto = OpenTaskReportRefDTO.builder()
+                    .type(inferReportRefType(text))
+                    .ref(sanitizeDiagnosticText(text))
+                    .frameId(sanitizeDiagnosticText(inferFrameId(text)))
+                    .build();
+        }
+        if (dto != null && StringUtils.hasText(dto.getRef())) {
+            String ref = dto.getRef();
+            if (refs.stream().noneMatch(existing -> ref.equals(existing.getRef()))) {
+                refs.add(dto);
+            }
+        }
+    }
+
+    private void collectArtifactRefs(List<OpenTaskArtifactRefDTO> refs, Object raw) {
+        if (raw == null) {
+            return;
+        }
+        if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                collectArtifactRefs(refs, item);
+            }
+            return;
+        }
+        OpenTaskArtifactRefDTO dto = null;
+        if (raw instanceof Map<?, ?> rawMap) {
+            Map<String, Object> map = toStringObjectMap(rawMap);
+            dto = OpenTaskArtifactRefDTO.builder()
+                    .path(safeArtifactRef(firstNonBlank(stringValue(map.get("path")), stringValue(map.get("file")))))
+                    .ref(safeArtifactRef(firstNonBlank(stringValue(map.get("ref")), stringValue(map.get("id")))))
+                    .summary(sanitizeDiagnosticText(stringValue(map.get("summary"))))
+                    .hash(sanitizeDiagnosticText(stringValue(map.get("hash"))))
+                    .mtime(sanitizeDiagnosticText(firstNonBlank(stringValue(map.get("mtime")), stringValue(map.get("modifiedAt")))))
+                    .build();
+        } else if (raw instanceof String text && StringUtils.hasText(text)) {
+            dto = OpenTaskArtifactRefDTO.builder()
+                    .path(safeArtifactRef(text))
+                    .build();
+        }
+        if (dto != null && (StringUtils.hasText(dto.getPath()) || StringUtils.hasText(dto.getRef()))) {
+            String key = firstNonBlank(dto.getRef(), dto.getPath());
+            if (refs.stream().noneMatch(existing -> key.equals(firstNonBlank(existing.getRef(), existing.getPath())))) {
+                refs.add(dto);
+            }
+        }
+    }
+
+    private Map<String, Object> toStringObjectMap(Map<?, ?> rawMap) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        rawMap.forEach((key, value) -> {
+            if (key instanceof String text) {
+                map.put(text, value);
+            }
+        });
+        return map;
+    }
+
+    private String inferReportRefType(String ref) {
+        if (!StringUtils.hasText(ref)) {
+            return null;
+        }
+        if (ref.startsWith("frame-report://")) {
+            return "frame_report";
+        }
+        return "report";
+    }
+
+    private String inferFrameId(String ref) {
+        if (!StringUtils.hasText(ref) || !ref.startsWith("frame-report://")) {
+            return null;
+        }
+        int slash = ref.lastIndexOf('/');
+        return slash >= 0 && slash + 1 < ref.length() ? ref.substring(slash + 1) : null;
+    }
+
+    private String safeArtifactRef(String value) {
+        String sanitized = sanitizeDiagnosticText(value);
+        if (!StringUtils.hasText(sanitized)) {
+            return null;
+        }
+        int queryIndex = sanitized.indexOf('?');
+        if (queryIndex > 0) {
+            sanitized = sanitized.substring(0, queryIndex);
+        }
+        return truncate(sanitized, 300);
+    }
+
     private String failureSummary(SessionTaskEntity taskEntity, List<OpenSessionMessageDTO> messages) {
         if (messages != null) {
             for (OpenSessionMessageDTO message : messages) {
@@ -2078,6 +2565,12 @@ public class OpenApiController {
         String terminalStatus = inferTerminalStatus(metadata);
         String status = taskStatus == null || taskStatus.isBlank() ? null : mapTaskStatus(taskStatus);
         List<Map<String, Object>> attachments = extractOpenMessageAttachments(metadata);
+        String eventKind = inferEventKind(entity.getRole(), type, terminalStatus, metadata);
+        String progressType = inferProgressType(metadata, eventKind);
+        List<OpenTaskReportRefDTO> reportRefs = extractOpenMessageReportRefs(metadata);
+        List<OpenTaskArtifactRefDTO> artifactRefs = extractOpenMessageArtifactRefs(metadata);
+        Object structuredOutput = sanitizeEvidenceValue(firstPresent(metadata,
+                "structuredOutput", "structured_output", "outputJson", "output_json"));
 
         // 过滤内部字段，避免泄露（不直接 mutate Jackson 反序列化的 Map）
         if (metadata != null) {
@@ -2091,12 +2584,17 @@ public class OpenApiController {
                 .taskId(entity.getTaskId())
                 .role(entity.getRole() != null ? entity.getRole().toLowerCase() : null)
                 .type(type)
+                .eventKind(eventKind)
+                .progressType(progressType)
                 .content(sanitizeDiagnosticText(entity.getContent()))
                 .status(status)
                 .terminal(terminalStatus != null)
                 .terminalStatus(terminalStatus)
                 .metadata(metadata)
+                .structuredOutput(structuredOutput)
                 .attachments(attachments)
+                .reportRefs(reportRefs)
+                .artifactRefs(artifactRefs)
                 .createdAt(entity.getCreatedAt())
                 .build();
     }
@@ -2141,6 +2639,7 @@ public class OpenApiController {
                 .taskId(taskEntity.getTaskId())
                 .role("assistant")
                 .type("ERROR")
+                .eventKind("error")
                 .content(firstNonBlank(failureSummary, "Task failed without persisted runtime messages."))
                 .status(status)
                 .terminal(true)
@@ -2176,6 +2675,27 @@ public class OpenApiController {
         return attachments.isEmpty() ? null : attachments;
     }
 
+    private List<OpenTaskReportRefDTO> extractOpenMessageReportRefs(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return null;
+        }
+        List<OpenTaskReportRefDTO> refs = new ArrayList<>();
+        collectReportRefs(refs, firstPresent(metadata,
+                "reportRef", "report_ref", "frameReportRef", "frame_report_ref",
+                "executionReportRef", "execution_report_ref", "reportRefs", "report_refs"));
+        return refs.isEmpty() ? null : refs;
+    }
+
+    private List<OpenTaskArtifactRefDTO> extractOpenMessageArtifactRefs(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return null;
+        }
+        List<OpenTaskArtifactRefDTO> refs = new ArrayList<>();
+        collectArtifactRefs(refs, firstPresent(metadata,
+                "artifactRefs", "artifact_refs", "artifacts"));
+        return refs.isEmpty() ? null : refs;
+    }
+
     /**
      * 根据 role 和 metadata 推断对外消息类型
      */
@@ -2199,6 +2719,126 @@ public class OpenApiController {
             }
         }
         return "TEXT";
+    }
+
+    private String inferEventKind(
+            String role,
+            String messageType,
+            String terminalStatus,
+            Map<String, Object> metadata) {
+        String explicitKind = normalizedEventToken(firstPresent(metadata,
+                "eventKind", "event_kind", "kind"));
+        if (StringUtils.hasText(explicitKind)) {
+            return explicitKind;
+        }
+        if ("FAILED".equals(terminalStatus)) {
+            return "error";
+        }
+        if ("COMPLETED".equals(terminalStatus)) {
+            return "final_marker";
+        }
+        String metadataType = stringValue(firstPresent(metadata, "type", "messageType", "message_type"));
+        if (StringUtils.hasText(metadataType)) {
+            String normalizedType = normalizedEventToken(metadataType);
+            return switch (normalizedType) {
+                case "text_delta", "delta" -> "text_delta";
+                case "text_complete", "text", "message", "assistant_message" -> "text_complete";
+                case "tool_call_start", "tool_call", "tool_use" -> "tool_call_summary";
+                case "tool_call_result", "tool_result" -> "tool_result_summary";
+                case "tool_call_error", "error" -> "error";
+                case "task_completed", "task_complete", "final", "final_answer" -> "final_marker";
+                case "structured_output", "output_json" -> "structured_output";
+                case "heartbeat" -> "heartbeat";
+                case "retry", "retrying", "backoff" -> "retrying";
+                case "progress" -> "progress";
+                case "state_sync" -> eventKindFromStateSubtype(metadata);
+                default -> switch (messageType) {
+                    case "TOOL_CALL" -> "tool_call_summary";
+                    case "TOOL_RESULT" -> "tool_result_summary";
+                    case "RESULT" -> "final_marker";
+                    case "ERROR" -> "error";
+                    case "STATE" -> "progress";
+                    case "USER" -> "user_message";
+                    default -> "text_complete";
+                };
+            };
+        }
+        if ("USER".equalsIgnoreCase(role) || "USER".equals(messageType)) {
+            return "user_message";
+        }
+        if ("TOOL".equalsIgnoreCase(role) || "TOOL_RESULT".equals(messageType)) {
+            return "tool_result_summary";
+        }
+        if ("SYSTEM".equalsIgnoreCase(role) || "STATE".equals(messageType)) {
+            return "progress";
+        }
+        if ("ERROR".equals(messageType)) {
+            return "error";
+        }
+        if ("RESULT".equals(messageType)) {
+            return "final_marker";
+        }
+        return "text_complete";
+    }
+
+    private String eventKindFromStateSubtype(Map<String, Object> metadata) {
+        String subtype = normalizedEventToken(firstPresent(metadata,
+                "subtype", "state", "stateType", "state_type", "progressType", "progress_type"));
+        if (!StringUtils.hasText(subtype)) {
+            return "progress";
+        }
+        if (subtype.contains("heartbeat") || subtype.contains("keepalive")) {
+            return "heartbeat";
+        }
+        if (subtype.contains("retry") || subtype.contains("backoff")) {
+            return "retrying";
+        }
+        if (subtype.contains("structured_output")) {
+            return "structured_output";
+        }
+        if (subtype.contains("error") || subtype.contains("failed")) {
+            return "error";
+        }
+        return "progress";
+    }
+
+    private String inferProgressType(Map<String, Object> metadata, String eventKind) {
+        String explicitProgressType = normalizedEventToken(firstPresent(metadata,
+                "progressType", "progress_type"));
+        if (StringUtils.hasText(explicitProgressType)) {
+            return explicitProgressType;
+        }
+        if (!StringUtils.hasText(eventKind)) {
+            return null;
+        }
+        if ("heartbeat".equals(eventKind)) {
+            return "heartbeat";
+        }
+        if ("retrying".equals(eventKind)) {
+            return "retry";
+        }
+        if (!"progress".equals(eventKind)) {
+            return null;
+        }
+        String subtype = normalizedEventToken(firstPresent(metadata,
+                "subtype", "state", "stateType", "state_type", "stage", "phase"));
+        return StringUtils.hasText(subtype) ? subtype : "progress";
+    }
+
+    private String normalizedEventToken(Object value) {
+        String text = sanitizeDiagnosticText(stringValue(value));
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        String normalized = text.trim()
+                .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
+                .replace('-', '_')
+                .replace(' ', '_')
+                .toLowerCase();
+        normalized = normalized.replaceAll("[^a-z0-9_]+", "_")
+                .replaceAll("_+", "_")
+                .replaceAll("^_|_$", "");
+        return StringUtils.hasText(normalized) ? truncate(normalized, 80) : null;
     }
 
     /**
