@@ -4,13 +4,12 @@
 
 **相关文档**:
 - [Agent Framework 使用指南](./agent-framework-guide.md) - 开发者集成文档
-- [导师Agent设计文档](./tutor-agent-design.md) - 导师Agent实现参考
 
 ## 1. 框架概述
 
 ### 1.1 定位
 
-公共Agent框架是一个**通用的、配置驱动的Agent运行时框架**，为各类Agent（导师Agent、语义层Agent、编程Agent等）提供统一的运行环境和基础能力。
+公共Agent框架是一个**通用的、配置驱动的Agent运行时框架**，为各类Agent（业务Agent、语义层Agent、编程Agent等）提供统一的运行环境和基础能力。
 
 ### 1.2 核心目标
 
@@ -323,7 +322,7 @@ public class ToolExecutionRequest {
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    共享Agent实例                                 │
-│              (导师Agent / 编程Agent / ...)                       │
+│              (业务Agent / 编程Agent / ...)                       │
 ├─────────────────────────────────────────────────────────────────┤
 │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
 │   │  用户A会话   │  │  用户B会话   │  │  用户C会话   │            │
@@ -1574,7 +1573,7 @@ public enum SyncMode {
 {
   "messageId": "msg-001",
   "sessionId": "sess-123",
-  "agentId": "tutor-agent",
+  "agentId": "demo-agent",
   "timestamp": 1737820800000,
   "version": "1.0",
   "type": "ROUTE_REQUEST",
@@ -1609,7 +1608,7 @@ public enum SyncMode {
 {
   "messageId": "msg-002",
   "sessionId": "sess-123",
-  "agentId": "tutor-agent",
+  "agentId": "demo-agent",
   "timestamp": 1737820801000,
   "version": "1.0",
   "type": "SURFACE_UPDATE",
@@ -1890,7 +1889,7 @@ agent:
 
 ### 13.2 完整配置示例
 
-参见导师Agent的配置文件（tutor-agent.json / tutor-agent.yml）
+参见实际接入模块中的 Agent 配置文件。
 
 ---
 

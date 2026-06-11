@@ -3,9 +3,11 @@ import { TEST_CONFIG } from './config.js';
 import type {
   BizWorkerIdentity,
   BizWorkerPool,
+  BusinessAgentBundle,
   BusinessAgentTask,
   ClientApp,
   ClientAppModelConfigGrant,
+  ClientAppRuntimeAccessToken,
   ClientAppSkillGrant,
   ClientAppUpstreamUserGrant,
   CreateBusinessAgentTaskRequest,
@@ -15,8 +17,14 @@ import type {
   LanggraphTask,
   LanggraphWorker,
   LoginResultDTO,
+  OpenApiAskRequest,
+  OpenApiTask,
+  OpenTaskDiagnostics,
+  OpenTaskEvidence,
+  OpenTaskMessagesResponse,
   RXResponse,
   Skill,
+  UpstreamAdminCredential,
   UpstreamAdminCredentialClaim,
   UpstreamBootstrapRequestCreated,
   UpstreamTenantClientAppProvisioning
@@ -138,6 +146,11 @@ export class BusinessAgentClient {
     return unwrapData<UpstreamAdminCredentialClaim>(response.data);
   }
 
+  async inspectCurrentUpstreamAdminCredential(): Promise<UpstreamAdminCredential> {
+    const response = await this.client.get('/api/v1/upstream-admin/admin-credential/current');
+    return unwrapData<UpstreamAdminCredential>(response.data);
+  }
+
   async ensureUpstreamTenantClientApp(body: RequestBody): Promise<UpstreamTenantClientAppProvisioning> {
     const response = await this.client.post(
       '/api/v1/admin/upstream-tenants/client-apps/ensure',
@@ -151,6 +164,22 @@ export class BusinessAgentClient {
     return unwrapData<ClientApp>(response.data);
   }
 
+  async issueRuntimeCredential(clientAppId: string, body: RequestBody): Promise<IssuedCredential> {
+    const response = await this.client.post(
+      `/api/v1/client-apps/${encodeURIComponent(clientAppId)}/runtime-credentials`,
+      body
+    );
+    return unwrapData<IssuedCredential>(response.data);
+  }
+
+  async issueControlCredential(clientAppId: string, body: RequestBody): Promise<IssuedCredential> {
+    const response = await this.client.post(
+      `/api/v1/client-apps/${encodeURIComponent(clientAppId)}/control-credentials`,
+      body
+    );
+    return unwrapData<IssuedCredential>(response.data);
+  }
+
   async createWorkerPool(body: RequestBody): Promise<BizWorkerPool> {
     const response = await this.client.post('/api/v1/business-agent/worker-pools', body);
     return unwrapData<BizWorkerPool>(response.data);
@@ -158,6 +187,11 @@ export class BusinessAgentClient {
 
   async registerWorkerIdentity(body: RequestBody): Promise<BizWorkerIdentity> {
     const response = await this.client.post('/api/v1/business-agent/worker-identities', body);
+    return unwrapData<BizWorkerIdentity>(response.data);
+  }
+
+  async registerUpstreamWorkerIdentity(body: RequestBody): Promise<BizWorkerIdentity> {
+    const response = await this.client.post('/api/v1/upstream-admin/worker-identities', body);
     return unwrapData<BizWorkerIdentity>(response.data);
   }
 
@@ -184,6 +218,11 @@ export class BusinessAgentClient {
   async createSkill(body: RequestBody): Promise<Skill> {
     const response = await this.client.post('/api/v1/business-agent/skills', body);
     return unwrapData<Skill>(response.data);
+  }
+
+  async syncAgentBundle(body: RequestBody): Promise<BusinessAgentBundle> {
+    const response = await this.client.post('/api/v1/business-agent/agent-bundles/sync', body);
+    return unwrapData<BusinessAgentBundle>(response.data);
   }
 
   async grantSkillToClientApp(clientAppId: string, body: RequestBody): Promise<ClientAppSkillGrant> {
@@ -244,6 +283,110 @@ export class BusinessAgentClient {
       { params: { userId } }
     );
     return unwrapData<LanggraphTask>(response.data);
+  }
+
+  async issueClientAppRuntimeToken(appKey: string, appSecret: string): Promise<ClientAppRuntimeAccessToken> {
+    const response = await this.client.post(
+      '/api/v1/open/client-apps/runtime-token',
+      null,
+      {
+        headers: {
+          'X-Client-App-Key': appKey,
+          'X-Client-App-Secret': appSecret
+        }
+      }
+    );
+    return unwrapData<ClientAppRuntimeAccessToken>(response.data);
+  }
+
+  async askOpenApiAgent(
+    agentId: string,
+    body: OpenApiAskRequest,
+    appKey: string,
+    accessToken: string,
+    upstreamUserId?: string
+  ): Promise<OpenApiTask> {
+    const response = await this.client.post(
+      `/api/v1/open/agents/${encodeURIComponent(agentId)}/ask`,
+      body,
+      { headers: this.runtimeHeaders(appKey, accessToken, upstreamUserId) }
+    );
+    return unwrapData<OpenApiTask>(response.data);
+  }
+
+  async getOpenApiTask(
+    agentId: string,
+    taskId: string,
+    appKey: string,
+    accessToken: string,
+    upstreamUserId?: string
+  ): Promise<OpenApiTask> {
+    const response = await this.client.get(
+      `/api/v1/open/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}`,
+      { headers: this.runtimeHeaders(appKey, accessToken, upstreamUserId) }
+    );
+    return unwrapData<OpenApiTask>(response.data);
+  }
+
+  async getOpenApiTaskDiagnostics(
+    agentId: string,
+    taskId: string,
+    appKey: string,
+    accessToken: string,
+    upstreamUserId?: string
+  ): Promise<OpenTaskDiagnostics> {
+    const response = await this.client.get(
+      `/api/v1/open/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}/diagnostics`,
+      { headers: this.runtimeHeaders(appKey, accessToken, upstreamUserId) }
+    );
+    return unwrapData<OpenTaskDiagnostics>(response.data);
+  }
+
+  async getOpenApiTaskEvidence(
+    agentId: string,
+    taskId: string,
+    appKey: string,
+    accessToken: string,
+    upstreamUserId?: string
+  ): Promise<OpenTaskEvidence> {
+    const response = await this.client.get(
+      `/api/v1/open/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}/evidence`,
+      { headers: this.runtimeHeaders(appKey, accessToken, upstreamUserId) }
+    );
+    return unwrapData<OpenTaskEvidence>(response.data);
+  }
+
+  async getOpenApiTaskMessages(
+    agentId: string,
+    taskId: string,
+    query: { cursor?: string; limit?: number; includeInternal?: boolean },
+    appKey: string,
+    accessToken: string,
+    upstreamUserId?: string
+  ): Promise<OpenTaskMessagesResponse> {
+    const response = await this.client.get(
+      `/api/v1/open/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}/messages`,
+      {
+        headers: this.runtimeHeaders(appKey, accessToken, upstreamUserId),
+        params: query
+      }
+    );
+    return unwrapData<OpenTaskMessagesResponse>(response.data);
+  }
+
+  private runtimeHeaders(
+    appKey: string,
+    accessToken: string,
+    upstreamUserId?: string
+  ): Record<string, string> {
+    const headers: Record<string, string> = {
+      'X-Client-App-Key': appKey,
+      'X-Client-App-Access-Token': accessToken
+    };
+    if (upstreamUserId) {
+      headers['X-Upstream-User-Id'] = upstreamUserId;
+    }
+    return headers;
   }
 }
 

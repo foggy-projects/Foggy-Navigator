@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 
 /**
  * 统一会话 DTO
- * 用于前端展示所有类型的会话（tutor-agent, coding-agent 等）
+ * 用于前端展示所有类型的会话（coding-agent 等）
  */
 @Data
 @Builder
@@ -31,7 +31,7 @@ public class UnifiedSessionDTO {
 
     // === 扩展字段 ===
 
-    // 会话类型：tutor, coding 等（用于前端路由和渲染）
+    // 会话类型：chat, coding 等（用于前端路由和渲染）
     private String type;
 
     // coding-agent 特有字段
@@ -43,7 +43,7 @@ public class UnifiedSessionDTO {
      * 从 Session 创建基础 DTO
      */
     public static UnifiedSessionDTO fromSession(Session session) {
-        String type = "tutor";  // 默认类型
+        String type = "chat";
         if ("coding-agent".equals(session.getAgentId())) {
             type = "coding";
         }

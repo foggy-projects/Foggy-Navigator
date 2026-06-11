@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { useChatStore, AipMessageType } from '@foggy/chat'
 import { ElNotification } from 'element-plus'
-import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
+import { agentMessageAdapter } from '@/adapters/AgentMessageAdapter'
 import * as sessionApi from '@/api/session'
 import { useUnifiedSse } from '@/composables/useUnifiedSse'
 import type { AgentMessage, RoutePayload } from '@/types'
@@ -81,7 +81,7 @@ export function useSession() {
     // Subscribe to session events via unified SSE
     unsubscribeSse = subscribeSession(sessionId, (raw: AgentMessage) => {
       // Pass through adapter for chat messages
-      const msgs = tutorAgentAdapter.convert(raw, sessionId)
+      const msgs = agentMessageAdapter.convert(raw, sessionId)
       for (const msg of msgs) {
         chatStore.processAipMessage(msg)
       }

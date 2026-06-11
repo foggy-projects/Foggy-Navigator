@@ -173,9 +173,10 @@ describe.skipIf(!TEST_CONFIG.enableLanggraphWorkerSmoke)(
 );
 
 async function assertMockLlmReady(): Promise<void> {
-  await axios.get(`${TEST_CONFIG.mockAdminBaseURL}/admin/health`, {
+  const response = await axios.get(`${TEST_CONFIG.mockAdminBaseURL}/admin/health`, {
     timeout: TEST_CONFIG.timeout
   });
+  expect(response.data?.status).toBe('ok');
 }
 
 async function registerMockScript(traceId: string, command: string): Promise<void> {

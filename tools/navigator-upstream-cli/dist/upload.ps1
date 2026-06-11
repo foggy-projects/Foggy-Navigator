@@ -60,8 +60,30 @@ function Invoke-RemoteInstallSmoke {
         }
 
         $helpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream --help 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $helpOutput -notmatch "function import" -or $helpOutput -notmatch "--model-variant") {
+        if ($LASTEXITCODE -ne 0 -or $helpOutput -notmatch "function import" -or $helpOutput -notmatch "--model-variant" -or $helpOutput -notmatch "diagnostics session-dir") {
             throw "upstream help smoke did not list function commands: $helpOutput"
+        }
+
+        $sessionDirHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream diagnostics session-dir --help 2>&1 | Out-String
+        $sessionDirHelpOk = $LASTEXITCODE -eq 0 `
+            -and $sessionDirHelpOutput -match "Usage: navi upstream diagnostics" `
+            -and $sessionDirHelpOutput -match "--context-id" `
+            -and $sessionDirHelpOutput -match "--data-root" `
+            -and $sessionDirHelpOutput -match "does not print tokens"
+        if (-not $sessionDirHelpOk) {
+            throw "diagnostics session-dir help smoke failed: $sessionDirHelpOutput"
+        }
+
+        $sessionDirOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream diagnostics session-dir `
+            --context-id bctx_20990101_f1_smoke `
+            --task-id lgt_smoke `
+            --data-root (Join-Path $tmpRoot "missing-biz-data") 2>&1 | Out-String
+        $sessionDirOk = $LASTEXITCODE -eq 0 `
+            -and $sessionDirOutput -match "exists=false" `
+            -and $sessionDirOutput -match "skillToolCallsFile=" `
+            -and $sessionDirOutput -match "notFoundReason=worker-unavailable"
+        if (-not $sessionDirOk) {
+            throw "diagnostics session-dir command smoke failed: $sessionDirOutput"
         }
 
         $functionHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream function --help 2>&1 | Out-String
@@ -75,7 +97,7 @@ function Invoke-RemoteInstallSmoke {
         }
 
         $adminKeyHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream admin-key --help 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $adminKeyHelpOutput -notmatch "Commands: request, status, claim, list, approve, deny, revoke, rotate") {
+        if ($LASTEXITCODE -ne 0 -or $adminKeyHelpOutput -notmatch "Commands: inspect, request, status, claim, list, approve, deny, revoke, rotate") {
             throw "admin-key help smoke failed: $adminKeyHelpOutput"
         }
 

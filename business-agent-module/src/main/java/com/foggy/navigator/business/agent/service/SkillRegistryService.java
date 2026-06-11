@@ -52,7 +52,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.HashMap;
@@ -80,7 +79,6 @@ public class SkillRegistryService {
     private static final Pattern SAFE_RESOURCE_SEGMENT = Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9._-]*$");
     private static final Pattern SCHEMA_PLACEHOLDER = Pattern.compile("\\$\\{@schema\\.([A-Za-z0-9][A-Za-z0-9._-]*)\\}");
     private static final String SCHEMA_PLACEHOLDER_PREFIX = "${@schema.";
-    private static final int MAX_RENDERED_SCHEMA_FIELDS = 80;
     private static final String CONTEXT_VISIBILITY_ISOLATED = "isolated";
     private static final String CONTEXT_VISIBILITY_SUMMARY = "summary";
     private static final String CONTEXT_VISIBILITY_PASSTHROUGH = "passthrough";
@@ -1263,8 +1261,8 @@ public class SkillRegistryService {
             md.append("- Public schema notes: ").append(cleanInline(version.getSchemaVisibleSummary())).append("\n");
         }
 
-        appendSchemaSection(md, "Input Fields", version.getInputSchemaJson(), functionId, versionId);
-        appendSchemaSection(md, "Output Fields", version.getOutputSchemaJson(), functionId, versionId);
+        appendSchemaSection(md, "Input JSON Schema", version.getInputSchemaJson(), functionId, versionId);
+        appendSchemaSection(md, "Output JSON Schema", version.getOutputSchemaJson(), functionId, versionId);
         return md.toString().trim();
     }
 
@@ -1278,187 +1276,16 @@ public class SkillRegistryService {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Function schema is invalid JSON: " + functionId + "@" + versionId, e);
         }
-        md.append("\n#### ").append(heading).append("\n");
-        int[] count = new int[] {0};
-        boolean appended = appendSchemaProperties(md, schema, schema, "", 0, count);
-        if (!appended) {
-            md.append("- Registered schema has no top-level JSON Schema properties.\n");
+        try {
+            md.append("\n#### ").append(heading).append("\n\n");
+            md.append("```json\n");
+            md.append(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(schema)
+                    .replace("\r\n", "\n")
+                    .replace("\r", "\n"));
+            md.append("\n```\n");
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Function schema cannot be rendered: " + functionId + "@" + versionId, e);
         }
-    }
-
-    private boolean appendSchemaProperties(
-            StringBuilder md,
-            JsonNode rootSchema,
-            JsonNode schema,
-            String pathPrefix,
-            int depth,
-            int[] count) {
-        JsonNode properties = schema == null ? null : schema.get("properties");
-        if (properties == null || !properties.isObject()) {
-            return false;
-        }
-        boolean appended = false;
-        Set<String> required = requiredNames(schema);
-        Iterator<Map.Entry<String, JsonNode>> fields = properties.fields();
-        while (fields.hasNext()) {
-            if (count[0] >= MAX_RENDERED_SCHEMA_FIELDS) {
-                md.append("- Additional schema fields omitted after ").append(MAX_RENDERED_SCHEMA_FIELDS).append(" fields.\n");
-                return true;
-            }
-            Map.Entry<String, JsonNode> field = fields.next();
-            String name = field.getKey();
-            JsonNode fieldSchema = resolveLocalSchemaRef(rootSchema, field.getValue());
-            String fieldPath = StringUtils.hasText(pathPrefix) ? pathPrefix + "." + name : name;
-            md.append("- `").append(fieldPath).append("` (")
-                    .append(describeSchemaField(fieldSchema, required.contains(name)))
-                    .append(")");
-            String description = schemaDescription(fieldSchema);
-            if (StringUtils.hasText(description)) {
-                md.append(": ").append(description);
-            }
-            md.append("\n");
-            count[0]++;
-            appended = true;
-
-            if (depth < 4) {
-                appendSchemaProperties(md, rootSchema, fieldSchema, fieldPath, depth + 1, count);
-                JsonNode items = fieldSchema == null ? null : fieldSchema.get("items");
-                if (items != null && items.isObject()) {
-                    appendSchemaProperties(md, rootSchema, resolveLocalSchemaRef(rootSchema, items),
-                            fieldPath + "[]", depth + 1, count);
-                }
-            }
-        }
-        return appended;
-    }
-
-    private JsonNode resolveLocalSchemaRef(JsonNode rootSchema, JsonNode node) {
-        if (rootSchema == null || node == null || !node.isObject()) {
-            return node;
-        }
-        JsonNode ref = node.get("$ref");
-        if (ref == null || !ref.isTextual()) {
-            return node;
-        }
-        String pointer = ref.asText();
-        if (!pointer.startsWith("#/")) {
-            return node;
-        }
-        JsonNode resolved = rootSchema.at(pointer.substring(1));
-        return resolved.isMissingNode() ? node : resolved;
-    }
-
-    private Set<String> requiredNames(JsonNode schema) {
-        JsonNode required = schema == null ? null : schema.get("required");
-        if (required == null || !required.isArray()) {
-            return Set.of();
-        }
-        Set<String> names = new LinkedHashSet<>();
-        for (JsonNode item : required) {
-            if (item.isTextual()) {
-                names.add(item.asText());
-            }
-        }
-        return names;
-    }
-
-    private String describeSchemaField(JsonNode fieldSchema, boolean required) {
-        List<String> parts = new ArrayList<>();
-        parts.add(schemaType(fieldSchema));
-        if (required) {
-            parts.add("required");
-        } else if (isRecommended(fieldSchema)) {
-            parts.add("recommended");
-        } else {
-            parts.add("optional");
-        }
-        String enumValues = enumValues(fieldSchema);
-        if (StringUtils.hasText(enumValues)) {
-            parts.add("enum: " + enumValues);
-        }
-        return String.join(", ", parts);
-    }
-
-    private String schemaType(JsonNode fieldSchema) {
-        if (fieldSchema == null || fieldSchema.isMissingNode()) {
-            return "value";
-        }
-        JsonNode type = fieldSchema.get("type");
-        if (type != null && type.isTextual() && StringUtils.hasText(type.asText())) {
-            return type.asText();
-        }
-        if (type != null && type.isArray()) {
-            List<String> values = new ArrayList<>();
-            for (JsonNode item : type) {
-                if (item.isTextual() && StringUtils.hasText(item.asText())) {
-                    values.add(item.asText());
-                }
-            }
-            if (!values.isEmpty()) {
-                return String.join("|", values);
-            }
-        }
-        if (fieldSchema.has("properties")) {
-            return "object";
-        }
-        if (fieldSchema.has("items")) {
-            return "array";
-        }
-        if (fieldSchema.has("enum")) {
-            return "enum";
-        }
-        return "value";
-    }
-
-    private boolean isRecommended(JsonNode fieldSchema) {
-        if (fieldSchema == null || fieldSchema.isMissingNode()) {
-            return false;
-        }
-        return booleanField(fieldSchema, "recommended")
-                || booleanField(fieldSchema, "x-recommended")
-                || booleanField(fieldSchema, "xRecommended");
-    }
-
-    private boolean booleanField(JsonNode node, String name) {
-        JsonNode value = node.get(name);
-        return value != null && value.isBoolean() && value.asBoolean();
-    }
-
-    private String enumValues(JsonNode fieldSchema) {
-        JsonNode enumNode = fieldSchema == null ? null : fieldSchema.get("enum");
-        if (enumNode == null || !enumNode.isArray()) {
-            return "";
-        }
-        List<String> values = new ArrayList<>();
-        int count = 0;
-        for (JsonNode item : enumNode) {
-            if (count >= 12) {
-                values.add("...");
-                break;
-            }
-            if (item.isTextual()) {
-                values.add("`" + cleanInline(item.asText()) + "`");
-            } else if (!item.isNull()) {
-                values.add("`" + cleanInline(item.toString()) + "`");
-            }
-            count++;
-        }
-        return String.join(", ", values);
-    }
-
-    private String schemaDescription(JsonNode fieldSchema) {
-        if (fieldSchema == null || fieldSchema.isMissingNode()) {
-            return "";
-        }
-        JsonNode description = fieldSchema.get("description");
-        if (description != null && description.isTextual() && StringUtils.hasText(description.asText())) {
-            return cleanInline(description.asText());
-        }
-        JsonNode title = fieldSchema.get("title");
-        if (title != null && title.isTextual() && StringUtils.hasText(title.asText())) {
-            return cleanInline(title.asText());
-        }
-        return "";
     }
 
     private String cleanInline(String value) {

@@ -291,7 +291,14 @@ class LanggraphStreamRelayTest {
                   "type": "result",
                   "content": "done",
                   "duration_ms": 42,
-                  "structured_output": {"ok": true},
+                  "structured_output": {
+                    "type": "OPEN_ARTIFACT",
+                    "label": "查看模板预览",
+                    "artifact": {
+                      "kind": "iframe",
+                      "uri": "http://localhost:3199/tms/print-template-preview?templateId=tpl-1"
+                    }
+                  },
                   "execution_report_ref": "frame-report://lgt-task-4/root",
                   "execution_report_digest": {"status": "COMPLETED"}
                 }
@@ -306,11 +313,15 @@ class LanggraphStreamRelayTest {
                         && message.getPayload() instanceof Map<?, ?> payload
                         && "frame-report://lgt-task-4/root".equals(payload.get("execution_report_ref"))
                         && "COMPLETED".equals(payload.get("status"))
+                        && payload.get("structuredOutput") instanceof Map<?, ?> structuredOutput
+                        && "OPEN_ARTIFACT".equals(structuredOutput.get("type"))
+                        && structuredOutput.get("artifact") instanceof Map<?, ?> artifact
+                        && "iframe".equals(artifact.get("kind"))
         ));
         inOrder.verify(taskService).completeTask(
                 taskId,
                 "done",
-                "{\"ok\":true}",
+                "{\"type\":\"OPEN_ARTIFACT\",\"label\":\"查看模板预览\",\"artifact\":{\"kind\":\"iframe\",\"uri\":\"http://localhost:3199/tms/print-template-preview?templateId=tpl-1\"}}",
                 42L
         );
     }

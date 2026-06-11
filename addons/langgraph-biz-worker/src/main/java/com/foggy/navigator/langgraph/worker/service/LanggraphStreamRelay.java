@@ -245,8 +245,9 @@ public class LanggraphStreamRelay {
 
                 case "result" -> {
                     String content = node.path("content").asText("");
-                    String structuredOutput = node.has("structured_output") && !node.get("structured_output").isNull()
-                            ? node.get("structured_output").toString() : null;
+                    JsonNode structuredOutputNode = firstPresent(node, "structured_output", "structuredOutput");
+                    String structuredOutput = structuredOutputNode != null && !structuredOutputNode.isNull()
+                            ? structuredOutputNode.toString() : null;
                     Long durationMs = node.has("duration_ms") && !node.get("duration_ms").isNull()
                             ? node.get("duration_ms").asLong() : null;
 
@@ -254,6 +255,11 @@ public class LanggraphStreamRelay {
                     payload.put("content", content);
                     payload.put("taskId", taskId);
                     payload.put("status", "COMPLETED");
+                    if (structuredOutputNode != null && !structuredOutputNode.isNull()) {
+                        Object structuredOutputValue = toObject(structuredOutputNode);
+                        payload.put("structured_output", structuredOutputValue);
+                        payload.put("structuredOutput", structuredOutputValue);
+                    }
                     copyExecutionReportFields(payload, node);
                     publishMessage(sessionId, MessageType.TASK_COMPLETED,
                             payload);

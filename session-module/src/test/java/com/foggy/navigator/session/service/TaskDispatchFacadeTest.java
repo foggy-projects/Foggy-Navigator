@@ -199,6 +199,55 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void submitTask_persistsRecoveryCorrelationMetadataToTaskState() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(com.foggy.navigator.common.dto.a2a.A2aPart.text("recover task")))
+                .contextId("ctx-1")
+                .metadata(Map.of(
+                        "originalTaskId", "task-original",
+                        "recoveryCorrelationKey", "world-run/contract-1",
+                        "attemptNumber", 2,
+                        "idempotencyKey", "idem-1"))
+                .build();
+        AgentTaskSubmitRequest request = AgentTaskSubmitRequest.builder()
+                .agentId("agent-1")
+                .resolveContext(AgentResolveContext.builder()
+                        .userId("user-1")
+                        .tenantId("tenant-1")
+                        .requestSource("OPEN_API")
+                        .build())
+                .message(message)
+                .prompt("recover task")
+                .contextId("ctx-1")
+                .build();
+        SessionTaskEntity entity = sessionTask(
+                "task-recovery-1", "session-1", "claude-worker", "worker-1", "dir-1",
+                "RUNNING", LocalDateTime.of(2026, 5, 27, 9, 0), "{}");
+
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agentResolver.getProviderType(eq("agent-1"), any())).thenReturn(Optional.of("claude-worker"));
+        when(agent.getAgentCard()).thenReturn(A2aAgentCard.builder().id("agent-1").build());
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-recovery-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+        when(sessionTaskRepository.findByTaskId("task-recovery-1")).thenReturn(Optional.of(entity));
+
+        facade.submitTask(request);
+
+        verify(sessionTaskRepository).save(entity);
+        String taskStateJson = entity.getTaskStateJson();
+        assertTrue(taskStateJson.contains("\"contextId\":\"ctx-1\""));
+        assertTrue(taskStateJson.contains("\"originalTaskId\":\"task-original\""));
+        assertTrue(taskStateJson.contains("\"recoveryCorrelationKey\":\"world-run/contract-1\""));
+        assertTrue(taskStateJson.contains("\"attemptNumber\":2"));
+        assertTrue(taskStateJson.contains("\"idempotencyKey\":\"idem-1\""));
+    }
+
+    @Test
     void createTask_usesDirectProviderRouteWhenModelConfigTargetsCodex() {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .workerId("worker-1")

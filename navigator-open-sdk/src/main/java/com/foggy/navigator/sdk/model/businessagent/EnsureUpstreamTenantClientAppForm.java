@@ -9,12 +9,18 @@ public class EnsureUpstreamTenantClientAppForm {
     private String clientAppName;
     private String capabilityDomain;
     private String tenantName;
+    private String upstreamRef;
     private String agentRole;
     private String agentBundleCode;
+    private String agentCode;
     private String modelProfileCode;
     private String modelConfigId;
     private String skillId;
     private String workerPoolId;
+    private String workerBackend;
+    private String physicalWorkerId;
+    private String directoryId;
+    private String bizWorkerBaseUrl;
     private Boolean rotateCredentials;
 
     public String getSourceSystem() { return sourceSystem; }
@@ -27,10 +33,14 @@ public class EnsureUpstreamTenantClientAppForm {
     public void setCapabilityDomain(String capabilityDomain) { this.capabilityDomain = capabilityDomain; }
     public String getTenantName() { return tenantName; }
     public void setTenantName(String tenantName) { this.tenantName = tenantName; }
+    public String getUpstreamRef() { return upstreamRef; }
+    public void setUpstreamRef(String upstreamRef) { this.upstreamRef = upstreamRef; }
     public String getAgentRole() { return agentRole; }
     public void setAgentRole(String agentRole) { this.agentRole = agentRole; }
     public String getAgentBundleCode() { return agentBundleCode; }
     public void setAgentBundleCode(String agentBundleCode) { this.agentBundleCode = agentBundleCode; }
+    public String getAgentCode() { return agentCode; }
+    public void setAgentCode(String agentCode) { this.agentCode = agentCode; }
     public String getModelProfileCode() { return modelProfileCode; }
     public void setModelProfileCode(String modelProfileCode) { this.modelProfileCode = modelProfileCode; }
     public String getModelConfigId() { return modelConfigId; }
@@ -39,6 +49,14 @@ public class EnsureUpstreamTenantClientAppForm {
     public void setSkillId(String skillId) { this.skillId = skillId; }
     public String getWorkerPoolId() { return workerPoolId; }
     public void setWorkerPoolId(String workerPoolId) { this.workerPoolId = workerPoolId; }
+    public String getWorkerBackend() { return workerBackend; }
+    public void setWorkerBackend(String workerBackend) { this.workerBackend = workerBackend; }
+    public String getPhysicalWorkerId() { return physicalWorkerId; }
+    public void setPhysicalWorkerId(String physicalWorkerId) { this.physicalWorkerId = physicalWorkerId; }
+    public String getDirectoryId() { return directoryId; }
+    public void setDirectoryId(String directoryId) { this.directoryId = directoryId; }
+    public String getBizWorkerBaseUrl() { return bizWorkerBaseUrl; }
+    public void setBizWorkerBaseUrl(String bizWorkerBaseUrl) { this.bizWorkerBaseUrl = bizWorkerBaseUrl; }
     public Boolean getRotateCredentials() { return rotateCredentials; }
     public void setRotateCredentials(Boolean rotateCredentials) { this.rotateCredentials = rotateCredentials; }
 }

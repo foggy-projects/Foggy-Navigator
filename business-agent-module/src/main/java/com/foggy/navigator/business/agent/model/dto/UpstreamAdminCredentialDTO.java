@@ -8,6 +8,9 @@ import java.util.List;
 @Data
 public class UpstreamAdminCredentialDTO {
     private String credentialId;
+    private String principalId;
+    private String credentialKeyPrefix;
+    private String credentialKeySuffix;
     private String upstreamSystemId;
     private List<String> authorizedTenantIds;
     private String authorizedClientAppNamespace;

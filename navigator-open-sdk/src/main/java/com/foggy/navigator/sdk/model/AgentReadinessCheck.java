@@ -4,6 +4,8 @@ public class AgentReadinessCheck {
     private String code;
     private String status;
     private String message;
+    private String errorCode;
+    private String action;
 
     public String getCode() { return code; }
     public void setCode(String code) { this.code = code; }
@@ -13,4 +15,10 @@ public class AgentReadinessCheck {
 
     public String getMessage() { return message; }
     public void setMessage(String message) { this.message = message; }
+
+    public String getErrorCode() { return errorCode; }
+    public void setErrorCode(String errorCode) { this.errorCode = errorCode; }
+
+    public String getAction() { return action; }
+    public void setAction(String action) { this.action = action; }
 }

@@ -17,7 +17,6 @@
 | [Worker 重新安装与本体升级指南](./worker-reinstall-and-upgrade-guide.md) | Claude / Codex / Gemini Worker 重装、底层 CLI 升级与模型 alias 映射说明 | 已新增 |
 | [Agent 框架需求](./agent-framework-requirements.md) | 公共 Agent 框架接口与实现要求 | 已完成 |
 | [Agent 框架指南](./agent-framework-guide.md) | 框架使用指南 | 已完成 |
-| [导师 Agent 设计](./tutor-agent-design.md) | Tutor Agent 详细设计 | 已完成 |
 | [认证快速上手](./auth-quickstart.md) | JWT 认证配置 | 已完成 |
 
 ---
@@ -74,4 +73,4 @@
 
 ---
 
-**更新日期**: 2026-04-03
+**更新日期**: 2026-06-02

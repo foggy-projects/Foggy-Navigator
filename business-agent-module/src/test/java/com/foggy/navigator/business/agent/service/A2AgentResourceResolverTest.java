@@ -10,6 +10,7 @@ import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRe
 import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
+import com.foggy.navigator.business.agent.transaction.ReadinessTransactional;
 import com.foggy.navigator.business.agent.service.worker.PhysicalWorkerRuntimeRegistry;
 import com.foggy.navigator.business.agent.service.worker.ResolvedPhysicalWorker;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
@@ -26,11 +27,13 @@ import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -78,6 +81,64 @@ class A2AgentResourceResolverTest {
                 agentModelBindingRepository);
         when(llmModelManager.getModelConfig(anyString())).thenAnswer(invocation ->
                 Optional.of(model(invocation.getArgument(0, String.class))));
+    }
+
+    @Test
+    void resolveRequiredAgentDoesNotMarkCallerTransactionRollbackOnlyForReadinessExceptions() throws Exception {
+        Method method = A2AgentResourceResolver.class.getMethod(
+                "resolveRequiredAgent",
+                String.class,
+                String.class,
+                String.class,
+                String.class);
+        ReadinessTransactional transactional = method.getAnnotation(ReadinessTransactional.class);
+
+        assertNotNull(transactional);
+        assertTrue(transactional.readOnly());
+        assertReadinessNoRollbackFor(method);
+    }
+
+    @Test
+    void workspaceResolversDoNotMarkCallerTransactionRollbackOnlyForReadinessExceptions() throws Exception {
+        assertReadinessNoRollbackFor(A2AgentResourceResolver.class.getMethod(
+                "resolveOptionalWorkspace",
+                String.class,
+                String.class,
+                String.class,
+                String.class));
+        assertReadinessNoRollbackFor(A2AgentResourceResolver.class.getMethod(
+                "resolveOptionalWorkspaceForAgent",
+                String.class,
+                String.class,
+                String.class,
+                A2AgentResourceResolver.ResolvedAgentResource.class,
+                String.class));
+        assertReadinessNoRollbackFor(A2AgentResourceResolver.class.getMethod(
+                "resolveRequiredWorkspace",
+                String.class,
+                String.class,
+                String.class,
+                String.class));
+        assertReadinessNoRollbackFor(A2AgentResourceResolver.class.getMethod(
+                "resolveRequiredWorkspaceForAgent",
+                String.class,
+                String.class,
+                String.class,
+                A2AgentResourceResolver.ResolvedAgentResource.class,
+                String.class));
+    }
+
+    private void assertReadinessNoRollbackFor(Method method) {
+        ReadinessTransactional transactional = method.getAnnotation(ReadinessTransactional.class);
+        org.springframework.transaction.annotation.Transactional springTransactional =
+                ReadinessTransactional.class.getAnnotation(org.springframework.transaction.annotation.Transactional.class);
+
+        assertNotNull(transactional);
+        assertNotNull(springTransactional);
+        assertTrue(transactional.readOnly());
+        assertTrue(List.of(springTransactional.noRollbackFor()).contains(IllegalArgumentException.class));
+        assertTrue(List.of(springTransactional.noRollbackFor()).contains(IllegalStateException.class));
+        assertTrue(List.of(springTransactional.noRollbackFor()).contains(SecurityException.class));
     }
 
     @Test

@@ -24,12 +24,19 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
 
     long countBySessionId(String sessionId);
 
+    long countByTaskId(String taskId);
+
+    Optional<SessionMessageEntity> findFirstByTaskIdOrderByCreatedAtDesc(String taskId);
+
     void deleteBySessionId(String sessionId);
 
     // ── Open API: cursor 分页查询 ──
 
     /** 按 taskId 查询消息（首次，cursor 为空） */
     List<SessionMessageEntity> findByTaskIdOrderByCreatedAtAsc(String taskId, Pageable pageable);
+
+    /** 按 taskId 查询最近消息（用于 evidence 快照） */
+    List<SessionMessageEntity> findByTaskIdOrderByCreatedAtDesc(String taskId, Pageable pageable);
 
     /** 按 taskId + createdAt cursor 查询增量消息（不含 cursor 所指消息） */
     @Query("SELECT m FROM SessionMessageEntity m WHERE m.taskId = :taskId AND m.createdAt > :afterTime ORDER BY m.createdAt ASC")

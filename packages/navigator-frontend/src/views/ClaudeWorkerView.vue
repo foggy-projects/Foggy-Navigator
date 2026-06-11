@@ -161,11 +161,6 @@
           暂无 Worker，点击上方添加
         </div>
       </div>
-      <div class="sidebar-footer">
-        <el-button text size="small" @click="router.push('/chat')">
-          <el-icon><Back /></el-icon> 返回会话
-        </el-button>
-      </div>
     </aside>
 
     <!-- Middle Panel: Main Content Area -->
@@ -976,6 +971,14 @@
               @click="handleBatchDelete"
             >
               删除({{ selectedConvIds.size }})
+            </el-button>
+            <el-button
+              size="small"
+              text
+              :disabled="selectedConvIds.size === 0"
+              @click="handleBatchArchive"
+            >
+              归档({{ selectedConvIds.size }})
             </el-button>
             <el-button
               size="small"
@@ -2693,7 +2696,7 @@
 import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Back, Loading } from '@element-plus/icons-vue'
+import { ArrowDown, Loading } from '@element-plus/icons-vue'
 import { DEFAULT_TASK_PAGE_SIZE, useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useCodingAgent } from '@/composables/useCodingAgent'
 import { useInputMemory } from '@/composables/useInputMemory'
@@ -5602,6 +5605,31 @@ async function handleBatchDelete() {
   }
 }
 
+async function handleBatchArchive() {
+  const sessionIds = [...selectedConvIds.value]
+  const count = sessionIds.length
+  if (count === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确认归档选中的 ${count} 个会话？归档后默认不在列表中显示，可通过"已归档"筛选查看。`,
+      '归档会话',
+      { type: 'info', confirmButtonText: '确认归档', cancelButtonText: '取消' },
+    )
+    let archived = 0
+    for (const sessionId of sessionIds) {
+      await workerState.archiveConversation(sessionId)
+      archived++
+    }
+    ElMessage.success(`已归档 ${archived} 个会话`)
+    exitBatchSelectMode()
+    reloadFilteredTasks()
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('归档失败')
+    }
+  }
+}
+
 async function handleBatchBindAuth() {
   const mode = batchAuthForm.value.authMode
   // 如果选择了平台模型配置，token 和 baseUrl 可以不填
@@ -7691,11 +7719,6 @@ function handlePopOutTerminal() {
   padding: 8px 12px 8px 40px;
   font-size: 12px;
   color: #c0c4cc;
-}
-
-.sidebar-footer {
-  padding: 10px 12px;
-  border-top: 1px solid #e4e7ed;
 }
 
 /* Main content area (middle column) */

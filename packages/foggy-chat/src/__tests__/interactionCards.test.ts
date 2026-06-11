@@ -764,5 +764,47 @@ describe('ToolCallBlock', () => {
 
       expect(wrapper.text()).toContain('command not found')
     })
+
+    it('collapses and expands command output from the toggle button', async () => {
+      const wrapper = mountToolCallBlock(makeToolMessage({
+        id: 'msg-tool-toggle',
+        toolName: 'Bash',
+        content: 'pwd',
+        toolOutput: '/home/user',
+      }))
+
+      const toggle = wrapper.find('.tool-toggle-btn')
+      await toggle.trigger('click')
+      await nextTick()
+
+      expect(wrapper.find('.tool-output').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('/home/user')
+
+      await toggle.trigger('click')
+      await nextTick()
+
+      expect(wrapper.find('.tool-output').exists()).toBe(true)
+      expect(wrapper.text()).toContain('/home/user')
+    })
+
+    it('keeps manual collapse state after remounting the same tool message', async () => {
+      const message = makeToolMessage({
+        id: 'msg-tool-collapse-persist',
+        toolName: 'Bash',
+        content: 'cat large-output.txt',
+        toolOutput: 'large output',
+      })
+      const wrapper = mountToolCallBlock(message)
+
+      await wrapper.find('.tool-toggle-btn').trigger('click')
+      await nextTick()
+      expect(wrapper.find('.tool-output').exists()).toBe(false)
+
+      wrapper.unmount()
+      const remounted = mountToolCallBlock(message)
+      await nextTick()
+
+      expect(remounted.find('.tool-output').exists()).toBe(false)
+    })
   })
 })

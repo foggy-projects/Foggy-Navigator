@@ -2,11 +2,6 @@
   <div class="chat-layout">
     <!-- 左侧 sidebar -->
     <aside class="sidebar">
-      <div class="sidebar-header">
-        <el-button type="primary" style="width: 100%" @click="handleNewSession">
-          + 新建会话
-        </el-button>
-      </div>
       <div class="session-list">
         <div
           v-for="session in sessionStore.sessions"
@@ -24,7 +19,7 @@
           </el-icon>
         </div>
         <div v-if="sessionStore.sessions.length === 0" class="empty-hint">
-          暂无会话，点击上方按钮新建
+          暂无可打开的会话
         </div>
       </div>
     </aside>
@@ -67,7 +62,7 @@
       <template v-else>
         <div class="empty-state">
           <h2>Foggy Navigator</h2>
-          <p>选择一个会话或新建会话开始对话</p>
+          <p>请从 Workers 打开任务会话</p>
         </div>
       </template>
     </main>
@@ -101,9 +96,9 @@ const activeSession = computed(() =>
 onMounted(async () => {
   await sessionStore.loadSessions()
 
-  // 加载引导卡片
+  // 兼容页只展示通用引导，不再绑定旧独立会话入口。
   try {
-    guideCards.value = await sessionApi.getGuideCards('tutor-agent')
+    guideCards.value = await sessionApi.getGuideCards()
   } catch {
     // 加载失败使用默认卡片
     guideCards.value = [
@@ -154,15 +149,6 @@ async function switchSession(id: string) {
   router.push(`/c/${id}`)
 }
 
-async function handleNewSession() {
-  try {
-    const session = await sessionStore.createSession('新会话')
-    router.push(`/c/${session.id}`)
-  } catch {
-    ElMessage.error('创建会话失败')
-  }
-}
-
 async function handleDeleteSession(id: string) {
   try {
     await ElMessageBox.confirm('确认删除该会话？', '提示', {
@@ -172,7 +158,7 @@ async function handleDeleteSession(id: string) {
     })
     await sessionStore.deleteSession(id)
     if (sessionStore.activeSessionId === null) {
-      router.push('/chat')
+      router.push('/')
     }
   } catch {
     // 用户取消

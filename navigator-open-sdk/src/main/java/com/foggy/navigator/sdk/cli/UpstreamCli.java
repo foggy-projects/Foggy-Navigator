@@ -21,6 +21,8 @@ import com.foggy.navigator.sdk.model.SessionSummary;
 import com.foggy.navigator.sdk.model.SkillArtifactFile;
 import com.foggy.navigator.sdk.model.SkillArtifactSlice;
 import com.foggy.navigator.sdk.model.SkillArtifactTree;
+import com.foggy.navigator.sdk.model.TaskDiagnostics;
+import com.foggy.navigator.sdk.model.TaskEvidence;
 import com.foggy.navigator.sdk.model.TaskMessagesPage;
 import com.foggy.navigator.sdk.model.Worker;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO;
@@ -76,22 +78,29 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.net.InetAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class UpstreamCli {
     private static final String CREDENTIALS_NOT_REPLAYABLE = "CREDENTIALS_NOT_REPLAYABLE";
@@ -101,6 +110,10 @@ public class UpstreamCli {
             "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-worker";
     private static final String BIZ_WORKER_INSTALL_BASE_URL =
             "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/langgraph-biz-worker";
+    private static final String LANGGRAPH_BIZ_BACKEND = "LANGGRAPH_BIZ";
+    private static final Pattern BIZ_CONTEXT_ID_PATTERN =
+            Pattern.compile("^bctx_(\\d{8})_([0-9a-fA-F]{2})_[A-Za-z0-9._-]+$");
+    private static final DateTimeFormatter BIZ_CONTEXT_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
 
     private final PrintStream out;
     private final PrintStream err;
@@ -160,6 +173,10 @@ public class UpstreamCli {
             case "ensure-grant" -> ensureGrant(args);
             case "ask" -> ask(args);
             case "messages" -> messages(args);
+            case "diagnostics session-dir" -> diagnosticsSessionDir(args);
+            case "diagnostics help" -> diagnosticsUsage();
+            case "diagnostics" -> args.flag("help") ? diagnosticsUsage() : diagnostics(args);
+            case "evidence" -> evidence(args);
             case "sessions" -> sessions(args);
             case "session-messages" -> sessionMessages(args);
             case "skill tree" -> skillTree(args);
@@ -216,6 +233,7 @@ public class UpstreamCli {
             case "model system-update" -> modelSystemUpdate(args);
             case "model system-rotate-key" -> modelSystemRotateKey(args);
             case "admin-key", "admin-key help" -> adminKeyUsage();
+            case "admin-key inspect" -> adminKeyInspect(args);
             case "admin-key request" -> adminKeyRequest(args);
             case "admin-key status" -> adminKeyStatus(args);
             case "admin-key claim" -> adminKeyClaim(args);
@@ -276,11 +294,14 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker-host apply.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
-        out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--model-config-id <id>] [--model-variant <name>] [--client-context-json <json>|--client-context-file <path>]");
+        out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
+        out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
+        out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>]");
+        out.println("  evidence --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
         out.println("  model create/update uses NAVI_CONTROL_API_KEY and creates ClientApp-owned models.");
         out.println("  model system-create/system-update uses NAVI_ADMIN_API_KEY and creates UpstreamSystem-owned shared models.");
@@ -290,11 +311,13 @@ public class UpstreamCli {
 
     private int adminKeyUsage() {
         out.println("Usage: navi upstream admin-key <command> [options]");
-        out.println("Commands: request, status, claim, list, approve, deny, revoke, rotate");
+        out.println("Commands: inspect, request, status, claim, list, approve, deny, revoke, rotate");
+        out.println("  inspect");
         out.println("  request --upstream-system-id <id> --requested-tenant-id <tenantId> [--multi-tenant] --write-profile");
         out.println("  status  [--request-code <code>]");
         out.println("  claim   [--request-code <code>] [--claim-token-env <env>] --write-profile");
         out.println("  approve --request-code <code> --authorized-tenant-ids <tenantId[,tenantId]> [--namespace <prefix>] [--scopes <scope[,scope]>] [--claim-ttl-minutes <minutes|0|-1>] [--credential-expires-at <yyyy-MM-ddTHH:mm:ss>]");
+        out.println("  rotate --credential-id <id> --write-profile [--scopes <scope[,scope]>] [--credential-expires-at <yyyy-MM-ddTHH:mm:ss>]");
         out.println("           claim ttl 0 or -1 means the Navigator approver confirms a no-expiry NAVI_ADMIN_API_KEY; the claim window still uses the default TTL.");
         out.println("  deny    --request-code <code> --reason <text>");
         out.println("  revoke  --credential-id <id>");
@@ -307,7 +330,7 @@ public class UpstreamCli {
         out.println("Commands: list, ensure, ensure-tenant, issue-runtime-key, issue-runtime-credential, issue-control-key");
         out.println("  list [--target-tenant-id <tenantId>]");
         out.println("  ensure --target-tenant-id <tenantId> --upstream-ref <ref> [--name <name>] [--tenant-profile <path>] [--write-profile]");
-        out.println("  ensure-tenant --source-system <system> --source-tenant-id <id> [--name <name>] [--tenant-profile <path>] [--rotate-credentials] --write-profile");
+        out.println("  ensure-tenant --source-system <system> --source-tenant-id <id> [--name <name>] [--upstream-ref <ref>] [--agent-code <id>] [--worker-backend <backend>] [--physical-worker-id <id>] [--directory-id <id>] [--biz-worker-base-url <url>] [--tenant-profile <path>] [--rotate-credentials] --write-profile");
         out.println("  issue-runtime-key --client-app-id <id> [--tenant-profile <path>] [--rotate-runtime-credential] --write-profile");
         out.println("  issue-control-key --client-app-id <id> [--scopes <scope[,scope]>] [--tenant-profile <path>] --write-profile");
         return 0;
@@ -378,6 +401,16 @@ public class UpstreamCli {
         out.println("  list   [--client-app-id <clientAppId>]");
         out.println("  set    --upstream-ref <ref> --url <baseUrl> [--user-token-header <header>] [--status ENABLED|DISABLED]");
         out.println("  status --upstream-ref <ref> --status ENABLED|DISABLED");
+        return 0;
+    }
+
+    private int diagnosticsUsage() {
+        out.println("Usage: navi upstream diagnostics <command|options> [options]");
+        out.println("Commands: session-dir");
+        out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
+        out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>]");
+        out.println("    session-dir resolves the local LangGraph BizWorker runtime session path from a bctx_yyyyMMdd_<shard>_<id> contextId.");
+        out.println("    It prints paths and worker hints only; it does not print tokens, headers, credentials, or log contents.");
         return 0;
     }
 
@@ -461,6 +494,17 @@ public class UpstreamCli {
                 .getUpstreamAdminKeyRequestStatus(adminKeyRequestCode(args));
         out.println("admin-key status ok");
         printUpstreamBootstrapRequest("request", request);
+        return 0;
+    }
+
+    private int adminKeyInspect(CliArguments args) {
+        UpstreamAdminCredentialDTO credential = upstreamAdminApi().inspectCurrentUpstreamAdminCredential(
+                optionalOptionOrConfig(args, "admin-api-key", "NAVI_ADMIN_API_KEY"));
+        out.println("admin-key inspect ok");
+        printUpstreamAdminCredential("credential", credential);
+        out.println("rotation=use admin-key rotate --credential-id "
+                + valueOrEmpty(credential != null ? credential.getCredentialId() : null)
+                + " to replace this same upstream admin principal");
         return 0;
     }
 
@@ -558,6 +602,7 @@ public class UpstreamCli {
 
         RotateUpstreamAdminCredentialForm form = new RotateUpstreamAdminCredentialForm();
         form.setCredentialExpiresAt(parseLocalDateTimeOption(args.option("credential-expires-at"), "credential expires at"));
+        form.setScopes(parseCsv(args.option("scopes")));
         UpstreamAdminCredentialClaimDTO claim = operatorOrAdminApi()
                 .rotateUpstreamAdminCredential(requiredOption(args, "credential-id", "credential id"), form);
         if (claim == null || !hasText(claim.getNaviAdminApiKey())) {
@@ -640,12 +685,20 @@ public class UpstreamCli {
         form.setClientAppName(args.option("name"));
         form.setCapabilityDomain(args.option("capability-domain"));
         form.setTenantName(args.option("tenant-name"));
+        form.setUpstreamRef(optionalOptionOrConfig(args, "upstream-ref", "NAVI_UPSTREAM_REF"));
         form.setAgentRole(args.option("agent-role"));
         form.setAgentBundleCode(args.option("agent-bundle-code"));
+        form.setAgentCode(optionalOptionOrConfig(args, "agent-code", "NAVI_AGENT_CODE"));
         form.setModelProfileCode(optionalOptionOrConfig(args, "model-profile-code", "NAVI_MODEL_PROFILE_CODE"));
         form.setModelConfigId(optionalOptionOrConfig(args, "model-config-id", "NAVI_MODEL_CONFIG_ID"));
         form.setSkillId(optionalOptionOrConfig(args, "skill-id", "NAVI_SKILL_ID"));
         form.setWorkerPoolId(optionalOptionOrConfig(args, "worker-pool-id", "NAVI_WORKER_POOL_ID"));
+        form.setWorkerBackend(optionalOptionOrConfig(args, "worker-backend", "NAVI_WORKER_BACKEND"));
+        form.setPhysicalWorkerId(firstNonBlank(
+                optionalOptionOrConfig(args, "physical-worker-id", "NAVI_PHYSICAL_WORKER_ID"),
+                optionalOptionOrConfig(args, "worker-id", "NAVI_BIZ_WORKER_ID")));
+        form.setDirectoryId(optionalOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID"));
+        form.setBizWorkerBaseUrl(optionalOptionOrConfig(args, "biz-worker-base-url", "NAVI_BIZ_WORKER_BASE_URL"));
         form.setRotateCredentials(args.flag("rotate-credentials"));
 
         UpstreamTenantClientAppProvisioningDTO dto = upstreamAdminApi().ensureUpstreamTenantClientApp(form);
@@ -1779,7 +1832,9 @@ public class UpstreamCli {
             for (AgentReadinessCheck check : readiness.getChecks()) {
                 out.println("check " + valueOrEmpty(check.getCode())
                         + "=" + valueOrEmpty(check.getStatus())
-                        + (hasText(check.getMessage()) ? " message=" + redact(check.getMessage()) : ""));
+                        + (hasText(check.getErrorCode()) ? " errorCode=" + valueOrEmpty(check.getErrorCode()) : "")
+                        + (hasText(check.getMessage()) ? " message=" + redact(check.getMessage()) : "")
+                        + (hasText(check.getAction()) ? " action=" + redact(check.getAction()) : ""));
             }
         }
         if (readiness.getSkillArtifact() != null && readiness.getSkillArtifact().isAvailable()) {
@@ -1911,6 +1966,392 @@ public class UpstreamCli {
             }
             Thread.sleep(config.pollIntervalSeconds() * 1000L);
         } while (true);
+        return 0;
+    }
+
+    private int diagnostics(CliArguments args) {
+        String agent = explicitAgentCode(args, "diagnostics");
+        String taskId = requiredOption(args, "task-id", "task id");
+        String upstreamUserId = optionalUpstreamUserId(args);
+        TaskDiagnostics diagnostics = agentApi().getTaskDiagnosticsWithClientAppAccessToken(
+                agent, taskId, clientAppKey(args), clientAppAccessToken(args), upstreamUserId);
+        printTaskDiagnostics(diagnostics);
+        return 0;
+    }
+
+    private int diagnosticsSessionDir(CliArguments args) {
+        if (args.flag("help")) {
+            return diagnosticsUsage();
+        }
+        String contextId = requiredOption(args, "context-id", "context id");
+        String taskId = args.option("task-id");
+        SessionDirectoryDiagnostics diagnostics = resolveSessionDirectoryDiagnostics(args, contextId, taskId);
+        printSessionDirectoryDiagnostics(diagnostics);
+        return 0;
+    }
+
+    private SessionDirectoryDiagnostics resolveSessionDirectoryDiagnostics(CliArguments args,
+                                                                          String contextId,
+                                                                          String taskId) {
+        String hostname = firstNonBlank(localHostname(), env.get("COMPUTERNAME"), env.get("HOSTNAME"));
+        String workerHost = firstNonBlank(
+                args.option("worker-host"),
+                env.get("NAVI_WORKER_HOST"),
+                env.get("BIZ_WORKER_HOST"),
+                config.get("NAVI_WORKER_HOST"),
+                config.get("BIZ_WORKER_HOST"),
+                hostname);
+        String workerBackend = firstNonBlank(
+                args.option("worker-backend"),
+                env.get("NAVI_WORKER_BACKEND"),
+                config.get("NAVI_WORKER_BACKEND"),
+                LANGGRAPH_BIZ_BACKEND);
+        String physicalWorkerId = firstNonBlank(
+                args.option("physical-worker-id"),
+                args.option("worker-id"),
+                env.get("NAVI_PHYSICAL_WORKER_ID"),
+                env.get("NAVI_BIZ_WORKER_ID"),
+                env.get("NAVI_WORKER_ID"),
+                config.get("NAVI_PHYSICAL_WORKER_ID"),
+                config.get("NAVI_BIZ_WORKER_ID"),
+                config.get("NAVI_WORKER_ID"));
+
+        ContextLocator locator = parseContextLocator(contextId);
+        if (locator == null) {
+            return new SessionDirectoryDiagnostics(contextId, taskId, false, workerBackend, physicalWorkerId,
+                    workerHost, hostname, null, null, null, null, null, "unavailable", "context-not-found");
+        }
+
+        List<Path> dataRoots = candidateBizWorkerDataRoots(args);
+        Path selectedSessionDirectory = null;
+        Path expectedSessionDirectory = null;
+        for (Path dataRoot : dataRoots) {
+            Path candidateSessionDirectory = bizWorkerSessionDirectory(dataRoot, locator);
+            if (expectedSessionDirectory == null) {
+                expectedSessionDirectory = candidateSessionDirectory;
+            }
+            if (Files.isDirectory(candidateSessionDirectory)) {
+                selectedSessionDirectory = candidateSessionDirectory;
+                break;
+            }
+        }
+
+        boolean exists = selectedSessionDirectory != null;
+        Path sessionDirectory = exists ? selectedSessionDirectory : expectedSessionDirectory;
+        Path logsDirectory = sessionDirectory != null ? sessionDirectory.resolve("logs").toAbsolutePath().normalize() : null;
+        Path skillToolCallsDirectory = logsDirectory != null
+                ? logsDirectory.resolve("skill-tool-calls").toAbsolutePath().normalize()
+                : null;
+        Path skillToolCallsFile = hasText(taskId) && skillToolCallsDirectory != null
+                ? skillToolCallsDirectory.resolve(safePathSegment(taskId) + ".jsonl").toAbsolutePath().normalize()
+                : null;
+        Path llmSubmissionsDirectory = logsDirectory != null
+                ? logsDirectory.resolve("llm-submissions").toAbsolutePath().normalize()
+                : null;
+        String notFoundReason = exists ? null : sessionDirectoryNotFoundReason(locator, dataRoots);
+        String accessHint = exists
+                ? "local"
+                : (!isLikelyLocalHost(workerHost, hostname) ? "ssh-required" : "unavailable");
+        return new SessionDirectoryDiagnostics(contextId, taskId, exists, workerBackend, physicalWorkerId,
+                workerHost, hostname, sessionDirectory, logsDirectory, skillToolCallsDirectory, skillToolCallsFile,
+                llmSubmissionsDirectory, accessHint, notFoundReason);
+    }
+
+    private List<Path> candidateBizWorkerDataRoots(CliArguments args) {
+        List<Path> candidates = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        addDataRootCandidate(candidates, seen, args.option("data-root"), cwd);
+        addDataRootCandidate(candidates, seen, args.option("biz-worker-data-root"), cwd);
+        addDataRootCandidate(candidates, seen, env.get("NAVI_BIZ_WORKER_DATA_ROOT"), cwd);
+        addDataRootCandidate(candidates, seen, env.get("BIZ_WORKER_DATA_ROOT"), cwd);
+        addDataRootCandidate(candidates, seen, config.get("NAVI_BIZ_WORKER_DATA_ROOT"), cwd);
+        addDataRootCandidate(candidates, seen, config.get("BIZ_WORKER_DATA_ROOT"), cwd);
+
+        addBizWorkerEnvFileDataRootCandidates(candidates, seen, args.option("biz-worker-env-file"));
+        addBizWorkerEnvFileDataRootCandidates(candidates, seen, env.get("NAVI_BIZ_WORKER_ENV_FILE"));
+        addBizWorkerEnvFileDataRootCandidates(candidates, seen, env.get("BIZ_WORKER_ENV_FILE"));
+        addBizWorkerEnvFileDataRootCandidates(candidates, seen, config.get("NAVI_BIZ_WORKER_ENV_FILE"));
+        addDefaultBizWorkerEnvFileDataRootCandidates(candidates, seen);
+        addDefaultBizWorkerDataRootCandidates(candidates, seen);
+        return candidates;
+    }
+
+    private void addDefaultBizWorkerEnvFileDataRootCandidates(List<Path> candidates, Set<String> seen) {
+        List<Path> workerDirs = new ArrayList<>();
+        workerDirs.add(cwd.resolve("tools").resolve("langgraph-biz-worker").toAbsolutePath().normalize());
+        if (cwd.getFileName() != null && "langgraph-biz-worker".equals(cwd.getFileName().toString())) {
+            workerDirs.add(cwd.toAbsolutePath().normalize());
+        }
+        for (Path workerDir : workerDirs) {
+            for (String fileName : List.of(".env", ".env.local", ".env.real-llm.local",
+                    ".env.mock-llm.local", ".env.qwen35-plus.local")) {
+                addEnvFileDataRootCandidates(candidates, seen, workerDir.resolve(fileName));
+            }
+        }
+    }
+
+    private void addDefaultBizWorkerDataRootCandidates(List<Path> candidates, Set<String> seen) {
+        Path cursor = cwd.toAbsolutePath().normalize();
+        int depth = 0;
+        while (cursor != null && depth++ < 6) {
+            addDataRootPathCandidate(candidates, seen,
+                    cursor.resolve("tools").resolve("langgraph-biz-worker").resolve("data"));
+            cursor = cursor.getParent();
+        }
+        if (cwd.getFileName() != null && "langgraph-biz-worker".equals(cwd.getFileName().toString())) {
+            addDataRootPathCandidate(candidates, seen, cwd.resolve("data"));
+        }
+    }
+
+    private void addBizWorkerEnvFileDataRootCandidates(List<Path> candidates, Set<String> seen, String envFileValue) {
+        if (!hasText(envFileValue)) {
+            return;
+        }
+        Path envFile = resolveCliPath(envFileValue, cwd);
+        addEnvFileDataRootCandidates(candidates, seen, envFile);
+    }
+
+    private void addEnvFileDataRootCandidates(List<Path> candidates, Set<String> seen, Path envFile) {
+        if (envFile == null) {
+            return;
+        }
+        Path baseDir = envFile.getParent() != null ? envFile.getParent() : cwd;
+        addDataRootCandidate(candidates, seen, readEnvFileValue(envFile, "BIZ_WORKER_DATA_ROOT"), baseDir);
+        addDataRootCandidate(candidates, seen, readEnvFileValue(envFile, "NAVI_BIZ_WORKER_DATA_ROOT"), baseDir);
+    }
+
+    private void addDataRootCandidate(List<Path> candidates, Set<String> seen, String value, Path baseDir) {
+        if (!hasText(value)) {
+            return;
+        }
+        addDataRootPathCandidate(candidates, seen, resolveCliPath(stripOptionalQuotes(value.trim()), baseDir));
+    }
+
+    private void addDataRootPathCandidate(List<Path> candidates, Set<String> seen, Path path) {
+        if (path == null) {
+            return;
+        }
+        Path normalized = path.toAbsolutePath().normalize();
+        if (seen.add(normalized.toString())) {
+            candidates.add(normalized);
+        }
+    }
+
+    private Path resolveCliPath(String value, Path baseDir) {
+        if (!hasText(value)) {
+            return null;
+        }
+        Path path = Path.of(value);
+        if (!path.isAbsolute()) {
+            path = (baseDir != null ? baseDir : cwd).resolve(path);
+        }
+        return path.toAbsolutePath().normalize();
+    }
+
+    private String readEnvFileValue(Path envFile, String key) {
+        if (envFile == null || !Files.isRegularFile(envFile)) {
+            return null;
+        }
+        try {
+            for (String line : Files.readAllLines(envFile, StandardCharsets.UTF_8)) {
+                String trimmed = line.trim();
+                if (!hasText(trimmed) || trimmed.startsWith("#")) {
+                    continue;
+                }
+                if (trimmed.startsWith("export ")) {
+                    trimmed = trimmed.substring("export ".length()).trim();
+                }
+                int equals = trimmed.indexOf('=');
+                if (equals <= 0) {
+                    continue;
+                }
+                String name = trimmed.substring(0, equals).trim();
+                if (key.equals(name)) {
+                    return stripOptionalQuotes(trimmed.substring(equals + 1).trim());
+                }
+            }
+            return null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private String stripOptionalQuotes(String value) {
+        if (value == null || value.length() < 2) {
+            return value;
+        }
+        if ((value.startsWith("\"") && value.endsWith("\""))
+                || (value.startsWith("'") && value.endsWith("'"))) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
+    }
+
+    private ContextLocator parseContextLocator(String contextId) {
+        if (!hasText(contextId)) {
+            return null;
+        }
+        Matcher matcher = BIZ_CONTEXT_ID_PATTERN.matcher(contextId);
+        if (!matcher.matches()) {
+            return null;
+        }
+        String compactDate = matcher.group(1);
+        try {
+            LocalDate date = LocalDate.parse(compactDate, BIZ_CONTEXT_DATE_FORMATTER);
+            return new ContextLocator(
+                    contextId,
+                    compactDate.substring(0, 4),
+                    compactDate.substring(4, 6),
+                    compactDate.substring(6, 8),
+                    matcher.group(2).toLowerCase(Locale.ROOT),
+                    date);
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+    }
+
+    private Path bizWorkerSessionDirectory(Path dataRoot, ContextLocator locator) {
+        return dataRoot
+                .resolve("runtime")
+                .resolve("sessions")
+                .resolve("by-date")
+                .resolve(locator.year())
+                .resolve(locator.month())
+                .resolve(locator.day())
+                .resolve(locator.shard())
+                .resolve(safePathSegment(locator.contextId()))
+                .toAbsolutePath()
+                .normalize();
+    }
+
+    private String sessionDirectoryNotFoundReason(ContextLocator locator, List<Path> dataRoots) {
+        boolean anySessionsRootExists = false;
+        boolean anyDateDirExists = false;
+        boolean anyShardDirExists = false;
+        for (Path dataRoot : dataRoots) {
+            Path byDate = dataRoot.resolve("runtime").resolve("sessions").resolve("by-date");
+            if (Files.isDirectory(byDate)) {
+                anySessionsRootExists = true;
+            }
+            Path dateDir = byDate.resolve(locator.year()).resolve(locator.month()).resolve(locator.day());
+            if (Files.isDirectory(dateDir)) {
+                anyDateDirExists = true;
+            }
+            if (Files.isDirectory(dateDir.resolve(locator.shard()))) {
+                anyShardDirExists = true;
+            }
+        }
+        if (!anySessionsRootExists) {
+            return "worker-unavailable";
+        }
+        if (!anyDateDirExists && locator.date().isBefore(LocalDate.now())) {
+            return "cleaned";
+        }
+        if (anyDateDirExists || anyShardDirExists) {
+            return "context-not-found";
+        }
+        return "session-dir-not-found";
+    }
+
+    private void printSessionDirectoryDiagnostics(SessionDirectoryDiagnostics diagnostics) {
+        out.println("contextId=" + valueOrEmpty(diagnostics.contextId()));
+        if (hasText(diagnostics.taskId())) {
+            out.println("taskId=" + valueOrEmpty(diagnostics.taskId()));
+        }
+        out.println("exists=" + diagnostics.exists());
+        out.println("workerBackend=" + valueOrEmpty(diagnostics.workerBackend()));
+        out.println("physicalWorkerId=" + valueOrEmpty(diagnostics.physicalWorkerId()));
+        out.println("workerHost=" + redact(valueOrEmpty(diagnostics.workerHost())));
+        out.println("hostname=" + redact(valueOrEmpty(diagnostics.hostname())));
+        out.println("sessionDirectory=" + valueOrEmpty(diagnostics.sessionDirectory()));
+        out.println("logsDirectory=" + valueOrEmpty(diagnostics.logsDirectory()));
+        out.println("skillToolCallsDirectory=" + valueOrEmpty(diagnostics.skillToolCallsDirectory()));
+        if (hasText(diagnostics.taskId())) {
+            out.println("skillToolCallsFile=" + valueOrEmpty(diagnostics.skillToolCallsFile()));
+        }
+        out.println("llmSubmissionsDirectory=" + valueOrEmpty(diagnostics.llmSubmissionsDirectory()));
+        out.println("accessHint=" + valueOrEmpty(diagnostics.accessHint()));
+        if (!diagnostics.exists()) {
+            out.println("notFoundReason=" + valueOrEmpty(diagnostics.notFoundReason()));
+        }
+    }
+
+    private String localHostname() {
+        try {
+            return InetAddress.getLocalHost().getHostName();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean isLikelyLocalHost(String workerHost, String hostname) {
+        String normalized = normalizeHostForCompare(workerHost);
+        if (!hasText(normalized)) {
+            return true;
+        }
+        if ("localhost".equals(normalized) || "127.0.0.1".equals(normalized) || "::1".equals(normalized)) {
+            return true;
+        }
+        for (String candidate : new String[]{hostname, env.get("COMPUTERNAME"), env.get("HOSTNAME")}) {
+            if (normalized.equals(normalizeHostForCompare(candidate))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String normalizeHostForCompare(String value) {
+        if (!hasText(value)) {
+            return "";
+        }
+        String host = value.trim();
+        if (host.startsWith("http://") || host.startsWith("https://")) {
+            try {
+                host = URI.create(host).getHost();
+            } catch (IllegalArgumentException ignored) {
+                // Fall back to string normalization below.
+            }
+        }
+        if (!hasText(host)) {
+            return "";
+        }
+        int slash = host.indexOf('/');
+        if (slash >= 0) {
+            host = host.substring(0, slash);
+        }
+        int colon = host.indexOf(':');
+        if (colon > 0 && colon == host.lastIndexOf(':')) {
+            host = host.substring(0, colon);
+        }
+        return host.toLowerCase(Locale.ROOT);
+    }
+
+    private static String safePathSegment(String value) {
+        if (!hasText(value)) {
+            return "unknown";
+        }
+        StringBuilder builder = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if ((ch >= 'a' && ch <= 'z')
+                    || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9')
+                    || ch == '.' || ch == '_' || ch == '-') {
+                builder.append(ch);
+            } else {
+                builder.append('_');
+            }
+        }
+        return builder.toString();
+    }
+
+    private int evidence(CliArguments args) throws Exception {
+        String agent = explicitAgentCode(args, "evidence");
+        String taskId = requiredOption(args, "task-id", "task id");
+        String upstreamUserId = optionalUpstreamUserId(args);
+        TaskEvidence evidence = agentApi().getTaskEvidenceWithClientAppAccessToken(
+                agent, taskId, clientAppKey(args), clientAppAccessToken(args), upstreamUserId);
+        printTaskEvidence(evidence);
         return 0;
     }
 
@@ -3145,17 +3586,21 @@ public class UpstreamCli {
     private void printUpstreamAdminCredential(String prefix, UpstreamAdminCredentialDTO credential) {
         out.println(prefix
                 + " credentialId=" + valueOrEmpty(credential != null ? credential.getCredentialId() : null)
+                + " principalId=" + valueOrEmpty(credential != null ? credential.getPrincipalId() : null)
                 + " upstreamSystemId=" + valueOrEmpty(credential != null ? credential.getUpstreamSystemId() : null)
                 + " status=" + valueOrEmpty(credential != null ? credential.getStatus() : null));
         if (credential == null) {
             return;
         }
+        out.println(prefix + " keyPrefix=" + SecretMasker.mask(credential.getCredentialKeyPrefix())
+                + " keySuffix=" + SecretMasker.mask(credential.getCredentialKeySuffix()));
         out.println(prefix + " authorizedTenantIds=" + joinList(credential.getAuthorizedTenantIds()));
         out.println(prefix + " authorizedClientAppNamespace=" + valueOrEmpty(credential.getAuthorizedClientAppNamespace()));
         out.println(prefix + " scopes=" + joinList(credential.getScopes()));
         out.println(prefix + " expiresAt=" + valueOrEmpty(credential.getExpiresAt()));
         out.println(prefix + " revokedAt=" + valueOrEmpty(credential.getRevokedAt()));
         out.println(prefix + " lastUsedAt=" + valueOrEmpty(credential.getLastUsedAt()));
+        out.println(prefix + " sourceRequestId=" + valueOrEmpty(credential.getSourceRequestId()));
     }
 
     private void printClientApp(String prefix, ClientAppDTO app) {
@@ -3176,13 +3621,20 @@ public class UpstreamCli {
         config.writeProfileValue(targetProfile, "NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"));
         config.writeProfileValue(targetProfile, "NAVI_TENANT_ID", emptyIfNull(dto.getNavigatorTenantId()));
         config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_ID", emptyIfNull(dto.getClientAppId()));
-        config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_SYSTEM_ID", emptyIfNull(sourceSystem));
-        config.writeProfileValue(targetProfile, "NAVI_SOURCE_TENANT_ID", emptyIfNull(sourceTenantId));
-        config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_REF", emptyIfNull(sourceTenantId));
-        config.writeProfileValue(targetProfile, "NAVI_AGENT_CODE", emptyIfNull(dto.getRootAgentId()));
+        config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_SYSTEM_ID", emptyIfNull(firstNonBlank(dto.getUpstreamSystemId(), sourceSystem)));
+        config.writeProfileValue(targetProfile, "NAVI_SOURCE_TENANT_ID", emptyIfNull(firstNonBlank(dto.getSourceTenantId(), sourceTenantId)));
+        config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_REF", emptyIfNull(firstNonBlank(dto.getUpstreamRef(), sourceTenantId)));
+        config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_NAMESPACE", emptyIfNull(dto.getUpstreamNamespace()));
+        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_CAPABILITY_DOMAIN", emptyIfNull(firstNonBlank(dto.getClientAppCapabilityDomain(), dto.getCapabilityDomain())));
+        config.writeProfileValue(targetProfile, "NAVI_AGENT_CODE", emptyIfNull(firstNonBlank(dto.getAgentCode(), dto.getRootAgentId())));
+        config.writeProfileValue(targetProfile, "NAVI_ROOT_AGENT_ID", emptyIfNull(dto.getRootAgentId()));
         config.writeProfileValue(targetProfile, "NAVI_MODEL_CONFIG_ID", emptyIfNull(dto.getModelConfigId()));
         config.writeProfileValue(targetProfile, "NAVI_SKILL_ID", emptyIfNull(dto.getSkillId()));
         config.writeProfileValue(targetProfile, "NAVI_WORKER_POOL_ID", emptyIfNull(dto.getWorkerPoolId()));
+        config.writeProfileValue(targetProfile, "NAVI_WORKER_BACKEND", emptyIfNull(dto.getWorkerBackend()));
+        config.writeProfileValue(targetProfile, "NAVI_PHYSICAL_WORKER_ID", emptyIfNull(dto.getPhysicalWorkerId()));
+        config.writeProfileValue(targetProfile, "NAVI_DIRECTORY_ID", emptyIfNull(dto.getDirectoryId()));
+        config.writeProfileValue(targetProfile, "NAVI_BIZ_WORKER_BASE_URL", emptyIfNull(dto.getBizWorkerBaseUrl()));
         if (hasText(dto.getClientAppKey())) {
             config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_KEY", dto.getClientAppKey());
         }
@@ -3202,10 +3654,17 @@ public class UpstreamCli {
                 "NAVI_UPSTREAM_SYSTEM_ID",
                 "NAVI_SOURCE_TENANT_ID",
                 "NAVI_UPSTREAM_REF",
+                "NAVI_UPSTREAM_NAMESPACE",
+                "NAVI_CLIENT_APP_CAPABILITY_DOMAIN",
                 "NAVI_AGENT_CODE",
+                "NAVI_ROOT_AGENT_ID",
                 "NAVI_MODEL_CONFIG_ID",
                 "NAVI_SKILL_ID",
-                "NAVI_WORKER_POOL_ID"));
+                "NAVI_WORKER_POOL_ID",
+                "NAVI_WORKER_BACKEND",
+                "NAVI_PHYSICAL_WORKER_ID",
+                "NAVI_DIRECTORY_ID",
+                "NAVI_BIZ_WORKER_BASE_URL"));
         if (hasText(dto.getClientAppKey())) {
             keys.add("NAVI_CLIENT_APP_KEY");
         }
@@ -3229,19 +3688,33 @@ public class UpstreamCli {
         out.println("clientAppId=" + valueOrEmpty(dto != null ? dto.getClientAppId() : null));
         out.println("clientAppName=" + redact(dto != null ? dto.getClientAppName() : null));
         out.println("capabilityDomain=" + valueOrEmpty(dto != null ? dto.getCapabilityDomain() : null));
+        out.println("clientAppCapabilityDomain=" + valueOrEmpty(dto != null ? dto.getClientAppCapabilityDomain() : null));
+        out.println("upstreamSystemId=" + valueOrEmpty(dto != null ? dto.getUpstreamSystemId() : null));
+        out.println("sourceTenantId=" + valueOrEmpty(dto != null ? dto.getSourceTenantId() : null));
+        out.println("upstreamRef=" + valueOrEmpty(dto != null ? dto.getUpstreamRef() : null));
+        out.println("upstreamNamespace=" + valueOrEmpty(dto != null ? dto.getUpstreamNamespace() : null));
         out.println("clientAppKey=" + SecretMasker.mask(dto != null ? dto.getClientAppKey() : null));
         out.println("clientAppSecret=" + SecretMasker.mask(dto != null ? dto.getClientAppSecret() : null));
         out.println("controlApiKey=" + SecretMasker.mask(dto != null ? dto.getControlApiKey() : null));
+        out.println("agentCode=" + valueOrEmpty(dto != null ? dto.getAgentCode() : null));
         out.println("rootAgentId=" + valueOrEmpty(dto != null ? dto.getRootAgentId() : null));
         out.println("modelConfigId=" + valueOrEmpty(dto != null ? dto.getModelConfigId() : null));
         out.println("skillId=" + valueOrEmpty(dto != null ? dto.getSkillId() : null));
         out.println("workerPoolId=" + valueOrEmpty(dto != null ? dto.getWorkerPoolId() : null));
+        out.println("workerBackend=" + valueOrEmpty(dto != null ? dto.getWorkerBackend() : null));
+        out.println("physicalWorkerId=" + valueOrEmpty(dto != null ? dto.getPhysicalWorkerId() : null));
+        out.println("directoryId=" + valueOrEmpty(dto != null ? dto.getDirectoryId() : null));
+        out.println("bizWorkerBaseUrl=" + redact(dto != null ? dto.getBizWorkerBaseUrl() : null));
         out.println("bindingVersion=" + valueOrEmpty(dto != null ? dto.getBindingVersion() : null));
         out.println("status=" + valueOrEmpty(dto != null ? dto.getStatus() : null));
         out.println("errorCode=" + valueOrEmpty(dto != null ? dto.getErrorCode() : null));
+        out.println("activationReady=" + (dto != null && Boolean.TRUE.equals(dto.getActivationReady())));
         out.println("credentialsReplayable=" + (dto != null && Boolean.TRUE.equals(dto.getCredentialsReplayable())));
         if (dto != null && hasText(dto.getMessage())) {
             out.println("message=" + redact(dto.getMessage()));
+        }
+        if (dto != null && hasText(dto.getRemediationHint())) {
+            out.println("remediationHint=" + redact(dto.getRemediationHint()));
         }
         out.println("created=" + (dto != null && Boolean.TRUE.equals(dto.getCreated())));
         out.println("rotated=" + (dto != null && Boolean.TRUE.equals(dto.getRotated())));
@@ -3249,6 +3722,16 @@ public class UpstreamCli {
             for (String blocker : dto.getBlockers()) {
                 out.println("blocker=" + redact(blocker));
             }
+        }
+        if (dto != null && dto.getMissingFields() != null) {
+            for (String missingField : dto.getMissingFields()) {
+                out.println("missingField=" + valueOrEmpty(missingField));
+            }
+        }
+        if (dto != null) {
+            out.println("requiredScopes=" + joinList(dto.getRequiredScopes()));
+            out.println("actualScopes=" + joinList(dto.getActualScopes()));
+            out.println("authorizedTenantIds=" + joinList(dto.getAuthorizedTenantIds()));
         }
     }
 
@@ -3500,7 +3983,27 @@ public class UpstreamCli {
             out.println("message id=" + valueOrEmpty(message.getMessageId())
                     + " role=" + valueOrEmpty(message.getRole())
                     + " type=" + valueOrEmpty(message.getType())
+                    + " eventKind=" + valueOrEmpty(message.getEventKind())
+                    + " progressType=" + valueOrEmpty(message.getProgressType())
+                    + " status=" + valueOrEmpty(message.getStatus())
+                    + " terminal=" + Boolean.TRUE.equals(message.getTerminal())
+                    + " terminalStatus=" + valueOrEmpty(message.getTerminalStatus())
                     + " content=" + redact(truncate(message.getContent(), 500)));
+            if (message.getReportRefs() != null) {
+                for (TaskEvidence.ReportRef ref : message.getReportRefs()) {
+                    out.println("messageReportRef messageId=" + valueOrEmpty(message.getMessageId())
+                            + " type=" + valueOrEmpty(ref != null ? ref.getType() : null)
+                            + " ref=" + redact(valueOrEmpty(ref != null ? ref.getRef() : null))
+                            + " frameId=" + redact(valueOrEmpty(ref != null ? ref.getFrameId() : null)));
+                }
+            }
+            if (message.getArtifactRefs() != null) {
+                for (TaskEvidence.ArtifactRef ref : message.getArtifactRefs()) {
+                    out.println("messageArtifactRef messageId=" + valueOrEmpty(message.getMessageId())
+                            + " path=" + redact(valueOrEmpty(ref != null ? ref.getPath() : null))
+                            + " ref=" + redact(valueOrEmpty(ref != null ? ref.getRef() : null)));
+                }
+            }
         }
     }
 
@@ -3519,6 +4022,105 @@ public class UpstreamCli {
 
     private void printTaskDiagnostics(AgentTask task) {
         printTaskDiagnostics(null, task);
+    }
+
+    private void printTaskDiagnostics(TaskDiagnostics diagnostics) {
+        if (diagnostics == null) {
+            return;
+        }
+        out.println("taskId=" + valueOrEmpty(diagnostics.getTaskId()));
+        out.println("contextId=" + valueOrEmpty(diagnostics.getContextId()));
+        out.println("status=" + valueOrEmpty(diagnostics.getStatus()));
+        out.println("terminal=" + diagnostics.isTerminal());
+        printDiagnostic("terminalStatus", diagnostics.getTerminalStatus());
+        printDiagnostic("submittedAt", diagnostics.getSubmittedAt() != null ? diagnostics.getSubmittedAt().toString() : null);
+        printDiagnostic("workerStartedAt", diagnostics.getWorkerStartedAt() != null ? diagnostics.getWorkerStartedAt().toString() : null);
+        printDiagnostic("lastObservedAt", diagnostics.getLastObservedAt() != null ? diagnostics.getLastObservedAt().toString() : null);
+        if (diagnostics.getMessagesCount() != null) {
+            out.println("messagesCount=" + diagnostics.getMessagesCount());
+        }
+        printDiagnostic("providerTaskId", diagnostics.getProviderTaskId());
+        printDiagnostic("workerTaskId", diagnostics.getWorkerTaskId());
+        if (diagnostics.getLastAckedSeq() != null) {
+            out.println("lastAckedSeq=" + diagnostics.getLastAckedSeq());
+        }
+        printDiagnostic("modelConfigId", diagnostics.getModelConfigId());
+        printDiagnostic("modelConfigSource", diagnostics.getModelConfigSource());
+        printDiagnostic("workerBackend", diagnostics.getWorkerBackend());
+        printDiagnostic("providerType", diagnostics.getProviderType());
+        printDiagnostic("taskSource", diagnostics.getTaskSource());
+        printDiagnostic("workerSource", diagnostics.getWorkerSource());
+        printDiagnostic("backendSource", diagnostics.getBackendSource());
+        printDiagnostic("safeWorkerRef", diagnostics.getSafeWorkerRef());
+        printDiagnostic("failureStage", diagnostics.getFailureStage());
+        if (hasText(diagnostics.getFailureSummary())) {
+            out.println("failureSummary=" + redact(truncate(diagnostics.getFailureSummary(), 500)));
+        }
+        TaskDiagnostics.CancelCapability cancel = diagnostics.getCancelCapability();
+        if (cancel != null) {
+            out.println("cancelSupported=" + Boolean.TRUE.equals(cancel.getCancelSupported()));
+            printDiagnostic("cancelMode", cancel.getCancelMode());
+            out.println("cleanupSupported=" + Boolean.TRUE.equals(cancel.getCleanupSupported()));
+            if (cancel.getBackendLimitations() != null && !cancel.getBackendLimitations().isEmpty()) {
+                out.println("backendLimitations=" + String.join(",", cancel.getBackendLimitations()));
+            }
+        }
+        TaskDiagnostics.Correlation correlation = diagnostics.getCorrelation();
+        if (correlation != null) {
+            printDiagnostic("originalTaskId", correlation.getOriginalTaskId());
+            printDiagnostic("recoveryCorrelationKey", correlation.getRecoveryCorrelationKey());
+            if (correlation.getAttemptNumber() != null) {
+                out.println("attemptNumber=" + correlation.getAttemptNumber());
+            }
+            printDiagnostic("idempotencyKey", correlation.getIdempotencyKey());
+        }
+    }
+
+    private void printTaskEvidence(TaskEvidence evidence) throws Exception {
+        if (evidence == null) {
+            return;
+        }
+        out.println("taskId=" + valueOrEmpty(evidence.getTaskId()));
+        out.println("contextId=" + valueOrEmpty(evidence.getContextId()));
+        out.println("status=" + valueOrEmpty(evidence.getStatus()));
+        out.println("terminal=" + evidence.isTerminal());
+        printDiagnostic("terminalStatus", evidence.getTerminalStatus());
+        TaskEvidence.FinalAnswer finalAnswer = evidence.getFinalAnswer();
+        if (finalAnswer != null) {
+            out.println("finalAnswer.available=" + Boolean.TRUE.equals(finalAnswer.getAvailable()));
+            printDiagnostic("finalAnswer.source", finalAnswer.getSource());
+            printDiagnostic("finalAnswer.messageId", finalAnswer.getMessageId());
+            if (hasText(finalAnswer.getSummary())) {
+                out.println("finalAnswer.summary=" + redact(truncate(finalAnswer.getSummary(), 500)));
+            }
+        }
+        TaskEvidence.StructuredOutput structuredOutput = evidence.getStructuredOutput();
+        if (structuredOutput != null) {
+            out.println("structuredOutput.available=" + Boolean.TRUE.equals(structuredOutput.getAvailable()));
+            printDiagnostic("structuredOutput.source", structuredOutput.getSource());
+            if (structuredOutput.getValue() != null) {
+                out.println("structuredOutput.value=" + redact(objectMapper.writeValueAsString(structuredOutput.getValue())));
+            }
+        }
+        if (evidence.getReportRefs() != null) {
+            for (TaskEvidence.ReportRef ref : evidence.getReportRefs()) {
+                out.println("reportRef"
+                        + " type=" + valueOrEmpty(ref != null ? ref.getType() : null)
+                        + " ref=" + redact(valueOrEmpty(ref != null ? ref.getRef() : null))
+                        + " frameId=" + redact(valueOrEmpty(ref != null ? ref.getFrameId() : null))
+                        + " summary=" + redact(valueOrEmpty(ref != null ? ref.getSummary() : null)));
+            }
+        }
+        if (evidence.getArtifactRefs() != null) {
+            for (TaskEvidence.ArtifactRef ref : evidence.getArtifactRefs()) {
+                out.println("artifactRef"
+                        + " path=" + redact(valueOrEmpty(ref != null ? ref.getPath() : null))
+                        + " ref=" + redact(valueOrEmpty(ref != null ? ref.getRef() : null))
+                        + " hash=" + redact(valueOrEmpty(ref != null ? ref.getHash() : null))
+                        + " mtime=" + redact(valueOrEmpty(ref != null ? ref.getMtime() : null))
+                        + " summary=" + redact(valueOrEmpty(ref != null ? ref.getSummary() : null)));
+            }
+        }
     }
 
     private void printTaskDiagnostics(TaskMessagesPage page, AgentTask task) {
@@ -3701,6 +4303,26 @@ public class UpstreamCli {
     private static boolean isWindows() {
         String osName = System.getProperty("os.name", "");
         return osName.toLowerCase().contains("win");
+    }
+
+    private record ContextLocator(String contextId, String year, String month, String day, String shard,
+                                  LocalDate date) {
+    }
+
+    private record SessionDirectoryDiagnostics(String contextId,
+                                               String taskId,
+                                               boolean exists,
+                                               String workerBackend,
+                                               String physicalWorkerId,
+                                               String workerHost,
+                                               String hostname,
+                                               Path sessionDirectory,
+                                               Path logsDirectory,
+                                               Path skillToolCallsDirectory,
+                                               Path skillToolCallsFile,
+                                               Path llmSubmissionsDirectory,
+                                               String accessHint,
+                                               String notFoundReason) {
     }
 
     private record InstallerCommand(String role, String releaseBaseUrl, List<String> command, String scriptPreview) {

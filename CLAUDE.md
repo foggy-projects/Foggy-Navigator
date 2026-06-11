@@ -2,6 +2,11 @@
 
 Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 
+## 项目称呼
+
+- 用户或上下文中提到 `navi`、`Navi`、`NAVI` 时，默认指当前项目 Foggy Navigator，也就是本仓库/当前工作区。
+- 如同时出现其他 Navigator 环境，先按工作区路径、端口和进程命令行确认具体目标，避免误操作其他环境。
+
 ## 本机私有补充
 
 - 本机环境规则见 [CLAUDE.local.md](./CLAUDE.local.md)。
@@ -10,40 +15,48 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 
 ## 模块结构
 
-### 后端模块（Maven）
+模块清单以工程配置为准，本文只保留当前协作时最常用的分层口径：
 
-```
-Foggy-Navigator/
-├── navigator-common/           # 公共 DTO、Entity、CredentialEncryptor
-├── navigator-spi/              # SPI 接口定义（A2A、ClaudeWorkerFacade 等）
-├── agent-framework/            # Agent 核心框架（LLM调用、Skill解析、工具执行、会话路由）
-├── user-auth-module/           # 用户认证（JWT）
-├── metadata-config-module/     # Skill 配置 + 平台配置管理（Git/LLM/AgentModel）
-├── metadata-query-module/      # 元数据查询服务
-├── session-module/             # 会话管理 + SSE 推送 + JpaAgentRegistry
-├── tutor-agent/                # 导师 Agent（引导用户、分派任务）
-├── addons/claude-worker-agent/ # Claude Code 工人 Agent（远程编程）
-├── addons/langgraph-biz-worker/# LangGraph 业务型 Worker Agent（Java 侧，待开发）
-└── launcher/                   # Spring Boot 启动器
-```
+- **Maven 模块**：以 [pom.xml](./pom.xml) 的 `<modules>` 为准。
+- **前端 workspace**：以 [pnpm-workspace.yaml](./pnpm-workspace.yaml) 和 `packages/*/package.json` 为准。
+- **Worker / 辅助服务**：以 `tools/*/start.ps1`、`tools/*/.env.example` 和具体 README 为准。
+- **系统级架构说明**：以 [docs/00-system-overview.md](./docs/00-system-overview.md) 和 [docs/02-modules/functional-architecture.md](./docs/02-modules/functional-architecture.md) 为当前口径。
 
-### 前端模块（pnpm workspace）
+### 后端分层
 
-```
-packages/
-├── foggy-chat/             # 聊天组件库（ChatPanel、useChatStore）
-└── navigator-frontend/     # Navigator 前端（Vue 3 + Element Plus）
-```
+| 层级 | 当前模块 |
+|------|------|
+| 聚合启动 | `launcher` |
+| 底座与 SPI | `navigator-common`、`navigator-spi`、`agent-framework` |
+| 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module`、`metadata-query-module`、`monitoring-module` |
+| Worker / Agent addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/echo-agent`、`addons/task-assistant` |
+| 对外 SDK / 本地 BFF | `navigator-open-sdk`、`tools/navigator-chat-observer-bff` |
 
-### 工具与测试支撑
+`addons/code-review-agent` 目前存在源码目录，但未纳入根 `pom.xml`，开发前先确认是否仍为实验模块或待接入模块。
 
-```
-tools/
-├── claude-agent-worker/    # Claude Worker Python 服务
-├── gemini-agent-worker/    # Gemini Worker TypeScript 服务
-├── langgraph-biz-worker/   # LangGraph 业务型 Worker Python 服务（Skill Runtime + Frame 生命周期）
-└── mock-llm-service/       # Mock Anthropic 端点（L3 集成测试用）
-```
+旧独立“会话”入口及其配套 `tutor-agent` 模块已移除；不要再把它当作当前主线模块设计新能力。
+
+### 前端与移动端
+
+| 包 | 说明 |
+|------|------|
+| `packages/navigator-frontend` | Navigator 管理台与主工作台（Vue 3 + Element Plus） |
+| `packages/foggy-chat` | 聊天组件库 |
+| `packages/foggy-chat-core` | 跨 Web / Mobile 复用的聊天核心能力 |
+| `packages/navigator-chat-widget` | 可嵌入上游系统的聊天组件 |
+| `packages/foggy-mobile` | uni-app 移动端 |
+
+### 工具与 Worker
+
+| 目录 | 说明 |
+|------|------|
+| `tools/claude-agent-worker` | Claude Worker Python 服务 |
+| `tools/codex-agent-worker` | Codex Worker TypeScript 服务 |
+| `tools/gemini-agent-worker` | Gemini Worker TypeScript 服务 |
+| `tools/langgraph-biz-worker` | LangGraph Biz Worker Python 服务 |
+| `tools/mock-llm-service` | Mock LLM 端点 |
+| `tools/navigator-upstream`、`tools/navigator-upstream-cli` | 上游接入工具与 CLI |
+| `tools/claude-code-proxy`、`tools/llm-gateway`、`tools/llm-recorder-proxy` | LLM / Claude Code 调试与代理工具 |
 
 ## 项目启动
 
@@ -57,9 +70,12 @@ tools/
 | `start-frontend.ps1` | 前端开发服务器 | 5174 |
 | `tools/claude-agent-worker/start.ps1` | Claude Worker | 3031 |
 | `tools/claude-agent-worker/stop.ps1` | 停止 Claude Worker | - |
+| `tools/codex-agent-worker/start.ps1` | Codex Worker | 3051 |
+| `tools/codex-agent-worker/stop.ps1` | 停止 Codex Worker | - |
 | `tools/gemini-agent-worker/start.ps1` | Gemini Worker | 3071 |
 | `tools/gemini-agent-worker/stop.ps1` | 停止 Gemini Worker | - |
-| `tools/langgraph-biz-worker/start.ps1` | LangGraph Biz Worker | 3061 |
+| `tools/langgraph-biz-worker/start.ps1` | LangGraph Biz Worker（Windows 本地默认） | 3061 |
+| `tools/langgraph-biz-worker/restart-wsl-3161.ps1` | LangGraph Biz Worker（WSL / 上游联调常用） | 3161 |
 | `tools/langgraph-biz-worker/stop.ps1` | 停止 LangGraph Biz Worker | - |
 
 ### Worker 更新边界
@@ -67,9 +83,14 @@ tools/
 当前工作区路径为 `D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev`。当需要更新、重启或排查 Worker 时，只处理以下实例：
 
 - 当前 Windows 工作区内的 Worker：`D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev\tools\...`
-- WSL 中对应的 Worker，例如 `/home/navigator/.codex-worker`
+- WSL 中对应的 Worker，例如 `/home/navigator/.codex-worker` 或 3161 Biz Worker
 
-不要停止、重启或升级其他 Windows 工作区的 Worker，例如 `D:\foggy-projects\Foggy-Navigator` 下的进程或端口 `3052`。如果端口或进程归属不明确，先用进程命令行确认工作区路径，再执行操作。
+不要停止、重启或升级其他 Windows 工作区的 Worker，例如 `D:\foggy-projects\Foggy-Navigator` 下的进程。端口号只能作为线索，不能作为归属依据；如果端口或进程归属不明确，先用进程命令行确认工作区路径，再执行操作。
+
+本机联调时注意区分两类 Biz Worker：
+
+- `tools/langgraph-biz-worker/start.ps1` 默认启动 Windows 本地 3061。
+- `start-launcher.ps1` 未显式设置 `BUSINESS_AGENT_DEV_SYNC_WORKER_URL` 时，会默认把 Skill 同步指向 `http://127.0.0.1:3161`，用于当前 WSL / 上游联调链路。
 
 ### 后端启动
 
@@ -116,16 +137,17 @@ cd packages/navigator-frontend && pnpm exec vite build
 - **平台配置**：首次使用需在 `/#/settings` 配置 Git 提供者和 AI 模型
 - **日志文件**：`logs/backend.log`、`logs/backend-error.log`
 
-## Agent 编排核心 — A2A 统一发现与调用
+## Agent 编排核心
 
-Claude Worker Agent 是系统核心模块之一。所有 Agent（无论底层实现）统一通过 A2A 协议交互。
+所有 Agent（无论底层实现）统一通过 A2A / provider 路由接入会话与任务分发链路。
 
 - **SPI 接口**: `A2aAgent`（执行）+ `A2aAgentProvider`（提供者模式），位于 `navigator-spi/spi/agent/`
 - **统一注册**: `DefaultA2aAgentRegistry`（session-module）聚合所有 Provider
-- **统一分派**: `TaskDispatchFacade`（session-module）是所有 Worker 任务的入口，支持 A2A 路由和 Direct Provider 路由
+- **统一解析**: `UnifiedAgentResolver`（session-module）按 `agentId` / `providerType` / `modelConfigId` 解析目标
+- **统一分派**: `TaskDispatchFacade`（session-module）是 Worker / Agent 任务入口，支持 A2A 路由和 Direct Provider 路由
 - **会话绑定**: `SessionBindingService`（session-module）管理 Session ↔ Agent 绑定生命周期，绑定后不可切换
 - **REST 端点**: `GET /api/v1/agents`（发现）、`POST /api/v1/agents/{id}/ask`（调用）、`POST /api/v1/tasks`（任务分派）
-- **当前实现**: `ClaudeWorkerAgentProvider` → `ClaudeWorkerA2aAgent`（通过 `syncQuery` 同步执行）
+- **当前 Provider**: Claude Worker、Codex Worker、Gemini Worker、LangGraph Biz Worker、Echo Agent
 - **三个核心语义**（需求 26）：`logicalAgentId`（逻辑 Agent）、`providerType`（执行后端）、`modelConfigId`（模型配置）— 禁止混淆
 - **扩展**: 新 addon 只需实现 `A2aAgentProvider` + `@Component`，自动注入 Registry
 
@@ -147,3 +169,4 @@ Claude Worker Agent 是系统核心模块之一。所有 Agent（无论底层实
    - 若仍不一致，重启 Vite dev server（`stop-frontend.ps1` → `start-frontend.ps1`）
 10. **会话 modelConfigId 绑定原则**：一个会话使用 `modelConfigId` 创建后（创建新会话必须指定 modelConfigId），该值永远固定，除非用户主动修改。会话内可以切换 `model`（如 opus → sonnet），但不能自动切换 `modelConfigId`（即 API 凭证/订阅不变）。
 11. **测试产物落点规范**：根目录禁止新增临时测试产物（如 `*.yaml`、`*.yml`、`*.png`、`.tmp-*.log`、`.tmp-*.json`）。临时调试/回归产物统一写入 `temp/test-artifacts/<任务或日期>/`，该目录仅用于本地暂存并保持 git ignore；需要长期保留的验收证据，写入对应版本目录下的 `docs/version-tracker/<version>/evidence/`。编写 Playwright、脚本或临时验证命令时，必须显式指定输出目录，避免再次把大量测试文件落到仓库根目录。
+12. **异常与事务治理规范**：后端可预期业务异常、资源 not-ready、readiness/preflight blocker 不得被裸抛成 HTTP 500。Service 层需要区分系统缺陷与业务/资源状态异常；会被外层捕获并转换为 structured response 的事务方法，优先使用统一的 `@ReadinessTransactional` 或等价 `noRollbackFor` 策略，self-healing/readiness 聚合入口优先隔离大外层事务，避免 `UnexpectedRollbackException` 覆盖真实响应。详细规范见 [后端异常处理与事务治理规范](docs/dev-specs/exception-handling-and-transaction-governance.md)。

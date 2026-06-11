@@ -10,6 +10,7 @@ import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRe
 import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
+import com.foggy.navigator.business.agent.transaction.ReadinessTransactional;
 import com.foggy.navigator.business.agent.service.worker.PhysicalWorkerRuntimeRegistry;
 import com.foggy.navigator.business.agent.service.worker.ResolvedPhysicalWorker;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
@@ -24,7 +25,6 @@ import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
@@ -98,7 +98,7 @@ public class A2AgentResourceResolver {
             String source) {
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public ResolvedAgentResource resolveRequiredAgent(String tenantId,
                                                      String clientAppId,
                                                      String upstreamUserId,
@@ -161,7 +161,7 @@ public class A2AgentResourceResolver {
         return resolved;
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public Optional<String> resolveLatestHealthyBizWorkerIdentityId(String tenantId, String clientAppId) {
         requireText(tenantId, "tenantId is required");
         requireText(clientAppId, "clientAppId is required");
@@ -186,7 +186,7 @@ public class A2AgentResourceResolver {
                 .findFirst();
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public String resolveRequiredModelConfigId(String tenantId,
                                                String clientAppId,
                                                String requestedModelConfigId,
@@ -194,7 +194,7 @@ public class A2AgentResourceResolver {
         return resolveRequiredModel(tenantId, clientAppId, requestedModelConfigId, category).modelConfigId();
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public ResolvedModelResource resolveRequiredModel(String tenantId,
                                                       String clientAppId,
                                                       String requestedModelConfigId,
@@ -202,7 +202,7 @@ public class A2AgentResourceResolver {
         return resolveRequiredModel(tenantId, clientAppId, requestedModelConfigId, null, null, category);
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public ResolvedModelResource resolveRequiredModel(String tenantId,
                                                       String clientAppId,
                                                       String requestedModelConfigId,
@@ -248,7 +248,7 @@ public class A2AgentResourceResolver {
         return resolved;
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public String resolveRequiredModelConfigIdForAgent(String tenantId,
                                                        String clientAppId,
                                                        ResolvedAgentResource agentResource,
@@ -262,7 +262,7 @@ public class A2AgentResourceResolver {
                 category).modelConfigId();
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public ResolvedModelResource resolveRequiredModelForAgent(String tenantId,
                                                               String clientAppId,
                                                               ResolvedAgentResource agentResource,
@@ -277,7 +277,7 @@ public class A2AgentResourceResolver {
                 category);
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public ResolvedModelResource resolveRequiredModelForAgent(String tenantId,
                                                               String clientAppId,
                                                               ResolvedAgentResource agentResource,
@@ -317,7 +317,7 @@ public class A2AgentResourceResolver {
         return resolved;
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public String resolveOptionalModelConfigId(String tenantId,
                                                String clientAppId,
                                                LlmModelCategory category) {
@@ -326,7 +326,7 @@ public class A2AgentResourceResolver {
                 .orElse(null);
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public Optional<ResolvedModelResource> resolveOptionalModel(String tenantId,
                                                                String clientAppId,
                                                                LlmModelCategory category) {
@@ -356,7 +356,7 @@ public class A2AgentResourceResolver {
                 });
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public Optional<ResolvedModelResource> resolveOptionalModelForAgent(String tenantId,
                                                                        String clientAppId,
                                                                        ResolvedAgentResource agentResource,
@@ -390,7 +390,7 @@ public class A2AgentResourceResolver {
                 });
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public Optional<ResolvedWorkspaceResource> resolveOptionalWorkspace(String tenantId,
                                                                        String clientAppId,
                                                                        String upstreamUserId,
@@ -405,7 +405,7 @@ public class A2AgentResourceResolver {
         return Optional.of(resolveRequiredWorkspace(tenantId, clientAppId, upstreamUserId, normalizedDirectoryId));
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public Optional<ResolvedWorkspaceResource> resolveOptionalWorkspaceForAgent(String tenantId,
                                                                                String clientAppId,
                                                                                String upstreamUserId,
@@ -427,7 +427,7 @@ public class A2AgentResourceResolver {
                 normalizedDirectoryId));
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public ResolvedWorkspaceResource resolveRequiredWorkspace(String tenantId,
                                                              String clientAppId,
                                                              String upstreamUserId,
@@ -477,7 +477,7 @@ public class A2AgentResourceResolver {
         return resolved;
     }
 
-    @Transactional(readOnly = true)
+    @ReadinessTransactional(readOnly = true)
     public ResolvedWorkspaceResource resolveRequiredWorkspaceForAgent(String tenantId,
                                                                      String clientAppId,
                                                                      String upstreamUserId,

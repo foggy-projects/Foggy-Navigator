@@ -1,6 +1,7 @@
 package com.foggy.navigator.metadata.query.config.service;
 
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.dto.LlmModelConfigOwnerRepairResultDTO;
 import com.foggy.navigator.common.entity.AgentModelOverrideEntity;
 import com.foggy.navigator.common.entity.LlmModelConfigEntity;
 import com.foggy.navigator.common.entity.ModelWorkerAccessEntity;
@@ -9,6 +10,7 @@ import com.foggy.navigator.common.enums.ModelAccessScope;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.AgentModelOverrideForm;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
+import com.foggy.navigator.common.form.LlmModelConfigOwnerRepairForm;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.metadata.query.config.repository.AgentModelOverrideRepository;
 import com.foggy.navigator.metadata.query.config.repository.LlmModelConfigRepository;
@@ -166,6 +168,45 @@ public class LlmModelManagerImpl implements LlmModelManager {
 
         llmModelRepo.save(entity);
         log.info("LLM model config updated: id={}", id);
+    }
+
+    @Override
+    @Transactional
+    public LlmModelConfigOwnerRepairResultDTO repairModelConfigOwner(String id,
+                                                                     LlmModelConfigOwnerRepairForm form) {
+        log.warn("Repairing LLM model config owner: id={}", id);
+        if (form == null) {
+            throw new IllegalArgumentException("form is required");
+        }
+        ResourceOwnerType targetOwnerType = requireRepairOwnerType(form.getOwnerType());
+        String targetOwnerId = normalizeRepairOwnerId(targetOwnerType, form.getOwnerId());
+
+        LlmModelConfigEntity entity = llmModelRepo.findById(id)
+                .orElseThrow(() -> RX.throwB("LLM model config not found: " + id));
+        if (form.getTenantId() != null
+                && !form.getTenantId().isBlank()
+                && !form.getTenantId().trim().equals(entity.getTenantId())) {
+            throw new IllegalArgumentException("model config tenant mismatch");
+        }
+
+        LlmModelConfigOwnerRepairResultDTO result = new LlmModelConfigOwnerRepairResultDTO();
+        result.setModelConfigId(entity.getId());
+        result.setTenantId(entity.getTenantId());
+        result.setPreviousOwnerType(entity.getOwnerType());
+        result.setPreviousOwnerId(entity.getOwnerId());
+        result.setPreviousEnabled(entity.getEnabled());
+
+        entity.setOwnerType(targetOwnerType);
+        entity.setOwnerId(targetOwnerId);
+        if (form.getEnabled() != null) {
+            entity.setEnabled(form.getEnabled());
+        }
+        LlmModelConfigEntity saved = llmModelRepo.save(entity);
+
+        result.setOwnerType(saved.getOwnerType());
+        result.setOwnerId(saved.getOwnerId());
+        result.setEnabled(saved.getEnabled());
+        return result;
     }
 
     @Override
@@ -489,6 +530,33 @@ public class LlmModelManagerImpl implements LlmModelManager {
     private String trimToDefault(String value, String fallback) {
         String trimmed = trimToNull(value);
         return trimmed != null ? trimmed : fallback;
+    }
+
+    private ResourceOwnerType requireRepairOwnerType(ResourceOwnerType ownerType) {
+        if (ownerType == null) {
+            throw new IllegalArgumentException("ownerType is required");
+        }
+        if (ownerType != ResourceOwnerType.PLATFORM
+                && ownerType != ResourceOwnerType.UPSTREAM_SYSTEM
+                && ownerType != ResourceOwnerType.CLIENT_APP) {
+            throw new IllegalArgumentException(
+                    "ownerType must be PLATFORM, UPSTREAM_SYSTEM, or CLIENT_APP");
+        }
+        return ownerType;
+    }
+
+    private String normalizeRepairOwnerId(ResourceOwnerType ownerType, String ownerId) {
+        String normalized = trimToNull(ownerId);
+        if (ownerType == ResourceOwnerType.PLATFORM) {
+            if (normalized != null && !"platform".equals(normalized)) {
+                throw new IllegalArgumentException("PLATFORM ownerId must be platform");
+            }
+            return "platform";
+        }
+        if (normalized == null) {
+            throw new IllegalArgumentException("ownerId is required");
+        }
+        return normalized;
     }
 
     private void normalizeWorkerAuth(LlmModelConfigEntity entity) {

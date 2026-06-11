@@ -3,7 +3,9 @@ package com.foggy.navigator.metadata.query.config.service;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.LlmModelConfigEntity;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
+import com.foggy.navigator.common.form.LlmModelConfigOwnerRepairForm;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.metadata.query.config.repository.AgentModelOverrideRepository;
 import com.foggy.navigator.metadata.query.config.repository.LlmModelConfigRepository;
@@ -217,5 +219,88 @@ class LlmModelManagerImplTest {
 
         assertEquals("generic.128k", dto.getRuntimeBudgetPresetKey());
         assertEquals("{\"maxOutputTokens\":6144}", dto.getRuntimeBudgetOverrideJson());
+    }
+
+    @Test
+    void repairModelConfigOwnerUpdatesOnlyOwnershipMetadata() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-tenant-138");
+        entity.setTenantId("nav_tms_138");
+        entity.setName("legacy model");
+        entity.setCategory(LlmModelCategory.CODING);
+        entity.setBaseUrl("https://llm.example/v1");
+        entity.setApiKey("encrypted-key");
+        entity.setModelName("qwen-coder");
+        entity.setOwnerType(ResourceOwnerType.CLIENT_APP);
+        entity.setOwnerId("old-client");
+        entity.setEnabled(false);
+
+        LlmModelConfigOwnerRepairForm form = new LlmModelConfigOwnerRepairForm();
+        form.setTenantId("nav_tms_138");
+        form.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
+        form.setOwnerId("TMS");
+        form.setEnabled(true);
+
+        when(llmModelRepo.findById("cfg-tenant-138")).thenReturn(Optional.of(entity));
+        when(llmModelRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        var result = service.repairModelConfigOwner("cfg-tenant-138", form);
+
+        assertEquals("cfg-tenant-138", result.getModelConfigId());
+        assertEquals("nav_tms_138", result.getTenantId());
+        assertEquals(ResourceOwnerType.CLIENT_APP, result.getPreviousOwnerType());
+        assertEquals("old-client", result.getPreviousOwnerId());
+        assertEquals(ResourceOwnerType.UPSTREAM_SYSTEM, result.getOwnerType());
+        assertEquals("TMS", result.getOwnerId());
+        assertFalse(result.getPreviousEnabled());
+        assertTrue(result.getEnabled());
+        verify(llmModelRepo).save(argThat(saved ->
+                saved.getOwnerType() == ResourceOwnerType.UPSTREAM_SYSTEM
+                        && "TMS".equals(saved.getOwnerId())
+                        && Boolean.TRUE.equals(saved.getEnabled())
+                        && "https://llm.example/v1".equals(saved.getBaseUrl())
+                        && "encrypted-key".equals(saved.getApiKey())
+                        && "qwen-coder".equals(saved.getModelName())));
+    }
+
+    @Test
+    void repairModelConfigOwnerRejectsTenantMismatch() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-tenant-138");
+        entity.setTenantId("nav_tms_138");
+
+        LlmModelConfigOwnerRepairForm form = new LlmModelConfigOwnerRepairForm();
+        form.setTenantId("nav_tms_110");
+        form.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
+        form.setOwnerId("TMS");
+
+        when(llmModelRepo.findById("cfg-tenant-138")).thenReturn(Optional.of(entity));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.repairModelConfigOwner("cfg-tenant-138", form));
+        verify(llmModelRepo, never()).save(any());
+    }
+
+    @Test
+    void repairModelConfigOwnerNormalizesPlatformOwner() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-platform");
+        entity.setTenantId("nav_tms_138");
+        entity.setOwnerType(ResourceOwnerType.CLIENT_APP);
+        entity.setOwnerId("client-1");
+
+        LlmModelConfigOwnerRepairForm form = new LlmModelConfigOwnerRepairForm();
+        form.setOwnerType(ResourceOwnerType.PLATFORM);
+
+        when(llmModelRepo.findById("cfg-platform")).thenReturn(Optional.of(entity));
+        when(llmModelRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        var result = service.repairModelConfigOwner("cfg-platform", form);
+
+        assertEquals(ResourceOwnerType.PLATFORM, result.getOwnerType());
+        assertEquals("platform", result.getOwnerId());
+        verify(llmModelRepo).save(argThat(saved ->
+                saved.getOwnerType() == ResourceOwnerType.PLATFORM
+                        && "platform".equals(saved.getOwnerId())));
     }
 }

@@ -8,18 +8,6 @@ describe('04 - 引导卡片 (Guide Cards)', () => {
     client = await createAuthenticatedClient();
   });
 
-  test('应该返回 tutor-agent 的引导卡片', async () => {
-    const cards = await client.getGuideCards('tutor-agent');
-
-    expect(cards).toBeDefined();
-    expect(cards.length).toBe(3);
-    expect(cards[0].title).toBe('数据查询');
-    expect(cards[0].description).toBeTruthy();
-    expect(cards[0].icon).toBeTruthy();
-    expect(cards[1].title).toBe('报表生成');
-    expect(cards[2].title).toBe('数据建模');
-  });
-
   test('应该返回默认引导卡片', async () => {
     const cards = await client.getGuideCards();
 
@@ -29,8 +17,8 @@ describe('04 - 引导卡片 (Guide Cards)', () => {
     expect(cards[1].title).toBe('查看帮助');
   });
 
-  test('应该为未知 agentId 返回默认卡片', async () => {
-    const cards = await client.getGuideCards('unknown-agent');
+  test('应该忽略 agentId 并返回默认卡片', async () => {
+    const cards = await client.getGuideCards('test-agent');
 
     expect(cards).toBeDefined();
     expect(cards.length).toBe(2);

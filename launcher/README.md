@@ -53,7 +53,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=docker
 ```xml
 <dependency>
     <groupId>com.foggy.navigator</groupId>
-    <artifactId>tutor-agent</artifactId>
+    <artifactId>claude-worker-agent</artifactId>
     <version>${project.version}</version>
 </dependency>
 ```

@@ -5,6 +5,7 @@
  * 对已完成消息缓存渲染结果（LRU），streaming 阶段跳过代码高亮。
  */
 import MarkdownIt from 'markdown-it'
+import type { RenderRule } from 'markdown-it/lib/renderer.mjs'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
@@ -88,6 +89,23 @@ const mdLite = new MarkdownIt({
   breaks: true,
   highlight: plainHighlight,
 })
+
+function wrapTables(md: MarkdownIt): void {
+  const renderToken: RenderRule = (tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options)
+  const defaultTableOpen = md.renderer.rules.table_open ?? renderToken
+  const defaultTableClose = md.renderer.rules.table_close ?? renderToken
+
+  md.renderer.rules.table_open = (tokens, idx, options, env, self) => {
+    return `<div class="markdown-table-wrap">${defaultTableOpen(tokens, idx, options, env, self)}`
+  }
+
+  md.renderer.rules.table_close = (tokens, idx, options, env, self) => {
+    return `${defaultTableClose(tokens, idx, options, env, self)}</div>`
+  }
+}
+
+wrapTables(mdFull)
+wrapTables(mdLite)
 
 // ── LRU Cache (max 500 entries) ──
 const MAX_CACHE_SIZE = 500

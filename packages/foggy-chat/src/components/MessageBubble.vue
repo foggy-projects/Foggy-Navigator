@@ -319,6 +319,69 @@ onBeforeUnmount(() => {
   color: #606266;
 }
 
+.bubble-content :deep(.markdown-table-wrap) {
+  max-width: 100%;
+  margin: 10px 0 12px;
+  overflow-x: auto;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(31, 45, 61, 0.04);
+}
+
+.bubble-content :deep(.markdown-table-wrap table) {
+  width: max-content;
+  min-width: min(100%, 420px);
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.bubble-content :deep(.markdown-table-wrap th),
+.bubble-content :deep(.markdown-table-wrap td) {
+  padding: 7px 10px;
+  border-right: 1px solid #e1e6ef;
+  border-bottom: 1px solid #e1e6ef;
+  color: #303133;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.bubble-content :deep(.markdown-table-wrap th) {
+  background: #f3f6fb;
+  color: #1f2d3d;
+  font-weight: 600;
+}
+
+.bubble-content :deep(.markdown-table-wrap tbody tr:nth-child(even) td) {
+  background: #fbfcff;
+}
+
+.bubble-content :deep(.markdown-table-wrap tbody tr:hover td) {
+  background: #f2f7ff;
+}
+
+.bubble-content :deep(.markdown-table-wrap tr > :last-child) {
+  border-right: none;
+}
+
+.bubble-content :deep(.markdown-table-wrap tbody tr:last-child td) {
+  border-bottom: none;
+}
+
+.bubble-content :deep(.markdown-table-wrap th[style*="right"]),
+.bubble-content :deep(.markdown-table-wrap td[style*="right"]) {
+  text-align: right;
+}
+
+.bubble-content :deep(.markdown-table-wrap th[style*="center"]),
+.bubble-content :deep(.markdown-table-wrap td[style*="center"]) {
+  text-align: center;
+}
+
 /* Hover action bar */
 .bubble-actions {
   display: flex;
