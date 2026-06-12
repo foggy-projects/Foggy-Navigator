@@ -35,10 +35,14 @@ ERR_READ_ONLY = "workspace_read_only"
 # Constants
 # ---------------------------------------------------------------------------
 
-# File extensions allowed inside agent/skills/<name>/references/** and assets/**
+# File extensions allowed for account-agent text files and skill resources.
 _ALLOWED_EXTENSIONS: frozenset[str] = frozenset({
     ".md", ".txt", ".json", ".yaml", ".yml", ".fsscript",
 })
+
+_AGENT_ROOT = "agent"
+_SKILLS_DIR = "skills"
+_ACCOUNT_POLICY_PATH = (_AGENT_ROOT, "ACCOUNT_POLICY.md")
 
 # Forbidden skill-name values (reserved directory names)
 _FORBIDDEN_SKILL_NAMES: frozenset[str] = frozenset({
@@ -105,7 +109,7 @@ class AccountPathGuard:
                 raise PathGuardError(ERR_FORBIDDEN, str(exc))
 
         segments = self._validate_and_split(relative_path)
-        self._check_allowed_file_path(segments)
+        self._check_allowed_file_path(segments, write=False)
         resolved = self._join_and_resolve(segments)
         self._check_symlinks(resolved)
         return resolved
@@ -117,12 +121,17 @@ class AccountPathGuard:
                 raise PathGuardError(ERR_READ_ONLY, "workspace is read-only")
             try:
                 resolved = self._execution_policy.resolve_path(relative_path)
+                if self._is_account_policy_path(resolved):
+                    raise PathGuardError(
+                        ERR_FORBIDDEN,
+                        "agent/ACCOUNT_POLICY.md is read-only for agent file tools",
+                    )
                 return resolved
             except ValueError as exc:
                 raise PathGuardError(ERR_FORBIDDEN, str(exc))
 
         segments = self._validate_and_split(relative_path)
-        self._check_allowed_file_path(segments)
+        self._check_allowed_file_path(segments, write=True)
         resolved = self._join_and_resolve(segments)
         # For writes, also verify that existing parent dirs are not symlinks
         self._check_parent_symlinks(resolved)
@@ -135,6 +144,8 @@ class AccountPathGuard:
         """Resolve a relative path for list_files — allows directory targets.
 
         Allowed targets:
+        - ``agent/``
+        - ``agent/<safe-dir>/...``
         - ``agent/skills/``
         - ``agent/skills/<skill-name>/``
         - ``agent/skills/<skill-name>/references/``
@@ -184,13 +195,53 @@ class AccountPathGuard:
 
     # -- Allowlist checks ----------------------------------------------------
 
-    def _check_allowed_file_path(self, segments: list[str]) -> None:
+    def _check_allowed_file_path(self, segments: list[str], *, write: bool) -> None:
+        """Check that segments match allowed account-agent file paths."""
+        if segments[0] != _AGENT_ROOT:
+            raise PathGuardError(
+                ERR_FORBIDDEN,
+                f"path must start with '{_AGENT_ROOT}/': got '{'/'.join(segments)}'",
+            )
+
+        if write and tuple(segments) == _ACCOUNT_POLICY_PATH:
+            raise PathGuardError(
+                ERR_FORBIDDEN,
+                "agent/ACCOUNT_POLICY.md is read-only for agent file tools",
+            )
+
+        if len(segments) >= 2 and segments[1] == _SKILLS_DIR:
+            self._check_allowed_skill_file_path(segments)
+            return
+
+        self._check_allowed_agent_file_path(segments)
+
+    def _check_allowed_agent_file_path(self, segments: list[str]) -> None:
+        """Check that segments target a safe text file under agent/."""
+        if len(segments) < 2:
+            raise PathGuardError(
+                ERR_FORBIDDEN,
+                f"'{_AGENT_ROOT}/' requires a file target beneath it",
+            )
+
+        for s in segments[1:]:
+            if not _SAFE_SEGMENT_RE.match(s):
+                raise PathGuardError(ERR_INVALID_PATH, f"unsafe path segment: '{s}'")
+
+        filename = segments[-1]
+        ext = _get_extension(filename)
+        if ext not in _ALLOWED_EXTENSIONS:
+            raise PathGuardError(
+                ERR_FILE_TYPE,
+                f"file type '{ext}' not allowed; allowed: {sorted(_ALLOWED_EXTENSIONS)}",
+            )
+
+    def _check_allowed_skill_file_path(self, segments: list[str]) -> None:
         """Check that segments match the allowed file paths for skills."""
         # Expected patterns:
         #   agent/skills/<name>/SKILL.md
         #   agent/skills/<name>/references/<...path...>
         #   agent/skills/<name>/assets/<...path...>
-        if len(segments) < 4 or segments[0] != "agent" or segments[1] != "skills":
+        if len(segments) < 4 or segments[0] != _AGENT_ROOT or segments[1] != _SKILLS_DIR:
             raise PathGuardError(
                 ERR_FORBIDDEN,
                 f"path must start with 'agent/skills/<skill-name>/': got '{'/'.join(segments)}'",
@@ -232,8 +283,24 @@ class AccountPathGuard:
         )
 
     def _check_allowed_list_path(self, segments: list[str]) -> None:
-        """Check that segments are valid list-directory targets."""
-        if len(segments) < 2 or segments[0] != "agent" or segments[1] != "skills":
+        """Check that segments are valid list-directory targets under agent/."""
+        if segments[0] != _AGENT_ROOT:
+            raise PathGuardError(ERR_FORBIDDEN, "list_files only allowed under 'agent/'")
+
+        if len(segments) == 1:
+            return
+
+        if segments[1] == _SKILLS_DIR:
+            self._check_allowed_skill_list_path(segments)
+            return
+
+        for s in segments[1:]:
+            if not _SAFE_SEGMENT_RE.match(s):
+                raise PathGuardError(ERR_INVALID_PATH, f"unsafe path segment: '{s}'")
+
+    def _check_allowed_skill_list_path(self, segments: list[str]) -> None:
+        """Check that segments are valid skill list-directory targets."""
+        if len(segments) < 2 or segments[0] != _AGENT_ROOT or segments[1] != _SKILLS_DIR:
             raise PathGuardError(ERR_FORBIDDEN, "list_files only allowed under 'agent/skills/'")
 
         if len(segments) == 2:
@@ -268,6 +335,14 @@ class AccountPathGuard:
                 ERR_INVALID_PATH,
                 f"skill name must be a safe identifier: '{name}'",
             )
+
+    def _is_account_policy_path(self, resolved: Path) -> bool:
+        """Return true for the workspace-local account policy file."""
+        try:
+            rel = resolved.relative_to(self._account_root.resolve())
+        except ValueError:
+            return False
+        return tuple(rel.parts) == _ACCOUNT_POLICY_PATH
 
     # -- Filesystem resolution -----------------------------------------------
 

@@ -61,6 +61,22 @@ class TestValidPaths:
         p = populated_guard.resolve_write("agent/skills/my-skill/SKILL.md")
         assert p.name == "SKILL.md"
 
+    def test_write_agent_md(self, guard: AccountPathGuard):
+        p = guard.resolve_write("agent/AGENT.md")
+        assert p.name == "AGENT.md"
+
+    def test_write_memory_md(self, guard: AccountPathGuard):
+        p = guard.resolve_write("agent/MEMORY.md")
+        assert p.name == "MEMORY.md"
+
+    def test_write_personal_agent_file(self, guard: AccountPathGuard):
+        p = guard.resolve_write("agent/notes/context.md")
+        assert p.name == "context.md"
+
+    def test_read_account_policy(self, guard: AccountPathGuard):
+        p = guard.resolve_read("agent/ACCOUNT_POLICY.md")
+        assert p.name == "ACCOUNT_POLICY.md"
+
 
 # ---------------------------------------------------------------------------
 # Reject absolute paths
@@ -127,6 +143,11 @@ class TestRejectForbidden:
     def test_non_skill_path(self, guard: AccountPathGuard):
         with pytest.raises(PathGuardError) as exc_info:
             guard.resolve_write("config/settings.json")
+        assert exc_info.value.code == ERR_FORBIDDEN
+
+    def test_account_policy_write_rejected(self, guard: AccountPathGuard):
+        with pytest.raises(PathGuardError) as exc_info:
+            guard.resolve_write("agent/ACCOUNT_POLICY.md")
         assert exc_info.value.code == ERR_FORBIDDEN
 
     def test_skill_root_arbitrary_file(self, guard: AccountPathGuard):
@@ -204,6 +225,12 @@ class TestFsscript:
 # ---------------------------------------------------------------------------
 
 class TestListPaths:
+    def test_list_agent_root(self, guard: AccountPathGuard):
+        guard.resolve_list("agent")
+
+    def test_list_agent_notes(self, guard: AccountPathGuard):
+        guard.resolve_list("agent/notes")
+
     def test_list_skills_root(self, guard: AccountPathGuard):
         guard.resolve_list("agent/skills")  # Should not raise
 

@@ -86,6 +86,8 @@ def _build_system_prompt(
         "如果已提供 list_files、read_file、write_file 或 patch_file，可在当前账号/"
         "工作目录文件作用域内读取或维护文件；优先 list_files/read_file 观察现状，"
         "修改现有文件优先使用 patch_file，整文件创建或覆盖才使用 write_file。"
+        "托管账号模式下 `agent/ACCOUNT_POLICY.md` 只读；`agent/AGENT.md` 和 "
+        "`agent/MEMORY.md` 仅在任务需要或用户明确要求时维护。"
         "如果运行时提供了 delegated workspace，文件工具的 relative_path 以 delegated "
         "workspace 根目录为基准；用户要求写入 `actors/pm/example.txt` 时，"
         "write_file 的 relative_path 就传 `actors/pm/example.txt`。"

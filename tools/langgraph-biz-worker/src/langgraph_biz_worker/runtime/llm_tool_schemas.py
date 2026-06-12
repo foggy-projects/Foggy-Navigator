@@ -733,7 +733,8 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "With execution_policy.workdir, relative_path is relative to "
                 "the delegated workspace root. "
                 "When no explicit execution policy is supplied, this is limited "
-                "to the account skill directory."
+                "to the account agent workspace under agent/; the agent/skills/ "
+                "subtree keeps the stricter Skill resource layout."
             ),
             "parameters": {
                 "type": "object",
@@ -779,9 +780,13 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "expected_sha256 when replacing known existing content. With "
                 "execution_policy.workdir, relative_path is relative to the "
                 "delegated workspace root; use the user's requested path such as "
-                "actors/pm/biz-m2-live-smoke.txt directly. Do not write ordinary "
-                "task outputs to agent/skills/.../assets unless the user explicitly "
-                "asks to edit Skill resources."
+                "actors/pm/biz-m2-live-smoke.txt directly. Without an explicit "
+                "execution policy, relative_path must be under agent/; "
+                "agent/ACCOUNT_POLICY.md is read-only, while agent/AGENT.md, "
+                "agent/MEMORY.md, and other supported text files may be maintained "
+                "when the task calls for it. Do not write ordinary task outputs to "
+                "agent/skills/.../assets unless the user explicitly asks to edit "
+                "Skill resources."
             ),
             "parameters": {
                 "type": "object",
