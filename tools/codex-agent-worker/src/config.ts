@@ -17,6 +17,8 @@ export interface AppConfig {
   allowedCwds: string[]
   maxConcurrentTasks: number
   logLevel: 'debug' | 'info' | 'warn' | 'error'
+  /** Root directory for per-account/actor CODEX_HOME folders. Empty disables codex_home_key requests. */
+  codexBizHomeRoot: string
   /**
    * Worker 兜底默认模型（请求未显式指定 model 时使用）。
    *
@@ -114,6 +116,15 @@ function parseAllowedCwds(rawAllowedCwds: string | undefined): string[] {
   }
 
   return Array.from(normalized)
+}
+
+function parseOptionalAbsolutePath(rawValue: string | undefined, field: string): string {
+  const value = (rawValue || '').trim()
+  if (!value) return ''
+  if (!path.isAbsolute(value)) {
+    throw new Error(`${field} must be an absolute path`)
+  }
+  return path.normalize(value)
 }
 
 function parseLogLevel(rawLogLevel: string | undefined): AppConfig['logLevel'] {
@@ -235,6 +246,7 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     allowedCwds: parseAllowedCwds(env.CODEX_ALLOWED_CWDS),
     maxConcurrentTasks: parseMaxConcurrentTasks(env.CODEX_MAX_CONCURRENT_TASKS),
     logLevel: parseLogLevel(env.CODEX_LOG_LEVEL),
+    codexBizHomeRoot: parseOptionalAbsolutePath(env.CODEX_BIZ_HOME_ROOT, 'CODEX_BIZ_HOME_ROOT'),
     defaultModel: parseDefaultModel(env.CODEX_DEFAULT_MODEL),
     modelAliases: parseModelAliases(env.CODEX_MODEL_ALIASES),
   }

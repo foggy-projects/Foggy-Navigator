@@ -34,4 +34,24 @@ public class CreateCodexTaskForm {
     private String sessionId;
     /** OpenAPI/A2A 多轮上下文 ID，用于统一任务投影诊断 */
     private String contextId;
+    /** Effective TaskQueryProvider route; defaults to codex-worker when omitted. */
+    private String providerType;
+    /** CodexBiz: actor/account scoped CODEX_HOME logical key; worker resolves it under CODEX_BIZ_HOME_ROOT. */
+    private String codexHomeKey;
+    /** Codex SDK developer_instructions config, used for account/task contract injection. */
+    private String developerInstructions;
+    /** Codex SDK turn outputSchema. */
+    private Map<String, Object> outputSchema;
+    /** Additional Codex SDK config overrides. */
+    private Map<String, Object> codexConfig;
+    /** Codex SDK sandboxMode override. */
+    private String sandboxMode;
+    /** Codex SDK approvalPolicy override. */
+    private String approvalPolicy;
+    /** Codex SDK networkAccessEnabled override. */
+    private Boolean networkAccessEnabled;
+    /** Codex SDK webSearchMode override. */
+    private String webSearchMode;
+    /** Codex SDK additionalDirectories override. */
+    private List<String> additionalDirectories;
 }

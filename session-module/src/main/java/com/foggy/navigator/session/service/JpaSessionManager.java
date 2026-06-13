@@ -30,7 +30,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class JpaSessionManager implements SessionManager {
 
-    private static final Set<String> KNOWN_PROVIDER_TYPES = Set.of("claude-worker", "codex-worker");
+    private static final Set<String> KNOWN_PROVIDER_TYPES = Set.of("claude-worker", "codex-worker", "codex-biz-worker");
 
     private final SessionRepository sessionRepository;
     private final SessionMessageRepository messageRepository;

@@ -10,6 +10,7 @@ import {
   getRunningTaskCount,
   mapThreadItemToEvents,
   parseModelString,
+  resolveCodexHome,
   resolveModelAlias,
   saveAttachments,
   taskRegistry,
@@ -244,4 +245,19 @@ test('buildCodexInput injects non-image attachment paths into prompt', async () 
   assert.match(input[0]?.text || '', /The user attached files/)
   assert.match(input[0]?.text || '', /notes\.txt/)
   assert.match(input[0]?.text || '', /summarize attachment/)
+})
+
+test('resolveCodexHome derives stable sanitized paths under configured root', () => {
+  const root = process.platform === 'win32' ? 'D:\\codex-homes' : '/var/lib/codex-homes'
+  const homeA = resolveCodexHome('tenant/world-sim/scenario-1/actor-1', root)
+  const homeB = resolveCodexHome('tenant/world-sim/scenario-1/actor-1', root)
+
+  assert.equal(homeA, homeB)
+  assert.ok(homeA?.startsWith(root))
+  assert.match(path.basename(homeA || ''), /^tenant_world-sim_scenario-1_actor-1-[0-9a-f]{16}$/)
+})
+
+test('resolveCodexHome requires CODEX_BIZ_HOME_ROOT for scoped homes', () => {
+  assert.throws(() => resolveCodexHome('actor-1', ''), /CODEX_BIZ_HOME_ROOT is required/)
+  assert.equal(resolveCodexHome(undefined, ''), undefined)
 })

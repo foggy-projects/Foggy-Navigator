@@ -79,6 +79,26 @@ public class CodexWorkerClient {
                                                       List<Map<String, Object>> attachments,
                                                       String apiKey, String baseUrl,
                                                       java.util.Map<String, String> envVars) {
+        return streamQuery(prompt, cwd, codexThreadId, model, maxTurns, images, attachments,
+                apiKey, baseUrl, envVars,
+                null, null, null, null, null, null, null, null, null);
+    }
+
+    public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd,
+                                                      String codexThreadId, String model,
+                                                      Integer maxTurns, String images,
+                                                      List<Map<String, Object>> attachments,
+                                                      String apiKey, String baseUrl,
+                                                      java.util.Map<String, String> envVars,
+                                                      String codexHomeKey,
+                                                      String developerInstructions,
+                                                      Map<String, Object> outputSchema,
+                                                      Map<String, Object> codexConfig,
+                                                      String sandboxMode,
+                                                      String approvalPolicy,
+                                                      Boolean networkAccessEnabled,
+                                                      String webSearchMode,
+                                                      List<String> additionalDirectories) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) body.put("cwd", cwd);
@@ -99,6 +119,19 @@ public class CodexWorkerClient {
         if (apiKey != null) body.put("api_key", apiKey);
         if (baseUrl != null) body.put("base_url", baseUrl);
         if (envVars != null && !envVars.isEmpty()) body.put("env_vars", envVars);
+        if (codexHomeKey != null && !codexHomeKey.isBlank()) body.put("codex_home_key", codexHomeKey);
+        if (developerInstructions != null && !developerInstructions.isBlank()) {
+            body.put("developer_instructions", developerInstructions);
+        }
+        if (outputSchema != null && !outputSchema.isEmpty()) body.put("output_schema", outputSchema);
+        if (codexConfig != null && !codexConfig.isEmpty()) body.put("codex_config", codexConfig);
+        if (sandboxMode != null && !sandboxMode.isBlank()) body.put("sandbox_mode", sandboxMode);
+        if (approvalPolicy != null && !approvalPolicy.isBlank()) body.put("approval_policy", approvalPolicy);
+        if (networkAccessEnabled != null) body.put("network_access_enabled", networkAccessEnabled);
+        if (webSearchMode != null && !webSearchMode.isBlank()) body.put("web_search_mode", webSearchMode);
+        if (additionalDirectories != null && !additionalDirectories.isEmpty()) {
+            body.put("additional_directories", additionalDirectories);
+        }
 
         return webClient.post()
                 .uri("/api/v1/query")

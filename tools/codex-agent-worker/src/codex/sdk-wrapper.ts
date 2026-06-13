@@ -1,17 +1,30 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { Codex } from '@openai/codex-sdk'
 import type { CodexOptions, Input, ThreadOptions, ModelReasoningEffort, ThreadItem } from '@openai/codex-sdk'
 import fs from 'node:fs/promises'
 import { config } from '../config.js'
-import type { ImageAttachment, TaskEntry, WorkerEvent } from '../models.js'
+import type { CodexApprovalPolicy, CodexSandboxMode, CodexWebSearchMode, ImageAttachment, TaskEntry, WorkerEvent } from '../models.js'
 import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
 import { detectSpawnedCodexPid, snapshotCodexCliPids } from './processes.js'
 
 const moduleRequire = createRequire(import.meta.url)
+
+export type CodexRunOptions = {
+  codexHomeKey?: string
+  developerInstructions?: string
+  outputSchema?: Record<string, unknown>
+  codexConfig?: Record<string, unknown>
+  sandboxMode?: CodexSandboxMode
+  approvalPolicy?: CodexApprovalPolicy
+  networkAccessEnabled?: boolean
+  webSearchMode?: CodexWebSearchMode
+  additionalDirectories?: string[]
+}
 
 /**
  * Global task registry — tracks all active and recently completed tasks
@@ -193,6 +206,22 @@ export function buildCodexProcessEnv(
   }
 
   return env
+}
+
+export function resolveCodexHome(codexHomeKey: string | undefined, codexBizHomeRoot = config.codexBizHomeRoot): string | undefined {
+  const key = codexHomeKey?.trim()
+  if (!key) {
+    return undefined
+  }
+  if (!codexBizHomeRoot) {
+    throw new Error('CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided')
+  }
+  const safePrefix = key
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80) || 'codex-home'
+  const digest = createHash('sha256').update(key).digest('hex').slice(0, 16)
+  return path.join(codexBizHomeRoot, `${safePrefix}-${digest}`)
 }
 
 export function getRunningTaskCount(): number {
@@ -482,7 +511,8 @@ export async function runQuery(
   images: ImageAttachment[] | undefined,
   apiKey: string | undefined,
   baseUrl: string | undefined,
-  envVars: Record<string, string> | undefined
+  envVars: Record<string, string> | undefined,
+  runOptions: CodexRunOptions = {}
 ): Promise<void> {
   const broadcast = new EventBroadcast(taskId)
   taskBroadcasts.set(taskId, broadcast)
@@ -541,9 +571,14 @@ export async function runQuery(
     // 2. 订阅模式：不传 apiKey，SDK 通过 Codex CLI 自动读取 ~/.codex/auth.json
     const effectiveApiKey = apiKey || config.openaiApiKey || undefined
     const effectiveBaseUrl = baseUrl || config.openaiBaseUrl || undefined
+    const codexHome = resolveCodexHome(runOptions.codexHomeKey)
+    if (codexHome) {
+      await fs.mkdir(codexHome, { recursive: true })
+    }
     const codexOptions: CodexOptions = {
       env: buildCodexProcessEnv({
         ...process.env,
+        ...(codexHome ? { CODEX_HOME: codexHome } : {}),
         FOGGY_CODEX_TASK_ID: taskId,
         ...(threadId ? { FOGGY_CODEX_THREAD_ID: threadId } : {}),
       }),
@@ -555,7 +590,7 @@ export async function runQuery(
       codexOptions.baseUrl = effectiveBaseUrl
     }
     console.log(
-      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${reasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} base_url=${effectiveBaseUrl ?? ''} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''}`
+      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${reasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} base_url=${effectiveBaseUrl ?? ''} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''} scoped_codex_home=${Boolean(codexHome)} sandbox_mode=${runOptions.sandboxMode ?? ''} approval_policy=${runOptions.approvalPolicy ?? ''}`
     )
 
     // Codex CLI 配置项默认值 + envVars 覆盖
@@ -563,7 +598,7 @@ export async function runQuery(
       tool_output_token_limit: 10000,
       model_auto_compact_token_limit: 140000,
     }
-    const codexConfig: Record<string, string | number> = { ...codexConfigDefaults }
+    const codexConfig: Record<string, unknown> = { ...codexConfigDefaults }
     if (envVars) {
       const codexConfigKeys = ['model_context_window', 'model_auto_compact_token_limit', 'tool_output_token_limit']
       for (const key of codexConfigKeys) {
@@ -574,7 +609,13 @@ export async function runQuery(
         }
       }
     }
-    codexOptions.config = { ...codexOptions.config, ...codexConfig }
+    if (runOptions.codexConfig) {
+      Object.assign(codexConfig, runOptions.codexConfig)
+    }
+    if (runOptions.developerInstructions) {
+      codexConfig.developer_instructions = runOptions.developerInstructions
+    }
+    codexOptions.config = { ...codexOptions.config, ...codexConfig } as CodexOptions['config']
 
     const codex = new Codex(codexOptions)
 
@@ -582,10 +623,19 @@ export async function runQuery(
     const threadOptions: ThreadOptions = {
       model: effectiveModel,
       skipGitRepoCheck: true,
-      sandboxMode: 'danger-full-access',
+      sandboxMode: runOptions.sandboxMode ?? 'danger-full-access',
     }
     if (cwd) threadOptions.workingDirectory = cwd
     if (reasoningLevel) threadOptions.modelReasoningEffort = reasoningLevel
+    const mutableThreadOptions = threadOptions as ThreadOptions & Record<string, unknown>
+    if (runOptions.approvalPolicy) mutableThreadOptions.approvalPolicy = runOptions.approvalPolicy
+    if (runOptions.networkAccessEnabled !== undefined) {
+      mutableThreadOptions.networkAccessEnabled = runOptions.networkAccessEnabled
+    }
+    if (runOptions.webSearchMode) mutableThreadOptions.webSearchMode = runOptions.webSearchMode
+    if (runOptions.additionalDirectories?.length) {
+      mutableThreadOptions.additionalDirectories = runOptions.additionalDirectories
+    }
 
     const thread = threadId
       ? codex.resumeThread(threadId, threadOptions)
@@ -594,9 +644,13 @@ export async function runQuery(
     const input = await buildCodexInput(taskId, prompt, cwd, images)
 
     // 流式执行
-    const { events } = await thread.runStreamed(input, {
+    const turnOptions: { signal: AbortSignal; outputSchema?: Record<string, unknown> } = {
       signal: abortController.signal,
-    })
+    }
+    if (runOptions.outputSchema) {
+      turnOptions.outputSchema = runOptions.outputSchema
+    }
+    const { events } = await thread.runStreamed(input, turnOptions)
     entry.pid = await detectSpawnedCodexPid(existingPids)
 
     for await (const event of events) {

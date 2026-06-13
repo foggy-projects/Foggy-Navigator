@@ -26,6 +26,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -277,6 +278,96 @@ class CodexTaskServiceTest {
         verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
                 "[{\"name\":\"screen.png\",\"data\":\"YmFzZTY0\",\"mime_type\":\"image/png\"}]"
                         .equals(event.getProviderConfigString("images"))
+        ));
+    }
+
+    @Test
+    void createTaskDirect_doesNotForwardCodexBizOptionsForPlainCodexWorker() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+
+        Map<String, Object> outputSchema = Map.of("type", "object");
+        Map<String, Object> codexConfig = Map.of("tool_output_token_limit", 4096);
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("workerId", "worker-1");
+        params.put("prompt", "hello");
+        params.put("codexHomeKey", "tenant/world-sim/scenario-1/actor-1");
+        params.put("developerInstructions", "Return valid JSON.");
+        params.put("outputSchema", outputSchema);
+        params.put("codexConfig", codexConfig);
+        params.put("sandboxMode", "workspace-write");
+        params.put("approvalPolicy", "never");
+        params.put("networkAccessEnabled", false);
+        params.put("webSearchMode", "disabled");
+        params.put("additionalDirectories", List.of("D:/shared"));
+        service.createTaskDirect(params, "user-1", "tenant-1");
+
+        verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
+                "codex-worker".equals(event.getProviderType())
+                        && event.getProviderConfigString("codexHomeKey") == null
+                        && event.getProviderConfigString("developerInstructions") == null
+                        && event.getProviderConfigValue("outputSchema") == null
+                        && event.getProviderConfigValue("codexConfig") == null
+                        && event.getProviderConfigString("sandboxMode") == null
+                        && event.getProviderConfigString("approvalPolicy") == null
+                        && event.getProviderConfigValue("networkAccessEnabled") == null
+                        && event.getProviderConfigString("webSearchMode") == null
+                        && event.getProviderConfigValue("additionalDirectories") == null
+        ));
+    }
+
+    @Test
+    void createTaskDirect_forwardsCodexBizOptionsOnlyForCodexBizProvider() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+        when(sessionManager.createSession(any())).thenReturn("session-biz-1");
+
+        Map<String, Object> outputSchema = Map.of("type", "object");
+        Map<String, Object> codexConfig = Map.of("tool_output_token_limit", 4096);
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("providerType", "codex-biz-worker");
+        params.put("workerId", "worker-1");
+        params.put("prompt", "hello");
+        params.put("codexHomeKey", "tenant/world-sim/scenario-1/actor-1");
+        params.put("developerInstructions", "Return valid JSON.");
+        params.put("outputSchema", outputSchema);
+        params.put("codexConfig", codexConfig);
+        params.put("sandboxMode", "workspace-write");
+        params.put("approvalPolicy", "never");
+        params.put("networkAccessEnabled", false);
+        params.put("webSearchMode", "disabled");
+        params.put("additionalDirectories", List.of("D:/shared"));
+        DispatchTaskDTO result = service.createTaskDirect(params, "user-1", "tenant-1");
+
+        assertEquals("codex-biz-worker", result.getProviderType());
+        verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
+                "codex-biz-worker".equals(event.getProviderType())
+                        && "tenant/world-sim/scenario-1/actor-1".equals(event.getProviderConfigString("codexHomeKey"))
+                        && "Return valid JSON.".equals(event.getProviderConfigString("developerInstructions"))
+                        && outputSchema.equals(event.getProviderConfigValue("outputSchema"))
+                        && codexConfig.equals(event.getProviderConfigValue("codexConfig"))
+                        && "workspace-write".equals(event.getProviderConfigString("sandboxMode"))
+                        && "never".equals(event.getProviderConfigString("approvalPolicy"))
+                        && Boolean.FALSE.equals(event.getProviderConfigValue("networkAccessEnabled"))
+                        && "disabled".equals(event.getProviderConfigString("webSearchMode"))
+                        && List.of("D:/shared").equals(event.getProviderConfigValue("additionalDirectories"))
+        ));
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                "session-biz-1".equals(entity.getSessionId())
+                        && "codex-biz-worker".equals(entity.getProviderType())
+        ));
+        verify(sessionEntityRepository).save(argThat((SessionEntity entity) ->
+                "session-biz-1".equals(entity.getId())
+                        && "codex-biz-worker".equals(entity.getProviderType())
+                        && "worker-1".equals(entity.getCurrentWorkerId())
         ));
     }
 

@@ -54,6 +54,10 @@ public class CodexTaskEntity {
     @Transient
     private String contextId;
 
+    /** TaskQueryProvider route（不持久化到 codex_tasks，由统一 Session/Task 投影持久化） */
+    @Transient
+    private String providerType;
+
     @Column(columnDefinition = "TEXT")
     private String prompt;
 

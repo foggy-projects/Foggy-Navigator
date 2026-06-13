@@ -39,13 +39,31 @@ class CodexWorkerClientTest {
                     attachments,
                     null,
                     null,
-                    null
+                    null,
+                    "tenant/world-sim/scenario-1/actor-1",
+                    "Return valid JSON.",
+                    Map.of("type", "object"),
+                    Map.of("tool_output_token_limit", 4096),
+                    "workspace-write",
+                    "never",
+                    false,
+                    "disabled",
+                    List.of("D:/shared")
             ).blockFirst(Duration.ofSeconds(5));
 
             Map<String, Object> body = objectMapper.readValue(server.body(),
                     new TypeReference<>() {});
             assertEquals(attachments, body.get("attachments"));
             assertInstanceOf(List.class, body.get("images"));
+            assertEquals("tenant/world-sim/scenario-1/actor-1", body.get("codex_home_key"));
+            assertEquals("Return valid JSON.", body.get("developer_instructions"));
+            assertEquals(Map.of("type", "object"), body.get("output_schema"));
+            assertEquals(Map.of("tool_output_token_limit", 4096), body.get("codex_config"));
+            assertEquals("workspace-write", body.get("sandbox_mode"));
+            assertEquals("never", body.get("approval_policy"));
+            assertEquals(false, body.get("network_access_enabled"));
+            assertEquals("disabled", body.get("web_search_mode"));
+            assertEquals(List.of("D:/shared"), body.get("additional_directories"));
         }
     }
 

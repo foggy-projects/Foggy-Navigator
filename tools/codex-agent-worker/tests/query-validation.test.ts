@@ -80,3 +80,46 @@ test('validateQueryRequest accepts URL attachment metadata', () => {
   if (!result.ok) return
   assert.deepEqual(result.value.attachments, attachments)
 })
+
+test('validateQueryRequest accepts CodexBiz execution options', () => {
+  const outputSchema = {
+    type: 'object',
+    properties: {
+      decision: { type: 'string' },
+    },
+    required: ['decision'],
+  }
+  const result = validateQueryRequest({
+    prompt: 'decide',
+    codex_home_key: 'tenant-a/world-sim/scenario-1/actor-1',
+    developer_instructions: 'Return only valid JSON.',
+    output_schema: outputSchema,
+    codex_config: { tool_output_token_limit: 4096 },
+    sandbox_mode: 'workspace-write',
+    approval_policy: 'never',
+    network_access_enabled: false,
+    web_search_mode: 'disabled',
+    additional_directories: ['D:\\shared'],
+  })
+
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(result.value.codex_home_key, 'tenant-a/world-sim/scenario-1/actor-1')
+  assert.equal(result.value.developer_instructions, 'Return only valid JSON.')
+  assert.deepEqual(result.value.output_schema, outputSchema)
+  assert.equal(result.value.sandbox_mode, 'workspace-write')
+  assert.equal(result.value.approval_policy, 'never')
+  assert.equal(result.value.network_access_enabled, false)
+  assert.deepEqual(result.value.additional_directories, ['D:\\shared'])
+})
+
+test('validateQueryRequest rejects unsupported CodexBiz enum values', () => {
+  const result = validateQueryRequest({
+    prompt: 'decide',
+    sandbox_mode: 'host-root',
+  })
+
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.error, 'sandbox_mode is not supported')
+})

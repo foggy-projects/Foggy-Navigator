@@ -57,6 +57,10 @@ import java.util.stream.Collectors;
 public class CodexTaskService implements TaskQueryProvider {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    public static final String CODEX_PROVIDER_TYPE = "codex-worker";
+    public static final String CODEX_BIZ_PROVIDER_TYPE = "codex-biz-worker";
+    private static final String AGENT_ID = CODEX_PROVIDER_TYPE;
+
     private final CodexTaskRepository taskRepository;
     private final WorkerManagementFacade workerManagementFacade;
     private final ApplicationEventPublisher eventPublisher;
@@ -111,6 +115,12 @@ public class CodexTaskService implements TaskQueryProvider {
         form.setContextId((String) params.get("contextId"));
         form.setImages((String) params.get("images"));
         form.setAttachments(attachmentsParam(params.get("attachments")));
+        form.setProviderType(firstNonBlank(
+                stringParam(params, "providerType"),
+                stringParam(params, "provider_type")));
+        if (isCodexBizProvider(form.getProviderType())) {
+            applyCodexBizParams(form, params);
+        }
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
         }
@@ -138,7 +148,7 @@ public class CodexTaskService implements TaskQueryProvider {
             // a new Codex thread while reusing the Navigator session.
             validateExistingSession(userId, sessionId);
             CodexTaskDTO task = createAndStartTask(userId, tenantId, form, sessionId);
-            return getTaskById(task.getTaskId()).orElseThrow();
+            return getTaskByIdForProvider(task.getTaskId(), form.getProviderType()).orElseThrow();
         }
 
         if (!taskRepository.existsByCodexThreadIdAndWorkerIdAndUserId(
@@ -152,7 +162,7 @@ public class CodexTaskService implements TaskQueryProvider {
 
         validateExistingSession(userId, sessionId);
         CodexTaskDTO task = createAndStartTask(userId, tenantId, form, sessionId);
-        return getTaskById(task.getTaskId()).orElseThrow();
+        return getTaskByIdForProvider(task.getTaskId(), form.getProviderType()).orElseThrow();
     }
 
     private CodexTaskDTO createAndStartTask(String userId, String tenantId,
@@ -163,6 +173,8 @@ public class CodexTaskService implements TaskQueryProvider {
         if (form.getPrompt() == null || form.getPrompt().isBlank()) {
             throw new IllegalArgumentException("prompt is required");
         }
+        String effectiveProviderType = normalizeProviderType(form.getProviderType());
+        form.setProviderType(effectiveProviderType);
 
         // 验证 Worker 存在且当前 user/tenant 可访问（通过 WorkerManagementFacade SPI）
         workerManagementFacade.validateWorkerAccess(userId, tenantId, form.getWorkerId());
@@ -182,7 +194,8 @@ public class CodexTaskService implements TaskQueryProvider {
 
         String taskId = IdGenerator.shortId();
 
-        String sessionId = resolveSessionId(userId, tenantId, form.getPrompt(), existingSessionId, effectiveAgentId);
+        String sessionId = resolveSessionId(userId, tenantId, form.getPrompt(),
+                existingSessionId, effectiveAgentId, effectiveProviderType);
 
         String effectiveModelConfigId = resolveEffectiveModelConfigId(form.getModelConfigId(), effectiveAgentId);
         String modelConfigSource = resolveModelConfigSource(form.getModelConfigId(), effectiveAgentId);
@@ -198,6 +211,7 @@ public class CodexTaskService implements TaskQueryProvider {
         entity.setTenantId(tenantId);
         entity.setResolvedAgentId(effectiveAgentId);
         entity.setContextId(form.getContextId());
+        entity.setProviderType(effectiveProviderType);
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setModel(effectiveModelResolution.model());
@@ -206,7 +220,8 @@ public class CodexTaskService implements TaskQueryProvider {
         entity.setCodexThreadId(form.getCodexThreadId());
 
         persistTask(entity);
-        log.info("Created Codex task: taskId={}, workerId={}, sessionId={}", taskId, form.getWorkerId(), sessionId);
+        log.info("Created Codex task: taskId={}, providerType={}, workerId={}, sessionId={}",
+                taskId, effectiveProviderType, form.getWorkerId(), sessionId);
 
         // 解析 auth + envVars（apiKey + baseUrl + 环境变量，无配置时 Worker 使用本地凭证）
         CodexAuthResult auth = resolveCodexAuth(effectiveModelConfigId);
@@ -234,12 +249,31 @@ public class CodexTaskService implements TaskQueryProvider {
         if (auth.envVars != null && !auth.envVars.isEmpty()) {
             providerConfig.put("extraEnvVars", auth.envVars);
         }
+        if (isCodexBizProvider(effectiveProviderType)) {
+            putIfNotBlank(providerConfig, "codexHomeKey", form.getCodexHomeKey());
+            putIfNotBlank(providerConfig, "developerInstructions", form.getDeveloperInstructions());
+            putIfNotBlank(providerConfig, "sandboxMode", form.getSandboxMode());
+            putIfNotBlank(providerConfig, "approvalPolicy", form.getApprovalPolicy());
+            putIfNotBlank(providerConfig, "webSearchMode", form.getWebSearchMode());
+            if (form.getOutputSchema() != null && !form.getOutputSchema().isEmpty()) {
+                providerConfig.put("outputSchema", form.getOutputSchema());
+            }
+            if (form.getCodexConfig() != null && !form.getCodexConfig().isEmpty()) {
+                providerConfig.put("codexConfig", form.getCodexConfig());
+            }
+            if (form.getNetworkAccessEnabled() != null) {
+                providerConfig.put("networkAccessEnabled", form.getNetworkAccessEnabled());
+            }
+            if (form.getAdditionalDirectories() != null && !form.getAdditionalDirectories().isEmpty()) {
+                providerConfig.put("additionalDirectories", form.getAdditionalDirectories());
+            }
+        }
 
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
                 .prompt(form.getPrompt()).cwd(cwd)
                 .model(entity.getModel()).maxTurns(form.getMaxTurns())
-                .apiKey(auth.apiKey).providerType(AGENT_ID)
+                .apiKey(auth.apiKey).providerType(effectiveProviderType)
                 .providerConfig(providerConfig)
                 .build());
 
@@ -490,46 +524,85 @@ public class CodexTaskService implements TaskQueryProvider {
         form.setImages((String) params.get("images"));
         form.setAttachments(attachmentsParam(params.get("attachments")));
         form.setCodexThreadId((String) params.get("codexThreadId"));
+        form.setProviderType(firstNonBlank(
+                stringParam(params, "providerType"),
+                stringParam(params, "provider_type")));
+        if (isCodexBizProvider(form.getProviderType())) {
+            applyCodexBizParams(form, params);
+        }
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
         }
         CodexTaskDTO dto = createTask(userId, tenantId, form);
-        return getTaskById(dto.getTaskId()).orElseThrow();
+        return getTaskByIdForProvider(dto.getTaskId(), form.getProviderType()).orElseThrow();
     }
 
     @Override
     public Optional<DispatchTaskDTO> getTaskById(String taskId) {
-        return taskRepository.findByTaskId(taskId).map(this::toDispatchDTO);
+        return getTaskByIdForProvider(taskId, AGENT_ID);
     }
 
     @Override
     public Optional<DispatchTaskDTO> getTaskByIdAndUser(String taskId, String userId) {
-        return taskRepository.findByTaskIdAndUserId(taskId, userId).map(this::toDispatchDTO);
+        return getTaskByIdAndUserForProvider(taskId, userId, AGENT_ID);
     }
 
     @Override
     public List<DispatchTaskDTO> listTasksBySession(String sessionId) {
+        return listTasksBySessionForProvider(sessionId, AGENT_ID);
+    }
+
+    public Optional<DispatchTaskDTO> getTaskByIdForProvider(String taskId, String providerType) {
+        return taskRepository.findByTaskId(taskId)
+                .filter(entity -> matchesProvider(entity, providerType))
+                .map(this::toDispatchDTO);
+    }
+
+    public Optional<DispatchTaskDTO> getTaskByIdAndUserForProvider(String taskId, String userId, String providerType) {
+        return taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .filter(entity -> matchesProvider(entity, providerType))
+                .map(this::toDispatchDTO);
+    }
+
+    public List<DispatchTaskDTO> listTasksBySessionForProvider(String sessionId, String providerType) {
         return taskRepository.findBySessionId(sessionId).stream()
+                .filter(entity -> matchesProvider(entity, providerType))
                 .map(this::toDispatchDTO)
                 .toList();
     }
 
     @Override
     public List<DispatchTaskDTO> listActiveDispatchTasks(String userId) {
+        return listActiveDispatchTasksForProvider(userId, AGENT_ID);
+    }
+
+    public List<DispatchTaskDTO> listActiveDispatchTasksForProvider(String userId, String providerType) {
         return taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, List.of("RUNNING", "AWAITING_PERMISSION")).stream()
+                .filter(entity -> matchesProvider(entity, providerType))
                 .map(this::toDispatchDTO)
                 .toList();
     }
 
     @Override
     public Object listTasksPaged(String userId, int page, int size, String state) {
+        return listTasksPagedForProvider(userId, page, size, state, AGENT_ID);
+    }
+
+    public Object listTasksPagedForProvider(String userId, int page, int size, String state, String providerType) {
         List<CodexTaskEntity> tasks = taskRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        tasks = filterTasksByProvider(tasks, providerType);
         return buildSessionPage(tasks, page, size, state);
     }
 
     @Override
     public Object listTasksByDirectoryPaged(String userId, String directoryId, int page, int size, String state) {
+        return listTasksByDirectoryPagedForProvider(userId, directoryId, page, size, state, AGENT_ID);
+    }
+
+    public Object listTasksByDirectoryPagedForProvider(String userId, String directoryId, int page, int size,
+                                                       String state, String providerType) {
         List<CodexTaskEntity> tasks = taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId);
+        tasks = filterTasksByProvider(tasks, providerType);
         return buildSessionPage(tasks, page, size, state);
     }
 
@@ -544,8 +617,13 @@ public class CodexTaskService implements TaskQueryProvider {
         }
 
         String normalizedKeyword = keyword != null ? keyword.trim().toLowerCase(Locale.ROOT) : null;
+        return searchSessionsForProvider(userId, normalizedKeyword, workerId, directoryId, page, size, AGENT_ID);
+    }
+
+    public Object searchSessionsForProvider(String userId, String normalizedKeyword, String workerId,
+                                            String directoryId, int page, int size, String providerType) {
         List<List<CodexTaskEntity>> sessions = new ArrayList<>(groupTasksBySession(
-                taskRepository.findByUserIdOrderByCreatedAtDesc(userId)
+                filterTasksByProvider(taskRepository.findByUserIdOrderByCreatedAtDesc(userId), providerType)
         ).values());
 
         List<Map<String, Object>> filtered = sessions.stream()
@@ -567,6 +645,7 @@ public class CodexTaskService implements TaskQueryProvider {
 
     private DispatchTaskDTO toDispatchDTO(CodexTaskEntity entity) {
         String agentId = resolveLogicalAgentId(entity);
+        String providerType = resolveProviderType(entity);
         return DispatchTaskDTO.builder()
                 .taskId(entity.getTaskId())
                 .workerTaskId(entity.getWorkerTaskId())
@@ -574,7 +653,7 @@ public class CodexTaskService implements TaskQueryProvider {
                 .workerId(entity.getWorkerId())
                 .userId(entity.getUserId())
                 .agentId(agentId)
-                .providerType(AGENT_ID)
+                .providerType(providerType)
                 .prompt(entity.getPrompt())
                 .cwd(entity.getCwd())
                 .directoryId(entity.getDirectoryId())
@@ -763,7 +842,7 @@ public class CodexTaskService implements TaskQueryProvider {
                 .taskId(entity.getTaskId())
                 .sessionId(entity.getSessionId())
                 .userId(entity.getUserId())
-                .agentId(AGENT_ID)
+                .agentId(firstNonBlank(resolveLogicalAgentId(entity), resolveProviderType(entity)))
                 .status(entity.getStatus())
                 .previousStatus(previousStatus)
                 .errorMessage(entity.getErrorMessage())
@@ -795,8 +874,6 @@ public class CodexTaskService implements TaskQueryProvider {
         return left.compareTo(right);
     }
 
-    private static final String AGENT_ID = "codex-worker";
-
     private CodexTaskEntity persistTask(CodexTaskEntity entity) {
         CodexTaskEntity saved = taskRepository.save(entity);
         syncSessionTask(saved);
@@ -812,9 +889,15 @@ public class CodexTaskService implements TaskQueryProvider {
 
         SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(entity.getTaskId())
                 .orElseGet(SessionTaskEntity::new);
+        String providerType = firstNonBlank(
+                entity.getProviderType(),
+                sessionTask.getProviderType(),
+                resolveSessionProviderType(entity.getSessionId()),
+                AGENT_ID);
+        entity.setProviderType(providerType);
         sessionTask.setTaskId(entity.getTaskId());
         sessionTask.setSessionId(entity.getSessionId());
-        sessionTask.setProviderType(AGENT_ID);
+        sessionTask.setProviderType(providerType);
         sessionTask.setProviderTaskId(entity.getWorkerTaskId());
         sessionTask.setWorkerId(entity.getWorkerId());
         sessionTask.setUserId(entity.getUserId());
@@ -846,13 +929,14 @@ public class CodexTaskService implements TaskQueryProvider {
             return;
         }
         String agentId = resolveLogicalAgentId(entity);
+        String providerType = resolveProviderType(entity);
 
         SessionEntity session = sessionEntityRepository.findById(entity.getSessionId())
                 .orElseGet(() -> createSessionProjection(entity));
         session.setUserId(firstNonBlank(session.getUserId(), entity.getUserId()));
         session.setTenantId(firstNonBlank(session.getTenantId(), entity.getTenantId()));
         session.setAgentId(firstNonBlank(session.getAgentId(), agentId));
-        session.setProviderType(AGENT_ID);
+        session.setProviderType(providerType);
         session.setStatus(firstNonBlank(session.getStatus(), "ACTIVE"));
         session.setCurrentWorkerId(firstNonBlank(entity.getWorkerId(), session.getCurrentWorkerId()));
         session.setCurrentDirectoryId(firstNonBlank(entity.getDirectoryId(), session.getCurrentDirectoryId()));
@@ -866,12 +950,13 @@ public class CodexTaskService implements TaskQueryProvider {
 
     private SessionEntity createSessionProjection(CodexTaskEntity entity) {
         String agentId = resolveLogicalAgentId(entity);
+        String providerType = resolveProviderType(entity);
         SessionEntity session = new SessionEntity();
         session.setId(entity.getSessionId());
         session.setUserId(entity.getUserId());
         session.setTenantId(entity.getTenantId());
         session.setAgentId(agentId);
-        session.setProviderType(AGENT_ID);
+        session.setProviderType(providerType);
         session.setStatus("ACTIVE");
         session.setInteractionState(deriveInteractionState(entity.getStatus()));
         session.setCurrentWorkerId(entity.getWorkerId());
@@ -976,6 +1061,155 @@ public class CodexTaskService implements TaskQueryProvider {
             if (value != null && !value.isBlank()) {
                 return value;
             }
+        }
+        return null;
+    }
+
+    private String normalizeProviderType(String providerType) {
+        return CODEX_BIZ_PROVIDER_TYPE.equals(providerType) ? CODEX_BIZ_PROVIDER_TYPE : CODEX_PROVIDER_TYPE;
+    }
+
+    private boolean isCodexBizProvider(String providerType) {
+        return CODEX_BIZ_PROVIDER_TYPE.equals(providerType);
+    }
+
+    private boolean matchesProvider(CodexTaskEntity entity, String providerType) {
+        return normalizeProviderType(providerType).equals(resolveProviderType(entity));
+    }
+
+    private List<CodexTaskEntity> filterTasksByProvider(List<CodexTaskEntity> tasks, String providerType) {
+        return tasks.stream()
+                .filter(entity -> matchesProvider(entity, providerType))
+                .toList();
+    }
+
+    private String resolveProviderType(CodexTaskEntity entity) {
+        if (entity == null) {
+            return AGENT_ID;
+        }
+        String providerType = firstNonBlank(
+                entity.getProviderType(),
+                resolveSessionTaskProviderType(entity.getTaskId()),
+                resolveSessionProviderType(entity.getSessionId()),
+                AGENT_ID);
+        providerType = normalizeProviderType(providerType);
+        entity.setProviderType(providerType);
+        return providerType;
+    }
+
+    private String resolveSessionTaskProviderType(String taskId) {
+        if (sessionTaskRepository == null || taskId == null || taskId.isBlank()) {
+            return null;
+        }
+        return sessionTaskRepository.findByTaskId(taskId)
+                .map(SessionTaskEntity::getProviderType)
+                .filter(providerType -> providerType != null && !providerType.isBlank())
+                .orElse(null);
+    }
+
+    private String resolveSessionProviderType(String sessionId) {
+        if (sessionEntityRepository == null || sessionId == null || sessionId.isBlank()) {
+            return null;
+        }
+        return sessionEntityRepository.findById(sessionId)
+                .map(SessionEntity::getProviderType)
+                .filter(providerType -> providerType != null && !providerType.isBlank())
+                .orElse(null);
+    }
+
+    private void applyCodexBizParams(CreateCodexTaskForm form, Map<String, Object> params) {
+        Map<String, Object> policy = mapParam(firstPresent(params, "codexPolicy", "codex_policy"));
+        form.setCodexHomeKey(firstNonBlank(
+                stringParam(params, "codexHomeKey"),
+                stringParam(params, "codex_home_key"),
+                stringParam(params, "privateAccountId"),
+                stringParam(params, "private_account_id")));
+        form.setDeveloperInstructions(firstNonBlank(
+                stringParam(params, "developerInstructions"),
+                stringParam(params, "developer_instructions")));
+        form.setOutputSchema(mapParam(firstPresent(params,
+                "outputSchema", "output_schema", "expectedOutputSchema", "expected_output_schema")));
+        form.setCodexConfig(mapParam(firstPresent(params, "codexConfig", "codex_config")));
+        form.setSandboxMode(firstNonBlank(
+                stringParam(params, "sandboxMode"),
+                stringParam(params, "sandbox_mode"),
+                stringMap(policy, "sandboxMode"),
+                stringMap(policy, "sandbox_mode")));
+        form.setApprovalPolicy(firstNonBlank(
+                stringParam(params, "approvalPolicy"),
+                stringParam(params, "approval_policy"),
+                stringMap(policy, "approvalPolicy"),
+                stringMap(policy, "approval_policy")));
+        form.setNetworkAccessEnabled(firstNonNull(
+                booleanParam(firstPresent(params, "networkAccessEnabled", "network_access_enabled")),
+                booleanParam(firstPresent(policy, "networkAccessEnabled", "network_access_enabled"))));
+        form.setWebSearchMode(firstNonBlank(
+                stringParam(params, "webSearchMode"),
+                stringParam(params, "web_search_mode"),
+                stringMap(policy, "webSearchMode"),
+                stringMap(policy, "web_search_mode")));
+        form.setAdditionalDirectories(stringListParam(firstPresent(params, "additionalDirectories", "additional_directories")));
+    }
+
+    private Object firstPresent(Map<String, Object> values, String... keys) {
+        if (values == null) {
+            return null;
+        }
+        for (String key : keys) {
+            if (values.containsKey(key)) {
+                return values.get(key);
+            }
+        }
+        return null;
+    }
+
+    private String stringParam(Map<String, Object> params, String key) {
+        Object value = params.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString();
+        return text.isBlank() ? null : text;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> mapParam(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        return null;
+    }
+
+    private String stringMap(Map<String, Object> map, String key) {
+        if (map == null) {
+            return null;
+        }
+        Object value = map.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString();
+        return text.isBlank() ? null : text;
+    }
+
+    private Boolean booleanParam(Object value) {
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof String s && !s.isBlank()) {
+            return Boolean.parseBoolean(s);
+        }
+        return null;
+    }
+
+    private List<String> stringListParam(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream()
+                    .filter(String.class::isInstance)
+                    .map(String.class::cast)
+                    .map(String::trim)
+                    .filter(text -> !text.isBlank())
+                    .toList();
         }
         return null;
     }
@@ -1134,9 +1368,9 @@ public class CodexTaskService implements TaskQueryProvider {
     }
 
     private String resolveSessionId(String userId, String tenantId, String prompt,
-                                     String existingSessionId, String agentId) {
+                                     String existingSessionId, String agentId, String providerType) {
         if (existingSessionId == null || existingSessionId.isBlank()) {
-            return createPlatformSession(userId, tenantId, prompt, agentId);
+            return createPlatformSession(userId, tenantId, prompt, agentId, providerType);
         }
 
         if (sessionManager == null) {
@@ -1155,7 +1389,8 @@ public class CodexTaskService implements TaskQueryProvider {
     /**
      * 创建平台 SessionEntity（补齐 Codex 之前缺失的会话记录）
      */
-    private String createPlatformSession(String userId, String tenantId, String prompt, String agentId) {
+    private String createPlatformSession(String userId, String tenantId, String prompt,
+                                         String agentId, String providerType) {
         if (sessionManager == null) {
             log.warn("SessionManager not available, falling back to IdGenerator for Codex sessionId");
             return IdGenerator.shortId();
@@ -1164,8 +1399,8 @@ public class CodexTaskService implements TaskQueryProvider {
         String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
                 .userId(userId)
                 .tenantId(tenantId)
-                .agentId(agentId != null ? agentId : AGENT_ID)
-                .providerType(AGENT_ID)
+                .agentId(agentId)
+                .providerType(providerType)
                 .taskName(title)
                 .build());
         // 记录用户 prompt 到会话消息

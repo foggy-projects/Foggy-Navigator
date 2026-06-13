@@ -22,16 +22,33 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     `[query] received request: cwd=${body.cwd ?? ''} session_id=${body.session_id ?? ''} model=${body.model ?? ''} has_api_key=${Boolean(body.api_key)} base_url=${body.base_url ?? ''} env_var_keys=${body.env_vars ? Object.keys(body.env_vars).join(',') : ''} images=${body.images?.length ?? 0}`
   )
 
-  // Validate working directory
-  const cwd = body.cwd
-  if (cwd && config.allowedCwds.length > 0) {
+  const isAllowedPath = (candidate: string): boolean => {
+    if (config.allowedCwds.length === 0) return true
     const allowed = config.allowedCwds.some(acwd =>
-      cwd.startsWith(acwd) || cwd.replace(/\\/g, '/').startsWith(acwd.replace(/\\/g, '/'))
+      candidate.startsWith(acwd) || candidate.replace(/\\/g, '/').startsWith(acwd.replace(/\\/g, '/'))
     )
-    if (!allowed) {
-      res.status(403).json({ error: `Working directory not allowed: ${cwd}` })
-      return
+    return allowed
+  }
+
+  // Validate working directories
+  const cwd = body.cwd
+  if (cwd && !isAllowedPath(cwd)) {
+    res.status(403).json({ error: `Working directory not allowed: ${cwd}` })
+    return
+  }
+
+  if (body.additional_directories) {
+    for (const directory of body.additional_directories) {
+      if (!isAllowedPath(directory)) {
+        res.status(403).json({ error: `Additional directory not allowed: ${directory}` })
+        return
+      }
     }
+  }
+
+  if (body.codex_home_key && !config.codexBizHomeRoot) {
+    res.status(403).json({ error: 'CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided' })
+      return
   }
 
   if (cwd) {
@@ -92,7 +109,18 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     body.images,
     body.api_key,
     body.base_url,
-    body.env_vars
+    body.env_vars,
+    {
+      codexHomeKey: body.codex_home_key,
+      developerInstructions: body.developer_instructions,
+      outputSchema: body.output_schema,
+      codexConfig: body.codex_config,
+      sandboxMode: body.sandbox_mode,
+      approvalPolicy: body.approval_policy,
+      networkAccessEnabled: body.network_access_enabled,
+      webSearchMode: body.web_search_mode,
+      additionalDirectories: body.additional_directories,
+    }
   )
 
   // Wait a tick for broadcast to be registered
