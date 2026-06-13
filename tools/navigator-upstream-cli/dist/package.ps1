@@ -81,7 +81,9 @@ $features = @(
     "message-event-contract",
     "physical-worker-diagnostics",
     "worker-host-suite",
-    "navi-routed-codex-config"
+    "navi-routed-codex-config",
+    "codex-biz-worker-route",
+    "codex-biz-runtime-options"
 )
 
 Push-Location $RepoRoot

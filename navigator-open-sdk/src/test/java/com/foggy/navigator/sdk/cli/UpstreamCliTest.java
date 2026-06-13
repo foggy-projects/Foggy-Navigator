@@ -1221,6 +1221,64 @@ class UpstreamCliTest {
     }
 
     @Test
+    void askSendsCodexBizRuntimeOptionsTopLevel() {
+        responseOverride = "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUBMITTED\",\"contextId\":\"ctx-1\"}}";
+
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "hello",
+                "--provider-type", "codex-biz-worker",
+                "--directory-id", "dir-1",
+                "--private-account-id", "tenant/world-sim/scenario-1/actor-1",
+                "--sandbox-mode", "workspace-write",
+                "--approval-policy", "never",
+                "--network-access-enabled", "false",
+                "--web-search-mode", "disabled"}, Map.of());
+
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
+        assertTrue(lastBody.contains("\"providerType\":\"codex-biz-worker\""));
+        assertTrue(lastBody.contains("\"directoryId\":\"dir-1\""));
+        assertTrue(lastBody.contains("\"privateAccountId\":\"tenant/world-sim/scenario-1/actor-1\""));
+        assertTrue(lastBody.contains("\"sandboxMode\":\"workspace-write\""));
+        assertTrue(lastBody.contains("\"approvalPolicy\":\"never\""));
+        assertTrue(lastBody.contains("\"networkAccessEnabled\":false"));
+        assertTrue(lastBody.contains("\"webSearchMode\":\"disabled\""));
+        assertFalse(lastBody.contains("\"clientContext\""));
+    }
+
+    @Test
+    void askSendsCodexBizRuntimeOptionsFromEnv() {
+        responseOverride = "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUBMITTED\",\"contextId\":\"ctx-1\"}}";
+
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "hello"}, env(
+                "NAVI_PROVIDER_TYPE", "codex-biz-worker",
+                "NAVI_DIRECTORY_ID", "dir-env",
+                "NAVI_CODEX_HOME_KEY", "actor-home-env",
+                "NAVI_CODEX_SANDBOX_MODE", "workspace-write",
+                "NAVI_CODEX_APPROVAL_POLICY", "never",
+                "NAVI_CODEX_NETWORK_ACCESS_ENABLED", "false",
+                "NAVI_CODEX_WEB_SEARCH_MODE", "disabled"));
+
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
+        assertTrue(lastBody.contains("\"providerType\":\"codex-biz-worker\""));
+        assertTrue(lastBody.contains("\"directoryId\":\"dir-env\""));
+        assertTrue(lastBody.contains("\"codexHomeKey\":\"actor-home-env\""));
+        assertTrue(lastBody.contains("\"networkAccessEnabled\":false"));
+    }
+
+    @Test
     void messagesPollStopsOnTaskTerminalStatus() {
         responseOverride = "__MESSAGES_TERMINAL__";
 

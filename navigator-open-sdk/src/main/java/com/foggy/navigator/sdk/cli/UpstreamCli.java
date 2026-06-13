@@ -297,7 +297,7 @@ public class UpstreamCli {
         out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker-host apply.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
-        out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--client-context-json <json>|--client-context-file <path>]");
+        out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
         out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
         out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>]");
@@ -1924,6 +1924,7 @@ public class UpstreamCli {
         String upstreamUserId = upstreamUserId(args);
         String message = requiredOption(args, "message", "message");
         Map<String, Object> clientContext = parseClientContext(args);
+        Map<String, Object> runtimeOptions = buildAskRuntimeOptions(args);
         AgentTask task = agentApi().askWithClientAppAccessToken(
                 agent,
                 message,
@@ -1933,11 +1934,29 @@ public class UpstreamCli {
                 modelConfigId(args),
                 modelVariant(args),
                 null,
+                runtimeOptions,
                 clientAppKey(args),
                 clientAppAccessToken(args),
                 upstreamUserId);
         printTask(task);
         return 0;
+    }
+
+    private Map<String, Object> buildAskRuntimeOptions(CliArguments args) {
+        Map<String, Object> options = new LinkedHashMap<>();
+        putText(options, "providerType", optionalOptionOrConfig(args, "provider-type", "NAVI_PROVIDER_TYPE"));
+        putText(options, "directoryId", optionalOptionOrConfig(args, "directory-id", "NAVI_DIRECTORY_ID"));
+        putText(options, "codexHomeKey", optionalOptionOrConfig(args, "codex-home-key", "NAVI_CODEX_HOME_KEY"));
+        putText(options, "privateAccountId", optionalOptionOrConfig(args, "private-account-id", "NAVI_PRIVATE_ACCOUNT_ID"));
+        putText(options, "sandboxMode", optionalOptionOrConfig(args, "sandbox-mode", "NAVI_CODEX_SANDBOX_MODE"));
+        putText(options, "approvalPolicy", optionalOptionOrConfig(args, "approval-policy", "NAVI_CODEX_APPROVAL_POLICY"));
+        putText(options, "webSearchMode", optionalOptionOrConfig(args, "web-search-mode", "NAVI_CODEX_WEB_SEARCH_MODE"));
+        Boolean networkAccessEnabled = optionalBooleanOptionOrConfig(
+                args, "network-access-enabled", "NAVI_CODEX_NETWORK_ACCESS_ENABLED");
+        if (networkAccessEnabled != null) {
+            options.put("networkAccessEnabled", networkAccessEnabled);
+        }
+        return options.isEmpty() ? null : options;
     }
 
     private int messages(CliArguments args) throws InterruptedException {
@@ -4208,6 +4227,23 @@ public class UpstreamCli {
             return value;
         }
         return config.get(key);
+    }
+
+    private Boolean optionalBooleanOptionOrConfig(CliArguments args, String option, String key) {
+        String value = optionalOptionOrConfig(args, option, key);
+        if (!hasText(value)) {
+            return null;
+        }
+        if ("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value)) {
+            return Boolean.parseBoolean(value);
+        }
+        throw new UpstreamCliException("--" + option + " must be true or false");
+    }
+
+    private void putText(Map<String, Object> target, String key, String value) {
+        if (hasText(value)) {
+            target.put(key, value);
+        }
     }
 
     private Path tenantProfilePath(CliArguments args) {
