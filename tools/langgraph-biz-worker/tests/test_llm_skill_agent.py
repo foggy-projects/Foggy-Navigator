@@ -3232,6 +3232,81 @@ def test_llm_agent_injects_account_context_before_skill_instructions(tmp_path):
     assert "memory note" in system_prompt
 
 
+def test_llm_agent_updates_agent_memory_file_on_explicit_instruction(tmp_path):
+    data_root = tmp_path / "data"
+    account_root = data_root / "accounts" / "acct-001" / "agent"
+    account_root.mkdir(parents=True)
+    (account_root / "ACCOUNT_POLICY.md").write_text("AGENT.md may be updated on explicit user request.\n", encoding="utf-8")
+
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="agent_memory_skill",
+        name="agent_memory_skill",
+        description="Updates agent-maintained account memory.",
+        markdown_body="Follow the user's explicit account-memory instruction.",
+        output_schema={"type": "object"},
+        allowed_tools=["write_file", "submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    context_id = "bctx_20260612_aa_agent_memory_update"
+    task_id = "task_agent_memory_update_001"
+    frame_id = runtime.invoke_skill(
+        task_id=task_id,
+        skill_id="agent_memory_skill",
+        skill_input={},
+        conversation_id=context_id,
+        session_id=context_id,
+    )
+    agent_content = "# Agent\n\n- Prefer concise status updates for this account.\n"
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_write_agent",
+            "name": "write_file",
+            "args": {
+                "relative_path": "agent/AGENT.md",
+                "content": agent_content,
+                "mode": "create",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "AGENT.md updated.",
+                "structured_output": {"updated": "agent/AGENT.md"},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime, data_root=data_root).run(
+        task_id=task_id,
+        frame_id=frame_id,
+        prompt="请把这条明确规则写入 AGENT.md：Prefer concise status updates for this account.",
+        account_id="acct-001",
+    )
+
+    assert runtime.get_frame(frame_id).status == FrameStatus.COMPLETED
+    assert events[-1].type == "skill_result_submit"
+    assert (account_root / "AGENT.md").read_text(encoding="utf-8") == agent_content
+
+    frame = runtime.get_frame(frame_id)
+    account_file_audit = frame.private_working_state["account_file_audit"]
+    assert account_file_audit[-1]["operation"] == "write_file"
+    assert account_file_audit[-1]["relative_path"] == "agent/AGENT.md"
+    assert account_file_audit[-1]["sha256_after"]
+
+    tool_audit_path = (
+        session_data_dir(data_root, ("2026", "06", "12"), context_id)
+        / "logs" / "skill-tool-calls"
+        / f"{task_id}.jsonl"
+    )
+    entries = [json.loads(line) for line in tool_audit_path.read_text(encoding="utf-8").splitlines()]
+    write_request = next(entry for entry in entries if entry["tool"] == "write_file" and entry["phase"] == "request")
+    assert write_request["args"]["content"].startswith("<redacted:content")
+    assert "Prefer concise status updates" not in json.dumps(write_request, ensure_ascii=False)
+
+
 def test_llm_agent_injects_delegated_workspace_context_without_account_id(tmp_path):
     data_root = tmp_path / "data"
     workspace = tmp_path / "delegated" / "user-001"

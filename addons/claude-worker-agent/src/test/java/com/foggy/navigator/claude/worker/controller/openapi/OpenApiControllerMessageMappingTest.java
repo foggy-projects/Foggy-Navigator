@@ -468,6 +468,115 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void askAgent_topLevelCodexBizRuntimeOptionsAreForwardedAndDirectoryIsValidated() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                null,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                defaultRouteService(),
+                resourceResolver);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        A2AgentResourceResolver.ResolvedAgentResource agentResource =
+                new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent-1",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app-1",
+                        "app-1",
+                        "agent-1",
+                        "pool-1",
+                        ResourceOwnerType.PLATFORM,
+                        "tenant-1",
+                        "WORKER_POOL:PLATFORM",
+                        "OPENAI_CODEX",
+                        "codex-worker-1",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app-1",
+                        "AGENT_WORKER_REF",
+                        "model-default",
+                        null,
+                        "dir-default",
+                        "AGENT:CLIENT_APP");
+        when(resourceResolver.resolveRequiredAgent(
+                eq("tenant-1"), eq("app-1"), eq("scenario-1.actor-1"), eq("agent-1")))
+                .thenReturn(agentResource);
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq(agentResource),
+                eq("model-default"),
+                nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(new A2AgentResourceResolver.ResolvedModelResource(
+                        "model-default",
+                        "model-default",
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "codex-mini",
+                        "MODEL_CONFIG_DEFAULT",
+                        "OPENAI_CODEX",
+                        "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant-1"), eq("app-1"), eq("scenario-1.actor-1"), eq(agentResource), eq("dir-requested")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir-requested",
+                        "codex-worker-1",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/mnt/d/world-sim/scenario-1/actor-1",
+                        List.of("/mnt/d/world-sim/scenario-1/actor-1"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("run actor task");
+        form.setProviderType("codex-biz-worker");
+        form.setDirectoryId("dir-requested");
+        form.setPrivateAccountId("scenario-1.actor-1");
+        form.setSandboxMode("workspace-write");
+        form.setApprovalPolicy("never");
+        form.setNetworkAccessEnabled(false);
+        form.setWebSearchMode("disabled");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("scenario-1.actor-1");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        Map<String, Object> metadata = captor.getValue().getMetadata();
+        assertEquals("codex-biz-worker", metadata.get("providerType"));
+        assertEquals("dir-requested", metadata.get("directoryId"));
+        assertEquals("/mnt/d/world-sim/scenario-1/actor-1", metadata.get("cwd"));
+        assertEquals("scenario-1.actor-1", metadata.get("privateAccountId"));
+        assertEquals("workspace-write", metadata.get("sandboxMode"));
+        assertEquals("never", metadata.get("approvalPolicy"));
+        assertEquals(false, metadata.get("networkAccessEnabled"));
+        assertEquals("disabled", metadata.get("webSearchMode"));
+        verify(resourceResolver).resolveRequiredWorkspaceForAgent(
+                "tenant-1", "app-1", "scenario-1.actor-1", agentResource, "dir-requested");
+    }
+
+    @Test
     void askAgent_generatesStandardBusinessContextIdWhenContextIdIsOmitted() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);

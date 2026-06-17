@@ -151,6 +151,80 @@ class BusinessFunctionSuspensionServiceTest {
     }
 
     @Test
+    void resumeSuspension_usesPersistedBinding_ifBindingContextOmitted() {
+        BusinessFunctionSuspensionEntity entity = new BusinessFunctionSuspensionEntity();
+        entity.setSuspendId("sus_1");
+        entity.setTaskId("task1");
+        entity.setWorkerTaskId("lgt_1");
+        entity.setWorkerSessionId("worker_session1");
+        entity.setSessionId("session1");
+        entity.setTenantId("tenant1");
+        entity.setClientAppId("app1");
+        entity.setUpstreamUserId("user1");
+        entity.setFunctionId("f1");
+        entity.setVersion("v1");
+        entity.setInputJson("{\"key\":\"value\"}");
+        entity.setStatus("PENDING");
+        entity.setExpiresAt(LocalDateTime.now().plusHours(1));
+
+        when(repository.findBySuspendId("sus_1")).thenReturn(Optional.of(entity));
+
+        WorkerGatewayResumeForm form = new WorkerGatewayResumeForm();
+        WorkerGatewayResumeForm.ApprovalResult result = new WorkerGatewayResumeForm.ApprovalResult();
+        result.setStatus("approved");
+        result.setComment("server-side binding");
+        form.setApprovalResult(result);
+
+        suspensionService.resumeSuspension("tenant1", "admin1", "sus_1", form);
+
+        verify(repository).save(entityCaptor.capture());
+        assertEquals("RESUME_DISPATCHED", entityCaptor.getValue().getStatus());
+
+        WorkerGatewayResumeEvent workerEvent = captureWorkerResumeEvent();
+        assertEquals("lgt_1", workerEvent.getTaskId());
+        assertEquals("worker_session1", workerEvent.getSessionId());
+        assertEquals("session1", workerEvent.getBusinessSessionId());
+        assertEquals("tenant1", workerEvent.getTenantId());
+        assertEquals("app1", workerEvent.getClientAppId());
+        assertEquals("user1", workerEvent.getUpstreamUserId());
+        assertEquals("f1", workerEvent.getFunctionId());
+        assertEquals(computeSha256Hex("{\"key\":\"value\"}"), workerEvent.getInputHash());
+
+        BusinessSuspensionResumeDecisionEvent decisionEvent = captureBusinessDecisionEvent();
+        assertEquals("v1", decisionEvent.getVersion());
+        assertEquals(computeSha256Hex("{\"key\":\"value\"}"), decisionEvent.getInputHash());
+    }
+
+    @Test
+    void resumeSuspension_rejectsAuthorizedClientAppMismatchWhenBindingContextOmitted() {
+        BusinessFunctionSuspensionEntity entity = new BusinessFunctionSuspensionEntity();
+        entity.setSuspendId("sus_1");
+        entity.setTaskId("task1");
+        entity.setSessionId("session1");
+        entity.setTenantId("tenant1");
+        entity.setClientAppId("app1");
+        entity.setUpstreamUserId("user1");
+        entity.setFunctionId("f1");
+        entity.setVersion("v1");
+        entity.setInputJson("{\"key\":\"value\"}");
+        entity.setStatus("PENDING");
+        entity.setExpiresAt(LocalDateTime.now().plusHours(1));
+
+        when(repository.findBySuspendId("sus_1")).thenReturn(Optional.of(entity));
+
+        WorkerGatewayResumeForm form = new WorkerGatewayResumeForm();
+        WorkerGatewayResumeForm.ApprovalResult result = new WorkerGatewayResumeForm.ApprovalResult();
+        result.setStatus("approved");
+        form.setApprovalResult(result);
+
+        SecurityException exception = assertThrows(SecurityException.class, () ->
+                suspensionService.resumeSuspension("tenant1", "admin1", "sus_1", form, "other-app"));
+
+        assertEquals("Client App ID mismatch", exception.getMessage());
+        verify(repository, never()).save(any(BusinessFunctionSuspensionEntity.class));
+    }
+
+    @Test
     void resumeSuspension_dispatchesWorkerTaskId_whenBound() {
         BusinessFunctionSuspensionEntity entity = new BusinessFunctionSuspensionEntity();
         entity.setSuspendId("sus_1");

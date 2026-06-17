@@ -168,10 +168,10 @@ class BizWorkerControlPlaneAuthorizationTest {
 
     @Test
     void testBusinessFunctionApprovalController() throws Exception {
-        assertMethodRole(
-                BusinessFunctionApprovalController.class.getMethod("resumeSuspension", String.class, String.class, String.class, com.foggy.navigator.business.agent.model.form.WorkerGatewayResumeForm.class),
-                "TENANT_ADMIN"
-        );
+        assertNull(BusinessFunctionApprovalController.class
+                .getMethod("resumeSuspension", jakarta.servlet.http.HttpServletRequest.class, String.class,
+                        com.foggy.navigator.business.agent.model.form.WorkerGatewayResumeForm.class)
+                .getAnnotation(RequireAuth.class));
     }
 
     @Test

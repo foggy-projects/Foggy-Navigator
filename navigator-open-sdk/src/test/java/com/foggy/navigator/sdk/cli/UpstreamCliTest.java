@@ -1432,9 +1432,13 @@ class UpstreamCliTest {
                 .resolve("2026").resolve("05").resolve("31").resolve("f1").resolve(contextId);
         Path skillToolCallsFile = sessionDir.resolve("logs").resolve("skill-tool-calls")
                 .resolve(taskId + ".jsonl");
+        Path runtimeMessageEventsFile = sessionDir.resolve("logs").resolve("runtime-message-events")
+                .resolve(taskId + ".jsonl");
         Files.createDirectories(skillToolCallsFile.getParent());
+        Files.createDirectories(runtimeMessageEventsFile.getParent());
         Files.createDirectories(sessionDir.resolve("logs").resolve("llm-submissions"));
         Files.writeString(skillToolCallsFile, "{\"toolName\":\"tms.dataset.queryModel\"}\n", StandardCharsets.UTF_8);
+        Files.writeString(runtimeMessageEventsFile, "{\"event\":\"tool_result\"}\n", StandardCharsets.UTF_8);
 
         int code = run(new String[]{"upstream", "diagnostics", "session-dir",
                 "--context-id", contextId,
@@ -1455,12 +1459,16 @@ class UpstreamCliTest {
         assertTrue(output.contains("skillToolCallsDirectory="
                 + sessionDir.resolve("logs").resolve("skill-tool-calls").toAbsolutePath().normalize()));
         assertTrue(output.contains("skillToolCallsFile=" + skillToolCallsFile.toAbsolutePath().normalize()));
+        assertTrue(output.contains("runtimeMessageEventsDirectory="
+                + sessionDir.resolve("logs").resolve("runtime-message-events").toAbsolutePath().normalize()));
+        assertTrue(output.contains("runtimeMessageEventsFile=" + runtimeMessageEventsFile.toAbsolutePath().normalize()));
         assertTrue(output.contains("llmSubmissionsDirectory="
                 + sessionDir.resolve("logs").resolve("llm-submissions").toAbsolutePath().normalize()));
         assertTrue(output.contains("accessHint=local"));
         assertFalse(output.contains("notFoundReason="));
         assertFalse(output.contains("cat-runtime-secret"));
         assertFalse(output.contains("tms.dataset.queryModel"));
+        assertFalse(output.contains("tool_result"));
     }
 
     @Test
@@ -1485,6 +1493,9 @@ class UpstreamCliTest {
         assertTrue(output.contains("sessionDirectory=" + expectedSessionDir.toAbsolutePath().normalize()));
         assertTrue(output.contains("skillToolCallsFile="
                 + expectedSessionDir.resolve("logs").resolve("skill-tool-calls").resolve(taskId + ".jsonl")
+                .toAbsolutePath().normalize()));
+        assertTrue(output.contains("runtimeMessageEventsFile="
+                + expectedSessionDir.resolve("logs").resolve("runtime-message-events").resolve(taskId + ".jsonl")
                 .toAbsolutePath().normalize()));
         assertTrue(output.contains("accessHint=unavailable"));
         assertTrue(output.contains("notFoundReason=context-not-found"));

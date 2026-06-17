@@ -128,3 +128,27 @@ def test_analyze_attachment_requires_url_for_matched_attachment():
     )
 
     assert result == {"ok": False, "error": "ATTACHMENT_URL_REQUIRED: att-missing-url"}
+
+
+def test_analyze_attachment_reports_local_path_boundary():
+    result = analyze_attachment(
+        {
+            "attachment_id": (
+                "tms-order-clerk-real-browser-m0/evidence/"
+                "order-create-dongguan-20260614-001/screenshot-dongguan-001-error.png"
+            ),
+            "purpose": "inspect screenshot",
+        },
+        {
+            "vision_llm_config": {"provider": "openai", "model": "vision-model"},
+            "attachments": [],
+        },
+    )
+
+    assert result == {
+        "ok": False,
+        "error": (
+            "ATTACHMENT_NOT_FOUND: local evidence paths are not attachment ids; "
+            "register the file as an attachment before analysis"
+        ),
+    }

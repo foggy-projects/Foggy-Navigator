@@ -420,6 +420,7 @@ def _system_root_manifest() -> SkillManifest:
             "invoke_business_function",
             "invoke_business_skill",
             "invoke_business_agent",
+            "register_evidence_attachment",
             "analyze_attachment",
             "analyze_spreadsheet",
             "submit_frame_result",

@@ -435,7 +435,8 @@ public class OpenApiController {
                 tenantId,
                 clientAppCredential,
                 upstreamUserId,
-                agentResource);
+                agentResource,
+                form);
         String modelConfigId = modelResource.modelConfigId();
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId)
@@ -454,6 +455,7 @@ public class OpenApiController {
             metadata.putAll(form.getMetadata());
         }
         removeWorkerLaunchOnlyMetadata(metadata);
+        mergeTopLevelRuntimeOptions(metadata, form);
         if (StringUtils.hasText(modelConfigId)) {
             metadata.put("modelConfigId", modelConfigId);
         }
@@ -507,6 +509,7 @@ public class OpenApiController {
                 agent, agentSubmitPipeline, route.agentId(), ctx);
         A2aTask task = submittingAgent.submitTask(AgentTaskSubmitRequest.builder()
                 .agentId(route.agentId())
+                .providerType(stringValue(metadata.get("providerType")))
                 .resolveContext(ctx)
                 .message(message)
                 .prompt(messageContent)
@@ -589,8 +592,12 @@ public class OpenApiController {
             String tenantId,
             ResolvedClientAppCredentialDTO clientAppCredential,
             String upstreamUserId,
-            A2AgentResourceResolver.ResolvedAgentResource agentResource) {
-        if (!StringUtils.hasText(agentResource.defaultDirectoryId())) {
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            OpenApiQueryForm form) {
+        String directoryId = firstNonBlank(
+                form != null ? form.getDirectoryId() : null,
+                agentResource.defaultDirectoryId());
+        if (!StringUtils.hasText(directoryId)) {
             return null;
         }
         return resourceResolver.resolveRequiredWorkspaceForAgent(
@@ -598,7 +605,7 @@ public class OpenApiController {
                 clientAppCredential.getClientAppId(),
                 upstreamUserId,
                 agentResource,
-                agentResource.defaultDirectoryId());
+                directoryId);
     }
 
     private void injectOwnerAwareLaunchMetadata(
@@ -1180,6 +1187,19 @@ public class OpenApiController {
         executionPolicy.putAll(policy);
         context.put("execution_policy", executionPolicy);
         metadata.put("context", context);
+    }
+
+    private void mergeTopLevelRuntimeOptions(Map<String, Object> metadata, OpenApiQueryForm form) {
+        if (form == null) {
+            return;
+        }
+        putText(metadata, "providerType", form.getProviderType());
+        putText(metadata, "codexHomeKey", form.getCodexHomeKey());
+        putText(metadata, "privateAccountId", form.getPrivateAccountId());
+        putText(metadata, "sandboxMode", form.getSandboxMode());
+        putText(metadata, "approvalPolicy", form.getApprovalPolicy());
+        putText(metadata, "webSearchMode", form.getWebSearchMode());
+        putObject(metadata, "networkAccessEnabled", form.getNetworkAccessEnabled());
     }
 
     private void putText(Map<String, Object> target, String key, String value) {
@@ -2378,7 +2398,7 @@ public class OpenApiController {
         }
         String normalized = providerType.trim().toUpperCase(Locale.ROOT);
         return switch (normalized) {
-            case "CODEX-WORKER", "OPENAI_CODEX", "CODEX" -> "OPENAI_CODEX";
+            case "CODEX-WORKER", "CODEX-BIZ-WORKER", "OPENAI_CODEX", "CODEX" -> "OPENAI_CODEX";
             case "CLAUDE-WORKER", "CLAUDE", "CLAUDE_CODE" -> "CLAUDE_CODE";
             case "GEMINI-WORKER", "GEMINI", "GEMINI_CLI" -> "GEMINI_CLI";
             case "LANGGRAPH-BIZ-WORKER", "LANGGRAPH", "LANGGRAPH_BIZ" -> "LANGGRAPH_BIZ";

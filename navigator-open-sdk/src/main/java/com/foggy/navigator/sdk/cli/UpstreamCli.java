@@ -2038,7 +2038,8 @@ public class UpstreamCli {
         ContextLocator locator = parseContextLocator(contextId);
         if (locator == null) {
             return new SessionDirectoryDiagnostics(contextId, taskId, false, workerBackend, physicalWorkerId,
-                    workerHost, hostname, null, null, null, null, null, "unavailable", "context-not-found");
+                    workerHost, hostname, null, null, null, null, null, null, null,
+                    "unavailable", "context-not-found");
         }
 
         List<Path> dataRoots = candidateBizWorkerDataRoots(args);
@@ -2064,6 +2065,12 @@ public class UpstreamCli {
         Path skillToolCallsFile = hasText(taskId) && skillToolCallsDirectory != null
                 ? skillToolCallsDirectory.resolve(safePathSegment(taskId) + ".jsonl").toAbsolutePath().normalize()
                 : null;
+        Path runtimeMessageEventsDirectory = logsDirectory != null
+                ? logsDirectory.resolve("runtime-message-events").toAbsolutePath().normalize()
+                : null;
+        Path runtimeMessageEventsFile = hasText(taskId) && runtimeMessageEventsDirectory != null
+                ? runtimeMessageEventsDirectory.resolve(safePathSegment(taskId) + ".jsonl").toAbsolutePath().normalize()
+                : null;
         Path llmSubmissionsDirectory = logsDirectory != null
                 ? logsDirectory.resolve("llm-submissions").toAbsolutePath().normalize()
                 : null;
@@ -2073,7 +2080,8 @@ public class UpstreamCli {
                 : (!isLikelyLocalHost(workerHost, hostname) ? "ssh-required" : "unavailable");
         return new SessionDirectoryDiagnostics(contextId, taskId, exists, workerBackend, physicalWorkerId,
                 workerHost, hostname, sessionDirectory, logsDirectory, skillToolCallsDirectory, skillToolCallsFile,
-                llmSubmissionsDirectory, accessHint, notFoundReason);
+                runtimeMessageEventsDirectory, runtimeMessageEventsFile, llmSubmissionsDirectory,
+                accessHint, notFoundReason);
     }
 
     private List<Path> candidateBizWorkerDataRoots(CliArguments args) {
@@ -2287,6 +2295,10 @@ public class UpstreamCli {
         out.println("skillToolCallsDirectory=" + valueOrEmpty(diagnostics.skillToolCallsDirectory()));
         if (hasText(diagnostics.taskId())) {
             out.println("skillToolCallsFile=" + valueOrEmpty(diagnostics.skillToolCallsFile()));
+        }
+        out.println("runtimeMessageEventsDirectory=" + valueOrEmpty(diagnostics.runtimeMessageEventsDirectory()));
+        if (hasText(diagnostics.taskId())) {
+            out.println("runtimeMessageEventsFile=" + valueOrEmpty(diagnostics.runtimeMessageEventsFile()));
         }
         out.println("llmSubmissionsDirectory=" + valueOrEmpty(diagnostics.llmSubmissionsDirectory()));
         out.println("accessHint=" + valueOrEmpty(diagnostics.accessHint()));
@@ -4356,6 +4368,8 @@ public class UpstreamCli {
                                                Path logsDirectory,
                                                Path skillToolCallsDirectory,
                                                Path skillToolCallsFile,
+                                               Path runtimeMessageEventsDirectory,
+                                               Path runtimeMessageEventsFile,
                                                Path llmSubmissionsDirectory,
                                                String accessHint,
                                                String notFoundReason) {

@@ -955,7 +955,7 @@
 
     <!-- Right Panel: Task History -->
     <aside v-if="selectedWorkerId || workerState.activeTasks.value.length > 0" :class="['worker-history', { collapsed: prefs.rightPanelCollapsed }]">
-      <div class="history-header">
+      <div :class="['history-header', { 'batch-selecting': batchSelectMode }]">
         <span class="panel-collapse-btn" title="收起历史" @click="prefs.rightPanelCollapsed = true">&raquo;</span>
         <h3>历史会话</h3>
         <div class="history-header-actions">
@@ -7755,24 +7755,52 @@ function handlePopOutTerminal() {
 }
 
 .history-header {
-  padding: 12px 16px;
+  padding: 10px 12px;
   border-bottom: 1px solid #e4e7ed;
   background: #fff;
-  display: flex;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
+  column-gap: 8px;
+  row-gap: 6px;
 }
 
 .history-header h3 {
   margin: 0;
   font-size: 16px;
   color: #303133;
+  line-height: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .history-header-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.history-header.batch-selecting {
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
+.history-header.batch-selecting .history-header-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+}
+
+.history-header-actions :deep(.el-button) {
+  margin-left: 0;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.history-header-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 
 .history-filter-bar {

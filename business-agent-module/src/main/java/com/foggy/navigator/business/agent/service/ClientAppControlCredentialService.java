@@ -27,6 +27,7 @@ public class ClientAppControlCredentialService {
     public static final String SCOPE_SKILL_BUNDLE_SYNC = "SKILL_BUNDLE_SYNC";
     public static final String SCOPE_FUNCTION_MANIFEST_IMPORT = "FUNCTION_MANIFEST_IMPORT";
     public static final String SCOPE_FUNCTION_GRANT_MANAGE = "FUNCTION_GRANT_MANAGE";
+    public static final String SCOPE_FUNCTION_SUSPENSION_RESUME = "FUNCTION_SUSPENSION_RESUME";
     public static final String SCOPE_BUSINESS_OBJECT_MANAGE = "BUSINESS_OBJECT_MANAGE";
     public static final String SCOPE_E2E_MODEL_ENSURE = "E2E_MODEL_ENSURE";
     public static final String SCOPE_UPSTREAM_USER_GRANT = "UPSTREAM_USER_GRANT";
@@ -99,7 +100,11 @@ public class ClientAppControlCredentialService {
     }
 
     private boolean hasRequiredScope(Set<String> scopes, String requiredScope) {
-        return scopes.contains(SCOPE_ALL) || scopes.contains(requiredScope);
+        if (scopes.contains(SCOPE_ALL) || scopes.contains(requiredScope)) {
+            return true;
+        }
+        return SCOPE_FUNCTION_SUSPENSION_RESUME.equals(requiredScope)
+                && scopes.contains(SCOPE_FUNCTION_GRANT_MANAGE);
     }
 
     public static Set<String> defaultScopes() {
@@ -108,6 +113,7 @@ public class ClientAppControlCredentialService {
                 SCOPE_SKILL_BUNDLE_SYNC,
                 SCOPE_FUNCTION_MANIFEST_IMPORT,
                 SCOPE_FUNCTION_GRANT_MANAGE,
+                SCOPE_FUNCTION_SUSPENSION_RESUME,
                 SCOPE_BUSINESS_OBJECT_MANAGE,
                 SCOPE_E2E_MODEL_ENSURE,
                 SCOPE_UPSTREAM_USER_GRANT,

@@ -28,6 +28,14 @@ def analyze_attachment(args: dict[str, Any], runtime_context: dict[str, Any] | N
 
     attachment = _find_attachment(context.get("attachments"), attachment_id)
     if attachment is None:
+        if _looks_like_local_path_reference(attachment_id):
+            return {
+                "ok": False,
+                "error": (
+                    "ATTACHMENT_NOT_FOUND: local evidence paths are not attachment ids; "
+                    "register the file as an attachment before analysis"
+                ),
+            }
         return {"ok": False, "error": f"ATTACHMENT_NOT_FOUND: {attachment_id}"}
 
     url = _text(attachment.get("url") or attachment.get("href"))
@@ -137,6 +145,18 @@ def _has_image_extension(value: Any) -> bool:
     except ValueError:
         text = text.split("?", 1)[0].split("#", 1)[0]
     return text.lower().endswith(_IMAGE_EXTENSIONS)
+
+
+def _looks_like_local_path_reference(value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if re.match(r"^[a-z]:[\\/]", text, re.IGNORECASE) or lowered.startswith(("./", "../", ".\\", "..\\")):
+        return True
+    if "\\" in text:
+        return True
+    return "/" in text and _has_image_extension(text)
 
 
 def _analysis_prompt(purpose: str, expected_fields: list[str]) -> str:

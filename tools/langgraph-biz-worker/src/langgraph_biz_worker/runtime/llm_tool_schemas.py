@@ -326,7 +326,11 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "properties": {
                     "attachment_id": {
                         "type": "string",
-                        "description": "Attachment id from the upstream attachment metadata.",
+                        "description": (
+                            "Attachment id from the upstream attachment metadata. "
+                            "Do not pass local delegated workspace or evidence file paths; "
+                            "local evidence files must first be registered as attachments."
+                        ),
                     },
                     "purpose": {
                         "type": "string",
@@ -339,6 +343,40 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     },
                 },
                 "required": ["attachment_id", "purpose"],
+            },
+        },
+    },
+    "register_evidence_attachment": {
+        "type": "function",
+        "function": {
+            "name": "register_evidence_attachment",
+            "description": (
+                "Register a small image file from the authorized delegated workspace as a "
+                "runtime attachment before calling analyze_attachment. Use this only for "
+                "local evidence screenshots/files that are inside the execution policy "
+                "allowed directories. Do not use it for already-uploaded upstream attachments."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative or absolute path to an authorized local evidence image.",
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": "Business reason for registering this evidence image.",
+                    },
+                    "mime_type": {
+                        "type": "string",
+                        "description": "Optional image MIME type override, e.g. image/png.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional attachment display name.",
+                    },
+                },
+                "required": ["path", "purpose"],
             },
         },
     },

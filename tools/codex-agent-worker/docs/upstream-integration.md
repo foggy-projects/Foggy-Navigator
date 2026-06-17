@@ -109,6 +109,11 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 | `model` | `string` | 否 | 模型名，支持附带思考等级后缀 |
 | `max_turns` | `number` | 否 | 限制最多完成多少个 turn，必须是正整数 |
 | `api_key` | `string` | 否 | 本次请求覆盖默认鉴权 |
+| `codex_home_key` | `string` | 否 | 逻辑账号/actor key；worker 会在 `CODEX_BIZ_HOME_ROOT` 下解析独立 `CODEX_HOME` |
+| `sandbox_mode` | `string` | 否 | 覆盖 Codex SDK sandbox mode |
+| `approval_policy` | `string` | 否 | 覆盖 Codex SDK approval policy |
+| `network_access_enabled` | `boolean` | 否 | 是否允许网络访问 |
+| `web_search_mode` | `string` | 否 | 覆盖 Codex web search mode |
 
 最小请求：
 
@@ -128,6 +133,35 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
   "max_turns": 1
 }
 ```
+
+### 3.1.1 Codex Biz scoped CODEX_HOME
+
+当 Navigator 通过 `providerType=codex-biz-worker` 调用本 worker 时，通常会传入 `codex_home_key`，让不同 actor 使用独立 durable Codex home。worker 侧必须配置绝对路径 `CODEX_BIZ_HOME_ROOT`，否则带 `codex_home_key` 的请求会被拒绝。
+
+本机 WSL sim 推荐配置：
+
+```bash
+CODEX_WORKER_HOST=0.0.0.0
+CODEX_WORKER_PORT=3051
+CODEX_BIZ_HOME_ROOT=/home/$USER/.foggy/codex-biz-homes
+CODEX_ALLOWED_CWDS=/mnt/d/foggy-projects
+```
+
+请求示例：
+
+```json
+{
+  "prompt": "在 actor workspace 内完成本轮任务",
+  "cwd": "/mnt/d/world-sim/scenario-1/actor-1",
+  "codex_home_key": "scenario-1.actor-1",
+  "sandbox_mode": "workspace-write",
+  "approval_policy": "never",
+  "network_access_enabled": false,
+  "web_search_mode": "disabled"
+}
+```
+
+`codex_home_key` 是 worker 本地 scoped home key；上游业务系统不应直接拼接 `CODEX_HOME` 路径。修改 `CODEX_BIZ_HOME_ROOT` 后需要重启 worker 进程。
 
 ### 3.2 返回方式
 

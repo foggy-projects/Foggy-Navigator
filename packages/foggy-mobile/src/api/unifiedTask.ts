@@ -15,6 +15,23 @@ import type {
 
 const taskPageRequests = new Map<string, Promise<SessionPageResult<DispatchTask>>>()
 
+function normalizeImages(images?: string | string[]): string[] | undefined {
+  if (images == null) return undefined
+  if (Array.isArray(images)) {
+    const normalized = images.map(item => item?.trim()).filter((item): item is string => !!item)
+    return normalized.length > 0 ? normalized : undefined
+  }
+  const normalized = images.trim()
+  return normalized ? [normalized] : undefined
+}
+
+function normalizeTaskForm<T extends { images?: string | string[] }>(
+  form: T,
+): Omit<T, 'images'> & { images?: string[] } {
+  const images = normalizeImages(form.images)
+  return images ? { ...form, images } : { ...form, images: undefined }
+}
+
 /**
  * Create a task via unified dispatch.
  */
@@ -27,13 +44,13 @@ export async function createTaskUnified(form: {
   maxTurns?: number
   agentTeamsJson?: string
   agentTeamsConfigId?: string
-  images?: string[]
+  images?: string | string[]
   permissionMode?: string
   modelConfigId?: string
   agentId?: string
   contextId?: string
 }): Promise<DispatchTask> {
-  const rx = (await client.post('/tasks', form)) as unknown as RX<DispatchTask>
+  const rx = (await client.post('/tasks', normalizeTaskForm(form))) as unknown as RX<DispatchTask>
   return rx.data
 }
 
@@ -50,12 +67,12 @@ export async function resumeTaskUnified(form: {
   maxTurns?: number
   agentTeamsJson?: string
   agentTeamsConfigId?: string
-  images?: string[]
+  images?: string | string[]
   permissionMode?: string
   modelConfigId?: string
   agentId?: string
 }): Promise<DispatchTask> {
-  const rx = (await client.post('/tasks/resume', form)) as unknown as RX<DispatchTask>
+  const rx = (await client.post('/tasks/resume', normalizeTaskForm(form))) as unknown as RX<DispatchTask>
   return rx.data
 }
 

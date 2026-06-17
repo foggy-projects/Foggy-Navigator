@@ -71,12 +71,15 @@ def test_write_policy_is_guarded_by_expected_sha(tmp_path):
 
 
 def test_only_account_policy_is_writable(tmp_path):
-    response = _client(tmp_path).put(
-        "/api/v1/account-context/accounts/acct-001/files/AGENT.md",
-        json={"content": "agent rule\n"},
-    )
+    client = _client(tmp_path)
 
-    assert response.status_code == 403
+    for file_name in ("AGENT.md", "MEMORY.md"):
+        response = client.put(
+            f"/api/v1/account-context/accounts/acct-001/files/{file_name}",
+            json={"content": "agent-maintained content\n"},
+        )
+
+        assert response.status_code == 403
 
 
 def test_ensure_creates_agent_workspace_and_initial_files(tmp_path):

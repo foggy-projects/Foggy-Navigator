@@ -32,6 +32,38 @@ public class OpenApiQueryForm {
     @JsonAlias({"model", "modelName", "model_name", "model_variant"})
     private String modelVariant;
 
+    /** 显式执行 Provider；独立执行路由可传 codex-biz-worker。 */
+    @JsonAlias({"provider_type"})
+    private String providerType;
+
+    /** 显式工作目录 ID；必须对当前 ClientApp/upstream user/Agent 可见并绑定。 */
+    @JsonAlias({"directory_id"})
+    private String directoryId;
+
+    /** Codex Biz scoped CODEX_HOME key；为空时可由 privateAccountId 回退。 */
+    @JsonAlias({"codex_home_key"})
+    private String codexHomeKey;
+
+    /** Actor/account 稳定私有身份；Codex Biz route 可用作 scoped CODEX_HOME key。 */
+    @JsonAlias({"private_account_id"})
+    private String privateAccountId;
+
+    /** Codex SDK sandbox mode override. */
+    @JsonAlias({"sandbox_mode"})
+    private String sandboxMode;
+
+    /** Codex SDK approval policy override. */
+    @JsonAlias({"approval_policy"})
+    private String approvalPolicy;
+
+    /** Codex SDK network access override. */
+    @JsonAlias({"network_access_enabled"})
+    private Boolean networkAccessEnabled;
+
+    /** Codex SDK web search mode override. */
+    @JsonAlias({"web_search_mode"})
+    private String webSearchMode;
+
     /** 原生系统提示词，仅对支持该能力的 Agent 生效 */
     private String systemPrompt;
 
