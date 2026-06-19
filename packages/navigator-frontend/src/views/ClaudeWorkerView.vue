@@ -1275,8 +1275,81 @@
                       <span class="branch-session-more-trigger" @click.stop>&#8943;</span>
                       <template #dropdown>
                         <el-dropdown-menu>
+                          <el-dropdown-item @click="handleTogglePin(child)">
+                            {{ child.config?.pinned ? '取消置顶' : '置顶' }}
+                          </el-dropdown-item>
+                          <el-dropdown-item @click="handleEditTitle(child)">
+                            编辑标题
+                          </el-dropdown-item>
+                          <el-dropdown-item @click="handleEditMilestone(child)">
+                            设置里程碑
+                          </el-dropdown-item>
+                          <el-dropdown-item @click="handleAuthConfig(child)">
+                            Auth 配置
+                          </el-dropdown-item>
+                          <el-dropdown-item @click="handleEditTags(child)">
+                            标签
+                          </el-dropdown-item>
                           <el-dropdown-item @click="handleShowDetail(child)">
                             详情
+                          </el-dropdown-item>
+                          <el-dropdown-item
+                            v-if="conversationInteractionState(child) !== 'ARCHIVED' && conversationInteractionState(child) !== 'ON_HOLD'"
+                            @click="handleHoldConversation(child)"
+                          >
+                            搁置
+                          </el-dropdown-item>
+                          <el-dropdown-item
+                            v-if="conversationInteractionState(child) === 'ON_HOLD'"
+                            @click="handleUnholdConversation(child)"
+                          >
+                            取消搁置
+                          </el-dropdown-item>
+                          <el-dropdown-item
+                            v-if="conversationInteractionState(child) !== 'ARCHIVED'"
+                            @click="handleArchiveConversation(child)"
+                          >
+                            归档
+                          </el-dropdown-item>
+                          <el-dropdown-item
+                            v-if="conversationInteractionState(child) === 'ARCHIVED'"
+                            @click="handleUnarchiveConversation(child)"
+                          >
+                            取消归档
+                          </el-dropdown-item>
+                          <el-dropdown-item
+                            v-if="canRepairContext(child)"
+                            @click="handleRepairContext(child)"
+                          >
+                            修复上下文
+                          </el-dropdown-item>
+                          <el-dropdown-item
+                            v-if="isClaudeCodeTask(child.latestTask) && child.latestTask.status !== 'RUNNING' && hasCheckpoints(child.latestTask)"
+                            @click="showRewindDialog(child.latestTask)"
+                          >
+                            回退
+                          </el-dropdown-item>
+                          <el-dropdown-item
+                            v-if="canScanCheckpoints(child.latestTask)"
+                            :disabled="scanningTaskId === child.latestTask.taskId"
+                            @click="handleScanCheckpoints(child.latestTask)"
+                          >
+                            {{ scanningTaskId === child.latestTask.taskId ? '扫描中...' : '扫描' }}
+                          </el-dropdown-item>
+                          <el-dropdown-item
+                            v-if="child.latestTask.status === 'FAILED' && canResyncTask(child.latestTask)"
+                            :disabled="resyncingTaskId === child.latestTask.taskId"
+                            @click="handleResyncFromList(child)"
+                          >
+                            {{ resyncingTaskId === child.latestTask.taskId ? '同步中...' : '重新同步' }}
+                          </el-dropdown-item>
+                          <el-dropdown-item
+                            v-if="child.latestTask.status !== 'RUNNING'"
+                            divided
+                            class="delete-dropdown-item"
+                            @click="handleDeleteConversation(child)"
+                          >
+                            删除
                           </el-dropdown-item>
                         </el-dropdown-menu>
                       </template>
@@ -1491,8 +1564,81 @@
                     <span class="branch-session-more-trigger" @click.stop>&#8943;</span>
                     <template #dropdown>
                       <el-dropdown-menu>
+                        <el-dropdown-item @click="handleTogglePin(child)">
+                          {{ child.config?.pinned ? '取消置顶' : '置顶' }}
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="handleEditTitle(child)">
+                          编辑标题
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="handleEditMilestone(child)">
+                          设置里程碑
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="handleAuthConfig(child)">
+                          Auth 配置
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="handleEditTags(child)">
+                          标签
+                        </el-dropdown-item>
                         <el-dropdown-item @click="handleShowDetail(child)">
                           详情
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conversationInteractionState(child) !== 'ARCHIVED' && conversationInteractionState(child) !== 'ON_HOLD'"
+                          @click="handleHoldConversation(child)"
+                        >
+                          搁置
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conversationInteractionState(child) === 'ON_HOLD'"
+                          @click="handleUnholdConversation(child)"
+                        >
+                          取消搁置
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conversationInteractionState(child) !== 'ARCHIVED'"
+                          @click="handleArchiveConversation(child)"
+                        >
+                          归档
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conversationInteractionState(child) === 'ARCHIVED'"
+                          @click="handleUnarchiveConversation(child)"
+                        >
+                          取消归档
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="canRepairContext(child)"
+                          @click="handleRepairContext(child)"
+                        >
+                          修复上下文
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="isClaudeCodeTask(child.latestTask) && child.latestTask.status !== 'RUNNING' && hasCheckpoints(child.latestTask)"
+                          @click="showRewindDialog(child.latestTask)"
+                        >
+                          回退
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="canScanCheckpoints(child.latestTask)"
+                          :disabled="scanningTaskId === child.latestTask.taskId"
+                          @click="handleScanCheckpoints(child.latestTask)"
+                        >
+                          {{ scanningTaskId === child.latestTask.taskId ? '扫描中...' : '扫描' }}
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="child.latestTask.status === 'FAILED' && canResyncTask(child.latestTask)"
+                          :disabled="resyncingTaskId === child.latestTask.taskId"
+                          @click="handleResyncFromList(child)"
+                        >
+                          {{ resyncingTaskId === child.latestTask.taskId ? '同步中...' : '重新同步' }}
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="child.latestTask.status !== 'RUNNING'"
+                          divided
+                          class="delete-dropdown-item"
+                          @click="handleDeleteConversation(child)"
+                        >
+                          删除
                         </el-dropdown-item>
                       </el-dropdown-menu>
                     </template>
@@ -3158,12 +3304,12 @@ function reloadWorkerTasks() {
 }
 
 /** Reload history tasks using the current interactionState filter */
-function reloadFilteredTasks() {
+async function reloadFilteredTasks() {
   if (selectedDirectoryId.value) {
     dirTaskPage.value = 0
-    loadDirectoryTasks()
+    await loadDirectoryTasks()
   } else {
-    workerState.loadTasksPage(0, undefined, currentStateParam())
+    await workerState.loadTasksPage(0, undefined, currentStateParam())
   }
 }
 
@@ -4166,6 +4312,7 @@ const childConversationMap = computed(() => {
   const map = new Map<string, ConversationGroup[]>()
   for (const conv of relationConversationPool.value) {
     if (!conv.parentSessionId) continue
+    if (!matchesCurrentConversationFilters(conv)) continue
     const root = rootConversation(conv)
     if (root.sessionId === conv.sessionId) continue
     const existing = map.get(root.sessionId)
@@ -4211,21 +4358,28 @@ function parentConversationRef(conv: ConversationGroup): string {
   return parent ? conversationRefLabel(parent) : conv.parentSessionId
 }
 
+function matchesCurrentSourceFilter(conv: ConversationGroup): boolean {
+  const allSourcesSelected = ALL_SOURCES.every((source) => sessionSourceFilters.value.has(source))
+  if (allSourcesSelected) return true
+
+  const isPlatform = conv.tasks.some((task) =>
+    task.source === 'PLATFORM' || (task.source == null && task.fileCheckpointingEnabled === true),
+  )
+  if (sessionSourceFilters.value.has('PLATFORM') && !sessionSourceFilters.value.has('SYNCED')) return isPlatform
+  if (sessionSourceFilters.value.has('SYNCED') && !sessionSourceFilters.value.has('PLATFORM')) return !isPlatform
+  return true
+}
+
+function matchesCurrentConversationFilters(conv: ConversationGroup): boolean {
+  return matchesCurrentSourceFilter(conv)
+    && matchesCurrentInteractionFilter(resolveConversationInteractionState(conv))
+}
+
 const activeConversations = computed(() => {
   let list = allConversations.value
 
   // Source filter (client-side, multi-select)
-  const allSourcesSelected = ALL_SOURCES.every((s) => sessionSourceFilters.value.has(s))
-  if (!allSourcesSelected) {
-    list = list.filter((conv) => {
-      const isPlatform = conv.tasks.some((t) =>
-        t.source === 'PLATFORM' || (t.source == null && t.fileCheckpointingEnabled === true),
-      )
-      if (sessionSourceFilters.value.has('PLATFORM') && !sessionSourceFilters.value.has('SYNCED')) return isPlatform
-      if (sessionSourceFilters.value.has('SYNCED') && !sessionSourceFilters.value.has('PLATFORM')) return !isPlatform
-      return true
-    })
-  }
+  list = list.filter(matchesCurrentSourceFilter)
 
   // interactionState filtering is done by the backend API (multi-select via comma-separated param)
 
@@ -5634,11 +5788,7 @@ async function handleBindAuth() {
 }
 
 async function handleRefreshConversations() {
-  if (selectedDirectoryId.value) {
-    await loadDirectoryTasks()
-  } else {
-    await reloadWorkerTasks()
-  }
+  await reloadFilteredTasks()
 }
 
 function handleBatchAuthConfig() {
@@ -5726,7 +5876,7 @@ async function handleBatchArchive() {
     }
     ElMessage.success(`已归档 ${archived} 个会话`)
     exitBatchSelectMode()
-    reloadFilteredTasks()
+    await reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') {
       ElMessage.error('归档失败')
@@ -7023,7 +7173,7 @@ async function handleArchiveConversation(conv: ConversationGroup) {
     )
     await workerState.archiveConversation(conv.sessionId)
     ElMessage.success('已归档')
-    reloadFilteredTasks()
+    await reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('归档失败')
   }
@@ -7039,7 +7189,7 @@ async function handlePaneArchive(sessionId?: string) {
     )
     await workerState.archiveConversation(sessionId)
     ElMessage.success('已归档')
-    reloadFilteredTasks()
+    await reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('归档失败')
   }
@@ -7050,7 +7200,7 @@ async function handlePaneUnarchive(sessionId?: string) {
   try {
     await workerState.unarchiveConversation(sessionId)
     ElMessage.success('已取消归档')
-    reloadFilteredTasks()
+    await reloadFilteredTasks()
   } catch {
     ElMessage.error('取消归档失败')
   }
@@ -7069,7 +7219,7 @@ async function handleUnarchiveConversation(conv: ConversationGroup) {
   try {
     await workerState.unarchiveConversation(conv.sessionId)
     ElMessage.success('已取消归档')
-    reloadFilteredTasks()
+    await reloadFilteredTasks()
   } catch {
     ElMessage.error('取消归档失败')
   }
@@ -7084,7 +7234,7 @@ async function handleHoldConversation(conv: ConversationGroup) {
     )
     await workerState.holdConversation(conv.sessionId)
     ElMessage.success('已搁置')
-    reloadFilteredTasks()
+    await reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('搁置失败')
   }
@@ -7100,7 +7250,7 @@ async function handlePaneHold(sessionId?: string) {
     )
     await workerState.holdConversation(sessionId)
     ElMessage.success('已搁置')
-    reloadFilteredTasks()
+    await reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('搁置失败')
   }
@@ -7110,7 +7260,7 @@ async function handleUnholdConversation(conv: ConversationGroup) {
   try {
     await workerState.unholdConversation(conv.sessionId)
     ElMessage.success('已取消搁置')
-    reloadFilteredTasks()
+    await reloadFilteredTasks()
   } catch {
     ElMessage.error('取消搁置失败')
   }

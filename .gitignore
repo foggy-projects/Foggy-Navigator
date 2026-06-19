@@ -195,6 +195,7 @@ cache/
 
 # Local agent notes
 CLAUDE.local.md
+handoff/
 
 # Backup files
 *.bak
