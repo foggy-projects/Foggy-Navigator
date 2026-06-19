@@ -24,6 +24,7 @@
 - [18-biz-worker-complex-task-session-sample-audit.md](./18-biz-worker-complex-task-session-sample-audit.md) - Desensitized Codex/Claude session sample audit for complex task planning
 - [19-biz-worker-frame-execution-report-design.md](./19-biz-worker-frame-execution-report-design.md) - BizWorker frame execution report and provenance markdown design
 - [20-worker-host-suite-upstream-worker-model.md](./20-worker-host-suite-upstream-worker-model.md) - WorkerHost suite manifest and upstream worker creation model
+- [21-history-session-root-branch-grouping.md](./21-history-session-root-branch-grouping.md) - Workers history session root conversation and branch conversation grouping
 - [workitems/BUG-021-follow-up-3-langgraph-terminal-status-after-approval-result.md](./workitems/BUG-021-follow-up-3-langgraph-terminal-status-after-approval-result.md) - BUG-021 follow-up terminal status persistence after approval result
 - [workitems/BUG-022-materialize-bootstrap-non-blocking.md](./workitems/BUG-022-materialize-bootstrap-non-blocking.md) - materialize should not block first bootstrap when Skill/Function resources are not ready
 - [workitems/BUG-023-frame-execution-report-approval-resume-propagation.md](./workitems/BUG-023-frame-execution-report-approval-resume-propagation.md) - frame execution report propagation and terminal convergence after approval resume

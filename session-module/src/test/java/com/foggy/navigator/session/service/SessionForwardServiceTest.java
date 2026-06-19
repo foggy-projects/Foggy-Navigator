@@ -1,5 +1,6 @@
 package com.foggy.navigator.session.service;
 
+import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.entity.SessionEntity;
@@ -9,8 +10,10 @@ import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
+import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.dto.SessionForwardCreateRequest;
 import com.foggy.navigator.session.dto.SessionForwardCreateResponse;
+import com.foggy.navigator.session.dto.SessionRelationDTO;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.session.repository.SessionRelationRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
@@ -219,5 +222,105 @@ class SessionForwardServiceTest {
         verify(taskDispatchFacade, never()).resumeTask(any(), any());
         verify(sessionRelationRepository, never()).save(any());
         verify(sessionTaskRepository, never()).findBySessionIdOrderByCreatedAtDesc(any());
+    }
+
+    @Test
+    void forwardToNewSession_newSessionFromChild_flattensToRootParent() {
+        SessionEntity rootSession = new SessionEntity();
+        rootSession.setId("session-root");
+        rootSession.setUserId("user-1");
+
+        SessionEntity sourceChild = new SessionEntity();
+        sourceChild.setId("session-child-a");
+        sourceChild.setUserId("user-1");
+        sourceChild.setParentSessionId("session-root");
+        sourceChild.setCurrentWorkerId("worker-source");
+        sourceChild.setCurrentDirectoryId("dir-source");
+
+        SessionEntity createdSession = new SessionEntity();
+        createdSession.setId("session-child-b");
+        createdSession.setUserId("user-1");
+
+        SessionMessageEntity sourceMessage = new SessionMessageEntity();
+        sourceMessage.setId("msg-1");
+        sourceMessage.setSessionId("session-child-a");
+        sourceMessage.setRole("ASSISTANT");
+        sourceMessage.setContent("原始回复");
+
+        DispatchTaskDTO createdTask = DispatchTaskDTO.builder()
+                .taskId("task-created")
+                .sessionId("session-child-b")
+                .workerId("worker-target")
+                .model("gpt-5.4")
+                .providerType("codex-worker")
+                .build();
+
+        when(sessionRepository.findByIdAndUserId("session-child-a", "user-1")).thenReturn(Optional.of(sourceChild));
+        when(sessionRepository.findByIdAndUserId("session-root", "user-1")).thenReturn(Optional.of(rootSession));
+        when(sessionMessageRepository.findById("msg-1")).thenReturn(Optional.of(sourceMessage));
+        when(sessionManager.createSession(any())).thenReturn("session-child-b");
+        when(sessionRepository.findById("session-child-b")).thenReturn(Optional.of(createdSession));
+        when(agentSubmitPipeline.submit(any())).thenReturn(AgentTaskSubmitResult.of(null, createdTask));
+        when(sessionRelationRepository.save(any())).thenAnswer(invocation -> {
+            SessionRelationEntity relation = invocation.getArgument(0);
+            relation.setId(100L);
+            return relation;
+        });
+
+        SessionForwardCreateRequest request = new SessionForwardCreateRequest();
+        request.setSourceSessionId("session-child-a");
+        request.setSourceMessageId("msg-1");
+        request.setTargetMode("NEW_SESSION");
+        request.setWorkerId("worker-target");
+        request.setPrompt("继续拆一个分支");
+        request.setModel("gpt-5.4");
+
+        SessionForwardCreateResponse response = service.forwardToNewSession(request, "user-1", "tenant-1");
+
+        assertEquals("NEW_SESSION", response.getTargetMode());
+        assertEquals("session-child-b", response.getTargetSessionId());
+
+        ArgumentCaptor<SessionCreateRequest> createCaptor = ArgumentCaptor.forClass(SessionCreateRequest.class);
+        verify(sessionManager).createSession(createCaptor.capture());
+        assertEquals("session-root", createCaptor.getValue().getParentSessionId());
+
+        ArgumentCaptor<SessionRelationEntity> relationCaptor = ArgumentCaptor.forClass(SessionRelationEntity.class);
+        verify(sessionRelationRepository).save(relationCaptor.capture());
+        assertEquals("session-child-a", relationCaptor.getValue().getSourceSessionId());
+        assertEquals("session-child-b", relationCaptor.getValue().getTargetSessionId());
+    }
+
+    @Test
+    void findIncomingForwardRelation_returnsLatestForwardForOwnedTarget() {
+        SessionEntity targetSession = new SessionEntity();
+        targetSession.setId("session-child-b");
+        targetSession.setUserId("user-1");
+
+        SessionRelationEntity relation = new SessionRelationEntity();
+        relation.setId(101L);
+        relation.setRelationType("FORWARD");
+        relation.setTargetMode("NEW_SESSION");
+        relation.setSourceSessionId("session-child-a");
+        relation.setSourceMessageId("msg-1");
+        relation.setTargetSessionId("session-child-b");
+        relation.setSourceWorkerId("worker-source");
+        relation.setTargetWorkerId("worker-target");
+        relation.setCreatedAt(LocalDateTime.now());
+
+        when(sessionRepository.findByIdAndUserId("session-child-b", "user-1")).thenReturn(Optional.of(targetSession));
+        when(sessionRelationRepository.findFirstByUserIdAndRelationTypeAndTargetSessionIdOrderByCreatedAtDesc(
+                "user-1", "FORWARD", "session-child-b"
+        )).thenReturn(Optional.of(relation));
+
+        SessionRelationDTO result = service.findIncomingForwardRelation("session-child-b", "user-1");
+
+        assertEquals(101L, result.getId());
+        assertEquals("FORWARD", result.getRelationType());
+        assertEquals("NEW_SESSION", result.getTargetMode());
+        assertEquals("session-child-a", result.getSourceSessionId());
+        assertEquals("msg-1", result.getSourceMessageId());
+        assertEquals("session-child-b", result.getTargetSessionId());
+        assertEquals("worker-source", result.getSourceWorkerId());
+        assertEquals("worker-target", result.getTargetWorkerId());
     }
 }

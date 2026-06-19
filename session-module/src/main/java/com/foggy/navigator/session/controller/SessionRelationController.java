@@ -4,6 +4,7 @@ import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.session.dto.SessionForwardCreateRequest;
 import com.foggy.navigator.session.dto.SessionForwardCreateResponse;
+import com.foggy.navigator.session.dto.SessionRelationDTO;
 import com.foggy.navigator.session.service.SessionForwardService;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +24,14 @@ public class SessionRelationController {
                 request,
                 UserContext.getCurrentUserId(),
                 UserContext.getCurrentTenantId()
+        ));
+    }
+
+    @GetMapping("/forward/incoming/{targetSessionId}")
+    public RX<SessionRelationDTO> findIncomingForwardRelation(@PathVariable String targetSessionId) {
+        return RX.ok(sessionForwardService.findIncomingForwardRelation(
+                targetSessionId,
+                UserContext.getCurrentUserId()
         ));
     }
 }

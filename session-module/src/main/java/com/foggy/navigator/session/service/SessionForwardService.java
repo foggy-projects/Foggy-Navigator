@@ -16,6 +16,7 @@ import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.DirectoryAgentId;
 import com.foggy.navigator.session.dto.SessionForwardCreateRequest;
 import com.foggy.navigator.session.dto.SessionForwardCreateResponse;
+import com.foggy.navigator.session.dto.SessionRelationDTO;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
@@ -28,9 +29,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -74,6 +77,23 @@ public class SessionForwardService {
         };
     }
 
+    @Transactional(readOnly = true)
+    public SessionRelationDTO findIncomingForwardRelation(String targetSessionId, String userId) {
+        String normalizedTargetSessionId = blankToNull(targetSessionId);
+        if (normalizedTargetSessionId == null) {
+            throw new IllegalArgumentException("targetSessionId is required");
+        }
+        findOwnedSession(normalizedTargetSessionId, userId, "Target session not found: ");
+        return sessionRelationRepository
+                .findFirstByUserIdAndRelationTypeAndTargetSessionIdOrderByCreatedAtDesc(
+                        userId,
+                        "FORWARD",
+                        normalizedTargetSessionId
+                )
+                .map(SessionRelationDTO::fromEntity)
+                .orElse(null);
+    }
+
     private SessionForwardCreateResponse forwardCreatingNewSession(
             SessionForwardCreateRequest request,
             String userId,
@@ -86,11 +106,12 @@ public class SessionForwardService {
         normalizeTargetContext(request, targetDirectory);
         String targetMilestoneId = resolveTargetMilestoneId(request, sourceSession, targetDirectory);
 
+        String rootSessionId = resolveRootSessionId(sourceSession, userId);
         String targetSessionId = sessionManager.createSession(SessionCreateRequest.builder()
                 .userId(userId)
                 .tenantId(tenantId)
                 .agentId(blankToNull(request.getAgentId()))
-                .parentSessionId(sourceSession.getId())
+                .parentSessionId(rootSessionId)
                 .taskName(truncate(prompt, 120))
                 .build());
 
@@ -371,15 +392,40 @@ public class SessionForwardService {
             throw new IllegalArgumentException("Target session cannot be the same as source session");
         }
         boolean isDirectChild = sourceSession.getId().equals(blankToNull(targetSession.getParentSessionId()));
+        String sourceRootId = resolveRootSessionId(sourceSession, userId);
+        String targetRootId = resolveRootSessionId(targetSession, userId);
+        boolean isSameRootBranch = sourceRootId.equals(targetRootId)
+                && !targetSession.getId().equals(targetRootId);
         boolean hasForwardRelation = sessionRelationRepository.existsByUserIdAndRelationTypeAndSourceSessionIdAndTargetSessionId(
                 userId,
                 "FORWARD",
                 sourceSession.getId(),
                 targetSession.getId()
         );
-        if (!isDirectChild && !hasForwardRelation) {
+        if (!isDirectChild && !isSameRootBranch && !hasForwardRelation) {
             throw new IllegalArgumentException("Target session must be a previously forwarded child session");
         }
+    }
+
+    private String resolveRootSessionId(SessionEntity session, String userId) {
+        String rootId = session.getId();
+        String parentId = blankToNull(session.getParentSessionId());
+        Set<String> seen = new HashSet<>();
+        seen.add(rootId);
+
+        while (parentId != null && !seen.contains(parentId)) {
+            SessionEntity parent = sessionRepository.findByIdAndUserId(parentId, userId)
+                    .filter(candidate -> candidate.getDeletedAt() == null)
+                    .orElse(null);
+            if (parent == null) {
+                break;
+            }
+            rootId = parent.getId();
+            seen.add(rootId);
+            parentId = blankToNull(parent.getParentSessionId());
+        }
+
+        return rootId;
     }
 
     private SessionTaskEntity resolveLatestTask(SessionEntity session, String userId) {

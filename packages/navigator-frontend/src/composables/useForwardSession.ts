@@ -255,11 +255,26 @@ export function useForwardSession(deps: ForwardSessionDeps) {
     }
     return groupTasksToConversations([...taskMap.values()])
   })
+  function rootSessionIdOf(conv: ConversationGroup, pool: ConversationGroup[]): string {
+    let current = conv
+    const byId = new Map(pool.map((item) => [item.sessionId, item]))
+    const seen = new Set<string>([conv.sessionId])
+    while (current.parentSessionId) {
+      const parent = byId.get(current.parentSessionId)
+      if (!parent || seen.has(parent.sessionId)) break
+      current = parent
+      seen.add(current.sessionId)
+    }
+    return current.sessionId
+  }
   const forwardExistingTargets = computed(() => {
     const sourceSessionId = forwardSource.value?.sourceSessionId
     if (!sourceSessionId) return [] as ConversationGroup[]
-    return forwardConversationPool.value
-      .filter((conv) => conv.parentSessionId === sourceSessionId)
+    const pool = forwardConversationPool.value
+    const source = pool.find((conv) => conv.sessionId === sourceSessionId)
+    const rootSessionId = source ? rootSessionIdOf(source, pool) : sourceSessionId
+    return pool
+      .filter((conv) => conv.sessionId !== sourceSessionId && rootSessionIdOf(conv, pool) === rootSessionId && !!conv.parentSessionId)
       .sort((a, b) => new Date(b.latestTask.createdAt).getTime() - new Date(a.latestTask.createdAt).getTime())
   })
   const forwardSelectedExistingConversation = computed(() =>
