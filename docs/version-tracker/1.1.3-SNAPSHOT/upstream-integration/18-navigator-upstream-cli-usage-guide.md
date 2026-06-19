@@ -550,6 +550,44 @@ owner-smoke ready
 
 `clientContext` 是 `POST /ask` 的顶层字段，只写入 Navigator 会话摘要和上游关联元数据，不是 LLM runtime prompt、模型配置或 workspace 配置。不要用它传完整 UI transcript、`recentConversation`、模型 token 预算、system prompt 覆盖、Skill/Function 私有配置或临时文件系统路径。
 
+### 4.1 Codex Biz Worker 本机 Sim Route
+
+需要让 world-sim actor 走 Codex 时，使用独立执行通道 `providerType=codex-biz-worker`，不要复用或透明替换 LangGraph Biz root-skill route。runtime 字段必须作为 `ask` 顶层字段传入，不能放进 `clientContext`。
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream ask `
+  --agent-code <agentId> `
+  --upstream-user-id <scenarioId.actorId> `
+  --provider-type codex-biz-worker `
+  --directory-id <directoryId> `
+  --private-account-id <scenarioId.actorId> `
+  --sandbox-mode workspace-write `
+  --approval-policy never `
+  --network-access-enabled false `
+  --web-search-mode disabled `
+  --message "请在 actor workspace 内完成本轮任务，并输出可由 world-sim 校验的结构化 proposal。"
+```
+
+`--directory-id` 是 Navigator WorkingDirectory ID，不是本机 filesystem path；服务端仍会按当前 `ClientApp + upstreamUserId + Agent` 做 owner-aware workspace 解析和绑定校验。`--private-account-id` 推荐使用稳定 actor key，例如 `<scenarioId.actorId>`；Codex route 会把它作为 scoped `CODEX_HOME` key 的来源。需要显式区分同一个 actor 的多个 Codex home 时，传 `--codex-home-key`。
+
+本机简化 sim 推荐在 WSL 中启动一个已有的 `tools/codex-agent-worker` 进程，并配置 `CODEX_BIZ_HOME_ROOT`，不需要新建单独二进制：
+
+```bash
+cd /mnt/d/foggy-projects/Foggy-Navigator-wt-qd-win11-dev/tools/codex-agent-worker
+cp .env.example .env
+# edit .env:
+# CODEX_WORKER_HOST=0.0.0.0
+# CODEX_WORKER_PORT=3051
+# CODEX_BIZ_HOME_ROOT=/home/$USER/.foggy/codex-biz-homes
+# CODEX_ALLOWED_CWDS=/mnt/d/foggy-projects
+# OPENAI_API_KEY=<openai-key>
+npm install
+npm run start
+curl http://localhost:3051/health
+```
+
+Java Navigator 服务需要重启后才能加载新的 `codex-biz-worker` provider route 和 OpenAPI 字段；Codex worker 进程也需要在设置或修改 `CODEX_BIZ_HOME_ROOT` 后重启。Windows Java 如果不能访问 WSL `localhost`，把 PhysicalWorker `baseUrl` 配成 WSL IP 上的 `http://<wsl-ip>:3051`。
+
 BizWorker 会把当前 account/private 与 public skill catalog 的 `id`、`name`、`description` 放入 Root system prompt。`allowed_skills` 未传或为空时表示使用默认 catalog；非空时只作为这个 catalog 的过滤器。
 
 如果 live smoke 要验证某个明确的 Biz actor/skill，不要通过 `clientContext`、metadata、profile env 或隐藏字段传 `businessSkillName` / `businessSkillId` / `skill_name`。把“使用哪个技能”写进用户消息，让根 Agent 按自然语言任务语义执行。例如：

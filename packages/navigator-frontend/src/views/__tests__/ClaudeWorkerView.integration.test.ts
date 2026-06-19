@@ -57,6 +57,7 @@ vi.mock('@/api/unifiedTask', () => ({
   deleteTaskUnified: vi.fn(),
   rewindTaskUnified: vi.fn(),
   scanCheckpointsUnified: vi.fn(),
+  getIncomingForwardRelation: vi.fn().mockResolvedValue(null),
   searchSessionsUnified: vi.fn().mockResolvedValue([]),
   listTasksPagedUnified: vi.fn().mockResolvedValue({ content: [], totalSessions: 0, page: 0, size: 20 }),
   listTasksByDirectoryUnified: vi.fn().mockResolvedValue([]),

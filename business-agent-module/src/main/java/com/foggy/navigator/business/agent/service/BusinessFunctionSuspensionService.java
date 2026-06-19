@@ -112,6 +112,15 @@ public class BusinessFunctionSuspensionService {
 
     @Transactional
     public void resumeSuspension(String tenantId, String userId, String suspendId, WorkerGatewayResumeForm form) {
+        resumeSuspension(tenantId, userId, suspendId, form, null);
+    }
+
+    @Transactional
+    public void resumeSuspension(String tenantId,
+                                 String userId,
+                                 String suspendId,
+                                 WorkerGatewayResumeForm form,
+                                 String authorizedClientAppId) {
         // Audit: resume requested (best-effort)
         auditService.recordResumeRequested(tenantId, suspendId, userId);
 
@@ -134,7 +143,7 @@ public class BusinessFunctionSuspensionService {
                 throw new IllegalArgumentException("Unknown approval status: " + resultStatus);
             }
 
-            String expectedHash = validateResumeBinding(suspension, tenantId, form.getBindingContext());
+            String expectedHash = validateResumeBinding(suspension, tenantId, authorizedClientAppId, form.getBindingContext());
             if (!STATUS_PENDING.equals(suspension.getStatus())) {
                 if (isIdempotentResumeReplay(suspension, approved, rejected)) {
                     log.info("Ignoring idempotent suspension resume replay: suspendId={}, status={}, decision={}",
@@ -386,12 +395,20 @@ public class BusinessFunctionSuspensionService {
 
     private String validateResumeBinding(BusinessFunctionSuspensionEntity suspension,
                                          String tenantId,
+                                         String authorizedClientAppId,
                                          WorkerGatewayResumeForm.BindingContext binding) {
-        if (binding == null) {
-            throw new IllegalArgumentException("binding_context is required");
-        }
         if (!suspension.getTenantId().equals(tenantId)) {
             throw new SecurityException("Tenant ID mismatch: unauthorized resume attempt");
+        }
+        if (StringUtils.hasText(authorizedClientAppId)
+                && !suspension.getClientAppId().equals(authorizedClientAppId)) {
+            throw new SecurityException("Client App ID mismatch");
+        }
+        String expectedHash = computeSha256Hex(suspension.getInputJson());
+        if (binding == null) {
+            log.info("Resume binding_context omitted; using persisted suspension binding: suspendId={}, tenantId={}",
+                    suspension.getSuspendId(), tenantId);
+            return expectedHash;
         }
         if (!suspension.getClientAppId().equals(binding.getClientAppId())) {
             throw new SecurityException("Client App ID mismatch");
@@ -415,7 +432,6 @@ public class BusinessFunctionSuspensionService {
             throw new SecurityException("input_hash is required for fail-closed validation");
         }
 
-        String expectedHash = computeSha256Hex(suspension.getInputJson());
         if (!expectedHash.equalsIgnoreCase(binding.getInputHash())) {
             throw new SecurityException("Input hash mismatch");
         }

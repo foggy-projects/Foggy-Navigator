@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
 import reactor.core.publisher.Flux;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -33,6 +35,7 @@ class CodexStreamRelayTest {
     private WorkerManagementFacade workerManagementFacade;
     private CodexTaskService taskService;
     private CodexWorkerClient client;
+    private ApplicationEventPublisher eventPublisher;
     private CodexStreamRelay relay;
 
     @BeforeEach
@@ -42,13 +45,14 @@ class CodexStreamRelayTest {
         workerManagementFacade = mock(WorkerManagementFacade.class);
         taskService = mock(CodexTaskService.class);
         client = mock(CodexWorkerClient.class);
+        eventPublisher = mock(ApplicationEventPublisher.class);
 
         relay = new CodexStreamRelay(
                 workerManagementFacade,
                 clientFactory,
                 taskService,
                 taskRepository,
-                mock(ApplicationEventPublisher.class),
+                eventPublisher,
                 new ObjectMapper()
         );
     }
@@ -98,7 +102,8 @@ class CodexStreamRelayTest {
                         .build());
         when(clientFactory.getOrCreate("worker-1:codex", "http://localhost:3051", "worker-token"))
                 .thenReturn(client);
-        when(client.streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(client.streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Flux.error(new RuntimeException("401 Unauthorized")));
 
         relay.onTaskStart(WorkerTaskStartEvent.builder()
@@ -114,5 +119,60 @@ class CodexStreamRelayTest {
         verify(taskService).failTask(eq("local-task-1"), isNull(), isNull(),
                 contains("before worker task was accepted"));
         verify(client, never()).subscribeToTask(any(), anyInt());
+    }
+
+    @Test
+    void onTaskStartForCodexBizWorkerForwardsCodexBizRuntimeOptions() {
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://localhost:3051")
+                        .authToken("worker-token")
+                        .build());
+        when(clientFactory.getOrCreate("worker-1:codex", "http://localhost:3051", "worker-token"))
+                .thenReturn(client);
+        when(client.streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Flux.never());
+
+        relay.onTaskStart(WorkerTaskStartEvent.builder()
+                .taskId("local-task-1")
+                .sessionId("session-1")
+                .workerId("worker-1")
+                .prompt("hello")
+                .cwd("D:/repo")
+                .model("gpt-5.5")
+                .apiKey("sk-test")
+                .providerType("codex-biz-worker")
+                .providerConfig(Map.of(
+                        "codexHomeKey", "tenant/world-sim/scenario-1/actor-1",
+                        "developerInstructions", "Return ActorDecisionResult JSON.",
+                        "sandboxMode", "workspace-write",
+                        "approvalPolicy", "never",
+                        "networkAccessEnabled", false,
+                        "webSearchMode", "disabled",
+                        "additionalDirectories", List.of("D:/shared")
+                ))
+                .build());
+
+        verify(client).streamQuery(
+                eq("hello"),
+                eq("D:/repo"),
+                isNull(),
+                eq("gpt-5.5"),
+                isNull(),
+                isNull(),
+                isNull(),
+                eq("sk-test"),
+                isNull(),
+                isNull(),
+                eq("tenant/world-sim/scenario-1/actor-1"),
+                eq("Return ActorDecisionResult JSON."),
+                isNull(),
+                isNull(),
+                eq("workspace-write"),
+                eq("never"),
+                eq(false),
+                eq("disabled"),
+                eq(List.of("D:/shared")));
     }
 }

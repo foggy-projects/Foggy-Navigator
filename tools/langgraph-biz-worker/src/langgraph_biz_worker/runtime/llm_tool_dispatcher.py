@@ -12,6 +12,7 @@ from typing import Any
 
 from ..models import QueryEvent
 from ..tools.attachment_analysis import analyze_attachment
+from ..tools.evidence_attachment_bridge import register_evidence_attachment
 from ..tools.spreadsheet_analysis import analyze_spreadsheet
 from ..tools.business_function_tools import (
     BusinessFunctionToolError,
@@ -95,6 +96,13 @@ class LlmToolDispatcher:
 
         if name == "analyze_attachment":
             return analyze_attachment(args, context.runtime_context)
+
+        if name == "register_evidence_attachment":
+            return register_evidence_attachment(
+                args,
+                context.runtime_context,
+                execution_policy=context.execution_policy,
+            )
 
         if name == "analyze_spreadsheet":
             return analyze_spreadsheet(

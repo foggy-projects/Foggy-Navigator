@@ -34,6 +34,16 @@ import java.util.Map;
 public class AgentApi {
 
     private static final Logger log = LoggerFactory.getLogger(AgentApi.class);
+    private static final List<String> ASK_RUNTIME_OPTION_KEYS = List.of(
+            "providerType",
+            "directoryId",
+            "codexHomeKey",
+            "privateAccountId",
+            "sandboxMode",
+            "approvalPolicy",
+            "networkAccessEnabled",
+            "webSearchMode"
+    );
 
     private final HttpHelper http;
 
@@ -183,8 +193,27 @@ public class AgentApi {
             String clientAppKey,
             String clientAppAccessToken,
             String upstreamUserId) {
+        return askWithClientAppAccessToken(agentId, question, contextId, maxTurns,
+                clientContext, modelConfigId, modelVariant, attachments, null,
+                clientAppKey, clientAppAccessToken, upstreamUserId);
+    }
+
+    public AgentTask askWithClientAppAccessToken(
+            String agentId,
+            String question,
+            String contextId,
+            Integer maxTurns,
+            Map<String, Object> clientContext,
+            String modelConfigId,
+            String modelVariant,
+            List<Map<String, Object>> attachments,
+            Map<String, Object> runtimeOptions,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
         Map<String, Object> body = buildAskBody(question, contextId, maxTurns,
                 null, null, clientContext, modelConfigId, modelVariant, attachments);
+        mergeAskRuntimeOptions(body, runtimeOptions);
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("X-Client-App-Key", clientAppKey);
         headers.put("X-Client-App-Access-Token", clientAppAccessToken);
@@ -433,6 +462,18 @@ public class AgentApi {
             body.put("attachments", attachments);
         }
         return body;
+    }
+
+    private void mergeAskRuntimeOptions(Map<String, Object> body, Map<String, Object> runtimeOptions) {
+        if (runtimeOptions == null || runtimeOptions.isEmpty()) {
+            return;
+        }
+        for (String key : ASK_RUNTIME_OPTION_KEYS) {
+            Object value = runtimeOptions.get(key);
+            if (value != null) {
+                body.put(key, value);
+            }
+        }
     }
 
     /**

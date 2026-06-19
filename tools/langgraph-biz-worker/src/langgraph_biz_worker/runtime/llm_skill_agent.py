@@ -95,6 +95,11 @@ logger = logging.getLogger(__name__)
 # Runtime-local constants
 # ---------------------------------------------------------------------------
 
+_FILE_MUTATION_TOOL_NAMES = frozenset({"write_file", "str_replace", "edit_file", "patch_file"})
+_FILE_CONTENT_ARG_NAMES = frozenset({"content", "patch", "old_str", "new_str"})
+_ACCOUNT_FILE_AUDIT_KEY = "account_file_audit"
+_MAX_ACCOUNT_FILE_AUDIT_RECORDS = 100
+
 
 class LlmSkillAgent:
     """Run a Skill frame by repeatedly processing model tool calls."""
@@ -682,7 +687,7 @@ class LlmSkillAgent:
     ) -> dict[str, Any]:
         name = call["name"]
         args = call["args"]
-        safe_args = _safe_tool_call_args(args)
+        safe_args = _safe_tool_call_args_for_tool(name, args)
         frame = self._runtime.get_frame(frame_id)
         parent_frame_id = frame.parent_frame_id if frame else None
         session_key = (frame.conversation_id or frame.session_id) if frame else None
@@ -715,6 +720,11 @@ class LlmSkillAgent:
             session_id=session_key,
         )
 
+        account_file_audit_start = (
+            len(file_tools.audit_records)
+            if file_tools is not None and name in _FILE_MUTATION_TOOL_NAMES
+            else None
+        )
         try:
             result = self._call_tool(
                 frame_id, name, args,
@@ -730,6 +740,11 @@ class LlmSkillAgent:
         except Exception as exc:
             logger.exception("LLM skill tool call failed: %s", name)
             result = {"ok": False, "error": str(exc)}
+        if account_file_audit_start is not None and file_tools is not None:
+            self._append_account_file_audit_records(
+                frame_id,
+                file_tools.audit_records[account_file_audit_start:],
+            )
         extra_events = result.pop("_events", []) if isinstance(result, dict) else []
         suspended = bool(result.pop("_suspended", False)) if isinstance(result, dict) else False
         _append_tool_audit(
@@ -1156,6 +1171,19 @@ class LlmSkillAgent:
             "args": args,
         })
 
+    def _append_account_file_audit_records(self, frame_id: str, records: list[dict[str, Any]]) -> None:
+        if not records:
+            return
+        frame = self._runtime.get_frame(frame_id)
+        if frame is None:
+            return
+        existing = frame.private_working_state.get(_ACCOUNT_FILE_AUDIT_KEY)
+        if not isinstance(existing, list):
+            existing = []
+        existing.extend(_safe_content(record) for record in records)
+        frame.private_working_state[_ACCOUNT_FILE_AUDIT_KEY] = existing[-_MAX_ACCOUNT_FILE_AUDIT_RECORDS:]
+        self._runtime.save_frame(frame)
+
 
 def _model_exception_interruption_reason(exc: Exception) -> str:
     text = str(exc)
@@ -1172,6 +1200,18 @@ def _tool_authorized(name: str, execution_policy: ExecutionPolicy | None) -> boo
     if execution_policy is None:
         return True
     return execution_policy.allows_tool(name) or name in _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES
+
+
+def _safe_tool_call_args_for_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    safe_args = _safe_tool_call_args(args)
+    if name not in _FILE_MUTATION_TOOL_NAMES or not isinstance(safe_args, dict):
+        return safe_args
+    for key in _FILE_CONTENT_ARG_NAMES:
+        if key in safe_args:
+            value = args.get(key)
+            char_count = len(value) if isinstance(value, str) else len(str(value))
+            safe_args[key] = f"<redacted:{key}, chars={char_count}>"
+    return safe_args
 
 
 def _is_waiting_for_user_input_output(structured_output: Any) -> bool:
@@ -1419,6 +1459,7 @@ def _generic_agent_manifest(frame: Any) -> SkillManifest:
             "invoke_business_skill",
             "invoke_business_agent",
             "invoke_business_function",
+            "register_evidence_attachment",
             "analyze_attachment",
             "analyze_spreadsheet",
             _FRAME_RESULT_TOOL_NAME,

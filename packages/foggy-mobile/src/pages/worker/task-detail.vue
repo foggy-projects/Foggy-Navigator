@@ -1,5 +1,24 @@
 <template>
   <view class="task-detail-page">
+    <view class="session-title-bar">
+      <view v-if="editingTitle" class="title-edit-row">
+        <input
+          v-model="titleDraft"
+          class="title-input"
+          placeholder="输入会话标题"
+          :maxlength="80"
+          confirm-type="done"
+          @confirm="saveTitle"
+        />
+        <button class="title-action" :loading="savingTitle" @tap="saveTitle">保存</button>
+        <button class="title-action ghost" @tap="cancelEditTitle">取消</button>
+      </view>
+      <view v-else class="title-display-row">
+        <text class="session-title">{{ sessionTitle }}</text>
+        <text class="title-edit-btn" @tap="startEditTitle">编辑</text>
+      </view>
+    </view>
+
     <!-- 状态栏 -->
     <view v-if="taskStream.task.value" class="task-status-bar">
       <StatusBadge :status="taskStream.task.value.status" :show-label="true" />
@@ -65,6 +84,11 @@
             placeholder="输入续对消息..."
             send-label="继续"
             :history-items="historyItems"
+            :enable-attachments="true"
+            :attachments="attachments"
+            @add-image="chooseImages"
+            @add-file="chooseFiles"
+            @remove-attachment="removeAttachment"
             @send="handleResume"
             @sent="onSent"
           />
@@ -78,6 +102,11 @@
           placeholder="输入续对消息..."
           send-label="继续"
           :history-items="historyItems"
+          :enable-attachments="true"
+          :attachments="attachments"
+          @add-image="chooseImages"
+          @add-file="chooseFiles"
+          @remove-attachment="removeAttachment"
           @send="handleResume"
           @sent="onSent"
         />
@@ -92,7 +121,8 @@ import { onLoad, onUnload } from '@dcloudio/uni-app'
 import { useTaskStream } from '@/composables/useTaskStream'
 import { useInputMemory } from '@/composables/useInputMemory'
 import { useSessionModelCache } from '@/composables/useSessionModelCache'
-import { listConversationConfigs } from '@/api/conversationConfig'
+import { listConversationConfigs, updateConversationTitle } from '@/api/conversationConfig'
+import { useAttachments, toImagesJson } from '@/composables/useAttachments'
 import {
   getTaskUnified,
   cancelTaskUnified,
@@ -116,9 +146,13 @@ const aborting = ref(false)
 const resumeInput = ref('')
 const conversationConfig = ref<ConversationConfig | null>(null)
 const platformModels = ref<LlmModelConfig[]>([])
+const editingTitle = ref(false)
+const titleDraft = ref('')
+const savingTitle = ref(false)
 
 // Model cache
 const { initFromTask, getSessionModel } = useSessionModelCache()
+const { attachments, chooseImages, chooseFiles, removeAttachment, clearAttachments } = useAttachments()
 
 // Draft & history
 const memoryScope = computed(() => sessionId.value ? 'pane-' + sessionId.value : '')
@@ -163,6 +197,10 @@ const modelConfigLabel = computed(() => {
   if (!configId) return ''
   const cfg = platformModels.value.find(m => m.id === configId)
   return cfg ? cfg.name : ''
+})
+
+const sessionTitle = computed(() => {
+  return conversationConfig.value?.customTitle || taskStream.task.value?.prompt || 'Worker 会话'
 })
 
 onLoad(async (options) => {
@@ -219,6 +257,37 @@ async function loadConversationConfig(sid: string) {
   }
 }
 
+function startEditTitle() {
+  titleDraft.value = conversationConfig.value?.customTitle || taskStream.task.value?.prompt || ''
+  editingTitle.value = true
+}
+
+function cancelEditTitle() {
+  editingTitle.value = false
+  titleDraft.value = ''
+}
+
+async function saveTitle() {
+  const title = titleDraft.value.trim()
+  const sid = taskStream.task.value?.sessionId || sessionId.value
+  if (!sid) return
+  if (!title) {
+    uni.showToast({ title: '标题不能为空', icon: 'none' })
+    return
+  }
+  savingTitle.value = true
+  try {
+    conversationConfig.value = await updateConversationTitle(sid, title)
+    editingTitle.value = false
+    uni.showToast({ title: '标题已更新', icon: 'success' })
+  } catch (e) {
+    console.error('Failed to update title:', e)
+    uni.showToast({ title: '更新失败', icon: 'error' })
+  } finally {
+    savingTitle.value = false
+  }
+}
+
 async function handleAbort() {
   if (!taskId.value) return
   aborting.value = true
@@ -242,6 +311,10 @@ async function handleResume(prompt: string) {
 
   // Get cached model selection for this session
   const cached = getSessionModel(task.sessionId)
+  const imagesJson = toImagesJson(attachments.value)
+  const chatImages = attachments.value
+    .filter(att => att.isImage && att.previewUrl)
+    .map(att => ({ name: att.name, url: att.previewUrl }))
 
   try {
     const newTask = await resumeTaskUnified({
@@ -251,10 +324,12 @@ async function handleResume(prompt: string) {
       sessionId: task.sessionId,
       model: cached?.model || task.model,
       modelConfigId: cached?.modelConfigId || task.modelConfigId,
+      images: imagesJson,
     })
-    taskStream.resumeInPlace(newTask)
+    taskStream.resumeInPlace(newTask, chatImages)
     taskId.value = newTask.taskId
     sessionId.value = newTask.sessionId
+    clearAttachments()
     // Update model cache
     initFromTask(newTask)
 
@@ -372,6 +447,63 @@ function onSent(content: string) {
   flex-direction: column;
   height: calc(100vh - var(--window-top, 0px));
   background: #f5f5f5;
+}
+.session-title-bar {
+  background: #ffffff;
+  padding: 16rpx 24rpx;
+  border-bottom: 2rpx solid #f0f0f0;
+}
+.title-display-row,
+.title-edit-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  min-height: 64rpx;
+}
+.session-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.title-edit-btn {
+  flex-shrink: 0;
+  margin-left: 16rpx;
+  padding: 8rpx 18rpx;
+  border-radius: 10rpx;
+  background: #ecf5ff;
+  color: #409eff;
+  font-size: 24rpx;
+}
+.title-input {
+  flex: 1;
+  min-width: 0;
+  height: 64rpx;
+  padding: 0 18rpx;
+  border-radius: 12rpx;
+  background: #f5f7fa;
+  color: #303133;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+.title-action {
+  flex-shrink: 0;
+  height: 64rpx;
+  margin-left: 12rpx;
+  padding: 0 20rpx;
+  border-radius: 12rpx;
+  background: #409eff;
+  color: #ffffff;
+  font-size: 24rpx;
+  line-height: 64rpx;
+}
+.title-action.ghost {
+  background: #f0f2f5;
+  color: #606266;
 }
 .task-status-bar {
   display: flex;

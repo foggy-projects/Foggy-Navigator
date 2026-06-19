@@ -17,6 +17,7 @@ test('createConfig normalizes placeholder api key and valid defaults', () => {
   assert.equal(config.port, 3051)
   assert.deepEqual(config.allowedCwds, ['D:\\repo'])
   assert.equal(config.logLevel, 'warn')
+  assert.equal(config.codexBizHomeRoot, '')
 })
 
 test('createConfig rejects invalid port', () => {
@@ -75,6 +76,18 @@ test('createConfig provides default Codex modelAliases when CODEX_MODEL_ALIASES 
   assert.equal(config.modelAliases['codex-deep'], 'gpt-5.5:high')
   assert.equal(config.modelAliases['codex-xhigh'], 'gpt-5.5:xhigh')
   assert.equal(config.modelAliases['codex-mini'], 'gpt-5.4-mini')
+})
+
+test('createConfig parses absolute CODEX_BIZ_HOME_ROOT and rejects relative values', () => {
+  const absoluteRoot = process.platform === 'win32' ? 'D:\\codex-homes' : '/var/lib/codex-homes'
+  const config = createConfig({
+    CODEX_BIZ_HOME_ROOT: absoluteRoot,
+  })
+  assert.equal(config.codexBizHomeRoot, absoluteRoot)
+
+  assert.throws(() => createConfig({
+    CODEX_BIZ_HOME_ROOT: 'relative/codex-homes',
+  }), /CODEX_BIZ_HOME_ROOT must be an absolute path/)
 })
 
 test('createConfig CODEX_MODEL_ALIASES JSON override merges into defaults', () => {

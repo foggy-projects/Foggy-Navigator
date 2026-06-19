@@ -99,7 +99,9 @@ skills/<skill-name>/assets/**
 
 `ACCOUNT_POLICY.md` 不是模型厂商侧的隐藏内置记忆，而是 Navigator / 上游 BFF 管理的账号上下文文件。只要该文件存在且解析通过，Worker 会把其正文注入 system prompt；因此模型通常不需要再调用 `read_file` 读取同名文件确认内容。只有用户明确要求查看/维护账号上下文，或任务需要逐字引用文件正文时，才应读取物理文件。
 
-首段实现提供上游 BFF 可调用的 runtime-token OpenAPI，只允许写 `ACCOUNT_POLICY.md`。不允许 LLM 写 `ACCOUNT_POLICY.md`，也暂不让 LLM 通过通用 account file tools 写 `AGENT.md` 或 `MEMORY.md`。
+首段实现提供上游 BFF 可调用的 runtime-token OpenAPI，只允许写 `ACCOUNT_POLICY.md`。不允许 LLM 写 `ACCOUNT_POLICY.md`，首段也暂不让 LLM 通过通用 account file tools 写 `AGENT.md` 或 `MEMORY.md`。
+
+2026-06-12 更新：BizWorker 运行时账号文件工具已放开 `agent/AGENT.md`、`agent/MEMORY.md` 以及 `agent/` 下受支持的文本型个人文件写入，用于 agent 自主维护或在用户明确提示时更新；`agent/ACCOUNT_POLICY.md` 仍对 LLM file tools 只读，托管账号模式和 delegated workspace 模式一致。上游 OpenAPI/CLI 的 `write-policy` 能力仍只面向 `ACCOUNT_POLICY.md`。
 
 ## ACCOUNT_POLICY.md 建议模板
 
@@ -138,7 +140,7 @@ PUT /api/v1/open/accounts/me/context-files/ACCOUNT_POLICY.md
 4. 默认只允许 UTF-8 Markdown 文本，限制大小和行数。
 5. 覆盖写入支持 `expectedSha256`，避免覆盖其他会话修改。
 6. 输出不得包含服务器物理路径、token、secret、`manifestJson`、`adapterConfigJson` 或内部 worker 配置。
-7. `AGENT.md` / `MEMORY.md` 首段只读，后续开放写入时必须补审计：clientAppId、upstreamUserId、accountId、fileName、operation、sha256Before、sha256After、actorType。
+7. `AGENT.md` / `MEMORY.md` 可由 BizWorker runtime file tools 在账号 `agent/` 工作区内维护，写入记录至少应保留 accountId、fileName、operation、sha256Before、sha256After、actorType；面向上游 OpenAPI 的写入能力如后续开放，需补 clientAppId、upstreamUserId、乐观并发和敏感信息禁写约束。
 
 ## 与 CLI / Skill 的关系
 
@@ -204,7 +206,7 @@ Java 控制面可以继续保存注册信息、做授权和物化请求；BizWor
 | skill execution prompt 注入 | done | LLM skill execution 注入 account context |
 | OpenAPI 读接口 | done | `GET /api/v1/open/accounts/me/context-files` 和 `{fileName}`，绑定 runtime token + upstream user grant |
 | `ACCOUNT_POLICY.md` 写接口 | done | `PUT /api/v1/open/accounts/me/context-files/ACCOUNT_POLICY.md`，支持 `expectedSha256` 与敏感字段禁写 |
-| `AGENT.md / MEMORY.md` 写接口 | pending | 后续通过独立工具或 OpenAPI 补审计后开放 |
+| `AGENT.md / MEMORY.md` 写接口 | partial | BizWorker runtime file tools 已允许维护；上游 OpenAPI/CLI 写接口和后台记忆维护任务待后续补齐 |
 | SDK wrapper | done | `AgentApi` 已提供 account context list/read/write policy 方法 |
 | CLI 命令 | done | `upstream account-context list/read/write-policy` |
 | Skill 更新 | done | 更新 `navigator-upstream-cli` 与 `navigator-upstream-llm-integration` 使用说明 |
@@ -217,6 +219,7 @@ Java 控制面可以继续保存注册信息、做授权和物化请求；BizWor
 | account private Skill 回归 | done | `tests/test_account_skill_routing.py` 通过 |
 | account context files 测试 | done | 补 loader、routing、skill execution 注入测试并通过 |
 | account context OpenAPI service 测试 | done | `AccountContextFileServiceTest` 覆盖 grant 校验、worker 转发、敏感字段拒绝 |
+| account file tools 写入权限测试 | done | `AccountPathGuard` / `AccountFileTools` 覆盖 `AGENT.md`、`MEMORY.md` 可写和 `ACCOUNT_POLICY.md` 只读 |
 
 ### Experience Progress
 

@@ -59,6 +59,24 @@ export interface ForwardSessionResult {
   task: DispatchTask
 }
 
+export interface SessionRelationInfo {
+  id: number
+  relationType: string
+  targetMode: ForwardTargetMode
+  sourceSessionId: string
+  sourceMessageId?: string
+  targetSessionId: string
+  sourceWorkerId?: string
+  sourceDirectoryId?: string
+  sourceMilestoneId?: string
+  targetWorkerId?: string
+  targetDirectoryId?: string
+  targetMilestoneId?: string
+  targetProviderType?: string
+  targetModelConfigId?: string
+  createdAt?: string
+}
+
 export type RewindTaskResult = {
   status: string
   checkpointId?: string
@@ -122,6 +140,15 @@ export async function forwardSessionUnified(
 ): Promise<ForwardSessionResult> {
   const rx = (await client.post('/session-relations/forward', form)) as unknown as RX<ForwardSessionResult>
   return rx.data
+}
+
+export async function getIncomingForwardRelation(
+  targetSessionId: string,
+): Promise<SessionRelationInfo | null> {
+  const rx = (await client.get(
+    `/session-relations/forward/incoming/${encodeURIComponent(targetSessionId)}`,
+  )) as unknown as RX<SessionRelationInfo | null>
+  return rx.data || null
 }
 
 /**

@@ -50,7 +50,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @RequiredArgsConstructor
 public class CodexStreamRelay {
 
-    private static final String AGENT_ID = "codex-worker";
+    private static final String AGENT_ID = CodexTaskService.CODEX_PROVIDER_TYPE;
+    private static final String CODEX_BIZ_AGENT_ID = CodexTaskService.CODEX_BIZ_PROVIDER_TYPE;
     private static final int MAX_RECONNECT_ATTEMPTS = 3;
     private static final long RECONNECT_BASE_DELAY_MS = 2000;
 
@@ -74,13 +75,15 @@ public class CodexStreamRelay {
     @TransactionalEventListener(
             phase = TransactionPhase.AFTER_COMMIT,
             fallbackExecution = true,
-            condition = "#event.providerType == 'codex-worker'")
+            condition = "#event.providerType == 'codex-worker' || #event.providerType == 'codex-biz-worker'")
     public void onTaskStart(WorkerTaskStartEvent event) {
         String taskId = event.getTaskId();
         String sessionId = event.getSessionId();
         String workerId = event.getWorkerId();
+        String providerType = providerType(event.getProviderType());
 
-        log.info("Starting Codex stream relay: taskId={}, sessionId={}, workerId={}", taskId, sessionId, workerId);
+        log.info("Starting Codex stream relay: taskId={}, providerType={}, sessionId={}, workerId={}",
+                taskId, providerType, sessionId, workerId);
 
         // 发送 SESSION_START
         Map<String, Object> sessionStartPayload = new LinkedHashMap<>();
@@ -89,7 +92,7 @@ public class CodexStreamRelay {
         if (event.getProviderConfigString("codexThreadId") != null) {
             sessionStartPayload.put("codexThreadId", event.getProviderConfigString("codexThreadId"));
         }
-        publishMessage(sessionId, MessageType.SESSION_START, sessionStartPayload);
+        publishMessage(sessionId, providerType, MessageType.SESSION_START, sessionStartPayload);
 
         try {
             CodexWorkerClient client = getCodexClient(workerId);
@@ -101,8 +104,20 @@ public class CodexStreamRelay {
             String baseUrl = blankToNull(event.getProviderConfigString("baseUrl"));
             @SuppressWarnings("unchecked")
             Map<String, String> extraEnvVars = event.getProviderConfigValue("extraEnvVars");
+            String codexHomeKey = blankToNull(event.getProviderConfigString("codexHomeKey"));
+            String developerInstructions = blankToNull(event.getProviderConfigString("developerInstructions"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> outputSchema = event.getProviderConfigValue("outputSchema");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> codexConfig = event.getProviderConfigValue("codexConfig");
+            String sandboxMode = blankToNull(event.getProviderConfigString("sandboxMode"));
+            String approvalPolicy = blankToNull(event.getProviderConfigString("approvalPolicy"));
+            Boolean networkAccessEnabled = event.getProviderConfigValue("networkAccessEnabled");
+            String webSearchMode = blankToNull(event.getProviderConfigString("webSearchMode"));
+            @SuppressWarnings("unchecked")
+            List<String> additionalDirectories = event.getProviderConfigValue("additionalDirectories");
             log.info(
-                    "Dispatching Codex worker query: taskId={}, workerId={}, model={}, hasApiKey={}, baseUrl={}, envVarKeys={}, hasImages={}, resumeThread={}",
+                    "Dispatching Codex worker query: taskId={}, workerId={}, model={}, hasApiKey={}, baseUrl={}, envVarKeys={}, hasImages={}, resumeThread={}, hasCodexHomeKey={}, sandboxMode={}, approvalPolicy={}",
                     taskId,
                     workerId,
                     event.getModel(),
@@ -110,7 +125,10 @@ public class CodexStreamRelay {
                     baseUrl,
                     extraEnvVars != null ? extraEnvVars.keySet() : List.of(),
                     images != null && !images.isBlank(),
-                    codexThreadId != null && !codexThreadId.isBlank()
+                    codexThreadId != null && !codexThreadId.isBlank(),
+                    codexHomeKey != null,
+                    sandboxMode,
+                    approvalPolicy
             );
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(codexThreadId);
@@ -118,9 +136,11 @@ public class CodexStreamRelay {
             Flux<ServerSentEvent<String>> sseFlux = client.streamQuery(
                     event.getPrompt(), event.getCwd(),
                     codexThreadId, event.getModel(),
-                    event.getMaxTurns(), images, attachments, event.getApiKey(), baseUrl, extraEnvVars);
+                    event.getMaxTurns(), images, attachments, event.getApiKey(), baseUrl, extraEnvVars,
+                    codexHomeKey, developerInstructions, outputSchema, codexConfig,
+                    sandboxMode, approvalPolicy, networkAccessEnabled, webSearchMode, additionalDirectories);
 
-            Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
+            Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId, providerType,
                     detectedModel, detectedCodexThreadId, 0);
 
             registerActiveStream(taskId, subscription);
@@ -129,14 +149,14 @@ public class CodexStreamRelay {
             eventPublisher.publishEvent(TaskStartedEvent.builder()
                     .externalTaskId(taskId)
                     .parentSessionId(sessionId)
-                    .targetAgentId(AGENT_ID)
+                    .targetAgentId(providerType)
                     .prompt(truncateResult(event.getPrompt()))
                     .build());
 
         } catch (Exception e) {
             log.error("Failed to start Codex stream relay: taskId={}", taskId, e);
             taskService.failTask(taskId, null, null, connectionFailureMessage(e));
-            publishMessage(sessionId, MessageType.ERROR,
+            publishMessage(sessionId, providerType, MessageType.ERROR,
                     Map.of("content", "Failed to connect to Codex worker: " + connectionFailureMessage(e), "taskId", taskId));
         }
     }
@@ -176,6 +196,7 @@ public class CodexStreamRelay {
 
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(entity.getCodexThreadId());
+            String providerType = resolveTaskProviderType(taskId);
 
             AtomicInteger seqTracker = lastAckedSeq.get(taskId);
             int memoryAckSeq = seqTracker != null ? seqTracker.get() : 0;
@@ -184,7 +205,7 @@ public class CodexStreamRelay {
 
             Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(entity.getWorkerTaskId(), ackSeq);
 
-            Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
+            Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId, providerType,
                     detectedModel, detectedCodexThreadId, reconnectAttempt);
 
             registerActiveStream(taskId, subscription);
@@ -262,19 +283,19 @@ public class CodexStreamRelay {
     // -------------------------------------------------------------------------
 
     private Disposable subscribeSseFlux(Flux<ServerSentEvent<String>> sseFlux,
-                                         String taskId, String sessionId, String workerId,
+                                         String taskId, String sessionId, String workerId, String providerType,
                                          AtomicReference<String> detectedModel,
                                          AtomicReference<String> detectedCodexThreadId,
                                          int reconnectAttempt) {
         return sseFlux.subscribe(
-                sse -> handleSseEvent(sse, taskId, sessionId, detectedModel, detectedCodexThreadId),
+                sse -> handleSseEvent(sse, taskId, sessionId, providerType, detectedModel, detectedCodexThreadId),
                 error -> {
                     log.warn("Codex SSE stream error: taskId={}, attempt={}, error={}",
                             taskId, reconnectAttempt, error.getMessage());
                     activeStreams.remove(taskId);
 
                     if (!hasAcceptedWorkerTask(taskId)) {
-                        failStreamTask(taskId, sessionId, detectedCodexThreadId,
+                        failStreamTask(taskId, sessionId, providerType, detectedCodexThreadId,
                                 "Codex worker stream failed before worker task was accepted: "
                                         + connectionFailureMessage(error));
                         return;
@@ -292,7 +313,7 @@ public class CodexStreamRelay {
                         reconnectTask(taskId, sessionId, workerId, reconnectAttempt + 1);
                     } else {
                         log.error("Max reconnection attempts reached for Codex task {}", taskId);
-                        failStreamTask(taskId, sessionId, detectedCodexThreadId,
+                        failStreamTask(taskId, sessionId, providerType, detectedCodexThreadId,
                                 "SSE stream disconnected after " + MAX_RECONNECT_ATTEMPTS
                                         + " reconnection attempts: " + connectionFailureMessage(error));
                     }
@@ -319,18 +340,18 @@ public class CodexStreamRelay {
                 .orElse(false);
     }
 
-    private void failStreamTask(String taskId, String sessionId,
+    private void failStreamTask(String taskId, String sessionId, String providerType,
                                 AtomicReference<String> detectedCodexThreadId,
                                 String errorMessage) {
         taskService.failTask(taskId, null, detectedCodexThreadId.get(), errorMessage);
-        publishMessage(sessionId, MessageType.ERROR,
+        publishMessage(sessionId, providerType, MessageType.ERROR,
                 Map.of("content", errorMessage, "taskId", taskId));
         lastAckedSeq.remove(taskId);
         reconnecting.remove(taskId);
         eventPublisher.publishEvent(TaskCompletionEvent.builder()
                 .externalTaskId(taskId)
                 .parentSessionId(sessionId)
-                .targetAgentId(AGENT_ID)
+                .targetAgentId(providerType)
                 .resultSummary(truncateResult(errorMessage))
                 .status("FAILED")
                 .build());
@@ -343,7 +364,7 @@ public class CodexStreamRelay {
         return error.getMessage();
     }
 
-    private void handleSseEvent(ServerSentEvent<String> sse, String taskId, String sessionId,
+    private void handleSseEvent(ServerSentEvent<String> sse, String taskId, String sessionId, String providerType,
                                  AtomicReference<String> detectedModel,
                                  AtomicReference<String> detectedCodexThreadId) {
         String data = sse.data();
@@ -375,7 +396,7 @@ public class CodexStreamRelay {
             if (type == null) return;
 
             // 使用 AgentMessageBuilder 标准化 payload 字段名
-            AgentMessageBuilder mb = AgentMessageBuilder.create(sessionId, AGENT_ID)
+            AgentMessageBuilder mb = AgentMessageBuilder.create(sessionId, providerType)
                     .taskId(taskId)
                     .put("codexThreadId", detectedCodexThreadId.get());
 
@@ -416,7 +437,7 @@ public class CodexStreamRelay {
                     eventPublisher.publishEvent(TaskCompletionEvent.builder()
                             .externalTaskId(taskId)
                             .parentSessionId(sessionId)
-                            .targetAgentId(AGENT_ID)
+                            .targetAgentId(providerType)
                             .resultSummary(truncateResult(resultText))
                             .status("COMPLETED")
                             .build());
@@ -429,7 +450,7 @@ public class CodexStreamRelay {
                     eventPublisher.publishEvent(TaskCompletionEvent.builder()
                             .externalTaskId(taskId)
                             .parentSessionId(sessionId)
-                            .targetAgentId(AGENT_ID)
+                            .targetAgentId(providerType)
                             .resultSummary(event.getError())
                             .status("FAILED")
                             .build());
@@ -442,9 +463,24 @@ public class CodexStreamRelay {
         }
     }
 
-    private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
-        AgentMessage message = AgentMessage.of(sessionId, AGENT_ID, type, payload);
+    private void publishMessage(String sessionId, String providerType, MessageType type, Map<String, Object> payload) {
+        AgentMessage message = AgentMessage.of(sessionId, providerType, type, payload);
         eventPublisher.publishEvent(message);
+    }
+
+    private String resolveTaskProviderType(String taskId) {
+        try {
+            if (taskService.getTaskByIdForProvider(taskId, CODEX_BIZ_AGENT_ID).isPresent()) {
+                return CODEX_BIZ_AGENT_ID;
+            }
+        } catch (Exception e) {
+            log.debug("Failed to resolve Codex task providerType: taskId={}, error={}", taskId, e.getMessage());
+        }
+        return AGENT_ID;
+    }
+
+    private String providerType(String providerType) {
+        return CODEX_BIZ_AGENT_ID.equals(providerType) ? CODEX_BIZ_AGENT_ID : AGENT_ID;
     }
 
     private void publishBuilt(AgentMessageBuilder builder) {

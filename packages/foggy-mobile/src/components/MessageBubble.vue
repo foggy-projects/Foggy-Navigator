@@ -17,6 +17,16 @@
             </scroll-view>
           </view>
         </template>
+        <view v-if="message.images?.length" class="message-images">
+          <image
+            v-for="(img, imgIndex) in message.images"
+            :key="`${img.name}-${imgIndex}`"
+            class="message-image"
+            :src="img.url"
+            mode="aspectFill"
+            @tap.stop="previewImage(imgIndex)"
+          />
+        </view>
       </view>
       <text v-if="copyable" class="copy-action" @tap.stop="handleCopy">{{ copyLabel }}</text>
     </view>
@@ -183,6 +193,15 @@ async function handleCopyCode(code: string, index: number) {
     console.error('Failed to copy code block:', error)
     uni.showToast({ title: '复制失败', icon: 'none' })
   }
+}
+
+function previewImage(index: number) {
+  const urls = props.message.images?.map(img => img.url).filter(Boolean) || []
+  if (urls.length === 0) return
+  uni.previewImage({
+    urls,
+    current: urls[index],
+  })
 }
 
 onBeforeUnmount(() => {
@@ -419,5 +438,18 @@ onBeforeUnmount(() => {
   font-family: monospace;
   color: #f9fafb;
   white-space: pre;
+}
+.message-images {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-top: 12rpx;
+}
+.message-image {
+  width: 148rpx;
+  height: 148rpx;
+  border-radius: 12rpx;
+  background: rgba(255, 255, 255, 0.2);
 }
 </style>

@@ -955,7 +955,7 @@
 
     <!-- Right Panel: Task History -->
     <aside v-if="selectedWorkerId || workerState.activeTasks.value.length > 0" :class="['worker-history', { collapsed: prefs.rightPanelCollapsed }]">
-      <div class="history-header">
+      <div :class="['history-header', { 'batch-selecting': batchSelectMode }]">
         <span class="panel-collapse-btn" title="收起历史" @click="prefs.rightPanelCollapsed = true">&raquo;</span>
         <h3>历史会话</h3>
         <div class="history-header-actions">
@@ -1072,7 +1072,7 @@
                 >
                   {{ milestoneStatusLabel(group.milestone.status) }}
                 </el-tag>
-                <span class="milestone-group-count">{{ group.conversations.length }} 个会话</span>
+                <span class="milestone-group-count">{{ group.conversations.length }} 个主会话</span>
               </div>
               <code v-if="group.milestone?.docPath" class="milestone-group-doc">{{ group.milestone.docPath }}</code>
             </div>
@@ -1109,41 +1109,14 @@
                   truncate(conv.config?.customTitle || conv.firstPrompt, 36)
                 }}</span>
                 <el-tag
-                  v-if="parentConversation(conv)"
+                  v-if="childConversations(conv).length > 0"
                   size="small"
-                  type="info"
+                  type="success"
                   effect="plain"
                   class="conv-rel-tag"
-                  @click.stop="viewRelatedTask(parentConversation(conv)!.latestTask)"
                 >
-                  上游
+                  分支 {{ childConversations(conv).length }}
                 </el-tag>
-                <el-popover
-                  v-if="childConversations(conv).length > 0"
-                  placement="bottom"
-                  trigger="click"
-                  width="320"
-                >
-                  <template #reference>
-                    <el-tag size="small" type="success" effect="plain" class="conv-rel-tag" @click.stop>
-                      子会话 {{ childConversations(conv).length }}
-                    </el-tag>
-                  </template>
-                  <div class="child-session-popover">
-                    <div class="child-session-title">转发出的子会话</div>
-                    <div
-                      v-for="child in childConversations(conv)"
-                      :key="child.sessionId"
-                      class="child-session-item"
-                      @click="viewRelatedTask(child.latestTask)"
-                    >
-                      <span class="child-session-name" :title="child.config?.customTitle || child.firstPrompt">
-                        {{ truncate(child.config?.customTitle || child.firstPrompt, 28) }}
-                      </span>
-                      <span class="child-session-time">{{ formatTime(child.latestTask.createdAt) }}</span>
-                    </div>
-                  </div>
-                </el-popover>
                 <span :class="['conv-status-dot', conv.latestTask.status.toLowerCase()]" :title="conv.latestTask.status" />
               </div>
               <div v-if="conv.config?.customTitle" class="conv-row-subtitle">
@@ -1261,6 +1234,56 @@
                   </el-dropdown>
                 </span>
               </div>
+              <div v-if="childConversations(conv).length > 0" class="branch-session-list" @click.stop>
+                <div
+                  v-for="child in childConversations(conv)"
+                  :key="child.sessionId"
+                  :class="['branch-session-item', { 'branch-session-focused': child.sessionId === focusedSessionId }]"
+                  @click="viewRelatedTask(child.latestTask)"
+                >
+                  <div class="branch-session-main">
+                    <span
+                      v-if="paneSessionMap.has(child.sessionId)"
+                      :class="['sidebar-pane-letter', `pane-letter-${paneSessionMap.get(child.sessionId)!.label.toLowerCase()}`]"
+                    >{{ paneSessionMap.get(child.sessionId)!.label }}</span>
+                    <span
+                      v-if="conversationInteractionState(child)"
+                      :class="['conv-interaction-badge', conversationInteractionState(child)!.toLowerCase()]"
+                      :title="interactionStateLabel(conversationInteractionState(child)!)"
+                    />
+                    <span class="branch-session-title" :title="child.config?.customTitle || child.firstPrompt">
+                      {{ truncate(child.config?.customTitle || child.firstPrompt, 34) }}
+                    </span>
+                    <span :class="['conv-status-dot', child.latestTask.status.toLowerCase()]" :title="child.latestTask.status" />
+                  </div>
+                  <div class="branch-session-meta">
+                    <span v-if="child.taskCount > 1" class="conv-rounds">{{ child.taskCount }}轮</span>
+                    <span v-if="child.latestTask.model" class="conv-model">{{ shortModel(child.latestTask.model) }}</span>
+                    <span v-if="child.totalCost > 0" class="conv-cost">${{ child.totalCost.toFixed(2) }}</span>
+                    <span class="conv-time">{{ formatTime(child.latestTask.createdAt) }}</span>
+                    <el-button
+                      v-if="child.latestTask.status === 'RUNNING'"
+                      type="warning"
+                      size="small"
+                      text
+                      title="中止任务"
+                      @click.stop="handleAbortTask(child.latestTask.taskId)"
+                    >
+                      中止
+                    </el-button>
+                    <el-dropdown trigger="click" @click.stop>
+                      <span class="branch-session-more-trigger" @click.stop>&#8943;</span>
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item @click="handleShowDetail(child)">
+                            详情
+                          </el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1301,41 +1324,14 @@
                 truncate(conv.config?.customTitle || conv.firstPrompt, 36)
               }}</span>
               <el-tag
-                v-if="parentConversation(conv)"
+                v-if="childConversations(conv).length > 0"
                 size="small"
-                type="info"
+                type="success"
                 effect="plain"
                 class="conv-rel-tag"
-                @click.stop="viewRelatedTask(parentConversation(conv)!.latestTask)"
               >
-                上游
+                分支 {{ childConversations(conv).length }}
               </el-tag>
-              <el-popover
-                v-if="childConversations(conv).length > 0"
-                placement="bottom"
-                trigger="click"
-                width="320"
-              >
-                <template #reference>
-                  <el-tag size="small" type="success" effect="plain" class="conv-rel-tag" @click.stop>
-                    子会话 {{ childConversations(conv).length }}
-                  </el-tag>
-                </template>
-                <div class="child-session-popover">
-                  <div class="child-session-title">转发出的子会话</div>
-                  <div
-                    v-for="child in childConversations(conv)"
-                    :key="child.sessionId"
-                    class="child-session-item"
-                    @click="viewRelatedTask(child.latestTask)"
-                  >
-                    <span class="child-session-name" :title="child.config?.customTitle || child.firstPrompt">
-                      {{ truncate(child.config?.customTitle || child.firstPrompt, 28) }}
-                    </span>
-                    <span class="child-session-time">{{ formatTime(child.latestTask.createdAt) }}</span>
-                  </div>
-                </div>
-              </el-popover>
               <span :class="['conv-status-dot', conv.latestTask.status.toLowerCase()]" :title="conv.latestTask.status" />
             </div>
             <div v-if="conv.config?.customTitle" class="conv-row-subtitle">
@@ -1453,6 +1449,56 @@
                   </template>
                 </el-dropdown>
               </span>
+            </div>
+            <div v-if="childConversations(conv).length > 0" class="branch-session-list" @click.stop>
+              <div
+                v-for="child in childConversations(conv)"
+                :key="child.sessionId"
+                :class="['branch-session-item', { 'branch-session-focused': child.sessionId === focusedSessionId }]"
+                @click="viewRelatedTask(child.latestTask)"
+              >
+                <div class="branch-session-main">
+                  <span
+                    v-if="paneSessionMap.has(child.sessionId)"
+                    :class="['sidebar-pane-letter', `pane-letter-${paneSessionMap.get(child.sessionId)!.label.toLowerCase()}`]"
+                  >{{ paneSessionMap.get(child.sessionId)!.label }}</span>
+                  <span
+                    v-if="conversationInteractionState(child)"
+                    :class="['conv-interaction-badge', conversationInteractionState(child)!.toLowerCase()]"
+                    :title="interactionStateLabel(conversationInteractionState(child)!)"
+                  />
+                  <span class="branch-session-title" :title="child.config?.customTitle || child.firstPrompt">
+                    {{ truncate(child.config?.customTitle || child.firstPrompt, 34) }}
+                  </span>
+                  <span :class="['conv-status-dot', child.latestTask.status.toLowerCase()]" :title="child.latestTask.status" />
+                </div>
+                <div class="branch-session-meta">
+                  <span v-if="child.taskCount > 1" class="conv-rounds">{{ child.taskCount }}轮</span>
+                  <span v-if="child.latestTask.model" class="conv-model">{{ shortModel(child.latestTask.model) }}</span>
+                  <span v-if="child.totalCost > 0" class="conv-cost">${{ child.totalCost.toFixed(2) }}</span>
+                  <span class="conv-time">{{ formatTime(child.latestTask.createdAt) }}</span>
+                  <el-button
+                    v-if="child.latestTask.status === 'RUNNING'"
+                    type="warning"
+                    size="small"
+                    text
+                    title="中止任务"
+                    @click.stop="handleAbortTask(child.latestTask.taskId)"
+                  >
+                    中止
+                  </el-button>
+                  <el-dropdown trigger="click" @click.stop>
+                    <span class="branch-session-more-trigger" @click.stop>&#8943;</span>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item @click="handleShowDetail(child)">
+                          详情
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -2305,6 +2351,25 @@
         <el-descriptions-item label="原始 Prompt" :span="2">
           {{ detailConv.firstPrompt }}
         </el-descriptions-item>
+        <el-descriptions-item label="会话类型">
+          {{ detailConv.parentSessionId ? '分支会话' : '主会话' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="分支数量">
+          {{ childConversations(rootConversation(detailConv)).length }}
+        </el-descriptions-item>
+        <el-descriptions-item label="所属主会话" :span="2">
+          {{ conversationRefLabel(rootConversation(detailConv)) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="上级会话" :span="2">
+          {{ parentConversationRef(detailConv) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="直接来源会话" :span="2">
+          <span v-if="detailRelationLoading">加载中...</span>
+          <span v-else>{{ incomingRelationSourceRef }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="来源消息" :span="2">
+          <code>{{ detailIncomingRelation?.sourceMessageId || '-' }}</code>
+        </el-descriptions-item>
         <el-descriptions-item label="任务轮次">{{ detailConv.tasks.length }}</el-descriptions-item>
         <el-descriptions-item label="状态">{{ detailConv.latestTask.status }}</el-descriptions-item>
         <el-descriptions-item label="模型">{{ detailConv.latestTask.model || '-' }}</el-descriptions-item>
@@ -2732,9 +2797,11 @@ import {
   resyncTaskUnified,
   rewindTaskUnified,
   scanCheckpointsUnified,
+  getIncomingForwardRelation,
   listTasksByDirectoryUnified,
   listTasksByDirectoryPagedUnified,
 } from '@/api/unifiedTask'
+import type { SessionRelationInfo } from '@/api/unifiedTask'
 import * as sshApi from '@/api/ssh'
 import { searchFiles } from '@/api/fileBrowser'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
@@ -3212,6 +3279,8 @@ const tagForm = ref<{ tags: string[] }>({ tags: [] })
 // Detail dialog state
 const showDetailDialog = ref(false)
 const detailConv = ref<ConversationGroup | null>(null)
+const detailIncomingRelation = ref<SessionRelationInfo | null>(null)
+const detailRelationLoading = ref(false)
 const detailTotalTokens = computed(() => {
   if (!detailConv.value) return { input: 0, output: 0 }
   return {
@@ -3225,6 +3294,12 @@ const detailAuthModeLabel = computed(() => {
   if (mode === 'API_KEY') return 'API Key'
   if (mode === 'CUSTOM_ENDPOINT') return '自定义端点'
   return mode || '-'
+})
+const incomingRelationSourceRef = computed(() => {
+  const relation = detailIncomingRelation.value
+  if (!relation?.sourceSessionId) return '-'
+  const source = conversationBySessionId.value.get(relation.sourceSessionId)
+  return source ? conversationRefLabel(source) : relation.sourceSessionId
 })
 
 // Rewind dialog state
@@ -4091,11 +4166,13 @@ const childConversationMap = computed(() => {
   const map = new Map<string, ConversationGroup[]>()
   for (const conv of relationConversationPool.value) {
     if (!conv.parentSessionId) continue
-    const existing = map.get(conv.parentSessionId)
+    const root = rootConversation(conv)
+    if (root.sessionId === conv.sessionId) continue
+    const existing = map.get(root.sessionId)
     if (existing) {
       existing.push(conv)
     } else {
-      map.set(conv.parentSessionId, [conv])
+      map.set(root.sessionId, [conv])
     }
   }
   for (const children of map.values()) {
@@ -4110,8 +4187,28 @@ function childConversations(conv: ConversationGroup): ConversationGroup[] {
   return childConversationMap.value.get(conv.sessionId) || []
 }
 
-function parentConversation(conv: ConversationGroup): ConversationGroup | undefined {
-  return conv.parentSessionId ? conversationBySessionId.value.get(conv.parentSessionId) : undefined
+function rootConversation(conv: ConversationGroup): ConversationGroup {
+  let current = conv
+  const seen = new Set<string>([conv.sessionId])
+  while (current.parentSessionId) {
+    const parent = conversationBySessionId.value.get(current.parentSessionId)
+    if (!parent || seen.has(parent.sessionId)) break
+    current = parent
+    seen.add(current.sessionId)
+  }
+  return current
+}
+
+function conversationRefLabel(conv?: ConversationGroup | null): string {
+  if (!conv) return '-'
+  const title = conv.config?.customTitle || conv.firstPrompt
+  return title ? `${truncate(title, 28)} (${conv.sessionId})` : conv.sessionId
+}
+
+function parentConversationRef(conv: ConversationGroup): string {
+  if (!conv.parentSessionId) return '-'
+  const parent = conversationBySessionId.value.get(conv.parentSessionId)
+  return parent ? conversationRefLabel(parent) : conv.parentSessionId
 }
 
 const activeConversations = computed(() => {
@@ -4132,7 +4229,14 @@ const activeConversations = computed(() => {
 
   // interactionState filtering is done by the backend API (multi-select via comma-separated param)
 
-  return list
+  const roots = new Map<string, ConversationGroup>()
+  for (const conv of list) {
+    const root = rootConversation(conv)
+    if (!roots.has(root.sessionId)) {
+      roots.set(root.sessionId, root)
+    }
+  }
+  return Array.from(roots.values())
 })
 
 const directoryMilestoneMap = computed(() => {
@@ -4150,7 +4254,7 @@ function milestonesForDirectory(directoryId?: string): DirectoryMilestone[] {
 
 const conversationMilestoneMap = computed(() => {
   const cache = new Map<string, DirectoryMilestone>()
-  for (const conv of activeConversations.value) {
+  for (const conv of relationConversationPool.value) {
     const milestoneId = conv.config?.milestoneId
     if (!milestoneId) continue
     const milestone = milestonesForDirectory(conv.latestTask.directoryId).find(m => m.id === milestoneId)
@@ -5665,9 +5769,18 @@ async function handleBatchBindAuth() {
   }
 }
 
-function handleShowDetail(conv: ConversationGroup) {
+async function handleShowDetail(conv: ConversationGroup) {
   detailConv.value = conv
+  detailIncomingRelation.value = null
   showDetailDialog.value = true
+  detailRelationLoading.value = true
+  try {
+    detailIncomingRelation.value = await getIncomingForwardRelation(conv.sessionId)
+  } catch {
+    detailIncomingRelation.value = null
+  } finally {
+    detailRelationLoading.value = false
+  }
 }
 
 /** After a permission response succeeds, sync sidebar state immediately (don't wait for SSE) */
@@ -7755,24 +7868,52 @@ function handlePopOutTerminal() {
 }
 
 .history-header {
-  padding: 12px 16px;
+  padding: 10px 12px;
   border-bottom: 1px solid #e4e7ed;
   background: #fff;
-  display: flex;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
+  column-gap: 8px;
+  row-gap: 6px;
 }
 
 .history-header h3 {
   margin: 0;
   font-size: 16px;
   color: #303133;
+  line-height: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .history-header-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.history-header.batch-selecting {
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
+.history-header.batch-selecting .history-header-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+}
+
+.history-header-actions :deep(.el-button) {
+  margin-left: 0;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.history-header-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 
 .history-filter-bar {
@@ -8753,9 +8894,66 @@ function handlePopOutTerminal() {
 }
 
 .conv-rel-tag {
-  cursor: pointer;
   margin-left: 4px;
   flex-shrink: 0;
+}
+
+.branch-session-list {
+  margin-top: 7px;
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 2px solid #dcdfe6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.branch-session-item {
+  padding: 6px 7px;
+  border-radius: 5px;
+  background: #f7f9fc;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.branch-session-item:hover,
+.branch-session-focused {
+  background: #eef5ff;
+}
+
+.branch-session-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.branch-session-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.branch-session-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  padding-left: 14px;
+  font-size: 11px;
+  color: #909399;
+  min-width: 0;
+}
+
+.branch-session-more-trigger {
+  color: #909399;
+  cursor: pointer;
+  padding: 0 3px;
+  line-height: 1;
 }
 
 .child-session-popover {

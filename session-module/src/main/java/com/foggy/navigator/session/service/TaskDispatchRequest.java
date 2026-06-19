@@ -18,10 +18,10 @@ public class TaskDispatchRequest {
     private String agentId;
 
     /**
-     * 目标执行 Provider（claude-worker / codex-worker）。
+     * 目标执行 Provider（如 claude-worker / codex-worker / codex-biz-worker）。
      * <p>
-     * @deprecated 前端不再需要显式传递此字段。providerType 由后端从 modelConfigId 推导。
-     *             保留字段仅为 Open API 向后兼容。
+     * @deprecated 常规前端任务优先由后端从 modelConfigId 推导；OpenAPI 或独立执行 route
+     *             仍可显式传递 providerType。
      */
     @Deprecated
     private String providerType;

@@ -6,6 +6,10 @@ export interface ImageAttachment {
 
 export type NavigatorAttachment = Record<string, unknown>
 
+export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+export type CodexApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted'
+export type CodexWebSearchMode = 'disabled' | 'cached' | 'live'
+
 /**
  * Query request body
  */
@@ -20,6 +24,15 @@ export interface QueryRequest {
   api_key?: string     // Per-request OpenAI API key override
   base_url?: string    // Per-request OpenAI base URL override
   env_vars?: Record<string, string>  // Extra env vars (includes Codex CLI config like model_context_window)
+  codex_home_key?: string // Logical account/actor key; resolved under CODEX_BIZ_HOME_ROOT.
+  developer_instructions?: string
+  output_schema?: Record<string, unknown>
+  codex_config?: Record<string, unknown>
+  sandbox_mode?: CodexSandboxMode
+  approval_policy?: CodexApprovalPolicy
+  network_access_enabled?: boolean
+  web_search_mode?: CodexWebSearchMode
+  additional_directories?: string[]
 }
 
 /**

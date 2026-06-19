@@ -17,7 +17,7 @@ export interface TaskStreamState {
   /** Whether currently loading more history */
   loadingMore: ReturnType<typeof ref<boolean>>
   connect(sessionId: string): Promise<void>
-  resumeInPlace(newTask: DispatchTask): void
+  resumeInPlace(newTask: DispatchTask, images?: Array<{ name: string; url: string }>): void
   /** Load older messages (pagination) */
   loadMoreHistory(): Promise<void>
   /** Sync task status from backend */
@@ -223,9 +223,9 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
     }
   }
 
-  function resumeInPlace(newTask: DispatchTask) {
+  function resumeInPlace(newTask: DispatchTask, images?: Array<{ name: string; url: string }>) {
     task.value = newTask
-    chatState.addUserMessage(newTask.prompt)
+    chatState.addUserMessage(newTask.prompt, undefined, images && images.length > 0 ? images : undefined)
 
     if (unsubscribeSse) {
       unsubscribeSse()

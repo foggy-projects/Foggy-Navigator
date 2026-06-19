@@ -6,6 +6,9 @@
         <text class="project-name">{{ projectName }}</text>
       </view>
       <view class="input-row">
+        <view class="attach-btn" @tap="showAttachmentActions">
+          <text class="attach-icon">+</text>
+        </view>
         <view
           v-if="historyItems.length > 0"
           class="history-btn"
@@ -28,6 +31,23 @@
         >
           运行
         </button>
+      </view>
+      <view v-if="attachments.length > 0" class="attachment-strip">
+        <view
+          v-for="(att, index) in attachments"
+          :key="`${att.name}-${index}`"
+          class="attachment-chip"
+        >
+          <image
+            v-if="att.isImage && att.previewUrl"
+            class="attachment-thumb"
+            :src="att.previewUrl"
+            mode="aspectFill"
+          />
+          <text v-else class="attachment-file">{{ fileIcon(att.mimeType) }}</text>
+          <text class="attachment-name">{{ att.name }}</text>
+          <text class="attachment-remove" @tap="removeAttachment(index)">x</text>
+        </view>
       </view>
       <!-- 模型 / 轮次 选择行 -->
       <view class="option-row">
@@ -132,13 +152,14 @@
 import { ref, computed, watch } from 'vue'
 import { onLoad, onShow, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app'
 import { createTaskUnified, listTasksByDirPagedUnified, deleteTaskUnified } from '@/api/unifiedTask'
-import { listConversationConfigs, updateConversationMilestone, updateConversationPin, archiveConversation, holdConversation, unholdConversation, unarchiveConversation } from '@/api/conversationConfig'
+import { listConversationConfigs, updateConversationMilestone, updateConversationPin, updateConversationTitle, archiveConversation, holdConversation, unholdConversation, unarchiveConversation } from '@/api/conversationConfig'
 import { listMilestones } from '@/api/claudeWorker'
 import { listModelConfigs, listAgentModelOverrides } from '@/api/platform'
 import type { DispatchTask, ConversationGroup, ConversationConfig, DirectoryMilestone, LlmModelConfig } from '@/api/types'
 import { buildConversationGroups, getGroupInteractionState } from '@/composables/useConversationGroup'
 import { buildMilestoneSections, resolveConversationMilestone } from '@/composables/useMilestoneGroups'
 import { useInputMemory } from '@/composables/useInputMemory'
+import { useAttachments, toImagesJson, fileIcon } from '@/composables/useAttachments'
 import SessionCard from '@/components/SessionCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
 
@@ -148,6 +169,7 @@ const projectName = ref('')
 const promptInput = ref('')
 const creating = ref(false)
 const loading = ref(false)
+const { attachments, chooseImages, chooseFiles, removeAttachment, clearAttachments } = useAttachments()
 
 // Session-driven data
 const tasks = ref<DispatchTask[]>([])
@@ -448,6 +470,7 @@ async function handleCreateTask() {
   if (!promptInput.value.trim() || !workerId.value) return
   creating.value = true
   try {
+    const imagesJson = toImagesJson(attachments.value)
     const form: Parameters<typeof createTaskUnified>[0] = {
       workerId: workerId.value,
       prompt: promptInput.value.trim(),
@@ -457,11 +480,13 @@ async function handleCreateTask() {
     if (selectedModel.value) form.model = selectedModel.value
     if (selectedTurns.value) form.maxTurns = selectedTurns.value
     if (selectedPermission.value) form.permissionMode = selectedPermission.value
+    if (imagesJson) form.images = imagesJson
 
     const task = await createTaskUnified(form)
     addToHistory(promptInput.value.trim())
     clearDraft()
     promptInput.value = ''
+    clearAttachments()
     // Navigate to session detail
     uni.navigateTo({
       url: `/pages/worker/task-detail?taskId=${task.taskId}&sessionId=${task.sessionId}`,
@@ -495,6 +520,12 @@ function showSessionActions(group: ConversationGroup) {
           conversationConfigs.value.set(group.sessionId, cfg)
           rebuildGroups()
         } catch { uni.showToast({ title: '操作失败', icon: 'error' }) }
+      },
+    },
+    {
+      label: '改标题',
+      handler: async () => {
+        await showTitleEditor(group)
       },
     },
   ]
@@ -579,6 +610,42 @@ function showSessionActions(group: ConversationGroup) {
     itemList: actions.map(a => a.label),
     success: (res) => {
       actions[res.tapIndex].handler()
+    },
+  })
+}
+
+async function showTitleEditor(group: ConversationGroup): Promise<void> {
+  const current = group.config?.customTitle || group.firstPrompt || ''
+  uni.showModal({
+    title: '修改标题',
+    editable: true,
+    placeholderText: '输入会话标题',
+    content: current,
+    success: async (res) => {
+      if (!res.confirm) return
+      const title = String((res as unknown as { content?: string }).content || '').trim()
+      if (!title) {
+        uni.showToast({ title: '标题不能为空', icon: 'none' })
+        return
+      }
+      try {
+        const cfg = await updateConversationTitle(group.sessionId, title)
+        conversationConfigs.value.set(group.sessionId, cfg)
+        rebuildGroups()
+        uni.showToast({ title: '标题已更新', icon: 'success' })
+      } catch {
+        uni.showToast({ title: '更新失败', icon: 'error' })
+      }
+    },
+  } as UniApp.ShowModalOptions)
+}
+
+function showAttachmentActions() {
+  uni.showActionSheet({
+    itemList: ['选择图片', '选择文件'],
+    success: (res) => {
+      if (res.tapIndex === 0) chooseImages()
+      if (res.tapIndex === 1) chooseFiles()
     },
   })
 }
@@ -718,6 +785,23 @@ function showPermissionPicker() {
   flex-direction: row;
   align-items: flex-end;
 }
+.attach-btn {
+  width: 64rpx;
+  height: 64rpx;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 12rpx;
+  border-radius: 32rpx;
+  background: #f0f2f5;
+  color: #606266;
+}
+.attach-icon {
+  font-size: 40rpx;
+  line-height: 1;
+}
 .history-btn {
   width: 64rpx;
   height: 64rpx;
@@ -726,7 +810,7 @@ function showPermissionPicker() {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-right: 16rpx;
+  margin-right: 12rpx;
 }
 .history-icon {
   font-size: 36rpx;
@@ -758,6 +842,67 @@ function showPermissionPicker() {
 }
 .run-btn[disabled] {
   opacity: 0.5;
+}
+.attachment-strip {
+  display: flex;
+  flex-direction: row;
+  gap: 12rpx;
+  margin-top: 14rpx;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.attachment-chip {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  max-width: 360rpx;
+  min-width: 0;
+  height: 64rpx;
+  padding: 0 12rpx;
+  border-radius: 12rpx;
+  background: #f5f7fa;
+  border: 2rpx solid #e4e7ed;
+  box-sizing: border-box;
+}
+.attachment-thumb {
+  width: 44rpx;
+  height: 44rpx;
+  border-radius: 8rpx;
+  flex-shrink: 0;
+  background: #e4e7ed;
+}
+.attachment-file {
+  min-width: 48rpx;
+  height: 36rpx;
+  padding: 0 8rpx;
+  border-radius: 6rpx;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 18rpx;
+  line-height: 36rpx;
+  text-align: center;
+  flex-shrink: 0;
+}
+.attachment-name {
+  max-width: 210rpx;
+  margin-left: 10rpx;
+  font-size: 24rpx;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-remove {
+  margin-left: 10rpx;
+  width: 32rpx;
+  height: 32rpx;
+  border-radius: 16rpx;
+  background: #c0c4cc;
+  color: #ffffff;
+  font-size: 22rpx;
+  line-height: 32rpx;
+  text-align: center;
+  flex-shrink: 0;
 }
 .option-row {
   display: flex;

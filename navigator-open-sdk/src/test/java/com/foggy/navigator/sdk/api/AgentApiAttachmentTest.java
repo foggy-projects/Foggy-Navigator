@@ -91,6 +91,40 @@ class AgentApiAttachmentTest {
         assertEquals("photo.png", attachment.get("name"));
     }
 
+    @Test
+    void askWithClientAppAccessTokenIncludesRuntimeOptions() throws Exception {
+        NavigatorClient client = NavigatorClient.builder()
+                .baseUrl("http://127.0.0.1:" + server.getAddress().getPort())
+                .noDefaultAuth()
+                .build();
+
+        AgentTask task = client.agents().askWithClientAppAccessToken(
+                "agent-1",
+                "run actor",
+                null,
+                1,
+                null,
+                "model-1",
+                "codex-mini",
+                null,
+                Map.of(
+                        "providerType", "codex-biz-worker",
+                        "directoryId", "dir-1",
+                        "privateAccountId", "tenant/world-sim/scenario-1/actor-1",
+                        "networkAccessEnabled", false
+                ),
+                "app-key",
+                "runtime-token",
+                "tms-user-1");
+
+        assertEquals("task-1", task.getTaskId());
+        Map<String, Object> body = OBJECT_MAPPER.readValue(captured.body(), new TypeReference<>() {});
+        assertEquals("codex-biz-worker", body.get("providerType"));
+        assertEquals("dir-1", body.get("directoryId"));
+        assertEquals("tenant/world-sim/scenario-1/actor-1", body.get("privateAccountId"));
+        assertEquals(Boolean.FALSE, body.get("networkAccessEnabled"));
+    }
+
     private void handle(HttpExchange exchange) throws IOException {
         captured = new CapturedRequest(
                 exchange.getRequestMethod(),

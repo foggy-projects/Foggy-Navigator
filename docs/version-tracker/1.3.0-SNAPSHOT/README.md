@@ -24,6 +24,7 @@
 - [18-biz-worker-complex-task-session-sample-audit.md](./18-biz-worker-complex-task-session-sample-audit.md) - Desensitized Codex/Claude session sample audit for complex task planning
 - [19-biz-worker-frame-execution-report-design.md](./19-biz-worker-frame-execution-report-design.md) - BizWorker frame execution report and provenance markdown design
 - [20-worker-host-suite-upstream-worker-model.md](./20-worker-host-suite-upstream-worker-model.md) - WorkerHost suite manifest and upstream worker creation model
+- [21-history-session-root-branch-grouping.md](./21-history-session-root-branch-grouping.md) - Workers history session root conversation and branch conversation grouping
 - [workitems/BUG-021-follow-up-3-langgraph-terminal-status-after-approval-result.md](./workitems/BUG-021-follow-up-3-langgraph-terminal-status-after-approval-result.md) - BUG-021 follow-up terminal status persistence after approval result
 - [workitems/BUG-022-materialize-bootstrap-non-blocking.md](./workitems/BUG-022-materialize-bootstrap-non-blocking.md) - materialize should not block first bootstrap when Skill/Function resources are not ready
 - [workitems/BUG-023-frame-execution-report-approval-resume-propagation.md](./workitems/BUG-023-frame-execution-report-approval-resume-propagation.md) - frame execution report propagation and terminal convergence after approval resume
@@ -50,6 +51,7 @@
 - [workitems/BUG-042-biz-agent-skill-handoff-smoke.md](./workitems/BUG-042-biz-agent-skill-handoff-smoke.md) - School Sim Biz actor live smoke prompt/skill handoff validation, closed by R11
 - [workitems/OPT-043-tms-new-tenant-ensure-flow.md](./workitems/OPT-043-tms-new-tenant-ensure-flow.md) - TMS new-tenant ensure flow activation-ready payload, default policy, admin credential UX, and structured provisioning errors
 - [workitems/BUG-044-public-skill-querymodel-schema-rendering.md](./workitems/BUG-044-public-skill-querymodel-schema-rendering.md) - public skill / BusinessFunction queryModel schema rendering should preserve nested JSON Schema and exact `$or` / `$and`
+- [workitems/OPT-045-tms-rehearsal-diagnostics-and-local-evidence-bridge.md](./workitems/OPT-045-tms-rehearsal-diagnostics-and-local-evidence-bridge.md) - TMS real rehearsal diagnostics, report status wording, local evidence attachment bridge, and same-context continuation handoff
 - [workitems/REQ-041-world-sim-task-diagnostics-contract.md](./workitems/REQ-041-world-sim-task-diagnostics-contract.md) - world-sim task diagnostics / evidence facts-only contract for issue #134
 - [workitems/REQ-041-world-sim-upstream-contract-handoff.md](./workitems/REQ-041-world-sim-upstream-contract-handoff.md) - world-sim upstream integration handoff, CLI usage, and real smoke checklist
 - [workitems/REQ-126-mobile-agent-chat-component.md](./workitems/REQ-126-mobile-agent-chat-component.md) - mobile-ready public Agent chat component for upstream Vue 3 apps

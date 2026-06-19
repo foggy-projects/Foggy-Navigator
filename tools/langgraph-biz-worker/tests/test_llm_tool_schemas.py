@@ -99,6 +99,25 @@ def test_analyze_spreadsheet_schema_keeps_one_tool_entry():
     assert operation["enum"] == ["summary", "preview", "read_range", "extract_rows"]
 
 
+def test_analyze_attachment_schema_rejects_local_evidence_paths():
+    schema = _KNOWN_TOOL_SCHEMAS["analyze_attachment"]["function"]
+    attachment_id = schema["parameters"]["properties"]["attachment_id"]["description"]
+
+    assert "Attachment id from the upstream attachment metadata" in attachment_id
+    assert "Do not pass local delegated workspace or evidence file paths" in attachment_id
+    assert "registered as attachments" in attachment_id
+
+
+def test_register_evidence_attachment_schema_declares_local_bridge_contract():
+    schema = _KNOWN_TOOL_SCHEMAS["register_evidence_attachment"]["function"]
+    description = schema["description"]
+
+    assert "authorized delegated workspace" in description
+    assert "before calling analyze_attachment" in description
+    assert "already-uploaded upstream attachments" in description
+    assert schema["parameters"]["required"] == ["path", "purpose"]
+
+
 def test_default_file_tool_set_is_minimal():
     assert _DEFAULT_FILE_TOOL_NAMES == (
         "list_files",

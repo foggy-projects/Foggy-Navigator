@@ -520,7 +520,13 @@ def test_persistent_root_turn_report_is_completed_while_frame_remains_running(tm
 
     assert report.digest["status"] == "COMPLETED"
     assert report.digest["frame_status"] == "RUNNING"
+    assert report.digest["turn_status"] == "COMPLETED"
+    assert report.digest["report_status"] == "COMPLETED"
+    assert report.digest["persistent_frame_status"] == "RUNNING"
     assert report.digest["ended_at"] == frame.private_working_state["current_turn_report"]["ended_at"]
+    assert "- turn_status: `COMPLETED`" in report.markdown
+    assert "- persistent_frame_status: `RUNNING`" in report.markdown
+    assert "`status` is a compatibility alias" in report.markdown
 
 
 def test_llm_tool_audit_log_uses_session_directory(tmp_path):

@@ -51,6 +51,13 @@ class TestListFiles:
         assert result["ok"]
         assert result["entries"] == []
 
+    def test_list_agent_root(self, tmp_path: Path):
+        tools = _setup_skill(tmp_path)
+        result = tools.list_files("agent")
+        assert result["ok"]
+        paths = [e["path"] for e in result["entries"]]
+        assert "agent/skills" in paths
+
     def test_list_delegated_workspace_without_account_id(self, tmp_path: Path):
         workspace = tmp_path / "workspace"
         skill_dir = workspace / "agent/skills" / "my-skill"
@@ -100,6 +107,16 @@ class TestReadFile:
             tools.read_file("agent/skills/my-skill/SKILL.md")
         assert exc_info.value.code == "file_not_found"
 
+    def test_read_account_policy(self, tmp_path: Path):
+        tools = _setup_skill(tmp_path)
+        policy = tmp_path / "accounts" / "user-001" / "agent" / "ACCOUNT_POLICY.md"
+        policy.write_bytes(b"# Policy\n")
+
+        result = tools.read_file("agent/ACCOUNT_POLICY.md")
+
+        assert result["ok"]
+        assert result["content"] == "# Policy\n"
+
 
 # ---------------------------------------------------------------------------
 # write_file
@@ -118,6 +135,39 @@ class TestWriteFile:
         # Verify on disk
         p = tmp_path / "accounts" / "user-001" / "agent/skills" / "my-skill" / "SKILL.md"
         assert p.read_text(encoding="utf-8").startswith("---")
+
+    def test_create_agent_md(self, tmp_path: Path):
+        tools = _setup_skill(tmp_path)
+        result = tools.write_file(
+            "agent/AGENT.md",
+            content="# Agent Notes\n",
+            mode="create",
+        )
+        assert result["ok"]
+        assert result["relative_path"] == "agent/AGENT.md"
+        p = tmp_path / "accounts" / "user-001" / "agent" / "AGENT.md"
+        assert p.read_text(encoding="utf-8") == "# Agent Notes\n"
+
+    def test_overwrite_memory_md(self, tmp_path: Path):
+        tools = _setup_skill(tmp_path)
+        memory = tmp_path / "accounts" / "user-001" / "agent" / "MEMORY.md"
+        memory.write_bytes(b"old\n")
+
+        result = tools.write_file(
+            "agent/MEMORY.md",
+            content="new\n",
+            mode="overwrite",
+            expected_sha256=_sha256("old\n"),
+        )
+
+        assert result["ok"]
+        assert memory.read_text(encoding="utf-8") == "new\n"
+
+    def test_account_policy_write_rejected(self, tmp_path: Path):
+        tools = _setup_skill(tmp_path)
+        with pytest.raises(FileToolError) as exc_info:
+            tools.write_file("agent/ACCOUNT_POLICY.md", content="# Policy\n")
+        assert exc_info.value.code == "forbidden_target"
 
     def test_create_rejects_existing(self, tmp_path: Path):
         tools = _setup_skill(tmp_path)
@@ -177,6 +227,22 @@ class TestWriteFile:
         assert result["ok"]
         assert (workspace / "agent/skills" / "my-skill" / "SKILL.md").is_file()
         assert tools.audit_records[0]["account_id"] == "delegated"
+
+    def test_delegated_workspace_account_policy_write_rejected(self, tmp_path: Path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        policy = ExecutionPolicy.from_context({
+            "execution_policy": {
+                "workdir": str(workspace),
+                "allowed_dirs": [str(workspace)],
+            },
+        })
+        tools = AccountFileTools(tmp_path / "data", None, task_id="task-001", execution_policy=policy)
+
+        with pytest.raises(FileToolError) as exc_info:
+            tools.write_file("agent/ACCOUNT_POLICY.md", content="# Policy\n")
+
+        assert exc_info.value.code == "forbidden_target"
 
     def test_read_only_execution_policy_rejects_write(self, tmp_path: Path):
         workspace = tmp_path / "workspace"

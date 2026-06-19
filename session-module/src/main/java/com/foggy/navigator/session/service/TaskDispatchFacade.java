@@ -49,6 +49,9 @@ import java.util.stream.Collectors;
 public class TaskDispatchFacade {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String CODEX_PROVIDER_TYPE = "codex-worker";
+    private static final String CODEX_BIZ_PROVIDER_TYPE = "codex-biz-worker";
+
     private final UnifiedAgentResolver agentResolver;
     private final SessionBindingService bindingService;
     private final SessionRepository sessionRepository;
@@ -339,20 +342,27 @@ public class TaskDispatchFacade {
     }
 
     private String resolveResumeProviderTypeFromLegacyContext(TaskDispatchRequest request, AgentResolveContext context) {
-        // 1. 从 modelConfigId 推导（优先于已废弃的 request.providerType）
+        // 1. 显式 providerType 存在且可用时优先；codex-biz-worker 可复用 OPENAI_CODEX 模型配置。
+        @SuppressWarnings("deprecation")
+        String requestedProviderType = request.getProviderType();
         String fromModelConfig = resolveProviderTypeFromModelConfig(request.getModelConfigId());
+        if (requestedProviderType != null && !requestedProviderType.isBlank()
+                && findTaskQueryProviderByType(requestedProviderType).isPresent()
+                && (fromModelConfig == null || isModelProviderCompatible(fromModelConfig, requestedProviderType))) {
+            return requestedProviderType;
+        }
+
+        // 2. 从 modelConfigId 推导 provider（旧 Open API 行为）
         if (fromModelConfig != null && !fromModelConfig.isBlank()) {
             return fromModelConfig;
         }
 
-        // 2. 从已废弃的 request.providerType（向后兼容 Open API）
-        @SuppressWarnings("deprecation")
-        String requestedProviderType = request.getProviderType();
+        // 3. 从已废弃的 request.providerType 兜底（向后兼容 Open API）
         if (requestedProviderType != null && !requestedProviderType.isBlank()) {
             return requestedProviderType;
         }
 
-        // 3. 从 agentId 推导（包括 directory# 格式）
+        // 4. 从 agentId 推导（包括 directory# 格式）
         String agentLookupId = resolveBoundOrExplicitAgentId(request.getAgentId(), request.getSessionId());
         if (agentLookupId != null && !agentLookupId.isBlank()) {
             // directory# 格式的 agentId 需要通过目录的 modelConfigId 推导
@@ -1638,7 +1648,14 @@ public class TaskDispatchFacade {
             return CreateExecutionTarget.a2a(new AgentLookup(sessionAgentId, "SESSION_AGENT"));
         }
 
-        // Case 4: 完全无 Agent → 通过 modelConfigId 推导 providerType，走 Direct Provider Route（向后兼容 ad-hoc cwd）
+        // Case 4: 显式 providerType → Direct Provider Route
+        String requestedProviderType = request.getProviderType();
+        if (requestedProviderType != null && !requestedProviderType.isBlank()
+                && findTaskQueryProviderByType(requestedProviderType).isPresent()) {
+            return CreateExecutionTarget.direct(requestedProviderType);
+        }
+
+        // Case 5: 完全无 Agent → 通过 modelConfigId 推导 providerType，走 Direct Provider Route（向后兼容 ad-hoc cwd）
         String providerType = resolveProviderTypeFromModelConfig(request.getModelConfigId());
         if (providerType != null && findTaskQueryProviderByType(providerType).isPresent()) {
             return CreateExecutionTarget.direct(providerType);
@@ -1670,6 +1687,12 @@ public class TaskDispatchFacade {
         String providerType = resolveProviderTypeFromModelConfig(modelConfigId);
         if (providerType == null) {
             throw new IllegalArgumentException("modelConfigId " + modelConfigId + " 无法推导执行后端类型");
+        }
+        String requestedProviderType = request.getProviderType();
+        if (requestedProviderType != null && !requestedProviderType.isBlank()
+                && findTaskQueryProviderByType(requestedProviderType).isPresent()
+                && isModelProviderCompatible(providerType, requestedProviderType)) {
+            return CreateExecutionTarget.direct(requestedProviderType);
         }
         return CreateExecutionTarget.direct(providerType);
     }
@@ -1805,7 +1828,7 @@ public class TaskDispatchFacade {
         String modelConfigId = request.getModelConfigId();
         if (modelConfigId != null && !modelConfigId.isBlank()) {
             String modelProviderType = resolveProviderTypeFromModelConfig(modelConfigId);
-            if (modelProviderType != null && !resolvedProviderType.equals(modelProviderType)) {
+            if (modelProviderType != null && !isModelProviderCompatible(modelProviderType, resolvedProviderType)) {
                 log.info("Resume normalize: clearing modelConfigId {} (targets {}, session bound to {})",
                         modelConfigId, modelProviderType, resolvedProviderType);
                 request.setModelConfigId(null);
@@ -1835,11 +1858,18 @@ public class TaskDispatchFacade {
             return;
         }
 
-        if (!providerType.equals(modelProviderType)) {
+        if (!isModelProviderCompatible(modelProviderType, providerType)) {
             throw new IllegalArgumentException(
                     "modelConfigId " + modelConfigId + " targets provider " + modelProviderType
                             + ", but resolved provider is " + providerType);
         }
+    }
+
+    private boolean isModelProviderCompatible(String modelProviderType, String providerType) {
+        if (Objects.equals(modelProviderType, providerType)) {
+            return true;
+        }
+        return CODEX_PROVIDER_TYPE.equals(modelProviderType) && CODEX_BIZ_PROVIDER_TYPE.equals(providerType);
     }
 
     private String resolveLogicalAgentId(A2aAgent agent, String lookupId) {

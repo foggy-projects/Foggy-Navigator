@@ -63,6 +63,13 @@ function Invoke-RemoteInstallSmoke {
         if ($LASTEXITCODE -ne 0 -or $helpOutput -notmatch "function import" -or $helpOutput -notmatch "--model-variant" -or $helpOutput -notmatch "diagnostics session-dir") {
             throw "upstream help smoke did not list function commands: $helpOutput"
         }
+        $codexBizAskHelpOk = $helpOutput -match "--provider-type codex-biz-worker" `
+            -and $helpOutput -match "--private-account-id" `
+            -and $helpOutput -match "--codex-home-key" `
+            -and $helpOutput -match "--directory-id"
+        if (-not $codexBizAskHelpOk) {
+            throw "upstream help smoke did not list Codex Biz ask runtime options: $helpOutput"
+        }
 
         $sessionDirHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream diagnostics session-dir --help 2>&1 | Out-String
         $sessionDirHelpOk = $LASTEXITCODE -eq 0 `

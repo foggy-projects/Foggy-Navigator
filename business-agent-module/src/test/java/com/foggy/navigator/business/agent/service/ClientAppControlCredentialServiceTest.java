@@ -151,6 +151,23 @@ class ClientAppControlCredentialServiceTest {
     }
 
     @Test
+    void requireAccess_acceptsLegacyFunctionGrantScopeForSuspensionResume() {
+        when(repository.findByControlKeyHash(anyString()))
+                .thenReturn(Optional.of(activeCredential("tenant-1", "capp-1",
+                        ClientAppControlCredentialService.SCOPE_FUNCTION_GRANT_MANAGE)));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader(ClientAppControlCredentialService.HEADER_CONTROL_KEY, "cac_test");
+
+        ClientAppControlPlanePrincipal principal = service.requireAccess(
+                request,
+                ClientAppControlCredentialService.SCOPE_FUNCTION_SUSPENSION_RESUME,
+                "capp-1");
+
+        assertFalse(principal.isAdmin());
+        assertEquals("capp-1", principal.getClientAppId());
+    }
+
+    @Test
     void requireAccess_rejectsMissingControlPlaneCredentialWhenNoAdminUser() {
         assertThrows(SecurityException.class, () -> service.requireAccess(
                 new MockHttpServletRequest(),
