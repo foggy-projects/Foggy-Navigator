@@ -26,6 +26,36 @@ const conversationConfigs = ref<Map<string, ConversationConfig>>(new Map())
 const activeTasks = ref<ClaudeTask[]>([])
 const awaitingReplyTasks = ref<ClaudeTask[]>([])
 
+function setConversationConfig(config: ConversationConfig) {
+  const next = new Map(conversationConfigs.value)
+  next.set(config.sessionId, config)
+  conversationConfigs.value = next
+}
+
+function setConversationConfigs(configs: ConversationConfig[]) {
+  if (configs.length === 0) return
+  const next = new Map(conversationConfigs.value)
+  for (const config of configs) {
+    next.set(config.sessionId, config)
+  }
+  conversationConfigs.value = next
+}
+
+function patchConversationConfig(sessionId: string, patch: Partial<ConversationConfig>) {
+  const next = new Map(conversationConfigs.value)
+  const existing = next.get(sessionId)
+  next.set(sessionId, existing
+    ? { ...existing, ...patch }
+    : {
+        sessionId,
+        pinned: false,
+        authBound: false,
+        ...patch,
+      },
+  )
+  conversationConfigs.value = next
+}
+
 export function useClaudeWorker() {
   const onlineWorkers = computed(() => workers.value.filter((w) => w.status === 'ONLINE'))
 
@@ -256,7 +286,7 @@ export function useClaudeWorker() {
 
   async function updateTags(sessionId: string, tags: string[]) {
     const config = await api.updateConversationTags(sessionId, tags)
-    conversationConfigs.value.set(config.sessionId, config)
+    setConversationConfig(config)
     return config
   }
 
@@ -266,9 +296,7 @@ export function useClaudeWorker() {
     if (sessionIds.length === 0) return
     try {
       const configs = await api.listConversationConfigs(sessionIds)
-      for (const config of configs) {
-        conversationConfigs.value.set(config.sessionId, config)
-      }
+      setConversationConfigs(configs)
     } catch {
       // best-effort
     }
@@ -276,31 +304,31 @@ export function useClaudeWorker() {
 
   async function togglePin(sessionId: string, pinned: boolean) {
     const config = await api.updateConversationPin(sessionId, pinned)
-    conversationConfigs.value.set(config.sessionId, config)
+    setConversationConfig(config)
     return config
   }
 
   async function setTitle(sessionId: string, title: string) {
     const config = await api.updateConversationTitle(sessionId, title)
-    conversationConfigs.value.set(config.sessionId, config)
+    setConversationConfig(config)
     return config
   }
 
   async function setMilestone(sessionId: string, milestoneId?: string) {
     const config = await api.updateConversationMilestone(sessionId, milestoneId)
-    conversationConfigs.value.set(config.sessionId, config)
+    setConversationConfig(config)
     return config
   }
 
   async function bindAuth(sessionId: string, form: { authMode: string; authToken: string; baseUrl?: string; modelConfigId?: string }) {
     const config = await api.bindConversationAuth(sessionId, form)
-    conversationConfigs.value.set(config.sessionId, config)
+    setConversationConfig(config)
     return config
   }
 
   async function updateAuth(sessionId: string, form: { authMode: string; authToken: string; baseUrl?: string; modelConfigId?: string }) {
     const config = await api.updateConversationAuth(sessionId, form)
-    conversationConfigs.value.set(config.sessionId, config)
+    setConversationConfig(config)
     return config
   }
 
@@ -322,40 +350,32 @@ export function useClaudeWorker() {
 
   async function archiveConversation(sessionId: string) {
     const config = await api.archiveConversation(sessionId)
-    conversationConfigs.value.set(config.sessionId, config)
+    setConversationConfig(config)
     return config
   }
 
   async function unarchiveConversation(sessionId: string) {
     const config = await api.unarchiveConversation(sessionId)
-    conversationConfigs.value.set(config.sessionId, config)
+    setConversationConfig(config)
     return config
   }
 
   async function holdConversation(sessionId: string) {
     const config = await api.holdConversation(sessionId)
-    conversationConfigs.value.set(config.sessionId, config)
+    setConversationConfig(config)
     return config
   }
 
   async function unholdConversation(sessionId: string) {
     const config = await api.unholdConversation(sessionId)
-    conversationConfigs.value.set(config.sessionId, config)
+    setConversationConfig(config)
     return config
   }
 
   function updateInteractionStateFromSSE(sessionId: string, interactionState: string) {
-    const config = conversationConfigs.value.get(sessionId)
-    if (config) {
-      config.interactionState = interactionState as ConversationConfig['interactionState']
-    } else {
-      conversationConfigs.value.set(sessionId, {
-        sessionId,
-        pinned: false,
-        authBound: false,
-        interactionState: interactionState as ConversationConfig['interactionState'],
-      })
-    }
+    patchConversationConfig(sessionId, {
+      interactionState: interactionState as ConversationConfig['interactionState'],
+    })
   }
 
   return {
