@@ -104,6 +104,12 @@ const incomingRelations: Record<string, unknown> = {
   },
 }
 
+type MockApiOptions = {
+  keepArchivedTasksInList?: boolean
+  resumeWithoutParent?: boolean
+  delayReloadAfterResume?: boolean
+}
+
 function rx(data: unknown) {
   return {
     code: 200,
@@ -120,7 +126,25 @@ async function fulfill(route: Route, data: unknown) {
   })
 }
 
-async function mockApi(page: Page) {
+async function mockApi(page: Page, options: MockApiOptions = {}) {
+  const archivedSessionIds = new Set<string>()
+  let resumeCalled = false
+  const resumedBranchA = {
+    ...tasks[1]!,
+    taskId: 'task-branch-a-resumed',
+    prompt: 'Continue Branch A',
+    status: 'RUNNING',
+    parentSessionId: options.resumeWithoutParent ? undefined : 'session-root',
+    costUsd: 0.44,
+    createdAt: '2026-06-19T08:30:00Z',
+    updatedAt: '2026-06-19T08:30:00Z',
+  }
+  const listedTasks = () => {
+    const sourceTasks = resumeCalled ? [resumedBranchA, ...tasks] : tasks
+    if (options.keepArchivedTasksInList) return sourceTasks
+    return sourceTasks.filter((task) => !archivedSessionIds.has(task.sessionId))
+  }
+
   await page.addInitScript(() => {
     localStorage.setItem('navigator_token', 'e2e-token')
     localStorage.setItem(
@@ -158,13 +182,47 @@ async function mockApi(page: Page) {
       return
     }
 
+    if (path === '/config/platform/agent-model') {
+      await fulfill(route, [])
+      return
+    }
+
+    if (path.match(/^\/claude-workers\/[^/]+\/processes$/)) {
+      await fulfill(route, [])
+      return
+    }
+
     if (path === '/tasks/page') {
+      if (resumeCalled && options.delayReloadAfterResume) {
+        await new Promise((resolve) => setTimeout(resolve, 1200))
+      }
       await fulfill(route, {
-        content: tasks,
-        totalSessions: tasks.length,
+        content: listedTasks(),
+        totalSessions: listedTasks().length,
         page: Number(url.searchParams.get('page') || '0'),
         size: Number(url.searchParams.get('size') || '20'),
       })
+      return
+    }
+
+    if (path === '/tasks/resume') {
+      resumeCalled = true
+      await fulfill(route, resumedBranchA)
+      return
+    }
+
+    if (path === `/tasks/directory/${directory.directoryId}/page`) {
+      await fulfill(route, {
+        content: listedTasks(),
+        totalSessions: listedTasks().length,
+        page: Number(url.searchParams.get('page') || '0'),
+        size: Number(url.searchParams.get('size') || '20'),
+      })
+      return
+    }
+
+    if (path === `/tasks/directory/${directory.directoryId}`) {
+      await fulfill(route, listedTasks())
       return
     }
 
@@ -183,10 +241,24 @@ async function mockApi(page: Page) {
           sessionId,
           pinned: false,
           authBound: false,
-          interactionState: 'PROCESSING',
+          interactionState: archivedSessionIds.has(sessionId) ? 'ARCHIVED' : 'PROCESSING',
           tags: [],
         })),
       )
+      return
+    }
+
+    const archiveMatch = path.match(/^\/sessions\/([^/]+)\/config\/archive$/)
+    if (archiveMatch) {
+      const sessionId = archiveMatch[1]!
+      archivedSessionIds.add(sessionId)
+      await fulfill(route, {
+        sessionId,
+        pinned: false,
+        authBound: false,
+        interactionState: 'ARCHIVED',
+        tags: [],
+      })
       return
     }
 
@@ -208,9 +280,23 @@ async function mockApi(page: Page) {
       return
     }
 
+    if (path.match(/^\/tasks\/workers\/[^/]+\/sessions\/[^/]+\/message-count$/)) {
+      await fulfill(route, {
+        user_count: 0,
+        assistant_count: 0,
+        total: 0,
+      })
+      return
+    }
+
+    if (path.match(/^\/tasks\/workers\/[^/]+\/sessions\/[^/]+\/messages$/)) {
+      await fulfill(route, [])
+      return
+    }
+
     const workerDirectoryMatch = path.match(/^\/working-directories\/worker\/([^/]+)$/)
     if (workerDirectoryMatch) {
-      await fulfill(route, [directory])
+      await fulfill(route, [])
       return
     }
 
@@ -250,5 +336,47 @@ test.describe('history session branch grouping', () => {
     await expect(dialog.getByText('Main task domain (session-root)')).toHaveCount(2)
     await expect(dialog.getByText('Branch A investigation (session-branch-a)')).toBeVisible()
     await expect(dialog.getByText('msg-branch-a')).toBeVisible()
+  })
+
+  test('hides archived branch even when stale task cache still contains it', async ({ page }) => {
+    await mockApi(page, { keepArchivedTasksInList: true })
+    await page.goto('/')
+    await page.getByText('History Worker', { exact: true }).click()
+
+    const root = page.locator('.conv-item', { hasText: 'Main task domain' }).first()
+    await expect(root).toBeVisible()
+    await expect(root.locator('.branch-session-item')).toHaveCount(2)
+
+    const branchA = root.locator('.branch-session-item', { hasText: 'Branch A investigation' })
+    await branchA.locator('.branch-session-more-trigger').click()
+    const menu = page.locator('.el-dropdown__popper:visible').last()
+    await expect(menu).toBeVisible()
+    await menu.getByText('归档', { exact: true }).click()
+    await page.getByRole('button', { name: '确认归档' }).click()
+
+    await expect(root.locator('.branch-session-item', { hasText: 'Branch A investigation' })).toHaveCount(0)
+    await expect(root.locator('.branch-session-item', { hasText: 'Branch B from branch A' })).toBeVisible()
+    await expect(root.locator('.conv-rel-tag')).toContainText('分支 1')
+  })
+
+  test('keeps branch nested when resumed task response lacks parent', async ({ page }) => {
+    await mockApi(page, {
+      resumeWithoutParent: true,
+    })
+    await page.goto('/')
+    await page.getByText('History Worker', { exact: true }).click()
+
+    const root = page.locator('.conv-item', { hasText: 'Main task domain' }).first()
+    await expect(root).toBeVisible()
+    await expect(page.locator('.conv-list > .conv-item')).toHaveCount(1)
+
+    await root.locator('.branch-session-item', { hasText: 'Branch A investigation' }).click()
+    await page.locator('.task-pane').first().waitFor({ state: 'visible' })
+    await page.locator('.task-pane textarea').first().fill('Continue Branch A')
+    await page.locator('.task-pane .send-btn-inside').first().click()
+
+    await expect(page.locator('.conv-item', { hasText: 'Main task domain' })).toHaveCount(1)
+    await expect(root.locator('.branch-session-item', { hasText: 'Branch A investigation' })).toBeVisible()
+    await expect(root.locator('.branch-session-item')).toHaveCount(2)
   })
 })
