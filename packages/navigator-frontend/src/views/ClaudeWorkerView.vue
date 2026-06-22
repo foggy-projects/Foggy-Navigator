@@ -3325,7 +3325,9 @@ function deriveInteractionStateFromTaskStatus(
 function resolveConversationInteractionState(
   conv: Pick<ConversationGroup, 'latestTask' | 'config'>,
 ): ConversationConfig['interactionState'] | undefined {
-  return deriveInteractionStateFromTaskStatus(conv.latestTask.status) ?? conv.config?.interactionState
+  const configState = conv.config?.interactionState
+  if (configState === 'ARCHIVED' || configState === 'ON_HOLD') return configState
+  return deriveInteractionStateFromTaskStatus(conv.latestTask.status) ?? configState
 }
 
 function matchesCurrentInteractionFilter(
@@ -4249,20 +4251,23 @@ function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] 
     }
   }
   return Array.from(groups.values())
-    .map((tasks) => ({
-      sessionId: tasks[0]!.sessionId,
-      parentSessionId: tasks[0]!.parentSessionId,
-      claudeSessionId: tasks.find((t) => t.claudeSessionId)?.claudeSessionId || '',
-      codexThreadId: tasks.find((t) => t.codexThreadId)?.codexThreadId || '',
-      latestTask: tasks[0]!,
-      tasks,
-      taskCount: tasks[0]!.sessionTaskCount ?? tasks.length,
-      totalCost: tasks[0]!.sessionTotalCostUsd ?? tasks.reduce((s, t) => s + (t.costUsd || 0), 0),
-      totalInputTokens: tasks[0]!.sessionInputTokens ?? tasks.reduce((s, t) => s + (t.inputTokens || 0), 0),
-      totalOutputTokens: tasks[0]!.sessionOutputTokens ?? tasks.reduce((s, t) => s + (t.outputTokens || 0), 0),
-      firstPrompt: tasks[0]!.sessionFirstPrompt || tasks[tasks.length - 1]!.prompt,
-      config: workerState.conversationConfigs.value.get(tasks[0]!.sessionId),
-    }))
+    .map((tasks) => {
+      const latestTask = tasks[0]!
+      return {
+        sessionId: latestTask.sessionId,
+        parentSessionId: latestTask.parentSessionId || tasks.find((t) => t.parentSessionId)?.parentSessionId,
+        claudeSessionId: tasks.find((t) => t.claudeSessionId)?.claudeSessionId || '',
+        codexThreadId: tasks.find((t) => t.codexThreadId)?.codexThreadId || '',
+        latestTask,
+        tasks,
+        taskCount: latestTask.sessionTaskCount ?? tasks.length,
+        totalCost: latestTask.sessionTotalCostUsd ?? tasks.reduce((s, t) => s + (t.costUsd || 0), 0),
+        totalInputTokens: latestTask.sessionInputTokens ?? tasks.reduce((s, t) => s + (t.inputTokens || 0), 0),
+        totalOutputTokens: latestTask.sessionOutputTokens ?? tasks.reduce((s, t) => s + (t.outputTokens || 0), 0),
+        firstPrompt: latestTask.sessionFirstPrompt || tasks[tasks.length - 1]!.prompt,
+        config: workerState.conversationConfigs.value.get(latestTask.sessionId),
+      }
+    })
     .sort((a, b) => {
       // Pinned conversations first (by pinnedAt desc)
       const aPinned = a.config?.pinned ?? false
@@ -6766,6 +6771,9 @@ async function handlePaneSend(paneId: string, content: string) {
     if (!newTask?.sessionId) {
       throw new Error('继续会话失败：服务端未返回有效任务数据')
     }
+    if (!newTask.parentSessionId && oldTask.parentSessionId) {
+      newTask.parentSessionId = oldTask.parentSessionId
+    }
     // 记录 session → 用户选择的短模型名，供后续 restoreSessionModelSelection 恢复
     saveSessionModel(newTask.sessionId, taskForm.value.model)
     // Don't revoke blob URLs that will be displayed in chat messages
@@ -7335,6 +7343,9 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     const newTask = await workerState.resumeTask(resumeForm)
     if (!newTask?.sessionId) {
       throw new Error('继续会话失败：服务端未返回有效任务数据')
+    }
+    if (!newTask.parentSessionId && task.parentSessionId) {
+      newTask.parentSessionId = task.parentSessionId
     }
 
     // Per-conversation: find existing pane by sessionId
