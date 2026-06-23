@@ -984,6 +984,39 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void listTasksPaged_compactOmitsHeavyFields() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+
+        SessionTaskEntity latestTask = sessionTask(
+                "task-latest", "session-1", "claude-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 24, 22, 0),
+                "{\"claudeSessionId\":\"claude-session-1\",\"checkpoints\":[{\"id\":\"ckpt-1\"}]}"
+        );
+        latestTask.setPrompt("latest prompt");
+        latestTask.setResultText("large result payload");
+
+        when(sessionTaskRepository.findByUserIdOrderByCreatedAtDesc("user-1"))
+                .thenReturn(List.of(latestTask));
+        when(sessionRepository.findAllById(List.of("session-1")))
+                .thenReturn(List.of(
+                        sessionEntity("session-1", "user-1", "AWAITING_REPLY",
+                                LocalDateTime.of(2026, 3, 24, 22, 5))
+                ));
+
+        Object result = facade.listTasksPaged("user-1", 0, 1, "AWAITING_REPLY", true);
+
+        Map<?, ?> page = assertInstanceOf(Map.class, result);
+        List<?> content = assertInstanceOf(List.class, page.get("content"));
+        Map<?, ?> summary = assertInstanceOf(Map.class, content.get(0));
+        assertEquals("task-latest", summary.get("taskId"));
+        assertEquals("claude-session-1", summary.get("claudeSessionId"));
+        assertEquals("latest prompt", summary.get("sessionFirstPrompt"));
+        assertFalse(summary.containsKey("resultText"));
+        assertFalse(summary.containsKey("errorMessage"));
+        assertFalse(summary.containsKey("checkpoints"));
+    }
+
+    @Test
     void listActiveTasks_allowsNullDirectoryId() {
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
         ReflectionTestUtils.setField(facade, "workingDirectoryRepository", workingDirectoryRepository);

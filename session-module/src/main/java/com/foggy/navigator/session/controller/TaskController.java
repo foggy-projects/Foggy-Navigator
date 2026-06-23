@@ -285,9 +285,10 @@ public class TaskController {
     public RX<?> listTasksPaged(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
-            @RequestParam(required = false) String state) {
+            @RequestParam(required = false) String state,
+            @RequestParam(defaultValue = "false") boolean compact) {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(taskDispatchFacade.listTasksPaged(userId, page, size, state));
+        return RX.ok(taskDispatchFacade.listTasksPaged(userId, page, size, state, compact));
     }
 
     /**
