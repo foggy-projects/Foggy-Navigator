@@ -13,6 +13,16 @@
       </div>
       <slot name="header-extra" :pane-state="paneState" />
       <div class="pane-actions">
+        <el-button
+          size="small"
+          text
+          :loading="copyingConversation"
+          :disabled="!paneState.task.value?.sessionId"
+          title="复制整个会话"
+          @click.stop="handleCopyConversation"
+        >
+          复制会话
+        </el-button>
         <span v-if="paneState.task.value?.costUsd" class="cost-label">
           ${{ paneState.task.value.costUsd.toFixed(4) }}
         </span>
@@ -117,9 +127,11 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
-import type { NavigatorUiAction } from '@foggy/chat'
+import type { ChatMessage, NavigatorUiAction } from '@foggy/chat'
+import { ElMessage } from 'element-plus'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import { useInputMemory } from '@/composables/useInputMemory'
+import { copyToClipboard } from '@/utils/clipboard'
 import type { SkillInfo } from '@/types'
 import SlashCommandInput from './SlashCommandInput.vue'
 import type { AgentItem } from './SlashCommandInput.vue'
@@ -151,6 +163,7 @@ const emit = defineEmits<{
 }>()
 
 const paneInput = ref('')
+const copyingConversation = ref(false)
 // --- Input memory: draft persistence + history for pane input ---
 const paneInputScope = computed(() => {
   const sid = props.paneState.task.value?.sessionId
@@ -264,6 +277,89 @@ function handleRewind(turnIndex: number) {
 
 function handleReconnect(taskId: string) {
   emit('reconnect', props.paneState.paneId, taskId)
+}
+
+async function handleCopyConversation() {
+  if (copyingConversation.value) return
+
+  copyingConversation.value = true
+  try {
+    const messages = await props.paneState.getAllHistoryMessages()
+    const text = formatConversationForCopy(messages)
+    if (!text.trim()) {
+      ElMessage.warning('当前会话没有可复制的消息')
+      return
+    }
+    const ok = await copyToClipboard(text)
+    if (ok) {
+      ElMessage.success(`已复制整个会话（${messages.length} 条）`)
+    } else {
+      ElMessage.error('复制失败')
+    }
+  } catch (error) {
+    console.error('复制会话失败:', error)
+    ElMessage.error('复制会话失败')
+  } finally {
+    copyingConversation.value = false
+  }
+}
+
+function formatConversationForCopy(messages: ChatMessage[]): string {
+  return messages
+    .map(formatMessageForCopy)
+    .filter((part) => part.trim().length > 0)
+    .join('\n\n---\n\n')
+}
+
+function formatMessageForCopy(message: ChatMessage): string {
+  const header = `[${formatMessageTime(message.timestamp)}] ${messageRoleLabel(message)}`
+  const lines: string[] = [header]
+
+  if (message.toolName) lines.push(`TOOL: ${message.toolName}`)
+  if (message.thought) lines.push(`THOUGHT:\n${message.thought}`)
+  if (message.content) {
+    lines.push(message.toolName ? `COMMAND:\n${message.content}` : message.content)
+  }
+  if (message.toolOutput !== undefined) lines.push(`OUTPUT:\n${message.toolOutput}`)
+  if (message.error) lines.push(`ERROR:\n${message.error}`)
+  if (message.plan) lines.push(`PLAN:\n${message.plan}`)
+  if (message.questions?.length) {
+    lines.push(`QUESTIONS:\n${message.questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n')}`)
+  }
+  if (!message.content && !message.toolOutput && !message.error && !message.plan && !message.questions?.length && message.raw) {
+    lines.push(`RAW:\n${safeStringify(message.raw)}`)
+  }
+
+  return lines.join('\n')
+}
+
+function messageRoleLabel(message: ChatMessage): string {
+  if (message.toolName || message.sender === 'tool') return '工具'
+  switch (message.sender) {
+    case 'user': return '用户'
+    case 'assistant': return 'Agent'
+    case 'system': return '系统'
+    default: return message.sender
+  }
+}
+
+function formatMessageTime(timestamp: number): string {
+  const d = new Date(timestamp)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} `
+    + `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
 }
 
 // Message-level rewind is available for providers with platform conversation rewind.

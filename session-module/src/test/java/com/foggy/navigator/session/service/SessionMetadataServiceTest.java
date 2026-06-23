@@ -2,7 +2,9 @@ package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.session.dto.SessionConfigDTO;
@@ -33,12 +35,15 @@ class SessionMetadataServiceTest {
     private LlmModelManager llmModelManager;
     @Mock
     private WorkingDirectoryRepository workingDirectoryRepository;
+    @Mock
+    private SessionTaskRepository sessionTaskRepository;
 
     private SessionMetadataService service;
 
     @BeforeEach
     void setUp() {
-        service = new SessionMetadataService(sessionRepository, credentialEncryptor, llmModelManager, workingDirectoryRepository);
+        service = new SessionMetadataService(sessionRepository, credentialEncryptor, llmModelManager,
+                workingDirectoryRepository, sessionTaskRepository);
     }
 
     @Test
@@ -119,6 +124,52 @@ class SessionMetadataServiceTest {
         assertTrue(session.getPinned());
         assertNotNull(session.getPinnedAt());
         assertTrue(result.isPinned());
+    }
+
+    @Test
+    void archiveConversation_createsMetadataFromOwnedTaskProjectionWhenSessionMissing() {
+        SessionTaskEntity task = new SessionTaskEntity();
+        task.setSessionId("legacy-session-1");
+        task.setTaskId("task-1");
+        task.setUserId("user-1");
+        task.setTenantId("tenant-1");
+        task.setProviderType("codex-worker");
+        task.setAgentId("agent-1");
+        task.setWorkerId("worker-1");
+        task.setDirectoryId("dir-1");
+        task.setModel("gpt-5");
+        task.setCreatedAt(LocalDateTime.of(2026, 3, 24, 9, 0));
+        task.setUpdatedAt(LocalDateTime.of(2026, 3, 24, 10, 0));
+
+        when(sessionRepository.findByIdAndUserId("legacy-session-1", "user-1")).thenReturn(Optional.empty());
+        when(sessionTaskRepository.findFirstBySessionIdAndUserIdOrderByCreatedAtDesc("legacy-session-1", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        SessionConfigDTO result = service.archiveConversation("legacy-session-1", "user-1");
+
+        assertEquals("legacy-session-1", result.getSessionId());
+        assertEquals("ARCHIVED", result.getInteractionState());
+        verify(sessionRepository).save(argThat(session ->
+                "legacy-session-1".equals(session.getId())
+                        && "user-1".equals(session.getUserId())
+                        && "codex-worker".equals(session.getProviderType())
+                        && "worker-1".equals(session.getCurrentWorkerId())
+                        && "task-1".equals(session.getLatestTaskId())
+                        && "ARCHIVED".equals(session.getInteractionState())));
+    }
+
+    @Test
+    void archiveConversation_stillRejectsUnknownSessionWithoutOwnedTaskProjection() {
+        when(sessionRepository.findByIdAndUserId("missing-session", "user-1")).thenReturn(Optional.empty());
+        when(sessionTaskRepository.findFirstBySessionIdAndUserIdOrderByCreatedAtDesc("missing-session", "user-1"))
+                .thenReturn(Optional.empty());
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.archiveConversation("missing-session", "user-1"));
+
+        assertEquals("Session not found: missing-session", error.getMessage());
+        verify(sessionRepository, never()).save(any());
     }
 
     @Test
