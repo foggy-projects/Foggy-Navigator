@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.common.dto.DirectoryMilestoneDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.session.dto.SessionConfigDTO;
@@ -34,6 +36,7 @@ public class SessionMetadataService {
     private final CredentialEncryptor credentialEncryptor;
     private final LlmModelManager llmModelManager;
     private final WorkingDirectoryRepository workingDirectoryRepository;
+    private final SessionTaskRepository sessionTaskRepository;
 
     @Transactional(readOnly = true)
     public List<SessionConfigDTO> listBySessionIds(String userId, List<String> sessionIds) {
@@ -158,7 +161,7 @@ public class SessionMetadataService {
     }
 
     private SessionConfigDTO updateInteractionState(String sessionId, String userId, String interactionState) {
-        SessionEntity session = requireOwnedSession(sessionId, userId);
+        SessionEntity session = requireOwnedSessionForInteractionState(sessionId, userId);
         session.setInteractionState(interactionState);
         return toDTO(sessionRepository.save(session));
     }
@@ -167,6 +170,37 @@ public class SessionMetadataService {
         return sessionRepository.findByIdAndUserId(sessionId, userId)
                 .filter(session -> session.getDeletedAt() == null)
                 .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
+    }
+
+    private SessionEntity requireOwnedSessionForInteractionState(String sessionId, String userId) {
+        return sessionRepository.findByIdAndUserId(sessionId, userId)
+                .filter(session -> session.getDeletedAt() == null)
+                .orElseGet(() -> createSessionMetadataFromTaskProjection(sessionId, userId));
+    }
+
+    private SessionEntity createSessionMetadataFromTaskProjection(String sessionId, String userId) {
+        SessionTaskEntity latestTask = sessionTaskRepository.findFirstBySessionIdAndUserIdOrderByCreatedAtDesc(sessionId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
+
+        SessionEntity session = new SessionEntity();
+        session.setId(sessionId);
+        session.setUserId(userId);
+        session.setTenantId(latestTask.getTenantId());
+        session.setAgentId(blankToNull(latestTask.getAgentId()));
+        session.setProviderType(blankToNull(latestTask.getProviderType()));
+        session.setStatus("ACTIVE");
+        session.setInteractionState("PROCESSING");
+        session.setPinned(false);
+        session.setCurrentWorkerId(blankToNull(latestTask.getWorkerId()));
+        session.setCurrentDirectoryId(blankToNull(latestTask.getDirectoryId()));
+        session.setLatestTaskId(blankToNull(latestTask.getTaskId()));
+        session.setLatestModel(blankToNull(latestTask.getModel()));
+        session.setLastActivityAt(firstNonNull(latestTask.getUpdatedAt(), latestTask.getCreatedAt(), LocalDateTime.now()));
+        session.setCreatedAt(firstNonNull(latestTask.getCreatedAt(), LocalDateTime.now()));
+        session.setUpdatedAt(firstNonNull(latestTask.getUpdatedAt(), latestTask.getCreatedAt(), LocalDateTime.now()));
+        log.info("Created missing session metadata from task projection: sessionId={}, userId={}, taskId={}",
+                sessionId, userId, latestTask.getTaskId());
+        return session;
     }
 
     private void validateMilestoneOwnership(SessionEntity session, String userId, String milestoneId) {
@@ -315,6 +349,16 @@ public class SessionMetadataService {
 
     private String blankToNull(String value) {
         return value != null && !value.isBlank() ? value : null;
+    }
+
+    @SafeVarargs
+    private final <T> T firstNonNull(T... values) {
+        for (T value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private record ResolvedAuth(String authMode, String authToken, String baseUrl, String modelConfigId) {

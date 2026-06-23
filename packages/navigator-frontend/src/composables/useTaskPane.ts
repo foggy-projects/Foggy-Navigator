@@ -29,6 +29,8 @@ export interface TaskPaneState {
   loadMoreHistory(): Promise<void>
   /** Load all (or up to `limit`) messages, replacing current messages. Scrolls to top. */
   loadAllHistory(limit?: number): Promise<void>
+  /** Fetch all messages for export/copy without changing the visible pane history. */
+  getAllHistoryMessages(): Promise<ChatMessage[]>
   /** Resume in-place: keep messages, update task, reconnect SSE */
   resumeInPlace(newTask: ClaudeTask, images?: Array<{ name: string; url: string }>): void
   /** Resume in-place without adding user message (caller already added it) */
@@ -119,7 +121,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
    * @param msg       The DB message
    * @param nextMsg   The next message in sequence (for waiting-hint suppression)
    */
-  function convertAndPushDbMessage(msg: Message, nextMsg?: Message): number {
+  function convertAndPushDbMessage(msg: Message, nextMsg?: Message, targetState: ChatState = chatState): number {
     let counted = 0
     if (msg.role === 'USER' || msg.role === 'ASSISTANT') {
       counted = 1
@@ -129,7 +131,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     const ts = new Date(msg.createdAt).getTime()
 
     if (msg.role === 'USER') {
-      chatState.messages.value.push({
+      targetState.messages.value.push({
         id: msg.id,
         type: AipMessageType.TEXT_COMPLETE,
         sender: 'user',
@@ -143,7 +145,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         || nextType === 'TASK_COMPLETED' || nextMsg.role === 'USER')) {
         return counted
       }
-      chatState.messages.value.push({
+      targetState.messages.value.push({
         id: msg.id,
         type: AipMessageType.STATE_SYNC,
         sender: 'system',
@@ -152,7 +154,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         timestamp: ts,
       })
     } else if (msgType && msgType in AipMessageType) {
-      chatState.processAipMessage({
+      targetState.processAipMessage({
         messageId: msg.id,
         sessionId: msg.sessionId,
         timestamp: ts,
@@ -160,7 +162,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         payload: meta,
       })
     } else {
-      chatState.messages.value.push({
+      targetState.messages.value.push({
         id: msg.id,
         type: AipMessageType.TEXT_COMPLETE,
         sender: 'assistant',
@@ -443,6 +445,20 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     }
   }
 
+  async function getAllHistoryMessages(): Promise<ChatMessage[]> {
+    const sessionId = currentSessionId || task.value?.sessionId
+    if (!sessionId) return []
+
+    const allMessages = await sessionApi.getMessages(sessionId)
+    const exportState = createChatState()
+    for (let i = 0; i < allMessages.length; i++) {
+      const msg = allMessages[i]
+      if (!msg) continue
+      convertAndPushDbMessage(msg, allMessages[i + 1], exportState)
+    }
+    return [...exportState.sortedMessages.value]
+  }
+
   /** Resume in the same pane without clearing messages */
   function resumeInPlace(newTask: ClaudeTask, images?: Array<{ name: string; url: string }>) {
     task.value = newTask
@@ -513,6 +529,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     connect,
     loadMoreHistory,
     loadAllHistory,
+    getAllHistoryMessages,
     resumeInPlace,
     resumeInPlaceNoMessage,
     reconnectSse,
