@@ -4499,6 +4499,7 @@ function toggleProjectExpand(projectId: string) {
 }
 
 // Active tasks polling (fallback) + SSE-driven refresh
+const ACTIVE_TASKS_POLL_INTERVAL_MS = 120000
 let activeTasksInterval: ReturnType<typeof setInterval> | null = null
 
 function handleTaskUpdateEvent(event: Event) {
@@ -4573,7 +4574,7 @@ onMounted(async () => {
   if (sessionIds.length > 0) {
     await workerState.loadConversationConfigs(sessionIds)
   }
-  // Start polling active tasks every 30s (fallback for SSE disconnects)
+  // Start polling active tasks every 2 minutes (fallback for SSE disconnects)
   activeTasksInterval = setInterval(async () => {
     // 1. Sync task lists from backend
     await Promise.all([workerState.loadActiveTasks(), workerState.loadAwaitingReplyTasks()])
@@ -4590,7 +4591,7 @@ onMounted(async () => {
     if (unique.length > 0) {
       workerState.loadConversationConfigs(unique)
     }
-  }, 30000)
+  }, ACTIVE_TASKS_POLL_INTERVAL_MS)
 })
 
 onUnmounted(() => {
@@ -4641,7 +4642,7 @@ onActivated(() => {
     activeTasksInterval = setInterval(() => {
       workerState.loadActiveTasks()
       workerState.loadAwaitingReplyTasks()
-    }, 30000)
+    }, ACTIVE_TASKS_POLL_INTERVAL_MS)
   }
 })
 

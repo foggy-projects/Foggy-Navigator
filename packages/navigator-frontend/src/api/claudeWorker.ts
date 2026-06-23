@@ -526,7 +526,7 @@ export async function listActiveTasks(): Promise<ClaudeTask[]> {
 }
 
 export async function listAwaitingReplyTasks(): Promise<ClaudeTask[]> {
-  return await listTasksByStateUnified('AWAITING_REPLY') as unknown as ClaudeTask[]
+  return await listTasksByStateUnified('AWAITING_REPLY', 100, true) as unknown as ClaudeTask[]
 }
 
 // ===== Conversation Config API =====

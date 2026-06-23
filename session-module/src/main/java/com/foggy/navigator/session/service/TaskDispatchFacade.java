@@ -416,8 +416,15 @@ public class TaskDispatchFacade {
      * 分页查询任务列表（按会话聚合所有 Provider，再统一分页）
      */
     public Object listTasksPaged(String userId, int page, int size, String state) {
+        return listTasksPaged(userId, page, size, state, false);
+    }
+
+    /**
+     * 分页查询任务列表（按会话聚合所有 Provider，再统一分页）
+     */
+    public Object listTasksPaged(String userId, int page, int size, String state, boolean compact) {
         if (sessionTaskRepository != null) {
-            Object unified = listTasksPagedFromSessionStore(userId, null, page, size, state);
+            Object unified = listTasksPagedFromSessionStore(userId, null, page, size, state, compact);
             if (unified != null) {
                 return unified;
             }
@@ -431,7 +438,9 @@ public class TaskDispatchFacade {
             try {
                 Object pageResult = provider.listTasksPaged(userId, 0, fetchSize, state);
                 TaskPageEnvelope envelope = toTaskPageEnvelope(pageResult);
-                content.addAll(envelope.content());
+                content.addAll(compact
+                        ? envelope.content().stream().map(this::toCompactTaskItem).toList()
+                        : envelope.content());
                 totalSessions += envelope.totalSessions();
             } catch (UnsupportedOperationException ignored) {
             }
@@ -525,7 +534,7 @@ public class TaskDispatchFacade {
     public Object listTasksByDirectoryPaged(String userId, String directoryId,
                                              int page, int size, String state) {
         if (sessionTaskRepository != null) {
-            Object unified = listTasksPagedFromSessionStore(userId, directoryId, page, size, state);
+            Object unified = listTasksPagedFromSessionStore(userId, directoryId, page, size, state, false);
             if (unified != null) {
                 return unified;
             }
@@ -1034,7 +1043,8 @@ public class TaskDispatchFacade {
         return left.compareTo(right);
     }
 
-    private Object listTasksPagedFromSessionStore(String userId, String directoryId, int page, int size, String state) {
+    private Object listTasksPagedFromSessionStore(String userId, String directoryId, int page, int size, String state,
+                                                  boolean compact) {
         List<SessionTaskEntity> tasks = directoryId == null || directoryId.isBlank()
                 ? sessionTaskRepository.findByUserIdOrderByCreatedAtDesc(userId)
                 : sessionTaskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId);
@@ -1045,8 +1055,8 @@ public class TaskDispatchFacade {
         List<UnifiedSessionView> sessions = buildUnifiedSessionViews(tasks, userId, directoryId, state);
         int from = Math.min(page * size, sessions.size());
         int to = Math.min(from + size, sessions.size());
-        List<DispatchTaskDTO> content = sessions.subList(from, to).stream()
-                .map(this::toSessionSummaryDispatchTaskDTO)
+        List<?> content = sessions.subList(from, to).stream()
+                .map(view -> compact ? toCompactSessionSummaryItem(view) : toSessionSummaryDispatchTaskDTO(view))
                 .toList();
 
         return Map.of(
@@ -1208,6 +1218,90 @@ public class TaskDispatchFacade {
                 view.earliestTask().getPrompt()
         );
         return summary;
+    }
+
+    private Map<String, Object> toCompactSessionSummaryItem(UnifiedSessionView view) {
+        SessionTaskEntity latestTask = view.latestTask();
+        SessionTaskEntity earliestTask = view.earliestTask();
+        SessionEntity session = view.session();
+        Map<String, Object> state = parseJsonObject(latestTask.getTaskStateJson());
+
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("taskId", latestTask.getTaskId());
+        item.put("workerTaskId", latestTask.getProviderTaskId());
+        item.put("sessionId", firstNonBlank(latestTask.getSessionId(), view.sessionKey()));
+        item.put("parentSessionId", session != null ? session.getParentSessionId() : null);
+        item.put("workerId", firstNonBlank(latestTask.getWorkerId(), session != null ? session.getCurrentWorkerId() : null));
+        item.put("agentId", latestTask.getAgentId());
+        item.put("providerType", latestTask.getProviderType());
+        item.put("prompt", truncate(latestTask.getPrompt(), 500));
+        item.put("cwd", latestTask.getCwd());
+        item.put("directoryId", firstNonBlank(latestTask.getDirectoryId(), session != null ? session.getCurrentDirectoryId() : null));
+        item.put("status", latestTask.getStatus());
+        item.put("model", firstNonBlank(latestTask.getModel(), session != null ? session.getLatestModel() : null));
+        item.put("modelConfigId", latestTask.getModelConfigId());
+        item.put("costUsd", latestTask.getCostUsd());
+        item.put("inputTokens", latestTask.getInputTokens());
+        item.put("outputTokens", latestTask.getOutputTokens());
+        item.put("durationMs", latestTask.getDurationMs());
+        item.put("numTurns", latestTask.getNumTurns());
+        item.put("source", latestTask.getSource());
+        item.put("createdAt", latestTask.getCreatedAt());
+        item.put("updatedAt", latestTask.getUpdatedAt());
+        item.put("sessionTaskCount", view.tasks().size());
+        item.put("sessionTotalCostUsd", sumCost(view.tasks()));
+        item.put("sessionInputTokens", sumInputTokens(view.tasks()));
+        item.put("sessionOutputTokens", sumOutputTokens(view.tasks()));
+        item.put("sessionFirstPrompt", truncate(earliestTask.getPrompt(), 500));
+        item.put("claudeSessionId", asString(state.get("claudeSessionId")));
+        item.put("codexThreadId", asString(state.get("codexThreadId")));
+        item.put("geminiSessionId", asString(state.get("geminiSessionId")));
+        item.put("contextId", asString(state.get("contextId")));
+        item.put("fileCheckpointingEnabled", asBoolean(state.get("fileCheckpointingEnabled")));
+        item.put("interactionState", resolveInteractionState(view));
+        return item;
+    }
+
+    private Object toCompactTaskItem(Object task) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        putIfPresent(item, "taskId", readProperty(task, "taskId"));
+        putIfPresent(item, "workerTaskId", readProperty(task, "workerTaskId"));
+        putIfPresent(item, "sessionId", readProperty(task, "sessionId"));
+        putIfPresent(item, "parentSessionId", readProperty(task, "parentSessionId"));
+        putIfPresent(item, "workerId", readProperty(task, "workerId"));
+        putIfPresent(item, "agentId", readProperty(task, "agentId"));
+        putIfPresent(item, "providerType", readProperty(task, "providerType"));
+        putIfPresent(item, "prompt", truncate(readStringProperty(task, "prompt"), 500));
+        putIfPresent(item, "cwd", readProperty(task, "cwd"));
+        putIfPresent(item, "directoryId", readProperty(task, "directoryId"));
+        putIfPresent(item, "status", readProperty(task, "status"));
+        putIfPresent(item, "model", readProperty(task, "model"));
+        putIfPresent(item, "modelConfigId", readProperty(task, "modelConfigId"));
+        putIfPresent(item, "costUsd", readProperty(task, "costUsd"));
+        putIfPresent(item, "inputTokens", readProperty(task, "inputTokens"));
+        putIfPresent(item, "outputTokens", readProperty(task, "outputTokens"));
+        putIfPresent(item, "durationMs", readProperty(task, "durationMs"));
+        putIfPresent(item, "numTurns", readProperty(task, "numTurns"));
+        putIfPresent(item, "source", readProperty(task, "source"));
+        putIfPresent(item, "createdAt", readProperty(task, "createdAt"));
+        putIfPresent(item, "updatedAt", readProperty(task, "updatedAt"));
+        putIfPresent(item, "sessionTaskCount", readProperty(task, "sessionTaskCount"));
+        putIfPresent(item, "sessionTotalCostUsd", readProperty(task, "sessionTotalCostUsd"));
+        putIfPresent(item, "sessionInputTokens", readProperty(task, "sessionInputTokens"));
+        putIfPresent(item, "sessionOutputTokens", readProperty(task, "sessionOutputTokens"));
+        putIfPresent(item, "sessionFirstPrompt", truncate(readStringProperty(task, "sessionFirstPrompt"), 500));
+        putIfPresent(item, "claudeSessionId", readProperty(task, "claudeSessionId"));
+        putIfPresent(item, "codexThreadId", readProperty(task, "codexThreadId"));
+        putIfPresent(item, "geminiSessionId", readProperty(task, "geminiSessionId"));
+        putIfPresent(item, "contextId", readProperty(task, "contextId"));
+        putIfPresent(item, "fileCheckpointingEnabled", readProperty(task, "fileCheckpointingEnabled"));
+        return item;
+    }
+
+    private void putIfPresent(Map<String, Object> target, String key, Object value) {
+        if (value != null) {
+            target.put(key, value);
+        }
     }
 
     private Object toSessionSummaryItem(List<Object> sessionTasks) {

@@ -275,14 +275,15 @@ export async function listTasksPagedUnified(
   page: number,
   size: number,
   state?: string,
+  compact = false,
 ): Promise<TaskPageResult> {
-  const key = `tasks:${page}:${size}:${state || ''}`
+  const key = `tasks:${page}:${size}:${state || ''}:${compact ? 'compact' : 'full'}`
   const existing = taskPageRequests.get(key)
   if (existing) return existing
 
   const request = (async () => {
     const rx = (await client.get('/tasks/page', {
-      params: { page, size, ...(state ? { state } : {}) },
+      params: { page, size, ...(state ? { state } : {}), ...(compact ? { compact: true } : {}) },
     })) as unknown as RX<TaskPageResult>
     return rx.data
   })()
@@ -302,13 +303,14 @@ export async function listTasksPagedUnified(
 export async function listTasksByStateUnified(
   state: string,
   pageSize = 100,
+  compact = false,
 ): Promise<DispatchTask[]> {
   const tasks: DispatchTask[] = []
   let page = 0
   let totalSessions = 0
 
   do {
-    const result = await listTasksPagedUnified(page, pageSize, state)
+    const result = await listTasksPagedUnified(page, pageSize, state, compact)
     tasks.push(...(result.content as DispatchTask[]))
     totalSessions = result.totalSessions
     page += 1
