@@ -315,6 +315,8 @@ def test_llm_agent_prompts_delegated_workspace_file_contract(tmp_path):
     assert "Delegated workspace 文件契约" in system_prompt
     assert "只传文件名或该根目录下的相对路径" in system_prompt
     assert "不要因为上下文提到 private workspace" in system_prompt
+    assert "结构化 file tool" in system_prompt
+    assert "call:...:write_file" in system_prompt
     assert "不要把普通任务产物或 smoke marker 写到那里" in system_prompt
 
     write_schema = next(
@@ -2374,6 +2376,56 @@ def test_llm_agent_persistent_root_accepts_plain_assistant_final_answer():
     assert frame.result_summary == "你好，我可以帮你处理运输和工单相关问题。"
     assert frame.output["completion_mode"] == "assistant_message"
     assert markers == ["finalizing"]
+
+
+def test_llm_agent_persistent_root_rejects_textified_write_file_final_message(tmp_path):
+    data_root = tmp_path / "data"
+    workspace = tmp_path / "delegated-workspace"
+    workspace.mkdir()
+    runtime = _root_runtime()
+    task_id = "task_textified_write_file_001"
+    frame_id = runtime.invoke_skill(
+        task_id=task_id,
+        skill_id="system.root",
+        skill_input={"request": "write two sidecar files"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_write_first",
+            "name": "write_file",
+            "args": {
+                "relative_path": "reports/first.md",
+                "content": "first file\n",
+                "mode": "create",
+            },
+        }]),
+        AIMessage(content=(
+            "call:default_api:write_file{"
+            "relative_path: reports/second.md, content: second file, mode: create}"
+        )),
+    ])
+
+    events = LlmSkillAgent(model, runtime, data_root=data_root).run(
+        task_id=task_id,
+        frame_id=frame_id,
+        prompt="write reports/first.md and reports/second.md",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workspace),
+                "allowed_dirs": [str(workspace)],
+                "allowed_tools": ["write_file", "submit_frame_result"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert (workspace / "reports" / "first.md").read_text(encoding="utf-8") == "first file\n"
+    assert not (workspace / "reports" / "second.md").exists()
+    assert (frame.output or {}).get("completion_mode") != "assistant_message"
+    error_event = next(event for event in events if event.type == "error")
+    assert error_event.reason == "textified_tool_call"
+    assert "TEXTIFIED_TOOL_CALL" in error_event.error
 
 
 def test_llm_agent_child_plain_assistant_answer_completes_as_subagent_result():
