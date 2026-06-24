@@ -67,7 +67,6 @@ skills/<skill-name>/SKILL.md
 或直接安装到：
 
 - `.agents/skills/`
-- `~/.codex/skills/`
 
 ### 3.2 skill 发现路径不适合直接给 Codex
 
@@ -105,7 +104,7 @@ allowed-tools: Read, Grep, Glob, WebFetch, Bash
 
 例如内容里会提到：
 
-- `.claude/skills/`
+- `.agents/skills/`
 - Claude Code
 - `/plugin marketplace ...`
 - Claude Worker
@@ -302,7 +301,7 @@ company-skill-marketplace/
 
 对以下内容进行替换或审查：
 
-- `.claude/skills/`
+- `.agents/skills/`
 - Claude Code
 - `/plugin ...`
 - 仅适用于 Claude marketplace 的安装说明
@@ -396,4 +395,3 @@ skills/<name>/SKILL.md
 - 中长期再评估是否升级为“标准 skill 为源，平台包装为生成物”
 
 这条路线最稳，也最符合后续多平台兼容的方向。
-

@@ -167,7 +167,7 @@ class GitInfoResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class SkillInfo(BaseModel):
-    """A single agent-managed skill discovered from ``.agent/skills/``."""
+    """A single agent-managed skill discovered from ``.agents/skills/``."""
 
     name: str
     description: str = ""

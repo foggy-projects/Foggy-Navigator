@@ -4,6 +4,7 @@ The SdkWrapper.run_query() method depends on the Claude SDK at runtime.
 We test the testable components independently:
   - EventBroadcast: fan-out event distribution with ESN replay
   - SdkWrapper._build_env: environment variable construction
+  - SdkWrapper._build_skill_plugins: .agents local plugin discovery
   - SdkWrapper._apply_agents_config: agent teams config extraction
   - SdkWrapper._save_images / _augment_prompt_with_images: image handling
   - _extract_error_detail: structured error message building
@@ -458,6 +459,38 @@ class TestApplyAgentsConfig:
             SdkWrapper._apply_agents_config(extra_args, options)
         # agents should be back in extra_args
         assert "agents" in options.get("extra_args", {})
+
+
+# ===========================================================================
+# SdkWrapper._build_skill_plugins
+# ===========================================================================
+
+class TestBuildSkillPlugins:
+    """_build_skill_plugins discovers .agents roots with skills."""
+
+    def test_project_and_user_agents_dirs_are_loaded_as_plugins(self, tmp_path):
+        project_dir = tmp_path / "project"
+        user_agent_dir = tmp_path / "home" / ".agents"
+
+        (project_dir / ".agents" / "skills").mkdir(parents=True)
+        (user_agent_dir / "skills").mkdir(parents=True)
+
+        with patch("agent_worker.claude.sdk_wrapper.user_agent_dir", return_value=user_agent_dir):
+            plugins = SdkWrapper._build_skill_plugins(str(project_dir))
+
+        assert plugins == [
+            {"type": "local", "path": str(project_dir / ".agents")},
+            {"type": "local", "path": str(user_agent_dir)},
+        ]
+
+    def test_missing_skills_dirs_are_skipped(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        with patch("agent_worker.claude.sdk_wrapper.user_agent_dir", return_value=tmp_path / "home" / ".agents"):
+            plugins = SdkWrapper._build_skill_plugins(str(project_dir))
+
+        assert plugins == []
 
 
 # ===========================================================================

@@ -7,7 +7,7 @@ import processesRouter from './routes/processes.js'
 import queryRouter from './routes/query.js'
 import tasksRouter from './routes/tasks.js'
 import sessionsRouter from './routes/sessions.js'
-import { ensureUserAgentSkillsDir } from './startup/skills-link.js'
+import { ensureUserAgentsSkillsDir } from './startup/skills-link.js'
 
 const app = express()
 
@@ -31,7 +31,7 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 
 async function bootstrap(): Promise<void> {
   try {
-    const result = await ensureUserAgentSkillsDir()
+    const result = await ensureUserAgentsSkillsDir()
     if (result.status === 'created') {
       console.log(`Created user agent skills directory: ${result.skillsDir}`)
     } else if (result.status === 'skipped') {

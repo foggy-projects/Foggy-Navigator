@@ -15,7 +15,7 @@ class TestDeploySkills:
 
     async def test_deploys_single_skill(self, tmp_path):
         req = DeploySkillsRequest(skills={"test-skill": "# Test Skill\nContent here"})
-        skills_dir = tmp_path / ".agent" / "skills"
+        skills_dir = tmp_path / ".agents" / "skills"
         with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
             result = await deploy_skills(req)
 
@@ -29,7 +29,7 @@ class TestDeploySkills:
             "skill-a": "# Skill A",
             "skill-b": "# Skill B",
         })
-        skills_dir = tmp_path / ".agent" / "skills"
+        skills_dir = tmp_path / ".agents" / "skills"
         with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
             result = await deploy_skills(req)
 
@@ -37,7 +37,7 @@ class TestDeploySkills:
 
     async def test_overwrites_existing_skill(self, tmp_path):
         # Pre-create the skill
-        skills_dir = tmp_path / ".agent" / "skills"
+        skills_dir = tmp_path / ".agents" / "skills"
         skill_dir = skills_dir / "existing"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("old content")
@@ -51,7 +51,7 @@ class TestDeploySkills:
 
     async def test_empty_skills_returns_empty(self, tmp_path):
         req = DeploySkillsRequest(skills={})
-        skills_dir = tmp_path / ".agent" / "skills"
+        skills_dir = tmp_path / ".agents" / "skills"
         with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
             result = await deploy_skills(req)
 
@@ -65,7 +65,7 @@ class TestDeploySkills:
             "good-skill": "# Good",
             "bad-skill": "# Bad",
         })
-        skills_dir = tmp_path / ".agent" / "skills"
+        skills_dir = tmp_path / ".agents" / "skills"
 
         original_write_text = Path.write_text
 
@@ -91,7 +91,7 @@ class TestDeploySkills:
             to_thread_calls.append((func, args, kwargs))
             return func(*args, **kwargs)
 
-        skills_dir = tmp_path / ".agent" / "skills"
+        skills_dir = tmp_path / ".agents" / "skills"
         with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
             with patch("agent_worker.routes.platform_skills.asyncio.to_thread", side_effect=fake_to_thread):
                 result = await deploy_skills(req)

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from ..config import settings
+from ..skill_paths import project_agent_dir, user_agent_dir
 from . import event_mapper
 
 logger = logging.getLogger(__name__)
@@ -657,6 +658,15 @@ class SdkWrapper:
         if extra_args:
             options_kwargs["extra_args"] = extra_args
 
+    @staticmethod
+    def _build_skill_plugins(cwd: str) -> list[dict[str, str]]:
+        """Build local Claude plugin configs for agent-managed skills."""
+        plugins: list[dict[str, str]] = []
+        for root in (project_agent_dir(cwd), user_agent_dir()):
+            if (root / "skills").is_dir():
+                plugins.append({"type": "local", "path": str(root)})
+        return plugins
+
     # -- File / image attachments ----------------------------------------------
 
     @staticmethod
@@ -838,6 +848,9 @@ class SdkWrapper:
                 # interactive sessions (matches reference implementation).
                 base_env["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = "300000"
                 options_kwargs["env"] = base_env
+                skill_plugins = self._build_skill_plugins(cwd)
+                if skill_plugins:
+                    options_kwargs["plugins"] = skill_plugins
                 self._apply_agents_config(extra_args, options_kwargs)
                 if disallowed_tools:
                     options_kwargs["disallowed_tools"] = disallowed_tools

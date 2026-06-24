@@ -290,7 +290,7 @@ SSE 事件类型：
 
 ### GET /api/v1/skills
 
-列出指定目录下的 Claude Code Skills（`.claude/skills/`）。
+列出指定目录下由 Foggy 统一管理的 Skills（`.agents/skills/`）。
 
 ### POST /api/v1/worktrees
 

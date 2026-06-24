@@ -12,8 +12,8 @@ from agent_worker.routes.skills import list_skills
 @pytest.mark.asyncio
 async def test_list_skills_scans_agent_project_and_user_dirs(tmp_path):
     project_dir = tmp_path / "project"
-    project_skill = project_dir / ".agent" / "skills" / "project-skill"
-    user_skills_dir = tmp_path / "home" / ".agent" / "skills"
+    project_skill = project_dir / ".agents" / "skills" / "project-skill"
+    user_skills_dir = tmp_path / "home" / ".agents" / "skills"
     user_skill = user_skills_dir / "user-skill"
 
     project_skill.mkdir(parents=True)

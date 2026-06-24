@@ -257,7 +257,7 @@ public class OpenApiController {
     /**
      * 更新目录中的文件（覆盖写入）
      * <p>
-     * 支持更新 CLAUDE.md、.agent/skills/ 等文件。
+     * 支持更新 CLAUDE.md、.agents/skills/ 等文件。
      * 文件路径为相对于工作目录的相对路径。
      */
     @PutMapping("/directories/{directoryId}/files")
