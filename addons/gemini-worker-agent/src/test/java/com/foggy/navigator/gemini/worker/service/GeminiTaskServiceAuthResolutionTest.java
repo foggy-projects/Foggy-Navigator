@@ -5,7 +5,6 @@ import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
-import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.model.GeminiConfig;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.gemini.worker.model.entity.GeminiTaskEntity;
@@ -30,6 +29,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class GeminiTaskServiceAuthResolutionTest {
@@ -164,23 +164,20 @@ class GeminiTaskServiceAuthResolutionTest {
     }
 
     @Test
-    void deleteTaskSoftDeletesSessionAndRemovesGeminiTask() {
+    void deleteTaskRemovesGeminiTaskWithoutDeletingSession() {
         GeminiTaskEntity task = new GeminiTaskEntity();
         task.setTaskId("task-1");
         task.setUserId("user-1");
         task.setSessionId("session-1");
         task.setStatus("COMPLETED");
-        SessionEntity session = new SessionEntity();
-        session.setId("session-1");
 
         when(taskRepository.findByTaskIdAndUserId("task-1", "user-1")).thenReturn(Optional.of(task));
-        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
 
         taskService.deleteTask("user-1", "task-1");
 
-        verify(sessionEntityRepository).save(argThat(saved -> saved.getDeletedAt() != null));
         verify(taskRepository).delete(task);
-        verify(sessionManager).deleteSession("session-1");
+        verifyNoInteractions(sessionManager);
+        verify(sessionEntityRepository, never()).save(any());
     }
 
     @Test

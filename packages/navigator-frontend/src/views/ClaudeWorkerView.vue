@@ -5843,24 +5843,18 @@ async function handleBatchDelete() {
     const convs = activeConversations.value.filter((c) => selectedConvIds.value.has(c.sessionId))
     let deleted = 0
     for (const conv of convs) {
-      for (const task of conv.tasks) {
-        if (task.status !== 'RUNNING') {
-          await workerState.deleteTask(task.taskId)
-          deleted++
-        }
-      }
-      // Clean up draft for this conversation
-      taskMemory.deleteDraft('pane-' + conv.sessionId)
+      await deleteConversationBySessionId(conv.sessionId, { refresh: false })
+      deleted++
     }
-    ElMessage.success(`已删除 ${deleted} 个任务`)
+    ElMessage.success(`已删除 ${deleted} 个会话`)
     exitBatchSelectMode()
-    reloadWorkerTasks()
+    await reloadWorkerTasks()
     if (selectedDirectoryId.value) {
-      loadDirectoryTasks()
+      await loadDirectoryTasks()
     }
   } catch (e) {
     if (e !== 'cancel') {
-      ElMessage.error('删除失败')
+      ElMessage.error(e instanceof Error ? e.message : '删除失败')
     }
   }
 }
@@ -6442,6 +6436,14 @@ function closePane(paneId: string) {
   if (idx >= 0) {
     ws.panes.value[idx]!.dispose()
     ws.panes.value = ws.panes.value.filter((_, i) => i !== idx)
+  }
+}
+
+function closePanesForSession(sessionId: string) {
+  for (const pane of [...panes.value]) {
+    if (pane.task.value?.sessionId === sessionId) {
+      closePane(pane.paneId)
+    }
   }
 }
 
@@ -7146,6 +7148,21 @@ async function executeContextRepair() {
 
 // ─── Delete Conversation ──────────────────────────────────────────
 
+async function deleteConversationBySessionId(
+  sessionId: string,
+  options: { refresh?: boolean } = {},
+) {
+  await workerState.deleteConversation(sessionId)
+  taskMemory.deleteDraft('pane-' + sessionId)
+  closePanesForSession(sessionId)
+  if (options.refresh !== false) {
+    await reloadWorkerTasks()
+    if (selectedDirectoryId.value) {
+      await loadDirectoryTasks()
+    }
+  }
+}
+
 async function handleDeleteConversation(conv: ConversationGroup) {
   try {
     await ElMessageBox.confirm(
@@ -7153,22 +7170,11 @@ async function handleDeleteConversation(conv: ConversationGroup) {
       '提示',
       { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
     )
-    // Delete all non-running tasks in the conversation
-    for (const task of conv.tasks) {
-      if (task.status !== 'RUNNING') {
-        await workerState.deleteTask(task.taskId)
-      }
-    }
-    // Clean up draft for this conversation (session)
-    taskMemory.deleteDraft('pane-' + conv.sessionId)
+    await deleteConversationBySessionId(conv.sessionId)
     ElMessage.success('会话已删除')
-    reloadWorkerTasks()
-    if (selectedDirectoryId.value) {
-      loadDirectoryTasks()
-    }
   } catch (e) {
     if (e !== 'cancel') {
-      ElMessage.error('删除失败')
+      ElMessage.error(e instanceof Error ? e.message : '删除失败')
     }
   }
 }
@@ -7219,8 +7225,20 @@ async function handlePaneDelete(sessionId?: string) {
   if (!sessionId) return
   const conv = [...activeSessionConvs.value, ...activeConversations.value]
     .find(c => c.sessionId === sessionId)
-  if (conv) {
-    await handleDeleteConversation(conv)
+  try {
+    await ElMessageBox.confirm(
+      conv
+        ? `确认删除该会话？包含 ${conv.taskCount} 个任务，此操作不可恢复。`
+        : '确认删除该会话？此操作不可恢复。',
+      '提示',
+      { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
+    )
+    await deleteConversationBySessionId(sessionId)
+    ElMessage.success('会话已删除')
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e instanceof Error ? e.message : '删除失败')
+    }
   }
 }
 

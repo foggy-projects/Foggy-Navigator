@@ -1114,30 +1114,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
         }
 
-        // Soft-delete the associated SessionEntity (sets deletedAt) to prevent syncLocalSessions re-import
-        String sessionId = entity.getSessionId();
-        if (sessionId != null && sessionEntityRepository != null) {
-            try {
-                sessionEntityRepository.findById(sessionId).ifPresent(session -> {
-                    session.setDeletedAt(LocalDateTime.now());
-                    sessionEntityRepository.save(session);
-                    log.info("Session soft-deleted: sessionId={}", sessionId);
-                });
-            } catch (Exception e) {
-                log.warn("Failed to soft-delete session: sessionId={}", sessionId, e);
-            }
-        }
-
-        // Also hard-delete from SessionManager (messages, etc.)
         taskRepository.delete(entity);
-        if (sessionId != null) {
-            try {
-                sessionManager.deleteSession(sessionId);
-                log.info("Associated session deleted from SessionManager: sessionId={}", sessionId);
-            } catch (Exception e) {
-                log.warn("Failed to delete associated session from SessionManager: sessionId={}", sessionId, e);
-            }
-        }
         log.info("Task deleted: taskId={}, userId={}", taskId, userId);
     }
 

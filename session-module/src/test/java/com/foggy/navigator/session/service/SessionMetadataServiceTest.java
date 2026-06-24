@@ -173,6 +173,83 @@ class SessionMetadataServiceTest {
     }
 
     @Test
+    void deleteConversation_softDeletesExistingSessionWithoutRemovingTaskProjection() {
+        SessionEntity session = session("session-1");
+        SessionTaskEntity task = taskProjection("session-1", "task-1", "COMPLETED");
+        when(sessionTaskRepository.findBySessionIdAndUserIdOrderByCreatedAtDesc("session-1", "user-1"))
+                .thenReturn(List.of(task));
+        when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
+        when(sessionRepository.save(session)).thenReturn(session);
+
+        boolean deleted = service.deleteConversation("session-1", "user-1");
+
+        assertTrue(deleted);
+        assertEquals("DELETED", session.getStatus());
+        assertEquals("DELETED", session.getInteractionState());
+        assertNotNull(session.getDeletedAt());
+        verify(sessionRepository).save(session);
+    }
+
+    @Test
+    void deleteConversation_createsDeletedTombstoneFromOwnedTaskProjectionWhenSessionMissing() {
+        SessionTaskEntity task = taskProjection("legacy-session-1", "task-1", "COMPLETED");
+        when(sessionTaskRepository.findBySessionIdAndUserIdOrderByCreatedAtDesc("legacy-session-1", "user-1"))
+                .thenReturn(List.of(task));
+        when(sessionRepository.findByIdAndUserId("legacy-session-1", "user-1")).thenReturn(Optional.empty());
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        boolean deleted = service.deleteConversation("legacy-session-1", "user-1");
+
+        assertTrue(deleted);
+        verify(sessionRepository).save(argThat(session ->
+                "legacy-session-1".equals(session.getId())
+                        && "user-1".equals(session.getUserId())
+                        && "task-1".equals(session.getLatestTaskId())
+                        && "DELETED".equals(session.getStatus())
+                        && "DELETED".equals(session.getInteractionState())
+                        && session.getDeletedAt() != null));
+    }
+
+    @Test
+    void deleteConversation_rejectsActiveTask() {
+        SessionTaskEntity task = taskProjection("session-1", "task-1", "RUNNING");
+        when(sessionTaskRepository.findBySessionIdAndUserIdOrderByCreatedAtDesc("session-1", "user-1"))
+                .thenReturn(List.of(task));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.deleteConversation("session-1", "user-1"));
+
+        assertEquals("Cannot delete a session with active tasks. Please abort it first.", error.getMessage());
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void deleteConversation_missingSessionAndTaskProjectionIsIdempotent() {
+        when(sessionTaskRepository.findBySessionIdAndUserIdOrderByCreatedAtDesc("missing-session", "user-1"))
+                .thenReturn(List.of());
+        when(sessionRepository.findByIdAndUserId("missing-session", "user-1")).thenReturn(Optional.empty());
+
+        boolean deleted = service.deleteConversation("missing-session", "user-1");
+
+        assertFalse(deleted);
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void archiveConversation_rejectsAlreadyDeletedSessionWithoutRecreatingFromTaskProjection() {
+        SessionEntity session = session("session-1");
+        session.setDeletedAt(LocalDateTime.of(2026, 3, 24, 11, 0));
+        when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.archiveConversation("session-1", "user-1"));
+
+        assertEquals("Session already deleted: session-1", error.getMessage());
+        verify(sessionTaskRepository, never()).findFirstBySessionIdAndUserIdOrderByCreatedAtDesc(anyString(), anyString());
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
     void batchBindAuth_resolvesModelConfigUsingSessionWorker() {
         SessionEntity session = session("session-1");
         session.setCurrentWorkerId("worker-1");
@@ -271,5 +348,22 @@ class SessionMetadataServiceTest {
         session.setCreatedAt(LocalDateTime.of(2026, 3, 24, 9, 0));
         session.setUpdatedAt(LocalDateTime.of(2026, 3, 24, 9, 0));
         return session;
+    }
+
+    private SessionTaskEntity taskProjection(String sessionId, String taskId, String status) {
+        SessionTaskEntity task = new SessionTaskEntity();
+        task.setSessionId(sessionId);
+        task.setTaskId(taskId);
+        task.setUserId("user-1");
+        task.setTenantId("tenant-1");
+        task.setProviderType("codex-worker");
+        task.setAgentId("agent-1");
+        task.setWorkerId("worker-1");
+        task.setDirectoryId("dir-1");
+        task.setModel("gpt-5");
+        task.setStatus(status);
+        task.setCreatedAt(LocalDateTime.of(2026, 3, 24, 9, 0));
+        task.setUpdatedAt(LocalDateTime.of(2026, 3, 24, 10, 0));
+        return task;
     }
 }

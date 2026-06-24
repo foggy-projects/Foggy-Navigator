@@ -127,6 +127,17 @@ class JpaSessionManagerTest {
     }
 
     @Test
+    void getSession_shouldReturnNullForSoftDeletedSession() {
+        String sessionId = sessionManager.createSession(createTestRequest());
+        var entity = sessionRepository.findById(sessionId).orElseThrow();
+        entity.setDeletedAt(LocalDateTime.of(2026, 3, 24, 12, 0));
+        entity.setStatus("DELETED");
+        sessionRepository.save(entity);
+
+        assertNull(sessionManager.getSession(sessionId));
+    }
+
+    @Test
     void updateStatus_shouldChangeSessionStatus() {
         String sessionId = sessionManager.createSession(createTestRequest());
 

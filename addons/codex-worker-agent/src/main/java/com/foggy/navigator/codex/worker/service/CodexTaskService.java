@@ -685,27 +685,7 @@ public class CodexTaskService implements TaskQueryProvider {
             throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
         }
 
-        // Soft-delete session
-        String sessionId = entity.getSessionId();
-        if (sessionId != null && sessionEntityRepository != null) {
-            try {
-                sessionEntityRepository.findById(sessionId).ifPresent(session -> {
-                    session.setDeletedAt(java.time.LocalDateTime.now());
-                    sessionEntityRepository.save(session);
-                });
-            } catch (Exception e) {
-                log.warn("Failed to soft-delete session: sessionId={}", sessionId, e);
-            }
-        }
-
         taskRepository.delete(entity);
-        if (sessionId != null && sessionManager != null) {
-            try {
-                sessionManager.deleteSession(sessionId);
-            } catch (Exception e) {
-                log.warn("Failed to delete session from SessionManager: sessionId={}", sessionId, e);
-            }
-        }
         log.info("Codex task deleted: taskId={}, userId={}", taskId, userId);
     }
 

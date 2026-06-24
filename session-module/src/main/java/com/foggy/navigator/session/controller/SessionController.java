@@ -10,6 +10,7 @@ import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.session.dto.UnifiedSessionDTO;
 import com.foggy.navigator.session.repository.SessionRepository;
+import com.foggy.navigator.session.service.SessionMetadataService;
 import com.foggyframework.core.ex.RX;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -32,12 +33,15 @@ public class SessionController {
     private final SessionManager sessionManager;
     private final AgentInvoker agentInvoker;
     private final SessionRepository sessionRepository;
+    private final SessionMetadataService sessionMetadataService;
 
     public SessionController(SessionManager sessionManager, AgentInvoker agentInvoker,
-                             SessionRepository sessionRepository) {
+                             SessionRepository sessionRepository,
+                             SessionMetadataService sessionMetadataService) {
         this.sessionManager = sessionManager;
         this.agentInvoker = agentInvoker;
         this.sessionRepository = sessionRepository;
+        this.sessionMetadataService = sessionMetadataService;
     }
 
     /**
@@ -119,8 +123,11 @@ public class SessionController {
     @DeleteMapping("/{id}")
     public RX<Void> deleteSession(@PathVariable String id) {
         log.info("Delete session: id={}", id);
-
-        sessionManager.deleteSession(id);
+        try {
+            sessionMetadataService.deleteConversation(id, UserContext.getCurrentUserId());
+        } catch (IllegalStateException e) {
+            return RX.failB(e.getMessage());
+        }
         return RX.ok();
     }
 

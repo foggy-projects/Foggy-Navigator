@@ -24,6 +24,8 @@ public interface SessionTaskRepository extends JpaRepository<SessionTaskEntity, 
 
     List<SessionTaskEntity> findBySessionIdOrderByCreatedAtDesc(String sessionId);
 
+    List<SessionTaskEntity> findBySessionIdAndUserIdOrderByCreatedAtDesc(String sessionId, String userId);
+
     Optional<SessionTaskEntity> findFirstBySessionIdAndUserIdOrderByCreatedAtDesc(String sessionId, String userId);
 
     List<SessionTaskEntity> findByUserIdOrderByCreatedAtDesc(String userId);

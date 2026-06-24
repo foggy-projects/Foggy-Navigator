@@ -75,6 +75,8 @@ public class JpaSessionManager implements SessionManager {
     @Transactional(readOnly = true)
     public Session getSession(String sessionId) {
         return sessionRepository.findById(sessionId)
+                .filter(entity -> entity.getDeletedAt() == null)
+                .filter(entity -> !"DELETED".equals(entity.getStatus()))
                 .map(this::toSession)
                 .orElse(null);
     }
