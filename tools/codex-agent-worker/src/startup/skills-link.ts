@@ -2,19 +2,19 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-export type EnsureAgentSkillsDirResult =
+export type EnsureAgentsSkillsDirResult =
   | { status: 'created'; skillsDir: string }
   | { status: 'exists'; skillsDir: string }
   | { status: 'skipped'; skillsDir: string; reason: string }
 
-export function agentSkillsDir(baseDir: string): string {
-  return path.join(baseDir, '.agent', 'skills')
+export function agentsSkillsDir(baseDir: string): string {
+  return path.join(baseDir, '.agents', 'skills')
 }
 
-export async function ensureUserAgentSkillsDir(
+export async function ensureUserAgentsSkillsDir(
   homeDir: string = os.homedir()
-): Promise<EnsureAgentSkillsDirResult> {
-  const skillsDir = agentSkillsDir(homeDir)
+): Promise<EnsureAgentsSkillsDirResult> {
+  const skillsDir = agentsSkillsDir(homeDir)
 
   try {
     const stat = await fs.stat(skillsDir)

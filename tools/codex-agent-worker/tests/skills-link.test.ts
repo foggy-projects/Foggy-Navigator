@@ -3,44 +3,44 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { agentSkillsDir, ensureUserAgentSkillsDir } from '../src/startup/skills-link.ts'
+import { agentsSkillsDir, ensureUserAgentsSkillsDir } from '../src/startup/skills-link.ts'
 
-test('agentSkillsDir resolves to .agent/skills', async () => {
+test('agentsSkillsDir resolves to .agents/skills', async () => {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-skills-home-'))
 
-  assert.equal(agentSkillsDir(homeDir), path.join(homeDir, '.agent', 'skills'))
+  assert.equal(agentsSkillsDir(homeDir), path.join(homeDir, '.agents', 'skills'))
 })
 
-test('ensureUserAgentSkillsDir creates .agent/skills directory', async () => {
+test('ensureUserAgentsSkillsDir creates .agents/skills directory', async () => {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-skills-home-'))
 
-  const result = await ensureUserAgentSkillsDir(homeDir)
+  const result = await ensureUserAgentsSkillsDir(homeDir)
 
   assert.equal(result.status, 'created')
-  assert.equal(result.skillsDir, path.join(homeDir, '.agent', 'skills'))
+  assert.equal(result.skillsDir, path.join(homeDir, '.agents', 'skills'))
 
-  const sourceStat = await fs.stat(path.join(homeDir, '.agent', 'skills'))
+  const sourceStat = await fs.stat(path.join(homeDir, '.agents', 'skills'))
   assert.equal(sourceStat.isDirectory(), true)
 })
 
-test('ensureUserAgentSkillsDir returns exists for existing .agent/skills directory', async () => {
+test('ensureUserAgentsSkillsDir returns exists for existing .agents/skills directory', async () => {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-skills-home-'))
-  const existingDir = path.join(homeDir, '.agent', 'skills')
+  const existingDir = path.join(homeDir, '.agents', 'skills')
   await fs.mkdir(existingDir, { recursive: true })
 
-  const result = await ensureUserAgentSkillsDir(homeDir)
+  const result = await ensureUserAgentsSkillsDir(homeDir)
 
   assert.equal(result.status, 'exists')
   assert.equal(result.skillsDir, existingDir)
 })
 
-test('ensureUserAgentSkillsDir skips when .agent/skills already exists as a file', async () => {
+test('ensureUserAgentsSkillsDir skips when .agents/skills already exists as a file', async () => {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-skills-home-'))
-  const existingPath = path.join(homeDir, '.agent', 'skills')
+  const existingPath = path.join(homeDir, '.agents', 'skills')
   await fs.mkdir(path.dirname(existingPath), { recursive: true })
   await fs.writeFile(existingPath, 'not a directory')
 
-  const result = await ensureUserAgentSkillsDir(homeDir)
+  const result = await ensureUserAgentsSkillsDir(homeDir)
 
   assert.equal(result.status, 'skipped')
   assert.equal(result.skillsDir, existingPath)

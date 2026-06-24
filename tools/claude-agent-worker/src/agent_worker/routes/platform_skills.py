@@ -1,4 +1,4 @@
-"""Platform skills deployment endpoint — receives skill content from Navigator and writes to ~/.agent/skills/."""
+"""Platform skills deployment endpoint — receives skill content from Navigator and writes to ~/.agents/skills/."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def _write_skill_file(skills_dir: Path, name: str, content: str) -> None:
 
 @router.post("/platform-skills/deploy")
 async def deploy_skills(request: DeploySkillsRequest):
-    """Receive skill content pushed from Navigator and write to ~/.agent/skills/<name>/SKILL.md."""
+    """Receive skill content pushed from Navigator and write to ~/.agents/skills/<name>/SKILL.md."""
     deployed = []
     skills_dir = user_skills_dir()
 

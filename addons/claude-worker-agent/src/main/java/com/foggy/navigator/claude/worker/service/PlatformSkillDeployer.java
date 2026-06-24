@@ -15,7 +15,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 /**
- * 启动时将 classpath 中的平台技能部署到 ~/.agent/skills/，
+ * 启动时将 classpath 中的平台技能部署到 ~/.agents/skills/，
  * 确保 Claude Code 原生 skill 机制可靠加载。
  * <p>
  * 模板中的 {@code {{NAVIGATOR_API_BASE}}} 占位符会被替换为实际的后端地址。
@@ -31,7 +31,7 @@ public class PlatformSkillDeployer {
 
     @PostConstruct
     public void deploy() {
-        Path agentSkillsDir = Path.of(System.getProperty("user.home"), ".agent", "skills");
+        Path agentSkillsDir = Path.of(System.getProperty("user.home"), ".agents", "skills");
         PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
 
         Map<String, String> vars = Map.of(

@@ -1,4 +1,4 @@
-"""Deploy platform skills to ~/.agent/skills/ on Worker startup.
+"""Deploy platform skills to ~/.agents/skills/ on Worker startup.
 
 Templates may contain ``{{NAVIGATOR_API_BASE}}`` which is replaced with the
 actual Navigator backend URL at deploy time.
@@ -32,7 +32,7 @@ _TEMPLATE_VARS = {
 
 
 def deploy_platform_skills() -> None:
-    """Read bundled skill templates, substitute placeholders, and write to ~/.agent/skills/<name>/SKILL.md."""
+    """Read bundled skill templates, substitute placeholders, and write to ~/.agents/skills/<name>/SKILL.md."""
     skills_dir = user_skills_dir()
 
     for skill_name, template_file in _SKILL_TEMPLATES.items():
