@@ -493,6 +493,10 @@ export async function deleteTask(taskId: string): Promise<{ taskId: string; dele
   return { taskId, deleted: true }
 }
 
+export async function deleteConversation(sessionId: string): Promise<void> {
+  await client.delete(`/sessions/${sessionId}`)
+}
+
 export async function listWorkerSessions(
   workerId: string,
 ): Promise<WorkerSession[]> {

@@ -315,6 +315,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     vi.mocked(claudeWorkerApi.getWorkerSessionMessagesPaged).mockResolvedValue([])
     vi.mocked(claudeWorkerApi.listAwaitingReplyTasks).mockResolvedValue([])
     vi.mocked(claudeWorkerApi.listConversationConfigs).mockResolvedValue([])
+    vi.mocked(claudeWorkerApi.deleteConversation).mockResolvedValue(undefined)
 
     // Re-setup unified / platform / codingAgent mocks (clearAllMocks resets factory defaults)
     vi.mocked(langgraphWorkerApi.listWorkers).mockResolvedValue([])
@@ -599,6 +600,46 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
 
       expect(vm.directoryTasks[0].status).toBe('COMPLETED')
       expect(vm.conversationInteractionState(vm.activeConversations[0])).toBe('AWAITING_REPLY')
+    })
+  })
+
+  describe('Issue 4: Conversation delete must use session API', () => {
+    it('deletes a conversation by session id instead of deleting its tasks', async () => {
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      await vm.handleDeleteConversation({
+        sessionId: 'session-1',
+        latestTask: mockCompletedTask,
+        tasks: [
+          mockCompletedTask,
+          { ...mockCompletedTask, taskId: 'task-2' },
+        ],
+        taskCount: 2,
+        totalCost: 0,
+        firstPrompt: mockCompletedTask.prompt,
+      })
+      await flushPromises()
+
+      expect(claudeWorkerApi.deleteConversation).toHaveBeenCalledWith('session-1')
+      expect(unifiedTaskApi.deleteTaskUnified).not.toHaveBeenCalled()
+    })
+
+    it('deletes a pane-only session even when it is absent from the conversation list', async () => {
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      await vm.handlePaneDelete('session-pane-only')
+      await flushPromises()
+
+      expect(claudeWorkerApi.deleteConversation).toHaveBeenCalledWith('session-pane-only')
+      expect(unifiedTaskApi.deleteTaskUnified).not.toHaveBeenCalled()
     })
   })
 

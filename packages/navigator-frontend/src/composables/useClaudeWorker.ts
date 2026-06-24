@@ -56,6 +56,12 @@ function patchConversationConfig(sessionId: string, patch: Partial<ConversationC
   conversationConfigs.value = next
 }
 
+function removeConversationConfig(sessionId: string) {
+  const next = new Map(conversationConfigs.value)
+  next.delete(sessionId)
+  conversationConfigs.value = next
+}
+
 export function useClaudeWorker() {
   const onlineWorkers = computed(() => workers.value.filter((w) => w.status === 'ONLINE'))
 
@@ -233,6 +239,14 @@ export function useClaudeWorker() {
     tasks.value = tasks.value.filter((t) => t.taskId !== taskId)
   }
 
+  async function deleteConversation(sessionId: string) {
+    await api.deleteConversation(sessionId)
+    tasks.value = tasks.value.filter((t) => t.sessionId !== sessionId)
+    activeTasks.value = activeTasks.value.filter((t) => t.sessionId !== sessionId)
+    awaitingReplyTasks.value = awaitingReplyTasks.value.filter((t) => t.sessionId !== sessionId)
+    removeConversationConfig(sessionId)
+  }
+
   // ===== Directory methods =====
 
   async function loadDirectories(workerId: string) {
@@ -401,6 +415,7 @@ export function useClaudeWorker() {
     respondToPermission,
     abortTask,
     deleteTask,
+    deleteConversation,
     loadDirectories,
     createDirectory,
     deleteDirectory,

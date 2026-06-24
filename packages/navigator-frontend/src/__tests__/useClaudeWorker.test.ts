@@ -8,6 +8,7 @@ vi.mock('@/api/claudeWorker', () => ({
   registerWorker: vi.fn(),
   updateWorker: vi.fn(),
   deleteWorker: vi.fn(),
+  deleteConversation: vi.fn(),
   triggerHealthCheck: vi.fn(),
   createTask: vi.fn(),
   resumeTask: vi.fn(),
@@ -91,7 +92,18 @@ describe('useClaudeWorker', () => {
     vi.clearAllMocks()
     mockLanggraphApi.listWorkers.mockResolvedValue([])
     // Reset the module-level state by directly mutating refs
-    const { workers, tasks, directories, loading, taskPage, taskSize, taskTotal } =
+    const {
+      workers,
+      tasks,
+      directories,
+      loading,
+      taskPage,
+      taskSize,
+      taskTotal,
+      activeTasks,
+      awaitingReplyTasks,
+      conversationConfigs,
+    } =
       useClaudeWorker()
     workers.value = []
     tasks.value = []
@@ -100,6 +112,9 @@ describe('useClaudeWorker', () => {
     taskPage.value = 0
     taskSize.value = DEFAULT_TASK_PAGE_SIZE
     taskTotal.value = 0
+    activeTasks.value = []
+    awaitingReplyTasks.value = []
+    conversationConfigs.value = new Map()
   })
 
   // ========== loadWorkers ==========
@@ -304,6 +319,49 @@ describe('useClaudeWorker', () => {
       await abortTask('t-1')
 
       expect(tasks.value[0]!.status).toBe('ABORTED')
+    })
+  })
+
+  // ========== deleteConversation ==========
+
+  describe('deleteConversation', () => {
+    it('deletes by session id and clears local session state', async () => {
+      mockApi.deleteConversation.mockResolvedValue(undefined)
+
+      const {
+        deleteConversation,
+        tasks,
+        activeTasks,
+        awaitingReplyTasks,
+        conversationConfigs,
+      } = useClaudeWorker()
+      tasks.value = [
+        makeTask({ taskId: 't-1', sessionId: 'session-1' }),
+        makeTask({ taskId: 't-2', sessionId: 'session-1' }),
+        makeTask({ taskId: 't-3', sessionId: 'session-2' }),
+      ]
+      activeTasks.value = [
+        makeTask({ taskId: 'active-1', sessionId: 'session-1' }),
+        makeTask({ taskId: 'active-2', sessionId: 'session-2' }),
+      ]
+      awaitingReplyTasks.value = [
+        makeTask({ taskId: 'awaiting-1', sessionId: 'session-1' }),
+        makeTask({ taskId: 'awaiting-2', sessionId: 'session-2' }),
+      ]
+      conversationConfigs.value = new Map([
+        ['session-1', { sessionId: 'session-1', pinned: true, authBound: false } as any],
+        ['session-2', { sessionId: 'session-2', pinned: false, authBound: false } as any],
+      ])
+
+      await deleteConversation('session-1')
+
+      expect(mockApi.deleteConversation).toHaveBeenCalledWith('session-1')
+      expect(mockUnifiedTaskApi.deleteTaskUnified).not.toHaveBeenCalled()
+      expect(tasks.value.map(t => t.taskId)).toEqual(['t-3'])
+      expect(activeTasks.value.map(t => t.taskId)).toEqual(['active-2'])
+      expect(awaitingReplyTasks.value.map(t => t.taskId)).toEqual(['awaiting-2'])
+      expect(conversationConfigs.value.has('session-1')).toBe(false)
+      expect(conversationConfigs.value.has('session-2')).toBe(true)
     })
   })
 

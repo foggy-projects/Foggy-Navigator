@@ -406,26 +406,7 @@ public class GeminiTaskService implements TaskQueryProvider {
             throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
         }
 
-        String sessionId = entity.getSessionId();
-        if (sessionId != null && sessionEntityRepository != null) {
-            try {
-                sessionEntityRepository.findById(sessionId).ifPresent(session -> {
-                    session.setDeletedAt(LocalDateTime.now());
-                    sessionEntityRepository.save(session);
-                });
-            } catch (Exception e) {
-                log.warn("Failed to soft-delete Gemini session: sessionId={}", sessionId, e);
-            }
-        }
-
         taskRepository.delete(entity);
-        if (sessionId != null && sessionManager != null) {
-            try {
-                sessionManager.deleteSession(sessionId);
-            } catch (Exception e) {
-                log.warn("Failed to delete Gemini session from SessionManager: sessionId={}", sessionId, e);
-            }
-        }
         log.info("Gemini task deleted: taskId={}, userId={}", taskId, userId);
     }
 

@@ -22,7 +22,9 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -31,6 +33,8 @@ import java.util.stream.Collectors;
 public class SessionMetadataService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Set<String> ACTIVE_TASK_STATUSES = Set.of(
+            "PENDING", "RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT");
 
     private final SessionRepository sessionRepository;
     private final CredentialEncryptor credentialEncryptor;
@@ -160,6 +164,42 @@ public class SessionMetadataService {
         return updateInteractionState(sessionId, userId, "AWAITING_REPLY");
     }
 
+    @Transactional
+    public boolean deleteConversation(String sessionId, String userId) {
+        List<SessionTaskEntity> tasks = sessionTaskRepository
+                .findBySessionIdAndUserIdOrderByCreatedAtDesc(sessionId, userId);
+        if (tasks.stream().anyMatch(task -> isActiveTaskStatus(task.getStatus()))) {
+            throw new IllegalStateException("Cannot delete a session with active tasks. Please abort it first.");
+        }
+
+        SessionEntity session = sessionRepository.findByIdAndUserId(sessionId, userId).orElse(null);
+        if (session == null) {
+            if (tasks.isEmpty()) {
+                log.info("Delete session ignored because no owned session or task projection exists: sessionId={}, userId={}",
+                        sessionId, userId);
+                return false;
+            }
+            session = createSessionMetadataFromTaskProjection(sessionId, userId, tasks.get(0));
+        }
+
+        if (session.getDeletedAt() == null) {
+            LocalDateTime now = LocalDateTime.now();
+            session.setDeletedAt(now);
+            session.setStatus("DELETED");
+            session.setInteractionState("DELETED");
+            session.setPinned(false);
+            session.setPinnedAt(null);
+            session.setLastActivityAt(now);
+            sessionRepository.save(session);
+            log.info("Session soft-deleted: sessionId={}, userId={}", sessionId, userId);
+        }
+        return true;
+    }
+
+    private boolean isActiveTaskStatus(String status) {
+        return status != null && ACTIVE_TASK_STATUSES.contains(status.toUpperCase(Locale.ROOT));
+    }
+
     private SessionConfigDTO updateInteractionState(String sessionId, String userId, String interactionState) {
         SessionEntity session = requireOwnedSessionForInteractionState(sessionId, userId);
         session.setInteractionState(interactionState);
@@ -173,15 +213,23 @@ public class SessionMetadataService {
     }
 
     private SessionEntity requireOwnedSessionForInteractionState(String sessionId, String userId) {
-        return sessionRepository.findByIdAndUserId(sessionId, userId)
-                .filter(session -> session.getDeletedAt() == null)
-                .orElseGet(() -> createSessionMetadataFromTaskProjection(sessionId, userId));
+        SessionEntity session = sessionRepository.findByIdAndUserId(sessionId, userId).orElse(null);
+        if (session != null) {
+            if (session.getDeletedAt() != null) {
+                throw new IllegalStateException("Session already deleted: " + sessionId);
+            }
+            return session;
+        }
+        return createSessionMetadataFromTaskProjection(sessionId, userId);
     }
 
     private SessionEntity createSessionMetadataFromTaskProjection(String sessionId, String userId) {
         SessionTaskEntity latestTask = sessionTaskRepository.findFirstBySessionIdAndUserIdOrderByCreatedAtDesc(sessionId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
+        return createSessionMetadataFromTaskProjection(sessionId, userId, latestTask);
+    }
 
+    private SessionEntity createSessionMetadataFromTaskProjection(String sessionId, String userId, SessionTaskEntity latestTask) {
         SessionEntity session = new SessionEntity();
         session.setId(sessionId);
         session.setUserId(userId);
