@@ -1,4 +1,4 @@
-"""Deploy platform skills to ~/.claude/skills/ on Worker startup.
+"""Deploy platform skills to ~/.agent/skills/ on Worker startup.
 
 Templates may contain ``{{NAVIGATOR_API_BASE}}`` which is replaced with the
 actual Navigator backend URL at deploy time.
@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..marketplace.config import DEFAULT_MARKETPLACE_URL
+from ..skill_paths import user_skills_dir
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,8 @@ _TEMPLATE_VARS = {
 
 
 def deploy_platform_skills() -> None:
-    """Read bundled skill templates, substitute placeholders, and write to ~/.claude/skills/<name>/SKILL.md."""
-    claude_skills_dir = Path.home() / ".claude" / "skills"
+    """Read bundled skill templates, substitute placeholders, and write to ~/.agent/skills/<name>/SKILL.md."""
+    skills_dir = user_skills_dir()
 
     for skill_name, template_file in _SKILL_TEMPLATES.items():
         try:
@@ -45,7 +46,7 @@ def deploy_platform_skills() -> None:
             for placeholder, value_fn in _TEMPLATE_VARS.items():
                 content = content.replace(placeholder, value_fn())
 
-            target_dir = claude_skills_dir / skill_name
+            target_dir = skills_dir / skill_name
             target_dir.mkdir(parents=True, exist_ok=True)
 
             target = target_dir / "SKILL.md"

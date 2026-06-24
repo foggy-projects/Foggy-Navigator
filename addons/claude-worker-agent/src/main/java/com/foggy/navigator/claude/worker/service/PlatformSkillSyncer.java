@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 将平台 Skill（如 ask-agent）推送到在线 Worker 的 ~/.claude/skills/。
+ * 将平台 Skill（如 ask-agent）推送到在线 Worker 的 ~/.agent/skills/。
  * <p>
  * ask-agent 技能内容包含动态 Agent 列表，由 Navigator 后端生成后推送给 Worker，
  * Worker 自身无需反向调用 Navigator API。

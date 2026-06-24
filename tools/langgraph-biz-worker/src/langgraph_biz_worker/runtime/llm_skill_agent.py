@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +100,11 @@ _FILE_MUTATION_TOOL_NAMES = frozenset({"write_file", "str_replace", "edit_file",
 _FILE_CONTENT_ARG_NAMES = frozenset({"content", "patch", "old_str", "new_str"})
 _ACCOUNT_FILE_AUDIT_KEY = "account_file_audit"
 _MAX_ACCOUNT_FILE_AUDIT_RECORDS = 100
+_TEXTIFIED_MUTATION_TOOL_CALL_RE = re.compile(
+    r"\bcall\s*:\s*[\w.-]+\s*:\s*"
+    r"(write_file|patch_file|edit_file|str_replace|create_artifact)\s*\{",
+    re.IGNORECASE,
+)
 
 
 class LlmSkillAgent:
@@ -373,38 +379,45 @@ class LlmSkillAgent:
                         )
                         continue
                     final_text = _assistant_response_text(response)
+                    textified_tool_call = _assistant_text_contains_textified_mutation_tool_call(final_text)
                     if final_text:
-                        _mark_runtime_memory_finalizing(runtime_context)
-                        validation = self._runtime.submit_persistent_turn_result(
-                            frame_id=frame_id,
-                            summary=final_text,
-                            structured_output={
-                                "turn_status": "FINAL_FOR_USER",
-                                "message": final_text,
-                                "completion_mode": "assistant_message",
-                            },
-                        )
-                        if validation.ok:
-                            self._store_persistent_turn_protocol_messages(
-                                frame_id,
-                                messages=messages,
-                                turn_start_index=turn_start_index,
-                                task_id=task_id,
-                            )
-                            record_checkpoint_runtime_event(
-                                runtime_context,
-                                task_id=task_id,
+                        if textified_tool_call:
+                            error = _textified_mutation_tool_call_error()
+                        else:
+                            _mark_runtime_memory_finalizing(runtime_context)
+                            validation = self._runtime.submit_persistent_turn_result(
                                 frame_id=frame_id,
-                                checkpoint="persistent_turn_completed",
+                                summary=final_text,
+                                structured_output={
+                                    "turn_status": "FINAL_FOR_USER",
+                                    "message": final_text,
+                                    "completion_mode": "assistant_message",
+                                },
                             )
-                            return events
-                        _mark_runtime_memory_running(runtime_context)
-                        error = "Root assistant response failed output contract: " + "; ".join(validation.errors)
+                            if validation.ok:
+                                self._store_persistent_turn_protocol_messages(
+                                    frame_id,
+                                    messages=messages,
+                                    turn_start_index=turn_start_index,
+                                    task_id=task_id,
+                                )
+                                record_checkpoint_runtime_event(
+                                    runtime_context,
+                                    task_id=task_id,
+                                    frame_id=frame_id,
+                                    checkpoint="persistent_turn_completed",
+                                )
+                                return events
+                            _mark_runtime_memory_running(runtime_context)
+                            error = "Root assistant response failed output contract: " + "; ".join(
+                                validation.errors
+                            )
                     else:
                         error = "Root assistant returned no tool call and no final content"
+                    reason = "textified_tool_call" if textified_tool_call else "model_error"
                     self._runtime.record_recoverable_interruption(
                         frame_id,
-                        reason="model_error",
+                        reason=reason,
                         error=error,
                         task_id=task_id,
                     )
@@ -414,48 +427,55 @@ class LlmSkillAgent:
                         skill_frame_id=frame_id,
                         skill_id=event_skill_id,
                         presentation_hint=event_presentation_hint,
+                        reason=reason,
                         error=error,
                     ))
                     return events
 
                 final_text = _assistant_response_text(response)
+                textified_tool_call = _assistant_text_contains_textified_mutation_tool_call(final_text)
                 if final_text:
-                    validation = self._submit_child_plain_assistant_response(
-                        frame_id=frame_id,
-                        summary=final_text,
-                    )
-                    frame = self._runtime.get_frame(frame_id)
-                    if validation.ok:
-                        report_payload = _execution_report_payload_from_frame(frame)
-                        structured_output = frame.output if frame else {}
-                        events.append(QueryEvent(
-                            type="skill_result_submit",
-                            task_id=task_id,
-                            skill_frame_id=frame_id,
-                            parent_frame_id=frame.parent_frame_id if frame else None,
-                            skill_id=event_skill_id,
-                            presentation_hint=event_presentation_hint,
-                            content=json.dumps({
-                                "ok": True,
-                                "assistant_message": True,
-                                "turn_status": structured_output.get("turn_status"),
-                                "structured_output": structured_output,
-                            }, ensure_ascii=False),
-                            tool_name="assistant_message",
-                            execution_report_ref=report_payload.get("execution_report_ref"),
-                            execution_report_digest=report_payload.get("execution_report_digest"),
-                        ))
-                        return events
-                    error = "Child assistant response failed output contract: " + "; ".join(validation.errors)
+                    if textified_tool_call:
+                        error = _textified_mutation_tool_call_error()
+                    else:
+                        validation = self._submit_child_plain_assistant_response(
+                            frame_id=frame_id,
+                            summary=final_text,
+                        )
+                        frame = self._runtime.get_frame(frame_id)
+                        if validation.ok:
+                            report_payload = _execution_report_payload_from_frame(frame)
+                            structured_output = frame.output if frame else {}
+                            events.append(QueryEvent(
+                                type="skill_result_submit",
+                                task_id=task_id,
+                                skill_frame_id=frame_id,
+                                parent_frame_id=frame.parent_frame_id if frame else None,
+                                skill_id=event_skill_id,
+                                presentation_hint=event_presentation_hint,
+                                content=json.dumps({
+                                    "ok": True,
+                                    "assistant_message": True,
+                                    "turn_status": structured_output.get("turn_status"),
+                                    "structured_output": structured_output,
+                                }, ensure_ascii=False),
+                                tool_name="assistant_message",
+                                execution_report_ref=report_payload.get("execution_report_ref"),
+                                execution_report_digest=report_payload.get("execution_report_digest"),
+                            ))
+                            return events
+                        error = "Child assistant response failed output contract: " + "; ".join(validation.errors)
                 else:
                     error = "Child assistant returned no tool call and no final content"
                 self._runtime.fail_frame(frame_id, error)
+                reason = "textified_tool_call" if textified_tool_call else "model_error"
                 events.append(QueryEvent(
                     type="error",
                     task_id=task_id,
                     skill_frame_id=frame_id,
                     skill_id=event_skill_id,
                     presentation_hint=event_presentation_hint,
+                    reason=reason,
                     error=error,
                 ))
                 return events
@@ -1338,6 +1358,19 @@ def _assistant_response_text(response: Any) -> str:
         return json.dumps(content, ensure_ascii=False)
     except Exception:
         return str(content).strip()
+
+
+def _assistant_text_contains_textified_mutation_tool_call(text: str) -> bool:
+    if not text:
+        return False
+    return bool(_TEXTIFIED_MUTATION_TOOL_CALL_RE.search(text))
+
+
+def _textified_mutation_tool_call_error() -> str:
+    return (
+        "TEXTIFIED_TOOL_CALL: assistant returned a file/artifact mutation as plain text "
+        "instead of a structured tool_call. Retry using the provided structured tool call channel."
+    )
 
 
 def _assistant_text_requests_user_input(text: str) -> bool:

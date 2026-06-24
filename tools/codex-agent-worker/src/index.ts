@@ -7,10 +7,9 @@ import processesRouter from './routes/processes.js'
 import queryRouter from './routes/query.js'
 import tasksRouter from './routes/tasks.js'
 import sessionsRouter from './routes/sessions.js'
-import { ensureUserCodexSkillsLinks, ensureUserSkillsLink } from './startup/skills-link.js'
+import { ensureUserAgentSkillsDir } from './startup/skills-link.js'
 
 const app = express()
-const CODEX_SKILLS_RECONCILE_INTERVAL_MS = 5000
 
 // Middleware
 app.use(cors())
@@ -31,44 +30,16 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 })
 
 async function bootstrap(): Promise<void> {
-  const reconcileCodexSkillsLinks = async (): Promise<void> => {
-    try {
-      const result = await ensureUserCodexSkillsLinks()
-      if (result.migrated.length > 0) {
-        console.log(
-          `Migrated Codex-created skills into Claude skills: ${result.migrated.join(', ')} -> ${result.sourceDir}`
-        )
-      }
-      if (result.created.length > 0) {
-        console.log(
-          `Linked Claude skills into Codex skills: ${result.created.join(', ')} -> ${result.codexSkillsDir}`
-        )
-      }
-      for (const skipped of result.skipped) {
-        console.warn(`Skipped Codex skill link: ${skipped.name} (${skipped.reason})`)
-      }
-    } catch (error) {
-      console.warn('Failed to initialize Codex skills links:', error)
-    }
-  }
-
   try {
-    const result = await ensureUserSkillsLink()
+    const result = await ensureUserAgentSkillsDir()
     if (result.status === 'created') {
-      console.log(`Created user skills link: ${result.linkPath} -> ${result.targetPath}`)
+      console.log(`Created user agent skills directory: ${result.skillsDir}`)
     } else if (result.status === 'skipped') {
-      console.warn(`Skipped user skills link: ${result.linkPath} (${result.reason})`)
+      console.warn(`Skipped user agent skills directory: ${result.skillsDir} (${result.reason})`)
     }
   } catch (error) {
-    console.warn('Failed to initialize user skills link:', error)
+    console.warn('Failed to initialize user agent skills directory:', error)
   }
-
-  await reconcileCodexSkillsLinks()
-
-  const codexSkillsInterval = setInterval(() => {
-    void reconcileCodexSkillsLinks()
-  }, CODEX_SKILLS_RECONCILE_INTERVAL_MS)
-  codexSkillsInterval.unref()
 
   const server = app.listen(config.port, config.host, () => {
     const authMode = config.openaiApiKey ? 'API Key' : 'Codex Login / Per-request'
@@ -86,13 +57,11 @@ async function bootstrap(): Promise<void> {
   // Graceful shutdown
   process.on('SIGTERM', () => {
     console.log('SIGTERM received, shutting down...')
-    clearInterval(codexSkillsInterval)
     server.close(() => process.exit(0))
   })
 
   process.on('SIGINT', () => {
     console.log('SIGINT received, shutting down...')
-    clearInterval(codexSkillsInterval)
     server.close(() => process.exit(0))
   })
 }

@@ -141,7 +141,7 @@ async def lifespan(app: FastAPI):
         default_auth = "SUBSCRIPTION (claude login)"
     logger.info("  default_auth   = %s", default_auth)
 
-    # Deploy platform skills to ~/.claude/skills/
+    # Deploy platform skills to ~/.agent/skills/
     await asyncio.to_thread(deploy_platform_skills)
 
     # Setup company-skill-marketplace in settings.json

@@ -1,4 +1,4 @@
-"""Platform skills deployment endpoint — receives skill content from Navigator and writes to ~/.claude/skills/."""
+"""Platform skills deployment endpoint — receives skill content from Navigator and writes to ~/.agent/skills/."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ..auth import verify_token
+from ..skill_paths import user_skills_dir
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,9 @@ def _write_skill_file(skills_dir: Path, name: str, content: str) -> None:
 
 @router.post("/platform-skills/deploy")
 async def deploy_skills(request: DeploySkillsRequest):
-    """Receive skill content pushed from Navigator and write to ~/.claude/skills/<name>/SKILL.md."""
+    """Receive skill content pushed from Navigator and write to ~/.agent/skills/<name>/SKILL.md."""
     deployed = []
-    skills_dir = Path.home() / ".claude" / "skills"
+    skills_dir = user_skills_dir()
 
     for name, content in request.skills.items():
         try:

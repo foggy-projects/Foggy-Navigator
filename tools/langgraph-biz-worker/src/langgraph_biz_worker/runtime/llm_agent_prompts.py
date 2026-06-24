@@ -91,6 +91,10 @@ def _build_system_prompt(
         "如果运行时提供了 delegated workspace，文件工具的 relative_path 以 delegated "
         "workspace 根目录为基准；用户要求写入 `actors/pm/example.txt` 时，"
         "write_file 的 relative_path 就传 `actors/pm/example.txt`。"
+        "凡是需要创建、覆盖或修改文件，必须通过系统提供的结构化 tool call 通道调用 "
+        "write_file/patch_file；不要在最终答复或正文中输出 "
+        "`call:...:write_file{...}`、`call:...:patch_file{...}` 这类文本化工具调用。"
+        "只有收到文件工具结果后，才能声称文件已经写入或修改。"
         "`agent/skills/.../assets` 只用于明确维护 Skill 资源，不用于普通任务产物或 smoke marker。"
         "不要臆造真实路径，不要访问未授权目录。"
         "Skill 是当前 frame 内的能力材料，使用 invoke_business_skill 不会打开 child frame。"
@@ -512,6 +516,8 @@ def _build_delegated_workspace_file_contract_prompt(runtime_context: dict[str, A
         "- 如果任务要求在已绑定/当前/私有工作目录内创建文件，只传文件名或该根目录下的相对路径。",
         "- Skill 或账号上下文中的 private workspace（例如 `actors/pm/`）是逻辑说明，不一定是 file tool 前缀。",
         "- 不要因为上下文提到 private workspace 就自动给 relative_path 加 `actors/<role>/` 前缀。",
+        "- 写文件或改文件必须调用结构化 file tool；不要把 `call:...:write_file{...}` 写成普通文本。",
+        "- 只有收到 write_file/patch_file 的工具结果后，才能在最终答复中说明文件已写入。",
         (
             f"- 当前 delegated workspace 根目录已经是 `{actor_suffix}/`；写入该私有目录内文件时"
             f"不要再加 `{actor_suffix}/` 前缀。"
