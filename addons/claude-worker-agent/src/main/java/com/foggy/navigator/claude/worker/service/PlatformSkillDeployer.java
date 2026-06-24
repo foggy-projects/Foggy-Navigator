@@ -15,7 +15,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 /**
- * 启动时将 classpath 中的平台技能部署到 ~/.claude/skills/，
+ * 启动时将 classpath 中的平台技能部署到 ~/.agent/skills/，
  * 确保 Claude Code 原生 skill 机制可靠加载。
  * <p>
  * 模板中的 {@code {{NAVIGATOR_API_BASE}}} 占位符会被替换为实际的后端地址。
@@ -31,7 +31,7 @@ public class PlatformSkillDeployer {
 
     @PostConstruct
     public void deploy() {
-        Path claudeSkillsDir = Path.of(System.getProperty("user.home"), ".claude", "skills");
+        Path agentSkillsDir = Path.of(System.getProperty("user.home"), ".agent", "skills");
         PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
 
         Map<String, String> vars = Map.of(
@@ -41,14 +41,14 @@ public class PlatformSkillDeployer {
         try {
             Resource[] resources = resolver.getResources(SKILLS_RESOURCE_PATTERN);
             for (Resource resource : resources) {
-                deploySkill(resource, claudeSkillsDir, vars);
+                deploySkill(resource, agentSkillsDir, vars);
             }
         } catch (IOException e) {
             log.warn("Failed to scan platform skills resources: {}", e.getMessage());
         }
     }
 
-    private void deploySkill(Resource resource, Path claudeSkillsDir, Map<String, String> vars) {
+    private void deploySkill(Resource resource, Path agentSkillsDir, Map<String, String> vars) {
         try {
             // 从资源路径提取技能名称: platform-skills/{skillName}/SKILL.md
             String path = resource.getURL().getPath();
@@ -74,7 +74,7 @@ public class PlatformSkillDeployer {
                 content = content.replace(entry.getKey(), entry.getValue());
             }
 
-            Path targetDir = claudeSkillsDir.resolve(skillName);
+            Path targetDir = agentSkillsDir.resolve(skillName);
             Files.createDirectories(targetDir);
             Files.writeString(targetDir.resolve("SKILL.md"), content, StandardCharsets.UTF_8);
 

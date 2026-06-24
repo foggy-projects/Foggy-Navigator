@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from ..auth import verify_token
 from ..config import settings
 from ..models import SkillInfo
+from ..skill_paths import project_skills_dir, user_skills_dir
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +100,8 @@ async def list_skills(
             detail=f"Path is not a directory: {cwd}",
         )
 
-    project_dir = Path(resolved) / ".claude" / "skills"
-    user_dir = Path.home() / ".claude" / "skills"
+    project_dir = project_skills_dir(resolved)
+    user_dir = user_skills_dir()
 
     project_skills = _scan_skills_dir(project_dir, "project")
     user_skills = _scan_skills_dir(user_dir, "user")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import patch
 
 import pytest
@@ -15,50 +14,45 @@ class TestDeploySkills:
     """POST /api/v1/platform-skills/deploy endpoint logic."""
 
     async def test_deploys_single_skill(self, tmp_path):
-        from pathlib import Path
         req = DeploySkillsRequest(skills={"test-skill": "# Test Skill\nContent here"})
-        with patch("agent_worker.routes.platform_skills.Path", wraps=Path) as WrappedPath:
-            WrappedPath.home = lambda: tmp_path
+        skills_dir = tmp_path / ".agent" / "skills"
+        with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
             result = await deploy_skills(req)
 
         assert "test-skill" in result["deployed"]
-        skill_file = tmp_path / ".claude" / "skills" / "test-skill" / "SKILL.md"
+        skill_file = skills_dir / "test-skill" / "SKILL.md"
         assert skill_file.exists()
         assert skill_file.read_text(encoding="utf-8") == "# Test Skill\nContent here"
 
     async def test_deploys_multiple_skills(self, tmp_path):
-        from pathlib import Path
         req = DeploySkillsRequest(skills={
             "skill-a": "# Skill A",
             "skill-b": "# Skill B",
         })
-        with patch("agent_worker.routes.platform_skills.Path", wraps=Path) as WrappedPath:
-            WrappedPath.home = lambda: tmp_path
+        skills_dir = tmp_path / ".agent" / "skills"
+        with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
             result = await deploy_skills(req)
 
         assert set(result["deployed"]) == {"skill-a", "skill-b"}
 
     async def test_overwrites_existing_skill(self, tmp_path):
-        from pathlib import Path
-
         # Pre-create the skill
-        skill_dir = tmp_path / ".claude" / "skills" / "existing"
+        skills_dir = tmp_path / ".agent" / "skills"
+        skill_dir = skills_dir / "existing"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("old content")
 
         req = DeploySkillsRequest(skills={"existing": "new content"})
-        with patch("agent_worker.routes.platform_skills.Path", wraps=Path) as WrappedPath:
-            WrappedPath.home = lambda: tmp_path
+        with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
             result = await deploy_skills(req)
 
         assert "existing" in result["deployed"]
         assert (skill_dir / "SKILL.md").read_text() == "new content"
 
     async def test_empty_skills_returns_empty(self, tmp_path):
-        from pathlib import Path
         req = DeploySkillsRequest(skills={})
-        with patch("agent_worker.routes.platform_skills.Path", wraps=Path) as WrappedPath:
-            WrappedPath.home = lambda: tmp_path
+        skills_dir = tmp_path / ".agent" / "skills"
+        with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
             result = await deploy_skills(req)
 
         assert result["deployed"] == []
@@ -71,6 +65,7 @@ class TestDeploySkills:
             "good-skill": "# Good",
             "bad-skill": "# Bad",
         })
+        skills_dir = tmp_path / ".agent" / "skills"
 
         original_write_text = Path.write_text
 
@@ -79,8 +74,7 @@ class TestDeploySkills:
                 raise PermissionError("denied")
             return original_write_text(self, content, **kwargs)
 
-        with patch("agent_worker.routes.platform_skills.Path", wraps=Path) as WrappedPath:
-            WrappedPath.home = lambda: tmp_path
+        with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
             with patch.object(Path, "write_text", failing_write):
                 result = await deploy_skills(req)
 
@@ -97,11 +91,11 @@ class TestDeploySkills:
             to_thread_calls.append((func, args, kwargs))
             return func(*args, **kwargs)
 
-        with patch("agent_worker.routes.platform_skills.Path", wraps=Path) as WrappedPath:
-            WrappedPath.home = lambda: tmp_path
+        skills_dir = tmp_path / ".agent" / "skills"
+        with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
             with patch("agent_worker.routes.platform_skills.asyncio.to_thread", side_effect=fake_to_thread):
                 result = await deploy_skills(req)
 
         assert result["deployed"] == ["threaded-skill"]
         assert len(to_thread_calls) == 1
-        assert (tmp_path / ".claude" / "skills" / "threaded-skill" / "SKILL.md").exists()
+        assert (skills_dir / "threaded-skill" / "SKILL.md").exists()
