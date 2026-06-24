@@ -1250,6 +1250,31 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void cancelTask_routesViaProviderWhenUnifiedTaskHasLogicalAgentId() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        SessionTaskEntity task = sessionTask(
+                "task-codex-logical-agent", "session-codex-1", "codex-worker", "worker-1", "dir-1",
+                "RUNNING", LocalDateTime.of(2026, 3, 27, 10, 0), "{\"codexThreadId\":\"thread-1\"}"
+        );
+        task.setAgentId("agent-codex-prod-1");
+
+        when(sessionTaskRepository.findByTaskIdAndUserId("task-codex-logical-agent", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+
+        facade.cancelTask("task-codex-logical-agent", task.getAgentId(), context);
+
+        verify(taskQueryProvider).cancelTask("task-codex-logical-agent", "user-1");
+        verify(agentResolver, never()).resolveAgent(eq("agent-codex-prod-1"), any());
+        verify(agent, never()).cancelTask(anyString());
+    }
+
+    @Test
     void cancelTask_routesViaProviderWhenLogicalAgentIsMissing() {
         DispatchTaskDTO task = DispatchTaskDTO.builder()
                 .taskId("task-direct-no-agent")

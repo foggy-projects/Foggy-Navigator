@@ -219,10 +219,10 @@ public class TaskDispatchFacade {
     /**
      * 取消任务。
      * <p>
-     * 优先走 A2A 路径，以复用 {@link com.foggy.navigator.session.agent.AbortCoordinatingA2aAgent}
-     * 的统一中止编排；但当任务属于 direct provider route，或任务投影中的 agentId
-     * 实际上是 provider 常量（如 claude-worker / codex-worker）时，回退到
-     * {@link TaskQueryProvider#cancelTask(String, String)}。
+     * 已知 providerType 的任务优先走 {@link TaskQueryProvider#cancelTask(String, String)}。
+     * 统一任务投影中的 agentId 保存真实 logical agent，不能用它来判断是否需要 A2A；
+     * 否则 provider 自身任务表和 session_tasks 短暂不一致时，可能出现详情可见但中止
+     * 报 "Task not found" 的割裂。
      */
     public void cancelTask(String taskId, String agentId, AgentResolveContext context) {
         DispatchTaskDTO task = getTask(taskId, context).orElse(null);
@@ -235,7 +235,7 @@ public class TaskDispatchFacade {
         String effectiveAgentId = firstNonBlank(agentId, task != null ? task.getAgentId() : null);
         String providerType = task != null ? task.getProviderType() : null;
 
-        if (shouldCancelViaProvider(effectiveAgentId, providerType)) {
+        if (providerType != null && !providerType.isBlank()) {
             cancelTaskViaProvider(taskId, context.getUserId(), providerType);
             return;
         }
@@ -649,13 +649,6 @@ public class TaskDispatchFacade {
         return taskQueryProviders.stream()
                 .filter(provider -> providerType.equals(provider.getProviderType()))
                 .findFirst();
-    }
-
-    private boolean shouldCancelViaProvider(@Nullable String agentId, @Nullable String providerType) {
-        if (providerType == null || providerType.isBlank()) {
-            return false;
-        }
-        return agentId == null || agentId.isBlank() || providerType.equals(agentId);
     }
 
     private void cancelTaskViaProvider(String taskId, String userId, @Nullable String providerType) {
