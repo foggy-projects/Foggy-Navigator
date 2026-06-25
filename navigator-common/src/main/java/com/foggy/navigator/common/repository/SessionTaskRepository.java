@@ -39,6 +39,9 @@ public interface SessionTaskRepository extends JpaRepository<SessionTaskEntity, 
     /** 批量按 sessionId 查询任务（用于 N+1 消除） */
     List<SessionTaskEntity> findBySessionIdInOrderByCreatedAtDesc(Collection<String> sessionIds);
 
+    /** 批量按 sessionId 和 userId 查询任务（用于会话组元数据操作校验） */
+    List<SessionTaskEntity> findBySessionIdInAndUserIdOrderByCreatedAtDesc(Collection<String> sessionIds, String userId);
+
     /** 批量按 taskId 查询任务（用于历史消息补齐所属任务状态） */
     List<SessionTaskEntity> findByTaskIdIn(Collection<String> taskIds);
 }

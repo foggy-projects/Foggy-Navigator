@@ -3299,8 +3299,9 @@ function currentStateParam(): string | undefined {
 }
 
 /** Reload worker-level tasks respecting the current filter */
-function reloadWorkerTasks() {
-  return workerState.loadTasks(currentStateParam())
+async function reloadWorkerTasks() {
+  await workerState.loadTasks(currentStateParam())
+  await loadConfigsForTasks(workerState.tasks.value)
 }
 
 /** Reload history tasks using the current interactionState filter */
@@ -3310,6 +3311,14 @@ async function reloadFilteredTasks() {
     await loadDirectoryTasks()
   } else {
     await workerState.loadTasksPage(0, undefined, currentStateParam())
+    await loadConfigsForTasks(workerState.tasks.value)
+  }
+}
+
+async function loadConfigsForTasks(taskList: ClaudeTask[]) {
+  const sessionIds = [...new Set(taskList.map((task) => task.sessionId))]
+  if (sessionIds.length > 0) {
+    await workerState.loadConversationConfigs(sessionIds)
   }
 }
 
@@ -4383,10 +4392,9 @@ function matchesCurrentConversationFilters(conv: ConversationGroup): boolean {
 const activeConversations = computed(() => {
   let list = allConversations.value
 
-  // Source filter (client-side, multi-select)
-  list = list.filter(matchesCurrentSourceFilter)
-
-  // interactionState filtering is done by the backend API (multi-select via comma-separated param)
+  // Backend state filtering handles normal reloads; local filtering keeps the sidebar correct
+  // while task caches are stale after metadata-only operations such as archive/hold.
+  list = list.filter(matchesCurrentConversationFilters)
 
   const roots = new Map<string, ConversationGroup>()
   for (const conv of list) {
@@ -4883,7 +4891,7 @@ async function loadDirectoryTasks() {
   // Load configs for directory tasks
   const sessionIds = [...new Set(directoryTasks.value.map((t) => t.sessionId))]
   if (sessionIds.length > 0) {
-    workerState.loadConversationConfigs(sessionIds)
+    await workerState.loadConversationConfigs(sessionIds)
   }
 }
 
@@ -5863,9 +5871,14 @@ async function handleBatchArchive() {
   const sessionIds = [...selectedConvIds.value]
   const count = sessionIds.length
   if (count === 0) return
+  const includesParentConversation = sessionIds
+    .map((sessionId) => conversationBySessionId.value.get(sessionId))
+    .some((conv) => conv && !conv.parentSessionId && childConversations(conv).length > 0)
   try {
     await ElMessageBox.confirm(
-      `确认归档选中的 ${count} 个会话？归档后默认不在列表中显示，可通过"已归档"筛选查看。`,
+      includesParentConversation
+        ? `确认归档选中的 ${count} 个会话？其中父会话会同时归档所有子会话。归档后默认不在列表中显示，可通过"已归档"筛选查看。`
+        : `确认归档选中的 ${count} 个会话？归档后默认不在列表中显示，可通过"已归档"筛选查看。`,
       '归档会话',
       { type: 'info', confirmButtonText: '确认归档', cancelButtonText: '取消' },
     )
@@ -7182,7 +7195,7 @@ async function handleDeleteConversation(conv: ConversationGroup) {
 async function handleArchiveConversation(conv: ConversationGroup) {
   try {
     await ElMessageBox.confirm(
-      '确认归档该会话？归档后默认不在列表中显示，可通过"已归档"筛选查看。',
+      archiveConversationConfirmMessage(conv),
       '归档会话',
       { type: 'info', confirmButtonText: '确认归档', cancelButtonText: '取消' },
     )
@@ -7196,9 +7209,10 @@ async function handleArchiveConversation(conv: ConversationGroup) {
 
 async function handlePaneArchive(sessionId?: string) {
   if (!sessionId) return
+  const conv = conversationBySessionId.value.get(sessionId)
   try {
     await ElMessageBox.confirm(
-      '确认归档该会话？归档后默认不在列表中显示，可通过"已归档"筛选查看。',
+      archiveConversationConfirmMessage(conv),
       '归档会话',
       { type: 'info', confirmButtonText: '确认归档', cancelButtonText: '取消' },
     )
@@ -7219,6 +7233,14 @@ async function handlePaneUnarchive(sessionId?: string) {
   } catch {
     ElMessage.error('取消归档失败')
   }
+}
+
+function archiveConversationConfirmMessage(conv?: ConversationGroup | null): string {
+  const archivesChildren = !!conv && !conv.parentSessionId && childConversations(conv).length > 0
+  if (archivesChildren) {
+    return '确认归档该会话？该操作会同时归档所有子会话。归档后默认不在列表中显示，可通过"已归档"筛选查看。'
+  }
+  return '确认归档该会话？归档后默认不在列表中显示，可通过"已归档"筛选查看。'
 }
 
 async function handlePaneDelete(sessionId?: string) {

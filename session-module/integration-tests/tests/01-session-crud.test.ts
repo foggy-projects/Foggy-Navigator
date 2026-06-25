@@ -120,4 +120,86 @@ describe('01 - 会话 CRUD (Session CRUD)', () => {
       // best effort
     }
   });
+
+  test('父会话归档应该级联归档子会话且取消归档只恢复父会话', async () => {
+    const createdIds: string[] = [];
+    const parent = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId
+    });
+    createdIds.push(parent.id);
+
+    const childA = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId,
+      parentSessionId: parent.id
+    });
+    createdIds.push(childA.id);
+
+    const childB = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId,
+      parentSessionId: parent.id
+    });
+    createdIds.push(childB.id);
+
+    try {
+      await client.archiveConversation(parent.id);
+
+      const archivedConfigs = await client.listSessionConfigs(createdIds);
+      const archivedById = new Map(archivedConfigs.map(config => [config.sessionId, config]));
+      expect(archivedById.get(parent.id)?.interactionState).toBe('ARCHIVED');
+      expect(archivedById.get(childA.id)?.interactionState).toBe('ARCHIVED');
+      expect(archivedById.get(childB.id)?.interactionState).toBe('ARCHIVED');
+
+      await client.unarchiveConversation(parent.id);
+
+      const unarchivedConfigs = await client.listSessionConfigs(createdIds);
+      const unarchivedById = new Map(unarchivedConfigs.map(config => [config.sessionId, config]));
+      expect(unarchivedById.get(parent.id)?.interactionState).toBe('AWAITING_REPLY');
+      expect(unarchivedById.get(childA.id)?.interactionState).toBe('ARCHIVED');
+      expect(unarchivedById.get(childB.id)?.interactionState).toBe('ARCHIVED');
+    } finally {
+      for (const id of createdIds.reverse()) {
+        try {
+          await client.deleteSession(id);
+        } catch {
+          // best effort
+        }
+      }
+    }
+  });
+
+  test('子会话归档不应该影响父会话', async () => {
+    const createdIds: string[] = [];
+    const parent = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId
+    });
+    createdIds.push(parent.id);
+
+    const child = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId,
+      parentSessionId: parent.id
+    });
+    createdIds.push(child.id);
+
+    try {
+      await client.archiveConversation(child.id);
+
+      const configs = await client.listSessionConfigs(createdIds);
+      const byId = new Map(configs.map(config => [config.sessionId, config]));
+      expect(byId.get(parent.id)?.interactionState).not.toBe('ARCHIVED');
+      expect(byId.get(child.id)?.interactionState).toBe('ARCHIVED');
+    } finally {
+      for (const id of createdIds.reverse()) {
+        try {
+          await client.deleteSession(id);
+        } catch {
+          // best effort
+        }
+      }
+    }
+  });
 });

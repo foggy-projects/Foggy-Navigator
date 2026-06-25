@@ -173,6 +173,94 @@ class SessionMetadataServiceTest {
     }
 
     @Test
+    void archiveConversation_archivesChildrenWhenParentArchived() {
+        SessionEntity parent = session("parent-session");
+        SessionEntity childA = session("child-a");
+        childA.setParentSessionId("parent-session");
+        SessionEntity childB = session("child-b");
+        childB.setParentSessionId("parent-session");
+
+        when(sessionRepository.findByIdAndUserId("parent-session", "user-1")).thenReturn(Optional.of(parent));
+        when(sessionRepository.findActiveChildrenByParentSessionId("user-1", "parent-session"))
+                .thenReturn(List.of(childA, childB));
+        when(sessionTaskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(
+                List.of("parent-session", "child-a", "child-b"), "user-1"))
+                .thenReturn(List.of(
+                        taskProjection("parent-session", "task-parent", "COMPLETED"),
+                        taskProjection("child-a", "task-child-a", "COMPLETED"),
+                        taskProjection("child-b", "task-child-b", "FAILED")
+                ));
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        SessionConfigDTO result = service.archiveConversation("parent-session", "user-1");
+
+        assertEquals("parent-session", result.getSessionId());
+        assertEquals("ARCHIVED", result.getInteractionState());
+        assertEquals("ARCHIVED", parent.getInteractionState());
+        assertEquals("ARCHIVED", childA.getInteractionState());
+        assertEquals("ARCHIVED", childB.getInteractionState());
+        verify(sessionRepository).save(parent);
+        verify(sessionRepository).save(childA);
+        verify(sessionRepository).save(childB);
+    }
+
+    @Test
+    void archiveConversation_archivesOnlyChildWhenChildArchived() {
+        SessionEntity child = session("child-session");
+        child.setParentSessionId("parent-session");
+
+        when(sessionRepository.findByIdAndUserId("child-session", "user-1")).thenReturn(Optional.of(child));
+        when(sessionTaskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(List.of("child-session"), "user-1"))
+                .thenReturn(List.of(taskProjection("child-session", "task-child", "COMPLETED")));
+        when(sessionRepository.save(child)).thenReturn(child);
+
+        SessionConfigDTO result = service.archiveConversation("child-session", "user-1");
+
+        assertEquals("child-session", result.getSessionId());
+        assertEquals("ARCHIVED", child.getInteractionState());
+        verify(sessionRepository, never()).findActiveChildrenByParentSessionId(anyString(), anyString());
+        verify(sessionRepository).save(child);
+    }
+
+    @Test
+    void archiveConversation_rejectsParentWhenAnyChildHasActiveTask() {
+        SessionEntity parent = session("parent-session");
+        SessionEntity child = session("child-session");
+        child.setParentSessionId("parent-session");
+
+        when(sessionRepository.findByIdAndUserId("parent-session", "user-1")).thenReturn(Optional.of(parent));
+        when(sessionRepository.findActiveChildrenByParentSessionId("user-1", "parent-session"))
+                .thenReturn(List.of(child));
+        when(sessionTaskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(
+                List.of("parent-session", "child-session"), "user-1"))
+                .thenReturn(List.of(taskProjection("child-session", "task-child", "RUNNING")));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.archiveConversation("parent-session", "user-1"));
+
+        assertEquals("Cannot archive a session with active tasks. Please abort it first.", error.getMessage());
+        assertNull(parent.getInteractionState());
+        assertNull(child.getInteractionState());
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void unarchiveConversation_onlyUpdatesCurrentSession() {
+        SessionEntity parent = session("parent-session");
+        parent.setInteractionState("ARCHIVED");
+
+        when(sessionRepository.findByIdAndUserId("parent-session", "user-1")).thenReturn(Optional.of(parent));
+        when(sessionRepository.save(parent)).thenReturn(parent);
+
+        SessionConfigDTO result = service.unarchiveConversation("parent-session", "user-1");
+
+        assertEquals("parent-session", result.getSessionId());
+        assertEquals("AWAITING_REPLY", result.getInteractionState());
+        verify(sessionRepository, never()).findActiveChildrenByParentSessionId(anyString(), anyString());
+        verify(sessionRepository).save(parent);
+    }
+
+    @Test
     void deleteConversation_softDeletesExistingSessionWithoutRemovingTaskProjection() {
         SessionEntity session = session("session-1");
         SessionTaskEntity task = taskProjection("session-1", "task-1", "COMPLETED");

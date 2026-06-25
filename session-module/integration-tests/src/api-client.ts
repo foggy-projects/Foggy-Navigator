@@ -9,7 +9,8 @@ import type {
   Message,
   AgentMessage,
   GuideCard,
-  LoginResultDTO
+  LoginResultDTO,
+  SessionConfig
 } from './types.js';
 
 /**
@@ -99,6 +100,37 @@ export class SessionClient {
   }
 
   /**
+   * 查询会话配置
+   */
+  async listSessionConfigs(sessionIds: string[]): Promise<SessionConfig[]> {
+    const response = await this.client.post<RXResponse<SessionConfig[]>>(
+      '/api/v1/sessions/configs',
+      { sessionIds }
+    );
+    return response.data.data!;
+  }
+
+  /**
+   * 归档会话
+   */
+  async archiveConversation(sessionId: string): Promise<SessionConfig> {
+    const response = await this.client.post<RXResponse<SessionConfig>>(
+      `/api/v1/sessions/${sessionId}/config/archive`
+    );
+    return response.data.data!;
+  }
+
+  /**
+   * 取消归档会话
+   */
+  async unarchiveConversation(sessionId: string): Promise<SessionConfig> {
+    const response = await this.client.post<RXResponse<SessionConfig>>(
+      `/api/v1/sessions/${sessionId}/config/unarchive`
+    );
+    return response.data.data!;
+  }
+
+  /**
    * 获取消息列表
    */
   async getMessages(sessionId: string): Promise<Message[]> {
@@ -146,7 +178,7 @@ export class SessionClient {
       callbacks.onOpen?.();
     };
 
-    eventSource.onerror = (error) => {
+    eventSource.onerror = (error: unknown) => {
       console.error('SSE error:', error);
       callbacks.onError?.(error);
     };

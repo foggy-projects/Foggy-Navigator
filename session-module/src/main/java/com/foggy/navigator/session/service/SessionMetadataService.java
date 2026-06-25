@@ -146,7 +146,19 @@ public class SessionMetadataService {
 
     @Transactional
     public SessionConfigDTO archiveConversation(String sessionId, String userId) {
-        return updateInteractionState(sessionId, userId, "ARCHIVED");
+        SessionEntity session = requireOwnedSessionForInteractionState(sessionId, userId);
+        List<SessionEntity> sessionsToArchive = sessionsToArchive(session, userId);
+        assertNoActiveTasksForArchive(sessionsToArchive, userId);
+
+        SessionEntity savedCurrent = null;
+        for (SessionEntity target : sessionsToArchive) {
+            target.setInteractionState("ARCHIVED");
+            SessionEntity saved = sessionRepository.save(target);
+            if (target.getId().equals(session.getId())) {
+                savedCurrent = saved;
+            }
+        }
+        return toDTO(savedCurrent != null ? savedCurrent : session);
     }
 
     @Transactional
@@ -198,6 +210,36 @@ public class SessionMetadataService {
 
     private boolean isActiveTaskStatus(String status) {
         return status != null && ACTIVE_TASK_STATUSES.contains(status.toUpperCase(Locale.ROOT));
+    }
+
+    private List<SessionEntity> sessionsToArchive(SessionEntity session, String userId) {
+        if (blankToNull(session.getParentSessionId()) != null) {
+            return List.of(session);
+        }
+        List<SessionEntity> children = sessionRepository.findActiveChildrenByParentSessionId(userId, session.getId());
+        if (children.isEmpty()) {
+            return List.of(session);
+        }
+        List<SessionEntity> result = new java.util.ArrayList<>(children.size() + 1);
+        result.add(session);
+        result.addAll(children);
+        return result;
+    }
+
+    private void assertNoActiveTasksForArchive(List<SessionEntity> sessions, String userId) {
+        List<String> sessionIds = sessions.stream()
+                .map(SessionEntity::getId)
+                .toList();
+        if (sessionIds.isEmpty()) {
+            return;
+        }
+        boolean hasActiveTask = sessionTaskRepository
+                .findBySessionIdInAndUserIdOrderByCreatedAtDesc(sessionIds, userId)
+                .stream()
+                .anyMatch(task -> isActiveTaskStatus(task.getStatus()));
+        if (hasActiveTask) {
+            throw new IllegalStateException("Cannot archive a session with active tasks. Please abort it first.");
+        }
     }
 
     private SessionConfigDTO updateInteractionState(String sessionId, String userId, String interactionState) {

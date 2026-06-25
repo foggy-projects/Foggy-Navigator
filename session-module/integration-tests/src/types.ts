@@ -24,6 +24,21 @@ export interface SendMessageRequest {
   content: string;
 }
 
+export interface SessionConfig {
+  sessionId: string;
+  pinned: boolean;
+  pinnedAt?: string;
+  customTitle?: string;
+  authMode?: string;
+  authBound: boolean;
+  authModelConfigId?: string;
+  baseUrl?: string;
+  maskedAuthToken?: string;
+  tags: string[];
+  interactionState?: string;
+  milestoneId?: string;
+}
+
 // ===== 响应类型 =====
 
 export interface Session {

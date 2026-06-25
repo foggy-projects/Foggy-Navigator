@@ -252,6 +252,11 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
     if (archiveMatch) {
       const sessionId = archiveMatch[1]!
       archivedSessionIds.add(sessionId)
+      if (sessionId === 'session-root') {
+        tasks
+          .filter((task) => task.parentSessionId === 'session-root')
+          .forEach((task) => archivedSessionIds.add(task.sessionId))
+      }
       await fulfill(route, {
         sessionId,
         pinned: false,
@@ -357,6 +362,28 @@ test.describe('history session branch grouping', () => {
     await expect(root.locator('.branch-session-item', { hasText: 'Branch A investigation' })).toHaveCount(0)
     await expect(root.locator('.branch-session-item', { hasText: 'Branch B from branch A' })).toBeVisible()
     await expect(root.locator('.conv-rel-tag')).toContainText('分支 1')
+  })
+
+  test('archives root conversation with cascade confirmation for branches', async ({ page }) => {
+    await mockApi(page, { keepArchivedTasksInList: true })
+    await page.goto('/')
+    await page.getByText('History Worker', { exact: true }).click()
+
+    const root = page.locator('.conv-item', { hasText: 'Main task domain' }).first()
+    await expect(root).toBeVisible()
+    await expect(root.locator('.branch-session-item')).toHaveCount(2)
+
+    await root.locator('.conv-more-trigger').click()
+    const menu = page.locator('.el-dropdown__popper:visible').last()
+    await expect(menu).toBeVisible()
+    await menu.getByText('归档', { exact: true }).click()
+
+    const confirmDialog = page.getByRole('dialog', { name: '归档会话' })
+    await expect(confirmDialog).toBeVisible()
+    await expect(confirmDialog.getByText('该操作会同时归档所有子会话')).toBeVisible()
+    await confirmDialog.getByRole('button', { name: '确认归档' }).click()
+
+    await expect(page.locator('.conv-item', { hasText: 'Main task domain' })).toHaveCount(0)
   })
 
   test('keeps branch nested when resumed task response lacks parent', async ({ page }) => {

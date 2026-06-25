@@ -35,6 +35,15 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
 
     Optional<SessionEntity> findByIdAndUserId(String id, String userId);
 
+    @Query("SELECT s FROM SessionEntity s " +
+           "WHERE s.userId = :userId " +
+           "AND s.parentSessionId = :parentSessionId " +
+           "AND s.deletedAt IS NULL " +
+           "AND s.status <> 'DELETED' " +
+           "ORDER BY s.updatedAt DESC")
+    List<SessionEntity> findActiveChildrenByParentSessionId(@Param("userId") String userId,
+                                                            @Param("parentSessionId") String parentSessionId);
+
     @Query("SELECT s.id FROM SessionEntity s " +
            "WHERE s.userId = :userId AND s.interactionState = :state AND s.deletedAt IS NULL")
     List<String> findSessionIdsByInteractionState(@Param("userId") String userId,
