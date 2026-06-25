@@ -70,6 +70,31 @@ class LlmModelManagerImplTest {
     }
 
     @Test
+    void updateModelConfig_clearsStoredApiKeyForNormalizedSubscriptionBackend() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-normalized");
+        entity.setTenantId("tenant-1");
+        entity.setCategory(LlmModelCategory.CODING);
+        entity.setWorkerBackend("OPENAI_CODEX");
+        entity.setBaseUrl(null);
+        entity.setApiKey("encrypted-old-key");
+        entity.setModelName("gpt-5.4");
+
+        LlmModelConfigForm form = new LlmModelConfigForm();
+        form.setWorkerBackend("openai-codex");
+        form.setBaseUrl("");
+        form.setModelName("gpt-5.4");
+
+        when(llmModelRepo.findById("cfg-normalized")).thenReturn(Optional.of(entity));
+
+        service.updateModelConfig("cfg-normalized", form);
+
+        assertNull(entity.getApiKey());
+        verify(llmModelRepo).save(entity);
+        verifyNoInteractions(credentialEncryptor);
+    }
+
+    @Test
     void getModelConfig_hidesStaleApiKeyForCodexSubscriptionMode() {
         LlmModelConfigEntity entity = new LlmModelConfigEntity();
         entity.setId("cfg-1");

@@ -5,30 +5,29 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.*;
-import com.foggy.navigator.common.util.DirectoryAgentId;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.TaskListingProvider;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
+import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
-import java.lang.reflect.Method;
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * 统一任务分发 Facade —— 所有外部入口（前端 / OpenAPI / A2A）的唯一任务操作层。
@@ -45,17 +44,14 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class TaskDispatchFacade {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private static final String CODEX_PROVIDER_TYPE = "codex-worker";
-    private static final String CODEX_BIZ_PROVIDER_TYPE = "codex-biz-worker";
 
     private final UnifiedAgentResolver agentResolver;
     private final SessionBindingService bindingService;
     private final SessionRepository sessionRepository;
-    private final List<TaskQueryProvider> taskQueryProviders;
+    private final TaskQueryProviderRegistry taskQueryProviderRegistry;
     private final LlmModelManager llmModelManager;
 
     @Autowired(required = false)
@@ -66,6 +62,48 @@ public class TaskDispatchFacade {
     @Nullable
     private WorkingDirectoryRepository workingDirectoryRepository;
 
+    public TaskDispatchFacade(UnifiedAgentResolver agentResolver,
+                              SessionBindingService bindingService,
+                              SessionRepository sessionRepository,
+                              List<? extends TaskLookupProvider> taskLookupProviders,
+                              List<? extends TaskCommandProvider> taskCommandProviders,
+                              List<? extends TaskListingProvider> taskListingProviders,
+                              List<? extends WorkerSessionQueryProvider> workerSessionQueryProviders,
+                              LlmModelManager llmModelManager) {
+        this.agentResolver = agentResolver;
+        this.bindingService = bindingService;
+        this.sessionRepository = sessionRepository;
+        this.taskQueryProviderRegistry = new TaskQueryProviderRegistry(
+                taskLookupProviders,
+                taskCommandProviders,
+                taskListingProviders,
+                workerSessionQueryProviders);
+        this.llmModelManager = llmModelManager;
+    }
+
+    private TaskCreateTargetResolver createTargetResolver() {
+        return new TaskCreateTargetResolver(
+                sessionRepository,
+                workingDirectoryRepository,
+                taskQueryProviderRegistry,
+                llmModelManager);
+    }
+
+    private UnifiedSessionTaskProjectionService projectionService() {
+        return new UnifiedSessionTaskProjectionService(sessionRepository, workingDirectoryRepository);
+    }
+
+    private TaskOperationRouter operationRouter() {
+        return new TaskOperationRouter(
+                agentResolver,
+                bindingService,
+                sessionRepository,
+                sessionTaskRepository,
+                taskQueryProviderRegistry,
+                createTargetResolver(),
+                projectionService());
+    }
+
     /**
      * 创建任务。
      * <p>
@@ -75,12 +113,12 @@ public class TaskDispatchFacade {
      * 4. 返回统一 DTO
      */
     public DispatchTaskDTO createTask(TaskDispatchRequest request, AgentResolveContext context) {
-        CreateExecutionTarget target = resolveCreateExecutionTarget(request);
+        TaskCreateTargetResolver.CreateExecutionTarget target = createTargetResolver().resolveCreateExecutionTarget(request);
         if (target.directProviderRoute()) {
             return createTaskDirect(target.providerType(), request, context);
         }
 
-        AgentLookup lookup = target.agentLookup();
+        TaskCreateTargetResolver.AgentLookup lookup = target.agentLookup();
 
         A2aAgent agent = agentResolver.resolveAgent(lookup.lookupId, context)
                 .orElseThrow(() -> new IllegalArgumentException("Agent not available: " + lookup.lookupId));
@@ -89,8 +127,9 @@ public class TaskDispatchFacade {
                 .orElseThrow(() -> new IllegalArgumentException("No provider found for agent: " + lookup.lookupId));
 
         String agentId = resolveLogicalAgentId(agent, lookup.lookupId);
-        validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
-        validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
+        TaskOperationRouter operations = operationRouter();
+        operations.validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
+        operations.validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
 
         // 绑定校验
         if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
@@ -134,25 +173,10 @@ public class TaskDispatchFacade {
     }
 
     /**
-     * 查询单个任务（遍历所有 TaskQueryProvider）
+     * 查询单个任务（遍历所有 lookup provider）
      */
     public Optional<DispatchTaskDTO> getTask(String taskId, AgentResolveContext context) {
-        if (sessionTaskRepository != null) {
-            Optional<DispatchTaskDTO> unified = context.getUserId() != null
-                    ? sessionTaskRepository.findByTaskIdAndUserId(taskId, context.getUserId()).map(this::toDispatchTaskDTO)
-                    : sessionTaskRepository.findByTaskId(taskId).map(this::toDispatchTaskDTO);
-            if (unified.isPresent()) {
-                return unified;
-            }
-        }
-
-        for (TaskQueryProvider provider : taskQueryProviders) {
-            Optional<DispatchTaskDTO> result = context.getUserId() != null
-                    ? provider.getTaskByIdAndUser(taskId, context.getUserId())
-                    : provider.getTaskById(taskId);
-            if (result.isPresent()) return result;
-        }
-        return Optional.empty();
+        return operationRouter().getTask(taskId, context);
     }
 
     /**
@@ -171,17 +195,15 @@ public class TaskDispatchFacade {
         if (session == null) return List.of();
 
         String providerType = session.getProviderType();
-        if (providerType != null) {
+        if (providerType != null && !providerType.isBlank()) {
             // 精确匹配 provider
-            return taskQueryProviders.stream()
-                    .filter(p -> providerType.equals(p.getProviderType()))
-                    .findFirst()
+            return taskQueryProviderRegistry.findLookupProviderByType(providerType)
                     .map(p -> p.listTasksBySession(sessionId))
                     .orElse(List.of());
         }
 
         // providerType 为空（旧会话），遍历所有 provider
-        return taskQueryProviders.stream()
+        return taskQueryProviderRegistry.lookupProviders().stream()
                 .flatMap(p -> p.listTasksBySession(sessionId).stream())
                 .sorted((a, b) -> {
                     if (a.getCreatedAt() == null || b.getCreatedAt() == null) return 0;
@@ -205,7 +227,7 @@ public class TaskDispatchFacade {
             }
         }
 
-        return taskQueryProviders.stream()
+        return taskQueryProviderRegistry.lookupProviders().stream()
                 .flatMap(p -> p.listActiveDispatchTasks(userId).stream())
                 .sorted((a, b) -> {
                     if (a.getCreatedAt() == null || b.getCreatedAt() == null) return 0;
@@ -214,90 +236,41 @@ public class TaskDispatchFacade {
                 .toList();
     }
 
-    private static final Set<String> TERMINAL_STATES = Set.of("COMPLETED", "FAILED", "ABORTED");
-
     /**
      * 取消任务。
-     * <p>
-     * 已知 providerType 的任务优先走 {@link TaskQueryProvider#cancelTask(String, String)}。
-     * 统一任务投影中的 agentId 保存真实 logical agent，不能用它来判断是否需要 A2A；
-     * 否则 provider 自身任务表和 session_tasks 短暂不一致时，可能出现详情可见但中止
-     * 报 "Task not found" 的割裂。
      */
     public void cancelTask(String taskId, String agentId, AgentResolveContext context) {
-        DispatchTaskDTO task = getTask(taskId, context).orElse(null);
-        if (task != null && task.getStatus() != null && TERMINAL_STATES.contains(task.getStatus())) {
-            log.info("cancelTask: task {} already in terminal state ({}), returning no-op",
-                    taskId, task.getStatus());
-            return;
-        }
-
-        String effectiveAgentId = firstNonBlank(agentId, task != null ? task.getAgentId() : null);
-        String providerType = task != null ? task.getProviderType() : null;
-
-        if (providerType != null && !providerType.isBlank()) {
-            cancelTaskViaProvider(taskId, context.getUserId(), providerType);
-            return;
-        }
-
-        if (effectiveAgentId == null || effectiveAgentId.isBlank()) {
-            throw new IllegalArgumentException(
-                    "Cannot cancel task " + taskId + ": agentId is missing and provider route is unavailable");
-        }
-
-        Optional<A2aAgent> agentOpt = agentResolver.resolveAgent(effectiveAgentId, context);
-        if (agentOpt.isEmpty()) {
-            if (providerType != null && !providerType.isBlank()) {
-                log.warn("cancelTask: unresolved agentId {}, fallback to provider {} for task {}",
-                        effectiveAgentId, providerType, taskId);
-                cancelTaskViaProvider(taskId, context.getUserId(), providerType);
-                return;
-            }
-        }
-
-        A2aAgent agent = agentOpt
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Cannot cancel task " + taskId + ": no A2A agent found for agentId=" + effectiveAgentId));
-
-        if (context.getSessionId() != null) {
-            bindingService.validateBinding(context.getSessionId(), effectiveAgentId);
-        }
-        agent.cancelTask(taskId);
-        log.info("Cancelled task via A2a Agent: taskId={}, agentId={}", taskId, effectiveAgentId);
+        operationRouter().cancelTask(taskId, agentId, context);
     }
 
-    // ── 任务操作（路由到 TaskQueryProvider） ──
+    // ── 任务操作（路由到 command provider） ──
 
     /**
      * 回复权限请求 / 用户问题（不支持的 Provider 自动抛 UnsupportedOperationException）
      */
     public void respondToTask(String taskId, String userId, Map<String, Object> response) {
-        TaskQueryProvider provider = findProviderForTask(taskId);
-        provider.respondToTask(taskId, userId, response);
+        operationRouter().respondToTask(taskId, userId, response);
     }
 
     /**
      * 重连任务 SSE 流
      */
     public void reconnectTask(String taskId, String userId) {
-        TaskQueryProvider provider = findProviderForTask(taskId);
-        provider.reconnectTask(taskId, userId);
+        operationRouter().reconnectTask(taskId, userId);
     }
 
     /**
      * 重新同步任务状态
      */
     public Object resyncTask(String taskId, String userId) {
-        TaskQueryProvider provider = findProviderForTask(taskId);
-        return provider.resyncTask(taskId, userId);
+        return operationRouter().resyncTask(taskId, userId);
     }
 
     /**
      * 回退到检查点
      */
     public Object rewindTask(String taskId, String userId, Map<String, Object> params) {
-        TaskQueryProvider provider = findProviderForTask(taskId);
-        return provider.rewindTask(taskId, userId, params);
+        return operationRouter().rewindTask(taskId, userId, params);
     }
 
     // ── Phase 3: 统一任务端点扩展 ──
@@ -306,110 +279,23 @@ public class TaskDispatchFacade {
      * 恢复任务（resume）—— 续接已有会话。
      */
     public DispatchTaskDTO resumeTask(TaskDispatchRequest request, AgentResolveContext context) {
-        String providerType = resolveResumeProviderType(request, context);
-        normalizeResumeRequest(request, providerType);
-        validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
-        validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
-
-        // 找到对应 Provider 直接调用 resumeTask
-        TaskQueryProvider provider = taskQueryProviders.stream()
-                .filter(p -> providerType.equals(p.getProviderType()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerType));
-
-        Map<String, Object> params = buildResumeParams(request);
-        DispatchTaskDTO dto = provider.resumeTask(context.getUserId(), context.getTenantId(), params);
+        DispatchTaskDTO dto = operationRouter().resumeTask(request, context);
         persistTaskRequestFields(dto.getTaskId(), request);
         return dto;
-    }
-
-    /**
-     * resume 优先复用 session 已绑定的 provider，避免跨 provider 误路由。
-     * 仅当旧 session 尚未绑定 providerType 时，才允许通过显式 provider/modelConfig/agent 做迁移兜底。
-     */
-    private String resolveResumeProviderType(TaskDispatchRequest request, AgentResolveContext context) {
-        String sessionId = request.getSessionId();
-        if (sessionId != null && !sessionId.isBlank()) {
-            SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
-            if (session != null) {
-                String boundProviderType = session.getProviderType();
-                if (boundProviderType != null && !boundProviderType.isBlank()) {
-                    return boundProviderType;
-                }
-            }
-        }
-        return resolveResumeProviderTypeFromLegacyContext(request, context);
-    }
-
-    private String resolveResumeProviderTypeFromLegacyContext(TaskDispatchRequest request, AgentResolveContext context) {
-        // 1. 显式 providerType 存在且可用时优先；codex-biz-worker 可复用 OPENAI_CODEX 模型配置。
-        @SuppressWarnings("deprecation")
-        String requestedProviderType = request.getProviderType();
-        String fromModelConfig = resolveProviderTypeFromModelConfig(request.getModelConfigId());
-        if (requestedProviderType != null && !requestedProviderType.isBlank()
-                && findTaskQueryProviderByType(requestedProviderType).isPresent()
-                && (fromModelConfig == null || isModelProviderCompatible(fromModelConfig, requestedProviderType))) {
-            return requestedProviderType;
-        }
-
-        // 2. 从 modelConfigId 推导 provider（旧 Open API 行为）
-        if (fromModelConfig != null && !fromModelConfig.isBlank()) {
-            return fromModelConfig;
-        }
-
-        // 3. 从已废弃的 request.providerType 兜底（向后兼容 Open API）
-        if (requestedProviderType != null && !requestedProviderType.isBlank()) {
-            return requestedProviderType;
-        }
-
-        // 4. 从 agentId 推导（包括 directory# 格式）
-        String agentLookupId = resolveBoundOrExplicitAgentId(request.getAgentId(), request.getSessionId());
-        if (agentLookupId != null && !agentLookupId.isBlank()) {
-            // directory# 格式的 agentId 需要通过目录的 modelConfigId 推导
-            if (DirectoryAgentId.isDirectoryAgent(agentLookupId)) {
-                String dirId = DirectoryAgentId.extractDirectoryId(agentLookupId);
-                String dirModelConfigId = resolveModelConfigIdFromDirectory(null, dirId);
-                if (dirModelConfigId != null) {
-                    String pt = resolveProviderTypeFromModelConfig(dirModelConfigId);
-                    if (pt != null) return pt;
-                }
-            }
-            return agentResolver.getProviderType(agentLookupId, context)
-                    .orElseThrow(() -> new IllegalArgumentException("No provider found for agent: " + agentLookupId));
-        }
-
-        throw new IllegalArgumentException(
-                "No provider found for resume request; old sessions require session.providerType or explicit providerType/modelConfigId/agentId");
     }
 
     /**
      * 删除任务
      */
     public void deleteTask(String taskId, String userId) {
-        TaskQueryProvider provider = findProviderForTask(taskId);
-        boolean shouldCleanupSessionStore = false;
-        try {
-            provider.deleteTask(userId, taskId);
-            shouldCleanupSessionStore = true;
-        } catch (IllegalArgumentException e) {
-            if (!isProviderTaskAlreadyMissing(e, taskId)) {
-                throw e;
-            }
-            log.warn("Provider task already missing during delete; cleaning unified session store only: taskId={}", taskId);
-            shouldCleanupSessionStore = true;
-        }
-
-        if (shouldCleanupSessionStore && sessionTaskRepository != null) {
-            sessionTaskRepository.deleteByTaskId(taskId);
-        }
+        operationRouter().deleteTask(taskId, userId);
     }
 
     /**
      * 扫描 checkpoints
      */
     public Object scanCheckpoints(String taskId, String userId) {
-        TaskQueryProvider provider = findProviderForTask(taskId);
-        return provider.scanCheckpoints(taskId, userId);
+        return operationRouter().scanCheckpoints(taskId, userId);
     }
 
     /**
@@ -434,10 +320,10 @@ public class TaskDispatchFacade {
         List<Object> content = new ArrayList<>();
         long totalSessions = 0L;
 
-        for (TaskQueryProvider provider : taskQueryProviders) {
+        for (TaskListingProvider provider : taskQueryProviderRegistry.listingProvidersSupporting(TaskQueryCapability.LIST_TASKS_PAGED)) {
             try {
                 Object pageResult = provider.listTasksPaged(userId, 0, fetchSize, state);
-                TaskPageEnvelope envelope = toTaskPageEnvelope(pageResult);
+                UnifiedSessionTaskProjectionService.TaskPageEnvelope envelope = toTaskPageEnvelope(pageResult);
                 content.addAll(compact
                         ? envelope.content().stream().map(this::toCompactTaskItem).toList()
                         : envelope.content());
@@ -465,10 +351,10 @@ public class TaskDispatchFacade {
         List<Object> results = new ArrayList<>();
         long total = 0L;
 
-        for (TaskQueryProvider provider : taskQueryProviders) {
+        for (TaskListingProvider provider : taskQueryProviderRegistry.listingProvidersSupporting(TaskQueryCapability.SEARCH_SESSIONS)) {
             try {
                 Object searchResult = provider.searchSessions(userId, keyword, workerId, directoryId, 0, fetchSize);
-                SearchEnvelope envelope = toSearchEnvelope(searchResult);
+                UnifiedSessionTaskProjectionService.SearchEnvelope envelope = toSearchEnvelope(searchResult);
                 results.addAll(envelope.results());
                 total += envelope.total();
             } catch (UnsupportedOperationException ignored) {
@@ -517,7 +403,7 @@ public class TaskDispatchFacade {
             }
         }
 
-        return taskQueryProviders.stream()
+        return taskQueryProviderRegistry.listingProvidersSupporting(TaskQueryCapability.LIST_TASKS_BY_DIRECTORY).stream()
                 .flatMap(p -> {
                     try {
                         return p.listTasksByDirectory(userId, directoryId).stream();
@@ -544,10 +430,10 @@ public class TaskDispatchFacade {
         List<Object> content = new ArrayList<>();
         long totalSessions = 0L;
 
-        for (TaskQueryProvider provider : taskQueryProviders) {
+        for (TaskListingProvider provider : taskQueryProviderRegistry.listingProvidersSupporting(TaskQueryCapability.LIST_TASKS_BY_DIRECTORY_PAGED)) {
             try {
                 Object pageResult = provider.listTasksByDirectoryPaged(userId, directoryId, 0, fetchSize, state);
-                TaskPageEnvelope envelope = toTaskPageEnvelope(pageResult);
+                UnifiedSessionTaskProjectionService.TaskPageEnvelope envelope = toTaskPageEnvelope(pageResult);
                 content.addAll(envelope.content());
                 totalSessions += envelope.totalSessions();
             } catch (UnsupportedOperationException ignored) {
@@ -557,14 +443,10 @@ public class TaskDispatchFacade {
         return buildTaskPageResponse(content, totalSessions, page, size);
     }
 
-    private Map<String, Object> buildResumeParams(TaskDispatchRequest request) {
-        return toCommonParams(request);
-    }
-
     // ── Worker Session 查询（统一端点） ──
 
     public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
-        for (TaskQueryProvider provider : taskQueryProviders) {
+        for (WorkerSessionQueryProvider provider : taskQueryProviderRegistry.workerSessionProvidersSupporting(TaskQueryCapability.LIST_WORKER_SESSIONS)) {
             try {
                 return provider.listWorkerSessions(workerId, userId);
             } catch (UnsupportedOperationException ignored) {
@@ -578,7 +460,7 @@ public class TaskDispatchFacade {
     }
 
     public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
-        for (TaskQueryProvider provider : taskQueryProviders) {
+        for (WorkerSessionQueryProvider provider : taskQueryProviderRegistry.workerSessionProvidersSupporting(TaskQueryCapability.GET_WORKER_SESSION_MESSAGE_COUNT)) {
             try {
                 return provider.getWorkerSessionMessageCount(workerId, sessionId, userId);
             } catch (UnsupportedOperationException ignored) {
@@ -593,7 +475,7 @@ public class TaskDispatchFacade {
 
     public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
                                                                String userId, Integer offset, Integer limit) {
-        for (TaskQueryProvider provider : taskQueryProviders) {
+        for (WorkerSessionQueryProvider provider : taskQueryProviderRegistry.workerSessionProvidersSupporting(TaskQueryCapability.GET_WORKER_SESSION_MESSAGES)) {
             try {
                 return provider.getWorkerSessionMessages(workerId, sessionId, userId, offset, limit);
             } catch (UnsupportedOperationException ignored) {
@@ -607,7 +489,7 @@ public class TaskDispatchFacade {
     }
 
     public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
-        for (TaskQueryProvider provider : taskQueryProviders) {
+        for (WorkerSessionQueryProvider provider : taskQueryProviderRegistry.workerSessionProvidersSupporting(TaskQueryCapability.SYNC_WORKER_SESSIONS)) {
             try {
                 return provider.syncWorkerSessions(workerId, userId, tenantId);
             } catch (UnsupportedOperationException ignored) {
@@ -625,50 +507,6 @@ public class TaskDispatchFacade {
         return message != null && message.toLowerCase().contains("worker not found");
     }
 
-    private TaskQueryProvider findProviderForTask(String taskId) {
-        if (sessionTaskRepository != null) {
-            String providerType = sessionTaskRepository.findByTaskId(taskId)
-                    .map(SessionTaskEntity::getProviderType)
-                    .orElse(null);
-            if (providerType != null && !providerType.isBlank()) {
-                return findTaskQueryProviderByType(providerType)
-                        .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerType));
-            }
-        }
-
-        for (TaskQueryProvider p : taskQueryProviders) {
-            if (p.getTaskById(taskId).isPresent()) return p;
-        }
-        throw new IllegalArgumentException("Task not found: " + taskId);
-    }
-
-    private Optional<TaskQueryProvider> findTaskQueryProviderByType(String providerType) {
-        if (providerType == null || providerType.isBlank()) {
-            return Optional.empty();
-        }
-        return taskQueryProviders.stream()
-                .filter(provider -> providerType.equals(provider.getProviderType()))
-                .findFirst();
-    }
-
-    private void cancelTaskViaProvider(String taskId, String userId, @Nullable String providerType) {
-        if (userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("Cannot cancel task " + taskId + ": userId is required for provider route");
-        }
-        TaskQueryProvider provider = findTaskQueryProviderByType(providerType)
-                .orElseGet(() -> findProviderForTask(taskId));
-        provider.cancelTask(taskId, userId);
-        log.info("Cancelled task via provider route: taskId={}, providerType={}", taskId, provider.getProviderType());
-    }
-
-    private boolean isProviderTaskAlreadyMissing(IllegalArgumentException exception, String taskId) {
-        String message = exception.getMessage();
-        if (message == null || message.isBlank()) {
-            return false;
-        }
-        return message.equals("Task not found: " + taskId) || message.contains("Task not found");
-    }
-
     // ── 内部方法 ──
 
     private A2aMessage buildMessage(TaskDispatchRequest request) {
@@ -676,7 +514,7 @@ public class TaskDispatchFacade {
         parts.add(A2aPart.text(request.getPrompt()));
 
         // 复用公共参数转换，A2A message 的 metadata 和 Direct params 共享同一组字段
-        Map<String, Object> metadata = toCommonParams(request);
+        Map<String, Object> metadata = TaskDispatchRequestParams.toCommonParams(request);
 
         return A2aMessage.builder()
                 .role("user")
@@ -902,606 +740,51 @@ public class TaskDispatchFacade {
     }
 
     private Map<String, Object> buildTaskPageResponse(List<Object> taskItems, long totalSessions, int page, int size) {
-        Map<String, List<Object>> sessions = new LinkedHashMap<>();
-        for (Object item : taskItems) {
-            String sessionId = readStringProperty(item, "sessionId");
-            String key = (sessionId != null && !sessionId.isBlank())
-                    ? sessionId
-                    : Optional.ofNullable(readStringProperty(item, "taskId")).orElse(UUID.randomUUID().toString());
-            sessions.computeIfAbsent(key, ignored -> new ArrayList<>()).add(item);
-        }
-
-        List<List<Object>> sortedSessions = new ArrayList<>(sessions.values());
-        sortedSessions.sort((left, right) -> compareNullableTime(
-                latestTaskTime(right),
-                latestTaskTime(left)));
-
-        int from = Math.min(page * size, sortedSessions.size());
-        int to = Math.min(from + size, sortedSessions.size());
-        List<Object> content = sortedSessions.subList(from, to).stream()
-                .map(this::toSessionSummaryItem)
-                .toList();
-
-        return Map.of(
-                "content", content,
-                "totalSessions", totalSessions,
-                "page", page,
-                "size", size
-        );
+        return projectionService().buildTaskPageResponse(taskItems, totalSessions, page, size);
     }
 
-    private LocalDateTime latestTaskTime(List<Object> tasks) {
-        return tasks.stream()
-                .map(this::latestItemTime)
-                .filter(Objects::nonNull)
-                .max(LocalDateTime::compareTo)
-                .orElse(null);
+    private UnifiedSessionTaskProjectionService.TaskPageEnvelope toTaskPageEnvelope(Object pageResult) {
+        return projectionService().toTaskPageEnvelope(pageResult);
     }
 
-    private LocalDateTime latestItemTime(Object task) {
-        LocalDateTime createdAt = readDateTimeProperty(task, "createdAt");
-        LocalDateTime updatedAt = readDateTimeProperty(task, "updatedAt");
-        return compareNullableTime(createdAt, updatedAt) >= 0 ? createdAt : updatedAt;
-    }
-
-    private TaskPageEnvelope toTaskPageEnvelope(Object pageResult) {
-        return new TaskPageEnvelope(
-                readListProperty(pageResult, "content"),
-                readLongProperty(pageResult, "totalSessions")
-        );
-    }
-
-    private SearchEnvelope toSearchEnvelope(Object searchResult) {
-        return new SearchEnvelope(
-                readListProperty(searchResult, "results"),
-                readLongProperty(searchResult, "total")
-        );
-    }
-
-    private List<Object> readListProperty(Object target, String property) {
-        Object value = readProperty(target, property);
-        if (value instanceof Collection<?> collection) {
-            return new ArrayList<>(collection);
-        }
-        return List.of();
-    }
-
-    private long readLongProperty(Object target, String property) {
-        Object value = readProperty(target, property);
-        if (value instanceof Number number) {
-            return number.longValue();
-        }
-        if (value instanceof String text && !text.isBlank()) {
-            try {
-                return Long.parseLong(text);
-            } catch (NumberFormatException ignored) {
-                return 0L;
-            }
-        }
-        return 0L;
+    private UnifiedSessionTaskProjectionService.SearchEnvelope toSearchEnvelope(Object searchResult) {
+        return projectionService().toSearchEnvelope(searchResult);
     }
 
     private String readStringProperty(Object target, String property) {
-        Object value = readProperty(target, property);
-        return value != null ? value.toString() : null;
+        return projectionService().readStringProperty(target, property);
     }
 
     private LocalDateTime readDateTimeProperty(Object target, String property) {
-        Object value = readProperty(target, property);
-        if (value instanceof LocalDateTime localDateTime) {
-            return localDateTime;
-        }
-        if (value instanceof OffsetDateTime offsetDateTime) {
-            return offsetDateTime.toLocalDateTime();
-        }
-        if (value instanceof String text && !text.isBlank()) {
-            try {
-                return OffsetDateTime.parse(text).toLocalDateTime();
-            } catch (Exception ignored) {
-                try {
-                    return LocalDateTime.parse(text);
-                } catch (Exception ignoredAgain) {
-                    return null;
-                }
-            }
-        }
-        return null;
-    }
-
-    private Object readProperty(Object target, String property) {
-        if (target == null) {
-            return null;
-        }
-        if (target instanceof Map<?, ?> map) {
-            return map.get(property);
-        }
-        try {
-            Method getter = target.getClass().getMethod("get" + Character.toUpperCase(property.charAt(0)) + property.substring(1));
-            return getter.invoke(target);
-        } catch (Exception ignored) {
-            return null;
-        }
+        return projectionService().readDateTimeProperty(target, property);
     }
 
     private int compareNullableTime(LocalDateTime left, LocalDateTime right) {
-        if (left == null && right == null) {
-            return 0;
-        }
-        if (left == null) {
-            return -1;
-        }
-        if (right == null) {
-            return 1;
-        }
-        return left.compareTo(right);
+        return projectionService().compareNullableTime(left, right);
     }
 
     private Object listTasksPagedFromSessionStore(String userId, String directoryId, int page, int size, String state,
-                                                  boolean compact) {
-        List<SessionTaskEntity> tasks = directoryId == null || directoryId.isBlank()
-                ? sessionTaskRepository.findByUserIdOrderByCreatedAtDesc(userId)
-                : sessionTaskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId);
-        if (tasks.isEmpty()) {
-            return null;
-        }
-
-        List<UnifiedSessionView> sessions = buildUnifiedSessionViews(tasks, userId, directoryId, state);
-        int from = Math.min(page * size, sessions.size());
-        int to = Math.min(from + size, sessions.size());
-        List<?> content = sessions.subList(from, to).stream()
-                .map(view -> compact ? toCompactSessionSummaryItem(view) : toSessionSummaryDispatchTaskDTO(view))
-                .toList();
-
-        return Map.of(
-                "content", content,
-                "totalSessions", (long) sessions.size(),
-                "page", page,
-                "size", size
-        );
+                                                   boolean compact) {
+        return projectionService().listTasksPagedFromSessionStore(
+                sessionTaskRepository, userId, directoryId, page, size, state, compact);
     }
 
     private Object searchSessionsFromSessionStore(String userId, String keyword, String workerId,
-                                                  String directoryId, int page, int size) {
-        List<SessionTaskEntity> tasks = sessionTaskRepository.findByUserIdOrderByCreatedAtDesc(userId);
-        if (tasks.isEmpty()) {
-            return null;
-        }
-
-        String normalizedKeyword = keyword != null ? keyword.trim().toLowerCase(Locale.ROOT) : null;
-        List<UnifiedSessionView> sessions = buildUnifiedSessionViews(tasks, userId, directoryId, null).stream()
-                .filter(view -> matchesWorkerFilter(view, workerId))
-                .filter(view -> matchesKeywordFilter(view, normalizedKeyword))
-                .toList();
-
-        int from = Math.min(page * size, sessions.size());
-        int to = Math.min(from + size, sessions.size());
-        List<Map<String, Object>> results = sessions.subList(from, to).stream()
-                .map(this::toSearchResult)
-                .toList();
-
-        return Map.of(
-                "results", results,
-                "total", (long) sessions.size(),
-                "page", page,
-                "size", size
-        );
-    }
-
-    private List<UnifiedSessionView> buildUnifiedSessionViews(List<SessionTaskEntity> tasks, String userId,
-                                                              String directoryId, String state) {
-        Map<String, List<SessionTaskEntity>> grouped = groupSessionTasks(tasks);
-        Map<String, SessionEntity> sessionsById = loadSessions(grouped.keySet());
-        Set<String> stateFilter = parseInteractionStates(state);
-
-        return grouped.entrySet().stream()
-                .map(entry -> toUnifiedSessionView(entry.getKey(), entry.getValue(), sessionsById.get(entry.getKey())))
-                .filter(view -> view.session() == null || view.session().getDeletedAt() == null)
-                .filter(view -> view.session() == null || userId.equals(view.session().getUserId()))
-                .filter(view -> matchesDirectoryFilter(view, directoryId))
-                .filter(view -> stateFilter.isEmpty() || stateFilter.contains(resolveInteractionState(view)))
-                .sorted((left, right) -> compareNullableTime(resolveSessionSortTime(right), resolveSessionSortTime(left)))
-                .toList();
-    }
-
-    private Map<String, List<SessionTaskEntity>> groupSessionTasks(List<SessionTaskEntity> tasks) {
-        Map<String, List<SessionTaskEntity>> grouped = new LinkedHashMap<>();
-        for (SessionTaskEntity task : tasks) {
-            String key = task.getSessionId() != null && !task.getSessionId().isBlank()
-                    ? task.getSessionId()
-                    : "task:" + task.getTaskId();
-            grouped.computeIfAbsent(key, ignored -> new ArrayList<>()).add(task);
-        }
-        grouped.values().forEach(group -> group.sort((left, right) -> compareNullableTime(
-                firstNonNull(right.getCreatedAt(), right.getUpdatedAt()),
-                firstNonNull(left.getCreatedAt(), left.getUpdatedAt()))));
-        return grouped;
-    }
-
-    private Map<String, SessionEntity> loadSessions(Collection<String> sessionIds) {
-        List<String> persistedSessionIds = sessionIds.stream()
-                .filter(id -> id != null && !id.isBlank() && !id.startsWith("task:"))
-                .toList();
-        if (persistedSessionIds.isEmpty()) {
-            return Map.of();
-        }
-        return sessionRepository.findAllById(persistedSessionIds).stream()
-                .collect(Collectors.toMap(SessionEntity::getId, session -> session));
-    }
-
-    private UnifiedSessionView toUnifiedSessionView(String sessionKey, List<SessionTaskEntity> tasks, SessionEntity session) {
-        SessionTaskEntity latestTask = tasks.get(0);
-        SessionTaskEntity earliestTask = tasks.get(tasks.size() - 1);
-        return new UnifiedSessionView(sessionKey, session, tasks, latestTask, earliestTask);
-    }
-
-    private boolean matchesWorkerFilter(UnifiedSessionView view, String workerId) {
-        if (workerId == null || workerId.isBlank()) {
-            return true;
-        }
-        String currentWorkerId = firstNonBlank(
-                view.latestTask().getWorkerId(),
-                view.session() != null ? view.session().getCurrentWorkerId() : null
-        );
-        return workerId.equals(currentWorkerId);
-    }
-
-    private boolean matchesDirectoryFilter(UnifiedSessionView view, String directoryId) {
-        if (directoryId == null || directoryId.isBlank()) {
-            return true;
-        }
-        String currentDirectoryId = firstNonBlank(
-                view.latestTask().getDirectoryId(),
-                view.session() != null ? view.session().getCurrentDirectoryId() : null
-        );
-        return directoryId.equals(currentDirectoryId);
-    }
-
-    private boolean matchesKeywordFilter(UnifiedSessionView view, String keyword) {
-        if (keyword == null || keyword.isBlank()) {
-            return true;
-        }
-        if (view.session() != null) {
-            if (containsIgnoreCase(view.session().getTitle(), keyword)
-                    || containsIgnoreCase(view.session().getTagsJson(), keyword)) {
-                return true;
-            }
-        }
-        return view.tasks().stream().anyMatch(task ->
-                containsIgnoreCase(task.getPrompt(), keyword)
-                        || containsIgnoreCase(task.getResultText(), keyword));
-    }
-
-    private Map<String, Object> toSearchResult(UnifiedSessionView view) {
-        BigDecimal totalCost = view.tasks().stream()
-                .map(task -> task.getCostUsd() != null ? task.getCostUsd() : BigDecimal.ZERO)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("sessionId", firstNonBlank(view.latestTask().getSessionId(), view.sessionKey()));
-        result.put("parentSessionId", view.session() != null ? view.session().getParentSessionId() : null);
-        result.put("workerId", firstNonBlank(view.latestTask().getWorkerId(),
-                view.session() != null ? view.session().getCurrentWorkerId() : null));
-        result.put("directoryId", firstNonBlank(view.latestTask().getDirectoryId(),
-                view.session() != null ? view.session().getCurrentDirectoryId() : null));
-        result.put("firstPrompt", truncate(view.earliestTask().getPrompt(), 200));
-        result.put("customTitle", view.session() != null ? view.session().getTitle() : null);
-        result.put("tags", view.session() != null ? parseTags(view.session().getTagsJson()) : List.of());
-        result.put("interactionState", resolveInteractionState(view));
-        result.put("milestoneId", view.session() != null ? view.session().getMilestoneId() : null);
-        result.put("latestTaskId", view.latestTask().getTaskId());
-        result.put("latestStatus", view.latestTask().getStatus());
-        result.put("model", firstNonBlank(view.latestTask().getModel(),
-                view.session() != null ? view.session().getLatestModel() : null));
-        result.put("modelConfigId", view.latestTask().getModelConfigId());
-        result.put("cwd", view.latestTask().getCwd());
-        result.put("source", view.latestTask().getSource());
-        result.put("totalCost", totalCost);
-        result.put("createdAt", view.earliestTask().getCreatedAt());
-        result.put("updatedAt", resolveSessionSortTime(view));
-        return result;
-    }
-
-    private DispatchTaskDTO toSessionSummaryDispatchTaskDTO(UnifiedSessionView view) {
-        DispatchTaskDTO summary = toDispatchTaskDTO(view.latestTask());
-        applySessionSummaryFields(
-                summary,
-                view.tasks().size(),
-                sumCost(view.tasks()),
-                sumInputTokens(view.tasks()),
-                sumOutputTokens(view.tasks()),
-                view.earliestTask().getPrompt()
-        );
-        return summary;
-    }
-
-    private Map<String, Object> toCompactSessionSummaryItem(UnifiedSessionView view) {
-        SessionTaskEntity latestTask = view.latestTask();
-        SessionTaskEntity earliestTask = view.earliestTask();
-        SessionEntity session = view.session();
-        Map<String, Object> state = parseJsonObject(latestTask.getTaskStateJson());
-
-        Map<String, Object> item = new LinkedHashMap<>();
-        item.put("taskId", latestTask.getTaskId());
-        item.put("workerTaskId", latestTask.getProviderTaskId());
-        item.put("sessionId", firstNonBlank(latestTask.getSessionId(), view.sessionKey()));
-        item.put("parentSessionId", session != null ? session.getParentSessionId() : null);
-        item.put("workerId", firstNonBlank(latestTask.getWorkerId(), session != null ? session.getCurrentWorkerId() : null));
-        item.put("agentId", latestTask.getAgentId());
-        item.put("providerType", latestTask.getProviderType());
-        item.put("prompt", truncate(latestTask.getPrompt(), 500));
-        item.put("cwd", latestTask.getCwd());
-        item.put("directoryId", firstNonBlank(latestTask.getDirectoryId(), session != null ? session.getCurrentDirectoryId() : null));
-        item.put("status", latestTask.getStatus());
-        item.put("model", firstNonBlank(latestTask.getModel(), session != null ? session.getLatestModel() : null));
-        item.put("modelConfigId", latestTask.getModelConfigId());
-        item.put("costUsd", latestTask.getCostUsd());
-        item.put("inputTokens", latestTask.getInputTokens());
-        item.put("outputTokens", latestTask.getOutputTokens());
-        item.put("durationMs", latestTask.getDurationMs());
-        item.put("numTurns", latestTask.getNumTurns());
-        item.put("source", latestTask.getSource());
-        item.put("createdAt", latestTask.getCreatedAt());
-        item.put("updatedAt", latestTask.getUpdatedAt());
-        item.put("sessionTaskCount", view.tasks().size());
-        item.put("sessionTotalCostUsd", sumCost(view.tasks()));
-        item.put("sessionInputTokens", sumInputTokens(view.tasks()));
-        item.put("sessionOutputTokens", sumOutputTokens(view.tasks()));
-        item.put("sessionFirstPrompt", truncate(earliestTask.getPrompt(), 500));
-        item.put("claudeSessionId", asString(state.get("claudeSessionId")));
-        item.put("codexThreadId", asString(state.get("codexThreadId")));
-        item.put("geminiSessionId", asString(state.get("geminiSessionId")));
-        item.put("contextId", asString(state.get("contextId")));
-        item.put("fileCheckpointingEnabled", asBoolean(state.get("fileCheckpointingEnabled")));
-        item.put("interactionState", resolveInteractionState(view));
-        return item;
+                                                   String directoryId, int page, int size) {
+        return projectionService().searchSessionsFromSessionStore(
+                sessionTaskRepository, userId, keyword, workerId, directoryId, page, size);
     }
 
     private Object toCompactTaskItem(Object task) {
-        Map<String, Object> item = new LinkedHashMap<>();
-        putIfPresent(item, "taskId", readProperty(task, "taskId"));
-        putIfPresent(item, "workerTaskId", readProperty(task, "workerTaskId"));
-        putIfPresent(item, "sessionId", readProperty(task, "sessionId"));
-        putIfPresent(item, "parentSessionId", readProperty(task, "parentSessionId"));
-        putIfPresent(item, "workerId", readProperty(task, "workerId"));
-        putIfPresent(item, "agentId", readProperty(task, "agentId"));
-        putIfPresent(item, "providerType", readProperty(task, "providerType"));
-        putIfPresent(item, "prompt", truncate(readStringProperty(task, "prompt"), 500));
-        putIfPresent(item, "cwd", readProperty(task, "cwd"));
-        putIfPresent(item, "directoryId", readProperty(task, "directoryId"));
-        putIfPresent(item, "status", readProperty(task, "status"));
-        putIfPresent(item, "model", readProperty(task, "model"));
-        putIfPresent(item, "modelConfigId", readProperty(task, "modelConfigId"));
-        putIfPresent(item, "costUsd", readProperty(task, "costUsd"));
-        putIfPresent(item, "inputTokens", readProperty(task, "inputTokens"));
-        putIfPresent(item, "outputTokens", readProperty(task, "outputTokens"));
-        putIfPresent(item, "durationMs", readProperty(task, "durationMs"));
-        putIfPresent(item, "numTurns", readProperty(task, "numTurns"));
-        putIfPresent(item, "source", readProperty(task, "source"));
-        putIfPresent(item, "createdAt", readProperty(task, "createdAt"));
-        putIfPresent(item, "updatedAt", readProperty(task, "updatedAt"));
-        putIfPresent(item, "sessionTaskCount", readProperty(task, "sessionTaskCount"));
-        putIfPresent(item, "sessionTotalCostUsd", readProperty(task, "sessionTotalCostUsd"));
-        putIfPresent(item, "sessionInputTokens", readProperty(task, "sessionInputTokens"));
-        putIfPresent(item, "sessionOutputTokens", readProperty(task, "sessionOutputTokens"));
-        putIfPresent(item, "sessionFirstPrompt", truncate(readStringProperty(task, "sessionFirstPrompt"), 500));
-        putIfPresent(item, "claudeSessionId", readProperty(task, "claudeSessionId"));
-        putIfPresent(item, "codexThreadId", readProperty(task, "codexThreadId"));
-        putIfPresent(item, "geminiSessionId", readProperty(task, "geminiSessionId"));
-        putIfPresent(item, "contextId", readProperty(task, "contextId"));
-        putIfPresent(item, "fileCheckpointingEnabled", readProperty(task, "fileCheckpointingEnabled"));
-        return item;
-    }
-
-    private void putIfPresent(Map<String, Object> target, String key, Object value) {
-        if (value != null) {
-            target.put(key, value);
-        }
-    }
-
-    private Object toSessionSummaryItem(List<Object> sessionTasks) {
-        Object latest = sessionTasks.stream()
-                .max((left, right) -> compareNullableTime(latestItemTime(left), latestItemTime(right)))
-                .orElse(null);
-        if (latest == null) {
-            return Map.of();
-        }
-
-        BigDecimal totalCost = sessionTasks.stream()
-                .map(task -> readProperty(task, "costUsd"))
-                .map(this::toBigDecimal)
-                .filter(Objects::nonNull)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        Long inputTokens = sumLongProperty(sessionTasks, "inputTokens");
-        Long outputTokens = sumLongProperty(sessionTasks, "outputTokens");
-        String firstPrompt = sessionTasks.stream()
-                .min((left, right) -> compareNullableTime(latestItemTime(left), latestItemTime(right)))
-                .map(task -> readStringProperty(task, "prompt"))
-                .orElse(null);
-
-        if (latest instanceof DispatchTaskDTO dto) {
-            applySessionSummaryFields(dto, sessionTasks.size(), totalCost, inputTokens, outputTokens, firstPrompt);
-            return dto;
-        }
-        if (latest instanceof Map<?, ?> map) {
-            Map<String, Object> copy = new LinkedHashMap<>();
-            map.forEach((key, value) -> {
-                if (key != null) {
-                    copy.put(key.toString(), value);
-                }
-            });
-            copy.put("sessionTaskCount", sessionTasks.size());
-            copy.put("sessionTotalCostUsd", totalCost);
-            copy.put("sessionInputTokens", inputTokens);
-            copy.put("sessionOutputTokens", outputTokens);
-            copy.put("sessionFirstPrompt", firstPrompt);
-            return copy;
-        }
-        setSessionSummaryByReflection(latest, sessionTasks.size(), totalCost, inputTokens, outputTokens, firstPrompt);
-        return latest;
-    }
-
-    private void applySessionSummaryFields(DispatchTaskDTO dto, int taskCount, BigDecimal totalCost,
-                                           Long inputTokens, Long outputTokens, String firstPrompt) {
-        dto.setSessionTaskCount(taskCount);
-        dto.setSessionTotalCostUsd(totalCost);
-        dto.setSessionInputTokens(inputTokens);
-        dto.setSessionOutputTokens(outputTokens);
-        dto.setSessionFirstPrompt(firstPrompt);
-    }
-
-    private void setSessionSummaryByReflection(Object target, int taskCount, BigDecimal totalCost,
-                                               Long inputTokens, Long outputTokens, String firstPrompt) {
-        invokeSetter(target, "setSessionTaskCount", Integer.class, taskCount);
-        invokeSetter(target, "setSessionTotalCostUsd", BigDecimal.class, totalCost);
-        invokeSetter(target, "setSessionInputTokens", Long.class, inputTokens);
-        invokeSetter(target, "setSessionOutputTokens", Long.class, outputTokens);
-        invokeSetter(target, "setSessionFirstPrompt", String.class, firstPrompt);
-    }
-
-    private void invokeSetter(Object target, String methodName, Class<?> parameterType, Object value) {
-        try {
-            Method setter = target.getClass().getMethod(methodName, parameterType);
-            setter.invoke(target, value);
-        } catch (Exception ignored) {
-        }
-    }
-
-    private BigDecimal sumCost(List<SessionTaskEntity> tasks) {
-        return tasks.stream()
-                .map(task -> task.getCostUsd() != null ? task.getCostUsd() : BigDecimal.ZERO)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
-    private Long sumInputTokens(List<SessionTaskEntity> tasks) {
-        return tasks.stream()
-                .map(SessionTaskEntity::getInputTokens)
-                .filter(Objects::nonNull)
-                .reduce(0L, Long::sum);
-    }
-
-    private Long sumOutputTokens(List<SessionTaskEntity> tasks) {
-        return tasks.stream()
-                .map(SessionTaskEntity::getOutputTokens)
-                .filter(Objects::nonNull)
-                .reduce(0L, Long::sum);
-    }
-
-    private Long sumLongProperty(List<Object> tasks, String property) {
-        return tasks.stream()
-                .map(task -> readProperty(task, property))
-                .filter(Number.class::isInstance)
-                .map(Number.class::cast)
-                .map(Number::longValue)
-                .reduce(0L, Long::sum);
-    }
-
-    private BigDecimal toBigDecimal(Object value) {
-        if (value instanceof BigDecimal decimal) {
-            return decimal;
-        }
-        if (value instanceof Number number) {
-            return BigDecimal.valueOf(number.doubleValue());
-        }
-        if (value instanceof String text && !text.isBlank()) {
-            try {
-                return new BigDecimal(text);
-            } catch (NumberFormatException ignored) {
-                return null;
-            }
-        }
-        return null;
+        return projectionService().toCompactTaskItem(task);
     }
 
     private List<DispatchTaskDTO> toDispatchTaskDTOs(List<SessionTaskEntity> entities) {
-        if (entities == null || entities.isEmpty()) {
-            return List.of();
-        }
-        Map<String, String> directoryNames = loadDirectoryNames(entities);
-        Map<String, SessionEntity> sessionsById = loadSessions(entities.stream()
-                .map(SessionTaskEntity::getSessionId)
-                .filter(Objects::nonNull)
-                .toList());
-        return entities.stream()
-                .map(entity -> toDispatchTaskDTO(entity, directoryNames, sessionsById))
-                .toList();
+        return projectionService().toDispatchTaskDTOs(entities);
     }
 
     private DispatchTaskDTO toDispatchTaskDTO(SessionTaskEntity entity) {
-        return toDispatchTaskDTO(
-                entity,
-                loadDirectoryNames(List.of(entity)),
-                loadSessions(List.of(entity.getSessionId()))
-        );
-    }
-
-    private DispatchTaskDTO toDispatchTaskDTO(SessionTaskEntity entity,
-                                              Map<String, String> directoryNames,
-                                              Map<String, SessionEntity> sessionsById) {
-        Map<String, Object> state = parseJsonObject(entity.getTaskStateJson());
-        SessionEntity session = sessionsById.get(entity.getSessionId());
-        String directoryId = entity.getDirectoryId();
-        DispatchTaskDTO.DispatchTaskDTOBuilder builder = DispatchTaskDTO.builder()
-                .taskId(entity.getTaskId())
-                .workerTaskId(entity.getProviderTaskId())
-                .sessionId(entity.getSessionId())
-                .parentSessionId(session != null ? session.getParentSessionId() : null)
-                .workerId(entity.getWorkerId())
-                .userId(entity.getUserId())
-                .agentId(entity.getAgentId())
-                .providerType(entity.getProviderType())
-                .prompt(entity.getPrompt())
-                .cwd(entity.getCwd())
-                .directoryId(directoryId)
-                .status(entity.getStatus())
-                .model(entity.getModel())
-                .costUsd(entity.getCostUsd())
-                .inputTokens(entity.getInputTokens())
-                .outputTokens(entity.getOutputTokens())
-                .durationMs(entity.getDurationMs())
-                .numTurns(entity.getNumTurns())
-                .resultText(entity.getResultText())
-                .errorMessage(entity.getErrorMessage())
-                .lastAckedSeq(entity.getLastAckedSeq())
-                .source(entity.getSource())
-                .createdAt(entity.getCreatedAt())
-                .updatedAt(entity.getUpdatedAt())
-                .directoryName(directoryId == null ? null : directoryNames.get(directoryId))
-                .claudeSessionId(asString(state.get("claudeSessionId")))
-                .codexThreadId(asString(state.get("codexThreadId")))
-                .geminiSessionId(asString(state.get("geminiSessionId")))
-                .contextId(asString(state.get("contextId")))
-                .modelConfigId(entity.getModelConfigId())
-                .fileCheckpointingEnabled(asBoolean(state.get("fileCheckpointingEnabled")));
-        if (state.containsKey("checkpoints")) {
-            builder.checkpoints(writeJson(state.get("checkpoints")));
-        }
-        return builder.build();
-    }
-
-    private Map<String, String> loadDirectoryNames(List<SessionTaskEntity> entities) {
-        if (workingDirectoryRepository == null || entities == null || entities.isEmpty()) {
-            return Map.of();
-        }
-        List<String> directoryIds = entities.stream()
-                .map(SessionTaskEntity::getDirectoryId)
-                .filter(Objects::nonNull)
-                .filter(id -> !id.isBlank())
-                .distinct()
-                .toList();
-        if (directoryIds.isEmpty()) {
-            return Map.of();
-        }
-        List<com.foggy.navigator.common.entity.WorkingDirectoryEntity> directories =
-                workingDirectoryRepository.findByDirectoryIdIn(directoryIds);
-        if (directories == null || directories.isEmpty()) {
-            return Map.of();
-        }
-        return directories.stream()
-                .collect(Collectors.toMap(
-                        com.foggy.navigator.common.entity.WorkingDirectoryEntity::getDirectoryId,
-                        com.foggy.navigator.common.entity.WorkingDirectoryEntity::getProjectName,
-                        (left, right) -> left,
-                        LinkedHashMap::new
-                ));
+        return projectionService().toDispatchTaskDTO(entity);
     }
 
     private Map<String, Object> parseJsonObject(String json) {
@@ -1513,18 +796,6 @@ public class TaskDispatchFacade {
         } catch (Exception e) {
             log.warn("Failed to parse task/session JSON payload: {}", json);
             return Map.of();
-        }
-    }
-
-    private List<String> parseTags(String tagsJson) {
-        if (tagsJson == null || tagsJson.isBlank()) {
-            return List.of();
-        }
-        try {
-            return OBJECT_MAPPER.readValue(tagsJson, new TypeReference<List<String>>() {});
-        } catch (Exception e) {
-            log.warn("Failed to parse session tags JSON: {}", tagsJson);
-            return List.of();
         }
     }
 
@@ -1540,56 +811,6 @@ public class TaskDispatchFacade {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize task state payload", e);
         }
-    }
-
-    private Set<String> parseInteractionStates(String interactionState) {
-        if (interactionState == null || interactionState.isBlank()) {
-            return Set.of();
-        }
-        return Arrays.stream(interactionState.split(","))
-                .map(String::trim)
-                .filter(state -> !state.isEmpty())
-                .collect(Collectors.toSet());
-    }
-
-    private String resolveInteractionState(UnifiedSessionView view) {
-        if (view.session() != null && view.session().getInteractionState() != null
-                && !view.session().getInteractionState().isBlank()) {
-            return view.session().getInteractionState();
-        }
-        return deriveInteractionState(view.latestTask().getStatus());
-    }
-
-    private String deriveInteractionState(String taskStatus) {
-        if ("RUNNING".equals(taskStatus) || "PENDING".equals(taskStatus)) {
-            return "PROCESSING";
-        }
-        if ("COMPLETED".equals(taskStatus) || "FAILED".equals(taskStatus)
-                || "ABORTED".equals(taskStatus) || "AWAITING_PERMISSION".equals(taskStatus)) {
-            return "AWAITING_REPLY";
-        }
-        return null;
-    }
-
-    private LocalDateTime resolveSessionSortTime(UnifiedSessionView view) {
-        if (view.session() != null) {
-            LocalDateTime sessionTime = firstNonNull(view.session().getLastActivityAt(), view.session().getUpdatedAt());
-            if (sessionTime != null) {
-                return sessionTime;
-            }
-        }
-        return firstNonNull(view.latestTask().getUpdatedAt(), view.latestTask().getCreatedAt());
-    }
-
-    private boolean containsIgnoreCase(String value, String keyword) {
-        return value != null && value.toLowerCase(Locale.ROOT).contains(keyword);
-    }
-
-    private String truncate(String value, int maxLength) {
-        if (value == null || value.length() <= maxLength) {
-            return value;
-        }
-        return value.substring(0, maxLength);
     }
 
     /**
@@ -1610,12 +831,13 @@ public class TaskDispatchFacade {
             if (hasModel) st.setModel(model);
             if (hasModelConfigId) st.setModelConfigId(modelConfigId);
             if (hasContextId || hasDiagnostics) {
-                Map<String, Object> state = new LinkedHashMap<>(parseJsonObject(st.getTaskStateJson()));
+                Map<String, Object> state = new LinkedHashMap<>();
                 if (hasContextId) {
                     state.put("contextId", request.getContextId().trim());
                 }
                 copyDiagnosticMetadata(state, request.getMetadata());
-                st.setTaskStateJson(writeJson(state));
+                st.setTaskStateJson(ProviderStateCodec.mergeTaskValues(
+                        st.getTaskStateJson(), st.getProviderType(), state));
             }
             sessionTaskRepository.save(st);
         });
@@ -1672,20 +894,6 @@ public class TaskDispatchFacade {
                 "idempotency_key");
     }
 
-    private String asString(Object value) {
-        return value != null ? value.toString() : null;
-    }
-
-    private Boolean asBoolean(Object value) {
-        if (value instanceof Boolean bool) {
-            return bool;
-        }
-        if (value instanceof String text && !text.isBlank()) {
-            return Boolean.parseBoolean(text);
-        }
-        return null;
-    }
-
     private String firstNonBlank(String... values) {
         for (String value : values) {
             if (value != null && !value.isBlank()) {
@@ -1695,268 +903,10 @@ public class TaskDispatchFacade {
         return null;
     }
 
-    @SafeVarargs
-    private final <T> T firstNonNull(T... values) {
-        for (T value : values) {
-            if (value != null) {
-                return value;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * 路由决策核心 —— 根据 agentId 格式决定路由路径：
-     * <ol>
-     *   <li>"directory#xxx" → Direct Provider Route（隐式目录 Agent，providerType 从 modelConfigId 推导）</li>
-     *   <li>真实 agentId → A2A Route（通过 UnifiedAgentResolver 解析）</li>
-     *   <li>无 agentId → 尝试 session 绑定的 agentId，或 fallback 到 Direct Provider Route</li>
-     * </ol>
-     */
-    private CreateExecutionTarget resolveCreateExecutionTarget(TaskDispatchRequest request) {
-        String agentId = request.getAgentId();
-
-        // Case 1: directory# 隐式 Agent → Direct Provider Route
-        if (agentId != null && DirectoryAgentId.isDirectoryAgent(agentId)) {
-            return resolveDirectoryAgentTarget(request, agentId);
-        }
-
-        // Case 2: 真实 agentId → A2A Route
-        if (agentId != null && !agentId.isBlank()) {
-            return CreateExecutionTarget.a2a(new AgentLookup(agentId, "EXPLICIT_AGENT"));
-        }
-
-        // Case 3: 无 agentId → 尝试 session 绑定
-        String sessionAgentId = resolveBoundOrExplicitAgentId(null, request.getSessionId());
-        if (sessionAgentId != null && !sessionAgentId.isBlank()) {
-            if (DirectoryAgentId.isDirectoryAgent(sessionAgentId)) {
-                return resolveDirectoryAgentTarget(request, sessionAgentId);
-            }
-            return CreateExecutionTarget.a2a(new AgentLookup(sessionAgentId, "SESSION_AGENT"));
-        }
-
-        // Case 4: 显式 providerType → Direct Provider Route
-        String requestedProviderType = request.getProviderType();
-        if (requestedProviderType != null && !requestedProviderType.isBlank()
-                && findTaskQueryProviderByType(requestedProviderType).isPresent()) {
-            return CreateExecutionTarget.direct(requestedProviderType);
-        }
-
-        // Case 5: 完全无 Agent → 通过 modelConfigId 推导 providerType，走 Direct Provider Route（向后兼容 ad-hoc cwd）
-        String providerType = resolveProviderTypeFromModelConfig(request.getModelConfigId());
-        if (providerType != null && findTaskQueryProviderByType(providerType).isPresent()) {
-            return CreateExecutionTarget.direct(providerType);
-        }
-
-        throw new IllegalArgumentException("无法确定执行后端：请指定 agentId 或 modelConfigId");
-    }
-
-    /**
-     * directory# 隐式 Agent 路由：从目录解析 modelConfigId，推导 providerType。
-     * 同时将解析出的 directoryId 回填到 request（供 provider 使用）。
-     */
-    private CreateExecutionTarget resolveDirectoryAgentTarget(TaskDispatchRequest request, String directoryAgentId) {
-        String directoryId = DirectoryAgentId.extractDirectoryId(directoryAgentId);
-
-        // 回填 directoryId（如果 request 中未设置）
-        if (request.getDirectoryId() == null || request.getDirectoryId().isBlank()) {
-            request.setDirectoryId(directoryId);
-        }
-
-        // modelConfigId 解析：显式传入 > 目录默认
-        String modelConfigId = resolveModelConfigIdFromDirectory(request.getModelConfigId(), directoryId);
-        if (modelConfigId == null) {
-            throw new IllegalArgumentException("该工作目录需要配置 LLM 模型才能执行任务（directoryId=" + directoryId + "）");
-        }
-        // 将解析后的 modelConfigId 回填到 request，确保 provider 拿到有效值
-        request.setModelConfigId(modelConfigId);
-
-        String providerType = resolveProviderTypeFromModelConfig(modelConfigId);
-        if (providerType == null) {
-            throw new IllegalArgumentException("modelConfigId " + modelConfigId + " 无法推导执行后端类型");
-        }
-        String requestedProviderType = request.getProviderType();
-        if (requestedProviderType != null && !requestedProviderType.isBlank()
-                && findTaskQueryProviderByType(requestedProviderType).isPresent()
-                && isModelProviderCompatible(providerType, requestedProviderType)) {
-            return CreateExecutionTarget.direct(requestedProviderType);
-        }
-        return CreateExecutionTarget.direct(providerType);
-    }
-
-    /**
-     * 从目录解析 modelConfigId：显式传入优先，fallback 到目录默认配置。
-     */
-    private String resolveModelConfigIdFromDirectory(String explicitModelConfigId, String directoryId) {
-        if (explicitModelConfigId != null && !explicitModelConfigId.isBlank()) {
-            return explicitModelConfigId;
-        }
-        if (workingDirectoryRepository != null && directoryId != null && !directoryId.isBlank()) {
-            return workingDirectoryRepository.findByDirectoryId(directoryId)
-                    .map(com.foggy.navigator.common.entity.WorkingDirectoryEntity::getDefaultModelConfigId)
-                    .filter(id -> !id.isBlank())
-                    .orElse(null);
-        }
-        return null;
-    }
-
     private DispatchTaskDTO createTaskDirect(String providerType, TaskDispatchRequest request, AgentResolveContext context) {
-        validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
-        validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
-
-        TaskQueryProvider provider = findTaskQueryProviderByType(providerType)
-                .orElseThrow(() -> new IllegalArgumentException("Provider not available: " + providerType));
-        Map<String, Object> params = buildDirectCreateParams(request);
-        DispatchTaskDTO dto = provider.createTaskDirect(params, context.getUserId(), context.getTenantId());
-        log.info("Dispatched task directly via provider: providerType={}, taskId={}, workerId={}, directoryId={}",
-                providerType, dto.getTaskId(), request.getWorkerId(), request.getDirectoryId());
+        DispatchTaskDTO dto = operationRouter().createTaskDirect(providerType, request, context);
         persistTaskRequestFields(dto.getTaskId(), request);
         return dto;
-    }
-
-    /**
-     * Request → Map 公共转换：提取所有标准字段到 Map（供 Direct/Resume/A2A 各路径复用）。
-     */
-    @SuppressWarnings("deprecation")
-    private Map<String, Object> toCommonParams(TaskDispatchRequest request) {
-        Map<String, Object> params = new LinkedHashMap<>();
-        if (request.getMetadata() != null && !request.getMetadata().isEmpty()) {
-            params.putAll(request.getMetadata());
-        }
-        putIfNotBlank(params, "agentId", request.getAgentId());
-        putIfNotBlank(params, "providerType", request.getProviderType());
-        putIfNotBlank(params, "sessionId", request.getSessionId());
-        putIfNotBlank(params, "contextId", request.getContextId());
-        putIfNotBlank(params, "workerId", request.getWorkerId());
-        putIfNotBlank(params, "prompt", request.getPrompt());
-        putIfNotBlank(params, "cwd", request.getCwd());
-        putIfNotBlank(params, "directoryId", request.getDirectoryId());
-        putIfNotBlank(params, "model", request.getModel());
-        putIfNotBlank(params, "modelConfigId", request.getModelConfigId());
-        putIfNotBlank(params, "permissionMode", request.getPermissionMode());
-        putIfNotBlank(params, "agentTeamsConfigId", request.getAgentTeamsConfigId());
-        putIfNotBlank(params, "agentTeamsJson", request.getAgentTeamsJson());
-        if (request.getContext() != null && !request.getContext().isEmpty()) {
-            params.put("context", request.getContext());
-        }
-        // claudeSessionId / codexThreadId / geminiSessionId 不再透传 — Provider 从 SessionEntity.providerStateJson 恢复
-        if (request.getMaxTurns() != null) {
-            params.put("maxTurns", request.getMaxTurns());
-        }
-        if (request.getImages() != null && !request.getImages().isEmpty()) {
-            params.put("images", String.join(",", request.getImages()));
-        }
-        if (request.getAttachments() != null && !request.getAttachments().isEmpty()) {
-            params.put("attachments", request.getAttachments());
-        }
-        return params;
-    }
-
-    private Map<String, Object> buildDirectCreateParams(TaskDispatchRequest request) {
-        return toCommonParams(request);
-    }
-
-    private String mapWorkerBackendToProviderType(String workerBackend) {
-        if (workerBackend == null || workerBackend.isBlank()) {
-            return null;
-        }
-        return switch (workerBackend) {
-            case "OPENAI_CODEX" -> "codex-worker";
-            case "CLAUDE_CODE" -> "claude-worker";
-            case "GEMINI_CLI" -> "gemini-worker";
-            case "LANGGRAPH_BIZ" -> "langgraph-biz-worker";
-            default -> null;
-        };
-    }
-
-    private String resolveBoundOrExplicitAgentId(@Nullable String requestedAgentId, @Nullable String sessionId) {
-        if (requestedAgentId != null && !requestedAgentId.isBlank()) {
-            return requestedAgentId;
-        }
-        if (sessionId == null || sessionId.isBlank()) {
-            return null;
-        }
-        return sessionRepository.findById(sessionId)
-                .map(SessionEntity::getAgentId)
-                .filter(agentId -> !agentId.isBlank())
-                .orElse(null);
-    }
-
-    private String resolveProviderTypeFromModelConfig(String modelConfigId) {
-        if (modelConfigId == null || modelConfigId.isBlank()) {
-            return null;
-        }
-        return llmModelManager.getModelConfig(modelConfigId)
-                .map(cfg -> mapWorkerBackendToProviderType(cfg.getWorkerBackend()))
-                .orElse(null);
-    }
-
-    /**
-     * Resume 上下文规范化 —— session 已绑定 provider 时，
-     * 将 request 中与 session provider 不兼容的字段静默修正，
-     * 避免前端传入的 modelConfigId / providerType 与 session 绑定冲突。
-     * <p>
-     * 仅在 resume 路径调用；createTask 首次绑定时保留硬校验。
-     */
-    private void normalizeResumeRequest(TaskDispatchRequest request, String resolvedProviderType) {
-        if (resolvedProviderType == null || resolvedProviderType.isBlank()) {
-            return;
-        }
-
-        // 1. providerType 对齐
-        String reqProvider = request.getProviderType();
-        if (reqProvider != null && !reqProvider.isBlank() && !resolvedProviderType.equals(reqProvider)) {
-            log.info("Resume normalize: overriding providerType {} → {} (session-bound)",
-                    reqProvider, resolvedProviderType);
-            request.setProviderType(resolvedProviderType);
-        }
-
-        // 2. modelConfigId 兼容性检查，不兼容则清空（让 provider 内部用自己的默认配置）
-        String modelConfigId = request.getModelConfigId();
-        if (modelConfigId != null && !modelConfigId.isBlank()) {
-            String modelProviderType = resolveProviderTypeFromModelConfig(modelConfigId);
-            if (modelProviderType != null && !isModelProviderCompatible(modelProviderType, resolvedProviderType)) {
-                log.info("Resume normalize: clearing modelConfigId {} (targets {}, session bound to {})",
-                        modelConfigId, modelProviderType, resolvedProviderType);
-                request.setModelConfigId(null);
-            }
-        }
-    }
-
-    private void validateRequestedProviderTypeCompatibility(String requestedProviderType, String resolvedProviderType) {
-        if (requestedProviderType == null || requestedProviderType.isBlank()
-                || resolvedProviderType == null || resolvedProviderType.isBlank()) {
-            return;
-        }
-
-        if (!resolvedProviderType.equals(requestedProviderType)) {
-            throw new IllegalArgumentException(
-                    "providerType " + requestedProviderType + " conflicts with resolved provider " + resolvedProviderType);
-        }
-    }
-
-    private void validateModelConfigProviderCompatibility(String modelConfigId, String providerType) {
-        if (modelConfigId == null || modelConfigId.isBlank() || providerType == null || providerType.isBlank()) {
-            return;
-        }
-
-        String modelProviderType = resolveProviderTypeFromModelConfig(modelConfigId);
-        if (modelProviderType == null || modelProviderType.isBlank()) {
-            return;
-        }
-
-        if (!isModelProviderCompatible(modelProviderType, providerType)) {
-            throw new IllegalArgumentException(
-                    "modelConfigId " + modelConfigId + " targets provider " + modelProviderType
-                            + ", but resolved provider is " + providerType);
-        }
-    }
-
-    private boolean isModelProviderCompatible(String modelProviderType, String providerType) {
-        if (Objects.equals(modelProviderType, providerType)) {
-            return true;
-        }
-        return CODEX_PROVIDER_TYPE.equals(modelProviderType) && CODEX_BIZ_PROVIDER_TYPE.equals(providerType);
     }
 
     private String resolveLogicalAgentId(A2aAgent agent, String lookupId) {
@@ -1966,42 +916,6 @@ public class TaskDispatchFacade {
             return agent.getAgentCard().getId();
         }
         return lookupId;
-    }
-
-    private static final class AgentLookup {
-        private final String lookupId;
-        private final String bindingSource;
-
-        private AgentLookup(String lookupId, String bindingSource) {
-            this.lookupId = lookupId;
-            this.bindingSource = bindingSource;
-        }
-    }
-
-    private record CreateExecutionTarget(@Nullable String providerType,
-                                         @Nullable AgentLookup agentLookup,
-                                         boolean directProviderRoute) {
-
-        private static CreateExecutionTarget direct(String providerType) {
-            return new CreateExecutionTarget(providerType, null, true);
-        }
-
-        private static CreateExecutionTarget a2a(AgentLookup agentLookup) {
-            return new CreateExecutionTarget(null, agentLookup, false);
-        }
-    }
-
-    private record TaskPageEnvelope(List<Object> content, long totalSessions) {
-    }
-
-    private record SearchEnvelope(List<Object> results, long total) {
-    }
-
-    private record UnifiedSessionView(String sessionKey,
-                                      SessionEntity session,
-                                      List<SessionTaskEntity> tasks,
-                                      SessionTaskEntity latestTask,
-                                      SessionTaskEntity earliestTask) {
     }
 
 }

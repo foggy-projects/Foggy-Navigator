@@ -1,7 +1,5 @@
 package com.foggy.navigator.claude.worker.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
@@ -34,12 +32,16 @@ import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.spi.agent.TaskPageResult;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
@@ -81,6 +83,24 @@ public class ClaudeTaskService implements TaskQueryProvider {
     private static final String AGENT_ID = "claude-worker";
     private static final java.util.Set<String> TERMINAL_STATES = java.util.Set.of("COMPLETED", "FAILED", "ABORTED");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
+            TaskQueryCapability.CREATE_TASK_DIRECT,
+            TaskQueryCapability.RESPOND_TO_TASK,
+            TaskQueryCapability.RECONNECT_TASK,
+            TaskQueryCapability.RESYNC_TASK,
+            TaskQueryCapability.REWIND_TASK,
+            TaskQueryCapability.RESUME_TASK,
+            TaskQueryCapability.CANCEL_TASK,
+            TaskQueryCapability.DELETE_TASK,
+            TaskQueryCapability.SCAN_CHECKPOINTS,
+            TaskQueryCapability.LIST_TASKS_PAGED,
+            TaskQueryCapability.SEARCH_SESSIONS,
+            TaskQueryCapability.LIST_TASKS_BY_DIRECTORY,
+            TaskQueryCapability.LIST_TASKS_BY_DIRECTORY_PAGED,
+            TaskQueryCapability.LIST_WORKER_SESSIONS,
+            TaskQueryCapability.GET_WORKER_SESSION_MESSAGE_COUNT,
+            TaskQueryCapability.GET_WORKER_SESSION_MESSAGES,
+            TaskQueryCapability.SYNC_WORKER_SESSIONS);
 
     private final ClaudeTaskRepository taskRepository;
     private final ClaudeWorkerService workerService;
@@ -1133,18 +1153,9 @@ public class ClaudeTaskService implements TaskQueryProvider {
             deletedSessionIds = sessionEntityRepository.findDeletedByWorkerIdAndUserId(workerId, userId)
                     .stream()
                     .map(s -> {
-                        // Extract claudeSessionId from providerStateJson
-                        String json = s.getProviderStateJson();
-                        if (json != null && !json.isBlank()) {
-                            try {
-                                Map<String, Object> state = OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
-                                Object csId = state.get("claudeSessionId");
-                                return csId != null ? csId.toString() : null;
-                            } catch (Exception e) {
-                                log.warn("Failed to parse providerStateJson for deleted session {}: {}", s.getId(), e.getMessage());
-                            }
-                        }
-                        return null;
+                        // Extract claudeSessionId from providerStateJson.
+                        return ProviderStateCodec.readStringOrNull(
+                                s.getProviderStateJson(), ProviderStateCodec.FIELD_CLAUDE_SESSION_ID);
                     })
                     .filter(id -> id != null && !id.isEmpty())
                     .collect(Collectors.toSet());
@@ -2135,12 +2146,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
     private void clearClaudeSessionId(String sessionId) {
         if (sessionEntityRepository == null || sessionId == null) return;
         sessionEntityRepository.findById(sessionId).ifPresent(session -> {
-            String providerState = session.getProviderStateJson();
-            if (providerState != null && !providerState.isBlank()) {
-                session.setProviderStateJson(
-                        mergeJsonValue(providerState, "claudeSessionId", null)
-                );
-            }
+            session.setProviderStateJson(ProviderStateCodec.mergeSessionValue(
+                    session.getProviderStateJson(),
+                    firstNonBlank(session.getProviderType(), AGENT_ID),
+                    ProviderStateCodec.FIELD_CLAUDE_SESSION_ID,
+                    null));
             sessionEntityRepository.save(session);
         });
     }
@@ -2217,7 +2227,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
         if (sessionEntityRepository == null || configId == null) return;
         SessionEntity session = getOrCreateSessionEntity(sessionId, workerId, userId);
         if (session == null) return;
-        session.setProviderStateJson(mergeJsonValue(session.getProviderStateJson(), "agentTeamsConfigId", configId));
+        session.setProviderStateJson(ProviderStateCodec.mergeSessionValue(
+                session.getProviderStateJson(),
+                firstNonBlank(session.getProviderType(), AGENT_ID),
+                ProviderStateCodec.FIELD_AGENT_TEAMS_CONFIG_ID,
+                configId));
         sessionEntityRepository.save(session);
     }
 
@@ -2227,20 +2241,9 @@ public class ClaudeTaskService implements TaskQueryProvider {
     private String readAgentTeamsConfigId(String sessionId) {
         if (sessionEntityRepository == null) return null;
         return sessionEntityRepository.findById(sessionId)
-                .map(session -> readJsonValue(session.getProviderStateJson(), "agentTeamsConfigId"))
+                .map(session -> ProviderStateCodec.readStringOrNull(
+                        session.getProviderStateJson(), ProviderStateCodec.FIELD_AGENT_TEAMS_CONFIG_ID))
                 .orElse(null);
-    }
-
-    private String readJsonValue(String json, String key) {
-        if (json == null || json.isBlank()) return null;
-        try {
-            Map<String, Object> values = OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
-            Object value = values.get(key);
-            return value != null ? value.toString() : null;
-        } catch (Exception e) {
-            log.warn("Failed to read key '{}' from JSON: {}", key, json);
-            return null;
-        }
     }
 
     private String blankToNull(String value) {
@@ -2381,7 +2384,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         sessionTask.setLastAliveAt(entity.getLastAliveAt());
         sessionTask.setCreatedAt(entity.getCreatedAt());
         sessionTask.setUpdatedAt(entity.getUpdatedAt());
-        sessionTask.setTaskStateJson(buildClaudeTaskStateJson(entity));
+        sessionTask.setTaskStateJson(buildClaudeTaskStateJson(entity, sessionTask.getTaskStateJson()));
         sessionTaskRepository.save(sessionTask);
     }
 
@@ -2398,61 +2401,34 @@ public class ClaudeTaskService implements TaskQueryProvider {
             session.setLatestTaskId(entity.getTaskId());
             session.setLatestModel(firstNonBlank(entity.getModel(), session.getLatestModel()));
             session.setLastActivityAt(firstNonNull(entity.getUpdatedAt(), entity.getLastAliveAt(), LocalDateTime.now()));
-            session.setProviderStateJson(mergeJsonValue(
-                    mergeJsonValue(session.getProviderStateJson(), "claudeSessionId", entity.getClaudeSessionId()),
-                    "agentTeamsConfigId", entity.getAgentTeamsConfigId()));
+            Map<String, Object> providerStateValues = new LinkedHashMap<>();
+            providerStateValues.put(ProviderStateCodec.FIELD_CLAUDE_SESSION_ID, entity.getClaudeSessionId());
+            providerStateValues.put(ProviderStateCodec.FIELD_AGENT_TEAMS_CONFIG_ID, entity.getAgentTeamsConfigId());
+            session.setProviderStateJson(ProviderStateCodec.mergeSessionValues(
+                    session.getProviderStateJson(),
+                    firstNonBlank(session.getProviderType(), AGENT_ID),
+                    providerStateValues));
             sessionEntityRepository.save(session);
         });
     }
 
-    private String buildClaudeTaskStateJson(ClaudeTaskEntity entity) {
+    private String buildClaudeTaskStateJson(ClaudeTaskEntity entity, String existingJson) {
         Map<String, Object> state = new LinkedHashMap<>();
-        putIfNotBlank(state, "claudeSessionId", entity.getClaudeSessionId());
-        putIfNotBlank(state, "contextId", entity.getContextId());
+        putIfNotBlank(state, ProviderStateCodec.FIELD_CLAUDE_SESSION_ID, entity.getClaudeSessionId());
+        putIfNotBlank(state, ProviderStateCodec.FIELD_CONTEXT_ID, entity.getContextId());
         putIfNotBlank(state, "dedupKey", entity.getDedupKey());
-        putIfNotBlank(state, "agentTeamsConfigId", entity.getAgentTeamsConfigId());
+        putIfNotBlank(state, ProviderStateCodec.FIELD_AGENT_TEAMS_CONFIG_ID, entity.getAgentTeamsConfigId());
         if (entity.getFileCheckpointingEnabled() != null) {
             state.put("fileCheckpointingEnabled", entity.getFileCheckpointingEnabled());
         }
         if (entity.getCheckpoints() != null && !entity.getCheckpoints().isBlank()) {
             try {
-                state.put("checkpoints", OBJECT_MAPPER.readValue(entity.getCheckpoints(), Object.class));
+                state.put(ProviderStateCodec.FIELD_CHECKPOINTS, OBJECT_MAPPER.readValue(entity.getCheckpoints(), Object.class));
             } catch (Exception e) {
-                state.put("checkpoints", entity.getCheckpoints());
+                state.put(ProviderStateCodec.FIELD_CHECKPOINTS, entity.getCheckpoints());
             }
         }
-        if (state.isEmpty()) {
-            return null;
-        }
-        try {
-            return OBJECT_MAPPER.writeValueAsString(state);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize Claude task state", e);
-        }
-    }
-
-    private String mergeJsonValue(String json, String key, String value) {
-        Map<String, Object> values = new LinkedHashMap<>();
-        if (json != null && !json.isBlank()) {
-            try {
-                values.putAll(OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {}));
-            } catch (Exception e) {
-                log.warn("Failed to parse session providerStateJson, recreating JSON: {}", json);
-            }
-        }
-        if (value == null || value.isBlank()) {
-            values.remove(key);
-        } else {
-            values.put(key, value);
-        }
-        if (values.isEmpty()) {
-            return null;
-        }
-        try {
-            return OBJECT_MAPPER.writeValueAsString(values);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize session provider state", e);
-        }
+        return ProviderStateCodec.mergeTaskValues(existingJson, AGENT_ID, state);
     }
 
     private void putIfNotBlank(Map<String, Object> target, String key, String value) {
@@ -2522,7 +2498,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
      * 关键词在 prompt、customTitle、tags 三个字段上做 union 匹配；
      * Worker/目录过滤做 intersect 取交集。
      */
-    public SessionSearchResultDTO.Page searchSessions(
+    public SessionSearchResultDTO.Page searchSessionsPage(
             String userId, String keyword, String workerId,
             String directoryId, int page, int size) {
 
@@ -2650,6 +2626,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
     @Override
     public String getProviderType() {
         return AGENT_ID;
+    }
+
+    @Override
+    public Set<TaskQueryCapability> getCapabilities() {
+        return CAPABILITIES;
     }
 
     @Override
@@ -2865,10 +2846,10 @@ public class ClaudeTaskService implements TaskQueryProvider {
         String sessionId = form.getSessionId();
         String claudeSessionId = null;
         if (sessionId != null && !sessionId.isEmpty()) {
-            claudeSessionId = readJsonValue(
+            claudeSessionId = ProviderStateCodec.readStringOrNull(
                     sessionEntityRepository.findById(sessionId)
                             .map(SessionEntity::getProviderStateJson).orElse(null),
-                    "claudeSessionId");
+                    ProviderStateCodec.FIELD_CLAUDE_SESSION_ID);
         }
 
         if (claudeSessionId == null || claudeSessionId.isEmpty()) {
@@ -2926,11 +2907,16 @@ public class ClaudeTaskService implements TaskQueryProvider {
 
     @Override
     public Object listTasksPaged(String userId, int page, int size, String state) {
-        return listTasksBySession(userId, page, size, state);
+        SessionPageDTO result = listTasksBySession(userId, page, size, state);
+        return TaskPageResult.of(result.getContent(), result.getTotalSessions(), result.getPage(), result.getSize());
     }
 
-    // searchSessions(userId, keyword, workerId, directoryId, page, size) is already defined
-    // above and satisfies the SPI interface (covariant return: SessionSearchResultDTO.Page → Object)
+    @Override
+    public Object searchSessions(String userId, String keyword, String workerId,
+                                 String directoryId, int page, int size) {
+        SessionSearchResultDTO.Page result = searchSessionsPage(userId, keyword, workerId, directoryId, page, size);
+        return TaskSearchResult.of(result.getResults(), result.getTotal(), result.getPage(), result.getSize());
+    }
 
     @Override
     public List<DispatchTaskDTO> listTasksByDirectory(String userId, String directoryId) {
@@ -2942,7 +2928,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
     @Override
     public Object listTasksByDirectoryPaged(String userId, String directoryId,
                                              int page, int size, String state) {
-        return listTasksByDirectorySession(userId, directoryId, page, size, state);
+        SessionPageDTO result = listTasksByDirectorySession(userId, directoryId, page, size, state);
+        return TaskPageResult.of(result.getContent(), result.getTotalSessions(), result.getPage(), result.getSize());
     }
 
     // ── Worker Session 查询 SPI 实现 ──

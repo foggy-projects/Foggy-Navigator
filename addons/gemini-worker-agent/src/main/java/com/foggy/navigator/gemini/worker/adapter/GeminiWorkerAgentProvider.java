@@ -1,9 +1,9 @@
 package com.foggy.navigator.gemini.worker.adapter;
 
-import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.gemini.worker.repository.GeminiCodingAgentRepository;
 import com.foggy.navigator.gemini.worker.service.GeminiTaskService;
 import com.foggy.navigator.session.agent.AbortCoordinatingA2aAgent;
@@ -13,6 +13,7 @@ import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.RequiredArgsConstructor;
@@ -36,7 +37,7 @@ public class GeminiWorkerAgentProvider implements A2aAgentProvider {
 
     @Override
     public String getProviderType() {
-        return GeminiTaskService.AGENT_ID;
+        return ProviderRouteRegistry.PROVIDER_GEMINI_WORKER;
     }
 
     @Override
@@ -82,7 +83,7 @@ public class GeminiWorkerAgentProvider implements A2aAgentProvider {
     private boolean isManagedAgent(CodingAgentEntity entity) {
         String providerType = resolveProviderType(entity.getDefaultModelConfigId());
         if (providerType != null) {
-            return GeminiTaskService.AGENT_ID.equals(providerType);
+            return ProviderRouteRegistry.PROVIDER_GEMINI_WORKER.equals(providerType);
         }
         return "LOCAL_GEMINI_WORKER".equals(entity.getAgentType());
     }
@@ -92,22 +93,8 @@ public class GeminiWorkerAgentProvider implements A2aAgentProvider {
             return null;
         }
         return llmModelManager.getModelConfig(modelConfigId)
-                .map(LlmModelConfigDTO::getWorkerBackend)
-                .map(this::mapWorkerBackendToProviderType)
+                .flatMap(config -> ProviderRouteRegistry.providerTypeForWorkerBackend(config.getWorkerBackend()))
                 .orElse(null);
-    }
-
-    private String mapWorkerBackendToProviderType(String workerBackend) {
-        if (workerBackend == null || workerBackend.isBlank()) {
-            return null;
-        }
-        return switch (workerBackend) {
-            case "OPENAI_CODEX" -> "codex-worker";
-            case "CLAUDE_CODE" -> "claude-worker";
-            case "GEMINI_CLI" -> GeminiTaskService.AGENT_ID;
-            case "LANGGRAPH_BIZ" -> "langgraph-biz-worker";
-            default -> null;
-        };
     }
 
     private A2aAgent toA2aAgent(CodingAgentEntity entity, String userId) {
@@ -116,7 +103,8 @@ public class GeminiWorkerAgentProvider implements A2aAgentProvider {
                 : null;
         InnerA2aAgent inner = new GeminiWorkerInnerA2aAgent(entity, taskService, cwd);
         A2aAgent contextAgent = new ContextResolvingA2aAgent(inner, contextStore, entity);
-        return new AbortCoordinatingA2aAgent(contextAgent, inner, taskService);
+        TaskLookupProvider lookupProvider = taskService;
+        return new AbortCoordinatingA2aAgent(contextAgent, inner, lookupProvider);
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {

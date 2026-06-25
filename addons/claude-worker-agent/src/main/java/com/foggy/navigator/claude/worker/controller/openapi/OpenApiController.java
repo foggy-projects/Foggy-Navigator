@@ -42,6 +42,7 @@ import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.agent.TaskSubmittingA2aAgentDecorator;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
@@ -84,8 +85,8 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class OpenApiController {
 
-    private static final String BACKEND_OPENAI_CODEX = "OPENAI_CODEX";
-    private static final String BACKEND_LANGGRAPH_BIZ = "LANGGRAPH_BIZ";
+    private static final String BACKEND_OPENAI_CODEX = ProviderRouteRegistry.BACKEND_OPENAI_CODEX;
+    private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
     private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
 
     private final OpenApiProvisioningService provisioningService;
@@ -686,7 +687,7 @@ public class OpenApiController {
     }
 
     private boolean isBackend(String actual, String expected) {
-        return StringUtils.hasText(actual) && expected.equalsIgnoreCase(actual.trim());
+        return expected.equals(ProviderRouteRegistry.canonicalWorkerBackendOrNull(actual));
     }
 
     private void injectWorkspaceExecutionPolicy(
@@ -2346,8 +2347,10 @@ public class OpenApiController {
         if (stage != null) {
             return stage;
         }
-        if ("OPENAI_CODEX".equalsIgnoreCase(providerType) || "OPENAI_CODEX".equalsIgnoreCase(workerBackend)
-                || "codex-worker".equalsIgnoreCase(providerType)) {
+        String providerWorkerBackend = ProviderRouteRegistry.workerBackendForRouteTokenOrNull(providerType);
+        String normalizedWorkerBackend = ProviderRouteRegistry.canonicalWorkerBackendOrNull(workerBackend);
+        if (BACKEND_OPENAI_CODEX.equals(providerWorkerBackend)
+                || BACKEND_OPENAI_CODEX.equals(normalizedWorkerBackend)) {
             return "RUNTIME";
         }
         return "DISPATCH";
@@ -2396,14 +2399,10 @@ public class OpenApiController {
         if (!StringUtils.hasText(providerType)) {
             return null;
         }
-        String normalized = providerType.trim().toUpperCase(Locale.ROOT);
-        return switch (normalized) {
-            case "CODEX-WORKER", "CODEX-BIZ-WORKER", "OPENAI_CODEX", "CODEX" -> "OPENAI_CODEX";
-            case "CLAUDE-WORKER", "CLAUDE", "CLAUDE_CODE" -> "CLAUDE_CODE";
-            case "GEMINI-WORKER", "GEMINI", "GEMINI_CLI" -> "GEMINI_CLI";
-            case "LANGGRAPH-BIZ-WORKER", "LANGGRAPH", "LANGGRAPH_BIZ" -> "LANGGRAPH_BIZ";
-            default -> normalized;
-        };
+        String workerBackend = ProviderRouteRegistry.workerBackendForRouteTokenOrNull(providerType);
+        return workerBackend != null
+                ? workerBackend
+                : providerType.trim().toUpperCase(Locale.ROOT);
     }
 
     private Map<String, Object> parseJsonMap(String json) {

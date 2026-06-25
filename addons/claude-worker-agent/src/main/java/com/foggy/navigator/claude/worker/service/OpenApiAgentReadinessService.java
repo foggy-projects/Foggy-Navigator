@@ -26,6 +26,7 @@ import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.env.Environment;
@@ -48,9 +49,9 @@ public class OpenApiAgentReadinessService {
 
     private static final String UPSTREAM_PROPERTY_PREFIX = "foggy.navigator.business.agent.upstreams.";
     private static final Pattern UPSTREAM_REF_PATTERN = Pattern.compile("[A-Za-z0-9._-]{1,128}");
-    private static final String BACKEND_CLAUDE_CODE = "CLAUDE_CODE";
-    private static final String BACKEND_OPENAI_CODEX = "OPENAI_CODEX";
-    private static final String BACKEND_LANGGRAPH_BIZ = "LANGGRAPH_BIZ";
+    private static final String BACKEND_CLAUDE_CODE = ProviderRouteRegistry.BACKEND_CLAUDE_CODE;
+    private static final String BACKEND_OPENAI_CODEX = ProviderRouteRegistry.BACKEND_OPENAI_CODEX;
+    private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
     private static final String ROLE_CLAUDE_CODE = "claudeCode";
     private static final String ROLE_CODEX = "codex";
     private static final String ROLE_BIZ = "biz";
@@ -600,7 +601,7 @@ public class OpenApiAgentReadinessService {
     }
 
     private boolean isBackend(String actual, String expected) {
-        return expected.equalsIgnoreCase(trimToNull(actual));
+        return expected.equals(ProviderRouteRegistry.canonicalWorkerBackendOrNull(actual));
     }
 
     private boolean sameText(String left, String right) {

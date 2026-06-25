@@ -1,8 +1,5 @@
 package com.foggy.navigator.codex.worker.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
@@ -23,7 +20,11 @@ import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.spi.agent.TaskPageResult;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
@@ -56,10 +57,19 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class CodexTaskService implements TaskQueryProvider {
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     public static final String CODEX_PROVIDER_TYPE = "codex-worker";
     public static final String CODEX_BIZ_PROVIDER_TYPE = "codex-biz-worker";
     private static final String AGENT_ID = CODEX_PROVIDER_TYPE;
+    private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
+            TaskQueryCapability.CREATE_TASK_DIRECT,
+            TaskQueryCapability.RESUME_TASK,
+            TaskQueryCapability.CANCEL_TASK,
+            TaskQueryCapability.DELETE_TASK,
+            TaskQueryCapability.RESYNC_TASK,
+            TaskQueryCapability.REWIND_TASK,
+            TaskQueryCapability.LIST_TASKS_PAGED,
+            TaskQueryCapability.SEARCH_SESSIONS,
+            TaskQueryCapability.LIST_TASKS_BY_DIRECTORY_PAGED);
 
     private final CodexTaskRepository taskRepository;
     private final WorkerManagementFacade workerManagementFacade;
@@ -128,10 +138,10 @@ public class CodexTaskService implements TaskQueryProvider {
         // codexThreadId 从 SessionEntity.providerStateJson 恢复，不再从 request 透传
         String sessionId = (String) params.get("sessionId");
         if (sessionId != null && !sessionId.isBlank() && sessionEntityRepository != null) {
-            String codexThreadId = readJsonValue(
+            String codexThreadId = ProviderStateCodec.readStringOrNull(
                     sessionEntityRepository.findById(sessionId)
                             .map(SessionEntity::getProviderStateJson).orElse(null),
-                    "codexThreadId");
+                    ProviderStateCodec.FIELD_CODEX_THREAD_ID);
             form.setCodexThreadId(codexThreadId);
         }
         if (sessionId == null || sessionId.isBlank()) {
@@ -509,6 +519,11 @@ public class CodexTaskService implements TaskQueryProvider {
     }
 
     @Override
+    public Set<TaskQueryCapability> getCapabilities() {
+        return CAPABILITIES;
+    }
+
+    @Override
     public DispatchTaskDTO createTaskDirect(java.util.Map<String, Object> params,
                                              String userId, String tenantId) {
         CreateCodexTaskForm form = new CreateCodexTaskForm();
@@ -613,7 +628,7 @@ public class CodexTaskService implements TaskQueryProvider {
                 || (workerId != null && !workerId.isBlank())
                 || (directoryId != null && !directoryId.isBlank());
         if (!hasFilter) {
-            return Map.of("results", List.of(), "total", 0L, "page", page, "size", size);
+            return TaskSearchResult.empty(page, size);
         }
 
         String normalizedKeyword = keyword != null ? keyword.trim().toLowerCase(Locale.ROOT) : null;
@@ -635,12 +650,7 @@ public class CodexTaskService implements TaskQueryProvider {
         long total = filtered.size();
         int from = Math.min(page * size, filtered.size());
         int to = Math.min(from + size, filtered.size());
-        return Map.of(
-                "results", filtered.subList(from, to),
-                "total", total,
-                "page", page,
-                "size", size
-        );
+        return TaskSearchResult.of(filtered.subList(from, to), total, page, size);
     }
 
     private DispatchTaskDTO toDispatchDTO(CodexTaskEntity entity) {
@@ -714,7 +724,7 @@ public class CodexTaskService implements TaskQueryProvider {
         return Map.of("status", "RESYNCED", "action", "RECONNECTED", "taskId", taskId);
     }
 
-    private Map<String, Object> buildSessionPage(List<CodexTaskEntity> tasks, int page, int size, String interactionState) {
+    private TaskPageResult buildSessionPage(List<CodexTaskEntity> tasks, int page, int size, String interactionState) {
         Set<String> states = parseInteractionStates(interactionState);
         List<List<CodexTaskEntity>> sessions = new ArrayList<>(groupTasksBySession(tasks).values());
         if (!states.isEmpty()) {
@@ -731,12 +741,7 @@ public class CodexTaskService implements TaskQueryProvider {
                 .map(this::toDispatchDTO)
                 .toList();
 
-        return Map.of(
-                "content", content,
-                "totalSessions", totalSessions,
-                "page", page,
-                "size", size
-        );
+        return TaskPageResult.of(content, totalSessions, page, size);
     }
 
     private Map<String, List<CodexTaskEntity>> groupTasksBySession(List<CodexTaskEntity> tasks) {
@@ -924,7 +929,11 @@ public class CodexTaskService implements TaskQueryProvider {
         session.setLatestModel(firstNonBlank(entity.getModel(), session.getLatestModel()));
         session.setLastActivityAt(firstNonNull(entity.getUpdatedAt(), entity.getLastAliveAt(), LocalDateTime.now()));
         session.setInteractionState(deriveInteractionState(entity.getStatus()));
-        session.setProviderStateJson(mergeJsonValue(session.getProviderStateJson(), "codexThreadId", entity.getCodexThreadId()));
+        session.setProviderStateJson(ProviderStateCodec.mergeSessionValue(
+                session.getProviderStateJson(),
+                providerType,
+                ProviderStateCodec.FIELD_CODEX_THREAD_ID,
+                entity.getCodexThreadId()));
         sessionEntityRepository.save(session);
     }
 
@@ -946,30 +955,10 @@ public class CodexTaskService implements TaskQueryProvider {
     }
 
     private String buildCodexTaskStateJson(CodexTaskEntity entity, String existingJson) {
-        Map<String, Object> state = parseTaskStateJson(existingJson);
-        putIfNotBlank(state, "codexThreadId", entity.getCodexThreadId());
-        putIfNotBlank(state, "contextId", entity.getContextId());
-        if (state.isEmpty()) {
-            return null;
-        }
-        try {
-            return OBJECT_MAPPER.writeValueAsString(state);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize Codex task state", e);
-        }
-    }
-
-    private Map<String, Object> parseTaskStateJson(String json) {
         Map<String, Object> state = new LinkedHashMap<>();
-        if (json == null || json.isBlank()) {
-            return state;
-        }
-        try {
-            state.putAll(OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {}));
-        } catch (Exception e) {
-            log.debug("Failed to parse codex task state JSON: {}", e.getMessage());
-        }
-        return state;
+        putIfNotBlank(state, ProviderStateCodec.FIELD_CODEX_THREAD_ID, entity.getCodexThreadId());
+        putIfNotBlank(state, ProviderStateCodec.FIELD_CONTEXT_ID, entity.getContextId());
+        return ProviderStateCodec.mergeTaskValues(existingJson, AGENT_ID, state);
     }
 
     private String resolveTaskContextId(CodexTaskEntity entity) {
@@ -981,45 +970,9 @@ public class CodexTaskService implements TaskQueryProvider {
         }
         return sessionTaskRepository.findByTaskId(entity.getTaskId())
                 .map(SessionTaskEntity::getTaskStateJson)
-                .map(json -> readJsonValue(json, "contextId"))
+                .map(json -> ProviderStateCodec.readStringOrNull(json, ProviderStateCodec.FIELD_CONTEXT_ID))
                 .filter(contextId -> contextId != null && !contextId.isBlank())
                 .orElse(null);
-    }
-
-    private String mergeJsonValue(String json, String key, String value) {
-        Map<String, Object> values = new LinkedHashMap<>();
-        if (json != null && !json.isBlank()) {
-            try {
-                values.putAll(OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {}));
-            } catch (Exception e) {
-                log.warn("Failed to parse session providerStateJson, recreating JSON: {}", json);
-            }
-        }
-        if (value == null || value.isBlank()) {
-            values.remove(key);
-        } else {
-            values.put(key, value);
-        }
-        if (values.isEmpty()) {
-            return null;
-        }
-        try {
-            return OBJECT_MAPPER.writeValueAsString(values);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize session provider state", e);
-        }
-    }
-
-    private String readJsonValue(String json, String key) {
-        if (json == null || json.isBlank()) return null;
-        try {
-            Map<String, Object> values = OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
-            Object value = values.get(key);
-            return value != null ? value.toString() : null;
-        } catch (Exception e) {
-            log.warn("Failed to read key '{}' from JSON: {}", key, json);
-            return null;
-        }
     }
 
     private void putIfNotBlank(Map<String, Object> target, String key, String value) {
@@ -1297,7 +1250,11 @@ public class CodexTaskService implements TaskQueryProvider {
             return;
         }
         sessionEntityRepository.findById(sessionId).ifPresent(session -> {
-            session.setProviderStateJson(mergeJsonValue(session.getProviderStateJson(), "codexThreadId", null));
+            session.setProviderStateJson(ProviderStateCodec.mergeSessionValue(
+                    session.getProviderStateJson(),
+                    firstNonBlank(session.getProviderType(), CODEX_PROVIDER_TYPE),
+                    ProviderStateCodec.FIELD_CODEX_THREAD_ID,
+                    null));
             sessionEntityRepository.save(session);
         });
     }

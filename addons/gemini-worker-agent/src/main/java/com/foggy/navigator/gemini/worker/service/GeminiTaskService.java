@@ -16,11 +16,13 @@ import com.foggy.navigator.common.model.GeminiConfig;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.gemini.worker.model.dto.GeminiTaskDTO;
 import com.foggy.navigator.gemini.worker.model.entity.GeminiTaskEntity;
 import com.foggy.navigator.gemini.worker.model.form.CreateGeminiTaskForm;
 import com.foggy.navigator.gemini.worker.repository.GeminiCodingAgentRepository;
 import com.foggy.navigator.gemini.worker.repository.GeminiTaskRepository;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
@@ -40,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -51,6 +54,11 @@ import java.util.function.Consumer;
 public class GeminiTaskService implements TaskQueryProvider {
 
     public static final String AGENT_ID = "gemini-worker";
+    private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
+            TaskQueryCapability.CREATE_TASK_DIRECT,
+            TaskQueryCapability.RESUME_TASK,
+            TaskQueryCapability.CANCEL_TASK,
+            TaskQueryCapability.DELETE_TASK);
 
     private final GeminiTaskRepository taskRepository;
     private final WorkerManagementFacade workerManagementFacade;
@@ -124,10 +132,10 @@ public class GeminiTaskService implements TaskQueryProvider {
 
         String sessionId = form.getSessionId();
         if (sessionId != null && !sessionId.isBlank() && sessionEntityRepository != null) {
-            String geminiSessionId = readJsonValue(
+            String geminiSessionId = ProviderStateCodec.readStringOrNull(
                     sessionEntityRepository.findById(sessionId)
                             .map(SessionEntity::getProviderStateJson).orElse(null),
-                    "geminiSessionId");
+                    ProviderStateCodec.FIELD_GEMINI_SESSION_ID);
             form.setGeminiSessionId(geminiSessionId);
         }
         if (form.getGeminiSessionId() == null || form.getGeminiSessionId().isBlank()) {
@@ -365,6 +373,11 @@ public class GeminiTaskService implements TaskQueryProvider {
     }
 
     @Override
+    public Set<TaskQueryCapability> getCapabilities() {
+        return CAPABILITIES;
+    }
+
+    @Override
     public Optional<DispatchTaskDTO> getTaskById(String taskId) {
         return taskRepository.findByTaskId(taskId).map(this::toDispatchDTO);
     }
@@ -454,7 +467,11 @@ public class GeminiTaskService implements TaskQueryProvider {
                 session.setProviderType(AGENT_ID);
                 changed = true;
             }
-            String mergedState = mergeJsonValue(session.getProviderStateJson(), "geminiSessionId", entity.getGeminiSessionId());
+            String mergedState = ProviderStateCodec.mergeSessionValue(
+                    session.getProviderStateJson(),
+                    AGENT_ID,
+                    ProviderStateCodec.FIELD_GEMINI_SESSION_ID,
+                    entity.getGeminiSessionId());
             if (!Objects.equals(session.getProviderStateJson(), mergedState)) {
                 session.setProviderStateJson(mergedState);
                 changed = true;
@@ -465,10 +482,12 @@ public class GeminiTaskService implements TaskQueryProvider {
         });
     }
 
-    private String buildGeminiTaskStateJson(GeminiTaskEntity entity) {
-        Map<String, Object> state = new LinkedHashMap<>();
-        putIfNotBlank(state, "geminiSessionId", entity.getGeminiSessionId());
-        return JsonSupport.write(state);
+    private String buildGeminiTaskStateJson(GeminiTaskEntity entity, String existingJson) {
+        return ProviderStateCodec.mergeTaskValue(
+                existingJson,
+                AGENT_ID,
+                ProviderStateCodec.FIELD_GEMINI_SESSION_ID,
+                entity.getGeminiSessionId());
     }
 
     private void fillSessionTaskProjection(SessionTaskEntity projection, GeminiTaskEntity entity) {
@@ -498,7 +517,7 @@ public class GeminiTaskService implements TaskQueryProvider {
         projection.setCreatedAt(entity.getCreatedAt());
         projection.setUpdatedAt(entity.getUpdatedAt());
         projection.setModelConfigId(null);
-        projection.setTaskStateJson(buildGeminiTaskStateJson(entity));
+        projection.setTaskStateJson(buildGeminiTaskStateJson(entity, projection.getTaskStateJson()));
     }
 
     private void applyWorkerMetadata(GeminiTaskEntity entity, String workerTaskId, String geminiSessionId, String model) {
@@ -512,16 +531,6 @@ public class GeminiTaskService implements TaskQueryProvider {
             return value;
         }
         return value.substring(0, maxLength);
-    }
-
-    private String mergeJsonValue(String json, String key, String value) {
-        Map<String, Object> state = JsonSupport.read(json);
-        if (value == null || value.isBlank()) {
-            state.remove(key);
-        } else {
-            state.put(key, value);
-        }
-        return JsonSupport.write(state);
     }
 
     private void publishStatusChange(GeminiTaskEntity entity, String previousStatus) {
@@ -680,16 +689,6 @@ public class GeminiTaskService implements TaskQueryProvider {
             }
         }
         return new GeminiAuthResult(apiKey, baseUrl, envVars.isEmpty() ? null : envVars);
-    }
-
-    private static String readJsonValue(String json, String key) {
-        Map<String, Object> data = JsonSupport.read(json);
-        Object value = data.get(key);
-        if (value == null) {
-            return null;
-        }
-        String text = value.toString();
-        return text.isBlank() ? null : text;
     }
 
     private static void putIfNotBlank(Map<String, Object> target, String key, String value) {

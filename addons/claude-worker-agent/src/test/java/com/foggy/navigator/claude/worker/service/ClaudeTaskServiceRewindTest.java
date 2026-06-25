@@ -5,22 +5,23 @@ import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Map;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class ClaudeTaskServiceRewindTest {
 
@@ -34,12 +35,14 @@ class ClaudeTaskServiceRewindTest {
     private ClaudeTaskRepository taskRepository;
     private SessionManager sessionManager;
     private ClaudeWorkerService workerService;
+    private SessionEntityRepository sessionEntityRepository;
 
     @BeforeEach
     void setUp() {
         taskRepository = mock(ClaudeTaskRepository.class);
         sessionManager = mock(SessionManager.class);
         workerService = mock(ClaudeWorkerService.class);
+        sessionEntityRepository = mock(SessionEntityRepository.class);
 
         var agentTeamsConfigService = mock(AgentTeamsConfigService.class);
         var directoryService = mock(WorkingDirectoryService.class);
@@ -65,6 +68,7 @@ class ClaudeTaskServiceRewindTest {
                 credentialEncryptor,
                 txTemplate
         );
+        ReflectionTestUtils.setField(service, "sessionEntityRepository", sessionEntityRepository);
     }
 
     @Test
@@ -128,6 +132,54 @@ class ClaudeTaskServiceRewindTest {
         verify(client).rewindFiles(CLAUDE_SESSION_ID, "cp-1", "D:\\projects");
         verify(client).rewindConversation(CLAUDE_SESSION_ID, 2);
         verify(sessionManager).truncateMessagesFromTurn(SESSION_ID, 2);
+    }
+
+    @Test
+    void rewindTask_firstTurnSessionCleared_removesClaudeSessionIdFromProviderState() {
+        ClaudeTaskEntity task = createCompletedTask();
+        ClaudeWorkerEntity worker = createWorkerEntity();
+        ClaudeWorkerClient client = mock(ClaudeWorkerClient.class);
+        SessionEntity session = new SessionEntity();
+        session.setId(SESSION_ID);
+        session.setProviderType("claude-worker");
+        session.setProviderStateJson(ProviderStateCodec.mergeSessionValues(
+                "{\"other\":\"keep\"}",
+                "claude-worker",
+                Map.of(
+                        ProviderStateCodec.FIELD_CLAUDE_SESSION_ID, CLAUDE_SESSION_ID,
+                        ProviderStateCodec.FIELD_AGENT_TEAMS_CONFIG_ID, "teams-1"
+                )));
+
+        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(task));
+        when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(worker);
+        when(workerService.createClient(worker)).thenReturn(client);
+        when(client.rewindFiles(CLAUDE_SESSION_ID, "cp-1", "D:\\projects"))
+                .thenReturn(reactor.core.publisher.Mono.just(Map.of("status", "rewound")));
+        when(client.rewindConversation(CLAUDE_SESSION_ID, 1))
+                .thenReturn(reactor.core.publisher.Mono.just(Map.of(
+                        "status", "rewound",
+                        "session_cleared", true
+                )));
+        when(sessionManager.truncateMessagesFromTurn(SESSION_ID, 1)).thenReturn(4);
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
+        when(sessionEntityRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) service.rewindTask(
+                TASK_ID, USER_ID, Map.of(
+                        "mode", "file_rewind",
+                        "checkpointId", "cp-1",
+                        "turnIndex", 1
+                ));
+
+        assertNull(result.get("claudeSessionId"));
+        Map<String, Object> state = ProviderStateCodec.parseObject(session.getProviderStateJson());
+        assertFalse(state.containsKey(ProviderStateCodec.FIELD_CLAUDE_SESSION_ID));
+        assertEquals("teams-1", state.get(ProviderStateCodec.FIELD_AGENT_TEAMS_CONFIG_ID));
+        assertEquals("keep", state.get("other"));
+        assertEquals(ProviderStateCodec.CURRENT_SCHEMA_VERSION, state.get(ProviderStateCodec.FIELD_SCHEMA_VERSION));
+        assertEquals("claude-worker", state.get(ProviderStateCodec.FIELD_PROVIDER_TYPE));
+        verify(sessionEntityRepository).save(session);
     }
 
     @Test

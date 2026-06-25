@@ -1539,6 +1539,17 @@ class OpenApiControllerMessageMappingTest {
         assertTrue(error.getMessage().contains("Task not found: task-1"));
     }
 
+    @Test
+    void workerBackendFromProviderType_usesSharedRouteAliasesAndPreservesUnknownFallback() throws Exception {
+        OpenApiController controller = newController();
+        Method method = OpenApiController.class.getDeclaredMethod("workerBackendFromProviderType", String.class);
+        method.setAccessible(true);
+
+        assertEquals("OPENAI_CODEX", method.invoke(controller, "codex-biz-worker"));
+        assertEquals("GEMINI_CLI", method.invoke(controller, "gemini"));
+        assertEquals("CUSTOM-PROVIDER", method.invoke(controller, "custom-provider"));
+    }
+
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity)
             throws Exception {
         Method method = OpenApiController.class.getDeclaredMethod(

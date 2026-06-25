@@ -2,10 +2,10 @@ package com.foggy.navigator.codex.worker.adapter;
 
 import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
-import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.session.agent.AbortCoordinatingA2aAgent;
 import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -13,6 +13,7 @@ import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.RequiredArgsConstructor;
@@ -40,7 +41,7 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
 
     @Override
     public String getProviderType() {
-        return "codex-worker";
+        return ProviderRouteRegistry.PROVIDER_CODEX_WORKER;
     }
 
     @Override
@@ -77,8 +78,9 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
         String cwd = resolveDefaultCwd(entity, userId);
         InnerA2aAgent inner = new CodexWorkerInnerA2aAgent(entity, taskService, cwd);
         A2aAgent contextAgent = new ContextResolvingA2aAgent(inner, contextStore, entity);
+        TaskLookupProvider lookupProvider = taskService;
         // 装饰链：AbortCoordinatingA2aAgent → ContextResolvingA2aAgent → InnerA2aAgent
-        return new AbortCoordinatingA2aAgent(contextAgent, inner, taskService);
+        return new AbortCoordinatingA2aAgent(contextAgent, inner, lookupProvider);
     }
 
     /**
@@ -116,7 +118,7 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
     private boolean isManagedAgent(CodingAgentEntity entity) {
         String providerType = resolveProviderType(entity.getDefaultModelConfigId());
         if (providerType != null) {
-            return "codex-worker".equals(providerType);
+            return ProviderRouteRegistry.PROVIDER_CODEX_WORKER.equals(providerType);
         }
         return "LOCAL_CODEX_WORKER".equals(entity.getAgentType());
     }
@@ -126,27 +128,13 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
             return null;
         }
         return llmModelManager.getModelConfig(modelConfigId)
-                .map(LlmModelConfigDTO::getWorkerBackend)
-                .map(this::mapWorkerBackendToProviderType)
+                .flatMap(config -> ProviderRouteRegistry.providerTypeForWorkerBackend(config.getWorkerBackend()))
                 .orElse(null);
-    }
-
-    private String mapWorkerBackendToProviderType(String workerBackend) {
-        if (workerBackend == null || workerBackend.isBlank()) {
-            return null;
-        }
-        return switch (workerBackend) {
-            case "OPENAI_CODEX" -> "codex-worker";
-            case "CLAUDE_CODE" -> "claude-worker";
-            case "GEMINI_CLI" -> "gemini-worker";
-            case "LANGGRAPH_BIZ" -> "langgraph-biz-worker";
-            default -> null;
-        };
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {
         return AgentCardBuilder.fromEntity(entity,
                 "coding", "Execute coding tasks via OpenAI Codex",
-                List.of("coding", "codex-worker"));
+                List.of("coding", ProviderRouteRegistry.PROVIDER_CODEX_WORKER));
     }
 }

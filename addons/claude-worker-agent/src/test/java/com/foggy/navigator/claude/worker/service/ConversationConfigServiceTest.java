@@ -6,6 +6,7 @@ import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -50,6 +52,21 @@ class ConversationConfigServiceTest {
     }
 
     @Test
+    void getOrCreate_readsSchemaVersionedAgentTeamsProviderState() {
+        SessionEntity session = buildSession("s1", "w1", "u1");
+        session.setProviderStateJson(ProviderStateCodec.mergeSessionValue(
+                null,
+                "claude-worker",
+                ProviderStateCodec.FIELD_AGENT_TEAMS_CONFIG_ID,
+                "teams-1"));
+        when(sessionRepository.findById("s1")).thenReturn(Optional.of(session));
+
+        ConversationConfigEntity result = service.getOrCreate("s1", "w1", "u1");
+
+        assertEquals("teams-1", result.getAgentTeamsConfigId());
+    }
+
+    @Test
     void getOrCreate_missingSession_createsBackedSessionRecord() {
         when(sessionRepository.findById("s1")).thenReturn(Optional.empty());
         when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -76,6 +93,30 @@ class ConversationConfigServiceTest {
         assertTrue(dto.isPinned());
         assertTrue(session.getPinned());
         assertNotNull(session.getPinnedAt());
+    }
+
+    @Test
+    void saveConfig_writesSchemaVersionedProviderStateAndPreservesUnknownFields() {
+        SessionEntity session = buildSession("s1", "w1", "u1");
+        session.setProviderStateJson("{\"claudeSessionId\":\"claude-1\",\"other\":\"keep\"}");
+        when(sessionRepository.findById("s1")).thenReturn(Optional.of(session));
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ConversationConfigEntity entity = new ConversationConfigEntity();
+        entity.setSessionId("s1");
+        entity.setWorkerId("w1");
+        entity.setUserId("u1");
+        entity.setInteractionState("AWAITING_REPLY");
+        entity.setAgentTeamsConfigId("teams-1");
+
+        service.saveConfig(entity);
+
+        Map<String, Object> state = ProviderStateCodec.parseObject(session.getProviderStateJson());
+        assertEquals(ProviderStateCodec.CURRENT_SCHEMA_VERSION, state.get(ProviderStateCodec.FIELD_SCHEMA_VERSION));
+        assertEquals("claude-worker", state.get(ProviderStateCodec.FIELD_PROVIDER_TYPE));
+        assertEquals("claude-1", state.get(ProviderStateCodec.FIELD_CLAUDE_SESSION_ID));
+        assertEquals("teams-1", state.get(ProviderStateCodec.FIELD_AGENT_TEAMS_CONFIG_ID));
+        assertEquals("keep", state.get("other"));
     }
 
     @Test

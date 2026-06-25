@@ -15,6 +15,8 @@ import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.BeforeEach;
@@ -137,9 +139,9 @@ class CodexTaskServiceTest {
 
         Object result = service.listTasksPaged("user-1", 0, 20, "PROCESSING");
 
-        Map<?, ?> page = assertInstanceOf(Map.class, result);
-        assertEquals(1L, page.get("totalSessions"));
-        List<?> content = assertInstanceOf(List.class, page.get("content"));
+        TaskPageResult page = assertInstanceOf(TaskPageResult.class, result);
+        assertEquals(1L, page.totalSessions());
+        List<?> content = page.content();
         assertEquals(1, content.size());
         DispatchTaskDTO task = assertInstanceOf(DispatchTaskDTO.class, content.get(0));
         assertEquals("task-running", task.getTaskId());
@@ -188,16 +190,22 @@ class CodexTaskServiceTest {
                         && "worker-1".equals(entity.getWorkerId())
                         && "continue please".equals(entity.getPrompt())
         ));
-        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
-                "session-1".equals(entity.getSessionId())
-                        && "codex-worker".equals(entity.getProviderType())
-                        && entity.getTaskStateJson() != null
-                        && entity.getTaskStateJson().contains("thread-1")
-        ));
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) -> {
+            Map<String, Object> state = ProviderStateCodec.parseObject(entity.getTaskStateJson());
+            return "session-1".equals(entity.getSessionId())
+                    && "codex-worker".equals(entity.getProviderType())
+                    && Integer.valueOf(ProviderStateCodec.CURRENT_SCHEMA_VERSION).equals(state.get(ProviderStateCodec.FIELD_SCHEMA_VERSION))
+                    && "codex-worker".equals(state.get(ProviderStateCodec.FIELD_PROVIDER_TYPE))
+                    && "thread-1".equals(state.get(ProviderStateCodec.FIELD_CODEX_THREAD_ID));
+        }));
         verify(sessionEntityRepository).save(argThat((SessionEntity entity) ->
                 "session-1".equals(entity.getId())
                         && "codex-worker".equals(entity.getProviderType())
                         && "worker-1".equals(entity.getCurrentWorkerId())
+                        && entity.getProviderStateJson() != null
+                        && entity.getProviderStateJson().contains("\"schemaVersion\":1")
+                        && entity.getProviderStateJson().contains("\"providerType\":\"codex-worker\"")
+                        && entity.getProviderStateJson().contains("\"codexThreadId\":\"thread-1\"")
         ));
         verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
                 "session-1".equals(event.getSessionId())
@@ -238,11 +246,14 @@ class CodexTaskServiceTest {
     void createTaskDirect_persistsContextIdInUnifiedTaskState() {
         CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
         SessionTaskEntity[] savedSessionTask = new SessionTaskEntity[1];
+        SessionTaskEntity existingProjection = new SessionTaskEntity();
+        existingProjection.setTaskStateJson("{\"originalTaskId\":\"task-original\"}");
         when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
             savedTask[0] = invocation.getArgument(0);
             return savedTask[0];
         });
         when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+        when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.of(existingProjection));
         when(sessionManager.createSession(any())).thenReturn("session-ctx");
         when(sessionTaskRepository.save(any(SessionTaskEntity.class))).thenAnswer(invocation -> {
             savedSessionTask[0] = invocation.getArgument(0);
@@ -257,7 +268,11 @@ class CodexTaskServiceTest {
 
         assertEquals("bctx-1", result.getContextId());
         assertNotNull(savedSessionTask[0].getTaskStateJson());
-        assertTrue(savedSessionTask[0].getTaskStateJson().contains("\"contextId\":\"bctx-1\""));
+        Map<String, Object> state = ProviderStateCodec.parseObject(savedSessionTask[0].getTaskStateJson());
+        assertEquals(ProviderStateCodec.CURRENT_SCHEMA_VERSION, state.get(ProviderStateCodec.FIELD_SCHEMA_VERSION));
+        assertEquals("codex-worker", state.get(ProviderStateCodec.FIELD_PROVIDER_TYPE));
+        assertEquals("bctx-1", state.get(ProviderStateCodec.FIELD_CONTEXT_ID));
+        assertEquals("task-original", state.get("originalTaskId"));
     }
 
     @Test
@@ -502,7 +517,7 @@ class CodexTaskServiceTest {
         existingSession.setUserId("user-1");
         existingSession.setAgentId("agent-codex-1");
         existingSession.setProviderType("codex-worker");
-        existingSession.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        existingSession.setProviderStateJson("{\"schemaVersion\":1,\"providerType\":\"codex-worker\",\"codexThreadId\":\"thread-1\"}");
         when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(existingSession));
 
         DispatchTaskDTO result = service.resumeTask("user-1", "tenant-1", Map.of(
@@ -512,6 +527,7 @@ class CodexTaskServiceTest {
         ));
 
         assertEquals("agent-codex-1", result.getAgentId());
+        assertEquals("thread-1", result.getCodexThreadId());
         verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
                 "session-1".equals(entity.getSessionId())
                         && "agent-codex-1".equals(entity.getAgentId())
@@ -552,6 +568,8 @@ class CodexTaskServiceTest {
                 saved.getProviderStateJson() != null
                         && !saved.getProviderStateJson().contains("codexThreadId")
                         && saved.getProviderStateJson().contains("other")
+                        && saved.getProviderStateJson().contains("\"schemaVersion\":1")
+                        && saved.getProviderStateJson().contains("\"providerType\":\"codex-worker\"")
         ));
     }
 

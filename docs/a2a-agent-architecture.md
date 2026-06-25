@@ -1,167 +1,257 @@
-# A2A Agent 统一发现与调用架构
+# A2A Agent 统一发现、路由与任务分发架构
 
-> 当前 Foggy Navigator 中 Agent 发现、解析与调用的统一模型
+> 当前 Foggy Navigator 中 Agent 发现、Provider 解析、Direct Provider Route 与统一任务分发的实现口径。
 
 ## 1. 文档定位
 
-本文档解释的是平台如何把不同来源的 Agent 统一暴露出来并调用。
+本文说明 Java 后端如何把不同来源的 Agent / Worker Provider 纳入统一会话和任务链路。它是实现架构文档，不定义产品功能范围。
 
-它是实现设计文档，不负责定义产品功能范围。产品功能边界请优先看：
+产品功能边界优先参考：
 
 - [系统架构概览](./00-system-overview.md)
 - [功能架构说明](./02-modules/functional-architecture.md)
 
+本次同步源自 `1.3.1-SNAPSHOT` Java 侧架构风险治理工作项：
+
+- [OPT-001: Java 侧架构风险治理与核心链路优化](./version-tracker/1.3.1-SNAPSHOT/workitems/OPT-001-java-architecture-risk-governance.md)
+
 ## 2. 当前作用
 
-A2A 架构在当前系统中主要承担三类职责：
+A2A / Provider 架构当前承担四类职责：
 
 1. Agent 发现  
-   把多个 provider 暴露的 Agent 聚合成统一列表。
+   把多个 `A2aAgentProvider` 暴露的 Agent Card 聚合成统一列表。
 2. Agent 解析  
-   根据 `agentId` 找到具体的执行对象。
-3. Agent 调用  
-   通过统一接口发问、获取任务、取消任务。
+   根据 `agentId`、`providerType`、`modelConfigId` 和用户/租户上下文定位真实执行后端。
+3. 统一任务分发
+   支持显式 Agent 的 A2A Route，也支持目录、Worker、Provider、modelConfig 驱动的 Direct Provider Route。
+4. 任务查询与操作聚合
+   通过 `TaskQueryProvider` 聚合各 Provider 的查询、恢复、取消、回退、重连和会话同步能力。
 
-它当前主要服务：
-
-- 会话中的 Agent 发现与问答
-- 统一任务分发中的 A2A Route
-- 部分跨 Agent 协作场景
-
-## 3. 当前架构层次
+## 3. 当前运行拓扑
 
 ```text
-前端 / 外部调用
-  -> AgentDiscoveryController
-  -> TaskDispatchFacade (A2A Route)
-
-session-module
-  -> DefaultA2aAgentRegistry
+Frontend / OpenAPI / SDK
+  -> TaskController / AgentDiscoveryController
+  -> AgentSubmitPipeline
+  -> TaskDispatchFacade
   -> UnifiedAgentResolver
-
-SPI
-  -> A2aAgent
-  -> A2aAgentProvider
-
-各 addon / provider 实现
-  -> ClaudeWorkerAgentProvider
-  -> 其他 provider
+  -> A2aAgentProvider / A2aAgent / TaskQueryProvider
+  -> Provider TaskService
+  -> WorkerStreamRelay
+  -> AgentMessage / TaskStatusChangeEvent / TaskCompletionEvent
+  -> SessionEventListener / TaskUpdateNotifier
+  -> UnifiedSseEmitter
+  -> Frontend / SDK SSE consumer
 ```
 
-## 4. 核心接口
+## 4. 核心术语
 
-### 4.1 `A2aAgent`
+| 术语 | 含义 |
+| --- | --- |
+| `logicalAgentId` / `agentId` | 平台侧可发现、可绑定的逻辑 Agent。 |
+| `providerType` | 执行后端类型，例如 `claude-worker`、`codex-worker`、`codex-biz-worker`、`gemini-worker`、`langgraph-biz-worker`、`echo-agent`。 |
+| `modelConfigId` | 平台 LLM 模型配置，通常决定模型、凭证、baseUrl 和 worker backend 兼容性。 |
+| `workerBackend` | 模型配置中的物理执行后端标识，例如 `CLAUDE_CODE`、`OPENAI_CODEX`、`GEMINI_CLI`、`LANGGRAPH_BIZ`。 |
+| `A2aAgentProvider` | 某类 Agent 来源的 Spring Bean，负责列出和解析 Agent。 |
+| `A2aAgent` | 已解析的可执行 Agent，提供发送任务、查任务、取消任务的最小接口。 |
+| `TaskQueryProvider` | Provider 级任务查询和操作 SPI，不依赖先解析出某个 Agent 实例。 |
+| `TaskQueryCapability` | `TaskQueryProvider` 的可选能力描述，用于统一入口 fan-out 前缩小 Provider 候选集合。 |
+| `TaskQueryProviderRegistry` | `session-module` 内部 Provider 查找辅助，集中按 providerType、taskId 或 capability 定位 `TaskQueryProvider`。 |
+| `TaskCreateTargetResolver` | `session-module` 内部 create 路径目标推导组件，处理显式 Agent、`directory#`、session 绑定和 modelConfig fallback。 |
+| `TaskOperationRouter` | `session-module` 内部 Provider 操作路由组件，处理 direct create、cancel、respond、reconnect、resync、rewind、resume、delete 和 checkpoint scan。 |
+| `UnifiedSessionTaskProjectionService` | `session-module` 内部统一 session-store 查询与 DTO 投影组件。 |
+| Direct Provider Route | 不通过显式 `agentId`，由目录、worker、providerType 或 modelConfig 直接定位 Provider 的任务创建路径。 |
+| A2A Route | 由显式 `agentId` 解析出 `A2aAgent` 后调用 `sendTask()` 的路径。 |
 
-统一执行接口，表达“一个可调用 Agent”。
+## 5. 核心接口
 
-当前承担的动作包括：
+### 5.1 `A2aAgent`
+
+统一执行接口，表达“一个已解析、可调用的 Agent”。
+
+当前动作：
 
 - 返回 Agent Card
 - 发送任务
 - 查询任务
 - 取消任务
-- 检查可用性
 
-### 4.2 `A2aAgentProvider`
+### 5.2 `A2aAgentProvider`
 
 统一提供者接口，表达“某类 Agent 来源”。
 
-每个 provider 负责：
+每个 Provider 负责：
 
 - 列出自己管理的 Agent Card
-- 解析指定 `agentId`
+- 按用户/租户上下文解析指定 `agentId`
 - 返回自己的 `providerType`
 
-## 5. 当前平台实现
+### 5.3 `TaskQueryProvider`
 
-### 5.1 `DefaultA2aAgentRegistry`
+Provider 级任务查询和操作 SPI，供 `TaskDispatchFacade` / `TaskOperationRouter` 聚合使用。
+
+它覆盖：
+
+- 按 taskId / sessionId / directory / worker 查询任务
+- 创建 Direct Provider Route 任务
+- cancel / resume / reconnect / resync / rewind
+- worker session 列表与消息同步
+
+Stage 2.4 后，`TaskQueryProvider` 增加 `getCapabilities()` / `supports(...)` 默认方法。空 capability 集合表示 legacy provider，`TaskDispatchFacade` 的聚合查询会在没有明确支持者时保留旧的遍历 fallback。
+
+## 6. 当前主要实现
+
+### 6.1 `UnifiedAgentResolver`
 
 职责：
 
 - 聚合所有 `A2aAgentProvider`
-- 列出所有 Agent
-- 根据 `agentId` 解析 Agent
-- 按 providerType 过滤 Agent
+- 按 `providerType`、`modelConfigId` 和 `agentId` 推断目标 Provider
+- 给 `TaskDispatchFacade` 提供统一解析结果
 
-### 5.2 `AgentDiscoveryController`
+### 6.2 `TaskDispatchFacade`
 
-这是前端和外部系统感知 A2A 的主要入口。
+职责：
 
-当前暴露能力：
+- 统一承接前端、OpenAPI、A2A 装饰层和任务端点的任务请求
+- 解析执行目标：显式 Agent、目录、worker、providerType、modelConfig
+- 维护 Session 与 Agent / Provider 绑定
+- 调用 A2A Route 或 Direct Provider Route
+- 聚合 Provider 的任务查询和 worker session 同步能力，并委托 `TaskOperationRouter` 执行任务操作路由
 
-- 列出 Agent
-- 获取 Agent Card
-- 向指定 Agent 发问
-- 查询 consultation 记录
+Stage 2.1 后，Provider 列表与按 `providerType` / `taskId` 的查找已委托给 `TaskQueryProviderRegistry`。Facade 仍作为统一入口，但内部 Provider 查找、创建目标推导、统一查询/投影和任务操作已逐步拆分，后续治理继续在 `OPT-001` 跟踪。
 
-### 5.3 `UnifiedAgentResolver`
+Stage 2.2~2.5 后：
 
-它是统一任务分发中的桥梁，负责：
+- create 路径执行目标推导已委托 `TaskCreateTargetResolver`
+- 统一 session-store 查询、provider page/search envelope 读取和 `DispatchTaskDTO` 投影已委托 `UnifiedSessionTaskProjectionService`
+- Provider fan-out 查询会优先使用 `TaskQueryCapability` 缩小候选集合
+- direct create、cancel、respond、reconnect、resync、rewind、resume、delete 和 scan checkpoints 已委托 `TaskOperationRouter`
+- Facade 仍保留 Controller 入口、create A2A 编排、列表聚合和创建请求诊断状态回填
 
-- 根据 `agentId` 找到真实 Agent
-- 推断 `providerType`
-- 给 `TaskDispatchFacade` 提供一致的解析结果
+### 6.3 `TaskOperationRouter`
 
-## 6. 当前主要 provider
+职责：
 
-### 6.1 Claude Worker Agent Provider
+- 按统一任务投影或 Provider task 查询结果定位 `TaskQueryProvider`
+- 执行 direct create、cancel、respond、reconnect、resync、rewind、resume、delete 和 checkpoint scan
+- 在 resume 时优先复用 session 已绑定的 providerType，并规范化冲突的 providerType / modelConfigId
+- 在 cancel/delete 路径保留终态 no-op、Provider 已缺失清理和 A2A fallback 等兼容语义
 
-当前代码中最明确的 A2A provider 是 Claude Worker 方向的 provider。
+该组件不暴露 REST API，不改变 `TaskDispatchFacade` 的公开方法；它只是把 Provider 操作路由从 Facade 中移出。
 
-它负责：
+### 6.4 `SessionBindingService`
 
-- 把可用的 Claude Worker / Coding Agent 适配成统一 Agent
-- 通过 facade 将同步问答能力包装成 `A2aAgent`
+职责：
 
-### 6.2 扩展空间
+- 新会话首个任务建立 Agent / Provider 绑定
+- 已绑定会话禁止漂移到另一个 Agent / Provider
+- 对历史会话补齐 providerType 或恢复绑定来源
 
-这个架构允许后续继续挂接新的 Agent 来源，但前提是：
+### 6.5 `UnifiedSseEmitter`
 
-- 实现 `A2aAgentProvider`
-- 暴露可解析的 `agentId`
-- 接入统一调用语义
+职责：
 
-## 7. 与统一任务分发的关系
+- 维护用户 SSE 连接和 session 订阅关系
+- 推送 `session_event`、`assistant_notification`、`task_update`、`heartbeat`
+- 当前实现为单 JVM 内存态，`userEmitters`、`userSubscriptions` 和 `sessionToUsers` 不跨应用实例共享
+- 当前版本支持单实例，或部署层按用户/会话对 `/api/v1/sse/**` 做粘性路由，并保证订阅请求与任务事件生产链路同实例亲和
+- 浏览器断线重连后需重新建立 SSE 并重新订阅活跃 session；错过的状态以消息历史、任务详情查询或 provider resync 补偿，不依赖 SSE replay
+- 非粘性多实例需要外部事件总线或集中通知服务后再支持，演进计划见 `OPT-001 Stage 4`
 
-`TaskDispatchFacade` 当前支持两种路径：
+### 6.6 `ProviderRouteRegistry`
 
-- Direct Route
-- A2A Route
+职责：
 
-其中 A2A Route 的核心就是：
+- 作为 `workerBackend` 到 `providerType` 的统一映射入口
+- 规范化 `workerBackend` 输入，兼容大小写、短横线和下划线形式
+- 将 `providerType`、短别名和诊断字段中的 route token 反向映射到 canonical `workerBackend`
+- 维护 modelConfig 目标 Provider 与实际执行 Provider 的兼容规则
+- 支持 `OPENAI_CODEX` 模型配置走 `codex-worker` 或 `codex-biz-worker`
+- 被 `TaskDispatchFacade`、`UnifiedAgentResolver`、`JpaSessionManager`、配置服务、业务接入、OpenAPI 诊断链路和 Claude / Codex / Gemini / LangGraph Provider adapter 复用
 
-1. 根据 `agentId` 找到真实 Agent
-2. 获取其 `providerType`
-3. 建立 Session 绑定
-4. 调用 `A2aAgent.sendTask()`
+该组件只负责静态路由语义，不判断当前运行期是否存在可用的 `TaskQueryProvider`。运行期可用性由 `TaskQueryProviderRegistry` 和 `TaskQueryCapability` 声明辅助判断，最终仍以 Provider Bean 是否存在及具体调用结果为准。
 
-所以 A2A 架构不是独立产品能力，而是统一任务分发的重要底座。
+## 7. 当前 Provider
 
-## 8. 当前边界
+| Provider | providerType | 主要模块 | 说明 |
+| --- | --- | --- | --- |
+| Claude Worker | `claude-worker` | `addons/claude-worker-agent` | Claude Worker、目录、文件、跨项目、OpenAPI 任务主通道。 |
+| Codex Worker | `codex-worker` | `addons/codex-worker-agent` | Codex CLI Worker 任务通道，复用工作目录治理。 |
+| Codex Biz Route | `codex-biz-worker` | `addons/codex-worker-agent` | OpenAPI / 业务侧 Codex 直连路由，无独立可发现 Agent；可复用 `OPENAI_CODEX` modelConfig。 |
+| Gemini Worker | `gemini-worker` | `addons/gemini-worker-agent` | Gemini CLI Worker 任务通道。 |
+| LangGraph Biz Worker | `langgraph-biz-worker` | `addons/langgraph-biz-worker` | 业务 Agent / Skill / Function 执行通道。 |
+| Echo Agent | `echo-agent` | `addons/echo-agent` | 示例和测试型 Provider。 |
 
-### 8.1 它不是通用工作流引擎
+## 8. 任务路由语义
 
-它关注的是 Agent 的发现与调用，不负责：
+### 8.1 A2A Route
 
-- 多阶段流程编排
-- 目录治理
-- Git/文件操作
-- 配置资源治理
+适用场景：
 
-### 8.2 它不是主前端入口
+- 请求明确携带 `agentId`
+- 需要先通过 Provider 解析出一个 `A2aAgent`
+- 会话绑定的是逻辑 Agent 与 providerType
 
-用户通常不会直接感知“A2A”这个概念，而是通过：
+基本流程：
 
-- 会话中的 Agent 问答
-- Workers 中的任务执行
-- 后端统一任务分发
+```text
+TaskDispatchFacade
+  -> UnifiedAgentResolver.resolveAgent(agentId, context)
+  -> SessionBindingService.bind(...)
+  -> A2aAgent.sendTask(message)
+  -> provider task projection
+```
 
-间接使用这套架构。
+### 8.2 Direct Provider Route
 
-## 9. 阅读建议
+适用场景：
+
+- 请求从目录、worker、providerType 或 modelConfig 进入
+- 前端任务创建需要完整触发 Provider `TaskService`，包括 Session 创建、Provider task 持久化、WorkerTaskStartEvent 和 StreamRelay
+- 不需要先暴露成某个显式 Agent
+
+基本流程：
+
+```text
+TaskDispatchFacade
+  -> TaskCreateTargetResolver.resolveCreateExecutionTarget(...)
+  -> TaskOperationRouter.createTaskDirect(...)
+  -> TaskQueryProvider.createTaskDirect(...)
+  -> Provider TaskService
+  -> WorkerTaskStartEvent
+  -> StreamRelay
+```
+
+## 9. 与会话和事件的关系
+
+- `SessionEntity` 是统一会话投影，记录用户、租户、agentId、providerType、当前 worker / directory、latestTaskId 和 provider 私有状态。
+- `SessionTaskEntity` 是统一任务流水，记录 taskId、providerType、providerTaskId、workerId、directoryId、status、modelConfigId 和 task 私有状态。
+- `SessionMessageEntity` 存储可回放消息历史。
+- `SessionEventListener` 监听 `AgentMessage`，负责消息落库和 SSE 推送。
+- `TaskUpdateNotifier` 监听任务状态变化，推送 `task_update`。
+
+## 10. 当前边界与风险
+
+1. A2A 架构不是通用工作流引擎；跨项目阶段编排仍由专门模块承担。
+2. `TaskDispatchFacade` 当前仍是统一分发入口；Stage 2.1~2.5 已抽出 Provider 查找、创建目标推导、统一投影、capability fan-out 和任务操作路由，但 Provider 状态 schema 与 SPI 端口拆分仍需继续治理。
+3. Provider route / backend 的核心映射已收敛到 `ProviderRouteRegistry`；后续新增 Provider 应优先扩展该注册表和对应回归，而不是在业务模块复制常量。
+4. `providerStateJson` 与 `taskStateJson` 需要 schema 化，避免恢复、回退和跨版本兼容依赖隐式字段。
+5. `UnifiedSseEmitter` 当前为内存态实现；1.3.1-SNAPSHOT 支持单实例或具备同实例亲和的粘性会话部署，非粘性多实例需要外部事件总线或集中通知服务后再支持。
+
+上述治理项统一跟踪在 [OPT-001](./version-tracker/1.3.1-SNAPSHOT/workitems/OPT-001-java-architecture-risk-governance.md)。
+
+## 11. 阅读建议
 
 建议结合以下文档一起阅读：
 
-- [Session Module](./02-modules/session-module.md)
+- [系统架构概览](./00-system-overview.md)
 - [任务治理中心](./02-modules/task-governance.md)
 - [会话协作中心](./02-modules/session-collaboration.md)
+- [平台设置与资源治理](./02-modules/platform-governance.md)
+
+---
+
+**更新日期**: 2026-06-25
+**基准**: 当前 Java 代码结构、`session-module` 统一任务分发、`navigator-spi` Provider SPI 与各 Worker addon 实现

@@ -4,10 +4,10 @@ import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
-import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.session.agent.AbortCoordinatingA2aAgent;
 import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -15,6 +15,7 @@ import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.lang.Nullable;
@@ -40,7 +41,7 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
 
     @Override
     public String getProviderType() {
-        return "claude-worker";
+        return ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER;
     }
 
     @Override
@@ -124,7 +125,7 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
     private boolean isManagedAgent(CodingAgentEntity entity) {
         String providerType = resolveProviderType(entity.getDefaultModelConfigId());
         if (providerType != null) {
-            return "claude-worker".equals(providerType);
+            return ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER.equals(providerType);
         }
         return "LOCAL_CLAUDE_WORKER".equals(entity.getAgentType());
     }
@@ -134,35 +135,22 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
             return null;
         }
         return llmModelManager.getModelConfig(modelConfigId)
-                .map(LlmModelConfigDTO::getWorkerBackend)
-                .map(this::mapWorkerBackendToProviderType)
+                .flatMap(config -> ProviderRouteRegistry.providerTypeForWorkerBackend(config.getWorkerBackend()))
                 .orElse(null);
-    }
-
-    private String mapWorkerBackendToProviderType(String workerBackend) {
-        if (workerBackend == null || workerBackend.isBlank()) {
-            return null;
-        }
-        return switch (workerBackend) {
-            case "OPENAI_CODEX" -> "codex-worker";
-            case "CLAUDE_CODE" -> "claude-worker";
-            case "GEMINI_CLI" -> "gemini-worker";
-            case "LANGGRAPH_BIZ" -> "langgraph-biz-worker";
-            default -> null;
-        };
     }
 
     private A2aAgent toA2aAgent(CodingAgentEntity entity) {
         String cwd = resolveDefaultCwd(entity);
         InnerA2aAgent inner = new ClaudeWorkerInnerA2aAgent(entity, taskService, cwd);
         A2aAgent contextAgent = new ContextResolvingA2aAgent(inner, contextStore, entity);
+        TaskLookupProvider lookupProvider = taskService;
         // 装饰链：AbortCoordinatingA2aAgent → ContextResolvingA2aAgent → InnerA2aAgent
-        return new AbortCoordinatingA2aAgent(contextAgent, inner, taskService);
+        return new AbortCoordinatingA2aAgent(contextAgent, inner, lookupProvider);
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {
         return AgentCardBuilder.fromEntity(entity,
                 "coding", "Execute coding tasks via Claude Code CLI",
-                List.of("coding", "claude-worker"));
+                List.of("coding", ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER));
     }
 }

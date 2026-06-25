@@ -7,6 +7,7 @@ import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
@@ -240,10 +241,12 @@ class LanggraphTaskServiceTest {
 
             service.createTask(USER_ID, TENANT_ID, form);
 
-            verify(sessionTaskRepository).save(argThat((SessionTaskEntity projection) ->
-                    projection.getTaskStateJson() != null
-                            && projection.getTaskStateJson().contains("\"taskDeadlineAt\":\"2026-05-18T10:00:00Z\"")
-            ));
+            verify(sessionTaskRepository).save(argThat((SessionTaskEntity projection) -> {
+                Map<String, Object> state = ProviderStateCodec.parseObject(projection.getTaskStateJson());
+                return Integer.valueOf(ProviderStateCodec.CURRENT_SCHEMA_VERSION).equals(state.get(ProviderStateCodec.FIELD_SCHEMA_VERSION))
+                        && "langgraph-biz-worker".equals(state.get(ProviderStateCodec.FIELD_PROVIDER_TYPE))
+                        && "2026-05-18T10:00:00Z".equals(state.get("taskDeadlineAt"));
+            }));
         }
 
         @Test
@@ -408,15 +411,17 @@ class LanggraphTaskServiceTest {
 
             service.completeTask("lgt_existing", "result text", "{\"key\":\"val\"}", 1234L);
 
-            verify(sessionTaskRepository).save(argThat((SessionTaskEntity saved) ->
-                    saved.getTaskStateJson() != null
-                            && saved.getTaskStateJson().contains("\"originalTaskId\":\"task-original\"")
-                            && saved.getTaskStateJson().contains("\"recoveryCorrelationKey\":\"corr-1\"")
-                            && saved.getTaskStateJson().contains("\"attemptNumber\":2")
-                            && saved.getTaskStateJson().contains("\"idempotencyKey\":\"idem-1\"")
-                            && saved.getTaskStateJson().contains("\"contextId\":\"bctx_20260527_ab_task\"")
-                            && saved.getTaskStateJson().contains("\"structuredOutput\":\"{\\\"key\\\":\\\"val\\\"}\"")
-            ));
+            verify(sessionTaskRepository).save(argThat((SessionTaskEntity saved) -> {
+                Map<String, Object> state = ProviderStateCodec.parseObject(saved.getTaskStateJson());
+                return Integer.valueOf(ProviderStateCodec.CURRENT_SCHEMA_VERSION).equals(state.get(ProviderStateCodec.FIELD_SCHEMA_VERSION))
+                        && "langgraph-biz-worker".equals(state.get(ProviderStateCodec.FIELD_PROVIDER_TYPE))
+                        && "task-original".equals(state.get("originalTaskId"))
+                        && "corr-1".equals(state.get("recoveryCorrelationKey"))
+                        && Integer.valueOf(2).equals(state.get("attemptNumber"))
+                        && "idem-1".equals(state.get("idempotencyKey"))
+                        && "bctx_20260527_ab_task".equals(state.get(ProviderStateCodec.FIELD_CONTEXT_ID))
+                        && "{\"key\":\"val\"}".equals(state.get("structuredOutput"));
+            }));
         }
 
         @Test

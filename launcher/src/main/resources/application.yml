@@ -2,7 +2,8 @@ spring:
   application:
     name: foggy-navigator
   main:
-    allow-bean-definition-overriding: true
+    # Development default. Production profile overrides this to false.
+    allow-bean-definition-overriding: ${SPRING_MAIN_ALLOW_BEAN_DEFINITION_OVERRIDING:true}
 
   # SSE requires long-lived async requests; disable the default 30s timeout
   mvc:
@@ -24,7 +25,8 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
+      # Development default. Production profile must use validate/none and pre-provision schema.
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
     show-sql: false
     properties:
       hibernate:
@@ -59,25 +61,25 @@ server:
 
 # JWT 配置
 jwt:
-  secret: foggy-navigator-jwt-secret-key-change-in-production
-  expiration: 86400
+  secret: ${JWT_SECRET:foggy-navigator-jwt-secret-key-change-in-production}
+  expiration: ${JWT_EXPIRATION:86400}
 
 # ROOT 账号配置
 system:
   root:
-    username: root
-    password: root123
-    email: root@foggy.local
+    username: ${SYSTEM_ROOT_USERNAME:root}
+    password: ${SYSTEM_ROOT_PASSWORD:root123}
+    email: ${SYSTEM_ROOT_EMAIL:root@foggy.local}
 
 # Actuator 配置
 management:
   endpoints:
     web:
       exposure:
-        include: health,beans,metrics
+        include: ${MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE:health,beans,metrics}
   endpoint:
     health:
-      show-details: always
+      show-details: ${MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS:always}
   metrics:
     tags:
       application: foggy-navigator

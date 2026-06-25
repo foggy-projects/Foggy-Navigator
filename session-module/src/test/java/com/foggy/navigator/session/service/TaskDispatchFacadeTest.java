@@ -12,6 +12,7 @@ import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -67,8 +68,19 @@ class TaskDispatchFacadeTest {
 
     @BeforeEach
     void setUp() {
-        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
-                List.of(taskQueryProvider), llmModelManager);
+        facade = createFacade(List.of(taskQueryProvider));
+    }
+
+    private TaskDispatchFacade createFacade(List<? extends TaskQueryProvider> providers) {
+        return new TaskDispatchFacade(
+                agentResolver,
+                bindingService,
+                sessionRepository,
+                providers,
+                providers,
+                providers,
+                providers,
+                llmModelManager);
     }
 
     @Test
@@ -245,6 +257,8 @@ class TaskDispatchFacadeTest {
         assertTrue(taskStateJson.contains("\"recoveryCorrelationKey\":\"world-run/contract-1\""));
         assertTrue(taskStateJson.contains("\"attemptNumber\":2"));
         assertTrue(taskStateJson.contains("\"idempotencyKey\":\"idem-1\""));
+        assertTrue(taskStateJson.contains("\"schemaVersion\":1"));
+        assertTrue(taskStateJson.contains("\"providerType\":\"claude-worker\""));
     }
 
     @Test
@@ -288,8 +302,7 @@ class TaskDispatchFacadeTest {
     void createTask_usesExplicitCodexBizProviderWithOpenAICodexModelConfig() {
         TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
-        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
-                List.of(codexProvider, codexBizProvider), llmModelManager);
+        facade = createFacade(List.of(codexProvider, codexBizProvider));
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .providerType("codex-biz-worker")
@@ -384,6 +397,10 @@ class TaskDispatchFacadeTest {
 
     @Test
     void createTask_usesDirectProviderRouteWhenModelConfigTargetsLangGraphBiz() {
+        List<Map<String, Object>> attachments = List.of(Map.of(
+                "name", "evidence.txt",
+                "mimeType", "text/plain"
+        ));
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .workerId("worker-langgraph-1")
                 .directoryId("dir-langgraph-1")
@@ -391,6 +408,7 @@ class TaskDispatchFacadeTest {
                 .model("biz-default")
                 .modelConfigId("cfg-langgraph")
                 .context(Map.of("language", "fsscript", "script", "return 1;"))
+                .attachments(attachments)
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")
@@ -423,7 +441,8 @@ class TaskDispatchFacadeTest {
                         && "dir-langgraph-1".equals(params.get("directoryId"))
                         && "biz-default".equals(params.get("model"))
                         && "cfg-langgraph".equals(params.get("modelConfigId"))
-                        && Map.of("language", "fsscript", "script", "return 1;").equals(params.get("context"))),
+                        && Map.of("language", "fsscript", "script", "return 1;").equals(params.get("context"))
+                        && attachments.equals(params.get("attachments"))),
                 eq("user-1"),
                 eq("tenant-1"));
         verifyNoInteractions(agentResolver, bindingService, agent);
@@ -613,8 +632,7 @@ class TaskDispatchFacadeTest {
     void listTasksPaged_aggregatesSessionsAcrossProviders() {
         TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
-                List.of(claudeProvider, codexProvider), llmModelManager);
+        facade = createFacade(List.of(claudeProvider, codexProvider));
 
         DispatchTaskDTO claudeTask = DispatchTaskDTO.builder()
                 .taskId("task-claude-1")
@@ -729,8 +747,7 @@ class TaskDispatchFacadeTest {
     void resumeTask_prefersSessionBoundProviderTypeOverLookupFallback() {
         TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
-                List.of(claudeProvider, codexProvider), llmModelManager);
+        facade = createFacade(List.of(claudeProvider, codexProvider));
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .workerId("worker-1")
@@ -778,8 +795,7 @@ class TaskDispatchFacadeTest {
     void resumeTask_prefersSessionBoundGeminiProviderTypeOverLegacyModelConfigLookup() {
         TaskQueryProvider geminiProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
-                List.of(geminiProvider, codexProvider), llmModelManager);
+        facade = createFacade(List.of(geminiProvider, codexProvider));
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .workerId("worker-gemini-1")
@@ -1137,6 +1153,60 @@ class TaskDispatchFacadeTest {
         verify(taskQueryProvider, never()).getTaskById("task-claude-1");
     }
 
+    @Test
+    void reconnectTask_routesViaUnifiedSessionStoreProviderType() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        SessionTaskEntity task = sessionTask(
+                "task-codex-reconnect", "session-codex-1", "codex-worker", "worker-1", "dir-2",
+                "RUNNING", LocalDateTime.of(2026, 3, 24, 22, 0), "{\"codexThreadId\":\"thread-1\"}"
+        );
+        when(sessionTaskRepository.findByTaskId("task-codex-reconnect")).thenReturn(Optional.of(task));
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+
+        facade.reconnectTask("task-codex-reconnect", "user-1");
+
+        verify(taskQueryProvider).reconnectTask("task-codex-reconnect", "user-1");
+        verify(taskQueryProvider, never()).getTaskById("task-codex-reconnect");
+    }
+
+    @Test
+    void resyncTask_routesViaUnifiedSessionStoreProviderTypeAndReturnsProviderPayload() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        SessionTaskEntity task = sessionTask(
+                "task-claude-resync", "session-claude-1", "claude-worker", "worker-1", "dir-1",
+                "RUNNING", LocalDateTime.of(2026, 3, 24, 22, 0), "{\"claudeSessionId\":\"claude-session-1\"}"
+        );
+        when(sessionTaskRepository.findByTaskId("task-claude-resync")).thenReturn(Optional.of(task));
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        when(taskQueryProvider.resyncTask("task-claude-resync", "user-1"))
+                .thenReturn(Map.of("status", "synced", "taskId", "task-claude-resync"));
+
+        Object result = facade.resyncTask("task-claude-resync", "user-1");
+
+        assertEquals(Map.of("status", "synced", "taskId", "task-claude-resync"), result);
+        verify(taskQueryProvider).resyncTask("task-claude-resync", "user-1");
+        verify(taskQueryProvider, never()).getTaskById("task-claude-resync");
+    }
+
+    @Test
+    void scanCheckpoints_routesViaUnifiedSessionStoreProviderTypeAndReturnsProviderPayload() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        SessionTaskEntity task = sessionTask(
+                "task-claude-checkpoints", "session-claude-1", "claude-worker", "worker-1", "dir-1",
+                "RUNNING", LocalDateTime.of(2026, 3, 24, 22, 0), "{\"claudeSessionId\":\"claude-session-1\"}"
+        );
+        when(sessionTaskRepository.findByTaskId("task-claude-checkpoints")).thenReturn(Optional.of(task));
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        when(taskQueryProvider.scanCheckpoints("task-claude-checkpoints", "user-1"))
+                .thenReturn(Map.of("checkpoints", List.of(Map.of("id", "ckpt-1"))));
+
+        Object result = facade.scanCheckpoints("task-claude-checkpoints", "user-1");
+
+        assertEquals(Map.of("checkpoints", List.of(Map.of("id", "ckpt-1"))), result);
+        verify(taskQueryProvider).scanCheckpoints("task-claude-checkpoints", "user-1");
+        verify(taskQueryProvider, never()).getTaskById("task-claude-checkpoints");
+    }
+
     private SessionTaskEntity sessionTask(String taskId, String sessionId, String providerType,
                                           String workerId, String directoryId, String status,
                                           LocalDateTime createdAt, String taskStateJson) {
@@ -1360,8 +1430,7 @@ class TaskDispatchFacadeTest {
     void listWorkerSessions_skipsProviderWhenWorkerBelongsToAnotherBackend() {
         TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
-        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
-                List.of(claudeProvider, langgraphProvider), llmModelManager);
+        facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         List<Map<String, Object>> sessions = List.of(Map.of("session_id", "lg-session-1"));
         when(claudeProvider.listWorkerSessions("lg-worker-1", "user-1"))
@@ -1377,8 +1446,7 @@ class TaskDispatchFacadeTest {
     void getWorkerSessionMessageCount_skipsProviderWhenWorkerBelongsToAnotherBackend() {
         TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
-        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
-                List.of(claudeProvider, langgraphProvider), llmModelManager);
+        facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         Map<String, Object> count = Map.of("user_count", 1, "assistant_count", 1, "total", 2);
         when(claudeProvider.getWorkerSessionMessageCount("lg-worker-1", "session-1", "user-1"))
@@ -1395,8 +1463,7 @@ class TaskDispatchFacadeTest {
     void getWorkerSessionMessages_skipsProviderWhenWorkerBelongsToAnotherBackend() {
         TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
-        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
-                List.of(claudeProvider, langgraphProvider), llmModelManager);
+        facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         List<Map<String, Object>> messages = List.of(Map.of("role", "assistant", "content", "ok"));
         when(claudeProvider.getWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50))
@@ -1425,8 +1492,7 @@ class TaskDispatchFacadeTest {
     void syncWorkerSessions_skipsProviderWhenWorkerBelongsToAnotherBackend() {
         TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
-        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
-                List.of(claudeProvider, langgraphProvider), llmModelManager);
+        facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         Map<String, Object> syncResult = Map.of("synced", 0, "total", 1);
         when(claudeProvider.syncWorkerSessions("lg-worker-1", "user-1", "tenant-1"))
@@ -1442,8 +1508,7 @@ class TaskDispatchFacadeTest {
     void resumeTask_usesExplicitCodexBizProviderWithOpenAICodexModelConfigWhenSessionIsUnbound() {
         TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
-        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
-                List.of(codexProvider, codexBizProvider), llmModelManager);
+        facade = createFacade(List.of(codexProvider, codexBizProvider));
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .providerType("codex-biz-worker")
@@ -1625,6 +1690,41 @@ class TaskDispatchFacadeTest {
         assertNull(dto.getAgentId(),
                 "agentId should be null when entity has no logical agent, not fall back to providerType");
         assertEquals("claude-worker", dto.getProviderType());
+    }
+
+    @Test
+    void toDispatchTaskDTO_readsSchemaVersionedTaskStateProviderFields() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(facade, "workingDirectoryRepository", workingDirectoryRepository);
+
+        Map<String, Object> providerState = new LinkedHashMap<>();
+        providerState.put(ProviderStateCodec.FIELD_CODEX_THREAD_ID, "thread-v1");
+        providerState.put(ProviderStateCodec.FIELD_CONTEXT_ID, "ctx-v1");
+        providerState.put(ProviderStateCodec.FIELD_CHECKPOINTS, List.of(Map.of("id", "ckpt-v1")));
+        providerState.put("fileCheckpointingEnabled", true);
+        String taskStateJson = ProviderStateCodec.mergeTaskValues(null, "codex-worker", providerState);
+        SessionTaskEntity task = sessionTask(
+                "task-schema-v1", "session-schema-v1", "codex-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 27, 10, 0), taskStateJson
+        );
+
+        when(sessionTaskRepository.findByTaskIdAndUserId("task-schema-v1", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(workingDirectoryRepository.findByDirectoryIdIn(List.of("dir-1")))
+                .thenReturn(List.of(directoryEntity("dir-1", "Codex Project")));
+
+        Optional<DispatchTaskDTO> result = facade.getTask("task-schema-v1",
+                AgentResolveContext.builder().userId("user-1").build());
+
+        assertTrue(result.isPresent());
+        DispatchTaskDTO dto = result.orElseThrow();
+        assertEquals("codex-worker", dto.getProviderType());
+        assertEquals("thread-v1", dto.getCodexThreadId());
+        assertEquals("ctx-v1", dto.getContextId());
+        assertEquals(Boolean.TRUE, dto.getFileCheckpointingEnabled());
+        assertNotNull(dto.getCheckpoints());
+        assertTrue(dto.getCheckpoints().contains("ckpt-v1"));
+        assertEquals("Codex Project", dto.getDirectoryName());
     }
 
     @Test

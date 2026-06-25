@@ -3,15 +3,19 @@ package com.foggy.navigator.claude.worker.service;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Map;
@@ -32,6 +36,7 @@ class ClaudeTaskServiceSyncTest {
 
     private ClaudeTaskRepository taskRepository;
     private WorkingDirectoryRepository directoryRepository;
+    private SessionEntityRepository sessionEntityRepository;
     private SessionManager sessionManager;
     private ClaudeTaskService service;
 
@@ -43,6 +48,7 @@ class ClaudeTaskServiceSyncTest {
     void setUp() {
         taskRepository = mock(ClaudeTaskRepository.class);
         directoryRepository = mock(WorkingDirectoryRepository.class);
+        sessionEntityRepository = mock(SessionEntityRepository.class);
         sessionManager = mock(SessionManager.class);
 
         ClaudeWorkerService workerService = mock(ClaudeWorkerService.class);
@@ -59,6 +65,7 @@ class ClaudeTaskServiceSyncTest {
                 agentTeamsConfigService, codingAgentRepository, dirService, directoryRepository, sessionManager, publisher, llmModelManager,
                 userAuthService, credentialEncryptor,
                 mock(org.springframework.transaction.support.TransactionTemplate.class));
+        ReflectionTestUtils.setField(service, "sessionEntityRepository", sessionEntityRepository);
 
         // Session creation returns a predictable ID
         when(sessionManager.createSession(any(SessionCreateRequest.class)))
@@ -73,6 +80,9 @@ class ClaudeTaskServiceSyncTest {
                 .thenReturn(List.of());
 
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sessionEntityRepository.findById(anyString())).thenReturn(Optional.empty());
+        when(sessionEntityRepository.findDeletedByWorkerIdAndUserId(anyString(), anyString()))
+                .thenReturn(List.of());
     }
 
     @Test
@@ -94,6 +104,33 @@ class ClaudeTaskServiceSyncTest {
         ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
         verify(taskRepository).save(captor.capture());
         assertEquals("dir-1", captor.getValue().getDirectoryId());
+    }
+
+    @Test
+    void syncLocalSessions_skipsDeletedSessionFromSchemaVersionedProviderState() {
+        SessionEntity deletedSession = new SessionEntity();
+        deletedSession.setId("deleted-session");
+        deletedSession.setProviderStateJson(ProviderStateCodec.mergeSessionValue(
+                null,
+                "claude-worker",
+                ProviderStateCodec.FIELD_CLAUDE_SESSION_ID,
+                "sess-deleted"));
+        when(sessionEntityRepository.findDeletedByWorkerIdAndUserId(WORKER_ID, USER_ID))
+                .thenReturn(List.of(deletedSession));
+        when(directoryRepository.findByWorkerIdAndPathAndUserId(anyString(), anyString(), anyString()))
+                .thenReturn(Optional.empty());
+
+        List<Map<String, Object>> sessions = List.of(
+                Map.of("session_id", "sess-deleted", "cwd", "D:/deleted", "slug", "deleted"),
+                Map.of("session_id", "sess-new", "cwd", "D:/active", "slug", "active")
+        );
+
+        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
+
+        assertEquals(1, created);
+        ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
+        verify(taskRepository).save(captor.capture());
+        assertEquals("sess-new", captor.getValue().getClaudeSessionId());
     }
 
     @Test

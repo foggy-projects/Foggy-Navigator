@@ -1,7 +1,7 @@
 package com.foggy.navigator.session.registry;
 
-import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
@@ -95,21 +95,7 @@ public class UnifiedAgentResolver {
             return null;
         }
         return llmModelManager.getModelConfig(modelConfigId)
-                .map(LlmModelConfigDTO::getWorkerBackend)
-                .map(this::mapWorkerBackendToProviderType)
+                .flatMap(config -> ProviderRouteRegistry.providerTypeForWorkerBackend(config.getWorkerBackend()))
                 .orElse(null);
-    }
-
-    private String mapWorkerBackendToProviderType(String workerBackend) {
-        if (workerBackend == null || workerBackend.isBlank()) {
-            return null;
-        }
-        return switch (workerBackend) {
-            case "OPENAI_CODEX" -> "codex-worker";
-            case "CLAUDE_CODE" -> "claude-worker";
-            case "GEMINI_CLI" -> "gemini-worker";
-            case "LANGGRAPH_BIZ" -> "langgraph-biz-worker";
-            default -> null;
-        };
     }
 }

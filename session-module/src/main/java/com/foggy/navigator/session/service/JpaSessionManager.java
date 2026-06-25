@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.session.*;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
@@ -29,8 +30,6 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class JpaSessionManager implements SessionManager {
-
-    private static final Set<String> KNOWN_PROVIDER_TYPES = Set.of("claude-worker", "codex-worker", "codex-biz-worker");
 
     private final SessionRepository sessionRepository;
     private final SessionMessageRepository messageRepository;
@@ -65,8 +64,8 @@ public class JpaSessionManager implements SessionManager {
         if (request.getProviderType() != null && !request.getProviderType().isBlank()) {
             return request.getProviderType();
         }
-        if (request.getAgentId() != null && KNOWN_PROVIDER_TYPES.contains(request.getAgentId())) {
-            return request.getAgentId();
+        if (ProviderRouteRegistry.isKnownProviderType(request.getAgentId())) {
+            return request.getAgentId().trim();
         }
         return null;
     }

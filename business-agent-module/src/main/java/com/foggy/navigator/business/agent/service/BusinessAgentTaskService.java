@@ -16,6 +16,7 @@ import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTask
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,7 +35,7 @@ public class BusinessAgentTaskService {
 
     public static final String STATUS_CREATED = "CREATED";
     public static final String STATUS_ACTIVE = "ACTIVE";
-    private static final String BACKEND_LANGGRAPH_BIZ = "LANGGRAPH_BIZ";
+    private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
     private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
 
     private final BusinessAgentTaskRepository taskRepository;
@@ -591,7 +592,7 @@ public class BusinessAgentTaskService {
     }
 
     private boolean isBackend(String actual, String expected) {
-        return expected.equalsIgnoreCase(trimToNull(actual));
+        return expected.equals(ProviderRouteRegistry.canonicalWorkerBackendOrNull(actual));
     }
 
     private List<String> cleanStringList(List<String> values) {

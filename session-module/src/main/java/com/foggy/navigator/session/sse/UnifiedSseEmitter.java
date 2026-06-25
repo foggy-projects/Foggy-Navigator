@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Unified SSE Emitter — 每个用户仅维护一条 SSE 连接
@@ -78,7 +79,13 @@ public class UnifiedSseEmitter {
             removeEmitter(userId, emitter);
         });
 
-        userEmitters.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>()).add(emitter);
+        userEmitters.compute(userId, (key, emitters) -> {
+            CopyOnWriteArrayList<SseEmitter> current = emitters != null
+                    ? emitters
+                    : new CopyOnWriteArrayList<>();
+            current.add(emitter);
+            return current;
+        });
 
         try {
             emitter.send(SseEmitter.event().data(Map.of("type", "connected", "userId", userId)));
@@ -194,6 +201,9 @@ public class UnifiedSseEmitter {
         CopyOnWriteArrayList<SseEmitter> emitters = userEmitters.get(userId);
         if (emitters == null || emitters.isEmpty()) {
             log.debug("No active emitters for user: userId={}", userId);
+            if (emitters != null) {
+                cleanupDisconnectedUser(userId, emitters);
+            }
             return;
         }
 
@@ -208,6 +218,7 @@ public class UnifiedSseEmitter {
                 return true;
             }
         });
+        cleanupDisconnectedUser(userId, emitters);
     }
 
     private void sendHeartbeats() {
@@ -225,8 +236,7 @@ public class UnifiedSseEmitter {
                     }
                 });
                 if (emitters.isEmpty()) {
-                    userEmitters.remove(userId);
-                    cleanupSubscriptions(userId);
+                    cleanupDisconnectedUser(userId, emitters);
                 }
             });
         } catch (Exception e) {
@@ -239,9 +249,25 @@ public class UnifiedSseEmitter {
         if (emitters != null) {
             emitters.remove(emitter);
             if (emitters.isEmpty()) {
-                userEmitters.remove(userId);
-                cleanupSubscriptions(userId);
+                cleanupDisconnectedUser(userId, emitters);
             }
+        }
+    }
+
+    private void cleanupDisconnectedUser(String userId, CopyOnWriteArrayList<SseEmitter> emitters) {
+        if (!emitters.isEmpty()) {
+            return;
+        }
+        AtomicBoolean removed = new AtomicBoolean(false);
+        userEmitters.computeIfPresent(userId, (key, current) -> {
+            if (current == emitters && current.isEmpty()) {
+                removed.set(true);
+                return null;
+            }
+            return current;
+        });
+        if (removed.get()) {
+            cleanupSubscriptions(userId);
         }
     }
 

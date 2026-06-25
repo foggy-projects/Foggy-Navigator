@@ -1,9 +1,9 @@
 package com.foggy.navigator.langgraph.worker.adapter;
 
-import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphCodingAgentRepository;
 import com.foggy.navigator.langgraph.worker.service.LanggraphTaskService;
 import com.foggy.navigator.langgraph.worker.service.LanggraphWorkerService;
@@ -39,7 +39,7 @@ public class LanggraphWorkerAgentProvider implements A2aAgentProvider {
 
     @Override
     public String getProviderType() {
-        return LanggraphTaskService.PROVIDER_TYPE;
+        return ProviderRouteRegistry.PROVIDER_LANGGRAPH_BIZ_WORKER;
     }
 
     @Override
@@ -86,7 +86,7 @@ public class LanggraphWorkerAgentProvider implements A2aAgentProvider {
     private boolean isManagedAgent(CodingAgentEntity entity) {
         String providerType = resolveProviderType(entity.getDefaultModelConfigId());
         if (providerType != null) {
-            return LanggraphTaskService.PROVIDER_TYPE.equals(providerType);
+            return ProviderRouteRegistry.PROVIDER_LANGGRAPH_BIZ_WORKER.equals(providerType);
         }
         return AGENT_TYPE.equals(entity.getAgentType());
     }
@@ -96,22 +96,8 @@ public class LanggraphWorkerAgentProvider implements A2aAgentProvider {
             return null;
         }
         return llmModelManager.getModelConfig(modelConfigId)
-                .map(LlmModelConfigDTO::getWorkerBackend)
-                .map(this::mapWorkerBackendToProviderType)
+                .flatMap(config -> ProviderRouteRegistry.providerTypeForWorkerBackend(config.getWorkerBackend()))
                 .orElse(null);
-    }
-
-    private String mapWorkerBackendToProviderType(String workerBackend) {
-        if (workerBackend == null || workerBackend.isBlank()) {
-            return null;
-        }
-        return switch (workerBackend) {
-            case "OPENAI_CODEX" -> "codex-worker";
-            case "CLAUDE_CODE" -> "claude-worker";
-            case "GEMINI_CLI" -> "gemini-worker";
-            case "LANGGRAPH_BIZ" -> LanggraphTaskService.PROVIDER_TYPE;
-            default -> null;
-        };
     }
 
     private A2aAgent toA2aAgent(CodingAgentEntity entity) {
@@ -119,13 +105,14 @@ public class LanggraphWorkerAgentProvider implements A2aAgentProvider {
         InnerA2aAgent inner = new LanggraphWorkerInnerA2aAgent(entity, taskService, workerId);
         // Use explicit providerType since ContextResolvingA2aAgent's auto-derive
         // doesn't know about LOCAL_LANGGRAPH_WORKER yet
-        return new ContextResolvingA2aAgent(inner, contextStore, entity, LanggraphTaskService.PROVIDER_TYPE);
+        return new ContextResolvingA2aAgent(inner, contextStore, entity,
+                ProviderRouteRegistry.PROVIDER_LANGGRAPH_BIZ_WORKER);
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {
         return AgentCardBuilder.fromEntity(entity,
                 "business",
                 "Execute controlled business queries via LangGraph Skill Runtime",
-                List.of("business", "skill-runtime", LanggraphTaskService.PROVIDER_TYPE));
+                List.of("business", "skill-runtime", ProviderRouteRegistry.PROVIDER_LANGGRAPH_BIZ_WORKER));
     }
 }

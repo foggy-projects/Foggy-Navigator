@@ -5,8 +5,12 @@ import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.model.GeminiConfig;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.gemini.worker.model.entity.GeminiTaskEntity;
 import com.foggy.navigator.gemini.worker.repository.GeminiTaskRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -40,6 +44,7 @@ class GeminiTaskServiceAuthResolutionTest {
     private LlmModelManager llmModelManager;
     private com.foggy.navigator.agent.framework.session.SessionManager sessionManager;
     private SessionEntityRepository sessionEntityRepository;
+    private SessionTaskRepository sessionTaskRepository;
     private GeminiTaskService taskService;
     private Map<String, GeminiTaskEntity> savedTasks;
 
@@ -51,10 +56,12 @@ class GeminiTaskServiceAuthResolutionTest {
         llmModelManager = mock(LlmModelManager.class);
         sessionManager = mock(com.foggy.navigator.agent.framework.session.SessionManager.class);
         sessionEntityRepository = mock(SessionEntityRepository.class);
+        sessionTaskRepository = mock(SessionTaskRepository.class);
         taskService = new GeminiTaskService(taskRepository, workerManagementFacade, eventPublisher);
         ReflectionTestUtils.setField(taskService, "llmModelManager", llmModelManager);
         ReflectionTestUtils.setField(taskService, "sessionManager", sessionManager);
         ReflectionTestUtils.setField(taskService, "sessionEntityRepository", sessionEntityRepository);
+        ReflectionTestUtils.setField(taskService, "sessionTaskRepository", sessionTaskRepository);
 
         // Wire save() and findByTaskId() to a shared map so flows that round-trip via
         // findByTaskId (e.g. createTaskDirect) see what was just persisted.
@@ -68,6 +75,9 @@ class GeminiTaskServiceAuthResolutionTest {
         });
         when(taskRepository.findByTaskId(any())).thenAnswer(invocation ->
                 Optional.ofNullable(savedTasks.get((String) invocation.getArgument(0))));
+        when(sessionTaskRepository.findByTaskId(any())).thenReturn(Optional.empty());
+        when(sessionTaskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionEntityRepository.findById(any())).thenReturn(Optional.empty());
     }
 
     @Test
@@ -161,6 +171,68 @@ class GeminiTaskServiceAuthResolutionTest {
                 msg != null
                         && MessageRole.USER.equals(msg.getRole())
                         && "hi again".equals(msg.getContent())));
+    }
+
+    @Test
+    void createTaskDirectWritesSchemaVersionedGeminiProviderState() {
+        when(workerManagementFacade.getGeminiConfig("worker-1"))
+                .thenReturn(new GeminiConfig("http://127.0.0.1:3071", null, "gemini-flash"));
+        when(sessionManager.createSession(any())).thenReturn("session-created-1");
+        SessionEntity session = new SessionEntity();
+        session.setId("session-created-1");
+        session.setProviderStateJson("{\"other\":\"keep\"}");
+        when(sessionEntityRepository.findById("session-created-1")).thenReturn(Optional.of(session));
+        SessionTaskEntity projection = new SessionTaskEntity();
+        projection.setTaskStateJson("{\"originalTaskId\":\"task-original\"}");
+        when(sessionTaskRepository.findByTaskId(any())).thenReturn(Optional.of(projection));
+
+        var result = taskService.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hi",
+                "geminiSessionId", "gemini-session-1"
+        ), "user-1", "tenant-1");
+
+        assertEquals("gemini-session-1", result.getGeminiSessionId());
+        verify(sessionEntityRepository).save(argThat((SessionEntity saved) ->
+                saved.getProviderStateJson() != null
+                        && saved.getProviderStateJson().contains("\"schemaVersion\":1")
+                        && saved.getProviderStateJson().contains("\"providerType\":\"gemini-worker\"")
+                        && saved.getProviderStateJson().contains("\"geminiSessionId\":\"gemini-session-1\"")
+                        && saved.getProviderStateJson().contains("\"other\":\"keep\"")
+        ));
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity saved) -> {
+            Map<String, Object> state = ProviderStateCodec.parseObject(saved.getTaskStateJson());
+            return Integer.valueOf(ProviderStateCodec.CURRENT_SCHEMA_VERSION).equals(state.get(ProviderStateCodec.FIELD_SCHEMA_VERSION))
+                    && "gemini-worker".equals(state.get(ProviderStateCodec.FIELD_PROVIDER_TYPE))
+                    && "gemini-session-1".equals(state.get(ProviderStateCodec.FIELD_GEMINI_SESSION_ID))
+                    && "task-original".equals(state.get("originalTaskId"));
+        }));
+    }
+
+    @Test
+    void resumeTaskReadsSchemaVersionedGeminiProviderState() {
+        when(workerManagementFacade.getGeminiConfig("worker-1"))
+                .thenReturn(new GeminiConfig("http://127.0.0.1:3071", null, "gemini-flash"));
+        when(taskRepository.existsByGeminiSessionIdAndWorkerIdAndUserId(
+                "gemini-session-1", "worker-1", "user-1")).thenReturn(true);
+        when(taskRepository.existsByGeminiSessionIdAndWorkerIdAndUserIdAndStatus(
+                "gemini-session-1", "worker-1", "user-1", "RUNNING")).thenReturn(false);
+        when(sessionManager.getSession("session-existing-1")).thenReturn(
+                Session.builder().id("session-existing-1").userId("user-1").build());
+        SessionEntity session = new SessionEntity();
+        session.setId("session-existing-1");
+        session.setProviderStateJson("{\"schemaVersion\":1,\"providerType\":\"gemini-worker\",\"geminiSessionId\":\"gemini-session-1\"}");
+        when(sessionEntityRepository.findById("session-existing-1")).thenReturn(Optional.of(session));
+
+        var result = taskService.resumeTask("user-1", "tenant-1", Map.of(
+                "workerId", "worker-1",
+                "sessionId", "session-existing-1",
+                "prompt", "continue"
+        ));
+
+        assertEquals("gemini-session-1", result.getGeminiSessionId());
+        verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
+                "gemini-session-1".equals(event.getProviderConfigString("geminiSessionId"))));
     }
 
     @Test

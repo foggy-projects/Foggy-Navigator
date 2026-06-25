@@ -112,7 +112,7 @@ public class ClaudeTaskController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(taskService.searchSessions(userId, keyword, workerId, directoryId, page, size));
+        return RX.ok(taskService.searchSessionsPage(userId, keyword, workerId, directoryId, page, size));
     }
 
     @GetMapping("/{taskId}")

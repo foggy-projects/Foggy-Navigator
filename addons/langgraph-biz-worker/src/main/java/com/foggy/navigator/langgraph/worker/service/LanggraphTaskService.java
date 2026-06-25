@@ -1,7 +1,5 @@
 package com.foggy.navigator.langgraph.worker.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
@@ -14,6 +12,7 @@ import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphApprovalEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
@@ -24,6 +23,7 @@ import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalReposito
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
 import com.foggy.navigator.langgraph.worker.support.LanggraphSkillNameContract;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -54,6 +55,14 @@ public class LanggraphTaskService implements TaskQueryProvider {
 
     public static final String PROVIDER_TYPE = "langgraph-biz-worker";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
+            TaskQueryCapability.CREATE_TASK_DIRECT,
+            TaskQueryCapability.CANCEL_TASK,
+            TaskQueryCapability.DELETE_TASK,
+            TaskQueryCapability.LIST_WORKER_SESSIONS,
+            TaskQueryCapability.GET_WORKER_SESSION_MESSAGE_COUNT,
+            TaskQueryCapability.GET_WORKER_SESSION_MESSAGES,
+            TaskQueryCapability.SYNC_WORKER_SESSIONS);
 
     private final LanggraphTaskRepository taskRepository;
     private final LanggraphApprovalRepository approvalRepository;
@@ -72,6 +81,11 @@ public class LanggraphTaskService implements TaskQueryProvider {
     @Override
     public String getProviderType() {
         return PROVIDER_TYPE;
+    }
+
+    @Override
+    public Set<TaskQueryCapability> getCapabilities() {
+        return CAPABILITIES;
     }
 
     @Override
@@ -597,8 +611,8 @@ public class LanggraphTaskService implements TaskQueryProvider {
     }
 
     private String buildTaskStateJson(LanggraphTaskEntity entity, String existingJson) {
-        Map<String, Object> state = parseTaskStateJson(existingJson);
-        putIfNotBlank(state, "contextId", entity.getContextId());
+        Map<String, Object> state = new LinkedHashMap<>();
+        putIfNotBlank(state, ProviderStateCodec.FIELD_CONTEXT_ID, entity.getContextId());
         putIfNotBlank(state, "structuredOutput", entity.getStructuredOutput());
         putIfNotBlank(state, "taskSubStatus", entity.getTaskSubStatus());
         putIfNotBlank(state, "interruptionReason", entity.getInterruptionReason());
@@ -607,28 +621,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         if (entity.getRecoverable() != null) {
             state.put("recoverable", entity.getRecoverable());
         }
-        if (state.isEmpty()) {
-            return null;
-        }
-        try {
-            return OBJECT_MAPPER.writeValueAsString(state);
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to serialize langgraph task state: taskId={}", entity.getTaskId(), e);
-            return null;
-        }
-    }
-
-    private Map<String, Object> parseTaskStateJson(String json) {
-        Map<String, Object> state = new LinkedHashMap<>();
-        if (!StringUtils.hasText(json)) {
-            return state;
-        }
-        try {
-            state.putAll(OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {}));
-        } catch (Exception e) {
-            log.debug("Failed to parse langgraph task state JSON: {}", e.getMessage());
-        }
-        return state;
+        return ProviderStateCodec.mergeTaskValues(existingJson, PROVIDER_TYPE, state);
     }
 
     private String resolveAgentId(CreateLanggraphTaskForm form) {

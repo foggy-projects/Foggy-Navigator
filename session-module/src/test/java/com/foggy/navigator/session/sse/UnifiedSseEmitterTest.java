@@ -3,13 +3,17 @@ package com.foggy.navigator.session.sse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
-import com.foggy.navigator.common.dto.a2a.A2aMessage;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -20,6 +24,11 @@ class UnifiedSseEmitterTest {
     @BeforeEach
     void setUp() {
         emitter = new UnifiedSseEmitter(new ObjectMapper(), null);
+    }
+
+    @AfterEach
+    void tearDown() {
+        emitter.destroy();
     }
 
     // ========== subscribe / unsubscribe ==========
@@ -89,6 +98,19 @@ class UnifiedSseEmitterTest {
         emitter.sendSessionEvent("session1", message);
     }
 
+    @Test
+    void sendSessionEvent_failedEmitter_cleansSubscriptions() {
+        emitter.subscribe("user1", "session1");
+        addFailingEmitter("user1");
+
+        AgentMessage message = AgentMessage.of("session1", "agent1", MessageType.TEXT_CHUNK, Map.of("content", "hello"));
+        emitter.sendSessionEvent("session1", message);
+
+        assertFalse(emitter.hasActiveEmitters("user1"));
+        assertTrue(emitter.getSubscriptions("user1").isEmpty());
+        assertEquals(0, emitter.getTotalEmitterCount());
+    }
+
     // ========== emitter lifecycle ==========
 
     @Test
@@ -110,6 +132,33 @@ class UnifiedSseEmitterTest {
         assertEquals(2, emitter.getTotalEmitterCount());
     }
 
+    @Test
+    void heartbeat_failedEmitter_cleansSubscriptions() {
+        emitter.subscribe("user1", "session1");
+        addFailingEmitter("user1");
+
+        ReflectionTestUtils.invokeMethod(emitter, "sendHeartbeats");
+
+        assertFalse(emitter.hasActiveEmitters("user1"));
+        assertTrue(emitter.getSubscriptions("user1").isEmpty());
+        assertEquals(0, emitter.getTotalEmitterCount());
+    }
+
+    @Test
+    void reconnectAfterCleanup_canSubscribeAgain() {
+        emitter.subscribe("user1", "session1");
+        addFailingEmitter("user1");
+
+        AgentMessage message = AgentMessage.of("session1", "agent1", MessageType.TEXT_CHUNK, Map.of("content", "hello"));
+        emitter.sendSessionEvent("session1", message);
+
+        emitter.createEmitter("user1");
+        emitter.subscribe("user1", "session1");
+
+        assertTrue(emitter.hasActiveEmitters("user1"));
+        assertTrue(emitter.getSubscriptions("user1").contains("session1"));
+    }
+
     // ========== concurrent safety ==========
 
     @Test
@@ -129,5 +178,25 @@ class UnifiedSseEmitterTest {
         for (Thread t : threads) t.join();
 
         // Should not throw and all subscriptions should be cleaned up
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, CopyOnWriteArrayList<SseEmitter>> userEmitters() {
+        return (Map<String, CopyOnWriteArrayList<SseEmitter>>) ReflectionTestUtils.getField(emitter, "userEmitters");
+    }
+
+    private void addFailingEmitter(String userId) {
+        userEmitters().put(userId, new CopyOnWriteArrayList<>(List.of(new FailingSseEmitter())));
+    }
+
+    private static final class FailingSseEmitter extends SseEmitter {
+        private FailingSseEmitter() {
+            super(0L);
+        }
+
+        @Override
+        public void send(SseEventBuilder builder) throws IOException {
+            throw new IOException("simulated disconnect");
+        }
     }
 }

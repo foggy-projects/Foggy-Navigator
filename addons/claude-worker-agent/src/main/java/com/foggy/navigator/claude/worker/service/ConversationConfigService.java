@@ -11,6 +11,7 @@ import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,7 +20,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,7 +37,7 @@ public class ConversationConfigService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final String CLAUDE_PROVIDER_TYPE = "claude-worker";
-    private static final String AGENT_TEAMS_CONFIG_ID = "agentTeamsConfigId";
+    private static final String AGENT_TEAMS_CONFIG_ID = ProviderStateCodec.FIELD_AGENT_TEAMS_CONFIG_ID;
 
     private final SessionEntityRepository sessionRepository;
     private final ClaudeTaskRepository taskRepository;
@@ -379,8 +379,11 @@ public class ConversationConfigService {
         session.setAuthTokenCiphertext(blankToNull(entity.getAuthToken()));
         session.setCurrentWorkerId(firstNonBlank(entity.getWorkerId(), session.getCurrentWorkerId()));
         session.setProviderType(firstNonBlank(session.getProviderType(), CLAUDE_PROVIDER_TYPE));
-        session.setProviderStateJson(mergeProviderState(session.getProviderStateJson(),
-                AGENT_TEAMS_CONFIG_ID, entity.getAgentTeamsConfigId()));
+        session.setProviderStateJson(ProviderStateCodec.mergeSessionValue(
+                session.getProviderStateJson(),
+                firstNonBlank(session.getProviderType(), CLAUDE_PROVIDER_TYPE),
+                AGENT_TEAMS_CONFIG_ID,
+                entity.getAgentTeamsConfigId()));
         if (session.getLastActivityAt() == null) {
             session.setLastActivityAt(LocalDateTime.now());
         }
@@ -408,7 +411,7 @@ public class ConversationConfigService {
         entity.setAuthBoundAt(session.getAuthBoundAt());
         entity.setTags(session.getTagsJson());
         entity.setInteractionState(session.getInteractionState());
-        entity.setAgentTeamsConfigId(readProviderStateValue(session.getProviderStateJson(), AGENT_TEAMS_CONFIG_ID));
+        entity.setAgentTeamsConfigId(ProviderStateCodec.readStringOrNull(session.getProviderStateJson(), AGENT_TEAMS_CONFIG_ID));
         entity.setCreatedAt(session.getCreatedAt());
         entity.setUpdatedAt(session.getUpdatedAt());
         return entity;
@@ -446,44 +449,6 @@ public class ConversationConfigService {
         } catch (JsonProcessingException e) {
             log.warn("Failed to parse tags JSON: {}", tagsJson);
             return Collections.emptyList();
-        }
-    }
-
-    private String readProviderStateValue(String providerStateJson, String key) {
-        if (providerStateJson == null || providerStateJson.isBlank()) {
-            return null;
-        }
-        try {
-            Map<String, Object> values = OBJECT_MAPPER.readValue(providerStateJson, new TypeReference<Map<String, Object>>() {});
-            Object value = values.get(key);
-            return value != null ? value.toString() : null;
-        } catch (Exception e) {
-            log.warn("Failed to read provider state {} from session JSON", key, e);
-            return null;
-        }
-    }
-
-    private String mergeProviderState(String providerStateJson, String key, String value) {
-        Map<String, Object> values = new LinkedHashMap<>();
-        if (providerStateJson != null && !providerStateJson.isBlank()) {
-            try {
-                values.putAll(OBJECT_MAPPER.readValue(providerStateJson, new TypeReference<Map<String, Object>>() {}));
-            } catch (Exception e) {
-                log.warn("Failed to parse providerStateJson, recreating JSON: {}", providerStateJson);
-            }
-        }
-        if (value == null || value.isBlank()) {
-            values.remove(key);
-        } else {
-            values.put(key, value);
-        }
-        if (values.isEmpty()) {
-            return null;
-        }
-        try {
-            return OBJECT_MAPPER.writeValueAsString(values);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize provider state");
         }
     }
 

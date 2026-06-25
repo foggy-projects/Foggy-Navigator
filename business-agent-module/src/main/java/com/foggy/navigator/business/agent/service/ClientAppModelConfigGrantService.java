@@ -9,13 +9,13 @@ import com.foggy.navigator.business.agent.transaction.ReadinessTransactional;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
@@ -23,15 +23,11 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class ClientAppModelConfigGrantService {
 
-    public static final String LANGGRAPH_BIZ_BACKEND = "LANGGRAPH_BIZ";
-    public static final String CLAUDE_CODE_BACKEND = "CLAUDE_CODE";
-    public static final String OPENAI_CODEX_BACKEND = "OPENAI_CODEX";
-    public static final String GEMINI_CLI_BACKEND = "GEMINI_CLI";
-    public static final Set<String> SUPPORTED_WORKER_BACKENDS = Set.of(
-            LANGGRAPH_BIZ_BACKEND,
-            CLAUDE_CODE_BACKEND,
-            OPENAI_CODEX_BACKEND,
-            GEMINI_CLI_BACKEND);
+    public static final String LANGGRAPH_BIZ_BACKEND = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
+    public static final String CLAUDE_CODE_BACKEND = ProviderRouteRegistry.BACKEND_CLAUDE_CODE;
+    public static final String OPENAI_CODEX_BACKEND = ProviderRouteRegistry.BACKEND_OPENAI_CODEX;
+    public static final String GEMINI_CLI_BACKEND = ProviderRouteRegistry.BACKEND_GEMINI_CLI;
+    public static final Set<String> SUPPORTED_WORKER_BACKENDS = ProviderRouteRegistry.knownWorkerBackends();
     public static final String STATUS_ENABLED = "ENABLED";
     public static final String STATUS_DISABLED = "DISABLED";
 
@@ -200,16 +196,11 @@ public class ClientAppModelConfigGrantService {
     }
 
     public static String normalizeWorkerBackend(String workerBackend) {
-        if (!StringUtils.hasText(workerBackend)) {
-            return null;
-        }
-        return workerBackend.trim()
-                .replace('-', '_')
-                .toUpperCase(Locale.ROOT);
+        return ProviderRouteRegistry.normalizeWorkerBackend(workerBackend);
     }
 
     public static boolean isSupportedWorkerBackend(String workerBackend) {
-        return SUPPORTED_WORKER_BACKENDS.contains(normalizeWorkerBackend(workerBackend));
+        return ProviderRouteRegistry.isKnownWorkerBackend(workerBackend);
     }
 
     private void requireVisibleModelOwner(ClientAppEntity clientApp, LlmModelConfigDTO model) {

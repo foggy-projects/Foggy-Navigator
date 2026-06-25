@@ -138,6 +138,16 @@ class ClientAppModelConfigGrantServiceTest {
     }
 
     @Test
+    void grantModelConfig_accepts_normalizedSupportedBackend() {
+        when(llmModelManager.getModelConfig("cfg-codex-normalized"))
+                .thenReturn(Optional.of(model("cfg-codex-normalized", "tenant-1", "openai-codex")));
+
+        service.grantModelConfig("tenant-1", "admin-1", "capp-1", grantForm("cfg-codex-normalized", false));
+
+        verify(grantRepository).save(argThat(grant -> "cfg-codex-normalized".equals(grant.getModelConfigId())));
+    }
+
+    @Test
     void grantModelConfig_accepts_same_upstream_system_owner() {
         when(llmModelManager.getModelConfig("cfg-system"))
                 .thenReturn(Optional.of(model(

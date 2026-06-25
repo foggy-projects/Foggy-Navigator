@@ -7,6 +7,7 @@ import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
 import com.foggy.navigator.spi.agent.RemoteTaskIdResolution;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +23,7 @@ import java.util.Set;
  * 只拦截 {@link #cancelTask(String)}，其余操作直接委托给 delegate。
  * 中止生命周期模板：
  * <ol>
- *   <li>加载任务（通过 TaskQueryProvider）</li>
+ *   <li>加载任务（通过 TaskLookupProvider）</li>
  *   <li>Terminal-state guard（幂等）</li>
  *   <li>解析远端任务标识（通过 InnerA2aAgent）</li>
  *   <li>远端中止 + 流清理 + 状态落库 + 事件发布（通过 InnerA2aAgent.abortWorkerTask）</li>
@@ -37,14 +38,25 @@ public class AbortCoordinatingA2aAgent implements A2aAgent {
 
     private final A2aAgent delegate;
     private final InnerA2aAgent innerAgent;
-    private final TaskQueryProvider taskQueryProvider;
+    private final TaskLookupProvider taskLookupProvider;
 
     public AbortCoordinatingA2aAgent(A2aAgent delegate,
                                      InnerA2aAgent innerAgent,
-                                     TaskQueryProvider taskQueryProvider) {
+                                     TaskLookupProvider taskLookupProvider) {
         this.delegate = delegate;
         this.innerAgent = innerAgent;
-        this.taskQueryProvider = taskQueryProvider;
+        this.taskLookupProvider = taskLookupProvider;
+    }
+
+    /**
+     * @deprecated Use the lookup-port constructor. Kept to preserve binary compatibility
+     * for provider adapters compiled against the former aggregate SPI signature.
+     */
+    @Deprecated(since = "1.3.1-SNAPSHOT", forRemoval = false)
+    public AbortCoordinatingA2aAgent(A2aAgent delegate,
+                                     InnerA2aAgent innerAgent,
+                                     TaskQueryProvider taskQueryProvider) {
+        this(delegate, innerAgent, (TaskLookupProvider) taskQueryProvider);
     }
 
     @Override
@@ -68,7 +80,7 @@ public class AbortCoordinatingA2aAgent implements A2aAgent {
     @Override
     public void cancelTask(String taskId) {
         // 1. 加载任务
-        Optional<DispatchTaskDTO> taskOpt = taskQueryProvider.getTaskById(taskId);
+        Optional<DispatchTaskDTO> taskOpt = taskLookupProvider.getTaskById(taskId);
         if (taskOpt.isEmpty()) {
             log.warn("cancelTask: task not found, taskId={}", taskId);
             throw new IllegalArgumentException("Task not found: " + taskId);

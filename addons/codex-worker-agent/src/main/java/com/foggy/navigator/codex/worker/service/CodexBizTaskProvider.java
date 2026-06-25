@@ -1,7 +1,9 @@
 package com.foggy.navigator.codex.worker.service;
 
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.TaskSearchResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -9,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Dedicated Codex business execution route.
@@ -23,12 +26,27 @@ public class CodexBizTaskProvider implements TaskQueryProvider {
     private static final String DEFAULT_SANDBOX_MODE = "workspace-write";
     private static final String DEFAULT_APPROVAL_POLICY = "never";
     private static final String DEFAULT_WEB_SEARCH_MODE = "disabled";
+    private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
+            TaskQueryCapability.CREATE_TASK_DIRECT,
+            TaskQueryCapability.RESUME_TASK,
+            TaskQueryCapability.CANCEL_TASK,
+            TaskQueryCapability.DELETE_TASK,
+            TaskQueryCapability.RESYNC_TASK,
+            TaskQueryCapability.REWIND_TASK,
+            TaskQueryCapability.LIST_TASKS_PAGED,
+            TaskQueryCapability.SEARCH_SESSIONS,
+            TaskQueryCapability.LIST_TASKS_BY_DIRECTORY_PAGED);
 
     private final CodexTaskService codexTaskService;
 
     @Override
     public String getProviderType() {
         return CodexTaskService.CODEX_BIZ_PROVIDER_TYPE;
+    }
+
+    @Override
+    public Set<TaskQueryCapability> getCapabilities() {
+        return CAPABILITIES;
     }
 
     @Override
@@ -79,7 +97,7 @@ public class CodexBizTaskProvider implements TaskQueryProvider {
                 || (workerId != null && !workerId.isBlank())
                 || (directoryId != null && !directoryId.isBlank());
         if (!hasFilter) {
-            return Map.of("results", List.of(), "total", 0L, "page", page, "size", size);
+            return TaskSearchResult.empty(page, size);
         }
         String normalizedKeyword = keyword != null ? keyword.trim().toLowerCase(java.util.Locale.ROOT) : null;
         return codexTaskService.searchSessionsForProvider(

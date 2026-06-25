@@ -7,6 +7,7 @@ import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
@@ -15,6 +16,7 @@ import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +26,9 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -179,6 +183,32 @@ class ClaudeTaskServiceAuthTest {
     }
 
     @Test
+    void createTask_writesSchemaVersionedClaudeTaskStateAndPreservesExistingMetadata() {
+        SessionTaskEntity existingProjection = new SessionTaskEntity();
+        existingProjection.setTaskStateJson("{\"originalTaskId\":\"task-original\"}");
+        when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.of(existingProjection));
+
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Test task");
+        form.setCwd("/test/path");
+        form.setClaudeSessionId("claude-session-1");
+        form.setContextId("ctx-1");
+
+        service.createTask(USER_ID, TENANT_ID, form);
+
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) -> {
+            Map<String, Object> state = ProviderStateCodec.parseObject(entity.getTaskStateJson());
+            return SESSION_ID.equals(entity.getSessionId())
+                    && "claude-worker".equals(entity.getProviderType())
+                    && Integer.valueOf(ProviderStateCodec.CURRENT_SCHEMA_VERSION).equals(state.get(ProviderStateCodec.FIELD_SCHEMA_VERSION))
+                    && "claude-worker".equals(state.get(ProviderStateCodec.FIELD_PROVIDER_TYPE))
+                    && "ctx-1".equals(state.get(ProviderStateCodec.FIELD_CONTEXT_ID))
+                    && "task-original".equals(state.get("originalTaskId"));
+        }));
+    }
+
+    @Test
     void createTask_withModelConfigId_noBaseUrl_usesApiKeyMode() {
         // Arrange: Platform model config without custom baseUrl
         String modelConfigId = "model-config-456";
@@ -308,6 +338,112 @@ class ClaudeTaskServiceAuthTest {
                 SESSION_ID.equals(entity.getId())
                         && "agent-claude-1".equals(entity.getAgentId())
         ));
+    }
+
+    @Test
+    void resumeTask_persistsSchemaVersionedClaudeProviderState() {
+        SessionEntity existingSession = new SessionEntity();
+        existingSession.setId(SESSION_ID);
+        existingSession.setUserId(USER_ID);
+        existingSession.setProviderType("claude-worker");
+        existingSession.setCurrentWorkerId(WORKER_ID);
+        existingSession.setStatus("ACTIVE");
+        existingSession.setProviderStateJson("{\"other\":\"keep\",\"agentTeamsConfigId\":\"teams-locked\"}");
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(existingSession));
+        when(taskRepository.existsByClaudeSessionIdAndWorkerId("claude-session-schema", WORKER_ID)).thenReturn(true);
+        when(taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus("claude-session-schema", WORKER_ID, "RUNNING"))
+                .thenReturn(false);
+
+        var form = new com.foggy.navigator.claude.worker.model.form.ResumeTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Resume task");
+        form.setSessionId(SESSION_ID);
+        form.setClaudeSessionId("claude-session-schema");
+
+        service.resumeTask(USER_ID, TENANT_ID, form);
+
+        Map<String, Object> state = ProviderStateCodec.parseObject(existingSession.getProviderStateJson());
+        assertEquals(ProviderStateCodec.CURRENT_SCHEMA_VERSION, state.get(ProviderStateCodec.FIELD_SCHEMA_VERSION));
+        assertEquals("claude-worker", state.get(ProviderStateCodec.FIELD_PROVIDER_TYPE));
+        assertEquals("claude-session-schema", state.get(ProviderStateCodec.FIELD_CLAUDE_SESSION_ID));
+        assertEquals("teams-locked", state.get(ProviderStateCodec.FIELD_AGENT_TEAMS_CONFIG_ID));
+        assertEquals("keep", state.get("other"));
+    }
+
+    @Test
+    void resumeTaskDirect_readsLegacyClaudeProviderState() {
+        AtomicReference<ClaudeTaskEntity> savedTask = stubSavedTaskLookup();
+        SessionEntity existingSession = new SessionEntity();
+        existingSession.setId(SESSION_ID);
+        existingSession.setUserId(USER_ID);
+        existingSession.setProviderType("claude-worker");
+        existingSession.setCurrentWorkerId(WORKER_ID);
+        existingSession.setStatus("ACTIVE");
+        existingSession.setProviderStateJson("{\"claudeSessionId\":\"claude-session-legacy\"}");
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(existingSession));
+        when(taskRepository.existsByClaudeSessionIdAndWorkerId("claude-session-legacy", WORKER_ID)).thenReturn(true);
+        when(taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus("claude-session-legacy", WORKER_ID, "RUNNING"))
+                .thenReturn(false);
+
+        DispatchTaskDTO result = service.resumeTask(USER_ID, TENANT_ID, Map.of(
+                "workerId", WORKER_ID,
+                "sessionId", SESSION_ID,
+                "prompt", "Resume from legacy provider state"
+        ));
+
+        assertEquals(savedTask.get().getTaskId(), result.getTaskId());
+        assertEquals("claude-session-legacy", result.getClaudeSessionId());
+    }
+
+    @Test
+    void resumeTaskDirect_readsSchemaVersionedClaudeProviderState() {
+        AtomicReference<ClaudeTaskEntity> savedTask = stubSavedTaskLookup();
+        SessionEntity existingSession = new SessionEntity();
+        existingSession.setId(SESSION_ID);
+        existingSession.setUserId(USER_ID);
+        existingSession.setProviderType("claude-worker");
+        existingSession.setCurrentWorkerId(WORKER_ID);
+        existingSession.setStatus("ACTIVE");
+        existingSession.setProviderStateJson(ProviderStateCodec.mergeSessionValue(
+                null,
+                "claude-worker",
+                ProviderStateCodec.FIELD_CLAUDE_SESSION_ID,
+                "claude-session-v1"));
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(existingSession));
+        when(taskRepository.existsByClaudeSessionIdAndWorkerId("claude-session-v1", WORKER_ID)).thenReturn(true);
+        when(taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus("claude-session-v1", WORKER_ID, "RUNNING"))
+                .thenReturn(false);
+
+        DispatchTaskDTO result = service.resumeTask(USER_ID, TENANT_ID, Map.of(
+                "workerId", WORKER_ID,
+                "sessionId", SESSION_ID,
+                "prompt", "Resume from schema provider state"
+        ));
+
+        assertEquals(savedTask.get().getTaskId(), result.getTaskId());
+        assertEquals("claude-session-v1", result.getClaudeSessionId());
+    }
+
+    @Test
+    void resumeTaskDirect_badProviderStateFallsBackToCreateTask() {
+        AtomicReference<ClaudeTaskEntity> savedTask = stubSavedTaskLookup();
+        SessionEntity existingSession = new SessionEntity();
+        existingSession.setId(SESSION_ID);
+        existingSession.setUserId(USER_ID);
+        existingSession.setProviderType("claude-worker");
+        existingSession.setCurrentWorkerId(WORKER_ID);
+        existingSession.setStatus("ACTIVE");
+        existingSession.setProviderStateJson("{broken");
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(existingSession));
+
+        DispatchTaskDTO result = service.resumeTask(USER_ID, TENANT_ID, Map.of(
+                "workerId", WORKER_ID,
+                "sessionId", SESSION_ID,
+                "prompt", "Resume with bad provider state"
+        ));
+
+        assertEquals(savedTask.get().getTaskId(), result.getTaskId());
+        assertNull(result.getClaudeSessionId());
     }
 
     @Test
@@ -642,5 +778,16 @@ class ClaudeTaskServiceAuthTest {
         entity.setPath(path);
         entity.setDirectoryType("STANDARD");
         return entity;
+    }
+
+    private AtomicReference<ClaudeTaskEntity> stubSavedTaskLookup() {
+        AtomicReference<ClaudeTaskEntity> savedTask = new AtomicReference<>();
+        when(taskRepository.save(any(ClaudeTaskEntity.class))).thenAnswer(invocation -> {
+            ClaudeTaskEntity entity = invocation.getArgument(0);
+            savedTask.set(entity);
+            return entity;
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask.get()));
+        return savedTask;
     }
 }

@@ -28,6 +28,12 @@
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
 
+        <!-- Jackson (for shared JSON state codecs) -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>

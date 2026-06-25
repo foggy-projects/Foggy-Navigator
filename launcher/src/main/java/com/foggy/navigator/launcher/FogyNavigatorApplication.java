@@ -11,6 +11,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class FogyNavigatorApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(FogyNavigatorApplication.class, args);
+        SpringApplication application = new SpringApplication(FogyNavigatorApplication.class);
+        application.addInitializers(new ProductionConfigurationGuard());
+        application.run(args);
     }
 }

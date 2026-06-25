@@ -2,6 +2,7 @@ package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.agent.framework.session.*;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
@@ -119,6 +120,32 @@ class JpaSessionManagerTest {
         var saved = sessionRepository.findById(sessionId).orElseThrow();
         assertEquals("agent-1", saved.getAgentId());
         assertNull(saved.getProviderType());
+    }
+
+    @Test
+    void createSession_infersProviderTypeFromKnownProviderAgentId() {
+        List<String> providerTypes = List.of(
+                ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
+                ProviderRouteRegistry.PROVIDER_CODEX_WORKER,
+                ProviderRouteRegistry.PROVIDER_CODEX_BIZ_WORKER,
+                ProviderRouteRegistry.PROVIDER_GEMINI_WORKER,
+                ProviderRouteRegistry.PROVIDER_LANGGRAPH_BIZ_WORKER
+        );
+
+        for (String providerType : providerTypes) {
+            SessionCreateRequest request = SessionCreateRequest.builder()
+                    .userId("user-provider-" + providerType)
+                    .tenantId("tenant-1")
+                    .agentId(providerType)
+                    .taskName("Provider Task")
+                    .build();
+
+            String sessionId = sessionManager.createSession(request);
+
+            var saved = sessionRepository.findById(sessionId).orElseThrow();
+            assertEquals(providerType, saved.getAgentId());
+            assertEquals(providerType, saved.getProviderType());
+        }
     }
 
     @Test

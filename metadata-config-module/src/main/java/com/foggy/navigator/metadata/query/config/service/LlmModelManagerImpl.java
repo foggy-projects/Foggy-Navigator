@@ -12,6 +12,7 @@ import com.foggy.navigator.common.form.AgentModelOverrideForm;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.common.form.LlmModelConfigOwnerRepairForm;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.metadata.query.config.repository.AgentModelOverrideRepository;
 import com.foggy.navigator.metadata.query.config.repository.LlmModelConfigRepository;
 import com.foggy.navigator.metadata.query.config.repository.ModelWorkerAccessRepository;
@@ -577,10 +578,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
     }
 
     private boolean isSubscriptionBackend(String workerBackend) {
-        return "OPENAI_CODEX".equals(workerBackend)
-                || "CLAUDE_CODE".equals(workerBackend)
-                || "GEMINI_CLI".equals(workerBackend)
-                || "LANGGRAPH_BIZ".equals(workerBackend);
+        return ProviderRouteRegistry.isKnownWorkerBackend(workerBackend);
     }
 
     private String serializeEnvVars(Map<String, String> envVars) {
