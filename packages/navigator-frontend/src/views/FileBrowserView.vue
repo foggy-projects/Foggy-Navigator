@@ -234,7 +234,7 @@
           v-else-if="showHtmlPreview"
           class="html-preview-frame"
           :srcdoc="htmlPreviewSrcdoc"
-          sandbox=""
+          :sandbox="HTML_PREVIEW_SANDBOX"
           referrerpolicy="no-referrer"
           title="HTML 预览"
         ></iframe>
@@ -310,6 +310,9 @@ import { useTouchDetect } from '@/composables/useTouchDetect'
 import { parseFileReference } from '@/utils/fileReference'
 
 const { isTouchDevice } = useTouchDetect()
+
+// Allow common prototype interactions without granting the iframe same-origin access.
+const HTML_PREVIEW_SANDBOX = 'allow-scripts allow-forms allow-modals allow-popups'
 
 // ---- Route params ---------------------------------------------------------
 const route = useRoute()
