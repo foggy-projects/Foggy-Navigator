@@ -22,6 +22,7 @@
 - [workitems/OPT-001-stage8-provider-port-injection.md](./workitems/OPT-001-stage8-provider-port-injection.md) - OPT-001 Stage 8 Provider port 注入收窄执行计划
 - [workitems/OPT-001-stage9-langgraph-worker-session-split.md](./workitems/OPT-001-stage9-langgraph-worker-session-split.md) - OPT-001 Stage 9 LangGraph worker-session 端口拆分执行计划
 - [workitems/OPT-001-stage10-langgraph-narrow-port-bean.md](./workitems/OPT-001-stage10-langgraph-narrow-port-bean.md) - OPT-001 Stage 10 LangGraph 窄端口 bean 迁移执行计划
+- [workitems/RELEASE-20260626-java-architecture-main-closure.md](./workitems/RELEASE-20260626-java-architecture-main-closure.md) - 2026-06-26 Java 架构治理 main 发版收口记录
 - [quality/OPT-001-implementation-quality.md](./quality/OPT-001-implementation-quality.md) - OPT-001 Stage 2 实现质量门记录
 - [coverage/OPT-001-stage1-stage2-coverage-audit.md](./coverage/OPT-001-stage1-stage2-coverage-audit.md) - OPT-001 Stage 1/2 测试覆盖审计记录
 - [acceptance/OPT-001-stage1-stage2-acceptance.md](./acceptance/OPT-001-stage1-stage2-acceptance.md) - OPT-001 Stage 1/2 功能级验收签收记录
