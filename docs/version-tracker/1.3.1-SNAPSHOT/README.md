@@ -20,6 +20,8 @@
 - [workitems/OPT-001-stage6-task-query-provider-port-split.md](./workitems/OPT-001-stage6-task-query-provider-port-split.md) - OPT-001 Stage 6 TaskQueryProvider 窄端口治理执行计划
 - [workitems/OPT-001-stage7-provider-listing-envelope.md](./workitems/OPT-001-stage7-provider-listing-envelope.md) - OPT-001 Stage 7 Provider listing/search typed envelope 执行计划
 - [workitems/OPT-001-stage8-provider-port-injection.md](./workitems/OPT-001-stage8-provider-port-injection.md) - OPT-001 Stage 8 Provider port 注入收窄执行计划
+- [workitems/OPT-001-stage9-langgraph-worker-session-split.md](./workitems/OPT-001-stage9-langgraph-worker-session-split.md) - OPT-001 Stage 9 LangGraph worker-session 端口拆分执行计划
+- [workitems/OPT-001-stage10-langgraph-narrow-port-bean.md](./workitems/OPT-001-stage10-langgraph-narrow-port-bean.md) - OPT-001 Stage 10 LangGraph 窄端口 bean 迁移执行计划
 - [quality/OPT-001-implementation-quality.md](./quality/OPT-001-implementation-quality.md) - OPT-001 Stage 2 实现质量门记录
 - [coverage/OPT-001-stage1-stage2-coverage-audit.md](./coverage/OPT-001-stage1-stage2-coverage-audit.md) - OPT-001 Stage 1/2 测试覆盖审计记录
 - [acceptance/OPT-001-stage1-stage2-acceptance.md](./acceptance/OPT-001-stage1-stage2-acceptance.md) - OPT-001 Stage 1/2 功能级验收签收记录
@@ -37,3 +39,9 @@
 - [quality/OPT-001-stage8-implementation-quality.md](./quality/OPT-001-stage8-implementation-quality.md) - OPT-001 Stage 8 实现质量门记录
 - [coverage/OPT-001-stage8-coverage-audit.md](./coverage/OPT-001-stage8-coverage-audit.md) - OPT-001 Stage 8 测试覆盖审计记录
 - [acceptance/OPT-001-stage8-provider-port-injection-acceptance.md](./acceptance/OPT-001-stage8-provider-port-injection-acceptance.md) - OPT-001 Stage 8 功能级验收签收记录
+- [quality/OPT-001-stage9-implementation-quality.md](./quality/OPT-001-stage9-implementation-quality.md) - OPT-001 Stage 9 实现质量门记录
+- [coverage/OPT-001-stage9-coverage-audit.md](./coverage/OPT-001-stage9-coverage-audit.md) - OPT-001 Stage 9 测试覆盖审计记录
+- [acceptance/OPT-001-stage9-langgraph-worker-session-split-acceptance.md](./acceptance/OPT-001-stage9-langgraph-worker-session-split-acceptance.md) - OPT-001 Stage 9 功能级验收签收记录
+- [quality/OPT-001-stage10-implementation-quality.md](./quality/OPT-001-stage10-implementation-quality.md) - OPT-001 Stage 10 实现质量门记录
+- [coverage/OPT-001-stage10-coverage-audit.md](./coverage/OPT-001-stage10-coverage-audit.md) - OPT-001 Stage 10 测试覆盖审计记录
+- [acceptance/OPT-001-stage10-langgraph-narrow-port-bean-acceptance.md](./acceptance/OPT-001-stage10-langgraph-narrow-port-bean-acceptance.md) - OPT-001 Stage 10 功能级验收签收记录

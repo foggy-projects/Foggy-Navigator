@@ -218,6 +218,43 @@ Controller / OpenAPI
 - Stage 8 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage8-coverage-audit.md`。
 - Stage 8 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage8-provider-port-injection-acceptance.md`。
 
+### Stage 9 - LangGraph worker-session 端口拆分
+
+- [x] 新增 `LanggraphWorkerSessionQueryService implements WorkerSessionQueryProvider`。
+- [x] `LanggraphTaskService` 不再声明 worker-session capabilities。
+- [x] worker-session list/count/messages/sync 逻辑迁移到独立服务，并保持 Map payload 兼容。
+- [x] session facade 补充独立 worker-session provider 接入回归。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 9 子计划已落档：`workitems/OPT-001-stage9-langgraph-worker-session-split.md`。
+- `LanggraphWorkerSessionQueryService` 已独立承接 `LIST_WORKER_SESSIONS`、`GET_WORKER_SESSION_MESSAGE_COUNT`、`GET_WORKER_SESSION_MESSAGES`、`SYNC_WORKER_SESSIONS`。
+- `LanggraphTaskService` capability 已收窄到 create/cancel/delete 等任务生命周期能力。
+- worker ownership、session ownership、session message pagination 和 sync total 语义保持兼容。
+- `TaskDispatchFacadeTest` 已覆盖只实现 `WorkerSessionQueryProvider` 的 provider 可被 session facade 命中。
+- Stage 9 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage9-implementation-quality.md`。
+- Stage 9 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage9-coverage-audit.md`。
+- Stage 9 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage9-langgraph-worker-session-split-acceptance.md`。
+
+### Stage 10 - LangGraph narrow port bean 迁移
+
+- [x] `LanggraphTaskService` 从聚合 `TaskQueryProvider` 迁移为实际支持的窄端口 bean。
+- [x] `LanggraphTaskService` 仅暴露 task lookup 与 task command 能力，不再作为 listing / worker-session / aggregate provider 注册。
+- [x] `LanggraphWorkerSessionQueryService` 继续独立承接 worker-session 查询能力。
+- [x] 补充 LangGraph Provider 类型边界回归测试。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 10 子计划已落档：`workitems/OPT-001-stage10-langgraph-narrow-port-bean.md`。
+- `LanggraphTaskService` 已仅实现 `TaskLookupProvider` 与 `TaskCommandProvider`。
+- task lookup / create / cancel / delete 语义保持不变；worker-session 仍由 `LanggraphWorkerSessionQueryService` 承接。
+- `LanggraphTaskServiceTest#exposes_only_supported_task_provider_ports` 覆盖类型边界，防止 task service 回退为聚合 `TaskQueryProvider`。
+- Stage 10 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage10-implementation-quality.md`。
+- Stage 10 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage10-coverage-audit.md`。
+- Stage 10 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage10-langgraph-narrow-port-bean-acceptance.md`。
+
 ## Acceptance Criteria
 
 1. `TaskDispatchFacade` 不再作为所有 Provider 操作的唯一超大聚合点，关键职责有明确边界和测试。
@@ -230,6 +267,8 @@ Controller / OpenAPI
 8. `TaskQueryProvider` 的查询、命令、列表和 worker-session 职责有窄端口边界，session 调用点不再统一依赖宽接口表达所有操作。
 9. Provider listing/search 聚合结果有 typed envelope 主路径，统一投影层不再主要依赖 Map key / JavaBean getter 反射读取。
 10. session Provider 注册与发现边界按窄端口列表表达，不再以宽 `List<TaskQueryProvider>` 作为唯一注入集合。
+11. LangGraph worker-session 查询由独立 `WorkerSessionQueryProvider` bean 承接，任务生命周期服务不再声明 worker-session capability。
+12. LangGraph task lifecycle service 不再实现聚合 `TaskQueryProvider`，只作为实际支持的 lookup / command 窄端口注册。
 
 ## Constraints / Non-Goals
 
@@ -340,7 +379,9 @@ PowerShell 备注：`-Dtest=...`、`-DfailIfNoTests=false`、`-Dsurefire.failIfN
 | Stage 6 TaskQueryProvider 窄端口治理 | done | 见 `workitems/OPT-001-stage6-task-query-provider-port-split.md`；已完成兼容式窄端口 SPI、Registry typed views、session 调用点收窄、质量门、覆盖审计和签收。 |
 | Stage 7 Provider listing/search typed envelope | done | 见 `workitems/OPT-001-stage7-provider-listing-envelope.md`；已完成 typed envelope、projection typed-first 解析、Provider SPI 迁移、质量门、覆盖审计和签收。 |
 | Stage 8 Provider port 注入收窄 | done | 见 `workitems/OPT-001-stage8-provider-port-injection.md`；已完成 facade 四类端口列表注入、registry 分集合维护、lookup/command 分离路由、兼容构造和签收。 |
-| 代码实现 | in-progress | Stage 1/2、Stage 3、Stage 4、Stage 5、Stage 6、Stage 7、Stage 8 均已签收；剩余后续重点是 LangGraph worker session endpoint 拆分、Provider 独立窄端口 bean 迁移、`TaskListingProvider` strictly typed method 和生产 schema migration 工具化。 |
+| Stage 9 LangGraph worker-session 端口拆分 | done | 见 `workitems/OPT-001-stage9-langgraph-worker-session-split.md`；已完成独立 `WorkerSessionQueryProvider`、capability 迁移、session fan-out 回归、质量门、覆盖审计和签收。 |
+| Stage 10 LangGraph narrow port bean 迁移 | done | 见 `workitems/OPT-001-stage10-langgraph-narrow-port-bean.md`；已完成 LangGraph task service 退出聚合 `TaskQueryProvider`、lookup/command 窄端口注册、类型边界回归、质量门、覆盖审计和签收。 |
+| 代码实现 | in-progress | Stage 1/2、Stage 3、Stage 4、Stage 5、Stage 6、Stage 7、Stage 8、Stage 9、Stage 10 均已签收；剩余后续重点是 Gemini/Claude/Codex 聚合接口迁移、`TaskListingProvider` strictly typed method、typed worker-session DTO/envelope 和生产 schema migration 工具化。 |
 
 ### Testing Progress
 
@@ -372,6 +413,12 @@ PowerShell 备注：`-Dtest=...`、`-DfailIfNoTests=false`、`-Dsurefire.failIfN
 | Stage 6 affected reactor regression | done | `mvn test -pl navigator-spi,session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am` 通过，Surefire XML 合计 220 reports / 1520 tests，0 failures，0 errors，0 skipped。 |
 | Stage 8 session focused regression | done | `TaskQueryProviderRegistryTest`、`TaskDispatchFacadeTest` 通过，合计 63 tests。 |
 | Stage 8 affected reactor regression | done | `mvn test -pl navigator-spi,session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am` 通过，Surefire XML 合计 221 reports / 1525 tests，0 failures，0 errors，0 skipped。 |
+| Stage 9 LangGraph focused regression | done | `LanggraphWorkerSessionQueryServiceTest`、`LanggraphTaskServiceTest` 通过，合计 26 tests。 |
+| Stage 9 session focused regression | done | `TaskDispatchFacadeTest`、`TaskQueryProviderRegistryTest` 通过，合计 64 tests。 |
+| Stage 9 affected reactor regression | done | `mvn test -pl session-module,addons/langgraph-biz-worker -am` 通过，Surefire XML 合计 162 reports / 1148 tests，0 failures，0 errors，0 skipped。 |
+| Stage 10 LangGraph focused regression | done | `LanggraphTaskServiceTest`、`LanggraphWorkerSessionQueryServiceTest` 通过，合计 27 tests。 |
+| Stage 10 session focused regression | done | `TaskDispatchFacadeTest`、`TaskQueryProviderRegistryTest` 通过，合计 64 tests。 |
+| Stage 10 affected reactor regression | done | `mvn test -pl session-module,addons/langgraph-biz-worker -am` 通过，Surefire XML 合计 162 reports / 1149 tests，0 failures，0 errors，0 skipped。 |
 
 ### Experience Progress
 
@@ -410,6 +457,10 @@ experience: N/A
 - [x] Stage 5 功能级验收签收完成后补充 acceptance 记录。
 - [x] Stage 6 TaskQueryProvider 窄端口治理完成后补充 execution-checkin。
 - [x] Stage 6 实现质量门、覆盖审计和功能级验收签收完成后补充记录。
+- [x] Stage 7 Provider listing/search typed envelope 完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 8 Provider port 注入收窄完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 9 LangGraph worker-session 端口拆分完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 10 LangGraph narrow port bean 迁移完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
 - [ ] 每个后续实现阶段完成后补充 execution-checkin。
 
 ## Acceptance Status
@@ -466,6 +517,50 @@ experience: N/A
 - signed_off_at: 2026-06-25
 - acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage6-task-query-provider-port-split-acceptance.md
 - acceptance_scope: OPT-001 Stage 6 TaskQueryProvider port split only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 7
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-25
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage7-provider-listing-envelope-acceptance.md
+- acceptance_scope: OPT-001 Stage 7 Provider listing/search typed envelope only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 8
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-25
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage8-provider-port-injection-acceptance.md
+- acceptance_scope: OPT-001 Stage 8 Provider port injection narrowing only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 9
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-25
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage9-langgraph-worker-session-split-acceptance.md
+- acceptance_scope: OPT-001 Stage 9 LangGraph worker-session port split only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 10
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage10-langgraph-narrow-port-bean-acceptance.md
+- acceptance_scope: OPT-001 Stage 10 LangGraph narrow port bean migration only
 - blocking_items: none
 - follow_up_required: yes
 
@@ -1014,3 +1109,90 @@ Review 发现：
 下一步：
 
 - 建议进入 Stage 9：优先拆分 LangGraph worker session endpoint，或推进 Provider 独立窄端口 bean 迁移；若继续压低 listing/search contract 风险，可规划 `TaskListingProvider` strictly typed method 兼容迁移。
+
+### 2026-06-25 - Stage 9 LangGraph Worker Session Port Split
+
+Review 发现：
+
+- `LanggraphTaskService` 同时承载 task lifecycle 与 worker-session 查询端点，服务职责继续膨胀。
+- worker-session capability 仍由 task service 声明，Stage 8 的 worker-session 窄端口没有真实独立 Provider 样例。
+- worker-session ownership 校验和 Map projection helper 私有在 task service 中，测试也嵌在 `LanggraphTaskServiceTest.WorkerSessions`。
+
+已完成：
+
+- 新增 `LanggraphWorkerSessionQueryService implements WorkerSessionQueryProvider`，注入 `LanggraphWorkerService`、`SessionTaskRepository`、`SessionMessageRepository`。
+- `LanggraphWorkerSessionQueryService` 声明 worker-session list/count/messages/sync 四类 capability。
+- `LanggraphTaskService` 删除 worker-session list/count/messages/sync 方法和相关 helper，capability 收窄为 create/cancel/delete。
+- 保持 worker-session Map payload 字段兼容，包括 `session_id/sessionId`、`worker_id/workerId`、`latest_task_id/taskId`、message `role/content/timestamp/taskId`。
+- `LanggraphTaskServiceTest.WorkerSessions` 迁移为 `LanggraphWorkerSessionQueryServiceTest`，并补充独立 provider capability 与跨用户 worker 拒绝测试。
+- `TaskDispatchFacadeTest` 新增只实现 `WorkerSessionQueryProvider` 的 provider 回归，确认 facade 可脱离 `TaskQueryProvider` 聚合接口调用 worker-session list。
+
+测试证据：
+
+- `mvn test -pl addons/langgraph-biz-worker -am "-Dtest=LanggraphWorkerSessionQueryServiceTest,LanggraphTaskServiceTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：26 tests pass。
+- `mvn test -pl session-module -am "-Dtest=TaskDispatchFacadeTest,TaskQueryProviderRegistryTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：64 tests pass。
+- `mvn test -pl session-module,addons/langgraph-biz-worker -am`：affected reactor 通过，Surefire XML 合计 162 reports / 1148 tests，0 failures，0 errors，0 skipped。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage9-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage9-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage9-langgraph-worker-session-split-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- 当前仅 LangGraph worker-session 已拆成独立 provider；其他 Provider 仍主要通过聚合 `TaskQueryProvider` 兼容四类端口。
+- 当前缺少专门的 Spring ApplicationContext 启动测试验证两个 LangGraph provider bean 的真实注入列表；受影响 reactor 已覆盖编译和模块回归。
+- worker-session payload 仍是 Map，typed DTO / envelope 不在本阶段范围。
+
+下一步：
+
+- 建议进入 Stage 10：优先推进 Provider 独立窄端口 bean 迁移；备选是 `TaskListingProvider` strictly typed method 兼容迁移，或 worker-session typed DTO / envelope。
+
+### 2026-06-26 - Stage 10 LangGraph Narrow Port Bean Migration
+
+Review 发现：
+
+- Stage 9 后 `LanggraphWorkerSessionQueryService` 已独立承接 worker-session 端口，但 `LanggraphTaskService` 仍实现聚合 `TaskQueryProvider`。
+- 聚合接口会让 LangGraph task service 在 Spring 注入边界上继续被视为 listing / worker-session 候选，削弱 Stage 8 的窄端口集合治理收益。
+- 直接迁移所有 Provider 风险较高，LangGraph 是当前已具备独立 worker-session bean 的最小可验证切片。
+
+已完成：
+
+- `LanggraphTaskService` 从 `TaskQueryProvider` 迁移为 `TaskLookupProvider, TaskCommandProvider`。
+- `LanggraphTaskService` 保留 providerType、capability、lookup、create、cancel、delete 语义，不再作为 listing / worker-session / aggregate provider 暴露。
+- `LanggraphWorkerSessionQueryService` 保持独立 worker-session provider 角色，继续承接 list/count/messages/sync。
+- `LanggraphTaskServiceTest#exposes_only_supported_task_provider_ports` 覆盖类型边界，防止 task service 回退实现聚合接口或 listing/worker-session 端口。
+- Stage 10 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl addons/langgraph-biz-worker -am "-Dtest=LanggraphTaskServiceTest,LanggraphWorkerSessionQueryServiceTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：27 tests pass。
+- `mvn test -pl session-module -am "-Dtest=TaskDispatchFacadeTest,TaskQueryProviderRegistryTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：64 tests pass。
+- `mvn test -pl session-module,addons/langgraph-biz-worker -am`：affected reactor 通过，Surefire XML 合计 162 reports / 1149 tests，0 failures，0 errors，0 skipped。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage10-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage10-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage10-langgraph-narrow-port-bean-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- 当前仅 LangGraph task lifecycle service 退出聚合 `TaskQueryProvider`；Claude/Codex/Gemini 仍主要通过聚合接口兼容四类端口。
+- `TaskCommandProvider#cancelTask` 仍保留 deprecated fallback；彻底移除需等 A2A abort 链路和 Provider command 迁移全部收口。
+- `TaskListingProvider` 仍使用 `Object` 返回类型；strictly typed method 迁移仍需后续阶段处理。
+
+下一步：
+
+- 建议进入 Stage 11：优先迁移 Gemini 或 Codex task service 退出聚合 `TaskQueryProvider`，沿用 LangGraph 的类型边界测试模式。
+- 备选路线是先推进 `TaskListingProvider` strictly typed method 兼容迁移，继续压低 listing/search contract 风险。

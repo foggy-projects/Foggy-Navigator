@@ -18,7 +18,9 @@ import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,6 +37,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -1427,6 +1430,25 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void listWorkerSessions_usesDedicatedWorkerSessionProviderList() {
+        facade = new TaskDispatchFacade(
+                agentResolver,
+                bindingService,
+                sessionRepository,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(new WorkerSessionOnlyProvider()),
+                llmModelManager);
+
+        List<Map<String, Object>> result = facade.listWorkerSessions("worker-1", "user-1");
+
+        assertEquals(1, result.size());
+        assertEquals("worker-only-session", result.get(0).get("sessionId"));
+        verifyNoInteractions(taskQueryProvider);
+    }
+
+    @Test
     void listWorkerSessions_skipsProviderWhenWorkerBelongsToAnotherBackend() {
         TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
@@ -1788,5 +1810,23 @@ class TaskDispatchFacadeTest {
         assertEquals(List.of(), afterDelete.get("content"));
         verify(taskQueryProvider).deleteTask("user-1", "task-stale-1");
         verify(sessionTaskRepository).deleteByTaskId("task-stale-1");
+    }
+
+    private static final class WorkerSessionOnlyProvider implements WorkerSessionQueryProvider {
+
+        @Override
+        public String getProviderType() {
+            return "worker-session-only";
+        }
+
+        @Override
+        public Set<TaskQueryCapability> getCapabilities() {
+            return Set.of(TaskQueryCapability.LIST_WORKER_SESSIONS);
+        }
+
+        @Override
+        public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
+            return List.of(Map.of("sessionId", "worker-only-session"));
+        }
     }
 }
