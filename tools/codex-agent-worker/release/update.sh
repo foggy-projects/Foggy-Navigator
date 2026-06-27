@@ -8,6 +8,7 @@
 #   codex-worker upgrade-sdk
 #   codex-worker upgrade-sdk --sdk-version 0.130.0
 #   codex-worker upgrade-sdk --no-restart
+#   codex-worker upgrade-sdk --registry https://registry.npmjs.org/
 #
 # Differences from the dev-side update.sh (in tools/codex-agent-worker root):
 #   - No `npm run typecheck` (OBS install has no devDependencies and no src/)
@@ -21,6 +22,8 @@ INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_PORT=3051
 SdkVersion=""
 NoRestart=false
+Registry=""
+OfficialNpmRegistry="https://registry.npmjs.org/"
 
 # Colors
 RED='\033[0;31m'
@@ -45,9 +48,17 @@ while [ $# -gt 0 ]; do
             SdkVersion="${1#*=}"
             shift
             ;;
+        --registry)
+            Registry="$2"
+            shift 2
+            ;;
+        --registry=*)
+            Registry="${1#*=}"
+            shift
+            ;;
         *)
             echo -e "${RED}Unknown argument: $1${NC}"
-            echo "Usage: $0 [--no-restart] [--sdk-version <version>]"
+            echo "Usage: $0 [--no-restart] [--sdk-version <version>] [--registry <url>]"
             exit 1
             ;;
     esac
@@ -74,6 +85,21 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 NpmPath="$(command -v npm)"
 
+get_npm_registry() {
+    local registry
+    registry=$(npm --loglevel=silent config get registry 2>/dev/null || true)
+    if [ -n "$registry" ]; then
+        echo "$registry"
+    else
+        echo "unknown"
+    fi
+}
+
+normalize_registry() {
+    local registry="$1"
+    echo "${registry%/}"
+}
+
 get_pkg_version() {
     local pkg="$1"
     local pkgJson="$INSTALL_DIR/node_modules/$pkg/package.json"
@@ -82,6 +108,40 @@ get_pkg_version() {
         return
     fi
     node -e "try{console.log(require('$pkgJson').version)}catch(e){console.log('unknown')}" 2>/dev/null || echo "unknown"
+}
+
+npm_install_with_registry_fallback() {
+    local target="$1"
+    shift
+    local args=("install" "$target" "$@")
+    if [ -n "$Registry" ]; then
+        args+=("--registry=$Registry")
+    fi
+
+    echo -e "${CYAN}Running: npm ${args[*]}${NC}"
+    if npm "${args[@]}"; then
+        return 0
+    fi
+
+    if [ -n "$Registry" ]; then
+        return 1
+    fi
+
+    local configured_registry
+    configured_registry=$(get_npm_registry)
+    if [ "$(normalize_registry "$configured_registry")" = "$(normalize_registry "$OfficialNpmRegistry")" ]; then
+        return 1
+    fi
+
+    echo -e "${YELLOW}npm install failed using registry: $configured_registry${NC}"
+    echo -e "${YELLOW}Retrying with official npm registry: $OfficialNpmRegistry${NC}"
+    local retry_args=("install" "$target" "$@" "--registry=$OfficialNpmRegistry")
+    echo -e "${CYAN}Running: npm ${retry_args[*]}${NC}"
+    if npm "${retry_args[@]}"; then
+        return 0
+    fi
+
+    return 1
 }
 
 worker_running() {
@@ -108,6 +168,11 @@ echo -e "${CYAN}=== Codex Worker SDK Update ===${NC}"
 echo -e "${CYAN}Install dir: $INSTALL_DIR${NC}"
 echo -e "${CYAN}Port: $Port${NC}"
 echo -e "${CYAN}npm: $NpmPath${NC}"
+if [ -n "$Registry" ]; then
+    echo -e "${CYAN}npm registry: $Registry (script override)${NC}"
+else
+    echo -e "${CYAN}npm registry: $(get_npm_registry)${NC}"
+fi
 
 SdkBefore=$(get_pkg_version "@openai/codex-sdk")
 CliBefore=$(get_pkg_version "@openai/codex")
@@ -127,8 +192,7 @@ else
     Target="@openai/codex-sdk@latest"
 fi
 
-echo -e "${CYAN}Running: npm install $Target --omit=dev${NC}"
-if ! npm install "$Target" --omit=dev; then
+if ! npm_install_with_registry_fallback "$Target" --omit=dev; then
     echo -e "${RED}npm install FAILED. Worker has not been restarted.${NC}"
     echo -e "${YELLOW}Recovery: run 'codex-worker upgrade' to reinstall the pinned SDK from OBS.${NC}"
     exit 1

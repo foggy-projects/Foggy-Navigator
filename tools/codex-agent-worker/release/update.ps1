@@ -7,6 +7,7 @@
 #   codex-worker upgrade-sdk
 #   codex-worker upgrade-sdk -SdkVersion 0.130.0
 #   codex-worker upgrade-sdk -NoRestart
+#   codex-worker upgrade-sdk -Registry https://registry.npmjs.org/
 #
 # Differences from the dev-side update.ps1 (in tools/codex-agent-worker root):
 #   - No `npm run typecheck` (OBS install has no devDependencies and no src/)
@@ -16,12 +17,14 @@
 
 param(
     [string]$SdkVersion = "",
-    [switch]$NoRestart
+    [switch]$NoRestart,
+    [string]$Registry = ""
 )
 
 $ErrorActionPreference = "Stop"
 $InstallDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DefaultPort = 3051
+$OfficialNpmRegistry = "https://registry.npmjs.org/"
 
 function Get-Port {
     param([string]$RootDir)
@@ -75,6 +78,66 @@ function Resolve-Npm {
     throw "npm not found on PATH. Please install Node.js (>=20) first."
 }
 
+function Get-NpmRegistry {
+    param([string]$NpmPath)
+
+    try {
+        $lines = @(& $NpmPath --loglevel=silent config get registry 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $lines.Count -gt 0 -and $lines[0]) {
+            return $lines[0].Trim()
+        }
+    }
+    catch { }
+
+    return "unknown"
+}
+
+function Normalize-RegistryUrl {
+    param([string]$RegistryUrl)
+
+    if (-not $RegistryUrl -or $RegistryUrl -eq "unknown") {
+        return ""
+    }
+
+    return $RegistryUrl.Trim().TrimEnd([char]'/')
+}
+
+function Invoke-NpmInstallWithRegistryFallback {
+    param(
+        [string]$NpmPath,
+        [string]$Target,
+        [string[]]$ExtraArgs = @(),
+        [string]$Registry = ""
+    )
+
+    $installArgs = @("install", $Target) + $ExtraArgs
+    if ($Registry) {
+        $installArgs += "--registry=$Registry"
+    }
+
+    Write-Host "Running: npm $($installArgs -join ' ')" -ForegroundColor Cyan
+    & $NpmPath @installArgs
+    if ($LASTEXITCODE -eq 0) {
+        return $true
+    }
+
+    if ($Registry) {
+        return $false
+    }
+
+    $configuredRegistry = Get-NpmRegistry -NpmPath $NpmPath
+    if ((Normalize-RegistryUrl $configuredRegistry) -eq (Normalize-RegistryUrl $OfficialNpmRegistry)) {
+        return $false
+    }
+
+    Write-Host "npm install failed using registry: $configuredRegistry" -ForegroundColor Yellow
+    Write-Host "Retrying with official npm registry: $OfficialNpmRegistry" -ForegroundColor Yellow
+    $retryArgs = @("install", $Target) + $ExtraArgs + @("--registry=$OfficialNpmRegistry")
+    Write-Host "Running: npm $($retryArgs -join ' ')" -ForegroundColor Cyan
+    & $NpmPath @retryArgs
+    return ($LASTEXITCODE -eq 0)
+}
+
 function Test-WorkerHealth {
     param([int]$ListenPort, [int]$TimeoutSec = 30)
 
@@ -95,6 +158,7 @@ $Port = Get-Port -RootDir $InstallDir
 $StopScript = Join-Path $InstallDir "stop.ps1"
 $StartScript = Join-Path $InstallDir "start.ps1"
 $Npm = Resolve-Npm
+$NpmRegistry = if ($Registry) { "$Registry (script override)" } else { Get-NpmRegistry -NpmPath $Npm }
 
 if (-not (Test-Path (Join-Path $InstallDir "package.json"))) {
     Write-Host "ERROR: package.json not found in $InstallDir." -ForegroundColor Red
@@ -108,6 +172,7 @@ Write-Host "=== Codex Worker SDK Update ===" -ForegroundColor Cyan
 Write-Host "Install dir: $InstallDir" -ForegroundColor Cyan
 Write-Host "Port: $Port" -ForegroundColor Cyan
 Write-Host "npm: $Npm" -ForegroundColor Cyan
+Write-Host "npm registry: $NpmRegistry" -ForegroundColor Cyan
 
 $sdkBefore = Get-PackageVersion -RootDir $InstallDir -PackageName "@openai/codex-sdk"
 $cliBefore = Get-PackageVersion -RootDir $InstallDir -PackageName "@openai/codex"
@@ -127,9 +192,7 @@ if ($SdkVersion) {
     $target = "@openai/codex-sdk@latest"
 }
 
-Write-Host "Running: npm install $target --omit=dev" -ForegroundColor Cyan
-& $Npm install $target --omit=dev
-if ($LASTEXITCODE -ne 0) {
+if (-not (Invoke-NpmInstallWithRegistryFallback -NpmPath $Npm -Target $target -ExtraArgs @("--omit=dev") -Registry $Registry)) {
     Write-Host "npm install FAILED. Worker has not been restarted." -ForegroundColor Red
     Write-Host "Recovery: run 'codex-worker upgrade' to reinstall the pinned SDK from OBS." -ForegroundColor Yellow
     exit 1

@@ -236,7 +236,7 @@ function Invoke-Help {
     Write-Host "  logs                 Tail worker log output"
     Write-Host "  upgrade [archive]    Upgrade the worker itself from OBS or local .zip"
     Write-Host "  upgrade-sdk [opts]   Upgrade only @openai/codex-sdk in-place"
-    Write-Host "                         opts: -SdkVersion <ver>, -NoRestart"
+    Write-Host "                         opts: -SdkVersion <ver>, -NoRestart, -Registry <url>"
     Write-Host "  help                 Show this help message"
     Write-Host ""
     Write-Host "Environment:"

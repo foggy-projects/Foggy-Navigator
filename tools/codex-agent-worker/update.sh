@@ -4,6 +4,7 @@
 #   ./update.sh
 #   ./update.sh --no-restart
 #   ./update.sh --sdk-version 0.130.0
+#   ./update.sh --registry https://registry.npmjs.org/
 #
 # Notes:
 #   - @openai/codex-sdk pulls @openai/codex (the CLI) as a transitive dep with platform-specific
@@ -17,6 +18,8 @@ WorkerDir="$(cd "$(dirname "$0")" && pwd)"
 DefaultPort=3051
 SdkVersion=""
 NoRestart=false
+Registry=""
+OfficialNpmRegistry="https://registry.npmjs.org/"
 
 # Colors
 RED='\033[0;31m'
@@ -41,9 +44,17 @@ while [ $# -gt 0 ]; do
             SdkVersion="${1#*=}"
             shift
             ;;
+        --registry)
+            Registry="$2"
+            shift 2
+            ;;
+        --registry=*)
+            Registry="${1#*=}"
+            shift
+            ;;
         *)
             echo -e "${RED}Unknown argument: $1${NC}"
-            echo "Usage: $0 [--no-restart] [--sdk-version <version>]"
+            echo "Usage: $0 [--no-restart] [--sdk-version <version>] [--registry <url>]"
             exit 1
             ;;
     esac
@@ -65,6 +76,21 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 NpmPath="$(command -v npm)"
 
+get_npm_registry() {
+    local registry
+    registry=$(npm --loglevel=silent config get registry 2>/dev/null || true)
+    if [ -n "$registry" ]; then
+        echo "$registry"
+    else
+        echo "unknown"
+    fi
+}
+
+normalize_registry() {
+    local registry="$1"
+    echo "${registry%/}"
+}
+
 # Helper: read a package.json version field via node (always available with npm)
 get_pkg_version() {
     local pkg="$1"
@@ -74,6 +100,40 @@ get_pkg_version() {
         return
     fi
     node -e "try{console.log(require('$pkgJson').version)}catch(e){console.log('unknown')}" 2>/dev/null || echo "unknown"
+}
+
+npm_install_with_registry_fallback() {
+    local target="$1"
+    shift
+    local args=("install" "$target" "$@")
+    if [ -n "$Registry" ]; then
+        args+=("--registry=$Registry")
+    fi
+
+    echo -e "${CYAN}Running: npm ${args[*]}${NC}"
+    if npm "${args[@]}"; then
+        return 0
+    fi
+
+    if [ -n "$Registry" ]; then
+        return 1
+    fi
+
+    local configured_registry
+    configured_registry=$(get_npm_registry)
+    if [ "$(normalize_registry "$configured_registry")" = "$(normalize_registry "$OfficialNpmRegistry")" ]; then
+        return 1
+    fi
+
+    echo -e "${YELLOW}npm install failed using registry: $configured_registry${NC}"
+    echo -e "${YELLOW}Retrying with official npm registry: $OfficialNpmRegistry${NC}"
+    local retry_args=("install" "$target" "$@" "--registry=$OfficialNpmRegistry")
+    echo -e "${CYAN}Running: npm ${retry_args[*]}${NC}"
+    if npm "${retry_args[@]}"; then
+        return 0
+    fi
+
+    return 1
 }
 
 # Detect if worker is running
@@ -86,6 +146,11 @@ echo -e "${CYAN}=== Codex Agent Worker Update ===${NC}"
 echo -e "${CYAN}Worker dir: $WorkerDir${NC}"
 echo -e "${CYAN}Port: $Port${NC}"
 echo -e "${CYAN}npm: $NpmPath${NC}"
+if [ -n "$Registry" ]; then
+    echo -e "${CYAN}npm registry: $Registry (script override)${NC}"
+else
+    echo -e "${CYAN}npm registry: $(get_npm_registry)${NC}"
+fi
 
 SdkBefore=$(get_pkg_version "@openai/codex-sdk")
 CliBefore=$(get_pkg_version "@openai/codex")
@@ -105,8 +170,10 @@ else
     Target="@openai/codex-sdk@latest"
 fi
 
-echo -e "${CYAN}Running: npm install $Target${NC}"
-npm install "$Target"
+if ! npm_install_with_registry_fallback "$Target"; then
+    echo -e "${RED}npm install $Target failed.${NC}"
+    exit 1
+fi
 
 echo -e "${CYAN}Running: npm run typecheck (sanity check)${NC}"
 if ! npm run typecheck; then
