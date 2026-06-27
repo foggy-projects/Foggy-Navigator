@@ -2,17 +2,36 @@
 # 用法: powershell -ExecutionPolicy Bypass -File start.ps1
 
 $ErrorActionPreference = "Stop"
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $ScriptDir
+$ScriptDir = ""
+if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $ScriptDir = [string]$PSScriptRoot
+}
+if ([string]::IsNullOrWhiteSpace($ScriptDir) -and -not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+    $ScriptDir = Split-Path -Parent $PSCommandPath
+}
+if ([string]::IsNullOrWhiteSpace($ScriptDir) -and -not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) {
+    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if ([string]::IsNullOrWhiteSpace($ScriptDir) -and -not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Definition) -and (Test-Path -LiteralPath $MyInvocation.MyCommand.Definition -PathType Leaf)) {
+    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+}
+if ([string]::IsNullOrWhiteSpace($ScriptDir)) {
+    $ScriptDir = (Get-Location).ProviderPath
+}
+if ([string]::IsNullOrWhiteSpace($ScriptDir)) {
+    throw "Unable to resolve script directory for start.ps1"
+}
+Set-Location -LiteralPath $ScriptDir
+$ScriptDir = "$((Get-Location).ProviderPath)"
 
 function Import-DotEnv {
     param([string]$Path)
 
-    if (-not (Test-Path $Path)) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
         return
     }
 
-    foreach ($rawLine in Get-Content $Path) {
+    foreach ($rawLine in Get-Content -LiteralPath $Path) {
         $line = $rawLine.Trim()
         if (-not $line -or $line.StartsWith("#")) {
             continue
@@ -41,12 +60,63 @@ function Import-DotEnv {
     }
 }
 
-# 读取 .env 文件并覆盖当前启动进程的环境，避免外部 CODEX_* 变量污染 worker。
-Import-DotEnv -Path ".env"
-$PORT = if ($env:CODEX_WORKER_PORT) { $env:CODEX_WORKER_PORT.Trim() } else { "3051" }
+function Get-DotEnvValue {
+    param(
+        [string]$Path,
+        [string]$Name
+    )
+
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
+        return ""
+    }
+
+    foreach ($rawLine in Get-Content -LiteralPath $Path) {
+        $line = $rawLine.Trim()
+        if (-not $line -or $line.StartsWith("#")) {
+            continue
+        }
+
+        $parts = $line -split "=", 2
+        if ($parts.Count -ne 2) {
+            continue
+        }
+
+        $key = $parts[0].Trim()
+        if ($key -ne $Name) {
+            continue
+        }
+
+        $value = $parts[1].Trim()
+        if ($value.Length -ge 2) {
+            $first = $value.Substring(0, 1)
+            $last = $value.Substring($value.Length - 1, 1)
+            if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+        }
+        return $value
+    }
+
+    return ""
+}
+
+# 读取脚本所在目录的 .env，并覆盖当前启动进程的环境，避免外部 CODEX_* 变量污染 worker。
+# Windows PowerShell 5.1 -File may keep this value lazy; materialize before composing child paths.
+$null = "$ScriptDir"
+$ResolvedDotEnvPath = "$ScriptDir\.env"
+$envPort = Get-DotEnvValue -Path $ResolvedDotEnvPath -Name "CODEX_WORKER_PORT"
+Import-DotEnv -Path $ResolvedDotEnvPath
+$PORT = if ($envPort) {
+    $envPort.Trim()
+} elseif ($env:CODEX_WORKER_PORT) {
+    $env:CODEX_WORKER_PORT.Trim()
+} else {
+    "3051"
+}
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Codex Agent Worker" -ForegroundColor Cyan
+Write-Host "  Config: $ResolvedDotEnvPath" -ForegroundColor Cyan
 Write-Host "  Port: $PORT" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
@@ -79,16 +149,18 @@ if (-not (Test-Path "node_modules")) {
 }
 
 # 确保 logs 目录存在
-if (-not (Test-Path "logs")) {
-    New-Item -ItemType Directory -Path "logs" | Out-Null
+$LogDir = "$ScriptDir\logs"
+if (-not (Test-Path -LiteralPath $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir | Out-Null
 }
 
 # 后台启动
 Write-Host "`n[3/4] Starting Codex Worker..." -ForegroundColor Yellow
-$logFile = "logs/worker.log"
-$errFile = "logs/worker-error.log"
+$logFile = "$LogDir\worker.log"
+$errFile = "$LogDir\worker-error.log"
 
 $process = Start-Process -FilePath "npx.cmd" -ArgumentList "tsx", "src/index.ts" `
+    -WorkingDirectory $ScriptDir `
     -RedirectStandardOutput $logFile `
     -RedirectStandardError $errFile `
     -PassThru -NoNewWindow
