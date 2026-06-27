@@ -97,20 +97,38 @@ Write-Host "  PID: $($process.Id)" -ForegroundColor Green
 
 # 等待就绪
 Write-Host "`n[4/4] Waiting for worker to be ready..." -ForegroundColor Yellow
-$maxWait = 30
+$maxWait = 60
 $waited = 0
 $ready = $false
+$healthUrls = @(
+    "http://127.0.0.1:$PORT/health"
+    "http://localhost:$PORT/health"
+)
+
+function Test-WorkerHealth {
+    param(
+        [string[]]$Urls
+    )
+
+    foreach ($url in $Urls) {
+        try {
+            Invoke-RestMethod -Uri $url -TimeoutSec 2 -ErrorAction Stop | Out-Null
+            return $true
+        }
+        catch {
+        }
+    }
+
+    return $false
+}
 
 while ($waited -lt $maxWait) {
     Start-Sleep -Seconds 1
     $waited++
 
-    try {
-        Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction Stop | Out-Null
+    if (Test-WorkerHealth -Urls $healthUrls) {
         $ready = $true
         break
-    }
-    catch {
     }
 
     # 检查进程是否崩溃
@@ -138,10 +156,8 @@ if ($ready) {
         }
         exit 1
     }
-    try {
-        Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction Stop | Out-Null
-    }
-    catch {
+
+    if (-not (Test-WorkerHealth -Urls $healthUrls)) {
         Write-Host "`n  Worker health failed after readiness!" -ForegroundColor Red
         if (Test-Path $errFile) {
             Write-Host "`n  Error log:" -ForegroundColor Red

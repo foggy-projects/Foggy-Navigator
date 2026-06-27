@@ -64,8 +64,8 @@ D:\work\HBuilderX\cli.exe pack --platform android --project dist/build/app ^
   --android.androidpacktype 0 ^
   --android.packagename com.foggy.navigator ^
   --android.certfile keystore/foggy-navigator.keystore ^
-  --android.certpassword "@Shundao888" ^
-  --android.storepassword "@Shundao888" ^
+  --android.certpassword "<android-cert-password>" ^
+  --android.storepassword "<android-store-password>" ^
   --android.certalias foggy-navi
 ```
 
@@ -118,7 +118,7 @@ UNICLOUD_SPACE_ID=mp-4af7054d-5a40-4315-8678-df36b44298bb
 **uniCloud 客户端 API 协议要点**（逆向自 uni-admin 前端 SDK）：
 - 所有请求发送到 `https://api.next.bspapp.com/client`
 - 签名: `HmacMD5(sortedQueryString, clientSecret)`，通过 `x-serverless-sign` 头传递
-- clientSecret: `bFl25CiSXhK7K979vXI2rA==`（从 uni-admin 前端提取）
+- clientSecret: `<client-secret>`（从 uni-admin 前端提取）
 - 云函数调用: 先 `anonymousAuthorize` 获取 accessToken，通过 `x-basement-token` 头传递
 - uni-id 登录: 方法名 `login`（非 `loginByUsername`），params 为数组 `[{username, password}]`
 - clientDB 操作: 需同时传 accessToken（API 层）+ uniIdToken（在 functionArgs 中）

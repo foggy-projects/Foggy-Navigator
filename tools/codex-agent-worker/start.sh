@@ -97,14 +97,24 @@ echo "  PID: $WORKER_PID"
 # 等待就绪
 echo ""
 echo "[4/4] Waiting for worker to be ready..."
-MAX_WAIT=30
+MAX_WAIT=60
 WAITED=0
+
+check_health() {
+    local base_url
+    for base_url in "http://127.0.0.1:$PORT" "http://localhost:$PORT"; do
+        if curl -fsS --max-time 2 "$base_url/health" > /dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
 
 while [ $WAITED -lt $MAX_WAIT ]; do
     sleep 1
     WAITED=$((WAITED + 1))
 
-    if curl -fsS --max-time 2 "http://localhost:$PORT/health" > /dev/null 2>&1; then
+    if check_health; then
         sleep 3
         if ! kill -0 $WORKER_PID 2>/dev/null; then
             echo ""
@@ -113,7 +123,7 @@ while [ $WAITED -lt $MAX_WAIT ]; do
             tail -20 logs/worker-error.log 2>/dev/null || true
             exit 1
         fi
-        if ! curl -fsS --max-time 2 "http://localhost:$PORT/health" > /dev/null 2>&1; then
+        if ! check_health; then
             echo ""
             echo "  Worker health failed after readiness!"
             echo "  Error log:"
