@@ -5,14 +5,39 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# 读取端口
-PORT=3051
-if [ -f .env ]; then
-    PORT_LINE=$(grep "^CODEX_WORKER_PORT=" .env 2>/dev/null || true)
-    if [ -n "$PORT_LINE" ]; then
-        PORT=$(echo "$PORT_LINE" | cut -d= -f2 | tr -d ' ')
-    fi
-fi
+load_env_file() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [ -n "$line" ] || continue
+        case "$line" in \#*) continue ;; esac
+
+        local key="${line%%=*}"
+        local value="${line#*=}"
+        key="${key%"${key##*[![:space:]]}"}"
+        key="${key#"${key%%[![:space:]]*}"}"
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [ ${#value} -ge 2 ]; then
+            local first="${value:0:1}"
+            local last="${value: -1}"
+            if { [ "$first" = '"' ] && [ "$last" = '"' ]; } || { [ "$first" = "'" ] && [ "$last" = "'" ]; }; then
+                value="${value:1:${#value}-2}"
+            fi
+        fi
+
+        export "$key=$value"
+    done < "$env_file"
+}
+
+# Load .env before starting so this worker directory overrides inherited CODEX_* variables.
+load_env_file ".env"
+PORT="${CODEX_WORKER_PORT:-3051}"
 
 echo "========================================"
 echo "  Codex Agent Worker"
