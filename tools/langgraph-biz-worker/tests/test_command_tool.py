@@ -55,6 +55,68 @@ def test_run_command_tool_executes_subprocess_in_policy_workdir(tmp_path, monkey
     assert captured["argv"] == ["/bin/bash", "-lc", "git status --short"]
     assert captured["kwargs"]["cwd"] == str(policy.workdir)
     assert captured["kwargs"]["stdin"] is command_tool.subprocess.DEVNULL
+    assert captured["kwargs"]["umask"] == command_tool.COMMAND_UMASK
+
+
+def test_run_command_tool_drops_root_to_policy_workdir_owner(tmp_path, monkeypatch):
+    policy = _policy(tmp_path, allowed_tools=["command"])
+    captured: dict[str, object] = {}
+    expected_env = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/navigator",
+        "USER": "navigator",
+        "LOGNAME": "navigator",
+    }
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(argv, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(command_tool.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(command_tool, "_workspace_owner_ids", lambda workdir: (1001, 1002))
+    monkeypatch.setattr(command_tool, "_supplementary_groups_for_uid", lambda uid, gid: (1002, 1003))
+    monkeypatch.setattr(command_tool, "_command_env_for_uid", lambda uid: expected_env)
+    monkeypatch.setattr(command_tool.subprocess, "run", fake_run)
+
+    result = run_command_tool({"command": "mkdir -p tasks/example"}, policy)
+
+    assert result["ok"] is True
+    assert captured["argv"] == ["/bin/bash", "-lc", "mkdir -p tasks/example"]
+    assert captured["kwargs"]["user"] == 1001
+    assert captured["kwargs"]["group"] == 1002
+    assert captured["kwargs"]["extra_groups"] == (1002, 1003)
+    assert captured["kwargs"]["env"] is expected_env
+    assert captured["kwargs"]["umask"] == command_tool.COMMAND_UMASK
+
+
+def test_run_command_tool_keeps_current_identity_when_not_root(tmp_path, monkeypatch):
+    policy = _policy(tmp_path, allowed_tools=["command"])
+    captured: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(argv, 0, stdout="ok\n", stderr="")
+
+    def fail_owner_lookup(workdir):
+        raise AssertionError("non-root command should not inspect workspace owner")
+
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(command_tool.os, "geteuid", lambda: 1001, raising=False)
+    monkeypatch.setattr(command_tool, "_workspace_owner_ids", fail_owner_lookup)
+    monkeypatch.setattr(command_tool.subprocess, "run", fake_run)
+
+    result = run_command_tool({"command": "touch report.md"}, policy)
+
+    assert result["ok"] is True
+    assert "user" not in captured["kwargs"]
+    assert "group" not in captured["kwargs"]
+    assert "extra_groups" not in captured["kwargs"]
+    assert "env" not in captured["kwargs"]
+    assert captured["kwargs"]["umask"] == command_tool.COMMAND_UMASK
 
 
 def test_run_command_tool_executes_without_command_allowlist(tmp_path, monkeypatch):
