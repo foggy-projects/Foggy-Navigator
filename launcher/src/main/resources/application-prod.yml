@@ -38,6 +38,10 @@ navigator:
   security:
     credential-key: ${NAVIGATOR_CREDENTIAL_KEY:}
     credential-salt: ${NAVIGATOR_CREDENTIAL_SALT:}
+  database:
+    startup-migrations:
+      enabled: ${NAVIGATOR_DATABASE_STARTUP_MIGRATIONS_ENABLED:true}
+      dry-run: ${NAVIGATOR_DATABASE_STARTUP_MIGRATIONS_DRY_RUN:false}
 
 logging:
   level:

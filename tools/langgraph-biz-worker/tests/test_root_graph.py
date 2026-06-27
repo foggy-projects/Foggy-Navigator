@@ -717,6 +717,52 @@ def test_runtime_memory_projection_records_non_recoverable_error(monkeypatch, tm
     assert assistant["metadata"]["source"] == "error"
     assert assistant["metadata"]["errorCategory"] == "CONFIGURATION"
     assert assistant["metadata"]["recoverable"] is False
+    assert assistant["metadata"]["llmRetryAllowed"] is False
+
+
+def test_runtime_memory_projection_preserves_storage_permission_recoverability(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    state = _state("task_root_storage_permission_projection_001")
+    state["context"]["contextId"] = "bctx_20260521_cd_ctx-storage-permission"
+    routed = root_graph_module.route_skill(state)
+    root = runtime.get_frame(routed["active_frame_id"])
+    assert root is not None
+
+    memory = ContextRuntimeMemory(context_id=root.conversation_id)
+    memory.begin_turn(
+        task_id=state["task_id"],
+        root_frame_id=root.frame_id,
+        user_message="U1 write sidecar",
+    )
+    save_to_root_frame(root, memory)
+    runtime.save_frame(root)
+
+    output = {
+        "status": "ERROR",
+        "message": "文件写入权限不足，BizWorker 当前运行用户不能写入目标 Actor Home/任务目录。",
+        "error_category": "STORAGE_PERMISSION",
+        "error_code": "storage_permission_denied",
+        "recoverable": True,
+        "llm_retry_allowed": False,
+        "requires_upstream_action": True,
+    }
+    runtime.submit_persistent_turn_result(root.frame_id, output["message"], output)
+    root = runtime.get_frame(root.frame_id)
+    root_graph_module._commit_root_runtime_memory_turn(
+        root,
+        state=state,
+        assistant_message=output["message"],
+        structured_output=output,
+    )
+
+    restored = ContextRuntimeMemory.load_from_root_frame(runtime.get_frame(root.frame_id))
+    assistant = restored.visible_messages[-1]
+    assert assistant["metadata"]["source"] == "error"
+    assert assistant["metadata"]["errorCategory"] == "STORAGE_PERMISSION"
+    assert assistant["metadata"]["errorCode"] == "storage_permission_denied"
+    assert assistant["metadata"]["recoverable"] is True
+    assert assistant["metadata"]["llmRetryAllowed"] is False
+    assert assistant["metadata"]["requiresUpstreamAction"] is True
 
 
 def test_runtime_memory_commit_persists_root_tool_protocol(monkeypatch, tmp_path):

@@ -562,18 +562,28 @@ class LlmSkillAgent:
                     return events
                 if _is_non_recoverable_tool_error(tool_result):
                     error = tool_result.get("user_message") or tool_result.get("error") or "Non-recoverable tool error"
+                    recoverable = tool_result.get("recoverable")
+                    if not isinstance(recoverable, bool):
+                        recoverable = False
+                    llm_retry_allowed = tool_result.get("llm_retry_allowed")
+                    if not isinstance(llm_retry_allowed, bool):
+                        llm_retry_allowed = False
+                    structured_output = {
+                        "status": "ERROR",
+                        "message": error,
+                        "error_category": tool_result.get("error_category") or "NON_RECOVERABLE_TOOL_ERROR",
+                        "recoverable": recoverable,
+                        "llm_retry_allowed": llm_retry_allowed,
+                        "function_frame_id": tool_result.get("function_frame_id"),
+                    }
+                    for key in ("error_code", "requires_upstream_action", "suggested_action"):
+                        if key in tool_result:
+                            structured_output[key] = tool_result[key]
                     if persistent_frame:
                         self._runtime.submit_persistent_turn_result(
                             frame_id=frame_id,
                             summary=error,
-                            structured_output={
-                                "status": "ERROR",
-                                "message": error,
-                                "error_category": tool_result.get("error_category") or "NON_RECOVERABLE_TOOL_ERROR",
-                                "recoverable": False,
-                                "llm_retry_allowed": False,
-                                "function_frame_id": tool_result.get("function_frame_id"),
-                            },
+                            structured_output=structured_output,
                         )
                         self._store_persistent_turn_protocol_messages(
                             frame_id,
@@ -589,7 +599,7 @@ class LlmSkillAgent:
                         skill_frame_id=frame_id,
                         skill_id=event_skill_id,
                         presentation_hint=event_presentation_hint,
-                        reason="non_recoverable_tool_error",
+                        reason=_terminal_tool_error_reason(tool_result),
                         error=error,
                     ))
                     return events
@@ -1265,6 +1275,14 @@ def _is_non_recoverable_tool_error(result: Any) -> bool:
         result.get("llm_retry_allowed") is False
         or result.get("recoverable") is False
     )
+
+
+def _terminal_tool_error_reason(result: Any) -> str:
+    if isinstance(result, dict):
+        reason = result.get("reason") or result.get("error_code")
+        if isinstance(reason, str) and reason.strip():
+            return reason.strip()
+    return "non_recoverable_tool_error"
 
 
 def _auto_submit_payload_from_business_function_result(

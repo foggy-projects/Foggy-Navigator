@@ -6,12 +6,15 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
+import com.foggy.navigator.spi.agent.WorkerSessionMessage;
+import com.foggy.navigator.spi.agent.WorkerSessionMessageCount;
+import com.foggy.navigator.spi.agent.WorkerSessionSummary;
+import com.foggy.navigator.spi.agent.WorkerSessionSyncResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
@@ -71,12 +74,13 @@ class LanggraphWorkerSessionQueryServiceTest {
         when(sessionTaskRepository.findByWorkerIdAndUserIdOrderByCreatedAtDesc(WORKER_ID, USER_ID))
                 .thenReturn(List.of(latest, older));
 
-        List<Map<String, Object>> result = service.listWorkerSessions(WORKER_ID, USER_ID);
+        List<WorkerSessionSummary> result = service.listWorkerSessionSummaries(WORKER_ID, USER_ID);
 
         assertEquals(1, result.size());
-        assertEquals(SESSION_ID, result.get(0).get("session_id"));
-        assertEquals("lgt_latest", result.get(0).get("latest_task_id"));
-        assertEquals("/workspace/orders", result.get(0).get("project"));
+        assertEquals(SESSION_ID, result.get(0).sessionId());
+        assertEquals("lgt_latest", result.get(0).latestTaskId());
+        assertEquals("/workspace/orders", result.get(0).project());
+        assertEquals(SESSION_ID, service.listWorkerSessions(WORKER_ID, USER_ID).get(0).get("session_id"));
     }
 
     @Test
@@ -91,11 +95,12 @@ class LanggraphWorkerSessionQueryServiceTest {
                         sessionMessage("m3", "tool", "approval_required", LocalDateTime.of(2026, 4, 1, 10, 2))
                 ));
 
-        Map<String, Object> result = service.getWorkerSessionMessageCount(WORKER_ID, SESSION_ID, USER_ID);
+        WorkerSessionMessageCount result = service.getWorkerSessionMessageCountResult(WORKER_ID, SESSION_ID, USER_ID);
 
-        assertEquals(1L, result.get("user_count"));
-        assertEquals(1L, result.get("assistant_count"));
-        assertEquals(3, result.get("total"));
+        assertEquals(1L, result.userCount());
+        assertEquals(1L, result.assistantCount());
+        assertEquals(3L, result.total());
+        assertEquals(3, service.getWorkerSessionMessageCount(WORKER_ID, SESSION_ID, USER_ID).get("total"));
     }
 
     @Test
@@ -110,13 +115,15 @@ class LanggraphWorkerSessionQueryServiceTest {
                         sessionMessage("m3", "assistant", "third", LocalDateTime.of(2026, 4, 1, 10, 2))
                 ));
 
-        List<Map<String, Object>> result =
-                service.getWorkerSessionMessages(WORKER_ID, SESSION_ID, USER_ID, 1, 1);
+        List<WorkerSessionMessage> result =
+                service.listWorkerSessionMessages(WORKER_ID, SESSION_ID, USER_ID, 1, 1);
 
         assertEquals(1, result.size());
-        assertEquals("assistant", result.get(0).get("role"));
-        assertEquals("second", result.get(0).get("content"));
-        assertEquals("lgt_task", result.get(0).get("taskId"));
+        assertEquals("assistant", result.get(0).role());
+        assertEquals("second", result.get(0).content());
+        assertEquals("lgt_task", result.get(0).taskId());
+        assertEquals("second", service.getWorkerSessionMessages(WORKER_ID, SESSION_ID, USER_ID, 1, 1)
+                .get(0).get("content"));
     }
 
     @Test
@@ -129,11 +136,12 @@ class LanggraphWorkerSessionQueryServiceTest {
                                 LocalDateTime.of(2026, 4, 1, 11, 0))
                 ));
 
-        Map<String, Object> result = service.syncWorkerSessions(WORKER_ID, USER_ID, TENANT_ID);
+        WorkerSessionSyncResult result = service.syncWorkerSessionState(WORKER_ID, USER_ID, TENANT_ID);
 
-        assertEquals(0, result.get("synced"));
-        assertEquals(2L, result.get("total"));
-        assertEquals("session-store", result.get("source"));
+        assertEquals(0L, result.synced());
+        assertEquals(2L, result.total());
+        assertEquals("session-store", result.source());
+        assertEquals(2L, service.syncWorkerSessions(WORKER_ID, USER_ID, TENANT_ID).get("total"));
     }
 
     @Test
@@ -144,7 +152,7 @@ class LanggraphWorkerSessionQueryServiceTest {
         when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(worker);
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> service.listWorkerSessions(WORKER_ID, USER_ID));
+                () -> service.listWorkerSessionSummaries(WORKER_ID, USER_ID));
 
         assertEquals("Worker not found: " + WORKER_ID, error.getMessage());
     }

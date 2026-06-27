@@ -449,8 +449,8 @@ class LanggraphTaskServiceTest {
         }
 
         @Test
-        void cancelTask_sets_aborted_for_active_task() {
-            service.cancelTask("lgt_existing", USER_ID);
+        void cancelTaskDirect_sets_aborted_for_active_task() {
+            service.cancelTaskDirect("lgt_existing", USER_ID);
 
             assertEquals("ABORTED", existingTask.getStatus());
             assertEquals("INTERRUPTED", existingTask.getTaskSubStatus());
@@ -461,7 +461,7 @@ class LanggraphTaskServiceTest {
         }
 
         @Test
-        void cancelTask_records_recoverable_interruption_on_worker() {
+        void cancelTaskDirect_records_recoverable_interruption_on_worker() {
             existingTask.setWorkerId(WORKER_ID);
             existingTask.setSessionId(SESSION_ID);
             existingTask.setContextId("ctx-1");
@@ -474,7 +474,7 @@ class LanggraphTaskServiceTest {
                     anyString(), anyString(), anyString(), anyString(), anyString(), anyMap()
             )).thenReturn(Mono.just(Map.of("status", "recorded")));
 
-            service.cancelTask("lgt_existing", USER_ID);
+            service.cancelTaskDirect("lgt_existing", USER_ID);
 
             verify(workerClient).recordInterruption(
                     eq("lgt_existing"),

@@ -280,6 +280,14 @@ public class LanggraphStreamRelay {
                     payload.put("content", error);
                     payload.put("taskId", taskId);
                     payload.put("status", "FAILED");
+                    putTextIfPresent(payload, "reason", reason);
+                    putTextIfPresent(payload, "errorCode", node, "error_code");
+                    putTextIfPresent(payload, "errorCategory", node, "error_category");
+                    putBooleanIfPresent(payload, "recoverable", node, "recoverable");
+                    putBooleanIfPresent(payload, "llmRetryAllowed", node, "llm_retry_allowed");
+                    putBooleanIfPresent(payload, "requiresUpstreamAction", node, "requires_upstream_action");
+                    putTextIfPresent(payload, "suggestedAction", node, "suggested_action");
+                    copyExecutionReportFields(payload, node);
                     publishMessage(sessionId, MessageType.ERROR, payload);
                     taskService.failTask(taskId, error);
                 }
@@ -430,6 +438,13 @@ public class LanggraphStreamRelay {
         JsonNode value = node.get(sourceKey);
         if (value != null && value.isNumber()) {
             payload.put(targetKey, value.numberValue());
+        }
+    }
+
+    private void putBooleanIfPresent(Map<String, Object> payload, String targetKey, JsonNode node, String sourceKey) {
+        JsonNode value = node.get(sourceKey);
+        if (value != null && value.isBoolean()) {
+            payload.put(targetKey, value.booleanValue());
         }
     }
 

@@ -46,6 +46,30 @@ class FileToolError(Exception):
         super().__init__(f"{code}: {detail}")
 
 
+def _logical_path_for_error(relative_path: str) -> str:
+    value = (relative_path or ".").replace("\\", "/").strip()
+    return value or "."
+
+
+def _storage_permission_error(operation: str, relative_path: str) -> FileToolError:
+    return FileToolError(
+        "storage_permission_denied",
+        (
+            f"{operation} permission denied for '{_logical_path_for_error(relative_path)}'. "
+            "The target workspace or parent directory is not writable by the BizWorker runtime user. "
+            "Fix ownership/permissions or materialize the file through the Navigator directory worker, then retry."
+        ),
+    )
+
+
+def _storage_io_error(code: str, operation: str, relative_path: str, exc: OSError) -> FileToolError:
+    reason = exc.strerror or exc.__class__.__name__
+    return FileToolError(
+        code,
+        f"{operation} failed for '{_logical_path_for_error(relative_path)}': {reason}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # AccountFileTools
 # ---------------------------------------------------------------------------
@@ -145,8 +169,10 @@ class AccountFileTools:
 
         try:
             raw = resolved.read_bytes()
+        except PermissionError as exc:
+            raise _storage_permission_error("read_file", relative_path) from exc
         except OSError as exc:
-            raise FileToolError("storage_read_failed", str(exc)) from exc
+            raise _storage_io_error("storage_read_failed", "read_file", relative_path, exc) from exc
 
         truncated = False
 
@@ -207,32 +233,39 @@ class AccountFileTools:
         lock = self._get_file_lock(str(resolved))
 
         with lock:
-            sha256_before = None
+            try:
+                sha256_before = None
 
-            if resolved.exists():
-                if mode == "create":
-                    raise FileToolError("file_exists", f"'{relative_path}' already exists; use mode='overwrite'")
-                # overwrite mode
-                old_bytes = resolved.read_bytes()
-                sha256_before = hashlib.sha256(old_bytes).hexdigest()
-                if expected_sha256 is not None and sha256_before != expected_sha256:
-                    raise FileToolError(
-                        "checksum_mismatch",
-                        f"expected sha256 '{expected_sha256}' but current is '{sha256_before}'",
-                    )
-            else:
-                if mode == "overwrite" and expected_sha256 is not None:
-                    raise FileToolError(
-                        "file_not_found",
-                        f"'{relative_path}' does not exist for overwrite",
-                    )
+                if resolved.exists():
+                    if mode == "create":
+                        raise FileToolError("file_exists", f"'{relative_path}' already exists; use mode='overwrite'")
+                    # overwrite mode
+                    old_bytes = resolved.read_bytes()
+                    sha256_before = hashlib.sha256(old_bytes).hexdigest()
+                    if expected_sha256 is not None and sha256_before != expected_sha256:
+                        raise FileToolError(
+                            "checksum_mismatch",
+                            f"expected sha256 '{expected_sha256}' but current is '{sha256_before}'",
+                        )
+                else:
+                    if mode == "overwrite" and expected_sha256 is not None:
+                        raise FileToolError(
+                            "file_not_found",
+                            f"'{relative_path}' does not exist for overwrite",
+                        )
 
-            # Ensure parent dirs
-            resolved.parent.mkdir(parents=True, exist_ok=True)
+                # Ensure parent dirs
+                resolved.parent.mkdir(parents=True, exist_ok=True)
 
-            # Atomic write
-            sha256_after = hashlib.sha256(content_bytes).hexdigest()
-            _atomic_write(resolved, content_bytes)
+                # Atomic write
+                sha256_after = hashlib.sha256(content_bytes).hexdigest()
+                _atomic_write(resolved, content_bytes)
+            except FileToolError:
+                raise
+            except PermissionError as exc:
+                raise _storage_permission_error("write_file", relative_path) from exc
+            except OSError as exc:
+                raise _storage_io_error("storage_write_failed", "write_file", relative_path, exc) from exc
 
         self._record_audit("write_file", relative_path, sha256_before, sha256_after)
 
@@ -258,27 +291,34 @@ class AccountFileTools:
         except PathGuardError as exc:
             raise FileToolError(exc.code, exc.detail) from exc
 
-        if not resolved.is_file():
-            raise FileToolError("file_not_found", f"'{relative_path}' does not exist")
-
         lock = self._get_file_lock(str(resolved))
 
-        with lock:
-            text = resolved.read_text(encoding="utf-8")
-            sha256_before = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        try:
+            if not resolved.is_file():
+                raise FileToolError("file_not_found", f"'{relative_path}' does not exist")
 
-            count = text.count(old_str)
-            if count == 0:
-                raise FileToolError("no_match", "old_str not found in file")
-            if count > 1:
-                raise FileToolError("multiple_matches", f"old_str found {count} times; must be unique")
+            with lock:
+                text = resolved.read_text(encoding="utf-8")
+                sha256_before = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-            new_text = text.replace(old_str, new_str, 1)
-            new_bytes = new_text.encode("utf-8")
-            self._check_write_size(len(new_bytes))
-            sha256_after = hashlib.sha256(new_bytes).hexdigest()
+                count = text.count(old_str)
+                if count == 0:
+                    raise FileToolError("no_match", "old_str not found in file")
+                if count > 1:
+                    raise FileToolError("multiple_matches", f"old_str found {count} times; must be unique")
 
-            _atomic_write(resolved, new_bytes)
+                new_text = text.replace(old_str, new_str, 1)
+                new_bytes = new_text.encode("utf-8")
+                self._check_write_size(len(new_bytes))
+                sha256_after = hashlib.sha256(new_bytes).hexdigest()
+
+                _atomic_write(resolved, new_bytes)
+        except FileToolError:
+            raise
+        except PermissionError as exc:
+            raise _storage_permission_error("str_replace", relative_path) from exc
+        except OSError as exc:
+            raise _storage_io_error("storage_write_failed", "str_replace", relative_path, exc) from exc
 
         self._record_audit("str_replace", relative_path, sha256_before, sha256_after)
 
@@ -312,55 +352,62 @@ class AccountFileTools:
         except PathGuardError as exc:
             raise FileToolError(exc.code, exc.detail) from exc
 
-        if not resolved.is_file():
-            raise FileToolError("file_not_found", f"'{relative_path}' does not exist")
-
         lock = self._get_file_lock(str(resolved))
 
-        with lock:
-            text = resolved.read_text(encoding="utf-8")
-            sha256_before = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        try:
+            if not resolved.is_file():
+                raise FileToolError("file_not_found", f"'{relative_path}' does not exist")
 
-            lines = text.splitlines(keepends=True)
+            with lock:
+                text = resolved.read_text(encoding="utf-8")
+                sha256_before = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-            # Find anchor line
-            anchor_indices = [i for i, line in enumerate(lines) if line.strip() == anchor.strip()]
-            if len(anchor_indices) == 0:
-                raise FileToolError("anchor_not_found", f"anchor '{anchor}' not found in file")
-            if len(anchor_indices) > 1:
-                raise FileToolError("multiple_anchors", f"anchor '{anchor}' found {len(anchor_indices)} times")
+                lines = text.splitlines(keepends=True)
 
-            anchor_idx = anchor_indices[0]
+                # Find anchor line
+                anchor_indices = [i for i, line in enumerate(lines) if line.strip() == anchor.strip()]
+                if len(anchor_indices) == 0:
+                    raise FileToolError("anchor_not_found", f"anchor '{anchor}' not found in file")
+                if len(anchor_indices) > 1:
+                    raise FileToolError("multiple_anchors", f"anchor '{anchor}' found {len(anchor_indices)} times")
 
-            # Determine heading level
-            anchor_level = _heading_level(lines[anchor_idx])
-            if anchor_level == 0:
-                raise FileToolError("invalid_anchor", "anchor must be a markdown heading (starts with #)")
+                anchor_idx = anchor_indices[0]
 
-            # Find end: next heading at same or higher level
-            end_idx = len(lines)
-            for i in range(anchor_idx + 1, len(lines)):
-                level = _heading_level(lines[i])
-                if 0 < level <= anchor_level:
-                    end_idx = i
-                    break
+                # Determine heading level
+                anchor_level = _heading_level(lines[anchor_idx])
+                if anchor_level == 0:
+                    raise FileToolError("invalid_anchor", "anchor must be a markdown heading (starts with #)")
 
-            # Build new file
-            new_lines = lines[:anchor_idx]
-            # Include anchor heading itself, then new content
-            new_lines.append(lines[anchor_idx])
-            if content and not content.endswith("\n"):
-                content += "\n"
-            if content:
-                new_lines.append(content)
-            new_lines.extend(lines[end_idx:])
+                # Find end: next heading at same or higher level
+                end_idx = len(lines)
+                for i in range(anchor_idx + 1, len(lines)):
+                    level = _heading_level(lines[i])
+                    if 0 < level <= anchor_level:
+                        end_idx = i
+                        break
 
-            new_text = "".join(new_lines)
-            new_bytes = new_text.encode("utf-8")
-            self._check_write_size(len(new_bytes))
-            sha256_after = hashlib.sha256(new_bytes).hexdigest()
+                # Build new file
+                new_lines = lines[:anchor_idx]
+                # Include anchor heading itself, then new content
+                new_lines.append(lines[anchor_idx])
+                if content and not content.endswith("\n"):
+                    content += "\n"
+                if content:
+                    new_lines.append(content)
+                new_lines.extend(lines[end_idx:])
 
-            _atomic_write(resolved, new_bytes)
+                new_text = "".join(new_lines)
+                new_bytes = new_text.encode("utf-8")
+                self._check_write_size(len(new_bytes))
+                sha256_after = hashlib.sha256(new_bytes).hexdigest()
+
+                _atomic_write(resolved, new_bytes)
+        except FileToolError:
+            raise
+        except PermissionError as exc:
+            raise _storage_permission_error("edit_file", relative_path) from exc
+        except OSError as exc:
+            raise _storage_io_error("storage_write_failed", "edit_file", relative_path, exc) from exc
 
         self._record_audit("edit_file", relative_path, sha256_before, sha256_after)
 
@@ -390,35 +437,42 @@ class AccountFileTools:
         except PathGuardError as exc:
             raise FileToolError(exc.code, exc.detail) from exc
 
-        if not resolved.is_file():
-            raise FileToolError("file_not_found", f"'{relative_path}' does not exist")
-
         lock = self._get_file_lock(str(resolved))
 
-        with lock:
-            old_bytes = resolved.read_bytes()
-            sha256_before = hashlib.sha256(old_bytes).hexdigest()
+        try:
+            if not resolved.is_file():
+                raise FileToolError("file_not_found", f"'{relative_path}' does not exist")
 
-            if expected_sha256 is not None and sha256_before != expected_sha256:
-                raise FileToolError(
-                    "checksum_mismatch",
-                    f"expected sha256 '{expected_sha256}' but current is '{sha256_before}'",
-                )
+            with lock:
+                old_bytes = resolved.read_bytes()
+                sha256_before = hashlib.sha256(old_bytes).hexdigest()
 
-            old_text = old_bytes.decode("utf-8")
+                if expected_sha256 is not None and sha256_before != expected_sha256:
+                    raise FileToolError(
+                        "checksum_mismatch",
+                        f"expected sha256 '{expected_sha256}' but current is '{sha256_before}'",
+                    )
 
-            # Parse and apply patch in memory
-            try:
-                new_text = _apply_unified_diff(old_text, patch)
-            except PatchConflictError as exc:
-                raise FileToolError("patch_conflict", str(exc)) from exc
+                old_text = old_bytes.decode("utf-8")
 
-            new_bytes = new_text.encode("utf-8")
-            self._check_write_size(len(new_bytes))
-            sha256_after = hashlib.sha256(new_bytes).hexdigest()
+                # Parse and apply patch in memory
+                try:
+                    new_text = _apply_unified_diff(old_text, patch)
+                except PatchConflictError as exc:
+                    raise FileToolError("patch_conflict", str(exc)) from exc
 
-            # Atomic write: tmp → fsync → os.replace
-            _atomic_write(resolved, new_bytes)
+                new_bytes = new_text.encode("utf-8")
+                self._check_write_size(len(new_bytes))
+                sha256_after = hashlib.sha256(new_bytes).hexdigest()
+
+                # Atomic write: tmp -> fsync -> os.replace
+                _atomic_write(resolved, new_bytes)
+        except FileToolError:
+            raise
+        except PermissionError as exc:
+            raise _storage_permission_error("patch_file", relative_path) from exc
+        except OSError as exc:
+            raise _storage_io_error("storage_write_failed", "patch_file", relative_path, exc) from exc
 
         self._record_audit("patch_file", relative_path, sha256_before, sha256_after)
 
@@ -484,8 +538,10 @@ class AccountFileTools:
 
 def _atomic_write(target: Path, data: bytes) -> None:
     """Write data atomically via tmp + fsync + os.replace."""
-    fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+    fd = -1
+    tmp_path: str | None = None
     try:
+        fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
         os.write(fd, data)
         os.fsync(fd)
         os.close(fd)
@@ -497,8 +553,11 @@ def _atomic_write(target: Path, data: bytes) -> None:
                 os.close(fd)
             except OSError:
                 pass
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                logger.debug("Failed to remove temporary file after atomic write failure", exc_info=True)
         raise
 
 

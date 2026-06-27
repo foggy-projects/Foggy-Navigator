@@ -391,6 +391,56 @@ class LanggraphStreamRelayTest {
         inOrder.verify(taskService).failTask(taskId, "LLM request timed out");
     }
 
+    @Test
+    void storagePermissionErrorPublishesFailureMetadataAndFailsTask() throws Exception {
+        String taskId = "lgt-task-storage-permission";
+        String sessionId = "session-storage-permission";
+        String error = "storage_permission_denied: write_file permission denied for 'REPORT.md'.";
+        String data = """
+                {
+                  "type": "error",
+                  "reason": "storage_permission_denied",
+                  "error": "storage_permission_denied: write_file permission denied for 'REPORT.md'.",
+                  "error_code": "storage_permission_denied",
+                  "error_category": "STORAGE_PERMISSION",
+                  "recoverable": true,
+                  "llm_retry_allowed": false,
+                  "requires_upstream_action": true,
+                  "suggested_action": "repair_workspace_permissions_or_write_via_navigator_directory_worker"
+                }
+                """;
+
+        invokeHandleEvent(ServerSentEvent.<String>builder().data(data).build(), taskId, sessionId);
+
+        ArgumentCaptor<AgentMessage> captor = ArgumentCaptor.forClass(AgentMessage.class);
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(taskService, sessionEventListener);
+        inOrder.verify(taskService).recordTaskInterruptionProjection(
+                taskId,
+                "storage_permission_denied",
+                error
+        );
+        inOrder.verify(sessionEventListener).handleMessage(captor.capture());
+        inOrder.verify(taskService).failTask(taskId, error);
+
+        AgentMessage message = captor.getValue();
+        assertEquals(MessageType.ERROR, message.getType());
+        assertEquals(taskId, message.getTaskId());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        assertEquals(error, payload.get("content"));
+        assertEquals("FAILED", payload.get("status"));
+        assertEquals("storage_permission_denied", payload.get("reason"));
+        assertEquals("storage_permission_denied", payload.get("errorCode"));
+        assertEquals("STORAGE_PERMISSION", payload.get("errorCategory"));
+        assertEquals(true, payload.get("recoverable"));
+        assertEquals(false, payload.get("llmRetryAllowed"));
+        assertEquals(true, payload.get("requiresUpstreamAction"));
+        assertEquals(
+                "repair_workspace_permissions_or_write_via_navigator_directory_worker",
+                payload.get("suggestedAction")
+        );
+    }
+
 
     @Test
     void resolveLlmConfigBuildsWorkerRequestConfigFromModelConfig() throws Exception {

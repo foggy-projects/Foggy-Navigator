@@ -1298,11 +1298,21 @@ def _runtime_memory_projection_metadata(
             "promotedResultDigest": child_report_digest,
         })
     if _is_non_recoverable_projection(output):
+        recoverable = output.get("recoverable")
+        llm_retry_allowed = output.get("llm_retry_allowed")
         metadata.update({
             "source": "error",
             "errorCategory": output.get("error_category") or "NON_RECOVERABLE_TOOL_ERROR",
-            "recoverable": False,
+            "recoverable": recoverable if isinstance(recoverable, bool) else False,
         })
+        if isinstance(llm_retry_allowed, bool):
+            metadata["llmRetryAllowed"] = llm_retry_allowed
+        error_code = output.get("error_code")
+        if isinstance(error_code, str) and error_code.strip():
+            metadata["errorCode"] = error_code.strip()
+        requires_upstream_action = output.get("requires_upstream_action")
+        if isinstance(requires_upstream_action, bool):
+            metadata["requiresUpstreamAction"] = requires_upstream_action
     return {key: value for key, value in metadata.items() if value not in (None, "", [], {})}
 
 

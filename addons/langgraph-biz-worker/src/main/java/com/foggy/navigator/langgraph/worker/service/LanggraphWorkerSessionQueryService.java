@@ -6,7 +6,11 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
+import com.foggy.navigator.spi.agent.WorkerSessionMessage;
+import com.foggy.navigator.spi.agent.WorkerSessionMessageCount;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
+import com.foggy.navigator.spi.agent.WorkerSessionSummary;
+import com.foggy.navigator.spi.agent.WorkerSessionSyncResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -44,7 +48,7 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
     }
 
     @Override
-    public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
+    public List<WorkerSessionSummary> listWorkerSessionSummaries(String workerId, String userId) {
         assertWorkerOwnedByUser(workerId, userId);
 
         Map<String, SessionTaskEntity> latestBySession = new LinkedHashMap<>();
@@ -55,12 +59,20 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
         }
 
         return latestBySession.values().stream()
-                .map(this::toWorkerSessionMap)
+                .map(task -> WorkerSessionSummary.from(toWorkerSessionMap(task)))
+                .toList();
+    }
+
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
+        return listWorkerSessionSummaries(workerId, userId).stream()
+                .map(WorkerSessionSummary::toMap)
                 .toList();
     }
 
     @Override
-    public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
+    public WorkerSessionMessageCount getWorkerSessionMessageCountResult(String workerId, String sessionId, String userId) {
         assertSessionOwnedByWorker(workerId, sessionId, userId);
 
         List<SessionMessageEntity> messages = sessionMessageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
@@ -71,12 +83,18 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
         result.put("user_count", userCount);
         result.put("assistant_count", assistantCount);
         result.put("total", messages.size());
-        return result;
+        return WorkerSessionMessageCount.from(result);
+    }
+
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
+        return getWorkerSessionMessageCountResult(workerId, sessionId, userId).toMap();
     }
 
     @Override
-    public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
-                                                              String userId, Integer offset, Integer limit) {
+    public List<WorkerSessionMessage> listWorkerSessionMessages(String workerId, String sessionId,
+                                                                String userId, Integer offset, Integer limit) {
         assertSessionOwnedByWorker(workerId, sessionId, userId);
 
         List<SessionMessageEntity> messages = sessionMessageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
@@ -91,12 +109,21 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
         }
 
         return messages.subList(fromIndex, toIndex).stream()
-                .map(this::toWorkerSessionMessageMap)
+                .map(message -> WorkerSessionMessage.from(toWorkerSessionMessageMap(message)))
+                .toList();
+    }
+
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
+                                                              String userId, Integer offset, Integer limit) {
+        return listWorkerSessionMessages(workerId, sessionId, userId, offset, limit).stream()
+                .map(WorkerSessionMessage::toMap)
                 .toList();
     }
 
     @Override
-    public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
+    public WorkerSessionSyncResult syncWorkerSessionState(String workerId, String userId, String tenantId) {
         assertWorkerOwnedByUser(workerId, userId);
 
         long total = sessionTaskRepository.findByWorkerIdAndUserIdOrderByCreatedAtDesc(workerId, userId).stream()
@@ -110,7 +137,13 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
         result.put("synced", 0);
         result.put("total", total);
         result.put("source", "session-store");
-        return result;
+        return WorkerSessionSyncResult.from(result);
+    }
+
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
+        return syncWorkerSessionState(workerId, userId, tenantId).toMap();
     }
 
     private void assertWorkerOwnedByUser(String workerId, String userId) {

@@ -18,8 +18,14 @@ import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
+import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
+import com.foggy.navigator.spi.agent.TaskSearchResult;
+import com.foggy.navigator.spi.agent.WorkerSessionMessage;
+import com.foggy.navigator.spi.agent.WorkerSessionMessageCount;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
+import com.foggy.navigator.spi.agent.WorkerSessionSummary;
+import com.foggy.navigator.spi.agent.WorkerSessionSyncResult;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -322,7 +328,7 @@ public class TaskDispatchFacade {
 
         for (TaskListingProvider provider : taskQueryProviderRegistry.listingProvidersSupporting(TaskQueryCapability.LIST_TASKS_PAGED)) {
             try {
-                Object pageResult = provider.listTasksPaged(userId, 0, fetchSize, state);
+                TaskPageResult pageResult = provider.listTaskPage(userId, 0, fetchSize, state);
                 UnifiedSessionTaskProjectionService.TaskPageEnvelope envelope = toTaskPageEnvelope(pageResult);
                 content.addAll(compact
                         ? envelope.content().stream().map(this::toCompactTaskItem).toList()
@@ -353,7 +359,7 @@ public class TaskDispatchFacade {
 
         for (TaskListingProvider provider : taskQueryProviderRegistry.listingProvidersSupporting(TaskQueryCapability.SEARCH_SESSIONS)) {
             try {
-                Object searchResult = provider.searchSessions(userId, keyword, workerId, directoryId, 0, fetchSize);
+                TaskSearchResult searchResult = provider.searchSessionPage(userId, keyword, workerId, directoryId, 0, fetchSize);
                 UnifiedSessionTaskProjectionService.SearchEnvelope envelope = toSearchEnvelope(searchResult);
                 results.addAll(envelope.results());
                 total += envelope.total();
@@ -432,7 +438,7 @@ public class TaskDispatchFacade {
 
         for (TaskListingProvider provider : taskQueryProviderRegistry.listingProvidersSupporting(TaskQueryCapability.LIST_TASKS_BY_DIRECTORY_PAGED)) {
             try {
-                Object pageResult = provider.listTasksByDirectoryPaged(userId, directoryId, 0, fetchSize, state);
+                TaskPageResult pageResult = provider.listDirectoryTaskPage(userId, directoryId, 0, fetchSize, state);
                 UnifiedSessionTaskProjectionService.TaskPageEnvelope envelope = toTaskPageEnvelope(pageResult);
                 content.addAll(envelope.content());
                 totalSessions += envelope.totalSessions();
@@ -445,10 +451,11 @@ public class TaskDispatchFacade {
 
     // ── Worker Session 查询（统一端点） ──
 
-    public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
+    public List<WorkerSessionSummary> listWorkerSessionSummaries(String workerId, String userId) {
         for (WorkerSessionQueryProvider provider : taskQueryProviderRegistry.workerSessionProvidersSupporting(TaskQueryCapability.LIST_WORKER_SESSIONS)) {
             try {
-                return provider.listWorkerSessions(workerId, userId);
+                List<WorkerSessionSummary> sessions = provider.listWorkerSessionSummaries(workerId, userId);
+                return sessions != null ? sessions : List.of();
             } catch (UnsupportedOperationException ignored) {
             } catch (IllegalArgumentException e) {
                 if (!isWorkerNotFound(e)) {
@@ -459,10 +466,17 @@ public class TaskDispatchFacade {
         return List.of();
     }
 
-    public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
+    public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
+        return listWorkerSessionSummaries(workerId, userId).stream()
+                .map(WorkerSessionSummary::toMap)
+                .toList();
+    }
+
+    public WorkerSessionMessageCount getWorkerSessionMessageCountResult(String workerId, String sessionId, String userId) {
         for (WorkerSessionQueryProvider provider : taskQueryProviderRegistry.workerSessionProvidersSupporting(TaskQueryCapability.GET_WORKER_SESSION_MESSAGE_COUNT)) {
             try {
-                return provider.getWorkerSessionMessageCount(workerId, sessionId, userId);
+                WorkerSessionMessageCount count = provider.getWorkerSessionMessageCountResult(workerId, sessionId, userId);
+                return count != null ? count : WorkerSessionMessageCount.empty();
             } catch (UnsupportedOperationException ignored) {
             } catch (IllegalArgumentException e) {
                 if (!isWorkerNotFound(e)) {
@@ -470,28 +484,41 @@ public class TaskDispatchFacade {
                 }
             }
         }
-        return Map.of("user_count", 0, "assistant_count", 0, "total", 0);
+        return WorkerSessionMessageCount.empty();
+    }
+
+    public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
+        return getWorkerSessionMessageCountResult(workerId, sessionId, userId).toMap();
+    }
+
+    public List<WorkerSessionMessage> listWorkerSessionMessages(String workerId, String sessionId,
+                                                                String userId, Integer offset, Integer limit) {
+        for (WorkerSessionQueryProvider provider : taskQueryProviderRegistry.workerSessionProvidersSupporting(TaskQueryCapability.GET_WORKER_SESSION_MESSAGES)) {
+            try {
+                List<WorkerSessionMessage> messages = provider.listWorkerSessionMessages(workerId, sessionId, userId, offset, limit);
+                return messages != null ? messages : List.of();
+            } catch (UnsupportedOperationException ignored) {
+            } catch (IllegalArgumentException e) {
+                if (!isWorkerNotFound(e)) {
+                    throw e;
+                }
+            }
+        }
+        return List.of();
     }
 
     public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
                                                                String userId, Integer offset, Integer limit) {
-        for (WorkerSessionQueryProvider provider : taskQueryProviderRegistry.workerSessionProvidersSupporting(TaskQueryCapability.GET_WORKER_SESSION_MESSAGES)) {
-            try {
-                return provider.getWorkerSessionMessages(workerId, sessionId, userId, offset, limit);
-            } catch (UnsupportedOperationException ignored) {
-            } catch (IllegalArgumentException e) {
-                if (!isWorkerNotFound(e)) {
-                    throw e;
-                }
-            }
-        }
-        return List.of();
+        return listWorkerSessionMessages(workerId, sessionId, userId, offset, limit).stream()
+                .map(WorkerSessionMessage::toMap)
+                .toList();
     }
 
-    public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
+    public WorkerSessionSyncResult syncWorkerSessionState(String workerId, String userId, String tenantId) {
         for (WorkerSessionQueryProvider provider : taskQueryProviderRegistry.workerSessionProvidersSupporting(TaskQueryCapability.SYNC_WORKER_SESSIONS)) {
             try {
-                return provider.syncWorkerSessions(workerId, userId, tenantId);
+                WorkerSessionSyncResult result = provider.syncWorkerSessionState(workerId, userId, tenantId);
+                return result != null ? result : WorkerSessionSyncResult.of(0, 0);
             } catch (UnsupportedOperationException ignored) {
             } catch (IllegalArgumentException e) {
                 if (!isWorkerNotFound(e)) {
@@ -500,6 +527,10 @@ public class TaskDispatchFacade {
             }
         }
         throw new UnsupportedOperationException("No provider supports syncWorkerSessions");
+    }
+
+    public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
+        return syncWorkerSessionState(workerId, userId, tenantId).toMap();
     }
 
     private boolean isWorkerNotFound(IllegalArgumentException e) {

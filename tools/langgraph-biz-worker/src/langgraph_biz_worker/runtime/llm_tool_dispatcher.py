@@ -47,6 +47,7 @@ _PROGRESS_EVENT_SINK_KEY = "_progress_event_sink"
 _FILE_TOOL_NAMES = frozenset({
     "list_files", "read_file", "write_file", "str_replace", "edit_file", "patch_file",
 })
+_FILE_STORAGE_PERMISSION_ERROR_CODES = frozenset({"storage_permission_denied"})
 _PUBLIC_RESOURCE_TOOL_NAMES = frozenset({
     "list_skill_resources", "read_skill_resource",
 })
@@ -443,7 +444,43 @@ def _dispatch_file_tool(
             )
         return {"ok": False, "error": f"Unknown file tool: {name}"}
     except FileToolError as exc:
-        return {"ok": False, "error": f"{exc.code}: {exc.detail}"}
+        return _file_tool_error_result(exc)
+    except PermissionError:
+        return _file_storage_permission_result(f"{name} permission denied for the delegated workspace.")
+
+
+def _file_tool_error_result(exc: FileToolError) -> dict[str, Any]:
+    if exc.code in _FILE_STORAGE_PERMISSION_ERROR_CODES:
+        return _file_storage_permission_result(exc.detail, error_code=exc.code)
+    return {
+        "ok": False,
+        "error": f"{exc.code}: {exc.detail}",
+        "error_code": exc.code,
+    }
+
+
+def _file_storage_permission_result(
+    detail: str,
+    *,
+    error_code: str = "storage_permission_denied",
+) -> dict[str, Any]:
+    user_message = (
+        "文件写入权限不足，BizWorker 当前运行用户不能写入目标 Actor Home/任务目录。"
+        "请上游通过 Navi/Directory Worker 物化 sidecar，或先修复目录所有者/权限后重新派发；"
+        "模型不应继续查看 worker 日志、源码或系统目录。"
+    )
+    return {
+        "ok": False,
+        "error": f"{error_code}: {detail}",
+        "error_code": error_code,
+        "error_category": "STORAGE_PERMISSION",
+        "recoverable": True,
+        "llm_retry_allowed": False,
+        "requires_upstream_action": True,
+        "suggested_action": "repair_workspace_permissions_or_write_via_navigator_directory_worker",
+        "user_message": user_message,
+        "reason": error_code,
+    }
 
 
 def _dispatch_public_resource_tool(

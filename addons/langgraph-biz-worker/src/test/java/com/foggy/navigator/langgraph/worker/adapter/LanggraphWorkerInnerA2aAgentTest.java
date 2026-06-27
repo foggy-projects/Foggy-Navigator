@@ -4,6 +4,7 @@ import com.foggy.navigator.common.dto.a2a.A2aContext;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aPart;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
+import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
@@ -293,6 +294,31 @@ class LanggraphWorkerInnerA2aAgentTest {
     }
 
     @Test
+    void getTask_mapsFailedLanggraphTaskToA2aFailedState() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        when(taskService.getTask("admin_01", "lgt_failed")).thenReturn(
+                LanggraphTaskDTO.builder()
+                        .taskId("lgt_failed")
+                        .status("FAILED")
+                        .resultText("storage_permission_denied: write_file permission denied for 'REPORT.md'.")
+                        .build()
+        );
+
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setUserId("admin_01");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
+
+        A2aTask task = agent.getTask("lgt_failed").orElseThrow();
+
+        assertEquals(A2aTaskState.FAILED, task.getStatus().getState());
+        assertEquals(
+                "storage_permission_denied: write_file permission denied for 'REPORT.md'.",
+                task.getArtifacts().get(0).getParts().get(0).getText()
+        );
+    }
+
+    @Test
     void cancelTask_recordsRecoverableInterruptionThroughTaskService() {
         LanggraphTaskService taskService = mock(LanggraphTaskService.class);
         CodingAgentEntity entity = new CodingAgentEntity();
@@ -302,7 +328,7 @@ class LanggraphWorkerInnerA2aAgentTest {
 
         agent.cancelTask("lgt_01");
 
-        verify(taskService).cancelTask("lgt_01", "admin_01");
+        verify(taskService).cancelTaskDirect("lgt_01", "admin_01");
     }
 
     @Test
@@ -315,6 +341,6 @@ class LanggraphWorkerInnerA2aAgentTest {
 
         agent.abortWorkerTask("lgt_01", "remote_01");
 
-        verify(taskService).cancelTask("lgt_01", "admin_01");
+        verify(taskService).cancelTaskDirect("lgt_01", "admin_01");
     }
 }

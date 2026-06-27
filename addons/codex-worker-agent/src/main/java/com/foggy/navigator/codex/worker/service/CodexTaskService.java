@@ -21,9 +21,11 @@ import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.TaskListingProvider;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -55,7 +57,7 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class CodexTaskService implements TaskQueryProvider {
+public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider, TaskListingProvider {
 
     public static final String CODEX_PROVIDER_TYPE = "codex-worker";
     public static final String CODEX_BIZ_PROVIDER_TYPE = "codex-biz-worker";
@@ -383,12 +385,18 @@ public class CodexTaskService implements TaskQueryProvider {
     }
 
     @Override
-    public void cancelTask(String taskId, String userId) {
+    public void cancelTaskDirect(String taskId, String userId) {
         CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())) {
             abortTask(taskId);
         }
+    }
+
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public void cancelTask(String taskId, String userId) {
+        cancelTaskDirect(taskId, userId);
     }
 
     /**
@@ -511,7 +519,7 @@ public class CodexTaskService implements TaskQueryProvider {
         }
     }
 
-    // ── TaskQueryProvider 实现 ──
+    // ── Task provider narrow port implementations ──
 
     @Override
     public String getProviderType() {
@@ -599,31 +607,43 @@ public class CodexTaskService implements TaskQueryProvider {
     }
 
     @Override
-    public Object listTasksPaged(String userId, int page, int size, String state) {
+    public TaskPageResult listTaskPage(String userId, int page, int size, String state) {
         return listTasksPagedForProvider(userId, page, size, state, AGENT_ID);
     }
 
-    public Object listTasksPagedForProvider(String userId, int page, int size, String state, String providerType) {
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public Object listTasksPaged(String userId, int page, int size, String state) {
+        return listTaskPage(userId, page, size, state);
+    }
+
+    public TaskPageResult listTasksPagedForProvider(String userId, int page, int size, String state, String providerType) {
         List<CodexTaskEntity> tasks = taskRepository.findByUserIdOrderByCreatedAtDesc(userId);
         tasks = filterTasksByProvider(tasks, providerType);
         return buildSessionPage(tasks, page, size, state);
     }
 
     @Override
-    public Object listTasksByDirectoryPaged(String userId, String directoryId, int page, int size, String state) {
+    public TaskPageResult listDirectoryTaskPage(String userId, String directoryId, int page, int size, String state) {
         return listTasksByDirectoryPagedForProvider(userId, directoryId, page, size, state, AGENT_ID);
     }
 
-    public Object listTasksByDirectoryPagedForProvider(String userId, String directoryId, int page, int size,
-                                                       String state, String providerType) {
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public Object listTasksByDirectoryPaged(String userId, String directoryId, int page, int size, String state) {
+        return listDirectoryTaskPage(userId, directoryId, page, size, state);
+    }
+
+    public TaskPageResult listTasksByDirectoryPagedForProvider(String userId, String directoryId, int page, int size,
+                                                               String state, String providerType) {
         List<CodexTaskEntity> tasks = taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId);
         tasks = filterTasksByProvider(tasks, providerType);
         return buildSessionPage(tasks, page, size, state);
     }
 
     @Override
-    public Object searchSessions(String userId, String keyword, String workerId,
-                                 String directoryId, int page, int size) {
+    public TaskSearchResult searchSessionPage(String userId, String keyword, String workerId,
+                                              String directoryId, int page, int size) {
         boolean hasFilter = (keyword != null && !keyword.isBlank())
                 || (workerId != null && !workerId.isBlank())
                 || (directoryId != null && !directoryId.isBlank());
@@ -635,8 +655,15 @@ public class CodexTaskService implements TaskQueryProvider {
         return searchSessionsForProvider(userId, normalizedKeyword, workerId, directoryId, page, size, AGENT_ID);
     }
 
-    public Object searchSessionsForProvider(String userId, String normalizedKeyword, String workerId,
-                                            String directoryId, int page, int size, String providerType) {
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public Object searchSessions(String userId, String keyword, String workerId,
+                                 String directoryId, int page, int size) {
+        return searchSessionPage(userId, keyword, workerId, directoryId, page, size);
+    }
+
+    public TaskSearchResult searchSessionsForProvider(String userId, String normalizedKeyword, String workerId,
+                                                      String directoryId, int page, int size, String providerType) {
         List<List<CodexTaskEntity>> sessions = new ArrayList<>(groupTasksBySession(
                 filterTasksByProvider(taskRepository.findByUserIdOrderByCreatedAtDesc(userId), providerType)
         ).values());

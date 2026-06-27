@@ -311,7 +311,7 @@ final class TaskOperationRouter {
         }
         TaskCommandProvider provider = findTaskCommandProviderByType(providerType)
                 .orElseGet(() -> findProviderForTask(taskId));
-        provider.cancelTask(taskId, userId);
+        provider.cancelTaskDirect(taskId, userId);
         log.info("Cancelled task via provider route: taskId={}, providerType={}", taskId, provider.getProviderType());
     }
 

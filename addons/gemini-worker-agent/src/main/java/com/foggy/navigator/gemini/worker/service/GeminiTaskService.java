@@ -22,8 +22,9 @@ import com.foggy.navigator.gemini.worker.model.entity.GeminiTaskEntity;
 import com.foggy.navigator.gemini.worker.model.form.CreateGeminiTaskForm;
 import com.foggy.navigator.gemini.worker.repository.GeminiCodingAgentRepository;
 import com.foggy.navigator.gemini.worker.repository.GeminiTaskRepository;
+import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.RequiredArgsConstructor;
@@ -51,7 +52,7 @@ import java.util.function.Consumer;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class GeminiTaskService implements TaskQueryProvider {
+public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvider {
 
     public static final String AGENT_ID = "gemini-worker";
     private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
@@ -401,12 +402,18 @@ public class GeminiTaskService implements TaskQueryProvider {
     }
 
     @Override
-    public void cancelTask(String taskId, String userId) {
+    public void cancelTaskDirect(String taskId, String userId) {
         GeminiTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())) {
             abortTask(taskId);
         }
+    }
+
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public void cancelTask(String taskId, String userId) {
+        cancelTaskDirect(taskId, userId);
     }
 
     @Override

@@ -16,7 +16,12 @@ import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.TaskListingProvider;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
+import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.BeforeEach;
@@ -91,6 +96,15 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void exposesOnlySupportedTaskProviderPorts() {
+        assertInstanceOf(TaskLookupProvider.class, service);
+        assertInstanceOf(TaskCommandProvider.class, service);
+        assertInstanceOf(TaskListingProvider.class, service);
+        assertFalse(service instanceof TaskQueryProvider);
+        assertFalse(service instanceof WorkerSessionQueryProvider);
+    }
+
+    @Test
     void resolveCodexAuth_returnsEmptyWhenNoApiKey() {
         LlmModelConfigDTO config = new LlmModelConfigDTO();
         config.setWorkerBackend("OPENAI_CODEX");
@@ -137,9 +151,7 @@ class CodexTaskServiceTest {
         when(taskRepository.findByUserIdOrderByCreatedAtDesc("user-1"))
                 .thenReturn(List.of(running, completed));
 
-        Object result = service.listTasksPaged("user-1", 0, 20, "PROCESSING");
-
-        TaskPageResult page = assertInstanceOf(TaskPageResult.class, result);
+        TaskPageResult page = service.listTaskPage("user-1", 0, 20, "PROCESSING");
         assertEquals(1L, page.totalSessions());
         List<?> content = page.content();
         assertEquals(1, content.size());

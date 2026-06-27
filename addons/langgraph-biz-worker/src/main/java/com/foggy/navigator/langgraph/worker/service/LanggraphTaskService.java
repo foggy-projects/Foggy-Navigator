@@ -362,7 +362,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
 
     @Override
     @Transactional
-    public void cancelTask(String taskId, String userId) {
+    public void cancelTaskDirect(String taskId, String userId) {
         LanggraphTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         if (!"RUNNING".equals(entity.getStatus()) && !"PENDING".equals(entity.getStatus())) {
@@ -377,6 +377,13 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         persistTask(entity);
         recordRecoverableInterruption(entity, "user_cancelled", "Cancelled by user");
         log.info("Task cancelled: taskId={}", taskId);
+    }
+
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    @Transactional
+    public void cancelTask(String taskId, String userId) {
+        cancelTaskDirect(taskId, userId);
     }
 
     public void recordTaskInterruption(String taskId, String reason, String errorMessage) {

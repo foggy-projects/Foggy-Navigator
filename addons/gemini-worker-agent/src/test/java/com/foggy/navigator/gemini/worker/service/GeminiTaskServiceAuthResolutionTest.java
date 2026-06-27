@@ -13,6 +13,11 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.gemini.worker.model.entity.GeminiTaskEntity;
 import com.foggy.navigator.gemini.worker.repository.GeminiTaskRepository;
+import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.TaskListingProvider;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
+import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +30,8 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -78,6 +85,15 @@ class GeminiTaskServiceAuthResolutionTest {
         when(sessionTaskRepository.findByTaskId(any())).thenReturn(Optional.empty());
         when(sessionTaskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(sessionEntityRepository.findById(any())).thenReturn(Optional.empty());
+    }
+
+    @Test
+    void exposesOnlySupportedTaskProviderPorts() {
+        assertInstanceOf(TaskLookupProvider.class, taskService);
+        assertInstanceOf(TaskCommandProvider.class, taskService);
+        assertFalse(taskService instanceof TaskQueryProvider);
+        assertFalse(taskService instanceof TaskListingProvider);
+        assertFalse(taskService instanceof WorkerSessionQueryProvider);
     }
 
     @Test

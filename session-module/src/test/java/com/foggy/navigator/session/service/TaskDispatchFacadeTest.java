@@ -19,8 +19,13 @@ import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
+import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.WorkerSessionMessage;
+import com.foggy.navigator.spi.agent.WorkerSessionMessageCount;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
+import com.foggy.navigator.spi.agent.WorkerSessionSummary;
+import com.foggy.navigator.spi.agent.WorkerSessionSyncResult;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -650,18 +655,10 @@ class TaskDispatchFacadeTest {
                 .createdAt(LocalDateTime.of(2026, 3, 24, 22, 0))
                 .build();
 
-        when(claudeProvider.listTasksPaged("user-1", 0, 20, null)).thenReturn(Map.of(
-                "content", List.of(claudeTask),
-                "totalSessions", 1L,
-                "page", 0,
-                "size", 20
-        ));
-        when(codexProvider.listTasksPaged("user-1", 0, 20, null)).thenReturn(Map.of(
-                "content", List.of(codexTask),
-                "totalSessions", 1L,
-                "page", 0,
-                "size", 20
-        ));
+        when(claudeProvider.listTaskPage("user-1", 0, 20, null))
+                .thenReturn(TaskPageResult.of(List.of(claudeTask), 1L, 0, 20));
+        when(codexProvider.listTaskPage("user-1", 0, 20, null))
+                .thenReturn(TaskPageResult.of(List.of(codexTask), 1L, 0, 20));
 
         Object result = facade.listTasksPaged("user-1", 0, 20, null);
 
@@ -955,7 +952,7 @@ class TaskDispatchFacadeTest {
         assertEquals("task-claude-1", second.getTaskId());
         assertEquals("claude-session-1", second.getClaudeSessionId());
         assertEquals("Claude Project", second.getDirectoryName());
-        verify(taskQueryProvider, never()).listTasksPaged(anyString(), anyInt(), anyInt(), any());
+        verify(taskQueryProvider, never()).listTaskPage(anyString(), anyInt(), anyInt(), any());
     }
 
     @Test
@@ -1098,7 +1095,7 @@ class TaskDispatchFacadeTest {
         assertEquals("Auth Session", first.get("customTitle"));
         assertEquals("task-claude-1", first.get("latestTaskId"));
         assertEquals(new BigDecimal("1.250000"), first.get("totalCost"));
-        verify(taskQueryProvider, never()).searchSessions(anyString(), any(), any(), any(), anyInt(), anyInt());
+        verify(taskQueryProvider, never()).searchSessionPage(anyString(), any(), any(), any(), anyInt(), anyInt());
     }
 
     @Test
@@ -1317,7 +1314,7 @@ class TaskDispatchFacadeTest {
 
         facade.cancelTask("task-claude-direct-1", "claude-worker", context);
 
-        verify(taskQueryProvider).cancelTask("task-claude-direct-1", "user-1");
+        verify(taskQueryProvider).cancelTaskDirect("task-claude-direct-1", "user-1");
         verify(agentResolver, never()).resolveAgent(eq("claude-worker"), any());
         verify(agent, never()).cancelTask(anyString());
     }
@@ -1342,7 +1339,7 @@ class TaskDispatchFacadeTest {
 
         facade.cancelTask("task-codex-logical-agent", task.getAgentId(), context);
 
-        verify(taskQueryProvider).cancelTask("task-codex-logical-agent", "user-1");
+        verify(taskQueryProvider).cancelTaskDirect("task-codex-logical-agent", "user-1");
         verify(agentResolver, never()).resolveAgent(eq("agent-codex-prod-1"), any());
         verify(agent, never()).cancelTask(anyString());
     }
@@ -1365,7 +1362,7 @@ class TaskDispatchFacadeTest {
 
         facade.cancelTask("task-direct-no-agent", null, context);
 
-        verify(taskQueryProvider).cancelTask("task-direct-no-agent", "user-1");
+        verify(taskQueryProvider).cancelTaskDirect("task-direct-no-agent", "user-1");
         verifyNoInteractions(agentResolver, agent);
     }
 
@@ -1417,16 +1414,18 @@ class TaskDispatchFacadeTest {
 
     @Test
     void listWorkerSessions_delegatesToProvider() {
-        List<Map<String, Object>> sessions = List.of(
+        List<WorkerSessionSummary> sessions = WorkerSessionSummary.fromList(List.of(
                 Map.of("sessionId", "s1", "status", "active"),
                 Map.of("sessionId", "s2", "status", "completed")
-        );
-        when(taskQueryProvider.listWorkerSessions("worker-1", "user-1")).thenReturn(sessions);
+        ));
+        when(taskQueryProvider.listWorkerSessionSummaries("worker-1", "user-1")).thenReturn(sessions);
 
         List<Map<String, Object>> result = facade.listWorkerSessions("worker-1", "user-1");
 
         assertEquals(2, result.size());
         assertEquals("s1", result.get(0).get("sessionId"));
+        verify(taskQueryProvider).listWorkerSessionSummaries("worker-1", "user-1");
+        verify(taskQueryProvider, never()).listWorkerSessions("worker-1", "user-1");
     }
 
     @Test
@@ -1455,13 +1454,15 @@ class TaskDispatchFacadeTest {
         facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         List<Map<String, Object>> sessions = List.of(Map.of("session_id", "lg-session-1"));
-        when(claudeProvider.listWorkerSessions("lg-worker-1", "user-1"))
+        when(claudeProvider.listWorkerSessionSummaries("lg-worker-1", "user-1"))
                 .thenThrow(new IllegalArgumentException("Worker not found: lg-worker-1"));
-        when(langgraphProvider.listWorkerSessions("lg-worker-1", "user-1")).thenReturn(sessions);
+        when(langgraphProvider.listWorkerSessionSummaries("lg-worker-1", "user-1"))
+                .thenReturn(WorkerSessionSummary.fromList(sessions));
 
         List<Map<String, Object>> result = facade.listWorkerSessions("lg-worker-1", "user-1");
 
-        assertEquals(sessions, result);
+        assertEquals(1, result.size());
+        assertEquals("lg-session-1", result.get(0).get("session_id"));
     }
 
     @Test
@@ -1471,10 +1472,10 @@ class TaskDispatchFacadeTest {
         facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         Map<String, Object> count = Map.of("user_count", 1, "assistant_count", 1, "total", 2);
-        when(claudeProvider.getWorkerSessionMessageCount("lg-worker-1", "session-1", "user-1"))
+        when(claudeProvider.getWorkerSessionMessageCountResult("lg-worker-1", "session-1", "user-1"))
                 .thenThrow(new IllegalArgumentException("Worker not found"));
-        when(langgraphProvider.getWorkerSessionMessageCount("lg-worker-1", "session-1", "user-1"))
-                .thenReturn(count);
+        when(langgraphProvider.getWorkerSessionMessageCountResult("lg-worker-1", "session-1", "user-1"))
+                .thenReturn(WorkerSessionMessageCount.from(count));
 
         Map<String, Object> result = facade.getWorkerSessionMessageCount("lg-worker-1", "session-1", "user-1");
 
@@ -1488,10 +1489,10 @@ class TaskDispatchFacadeTest {
         facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         List<Map<String, Object>> messages = List.of(Map.of("role", "assistant", "content", "ok"));
-        when(claudeProvider.getWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50))
+        when(claudeProvider.listWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50))
                 .thenThrow(new IllegalArgumentException("Worker not found"));
-        when(langgraphProvider.getWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50))
-                .thenReturn(messages);
+        when(langgraphProvider.listWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50))
+                .thenReturn(WorkerSessionMessage.fromList(messages));
 
         List<Map<String, Object>> result =
                 facade.getWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50);
@@ -1502,12 +1503,14 @@ class TaskDispatchFacadeTest {
     @Test
     void syncWorkerSessions_delegatesToProvider() {
         Map<String, Object> syncResult = Map.of("synced", 5, "workerId", "worker-1");
-        when(taskQueryProvider.syncWorkerSessions("worker-1", "user-1", "tenant-1")).thenReturn(syncResult);
+        when(taskQueryProvider.syncWorkerSessionState("worker-1", "user-1", "tenant-1"))
+                .thenReturn(WorkerSessionSyncResult.from(syncResult));
 
         Map<String, Object> result = facade.syncWorkerSessions("worker-1", "user-1", "tenant-1");
 
         assertEquals(5, result.get("synced"));
-        verify(taskQueryProvider).syncWorkerSessions("worker-1", "user-1", "tenant-1");
+        verify(taskQueryProvider).syncWorkerSessionState("worker-1", "user-1", "tenant-1");
+        verify(taskQueryProvider, never()).syncWorkerSessions("worker-1", "user-1", "tenant-1");
     }
 
     @Test
@@ -1517,13 +1520,27 @@ class TaskDispatchFacadeTest {
         facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         Map<String, Object> syncResult = Map.of("synced", 0, "total", 1);
-        when(claudeProvider.syncWorkerSessions("lg-worker-1", "user-1", "tenant-1"))
+        when(claudeProvider.syncWorkerSessionState("lg-worker-1", "user-1", "tenant-1"))
                 .thenThrow(new IllegalArgumentException("Worker not found"));
-        when(langgraphProvider.syncWorkerSessions("lg-worker-1", "user-1", "tenant-1")).thenReturn(syncResult);
+        when(langgraphProvider.syncWorkerSessionState("lg-worker-1", "user-1", "tenant-1"))
+                .thenReturn(WorkerSessionSyncResult.from(syncResult));
 
         Map<String, Object> result = facade.syncWorkerSessions("lg-worker-1", "user-1", "tenant-1");
 
         assertEquals(syncResult, result);
+    }
+
+    @Test
+    void workerSessionTypedDefaultsAdaptLegacyMaps() {
+        LegacyWorkerSessionProvider provider = new LegacyWorkerSessionProvider();
+
+        assertEquals("legacy-session", provider.listWorkerSessionSummaries("worker-1", "user-1")
+                .get(0).sessionId());
+        assertEquals(2L, provider.getWorkerSessionMessageCountResult("worker-1", "legacy-session", "user-1")
+                .total());
+        assertEquals("assistant", provider.listWorkerSessionMessages("worker-1", "legacy-session", "user-1", 0, 10)
+                .get(0).role());
+        assertEquals(1L, provider.syncWorkerSessionState("worker-1", "user-1", "tenant-1").total());
     }
 
     @Test
@@ -1827,6 +1844,44 @@ class TaskDispatchFacadeTest {
         @Override
         public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
             return List.of(Map.of("sessionId", "worker-only-session"));
+        }
+    }
+
+    private static final class LegacyWorkerSessionProvider implements WorkerSessionQueryProvider {
+
+        @Override
+        public String getProviderType() {
+            return "legacy-worker-session";
+        }
+
+        @Override
+        public Set<TaskQueryCapability> getCapabilities() {
+            return Set.of(
+                    TaskQueryCapability.LIST_WORKER_SESSIONS,
+                    TaskQueryCapability.GET_WORKER_SESSION_MESSAGE_COUNT,
+                    TaskQueryCapability.GET_WORKER_SESSION_MESSAGES,
+                    TaskQueryCapability.SYNC_WORKER_SESSIONS);
+        }
+
+        @Override
+        public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
+            return List.of(Map.of("session_id", "legacy-session", "status", "RUNNING"));
+        }
+
+        @Override
+        public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
+            return Map.of("user_count", 1, "assistant_count", 1, "total", 2);
+        }
+
+        @Override
+        public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
+                                                                  String userId, Integer offset, Integer limit) {
+            return List.of(Map.of("role", "assistant", "content", "ok"));
+        }
+
+        @Override
+        public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
+            return Map.of("synced", 0, "total", 1);
         }
     }
 }

@@ -38,9 +38,11 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.TaskListingProvider;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -78,7 +80,7 @@ import com.foggy.navigator.common.util.IdGenerator;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class ClaudeTaskService implements TaskQueryProvider {
+public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvider, TaskListingProvider {
 
     private static final String AGENT_ID = "claude-worker";
     private static final java.util.Set<String> TERMINAL_STATES = java.util.Set.of("COMPLETED", "FAILED", "ABORTED");
@@ -96,11 +98,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             TaskQueryCapability.LIST_TASKS_PAGED,
             TaskQueryCapability.SEARCH_SESSIONS,
             TaskQueryCapability.LIST_TASKS_BY_DIRECTORY,
-            TaskQueryCapability.LIST_TASKS_BY_DIRECTORY_PAGED,
-            TaskQueryCapability.LIST_WORKER_SESSIONS,
-            TaskQueryCapability.GET_WORKER_SESSION_MESSAGE_COUNT,
-            TaskQueryCapability.GET_WORKER_SESSION_MESSAGES,
-            TaskQueryCapability.SYNC_WORKER_SESSIONS);
+            TaskQueryCapability.LIST_TASKS_BY_DIRECTORY_PAGED);
 
     private final ClaudeTaskRepository taskRepository;
     private final ClaudeWorkerService workerService;
@@ -2621,7 +2619,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
     }
 
-    // ── TaskQueryProvider 实现 ──
+    // ── Task provider narrow port implementations ──
 
     @Override
     public String getProviderType() {
@@ -2634,13 +2632,19 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     @Override
-    public void cancelTask(String taskId, String userId) {
+    public void cancelTaskDirect(String taskId, String userId) {
         ClaudeTaskEntity task = taskRepository.findByTaskId(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         if (!task.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Task not found or access denied: " + taskId);
         }
         abortTask(taskId);
+    }
+
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public void cancelTask(String taskId, String userId) {
+        cancelTaskDirect(taskId, userId);
     }
 
     @Override
@@ -2880,7 +2884,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     // deleteTask(String userId, String taskId) is already defined above at line ~986
-    // and satisfies the SPI interface TaskQueryProvider.deleteTask(userId, taskId)
+    // and satisfies the SPI command port deleteTask(userId, taskId)
 
     @Override
     public Object scanCheckpoints(String taskId, String userId) {
@@ -2906,16 +2910,29 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     @Override
-    public Object listTasksPaged(String userId, int page, int size, String state) {
+    public TaskPageResult listTaskPage(String userId, int page, int size, String state) {
         SessionPageDTO result = listTasksBySession(userId, page, size, state);
         return TaskPageResult.of(result.getContent(), result.getTotalSessions(), result.getPage(), result.getSize());
     }
 
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public Object listTasksPaged(String userId, int page, int size, String state) {
+        return listTaskPage(userId, page, size, state);
+    }
+
+    @Override
+    public TaskSearchResult searchSessionPage(String userId, String keyword, String workerId,
+                                              String directoryId, int page, int size) {
+        SessionSearchResultDTO.Page result = searchSessionsPage(userId, keyword, workerId, directoryId, page, size);
+        return TaskSearchResult.of(result.getResults(), result.getTotal(), result.getPage(), result.getSize());
+    }
+
+    @Deprecated(since = "1.3.1", forRemoval = false)
     @Override
     public Object searchSessions(String userId, String keyword, String workerId,
                                  String directoryId, int page, int size) {
-        SessionSearchResultDTO.Page result = searchSessionsPage(userId, keyword, workerId, directoryId, page, size);
-        return TaskSearchResult.of(result.getResults(), result.getTotal(), result.getPage(), result.getSize());
+        return searchSessionPage(userId, keyword, workerId, directoryId, page, size);
     }
 
     @Override
@@ -2926,95 +2943,17 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     @Override
-    public Object listTasksByDirectoryPaged(String userId, String directoryId,
-                                             int page, int size, String state) {
+    public TaskPageResult listDirectoryTaskPage(String userId, String directoryId,
+                                                int page, int size, String state) {
         SessionPageDTO result = listTasksByDirectorySession(userId, directoryId, page, size, state);
         return TaskPageResult.of(result.getContent(), result.getTotalSessions(), result.getPage(), result.getSize());
     }
 
-    // ── Worker Session 查询 SPI 实现 ──
-
+    @Deprecated(since = "1.3.1", forRemoval = false)
     @Override
-    public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
-        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
-        if (!worker.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("Worker not found");
-        }
-        try {
-            ClaudeWorkerClient client = workerService.createClient(worker);
-            List<Map<String, Object>> sessions = client.listSessions()
-                    .block(java.time.Duration.ofSeconds(10));
-            return sessions != null ? sessions : List.of();
-        } catch (Exception e) {
-            log.warn("Failed to list worker sessions: workerId={}, error={}", workerId, e.getMessage());
-            return List.of();
-        }
-    }
-
-    @Override
-    public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
-        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
-        if (!worker.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("Worker not found");
-        }
-        try {
-            ClaudeWorkerClient client = workerService.createClient(worker);
-            Map<String, Object> result = client.getSessionMessageCount(sessionId)
-                    .block(java.time.Duration.ofSeconds(10));
-            return result != null ? result : Map.of("user_count", 0, "assistant_count", 0, "total", 0);
-        } catch (Exception e) {
-            log.warn("Failed to get message count: workerId={}, sessionId={}, error={}",
-                    workerId, sessionId, e.getMessage());
-            return Map.of("user_count", 0, "assistant_count", 0, "total", 0);
-        }
-    }
-
-    @Override
-    public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
-                                                               String userId, Integer offset, Integer limit) {
-        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
-        if (!worker.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("Worker not found");
-        }
-        try {
-            ClaudeWorkerClient client = workerService.createClient(worker);
-            List<Map<String, Object>> messages;
-            if (offset != null || limit != null) {
-                messages = client.getSessionMessages(sessionId,
-                        offset != null ? offset : 0, limit)
-                        .block(java.time.Duration.ofSeconds(30));
-            } else {
-                messages = client.getSessionMessages(sessionId)
-                        .block(java.time.Duration.ofSeconds(30));
-            }
-            return messages != null ? messages : List.of();
-        } catch (Exception e) {
-            log.warn("Failed to get session messages: workerId={}, sessionId={}, error={}",
-                    workerId, sessionId, e.getMessage());
-            return List.of();
-        }
-    }
-
-    @Override
-    public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
-        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
-        if (!worker.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("Worker not found");
-        }
-        try {
-            ClaudeWorkerClient client = workerService.createClient(worker);
-            client.syncSessions().block(java.time.Duration.ofSeconds(30));
-
-            List<Map<String, Object>> sessions = client.listSessions()
-                    .block(java.time.Duration.ofSeconds(10));
-            if (sessions == null) sessions = List.of();
-
-            int created = syncLocalSessions(userId, tenantId, workerId, sessions);
-            return Map.of("synced", created, "total", sessions.size());
-        } catch (Exception e) {
-            log.warn("Failed to sync sessions on worker: workerId={}, error={}", workerId, e.getMessage());
-            throw new RuntimeException("同步失败: " + e.getMessage());
-        }
+    public Object listTasksByDirectoryPaged(String userId, String directoryId,
+                                            int page, int size, String state) {
+        return listDirectoryTaskPage(userId, directoryId, page, size, state);
     }
 
     @SuppressWarnings("unchecked")

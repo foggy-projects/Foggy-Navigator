@@ -17,6 +17,12 @@ import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.TaskListingProvider;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
+import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -115,6 +121,19 @@ class ClaudeTaskServiceAuthTest {
 
         // Default: session entity with no auth bound yet (authBoundAt = null)
         // sessionEntityRepository.findById already mocked above to return a SessionEntity
+    }
+
+    @Test
+    void exposesOnlySupportedTaskProviderPorts() {
+        assertInstanceOf(TaskLookupProvider.class, service);
+        assertInstanceOf(TaskCommandProvider.class, service);
+        assertInstanceOf(TaskListingProvider.class, service);
+        assertFalse(service instanceof WorkerSessionQueryProvider);
+        assertFalse(service.supports(TaskQueryCapability.LIST_WORKER_SESSIONS));
+        assertFalse(service.supports(TaskQueryCapability.GET_WORKER_SESSION_MESSAGE_COUNT));
+        assertFalse(service.supports(TaskQueryCapability.GET_WORKER_SESSION_MESSAGES));
+        assertFalse(service.supports(TaskQueryCapability.SYNC_WORKER_SESSIONS));
+        assertFalse(service instanceof TaskQueryProvider);
     }
 
     @Test

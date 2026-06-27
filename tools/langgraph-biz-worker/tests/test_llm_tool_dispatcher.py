@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph_biz_worker.runtime.account_file_tools import FileToolError
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_tool_dispatcher import (
     LlmToolDispatchContext,
@@ -138,6 +139,47 @@ def test_business_function_configuration_error_result_is_non_recoverable() -> No
     assert result["recoverable"] is False
     assert result["llm_retry_allowed"] is False
     assert result["user_message"].startswith("业务函数配置错误")
+
+
+def test_file_tool_storage_permission_error_requires_upstream_action() -> None:
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=SkillRegistry())
+    root_frame_id = runtime.invoke_skill(
+        task_id="task-file-permission-001",
+        skill_id="system.root",
+        skill_input={"request": "write sidecar"},
+    )
+
+    class PermissionDeniedFileTools:
+        def write_file(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise FileToolError(
+                "storage_permission_denied",
+                (
+                    "write_file permission denied for 'REPORT.md'. "
+                    "The target workspace is not writable by the BizWorker runtime user."
+                ),
+            )
+
+    dispatcher = LlmToolDispatcher(runtime)
+    context = LlmToolDispatchContext(
+        frame_id=root_frame_id,
+        task_id="task-file-permission-001",
+        file_tools=PermissionDeniedFileTools(),  # type: ignore[arg-type]
+    )
+
+    result = dispatcher.dispatch_low_risk(
+        "write_file",
+        {"relative_path": "REPORT.md", "content": "# Report\n"},
+        context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "storage_permission_denied"
+    assert result["error_category"] == "STORAGE_PERMISSION"
+    assert result["recoverable"] is True
+    assert result["llm_retry_allowed"] is False
+    assert result["requires_upstream_action"] is True
+    assert result["reason"] == "storage_permission_denied"
+    assert "Directory Worker" in result["user_message"]
 
 
 def test_attachment_upload_rejects_already_uploaded_request_attachment() -> None:

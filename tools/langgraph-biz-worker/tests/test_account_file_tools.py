@@ -198,6 +198,26 @@ class TestWriteFile:
             tools.write_file("agent/skills/my-skill/SKILL.md", content=big)
         assert exc_info.value.code == "file_too_large"
 
+    def test_write_permission_error_uses_stable_sanitized_code(self, tmp_path: Path, monkeypatch):
+        tools = _setup_skill(tmp_path)
+
+        def deny_tmp_file(*args, **kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(
+            "langgraph_biz_worker.runtime.account_file_tools.tempfile.mkstemp",
+            deny_tmp_file,
+        )
+
+        with pytest.raises(FileToolError) as exc_info:
+            tools.write_file("agent/skills/my-skill/SKILL.md", content="content")
+
+        assert exc_info.value.code == "storage_permission_denied"
+        assert "agent/skills/my-skill/SKILL.md" in exc_info.value.detail
+        assert str(tmp_path) not in exc_info.value.detail
+        assert "Navigator directory worker" in exc_info.value.detail
+        assert tools.audit_records == []
+
     def test_write_audit_record(self, tmp_path: Path):
         tools = _setup_skill(tmp_path)
         tools.write_file("agent/skills/my-skill/SKILL.md", content="content")

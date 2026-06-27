@@ -1,6 +1,11 @@
 package com.foggy.navigator.codex.worker.service;
 
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.TaskListingProvider;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
+import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -9,6 +14,8 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -33,6 +40,15 @@ class CodexBizTaskProviderTest {
     @Test
     void getProviderType_returnsCodexBizWorker() {
         assertEquals("codex-biz-worker", provider.getProviderType());
+    }
+
+    @Test
+    void exposesOnlySupportedTaskProviderPorts() {
+        assertInstanceOf(TaskLookupProvider.class, provider);
+        assertInstanceOf(TaskCommandProvider.class, provider);
+        assertInstanceOf(TaskListingProvider.class, provider);
+        assertFalse(provider instanceof TaskQueryProvider);
+        assertFalse(provider instanceof WorkerSessionQueryProvider);
     }
 
     @Test
@@ -108,10 +124,10 @@ class CodexBizTaskProviderTest {
                 "task-1", "user-1", "codex-biz-worker")).thenReturn(Optional.empty());
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> provider.cancelTask("task-1", "user-1"));
+                () -> provider.cancelTaskDirect("task-1", "user-1"));
 
         assertEquals("Task not found: task-1", error.getMessage());
-        verify(codexTaskService, never()).cancelTask(any(), any());
+        verify(codexTaskService, never()).cancelTaskDirect(any(), any());
     }
 
     @Test

@@ -11,6 +11,7 @@ from langgraph_biz_worker.models import FrameKind, FrameStatus, SkillManifest
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_store import FrameStore
+from langgraph_biz_worker.runtime.account_file_tools import FileToolError
 from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_state_for_tests
 from langgraph_biz_worker.runtime import command_tool
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent, _root_manifest_with_bound_skill
@@ -1982,6 +1983,81 @@ def test_llm_agent_stops_on_non_recoverable_business_function_configuration_erro
     assert not any(
         event.type == "error"
         and event.error == "LLM skill agent reached max iterations without valid submit"
+        for event in events
+    )
+
+
+def test_llm_agent_stops_on_file_storage_permission_error(monkeypatch, tmp_path):
+    data_root = tmp_path / "data"
+    workspace = tmp_path / "actor-home"
+    workspace.mkdir()
+    runtime = _root_runtime()
+    task_id = "task_root_file_permission_001"
+    frame_id = runtime.invoke_skill(
+        task_id=task_id,
+        skill_id="system.root",
+        skill_input={"request": "write sidecar files"},
+    )
+
+    def deny_write_file(self, *args, **kwargs):
+        raise FileToolError(
+            "storage_permission_denied",
+            (
+                "write_file permission denied for 'REPORT.md'. "
+                "The target workspace is not writable by the BizWorker runtime user."
+            ),
+        )
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.account_file_tools.AccountFileTools.write_file",
+        deny_write_file,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_write_report",
+            "name": "write_file",
+            "args": {
+                "relative_path": "REPORT.md",
+                "content": "# Report\n",
+                "mode": "create",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_retry_read_logs",
+            "name": "read_file",
+            "args": {"relative_path": "worker.log"},
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime, data_root=data_root).run(
+        task_id=task_id,
+        frame_id=frame_id,
+        prompt="write sidecar files",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workspace),
+                "allowed_dirs": [str(workspace)],
+                "allowed_tools": ["write_file", "read_file", "submit_frame_result"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert model.calls == 1
+    assert frame.status == FrameStatus.RUNNING
+    assert frame.result_summary.startswith("文件写入权限不足")
+    assert frame.output["error_category"] == "STORAGE_PERMISSION"
+    assert frame.output["error_code"] == "storage_permission_denied"
+    assert frame.output["recoverable"] is True
+    assert frame.output["llm_retry_allowed"] is False
+    assert frame.output["requires_upstream_action"] is True
+    assert "continuation_state" not in frame.private_working_state
+    assert any(
+        event.type == "error"
+        and event.reason == "storage_permission_denied"
+        and "文件写入权限不足" in event.error
         for event in events
     )
 

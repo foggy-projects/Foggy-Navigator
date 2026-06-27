@@ -255,6 +255,209 @@ Controller / OpenAPI
 - Stage 10 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage10-coverage-audit.md`。
 - Stage 10 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage10-langgraph-narrow-port-bean-acceptance.md`。
 
+### Stage 11 - Gemini narrow port bean 迁移
+
+- [x] `GeminiTaskService` 从聚合 `TaskQueryProvider` 迁移为实际支持的窄端口 bean。
+- [x] `GeminiTaskService` 仅暴露 task lookup 与 task command 能力，不再作为 listing / worker-session / aggregate provider 注册。
+- [x] 保持 Gemini create/resume/cancel/delete、lookup、session projection 和 A2A abort wrapper 行为兼容。
+- [x] 补充 Gemini Provider 类型边界回归测试。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 11 子计划已落档：`workitems/OPT-001-stage11-gemini-narrow-port-bean.md`。
+- `GeminiTaskService` 已仅实现 `TaskLookupProvider` 与 `TaskCommandProvider`。
+- task lookup / create / resume / cancel / delete 语义保持不变。
+- `GeminiTaskServiceAuthResolutionTest#exposesOnlySupportedTaskProviderPorts` 覆盖类型边界，防止 task service 回退为聚合 `TaskQueryProvider`。
+- Stage 11 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage11-implementation-quality.md`。
+- Stage 11 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage11-coverage-audit.md`。
+- Stage 11 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage11-gemini-narrow-port-bean-acceptance.md`。
+
+### Stage 12 - Codex / Codex Biz narrow port bean 迁移
+
+- [x] `CodexTaskService` 从聚合 `TaskQueryProvider` 迁移为实际支持的窄端口 bean。
+- [x] `CodexBizTaskProvider` 从聚合 `TaskQueryProvider` 迁移为实际支持的窄端口 bean。
+- [x] 两个 Codex provider 仅暴露 task lookup、task command 与 task listing/search 能力，不再作为 worker-session / aggregate provider 注册。
+- [x] 保持 Codex / Codex Biz create/resume/cancel/delete/resync/rewind、listing/search、session projection 和 A2A abort wrapper 行为兼容。
+- [x] 补充 Codex / Codex Biz Provider 类型边界回归测试。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 12 子计划已落档：`workitems/OPT-001-stage12-codex-narrow-port-bean.md`。
+- `CodexTaskService` 已仅实现 `TaskLookupProvider`、`TaskCommandProvider` 与 `TaskListingProvider`。
+- `CodexBizTaskProvider` 已仅实现 `TaskLookupProvider`、`TaskCommandProvider` 与 `TaskListingProvider`。
+- task lookup / command / listing-search 语义保持不变。
+- `CodexTaskServiceTest#exposesOnlySupportedTaskProviderPorts` 与 `CodexBizTaskProviderTest#exposesOnlySupportedTaskProviderPorts` 覆盖类型边界，防止两个 provider 回退为聚合 `TaskQueryProvider` 或 worker-session 端口。
+- Stage 12 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage12-implementation-quality.md`。
+- Stage 12 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage12-coverage-audit.md`。
+- Stage 12 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage12-codex-narrow-port-bean-acceptance.md`。
+
+### Stage 13 - Claude narrow port bean 迁移
+
+- [x] `ClaudeTaskService` 从聚合 `TaskQueryProvider` 迁移为实际支持的窄端口 bean。
+- [x] `ClaudeTaskService` 显式暴露 task lookup、task command、task listing/search 与 worker-session 查询能力，不再作为 aggregate provider 注册。
+- [x] 保持 Claude create/resume/cancel/delete/respond/reconnect/resync/rewind、listing/search、worker-session 查询、session projection 和 A2A abort wrapper 行为兼容。
+- [x] 补充 Claude Provider 类型边界回归测试。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 13 子计划已落档：`workitems/OPT-001-stage13-claude-narrow-port-bean.md`。
+- `ClaudeTaskService` 已显式实现 `TaskLookupProvider`、`TaskCommandProvider`、`TaskListingProvider` 与 `WorkerSessionQueryProvider`。
+- task lookup / command / listing-search / worker-session 语义保持不变。
+- `ClaudeTaskServiceAuthTest#exposesOnlySupportedTaskProviderPorts` 覆盖类型边界，防止 provider 回退为聚合 `TaskQueryProvider`。
+- `rg "implements TaskQueryProvider"` 显示生产代码已无聚合实现，仅 session 测试 stub 保留兼容回归。
+- Stage 13 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage13-implementation-quality.md`。
+- Stage 13 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage13-coverage-audit.md`。
+- Stage 13 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage13-claude-narrow-port-bean-acceptance.md`。
+
+### Stage 14 - TaskListingProvider typed method contract
+
+- [x] `TaskListingProvider` 新增 typed listing/search 主方法。
+- [x] `TaskPageResult` / `TaskSearchResult` 增加 legacy Map / JavaBean envelope adapter。
+- [x] `TaskDispatchFacade` provider fan-out 改为调用 typed methods。
+- [x] Claude / Codex / Codex Biz Provider 实现 typed override，legacy `Object` 方法保留委派兼容。
+- [x] 补充 legacy envelope compatibility 与 typed facade path 回归。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 14 子计划已落档：`workitems/OPT-001-stage14-task-listing-typed-method.md`。
+- `TaskListingProvider` 已新增 `listTaskPage`、`searchSessionPage`、`listDirectoryTaskPage`。
+- `TaskDispatchFacade` 的 list/search fan-out 不再直接调用 `listTasksPaged`、`searchSessions`、`listTasksByDirectoryPaged` legacy 方法。
+- Claude / Codex / Codex Biz listing/search 实现已迁移为 typed override，legacy `Object` 方法继续保留为委派 wrapper。
+- `UnifiedSessionTaskProjectionServiceTest#taskListingProviderTypedMethodsAdaptLegacyEnvelopes` 覆盖旧 Map / JavaBean envelope 兼容。
+- Stage 14 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage14-implementation-quality.md`。
+- Stage 14 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage14-coverage-audit.md`。
+- Stage 14 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage14-task-listing-typed-method-acceptance.md`。
+
+### Stage 15 - WorkerSession typed DTO / envelope
+
+- [x] `WorkerSessionQueryProvider` 新增 typed worker-session summary、message、message count 和 sync result 主方法。
+- [x] 新增 `WorkerSessionSummary`、`WorkerSessionMessage`、`WorkerSessionMessageCount`、`WorkerSessionSyncResult` typed records。
+- [x] `TaskDispatchFacade` worker-session provider fan-out 改为调用 typed methods，再转回 legacy REST payload。
+- [x] Claude / LangGraph worker-session provider 实现 typed override，legacy Map 方法保留委派兼容。
+- [x] 补充 session facade typed path、legacy Map default adapter 和 LangGraph typed provider 回归。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 15 子计划已落档：`workitems/OPT-001-stage15-worker-session-typed-envelope.md`。
+- `WorkerSessionQueryProvider` 已新增 `listWorkerSessionSummaries`、`getWorkerSessionMessageCountResult`、`listWorkerSessionMessages`、`syncWorkerSessionState`。
+- `TaskDispatchFacade` worker-session fan-out 不再直接调用 `listWorkerSessions`、`getWorkerSessionMessageCount`、`getWorkerSessionMessages`、`syncWorkerSessions` legacy 方法。
+- Claude / LangGraph worker-session 实现已迁移为 typed override，legacy Map 方法继续保留为委派 wrapper。
+- `TaskDispatchFacadeTest#workerSessionTypedDefaultsAdaptLegacyMaps` 覆盖旧 Map provider 兼容。
+- Stage 15 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage15-implementation-quality.md`。
+- Stage 15 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage15-coverage-audit.md`。
+- Stage 15 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage15-worker-session-typed-envelope-acceptance.md`。
+
+### Stage 16 - Claude worker-session provider bean split
+
+- [x] 新增 `ClaudeWorkerSessionQueryService implements WorkerSessionQueryProvider`。
+- [x] `ClaudeTaskService` 不再实现 `WorkerSessionQueryProvider`。
+- [x] `ClaudeTaskService` 不再声明 worker-session capabilities。
+- [x] Claude worker-session list/count/messages/sync typed 与 legacy SPI 方法迁移到新 service。
+- [x] `ClaudeTaskService.syncLocalSessions(...)` 暂时保留为 sync 本地任务投影复用点。
+- [x] 补充 Claude worker-session provider 和 task service 类型边界回归。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 16 子计划已落档：`workitems/OPT-001-stage16-claude-worker-session-bean.md`。
+- `ClaudeWorkerSessionQueryService` 已独立承接 `LIST_WORKER_SESSIONS`、`GET_WORKER_SESSION_MESSAGE_COUNT`、`GET_WORKER_SESSION_MESSAGES`、`SYNC_WORKER_SESSIONS`。
+- `ClaudeTaskService` capability 已收窄到 task lookup / command / listing 相关能力，不再作为 worker-session provider 注册。
+- worker ownership、Worker API client 调用、typed DTO / envelope 与 legacy Map wrapper 兼容语义保持不变。
+- `ClaudeWorkerSessionQueryServiceTest` 覆盖 capabilities、list/count/messages/sync 和跨用户 worker 拒绝。
+- Stage 16 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage16-implementation-quality.md`。
+- Stage 16 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage16-coverage-audit.md`。
+- Stage 16 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage16-claude-worker-session-bean-acceptance.md`。
+
+### Stage 17 - Legacy provider method deprecation gate
+
+- [x] 盘点 legacy listing / worker-session provider 方法调用面和外部兼容边界。
+- [x] `TaskListingProvider` legacy `Object` 方法标记 `@Deprecated(since = "1.3.1", forRemoval = false)`。
+- [x] `WorkerSessionQueryProvider` legacy Map/List 方法标记 `@Deprecated(since = "1.3.1", forRemoval = false)`。
+- [x] Claude / Codex / Codex Biz listing legacy wrappers 与 Claude / LangGraph worker-session legacy wrappers 同步标记 deprecation。
+- [x] 新增反射回归锁定 legacy SPI methods 的 deprecation 契约。
+- [x] 明确 removal gate：本阶段不删除方法，不设置 `forRemoval=true`，后续 removal 必须另起 workitem。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 17 子计划已落档：`workitems/OPT-001-stage17-legacy-provider-method-deprecation.md`。
+- session-module 生产 provider fan-out 已确认不直接调用 legacy listing / worker-session provider methods。
+- `TaskListingProvider` 与 `WorkerSessionQueryProvider` legacy methods 已进入 deprecated 迁移窗口，typed default adapter 保留兼容调用。
+- Claude / Codex / Codex Biz / LangGraph 内置 provider wrapper deprecation 已同步，直接依赖具体 service 的调用方也能收到迁移信号。
+- `TaskProviderLegacyContractTest` 覆盖 SPI legacy methods 的 `since=1.3.1` 与 `forRemoval=false`。
+- Stage 17 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage17-implementation-quality.md`。
+- Stage 17 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage17-coverage-audit.md`。
+- Stage 17 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage17-legacy-provider-method-deprecation-acceptance.md`。
+
+### Stage 18 - TaskCommandProvider cancel direct method
+
+- [x] 盘点 command provider cancel legacy fallback 调用面和 A2A cancel 边界。
+- [x] `TaskCommandProvider` 新增非 deprecated `cancelTaskDirect(String, String)` 主方法。
+- [x] `TaskCommandProvider#cancelTask(String, String)` 保留兼容入口，并从 `forRemoval=true` 收敛为 `forRemoval=false`。
+- [x] session provider cancel route 迁移到 `cancelTaskDirect`。
+- [x] Claude / Codex / Codex Biz / Gemini / LangGraph provider 真实取消逻辑迁移到 direct method，legacy wrapper 仅委托。
+- [x] 补充反射回归、provider-route 回归和 direct service call 回归。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 18 子计划已落档：`workitems/OPT-001-stage18-task-command-cancel-direct-method.md`。
+- `TaskCommandProvider#cancelTaskDirect` 已成为 provider command cancel 主调用契约；default implementation 兼容外部只 override legacy `cancelTask` 的 provider。
+- `TaskOperationRouter` provider cancel route 不再直接调用 deprecated legacy cancel。
+- Claude / Codex / Codex Biz / Gemini / LangGraph 内置 provider 真实取消逻辑已迁移到 `cancelTaskDirect`，legacy `cancelTask` wrapper 保留兼容。
+- `TaskProviderLegacyContractTest` 覆盖 direct cancel 不 deprecated、legacy cancel deprecated 且 `forRemoval=false`。
+- `TaskDispatchFacadeTest` 覆盖 session provider-route 调用 `cancelTaskDirect`，A2A cancel 分流保持 `agent.cancelTask`。
+- Stage 18 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage18-implementation-quality.md`。
+- Stage 18 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage18-coverage-audit.md`。
+- Stage 18 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage18-task-command-cancel-direct-method-acceptance.md`。
+
+### Stage 19 - Migration support foundation
+
+- [x] 审计现有 production schema migration 资产和启动时 migration 实现。
+- [x] 新增 `DatabaseMigrationSupport`，集中承接 MySQL detection、INFORMATION_SCHEMA table / column / index 查询和 identifier quote。
+- [x] `CodingAgentTenantScopeMigration` 迁移到共享 helper，移除本地 DataSource / Connection / INFORMATION_SCHEMA 重复逻辑。
+- [x] `GeminiFlashRuntimeBudgetMigration` 迁移到共享 helper，保持启动时 MySQL-only、idempotent、warn-not-fail 语义。
+- [x] 明确历史 `docs/migration/*.sql` 不自动执行，避免把一次性或人工修复脚本误纳入启动流程。
+- [x] 补充 migration helper 与两个启动 migration 的行为单测。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 19 子计划已落档：`workitems/OPT-001-stage19-migration-support-foundation.md`。
+- 现有两个生产启动 migration 已共享 `DatabaseMigrationSupport`，减少后续 schema migration 继续复制 JDBC metadata / INFORMATION_SCHEMA 查询的风险。
+- `docs/migration/*.sql` 保持人工运维脚本定位，本阶段未引入 Flyway/Liquibase，也未做历史 SQL 自动执行。
+- `DatabaseMigrationSupportTest` 覆盖 MySQL detection、table / column / index 查询、single-column unique index 查询和 identifier quote。
+- `CodingAgentTenantScopeMigrationTest` 与 `GeminiFlashRuntimeBudgetMigrationTest` 覆盖 MySQL/table guard、DDL/DML 执行条件和核心 SQL 参数。
+- Stage 19 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage19-implementation-quality.md`。
+- Stage 19 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage19-coverage-audit.md`。
+- Stage 19 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage19-migration-support-foundation-acceptance.md`。
+
+### Stage 20 - Startup migration runner / manifest
+
+- [x] 新增 Java startup migration 契约，要求 migration 显式声明稳定 `id` 与 `description`。
+- [x] 新增统一 `DatabaseStartupMigrationRunner`，集中监听 `ApplicationReadyEvent` 并按 manifest 顺序执行。
+- [x] 新增 `navigator.database.startup-migrations.enabled` 与 `dry-run` 配置，生产 profile 支持环境变量覆盖。
+- [x] `CodingAgentTenantScopeMigration`、`GeminiFlashRuntimeBudgetMigration` 移除各自启动事件监听，改由 runner 编排。
+- [x] runner 统一处理 disabled、non-MySQL、dry-run、单项失败继续和 manifest 日志。
+- [x] 明确历史 `docs/migration/*.sql` 仍不自动执行，避免把人工脚本误纳入启动流程。
+- [x] 完成实现质量门、测试覆盖审计和功能级验收签收。
+
+当前完成范围：
+
+- Stage 20 子计划已落档：`workitems/OPT-001-stage20-startup-migration-runner.md`。
+- `DatabaseStartupMigrationRunner` 已成为 startup migration 的唯一启动事件监听入口；具体 migration class 只保留幂等迁移动作。
+- migration manifest 通过 `DatabaseStartupMigrationDescriptor` 输出稳定 id / description，并按 id 排序。
+- 默认行为保持兼容：默认 enabled、非 dry-run、MySQL 环境下继续运行现有两项 startup migrations。
+- `DatabaseStartupMigrationRunnerTest` 覆盖 disabled、non-MySQL、dry-run、排序、失败继续和 manifest descriptor。
+- Stage 20 实现质量门结论为 `ready-with-risks`；见 `quality/OPT-001-stage20-implementation-quality.md`。
+- Stage 20 覆盖审计结论为 `ready-with-gaps`，可进入验收；见 `coverage/OPT-001-stage20-coverage-audit.md`。
+- Stage 20 功能级验收已签收，结论为 `accepted-with-risks`；见 `acceptance/OPT-001-stage20-startup-migration-runner-acceptance.md`。
+
 ## Acceptance Criteria
 
 1. `TaskDispatchFacade` 不再作为所有 Provider 操作的唯一超大聚合点，关键职责有明确边界和测试。
@@ -269,6 +472,16 @@ Controller / OpenAPI
 10. session Provider 注册与发现边界按窄端口列表表达，不再以宽 `List<TaskQueryProvider>` 作为唯一注入集合。
 11. LangGraph worker-session 查询由独立 `WorkerSessionQueryProvider` bean 承接，任务生命周期服务不再声明 worker-session capability。
 12. LangGraph task lifecycle service 不再实现聚合 `TaskQueryProvider`，只作为实际支持的 lookup / command 窄端口注册。
+13. Gemini task lifecycle service 不再实现聚合 `TaskQueryProvider`，只作为实际支持的 lookup / command 窄端口注册。
+14. Codex / Codex Biz provider 不再实现聚合 `TaskQueryProvider`，只作为实际支持的 lookup / command / listing 窄端口注册。
+15. Claude provider 不再实现聚合 `TaskQueryProvider`，只作为实际支持的 lookup / command / listing / worker-session 窄端口注册。
+16. `TaskListingProvider` listing/search 主调用契约有 typed methods，session provider fan-out 不再直接依赖 legacy `Object` 返回方法。
+17. `WorkerSessionQueryProvider` worker-session 主调用契约有 typed DTO / envelope methods，session provider fan-out 不再直接依赖 legacy Map 返回方法。
+18. Claude worker-session 查询由独立 `WorkerSessionQueryProvider` bean 承接，`ClaudeTaskService` 不再声明 worker-session capability。
+19. Legacy listing / worker-session provider methods 明确标记 `@Deprecated(since = "1.3.1", forRemoval = false)`，并以 removal gate 管控后续删除。
+20. `TaskCommandProvider` provider direct cancel 主调用契约不再依赖 legacy `cancelTask(String, String)` 方法，session provider-route 与内置 provider 均以 `cancelTaskDirect(String, String)` 为主路径。
+21. 生产启动 migration 的共性 MySQL metadata / INFORMATION_SCHEMA 判断有共享 helper，现有启动 migration 不再各自复制底层 schema 检查逻辑，历史一次性 SQL 不被误自动执行。
+22. Java startup migrations 由统一 manifest runner 编排，具备稳定 id / description、确定性排序、enabled / dry-run 运维开关和单项失败 warn-not-fail 语义，历史一次性 SQL 仍不被误自动执行。
 
 ## Constraints / Non-Goals
 
@@ -381,7 +594,17 @@ PowerShell 备注：`-Dtest=...`、`-DfailIfNoTests=false`、`-Dsurefire.failIfN
 | Stage 8 Provider port 注入收窄 | done | 见 `workitems/OPT-001-stage8-provider-port-injection.md`；已完成 facade 四类端口列表注入、registry 分集合维护、lookup/command 分离路由、兼容构造和签收。 |
 | Stage 9 LangGraph worker-session 端口拆分 | done | 见 `workitems/OPT-001-stage9-langgraph-worker-session-split.md`；已完成独立 `WorkerSessionQueryProvider`、capability 迁移、session fan-out 回归、质量门、覆盖审计和签收。 |
 | Stage 10 LangGraph narrow port bean 迁移 | done | 见 `workitems/OPT-001-stage10-langgraph-narrow-port-bean.md`；已完成 LangGraph task service 退出聚合 `TaskQueryProvider`、lookup/command 窄端口注册、类型边界回归、质量门、覆盖审计和签收。 |
-| 代码实现 | in-progress | Stage 1/2、Stage 3、Stage 4、Stage 5、Stage 6、Stage 7、Stage 8、Stage 9、Stage 10 均已签收；剩余后续重点是 Gemini/Claude/Codex 聚合接口迁移、`TaskListingProvider` strictly typed method、typed worker-session DTO/envelope 和生产 schema migration 工具化。 |
+| Stage 11 Gemini narrow port bean 迁移 | done | 见 `workitems/OPT-001-stage11-gemini-narrow-port-bean.md`；已完成 Gemini task service 退出聚合 `TaskQueryProvider`、lookup/command 窄端口注册、类型边界回归、质量门、覆盖审计和签收。 |
+| Stage 12 Codex / Codex Biz narrow port bean 迁移 | done | 见 `workitems/OPT-001-stage12-codex-narrow-port-bean.md`；已完成 Codex / Codex Biz 退出聚合 `TaskQueryProvider`、lookup/command/listing 窄端口注册、类型边界回归、质量门、覆盖审计和签收。 |
+| Stage 13 Claude narrow port bean 迁移 | done | 见 `workitems/OPT-001-stage13-claude-narrow-port-bean.md`；已完成 Claude 退出聚合 `TaskQueryProvider`、lookup/command/listing/worker-session 窄端口注册、类型边界回归、质量门、覆盖审计和签收。 |
+| Stage 14 TaskListingProvider typed method contract | done | 见 `workitems/OPT-001-stage14-task-listing-typed-method.md`；已完成 typed listing/search 主方法、legacy envelope adapter、session fan-out typed 迁移、Claude/Codex typed override、质量门、覆盖审计和签收。 |
+| Stage 15 WorkerSession typed DTO / envelope | done | 见 `workitems/OPT-001-stage15-worker-session-typed-envelope.md`；已完成 worker-session typed records、SPI typed methods、session fan-out typed 迁移、Claude/LangGraph typed override、质量门、覆盖审计和签收。 |
+| Stage 16 Claude worker-session provider bean split | done | 见 `workitems/OPT-001-stage16-claude-worker-session-bean.md`；已完成独立 `ClaudeWorkerSessionQueryService`、Claude task service worker-session 端口移除、类型边界回归、质量门、覆盖审计和签收。 |
+| Stage 17 Legacy provider method deprecation gate | done | 见 `workitems/OPT-001-stage17-legacy-provider-method-deprecation.md`；已完成 legacy listing/worker-session 方法调用面审计、SPI/provider wrapper deprecation、反射回归、质量门、覆盖审计和签收。 |
+| Stage 18 TaskCommandProvider cancel direct method | done | 见 `workitems/OPT-001-stage18-task-command-cancel-direct-method.md`；已完成 provider command cancel direct method、session provider-route 迁移、内置 provider direct cancel 迁移、反射回归、质量门、覆盖审计和签收。 |
+| Stage 19 Migration support foundation | done | 见 `workitems/OPT-001-stage19-migration-support-foundation.md`；已完成共享 migration helper、现有启动 migration 去重、历史 SQL 自动执行边界确认、质量门、覆盖审计和签收。 |
+| Stage 20 Startup migration runner / manifest | done | 见 `workitems/OPT-001-stage20-startup-migration-runner.md`；已完成统一 startup migration runner、manifest、enabled/dry-run 配置、既有启动 migration 迁移、质量门、覆盖审计和签收。 |
+| 代码实现 | in-progress | Stage 1/2、Stage 3、Stage 4、Stage 5、Stage 6、Stage 7、Stage 8、Stage 9、Stage 10、Stage 11、Stage 12、Stage 13、Stage 14、Stage 15、Stage 16、Stage 17、Stage 18、Stage 19、Stage 20 均已签收；剩余后续重点是 migration version table / execution record、真实 MySQL smoke、可选的 Claude sync 本地投影 service 化，以及 legacy listing/worker-session/command cancel 方法在至少一个版本周期后的 removal 评估。 |
 
 ### Testing Progress
 
@@ -419,6 +642,38 @@ PowerShell 备注：`-Dtest=...`、`-DfailIfNoTests=false`、`-Dsurefire.failIfN
 | Stage 10 LangGraph focused regression | done | `LanggraphTaskServiceTest`、`LanggraphWorkerSessionQueryServiceTest` 通过，合计 27 tests。 |
 | Stage 10 session focused regression | done | `TaskDispatchFacadeTest`、`TaskQueryProviderRegistryTest` 通过，合计 64 tests。 |
 | Stage 10 affected reactor regression | done | `mvn test -pl session-module,addons/langgraph-biz-worker -am` 通过，Surefire XML 合计 162 reports / 1149 tests，0 failures，0 errors，0 skipped。 |
+| Stage 11 Gemini focused regression | done | `GeminiTaskServiceAuthResolutionTest`、`GeminiStreamRelayTest`、`GeminiWorkerAgentProviderTest`、`GeminiWorkerClientTest` 通过，合计 15 tests。 |
+| Stage 11 session focused regression | done | `TaskDispatchFacadeTest`、`TaskQueryProviderRegistryTest` 通过，合计 64 tests。 |
+| Stage 11 affected reactor regression | done | `mvn test -pl session-module,addons/gemini-worker-agent -am` 通过，Surefire XML 合计 578 tests，0 failures，0 errors，0 skipped。 |
+| Stage 12 Codex focused regression | done | `CodexTaskServiceTest`、`CodexBizTaskProviderTest`、`CodexStreamRelayTest`、`CodexWorkerAgentProviderTest`、`CodexWorkerA2aAgentTest`、`CodexWorkerFacadeImplTest`、`CodexWorkerClientTest` 通过，合计 59 tests。 |
+| Stage 12 session focused regression | done | `TaskDispatchFacadeTest`、`TaskQueryProviderRegistryTest` 通过，合计 64 tests。 |
+| Stage 12 affected reactor regression | done | `mvn test -pl session-module,addons/codex-worker-agent -am` 通过，Surefire XML 合计 622 tests，0 failures，0 errors，0 skipped。 |
+| Stage 13 Claude focused regression | done | `ClaudeTaskService*Test`、`WorkerStreamRelayTest`、`ClaudeWorkerAgentProviderTest`、`ClaudeWorkerA2aAgentTest`、`ClaudeWorkerClientTest` 通过，合计 90 tests。 |
+| Stage 13 session focused regression | done | `TaskDispatchFacadeTest`、`TaskQueryProviderRegistryTest` 通过，合计 64 tests。 |
+| Stage 13 affected reactor regression | done | `mvn test -pl session-module,addons/claude-worker-agent -am` 通过，Surefire XML 合计 1320 tests，0 failures，0 errors，0 skipped。 |
+| Stage 13 static scan / diff check | done | `rg "implements TaskQueryProvider"` 仅剩 session 测试 stub；`git diff --check` 无 whitespace error，仅 CRLF normalization warnings。 |
+| Stage 14 targeted regression | done | `TaskDispatchFacadeTest`、`UnifiedSessionTaskProjectionServiceTest`、`TaskQueryProviderRegistryTest`、`CodexTaskServiceTest`、`CodexBizTaskProviderTest`、`ClaudeTaskServiceAuthTest` 通过，合计 121 tests。 |
+| Stage 14 affected reactor regression | done | `mvn test -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent -am` 通过，Surefire XML 合计 191 suites / 1380 tests，0 failures，0 errors，0 skipped。 |
+| Stage 14 static scan / diff check | done | `rg "provider\\.(listTasksPaged|searchSessions|listTasksByDirectoryPaged)\\("` 无生产 fan-out legacy 调用；`git diff --check` 无 whitespace error，仅 CRLF normalization warnings。 |
+| Stage 15 targeted regression | done | `TaskDispatchFacadeTest`、`TaskQueryProviderRegistryTest`、`ClaudeTaskServiceAuthTest`、`LanggraphWorkerSessionQueryServiceTest`、`LanggraphTaskServiceTest` 通过，合计 114 tests。 |
+| Stage 15 affected direct reactor regression | done | `mvn test -pl session-module,addons/claude-worker-agent,addons/langgraph-biz-worker -am` 通过，Surefire XML 合计 208 reports / 1461 tests，0 failures，0 errors，0 skipped。 |
+| Stage 15 broader Java worker reactor regression | done | `mvn test -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am` 通过，Surefire XML 合计 221 reports / 1535 tests，0 failures，0 errors，0 skipped。 |
+| Stage 15 static scan / diff check | done | `rg "provider\\.(listWorkerSessions|getWorkerSessionMessageCount|getWorkerSessionMessages|syncWorkerSessions)\\("` 无生产 fan-out legacy 调用；`git diff --check` 无 whitespace error，仅 CRLF normalization warnings。 |
+| Stage 16 targeted regression | done | `TaskDispatchFacadeTest`、`TaskQueryProviderRegistryTest`、`ClaudeTaskServiceAuthTest`、`ClaudeWorkerSessionQueryServiceTest`、`ClaudeTaskServiceSyncTest` 通过，合计 100 tests。 |
+| Stage 16 affected reactor regression | done | `mvn test -pl session-module,addons/claude-worker-agent -am` 通过，Surefire XML 合计 183 reports / 1328 tests，0 failures，0 errors，0 skipped。 |
+| Stage 16 static scan / diff check | done | `ClaudeTaskService.java` worker-session provider 关键词无匹配；`ClaudeWorkerSessionQueryService.java` 独立实现 worker-session provider；`git diff --check` 无 whitespace error，仅 CRLF normalization warnings。 |
+| Stage 17 targeted regression | done | `TaskProviderLegacyContractTest`、`TaskDispatchFacadeTest`、`TaskQueryProviderRegistryTest`、`ClaudeTaskServiceAuthTest`、`ClaudeWorkerSessionQueryServiceTest`、`CodexTaskServiceTest`、`CodexBizTaskProviderTest`、`LanggraphWorkerSessionQueryServiceTest` 通过，合计 131 tests。 |
+| Stage 17 affected reactor regression | done | `mvn test -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/langgraph-biz-worker -am` 通过，Surefire XML 合计 219 reports / 1528 tests，0 failures，0 errors，0 skipped。 |
+| Stage 17 static scan / diff check | done | `rg "provider\\.(listTasksPaged|searchSessions|listTasksByDirectoryPaged|listWorkerSessions|getWorkerSessionMessageCount|getWorkerSessionMessages|syncWorkerSessions)\\("` 无生产 fan-out legacy 调用；deprecated annotation fixed-string scan 命中 24 处 expected annotations；`git diff --check` 无 whitespace error，仅 CRLF normalization warnings。 |
+| Stage 18 targeted regression | done | `TaskProviderLegacyContractTest`、`TaskDispatchFacadeTest`、`TaskQueryProviderRegistryTest`、`ClaudeTaskServiceAuthTest`、`CodexTaskServiceTest`、`CodexBizTaskProviderTest`、`GeminiTaskServiceAuthResolutionTest`、`LanggraphTaskServiceTest`、`LanggraphWorkerInnerA2aAgentTest` 通过，Surefire XML 合计 11 reports / 159 tests，0 failures，0 errors，0 skipped。 |
+| Stage 18 affected reactor regression | done | `mvn test -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am` 通过，Surefire XML 合计 223 reports / 1545 tests，0 failures，0 errors，0 skipped。 |
+| Stage 18 static scan / diff check | done | `rg "provider\\.cancelTask\\(" session-module/src/main/java` 无匹配；`cancelTaskDirect` direct usage scan 覆盖 SPI、session route 与内置 provider；`TaskCommandProvider` legacy `forRemoval=true` scan 无匹配；`git diff --check` 无 whitespace error，仅 CRLF normalization warnings。 |
+| Stage 19 targeted regression | done | `DatabaseMigrationSupportTest`、`CodingAgentTenantScopeMigrationTest`、`GeminiFlashRuntimeBudgetMigrationTest`、`CommonAutoConfigurationTest` 通过，合计 12 tests，0 failures，0 errors，0 skipped。 |
+| Stage 19 affected reactor regression | done | `mvn test -pl launcher -am` 通过，Surefire XML 合计 250 reports / 1669 tests，0 failures，0 errors，0 skipped。 |
+| Stage 19 static scan / diff check | done | main code 未发现 `docs/migration` / `ResourceDatabasePopulator` / `ScriptUtils` 自动执行历史 SQL；`DatabaseMigrationSupport` usage scan 仅命中预期 migration 与测试；`git diff --check` 无 whitespace error，仅 CRLF normalization warnings。 |
+| Stage 20 targeted regression | done | `DatabaseStartupMigrationRunnerTest`、`DatabaseMigrationSupportTest`、`CodingAgentTenantScopeMigrationTest`、`GeminiFlashRuntimeBudgetMigrationTest`、`CommonAutoConfigurationTest` 通过，合计 17 tests，0 failures，0 errors，0 skipped。 |
+| Stage 20 affected reactor regression | done | `mvn test -pl launcher -am` 通过，Surefire XML 合计 251 reports / 1674 tests，0 failures，0 errors，0 skipped。 |
+| Stage 20 static scan / diff check | done | startup migration event listener 只剩统一 runner；main code 未发现 `docs/migration` / `ResourceDatabasePopulator` / `ScriptUtils` 自动执行历史 SQL；`git diff --check` 无 whitespace error，仅 CRLF normalization warnings。 |
 
 ### Experience Progress
 
@@ -461,6 +716,16 @@ experience: N/A
 - [x] Stage 8 Provider port 注入收窄完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
 - [x] Stage 9 LangGraph worker-session 端口拆分完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
 - [x] Stage 10 LangGraph narrow port bean 迁移完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 11 Gemini narrow port bean 迁移完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 12 Codex / Codex Biz narrow port bean 迁移完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 13 Claude narrow port bean 迁移完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 14 TaskListingProvider typed method contract 完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 15 WorkerSession typed DTO / envelope 完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 16 Claude worker-session provider bean split 完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 17 Legacy provider method deprecation gate 完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 18 TaskCommandProvider cancel direct method 完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 19 Migration support foundation 完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
+- [x] Stage 20 Startup migration runner / manifest 完成后补充 execution-checkin、质量门、覆盖审计和签收记录。
 - [ ] 每个后续实现阶段完成后补充 execution-checkin。
 
 ## Acceptance Status
@@ -561,6 +826,116 @@ experience: N/A
 - signed_off_at: 2026-06-26
 - acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage10-langgraph-narrow-port-bean-acceptance.md
 - acceptance_scope: OPT-001 Stage 10 LangGraph narrow port bean migration only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 11
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage11-gemini-narrow-port-bean-acceptance.md
+- acceptance_scope: OPT-001 Stage 11 Gemini narrow port bean migration only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 12
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage12-codex-narrow-port-bean-acceptance.md
+- acceptance_scope: OPT-001 Stage 12 Codex / Codex Biz narrow port bean migration only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 13
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage13-claude-narrow-port-bean-acceptance.md
+- acceptance_scope: OPT-001 Stage 13 Claude narrow port bean migration only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 14
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage14-task-listing-typed-method-acceptance.md
+- acceptance_scope: OPT-001 Stage 14 TaskListingProvider typed method contract only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 15
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage15-worker-session-typed-envelope-acceptance.md
+- acceptance_scope: OPT-001 Stage 15 WorkerSession typed DTO / envelope only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 16
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage16-claude-worker-session-bean-acceptance.md
+- acceptance_scope: OPT-001 Stage 16 Claude worker-session provider bean split only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 17
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage17-legacy-provider-method-deprecation-acceptance.md
+- acceptance_scope: OPT-001 Stage 17 legacy provider method deprecation gate only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 18
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage18-task-command-cancel-direct-method-acceptance.md
+- acceptance_scope: OPT-001 Stage 18 TaskCommandProvider cancel direct method only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 19
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage19-migration-support-foundation-acceptance.md
+- acceptance_scope: OPT-001 Stage 19 migration support foundation only
+- blocking_items: none
+- follow_up_required: yes
+
+### Stage 20
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-26
+- acceptance_record: docs/version-tracker/1.3.1-SNAPSHOT/acceptance/OPT-001-stage20-startup-migration-runner-acceptance.md
+- acceptance_scope: OPT-001 Stage 20 startup migration runner / manifest only
 - blocking_items: none
 - follow_up_required: yes
 
@@ -1196,3 +1571,483 @@ Review 发现：
 
 - 建议进入 Stage 11：优先迁移 Gemini 或 Codex task service 退出聚合 `TaskQueryProvider`，沿用 LangGraph 的类型边界测试模式。
 - 备选路线是先推进 `TaskListingProvider` strictly typed method 兼容迁移，继续压低 listing/search contract 风险。
+
+### 2026-06-26 - Stage 11 Gemini Narrow Port Bean Migration
+
+Review 发现：
+
+- Stage 10 已验证 LangGraph task lifecycle service 可退出聚合 `TaskQueryProvider`，但 Gemini 仍直接实现聚合接口。
+- Gemini task service 实际只需要 lookup / command 能力，继续实现聚合接口会让它被 Spring 收集到 listing / worker-session 候选列表。
+- Gemini 能力面小于 Codex/Claude，适合作为第二个 Provider narrow-port bean 迁移切片。
+
+已完成：
+
+- `GeminiTaskService` 从 `TaskQueryProvider` 迁移为 `TaskLookupProvider, TaskCommandProvider`。
+- `GeminiTaskService` 保留 providerType、capability、lookup、createTaskDirect、resumeTask、cancelTask、deleteTask 语义，不再作为 listing / worker-session / aggregate provider 暴露。
+- `GeminiTaskServiceAuthResolutionTest#exposesOnlySupportedTaskProviderPorts` 覆盖类型边界，防止 task service 回退实现聚合接口或 listing/worker-session 端口。
+- Stage 11 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl addons/gemini-worker-agent -am "-Dtest=GeminiTaskServiceAuthResolutionTest,GeminiStreamRelayTest,GeminiWorkerAgentProviderTest,GeminiWorkerClientTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：15 tests pass。
+- `mvn test -pl session-module -am "-Dtest=TaskDispatchFacadeTest,TaskQueryProviderRegistryTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：64 tests pass。
+- `mvn test -pl session-module,addons/gemini-worker-agent -am`：affected reactor 通过，Surefire XML 合计 578 tests，0 failures，0 errors，0 skipped。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage11-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage11-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage11-gemini-narrow-port-bean-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- Claude/Codex/Codex Biz 仍直接实现 `TaskQueryProvider` 聚合接口。
+- `TaskCommandProvider#cancelTask` 仍保留 deprecated fallback；彻底移除需等 A2A abort 链路和 Provider command 迁移全部收口。
+- `TaskListingProvider` 仍使用 `Object` 返回类型；strictly typed method 迁移仍需后续阶段处理。
+- worker-session payload 仍是 Map，typed DTO / envelope 不在本阶段范围。
+
+下一步：
+
+- 建议进入 Stage 12：优先迁移 Codex / Codex Biz 退出聚合 `TaskQueryProvider`。该阶段比 Gemini 更复杂，因为 Codex 同时承载 listing/search 能力，需先明确是否拆物理 adapter，还是先改为精确实现 lookup / command / listing 三类窄端口。
+- 备选路线是先推进 `TaskListingProvider` strictly typed method 兼容迁移，为 Codex listing/search 迁移降低契约风险。
+
+### 2026-06-26 - Stage 12 Codex / Codex Biz Narrow Port Bean Migration
+
+Review 发现：
+
+- Stage 11 后 Gemini 已退出聚合 `TaskQueryProvider`，但 Codex 与 Codex Biz 仍直接实现聚合接口。
+- Codex / Codex Biz 实际需要 lookup / command / listing 三类能力，不需要 worker-session 查询端口。
+- 继续实现聚合接口会让两个 Codex provider 被 Spring 收集到 worker-session 候选集合，削弱 Stage 8 的窄端口集合治理收益。
+
+已完成：
+
+- `CodexTaskService` 从 `TaskQueryProvider` 迁移为 `TaskLookupProvider, TaskCommandProvider, TaskListingProvider`。
+- `CodexBizTaskProvider` 从 `TaskQueryProvider` 迁移为 `TaskLookupProvider, TaskCommandProvider, TaskListingProvider`。
+- 保留 providerType、capability、lookup、create/resume/cancel/delete/resync/rewind、listing/search typed envelope 和 session projection 语义。
+- `CodexTaskServiceTest#exposesOnlySupportedTaskProviderPorts` 覆盖 Codex task service 类型边界。
+- `CodexBizTaskProviderTest#exposesOnlySupportedTaskProviderPorts` 覆盖 Codex Biz provider 类型边界。
+- `rg "implements TaskQueryProvider"` 显示剩余生产实现仅为 Claude，session 测试 stub 保留兼容回归。
+- Stage 12 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl addons/codex-worker-agent -am "-Dtest=CodexTaskServiceTest,CodexBizTaskProviderTest,CodexStreamRelayTest,CodexWorkerAgentProviderTest,CodexWorkerA2aAgentTest,CodexWorkerFacadeImplTest,CodexWorkerClientTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：59 tests pass。
+- `mvn test -pl session-module -am "-Dtest=TaskDispatchFacadeTest,TaskQueryProviderRegistryTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：64 tests pass。
+- `mvn test -pl session-module,addons/codex-worker-agent -am`：affected reactor 通过，Surefire XML 合计 622 tests，0 failures，0 errors，0 skipped。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage12-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage12-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage12-codex-narrow-port-bean-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- Claude 仍直接实现 `TaskQueryProvider` 聚合接口。
+- `TaskCommandProvider#cancelTask` 仍保留 deprecated fallback；彻底移除需等 A2A abort 链路和 Provider command 迁移全部收口。
+- `TaskListingProvider` 仍使用 `Object` 返回类型；strictly typed method 迁移仍需后续阶段处理。
+- worker-session payload 仍是 Map，typed DTO / envelope 不在本阶段范围。
+- 当前缺少专门的 Spring ApplicationContext 启动测试验证真实 provider bean list；受影响 reactor 已覆盖编译和模块回归。
+
+下一步：
+
+- 建议进入 Stage 13：迁移 Claude task service 退出聚合 `TaskQueryProvider`，使生产 provider 中不再存在宽聚合实现。
+- 备选路线是先推进 `TaskListingProvider` strictly typed method 兼容迁移，收紧 Codex / Claude listing/search contract。
+
+### 2026-06-26 - Stage 13 Claude Narrow Port Bean Migration
+
+Review 发现：
+
+- Stage 12 后 Claude 是生产代码中最后一个直接实现聚合 `TaskQueryProvider` 的 provider。
+- Claude 与 Gemini / Codex 的差异是：它仍实际承接 worker-session list/count/messages/sync 查询能力。
+- 本阶段应先消除聚合接口暴露，但保留 Claude 的 worker-session 窄端口能力；物理拆分为独立 worker-session bean 可后续单独治理。
+
+已完成：
+
+- `ClaudeTaskService` 从 `TaskQueryProvider` 迁移为 `TaskLookupProvider, TaskCommandProvider, TaskListingProvider, WorkerSessionQueryProvider`。
+- 保留 providerType、capability、lookup、create/resume/cancel/delete/respond/reconnect/resync/rewind、listing/search typed envelope、worker-session 查询和 session projection 语义。
+- `ClaudeWorkerAgentProvider` 已在 Stage 8 通过 `TaskLookupProvider` 构造 abort wrapper，本阶段无需调整。
+- `ClaudeTaskServiceAuthTest#exposesOnlySupportedTaskProviderPorts` 覆盖 Claude task service 类型边界。
+- `rg "implements TaskQueryProvider"` 显示生产代码已无聚合实现，仅 session 测试 stub 保留兼容回归。
+- Stage 13 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl addons/claude-worker-agent -am "-Dtest=ClaudeTaskService*Test,WorkerStreamRelayTest,ClaudeWorkerAgentProviderTest,ClaudeWorkerA2aAgentTest,ClaudeWorkerClientTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：90 tests pass。
+- `mvn test -pl session-module -am "-Dtest=TaskDispatchFacadeTest,TaskQueryProviderRegistryTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：64 tests pass。
+- `mvn test -pl session-module,addons/claude-worker-agent -am`：affected reactor 通过，Surefire XML 合计 1320 tests，0 failures，0 errors，0 skipped。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+- `rg -n "implements TaskQueryProvider" addons navigator-spi session-module`：生产代码已无聚合实现，仅 `TaskQueryProviderRegistryTest` 保留兼容 stub。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage13-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage13-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage13-claude-narrow-port-bean-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- Claude worker-session 查询仍在 `ClaudeTaskService` 物理 bean 内；如需更强职责隔离，后续拆为独立 `WorkerSessionQueryProvider` bean。
+- `TaskCommandProvider#cancelTask` 仍保留 deprecated fallback；彻底移除需等 A2A abort 链路和 Provider command 迁移全部收口。
+- `TaskListingProvider` 仍使用 `Object` 返回类型；strictly typed method 迁移仍需后续阶段处理。
+- worker-session payload 仍是 Map，typed DTO / envelope 不在本阶段范围。
+- 当前缺少专门的 Spring ApplicationContext 启动测试验证真实 provider bean list；受影响 reactor、类型边界测试和静态扫描已覆盖本阶段核心风险。
+
+下一步：
+
+- 建议进入 Stage 14：优先治理 `TaskListingProvider` strictly typed method，让 Claude / Codex listing/search contract 从 `Object` 过渡到明确 typed envelope。
+- 备选路线是先拆 Claude worker-session 查询为独立 `WorkerSessionQueryProvider` bean，与 LangGraph 的职责边界保持一致。
+
+### 2026-06-26 - Stage 14 TaskListingProvider Typed Method Contract
+
+Review 发现：
+
+- Stage 7 虽已引入 typed envelope，但 `TaskListingProvider` 主方法仍返回 `Object`。
+- `TaskDispatchFacade` list/search fan-out 仍直接调用 legacy 方法，弱类型边界没有完全收敛。
+- Claude / Codex / Codex Biz 已是 narrow listing providers，适合迁移到 typed method override。
+
+已完成：
+
+- `TaskListingProvider` 新增 `listTaskPage`、`searchSessionPage`、`listDirectoryTaskPage` typed methods。
+- `TaskPageResult` / `TaskSearchResult` 新增 legacy Map / public JavaBean getter envelope adapter。
+- `TaskDispatchFacade` 三处 provider fan-out 已迁移到 typed methods。
+- Claude / Codex / Codex Biz listing/search 实现迁移为 typed override，legacy `Object` 方法保留委派兼容。
+- `UnifiedSessionTaskProjectionServiceTest` 补充 legacy envelope compatibility 回归；`TaskDispatchFacadeTest` 和 `CodexTaskServiceTest` 更新为 typed 主路径断言。
+- Stage 14 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl session-module,addons/codex-worker-agent,addons/claude-worker-agent -am "-Dtest=TaskDispatchFacadeTest,UnifiedSessionTaskProjectionServiceTest,TaskQueryProviderRegistryTest,CodexTaskServiceTest,CodexBizTaskProviderTest,ClaudeTaskServiceAuthTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：121 tests pass。
+- `mvn test -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent -am`：affected reactor 通过，Surefire XML 合计 191 suites / 1380 tests，0 failures，0 errors，0 skipped。
+- `rg -n "provider\.(listTasksPaged|searchSessions|listTasksByDirectoryPaged)\(" session-module/src/main/java addons/claude-worker-agent/src/main/java addons/codex-worker-agent/src/main/java navigator-spi/src/main/java`：无匹配。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage14-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage14-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage14-task-listing-typed-method-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- legacy `Object` listing/search 方法仍保留，后续可在外部调用方确认后 deprecate/remove。
+- worker-session payload 仍为 Map，typed DTO / envelope 未处理。
+- Claude worker-session 查询仍在 `ClaudeTaskService` 物理 bean 内。
+- 未运行仓库级全量 `mvn test`，本阶段以 affected reactor 覆盖直接依赖链。
+
+下一步：
+
+- Stage 15 已按优先级推进并签收，详见下方记录。
+- 后续建议优先拆 Claude worker-session 查询为独立 `WorkerSessionQueryProvider` bean，再评估 legacy listing / worker-session 方法 deprecation/removal 条件。
+
+### 2026-06-26 - Stage 15 WorkerSession Typed DTO / Envelope
+
+Review 发现：
+
+- `WorkerSessionQueryProvider` 主方法仍返回 `Map` / `List<Map>`，弱类型边界保留在 SPI 主链路。
+- `TaskDispatchFacade` worker-session fan-out 仍直接调用 legacy Map 方法，和 Stage 14 listing/search typed 主链路不一致。
+- Claude / LangGraph 已具备 worker-session provider 入口，适合先通过 typed override 完成契约收敛，同时保持 REST payload 不变。
+
+已完成：
+
+- 新增 `WorkerSessionSummary`、`WorkerSessionMessage`、`WorkerSessionMessageCount`、`WorkerSessionSyncResult` typed records。
+- `WorkerSessionQueryProvider` 新增 `listWorkerSessionSummaries`、`getWorkerSessionMessageCountResult`、`listWorkerSessionMessages`、`syncWorkerSessionState` typed methods。
+- `TaskDispatchFacade` 四处 worker-session provider fan-out 已迁移到 typed methods，再通过 `toMap()` 保持 REST payload 兼容。
+- Claude / LangGraph worker-session 实现迁移为 typed override，legacy Map 方法保留委派兼容。
+- `TaskDispatchFacadeTest` 补充 typed provider verify 与 legacy Map default adapter 回归；`LanggraphWorkerSessionQueryServiceTest` 直接断言 typed DTO / envelope。
+- Stage 15 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl session-module,addons/claude-worker-agent,addons/langgraph-biz-worker -am "-Dtest=TaskDispatchFacadeTest,TaskQueryProviderRegistryTest,ClaudeTaskServiceAuthTest,LanggraphWorkerSessionQueryServiceTest,LanggraphTaskServiceTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：114 tests pass。
+- `mvn test -pl session-module,addons/claude-worker-agent,addons/langgraph-biz-worker -am`：affected direct reactor 通过，Surefire XML 合计 208 reports / 1461 tests，0 failures，0 errors，0 skipped。
+- `mvn test -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am`：broader Java worker reactor 通过，Surefire XML 合计 221 reports / 1535 tests，0 failures，0 errors，0 skipped。
+- `rg -n "provider\.(listWorkerSessions|getWorkerSessionMessageCount|getWorkerSessionMessages|syncWorkerSessions)\(" session-module/src/main/java addons/claude-worker-agent/src/main/java addons/langgraph-biz-worker/src/main/java navigator-spi/src/main/java`：无匹配。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage15-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage15-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage15-worker-session-typed-envelope-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- legacy Map worker-session 方法仍保留，后续可在外部调用方确认后 deprecate/remove。
+- REST worker-session payload 仍为 Map，本阶段只收敛 Java SPI 主路径。
+- Claude worker-session 查询仍在 `ClaudeTaskService` 物理 bean 内。
+- 未运行仓库级全量 `mvn test`，本阶段以 affected reactor 和 broader Java worker reactor 覆盖直接依赖链。
+
+下一步：
+
+- Stage 16 已按建议推进并签收，详见下方记录。
+- 后续建议规划 legacy listing / worker-session 方法 deprecation/removal 条件；不建议早于外部插件兼容性确认直接删除。
+
+### 2026-06-26 - Stage 16 Claude WorkerSession Provider Bean Split
+
+Review 发现：
+
+- Stage 15 后 worker-session 主链路已迁移到 typed DTO / envelope，但 Claude worker-session 查询仍在 `ClaudeTaskService` 物理 bean 内。
+- `ClaudeTaskService` 同时承担 task lookup、command、listing 和 worker-session provider 注册，会削弱 Stage 8 窄端口集合与 Stage 9 LangGraph 拆分带来的职责边界收益。
+- Claude 已具备 typed worker-session methods，适合作为低风险物理 bean 拆分切片。
+
+已完成：
+
+- 新增 `ClaudeWorkerSessionQueryService implements WorkerSessionQueryProvider`，providerType 保持 `claude-worker`。
+- `ClaudeWorkerSessionQueryService` 独立声明 `LIST_WORKER_SESSIONS`、`GET_WORKER_SESSION_MESSAGE_COUNT`、`GET_WORKER_SESSION_MESSAGES`、`SYNC_WORKER_SESSIONS`。
+- `ClaudeTaskService` 不再实现 `WorkerSessionQueryProvider`，也不再声明 worker-session capabilities。
+- worker-session list/count/messages/sync typed 与 legacy Map wrapper 已迁移到新 service，REST payload 兼容语义不变。
+- sync path 暂时复用 `ClaudeTaskService.syncLocalSessions(...)` 作为本地任务投影入口，避免重复或重写落库规则。
+- `ClaudeWorkerSessionQueryServiceTest` 覆盖 capabilities、list/count/messages/sync 和跨用户 worker 拒绝；`ClaudeTaskServiceAuthTest` 覆盖 task service 类型边界。
+- Stage 16 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl session-module,addons/claude-worker-agent -am "-Dtest=TaskDispatchFacadeTest,TaskQueryProviderRegistryTest,ClaudeTaskServiceAuthTest,ClaudeWorkerSessionQueryServiceTest,ClaudeTaskServiceSyncTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：100 tests pass。
+- `mvn test -pl session-module,addons/claude-worker-agent -am`：affected reactor 通过，Surefire XML 合计 183 reports / 1328 tests，0 failures，0 errors，0 skipped。
+- `rg -n "WorkerSessionQueryProvider|LIST_WORKER_SESSIONS|GET_WORKER_SESSION_MESSAGE_COUNT|GET_WORKER_SESSION_MESSAGES|SYNC_WORKER_SESSIONS" addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/ClaudeTaskService.java`：无匹配。
+- `rg -n "class ClaudeWorkerSessionQueryService|implements WorkerSessionQueryProvider|LIST_WORKER_SESSIONS|getProviderType|getCapabilities|syncWorkerSessionState" addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/ClaudeWorkerSessionQueryService.java`：确认新 service 独立实现 worker-session provider。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage16-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage16-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage16-claude-worker-session-bean-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- `ClaudeWorkerSessionQueryService` sync path 仍依赖 `ClaudeTaskService.syncLocalSessions(...)`；后续如继续压低 service 间耦合，可单独抽 `ClaudeSessionProjectionService`。
+- legacy listing / worker-session 方法仍保留，后续需结合外部插件/调用方兼容性再规划 deprecation / removal。
+- `TaskCommandProvider#cancelTask` deprecated fallback、migration execution record / version table 与真实 MySQL smoke 仍属于后续治理项。
+- 未运行仓库级根目录全量 `mvn test`，本阶段以 affected reactor 覆盖直接依赖链。
+
+下一步：
+
+- Stage 17 已按建议推进并签收，详见下方记录。
+- 后续仍可单独抽 `ClaudeSessionProjectionService`，进一步降低 `ClaudeWorkerSessionQueryService` 对 `ClaudeTaskService` 的 sync 投影依赖。
+
+### 2026-06-26 - Stage 17 Legacy Provider Method Deprecation Gate
+
+Review 发现：
+
+- Stage 14/15 后 session-module 生产 provider fan-out 已迁移到 typed methods，但 legacy listing / worker-session SPI 方法仍保留为兼容入口。
+- 直接删除 legacy 方法会破坏外部插件、SDK、测试 stub 或未纳入本仓的 provider 实现；不适合作为本阶段动作。
+- 如果不显式 deprecate，后续实现仍可能继续误用旧 `Object` / Map 契约，导致 typed 主链路治理效果被稀释。
+
+已完成：
+
+- `TaskListingProvider` legacy `listTasksPaged`、`searchSessions`、`listTasksByDirectoryPaged` 标记 `@Deprecated(since = "1.3.1", forRemoval = false)`。
+- `WorkerSessionQueryProvider` legacy `listWorkerSessions`、`getWorkerSessionMessageCount`、`getWorkerSessionMessages`、`syncWorkerSessions` 标记 `@Deprecated(since = "1.3.1", forRemoval = false)`。
+- Claude / Codex / Codex Biz listing legacy wrappers 和 Claude / LangGraph worker-session legacy wrappers 同步标记 deprecation。
+- typed default adapter 保留兼容调用并 suppress 内部 deprecation warning，REST payload 兼容语义不变。
+- 新增 `TaskProviderLegacyContractTest`，反射断言 SPI legacy methods 均为 `since=1.3.1` 且 `forRemoval=false`。
+- Stage 17 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/langgraph-biz-worker -am "-Dtest=TaskProviderLegacyContractTest,TaskDispatchFacadeTest,TaskQueryProviderRegistryTest,ClaudeTaskServiceAuthTest,ClaudeWorkerSessionQueryServiceTest,CodexTaskServiceTest,CodexBizTaskProviderTest,LanggraphWorkerSessionQueryServiceTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：131 tests pass。
+- `mvn test -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/langgraph-biz-worker -am`：affected reactor 通过，Surefire XML 合计 219 reports / 1528 tests，0 failures，0 errors，0 skipped。
+- `rg -n "provider\.(listTasksPaged|searchSessions|listTasksByDirectoryPaged|listWorkerSessions|getWorkerSessionMessageCount|getWorkerSessionMessages|syncWorkerSessions)\(" session-module/src/main/java addons/claude-worker-agent/src/main/java addons/codex-worker-agent/src/main/java addons/langgraph-biz-worker/src/main/java navigator-spi/src/main/java`：无匹配。
+- deprecated annotation fixed-string scan：命中 24 处 expected `@Deprecated(since = "1.3.1", forRemoval = false)`。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage17-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage17-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage17-legacy-provider-method-deprecation-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- 外部插件、SDK 或未纳入本仓测试的调用方可能仍使用 legacy 方法；removal 前必须提供迁移窗口与 release note。
+- 本阶段没有删除 legacy 方法，也没有设置 `forRemoval=true`；后续 removal 必须另起 workitem 并至少覆盖 broader Java worker reactor。
+- `TaskCommandProvider#cancelTask` deprecated fallback、migration execution record / version table、真实 MySQL smoke、可选的 `ClaudeSessionProjectionService` 仍属于后续治理项。
+- 未运行根目录仓库级全量 `mvn test`，本阶段以 affected reactor 覆盖直接依赖链。
+
+下一步：
+
+- Stage 18 已按建议推进并签收，详见下方记录。
+- Stage 19 已推进 migration support foundation 并签收，详见下方记录。
+- Stage 20 已推进 startup migration runner / manifest；后续建议优先规划 migration execution record / version table 与真实 MySQL smoke，或单独抽 `ClaudeSessionProjectionService`，进一步降低 Claude worker-session sync 对 task service 的内部依赖。
+
+### 2026-06-26 - Stage 18 TaskCommandProvider Cancel Direct Method
+
+Review 发现：
+
+- `TaskCommandProvider#cancelTask(String, String)` 已是 deprecated fallback，但 session provider-route 仍直接调用该方法。
+- 内置 provider 的真实取消逻辑仍实现于 legacy override，导致 command provider 主链路与 deprecated contract 绑定。
+- A2A abort 的 `A2aAgent#cancelTask(String)` 与 provider command cancel 名称相近，需要在 SPI 与测试中明确边界，避免误删或误改 A2A 取消链路。
+
+已完成：
+
+- `TaskCommandProvider` 新增非 deprecated `cancelTaskDirect(String, String)` 主方法；default implementation 委派 legacy `cancelTask`，兼容外部只 override legacy 方法的 provider。
+- `TaskCommandProvider#cancelTask(String, String)` 保留兼容入口，并从 `forRemoval=true` 收敛为 `forRemoval=false`。
+- `TaskOperationRouter` provider cancel route 已迁移到 `cancelTaskDirect`；A2A route 仍保持 `A2aAgent#cancelTask(String)` 语义不变。
+- Claude / Codex / Codex Biz / Gemini / LangGraph 内置 provider 真实取消逻辑已迁移到 `cancelTaskDirect`，legacy `cancelTask` wrapper 保留委派兼容。
+- `CodexBizTaskProvider` 与 `LanggraphWorkerInnerA2aAgent` 内部 service 调用同步迁移到 direct method。
+- `TaskProviderLegacyContractTest` 补充 direct method 非 deprecated、legacy method `forRemoval=false` 反射回归。
+- Stage 18 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am "-Dtest=TaskProviderLegacyContractTest,TaskDispatchFacadeTest,TaskQueryProviderRegistryTest,ClaudeTaskServiceAuthTest,CodexTaskServiceTest,CodexBizTaskProviderTest,GeminiTaskServiceAuthResolutionTest,LanggraphTaskServiceTest,LanggraphWorkerInnerA2aAgentTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：Surefire XML 合计 11 reports / 159 tests，0 failures，0 errors，0 skipped。
+- `mvn test -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am`：affected reactor 通过，Surefire XML 合计 223 reports / 1545 tests，0 failures，0 errors，0 skipped。
+- `rg -n "provider\.cancelTask\(" session-module/src/main/java`：无匹配，session provider-route 不再调用 legacy provider cancel。
+- `cancelTaskDirect(` static scan：覆盖 SPI、session route、内置 provider 与相关测试。
+- `TaskCommandProvider` legacy `forRemoval=true` scan 无匹配，expected `forRemoval=false` annotation 存在。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage18-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage18-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage18-task-command-cancel-direct-method-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- 外部插件、SDK 或未纳入本仓测试的 provider 可能仍 override / call legacy `cancelTask(String, String)`；removal 前必须提供迁移窗口与 release note。
+- 本阶段只建立 direct method 主路径，不删除 legacy cancel；彻底 removal 必须另起 workitem 并覆盖外部兼容性确认。
+- migration execution record / version table、真实 MySQL smoke、可选的 `ClaudeSessionProjectionService` 仍属于后续治理项。
+- 未运行根目录仓库级全量 `mvn test`，本阶段以 direct affected reactor 覆盖涉及模块及其 `-am` 依赖。
+
+下一步：
+
+- Stage 19 已推进 migration support foundation 并签收，已把现有启动 migration 的重复 schema helper 收敛到共享 helper，并明确历史 SQL 不自动执行。
+- Stage 20 已推进 startup migration runner / manifest，并完成 enabled / dry-run 开关、统一启动入口和签收；真实 MySQL smoke 与 migration execution record 保留为后续 Stage 21 候选。
+- 备选路线是抽 `ClaudeSessionProjectionService`，降低 `ClaudeWorkerSessionQueryService` 对 `ClaudeTaskService.syncLocalSessions(...)` 的内部依赖。
+- legacy listing / worker-session / command cancel 方法 removal 不建议立即推进，至少等一个版本周期、外部插件迁移说明与 release note 完成后再评估。
+
+### 2026-06-26 - Stage 19 Migration Support Foundation
+
+Review 发现：
+
+- Stage 5 将生产 `ddl-auto` 收敛为 `validate` 后，schema preparation 仍依赖人工流程或既有启动 migration。
+- `CodingAgentTenantScopeMigration` 与 `GeminiFlashRuntimeBudgetMigration` 均有 MySQL-only guard、table/column/index 检查和 warn-not-fail 语义，但底层 JDBC metadata / INFORMATION_SCHEMA 逻辑重复。
+- `docs/migration/*.sql` 包含一次性改表、数据迁移和 dev tenant 修复脚本，不适合作为启动时自动执行脚本直接纳入。
+
+已完成：
+
+- 新增 `DatabaseMigrationSupport`，集中提供 MySQL detection、table / column / index 检查、single-column unique index 查询和 identifier quote。
+- `CodingAgentTenantScopeMigration` 迁移到共享 helper，保留 `agent_profile` 补列、legacy single-column unique index drop、tenant+agent composite unique index create 语义。
+- `GeminiFlashRuntimeBudgetMigration` 迁移到共享 helper，保留 MySQL-only、table guard、idempotent update 和 warn-not-fail 语义。
+- 历史 `docs/migration/*.sql` 保持人工运维脚本定位，本阶段未自动执行、未引入 Flyway/Liquibase。
+- `DatabaseMigrationSupport` 使用 `Locale.ROOT` 进行数据库产品名判断，避免区域化大小写边界。
+- Stage 19 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl navigator-common -am "-Dtest=DatabaseMigrationSupportTest,CodingAgentTenantScopeMigrationTest,GeminiFlashRuntimeBudgetMigrationTest,CommonAutoConfigurationTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：12 tests pass。
+- `mvn test -pl launcher -am`：affected reactor 通过，Surefire XML 合计 250 reports / 1669 tests，0 failures，0 errors，0 skipped。
+- `rg -n "docs/migration|migration/.*\.sql|ClassPathResource|ResourceDatabasePopulator|ScriptUtils" navigator-common/src/main/java launcher/src/main/java -S`：无匹配，main code 未自动执行历史 SQL。
+- `DatabaseMigrationSupport` usage scan：仅命中预期 migration 与测试。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage19-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage19-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage19-migration-support-foundation-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- 本阶段只建立 migration support foundation，不提供完整 migration runner、manifest、版本表、dry-run/apply 或 rollback 机制。
+- 未连接真实 MySQL 实例执行 smoke，当前通过 mocked JDBC metadata / JdbcTemplate 行为回归覆盖。
+- 启动 migration 继续保持 warn-not-fail，避免启动中断，但部署侧仍需显式检查 schema 结果。
+- 未运行仓库根目录全量 `mvn test`，本阶段以 `launcher -am` affected reactor 覆盖生产启动链路。
+
+下一步：
+
+- Stage 20 已推进 startup migration runner / manifest，把现有 Java startup migrations 纳入统一 runner、manifest、enabled / dry-run 开关和签收流程。
+- 后续如继续处理生产 schema 风险，建议 Stage 21 优先设计 migration execution record / version table 与真实 MySQL smoke，再评估是否扩展到历史 SQL runner。
+- 备选路线仍是抽 `ClaudeSessionProjectionService`，降低 `ClaudeWorkerSessionQueryService` 对 `ClaudeTaskService.syncLocalSessions(...)` 的内部依赖。
+- legacy listing / worker-session / command cancel 方法 removal 不建议立即推进，至少等一个版本周期、外部插件迁移说明与 release note 完成后再评估。
+
+### 2026-06-26 - Stage 20 Startup Migration Runner / Manifest
+
+Review 发现：
+
+- Stage 19 后既有 startup migrations 已复用 `DatabaseMigrationSupport`，但仍由各自 `@EventListener(ApplicationReadyEvent.class)` 分散触发。
+- 生产启动时缺少统一 manifest、确定性排序、enabled / dry-run 运维开关和单项失败处理口径。
+- 历史 `docs/migration/*.sql` 仍包含一次性人工脚本，不适合在本阶段自动接入启动执行。
+
+已完成：
+
+- 新增 `DatabaseStartupMigration` 契约，要求 startup migration 暴露稳定 `id`、`description` 和 `migrate()`。
+- 新增 `DatabaseStartupMigrationDescriptor`、`DatabaseStartupMigrationProperties` 与 `DatabaseStartupMigrationRunner`。
+- runner 统一监听 `ApplicationReadyEvent`，按 migration id 排序输出 manifest 并执行。
+- runner 统一处理 disabled、non-MySQL、dry-run 和单 migration 失败继续，失败策略保持 warn-not-fail。
+- `CodingAgentTenantScopeMigration` 与 `GeminiFlashRuntimeBudgetMigration` 已移除各自 event listener，改为 `DatabaseStartupMigration` bean。
+- `application-prod.yml` 增加 `NAVIGATOR_DATABASE_STARTUP_MIGRATIONS_ENABLED` 与 `NAVIGATOR_DATABASE_STARTUP_MIGRATIONS_DRY_RUN` 环境变量映射。
+- 历史 `docs/migration/*.sql` 继续保持人工运维脚本定位，本阶段未自动执行、未引入 Flyway/Liquibase。
+- Stage 20 子计划、README 索引、质量门、覆盖审计和验收签收记录已回写。
+
+测试证据：
+
+- `mvn test -pl navigator-common -am "-Dtest=DatabaseStartupMigrationRunnerTest,DatabaseMigrationSupportTest,CodingAgentTenantScopeMigrationTest,GeminiFlashRuntimeBudgetMigrationTest,CommonAutoConfigurationTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`：17 tests pass。
+- `mvn test -pl launcher -am`：affected reactor 通过，Surefire XML 合计 251 reports / 1674 tests，0 failures，0 errors，0 skipped。
+- `rg -n "ApplicationReadyEvent|@EventListener|implements DatabaseStartupMigration|DatabaseStartupMigrationRunner|startup-migrations" navigator-common/src/main/java launcher/src/main/resources/application-prod.yml navigator-common/src/test/java -S`：确认 startup migration event listener 只剩统一 runner，两个既有 migration 均实现 `DatabaseStartupMigration`。
+- `rg -n "docs/migration|migration/.*\.sql|ClassPathResource|ResourceDatabasePopulator|ScriptUtils" navigator-common/src/main/java launcher/src/main/java -S`：无匹配，main code 未自动执行历史 SQL。
+- `git diff --check`：无 whitespace error，仅 CRLF normalization warnings。
+
+质量与覆盖：
+
+- 实现质量门见 `quality/OPT-001-stage20-implementation-quality.md`，decision=`ready-with-risks`。
+- 测试覆盖审计见 `coverage/OPT-001-stage20-coverage-audit.md`，conclusion=`ready-with-gaps`，can_enter_acceptance=`yes`。
+
+签收结论：
+
+- 验收记录见 `acceptance/OPT-001-stage20-startup-migration-runner-acceptance.md`。
+- acceptance_decision=`accepted-with-risks`，无阻断项。
+
+剩余风险：
+
+- 本阶段没有实现 migration version table / execution record / rollback；新增复杂 migration 前仍需单独设计。
+- 未连接真实 MySQL 实例执行 smoke，当前通过 unit/mock 与 launcher affected reactor 覆盖。
+- 历史 `docs/migration/*.sql` 仍未纳入自动化 runner，后续需要脚本分类、幂等校验和运维流程。
+- runner 保持 warn-not-fail，部署侧仍需显式监控启动日志并核对 schema 结果。
+- 未运行仓库根目录全量 `mvn test`，本阶段以 `launcher -am` affected reactor 覆盖生产启动链路。
+
+下一步：
+
+- 建议 Stage 21 优先补 migration execution record / version table 和真实 MySQL smoke，把 startup migration 从“幂等动作集合”推进到“可审计执行记录”。
+- 备选路线仍是抽 `ClaudeSessionProjectionService`，降低 `ClaudeWorkerSessionQueryService` 对 `ClaudeTaskService.syncLocalSessions(...)` 的内部依赖。
+- legacy listing / worker-session / command cancel 方法 removal 不建议立即推进，至少等一个版本周期、外部插件迁移说明与 release note 完成后再评估。

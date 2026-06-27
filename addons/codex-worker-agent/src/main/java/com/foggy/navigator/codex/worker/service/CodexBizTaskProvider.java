@@ -1,8 +1,11 @@
 package com.foggy.navigator.codex.worker.service;
 
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.TaskListingProvider;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
+import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -21,7 +24,7 @@ import java.util.Set;
  */
 @Service
 @RequiredArgsConstructor
-public class CodexBizTaskProvider implements TaskQueryProvider {
+public class CodexBizTaskProvider implements TaskLookupProvider, TaskCommandProvider, TaskListingProvider {
 
     private static final String DEFAULT_SANDBOX_MODE = "workspace-write";
     private static final String DEFAULT_APPROVAL_POLICY = "never";
@@ -80,19 +83,31 @@ public class CodexBizTaskProvider implements TaskQueryProvider {
     }
 
     @Override
-    public Object listTasksPaged(String userId, int page, int size, String state) {
+    public TaskPageResult listTaskPage(String userId, int page, int size, String state) {
         return codexTaskService.listTasksPagedForProvider(userId, page, size, state, getProviderType());
     }
 
+    @Deprecated(since = "1.3.1", forRemoval = false)
     @Override
-    public Object listTasksByDirectoryPaged(String userId, String directoryId, int page, int size, String state) {
+    public Object listTasksPaged(String userId, int page, int size, String state) {
+        return listTaskPage(userId, page, size, state);
+    }
+
+    @Override
+    public TaskPageResult listDirectoryTaskPage(String userId, String directoryId, int page, int size, String state) {
         return codexTaskService.listTasksByDirectoryPagedForProvider(
                 userId, directoryId, page, size, state, getProviderType());
     }
 
+    @Deprecated(since = "1.3.1", forRemoval = false)
     @Override
-    public Object searchSessions(String userId, String keyword, String workerId,
-                                 String directoryId, int page, int size) {
+    public Object listTasksByDirectoryPaged(String userId, String directoryId, int page, int size, String state) {
+        return listDirectoryTaskPage(userId, directoryId, page, size, state);
+    }
+
+    @Override
+    public TaskSearchResult searchSessionPage(String userId, String keyword, String workerId,
+                                              String directoryId, int page, int size) {
         boolean hasFilter = (keyword != null && !keyword.isBlank())
                 || (workerId != null && !workerId.isBlank())
                 || (directoryId != null && !directoryId.isBlank());
@@ -104,10 +119,23 @@ public class CodexBizTaskProvider implements TaskQueryProvider {
                 userId, normalizedKeyword, workerId, directoryId, page, size, getProviderType());
     }
 
+    @Deprecated(since = "1.3.1", forRemoval = false)
+    @Override
+    public Object searchSessions(String userId, String keyword, String workerId,
+                                 String directoryId, int page, int size) {
+        return searchSessionPage(userId, keyword, workerId, directoryId, page, size);
+    }
+
+    @Override
+    public void cancelTaskDirect(String taskId, String userId) {
+        ensureTaskBelongsToProvider(taskId, userId);
+        codexTaskService.cancelTaskDirect(taskId, userId);
+    }
+
+    @Deprecated(since = "1.3.1", forRemoval = false)
     @Override
     public void cancelTask(String taskId, String userId) {
-        ensureTaskBelongsToProvider(taskId, userId);
-        codexTaskService.cancelTask(taskId, userId);
+        cancelTaskDirect(taskId, userId);
     }
 
     @Override

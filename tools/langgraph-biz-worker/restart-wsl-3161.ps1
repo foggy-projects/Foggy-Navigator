@@ -23,7 +23,11 @@ function Invoke-WslBash {
     param([string]$Script)
     $tempScript = New-TemporaryFile
     try {
-        Set-Content -Path $tempScript -Value $Script -Encoding ASCII
+        [System.IO.File]::WriteAllText(
+            $tempScript.FullName,
+            ($Script -replace "`r?`n", "`n"),
+            [System.Text.Encoding]::ASCII
+        )
         $tempScriptWsl = (& wsl -e wslpath -a $tempScript.FullName).Trim()
         if ($LASTEXITCODE -ne 0 -or -not $tempScriptWsl) {
             throw "Failed to resolve temporary script path in WSL"

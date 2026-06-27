@@ -191,7 +191,6 @@ exports/
 temp/
 cache/
 .foggy-attachments/
-/.agents/skills
 
 # Local agent notes
 CLAUDE.local.md
