@@ -2,6 +2,7 @@
 # Shell scripts
 *.sh text eol=lf
 *.bash text eol=lf
+tools/codex-agent-worker/release/bin/codex-worker text eol=lf
 
 # Python
 *.py text eol=lf
