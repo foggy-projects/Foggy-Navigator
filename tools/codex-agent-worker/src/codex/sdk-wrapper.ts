@@ -10,6 +10,7 @@ import { config } from '../config.js'
 import type { CodexApprovalPolicy, CodexSandboxMode, CodexWebSearchMode, ImageAttachment, TaskEntry, WorkerEvent } from '../models.js'
 import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
+import { recordSessionFileHintsForEventBestEffort } from '../persistence/session-file-hints.js'
 import { detectSpawnedCodexPid, snapshotCodexCliPids } from './processes.js'
 
 const moduleRequire = createRequire(import.meta.url)
@@ -501,7 +502,7 @@ export function mapThreadItemToEvents(
         task_id: taskId,
         session_id: threadId,
         tool: 'file_change',
-        input: { changes: item.changes },
+        input: { changes: item.changes, status: item.status },
         tool_use_id: item.id,
         seq: nextSeq(),
       })
@@ -586,6 +587,9 @@ export async function runQuery(
 ): Promise<void> {
   const broadcast = new EventBroadcast(taskId)
   taskBroadcasts.set(taskId, broadcast)
+  const recordFileHints = (event: WorkerEvent): void => {
+    recordSessionFileHintsForEventBestEffort(event, { cwd })
+  }
 
   const abortController = new AbortController()
   // 1.0.4 起：alias-first
@@ -756,6 +760,7 @@ export async function runQuery(
             if (we.type === 'assistant_text' && we.content && we.subtype !== 'reasoning') {
               lastAssistantText += we.content
             }
+            recordFileHints(we)
             broadcast.emit(we)
           }
           break
@@ -766,13 +771,14 @@ export async function runQuery(
           if (event.type === 'item.started') {
             if (event.item.type === 'command_execution') {
               startedToolUses.add(event.item.id)
-              emitWorkerEvent(
+              const workerEvent = emitWorkerEvent(
                 broadcast,
                 createToolUseEvent(taskId, resolvedThreadId, 'command_execution', { command: event.item.command }, event.item.id)
               )
+              recordFileHints(workerEvent)
             } else if (event.item.type === 'mcp_tool_call') {
               startedToolUses.add(event.item.id)
-              emitWorkerEvent(
+              const workerEvent = emitWorkerEvent(
                 broadcast,
                 createToolUseEvent(
                   taskId,
@@ -782,6 +788,7 @@ export async function runQuery(
                   event.item.id
                 )
               )
+              recordFileHints(workerEvent)
             }
           }
           break

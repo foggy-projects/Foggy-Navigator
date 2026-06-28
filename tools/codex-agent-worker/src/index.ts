@@ -7,6 +7,7 @@ import processesRouter from './routes/processes.js'
 import queryRouter from './routes/query.js'
 import tasksRouter from './routes/tasks.js'
 import sessionsRouter from './routes/sessions.js'
+import sessionFileHintsRouter from './routes/session-file-hints.js'
 import { ensureUserAgentsSkillsDir } from './startup/skills-link.js'
 
 const app = express()
@@ -22,6 +23,7 @@ app.use(processesRouter)
 app.use(queryRouter)
 app.use(tasksRouter)
 app.use(sessionsRouter)
+app.use(sessionFileHintsRouter)
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

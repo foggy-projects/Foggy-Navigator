@@ -14,6 +14,17 @@
       <slot name="header-extra" :pane-state="paneState" />
       <div class="pane-actions">
         <el-button
+          v-if="canShowFileHints"
+          size="small"
+          text
+          :loading="fileHintsLoading && fileHintsVisible"
+          :disabled="!paneState.task.value?.taskId"
+          title="查看本会话推断的改动文件"
+          @click.stop="handleShowFileHints"
+        >
+          改动文件
+        </el-button>
+        <el-button
           size="small"
           text
           :loading="copyingConversation"
@@ -121,6 +132,115 @@
         </template>
       </ChatPanel>
     </div>
+
+    <el-dialog
+      v-model="fileHintsVisible"
+      title="会话改动文件"
+      width="760px"
+      append-to-body
+    >
+      <el-alert
+        class="file-hints-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="文件线索基于 Codex 工具消息推断，可能不完整或不精确；cwd 外路径只展示，不能通过文件浏览器打开。"
+      />
+
+      <div v-if="fileHintsResponse" class="file-hints-meta">
+        <span v-if="fileHintsResponse.codexThreadId" :title="fileHintsResponse.codexThreadId">
+          Codex: {{ fileHintsResponse.codexThreadId }}
+        </span>
+        <span v-if="fileHintsResponse.cwd" :title="fileHintsResponse.cwd">
+          cwd: {{ fileHintsResponse.cwd }}
+        </span>
+      </div>
+
+      <el-table
+        v-loading="fileHintsLoading"
+        :data="fileHintFiles"
+        max-height="420"
+        size="small"
+        empty-text="暂无文件线索"
+      >
+        <el-table-column label="文件" min-width="300">
+          <template #default="{ row }">
+            <div class="file-path-cell">
+              <div class="file-path-main" :title="row.filePath">
+                {{ row.cwdRelativePath || row.filePath }}
+              </div>
+              <div v-if="row.cwdRelativePath && row.filePath !== row.cwdRelativePath" class="file-path-full">
+                {{ row.filePath }}
+              </div>
+              <div class="file-hint-tags">
+                <el-tag :type="fileScopeTagType(row.pathScope)" size="small" effect="plain">
+                  {{ fileScopeLabel(row.pathScope) }}
+                </el-tag>
+                <el-tag
+                  v-for="kind in row.changeKinds"
+                  :key="kind"
+                  size="small"
+                  effect="plain"
+                >
+                  {{ fileChangeKindLabel(kind) }}
+                </el-tag>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="来源" width="112">
+          <template #default="{ row }">
+            <div class="file-hint-source-tags">
+              <el-tag
+                v-for="source in row.sourceTools"
+                :key="source"
+                size="small"
+                effect="plain"
+              >
+                {{ fileSourceLabel(source) }}
+              </el-tag>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="可信度" width="80">
+          <template #default="{ row }">
+            <el-tag :type="fileConfidenceTagType(row.confidence)" size="small" effect="plain">
+              {{ fileConfidenceLabel(row.confidence) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="最近" width="118">
+          <template #default="{ row }">
+            <span class="file-hint-time">{{ formatFileHintTime(row.lastSeenAt) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="seenCount" label="次数" width="56" />
+        <el-table-column label="操作" width="108" fixed="right">
+          <template #default="{ row }">
+            <div class="file-hint-actions">
+              <el-button
+                size="small"
+                text
+                type="primary"
+                :disabled="!canOpenFileHint(row)"
+                :title="canOpenFileHint(row) ? '在文件浏览器打开' : '只有 cwd 内文件可打开'"
+                @click="handleOpenFileHint(row)"
+              >
+                打开
+              </el-button>
+              <el-button size="small" text @click="handleCopyFileHintPath(row)">
+                复制
+              </el-button>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <template #footer>
+        <el-button :loading="fileHintsLoading" @click="loadFileHints">刷新</el-button>
+        <el-button type="primary" @click="fileHintsVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -129,10 +249,13 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
 import type { ChatMessage, NavigatorUiAction } from '@foggy/chat'
 import { ElMessage } from 'element-plus'
+import { getCodexTaskFileHints } from '@/api/claudeWorker'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import { useInputMemory } from '@/composables/useInputMemory'
 import { copyToClipboard } from '@/utils/clipboard'
 import type { SkillInfo } from '@/types'
+import type { SessionFileHintFile, SessionFileHintsResponse } from '@/types/sessionFileHints'
+import { inferTaskWorkerBackend } from '@/utils/workerBackend'
 import SlashCommandInput from './SlashCommandInput.vue'
 import type { AgentItem } from './SlashCommandInput.vue'
 import { canEnableRewind, canShowContinuationInput } from './taskPaneResume'
@@ -164,6 +287,11 @@ const emit = defineEmits<{
 
 const paneInput = ref('')
 const copyingConversation = ref(false)
+const fileHintsVisible = ref(false)
+const fileHintsLoading = ref(false)
+const fileHintsResponse = ref<SessionFileHintsResponse | null>(null)
+const fileHintFiles = computed(() => fileHintsResponse.value?.files ?? [])
+const canShowFileHints = computed(() => inferTaskWorkerBackend(props.paneState.task.value) === 'OPENAI_CODEX')
 // --- Input memory: draft persistence + history for pane input ---
 const paneInputScope = computed(() => {
   const sid = props.paneState.task.value?.sessionId
@@ -279,6 +407,58 @@ function handleReconnect(taskId: string) {
   emit('reconnect', props.paneState.paneId, taskId)
 }
 
+async function handleShowFileHints() {
+  fileHintsVisible.value = true
+  await loadFileHints()
+}
+
+async function loadFileHints() {
+  const taskId = props.paneState.task.value?.taskId
+  if (!taskId) {
+    fileHintsResponse.value = null
+    return
+  }
+
+  fileHintsLoading.value = true
+  try {
+    fileHintsResponse.value = await getCodexTaskFileHints(taskId)
+  } catch (error) {
+    console.error('加载 Codex 文件线索失败:', error)
+    ElMessage.error('加载文件线索失败')
+  } finally {
+    fileHintsLoading.value = false
+  }
+}
+
+function canOpenFileHint(file: SessionFileHintFile): boolean {
+  const task = props.paneState.task.value
+  return !!task?.directoryId && !!task.workerId && file.openableInFileBrowser && !!file.cwdRelativePath
+}
+
+function handleOpenFileHint(file: SessionFileHintFile) {
+  const task = props.paneState.task.value
+  if (!task?.directoryId || !task.workerId || !file.cwdRelativePath || !file.openableInFileBrowser) {
+    ElMessage.warning('只有 cwd 内文件可在文件浏览器打开')
+    return
+  }
+
+  const params = new URLSearchParams({
+    directoryId: task.directoryId,
+    workerId: task.workerId,
+    filePath: file.cwdRelativePath.replace(/\\/g, '/'),
+  })
+  window.open(`${window.location.origin}/#/files?${params.toString()}`, '_blank', 'width=1400,height=900')
+}
+
+async function handleCopyFileHintPath(file: SessionFileHintFile) {
+  const ok = await copyToClipboard(file.filePath)
+  if (ok) {
+    ElMessage.success('已复制文件路径')
+  } else {
+    ElMessage.error('复制失败')
+  }
+}
+
 async function handleCopyConversation() {
   if (copyingConversation.value) return
 
@@ -366,6 +546,46 @@ function safeStringify(value: unknown): string {
 const rewindEnabled = computed(() => {
   return canEnableRewind(props.paneState.task.value)
 })
+
+function fileScopeLabel(scope: SessionFileHintFile['pathScope']): string {
+  if (scope === 'inside_cwd') return 'cwd 内'
+  if (scope === 'outside_cwd') return 'cwd 外'
+  return '未知'
+}
+
+function fileScopeTagType(scope: SessionFileHintFile['pathScope']) {
+  if (scope === 'inside_cwd') return 'success'
+  if (scope === 'outside_cwd') return 'warning'
+  return 'info'
+}
+
+function fileChangeKindLabel(kind: SessionFileHintFile['changeKinds'][number]): string {
+  if (kind === 'add') return '新增'
+  if (kind === 'delete') return '删除'
+  if (kind === 'update') return '修改'
+  return '未知'
+}
+
+function fileSourceLabel(source: SessionFileHintFile['sourceTools'][number]): string {
+  if (source === 'file_change') return '文件工具'
+  if (source === 'command_execution') return '命令'
+  return source
+}
+
+function fileConfidenceLabel(confidence: SessionFileHintFile['confidence']): string {
+  return confidence === 'high' ? '较高' : '较低'
+}
+
+function fileConfidenceTagType(confidence: SessionFileHintFile['confidence']) {
+  return confidence === 'high' ? 'success' : 'warning'
+}
+
+function formatFileHintTime(value?: string): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
 
 function truncate(text: string, maxLen: number) {
   return text.length > maxLen ? text.substring(0, maxLen) + '...' : text
@@ -533,6 +753,71 @@ function truncate(text: string, maxLen: number) {
 
 .pane-focused {
   box-shadow: 0 0 0 2px #409eff;
+}
+
+.file-hints-alert {
+  margin-bottom: 12px;
+}
+
+.file-hints-meta {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #606266;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.file-hints-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-path-cell {
+  min-width: 0;
+}
+
+.file-path-main,
+.file-path-full {
+  font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  word-break: break-all;
+}
+
+.file-path-main {
+  color: #303133;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.file-path-full {
+  margin-top: 2px;
+  color: #909399;
+  font-size: 11px;
+}
+
+.file-hint-tags,
+.file-hint-source-tags,
+.file-hint-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.file-hint-tags,
+.file-hint-source-tags {
+  flex-wrap: wrap;
+}
+
+.file-hint-tags {
+  margin-top: 6px;
+}
+
+.file-hint-time {
+  color: #606266;
+  font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 12px;
 }
 
 </style>

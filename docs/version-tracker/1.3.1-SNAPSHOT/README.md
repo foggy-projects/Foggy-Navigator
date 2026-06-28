@@ -4,11 +4,11 @@
 
 - doc_type: version-index
 - intended_for: execution-agent | reviewer | signoff-owner
-- purpose: 跟踪 `1.3.1-SNAPSHOT` 版本内的 Java 侧架构风险治理、实现进度、测试证据与验收状态。
+- purpose: 跟踪 `1.3.1-SNAPSHOT` 版本内的 Java 侧架构风险治理、Codex 会话体验优化、实现进度、测试证据与验收状态。
 
 ## 版本目标
 
-本版本优先处理 Java 侧架构 review 暴露出的高风险维护点，重点围绕统一任务分发、Provider 路由、Provider 私有状态、SSE 部署边界和运行配置治理。
+本版本优先处理 Java 侧架构 review 暴露出的高风险维护点，重点围绕统一任务分发、Provider 路由、Provider 私有状态、SSE 部署边界和运行配置治理；同时承接少量与 Codex 会话工作流直接相关的体验优化事项。
 
 ## 文档清单
 
@@ -16,6 +16,10 @@
 - [quality/BUG-145-implementation-quality.md](./quality/BUG-145-implementation-quality.md) - BUG-145 实现质量门记录
 - [coverage/BUG-145-coverage-audit.md](./coverage/BUG-145-coverage-audit.md) - BUG-145 测试覆盖审计记录
 - [acceptance/BUG-145-bizworker-sidecar-permission-recovery-acceptance.md](./acceptance/BUG-145-bizworker-sidecar-permission-recovery-acceptance.md) - BUG-145 验收签收记录
+- [workitems/OPT-003-codex-session-file-change-hints.md](./workitems/OPT-003-codex-session-file-change-hints.md) - Codex 会话文件变更线索记录与 TaskPane 弹窗展示实现记录
+- [quality/OPT-003-implementation-quality.md](./quality/OPT-003-implementation-quality.md) - OPT-003 实现质量门记录
+- [coverage/OPT-003-coverage-audit.md](./coverage/OPT-003-coverage-audit.md) - OPT-003 测试覆盖审计记录
+- [acceptance/OPT-003-codex-session-file-change-hints-acceptance.md](./acceptance/OPT-003-codex-session-file-change-hints-acceptance.md) - OPT-003 验收签收记录
 - [workitems/OPT-001-java-architecture-risk-governance.md](./workitems/OPT-001-java-architecture-risk-governance.md) - Java 侧架构风险治理与核心链路优化计划
 - [workitems/OPT-001-java-method-responsibility-inventory.md](./workitems/OPT-001-java-method-responsibility-inventory.md) - OPT-001 Stage 0 方法级职责清单与拆分输入
 - [workitems/OPT-001-stage3-provider-state-schema.md](./workitems/OPT-001-stage3-provider-state-schema.md) - OPT-001 Stage 3 Provider 状态 schema 化执行计划

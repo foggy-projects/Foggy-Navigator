@@ -103,9 +103,24 @@ class CodexWorkerClientTest {
         }
     }
 
+    @Test
+    void getSessionFileHints_sendsSessionAndDateQueryParams() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            Map<String, Object> response = client.getSessionFileHints(
+                    "thread-1", 7, "2026-06-01", "2026-06-28")
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("thread-1", response.get("session_id"));
+            assertEquals("session_id=thread-1&days=7&from=2026-06-01&to=2026-06-28", server.query());
+        }
+    }
+
     private static class CaptureServer implements AutoCloseable {
         private final HttpServer server;
         private final AtomicReference<String> body = new AtomicReference<>();
+        private final AtomicReference<String> query = new AtomicReference<>();
 
         private CaptureServer(HttpServer server) {
             this.server = server;
@@ -122,6 +137,14 @@ class CodexWorkerClientTest {
                 exchange.getResponseBody().write(response);
                 exchange.close();
             });
+            server.createContext("/api/v1/session-file-hints", exchange -> {
+                capture.query.set(exchange.getRequestURI().getRawQuery());
+                byte[] response = "{\"session_id\":\"thread-1\",\"files\":[],\"total\":0}".getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+            });
             server.start();
             return capture;
         }
@@ -132,6 +155,10 @@ class CodexWorkerClientTest {
 
         String body() {
             return body.get();
+        }
+
+        String query() {
+            return query.get();
         }
 
         @Override

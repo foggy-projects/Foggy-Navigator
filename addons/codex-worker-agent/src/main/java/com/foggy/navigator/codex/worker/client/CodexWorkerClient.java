@@ -196,6 +196,33 @@ public class CodexWorkerClient {
     }
 
     /**
+     * 查询 Worker 本地记录的 Codex session 文件改动线索。
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getSessionFileHints(String sessionId, Integer days, String from, String to) {
+        return webClient.get()
+                .uri(uriBuilder -> {
+                    var builder = uriBuilder
+                            .path("/api/v1/session-file-hints")
+                            .queryParam("session_id", sessionId);
+                    if (days != null) {
+                        builder.queryParam("days", days);
+                    }
+                    if (from != null && !from.isBlank()) {
+                        builder.queryParam("from", from);
+                    }
+                    if (to != null && !to.isBlank()) {
+                        builder.queryParam("to", to);
+                    }
+                    return builder.build();
+                })
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .timeout(Duration.ofSeconds(10));
+    }
+
+    /**
      * 列出 Worker 上的 Codex CLI 进程
      */
     @SuppressWarnings("unchecked")
