@@ -21,6 +21,7 @@ import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
@@ -158,6 +159,63 @@ class CodexTaskServiceTest {
         DispatchTaskDTO task = assertInstanceOf(DispatchTaskDTO.class, content.get(0));
         assertEquals("task-running", task.getTaskId());
         assertEquals("session-running", task.getSessionId());
+    }
+
+    @Test
+    void codexBizProviderFiltersLookupListingAndSearchAwayFromPlainCodexTasks() {
+        CodexTaskEntity plain = createTask(
+                "task-plain", "session-plain", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 3, 24, 22, 0)
+        );
+        plain.setProviderType("codex-worker");
+        plain.setResultText("plain result");
+
+        CodexTaskEntity biz = createTask(
+                "task-biz", "session-biz", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 3, 24, 23, 0)
+        );
+        biz.setProviderType("codex-biz-worker");
+        biz.setPrompt("actor decision");
+        biz.setResultText("biz result");
+
+        when(taskRepository.findByTaskId("task-plain")).thenReturn(Optional.of(plain));
+        when(taskRepository.findByTaskId("task-biz")).thenReturn(Optional.of(biz));
+        when(taskRepository.findBySessionId("session-mixed")).thenReturn(List.of(plain, biz));
+        when(taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc("user-1",
+                List.of("RUNNING", "AWAITING_PERMISSION"))).thenReturn(List.of(biz, plain));
+        when(taskRepository.findByUserIdOrderByCreatedAtDesc("user-1")).thenReturn(List.of(biz, plain));
+        when(taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc("dir-1", "user-1"))
+                .thenReturn(List.of(biz, plain));
+
+        assertTrue(service.getTaskByIdForProvider("task-plain", "codex-biz-worker").isEmpty());
+        DispatchTaskDTO bizLookup = service.getTaskByIdForProvider("task-biz", "codex-biz-worker").orElseThrow();
+        assertEquals("codex-biz-worker", bizLookup.getProviderType());
+
+        List<DispatchTaskDTO> sessionTasks = service.listTasksBySessionForProvider("session-mixed", "codex-biz-worker");
+        assertEquals(1, sessionTasks.size());
+        assertEquals("task-biz", sessionTasks.get(0).getTaskId());
+
+        List<DispatchTaskDTO> activeTasks = service.listActiveDispatchTasksForProvider("user-1", "codex-biz-worker");
+        assertEquals(1, activeTasks.size());
+        assertEquals("task-biz", activeTasks.get(0).getTaskId());
+
+        TaskPageResult page = service.listTasksPagedForProvider("user-1", 0, 20, null, "codex-biz-worker");
+        assertEquals(1L, page.totalSessions());
+        DispatchTaskDTO pagedTask = assertInstanceOf(DispatchTaskDTO.class, page.content().get(0));
+        assertEquals("task-biz", pagedTask.getTaskId());
+
+        TaskPageResult directoryPage = service.listTasksByDirectoryPagedForProvider(
+                "user-1", "dir-1", 0, 20, null, "codex-biz-worker");
+        assertEquals(1L, directoryPage.totalSessions());
+        DispatchTaskDTO directoryTask = assertInstanceOf(DispatchTaskDTO.class, directoryPage.content().get(0));
+        assertEquals("task-biz", directoryTask.getTaskId());
+
+        TaskSearchResult search = service.searchSessionsForProvider(
+                "user-1", "actor", null, null, 0, 20, "codex-biz-worker");
+        assertEquals(1L, search.total());
+        Map<?, ?> result = assertInstanceOf(Map.class, search.results().get(0));
+        assertEquals("session-biz", result.get("sessionId"));
+        assertEquals("task-biz", result.get("latestTaskId"));
     }
 
     @Test
@@ -395,6 +453,48 @@ class CodexTaskServiceTest {
                 "session-biz-1".equals(entity.getId())
                         && "codex-biz-worker".equals(entity.getProviderType())
                         && "worker-1".equals(entity.getCurrentWorkerId())
+        ));
+    }
+
+    @Test
+    void createTaskDirect_forwardsSnakeCaseCodexBizAliasesOnlyForCodexBizProvider() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+
+        Map<String, Object> outputSchema = Map.of("type", "object");
+        Map<String, Object> codexConfig = Map.of("tool_output_token_limit", 4096);
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("providerType", "codex-biz-worker");
+        params.put("workerId", "worker-1");
+        params.put("prompt", "hello");
+        params.put("codex_home_key", "tenant/world-sim/scenario-1/actor-2");
+        params.put("developer_instructions", "Return valid JSON.");
+        params.put("output_schema", outputSchema);
+        params.put("codex_config", codexConfig);
+        params.put("sandbox_mode", "workspace-write");
+        params.put("approval_policy", "never");
+        params.put("network_access_enabled", "false");
+        params.put("web_search_mode", "disabled");
+        params.put("additional_directories", List.of("D:/shared", " "));
+
+        DispatchTaskDTO result = service.createTaskDirect(params, "user-1", "tenant-1");
+
+        assertEquals("codex-biz-worker", result.getProviderType());
+        verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
+                "codex-biz-worker".equals(event.getProviderType())
+                        && "tenant/world-sim/scenario-1/actor-2".equals(event.getProviderConfigString("codexHomeKey"))
+                        && "Return valid JSON.".equals(event.getProviderConfigString("developerInstructions"))
+                        && outputSchema.equals(event.getProviderConfigValue("outputSchema"))
+                        && codexConfig.equals(event.getProviderConfigValue("codexConfig"))
+                        && "workspace-write".equals(event.getProviderConfigString("sandboxMode"))
+                        && "never".equals(event.getProviderConfigString("approvalPolicy"))
+                        && Boolean.FALSE.equals(event.getProviderConfigValue("networkAccessEnabled"))
+                        && "disabled".equals(event.getProviderConfigString("webSearchMode"))
+                        && List.of("D:/shared").equals(event.getProviderConfigValue("additionalDirectories"))
         ));
     }
 

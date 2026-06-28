@@ -30,7 +30,7 @@ public class SessionBindingService {
      *
      * @param sessionId       平台会话 ID
      * @param agentId         本次请求的目标 Agent ID
-     * @param providerType    Provider 类型（"claude-worker" / "codex-worker"）
+     * @param providerType    Provider 类型（如 "claude-worker" / "codex-worker" / "codex-biz-worker"）
      * @param bindingSource   绑定来源（"EXPLICIT_AGENT" / "LEGACY_MODEL_CONFIG" / "RESTORED"）
      * @return 实际绑定的 agentId
      * @throws SessionAgentBoundMismatchException 如果检测到跨 Agent 漂移

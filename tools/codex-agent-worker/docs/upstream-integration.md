@@ -109,11 +109,19 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 | `model` | `string` | 否 | 模型名，支持附带思考等级后缀 |
 | `max_turns` | `number` | 否 | 限制最多完成多少个 turn，必须是正整数 |
 | `api_key` | `string` | 否 | 本次请求覆盖默认鉴权 |
+| `base_url` | `string` | 否 | 本次请求覆盖 OpenAI compatible base URL |
+| `env_vars` | `object` | 否 | 传给 Codex 子进程的额外环境变量 |
+| `images` | `array` | 否 | Base64 图片附件，历史字段名，也可承载非图片附件 |
+| `attachments` | `array` | 否 | 上游已上传附件元数据和 URL |
 | `codex_home_key` | `string` | 否 | 逻辑账号/actor key；worker 会在 `CODEX_BIZ_HOME_ROOT` 下解析独立 `CODEX_HOME` |
+| `developer_instructions` | `string` | 否 | Codex SDK developer instructions |
+| `output_schema` | `object` | 否 | Codex SDK turn output schema |
+| `codex_config` | `object` | 否 | 额外 Codex SDK config override |
 | `sandbox_mode` | `string` | 否 | 覆盖 Codex SDK sandbox mode |
 | `approval_policy` | `string` | 否 | 覆盖 Codex SDK approval policy |
 | `network_access_enabled` | `boolean` | 否 | 是否允许网络访问 |
 | `web_search_mode` | `string` | 否 | 覆盖 Codex web search mode |
+| `additional_directories` | `array` | 否 | Codex SDK additional directories，仍受 `CODEX_ALLOWED_CWDS` 约束 |
 
 最小请求：
 
@@ -138,6 +146,14 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 
 当 Navigator 通过 `providerType=codex-biz-worker` 调用本 worker 时，通常会传入 `codex_home_key`，让不同 actor 使用独立 durable Codex home。worker 侧必须配置绝对路径 `CODEX_BIZ_HOME_ROOT`，否则带 `codex_home_key` 的请求会被拒绝。
 
+稳定错误：
+
+```json
+{
+  "error": "CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided"
+}
+```
+
 本机 WSL sim 推荐配置：
 
 ```bash
@@ -157,11 +173,29 @@ CODEX_ALLOWED_CWDS=/mnt/d/foggy-projects
   "sandbox_mode": "workspace-write",
   "approval_policy": "never",
   "network_access_enabled": false,
-  "web_search_mode": "disabled"
+  "web_search_mode": "disabled",
+  "developer_instructions": "Return only valid JSON.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "decision": { "type": "string" }
+    },
+    "required": ["decision"]
+  },
+  "codex_config": {
+    "tool_output_token_limit": 4096
+  },
+  "additional_directories": ["/mnt/d/world-sim/shared"]
 }
 ```
 
-`codex_home_key` 是 worker 本地 scoped home key；上游业务系统不应直接拼接 `CODEX_HOME` 路径。修改 `CODEX_BIZ_HOME_ROOT` 后需要重启 worker 进程。
+`codex_home_key` 是 worker 本地 scoped home key；上游业务系统不应直接拼接 `CODEX_HOME` 路径。修改 `CODEX_BIZ_HOME_ROOT` 后需要重启 worker 进程。`GET /health` 只返回是否配置了 root，不返回真实路径。
+
+当请求没有显式 `api_key`，且 worker 也没有有效 `OPENAI_API_KEY` 时，scoped home 会使用 worker 默认 Codex home 中的 `auth.json` 作为登录态种子。worker 只复制 `auth.json`，不会在日志、health 或 SSE 事件中输出该文件内容或真实 scoped home 路径。
+
+为避免过期环境变量污染 Codex CLI，worker 会在启动 Codex 子进程前同步处理 `OPENAI_API_KEY` 和 `CODEX_API_KEY`：存在有效 key 时写入有效值；不存在有效 key 时从子进程环境中移除这两个变量，让 Codex login/auth.json 路径生效。
+
+Codex Biz route 在 Navigator 侧使用 `providerType=codex-biz-worker`。它可以复用 `workerBackend=OPENAI_CODEX` 的 `modelConfigId`，但不会暴露为独立可发现 Agent，也不会走 LangGraph BizWorker root-skill 路由。
 
 ### 3.2 返回方式
 
@@ -488,35 +522,29 @@ POST /api/v1/tasks/:taskId/abort
 - 模型选择
 - 思考等级设置
 - API Key 或本机订阅登录
-
-### 9.2 已固定写死的行为
-
-当前 worker 内部固定传给 SDK：
-
-- `skipGitRepoCheck: true`
-- `sandboxMode: danger-full-access`
-
-也就是说，上游当前不能按请求动态切换：
-
-- sandbox 模式
-- approval policy
-- web search
-- network access
+- scoped `CODEX_HOME` (`codex_home_key` + `CODEX_BIZ_HOME_ROOT`)
+- developer instructions
+- output schema
+- Codex config override
+- sandbox mode / approval policy / network access / web search mode
 - additional directories
+- 图片输入和 URL 附件元数据透传
 
-### 9.3 SDK 有但当前 worker 未暴露
+### 9.2 默认行为
 
-虽然 Codex SDK 本身还有更多能力，但当前 HTTP API 未开放这些字段：
+当请求未显式传入相关字段时，worker 侧保持 Codex SDK 默认行为或平台默认策略。业务侧需要强约束时，应由 Navigator 的 `codex-biz-worker` route 在请求中显式带上：
 
-- `approvalPolicy`
-- `networkAccessEnabled`
-- `webSearchMode`
-- `webSearchEnabled`
-- `additionalDirectories`
-- `outputSchema`
-- 图片输入
+- `sandbox_mode`
+- `approval_policy`
+- `network_access_enabled`
+- `web_search_mode`
+- `additional_directories`
 
-如果上游后续需要这些能力，需要扩展 `QueryRequest` 和 `runQuery()` 的透传参数。
+### 9.3 SDK 有但当前 worker 未承诺稳定契约
+
+虽然 Codex SDK 本身还有更多能力，但不在上表中的 SDK 实验字段不属于当前 HTTP 稳定契约。上游不要依赖 worker 私有实现细节或 SDK 内部字段名。
+
+如果上游后续需要新的 SDK 字段，应先扩展 `QueryRequest`、校验逻辑和回归测试，再纳入本文档。
 
 ## 10. 当前限制与注意事项
 
@@ -545,12 +573,16 @@ Codex SDK 当前没有直接暴露 `max_turns` HTTP 参数，因此这里的限�
 
 - `codex_auth_configured`
 - `codex_auth_mode`
+- `codex_biz_home_root_configured`
+- `codex_biz_scoped_home_ready`
 
 其中 `codex_auth_mode` 可能为：
 
 - `api_key`
 - `codex_login`
 - `none`
+
+`codex_biz_home_root_configured` 和 `codex_biz_scoped_home_ready` 只表示 `CODEX_BIZ_HOME_ROOT` 是否已配置，不返回真实路径。
 
 ### 10.3 会话列表不是持久化数据库
 
@@ -611,3 +643,37 @@ curl -N -X POST http://localhost:3051/api/v1/query \
 ```bash
 curl -N "http://localhost:3051/api/v1/tasks/44beb057-c03b-4aa1-aabf-fffa479114c8/subscribe?ack_seq=2"
 ```
+
+### 12.5 Codex Biz readiness
+
+```bash
+curl http://localhost:3051/health
+```
+
+期望看到：
+
+```json
+{
+  "status": "ok",
+  "codex_biz_home_root_configured": true,
+  "codex_biz_scoped_home_ready": true
+}
+```
+
+本地 smoke helper：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3051
+```
+
+执行真实 Codex actor A/B 隔离与 resume 验证：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3051 -Cwd D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev -RunLiveQueries
+```
+
+预期结果：
+
+- actor A 和 actor B 返回不同 `session_id`
+- actor A resume 返回与 actor A 首次请求相同的 `session_id`
+- 输出只包含 task/session/model/turn/event 计数，不包含 token、auth 文件内容或 scoped home 真实路径

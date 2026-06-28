@@ -7,11 +7,14 @@ import type { ThreadItem } from '@openai/codex-sdk'
 import {
   buildCodexInput,
   buildCodexProcessEnv,
+  buildCodexTaskEnv,
   getRunningTaskCount,
   mapThreadItemToEvents,
   parseModelString,
+  resolveDefaultCodexHome,
   resolveCodexHome,
   resolveModelAlias,
+  seedCodexHomeAuthIfAvailable,
   saveAttachments,
   taskRegistry,
   shouldAbortBeforeTurnStart,
@@ -207,6 +210,52 @@ test('buildCodexProcessEnv preserves existing Windows variables and avoids dupli
   assert.equal(env.Path, ['D:\\codex\\vendor\\path', 'C:\\Tools'].join(';'))
 })
 
+test('buildCodexTaskEnv removes stale OpenAI settings when no effective values are present', () => {
+  const env = buildCodexTaskEnv(
+    {
+      Path: 'C:\\Tools',
+      OpenAI_Api_Key: 'stale-key',
+      CODEX_API_KEY: 'stale-codex-key',
+      OPENAI_BASE_URL: 'https://stale.example.com',
+    },
+    {
+      taskId: 'task-1',
+      codexHome: 'D:\\codex-homes\\actor-a',
+    }
+  )
+
+  assert.equal(env.OpenAI_Api_Key, undefined)
+  assert.equal(env.OPENAI_API_KEY, undefined)
+  assert.equal(env.CODEX_API_KEY, undefined)
+  assert.equal(env.OPENAI_BASE_URL, undefined)
+  assert.equal(env.CODEX_HOME, 'D:\\codex-homes\\actor-a')
+  assert.equal(env.FOGGY_CODEX_TASK_ID, 'task-1')
+})
+
+test('buildCodexTaskEnv pins effective OpenAI settings into child env', () => {
+  const env = buildCodexTaskEnv(
+    {
+      OPENAI_API_KEY: 'stale-key',
+      Codex_Api_Key: 'stale-codex-key',
+      OpenAI_Base_Url: 'https://stale.example.com',
+    },
+    {
+      effectiveApiKey: 'sk-effective',
+      effectiveBaseUrl: 'https://api.example.com/v1',
+      taskId: 'task-2',
+      threadId: 'thread-2',
+    }
+  )
+
+  assert.equal(env.OPENAI_API_KEY, 'sk-effective')
+  assert.equal(env.Codex_Api_Key, undefined)
+  assert.equal(env.CODEX_API_KEY, 'sk-effective')
+  assert.equal(env.OpenAI_Base_Url, undefined)
+  assert.equal(env.OPENAI_BASE_URL, 'https://api.example.com/v1')
+  assert.equal(env.FOGGY_CODEX_TASK_ID, 'task-2')
+  assert.equal(env.FOGGY_CODEX_THREAD_ID, 'thread-2')
+})
+
 test('saveAttachments writes image and non-image attachments separately', async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-images-'))
   const saved = await saveAttachments('task-images', cwd, [
@@ -260,4 +309,33 @@ test('resolveCodexHome derives stable sanitized paths under configured root', ()
 test('resolveCodexHome requires CODEX_BIZ_HOME_ROOT for scoped homes', () => {
   assert.throws(() => resolveCodexHome('actor-1', ''), /CODEX_BIZ_HOME_ROOT is required/)
   assert.equal(resolveCodexHome(undefined, ''), undefined)
+})
+
+test('resolveDefaultCodexHome uses CODEX_HOME or user home fallback', () => {
+  const configuredHome = path.join(os.tmpdir(), 'custom-codex')
+  const userHome = path.join(os.tmpdir(), 'worker-home')
+  assert.equal(resolveDefaultCodexHome({ CODEX_HOME: configuredHome }, userHome), path.resolve(configuredHome))
+  assert.equal(resolveDefaultCodexHome({}, userHome), path.resolve(path.join(userHome, '.codex')))
+})
+
+test('seedCodexHomeAuthIfAvailable copies auth into scoped home', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-auth-seed-'))
+  const sourceHome = path.join(root, 'source')
+  const targetHome = path.join(root, 'target')
+  await fs.mkdir(sourceHome, { recursive: true })
+  await fs.writeFile(path.join(sourceHome, 'auth.json'), '{"token":"fake"}')
+
+  const copied = await seedCodexHomeAuthIfAvailable(targetHome, sourceHome)
+
+  assert.equal(copied, true)
+  assert.equal(await fs.readFile(path.join(targetHome, 'auth.json'), 'utf8'), '{"token":"fake"}')
+})
+
+test('seedCodexHomeAuthIfAvailable skips when source auth is unavailable or target equals source', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-auth-seed-skip-'))
+  const sourceHome = path.join(root, 'source')
+  await fs.mkdir(sourceHome, { recursive: true })
+
+  assert.equal(await seedCodexHomeAuthIfAvailable(path.join(root, 'target'), sourceHome), false)
+  assert.equal(await seedCodexHomeAuthIfAvailable(sourceHome, sourceHome), false)
 })

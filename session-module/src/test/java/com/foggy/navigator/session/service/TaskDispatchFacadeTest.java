@@ -359,6 +359,100 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_usesExplicitCodexBizProviderFromDirectoryDefaultCodexModelConfig() {
+        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(codexProvider, codexBizProvider));
+        ReflectionTestUtils.setField(facade, "workingDirectoryRepository", workingDirectoryRepository);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .agentId("directory#dir-codex-biz")
+                .providerType("codex-biz-worker")
+                .workerId("worker-1")
+                .prompt("run directory actor task")
+                .metadata(Map.of("codexHomeKey", "tenant/world-sim/scenario-1/actor-1"))
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("WORLD_SIM")
+                .build();
+
+        WorkingDirectoryEntity directory = directoryEntity("dir-codex-biz", "World Sim");
+        directory.setDefaultModelConfigId("cfg-codex");
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("OPENAI_CODEX");
+
+        DispatchTaskDTO directTask = DispatchTaskDTO.builder()
+                .taskId("task-codex-biz-directory-1")
+                .providerType("codex-biz-worker")
+                .workerId("worker-1")
+                .directoryId("dir-codex-biz")
+                .modelConfigId("cfg-codex")
+                .build();
+
+        when(codexProvider.getProviderType()).thenReturn("codex-worker");
+        when(codexBizProvider.getProviderType()).thenReturn("codex-biz-worker");
+        when(workingDirectoryRepository.findByDirectoryId("dir-codex-biz")).thenReturn(Optional.of(directory));
+        when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(modelConfig));
+        when(codexBizProvider.createTaskDirect(any(), eq("user-1"), eq("tenant-1")))
+                .thenReturn(directTask);
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("task-codex-biz-directory-1", result.getTaskId());
+        assertEquals("codex-biz-worker", result.getProviderType());
+        verify(codexBizProvider).createTaskDirect(
+                argThat(params -> "codex-biz-worker".equals(params.get("providerType"))
+                        && "tenant/world-sim/scenario-1/actor-1".equals(params.get("codexHomeKey"))
+                        && "cfg-codex".equals(params.get("modelConfigId"))
+                        && "dir-codex-biz".equals(params.get("directoryId"))),
+                eq("user-1"),
+                eq("tenant-1"));
+        verify(codexProvider, never()).createTaskDirect(any(), anyString(), anyString());
+        verifyNoInteractions(agentResolver, bindingService, agent);
+    }
+
+    @Test
+    void createTask_rejectsExplicitCodexBizProviderWithNonCodexModelConfig() {
+        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(codexProvider, codexBizProvider));
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .providerType("codex-biz-worker")
+                .workerId("worker-1")
+                .directoryId("dir-2")
+                .prompt("run actor task")
+                .modelConfigId("cfg-claude")
+                .metadata(Map.of("codexHomeKey", "tenant/world-sim/scenario-1/actor-1"))
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("WORLD_SIM")
+                .build();
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("CLAUDE_CODE");
+
+        when(codexProvider.getProviderType()).thenReturn("codex-worker");
+        when(codexBizProvider.getProviderType()).thenReturn("codex-biz-worker");
+        when(llmModelManager.getModelConfig("cfg-claude")).thenReturn(Optional.of(modelConfig));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> facade.createTask(request, context));
+
+        assertTrue(error.getMessage().contains("cfg-claude"));
+        assertTrue(error.getMessage().contains("claude-worker"));
+        assertTrue(error.getMessage().contains("codex-biz-worker"));
+        verify(codexBizProvider, never()).createTaskDirect(any(), anyString(), anyString());
+        verify(codexProvider, never()).createTaskDirect(any(), anyString(), anyString());
+        verifyNoInteractions(agentResolver, bindingService, agent);
+    }
+
+    @Test
     void createTask_usesDirectProviderRouteWhenModelConfigTargetsGemini() {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .workerId("worker-gemini-1")
@@ -1592,6 +1686,70 @@ class TaskDispatchFacadeTest {
                         && "tenant/world-sim/scenario-1/actor-1".equals(params.get("codexHomeKey"))
                         && "cfg-codex".equals(params.get("modelConfigId"))
                         && "session-legacy-codex-biz".equals(params.get("sessionId"))));
+        verify(codexProvider, never()).resumeTask(anyString(), anyString(), any());
+        verifyNoInteractions(agentResolver);
+    }
+
+    @Test
+    void resumeTask_keepsCodexBizMetadataWhenSessionIsBoundToCodexBizProvider() {
+        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(codexProvider, codexBizProvider));
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("codex_home_key", "tenant/world-sim/scenario-1/actor-2");
+        metadata.put("developer_instructions", "Return only valid JSON.");
+        metadata.put("codex_policy", Map.of(
+                "sandbox_mode", "workspace-write",
+                "approval_policy", "never",
+                "network_access_enabled", false,
+                "web_search_mode", "disabled"));
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .providerType("codex-worker")
+                .workerId("worker-1")
+                .sessionId("session-codex-biz-bound")
+                .prompt("continue actor task")
+                .modelConfigId("cfg-codex")
+                .metadata(metadata)
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .sessionId("session-codex-biz-bound")
+                .requestSource("WORLD_SIM")
+                .build();
+
+        SessionEntity session = new SessionEntity();
+        session.setId("session-codex-biz-bound");
+        session.setUserId("user-1");
+        session.setProviderType("codex-biz-worker");
+        when(sessionRepository.findById("session-codex-biz-bound")).thenReturn(Optional.of(session));
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("OPENAI_CODEX");
+
+        DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
+                .taskId("task-codex-biz-bound")
+                .providerType("codex-biz-worker")
+                .sessionId("session-codex-biz-bound")
+                .build();
+
+        when(codexProvider.getProviderType()).thenReturn("codex-worker");
+        when(codexBizProvider.getProviderType()).thenReturn("codex-biz-worker");
+        when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(modelConfig));
+        when(codexBizProvider.resumeTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(resumedTask);
+
+        DispatchTaskDTO result = facade.resumeTask(request, context);
+
+        assertEquals("task-codex-biz-bound", result.getTaskId());
+        assertEquals("codex-biz-worker", result.getProviderType());
+        verify(codexBizProvider).resumeTask(eq("user-1"), eq("tenant-1"),
+                argThat(params -> "codex-biz-worker".equals(params.get("providerType"))
+                        && "tenant/world-sim/scenario-1/actor-2".equals(params.get("codex_home_key"))
+                        && "Return only valid JSON.".equals(params.get("developer_instructions"))
+                        && metadata.get("codex_policy").equals(params.get("codex_policy"))
+                        && "cfg-codex".equals(params.get("modelConfigId"))));
         verify(codexProvider, never()).resumeTask(anyString(), anyString(), any());
         verifyNoInteractions(agentResolver);
     }

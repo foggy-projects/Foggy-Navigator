@@ -1,7 +1,13 @@
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
-import { runQuery, taskBroadcasts, cleanupOldTasks, getRunningTaskCount } from '../codex/sdk-wrapper.js'
+import {
+  CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR,
+  runQuery,
+  taskBroadcasts,
+  cleanupOldTasks,
+  getRunningTaskCount,
+} from '../codex/sdk-wrapper.js'
 import type { WorkerEvent } from '../models.js'
 import { validateQueryRequest } from '../validation/query.js'
 
@@ -46,8 +52,8 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
   }
 
   if (body.codex_home_key && !config.codexBizHomeRoot) {
-    res.status(403).json({ error: 'CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided' })
-      return
+    res.status(403).json({ error: CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR })
+    return
   }
 
   const runningTasks = getRunningTaskCount()

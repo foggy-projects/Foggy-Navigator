@@ -36,6 +36,8 @@ export const taskRegistry = new Map<string, TaskEntry>()
  */
 export const taskBroadcasts = new Map<string, EventBroadcast>()
 
+export const CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR = 'CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided'
+
 /**
  * 解析 model:reasoning_level 后缀
  * 如 "gpt-5.4:high" → { model: "gpt-5.4", reasoningLevel: "high" }
@@ -208,13 +210,53 @@ export function buildCodexProcessEnv(
   return env
 }
 
+function deleteEnvKeyCaseInsensitive(env: NodeJS.ProcessEnv, key: string): void {
+  const normalizedKey = key.toUpperCase()
+  for (const existingKey of Object.keys(env)) {
+    if (existingKey.toUpperCase() === normalizedKey) {
+      delete env[existingKey]
+    }
+  }
+}
+
+function setEnvKeyCaseInsensitive(env: NodeJS.ProcessEnv, key: string, value: string | undefined): void {
+  deleteEnvKeyCaseInsensitive(env, key)
+  if (value !== undefined && value !== '') {
+    env[key] = value
+  }
+}
+
+export function buildCodexTaskEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  options: {
+    effectiveApiKey?: string
+    effectiveBaseUrl?: string
+    codexHome?: string
+    taskId: string
+    threadId?: string
+  }
+): Record<string, string> {
+  const envSource: NodeJS.ProcessEnv = { ...baseEnv }
+  setEnvKeyCaseInsensitive(envSource, 'OPENAI_API_KEY', options.effectiveApiKey)
+  setEnvKeyCaseInsensitive(envSource, 'CODEX_API_KEY', options.effectiveApiKey)
+  setEnvKeyCaseInsensitive(envSource, 'OPENAI_BASE_URL', options.effectiveBaseUrl)
+  if (options.codexHome) {
+    envSource.CODEX_HOME = options.codexHome
+  }
+  envSource.FOGGY_CODEX_TASK_ID = options.taskId
+  if (options.threadId) {
+    envSource.FOGGY_CODEX_THREAD_ID = options.threadId
+  }
+  return buildCodexProcessEnv(envSource)
+}
+
 export function resolveCodexHome(codexHomeKey: string | undefined, codexBizHomeRoot = config.codexBizHomeRoot): string | undefined {
   const key = codexHomeKey?.trim()
   if (!key) {
     return undefined
   }
   if (!codexBizHomeRoot) {
-    throw new Error('CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided')
+    throw new Error(CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR)
   }
   const safePrefix = key
     .replace(/[^A-Za-z0-9._-]+/g, '_')
@@ -222,6 +264,34 @@ export function resolveCodexHome(codexHomeKey: string | undefined, codexBizHomeR
     .slice(0, 80) || 'codex-home'
   const digest = createHash('sha256').update(key).digest('hex').slice(0, 16)
   return path.join(codexBizHomeRoot, `${safePrefix}-${digest}`)
+}
+
+export function resolveDefaultCodexHome(env: NodeJS.ProcessEnv = process.env, homeDir = os.homedir()): string {
+  const configured = env.CODEX_HOME?.trim()
+  return path.resolve(configured || path.join(homeDir, '.codex'))
+}
+
+export async function seedCodexHomeAuthIfAvailable(
+  targetCodexHome: string,
+  sourceCodexHome = resolveDefaultCodexHome()
+): Promise<boolean> {
+  const sourceHome = path.resolve(sourceCodexHome)
+  const targetHome = path.resolve(targetCodexHome)
+  if (sourceHome.toLowerCase() === targetHome.toLowerCase()) {
+    return false
+  }
+
+  const sourceAuth = path.join(sourceHome, 'auth.json')
+  const targetAuth = path.join(targetHome, 'auth.json')
+  try {
+    await fs.access(sourceAuth)
+  } catch {
+    return false
+  }
+
+  await fs.mkdir(targetHome, { recursive: true })
+  await fs.copyFile(sourceAuth, targetAuth)
+  return true
 }
 
 export function getRunningTaskCount(): number {
@@ -574,13 +644,17 @@ export async function runQuery(
     const codexHome = resolveCodexHome(runOptions.codexHomeKey)
     if (codexHome) {
       await fs.mkdir(codexHome, { recursive: true })
+      if (!effectiveApiKey) {
+        await seedCodexHomeAuthIfAvailable(codexHome)
+      }
     }
     const codexOptions: CodexOptions = {
-      env: buildCodexProcessEnv({
-        ...process.env,
-        ...(codexHome ? { CODEX_HOME: codexHome } : {}),
-        FOGGY_CODEX_TASK_ID: taskId,
-        ...(threadId ? { FOGGY_CODEX_THREAD_ID: threadId } : {}),
+      env: buildCodexTaskEnv(process.env, {
+        effectiveApiKey,
+        effectiveBaseUrl,
+        codexHome,
+        taskId,
+        threadId,
       }),
     }
     if (effectiveApiKey) {

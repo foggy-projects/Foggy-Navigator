@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 class CodexWorkerClientTest {
@@ -64,6 +65,41 @@ class CodexWorkerClientTest {
             assertEquals(false, body.get("network_access_enabled"));
             assertEquals("disabled", body.get("web_search_mode"));
             assertEquals(List.of("D:/shared"), body.get("additional_directories"));
+        }
+    }
+
+    @Test
+    void streamQuery_omitsCodexBizFieldsWhenNotProvided() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            client.streamQuery(
+                    "plain codex",
+                    "D:/repo",
+                    null,
+                    "gpt-5.4",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            ).blockFirst(Duration.ofSeconds(5));
+
+            Map<String, Object> body = objectMapper.readValue(server.body(),
+                    new TypeReference<>() {});
+            assertEquals("plain codex", body.get("prompt"));
+            assertEquals("D:/repo", body.get("cwd"));
+            assertEquals("gpt-5.4", body.get("model"));
+            assertFalse(body.containsKey("codex_home_key"));
+            assertFalse(body.containsKey("developer_instructions"));
+            assertFalse(body.containsKey("output_schema"));
+            assertFalse(body.containsKey("codex_config"));
+            assertFalse(body.containsKey("sandbox_mode"));
+            assertFalse(body.containsKey("approval_policy"));
+            assertFalse(body.containsKey("network_access_enabled"));
+            assertFalse(body.containsKey("web_search_mode"));
+            assertFalse(body.containsKey("additional_directories"));
         }
     }
 

@@ -28,6 +28,16 @@ export function checkCodexSdkAvailable(createCodex: () => unknown = () => new Co
   }
 }
 
+export function resolveCodexBizReadiness(
+  codexBizHomeRoot: string | undefined
+): Pick<HealthResponse, 'codex_biz_home_root_configured' | 'codex_biz_scoped_home_ready'> {
+  const configured = Boolean(codexBizHomeRoot?.trim())
+  return {
+    codex_biz_home_root_configured: configured,
+    codex_biz_scoped_home_ready: configured,
+  }
+}
+
 /**
  * GET /health — Worker health check
  */
@@ -40,6 +50,7 @@ router.get('/health', (_req: Request, res: Response) => {
   const codexSdkAvailable = checkCodexSdkAvailable(() => new Codex({
     apiKey: config.openaiApiKey || undefined,
   }))
+  const codexBizReadiness = resolveCodexBizReadiness(config.codexBizHomeRoot)
 
   const response: HealthResponse = {
     status: 'ok',
@@ -50,6 +61,7 @@ router.get('/health', (_req: Request, res: Response) => {
     codex_sdk_available: codexSdkAvailable,
     codex_auth_configured: codexAuthMode !== 'none',
     codex_auth_mode: codexAuthMode,
+    ...codexBizReadiness,
   }
 
   res.json(response)
