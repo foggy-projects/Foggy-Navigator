@@ -405,8 +405,11 @@ function enumerateScanDates(options: QueryOptions): { dates: Date[]; truncated: 
     const start = parseYmd(options.from) ?? shiftDate(stripTime(options.now ?? new Date()), -(MAX_DEFAULT_SCAN_DAYS - 1))
     const end = parseYmd(options.to) ?? stripTime(options.now ?? new Date())
     const totalDays = countDaysInclusive(start, end)
+    const effectiveStart = totalDays > MAX_EXPLICIT_SCAN_DAYS
+      ? shiftDate(end, -(MAX_EXPLICIT_SCAN_DAYS - 1))
+      : start
     return {
-      dates: enumerateDateRange(start, end, MAX_EXPLICIT_SCAN_DAYS),
+      dates: enumerateDateRange(effectiveStart, end, MAX_EXPLICIT_SCAN_DAYS),
       truncated: totalDays > MAX_EXPLICIT_SCAN_DAYS,
     }
   }

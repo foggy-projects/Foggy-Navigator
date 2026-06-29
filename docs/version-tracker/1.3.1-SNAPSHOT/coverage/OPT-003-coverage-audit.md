@@ -42,16 +42,19 @@ follow_up_required: yes
 | TaskPane Codex-only 入口、弹窗、提示文案、列表渲染 | major | no | no | yes | yes | yes | Playwright component; real workbench task `20260628-5af1` | covered |
 | 空结果不误导为“未修改文件” | major | no | no | no | yes | no | Playwright live workbench route intercept | covered |
 | 加载态和失败态展示合理 | major | no | no | no | yes | no | Playwright live workbench route intercept | covered |
+| 文件线索刷新失败后不保留旧列表 | major | yes | no | no | no | no | `taskPaneFileHints.test.ts` | covered |
 | 旧会话或无记录 session 查询不报错 | major | yes | no | yes | no | yes | failed task `20260628-bc1b` file-hints returned empty result | covered |
 | 文件线索写入失败不影响 WorkerEvent 主链路 | critical | yes | no | no | no | no | `recordSessionFileHintsForEventBestEffort` unit test | covered |
+| 显式日期范围超限时优先扫描靠近 `to` 的最近窗口 | major | yes | no | no | no | no | `tests/session-file-hints.test.ts` | covered |
 
 ## Evidence Summary
 
 - 已有自动化测试：
   - `npm run typecheck` in `tools/codex-agent-worker` -> pass
-  - `node --import tsx --test tests/session-file-hints.test.ts` -> 8 tests pass
+  - `node --import tsx --test tests/session-file-hints.test.ts` -> 9 tests pass
   - `mvn test -pl addons/codex-worker-agent -am "-Dtest=CodexWorkerClientTest,CodexTaskControllerTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"` -> 4 tests pass
   - `pnpm --dir packages/navigator-frontend type-check` -> pass
+  - `pnpm --dir packages/navigator-frontend test -- src/components/worker/__tests__/taskPaneFileHints.test.ts` -> 2 tests pass
   - Playwright component mount of real `TaskPane.vue` -> button/dialog/warning/list/openability pass
   - Playwright live workbench route intercept -> loading mask, empty text, failure message pass
 - 已有手工/真实链路验证：
@@ -63,7 +66,7 @@ follow_up_required: yes
 - 已有回归保护：
   - Worker extraction/storage/query unit tests
   - Java client/controller focused tests
-  - Frontend type-check plus Playwright UI checks
+  - Frontend type-check, file-hints helper unit test, plus Playwright UI checks
 
 ## Gaps
 

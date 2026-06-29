@@ -58,7 +58,7 @@ follow_up_required: yes
 - contract and compatibility: pass，Codex Worker SSE 对外事件格式未变；新增查询接口为旁路能力
 - documentation and writeback: pass，OPT-003 progress/test/experience 已回写，并补质量门与覆盖审计记录
 - test alignment: pass，单测覆盖提取/聚合/权限，Playwright 覆盖 UI，真实 E2E 覆盖工具消息到 Worker 文件、Java 查询、前端弹窗
-- release readiness: pass，可进入覆盖审计；需要在提交拆分时注意同一 worktree 内存在其他 unrelated dirty 内容
+- release readiness: pass，可进入覆盖审计；2026-06-29 复查时发现当前 worktree 另有 `1.3.2-SNAPSHOT` 文档改动，需要与 OPT-003 分开处理
 
 ## Findings
 
@@ -70,7 +70,7 @@ follow_up_required: yes
 - risk 1: `command_execution` 仍是低置信度启发式，无法覆盖脚本内部或外部进程产生的所有文件改动。该限制符合本事项“不要求精准”的 scope。
 - risk 2: 本地真实 E2E 首轮因平台默认模型配置解析为 `glm4.7` 导致 Codex SDK 失败；复跑显式 `model=codex-fast` 后通过。该问题属于环境配置，不是 OPT-003 功能缺陷。
 - follow-up 1: 如果后续要做精准归因，再新增 Git baseline 或文件系统快照，不复用当前“线索”字段承诺审计语义。
-- follow-up 2: 提交前按 OPT-003 与 Codex Biz/session/Claude worker 等其他 dirty 内容拆分 review，避免混合验收。
+- follow-up 2: 当前存在非本轮的 `docs/version-tracker/1.3.2-SNAPSHOT` 文档改动/未跟踪文件；提交或发布时需与 OPT-003 分开 review。
 
 ## Recommended Next Skills
 
@@ -89,4 +89,4 @@ follow_up_required: yes
 
 - self_check_summary: Worker 本地落档、Java task 鉴权代理、TaskPane 弹窗和真实 E2E 均已闭环；剩余风险是低置信度命令启发式和本地模型配置。
 - self_check_decision: needs-formal-quality-gate
-- self_check_follow_up: split unrelated dirty changes before final commit/release
+- self_check_follow_up: keep OPT-003 changes separate from current unrelated `1.3.2-SNAPSHOT` doc changes; command heuristic and model-config risks remain non-blocking follow-ups

@@ -204,6 +204,7 @@ git diff --check
 | `file_change` extraction | Worker unit | pass | `node --import tsx --test tests/session-file-hints.test.ts` 覆盖 completed/failed `file_change`。 |
 | command heuristic extraction | Worker unit | pass | 覆盖 `Set-Content` 和重定向写入的保守路径识别。 |
 | local file layout | Worker unit | pass | 覆盖 JSONL 写入、按日期读取聚合和显式日期范围截断标记。 |
+| capped date range recency | Worker unit | pass | 2026-06-29 新增覆盖：显式日期范围超过 120 天时优先扫描靠近 `to` 的最近窗口。 |
 | dedupe and merge | Worker unit | pass | 覆盖同一路径 `file_change` + `command_execution` 合并、最高置信度和计数。 |
 | path scope and openability | Worker unit | pass | 覆盖 `inside_cwd` 可打开、`outside_cwd` 只展示不可打开。 |
 | event publish failure isolation | Worker unit | pass | 新增 `recordSessionFileHintsForEventBestEffort` 写入异常隔离单测，确认落档失败只记录 warning、不抛出到事件链路。 |
@@ -213,6 +214,7 @@ git diff --check
 | imprecision warning | Playwright component | pass | 浏览器验证确认弹窗可见提示包含“文件线索基于 Codex 工具消息推断，可能不完整或不精确”。 |
 | real Codex E2E | Worker + Java + UI | pass | 真实任务 `20260628-5af1` 使用 `model=codex-fast` 在 `D:/tmp` 创建 `codex-file-hints-e2e-20260628-230206.txt`；Worker JSONL、Java `/file-hints`、真实工作台弹窗均验证通过。 |
 | loading / empty / failure UI states | Playwright live workbench | pass | 对同一真实 TaskPane 拦截 `/api/v1/codex-tasks/20260628-5af1/file-hints`，验证 loading mask、`暂无文件线索`、`加载文件线索失败`。 |
+| stale file list on failed refresh | Frontend unit | pass | 2026-06-29 新增 `taskPaneFileHints.test.ts`，验证刷新失败返回 `null` response，调用方可清空旧列表。 |
 
 ### Experience Progress
 
@@ -255,7 +257,8 @@ git diff --check
   - `packages/navigator-frontend/src/api/claudeWorker.ts`
   - `packages/navigator-frontend/src/types/sessionFileHints.ts`
   - `packages/navigator-frontend/src/components/worker/TaskPane.vue`
-- test status: pass for targeted automated checks。`npm run typecheck` in `tools/codex-agent-worker` pass；`node --import tsx --test tests/session-file-hints.test.ts` 8 tests pass；`mvn test -pl addons/codex-worker-agent -am "-Dtest=CodexWorkerClientTest,CodexTaskControllerTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"` 4 tests pass；`pnpm --dir packages/navigator-frontend type-check` pass；Node Playwright 在 Vite dev server 中挂载真实 `TaskPane.vue` 验证按钮、弹窗、不精准提示、文件列表和 `cwd` 外打开禁用；真实 Codex E2E `20260628-5af1` 验证 Worker JSONL、Java 查询和真实工作台弹窗；Playwright live workbench 拦截验证 loading/empty/failure 状态。
+  - `packages/navigator-frontend/src/components/worker/taskPaneFileHints.ts`
+- test status: pass for targeted automated checks。`npm run typecheck` in `tools/codex-agent-worker` pass；`node --import tsx --test tests/session-file-hints.test.ts` 9 tests pass；`mvn test -pl addons/codex-worker-agent -am "-Dtest=CodexWorkerClientTest,CodexTaskControllerTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"` 6 tests pass；`pnpm --dir packages/navigator-frontend type-check` pass；`pnpm --dir packages/navigator-frontend test -- src/components/worker/__tests__/taskPaneFileHints.test.ts` 2 tests pass；Node Playwright 在 Vite dev server 中挂载真实 `TaskPane.vue` 验证按钮、弹窗、不精准提示、文件列表和 `cwd` 外打开禁用；真实 Codex E2E `20260628-5af1` 验证 Worker JSONL、Java 查询和真实工作台弹窗；Playwright live workbench 拦截验证 loading/empty/failure 状态。
 - remaining risks / blockers: 无阻断项；`command_execution` 仍为低置信度启发式，不能覆盖脚本内部或外部进程产生的文件改动。真实 E2E 首轮发现本地平台默认模型配置会解析为非 Codex 模型 `glm4.7`，复跑显式 `codex-fast` 后通过，该配置风险不属于 OPT-003 功能缺陷。
 - acceptance readiness: ready-for-acceptance
 

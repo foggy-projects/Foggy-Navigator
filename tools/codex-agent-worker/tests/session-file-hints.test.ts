@@ -190,6 +190,44 @@ test('listSessionFileHints marks explicit date ranges as truncated when capped',
   }
 })
 
+test('listSessionFileHints scans the most recent dates when explicit range is capped', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-file-hints-recent-'))
+  try {
+    const sessionId = 'thread-range-recent'
+    await recordSessionFileHintsForEvent({
+      type: 'tool_use',
+      task_id: 'task-old',
+      session_id: sessionId,
+      tool: 'file_change',
+      input: { status: 'completed', changes: [{ path: 'old.ts', kind: 'update' }] },
+      tool_use_id: 'patch-old',
+      seq: 1,
+    }, { cwd: '/repo', now: new Date('2026-01-02T08:00:00.000Z'), rootDir })
+
+    await recordSessionFileHintsForEvent({
+      type: 'tool_use',
+      task_id: 'task-recent',
+      session_id: sessionId,
+      tool: 'file_change',
+      input: { status: 'completed', changes: [{ path: 'recent.ts', kind: 'update' }] },
+      tool_use_id: 'patch-recent',
+      seq: 2,
+    }, { cwd: '/repo', now: new Date('2026-06-28T08:00:00.000Z'), rootDir })
+
+    const result = await listSessionFileHints(sessionId, {
+      from: '2026-01-01',
+      to: '2026-06-28',
+      rootDir,
+    })
+
+    assert.equal(result.scanned_days, 120)
+    assert.equal(result.truncated, true)
+    assert.deepEqual(result.files.map(file => file.cwdRelativePath), ['recent.ts'])
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true })
+  }
+})
+
 test('sessionFileHintFileName uses session id directly when it is filename-safe', () => {
   assert.equal(sessionFileHintFileName('thread_abc-123.456'), 'thread_abc-123.456.jsonl')
   assert.match(sessionFileHintFileName('thread/unsafe'), /^thread_unsafe-[a-f0-9]{12}\.jsonl$/)

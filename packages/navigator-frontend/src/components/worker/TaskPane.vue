@@ -256,6 +256,7 @@ import { copyToClipboard } from '@/utils/clipboard'
 import type { SkillInfo } from '@/types'
 import type { SessionFileHintFile, SessionFileHintsResponse } from '@/types/sessionFileHints'
 import { inferTaskWorkerBackend } from '@/utils/workerBackend'
+import { loadTaskFileHints } from './taskPaneFileHints'
 import SlashCommandInput from './SlashCommandInput.vue'
 import type { AgentItem } from './SlashCommandInput.vue'
 import { canEnableRewind, canShowContinuationInput } from './taskPaneResume'
@@ -421,8 +422,14 @@ async function loadFileHints() {
 
   fileHintsLoading.value = true
   try {
-    fileHintsResponse.value = await getCodexTaskFileHints(taskId)
+    const result = await loadTaskFileHints(taskId, getCodexTaskFileHints)
+    fileHintsResponse.value = result.response
+    if (result.error) {
+      console.error('加载 Codex 文件线索失败:', result.error)
+      ElMessage.error('加载文件线索失败')
+    }
   } catch (error) {
+    fileHintsResponse.value = null
     console.error('加载 Codex 文件线索失败:', error)
     ElMessage.error('加载文件线索失败')
   } finally {

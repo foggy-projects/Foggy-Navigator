@@ -52,9 +52,10 @@ evidence_count: 8
   - `docs/version-tracker/1.3.1-SNAPSHOT/workitems/OPT-003-codex-session-file-change-hints.md`
 - Test:
   - `npm run typecheck` in `tools/codex-agent-worker` -> pass
-  - `node --import tsx --test tests/session-file-hints.test.ts` -> 8 tests pass
-  - `mvn test -pl addons/codex-worker-agent -am "-Dtest=CodexWorkerClientTest,CodexTaskControllerTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"` -> 4 tests pass
+  - `node --import tsx --test tests/session-file-hints.test.ts` -> 9 tests pass
+  - `mvn test -pl addons/codex-worker-agent -am "-Dtest=CodexWorkerClientTest,CodexTaskControllerTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"` -> 6 tests pass
   - `pnpm --dir packages/navigator-frontend type-check` -> pass
+  - `pnpm --dir packages/navigator-frontend test -- src/components/worker/__tests__/taskPaneFileHints.test.ts` -> 2 tests pass
   - Playwright component and live workbench checks -> pass
 - Experience:
   - Real Codex task `20260628-5af1` completed and generated `D:/tmp/codex-file-hints-e2e-20260628-230206.txt`
@@ -74,11 +75,11 @@ evidence_count: 8
 
 - `command_execution` remains a low-confidence heuristic and cannot cover every shell/script side effect. Owner: codex-worker-agent maintainer. Follow-up: only expand if a future precise attribution feature is requested.
 - Local platform default model configuration resolved an initial live task to non-Codex model `glm4.7`; explicit `codex-fast` passed. Owner: Navigator model-config maintainer. Follow-up: clean the local default Codex model config separately.
-- The current worktree contains unrelated dirty/untracked changes in Codex Biz, session-module and Claude worker areas. Owner: release/review owner. Follow-up: split OPT-003 changes from unrelated work before commit or release review.
+- Current worktree also contains non-OPT-003 `docs/version-tracker/1.3.2-SNAPSHOT` changes/untracked docs. Owner: release/review owner. Follow-up: keep those files out of the OPT-003 review/commit.
 
 ## Final Decision
 
-OPT-003 is `accepted-with-risks`. The delivered scope is intentionally best-effort rather than precise audit. Worker local persistence, Java authorization/proxy, TaskPane UI, warning copy, cwd openability rule, empty/loading/failure states and real Codex E2E have all passed. The remaining risks are non-blocking follow-ups.
+OPT-003 is `accepted-with-risks`. The delivered scope is intentionally best-effort rather than precise audit. Worker local persistence, Java authorization/proxy, TaskPane UI, warning copy, cwd openability rule, empty/loading/failure states, stale-list failure regression, capped date-range behavior and real Codex E2E have all passed. The remaining risks are non-blocking follow-ups.
 
 ## Signoff Marker
 
