@@ -402,13 +402,13 @@ class A2AgentResourceResolverTest {
     @Test
     void resolveRequiredAgent_allows_upstream_system_owned_agent() {
         ClientAppEntity clientApp = clientApp("tenant-1", "capp-1", "system-1");
-        CodingAgentEntity agent = agent("agent-1", ResourceOwnerType.UPSTREAM_SYSTEM, "system-1");
+        CodingAgentEntity agent = agent("agent-1", ResourceOwnerType.UPSTREAM_SYSTEM, "SYSTEM-1");
         agent.setWorkerId("pool-1");
         agent.setSkills("[{\"id\":\"skill-from-skills\"}]");
         when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp);
         when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1")).thenReturn(Optional.of(agent));
         when(workerPoolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
-                .thenReturn(Optional.of(pool("pool-1", ResourceOwnerType.UPSTREAM_SYSTEM, "system-1")));
+                .thenReturn(Optional.of(pool("pool-1", ResourceOwnerType.UPSTREAM_SYSTEM, "SYSTEM-1")));
 
         A2AgentResourceResolver.ResolvedAgentResource result = resolver.resolveRequiredAgent(
                 "tenant-1", "capp-1", "user-1", "agent-1");
@@ -417,7 +417,7 @@ class A2AgentResourceResolverTest {
         assertEquals("skill-from-skills", result.skillId());
         assertEquals("pool-1", result.workerPoolId());
         assertEquals(ResourceOwnerType.UPSTREAM_SYSTEM, result.workerPoolOwnerType());
-        assertEquals("system-1", result.workerPoolOwnerId());
+        assertEquals("SYSTEM-1", result.workerPoolOwnerId());
     }
 
     @Test
@@ -529,7 +529,7 @@ class A2AgentResourceResolverTest {
     void resolveRequiredWorkspace_allows_upstream_system_shared_directory_for_same_system() {
         ClientAppEntity clientApp = clientApp("tenant-1", "capp-1", "system-1");
         WorkingDirectoryEntity directory = directory("dir-3", WorkspaceScope.UPSTREAM_SYSTEM_SHARED, ResourceOwnerType.UPSTREAM_SYSTEM);
-        directory.setOwnerId("system-1");
+        directory.setOwnerId("SYSTEM-1");
         directory.setRootRef("D:/workspace/system-shared");
         when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp);
         when(workingDirectoryRepository.findByDirectoryId("dir-3")).thenReturn(Optional.of(directory));

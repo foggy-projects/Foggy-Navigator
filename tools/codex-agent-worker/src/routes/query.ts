@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
@@ -12,6 +13,24 @@ import type { WorkerEvent } from '../models.js'
 import { validateQueryRequest } from '../validation/query.js'
 
 const router = Router()
+
+const looksWindowsPath = (value: string): boolean =>
+  /^[a-zA-Z]:[\\/]/.test(value) || value.includes('\\')
+
+export const isPathWithinAllowedCwd = (candidate: string, allowedCwd: string): boolean => {
+  const pathApi = looksWindowsPath(candidate) || looksWindowsPath(allowedCwd) ? path.win32 : path.posix
+  const normalizeCase = looksWindowsPath(candidate) || looksWindowsPath(allowedCwd)
+  const normalizeBoundary = (value: string): string => {
+    const normalized = pathApi.normalize(value)
+    return normalized === pathApi.parse(normalized).root ? normalized : normalized.replace(/[\\/]+$/, '')
+  }
+  const normalizedCandidate = normalizeBoundary(candidate)
+  const normalizedAllowed = normalizeBoundary(allowedCwd)
+  const candidateForCompare = normalizeCase ? normalizedCandidate.toLowerCase() : normalizedCandidate
+  const allowedForCompare = normalizeCase ? normalizedAllowed.toLowerCase() : normalizedAllowed
+  const relative = pathApi.relative(allowedForCompare, candidateForCompare)
+  return relative === '' || (!!relative && !relative.startsWith('..') && !pathApi.isAbsolute(relative))
+}
 
 /**
  * POST /api/v1/query — Start a Codex query and stream results as SSE
@@ -29,10 +48,7 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
 
   const isAllowedPath = (candidate: string): boolean => {
     if (config.allowedCwds.length === 0) return true
-    const allowed = config.allowedCwds.some(acwd =>
-      candidate.startsWith(acwd) || candidate.replace(/\\/g, '/').startsWith(acwd.replace(/\\/g, '/'))
-    )
-    return allowed
+    return config.allowedCwds.some(acwd => isPathWithinAllowedCwd(candidate, acwd))
   }
 
   // Validate working directories
@@ -100,6 +116,7 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
       approvalPolicy: body.approval_policy,
       networkAccessEnabled: body.network_access_enabled,
       webSearchMode: body.web_search_mode,
+      businessRuntimeContext: body.business_runtime_context,
       additionalDirectories: body.additional_directories,
     }
   )

@@ -19,6 +19,8 @@ export interface AppConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error'
   /** Root directory for per-account/actor CODEX_HOME folders. Empty disables codex_home_key requests. */
   codexBizHomeRoot: string
+  /** Navigator gateway base URL used by the built-in business MCP bridge. */
+  navigatorWorkerGatewayBaseUrl: string
   /**
    * Worker 兜底默认模型（请求未显式指定 model 时使用）。
    *
@@ -125,6 +127,23 @@ function parseOptionalAbsolutePath(rawValue: string | undefined, field: string):
     throw new Error(`${field} must be an absolute path`)
   }
   return path.normalize(value)
+}
+
+function parseHttpUrl(rawValue: string | undefined, field: string, fallback: string): string {
+  const value = (rawValue || fallback).trim()
+  if (!value) {
+    throw new Error(`${field} must not be empty`)
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error(`${field} must be a valid URL`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${field} must use http or https`)
+  }
+  return value.replace(/\/+$/, '')
 }
 
 function parseLogLevel(rawLogLevel: string | undefined): AppConfig['logLevel'] {
@@ -247,6 +266,11 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     maxConcurrentTasks: parseMaxConcurrentTasks(env.CODEX_MAX_CONCURRENT_TASKS),
     logLevel: parseLogLevel(env.CODEX_LOG_LEVEL),
     codexBizHomeRoot: parseOptionalAbsolutePath(env.CODEX_BIZ_HOME_ROOT, 'CODEX_BIZ_HOME_ROOT'),
+    navigatorWorkerGatewayBaseUrl: parseHttpUrl(
+      env.CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL || env.NAVIGATOR_WORKER_GATEWAY_BASE_URL,
+      'CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL',
+      'http://localhost:8080'
+    ),
     defaultModel: parseDefaultModel(env.CODEX_DEFAULT_MODEL),
     modelAliases: parseModelAliases(env.CODEX_MODEL_ALIASES),
   }

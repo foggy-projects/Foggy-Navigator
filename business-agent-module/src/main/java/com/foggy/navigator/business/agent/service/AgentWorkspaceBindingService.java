@@ -191,7 +191,7 @@ public class AgentWorkspaceBindingService {
             throw new IllegalStateException("agent is disabled: " + agent.getAgentId());
         }
         if (agent.getOwnerType() != ResourceOwnerType.UPSTREAM_SYSTEM
-                || !principal.getUpstreamSystemId().equals(agent.getOwnerId())) {
+                || !sameUpstreamSystemId(principal.getUpstreamSystemId(), agent.getOwnerId())) {
             throw new SecurityException("agent is not owned by this upstream system: " + agent.getAgentId());
         }
         return agent;
@@ -249,11 +249,19 @@ public class AgentWorkspaceBindingService {
     private void requireDirectoryOwner(WorkingDirectoryEntity directory,
                                        ResourceOwnerType ownerType,
                                        String ownerId) {
-        if (!StringUtils.hasText(ownerId)
-                || directory.getOwnerType() != ownerType
-                || !ownerId.equals(directory.getOwnerId())) {
+        boolean ownerMatches = ownerType == ResourceOwnerType.UPSTREAM_SYSTEM
+                ? sameUpstreamSystemId(ownerId, directory.getOwnerId())
+                : StringUtils.hasText(ownerId) && ownerId.equals(directory.getOwnerId());
+        if (directory.getOwnerType() != ownerType || !ownerMatches) {
             throw new SecurityException("working directory owner mismatch: " + directory.getDirectoryId());
         }
+    }
+
+    private boolean sameUpstreamSystemId(String left, String right) {
+        String normalizedLeft = trimToNull(left);
+        String normalizedRight = trimToNull(right);
+        return normalizedLeft != null && normalizedRight != null
+                && normalizedLeft.equalsIgnoreCase(normalizedRight);
     }
 
     private AgentWorkspaceBindingDTO toDTO(AgentDirectoryBindingEntity binding, CodingAgentEntity agent) {

@@ -43,6 +43,11 @@ public class AgentReadinessDTO {
     private String workspaceResolverType;
     private Boolean workspaceReadOnly;
     private String workspaceSource;
+    private String commandWorkdirRoot;
+    private String fileToolRootMode;
+    private String fileToolRoot;
+    private String fileToolAgentRoot;
+    private Boolean fileToolWorkdirAligned;
     private PhysicalWorkerDiagnosticDTO physicalWorkerDiagnostic;
     private List<PhysicalWorkerDiagnosticDTO> physicalWorkerDiagnostics = new ArrayList<>();
     private List<AgentReadinessCheckDTO> checks = new ArrayList<>();

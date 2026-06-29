@@ -163,7 +163,12 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals("UPSTREAM_SYSTEM", result.getWorkerPoolOwnerType());
         assertEquals("AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT", result.getModelConfigSource());
         assertNotNull(result.getSkillArtifact());
-        assertEquals(8, result.getChecks().size());
+        assertEquals(9, result.getChecks().size());
+        assertEquals("MANAGED_ACCOUNT_LAYER", result.getFileToolRootMode());
+        assertNull(result.getCommandWorkdirRoot());
+        assertNull(result.getFileToolRoot());
+        assertNull(result.getFileToolAgentRoot());
+        assertNull(result.getFileToolWorkdirAligned());
         assertTrue(result.getChecks().stream().allMatch(check -> "OK".equals(check.getStatus())));
         verify(skillRegistryService).checkClientAppSkillAccess(
                 "tenant_1", "capp_1", "world-sim.bug-coordinator.decision.v1");
@@ -245,6 +250,11 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals("USER_PRIVATE", result.getWorkspaceScope());
         assertEquals("MANAGED", result.getWorkspaceResolverType());
         assertEquals(Boolean.FALSE, result.getWorkspaceReadOnly());
+        assertEquals("/workspace/user", result.getCommandWorkdirRoot());
+        assertEquals("DELEGATED_ACTOR_HOME", result.getFileToolRootMode());
+        assertEquals("/workspace/user", result.getFileToolRoot());
+        assertEquals("/workspace/user/agent", result.getFileToolAgentRoot());
+        assertEquals(Boolean.TRUE, result.getFileToolWorkdirAligned());
         assertNotNull(result.getPhysicalWorkerDiagnostic());
         assertEquals("worker_biz", result.getPhysicalWorkerDiagnostic().getPhysicalWorkerId());
         assertEquals("wsl-biz-worker", result.getPhysicalWorkerDiagnostic().getWorkerName());
@@ -276,6 +286,9 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals(Boolean.TRUE, claudeRole.getDirectoryWorker());
         assertTrue(result.getChecks().stream().anyMatch(check ->
                 "WORKSPACE_RESOURCE".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "FILE_TOOL_ROOT_ALIGNMENT".equals(check.getCode())
                         && "OK".equals(check.getStatus())));
         assertTrue(result.getChecks().stream().anyMatch(check ->
                 "WORKER_HOST_ROLE_ROUTING".equals(check.getCode())

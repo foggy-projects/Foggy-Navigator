@@ -35,6 +35,9 @@ public class BusinessAgentTaskService {
 
     public static final String STATUS_CREATED = "CREATED";
     public static final String STATUS_ACTIVE = "ACTIVE";
+    public static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
+    private static final String TASK_DIRECTORY_REQUIRED_MESSAGE =
+            TASK_DIRECTORY_REQUIRED + ": directoryId is required for Actor-owned BizWorker task";
     private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
     private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
 
@@ -147,6 +150,11 @@ public class BusinessAgentTaskService {
                 form,
                 existingResumeTask,
                 agentResource);
+        String workerBackend = firstNonBlank(
+                agentResource.workerBackend(),
+                workerPool != null ? workerPool.getWorkerBackend() : null,
+                finalModelResource.workerBackend());
+        requireTaskDirectoryForBizWorker(workerBackend, workspaceResource);
 
         // 7. task 创建后固定最终 modelConfigId
         BusinessAgentTaskEntity task = new BusinessAgentTaskEntity();
@@ -457,6 +465,14 @@ public class BusinessAgentTaskService {
             return modelWorkerBackend;
         }
         throw new IllegalStateException("agent worker backend is not configured");
+    }
+
+    private void requireTaskDirectoryForBizWorker(
+            String workerBackend,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ) && workspaceResource == null) {
+            throw new IllegalArgumentException(TASK_DIRECTORY_REQUIRED_MESSAGE);
+        }
     }
 
     private String resolveLaunchPhysicalWorkerId(

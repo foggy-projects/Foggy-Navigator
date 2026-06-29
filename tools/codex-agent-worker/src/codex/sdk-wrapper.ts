@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import os from 'node:os'
 import path from 'node:path'
 import { Codex } from '@openai/codex-sdk'
@@ -12,6 +13,7 @@ import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
 import { recordSessionFileHintsForEventBestEffort } from '../persistence/session-file-hints.js'
 import { detectSpawnedCodexPid, snapshotCodexCliPids } from './processes.js'
+import { buildNavigatorBusinessMcpConfig } from '../business-mcp/navigator-business-mcp-server.js'
 
 const moduleRequire = createRequire(import.meta.url)
 
@@ -24,6 +26,7 @@ export type CodexRunOptions = {
   approvalPolicy?: CodexApprovalPolicy
   networkAccessEnabled?: boolean
   webSearchMode?: CodexWebSearchMode
+  businessRuntimeContext?: Record<string, unknown>
   additionalDirectories?: string[]
 }
 
@@ -270,6 +273,35 @@ export function resolveCodexHome(codexHomeKey: string | undefined, codexBizHomeR
 export function resolveDefaultCodexHome(env: NodeJS.ProcessEnv = process.env, homeDir = os.homedir()): string {
   const configured = env.CODEX_HOME?.trim()
   return path.resolve(configured || path.join(homeDir, '.codex'))
+}
+
+export function resolveNavigatorBusinessMcpServerPath(currentModulePath = fileURLToPath(import.meta.url)): string {
+  const ext = path.extname(currentModulePath) || '.js'
+  return path.resolve(path.dirname(currentModulePath), '..', 'business-mcp', `navigator-business-mcp-server${ext}`)
+}
+
+export function mergeCodexConfig(...configs: Array<Record<string, unknown> | undefined>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const configPart of configs) {
+    if (!configPart) continue
+    mergeObjectInto(result, configPart)
+  }
+  return result
+}
+
+function mergeObjectInto(target: Record<string, unknown>, source: Record<string, unknown>): void {
+  for (const [key, sourceValue] of Object.entries(source)) {
+    const targetValue = target[key]
+    if (isPlainObject(targetValue) && isPlainObject(sourceValue)) {
+      mergeObjectInto(targetValue, sourceValue)
+    } else {
+      target[key] = sourceValue
+    }
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 export async function seedCodexHomeAuthIfAvailable(
@@ -693,7 +725,16 @@ export async function runQuery(
     if (runOptions.developerInstructions) {
       codexConfig.developer_instructions = runOptions.developerInstructions
     }
-    codexOptions.config = { ...codexOptions.config, ...codexConfig } as CodexOptions['config']
+    const navigatorBusinessMcpConfig = buildNavigatorBusinessMcpConfig(
+      runOptions.businessRuntimeContext,
+      config.navigatorWorkerGatewayBaseUrl,
+      resolveNavigatorBusinessMcpServerPath()
+    )
+    codexOptions.config = mergeCodexConfig(
+      codexOptions.config as Record<string, unknown> | undefined,
+      codexConfig,
+      navigatorBusinessMcpConfig
+    ) as CodexOptions['config']
 
     const codex = new Codex(codexOptions)
 

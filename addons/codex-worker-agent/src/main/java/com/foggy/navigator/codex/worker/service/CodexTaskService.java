@@ -187,6 +187,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         }
         String effectiveProviderType = normalizeProviderType(form.getProviderType());
         form.setProviderType(effectiveProviderType);
+        normalizeAndValidateCodexBizHomeKey(form, effectiveProviderType);
 
         // 验证 Worker 存在且当前 user/tenant 可访问（通过 WorkerManagementFacade SPI）
         workerManagementFacade.validateWorkerAccess(userId, tenantId, form.getWorkerId());
@@ -264,6 +265,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (isCodexBizProvider(effectiveProviderType)) {
             putIfNotBlank(providerConfig, "codexHomeKey", form.getCodexHomeKey());
             putIfNotBlank(providerConfig, "developerInstructions", form.getDeveloperInstructions());
+            if (form.getBusinessRuntimeContext() != null && !form.getBusinessRuntimeContext().isEmpty()) {
+                providerConfig.put("businessRuntimeContext", form.getBusinessRuntimeContext());
+            }
             putIfNotBlank(providerConfig, "sandboxMode", form.getSandboxMode());
             putIfNotBlank(providerConfig, "approvalPolicy", form.getApprovalPolicy());
             putIfNotBlank(providerConfig, "webSearchMode", form.getWebSearchMode());
@@ -1033,6 +1037,17 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return CODEX_BIZ_PROVIDER_TYPE.equals(providerType);
     }
 
+    private void normalizeAndValidateCodexBizHomeKey(CreateCodexTaskForm form, String providerType) {
+        if (!isCodexBizProvider(providerType)) {
+            return;
+        }
+        String codexHomeKey = firstNonBlank(form.getCodexHomeKey(), form.getPrivateAccountId());
+        if (codexHomeKey == null) {
+            throw new IllegalArgumentException("codex-biz-worker requires codexHomeKey or privateAccountId");
+        }
+        form.setCodexHomeKey(codexHomeKey);
+    }
+
     private boolean matchesProvider(CodexTaskEntity entity, String providerType) {
         return normalizeProviderType(providerType).equals(resolveProviderType(entity));
     }
@@ -1087,6 +1102,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         form.setDeveloperInstructions(firstNonBlank(
                 stringParam(params, "developerInstructions"),
                 stringParam(params, "developer_instructions")));
+        form.setBusinessRuntimeContext(mapParam(firstPresent(params,
+                "businessRuntimeContext", "business_runtime_context", "runtimeContext", "runtime_context")));
         form.setOutputSchema(mapParam(firstPresent(params,
                 "outputSchema", "output_schema", "expectedOutputSchema", "expected_output_schema")));
         form.setCodexConfig(mapParam(firstPresent(params, "codexConfig", "codex_config")));

@@ -156,7 +156,7 @@ class AgentWorkspaceBindingServiceTest {
         agent.setTenantId("tenant-1");
         agent.setAgentId("agent-1");
         agent.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
-        agent.setOwnerId("ups-1");
+        agent.setOwnerId("UPS-1");
         agent.setDefaultDirectoryId("dir-default");
         agent.setEnabled(true);
         return agent;
@@ -174,7 +174,7 @@ class AgentWorkspaceBindingServiceTest {
     private WorkingDirectoryEntity systemDirectory(String directoryId) {
         WorkingDirectoryEntity directory = directory(directoryId);
         directory.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
-        directory.setOwnerId("ups-1");
+        directory.setOwnerId("UPS-1");
         directory.setWorkspaceScope(WorkspaceScope.UPSTREAM_SYSTEM_SHARED);
         return directory;
     }

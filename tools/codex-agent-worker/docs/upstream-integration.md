@@ -122,6 +122,7 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 | `network_access_enabled` | `boolean` | 否 | 是否允许网络访问 |
 | `web_search_mode` | `string` | 否 | 覆盖 Codex web search mode |
 | `additional_directories` | `array` | 否 | Codex SDK additional directories，仍受 `CODEX_ALLOWED_CWDS` 约束 |
+| `business_runtime_context` | `object` | 否 | Navigator 服务端运行时上下文；可携带 `task_scoped_token`、业务 task/session/context 标识和工具 allowlist，不写入 Codex prompt |
 
 最小请求：
 
@@ -196,6 +197,22 @@ CODEX_ALLOWED_CWDS=/mnt/d/foggy-projects
 为避免过期环境变量污染 Codex CLI，worker 会在启动 Codex 子进程前同步处理 `OPENAI_API_KEY` 和 `CODEX_API_KEY`：存在有效 key 时写入有效值；不存在有效 key 时从子进程环境中移除这两个变量，让 Codex login/auth.json 路径生效。
 
 Codex Biz route 在 Navigator 侧使用 `providerType=codex-biz-worker`。它可以复用 `workerBackend=OPENAI_CODEX` 的 `modelConfigId`，但不会暴露为独立可发现 Agent，也不会走 LangGraph BizWorker root-skill 路由。
+
+路线定位上，`LANGGRAPH_BIZ` / LangBizWorker 与 `codex-biz-worker` / CodexBizWorker 是互补关系。企业应用、正式业务编排、审批/挂起、业务审计和依赖 root skill 的上游链路应默认继续使用 LangBizWorker；CodexBizWorker 只作为显式 opt-in 的内部调试、开发者自用和 Codex-native 执行/诊断通道。不要在未完成端到端 parity smoke 前把企业应用默认路由从 LangBizWorker 切到 CodexBizWorker。
+
+`business_runtime_context` 只作为 Java -> Worker 的结构化运行时字段接收。Worker 不会把其中的 `task_scoped_token` 拼进 `developer_instructions`、prompt、日志或 health response。
+
+当 `business_runtime_context.task_scoped_token` 存在，且 `allowed_tools` 为空或包含 `business.functions.invoke` / `business.functions.*` / `business.*` 等业务函数授权时，Worker 会给 Codex 动态注入内置 `navigator_business` MCP server。该 server 通过 `CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL` 指向 Navigator WorkerGateway，默认 `http://localhost:8080`，并使用运行时 token 调用 `/internal/worker-gateway/v1`。
+
+当前内置工具：
+
+- `list_business_functions`
+- `get_business_function_schema`
+- `invoke_business_function`
+
+`get_business_function_schema` 和 `invoke_business_function` 都要求传 `version`；`invoke_business_function` 还要求传 `input`，对象输入会转发为 `input`，字符串输入会转发为 `inputJson`。`report_tool_message` 不是模型可见工具；Worker 会在 `invoke_business_function` 后对 Navigator WorkerGateway 做 best-effort 内部审计上报。
+
+上游不需要、也不应该把 `task_scoped_token` 写入 prompt、developer instructions、`codex_config` 或模型可见参数。业务函数的真实授权仍由 Navigator WorkerGateway 根据 task-scoped token、skill grants 和 client-app visibility 校验。若未来要扩大到正式业务链路，仍需针对原 BizWorker 依赖的 `submit_skill_result`、BusinessFunction side effect、tool result/message 形态做端到端 smoke；在此之前，本能力只证明 Codex Worker 具备第一段 MCP 桥接能力，不改变 LangBizWorker 的企业应用默认定位。
 
 ### 3.2 返回方式
 
@@ -677,3 +694,5 @@ powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-
 - actor A 和 actor B 返回不同 `session_id`
 - actor A resume 返回与 actor A 首次请求相同的 `session_id`
 - 输出只包含 task/session/model/turn/event 计数，不包含 token、auth 文件内容或 scoped home 真实路径
+
+该 smoke 只验证 CodexBizWorker 的 scoped home、会话隔离和 Codex 执行前置条件；它不替代 LangBizWorker 的企业业务 smoke，也不构成把企业应用默认路线切到 CodexBizWorker 的验收证据。

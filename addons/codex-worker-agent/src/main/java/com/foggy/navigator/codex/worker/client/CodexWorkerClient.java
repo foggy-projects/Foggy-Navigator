@@ -81,7 +81,7 @@ public class CodexWorkerClient {
                                                       java.util.Map<String, String> envVars) {
         return streamQuery(prompt, cwd, codexThreadId, model, maxTurns, images, attachments,
                 apiKey, baseUrl, envVars,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd,
@@ -98,6 +98,7 @@ public class CodexWorkerClient {
                                                       String approvalPolicy,
                                                       Boolean networkAccessEnabled,
                                                       String webSearchMode,
+                                                      Map<String, Object> businessRuntimeContext,
                                                       List<String> additionalDirectories) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("prompt", prompt);
@@ -129,6 +130,9 @@ public class CodexWorkerClient {
         if (approvalPolicy != null && !approvalPolicy.isBlank()) body.put("approval_policy", approvalPolicy);
         if (networkAccessEnabled != null) body.put("network_access_enabled", networkAccessEnabled);
         if (webSearchMode != null && !webSearchMode.isBlank()) body.put("web_search_mode", webSearchMode);
+        if (businessRuntimeContext != null && !businessRuntimeContext.isEmpty()) {
+            body.put("business_runtime_context", businessRuntimeContext);
+        }
         if (additionalDirectories != null && !additionalDirectories.isEmpty()) {
             body.put("additional_directories", additionalDirectories);
         }

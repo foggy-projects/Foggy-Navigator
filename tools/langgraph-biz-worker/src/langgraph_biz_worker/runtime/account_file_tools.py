@@ -98,6 +98,7 @@ class AccountFileTools:
         self._account_id = self._guard.account_id
         self._task_id = task_id
         self._execution_policy = execution_policy
+        self._workspace = workspace
         self._file_locks: dict[str, threading.Lock] = {}
         self._global_lock = threading.Lock()
         self.audit_records: list[dict[str, Any]] = []
@@ -274,7 +275,8 @@ class AccountFileTools:
             "relative_path": relative_path,
             "size": len(content_bytes),
             "sha256": sha256_after,
-            "summary": f"account file {'overwritten' if mode == 'overwrite' else 'created'}",
+            "storage_mode": self._storage_mode(),
+            "summary": f"{self._storage_label()} {'overwritten' if mode == 'overwrite' else 'created'}",
         }
 
     # -- str_replace ---------------------------------------------------------
@@ -509,6 +511,18 @@ class AccountFileTools:
                 "file_too_large",
                 f"content size {size} exceeds limit {max_write_size}",
             )
+
+    def _storage_mode(self) -> str:
+        if self._workspace is not None:
+            return self._workspace.mode
+        if self._execution_policy and self._execution_policy.configured and self._execution_policy.workdir:
+            return "delegated"
+        return "managed"
+
+    def _storage_label(self) -> str:
+        if self._storage_mode() == "delegated":
+            return "delegated workspace file"
+        return "account file"
 
     def _record_audit(
         self,

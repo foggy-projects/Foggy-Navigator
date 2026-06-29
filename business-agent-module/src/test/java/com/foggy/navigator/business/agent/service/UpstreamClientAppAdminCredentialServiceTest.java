@@ -10,6 +10,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -126,6 +127,34 @@ class UpstreamClientAppAdminCredentialServiceTest {
         verify(repository, never()).save(any());
     }
 
+    @Test
+    void requireTenantAllowsDerivedTenantForUpstreamSystemScopedCredential() {
+        UpstreamClientAppAdminPrincipal principal = principal("TMS", "TMS");
+
+        service.requireTenant(principal, "nav_tms_88900");
+    }
+
+    @Test
+    void requireTenantAllowsDerivedTenantForSourceTenantScopedCredential() {
+        UpstreamClientAppAdminPrincipal principal = principal("TMS", "88900");
+
+        service.requireTenant(principal, "nav_tms_88900");
+    }
+
+    @Test
+    void requireTenantAllowsDerivedTenantForQualifiedSourceTenantScopedCredential() {
+        UpstreamClientAppAdminPrincipal principal = principal("TMS", "TMS:88900");
+
+        service.requireTenant(principal, "nav_tms_88900");
+    }
+
+    @Test
+    void requireTenantRejectsDerivedTenantForDifferentUpstreamSystem() {
+        UpstreamClientAppAdminPrincipal principal = principal("OMS", "OMS");
+
+        assertThrows(SecurityException.class, () -> service.requireTenant(principal, "nav_tms_88900"));
+    }
+
     private UpstreamClientAppAdminCredentialEntity activeCredential(String tenantIdsJson, String scopesJson) {
         UpstreamClientAppAdminCredentialEntity entity = new UpstreamClientAppAdminCredentialEntity();
         entity.setCredentialId("ucaac-1");
@@ -136,5 +165,16 @@ class UpstreamClientAppAdminCredentialServiceTest {
         entity.setScopesJson(scopesJson);
         entity.setStatus(UpstreamBootstrapRequestService.CREDENTIAL_STATUS_ACTIVE);
         return entity;
+    }
+
+    private UpstreamClientAppAdminPrincipal principal(String upstreamSystemId, String... tenantIds) {
+        return UpstreamClientAppAdminPrincipal.builder()
+                .credentialId("ucaac-1")
+                .principalId(upstreamSystemId)
+                .upstreamSystemId(upstreamSystemId)
+                .authorizedClientAppNamespace("x6")
+                .authorizedTenantIds(Set.of(tenantIds))
+                .scopes(Set.of(UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE))
+                .build();
     }
 }

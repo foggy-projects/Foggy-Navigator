@@ -10,15 +10,21 @@ import {
   buildCodexTaskEnv,
   getRunningTaskCount,
   mapThreadItemToEvents,
+  mergeCodexConfig,
   parseModelString,
   resolveDefaultCodexHome,
   resolveCodexHome,
+  resolveNavigatorBusinessMcpServerPath,
   resolveModelAlias,
   seedCodexHomeAuthIfAvailable,
   saveAttachments,
   taskRegistry,
   shouldAbortBeforeTurnStart,
 } from '../src/codex/sdk-wrapper.ts'
+import {
+  buildNavigatorBusinessMcpConfig,
+  isNavigatorBusinessMcpEnabled,
+} from '../src/business-mcp/navigator-business-mcp-server.ts'
 
 function createSeq(): () => number {
   let seq = 0
@@ -316,6 +322,74 @@ test('resolveDefaultCodexHome uses CODEX_HOME or user home fallback', () => {
   const userHome = path.join(os.tmpdir(), 'worker-home')
   assert.equal(resolveDefaultCodexHome({ CODEX_HOME: configuredHome }, userHome), path.resolve(configuredHome))
   assert.equal(resolveDefaultCodexHome({}, userHome), path.resolve(path.join(userHome, '.codex')))
+})
+
+test('resolveNavigatorBusinessMcpServerPath follows sdk wrapper module extension', () => {
+  const currentModule = path.join('D:\\worker', 'src', 'codex', 'sdk-wrapper.ts')
+  assert.equal(
+    resolveNavigatorBusinessMcpServerPath(currentModule),
+    path.join('D:\\worker', 'src', 'business-mcp', 'navigator-business-mcp-server.ts')
+  )
+})
+
+test('buildNavigatorBusinessMcpConfig injects token through MCP server env only', () => {
+  const config = buildNavigatorBusinessMcpConfig(
+    {
+      task_scoped_token: 'task-token',
+      allowed_tools: ['business.functions.invoke'],
+    },
+    'http://navigator.example.com:8080/',
+    '/worker/src/business-mcp/navigator-business-mcp-server.ts'
+  ) as Record<string, any>
+
+  const server = config.mcp_servers.navigator_business
+  assert.equal(server.command, process.execPath)
+  assert.deepEqual(server.args, ['--import', 'tsx', '/worker/src/business-mcp/navigator-business-mcp-server.ts'])
+  assert.equal(server.env.NAVIGATOR_WORKER_GATEWAY_BASE_URL, 'http://navigator.example.com:8080')
+  assert.equal(server.env.NAVIGATOR_TASK_SCOPED_TOKEN, 'task-token')
+  assert.equal(server.env.NAVIGATOR_BUSINESS_ALLOWED_TOOLS, JSON.stringify(['business.functions.invoke']))
+})
+
+test('buildNavigatorBusinessMcpConfig runs compiled server without tsx', () => {
+  const config = buildNavigatorBusinessMcpConfig(
+    { task_scoped_token: 'task-token' },
+    'http://navigator.example.com:8080',
+    '/worker/dist/business-mcp/navigator-business-mcp-server.js'
+  ) as Record<string, any>
+
+  assert.deepEqual(config.mcp_servers.navigator_business.args, [
+    '/worker/dist/business-mcp/navigator-business-mcp-server.js',
+  ])
+})
+
+test('buildNavigatorBusinessMcpConfig stays disabled without token or business tool grant', () => {
+  assert.equal(buildNavigatorBusinessMcpConfig({}, 'http://localhost:8080', '/server.ts'), undefined)
+  assert.equal(isNavigatorBusinessMcpEnabled({
+    task_scoped_token: 'task-token',
+    allowed_tools: ['filesystem.read'],
+  }), false)
+})
+
+test('mergeCodexConfig deep merges MCP servers and lets runtime config win', () => {
+  const merged = mergeCodexConfig(
+    {
+      tool_output_token_limit: 1000,
+      mcp_servers: {
+        custom: { command: 'custom' },
+        navigator_business: { command: 'unsafe', env: { NAVIGATOR_TASK_SCOPED_TOKEN: 'unsafe' } },
+      },
+    },
+    {
+      mcp_servers: {
+        navigator_business: { command: 'node', env: { NAVIGATOR_TASK_SCOPED_TOKEN: 'runtime' } },
+      },
+    }
+  ) as Record<string, any>
+
+  assert.equal(merged.tool_output_token_limit, 1000)
+  assert.equal(merged.mcp_servers.custom.command, 'custom')
+  assert.equal(merged.mcp_servers.navigator_business.command, 'node')
+  assert.equal(merged.mcp_servers.navigator_business.env.NAVIGATOR_TASK_SCOPED_TOKEN, 'runtime')
 })
 
 test('seedCodexHomeAuthIfAvailable copies auth into scoped home', async () => {

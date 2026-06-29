@@ -32,6 +32,7 @@ export interface QueryRequest {
   approval_policy?: CodexApprovalPolicy
   network_access_enabled?: boolean
   web_search_mode?: CodexWebSearchMode
+  business_runtime_context?: Record<string, unknown>
   additional_directories?: string[]
 }
 

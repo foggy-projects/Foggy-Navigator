@@ -88,6 +88,9 @@ public class OpenApiController {
     private static final String BACKEND_OPENAI_CODEX = ProviderRouteRegistry.BACKEND_OPENAI_CODEX;
     private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
     private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
+    private static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
+    private static final String TASK_DIRECTORY_REQUIRED_MESSAGE =
+            TASK_DIRECTORY_REQUIRED + ": directoryId is required for Actor-owned BizWorker task";
 
     private final OpenApiProvisioningService provisioningService;
     private final ClaudeWorkerService workerService;
@@ -438,8 +441,13 @@ public class OpenApiController {
                 upstreamUserId,
                 agentResource,
                 form);
+        if (requiresTaskDirectory(agentResource, modelResource) && workspaceResource == null) {
+            return RX.failB(TASK_DIRECTORY_REQUIRED_MESSAGE);
+        }
+        String agentOwnerUserId = resolveAgentOwnerUserId(route.agentId(), tenantId);
         String modelConfigId = modelResource.modelConfigId();
         AgentResolveContext ctx = AgentResolveContext.builder()
+                .userId(agentOwnerUserId)
                 .tenantId(tenantId)
                 .modelConfigId(modelConfigId)
                 .requestSource("OPEN_API")
@@ -528,9 +536,7 @@ public class OpenApiController {
             task.setContextId(contextId);
         }
         bindBusinessRuntimeTokenToWorkerTaskIfPossible(tenantId, businessRuntimeToken, task);
-        String agentOwnerUserId = null;
         if (clientContextJson != null) {
-            agentOwnerUserId = resolveAgentOwnerUserId(route.agentId(), tenantId);
             sessionQueryService.updateClientContextJson(contextId, agentOwnerUserId, route.agentId(), clientContextJson);
         }
         bindBusinessAgentSessionIfPossible(
@@ -688,6 +694,15 @@ public class OpenApiController {
 
     private boolean isBackend(String actual, String expected) {
         return expected.equals(ProviderRouteRegistry.canonicalWorkerBackendOrNull(actual));
+    }
+
+    private boolean requiresTaskDirectory(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedModelResource modelResource) {
+        String workerBackend = firstNonBlank(
+                modelResource != null ? modelResource.workerBackend() : null,
+                agentResource != null ? agentResource.workerBackend() : null);
+        return isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ);
     }
 
     private void injectWorkspaceExecutionPolicy(

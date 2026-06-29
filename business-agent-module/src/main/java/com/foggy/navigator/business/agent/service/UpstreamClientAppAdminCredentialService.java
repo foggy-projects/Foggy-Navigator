@@ -17,6 +17,7 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 @Service
@@ -120,11 +121,34 @@ public class UpstreamClientAppAdminCredentialService {
     }
 
     public void requireTenant(UpstreamClientAppAdminPrincipal principal, String tenantId) {
-        if (principal == null || !StringUtils.hasText(tenantId)
-                || principal.getAuthorizedTenantIds() == null
-                || !principal.getAuthorizedTenantIds().contains(tenantId)) {
+        if (!isTenantAuthorized(principal, tenantId)) {
             throw new SecurityException("upstream admin credential tenant mismatch");
         }
+    }
+
+    public boolean isTenantAuthorized(UpstreamClientAppAdminPrincipal principal, String tenantId) {
+        if (principal == null || !StringUtils.hasText(tenantId)
+                || principal.getAuthorizedTenantIds() == null
+                || principal.getAuthorizedTenantIds().isEmpty()) {
+            return false;
+        }
+        String normalizedTenantId = tenantId.trim();
+        Set<String> authorizedTenantIds = principal.getAuthorizedTenantIds();
+        if (authorizedTenantIds.contains(normalizedTenantId)) {
+            return true;
+        }
+
+        String upstreamSystemId = trimToNull(principal.getUpstreamSystemId());
+        if (upstreamSystemId == null) {
+            return false;
+        }
+        String sourceTenantId = deriveSourceTenantId(upstreamSystemId, normalizedTenantId);
+        if (sourceTenantId == null) {
+            return false;
+        }
+        return authorizedTenantIds.contains(upstreamSystemId)
+                || authorizedTenantIds.contains(sourceTenantId)
+                || authorizedTenantIds.contains(upstreamSystemId + ":" + sourceTenantId);
     }
 
     public void requireScope(UpstreamClientAppAdminPrincipal principal, String requiredScope) {
@@ -149,6 +173,19 @@ public class UpstreamClientAppAdminCredentialService {
             return "upstream admin credential expired";
         }
         return null;
+    }
+
+    private String deriveSourceTenantId(String upstreamSystemId, String tenantId) {
+        String prefix = "nav_" + upstreamSystemId.toLowerCase(Locale.ROOT) + "_";
+        if (!tenantId.toLowerCase(Locale.ROOT).startsWith(prefix)) {
+            return null;
+        }
+        String sourceTenantId = tenantId.substring(prefix.length());
+        return StringUtils.hasText(sourceTenantId) ? sourceTenantId : null;
+    }
+
+    private String trimToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
     }
 
     private String requestMethod(HttpServletRequest request) {

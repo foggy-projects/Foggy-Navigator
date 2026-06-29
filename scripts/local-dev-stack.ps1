@@ -6,6 +6,7 @@ param(
     [switch]$NoClaude,
     [switch]$NoCodex,
     [switch]$NoGemini,
+    [switch]$NoWinBiz,
     [switch]$NoWslBiz,
     [switch]$SyncWslBizSource
 )
@@ -203,6 +204,8 @@ function Write-WslBizStatus {
 $ClaudePort = [int](Get-DotEnvValue -Path (Join-Path $RepoRoot "tools\claude-agent-worker\.env") -Key "AGENT_WORKER_PORT" -DefaultValue "3031")
 $CodexPort = [int](Get-DotEnvValue -Path (Join-Path $RepoRoot "tools\codex-agent-worker\.env") -Key "CODEX_WORKER_PORT" -DefaultValue "3051")
 $GeminiPort = [int](Get-DotEnvValue -Path (Join-Path $RepoRoot "tools\gemini-agent-worker\.env") -Key "GEMINI_WORKER_PORT" -DefaultValue "3071")
+$WinBizPortDefault = Get-DotEnvValue -Path (Join-Path $RepoRoot "tools\langgraph-biz-worker\.env") -Key "BIZ_WORKER_PORT" -DefaultValue "3061"
+$WinBizPort = [int](Get-DotEnvValue -Path (Join-Path $RepoRoot "tools\langgraph-biz-worker\.env.local") -Key "BIZ_WORKER_PORT" -DefaultValue $WinBizPortDefault)
 
 Set-Location $RepoRoot
 
@@ -211,6 +214,7 @@ if ($Action -eq "status") {
     if (-not $NoClaude) { Write-PortStatus -Label "claude-worker" -Port $ClaudePort -HealthUrl "http://127.0.0.1:$ClaudePort/health" }
     if (-not $NoCodex) { Write-PortStatus -Label "codex-worker" -Port $CodexPort -HealthUrl "http://127.0.0.1:$CodexPort/health" }
     if (-not $NoGemini) { Write-PortStatus -Label "gemini-worker" -Port $GeminiPort -HealthUrl "http://127.0.0.1:$GeminiPort/health" }
+    if (-not $NoWinBiz) { Write-PortStatus -Label "win-biz-worker" -Port $WinBizPort -HealthUrl "http://127.0.0.1:$WinBizPort/health" }
     Write-WslBizStatus
     exit 0
 }
@@ -219,6 +223,7 @@ if ($Action -eq "stop" -or $Action -eq "restart") {
     if (-not $NoGemini) { Invoke-RepoScript -Label "Stop Gemini Worker" -RelativePath "tools\gemini-agent-worker\stop.ps1" }
     if (-not $NoCodex) { Invoke-RepoScript -Label "Stop Codex Worker" -RelativePath "tools\codex-agent-worker\stop.ps1" }
     if (-not $NoClaude) { Invoke-RepoScript -Label "Stop Claude Worker" -RelativePath "tools\claude-agent-worker\stop.ps1" }
+    if (-not $NoWinBiz) { Invoke-RepoScript -Label "Stop Windows LangGraph Biz Worker" -RelativePath "tools\langgraph-biz-worker\stop.ps1" }
     if (-not $NoBackend) { Invoke-RepoScript -Label "Stop Java Backend" -RelativePath "stop-launcher.ps1" }
     Invoke-WslBizStop
 }
@@ -231,6 +236,7 @@ if ($Action -eq "stop") {
 
 if ($Action -eq "start" -or $Action -eq "restart") {
     Invoke-WslBizStart
+    if (-not $NoWinBiz) { Invoke-RepoScript -Label "Start Windows LangGraph Biz Worker" -RelativePath "tools\langgraph-biz-worker\start.ps1" }
     if (-not $NoClaude) { Invoke-RepoScript -Label "Start Claude Worker" -RelativePath "tools\claude-agent-worker\start.ps1" }
     if (-not $NoCodex) { Invoke-RepoScript -Label "Start Codex Worker" -RelativePath "tools\codex-agent-worker\start.ps1" }
     if (-not $NoGemini) { Invoke-RepoScript -Label "Start Gemini Worker" -RelativePath "tools\gemini-agent-worker\start.ps1" }
@@ -250,4 +256,5 @@ if (-not $NoBackend) { Write-PortStatus -Label "backend" -Port $BackendPort -Hea
 if (-not $NoClaude) { Write-PortStatus -Label "claude-worker" -Port $ClaudePort -HealthUrl "http://127.0.0.1:$ClaudePort/health" }
 if (-not $NoCodex) { Write-PortStatus -Label "codex-worker" -Port $CodexPort -HealthUrl "http://127.0.0.1:$CodexPort/health" }
 if (-not $NoGemini) { Write-PortStatus -Label "gemini-worker" -Port $GeminiPort -HealthUrl "http://127.0.0.1:$GeminiPort/health" }
+if (-not $NoWinBiz) { Write-PortStatus -Label "win-biz-worker" -Port $WinBizPort -HealthUrl "http://127.0.0.1:$WinBizPort/health" }
 Write-WslBizStatus

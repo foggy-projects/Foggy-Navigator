@@ -5,6 +5,7 @@ import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
@@ -47,6 +48,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
@@ -382,6 +384,7 @@ class CodexTaskServiceTest {
         params.put("prompt", "hello");
         params.put("codexHomeKey", "tenant/world-sim/scenario-1/actor-1");
         params.put("developerInstructions", "Return valid JSON.");
+        params.put("businessRuntimeContext", Map.of("task_scoped_token", "token-1"));
         params.put("outputSchema", outputSchema);
         params.put("codexConfig", codexConfig);
         params.put("sandboxMode", "workspace-write");
@@ -395,6 +398,7 @@ class CodexTaskServiceTest {
                 "codex-worker".equals(event.getProviderType())
                         && event.getProviderConfigString("codexHomeKey") == null
                         && event.getProviderConfigString("developerInstructions") == null
+                        && event.getProviderConfigValue("businessRuntimeContext") == null
                         && event.getProviderConfigValue("outputSchema") == null
                         && event.getProviderConfigValue("codexConfig") == null
                         && event.getProviderConfigString("sandboxMode") == null
@@ -417,12 +421,14 @@ class CodexTaskServiceTest {
 
         Map<String, Object> outputSchema = Map.of("type", "object");
         Map<String, Object> codexConfig = Map.of("tool_output_token_limit", 4096);
+        Map<String, Object> businessRuntimeContext = Map.of("task_scoped_token", "token-1");
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("providerType", "codex-biz-worker");
         params.put("workerId", "worker-1");
         params.put("prompt", "hello");
         params.put("codexHomeKey", "tenant/world-sim/scenario-1/actor-1");
         params.put("developerInstructions", "Return valid JSON.");
+        params.put("businessRuntimeContext", businessRuntimeContext);
         params.put("outputSchema", outputSchema);
         params.put("codexConfig", codexConfig);
         params.put("sandboxMode", "workspace-write");
@@ -437,6 +443,7 @@ class CodexTaskServiceTest {
                 "codex-biz-worker".equals(event.getProviderType())
                         && "tenant/world-sim/scenario-1/actor-1".equals(event.getProviderConfigString("codexHomeKey"))
                         && "Return valid JSON.".equals(event.getProviderConfigString("developerInstructions"))
+                        && businessRuntimeContext.equals(event.getProviderConfigValue("businessRuntimeContext"))
                         && outputSchema.equals(event.getProviderConfigValue("outputSchema"))
                         && codexConfig.equals(event.getProviderConfigValue("codexConfig"))
                         && "workspace-write".equals(event.getProviderConfigString("sandboxMode"))
@@ -467,12 +474,14 @@ class CodexTaskServiceTest {
 
         Map<String, Object> outputSchema = Map.of("type", "object");
         Map<String, Object> codexConfig = Map.of("tool_output_token_limit", 4096);
+        Map<String, Object> snakeCaseBusinessRuntimeContext = Map.of("task_scoped_token", "token-2");
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("providerType", "codex-biz-worker");
         params.put("workerId", "worker-1");
         params.put("prompt", "hello");
         params.put("codex_home_key", "tenant/world-sim/scenario-1/actor-2");
         params.put("developer_instructions", "Return valid JSON.");
+        params.put("business_runtime_context", snakeCaseBusinessRuntimeContext);
         params.put("output_schema", outputSchema);
         params.put("codex_config", codexConfig);
         params.put("sandbox_mode", "workspace-write");
@@ -488,6 +497,7 @@ class CodexTaskServiceTest {
                 "codex-biz-worker".equals(event.getProviderType())
                         && "tenant/world-sim/scenario-1/actor-2".equals(event.getProviderConfigString("codexHomeKey"))
                         && "Return valid JSON.".equals(event.getProviderConfigString("developerInstructions"))
+                        && snakeCaseBusinessRuntimeContext.equals(event.getProviderConfigValue("businessRuntimeContext"))
                         && outputSchema.equals(event.getProviderConfigValue("outputSchema"))
                         && codexConfig.equals(event.getProviderConfigValue("codexConfig"))
                         && "workspace-write".equals(event.getProviderConfigString("sandboxMode"))
@@ -496,6 +506,44 @@ class CodexTaskServiceTest {
                         && "disabled".equals(event.getProviderConfigString("webSearchMode"))
                         && List.of("D:/shared").equals(event.getProviderConfigValue("additionalDirectories"))
         ));
+    }
+
+    @Test
+    void createTaskDirect_acceptsPrivateAccountIdAliasForCodexBizProvider() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("providerType", "codex-biz-worker");
+        params.put("workerId", "worker-1");
+        params.put("prompt", "hello");
+        params.put("privateAccountId", "tenant/world-sim/scenario-1/actor-3");
+
+        DispatchTaskDTO result = service.createTaskDirect(params, "user-1", "tenant-1");
+
+        assertEquals("codex-biz-worker", result.getProviderType());
+        verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
+                "codex-biz-worker".equals(event.getProviderType())
+                        && "tenant/world-sim/scenario-1/actor-3".equals(event.getProviderConfigString("codexHomeKey"))
+        ));
+    }
+
+    @Test
+    void createTask_rejectsLegacyCodexBizProviderWithoutScopedHomeKey() {
+        CreateCodexTaskForm form = new CreateCodexTaskForm();
+        form.setProviderType("codex-biz-worker");
+        form.setWorkerId("worker-1");
+        form.setPrompt("hello");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.createTask("user-1", "tenant-1", form));
+
+        assertEquals("codex-biz-worker requires codexHomeKey or privateAccountId", error.getMessage());
+        verify(taskRepository, never()).save(any());
     }
 
     @Test

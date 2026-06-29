@@ -59,6 +59,8 @@ class LanggraphTaskServiceTest {
     private static final String WORKER_ID = "worker-1";
     private static final String SESSION_ID = "session-001";
     private static final String AGENT_ID = "tms-agent-v305";
+    private static final String DIRECTORY_ID = "dir-001";
+    private static final String CWD = "D:/workspace/tms-order-clerk";
 
     @BeforeEach
     void setUp() {
@@ -94,6 +96,8 @@ class LanggraphTaskServiceTest {
         form.setSessionId(SESSION_ID);
         form.setModel("claude-sonnet");
         form.setModelConfigId("cfg-langgraph");
+        form.setDirectoryId(DIRECTORY_ID);
+        form.setCwd(CWD);
         return form;
     }
 
@@ -132,6 +136,8 @@ class LanggraphTaskServiceTest {
             assertEquals(TENANT_ID, saved.getTenantId());
             assertEquals(WORKER_ID, saved.getWorkerId());
             assertEquals(AGENT_ID, saved.getAgentId());
+            assertEquals(DIRECTORY_ID, saved.getDirectoryId());
+            assertEquals(CWD, saved.getCwd());
             assertNotNull(saved.getTaskId());
             assertTrue(saved.getTaskId().startsWith("lgt_"));
 
@@ -198,6 +204,43 @@ class LanggraphTaskServiceTest {
         }
 
         @Test
+        @SuppressWarnings("unchecked")
+        void createTaskDirect_accepts_snake_case_runtime_context_alias() {
+            var savedTask = new java.util.concurrent.atomic.AtomicReference<LanggraphTaskEntity>();
+            when(taskRepository.save(any(LanggraphTaskEntity.class))).thenAnswer(inv -> {
+                LanggraphTaskEntity entity = inv.getArgument(0);
+                savedTask.set(entity);
+                return entity;
+            });
+            when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> {
+                LanggraphTaskEntity entity = savedTask.get();
+                return entity != null && invocation.getArgument(0).equals(entity.getTaskId())
+                        ? Optional.of(entity)
+                        : Optional.empty();
+            });
+
+            Map<String, Object> params = directTaskParams();
+            params.put("runtime_context", Map.of(
+                    "execution_policy", Map.of(
+                            "workdir", "/workspace/user",
+                            "allowed_dirs", List.of("/workspace/user"))));
+
+            service.createTaskDirect(params, USER_ID, TENANT_ID);
+
+            ArgumentCaptor<WorkerTaskStartEvent> captor =
+                    ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
+            verify(eventPublisher).publishEvent(captor.capture());
+
+            Map<String, Object> runtimeContext =
+                    (Map<String, Object>) captor.getValue().getProviderConfig().get("runtimeContext");
+            assertNotNull(runtimeContext);
+            Map<String, Object> executionPolicy =
+                    (Map<String, Object>) runtimeContext.get("execution_policy");
+            assertEquals("/workspace/user", executionPolicy.get("workdir"));
+            assertEquals(List.of("/workspace/user"), executionPolicy.get("allowed_dirs"));
+        }
+
+        @Test
         void createTaskDirect_rejects_conflicting_skill_aliases() {
             Map<String, Object> params = directTaskParams();
             params.put("skill_name", "canonical.skill");
@@ -209,6 +252,21 @@ class LanggraphTaskServiceTest {
             assertEquals("skill_name aliases must resolve to the same value", error.getMessage());
             verify(eventPublisher, never()).publishEvent(any());
             verify(taskRepository, never()).save(any());
+        }
+
+        @Test
+        void rejects_missing_directoryId_before_resolving_worker_or_session() {
+            CreateLanggraphTaskForm form = makeForm();
+            form.setDirectoryId(" ");
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> service.createTask(USER_ID, TENANT_ID, form));
+
+            assertTrue(error.getMessage().contains(LanggraphTaskService.TASK_DIRECTORY_REQUIRED));
+            verify(workerService, never()).getWorkerEntity(anyString());
+            verify(sessionManager, never()).getSession(anyString());
+            verify(taskRepository, never()).save(any());
+            verify(eventPublisher, never()).publishEvent(any());
         }
 
         @Test
@@ -368,6 +426,8 @@ class LanggraphTaskServiceTest {
         params.put("sessionId", SESSION_ID);
         params.put("model", "claude-sonnet");
         params.put("modelConfigId", "cfg-langgraph");
+        params.put("directoryId", DIRECTORY_ID);
+        params.put("cwd", CWD);
         return params;
     }
 

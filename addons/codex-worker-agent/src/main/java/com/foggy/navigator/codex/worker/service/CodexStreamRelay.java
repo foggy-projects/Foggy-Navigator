@@ -107,6 +107,8 @@ public class CodexStreamRelay {
             String codexHomeKey = blankToNull(event.getProviderConfigString("codexHomeKey"));
             String developerInstructions = blankToNull(event.getProviderConfigString("developerInstructions"));
             @SuppressWarnings("unchecked")
+            Map<String, Object> businessRuntimeContext = event.getProviderConfigValue("businessRuntimeContext");
+            @SuppressWarnings("unchecked")
             Map<String, Object> outputSchema = event.getProviderConfigValue("outputSchema");
             @SuppressWarnings("unchecked")
             Map<String, Object> codexConfig = event.getProviderConfigValue("codexConfig");
@@ -138,7 +140,8 @@ public class CodexStreamRelay {
                     codexThreadId, event.getModel(),
                     event.getMaxTurns(), images, attachments, event.getApiKey(), baseUrl, extraEnvVars,
                     codexHomeKey, developerInstructions, outputSchema, codexConfig,
-                    sandboxMode, approvalPolicy, networkAccessEnabled, webSearchMode, additionalDirectories);
+                    sandboxMode, approvalPolicy, networkAccessEnabled, webSearchMode,
+                    businessRuntimeContext, additionalDirectories);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId, providerType,
                     detectedModel, detectedCodexThreadId, 0);

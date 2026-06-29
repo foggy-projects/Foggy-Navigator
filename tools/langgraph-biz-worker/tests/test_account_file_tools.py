@@ -246,6 +246,8 @@ class TestWriteFile:
 
         assert result["ok"]
         assert (workspace / "agent/skills" / "my-skill" / "SKILL.md").is_file()
+        assert result["storage_mode"] == "delegated"
+        assert result["summary"] == "delegated workspace file created"
         assert tools.audit_records[0]["account_id"] == "delegated"
 
     def test_delegated_workspace_account_policy_write_rejected(self, tmp_path: Path):

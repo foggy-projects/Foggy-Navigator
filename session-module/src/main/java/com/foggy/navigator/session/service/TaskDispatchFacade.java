@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
@@ -11,6 +12,7 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
+import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
@@ -68,6 +70,10 @@ public class TaskDispatchFacade {
     @Nullable
     private WorkingDirectoryRepository workingDirectoryRepository;
 
+    @Autowired(required = false)
+    @Nullable
+    private AgentConversationContextRepository agentConversationContextRepository;
+
     public TaskDispatchFacade(UnifiedAgentResolver agentResolver,
                               SessionBindingService bindingService,
                               SessionRepository sessionRepository,
@@ -119,6 +125,11 @@ public class TaskDispatchFacade {
      * 4. 返回统一 DTO
      */
     public DispatchTaskDTO createTask(TaskDispatchRequest request, AgentResolveContext context) {
+        validateContextBindingBeforeDispatch(request, context);
+        if (bindContinuationFromContext(request, context)) {
+            return resumeTask(request, context);
+        }
+
         TaskCreateTargetResolver.CreateExecutionTarget target = createTargetResolver().resolveCreateExecutionTarget(request);
         if (target.directProviderRoute()) {
             return createTaskDirect(target.providerType(), request, context);
@@ -152,6 +163,7 @@ public class TaskDispatchFacade {
 
         DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, providerType, request);
         persistTaskRequestFields(dto.getTaskId(), request);
+        persistContextBinding(dto, request, context, providerType);
         return dto;
     }
 
@@ -287,6 +299,7 @@ public class TaskDispatchFacade {
     public DispatchTaskDTO resumeTask(TaskDispatchRequest request, AgentResolveContext context) {
         DispatchTaskDTO dto = operationRouter().resumeTask(request, context);
         persistTaskRequestFields(dto.getTaskId(), request);
+        persistContextBinding(dto, request, context, dto.getProviderType());
         return dto;
     }
 
@@ -937,7 +950,197 @@ public class TaskDispatchFacade {
     private DispatchTaskDTO createTaskDirect(String providerType, TaskDispatchRequest request, AgentResolveContext context) {
         DispatchTaskDTO dto = operationRouter().createTaskDirect(providerType, request, context);
         persistTaskRequestFields(dto.getTaskId(), request);
+        persistContextBinding(dto, request, context, providerType);
         return dto;
+    }
+
+    private boolean bindContinuationFromContext(TaskDispatchRequest request, AgentResolveContext context) {
+        if (agentConversationContextRepository == null) {
+            return false;
+        }
+        String contextId = trimToNull(request.getContextId());
+        String userId = context != null ? trimToNull(context.getUserId()) : null;
+        if (contextId == null || userId == null) {
+            return false;
+        }
+
+        AgentConversationContextEntity boundContext = agentConversationContextRepository
+                .findByContextIdAndUserId(contextId, userId)
+                .orElse(null);
+        if (boundContext == null) {
+            return false;
+        }
+
+        validateContextAgentCompatibility(request, boundContext);
+
+        String navigatorSessionId = trimToNull(boundContext.getNavigatorSessionId());
+        if (navigatorSessionId == null) {
+            return false;
+        }
+
+        String requestedSessionId = trimToNull(request.getSessionId());
+        if (requestedSessionId != null && !requestedSessionId.equals(navigatorSessionId)) {
+            throw new IllegalArgumentException(
+                    "CONTEXT_SESSION_MISMATCH: contextId " + contextId
+                            + " is bound to session " + navigatorSessionId
+                            + ", but request sessionId is " + requestedSessionId);
+        }
+
+        SessionEntity session = sessionRepository.findById(navigatorSessionId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "CONTEXT_SESSION_MISMATCH: contextId " + contextId
+                                + " is bound to missing session " + navigatorSessionId));
+        validateContextSessionCompatibility(request, session);
+        request.setSessionId(navigatorSessionId);
+        fillFromBoundSession(request, session);
+        String targetAgentId = trimToNull(boundContext.getTargetAgentId());
+        if (trimToNull(request.getAgentId()) == null && targetAgentId != null) {
+            request.setAgentId(targetAgentId);
+        }
+        return true;
+    }
+
+    private void validateContextBindingBeforeDispatch(TaskDispatchRequest request, AgentResolveContext context) {
+        if (agentConversationContextRepository == null || request == null) {
+            return;
+        }
+        String contextId = trimToNull(request.getContextId());
+        String userId = context != null ? trimToNull(context.getUserId()) : null;
+        if (contextId == null || userId == null) {
+            return;
+        }
+
+        agentConversationContextRepository.findById(contextId).ifPresent(existing -> {
+            String existingUserId = trimToNull(existing.getUserId());
+            if (existingUserId != null && !existingUserId.equals(userId)) {
+                throw new IllegalArgumentException(
+                        "CONTEXT_WORKER_MISMATCH: contextId " + contextId + " is already bound to another user");
+            }
+            String existingTargetAgentId = trimToNull(existing.getTargetAgentId());
+            String requestedAgentId = trimToNull(request.getAgentId());
+            if (existingTargetAgentId != null && requestedAgentId != null && !existingTargetAgentId.equals(requestedAgentId)) {
+                throw new IllegalArgumentException(
+                        "CONTEXT_WORKER_MISMATCH: contextId " + contextId
+                                + " is already bound to agent " + existingTargetAgentId
+                                + ", but request agentId is " + requestedAgentId);
+            }
+            String existingSessionId = trimToNull(existing.getNavigatorSessionId());
+            String requestedSessionId = trimToNull(request.getSessionId());
+            if (existingSessionId != null && requestedSessionId != null && !existingSessionId.equals(requestedSessionId)) {
+                throw new IllegalArgumentException(
+                        "CONTEXT_SESSION_MISMATCH: contextId " + contextId
+                                + " is bound to session " + existingSessionId
+                                + ", but request sessionId is " + requestedSessionId);
+            }
+        });
+    }
+
+    private void validateContextAgentCompatibility(TaskDispatchRequest request,
+                                                   AgentConversationContextEntity boundContext) {
+        String requestedAgentId = trimToNull(request.getAgentId());
+        String targetAgentId = trimToNull(boundContext.getTargetAgentId());
+        if (requestedAgentId != null && targetAgentId != null && !requestedAgentId.equals(targetAgentId)) {
+            throw new IllegalArgumentException(
+                    "CONTEXT_WORKER_MISMATCH: contextId " + boundContext.getContextId()
+                            + " is bound to agent " + targetAgentId
+                            + ", but request agentId is " + requestedAgentId);
+        }
+    }
+
+    private void validateContextSessionCompatibility(TaskDispatchRequest request, SessionEntity session) {
+        String boundProvider = trimToNull(session.getProviderType());
+        String requestedProvider = trimToNull(request.getProviderType());
+        if (requestedProvider != null && boundProvider != null && !requestedProvider.equals(boundProvider)) {
+            throw new IllegalArgumentException(
+                    "CONTEXT_WORKER_MISMATCH: providerType " + requestedProvider
+                            + " conflicts with context/session-bound provider " + boundProvider);
+        }
+
+        String boundWorkerId = trimToNull(session.getCurrentWorkerId());
+        String requestedWorkerId = trimToNull(request.getWorkerId());
+        if (requestedWorkerId != null && boundWorkerId != null && !requestedWorkerId.equals(boundWorkerId)) {
+            throw new IllegalArgumentException(
+                    "CONTEXT_WORKER_MISMATCH: workerId " + requestedWorkerId
+                            + " conflicts with context/session-bound worker " + boundWorkerId);
+        }
+
+        String boundDirectoryId = trimToNull(session.getCurrentDirectoryId());
+        String requestedDirectoryId = trimToNull(request.getDirectoryId());
+        if (requestedDirectoryId != null && boundDirectoryId != null && !requestedDirectoryId.equals(boundDirectoryId)) {
+            throw new IllegalArgumentException(
+                    "CONTEXT_WORKER_MISMATCH: directoryId " + requestedDirectoryId
+                            + " conflicts with context/session-bound directory " + boundDirectoryId);
+        }
+    }
+
+    private void fillFromBoundSession(TaskDispatchRequest request, SessionEntity session) {
+        if (trimToNull(request.getProviderType()) == null) {
+            request.setProviderType(trimToNull(session.getProviderType()));
+        }
+        if (trimToNull(request.getWorkerId()) == null) {
+            request.setWorkerId(trimToNull(session.getCurrentWorkerId()));
+        }
+        if (trimToNull(request.getDirectoryId()) == null) {
+            request.setDirectoryId(trimToNull(session.getCurrentDirectoryId()));
+        }
+    }
+
+    private void persistContextBinding(DispatchTaskDTO dto,
+                                       TaskDispatchRequest request,
+                                       AgentResolveContext context,
+                                       String providerType) {
+        if (agentConversationContextRepository == null || dto == null) {
+            return;
+        }
+        String contextId = trimToNull(firstNonBlank(dto.getContextId(), request.getContextId()));
+        String userId = context != null ? trimToNull(context.getUserId()) : null;
+        String sessionId = trimToNull(dto.getSessionId());
+        if (contextId == null || userId == null || sessionId == null) {
+            return;
+        }
+
+        String targetAgentId = firstNonBlank(dto.getAgentId(), request.getAgentId(), providerType, dto.getProviderType());
+        String resolvedProviderType = firstNonBlank(dto.getProviderType(), providerType, request.getProviderType());
+        String agentSessionRef = firstNonBlank(
+                dto.getClaudeSessionId(),
+                dto.getCodexThreadId(),
+                dto.getGeminiSessionId(),
+                dto.getWorkerTaskId());
+
+        AgentConversationContextEntity entity = agentConversationContextRepository.findById(contextId)
+                .orElseGet(AgentConversationContextEntity::new);
+        if (entity.getContextId() == null) {
+            entity.setContextId(contextId);
+        }
+        String existingUserId = trimToNull(entity.getUserId());
+        if (existingUserId != null && !existingUserId.equals(userId)) {
+            throw new IllegalArgumentException(
+                    "CONTEXT_WORKER_MISMATCH: contextId " + contextId + " is already bound to another user");
+        }
+        String existingTargetAgentId = trimToNull(entity.getTargetAgentId());
+        if (existingTargetAgentId != null && targetAgentId != null && !existingTargetAgentId.equals(targetAgentId)) {
+            throw new IllegalArgumentException(
+                    "CONTEXT_WORKER_MISMATCH: contextId " + contextId
+                            + " is already bound to agent " + existingTargetAgentId
+                            + ", but dispatched agent is " + targetAgentId);
+        }
+
+        entity.setUserId(userId);
+        entity.setTargetAgentId(firstNonBlank(existingTargetAgentId, targetAgentId, resolvedProviderType));
+        entity.setAgentType(firstNonBlank(resolvedProviderType, entity.getAgentType(), "unknown"));
+        entity.setAgentSessionRef(firstNonBlank(agentSessionRef, entity.getAgentSessionRef()));
+        entity.setNavigatorSessionId(sessionId);
+        if (request.getContextAlias() != null && !request.getContextAlias().isBlank()) {
+            entity.setContextAlias(request.getContextAlias().trim());
+        }
+        agentConversationContextRepository.save(entity);
+    }
+
+    private String trimToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     private String resolveLogicalAgentId(A2aAgent agent, String lookupId) {

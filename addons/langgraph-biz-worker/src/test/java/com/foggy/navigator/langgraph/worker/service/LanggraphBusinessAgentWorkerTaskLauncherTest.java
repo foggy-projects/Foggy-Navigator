@@ -85,6 +85,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertEquals("session_01", form.getSessionId());
         assertEquals("ctx_01", form.getContextId());
         assertEquals("model_01", form.getModelConfigId());
+        assertEquals("dir_01", form.getDirectoryId());
+        assertEquals("D:/workspace/app", form.getCwd());
         assertFalse(form.getPrompt().contains("skill_01"));
         assertEquals("bt_01", form.getContext().get("businessTaskId"));
         assertEquals("ctx_01", form.getContext().get("contextId"));

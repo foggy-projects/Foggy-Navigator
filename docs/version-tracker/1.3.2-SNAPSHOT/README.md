@@ -10,6 +10,26 @@
 
 本版本优先把 `codex-biz-worker` 从“已有可用路由”推进到“可交给上游业务继续联调”的 readiness 状态：固定 OpenAPI/统一分派/Worker 请求契约，补齐缺失的回归保护，暴露非敏感 Worker 诊断，并给出 scoped `CODEX_HOME` 的可执行 smoke 入口。
 
+路线定位：`LANGGRAPH_BIZ` / LangBizWorker 与 `codex-biz-worker` / CodexBizWorker 是互补路线。企业应用和正式业务编排默认继续使用 LangBizWorker；CodexBizWorker 面向内部调试、开发者自用和 Codex-native 执行/诊断，必须显式 opt-in，不作为原 BizWorker 的透明替换。
+
+后续补充 `LANGGRAPH_BIZ` Actor-owned BizWorker 目录契约：Actor-owned 任务必须携带 `directoryId`，OpenAPI / BusinessAgentTaskService / LangGraph direct create 均 fail-fast；A2A / launcher / direct create 透传 `directoryId` 和 `cwd`；Python delegated workspace 文件工具写入 Actor Home，并在结果中标明 storage mode。
+
+## 版本状态
+
+- status: signed-off
+- decision: accepted
+- signed_off_at: 2026-06-29
+- acceptance_record: [acceptance/OPT-001-codex-biz-route-readiness-acceptance.md](./acceptance/OPT-001-codex-biz-route-readiness-acceptance.md)
+- follow_up_status: ready-for-signoff
+- follow_up_record: [workitems/OPT-002-langgraph-biz-actor-home-readiness.md](./workitems/OPT-002-langgraph-biz-actor-home-readiness.md)
+
 ## 文档清单
 
 - [workitems/OPT-001-codex-biz-route-readiness.md](./workitems/OPT-001-codex-biz-route-readiness.md) - Codex Biz Route readiness 与 1~5 推进计划
+- [quality/OPT-001-implementation-quality.md](./quality/OPT-001-implementation-quality.md) - 实现质量门禁记录
+- [coverage/OPT-001-coverage-audit.md](./coverage/OPT-001-coverage-audit.md) - 测试覆盖审计记录
+- [acceptance/OPT-001-codex-biz-route-readiness-acceptance.md](./acceptance/OPT-001-codex-biz-route-readiness-acceptance.md) - 功能级签收记录
+- [workitems/OPT-002-langgraph-biz-actor-home-readiness.md](./workitems/OPT-002-langgraph-biz-actor-home-readiness.md) - LangGraph BizWorker Actor Home 目录契约与文件工具对齐
+- [quality/OPT-002-implementation-quality.md](./quality/OPT-002-implementation-quality.md) - OPT-002 实现质量门禁记录
+- [coverage/OPT-002-coverage-audit.md](./coverage/OPT-002-coverage-audit.md) - OPT-002 测试覆盖审计记录
+- [acceptance/OPT-002-langgraph-biz-actor-home-readiness-acceptance.md](./acceptance/OPT-002-langgraph-biz-actor-home-readiness-acceptance.md) - OPT-002 待签收记录

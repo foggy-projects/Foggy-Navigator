@@ -49,6 +49,7 @@ class CodexWorkerClientTest {
                     "never",
                     false,
                     "disabled",
+                    Map.of("task_scoped_token", "token-1"),
                     List.of("D:/shared")
             ).blockFirst(Duration.ofSeconds(5));
 
@@ -64,6 +65,7 @@ class CodexWorkerClientTest {
             assertEquals("never", body.get("approval_policy"));
             assertEquals(false, body.get("network_access_enabled"));
             assertEquals("disabled", body.get("web_search_mode"));
+            assertEquals(Map.of("task_scoped_token", "token-1"), body.get("business_runtime_context"));
             assertEquals(List.of("D:/shared"), body.get("additional_directories"));
         }
     }
@@ -99,6 +101,7 @@ class CodexWorkerClientTest {
             assertFalse(body.containsKey("approval_policy"));
             assertFalse(body.containsKey("network_access_enabled"));
             assertFalse(body.containsKey("web_search_mode"));
+            assertFalse(body.containsKey("business_runtime_context"));
             assertFalse(body.containsKey("additional_directories"));
         }
     }

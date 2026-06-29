@@ -55,6 +55,9 @@ import java.util.UUID;
 public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProvider {
 
     public static final String PROVIDER_TYPE = "langgraph-biz-worker";
+    public static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
+    private static final String TASK_DIRECTORY_REQUIRED_MESSAGE =
+            TASK_DIRECTORY_REQUIRED + ": directoryId is required for Actor-owned BizWorker task";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
             TaskQueryCapability.CREATE_TASK_DIRECT,
@@ -130,7 +133,8 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
             Map<String, Object> contextMap = (Map<String, Object>) ctx;
             form.setContext(contextMap);
         }
-        if (params.get("runtimeContext") instanceof Map<?, ?> runtimeCtx) {
+        Object rawRuntimeContext = firstPresent(params, "runtimeContext", "runtime_context");
+        if (rawRuntimeContext instanceof Map<?, ?> runtimeCtx) {
             @SuppressWarnings("unchecked")
             Map<String, Object> runtimeContextMap = (Map<String, Object>) runtimeCtx;
             form.setRuntimeContext(runtimeContextMap);
@@ -144,6 +148,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
 
     @Transactional
     public LanggraphTaskDTO createTask(String userId, String tenantId, CreateLanggraphTaskForm form) {
+        requireTaskDirectoryId(form);
         String workerId = resolveCompatibleWorkerId(tenantId, form.getWorkerId());
 
         // 1. Create or reuse session
@@ -215,6 +220,13 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
                 taskId, sessionId, workerId);
 
         return toDTO(entity);
+    }
+
+    private void requireTaskDirectoryId(CreateLanggraphTaskForm form) {
+        if (form == null || !StringUtils.hasText(form.getDirectoryId())) {
+            throw new IllegalArgumentException(TASK_DIRECTORY_REQUIRED_MESSAGE);
+        }
+        form.setDirectoryId(form.getDirectoryId().trim());
     }
 
     private String resolveCompatibleWorkerId(String tenantId, String workerId) {

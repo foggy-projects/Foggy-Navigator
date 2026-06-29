@@ -156,7 +156,7 @@ class ClientAppModelConfigGrantServiceTest {
                         "LANGGRAPH_BIZ",
                         LlmModelCategory.GENERAL,
                         ResourceOwnerType.UPSTREAM_SYSTEM,
-                        "ups-1")));
+                        "UPS-1")));
 
         service.grantModelConfig("tenant-1", "admin-1", "capp-1", grantForm("cfg-system", false));
 

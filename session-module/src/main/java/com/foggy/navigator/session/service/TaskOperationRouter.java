@@ -260,7 +260,7 @@ final class TaskOperationRouter {
     }
 
     /**
-     * Resume 上下文规范化：session 已绑定 provider 时，静默修正冲突的 providerType/modelConfigId。
+     * Resume 上下文规范化：session 已绑定 provider 时，拒绝冲突的 providerType，并清除不兼容 modelConfigId。
      */
     private void normalizeResumeRequest(TaskDispatchRequest request, String resolvedProviderType) {
         if (resolvedProviderType == null || resolvedProviderType.isBlank()) {
@@ -268,10 +268,12 @@ final class TaskOperationRouter {
         }
 
         String reqProvider = request.getProviderType();
-        if (reqProvider != null && !reqProvider.isBlank() && !resolvedProviderType.equals(reqProvider)) {
-            log.info("Resume normalize: overriding providerType {} -> {} (session-bound)",
-                    reqProvider, resolvedProviderType);
+        if (reqProvider == null || reqProvider.isBlank()) {
             request.setProviderType(resolvedProviderType);
+        } else if (!resolvedProviderType.equals(reqProvider)) {
+            throw new IllegalArgumentException(
+                    "CONTEXT_WORKER_MISMATCH: providerType " + reqProvider
+                            + " conflicts with context/session-bound provider " + resolvedProviderType);
         }
 
         String modelConfigId = request.getModelConfigId();

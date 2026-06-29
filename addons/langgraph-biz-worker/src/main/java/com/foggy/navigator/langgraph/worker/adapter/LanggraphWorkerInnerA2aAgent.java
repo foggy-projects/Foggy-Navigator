@@ -58,7 +58,12 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setAgentId(entity.getAgentId());
         form.setWorkerId(firstText(meta.get("workerId"), workerId));
         form.setPrompt(prompt);
-        form.setDirectoryId(entity.getDefaultDirectoryId());
+        form.setDirectoryId(firstText(
+                firstPresent(meta, "directoryId", "directory_id", "workingDirectoryId", "working_directory_id"),
+                entity.getDefaultDirectoryId()));
+        form.setCwd(firstText(
+                firstPresent(meta, "cwd", "workdir", "workDir", "workingDirectory", "working_directory"),
+                null));
         form.setModel(firstText(meta.get("model"), entity.getDefaultModel()));
         form.setModelConfigId(firstText(meta.get("modelConfigId"), entity.getDefaultModelConfigId()));
         form.setMaxTurns(positiveInteger(firstPresent(meta, "maxTurns", "max_turns")));
@@ -68,7 +73,7 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         if (meta.get("context") instanceof Map<?, ?> ctx) {
             form.setContext(clientContextWithoutSkillRouting(ctx));
         }
-        Object rawRuntimeContext = meta.get("runtimeContext");
+        Object rawRuntimeContext = firstPresent(meta, "runtimeContext", "runtime_context");
         if (rawRuntimeContext instanceof Map<?, ?> runtimeCtx) {
             form.setRuntimeContext(clientContextWithoutSkillRouting(runtimeCtx));
         }
@@ -217,7 +222,8 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
                 continue;
             }
             Object value = entry.getValue();
-            if (("context".equals(key) || "runtimeContext".equals(key)) && value instanceof Map<?, ?> nested) {
+            if (("context".equals(key) || "runtimeContext".equals(key) || "runtime_context".equals(key))
+                    && value instanceof Map<?, ?> nested) {
                 Map<String, Object> sanitized = clientContextWithoutSkillRouting(nested);
                 if (!sanitized.isEmpty()) {
                     metadata.put(key, sanitized);
@@ -236,6 +242,12 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         }
         if (task.getWorkerId() != null) {
             metadata.put("workerId", task.getWorkerId());
+        }
+        if (task.getDirectoryId() != null) {
+            metadata.put("directoryId", task.getDirectoryId());
+        }
+        if (task.getCwd() != null) {
+            metadata.put("cwd", task.getCwd());
         }
         return metadata;
     }

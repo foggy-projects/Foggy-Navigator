@@ -33,6 +33,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -89,7 +90,19 @@ class BusinessAgentTaskServiceTest {
                 .thenReturn(Optional.empty());
         lenient().when(resourceResolver.resolveOptionalWorkspaceForAgent(
                 anyString(), anyString(), anyString(), any(), any()))
-                .thenReturn(Optional.empty());
+                .thenReturn(Optional.of(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_01",
+                        "worker_01",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.DELEGATED,
+                        "D:/workspace/app",
+                        List.of("D:/workspace"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"
+                )));
         lenient().when(resourceResolver.resolveRequiredAgent(
                         "tenant_01", "app_01", "user_01", "agent_01"))
                 .thenReturn(new A2AgentResourceResolver.ResolvedAgentResource(
@@ -109,7 +122,7 @@ class BusinessAgentTaskServiceTest {
                         null,
                         null,
                         null,
-                        null,
+                        "dir_01",
                         "AGENT:CLIENT_APP"
                 ));
     }
@@ -463,6 +476,48 @@ class BusinessAgentTaskServiceTest {
 
         assertTrue(error.getMessage().contains("workdir/allowedDirs"));
         verify(resourceResolver, never()).resolveRequiredModelForAgent(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createTask_langgraphBizTaskMissingDirectory_rejected() {
+        when(resourceResolver.resolveRequiredAgent(
+                        "tenant_01", "app_01", "user_01", "agent_01"))
+                .thenReturn(new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent_01",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app_01",
+                        "app_01",
+                        "skill_01",
+                        "pool_01",
+                        ResourceOwnerType.PLATFORM,
+                        "tenant_01",
+                        "WORKER_POOL:PLATFORM",
+                        "LANGGRAPH_BIZ",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "AGENT:CLIENT_APP"
+                ));
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        when(resourceResolver.resolveOptionalWorkspaceForAgent(
+                eq("tenant_01"), eq("app_01"), eq("user_01"), any(), isNull()))
+                .thenReturn(Optional.empty());
+        doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
+        doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> taskService.createTask("tenant_01", "actor_01", form));
+
+        assertTrue(error.getMessage().contains(BusinessAgentTaskService.TASK_DIRECTORY_REQUIRED));
+        verify(taskRepository, never()).save(any());
+        verify(tokenRepository, never()).save(any());
     }
 
     @Test
