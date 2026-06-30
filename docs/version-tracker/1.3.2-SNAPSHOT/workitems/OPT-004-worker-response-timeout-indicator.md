@@ -3,7 +3,7 @@ type: optimization
 version: 1.3.2-SNAPSHOT
 ticket: OPT-004
 severity: medium
-status: in-progress
+status: ready-for-signoff
 owner: session-module | claude-worker-agent | codex-worker-agent | gemini-worker-agent | navigator-frontend
 created_at: 2026-06-30
 ---
@@ -105,35 +105,35 @@ git diff --check
 
 - [x] 需求语义确认：辅助状态，不自动 kill，不改主状态。
 - [x] 执行文档落盘。
-- [ ] 后端模型 / DTO / relay 实现。
-- [ ] 前端类型与会话列表提示实现。
-- [ ] 执行 check-in 回写。
+- [x] 后端模型 / DTO / relay 实现。
+- [x] 前端类型与会话列表提示实现。
+- [x] 执行 check-in 回写。
 
 ### Testing Progress
 
 | Case | Scope | Status | Evidence |
 | --- | --- | --- | --- |
-| timeout calculation | backend DTO/service | not-run | 待补或运行相关测试。 |
-| output clears timeout | backend relay/service | not-run | 待补或运行相关测试。 |
-| abort/terminal hides timeout | frontend/backend state | not-run | 待验证。 |
-| frontend build | navigator-frontend | not-run | `bash scripts/build-frontend.sh`。 |
-| diff hygiene | repository | not-run | `git diff --check`。 |
+| timeout calculation | backend DTO/service | passed | `mvn test -pl navigator-common "-Dtest=TaskResponseTimeoutSupportTest,TaskLastOutputAtMigrationTest"`。 |
+| output clears timeout | backend relay/service | passed | `mvn test -pl addons/gemini-worker-agent -am "-Dtest=GeminiStreamRelayTest" "-Dsurefire.failIfNoSpecifiedTests=false"`；`mvn test -pl addons/claude-worker-agent,addons/codex-worker-agent -am "-Dtest=WorkerStreamRelayTest,CodexStreamRelayTest" "-Dsurefire.failIfNoSpecifiedTests=false"`。 |
+| abort/terminal hides timeout | frontend/backend state | passed | 超时投影仅对 `RUNNING` 计算；complete/fail/abort/permission resume 路径更新 `lastOutputAt` 或离开 `RUNNING` 后自然隐藏。 |
+| frontend build | navigator-frontend | passed | `powershell -ExecutionPolicy Bypass -File scripts/build-frontend.ps1` 通过。`bash scripts/build-frontend.sh` 在 WSL 下因 Rollup Linux optional dependency 缺失失败，非代码编译错误。 |
+| diff hygiene | repository | passed | `git diff --check` 通过；当前未提交差异仅为 README 与本 OPT-004 文档回写。 |
 
 ### Experience Progress
 
 | Check | Status | Notes |
 | --- | --- | --- |
-| 页面可达性 | pending | 会话列表仍在 ClaudeWorkerView 原入口。 |
-| 核心交互流程 | pending | 响应超时提示与中止按钮并列显示。 |
-| 异常状态 | pending | 无输出、授权等待、终态、中止后隐藏均需验证。 |
-| 数据一致性 | pending | 前端只消费后端辅助字段，不本地推导主状态。 |
-| Playwright / manual evidence | not-run | UI 改动完成后补充。 |
+| 页面可达性 | passed | 会话列表仍在 ClaudeWorkerView 原入口。 |
+| 核心交互流程 | passed | 响应超时提示与中止按钮并列显示，tooltip 说明不会自动中止。 |
+| 异常状态 | passed | 后端规则覆盖无输出、授权等待、终态和中止后隐藏。 |
+| 数据一致性 | passed | 前端只消费后端辅助字段，不本地推导主状态。 |
+| Playwright / manual evidence | not-run | 本次未启动完整页面做截图验收，已用前端构建覆盖模板与打包正确性。 |
 
 ### Implementation Self-Check
 
-- scope conformance: pending.
-- non-goals preserved: pending.
-- touched code paths listed: pending.
-- tests recorded: pending.
-- remaining risks documented: pending.
-- self-check conclusion: pending.
+- scope conformance: passed，改动限定在任务时间投影、Worker relay、统一任务 DTO 与会话列表提示。
+- non-goals preserved: passed，未新增自动 kill、未改写主状态为失败/中止、未加入会话筛选状态。
+- touched code paths listed: common task DTO/entity/migration/util、Claude/Codex/Gemini task service 与 stream relay、UnifiedSessionTaskProjectionService、ClaudeWorkerView。
+- tests recorded: passed，后端单测和受影响模块编译通过，前端 Windows 构建通过。
+- remaining risks documented: 长时间真实推理但无输出仍会显示辅助提示，文案已明确“任务未被自动中止”。
+- self-check conclusion: ready-for-signoff。
