@@ -34,7 +34,7 @@ This audit maps OPT-003 acceptance requirements to automated tests and live smok
 | BusinessFunction list/schema/invoke and tool-message audit | critical | yes | no | yes | no | yes | Worker log and MCP debug log for task `20260630-b499`; backend tool-message log | covered |
 | Task-scoped token hygiene | critical | yes | no | yes | no | yes | No token in scoped config, worker log or MCP debug log; backend logs only task/session ids | covered |
 | Context continuation positive and directory conflict negative | major | yes | no | yes | no | yes | Prior live tasks and `TaskDispatchFacadeTest` route guard | covered |
-| `TaskEvidence.structuredOutput` auto-lifts OPEN_ARTIFACT | major | yes | no | no | no | yes | `OpenApiControllerMessageMappingTest`; final JSON carries `structured_output.type=OPEN_ARTIFACT` | covered |
+| `TaskEvidence.structuredOutput` auto-lifts OPEN_ARTIFACT | major | yes | no | no | no | yes | `OpenApiControllerMessageMappingTest`; live task `20260630-af4c` evidence reports `structuredOutput.available=true`, `source=message_content` | covered |
 | SIM/TMS consumer-specific smoke | major | no | no | no | no | no | Protocol handed off; consumer repos must record their own evidence | partially-covered |
 
 ## Evidence Summary
@@ -44,6 +44,7 @@ This audit maps OPT-003 acceptance requirements to automated tests and live smok
 - Worker tests passed on 2026-06-30: `npm test -- tests/navigator-business-mcp.test.ts tests/sdk-wrapper.test.ts`; the script ran the full Worker suite, 97 tests passed.
 - Worker typecheck passed: `npm run typecheck`.
 - Live submit smoke passed: task `20260630-b499` completed with marker `codex-biz-smoke-20260630-134920`.
+- Live structured output lift passed: task `20260630-af4c` completed with marker `codex-biz-smoke-20260630-continue-143306`; evidence re-read after service restart reported `structuredOutput.available=true`, `source=message_content`, `value.type=OPEN_ARTIFACT`.
 - MCP/WorkerGateway evidence passed: list/schema/invoke/tool-message all completed with HTTP 200.
 
 ## Gaps

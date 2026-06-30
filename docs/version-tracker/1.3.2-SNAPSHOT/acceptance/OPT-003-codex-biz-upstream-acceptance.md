@@ -11,7 +11,7 @@ signed_off_at: 2026-06-30
 reviewed_by: Codex
 blocking_items: []
 follow_up_required: yes
-evidence_count: 14
+evidence_count: 15
 ---
 
 # Feature Acceptance
@@ -37,7 +37,7 @@ OPT-003 validates CodexBizWorker as an explicit gray/internal/developer route fo
 - [x] navigator_business MCP config is written to scoped Codex home without persisting task token.
 - [x] Codex MCP `list_business_functions`, `get_business_function_schema` and `invoke_business_function` all complete.
 - [x] `submit_skill_result` smoke returns marker `codex-biz-smoke-20260630-134920` and final JSON status `SUCCESS`.
-- [x] `TaskEvidence.structuredOutput` can lift Codex final JSON `structured_output.*` OPEN_ARTIFACT content.
+- [x] `TaskEvidence.structuredOutput` can lift Codex final JSON `structured_output.*` OPEN_ARTIFACT content; live task `20260630-af4c` confirms `source=message_content`.
 - [x] WorkerGateway tool-message audit records `invoke_business_function`, `submit_skill_result`, `SUCCESS`.
 - [x] `contextId` continuation positive and directory-conflict negative are covered.
 - [x] SIM/TMS protocol differences are documented as consumer adapter differences, not global `directoryId` mandates.
@@ -52,6 +52,7 @@ OPT-003 validates CodexBizWorker as an explicit gray/internal/developer route fo
 - WorkerGateway: GET `/business-functions` 200, GET `/business-functions/submit_skill_result/schema` 200, POST `/business-functions/submit_skill_result/invoke` 200, POST `/tool-messages` 200.
 - Backend audit: `Tool message received: tool=invoke_business_function, functionId=submit_skill_result, status=SUCCESS`.
 - Final marker: `{"marker":"codex-biz-smoke-20260630-134920","functionId":"submit_skill_result","status":"SUCCESS","structured_output.type":"OPEN_ARTIFACT"}`.
+- Live structured output lift: task `20260630-af4c`, contextId `bctx_20260630_b0_b0b8054afdbc43a0bf1401b2bd66e9dc`, marker `codex-biz-smoke-20260630-continue-143306`; after `.\start-launcher.ps1` reload, evidence reports `structuredOutput.available=true`, `source=message_content`, `value.type=OPEN_ARTIFACT`.
 - Tests: Worker suite passed with 97 tests, Worker typecheck passed, Java OpenAPI evidence regression passed, Java targeted tests passed earlier for SDK/session route changes.
 - Local wrapper: `navigator-upstream-cli 1.0.18`, packageSha `c7dbfbf364bd584e6c2f9414bdcabaa44b53bb688ce9c24f1b1bacc891abec70`, buildId `1.0.18+970590c3f2d7`.
 

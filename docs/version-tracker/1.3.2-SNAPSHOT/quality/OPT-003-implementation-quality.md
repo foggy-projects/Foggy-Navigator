@@ -20,7 +20,7 @@ OPT-003 将 CodexBizWorker 从 route readiness 推进到可交付上游验收的
 
 - Workitem: `docs/version-tracker/1.3.2-SNAPSHOT/workitems/OPT-003-codex-biz-upstream-acceptance.md`
 - Prior readiness: `OPT-001-codex-biz-route-readiness.md`, `OPT-002-langgraph-biz-actor-home-readiness.md`
-- Live evidence: task `20260630-b499`, context `bctx_20260630_36_36787f40b092468e8183687a84ea0d01`, workerTask `3c9ef3e8-80c6-4061-8e6c-231c6ae0c95c`
+- Live evidence: task `20260630-b499`, context `bctx_20260630_36_36787f40b092468e8183687a84ea0d01`, workerTask `3c9ef3e8-80c6-4061-8e6c-231c6ae0c95c`; task `20260630-af4c` confirms `TaskEvidence.structuredOutput` live lift with `source=message_content`
 
 ## Changed Surface
 
@@ -42,7 +42,7 @@ OPT-003 将 CodexBizWorker 从 route readiness 推进到可交付上游验收的
 - critical logic documentation: pass. Workitem records why `directoryId`, `codexHomeKey`, MCP approval and structured output handling differ from SIM-only assumptions.
 - contract and compatibility: pass with risk. `allowedTools` remains additive at the OpenAPI/SDK layer and is enforced at MCP tool granularity inside Codex Worker. Codex MCP approval fields rely on Codex CLI 0.142.3 documented config behavior.
 - documentation and writeback: pass. Workitem and index are updated; formal quality/coverage/acceptance docs are added.
-- test alignment: pass. Tests cover SDK serialization, route priority, MCP config/token hygiene and stdio framing; live smoke covers WorkerGateway path.
+- test alignment: pass. Tests cover SDK serialization, route priority, MCP config/token hygiene, stdio framing and OpenAPI evidence lift; live smoke covers WorkerGateway path and `TaskEvidence.structuredOutput`.
 - release readiness: ready with risks. Consumer-specific SIM/TMS smoke remains outside this repo handoff.
 
 ## Findings
