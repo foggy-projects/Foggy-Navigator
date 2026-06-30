@@ -365,7 +365,7 @@ class LanggraphTaskServiceTest {
             assertNotNull(context);
             assertFalse(context.containsKey("recentConversation"));
 
-            verify(sessionMessageRepository, never()).findBySessionIdOrderByCreatedAtDesc(eq(SESSION_ID), any());
+            verify(sessionMessageRepository, never()).findBySessionIdOrderByCreatedAtDescIdDesc(eq(SESSION_ID), any());
             verify(sessionManager).addMessage(eq(SESSION_ID), argThat(message ->
                     message.getRole() != null
                             && "USER".equals(message.getRole().name())
@@ -384,7 +384,7 @@ class LanggraphTaskServiceTest {
         @SuppressWarnings("unchecked")
         void can_forward_recent_conversation_when_compatibility_switch_enabled() {
             ReflectionTestUtils.setField(service, "includeRecentConversation", true);
-            when(sessionMessageRepository.findBySessionIdOrderByCreatedAtDesc(eq(SESSION_ID), any()))
+            when(sessionMessageRepository.findBySessionIdOrderByCreatedAtDescIdDesc(eq(SESSION_ID), any()))
                     .thenReturn(List.of(
                             sessionMessage("m3", "assistant", "Opening frame", LocalDateTime.of(2026, 4, 1, 10, 2),
                                     "{\"type\":\"STATE_SYNC\"}"),

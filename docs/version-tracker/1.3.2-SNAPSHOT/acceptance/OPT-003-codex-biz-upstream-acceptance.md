@@ -11,7 +11,7 @@ signed_off_at: 2026-06-30
 reviewed_by: Codex
 blocking_items: []
 follow_up_required: yes
-evidence_count: 15
+evidence_count: 18
 ---
 
 # Feature Acceptance
@@ -39,7 +39,7 @@ OPT-003 validates CodexBizWorker as an explicit gray/internal/developer route fo
 - [x] `submit_skill_result` smoke returns marker `codex-biz-smoke-20260630-134920` and final JSON status `SUCCESS`.
 - [x] `TaskEvidence.structuredOutput` can lift Codex final JSON `structured_output.*` OPEN_ARTIFACT content; live task `20260630-af4c` confirms `source=message_content`.
 - [x] WorkerGateway tool-message audit records `invoke_business_function`, `submit_skill_result`, `SUCCESS`.
-- [x] `contextId` continuation positive and directory-conflict negative are covered.
+- [x] `contextId` continuation positive and conflict negatives are covered; continuation can omit provider/worker/directory overrides, while direct CodexBizWorker calls still require the same scoped-home source.
 - [x] SIM/TMS protocol differences are documented as consumer adapter differences, not global `directoryId` mandates.
 - [x] Production boundary remains explicit: LangBizWorker stays default for formal enterprise business orchestration.
 
@@ -53,6 +53,9 @@ OPT-003 validates CodexBizWorker as an explicit gray/internal/developer route fo
 - Backend audit: `Tool message received: tool=invoke_business_function, functionId=submit_skill_result, status=SUCCESS`.
 - Final marker: `{"marker":"codex-biz-smoke-20260630-134920","functionId":"submit_skill_result","status":"SUCCESS","structured_output.type":"OPEN_ARTIFACT"}`.
 - Live structured output lift: task `20260630-af4c`, contextId `bctx_20260630_b0_b0b8054afdbc43a0bf1401b2bd66e9dc`, marker `codex-biz-smoke-20260630-continue-143306`; after `.\start-launcher.ps1` reload, evidence reports `structuredOutput.available=true`, `source=message_content`, `value.type=OPEN_ARTIFACT`.
+- 2026-06-30 rerun: task `20260630-0a61`, contextId `bctx_20260630_1b_1b347d05b3da48e9a7101738940c620d`, workerTask/providerTask `fcceaf4e-193d-4381-895a-5f178793ad29`; final marker `codex-biz-smoke-rerun-20260630-174033`, `functionId=submit_skill_result`, `status=SUCCESS`, `structuredOutput.source=message_content`, `structured_output.type=OPEN_ARTIFACT`.
+- 2026-06-30 continuation rerun: task `20260630-4f73` reused contextId `bctx_20260630_1b_1b347d05b3da48e9a7101738940c620d`, omitted provider/directory/model overrides, retained `privateAccountId=codex-biz-smoke-user`, and resolved to providerType `codex-biz-worker`, workerBackend `OPENAI_CODEX`, worker `3ad8bb7b`; marker `codex-biz-context-bound-rerun-20260630-174304`.
+- 2026-06-30 conflict/gap checks: strict context-only direct CLI failed before dispatch with HTTP 400 `codex-biz-worker requires codexHomeKey or privateAccountId`; same context plus conflicting `--provider-type langgraph-biz-worker` failed fast with HTTP 400 `CONTEXT_WORKER_MISMATCH`.
 - Tests: Worker suite passed with 97 tests, Worker typecheck passed, Java OpenAPI evidence regression passed, Java targeted tests passed earlier for SDK/session route changes.
 - Local wrapper: `navigator-upstream-cli 1.0.18`, packageSha `c7dbfbf364bd584e6c2f9414bdcabaa44b53bb688ce9c24f1b1bacc891abec70`, buildId `1.0.18+970590c3f2d7`.
 
@@ -60,6 +63,7 @@ OPT-003 validates CodexBizWorker as an explicit gray/internal/developer route fo
 
 - SIM and TMS still need to run and record consumer-side smoke in their own repos.
 - Consumer projects need to verify the published `navigator-upstream-cli` package by packageSha/buildId before relying on wrapper self-update; this project-local wrapper is already on 1.0.18.
+- Direct CodexBizWorker continuation restores provider/worker/directory from context but does not yet replay Codex scoped-home identity by itself; consumers should keep deriving/passing the same `privateAccountId` / `codexHomeKey` on continuation until a context-bound scoped-home follow-up is implemented.
 
 ## Failed Items
 

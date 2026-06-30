@@ -4,6 +4,7 @@ import { generateTestSuffix, TEST_CONFIG } from '../src/config.js';
 import type { CreatedBusinessAgentTask } from '../src/types.js';
 
 describe('01 - Business Agent task context continuity', () => {
+  const TASK_CREATION_BACKEND = 'CLAUDE_CODE';
   let bootstrapClient: BusinessAgentClient;
 
   beforeAll(async () => {
@@ -17,6 +18,7 @@ describe('01 - Business Agent task context continuity', () => {
     const password = `E2ePass_${suffix}_123`;
     const ownerUserId = `e2e_owner_${suffix}`;
     const upstreamUserId = `e2e_user_${suffix}`;
+    const agentId = `e2eagent_${suffix}`;
     const skillId = `e2eskill_${suffix}`;
     const workerPoolId = `e2epool_${suffix}`;
     const sessionId = `e2esession_${suffix}`;
@@ -54,10 +56,11 @@ describe('01 - Business Agent task context continuity', () => {
     const pool = await client.createWorkerPool({
       poolId: workerPoolId,
       name: `Business Agent E2E Pool ${suffix}`,
-      workerBackend: TEST_CONFIG.workerBackend,
+      workerBackend: TASK_CREATION_BACKEND,
       routingPolicy: 'ROUND_ROBIN'
     });
     expect(pool.poolId).toBe(workerPoolId);
+    expect(pool.workerBackend).toBe(TASK_CREATION_BACKEND);
 
     const skill = await client.createSkill({
       skillId,
@@ -82,27 +85,53 @@ describe('01 - Business Agent task context continuity', () => {
     });
     expect(userGrant.status).toBe('ENABLED');
 
-    const modelGrant = await client.ensureE2eModelConfig(app.clientAppId, {
-      standard: 'biz-worker',
-      mockBaseUrl: TEST_CONFIG.mockBaseURL,
+    const modelGrant = await client.createClientAppModelConfig(app.clientAppId, {
+      name: `Business Agent E2E Model ${suffix}`,
+      category: 'GENERAL',
+      baseUrl: TEST_CONFIG.mockBaseURL,
+      modelName: `business-agent-e2e-${suffix}`,
+      apiKey: `sk-e2e-${suffix}`,
+      workerBackend: TASK_CREATION_BACKEND,
+      availableModels: [`business-agent-e2e-${suffix}`],
       setDefault: true
     });
     expect(modelGrant.modelConfigId).toBeTruthy();
     expect(modelGrant.isDefault).toBe(true);
+    expect(modelGrant.workerBackend).toBe(TASK_CREATION_BACKEND);
 
-    const firstTask = await createTask(client, sessionId, app.clientAppId, upstreamUserId, skillId, workerPoolId);
+    const agent = await client.syncAgentBundle({
+      clientAppId: app.clientAppId,
+      agentId,
+      skillId,
+      name: `Business Agent E2E Agent ${suffix}`,
+      description: 'Agent bundle for task context continuity checks',
+      status: 'ENABLED',
+      workerId: workerPoolId,
+      defaultModelConfigId: modelGrant.modelConfigId,
+      markdownBody: 'You are a deterministic assistant used by integration tests.',
+      contextVisibility: 'passthrough',
+      materialize: false
+    });
+    expect(agent.agentId).toBe(agentId);
+    expect(agent.skillId).toBe(skillId);
+    expect(agent.workerId).toBe(workerPoolId);
+    expect(agent.defaultModelConfigId).toBe(modelGrant.modelConfigId);
+
+    const firstTask = await createTask(client, sessionId, app.clientAppId, upstreamUserId, agentId);
     expect(firstTask.contextId).toBeTruthy();
     expect(firstTask.contextId).toMatch(/^bctx_/);
     expect(firstTask.sessionId).toBe(sessionId);
     expect(firstTask.clientAppId).toBe(app.clientAppId);
+    expect(firstTask.agentId).toBe(agentId);
+    expect(firstTask.skillId).toBe(skillId);
+    expect(firstTask.workerPoolId).toBe(workerPoolId);
 
     const secondTask = await createTask(
       client,
       sessionId,
       app.clientAppId,
       upstreamUserId,
-      skillId,
-      workerPoolId,
+      agentId,
       firstTask.contextId
     );
     expect(secondTask.contextId).toBe(firstTask.contextId);
@@ -115,8 +144,7 @@ describe('01 - Business Agent task context continuity', () => {
     sessionId: string,
     clientAppId: string,
     upstreamUserId: string,
-    skillId: string,
-    workerPoolId: string,
+    agentId: string,
     contextId?: string
   ): Promise<CreatedBusinessAgentTask> {
     return client.createTask({
@@ -124,8 +152,7 @@ describe('01 - Business Agent task context continuity', () => {
       sessionId,
       contextId,
       upstreamUserId,
-      skillId,
-      workerPoolId,
+      agentId,
       clientContextJson: JSON.stringify({
         source: 'business-agent-module/integration-tests',
         contextId: contextId ?? null

@@ -88,7 +88,7 @@ class LanggraphWorkerSessionQueryServiceTest {
         when(sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(SESSION_ID))
                 .thenReturn(List.of(sessionTask("lgt_task", SESSION_ID, "RUNNING",
                         LocalDateTime.of(2026, 4, 1, 10, 0))));
-        when(sessionMessageRepository.findBySessionIdOrderByCreatedAtAsc(SESSION_ID))
+        when(sessionMessageRepository.findBySessionIdOrderByCreatedAtAscIdAsc(SESSION_ID))
                 .thenReturn(List.of(
                         sessionMessage("m1", "user", "close order", LocalDateTime.of(2026, 4, 1, 10, 0)),
                         sessionMessage("m2", "assistant", "needs approval", LocalDateTime.of(2026, 4, 1, 10, 1)),
@@ -108,7 +108,7 @@ class LanggraphWorkerSessionQueryServiceTest {
         when(sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(SESSION_ID))
                 .thenReturn(List.of(sessionTask("lgt_task", SESSION_ID, "RUNNING",
                         LocalDateTime.of(2026, 4, 1, 10, 0))));
-        when(sessionMessageRepository.findBySessionIdOrderByCreatedAtAsc(SESSION_ID))
+        when(sessionMessageRepository.findBySessionIdOrderByCreatedAtAscIdAsc(SESSION_ID))
                 .thenReturn(List.of(
                         sessionMessage("m1", "user", "first", LocalDateTime.of(2026, 4, 1, 10, 0)),
                         sessionMessage("m2", "assistant", "second", LocalDateTime.of(2026, 4, 1, 10, 1)),

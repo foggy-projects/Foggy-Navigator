@@ -20,7 +20,7 @@ OPT-003 将 CodexBizWorker 从 route readiness 推进到可交付上游验收的
 
 - Workitem: `docs/version-tracker/1.3.2-SNAPSHOT/workitems/OPT-003-codex-biz-upstream-acceptance.md`
 - Prior readiness: `OPT-001-codex-biz-route-readiness.md`, `OPT-002-langgraph-biz-actor-home-readiness.md`
-- Live evidence: task `20260630-b499`, context `bctx_20260630_36_36787f40b092468e8183687a84ea0d01`, workerTask `3c9ef3e8-80c6-4061-8e6c-231c6ae0c95c`; task `20260630-af4c` confirms `TaskEvidence.structuredOutput` live lift with `source=message_content`
+- Live evidence: task `20260630-b499`, context `bctx_20260630_36_36787f40b092468e8183687a84ea0d01`, workerTask `3c9ef3e8-80c6-4061-8e6c-231c6ae0c95c`; task `20260630-af4c` confirms `TaskEvidence.structuredOutput` live lift with `source=message_content`; 2026-06-30 rerun task `20260630-0a61` and continuation task `20260630-4f73` confirm current local route still works after handoff updates.
 
 ## Changed Surface
 
@@ -53,6 +53,7 @@ No blocking implementation issue found.
 
 - Consumer-visible `navigator-upstream-cli` publication must be verified by packageSha/buildId; this project-local wrapper is already on 1.0.18.
 - SIM and TMS must run their own consumer smoke and record route/profile, effective directory and Codex home sources.
+- Direct CodexBizWorker continuation currently restores provider/worker/directory from context but still requires adapter/profile/upstream-user mapping or explicit `privateAccountId` / `codexHomeKey` for scoped-home identity; implement context-bound scoped-home replay separately if consumers must send only `contextId`.
 
 ## Recommended Next Skills
 

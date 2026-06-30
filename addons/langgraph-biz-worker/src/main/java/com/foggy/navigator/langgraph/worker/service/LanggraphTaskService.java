@@ -268,7 +268,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
             return List.of();
         }
         List<SessionMessageEntity> messages = sessionMessageRepository
-                .findBySessionIdOrderByCreatedAtDesc(sessionId, PageRequest.of(0, 12));
+                .findBySessionIdOrderByCreatedAtDescIdDesc(sessionId, PageRequest.of(0, 12));
         if (messages == null || messages.isEmpty()) {
             return List.of();
         }

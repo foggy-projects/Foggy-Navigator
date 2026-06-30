@@ -13,6 +13,7 @@ updated_at: 2026-06-30
 - `directoryId` means the resolved Navigator WorkingDirectory/effective directory. It is not SIM-specific: SIM may derive it from actor-owned mapping; TMS may derive it from profile, route, or client-app binding.
 - `privateAccountId` / `codexHomeKey` selects the Codex scoped home. It does not replace `directoryId`.
 - `providerType=codex-biz-worker` is an explicit opt-in route. LangBizWorker remains the default formal enterprise business route.
+- Continuation on an existing `contextId` should omit `providerType` / worker type and `directoryId`; Navigator restores provider, worker and directory from the context binding. Current direct CodexBizWorker calls still need the same actor/account scoped-home source from adapter/profile/upstream-user mapping, or an explicit `privateAccountId` / `codexHomeKey`, until context-bound scoped-home replay is implemented.
 - `allowedTools` is a top-level ask option and is now MCP-tool granular: `business.functions.list` exposes `list_business_functions`; `business.functions.schema` exposes `get_business_function_schema`; `business.functions.invoke` exposes `invoke_business_function`; `business.functions.*` or `business.*` exposes all three.
 - Business function ids such as `submit_skill_result` are not MCP tool grants. Grant the function through Navigator WorkerGateway permissions, and grant the MCP bridge with `business.functions.*` or the specific MCP tool aliases above.
 - OPEN_ARTIFACT payloads should use `type`, `label`, `artifact.uri`, and optional `context`. Legacy `previewUrl` / `url` may be accepted by adapters, but consumer evidence should record the normalized artifact URI.
@@ -32,9 +33,13 @@ Use SIM's actor-owned directory mapping as the source of the effective Navigator
   --message "<ask the agent to produce submit_skill_result OPEN_ARTIFACT evidence>"
 .\tools\navigator-upstream\navi.ps1 upstream evidence --task-id <taskId>
 .\tools\navigator-upstream\navi.ps1 upstream diagnostics --task-id <taskId>
+.\tools\navigator-upstream\navi.ps1 upstream ask `
+  --context-id <returnedContextId> `
+  --private-account-id <same-tenant/scenario/actor-derived-key> `
+  --message "<short continuation smoke; do not pass providerType or directoryId>"
 ```
 
-Record: route/profile, actor mapping input, resolved `directoryId`, scoped home key source, task id, context id, WorkerGateway invoke status, tool-message audit status, and `TaskEvidence.structuredOutput.source`.
+Record: route/profile, actor mapping input, resolved `directoryId`, scoped home key source, task id, context id, continuation task id, WorkerGateway invoke status, tool-message audit status, and `TaskEvidence.structuredOutput.source`.
 
 ## TMS Smoke
 
@@ -50,9 +55,13 @@ Use TMS profile / route / client-app binding as the source of the effective Navi
   --message "<ask the agent to produce submit_skill_result OPEN_ARTIFACT evidence>"
 .\tools\navigator-upstream\navi.ps1 upstream evidence --task-id <taskId>
 .\tools\navigator-upstream\navi.ps1 upstream diagnostics --task-id <taskId>
+.\tools\navigator-upstream\navi.ps1 upstream ask `
+  --context-id <returnedContextId> `
+  --codex-home-key <same-tenant/clientApp/upstreamUser-derived-key> `
+  --message "<short continuation smoke; do not pass providerType or directoryId>"
 ```
 
-Record: TMS route/profile id, effective directory source, runtime credential source, scoped home key source, task id, context id, WorkerGateway invoke status, tool-message audit status, and `TaskEvidence.structuredOutput.source`.
+Record: TMS route/profile id, effective directory source, runtime credential source, scoped home key source, task id, context id, continuation task id, WorkerGateway invoke status, tool-message audit status, and `TaskEvidence.structuredOutput.source`.
 
 ## Wrapper Gate
 
@@ -75,7 +84,7 @@ Consumer signoff must include:
 - Worker health/readiness summary.
 - `submit_skill_result` task evidence: taskId, contextId, providerType, workerBackend, effective directory marker, structured output source.
 - BusinessFunction evidence: function id/version, schema summary, invoke result summary, WorkerGateway/tool-message audit marker.
-- Context continuation positive case and directory-conflict negative case.
+- Context continuation positive case that omits provider/worker/directory overrides, plus a conflict negative case. Record whether scoped-home identity came from adapter/profile or explicit `privateAccountId` / `codexHomeKey`.
 - SIM/TMS-specific notes: directory source, Codex home source, route/profile, fallback route.
 - Test command summary and result.
 - Explicit production boundary statement: CodexBizWorker remains opt-in gray/internal/developer route.

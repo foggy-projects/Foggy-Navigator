@@ -119,7 +119,7 @@ describe('02 - Upstream tenant ClientApp provisioning', () => {
     expect(first.bindingVersion).toBeTruthy();
     expect(first.modelConfigId).toBeFalsy();
     expect(first.activationReady).toBe(false);
-    expect(first.errorCode).toBe('WORKSPACE_RESOURCE');
+    expect(first.errorCode).toBe('MODEL_CONFIG_RESOURCE');
     expect(first.missingFields).toContain('modelConfigId');
     expect(first.missingFields).toContain('directoryId');
     expect(first.requiredScopes).toContain('CLIENT_APP_MANAGE');

@@ -119,13 +119,17 @@ public class OpenApiSessionQueryService {
     public List<SessionMessageEntity> getSessionMessages(String sessionId, String cursor, int limit) {
         Pageable pageable = PageRequest.of(0, limit + 1);
         if (cursor == null || cursor.isBlank()) {
-            return messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId, pageable);
+            return messageRepository.findBySessionIdOrderByCreatedAtAscIdAsc(sessionId, pageable);
         }
-        java.time.LocalDateTime afterTime = resolveCursorTime(cursor);
-        if (afterTime == null) {
-            return messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId, pageable);
+        Optional<SessionMessageEntity> cursorMessage = resolveCursorMessage(cursor);
+        if (cursorMessage.isEmpty()) {
+            return messageRepository.findBySessionIdOrderByCreatedAtAscIdAsc(sessionId, pageable);
         }
-        return messageRepository.findBySessionIdAfterTime(sessionId, afterTime, pageable);
+        return messageRepository.findBySessionIdAfterCursor(
+                sessionId,
+                cursorMessage.get().getCreatedAt(),
+                cursorMessage.get().getId(),
+                pageable);
     }
 
     // ── 4. 任务增量消息（按 taskId） ──
@@ -138,13 +142,17 @@ public class OpenApiSessionQueryService {
     public List<SessionMessageEntity> getTaskMessages(String taskId, String cursor, int limit) {
         Pageable pageable = PageRequest.of(0, limit + 1);
         if (cursor == null || cursor.isBlank()) {
-            return messageRepository.findByTaskIdOrderByCreatedAtAsc(taskId, pageable);
+            return messageRepository.findByTaskIdOrderByCreatedAtAscIdAsc(taskId, pageable);
         }
-        java.time.LocalDateTime afterTime = resolveCursorTime(cursor);
-        if (afterTime == null) {
-            return messageRepository.findByTaskIdOrderByCreatedAtAsc(taskId, pageable);
+        Optional<SessionMessageEntity> cursorMessage = resolveCursorMessage(cursor);
+        if (cursorMessage.isEmpty()) {
+            return messageRepository.findByTaskIdOrderByCreatedAtAscIdAsc(taskId, pageable);
         }
-        return messageRepository.findByTaskIdAfterTime(taskId, afterTime, pageable);
+        return messageRepository.findByTaskIdAfterCursor(
+                taskId,
+                cursorMessage.get().getCreatedAt(),
+                cursorMessage.get().getId(),
+                pageable);
     }
 
     /**
@@ -158,7 +166,7 @@ public class OpenApiSessionQueryService {
      * 查找某个任务最近一条消息，用于 lastObservedAt 诊断时间。
      */
     public Optional<SessionMessageEntity> findLatestTaskMessage(String taskId) {
-        return messageRepository.findFirstByTaskIdOrderByCreatedAtDesc(taskId);
+        return messageRepository.findFirstByTaskIdOrderByCreatedAtDescIdDesc(taskId);
     }
 
     /**
@@ -167,18 +175,17 @@ public class OpenApiSessionQueryService {
     public List<SessionMessageEntity> getLatestTaskMessages(String taskId, int limit) {
         Pageable pageable = PageRequest.of(0, Math.max(limit, 1));
         List<SessionMessageEntity> messages = new ArrayList<>(
-                messageRepository.findByTaskIdOrderByCreatedAtDesc(taskId, pageable));
+                messageRepository.findByTaskIdOrderByCreatedAtDescIdDesc(taskId, pageable));
         Collections.reverse(messages);
         return messages;
     }
 
     /**
-     * 从 cursor（消息 ID）解析 createdAt 时间戳
+     * 从 cursor（消息 ID）解析稳定分页游标。
      */
-    private java.time.LocalDateTime resolveCursorTime(String cursorMessageId) {
+    private Optional<SessionMessageEntity> resolveCursorMessage(String cursorMessageId) {
         return messageRepository.findById(cursorMessageId)
-                .map(SessionMessageEntity::getCreatedAt)
-                .orElse(null);
+                .filter(message -> message.getCreatedAt() != null);
     }
 
     /**
@@ -252,7 +259,7 @@ public class OpenApiSessionQueryService {
             return Map.of();
         }
         List<SessionMessageEntity> messages = messageRepository
-                .findBySessionIdInAndRoleOrderBySessionIdAscCreatedAtAsc(sessionIds, "USER");
+                .findBySessionIdInAndRoleOrderBySessionIdAscCreatedAtAscIdAsc(sessionIds, "USER");
         return messages.stream()
                 .filter(message -> message.getContent() != null && !message.getContent().isBlank())
                 .collect(Collectors.toMap(

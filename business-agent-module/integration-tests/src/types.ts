@@ -264,6 +264,7 @@ export interface CreateBusinessAgentTaskRequest {
   workerPoolId?: string;
   requestedModelConfigId?: string;
   modelVariant?: string;
+  directoryId?: string;
   resumeFromTaskId?: string;
   clientContextJson?: string;
   workdir?: string;
@@ -279,8 +280,10 @@ export interface CreatedBusinessAgentTask {
   clientAppId: string;
   upstreamUserId: string;
   navigatorEffectiveUserId: string;
+  agentId?: string;
   skillId: string;
   workerPoolId: string;
+  directoryId?: string;
   workerTaskId?: string;
   workerSessionId?: string;
   workerId?: string;

@@ -75,7 +75,8 @@ created_at: 2026-06-30
 
 ### Context Continuation
 
-- 已绑定 `contextId` 后，上游可只传 `contextId` 续接，不必再传 `providerType`、`workerId`、`directoryId` 或 `sessionId`。
+- 已绑定 `contextId` 后，上游不必再传 `providerType`、`workerId`、`directoryId` 或 `sessionId`；Navigator 使用 context/session 绑定恢复 provider、worker 和 directory。
+- Direct CodexBizWorker continuation 仍需要 route/profile/upstream-user 映射或显式 `privateAccountId` / `codexHomeKey` 提供 Codex scoped-home 身份，直到后续实现 context-bound scoped-home replay；2026-06-30 rerun 验证 strict context-only direct CLI 会返回 `codex-biz-worker requires codexHomeKey or privateAccountId`。
 - 如果上游仍显式传入这些字段，必须与 context 绑定一致。
 - 冲突时 fail-fast，不允许静默切换到另一类 Worker。
 
@@ -190,6 +191,7 @@ created_at: 2026-06-30
 
 - `directoryId` 表示 Navigator workspace/effective directory，不是 SIM 专属必填字段。SIM 可由 actor-owned mapping 派生，TMS 可由 profile/route/client-app 派生；进入 Worker 前必须解析出 effective directory。
 - `privateAccountId` / `codexHomeKey` 表示 Codex scoped home 隔离来源，不替代 `directoryId`。当前 self-owned smoke 使用 `privateAccountId=codex-biz-smoke-user`。
+- Continuation 时上游不应重复传 `providerType` / `workerType` / `directoryId` 来选择 Worker；若当前 adapter 尚未能从 context 反查 scoped-home 身份，则仍需按同一 actor/account 继续派生并传入 `privateAccountId` / `codexHomeKey`。
 - `allowedTools` 已作为 OpenAPI/SDK ask 顶层 runtime option 透传，并按 MCP tool 粒度生效：`business.functions.list` -> `list_business_functions`，`business.functions.schema` -> `get_business_function_schema`，`business.functions.invoke` -> `invoke_business_function`，`business.functions.*` / `business.*` -> 三个工具全部开放；不使用旧的 `navigator_business.*` 口径，业务函数 id 不等同 MCP tool grant。
 - CodexBizWorker 的 navigator_business MCP bridge 使用 scoped `CODEX_HOME/config.toml` managed block 注入 no-secret server config；task token 只通过 MCP 子进程继承的 env var 值传递，不持久化。
 - Windows/Codex MCP 需要 `cwd` 指向 `tools/codex-agent-worker`，stdio 使用 `Content-Length` framing；Codex CLI 0.142.3 还需要 server 级 `default_tools_approval_mode = "approve"` 与 `enabled_tools` 白名单，否则会出现 tools/list 可见但 tools/call 被客户端取消。
@@ -301,6 +303,11 @@ git diff --check
 | context continuation negative: valid directory conflict | Navigator route/session guard | pass | Created second ClientApp directory `20260630-cee1`, bound it as non-default workspace to `codex-biz-smoke-agent`, then reused the same context with `--directory-id 20260630-cee1`; CLI exited `2` with HTTP 400 `CONTEXT_WORKER_MISMATCH: directoryId 20260630-cee1 conflicts with context/session-bound directory 20260630-143b`. No task id was issued. |
 | `submit_skill_result` E2E | Navigator + Worker | pass | Task `20260630-b499`, contextId `bctx_20260630_36_36787f40b092468e8183687a84ea0d01`, workerTask/providerTask `3c9ef3e8-80c6-4061-8e6c-231c6ae0c95c`, marker `codex-biz-smoke-20260630-134920`; final JSON reports `functionId=submit_skill_result`, `status=SUCCESS`, `structured_output.type=OPEN_ARTIFACT`. |
 | BusinessFunction E2E | Navigator + WorkerGateway + Worker | pass | Same task: MCP `tools/call` list/schema/invoke all completed; WorkerGateway GET `/business-functions` 200, GET `/business-functions/submit_skill_result/schema` 200, POST `/business-functions/submit_skill_result/invoke` 200, POST `/tool-messages` 200. |
+| 2026-06-30 rerun owner-smoke | Navigator CLI / local 8112 | pass | Tenant profile `.navigator/tenants/codex-biz-smoke-local.env`; effective directory `20260630-143b`, worker `3ad8bb7b`, workerBackend `OPENAI_CODEX`, provider route `codex-biz-worker` readiness OK. |
+| 2026-06-30 rerun `submit_skill_result` | Navigator + CodexBizWorker + WorkerGateway | pass | Task `20260630-0a61`, contextId `bctx_20260630_1b_1b347d05b3da48e9a7101738940c620d`, provider/workerTask `fcceaf4e-193d-4381-895a-5f178793ad29`; final marker `codex-biz-smoke-rerun-20260630-174033`, `functionId=submit_skill_result`, `status=SUCCESS`, `structuredOutput.source=message_content`, `structured_output.type=OPEN_ARTIFACT`. |
+| 2026-06-30 rerun context continuation positive | Navigator context binding | pass | Task `20260630-4f73`, same contextId `bctx_20260630_1b_1b347d05b3da48e9a7101738940c620d`; request omitted provider, directory and model overrides, retained `privateAccountId=codex-biz-smoke-user`, and resolved to `providerType=codex-biz-worker`, workerBackend `OPENAI_CODEX`, worker `3ad8bb7b`; marker `codex-biz-context-bound-rerun-20260630-174304`. |
+| 2026-06-30 strict context-only scoped-home gap | Direct CLI continuation | expected-gap | Temporary gitignored profile removed provider/directory/model and scoped-home values; ask with only `contextId` failed before dispatch with HTTP 400 `codex-biz-worker requires codexHomeKey or privateAccountId`. This confirms provider/worker binding is restored but scoped-home identity is not yet replayed from context for direct CLI calls. |
+| 2026-06-30 provider conflict negative | Navigator route/session guard | pass | Same contextId plus explicit `--provider-type langgraph-biz-worker` failed fast with HTTP 400 `CONTEXT_WORKER_MISMATCH: providerType langgraph-biz-worker conflicts with context/session-bound provider codex-biz-worker`; no silent route switch. |
 | MCP tool allowlist granularity | Codex Worker | pass | `navigator-business-mcp.test.ts` and `sdk-wrapper.test.ts` cover grant-to-tool mapping, filtered `tools/list`, blocked disallowed `tools/call`, and `enabled_tools` for `business.functions.invoke`. |
 | `TaskEvidence.structuredOutput` OPEN_ARTIFACT lift | OpenAPI evidence | pass | `OpenApiControllerMessageMappingTest` covers visible final JSON content with flattened `structured_output.type`, `structured_output.artifact.*` and source `message_content`; live task `20260630-af4c` re-read after service restart reports `structuredOutput.available=true`, `source=message_content`, `value.type=OPEN_ARTIFACT`. |
 | Codex MCP approval config | Worker scoped Codex home | pass | Managed scoped `config.toml` writes `default_tools_approval_mode = "approve"` and `enabled_tools = ["list_business_functions", "get_business_function_schema", "invoke_business_function"]`; no task token persisted. |
@@ -327,6 +334,7 @@ git diff --check
 - No current blocker for self-owned smoke provisioning, basic live ask, deterministic `submit_skill_result`, BusinessFunction schema/invoke, tool-message audit, or task-scoped token hygiene in this Navi workspace.
 - `navigator-upstream-cli` project-local wrapper is updated to `1.0.18`; consumer projects still need to verify the published package by `packageSha256` / `buildId` before relying on `self update`.
 - BusinessAgent session binding added nullable columns; local/default launcher uses additive schema update, but validate-only deployments must include the equivalent additive DDL before promotion.
+- Direct CodexBizWorker continuation currently restores provider/worker/directory from context but not Codex scoped-home identity by itself; consumer adapters should keep deriving the same `privateAccountId` / `codexHomeKey` on continuation, or schedule a follow-up to persist/replay scoped-home binding on the Navigator context.
 - Consumer gray acceptance is handed off to SIM and TMS owners; each must record its own route/profile, directory source, Codex home source, and fallback boundary.
 
 ## Acceptance Status
