@@ -654,6 +654,7 @@ public class BusinessAgentApiSmokeTest {
         CreateBusinessAgentTaskForm form = new CreateBusinessAgentTaskForm();
         form.setClientAppId("app-456");
         form.setWorkerPoolId("pool-789");
+        form.setDirectoryId("dir-123");
         form.setSkillId("skill-001");
         form.setSkillName("skill-001");
         form.setWorkdir("D:/workspace/app");
@@ -668,6 +669,7 @@ public class BusinessAgentApiSmokeTest {
         assertEquals("/api/v1/business-agent/tasks", lastPath);
         assertEquals("POST", lastMethod);
         assertTrue(lastBody.contains("\"clientAppId\":\"app-456\""));
+        assertTrue(lastBody.contains("\"directoryId\":\"dir-123\""));
         assertTrue(lastBody.contains("\"skillId\":\"skill-001\""));
         assertTrue(lastBody.contains("\"skill_name\":\"skill-001\""));
         assertTrue(lastBody.contains("\"workdir\":\"D:/workspace/app\""));

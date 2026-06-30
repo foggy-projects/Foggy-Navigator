@@ -1279,6 +1279,26 @@ class UpstreamCliTest {
     }
 
     @Test
+    void askTaskDirectoryRequiredErrorSuggestsDirectoryId() {
+        responseOverride = "{\"code\":600,\"msg\":\"TASK_DIRECTORY_REQUIRED: directoryId is required for Actor-owned BizWorker task\"}";
+
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "hello"}, Map.of());
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
+        assertTrue(error.contains("TASK_DIRECTORY_REQUIRED"));
+        assertTrue(error.contains("--directory-id <id>"));
+        assertFalse(error.contains("cat-runtime-secret"));
+    }
+
+    @Test
     void messagesPollStopsOnTaskTerminalStatus() {
         responseOverride = "__MESSAGES_TERMINAL__";
 

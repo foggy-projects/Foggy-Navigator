@@ -8,6 +8,7 @@ import com.foggy.navigator.sdk.api.AgentApi;
 import com.foggy.navigator.sdk.api.BusinessAgentApi;
 import com.foggy.navigator.sdk.api.DirectoryApi;
 import com.foggy.navigator.sdk.api.WorkerApi;
+import com.foggy.navigator.sdk.exception.NavigatorApiException;
 import com.foggy.navigator.sdk.internal.HttpHelper;
 import com.foggy.navigator.sdk.model.AgentTask;
 import com.foggy.navigator.sdk.model.AgentReadiness;
@@ -1925,21 +1926,35 @@ public class UpstreamCli {
         String message = requiredOption(args, "message", "message");
         Map<String, Object> clientContext = parseClientContext(args);
         Map<String, Object> runtimeOptions = buildAskRuntimeOptions(args);
-        AgentTask task = agentApi().askWithClientAppAccessToken(
-                agent,
-                message,
-                args.option("context-id"),
-                parseInteger(args.option("max-turns")),
-                clientContext,
-                modelConfigId(args),
-                modelVariant(args),
-                null,
-                runtimeOptions,
-                clientAppKey(args),
-                clientAppAccessToken(args),
-                upstreamUserId);
+        AgentTask task;
+        try {
+            task = agentApi().askWithClientAppAccessToken(
+                    agent,
+                    message,
+                    args.option("context-id"),
+                    parseInteger(args.option("max-turns")),
+                    clientContext,
+                    modelConfigId(args),
+                    modelVariant(args),
+                    null,
+                    runtimeOptions,
+                    clientAppKey(args),
+                    clientAppAccessToken(args),
+                    upstreamUserId);
+        } catch (NavigatorApiException e) {
+            throw actionableAskException(e);
+        }
         printTask(task);
         return 0;
+    }
+
+    private UpstreamCliException actionableAskException(NavigatorApiException e) {
+        String message = e.getMessage();
+        if (message != null && message.contains("TASK_DIRECTORY_REQUIRED")) {
+            return new UpstreamCliException(message
+                    + ". Multiple or ambiguous Actor-owned directories may be available; rerun upstream ask with --directory-id <id>.");
+        }
+        return new UpstreamCliException(message != null ? message : "Navigator ask request failed", e);
     }
 
     private Map<String, Object> buildAskRuntimeOptions(CliArguments args) {

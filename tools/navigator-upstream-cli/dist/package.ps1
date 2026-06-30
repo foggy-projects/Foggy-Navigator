@@ -83,7 +83,8 @@ $features = @(
     "worker-host-suite",
     "navi-routed-codex-config",
     "codex-biz-worker-route",
-    "codex-biz-runtime-options"
+    "codex-biz-runtime-options",
+    "ask-directory-actionable-error"
 )
 
 Push-Location $RepoRoot
