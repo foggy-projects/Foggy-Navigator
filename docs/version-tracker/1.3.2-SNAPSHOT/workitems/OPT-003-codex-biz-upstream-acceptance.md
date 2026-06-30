@@ -109,7 +109,7 @@ created_at: 2026-06-30
 | `business-agent-module` | BusinessAgentTask 侧解析 effective directory、BusinessFunction token/runtime context、WorkerGateway 审计与 readiness。 | yes | smoke resources |
 | `addons/codex-worker-agent` | CodexBizWorker provider 边界、Java -> Worker body、scoped home、BusinessAgent launcher。 | yes | worker readiness |
 | `tools/codex-agent-worker` | Worker `/health`、scoped home、`navigator_business` MCP bridge、live smoke helper。 | yes | `CODEX_BIZ_HOME_ROOT`, Codex auth |
-| `tools/navigator-upstream` / `navigator-open-sdk` | self-owned smoke upstream provisioning、admin-key approve/claim、model grant、directory、agent、owner-smoke。 | yes | valid operator/admin key, `NAVI_LLM_API_KEY` |
+| `tools/navigator-upstream` / `navigator-open-sdk` | self-owned smoke upstream provisioning、admin-key approve/claim、model grant、directory、agent、owner-smoke、model key clear/rotate。 | yes | smoke model credential; current verified path uses `CODEX_API_KEY` env + proxy baseUrl |
 | SIM upstream | 消费通用 contract，保留 actor-owned directory mapping，执行 SIM-specific regression。 | after Stage 3 | shared smoke pass |
 | TMS upstream | 消费通用 contract，通过 TMS profile/route/client-app 解析 effective directory，执行 TMS-specific regression。 | after Stage 3 | shared smoke pass |
 
@@ -123,10 +123,14 @@ created_at: 2026-06-30
 | root | `docs/version-tracker/1.3.2-SNAPSHOT/coverage/OPT-003-coverage-audit.md` | coverage audit | create later | E2E evidence ready 后执行。 |
 | root | `docs/version-tracker/1.3.2-SNAPSHOT/acceptance/OPT-003-codex-biz-upstream-acceptance.md` | acceptance record | create later | 对外交付签收记录。 |
 | root | `tools/navigator-upstream/scripts/codex-biz-smoke-approve.ps1` | admin-key approval helper | update if needed | 已存在；需用有效 operator/admin key 运行。 |
-| root | `tools/navigator-upstream/scripts/codex-biz-smoke-bootstrap.ps1` | isolated smoke provisioning | update if needed | 已存在；生成 smoke ClientApp / Agent / Directory / Worker / model grant。 |
+| root | `tools/navigator-upstream/scripts/codex-biz-smoke-bootstrap.ps1` | isolated smoke provisioning | updated | 生成 smoke ClientApp / Agent / Directory / Worker / model grant；已补 worker token env、managed directory、owner-aware grant 和 explicit ask 参数。 |
+| root | `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/UpstreamCli.java` | upstream CLI | updated | 已补 `model clear-key` / `model system-clear-key`；项目本地 wrapper 仍为 1.0.16，需 release/update 后消费者才能直接使用新命令。 |
+| root | `business-agent-module` / `metadata-config-module` / `navigator-common` | model config key lifecycle | updated | 已补 `clearApiKey` 支持，允许清空 model config provider key 以验证 Worker local auth fallback。 |
 | root | `tools/codex-agent-worker/scripts/codex-biz-smoke.ps1` | Worker health/live query smoke | update if needed | 已存在；用于 local Worker readiness 和 actor A/B scoped home。 |
 | root | `session-module` | context binding / continuation | read-only-analysis or update | 只有发现 OPT-001 覆盖不足时才补代码。 |
-| root | `business-agent-module` | BusinessAgentTask / WorkerGateway / effective directory diagnostics | read-only-analysis or update | 重点验证 evidence/diagnostics 是否可验收。 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BusinessAgentSessionEntity.java` | BusinessAgent session binding | updated | 会话读模型新增 `directoryId` / `workerId` / `workerProviderType` / `modelConfigId`，用于后续 context 资源兼容校验；属于 additive schema change。 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentSessionService.java` | BusinessAgent context continuation guard | updated | `bindTask` 现在保存 task 解析出的 agent/directory/model/worker 绑定；新增 context resource compatibility 校验，并兼容历史误把 `skillId` 写入 `agentId` 的旧 session。 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskService.java` | BusinessAgent task create path | updated | 在 task/token 创建和 Worker launch 前执行 context 资源冲突校验，避免同一 context 静默切换 agent/directory/model。 |
 | root | `addons/codex-worker-agent` | Codex Biz provider and launcher | read-only-analysis or update | 重点验证 runtime fields 和 tool message 形态。 |
 | root | `tools/codex-agent-worker/src/business-mcp` | Navigator BusinessFunction MCP bridge | read-only-analysis or update | 重点验证 list/schema/invoke 和 token hygiene。 |
 | SIM repo | `foggy-world-sim/docs/versions/v0.0.706/tms-real-rehearsal-m0` | SIM consumer evidence | update later | 回写 SIM-specific acceptance notes，不改写通用 contract。 |
@@ -142,27 +146,28 @@ created_at: 2026-06-30
 
 ### Stage 1: Self-Owned Smoke Upstream Provisioning
 
-- [ ] 使用有效 Navigator operator/admin key 执行 `codex-biz-smoke-approve.ps1`。
-- [ ] claim admin-key 并 provision isolated ClientApp / control key / runtime token。
-- [ ] 设置 `NAVI_LLM_API_KEY`，创建 `OPENAI_CODEX` model config 和 grant。
-- [ ] 创建 smoke directory、Codex worker anchor、gray Agent 和 route/profile binding。
-- [ ] 记录 provisioning 输出到 gitignored `temp/codex-biz-smoke/`，把非敏感摘要回写到本 workitem。
+- [x] 使用有效 Navigator operator/admin key 执行 `codex-biz-smoke-approve.ps1`。
+- [x] claim admin-key 并 provision isolated ClientApp / control key / runtime token。
+- [x] 创建 `OPENAI_CODEX` model config 和 grant；当前可用 live-smoke 组合为 `CODEX_API_KEY` env + `https://codex2.qlfloor.com:8443/v1` proxy baseUrl。
+- [x] 创建 smoke directory、Codex worker anchor、gray Agent 和 route/profile binding。
+- [x] 记录 provisioning 输出到 gitignored `temp/codex-biz-smoke/`，把非敏感摘要回写到本 workitem。
 
 ### Stage 2: Worker Readiness And Local Smoke
 
-- [ ] 确认目标 Codex Worker 使用仓库外绝对 `CODEX_BIZ_HOME_ROOT`。
-- [ ] 跑 `tools/codex-agent-worker/scripts/codex-biz-smoke.ps1` health readiness。
+- [x] 确认目标 Codex Worker 使用仓库外绝对 `CODEX_BIZ_HOME_ROOT`。
+- [x] 跑 Worker `/health` readiness。
 - [ ] 如需要，显式 opt-in 跑 actor A/B scoped home live query。
-- [ ] 验证 health 和 smoke 输出不泄露真实 root path、API key、auth 内容。
+- [x] 验证 health 和 smoke 输出不泄露真实 root path、API key、auth 内容。
 
 ### Stage 3: Navigator End-To-End Smoke
 
+- [x] 发起基础 BusinessAgent ask，验证 Navigator -> CodexBizWorker -> provider live route 可完成。
 - [ ] 发起 deterministic `submit_skill_result` task。
 - [ ] 验证 `/tasks`、`/messages`、`/evidence`、`/diagnostics` 中的 provider、workerBackend、contextId、effective directory、structured output。
 - [ ] 执行低风险 BusinessFunction：schema -> invoke -> internal tool-message audit。
 - [ ] 验证 `business_runtime_context.task_scoped_token` 不进入 prompt / developer instructions / 普通日志。
-- [ ] 跑 `contextId` continuation 正例：只传 `contextId`。
-- [ ] 跑 `contextId` continuation 负例：传冲突 provider/worker/directory 并确认 fail-fast。
+- [x] 跑 `contextId` continuation 正例：只传 `contextId`。
+- [x] 跑 `contextId` continuation 负例：传冲突 directory 并确认 fail-fast；provider/worker 冲突沿用 session-module 既有单测覆盖，未在本次 live smoke 重复。
 
 ### Stage 4: Consumer Gray Acceptance
 
@@ -180,27 +185,26 @@ created_at: 2026-06-30
 
 ## Next Execution Runbook
 
-下一步先完成 Stage 1 / Stage 2 的基础闭环，避免直接拿 SIM 或 TMS 生产 profile 做首轮验证。
+下一步从已通过的 self-owned smoke upstream 继续 Stage 3，目标是补齐真实上游验收需要的功能形态，而不是重复 bootstrap。
 
-1. Stage 1.1: profile 与脚本前置检查。
-   - 确认 `tools/navigator-upstream/navi.ps1` 可执行，`tools/navigator-upstream/scripts/codex-biz-smoke-approve.ps1` 和 `tools/navigator-upstream/scripts/codex-biz-smoke-bootstrap.ps1` 存在。
-   - 确认 `.navigator/codex-biz-smoke.env`、`.navigator/tenants/codex-biz-smoke-local.env`、`temp/codex-biz-smoke/` 已被 gitignore 覆盖；不得把 profile、key、token 或 generated runtime artifact 纳入版本管理。
-   - 确认 `.navigator/codex-biz-smoke.env` 中已有 `NAVI_ADMIN_KEY_REQUEST_CODE`，或由 operator 手工传入 `-RequestCode`。
-2. Stage 1.2: Navigator operator approval。
-   - 在只属于运维 / 管理员的 shell 中设置 `NAVI_OPERATOR_API_KEY`，不打印变量值。
-   - 运行 `tools/navigator-upstream/scripts/codex-biz-smoke-approve.ps1`，默认授权 tenant `navi-codex-biz-smoke-local`、namespace `navi-codex-biz-smoke` 和 smoke 所需 scopes。
-   - 只记录 request code、tenant、namespace、approval 状态和时间；不记录 operator key 或返回的 admin key。
-3. Stage 1.3: self-owned smoke provisioning。
-   - 在执行 shell 中设置 `NAVI_LLM_API_KEY`，不打印变量值。
-   - 确认目标 Codex Worker `/health` 可访问，默认 bootstrap 端口为 `http://127.0.0.1:3070/health`。
-   - 运行 `tools/navigator-upstream/scripts/codex-biz-smoke-bootstrap.ps1`，完成 admin-key claim、ClientApp ensure、runtime/control key、runtime token、worker-host apply、`OPENAI_CODEX` model create、directory client-init、agent sync、grant 和 owner-smoke。
-   - 仅把非敏感摘要回写到本文 Progress Tracking：ClientApp id 是否存在、worker id 是否存在、directory id 是否存在、model config id 是否存在、owner-smoke pass/fail。
-4. Stage 2.1: Worker readiness。
-   - 确认 Worker 启动时使用仓库外绝对 `CODEX_BIZ_HOME_ROOT`。
-   - 运行 `tools/codex-agent-worker/scripts/codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3070`，先只验 `/health` 的 `codex_biz_home_root_configured` 和 `codex_biz_scoped_home_ready`。
-5. Stage 2.2: optional live query。
-   - 只有在 Codex auth 和模型链路准备好后，显式增加 `-RunLiveQueries`。
-   - actor A/B 与 resume 输出只记录 task/session/model/event_count 等非敏感字段；如果输出包含本机路径、auth 内容、API key 或 token，先修脚本脱敏再进入 Stage 3。
+1. Stage 3.1: submit_skill_result deterministic smoke。
+   - 使用 `.navigator/tenants/codex-biz-smoke-local.env` 中的 self-owned smoke profile。
+   - 继续使用已验证的 `OPENAI_CODEX` model config；如需重置 provider key，可用新 SDK jar 的 `model clear-key`，再按环境变量 `CODEX_API_KEY` 重新 `rotate-key`。
+   - 发起 deterministic `submit_skill_result` 任务，要求输出稳定 marker、structured output 和 tool result 线索。
+   - 记录 taskId、contextId、providerTaskId、workerBackend、非敏感 effective directory marker。
+2. Stage 3.2: BusinessFunction / WorkerGateway。
+   - 选择低风险只读函数，验证 schema -> invoke -> tool-message audit。
+   - 检查 `business_runtime_context.task_scoped_token` 只进入结构化 runtime context 和 MCP 子进程环境，不进入 prompt、developer instructions、普通日志或 evidence。
+3. Stage 3.3: context continuation。
+   - 已完成正例：只传 `contextId` 续接，确认仍绑定同一 provider / worker / directory。
+   - 已完成负例：绑定第二个有效 directory 后，用同一 `contextId` 显式请求冲突 `directoryId`，确认 fail-fast 且错误语义稳定。
+   - 后续如改动 provider/worker 显式覆盖协议，再补 provider/worker live 负例；当前 provider/worker 冲突由 session-module 既有测试保护。
+4. Stage 3.4: artifact 与 evidence 对齐。
+   - 对照上游 UI Artifact / AG-UI 协议，确认 structured output、messages、evidence 能被 SIM / TMS consumer 复用。
+   - 若发现 SIM-only 或 TMS-only 字段差异，记录为 consumer adapter 差异，不回退为通用 ask body 必传 `directoryId`。
+5. Stage 5 前置收口。
+   - Stage 3 完成后再执行正式 `foggy-implementation-quality-gate` 和 `foggy-test-coverage-audit`。
+   - 质量与覆盖通过后生成 `acceptance/OPT-003-codex-biz-upstream-acceptance.md`，再交付 SIM / TMS owner 验收。
 
 ## Acceptance Criteria
 
@@ -220,6 +224,9 @@ created_at: 2026-06-30
 powershell -ExecutionPolicy Bypass -File tools/navigator-upstream/scripts/codex-biz-smoke-approve.ps1
 powershell -ExecutionPolicy Bypass -File tools/navigator-upstream/scripts/codex-biz-smoke-bootstrap.ps1
 powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3070
+mvn -q -am -pl metadata-config-module,business-agent-module,navigator-open-sdk "-Dtest=LlmModelManagerImplTest,ClientAppOwnedModelConfigServiceTest,UpstreamAdminModelConfigServiceTest,UpstreamCliTest,BusinessAgentSessionServiceTest,BusinessAgentTaskServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+npm --prefix tools/codex-agent-worker run typecheck
+npm --prefix tools/codex-agent-worker test
 ```
 
 Targeted regression commands may be added as Stage 3/4 exposes concrete code deltas. Current known baseline from OPT-001:
@@ -243,22 +250,24 @@ git diff --check
 | self-owned smoke profile exists | pass | `.navigator/codex-biz-smoke.env` exists and is gitignored per OPT-001 record. |
 | smoke helper scripts exist | pass | `navi.ps1`, approve/bootstrap scripts, and Worker smoke script are present. |
 | smoke profile/artifact paths gitignored | pass | `.navigator/*.env`, `.navigator/tenants/*.env`, and `temp/` are covered by gitignore. |
-| admin-key request code available | pass | `NAVI_ADMIN_KEY_REQUEST_CODE` key is present in `.navigator/codex-biz-smoke.env`; value not recorded. |
-| tenant smoke profile exists | pending | `.navigator/tenants/codex-biz-smoke-local.env` is expected to be generated by bootstrap. |
-| Navigator Upstream CLI installed | pass | `navi.ps1 version` reports `navigator-upstream-cli 1.0.16`. |
-| admin-key request status | blocked | `admin-key status` reports `PENDING`; approval has not completed. |
-| valid operator/admin approval | blocked | `NAVI_OPERATOR_API_KEY` not present in Process/User/Machine env and not stored in checked smoke profiles. Required to approve pending request. |
-| `NAVI_LLM_API_KEY` for model config creation | blocked | Not present in Process/User/Machine env or known local profiles. Required by current `navigator-upstream model create`. |
-| default local Codex Worker health | pass | `http://127.0.0.1:3070/health` reports status ok, `codex_login`, scoped home configured and ready. |
+| admin-key request / approval | pass | Request `ubreq_72a92559-3f86-4b1a-9eb2-77a3bf721f8a`, code suffix `WH1A43OE`, approved at `2026-06-30T11:16:56.637421900`; tenant `navi-codex-biz-smoke-local`, upstreamSystemId `navi-codex-biz-smoke`. No admin/operator key recorded. |
+| tenant smoke profile exists | pass | `.navigator/tenants/codex-biz-smoke-local.env` generated by bootstrap and gitignored. |
+| Navigator Upstream CLI installed | pass | `navi.ps1 version` reports `navigator-upstream-cli 1.0.16`; rebuilt SDK jar `1.0.18` was used directly for new `model clear-key` command before wrapper release. |
+| owner-smoke provisioning | pass | ClientApp `capp_62137cc6-584a-42db-8ffc-35508a98aa80`, agent `codex-biz-smoke-agent`, modelConfig `48212e4e-fd63-4ec6-8fe5-47089a19824c`, directory `20260630-143b`, worker `3ad8bb7b`. |
+| `NAVI_LLM_API_KEY` for model config creation | pass with deviation | Not required for the completed smoke after model was created. Final live-smoke key source was process env `CODEX_API_KEY` via `--api-key-env CODEX_API_KEY`; no raw key recorded. |
+| default local Codex Worker health | pass | `http://127.0.0.1:3070/health` reports status ok, worker `codex-worker-biz-gray`, `codex_login`, scoped home configured and ready. |
 
 ### Development Progress
 
 - [x] Stage 0: Contract rebase recorded.
 - [x] Stage 1.1: local profile/script/gitignore preflight recorded.
-- [ ] Stage 1: self-owned smoke upstream provisioned.
+- [x] Stage 1: self-owned smoke upstream provisioned.
 - [x] Stage 2.1: Worker health readiness passed against default local Worker.
-- [ ] Stage 2: Worker readiness and local smoke recorded.
-- [ ] Stage 3: Navigator E2E smoke completed.
+- [x] Stage 2: Worker readiness and local smoke recorded for health / init-directory.
+- [x] Stage 3.0: Navigator basic BusinessAgent live ask completed through CodexBizWorker.
+- [ ] Stage 3.1: deterministic `submit_skill_result` smoke completed.
+- [ ] Stage 3.2: BusinessFunction schema/invoke and tool-message audit completed.
+- [x] Stage 3.3: `contextId` continuation positive / directory-conflict negative completed.
 - [ ] Stage 4: SIM / TMS consumer gray acceptance completed.
 - [ ] Stage 5: quality, coverage and acceptance signoff completed.
 
@@ -268,11 +277,22 @@ git diff --check
 | --- | --- | --- | --- |
 | route readiness baseline | OPT-001 | pass | Existing OPT-001 quality / coverage / acceptance docs. |
 | Stage 1.1 preflight | local docs/scripts/profile hygiene | pass | Scripts exist; system profile has request code; smoke profile/artifact paths are gitignored. |
-| isolated provisioning | Navigator CLI | not-run | Waiting for valid operator/admin key and `NAVI_LLM_API_KEY`. |
-| Worker health smoke | Codex Worker | pass | `codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3070` passed health readiness; live queries not run. |
-| `submit_skill_result` E2E | Navigator + Worker | not-run | Stage 3. |
+| Java targeted regression | metadata-config-module + business-agent-module + navigator-open-sdk | pass | `mvn -q -am -pl metadata-config-module,business-agent-module,navigator-open-sdk "-Dtest=LlmModelManagerImplTest,ClientAppOwnedModelConfigServiceTest,UpstreamAdminModelConfigServiceTest,UpstreamCliTest,BusinessAgentSessionServiceTest,BusinessAgentTaskServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`. |
+| Worker typecheck | tools/codex-agent-worker | pass | `npm run typecheck`. |
+| Worker unit tests | tools/codex-agent-worker | pass | `npm test`, 92 tests passed. |
+| isolated provisioning | Navigator CLI | pass | owner-smoke passed with ClientApp / Agent / ModelConfig / Directory / Worker resources listed in precondition table. |
+| Worker health smoke | Codex Worker | pass | Health reports `status=ok`, `codex_login`, `codex_biz_home_root_configured=true`, `codex_biz_scoped_home_ready=true`. |
+| Worker init-directory probe | Codex Worker | pass | Direct probe created `temp/codex-biz-smoke/.init-route-probe.md`; validates safe managed-directory file init route. |
+| backend restart / health | Navigator current project | pass | `.\start-launcher.ps1` restarted current Navi service; health is UP on `8112`, listening Java PID `35120`. |
+| provider auth diagnostic: official base without request key | Navigator + Worker + OpenAI official endpoint | expected-fail | Task `20260630-718c`, providerTask `7ec71212-caac-4a85-8bdc-44da326389ac`; failed with provider 401 missing `api.responses.write`, confirming no leaked request key path. |
+| provider auth diagnostic: proxy without key | Navigator + Worker + proxy endpoint | expected-fail | Task `20260630-c1a7`, providerTask `51d9756f-1761-4a1d-8f16-ab025385d1fe`; failed with provider 401 invalid API key, confirming proxy still needs a key. |
+| basic BusinessAgent live ask | Navigator + CodexBizWorker + provider | pass | Task `20260630-c4c8`, contextId `bctx_20260630_ef_ef2799df98f7416bacb45135e8a79d4a`, provider/workerTask `2785924a-110c-412f-92cc-d62aa64d84b5`; marker `CODEX_BIZ_SMOKE_OK_20260630_CODEX_KEY` returned. |
+| BusinessAgent context resource guard | business-agent-module | pass | `BusinessAgentSessionServiceTest` covers resource binding persistence, directory mismatch rejection, and legacy `skillId`-as-`agentId` compatibility; `BusinessAgentTaskServiceTest` covers fail-before-task-save when context resource validation rejects. |
+| context continuation positive | Navigator + CodexBizWorker + provider | pass | Post-guard task `20260630-62ca`, same contextId `bctx_20260630_ef_ef2799df98f7416bacb45135e8a79d4a`, provider/workerTask `cb52bc9a-d24a-42a4-ab5a-8eec2496e89a`; request intentionally omitted directory/model/provider overrides and returned marker `CODEX_BIZ_CONTEXT_BINDING_AFTER_GUARD_OK_20260630`. Earlier context-only continuation task `20260630-8a88` also passed with marker `CODEX_BIZ_CONTEXT_CONTINUATION_OK_20260630`. |
+| context continuation negative: valid directory conflict | Navigator route/session guard | pass | Created second ClientApp directory `20260630-cee1`, bound it as non-default workspace to `codex-biz-smoke-agent`, then reused the same context with `--directory-id 20260630-cee1`; CLI exited `2` with HTTP 400 `CONTEXT_WORKER_MISMATCH: directoryId 20260630-cee1 conflicts with context/session-bound directory 20260630-143b`. No task id was issued. |
+| `submit_skill_result` E2E | Navigator + Worker | not-run | Stage 3.1. |
 | BusinessFunction E2E | Navigator + WorkerGateway + Worker | not-run | Stage 3. |
-| context continuation positive / negative | Navigator + Worker | not-run | Stage 3. |
+| context continuation positive / directory-conflict negative | Navigator + Worker | pass | See dedicated rows above. Provider/worker conflict live cases remain optional unless their explicit override protocol changes. |
 | SIM gray acceptance | Consumer | not-run | Stage 4. |
 | TMS gray acceptance | Consumer | not-run | Stage 4. |
 
@@ -282,22 +302,24 @@ git diff --check
 
 ### Implementation Self-Check
 
-- scope conformance: pass for planning scope; execution remains staged.
+- scope conformance: pass for current staged scope; execution remains staged.
 - non-goals preserved: pass; SIM / TMS production cutover and mandatory ask-body `directoryId` are explicitly out of scope.
-- code/docs touched are listed: pass for README and this workitem; later quality/coverage/acceptance docs remain expected outputs.
-- tests and smoke evidence recorded: partial; Stage 1.1 preflight and Worker health passed, provisioning/E2E smoke not run.
-- remaining risks documented: pass; credential and E2E blockers remain listed.
-- self-check conclusion: plan is ready for Stage 1.2 once `NAVI_OPERATOR_API_KEY` and `NAVI_LLM_API_KEY` are available; Worker health does not block bootstrap.
+- code/docs touched are listed: pass for current code and docs; later quality/coverage/acceptance docs remain expected outputs.
+- tests and smoke evidence recorded: partial; Java / Worker regression, owner-smoke, Worker health, basic live ask, and context continuation positive/directory-conflict negative passed; deterministic `submit_skill_result` / BusinessFunction remain not-run.
+- remaining risks documented: pass; remaining functional E2E gaps are listed below.
+- self-check conclusion: current implementation is ready for Stage 3 functional expansion, but not ready for final OPT-003 acceptance signoff.
 
 ### Blockers
 
-- `NAVI_OPERATOR_API_KEY` is required to approve the self-owned smoke upstream request; current request status is `PENDING`.
-- `NAVI_LLM_API_KEY` is required by current model config creation flow even when local Codex Worker uses `codex_login`.
-- Full migration equivalence remains blocked until `submit_skill_result` and BusinessFunction E2E smoke pass.
+- No current blocker for self-owned smoke provisioning or basic live ask in this Navi workspace.
+- Full upstream acceptance remains incomplete until deterministic `submit_skill_result`, BusinessFunction schema/invoke, tool-message audit, and task-scoped token hygiene audit pass.
+- `navigator-upstream-cli` project wrapper is still `1.0.16` and does not expose `model clear-key`; the command exists in rebuilt SDK jar and needs wrapper/release update before consumers can use it directly.
+- BusinessAgent session binding added nullable columns; local/default launcher uses additive schema update, but validate-only deployments must include the equivalent additive DDL before promotion.
+- Consumer gray acceptance remains pending for SIM and TMS; each must record its own route/profile, directory source, Codex home source, and fallback boundary.
 
 ## Execution Prompt
 
-Use this prompt for the next execution agent after the required credentials are available:
+Use this prompt for the next execution agent:
 
 ```text
 You are executing OPT-003: Codex Biz Upstream Acceptance.
@@ -309,8 +331,8 @@ Read first:
 - CLAUDE.md
 
 Goal:
-- Provision the self-owned Codex Biz smoke upstream.
-- Run Worker readiness, Navigator E2E submit_skill_result, BusinessFunction, and context continuation smoke.
+- Continue from the already provisioned self-owned Codex Biz smoke upstream in the current Navi workspace.
+- Run deterministic Navigator E2E submit_skill_result, BusinessFunction, and context continuation smoke.
 - Record non-sensitive evidence and update OPT-003 progress.
 
 Do not:

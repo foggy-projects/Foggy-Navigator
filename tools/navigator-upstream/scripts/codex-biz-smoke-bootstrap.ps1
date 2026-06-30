@@ -12,6 +12,7 @@ param(
     [string]$WorkerHostId = "codex-biz-smoke-local",
     [string]$WorkerHostUrl = "http://127.0.0.1",
     [int]$WorkerPort = 3070,
+    [string]$WorkerTokenEnv = "NAVI_CODEX_BIZ_SMOKE_WORKER_TOKEN",
     [switch]$ForceRuntimeKey,
     [switch]$ForceControlKey,
     [switch]$ForceModelCreate,
@@ -30,7 +31,7 @@ $WorkDir = Join-Path $ProjectRoot "temp\codex-biz-smoke"
 $WorkerHostFile = Join-Path $WorkDir "worker-host.generated.json"
 $DirectoryFile = Join-Path $WorkDir "client-directory.generated.json"
 $AgentFile = Join-Path $WorkDir "agent.generated.json"
-$ControlScopes = "MODEL_CONFIG_MANAGE,WORKING_DIRECTORY_MANAGE,AGENT_BUNDLE_SYNC,AGENT_MODEL_BINDING_MANAGE,AGENT_WORKSPACE_BINDING_MANAGE,AGENT_WORKER_BINDING_MANAGE"
+$ControlScopes = "MODEL_CONFIG_MANAGE,WORKING_DIRECTORY_MANAGE,AGENT_BUNDLE_SYNC,AGENT_MODEL_BINDING_MANAGE,AGENT_WORKSPACE_BINDING_MANAGE,AGENT_WORKER_BINDING_MANAGE,UPSTREAM_USER_GRANT"
 
 function Invoke-Navi {
     param(
@@ -74,7 +75,27 @@ function Write-JsonFile {
         [Parameter(Mandatory = $true)]$Value
     )
     $json = $Value | ConvertTo-Json -Depth 16
-    Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $json, $utf8NoBom)
+}
+
+function Ensure-WorkerTokenEnv {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    if ([Environment]::GetEnvironmentVariable($Name)) {
+        return
+    }
+
+    $workerToken = [Environment]::GetEnvironmentVariable("CODEX_WORKER_TOKEN")
+    if (-not $workerToken) {
+        $workerEnvPath = Join-Path $ProjectRoot "tools\codex-agent-worker\.env"
+        $workerToken = Get-ProfileValue -Path $workerEnvPath -Name "CODEX_WORKER_TOKEN"
+    }
+    if (-not $workerToken) {
+        $workerToken = ([Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N"))
+    }
+    [Environment]::SetEnvironmentVariable($Name, $workerToken, "Process")
 }
 
 Push-Location $ProjectRoot
@@ -149,19 +170,23 @@ try {
 
     Invoke-Navi -Profile $TenantProfile -NaviArgs @("runtime-token", "--write-profile")
 
+    Ensure-WorkerTokenEnv -Name $WorkerTokenEnv
     $workerHost = [ordered]@{
         workerHostId = $WorkerHostId
         hostUrl = $WorkerHostUrl
+        port = $WorkerPort
         workers = [ordered]@{
             claudeCode = [ordered]@{
                 enabled = $true
                 port = $WorkerPort
                 name = "codex-biz-smoke-anchor"
+                authTokenEnv = $WorkerTokenEnv
             }
             codex = [ordered]@{
                 enabled = $true
                 port = $WorkerPort
                 name = "codex-biz-smoke-codex"
+                authTokenEnv = $WorkerTokenEnv
                 model = $ModelName
             }
         }
@@ -211,10 +236,13 @@ try {
             path = $ProjectPath
             projectName = "codex-biz-smoke-local"
             workspaceScope = "CLIENT_APP_SHARED"
-            resolverType = "DIRECT"
+            resolverType = "MANAGED"
             rootRef = $ProjectPath
             readOnly = $false
             allowedPathPrefixes = @($ProjectPath)
+            files = [ordered]@{
+                "temp/codex-biz-smoke/.directory-smoke.md" = "Codex Biz smoke workspace marker."
+            }
             enabled = $true
         }
         Write-JsonFile -Path $DirectoryFile -Value $directory
@@ -243,7 +271,7 @@ try {
         workerId = $workerId
         defaultModelConfigId = $modelConfigId
         defaultModel = $ModelName
-        contextVisibility = "CLIENT_APP"
+        contextVisibility = "isolated"
         markdownBody = "Use Codex Biz Worker only for local migration smoke. Keep replies short and do not modify files unless explicitly asked."
         resources = @()
         functions = @()
@@ -265,6 +293,10 @@ try {
             "--directory-id", $directoryId,
             "--provider-type", "codex-biz-worker",
             "--private-account-id", $PrivateAccountId,
+            "--sandbox-mode", "workspace-write",
+            "--approval-policy", "never",
+            "--network-access-enabled", "false",
+            "--web-search-mode", "disabled",
             "--max-turns", "1",
             "--message", $SmokeMessage
         )

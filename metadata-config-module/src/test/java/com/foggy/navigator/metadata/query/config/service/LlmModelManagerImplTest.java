@@ -70,6 +70,30 @@ class LlmModelManagerImplTest {
     }
 
     @Test
+    void updateModelConfig_clearsStoredApiKeyWhenRequested() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-clear-key");
+        entity.setTenantId("tenant-1");
+        entity.setCategory(LlmModelCategory.CODING);
+        entity.setWorkerBackend("OPENAI_CODEX");
+        entity.setBaseUrl("https://api.openai.example/v1");
+        entity.setApiKey("encrypted-old-key");
+        entity.setModelName("gpt-5.4");
+
+        LlmModelConfigForm form = new LlmModelConfigForm();
+        form.setClearApiKey(true);
+
+        when(llmModelRepo.findById("cfg-clear-key")).thenReturn(Optional.of(entity));
+
+        service.updateModelConfig("cfg-clear-key", form);
+
+        assertNull(entity.getApiKey());
+        assertEquals("https://api.openai.example/v1", entity.getBaseUrl());
+        verify(llmModelRepo).save(entity);
+        verifyNoInteractions(credentialEncryptor);
+    }
+
+    @Test
     void updateModelConfig_clearsStoredApiKeyForNormalizedSubscriptionBackend() {
         LlmModelConfigEntity entity = new LlmModelConfigEntity();
         entity.setId("cfg-normalized");

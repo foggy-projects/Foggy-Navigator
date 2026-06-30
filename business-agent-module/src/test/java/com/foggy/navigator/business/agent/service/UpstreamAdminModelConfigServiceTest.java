@@ -2,6 +2,7 @@ package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.UpstreamClientAppAdminPrincipal;
 import com.foggy.navigator.business.agent.model.form.ClientAppModelConfigForm;
+import com.foggy.navigator.business.agent.model.form.RotateModelConfigKeyForm;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ModelAccessScope;
@@ -140,6 +141,21 @@ class UpstreamAdminModelConfigServiceTest {
 
         assertEquals(1, result.size());
         assertEquals("model-1", result.get(0).getId());
+    }
+
+    @Test
+    void rotateKey_canClearUpstreamOwnedModelKey() {
+        when(llmModelManager.getModelConfig("model-1")).thenReturn(Optional.of(model("model-1", "ups-1")));
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setClearApiKey(true);
+
+        LlmModelConfigDTO result = service.rotateKey("tenant-1", principal(), "model-1", form);
+
+        ArgumentCaptor<LlmModelConfigForm> formCaptor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
+        verify(llmModelManager).updateModelConfig(eq("model-1"), formCaptor.capture());
+        assertEquals("model-1", result.getId());
+        assertEquals(true, formCaptor.getValue().getClearApiKey());
+        assertEquals(null, formCaptor.getValue().getApiKey());
     }
 
     private UpstreamClientAppAdminPrincipal principal() {

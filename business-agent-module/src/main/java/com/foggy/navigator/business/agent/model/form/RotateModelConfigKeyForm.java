@@ -5,4 +5,5 @@ import lombok.Data;
 @Data
 public class RotateModelConfigKeyForm {
     private String apiKey;
+    private Boolean clearApiKey;
 }

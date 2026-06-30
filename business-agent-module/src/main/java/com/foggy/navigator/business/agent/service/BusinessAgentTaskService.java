@@ -155,6 +155,21 @@ public class BusinessAgentTaskService {
                 workerPool != null ? workerPool.getWorkerBackend() : null,
                 finalModelResource.workerBackend());
         requireTaskDirectoryForBizWorker(workerBackend, workspaceResource);
+        String contextId = businessAgentSessionService.resolveReusableContextId(
+                tenantId,
+                form.getClientAppId(),
+                form.getUpstreamUserId(),
+                form.getContextId(),
+                form.getSessionId());
+        businessAgentSessionService.validateContextResourceCompatibility(
+                tenantId,
+                form.getClientAppId(),
+                form.getUpstreamUserId(),
+                contextId,
+                agentResource.agentId(),
+                agentResource.skillId(),
+                workspaceResource != null ? workspaceResource.directoryId() : null,
+                finalModelConfigId);
 
         // 7. task 创建后固定最终 modelConfigId
         BusinessAgentTaskEntity task = new BusinessAgentTaskEntity();
@@ -195,18 +210,17 @@ public class BusinessAgentTaskService {
         token = tokenRepository.save(token);
         tokenRuntimeStore.registerToken(tenantId, task.getSessionId(), task.getTaskId(), plainToken, expiresAt);
 
-        String contextId = businessAgentSessionService.resolveReusableContextId(
-                tenantId,
-                form.getClientAppId(),
-                form.getUpstreamUserId(),
-                form.getContextId(),
-                task.getSessionId());
-
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
                 tenantId, actorUserId, task, workerPool, agentResource, finalModelResource, plainToken,
                 finalVisionModelConfigId, contextId, skillName, form, workspaceResource, clientApp);
-        if (launchResult != null && StringUtils.hasText(launchResult.getContextId())) {
-            contextId = launchResult.getContextId();
+        if (launchResult != null) {
+            if (StringUtils.hasText(launchResult.getContextId())) {
+                contextId = launchResult.getContextId();
+            }
+            task.setWorkerTaskId(launchResult.getWorkerTaskId());
+            task.setWorkerSessionId(launchResult.getWorkerSessionId());
+            task.setWorkerId(launchResult.getWorkerId());
+            task.setWorkerProviderType(launchResult.getProviderType());
         }
 
         contextId = businessAgentSessionService
@@ -214,10 +228,6 @@ public class BusinessAgentTaskService {
                 .getContextId();
 
         if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
-            task.setWorkerTaskId(launchResult.getWorkerTaskId());
-            task.setWorkerSessionId(launchResult.getWorkerSessionId());
-            task.setWorkerId(launchResult.getWorkerId());
-            task.setWorkerProviderType(launchResult.getProviderType());
             task = taskRepository.save(task);
             token.setWorkerTaskId(task.getWorkerTaskId());
             token.setWorkerSessionId(task.getWorkerSessionId());

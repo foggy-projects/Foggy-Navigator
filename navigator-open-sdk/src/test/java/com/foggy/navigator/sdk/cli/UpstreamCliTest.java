@@ -2830,6 +2830,72 @@ class UpstreamCliTest {
     }
 
     @Test
+    void modelClearKeyUsesControlCredentialWithoutApiKey() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":43,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-owned",
+                  "modelConfigName":"Upstream Codex",
+                  "workerBackend":"OPENAI_CODEX",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP_OWNED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "clear-key",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--model-config-id", "model-owned"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs/model-owned/key", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"clearApiKey\":true"));
+        assertFalse(lastBody.contains("apiKey"));
+        assertTrue(output.contains("model clear-key ok"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void modelSystemClearKeyUsesUpstreamAdminKey() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":"model-upstream",
+                  "tenantId":"tenant-1",
+                  "name":"Upstream Codex",
+                  "modelName":"codex-mini",
+                  "workerBackend":"OPENAI_CODEX",
+                  "ownerType":"UPSTREAM_SYSTEM",
+                  "ownerId":"ups-1",
+                  "enabled":true
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "system-clear-key",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--admin-api-key", "naa-secret-admin-key",
+                "--target-tenant-id", "tenant-1",
+                "--model-config-id", "model-upstream"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/model-configs/model-upstream/key?targetTenantId=tenant-1", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"clearApiKey\":true"));
+        assertFalse(lastBody.contains("apiKey"));
+        assertTrue(output.contains("model system-clear-key ok"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
     void workerCreateUsesUpstreamAdminKeyAndStoresWorkerId() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
         Files.createDirectories(tempDir.resolve(".navigator"));

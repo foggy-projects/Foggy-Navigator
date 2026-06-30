@@ -68,11 +68,22 @@ public class UpstreamAdminModelConfigService {
                                        String modelConfigId,
                                        RotateModelConfigKeyForm form) {
         requireModel(tenantId, principal, modelConfigId);
-        if (form == null || !StringUtils.hasText(form.getApiKey())) {
+        if (form == null) {
+            throw new IllegalArgumentException("form is required");
+        }
+        boolean clearApiKey = Boolean.TRUE.equals(form.getClearApiKey());
+        if (clearApiKey && StringUtils.hasText(form.getApiKey())) {
+            throw new IllegalArgumentException("apiKey must be empty when clearApiKey is true");
+        }
+        if (!clearApiKey && !StringUtils.hasText(form.getApiKey())) {
             throw new IllegalArgumentException("apiKey is required");
         }
         LlmModelConfigForm modelForm = new LlmModelConfigForm();
-        modelForm.setApiKey(form.getApiKey());
+        if (clearApiKey) {
+            modelForm.setClearApiKey(true);
+        } else {
+            modelForm.setApiKey(form.getApiKey());
+        }
         llmModelManager.updateModelConfig(modelConfigId, modelForm);
         return requireModel(tenantId, principal, modelConfigId);
     }

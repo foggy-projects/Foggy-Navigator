@@ -85,6 +85,9 @@ class BusinessAgentTaskServiceTest {
                     dto.setContextId("bctx_20260520_ab_ctx_01");
                     return dto;
                 });
+        lenient().when(businessAgentSessionService.resolveReusableContextId(
+                        anyString(), anyString(), anyString(), nullable(String.class), anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(3));
         lenient().when(resourceResolver.resolveOptionalModelForAgent(
                 anyString(), anyString(), any(), eq(LlmModelCategory.VISION)))
                 .thenReturn(Optional.empty());
@@ -158,6 +161,9 @@ class BusinessAgentTaskServiceTest {
 
         verify(clientAppService).requireActiveClientApp("tenant_01", "app_01");
         verify(bizWorkerPoolService).requireAvailablePool("tenant_01", "pool_01");
+        verify(businessAgentSessionService).validateContextResourceCompatibility(
+                "tenant_01", "app_01", "user_01", null,
+                "agent_01", "skill_01", "dir_01", "model_01");
 
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor = ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
         verify(tokenRepository).save(tokenCaptor.capture());
@@ -235,6 +241,12 @@ class BusinessAgentTaskServiceTest {
         assertEquals("worker_session_123", result.getWorkerSessionId());
         assertEquals("worker_01", result.getWorkerId());
         assertEquals("langgraph-biz-worker", result.getWorkerProviderType());
+
+        ArgumentCaptor<BusinessAgentTaskEntity> bindTaskCaptor = ArgumentCaptor.forClass(BusinessAgentTaskEntity.class);
+        verify(businessAgentSessionService).bindTask(bindTaskCaptor.capture(), eq("bctx_20260520_ab_ctx_01"), isNull());
+        assertEquals("lgt_123", bindTaskCaptor.getValue().getWorkerTaskId());
+        assertEquals("worker_01", bindTaskCaptor.getValue().getWorkerId());
+        assertEquals("langgraph-biz-worker", bindTaskCaptor.getValue().getWorkerProviderType());
 
         ArgumentCaptor<BusinessAgentWorkerTaskLaunchRequest> requestCaptor =
                 ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
@@ -518,6 +530,48 @@ class BusinessAgentTaskServiceTest {
         assertTrue(error.getMessage().contains(BusinessAgentTaskService.TASK_DIRECTORY_REQUIRED));
         verify(taskRepository, never()).save(any());
         verify(tokenRepository, never()).save(any());
+    }
+
+    @Test
+    void createTask_contextResourceMismatchRejectedBeforeTaskCreated() {
+        form.setContextId("bctx_20260520_ab_ctx_01");
+        form.setDirectoryId("dir_02");
+
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        when(resourceResolver.resolveOptionalWorkspaceForAgent(
+                eq("tenant_01"), eq("app_01"), eq("user_01"), any(), eq("dir_02")))
+                .thenReturn(Optional.of(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_02",
+                        "worker_01",
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.DELEGATED,
+                        "D:/workspace/app-2",
+                        List.of("D:/workspace"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"
+                )));
+        doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
+        doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
+        doThrow(new IllegalArgumentException(BusinessAgentSessionService.CONTEXT_WORKER_MISMATCH
+                + ": directoryId dir_02 conflicts with context-bound directoryId dir_01"))
+                .when(businessAgentSessionService)
+                .validateContextResourceCompatibility(
+                        "tenant_01", "app_01", "user_01", "bctx_20260520_ab_ctx_01",
+                        "agent_01", "skill_01", "dir_02", "model_01");
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> taskService.createTask("tenant_01", "actor_01", form));
+
+        assertTrue(error.getMessage().contains(BusinessAgentSessionService.CONTEXT_WORKER_MISMATCH));
+        verify(taskRepository, never()).save(any());
+        verify(tokenRepository, never()).save(any());
+        verify(tokenRuntimeStore, never()).registerToken(anyString(), anyString(), anyString(), anyString(), any());
     }
 
     @Test

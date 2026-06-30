@@ -75,10 +75,20 @@ public class ClientAppOwnedModelConfigService {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
-        requireText(form.getApiKey(), "apiKey is required");
+        boolean clearApiKey = Boolean.TRUE.equals(form.getClearApiKey());
+        if (clearApiKey && StringUtils.hasText(form.getApiKey())) {
+            throw new IllegalArgumentException("apiKey must be empty when clearApiKey is true");
+        }
+        if (!clearApiKey) {
+            requireText(form.getApiKey(), "apiKey is required");
+        }
         ClientAppModelConfigGrantEntity grant = requireOwnedGrant(tenantId, clientAppId, modelConfigId);
         LlmModelConfigForm modelForm = new LlmModelConfigForm();
-        modelForm.setApiKey(form.getApiKey());
+        if (clearApiKey) {
+            modelForm.setClearApiKey(true);
+        } else {
+            modelForm.setApiKey(form.getApiKey());
+        }
         llmModelManager.updateModelConfig(modelConfigId, modelForm);
         return ClientAppModelConfigGrantDTO.fromEntity(grant);
     }

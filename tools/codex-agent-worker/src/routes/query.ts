@@ -1,4 +1,3 @@
-import path from 'node:path'
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
@@ -11,26 +10,11 @@ import {
 } from '../codex/sdk-wrapper.js'
 import type { WorkerEvent } from '../models.js'
 import { validateQueryRequest } from '../validation/query.js'
+import { isPathWithinAllowedCwd } from '../path-guards.js'
+
+export { isPathWithinAllowedCwd }
 
 const router = Router()
-
-const looksWindowsPath = (value: string): boolean =>
-  /^[a-zA-Z]:[\\/]/.test(value) || value.includes('\\')
-
-export const isPathWithinAllowedCwd = (candidate: string, allowedCwd: string): boolean => {
-  const pathApi = looksWindowsPath(candidate) || looksWindowsPath(allowedCwd) ? path.win32 : path.posix
-  const normalizeCase = looksWindowsPath(candidate) || looksWindowsPath(allowedCwd)
-  const normalizeBoundary = (value: string): string => {
-    const normalized = pathApi.normalize(value)
-    return normalized === pathApi.parse(normalized).root ? normalized : normalized.replace(/[\\/]+$/, '')
-  }
-  const normalizedCandidate = normalizeBoundary(candidate)
-  const normalizedAllowed = normalizeBoundary(allowedCwd)
-  const candidateForCompare = normalizeCase ? normalizedCandidate.toLowerCase() : normalizedCandidate
-  const allowedForCompare = normalizeCase ? normalizedAllowed.toLowerCase() : normalizedAllowed
-  const relative = pathApi.relative(allowedForCompare, candidateForCompare)
-  return relative === '' || (!!relative && !relative.startsWith('..') && !pathApi.isAbsolute(relative))
-}
 
 /**
  * POST /api/v1/query — Start a Codex query and stream results as SSE

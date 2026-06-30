@@ -126,7 +126,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
             entity.setBaseUrl(!form.getBaseUrl().isBlank() ? form.getBaseUrl() : null);
         }
         if (form.getModelName() != null) entity.setModelName(form.getModelName());
-        if (form.getApiKey() != null && !form.getApiKey().isBlank()) {
+        if (Boolean.TRUE.equals(form.getClearApiKey())) {
+            entity.setApiKey(null);
+        } else if (form.getApiKey() != null && !form.getApiKey().isBlank()) {
             entity.setApiKey(credentialEncryptor.encrypt(form.getApiKey()));
         }
         if (form.getIsDefault() != null) {

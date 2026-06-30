@@ -24,9 +24,9 @@ CodexBizWorker 后续验收从 SIM 单点评估升级为通用上游接入闭环
 - acceptance_record: [acceptance/OPT-001-codex-biz-route-readiness-acceptance.md](./acceptance/OPT-001-codex-biz-route-readiness-acceptance.md)
 - follow_up_status: ready-for-signoff
 - follow_up_record: [workitems/OPT-002-langgraph-biz-actor-home-readiness.md](./workitems/OPT-002-langgraph-biz-actor-home-readiness.md)
-- upstream_acceptance_status: in-progress
+- upstream_acceptance_status: in-progress; self-owned smoke, basic live ask, and context continuation passed; `submit_skill_result` / BusinessFunction expansion pending
 - upstream_acceptance_record: [workitems/OPT-003-codex-biz-upstream-acceptance.md](./workitems/OPT-003-codex-biz-upstream-acceptance.md)
-- worker_response_timeout_status: in-progress
+- worker_response_timeout_status: ready-for-signoff
 - worker_response_timeout_record: [workitems/OPT-004-worker-response-timeout-indicator.md](./workitems/OPT-004-worker-response-timeout-indicator.md)
 
 ## 文档清单
@@ -39,5 +39,5 @@ CodexBizWorker 后续验收从 SIM 单点评估升级为通用上游接入闭环
 - [quality/OPT-002-implementation-quality.md](./quality/OPT-002-implementation-quality.md) - OPT-002 实现质量门禁记录
 - [coverage/OPT-002-coverage-audit.md](./coverage/OPT-002-coverage-audit.md) - OPT-002 测试覆盖审计记录
 - [acceptance/OPT-002-langgraph-biz-actor-home-readiness-acceptance.md](./acceptance/OPT-002-langgraph-biz-actor-home-readiness-acceptance.md) - OPT-002 待签收记录
-- [workitems/OPT-003-codex-biz-upstream-acceptance.md](./workitems/OPT-003-codex-biz-upstream-acceptance.md) - CodexBizWorker 通用上游接入、self-owned smoke、SIM/TMS 灰度验收闭环
+- [workitems/OPT-003-codex-biz-upstream-acceptance.md](./workitems/OPT-003-codex-biz-upstream-acceptance.md) - CodexBizWorker 通用上游接入；self-owned smoke、基础 live ask、context continuation 已通过，`submit_skill_result` / BusinessFunction 待扩展
 - [workitems/OPT-004-worker-response-timeout-indicator.md](./workitems/OPT-004-worker-response-timeout-indicator.md) - Worker 任务长时间无用户可见输出时的响应超时辅助提示

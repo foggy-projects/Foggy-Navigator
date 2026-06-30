@@ -229,10 +229,12 @@ public class UpstreamCli {
             case "model create" -> modelCreate(args);
             case "model update" -> modelUpdate(args);
             case "model rotate-key" -> modelRotateKey(args);
+            case "model clear-key" -> modelClearKey(args);
             case "model system-list" -> modelSystemList(args);
             case "model system-create" -> modelSystemCreate(args);
             case "model system-update" -> modelSystemUpdate(args);
             case "model system-rotate-key" -> modelSystemRotateKey(args);
+            case "model system-clear-key" -> modelSystemClearKey(args);
             case "admin-key", "admin-key help" -> adminKeyUsage();
             case "admin-key inspect" -> adminKeyInspect(args);
             case "admin-key request" -> adminKeyRequest(args);
@@ -295,7 +297,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model clear-key, model system-list/system-create/system-update/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker-host apply.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--client-context-json <json>|--client-context-file <path>]");
@@ -3063,6 +3065,19 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int modelClearKey(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setClearApiKey(true);
+
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi()
+                .rotateClientAppModelConfigKey(clientAppId, modelConfigId, form);
+        out.println("model clear-key ok");
+        printModelConfigGrant("modelGrant", grant);
+        return 0;
+    }
+
     private int modelSystemList(CliArguments args) {
         List<LlmModelConfigDTO> models = upstreamAdminApi()
                 .listUpstreamSystemModelConfigs(args.option("target-tenant-id"));
@@ -3122,6 +3137,18 @@ public class UpstreamCli {
         LlmModelConfigDTO model = upstreamAdminApi()
                 .rotateUpstreamSystemModelConfigKey(modelConfigId, form, args.option("target-tenant-id"));
         out.println("model system-rotate-key ok");
+        printLlmModelConfig("modelConfig", model);
+        return 0;
+    }
+
+    private int modelSystemClearKey(CliArguments args) {
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setClearApiKey(true);
+
+        LlmModelConfigDTO model = upstreamAdminApi()
+                .rotateUpstreamSystemModelConfigKey(modelConfigId, form, args.option("target-tenant-id"));
+        out.println("model system-clear-key ok");
         printLlmModelConfig("modelConfig", model);
         return 0;
     }
