@@ -1654,6 +1654,59 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void getTaskEvidenceLiftsOpenArtifactFromFinalJsonMessage() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                mock(CodingAgentRepository.class),
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        SessionTaskEntity task = openApiTask("task-1", "tenant-1", "agent-1", "COMPLETED");
+        task.setTaskStateJson("{}");
+
+        when(credentialResolver.resolveAccessToken(nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(sessionQueryService.findTask("task-1")).thenReturn(Optional.of(task));
+        when(sessionQueryService.resolveContextId("session-1")).thenReturn(Optional.of("ctx-1"));
+        when(sessionQueryService.getLatestTaskMessages("task-1", 200)).thenReturn(List.of(
+                message("msg-1", "session-1", "ASSISTANT", """
+                        {
+                          "marker": "codex-biz-smoke-20260630",
+                          "functionId": "submit_skill_result",
+                          "status": "SUCCESS",
+                          "structured_output.type": "OPEN_ARTIFACT",
+                          "structured_output.label": "Open result",
+                          "structured_output.artifact.kind": "iframe",
+                          "structured_output.artifact.uri": "https://tms.example.com/report?token=secret",
+                          "structured_output.context.businessDomain": "tms"
+                        }
+                        """, "{\"type\":\"TEXT\"}")));
+
+        OpenTaskEvidenceDTO evidence = controller.getTaskEvidence("agent-1", "task-1", request).getData();
+
+        assertEquals(true, evidence.getStructuredOutput().getAvailable());
+        assertEquals("message_content", evidence.getStructuredOutput().getSource());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> structured = (Map<String, Object>) evidence.getStructuredOutput().getValue();
+        assertEquals("OPEN_ARTIFACT", structured.get("type"));
+        assertEquals("Open result", structured.get("label"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> artifact = (Map<String, Object>) structured.get("artifact");
+        assertEquals("iframe", artifact.get("kind"));
+        assertFalse(String.valueOf(artifact.get("uri")).contains("secret"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> context = (Map<String, Object>) structured.get("context");
+        assertEquals("tms", context.get("businessDomain"));
+    }
+
+    @Test
     void getTaskDiagnosticsRejectsTaskOwnedByAnotherAgent() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);

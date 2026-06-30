@@ -91,6 +91,7 @@ public class OpenApiController {
     private static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
     private static final String TASK_DIRECTORY_REQUIRED_MESSAGE =
             TASK_DIRECTORY_REQUIRED + ": directoryId is required for Actor-owned BizWorker task";
+    private static final int MAX_STRUCTURED_OUTPUT_CONTENT_LENGTH = 64 * 1024;
 
     private final OpenApiProvisioningService provisioningService;
     private final ClaudeWorkerService workerService;
@@ -2275,7 +2276,8 @@ public class OpenApiController {
         }
         if (messages != null) {
             for (int i = messages.size() - 1; i >= 0; i--) {
-                Map<String, Object> metadata = parseMessageMetadata(messages.get(i));
+                SessionMessageEntity message = messages.get(i);
+                Map<String, Object> metadata = parseMessageMetadata(message);
                 value = firstPresent(metadata,
                         "structuredOutput", "structured_output", "outputJson", "output_json");
                 if (value != null) {
@@ -2285,11 +2287,100 @@ public class OpenApiController {
                             .source("message_metadata")
                             .build();
                 }
+                if (BusinessAgentSessionMessageVisibility.isVisibleByDefault(message)) {
+                    value = extractStructuredOutputFromMessageContent(message.getContent());
+                    if (value != null) {
+                        return OpenTaskStructuredOutputDTO.builder()
+                                .available(true)
+                                .value(sanitizeEvidenceValue(value))
+                                .source("message_content")
+                                .build();
+                    }
+                }
             }
         }
         return OpenTaskStructuredOutputDTO.builder()
                 .available(false)
                 .build();
+    }
+
+    private Object extractStructuredOutputFromMessageContent(String content) {
+        if (!StringUtils.hasText(content)) {
+            return null;
+        }
+        String text = content.trim();
+        if (text.length() > MAX_STRUCTURED_OUTPUT_CONTENT_LENGTH
+                || !text.startsWith("{")
+                || !text.endsWith("}")) {
+            return null;
+        }
+        try {
+            Map<String, Object> contentMap = objectMapper.readValue(
+                    text,
+                    new TypeReference<Map<String, Object>>() {});
+            Object direct = firstPresent(contentMap,
+                    "structuredOutput", "structured_output", "outputJson", "output_json");
+            if (direct != null) {
+                return direct;
+            }
+            Map<String, Object> flattened = extractFlattenedStructuredOutput(contentMap);
+            if (!flattened.isEmpty()) {
+                return flattened;
+            }
+            if (isOpenArtifactType(contentMap.get("type"))) {
+                return contentMap;
+            }
+        } catch (Exception e) {
+            log.debug("Failed to parse structured output from message content: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    private Map<String, Object> extractFlattenedStructuredOutput(Map<String, Object> contentMap) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (contentMap == null || contentMap.isEmpty()) {
+            return result;
+        }
+        contentMap.forEach((key, value) -> {
+            String path = null;
+            if (key.startsWith("structured_output.")) {
+                path = key.substring("structured_output.".length());
+            } else if (key.startsWith("structuredOutput.")) {
+                path = key.substring("structuredOutput.".length());
+            }
+            if (StringUtils.hasText(path)) {
+                putDottedPath(result, path, value);
+            }
+        });
+        return result;
+    }
+
+    private void putDottedPath(Map<String, Object> target, String dottedPath, Object value) {
+        String[] parts = dottedPath.split("\\.");
+        Map<String, Object> current = target;
+        for (int i = 0; i < parts.length; i++) {
+            String part = parts[i];
+            if (!StringUtils.hasText(part)) {
+                return;
+            }
+            if (i == parts.length - 1) {
+                current.put(part, value);
+                return;
+            }
+            Object child = current.get(part);
+            Map<String, Object> childMap;
+            if (child instanceof Map<?, ?> rawMap) {
+                childMap = toStringObjectMap(rawMap);
+            } else {
+                childMap = new LinkedHashMap<>();
+            }
+            current.put(part, childMap);
+            current = childMap;
+        }
+    }
+
+    private boolean isOpenArtifactType(Object value) {
+        return value instanceof String text && "OPEN_ARTIFACT".equalsIgnoreCase(text.trim());
     }
 
     private SessionTaskEntity requireOpenApiTask(String taskId, String tenantId, String agentId) {

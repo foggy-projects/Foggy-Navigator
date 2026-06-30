@@ -358,8 +358,6 @@ test('buildNavigatorBusinessMcpConfig inherits token through named env vars only
   ])
   assert.equal(server.default_tools_approval_mode, 'approve')
   assert.deepEqual(server.enabled_tools, [
-    'list_business_functions',
-    'get_business_function_schema',
     'invoke_business_function',
   ])
   assert.equal(server.env, undefined)

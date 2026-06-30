@@ -27,6 +27,8 @@ export const NAVIGATOR_BUSINESS_MCP_TOOL_NAMES = [
   'invoke_business_function',
 ] as const
 
+export type NavigatorBusinessMcpToolName = typeof NAVIGATOR_BUSINESS_MCP_TOOL_NAMES[number]
+
 type JsonRpcId = string | number | null
 
 type JsonRpcRequest = {
@@ -85,6 +87,21 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
 ]
 
+const BUSINESS_MCP_ALL_TOOL_GRANTS = new Set([
+  'business.*',
+  'business.functions.*',
+  'navigator.business_functions',
+])
+
+const BUSINESS_MCP_SINGLE_TOOL_GRANTS: Record<string, NavigatorBusinessMcpToolName> = {
+  'business.functions.list': 'list_business_functions',
+  'business.functions.schema': 'get_business_function_schema',
+  'business.functions.invoke': 'invoke_business_function',
+  list_business_functions: 'list_business_functions',
+  get_business_function_schema: 'get_business_function_schema',
+  invoke_business_function: 'invoke_business_function',
+}
+
 export function createRuntimeFromEnv(env: NodeJS.ProcessEnv = process.env): NavigatorBusinessMcpRuntime {
   return {
     gatewayBaseUrl: (env.NAVIGATOR_WORKER_GATEWAY_BASE_URL || 'http://localhost:8080').replace(/\/+$/, ''),
@@ -95,22 +112,43 @@ export function createRuntimeFromEnv(env: NodeJS.ProcessEnv = process.env): Navi
   }
 }
 
+export function resolveNavigatorBusinessMcpToolNames(
+  context: Record<string, unknown> | undefined
+): NavigatorBusinessMcpToolName[] {
+  const allowedTools = context
+    ? readStringArray(context.allowed_tools) ?? readStringArray(context.allowedTools)
+    : undefined
+  return resolveNavigatorBusinessMcpToolNamesFromAllowedTools(allowedTools)
+}
+
+export function resolveNavigatorBusinessMcpToolNamesFromAllowedTools(
+  allowedTools: string[] | undefined
+): NavigatorBusinessMcpToolName[] {
+  if (!allowedTools || allowedTools.length === 0) {
+    return [...NAVIGATOR_BUSINESS_MCP_TOOL_NAMES]
+  }
+
+  const toolNames = new Set<NavigatorBusinessMcpToolName>()
+  for (const tool of allowedTools) {
+    const normalized = tool.trim().toLowerCase()
+    if (!normalized) continue
+    if (BUSINESS_MCP_ALL_TOOL_GRANTS.has(normalized)) {
+      return [...NAVIGATOR_BUSINESS_MCP_TOOL_NAMES]
+    }
+    const toolName = BUSINESS_MCP_SINGLE_TOOL_GRANTS[normalized]
+    if (toolName) toolNames.add(toolName)
+  }
+
+  return NAVIGATOR_BUSINESS_MCP_TOOL_NAMES.filter(toolName => toolNames.has(toolName))
+}
+
 export function isNavigatorBusinessMcpEnabled(context: Record<string, unknown> | undefined): boolean {
   if (!context || typeof context !== 'object') return false
   const token = readString(context, 'task_scoped_token') || readString(context, 'taskScopedToken')
   if (!token) return false
 
   const allowedTools = readStringArray(context.allowed_tools) ?? readStringArray(context.allowedTools)
-  if (!allowedTools || allowedTools.length === 0) return true
-  return allowedTools.some(tool => {
-    const normalized = tool.trim().toLowerCase()
-    return normalized === 'business.*'
-      || normalized === 'business.functions.*'
-      || normalized === 'business.functions.invoke'
-      || normalized === 'business.functions.list'
-      || normalized === 'business.functions.schema'
-      || normalized === 'navigator.business_functions'
-  })
+  return resolveNavigatorBusinessMcpToolNamesFromAllowedTools(allowedTools).length > 0
 }
 
 export function buildNavigatorBusinessMcpConfig(
@@ -119,6 +157,7 @@ export function buildNavigatorBusinessMcpConfig(
   serverScriptPath: string
 ): Record<string, unknown> | undefined {
   if (!buildNavigatorBusinessMcpEnv(context, gatewayBaseUrl)) return undefined
+  const enabledTools = resolveNavigatorBusinessMcpToolNames(context)
 
   return {
     mcp_servers: {
@@ -128,7 +167,7 @@ export function buildNavigatorBusinessMcpConfig(
         cwd: path.resolve(path.dirname(serverScriptPath), '..', '..'),
         env_vars: [...NAVIGATOR_BUSINESS_MCP_ENV_KEYS],
         default_tools_approval_mode: 'approve',
-        enabled_tools: [...NAVIGATOR_BUSINESS_MCP_TOOL_NAMES],
+        enabled_tools: enabledTools,
       },
     },
   }
@@ -174,7 +213,7 @@ export async function handleMcpRequest(
           serverInfo: { name: 'navigator-business', version: '1.0.0' },
         })
       case 'tools/list':
-        return jsonRpcResult(request.id ?? null, { tools: TOOL_DEFINITIONS })
+        return jsonRpcResult(request.id ?? null, { tools: allowedToolDefinitions(runtime) })
       case 'tools/call':
         return jsonRpcResult(request.id ?? null, await callTool(request.params, runtime))
       default:
@@ -191,8 +230,19 @@ export async function callTool(params: unknown, runtime: NavigatorBusinessMcpRun
   const args = optionalObject(values.arguments, 'arguments')
   const startedAt = Date.now()
   await debugLog(runtime, `tool_start name=${name}`)
+  const toolName = toNavigatorBusinessMcpToolName(name)
+  if (!toolName) {
+    const error = `Unknown business tool: ${name}`
+    await debugLog(runtime, `tool_error name=${name} error=${error}`)
+    throw new Error(error)
+  }
+  if (!isRuntimeToolAllowed(toolName, runtime)) {
+    const error = `Business MCP tool is not allowed: ${name}`
+    await debugLog(runtime, `tool_error name=${name} error=${error}`)
+    throw new Error(error)
+  }
 
-  switch (name) {
+  switch (toolName) {
     case 'list_business_functions': {
       const result = await listBusinessFunctions(args, runtime)
       await debugLog(runtime, `tool_done name=${name} duration_ms=${Date.now() - startedAt}`)
@@ -208,12 +258,28 @@ export async function callTool(params: unknown, runtime: NavigatorBusinessMcpRun
       await debugLog(runtime, `tool_done name=${name} duration_ms=${Date.now() - startedAt}`)
       return toolResult(result)
     }
-    default: {
-      const error = `Unknown business tool: ${name}`
-      await debugLog(runtime, `tool_error name=${name} error=${error}`)
-      throw new Error(error)
-    }
   }
+}
+
+function allowedToolDefinitions(runtime: NavigatorBusinessMcpRuntime): ToolDefinition[] {
+  const allowed = new Set(resolveNavigatorBusinessMcpToolNamesFromAllowedTools(runtime.allowedTools))
+  return TOOL_DEFINITIONS.filter(tool => {
+    const toolName = toNavigatorBusinessMcpToolName(tool.name)
+    return Boolean(toolName && allowed.has(toolName))
+  })
+}
+
+function isRuntimeToolAllowed(
+  toolName: NavigatorBusinessMcpToolName,
+  runtime: NavigatorBusinessMcpRuntime
+): boolean {
+  return resolveNavigatorBusinessMcpToolNamesFromAllowedTools(runtime.allowedTools).includes(toolName)
+}
+
+function toNavigatorBusinessMcpToolName(name: string): NavigatorBusinessMcpToolName | undefined {
+  return NAVIGATOR_BUSINESS_MCP_TOOL_NAMES.includes(name as NavigatorBusinessMcpToolName)
+    ? name as NavigatorBusinessMcpToolName
+    : undefined
 }
 
 async function listBusinessFunctions(

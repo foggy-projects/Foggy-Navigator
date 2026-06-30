@@ -122,9 +122,11 @@ created_at: 2026-06-30
 | root | `docs/version-tracker/1.3.2-SNAPSHOT/quality/OPT-003-implementation-quality.md` | quality gate | created | 正式质量门禁已执行。 |
 | root | `docs/version-tracker/1.3.2-SNAPSHOT/coverage/OPT-003-coverage-audit.md` | coverage audit | created | 测试证据覆盖审计已执行。 |
 | root | `docs/version-tracker/1.3.2-SNAPSHOT/acceptance/OPT-003-codex-biz-upstream-acceptance.md` | acceptance record | created | 对外交付签收记录；结论为 accepted-with-risks。 |
+| root | `docs/version-tracker/1.3.2-SNAPSHOT/handoff/OPT-003-consumer-handoff.md` | consumer handoff | created | SIM / TMS consumer smoke 协议、wrapper gate 和 evidence checklist。 |
 | root | `tools/navigator-upstream/scripts/codex-biz-smoke-approve.ps1` | admin-key approval helper | update if needed | 已存在；需用有效 operator/admin key 运行。 |
 | root | `tools/navigator-upstream/scripts/codex-biz-smoke-bootstrap.ps1` | isolated smoke provisioning | updated | 生成 smoke ClientApp / Agent / Directory / Worker / model grant；已补 worker token env、managed directory、owner-aware grant 和 explicit ask 参数。 |
-| root | `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/UpstreamCli.java` | upstream CLI | updated | 已补 `model clear-key` / `model system-clear-key`；项目本地 wrapper 仍为 1.0.16，需 release/update 后消费者才能直接使用新命令。 |
+| root | `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/UpstreamCli.java` | upstream CLI | updated | 已补 `model clear-key` / `model system-clear-key` 与 ask `allowedTools` runtime option；项目本地 wrapper 已更新到 1.0.18。 |
+| root | `tools/navigator-upstream` | project-local CLI wrapper | updated | 本地 jar / VERSION / BUILD_INFO / RELEASE_MANIFEST 更新到 1.0.18；保留 `scripts/codex-biz-smoke-*.ps1`。 |
 | root | `business-agent-module` / `metadata-config-module` / `navigator-common` | model config key lifecycle | updated | 已补 `clearApiKey` 支持，允许清空 model config provider key 以验证 Worker local auth fallback。 |
 | root | `tools/codex-agent-worker/scripts/codex-biz-smoke.ps1` | Worker health/live query smoke | update if needed | 已存在；用于 local Worker readiness 和 actor A/B scoped home。 |
 | root | `session-module` | context binding / continuation | read-only-analysis or update | 只有发现 OPT-001 覆盖不足时才补代码。 |
@@ -132,7 +134,8 @@ created_at: 2026-06-30
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentSessionService.java` | BusinessAgent context continuation guard | updated | `bindTask` 现在保存 task 解析出的 agent/directory/model/worker 绑定；新增 context resource compatibility 校验，并兼容历史误把 `skillId` 写入 `agentId` 的旧 session。 |
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskService.java` | BusinessAgent task create path | updated | 在 task/token 创建和 Worker launch 前执行 context 资源冲突校验，避免同一 context 静默切换 agent/directory/model。 |
 | root | `addons/codex-worker-agent` | Codex Biz provider and launcher | read-only-analysis or update | 重点验证 runtime fields 和 tool message 形态。 |
-| root | `tools/codex-agent-worker/src/business-mcp` | Navigator BusinessFunction MCP bridge | read-only-analysis or update | 重点验证 list/schema/invoke 和 token hygiene。 |
+| root | `tools/codex-agent-worker/src/business-mcp` | Navigator BusinessFunction MCP bridge | updated | list/schema/invoke、token hygiene、Content-Length framing 和 MCP tool 粒度 allowlist。 |
+| root | `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiController.java` | OpenAPI task evidence | updated | `TaskEvidence.structuredOutput` 可从 Codex final JSON 的 `structured_output.*` 自动提升。 |
 | SIM repo | `foggy-world-sim/docs/versions/v0.0.706/tms-real-rehearsal-m0` | SIM consumer evidence | update later | 回写 SIM-specific acceptance notes，不改写通用 contract。 |
 | TMS repo | TMS upstream profile/docs | TMS consumer evidence | update later | 由 TMS owner 按通用 contract 补接入说明和 smoke evidence。 |
 
@@ -163,7 +166,7 @@ created_at: 2026-06-30
 
 - [x] 发起基础 BusinessAgent ask，验证 Navigator -> CodexBizWorker -> provider live route 可完成。
 - [x] 发起 deterministic `submit_skill_result` task。
-- [x] 验证 `/tasks`、`/messages`、`/evidence`、`/diagnostics` 中的 provider、workerBackend、contextId、effective directory 与 final marker。CodexBizWorker 当前不把 MCP invoke payload 自动提升为 `TaskEvidence.structuredOutput`，OPEN_ARTIFACT 以 final JSON / function result / tool-message evidence 交付。
+- [x] 验证 `/tasks`、`/messages`、`/evidence`、`/diagnostics` 中的 provider、workerBackend、contextId、effective directory 与 final marker。`TaskEvidence.structuredOutput` 已补 Codex final JSON `structured_output.*` 自动提升；OPEN_ARTIFACT 仍可用 final JSON / function result / tool-message evidence 交叉验证。
 - [x] 执行低风险 BusinessFunction：schema -> invoke -> internal tool-message audit。
 - [x] 验证 `business_runtime_context.task_scoped_token` 不进入 prompt / developer instructions / 普通日志；Worker scoped `config.toml` 只持久化 command/cwd/args/env var names/MCP approval whitelist。
 - [x] 跑 `contextId` continuation 正例：只传 `contextId`。
@@ -187,10 +190,10 @@ created_at: 2026-06-30
 
 - `directoryId` 表示 Navigator workspace/effective directory，不是 SIM 专属必填字段。SIM 可由 actor-owned mapping 派生，TMS 可由 profile/route/client-app 派生；进入 Worker 前必须解析出 effective directory。
 - `privateAccountId` / `codexHomeKey` 表示 Codex scoped home 隔离来源，不替代 `directoryId`。当前 self-owned smoke 使用 `privateAccountId=codex-biz-smoke-user`。
-- `allowedTools` 已作为 OpenAPI/SDK ask 顶层 runtime option 透传；推荐值为 `business.functions.*`、`business.functions.list`、`business.functions.schema`、`business.functions.invoke` 或 `business.*`，不使用旧的 `navigator_business.*` 口径。
+- `allowedTools` 已作为 OpenAPI/SDK ask 顶层 runtime option 透传，并按 MCP tool 粒度生效：`business.functions.list` -> `list_business_functions`，`business.functions.schema` -> `get_business_function_schema`，`business.functions.invoke` -> `invoke_business_function`，`business.functions.*` / `business.*` -> 三个工具全部开放；不使用旧的 `navigator_business.*` 口径，业务函数 id 不等同 MCP tool grant。
 - CodexBizWorker 的 navigator_business MCP bridge 使用 scoped `CODEX_HOME/config.toml` managed block 注入 no-secret server config；task token 只通过 MCP 子进程继承的 env var 值传递，不持久化。
 - Windows/Codex MCP 需要 `cwd` 指向 `tools/codex-agent-worker`，stdio 使用 `Content-Length` framing；Codex CLI 0.142.3 还需要 server 级 `default_tools_approval_mode = "approve"` 与 `enabled_tools` 白名单，否则会出现 tools/list 可见但 tools/call 被客户端取消。
-- `submit_skill_result` 的 OPEN_ARTIFACT 在 CodexBizWorker 当前验收形态下以 BusinessFunction invoke result、tool-message audit 和 final JSON marker 交付；`TaskEvidence.structuredOutput` 自动提升保留为后续增强，不作为本次灰度交付 blocker。
+- `submit_skill_result` 的 OPEN_ARTIFACT 在 CodexBizWorker 当前验收形态下以 BusinessFunction invoke result、tool-message audit、final JSON marker 和 `TaskEvidence.structuredOutput` 交付；Evidence source 可能是 `task_state`、`message_metadata` 或 `message_content`。
 
 ## Consumer Handoff Runbook
 
@@ -205,9 +208,10 @@ Navigator self-owned acceptance is complete. The next execution owner should onl
    - Keep the same `allowedTools` protocol and `submit_skill_result` evidence shape validated here.
    - Record route/profile, directory source, Codex home source, fallback behavior, task id, context id, and OPEN_ARTIFACT evidence in the TMS repo.
 3. Optional follow-up enhancements。
-   - Update the `navigator-upstream-cli` wrapper release so consumers can use the rebuilt SDK commands directly.
-   - Auto-lift Codex MCP BusinessFunction invoke payload into `TaskEvidence.structuredOutput` if downstream UI consumers require a normalized evidence field.
+   - Confirm the `navigator-upstream-cli` 1.0.18 package is published to the consumer-visible release channel before relying on `self update`; this project-local wrapper already uses 1.0.18.
    - Add provider/worker live conflict negatives only if the explicit override protocol changes; current conflict behavior is protected by session-module regression tests.
+4. Detailed handoff。
+   - Use `docs/version-tracker/1.3.2-SNAPSHOT/handoff/OPT-003-consumer-handoff.md` for SIM / TMS smoke commands, wrapper gate and evidence checklist.
 
 ## Acceptance Criteria
 
@@ -228,6 +232,7 @@ powershell -ExecutionPolicy Bypass -File tools/navigator-upstream/scripts/codex-
 powershell -ExecutionPolicy Bypass -File tools/navigator-upstream/scripts/codex-biz-smoke-bootstrap.ps1
 powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3070
 mvn -q -am -pl metadata-config-module,business-agent-module,navigator-open-sdk "-Dtest=LlmModelManagerImplTest,ClientAppOwnedModelConfigServiceTest,UpstreamAdminModelConfigServiceTest,UpstreamCliTest,BusinessAgentSessionServiceTest,BusinessAgentTaskServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+mvn -q -am -pl addons/claude-worker-agent "-Dtest=OpenApiControllerMessageMappingTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
 npm --prefix tools/codex-agent-worker run typecheck
 npm --prefix tools/codex-agent-worker test
 ```
@@ -255,7 +260,7 @@ git diff --check
 | smoke profile/artifact paths gitignored | pass | `.navigator/*.env`, `.navigator/tenants/*.env`, and `temp/` are covered by gitignore. |
 | admin-key request / approval | pass | Request `ubreq_72a92559-3f86-4b1a-9eb2-77a3bf721f8a`, code suffix `WH1A43OE`, approved at `2026-06-30T11:16:56.637421900`; tenant `navi-codex-biz-smoke-local`, upstreamSystemId `navi-codex-biz-smoke`. No admin/operator key recorded. |
 | tenant smoke profile exists | pass | `.navigator/tenants/codex-biz-smoke-local.env` generated by bootstrap and gitignored. |
-| Navigator Upstream CLI installed | pass | `navi.ps1 version` reports `navigator-upstream-cli 1.0.16`; rebuilt SDK jar `1.0.18` was used directly for new `model clear-key` command before wrapper release. |
+| Navigator Upstream CLI installed | pass | `navi.ps1 version` reports `navigator-upstream-cli 1.0.18`, buildId `1.0.18+970590c3f2d7`, packageSha `c7dbfbf364bd584e6c2f9414bdcabaa44b53bb688ce9c24f1b1bacc891abec70`; local package metadata is `gitDirty=True`, so consumer release verification must compare packageSha/buildId. |
 | owner-smoke provisioning | pass | ClientApp `capp_62137cc6-584a-42db-8ffc-35508a98aa80`, agent `codex-biz-smoke-agent`, modelConfig `48212e4e-fd63-4ec6-8fe5-47089a19824c`, directory `20260630-143b`, worker `3ad8bb7b`. |
 | `NAVI_LLM_API_KEY` for model config creation | pass with deviation | Not required for the completed smoke after model was created. Final live-smoke key source was process env `CODEX_API_KEY` via `--api-key-env CODEX_API_KEY`; no raw key recorded. |
 | default local Codex Worker health | pass | `http://127.0.0.1:3070/health` reports status ok, worker `codex-worker-biz-gray`, `codex_login`, scoped home configured and ready. |
@@ -281,8 +286,9 @@ git diff --check
 | route readiness baseline | OPT-001 | pass | Existing OPT-001 quality / coverage / acceptance docs. |
 | Stage 1.1 preflight | local docs/scripts/profile hygiene | pass | Scripts exist; system profile has request code; smoke profile/artifact paths are gitignored. |
 | Java targeted regression | metadata-config-module + business-agent-module + navigator-open-sdk | pass | `mvn -q -am -pl metadata-config-module,business-agent-module,navigator-open-sdk "-Dtest=LlmModelManagerImplTest,ClientAppOwnedModelConfigServiceTest,UpstreamAdminModelConfigServiceTest,UpstreamCliTest,BusinessAgentSessionServiceTest,BusinessAgentTaskServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`. |
+| Java OpenAPI evidence regression | addons/claude-worker-agent | pass | `mvn -q -am -pl addons/claude-worker-agent "-Dtest=OpenApiControllerMessageMappingTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`; covers OPEN_ARTIFACT lift from final JSON `structured_output.*`. |
 | Worker typecheck | tools/codex-agent-worker | pass | `npm run typecheck`. |
-| Worker unit tests | tools/codex-agent-worker | pass | `npm test`, 92 tests passed. |
+| Worker unit tests | tools/codex-agent-worker | pass | `npm test -- tests/navigator-business-mcp.test.ts tests/sdk-wrapper.test.ts`; script ran the full Worker suite, 97 tests passed. |
 | isolated provisioning | Navigator CLI | pass | owner-smoke passed with ClientApp / Agent / ModelConfig / Directory / Worker resources listed in precondition table. |
 | Worker health smoke | Codex Worker | pass | Health reports `status=ok`, `codex_login`, `codex_biz_home_root_configured=true`, `codex_biz_scoped_home_ready=true`. |
 | Worker init-directory probe | Codex Worker | pass | Direct probe created `temp/codex-biz-smoke/.init-route-probe.md`; validates safe managed-directory file init route. |
@@ -295,6 +301,8 @@ git diff --check
 | context continuation negative: valid directory conflict | Navigator route/session guard | pass | Created second ClientApp directory `20260630-cee1`, bound it as non-default workspace to `codex-biz-smoke-agent`, then reused the same context with `--directory-id 20260630-cee1`; CLI exited `2` with HTTP 400 `CONTEXT_WORKER_MISMATCH: directoryId 20260630-cee1 conflicts with context/session-bound directory 20260630-143b`. No task id was issued. |
 | `submit_skill_result` E2E | Navigator + Worker | pass | Task `20260630-b499`, contextId `bctx_20260630_36_36787f40b092468e8183687a84ea0d01`, workerTask/providerTask `3c9ef3e8-80c6-4061-8e6c-231c6ae0c95c`, marker `codex-biz-smoke-20260630-134920`; final JSON reports `functionId=submit_skill_result`, `status=SUCCESS`, `structured_output.type=OPEN_ARTIFACT`. |
 | BusinessFunction E2E | Navigator + WorkerGateway + Worker | pass | Same task: MCP `tools/call` list/schema/invoke all completed; WorkerGateway GET `/business-functions` 200, GET `/business-functions/submit_skill_result/schema` 200, POST `/business-functions/submit_skill_result/invoke` 200, POST `/tool-messages` 200. |
+| MCP tool allowlist granularity | Codex Worker | pass | `navigator-business-mcp.test.ts` and `sdk-wrapper.test.ts` cover grant-to-tool mapping, filtered `tools/list`, blocked disallowed `tools/call`, and `enabled_tools` for `business.functions.invoke`. |
+| `TaskEvidence.structuredOutput` OPEN_ARTIFACT lift | OpenAPI evidence | pass | `OpenApiControllerMessageMappingTest` covers visible final JSON content with flattened `structured_output.type`, `structured_output.artifact.*` and source `message_content`. |
 | Codex MCP approval config | Worker scoped Codex home | pass | Managed scoped `config.toml` writes `default_tools_approval_mode = "approve"` and `enabled_tools = ["list_business_functions", "get_business_function_schema", "invoke_business_function"]`; no task token persisted. |
 | task-scoped token hygiene | Worker + backend logs | pass | Worker log and MCP debug log record only env var names / task ids / gateway path/status; no task token, API key, auth content, or `CODEX_BIZ_HOME_ROOT` value appears in smoke evidence. Backend debug records token registration by task/session id only. |
 | context continuation positive / directory-conflict negative | Navigator + Worker | pass | See dedicated rows above. Provider/worker conflict live cases remain optional unless their explicit override protocol changes. |
@@ -311,15 +319,14 @@ git diff --check
 - non-goals preserved: pass; SIM / TMS production cutover and mandatory ask-body `directoryId` are explicitly out of scope.
 - code/docs touched are listed: pass for current code and docs; later quality/coverage/acceptance docs remain expected outputs.
 - tests and smoke evidence recorded: pass; Java / Worker regression, owner-smoke, Worker health, basic live ask, `submit_skill_result`, BusinessFunction schema/invoke/tool-message, and context continuation positive/directory-conflict negative passed.
-- remaining risks documented: pass; consumer-side SIM/TMS smoke and structured output auto-lifting are follow-ups.
+- remaining risks documented: pass; consumer-side SIM/TMS smoke and consumer-visible wrapper release verification remain follow-ups.
 - self-check conclusion: current implementation is ready for consumer validation and signed off with risks for the self-owned Navigator acceptance scope.
 
 ### Residual Risks / Follow-ups
 
 - No current blocker for self-owned smoke provisioning, basic live ask, deterministic `submit_skill_result`, BusinessFunction schema/invoke, tool-message audit, or task-scoped token hygiene in this Navi workspace.
-- `navigator-upstream-cli` project wrapper is still `1.0.16` and does not expose `model clear-key`; the command exists in rebuilt SDK jar and needs wrapper/release update before consumers can use it directly.
+- `navigator-upstream-cli` project-local wrapper is updated to `1.0.18`; consumer projects still need to verify the published package by `packageSha256` / `buildId` before relying on `self update`.
 - BusinessAgent session binding added nullable columns; local/default launcher uses additive schema update, but validate-only deployments must include the equivalent additive DDL before promotion.
-- `TaskEvidence.structuredOutput` does not yet auto-lift Codex MCP BusinessFunction invoke payload; current handoff uses final JSON marker, function result and tool-message audit as the OPEN_ARTIFACT evidence.
 - Consumer gray acceptance is handed off to SIM and TMS owners; each must record its own route/profile, directory source, Codex home source, and fallback boundary.
 
 ## Acceptance Status
@@ -348,7 +355,7 @@ Read first:
 
 Goal:
 - Add SIM/TMS consumer-owned smoke evidence or implement an explicitly approved follow-up.
-- Preserve the accepted protocol adjustments: effective directory is resolved by the upstream adapter, `allowedTools` is a top-level ask runtime option, and OPEN_ARTIFACT can be evidenced by function result, tool-message audit, and final JSON marker.
+- Preserve the accepted protocol adjustments: effective directory is resolved by the upstream adapter, `allowedTools` is a top-level ask runtime option with MCP-tool granularity, and OPEN_ARTIFACT can be evidenced by `TaskEvidence.structuredOutput`, function result, tool-message audit, and final JSON marker.
 
 Do not:
 - Use TMS existing profile or tms-agent-v305 as the foundation smoke.

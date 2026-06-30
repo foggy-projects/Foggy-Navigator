@@ -5,6 +5,7 @@ import {
   callTool,
   createRuntimeFromEnv,
   handleMcpRequest,
+  resolveNavigatorBusinessMcpToolNamesFromAllowedTools,
   startStdioServer,
   type GatewayFetch,
 } from '../src/business-mcp/navigator-business-mcp-server.ts'
@@ -55,6 +56,25 @@ test('createRuntimeFromEnv reads gateway URL, token and allowed tools', () => {
   assert.equal(runtime.gatewayBaseUrl, 'http://navigator.example.com:8080')
   assert.equal(runtime.taskScopedToken, 'task-token')
   assert.deepEqual(runtime.allowedTools, ['business.functions.invoke'])
+})
+
+test('resolveNavigatorBusinessMcpToolNamesFromAllowedTools maps grants to MCP tools', () => {
+  assert.deepEqual(
+    resolveNavigatorBusinessMcpToolNamesFromAllowedTools(['business.functions.invoke']),
+    ['invoke_business_function']
+  )
+  assert.deepEqual(
+    resolveNavigatorBusinessMcpToolNamesFromAllowedTools([
+      'business.functions.schema',
+      'business.functions.invoke',
+    ]),
+    ['get_business_function_schema', 'invoke_business_function']
+  )
+  assert.deepEqual(
+    resolveNavigatorBusinessMcpToolNamesFromAllowedTools(['business.functions.*']),
+    ['list_business_functions', 'get_business_function_schema', 'invoke_business_function']
+  )
+  assert.deepEqual(resolveNavigatorBusinessMcpToolNamesFromAllowedTools(['submit_skill_result']), [])
 })
 
 test('callTool maps list_business_functions to WorkerGateway list endpoint', async () => {
@@ -251,6 +271,40 @@ test('handleMcpRequest returns JSON-RPC tool list and sanitized errors', async (
   assert.equal(errorResponse.error.code, -32000)
   assert.match(errorResponse.error.message, /task-scoped token is required/)
   assert.doesNotMatch(errorResponse.error.message, /task-token/)
+})
+
+test('handleMcpRequest filters tools/list and tools/call by allowedTools', async () => {
+  const recorder = createFetchRecorder({ ok: true })
+  const runtime = {
+    gatewayBaseUrl: 'http://navigator.example.com:8080',
+    taskScopedToken: 'task-token',
+    allowedTools: ['business.functions.invoke'],
+    fetchImpl: recorder.fetchImpl,
+  }
+  const listResponse = await handleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/list',
+  }, runtime) as Record<string, any>
+
+  assert.deepEqual(
+    listResponse.result.tools.map((tool: any) => tool.name),
+    ['invoke_business_function']
+  )
+
+  const errorResponse = await handleMcpRequest({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: {
+      name: 'list_business_functions',
+      arguments: {},
+    },
+  }, runtime) as Record<string, any>
+
+  assert.equal(errorResponse.error.code, -32000)
+  assert.match(errorResponse.error.message, /not allowed/)
+  assert.equal(recorder.calls.length, 0)
 })
 
 test('startStdioServer supports Content-Length framed MCP messages', async () => {

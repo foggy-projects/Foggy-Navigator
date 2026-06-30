@@ -24,7 +24,7 @@ CodexBizWorker 后续验收从 SIM 单点评估升级为通用上游接入闭环
 - acceptance_record: [acceptance/OPT-001-codex-biz-route-readiness-acceptance.md](./acceptance/OPT-001-codex-biz-route-readiness-acceptance.md)
 - follow_up_status: ready-for-signoff
 - follow_up_record: [workitems/OPT-002-langgraph-biz-actor-home-readiness.md](./workitems/OPT-002-langgraph-biz-actor-home-readiness.md)
-- upstream_acceptance_status: signed-off-with-risks; self-owned smoke, basic live ask, `submit_skill_result`, BusinessFunction schema/invoke/tool-message, context continuation passed; SIM / TMS consumer-side smoke handed off
+- upstream_acceptance_status: signed-off-with-risks; self-owned smoke, basic live ask, `submit_skill_result`, BusinessFunction schema/invoke/tool-message, context continuation passed; MCP tool allowlist and TaskEvidence OPEN_ARTIFACT lifting covered by regression; SIM / TMS consumer-side smoke handed off
 - upstream_acceptance_record: [workitems/OPT-003-codex-biz-upstream-acceptance.md](./workitems/OPT-003-codex-biz-upstream-acceptance.md)
 - worker_response_timeout_status: ready-for-signoff
 - worker_response_timeout_record: [workitems/OPT-004-worker-response-timeout-indicator.md](./workitems/OPT-004-worker-response-timeout-indicator.md)
@@ -43,4 +43,5 @@ CodexBizWorker 后续验收从 SIM 单点评估升级为通用上游接入闭环
 - [quality/OPT-003-implementation-quality.md](./quality/OPT-003-implementation-quality.md) - OPT-003 实现质量门禁记录
 - [coverage/OPT-003-coverage-audit.md](./coverage/OPT-003-coverage-audit.md) - OPT-003 测试覆盖审计记录
 - [acceptance/OPT-003-codex-biz-upstream-acceptance.md](./acceptance/OPT-003-codex-biz-upstream-acceptance.md) - OPT-003 功能级签收记录
+- [handoff/OPT-003-consumer-handoff.md](./handoff/OPT-003-consumer-handoff.md) - SIM / TMS consumer smoke 交接清单与 wrapper gate
 - [workitems/OPT-004-worker-response-timeout-indicator.md](./workitems/OPT-004-worker-response-timeout-indicator.md) - Worker 任务长时间无用户可见输出时的响应超时辅助提示

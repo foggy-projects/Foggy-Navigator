@@ -26,7 +26,9 @@ OPT-003 将 CodexBizWorker 从 route readiness 推进到可交付上游验收的
 
 - `navigator-open-sdk`: OpenAPI ask top-level `allowedTools` passthrough and CLI/env parsing.
 - `session-module`: explicit `providerType=codex-biz-worker` direct route when logical upstream `agentId` is present.
-- `tools/codex-agent-worker`: no-secret scoped MCP config, `cwd`, inherited env vars, Codex MCP approval whitelist, Content-Length stdio framing, MCP debug logs.
+- `tools/codex-agent-worker`: no-secret scoped MCP config, `cwd`, inherited env vars, Codex MCP approval whitelist, Content-Length stdio framing, MCP debug logs, MCP tool-granular allowlist.
+- `addons/claude-worker-agent`: `TaskEvidence.structuredOutput` fallback for Codex final JSON `structured_output.*` content.
+- `tools/navigator-upstream`: project-local wrapper metadata and SDK jar updated to 1.0.18 while preserving smoke scripts.
 - Docs: OPT-003 workitem, version index, quality, coverage and acceptance records.
 
 ## Quality Checklist
@@ -38,7 +40,7 @@ OPT-003 将 CodexBizWorker 从 route readiness 推进到可交付上游验收的
 - error handling and edge cases: pass. Missing token disables MCP config; stdio supports both Content-Length and JSONL; unknown tools remain errors.
 - readability and maintainability: pass. Routing helper `isKnownCommandProvider` removes repeated registry checks.
 - critical logic documentation: pass. Workitem records why `directoryId`, `codexHomeKey`, MCP approval and structured output handling differ from SIM-only assumptions.
-- contract and compatibility: pass with risk. `allowedTools` is additive. Codex MCP approval fields rely on Codex CLI 0.142.3 documented config behavior.
+- contract and compatibility: pass with risk. `allowedTools` remains additive at the OpenAPI/SDK layer and is enforced at MCP tool granularity inside Codex Worker. Codex MCP approval fields rely on Codex CLI 0.142.3 documented config behavior.
 - documentation and writeback: pass. Workitem and index are updated; formal quality/coverage/acceptance docs are added.
 - test alignment: pass. Tests cover SDK serialization, route priority, MCP config/token hygiene and stdio framing; live smoke covers WorkerGateway path.
 - release readiness: ready with risks. Consumer-specific SIM/TMS smoke remains outside this repo handoff.
@@ -49,8 +51,7 @@ No blocking implementation issue found.
 
 ## Risks / Follow-ups
 
-- `TaskEvidence.structuredOutput` does not auto-lift Codex MCP invoke payload yet; current handoff uses final JSON marker, function result and tool-message audit as OPEN_ARTIFACT evidence.
-- Installed `tools/navigator-upstream` wrapper is still `1.0.16`; consumers need the rebuilt SDK/wrapper release before relying on new CLI `allowedTools` behavior.
+- Consumer-visible `navigator-upstream-cli` publication must be verified by packageSha/buildId; this project-local wrapper is already on 1.0.18.
 - SIM and TMS must run their own consumer smoke and record route/profile, effective directory and Codex home sources.
 
 ## Recommended Next Skills
