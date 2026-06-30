@@ -42,7 +42,8 @@ public class AgentApi {
             "sandboxMode",
             "approvalPolicy",
             "networkAccessEnabled",
-            "webSearchMode"
+            "webSearchMode",
+            "allowedTools"
     );
 
     private final HttpHelper http;

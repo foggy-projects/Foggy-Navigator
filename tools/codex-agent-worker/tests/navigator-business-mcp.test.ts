@@ -1,9 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { PassThrough } from 'node:stream'
 import {
   callTool,
   createRuntimeFromEnv,
   handleMcpRequest,
+  startStdioServer,
   type GatewayFetch,
 } from '../src/business-mcp/navigator-business-mcp-server.ts'
 
@@ -249,4 +251,31 @@ test('handleMcpRequest returns JSON-RPC tool list and sanitized errors', async (
   assert.equal(errorResponse.error.code, -32000)
   assert.match(errorResponse.error.message, /task-scoped token is required/)
   assert.doesNotMatch(errorResponse.error.message, /task-token/)
+})
+
+test('startStdioServer supports Content-Length framed MCP messages', async () => {
+  const input = new PassThrough()
+  const output = new PassThrough()
+  const chunks: Buffer[] = []
+  output.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+
+  const request = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/list',
+    params: {},
+  })
+  const server = startStdioServer(createRuntimeFromEnv({
+    NAVIGATOR_WORKER_GATEWAY_BASE_URL: 'http://navigator.example.com',
+    NAVIGATOR_TASK_SCOPED_TOKEN: 'task-token',
+  }), { input, output })
+  input.end(`Content-Length: ${Buffer.byteLength(request, 'utf8')}\r\n\r\n${request}`)
+  await server
+
+  const raw = Buffer.concat(chunks).toString('utf8')
+  assert.match(raw, /^Content-Length: \d+\r\n\r\n/)
+  const body = raw.slice(raw.indexOf('\r\n\r\n') + 4)
+  const response = JSON.parse(body)
+  assert.equal(response.id, 1)
+  assert.equal(response.result.tools[0].name, 'list_business_functions')
 })

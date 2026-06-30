@@ -8,10 +8,12 @@ import {
   buildCodexInput,
   buildCodexProcessEnv,
   buildCodexTaskEnv,
+  ensureNavigatorBusinessMcpHomeConfig,
   getRunningTaskCount,
   mapThreadItemToEvents,
   mergeCodexConfig,
   parseModelString,
+  renderNavigatorBusinessMcpConfigBlock,
   resolveDefaultCodexHome,
   resolveCodexHome,
   resolveNavigatorBusinessMcpServerPath,
@@ -23,6 +25,7 @@ import {
 } from '../src/codex/sdk-wrapper.ts'
 import {
   buildNavigatorBusinessMcpConfig,
+  buildNavigatorBusinessMcpEnv,
   isNavigatorBusinessMcpEnabled,
 } from '../src/business-mcp/navigator-business-mcp-server.ts'
 
@@ -332,7 +335,7 @@ test('resolveNavigatorBusinessMcpServerPath follows sdk wrapper module extension
   )
 })
 
-test('buildNavigatorBusinessMcpConfig injects token through MCP server env only', () => {
+test('buildNavigatorBusinessMcpConfig inherits token through named env vars only', () => {
   const config = buildNavigatorBusinessMcpConfig(
     {
       task_scoped_token: 'task-token',
@@ -345,9 +348,38 @@ test('buildNavigatorBusinessMcpConfig injects token through MCP server env only'
   const server = config.mcp_servers.navigator_business
   assert.equal(server.command, process.execPath)
   assert.deepEqual(server.args, ['--import', 'tsx', '/worker/src/business-mcp/navigator-business-mcp-server.ts'])
-  assert.equal(server.env.NAVIGATOR_WORKER_GATEWAY_BASE_URL, 'http://navigator.example.com:8080')
-  assert.equal(server.env.NAVIGATOR_TASK_SCOPED_TOKEN, 'task-token')
-  assert.equal(server.env.NAVIGATOR_BUSINESS_ALLOWED_TOOLS, JSON.stringify(['business.functions.invoke']))
+  assert.equal(server.cwd, path.resolve('/worker/src/business-mcp', '..', '..'))
+  assert.deepEqual(server.env_vars, [
+    'NAVIGATOR_WORKER_GATEWAY_BASE_URL',
+    'NAVIGATOR_TASK_SCOPED_TOKEN',
+    'NAVIGATOR_BUSINESS_ALLOWED_TOOLS',
+    'NAVIGATOR_BUSINESS_MCP_DEBUG_LOG',
+    'NAVIGATOR_BUSINESS_MCP_TASK_ID',
+  ])
+  assert.equal(server.default_tools_approval_mode, 'approve')
+  assert.deepEqual(server.enabled_tools, [
+    'list_business_functions',
+    'get_business_function_schema',
+    'invoke_business_function',
+  ])
+  assert.equal(server.env, undefined)
+
+  const env = buildNavigatorBusinessMcpEnv(
+    {
+      task_scoped_token: 'task-token',
+      allowed_tools: ['business.functions.invoke'],
+    },
+    'http://navigator.example.com:8080/',
+    'D:\\logs\\business-mcp.log',
+    'task-1'
+  )
+  assert.deepEqual(env, {
+    NAVIGATOR_WORKER_GATEWAY_BASE_URL: 'http://navigator.example.com:8080',
+    NAVIGATOR_TASK_SCOPED_TOKEN: 'task-token',
+    NAVIGATOR_BUSINESS_ALLOWED_TOOLS: JSON.stringify(['business.functions.invoke']),
+    NAVIGATOR_BUSINESS_MCP_DEBUG_LOG: 'D:\\logs\\business-mcp.log',
+    NAVIGATOR_BUSINESS_MCP_TASK_ID: 'task-1',
+  })
 })
 
 test('buildNavigatorBusinessMcpConfig runs compiled server without tsx', () => {
@@ -360,6 +392,7 @@ test('buildNavigatorBusinessMcpConfig runs compiled server without tsx', () => {
   assert.deepEqual(config.mcp_servers.navigator_business.args, [
     '/worker/dist/business-mcp/navigator-business-mcp-server.js',
   ])
+  assert.equal(config.mcp_servers.navigator_business.cwd, path.resolve('/worker/dist/business-mcp', '..', '..'))
 })
 
 test('buildNavigatorBusinessMcpConfig stays disabled without token or business tool grant', () => {
@@ -390,6 +423,44 @@ test('mergeCodexConfig deep merges MCP servers and lets runtime config win', () 
   assert.equal(merged.mcp_servers.custom.command, 'custom')
   assert.equal(merged.mcp_servers.navigator_business.command, 'node')
   assert.equal(merged.mcp_servers.navigator_business.env.NAVIGATOR_TASK_SCOPED_TOKEN, 'runtime')
+})
+
+test('renderNavigatorBusinessMcpConfigBlock writes no task token', () => {
+  const config = buildNavigatorBusinessMcpConfig(
+    { task_scoped_token: 'task-token' },
+    'http://navigator.example.com:8080',
+    'D:\\worker\\src\\business-mcp\\navigator-business-mcp-server.ts'
+  ) as Record<string, any>
+
+  const block = renderNavigatorBusinessMcpConfigBlock(config)
+
+  assert.match(block, /\[mcp_servers\.navigator_business]/)
+  assert.match(block, /cwd = "D:\\\\worker"/)
+  assert.match(block, /args = \["--import", "tsx", "D:\\\\worker\\\\src\\\\business-mcp\\\\navigator-business-mcp-server\.ts"]/)
+  assert.match(block, /env_vars = \["NAVIGATOR_WORKER_GATEWAY_BASE_URL", "NAVIGATOR_TASK_SCOPED_TOKEN", "NAVIGATOR_BUSINESS_ALLOWED_TOOLS", "NAVIGATOR_BUSINESS_MCP_DEBUG_LOG", "NAVIGATOR_BUSINESS_MCP_TASK_ID"]/)
+  assert.match(block, /default_tools_approval_mode = "approve"/)
+  assert.match(block, /enabled_tools = \["list_business_functions", "get_business_function_schema", "invoke_business_function"]/)
+  assert.doesNotMatch(block, /task-token/)
+})
+
+test('ensureNavigatorBusinessMcpHomeConfig upserts managed block without token', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-mcp-config-'))
+  const config = buildNavigatorBusinessMcpConfig(
+    { task_scoped_token: 'task-token' },
+    'http://navigator.example.com:8080',
+    '/worker/dist/business-mcp/navigator-business-mcp-server.js'
+  ) as Record<string, any>
+
+  assert.equal(await ensureNavigatorBusinessMcpHomeConfig(root, config), true)
+  assert.equal(await ensureNavigatorBusinessMcpHomeConfig(root, config), false)
+  const file = await fs.readFile(path.join(root, 'config.toml'), 'utf8')
+
+  assert.match(file, /\[mcp_servers\.navigator_business]/)
+  assert.match(file, new RegExp(`cwd = ${JSON.stringify(path.resolve('/worker/dist/business-mcp', '..', '..')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+  assert.match(file, /env_vars = \["NAVIGATOR_WORKER_GATEWAY_BASE_URL", "NAVIGATOR_TASK_SCOPED_TOKEN", "NAVIGATOR_BUSINESS_ALLOWED_TOOLS", "NAVIGATOR_BUSINESS_MCP_DEBUG_LOG", "NAVIGATOR_BUSINESS_MCP_TASK_ID"]/)
+  assert.match(file, /default_tools_approval_mode = "approve"/)
+  assert.match(file, /enabled_tools = \["list_business_functions", "get_business_function_schema", "invoke_business_function"]/)
+  assert.doesNotMatch(file, /task-token/)
 })
 
 test('seedCodexHomeAuthIfAvailable copies auth into scoped home', async () => {

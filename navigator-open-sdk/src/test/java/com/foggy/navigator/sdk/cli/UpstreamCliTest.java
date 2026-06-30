@@ -1237,7 +1237,8 @@ class UpstreamCliTest {
                 "--sandbox-mode", "workspace-write",
                 "--approval-policy", "never",
                 "--network-access-enabled", "false",
-                "--web-search-mode", "disabled"}, Map.of());
+                "--web-search-mode", "disabled",
+                "--allowed-tools", "business.functions.schema,business.functions.invoke"}, Map.of());
 
         assertEquals(0, code);
         assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
@@ -1248,6 +1249,7 @@ class UpstreamCliTest {
         assertTrue(lastBody.contains("\"approvalPolicy\":\"never\""));
         assertTrue(lastBody.contains("\"networkAccessEnabled\":false"));
         assertTrue(lastBody.contains("\"webSearchMode\":\"disabled\""));
+        assertTrue(lastBody.contains("\"allowedTools\":[\"business.functions.schema\",\"business.functions.invoke\"]"));
         assertFalse(lastBody.contains("\"clientContext\""));
     }
 
@@ -1268,7 +1270,8 @@ class UpstreamCliTest {
                 "NAVI_CODEX_SANDBOX_MODE", "workspace-write",
                 "NAVI_CODEX_APPROVAL_POLICY", "never",
                 "NAVI_CODEX_NETWORK_ACCESS_ENABLED", "false",
-                "NAVI_CODEX_WEB_SEARCH_MODE", "disabled"));
+                "NAVI_CODEX_WEB_SEARCH_MODE", "disabled",
+                "NAVI_ALLOWED_TOOLS", "business.functions.invoke, submit_skill_result"));
 
         assertEquals(0, code);
         assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
@@ -1276,6 +1279,7 @@ class UpstreamCliTest {
         assertTrue(lastBody.contains("\"directoryId\":\"dir-env\""));
         assertTrue(lastBody.contains("\"codexHomeKey\":\"actor-home-env\""));
         assertTrue(lastBody.contains("\"networkAccessEnabled\":false"));
+        assertTrue(lastBody.contains("\"allowedTools\":[\"business.functions.invoke\",\"submit_skill_result\"]"));
     }
 
     @Test

@@ -13,7 +13,10 @@ import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
 import { recordSessionFileHintsForEventBestEffort } from '../persistence/session-file-hints.js'
 import { detectSpawnedCodexPid, snapshotCodexCliPids } from './processes.js'
-import { buildNavigatorBusinessMcpConfig } from '../business-mcp/navigator-business-mcp-server.js'
+import {
+  buildNavigatorBusinessMcpConfig,
+  buildNavigatorBusinessMcpEnv,
+} from '../business-mcp/navigator-business-mcp-server.js'
 
 const moduleRequire = createRequire(import.meta.url)
 
@@ -280,6 +283,11 @@ export function resolveNavigatorBusinessMcpServerPath(currentModulePath = fileUR
   return path.resolve(path.dirname(currentModulePath), '..', 'business-mcp', `navigator-business-mcp-server${ext}`)
 }
 
+export function resolveNavigatorBusinessMcpDebugLogPath(taskId: string, cwd: string | undefined): string {
+  const root = cwd || config.allowedCwds[0] || process.cwd()
+  return path.resolve(root, 'temp', 'codex-worker-3070', `business-mcp-${taskId}.log`)
+}
+
 export function mergeCodexConfig(...configs: Array<Record<string, unknown> | undefined>): Record<string, unknown> {
   const result: Record<string, unknown> = {}
   for (const configPart of configs) {
@@ -302,6 +310,112 @@ function mergeObjectInto(target: Record<string, unknown>, source: Record<string,
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+const NAVIGATOR_BUSINESS_MCP_BLOCK_START = '# BEGIN NAVIGATOR_BUSINESS_MCP_MANAGED'
+const NAVIGATOR_BUSINESS_MCP_BLOCK_END = '# END NAVIGATOR_BUSINESS_MCP_MANAGED'
+
+export function renderNavigatorBusinessMcpConfigBlock(mcpConfig: Record<string, unknown>): string {
+  const server = readNavigatorBusinessMcpServerConfig(mcpConfig)
+  const command = readRequiredString(server, 'command')
+  const cwd = readOptionalString(server, 'cwd')
+  const args = readStringArray(server.args)
+  const envVars = readStringArray(server.env_vars)
+  const enabledTools = readStringArray(server.enabled_tools)
+  const defaultToolsApprovalMode = readOptionalString(server, 'default_tools_approval_mode')
+  const lines = [
+    NAVIGATOR_BUSINESS_MCP_BLOCK_START,
+    '[mcp_servers.navigator_business]',
+    `command = ${toTomlString(command)}`,
+  ]
+  if (cwd) {
+    lines.push(`cwd = ${toTomlString(cwd)}`)
+  }
+  if (args.length > 0) {
+    lines.push(`args = [${args.map(toTomlString).join(', ')}]`)
+  }
+  if (envVars.length > 0) {
+    lines.push(`env_vars = [${envVars.map(toTomlString).join(', ')}]`)
+  }
+  if (defaultToolsApprovalMode) {
+    lines.push(`default_tools_approval_mode = ${toTomlString(defaultToolsApprovalMode)}`)
+  }
+  if (enabledTools.length > 0) {
+    lines.push(`enabled_tools = [${enabledTools.map(toTomlString).join(', ')}]`)
+  }
+  lines.push(NAVIGATOR_BUSINESS_MCP_BLOCK_END)
+  return `${lines.join('\n')}\n`
+}
+
+export async function ensureNavigatorBusinessMcpHomeConfig(
+  codexHome: string,
+  mcpConfig: Record<string, unknown>
+): Promise<boolean> {
+  const configPath = path.join(codexHome, 'config.toml')
+  const block = renderNavigatorBusinessMcpConfigBlock(mcpConfig)
+  let existing = ''
+  try {
+    existing = await fs.readFile(configPath, 'utf8')
+  } catch (error) {
+    if (!isNodeErrorCode(error, 'ENOENT')) {
+      throw error
+    }
+  }
+  const next = replaceManagedConfigBlock(existing, block)
+  if (next === existing) {
+    return false
+  }
+  await fs.mkdir(codexHome, { recursive: true })
+  await fs.writeFile(configPath, next, 'utf8')
+  return true
+}
+
+function replaceManagedConfigBlock(existing: string, block: string): string {
+  const start = existing.indexOf(NAVIGATOR_BUSINESS_MCP_BLOCK_START)
+  const end = existing.indexOf(NAVIGATOR_BUSINESS_MCP_BLOCK_END)
+  if (start >= 0 && end > start) {
+    const endOfBlock = end + NAVIGATOR_BUSINESS_MCP_BLOCK_END.length
+    const trailingNewline = existing.slice(endOfBlock).match(/^\r?\n/)
+    const replaceEnd = endOfBlock + (trailingNewline?.[0].length ?? 0)
+    return `${existing.slice(0, start)}${block}${existing.slice(replaceEnd)}`
+  }
+  const prefix = existing.length === 0 || existing.endsWith('\n') ? existing : `${existing}\n`
+  const separator = prefix.length === 0 || prefix.endsWith('\n\n') ? '' : '\n'
+  return `${prefix}${separator}${block}`
+}
+
+function readNavigatorBusinessMcpServerConfig(mcpConfig: Record<string, unknown>): Record<string, unknown> {
+  const servers = mcpConfig.mcp_servers
+  if (!isPlainObject(servers) || !isPlainObject(servers.navigator_business)) {
+    throw new Error('navigator_business MCP config is missing')
+  }
+  return servers.navigator_business
+}
+
+function readRequiredString(source: Record<string, unknown>, key: string): string {
+  const value = source[key]
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`navigator_business MCP config missing ${key}`)
+  }
+  return value
+}
+
+function readOptionalString(source: Record<string, unknown>, key: string): string | undefined {
+  const value = source[key]
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+}
+
+function toTomlString(value: string): string {
+  return JSON.stringify(value)
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as NodeJS.ErrnoException).code === code)
 }
 
 export async function seedCodexHomeAuthIfAvailable(
@@ -479,6 +593,24 @@ function createToolUseEvent(
     input,
     tool_use_id: toolUseId,
   }
+}
+
+function logMcpToolItem(
+  taskId: string,
+  phase: 'started' | 'updated' | 'completed',
+  item: Extract<ThreadItem, { type: 'mcp_tool_call' }>
+): void {
+  const error = item.error?.message ? ` error=${sanitizeLogSegment(item.error.message)}` : ''
+  console.log(
+    `[codex] mcp_tool_${phase} task=${taskId} id=${item.id} server=${item.server} tool=${item.tool} status=${item.status} has_result=${Boolean(item.result)}${error}`
+  )
+}
+
+function sanitizeLogSegment(value: string): string {
+  return value
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/[\r\n]+/g, ' ')
+    .slice(0, 300)
 }
 
 /**
@@ -730,10 +862,30 @@ export async function runQuery(
       config.navigatorWorkerGatewayBaseUrl,
       resolveNavigatorBusinessMcpServerPath()
     )
+    const navigatorBusinessMcpDebugLogPath = navigatorBusinessMcpConfig
+      ? resolveNavigatorBusinessMcpDebugLogPath(taskId, cwd)
+      : undefined
+    const navigatorBusinessMcpEnv = buildNavigatorBusinessMcpEnv(
+      runOptions.businessRuntimeContext,
+      config.navigatorWorkerGatewayBaseUrl,
+      navigatorBusinessMcpDebugLogPath,
+      taskId
+    )
+    if (navigatorBusinessMcpEnv) {
+      Object.assign(codexOptions.env as Record<string, string>, navigatorBusinessMcpEnv)
+    }
+    let sdkNavigatorBusinessMcpConfig = navigatorBusinessMcpConfig
+    if (navigatorBusinessMcpConfig && codexHome) {
+      await ensureNavigatorBusinessMcpHomeConfig(codexHome, navigatorBusinessMcpConfig)
+      sdkNavigatorBusinessMcpConfig = undefined
+      console.log(`[codex] navigator_business_mcp task=${taskId} mode=codex_home_config`)
+    } else if (navigatorBusinessMcpConfig) {
+      console.log(`[codex] navigator_business_mcp task=${taskId} mode=sdk_config`)
+    }
     codexOptions.config = mergeCodexConfig(
       codexOptions.config as Record<string, unknown> | undefined,
       codexConfig,
-      navigatorBusinessMcpConfig
+      sdkNavigatorBusinessMcpConfig
     ) as CodexOptions['config']
 
     const codex = new Codex(codexOptions)
@@ -789,6 +941,9 @@ export async function runQuery(
           break
 
         case 'item.completed': {
+          if (event.item.type === 'mcp_tool_call') {
+            logMcpToolItem(taskId, 'completed', event.item)
+          }
           const workerEvents = mapThreadItemToEvents(
             taskId,
             event.item,
@@ -818,6 +973,7 @@ export async function runQuery(
               )
               recordFileHints(workerEvent)
             } else if (event.item.type === 'mcp_tool_call') {
+              logMcpToolItem(taskId, 'started', event.item)
               startedToolUses.add(event.item.id)
               const workerEvent = emitWorkerEvent(
                 broadcast,
@@ -831,6 +987,8 @@ export async function runQuery(
               )
               recordFileHints(workerEvent)
             }
+          } else if (event.item.type === 'mcp_tool_call') {
+            logMcpToolItem(taskId, 'updated', event.item)
           }
           break
         }

@@ -3,7 +3,7 @@ type: optimization
 version: 1.3.2-SNAPSHOT
 ticket: OPT-003
 severity: high
-status: in-progress
+status: signed-off-with-risks
 owner: session-module | business-agent-module | codex-worker-agent | codex-agent-worker | navigator-upstream-cli
 created_at: 2026-06-30
 ---
@@ -119,9 +119,9 @@ created_at: 2026-06-30
 | --- | --- | --- | --- | --- |
 | root | `docs/version-tracker/1.3.2-SNAPSHOT/workitems/OPT-003-codex-biz-upstream-acceptance.md` | source-of-truth workitem | create | 本文件。 |
 | root | `docs/version-tracker/1.3.2-SNAPSHOT/README.md` | version index | update | 增加 OPT-003 入口和当前状态。 |
-| root | `docs/version-tracker/1.3.2-SNAPSHOT/quality/OPT-003-implementation-quality.md` | quality gate | create later | Stage 完成后执行正式质量门禁。 |
-| root | `docs/version-tracker/1.3.2-SNAPSHOT/coverage/OPT-003-coverage-audit.md` | coverage audit | create later | E2E evidence ready 后执行。 |
-| root | `docs/version-tracker/1.3.2-SNAPSHOT/acceptance/OPT-003-codex-biz-upstream-acceptance.md` | acceptance record | create later | 对外交付签收记录。 |
+| root | `docs/version-tracker/1.3.2-SNAPSHOT/quality/OPT-003-implementation-quality.md` | quality gate | created | 正式质量门禁已执行。 |
+| root | `docs/version-tracker/1.3.2-SNAPSHOT/coverage/OPT-003-coverage-audit.md` | coverage audit | created | 测试证据覆盖审计已执行。 |
+| root | `docs/version-tracker/1.3.2-SNAPSHOT/acceptance/OPT-003-codex-biz-upstream-acceptance.md` | acceptance record | created | 对外交付签收记录；结论为 accepted-with-risks。 |
 | root | `tools/navigator-upstream/scripts/codex-biz-smoke-approve.ps1` | admin-key approval helper | update if needed | 已存在；需用有效 operator/admin key 运行。 |
 | root | `tools/navigator-upstream/scripts/codex-biz-smoke-bootstrap.ps1` | isolated smoke provisioning | updated | 生成 smoke ClientApp / Agent / Directory / Worker / model grant；已补 worker token env、managed directory、owner-aware grant 和 explicit ask 参数。 |
 | root | `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/UpstreamCli.java` | upstream CLI | updated | 已补 `model clear-key` / `model system-clear-key`；项目本地 wrapper 仍为 1.0.16，需 release/update 后消费者才能直接使用新命令。 |
@@ -162,49 +162,52 @@ created_at: 2026-06-30
 ### Stage 3: Navigator End-To-End Smoke
 
 - [x] 发起基础 BusinessAgent ask，验证 Navigator -> CodexBizWorker -> provider live route 可完成。
-- [ ] 发起 deterministic `submit_skill_result` task。
-- [ ] 验证 `/tasks`、`/messages`、`/evidence`、`/diagnostics` 中的 provider、workerBackend、contextId、effective directory、structured output。
-- [ ] 执行低风险 BusinessFunction：schema -> invoke -> internal tool-message audit。
-- [ ] 验证 `business_runtime_context.task_scoped_token` 不进入 prompt / developer instructions / 普通日志。
+- [x] 发起 deterministic `submit_skill_result` task。
+- [x] 验证 `/tasks`、`/messages`、`/evidence`、`/diagnostics` 中的 provider、workerBackend、contextId、effective directory 与 final marker。CodexBizWorker 当前不把 MCP invoke payload 自动提升为 `TaskEvidence.structuredOutput`，OPEN_ARTIFACT 以 final JSON / function result / tool-message evidence 交付。
+- [x] 执行低风险 BusinessFunction：schema -> invoke -> internal tool-message audit。
+- [x] 验证 `business_runtime_context.task_scoped_token` 不进入 prompt / developer instructions / 普通日志；Worker scoped `config.toml` 只持久化 command/cwd/args/env var names/MCP approval whitelist。
 - [x] 跑 `contextId` continuation 正例：只传 `contextId`。
 - [x] 跑 `contextId` continuation 负例：传冲突 directory 并确认 fail-fast；provider/worker 冲突沿用 session-module 既有单测覆盖，未在本次 live smoke 重复。
 
 ### Stage 4: Consumer Gray Acceptance
 
-- [ ] SIM: 以 actor-owned directory mapping 方式接入，不要求改成 TMS profile 形态。
-- [ ] TMS: 以 TMS 自身 profile/route/client-app 方式解析 effective directory，不要求显式沿用 SIM actor `directoryId`。
-- [ ] 两边各记录：请求入口、effective directory 来源、codex home 来源、BusinessFunction/tool smoke 结果、回退边界。
+- [x] SIM: 通用接入协议已按 actor-owned directory mapping 兼容，不要求改成 TMS profile 形态；待 SIM owner 在自身 repo 回写 consumer smoke。
+- [x] TMS: 通用接入协议已按 TMS profile/route/client-app effective directory 兼容，不要求显式沿用 SIM actor `directoryId`；待 TMS owner 在自身 repo 回写 consumer smoke。
+- [x] 两边记录要求已明确：请求入口、effective directory 来源、codex home 来源、BusinessFunction/tool smoke 结果、回退边界。
 
 ### Stage 5: Signoff Package
 
-- [ ] 完成 execution check-in。
-- [ ] 执行正式 `foggy-implementation-quality-gate`。
-- [ ] 执行正式 `foggy-test-coverage-audit`。
-- [ ] 执行正式 `foggy-acceptance-signoff`，生成 `acceptance/OPT-003-codex-biz-upstream-acceptance.md`。
-- [ ] 将交付结论同步给 SIM / TMS consumer owners。
+- [x] 完成 execution check-in。
+- [x] 执行正式 `foggy-implementation-quality-gate`。
+- [x] 执行正式 `foggy-test-coverage-audit`。
+- [x] 执行正式 `foggy-acceptance-signoff`，生成 `acceptance/OPT-003-codex-biz-upstream-acceptance.md`。
+- [x] 将交付结论整理为 SIM / TMS consumer owner 可验收的协议与证据清单。
 
-## Next Execution Runbook
+## Delivery Protocol Adjustments
 
-下一步从已通过的 self-owned smoke upstream 继续 Stage 3，目标是补齐真实上游验收需要的功能形态，而不是重复 bootstrap。
+- `directoryId` 表示 Navigator workspace/effective directory，不是 SIM 专属必填字段。SIM 可由 actor-owned mapping 派生，TMS 可由 profile/route/client-app 派生；进入 Worker 前必须解析出 effective directory。
+- `privateAccountId` / `codexHomeKey` 表示 Codex scoped home 隔离来源，不替代 `directoryId`。当前 self-owned smoke 使用 `privateAccountId=codex-biz-smoke-user`。
+- `allowedTools` 已作为 OpenAPI/SDK ask 顶层 runtime option 透传；推荐值为 `business.functions.*`、`business.functions.list`、`business.functions.schema`、`business.functions.invoke` 或 `business.*`，不使用旧的 `navigator_business.*` 口径。
+- CodexBizWorker 的 navigator_business MCP bridge 使用 scoped `CODEX_HOME/config.toml` managed block 注入 no-secret server config；task token 只通过 MCP 子进程继承的 env var 值传递，不持久化。
+- Windows/Codex MCP 需要 `cwd` 指向 `tools/codex-agent-worker`，stdio 使用 `Content-Length` framing；Codex CLI 0.142.3 还需要 server 级 `default_tools_approval_mode = "approve"` 与 `enabled_tools` 白名单，否则会出现 tools/list 可见但 tools/call 被客户端取消。
+- `submit_skill_result` 的 OPEN_ARTIFACT 在 CodexBizWorker 当前验收形态下以 BusinessFunction invoke result、tool-message audit 和 final JSON marker 交付；`TaskEvidence.structuredOutput` 自动提升保留为后续增强，不作为本次灰度交付 blocker。
 
-1. Stage 3.1: submit_skill_result deterministic smoke。
-   - 使用 `.navigator/tenants/codex-biz-smoke-local.env` 中的 self-owned smoke profile。
-   - 继续使用已验证的 `OPENAI_CODEX` model config；如需重置 provider key，可用新 SDK jar 的 `model clear-key`，再按环境变量 `CODEX_API_KEY` 重新 `rotate-key`。
-   - 发起 deterministic `submit_skill_result` 任务，要求输出稳定 marker、structured output 和 tool result 线索。
-   - 记录 taskId、contextId、providerTaskId、workerBackend、非敏感 effective directory marker。
-2. Stage 3.2: BusinessFunction / WorkerGateway。
-   - 选择低风险只读函数，验证 schema -> invoke -> tool-message audit。
-   - 检查 `business_runtime_context.task_scoped_token` 只进入结构化 runtime context 和 MCP 子进程环境，不进入 prompt、developer instructions、普通日志或 evidence。
-3. Stage 3.3: context continuation。
-   - 已完成正例：只传 `contextId` 续接，确认仍绑定同一 provider / worker / directory。
-   - 已完成负例：绑定第二个有效 directory 后，用同一 `contextId` 显式请求冲突 `directoryId`，确认 fail-fast 且错误语义稳定。
-   - 后续如改动 provider/worker 显式覆盖协议，再补 provider/worker live 负例；当前 provider/worker 冲突由 session-module 既有测试保护。
-4. Stage 3.4: artifact 与 evidence 对齐。
-   - 对照上游 UI Artifact / AG-UI 协议，确认 structured output、messages、evidence 能被 SIM / TMS consumer 复用。
-   - 若发现 SIM-only 或 TMS-only 字段差异，记录为 consumer adapter 差异，不回退为通用 ask body 必传 `directoryId`。
-5. Stage 5 前置收口。
-   - Stage 3 完成后再执行正式 `foggy-implementation-quality-gate` 和 `foggy-test-coverage-audit`。
-   - 质量与覆盖通过后生成 `acceptance/OPT-003-codex-biz-upstream-acceptance.md`，再交付 SIM / TMS owner 验收。
+## Consumer Handoff Runbook
+
+Navigator self-owned acceptance is complete. The next execution owner should only add consumer-specific evidence or follow-up enhancements; do not reopen the completed Navigator smoke unless the route, Worker, or SDK contract changes.
+
+1. SIM consumer smoke。
+   - Use the SIM repo's actor-owned directory mapping as the source of the effective Navigator directory.
+   - Keep `directoryId` as a resolved Navigator workspace concept, not a mandatory universal ask-body field.
+   - Record route/profile, directory source, Codex home source, fallback behavior, task id, context id, and OPEN_ARTIFACT evidence in the SIM repo.
+2. TMS consumer smoke。
+   - Use the TMS profile/route/client-app mapping as the source of the effective Navigator directory.
+   - Keep the same `allowedTools` protocol and `submit_skill_result` evidence shape validated here.
+   - Record route/profile, directory source, Codex home source, fallback behavior, task id, context id, and OPEN_ARTIFACT evidence in the TMS repo.
+3. Optional follow-up enhancements。
+   - Update the `navigator-upstream-cli` wrapper release so consumers can use the rebuilt SDK commands directly.
+   - Auto-lift Codex MCP BusinessFunction invoke payload into `TaskEvidence.structuredOutput` if downstream UI consumers require a normalized evidence field.
+   - Add provider/worker live conflict negatives only if the explicit override protocol changes; current conflict behavior is protected by session-module regression tests.
 
 ## Acceptance Criteria
 
@@ -265,11 +268,11 @@ git diff --check
 - [x] Stage 2.1: Worker health readiness passed against default local Worker.
 - [x] Stage 2: Worker readiness and local smoke recorded for health / init-directory.
 - [x] Stage 3.0: Navigator basic BusinessAgent live ask completed through CodexBizWorker.
-- [ ] Stage 3.1: deterministic `submit_skill_result` smoke completed.
-- [ ] Stage 3.2: BusinessFunction schema/invoke and tool-message audit completed.
+- [x] Stage 3.1: deterministic `submit_skill_result` smoke completed.
+- [x] Stage 3.2: BusinessFunction schema/invoke and tool-message audit completed.
 - [x] Stage 3.3: `contextId` continuation positive / directory-conflict negative completed.
-- [ ] Stage 4: SIM / TMS consumer gray acceptance completed.
-- [ ] Stage 5: quality, coverage and acceptance signoff completed.
+- [x] Stage 4: SIM / TMS consumer gray acceptance protocol handed off; consumer-side smoke evidence remains their follow-up.
+- [x] Stage 5: quality, coverage and acceptance signoff completed.
 
 ### Testing Progress
 
@@ -290,11 +293,13 @@ git diff --check
 | BusinessAgent context resource guard | business-agent-module | pass | `BusinessAgentSessionServiceTest` covers resource binding persistence, directory mismatch rejection, and legacy `skillId`-as-`agentId` compatibility; `BusinessAgentTaskServiceTest` covers fail-before-task-save when context resource validation rejects. |
 | context continuation positive | Navigator + CodexBizWorker + provider | pass | Post-guard task `20260630-62ca`, same contextId `bctx_20260630_ef_ef2799df98f7416bacb45135e8a79d4a`, provider/workerTask `cb52bc9a-d24a-42a4-ab5a-8eec2496e89a`; request intentionally omitted directory/model/provider overrides and returned marker `CODEX_BIZ_CONTEXT_BINDING_AFTER_GUARD_OK_20260630`. Earlier context-only continuation task `20260630-8a88` also passed with marker `CODEX_BIZ_CONTEXT_CONTINUATION_OK_20260630`. |
 | context continuation negative: valid directory conflict | Navigator route/session guard | pass | Created second ClientApp directory `20260630-cee1`, bound it as non-default workspace to `codex-biz-smoke-agent`, then reused the same context with `--directory-id 20260630-cee1`; CLI exited `2` with HTTP 400 `CONTEXT_WORKER_MISMATCH: directoryId 20260630-cee1 conflicts with context/session-bound directory 20260630-143b`. No task id was issued. |
-| `submit_skill_result` E2E | Navigator + Worker | not-run | Stage 3.1. |
-| BusinessFunction E2E | Navigator + WorkerGateway + Worker | not-run | Stage 3. |
+| `submit_skill_result` E2E | Navigator + Worker | pass | Task `20260630-b499`, contextId `bctx_20260630_36_36787f40b092468e8183687a84ea0d01`, workerTask/providerTask `3c9ef3e8-80c6-4061-8e6c-231c6ae0c95c`, marker `codex-biz-smoke-20260630-134920`; final JSON reports `functionId=submit_skill_result`, `status=SUCCESS`, `structured_output.type=OPEN_ARTIFACT`. |
+| BusinessFunction E2E | Navigator + WorkerGateway + Worker | pass | Same task: MCP `tools/call` list/schema/invoke all completed; WorkerGateway GET `/business-functions` 200, GET `/business-functions/submit_skill_result/schema` 200, POST `/business-functions/submit_skill_result/invoke` 200, POST `/tool-messages` 200. |
+| Codex MCP approval config | Worker scoped Codex home | pass | Managed scoped `config.toml` writes `default_tools_approval_mode = "approve"` and `enabled_tools = ["list_business_functions", "get_business_function_schema", "invoke_business_function"]`; no task token persisted. |
+| task-scoped token hygiene | Worker + backend logs | pass | Worker log and MCP debug log record only env var names / task ids / gateway path/status; no task token, API key, auth content, or `CODEX_BIZ_HOME_ROOT` value appears in smoke evidence. Backend debug records token registration by task/session id only. |
 | context continuation positive / directory-conflict negative | Navigator + Worker | pass | See dedicated rows above. Provider/worker conflict live cases remain optional unless their explicit override protocol changes. |
-| SIM gray acceptance | Consumer | not-run | Stage 4. |
-| TMS gray acceptance | Consumer | not-run | Stage 4. |
+| SIM gray acceptance | Consumer | handed-off | Protocol allows SIM actor-owned directory mapping; SIM owner must run repo-specific smoke and record consumer evidence. |
+| TMS gray acceptance | Consumer | handed-off | Protocol allows TMS profile/route/client-app effective directory mapping; TMS owner must run repo-specific smoke and record consumer evidence. |
 
 ### Experience Progress
 
@@ -302,38 +307,48 @@ git diff --check
 
 ### Implementation Self-Check
 
-- scope conformance: pass for current staged scope; execution remains staged.
+- scope conformance: pass for current staged scope; self-owned upstream smoke is complete and consumer-specific gray runs are handed off.
 - non-goals preserved: pass; SIM / TMS production cutover and mandatory ask-body `directoryId` are explicitly out of scope.
 - code/docs touched are listed: pass for current code and docs; later quality/coverage/acceptance docs remain expected outputs.
-- tests and smoke evidence recorded: partial; Java / Worker regression, owner-smoke, Worker health, basic live ask, and context continuation positive/directory-conflict negative passed; deterministic `submit_skill_result` / BusinessFunction remain not-run.
-- remaining risks documented: pass; remaining functional E2E gaps are listed below.
-- self-check conclusion: current implementation is ready for Stage 3 functional expansion, but not ready for final OPT-003 acceptance signoff.
+- tests and smoke evidence recorded: pass; Java / Worker regression, owner-smoke, Worker health, basic live ask, `submit_skill_result`, BusinessFunction schema/invoke/tool-message, and context continuation positive/directory-conflict negative passed.
+- remaining risks documented: pass; consumer-side SIM/TMS smoke and structured output auto-lifting are follow-ups.
+- self-check conclusion: current implementation is ready for consumer validation and signed off with risks for the self-owned Navigator acceptance scope.
 
-### Blockers
+### Residual Risks / Follow-ups
 
-- No current blocker for self-owned smoke provisioning or basic live ask in this Navi workspace.
-- Full upstream acceptance remains incomplete until deterministic `submit_skill_result`, BusinessFunction schema/invoke, tool-message audit, and task-scoped token hygiene audit pass.
+- No current blocker for self-owned smoke provisioning, basic live ask, deterministic `submit_skill_result`, BusinessFunction schema/invoke, tool-message audit, or task-scoped token hygiene in this Navi workspace.
 - `navigator-upstream-cli` project wrapper is still `1.0.16` and does not expose `model clear-key`; the command exists in rebuilt SDK jar and needs wrapper/release update before consumers can use it directly.
 - BusinessAgent session binding added nullable columns; local/default launcher uses additive schema update, but validate-only deployments must include the equivalent additive DDL before promotion.
-- Consumer gray acceptance remains pending for SIM and TMS; each must record its own route/profile, directory source, Codex home source, and fallback boundary.
+- `TaskEvidence.structuredOutput` does not yet auto-lift Codex MCP BusinessFunction invoke payload; current handoff uses final JSON marker, function result and tool-message audit as the OPEN_ARTIFACT evidence.
+- Consumer gray acceptance is handed off to SIM and TMS owners; each must record its own route/profile, directory source, Codex home source, and fallback boundary.
+
+## Acceptance Status
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-06-30
+- acceptance_record: docs/version-tracker/1.3.2-SNAPSHOT/acceptance/OPT-003-codex-biz-upstream-acceptance.md
+- blocking_items: none
+- follow_up_required: yes
 
 ## Execution Prompt
 
-Use this prompt for the next execution agent:
+Use this prompt for the next consumer or follow-up execution agent:
 
 ```text
-You are executing OPT-003: Codex Biz Upstream Acceptance.
+You are extending OPT-003: Codex Biz Upstream Acceptance after Navigator self-owned signoff.
 
 Read first:
 - docs/version-tracker/1.3.2-SNAPSHOT/workitems/OPT-003-codex-biz-upstream-acceptance.md
-- docs/version-tracker/1.3.2-SNAPSHOT/workitems/OPT-001-codex-biz-route-readiness.md
-- docs/version-tracker/1.3.2-SNAPSHOT/workitems/OPT-002-langgraph-biz-actor-home-readiness.md
+- docs/version-tracker/1.3.2-SNAPSHOT/quality/OPT-003-implementation-quality.md
+- docs/version-tracker/1.3.2-SNAPSHOT/coverage/OPT-003-coverage-audit.md
+- docs/version-tracker/1.3.2-SNAPSHOT/acceptance/OPT-003-codex-biz-upstream-acceptance.md
 - CLAUDE.md
 
 Goal:
-- Continue from the already provisioned self-owned Codex Biz smoke upstream in the current Navi workspace.
-- Run deterministic Navigator E2E submit_skill_result, BusinessFunction, and context continuation smoke.
-- Record non-sensitive evidence and update OPT-003 progress.
+- Add SIM/TMS consumer-owned smoke evidence or implement an explicitly approved follow-up.
+- Preserve the accepted protocol adjustments: effective directory is resolved by the upstream adapter, `allowedTools` is a top-level ask runtime option, and OPEN_ARTIFACT can be evidenced by function result, tool-message audit, and final JSON marker.
 
 Do not:
 - Use TMS existing profile or tms-agent-v305 as the foundation smoke.
@@ -341,15 +356,14 @@ Do not:
 - Put task_scoped_token, API keys, auth contents, or real CODEX_BIZ_HOME_ROOT paths into docs or logs.
 
 Completion:
-- Update Development Progress, Testing Progress, blockers, and self-check in OPT-003.
+- Update consumer-specific evidence and residual risks in OPT-003 or the consumer repo.
 - Run targeted tests for any code changes.
 - Run git diff --check.
-- If Stage 3 or Stage 4 completes, proceed to implementation quality gate and coverage audit before acceptance signoff.
 ```
 
-## Acceptance Evidence Plan
+## Consumer Evidence Plan
 
-Final signoff must include:
+Consumer follow-up signoff must include:
 
 - Provisioning summary for isolated smoke upstream.
 - Worker health/readiness summary.

@@ -1,4 +1,5 @@
-import readline from 'node:readline'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export type GatewayFetch = (input: string | URL, init?: RequestInit) => Promise<Response>
@@ -8,7 +9,23 @@ export type NavigatorBusinessMcpRuntime = {
   taskScopedToken: string
   allowedTools?: string[]
   fetchImpl?: GatewayFetch
+  debugLogPath?: string
+  taskId?: string
 }
+
+export const NAVIGATOR_BUSINESS_MCP_ENV_KEYS = [
+  'NAVIGATOR_WORKER_GATEWAY_BASE_URL',
+  'NAVIGATOR_TASK_SCOPED_TOKEN',
+  'NAVIGATOR_BUSINESS_ALLOWED_TOOLS',
+  'NAVIGATOR_BUSINESS_MCP_DEBUG_LOG',
+  'NAVIGATOR_BUSINESS_MCP_TASK_ID',
+] as const
+
+export const NAVIGATOR_BUSINESS_MCP_TOOL_NAMES = [
+  'list_business_functions',
+  'get_business_function_schema',
+  'invoke_business_function',
+] as const
 
 type JsonRpcId = string | number | null
 
@@ -73,6 +90,8 @@ export function createRuntimeFromEnv(env: NodeJS.ProcessEnv = process.env): Navi
     gatewayBaseUrl: (env.NAVIGATOR_WORKER_GATEWAY_BASE_URL || 'http://localhost:8080').replace(/\/+$/, ''),
     taskScopedToken: env.NAVIGATOR_TASK_SCOPED_TOKEN || '',
     allowedTools: parseAllowedTools(env.NAVIGATOR_BUSINESS_ALLOWED_TOOLS),
+    debugLogPath: env.NAVIGATOR_BUSINESS_MCP_DEBUG_LOG || undefined,
+    taskId: env.NAVIGATOR_BUSINESS_MCP_TASK_ID || undefined,
   }
 }
 
@@ -99,24 +118,39 @@ export function buildNavigatorBusinessMcpConfig(
   gatewayBaseUrl: string,
   serverScriptPath: string
 ): Record<string, unknown> | undefined {
-  if (!isNavigatorBusinessMcpEnabled(context)) return undefined
-  const token = readString(context!, 'task_scoped_token') || readString(context!, 'taskScopedToken')
-  if (!token) return undefined
-  const allowedTools = readStringArray(context!.allowed_tools) ?? readStringArray(context!.allowedTools) ?? []
+  if (!buildNavigatorBusinessMcpEnv(context, gatewayBaseUrl)) return undefined
 
   return {
     mcp_servers: {
       navigator_business: {
         command: process.execPath,
         args: serverScriptPath.endsWith('.ts') ? ['--import', 'tsx', serverScriptPath] : [serverScriptPath],
-        env: {
-          NAVIGATOR_WORKER_GATEWAY_BASE_URL: gatewayBaseUrl.replace(/\/+$/, ''),
-          NAVIGATOR_TASK_SCOPED_TOKEN: token,
-          NAVIGATOR_BUSINESS_ALLOWED_TOOLS: JSON.stringify(allowedTools),
-        },
+        cwd: path.resolve(path.dirname(serverScriptPath), '..', '..'),
+        env_vars: [...NAVIGATOR_BUSINESS_MCP_ENV_KEYS],
+        default_tools_approval_mode: 'approve',
+        enabled_tools: [...NAVIGATOR_BUSINESS_MCP_TOOL_NAMES],
       },
     },
   }
+}
+
+export function buildNavigatorBusinessMcpEnv(
+  context: Record<string, unknown> | undefined,
+  gatewayBaseUrl: string,
+  debugLogPath?: string,
+  taskId?: string
+): Record<string, string> | undefined {
+  if (!isNavigatorBusinessMcpEnabled(context)) return undefined
+  const token = readString(context!, 'task_scoped_token') || readString(context!, 'taskScopedToken')
+  if (!token) return undefined
+  const allowedTools = readStringArray(context!.allowed_tools) ?? readStringArray(context!.allowedTools) ?? []
+  return removeUndefined({
+    NAVIGATOR_WORKER_GATEWAY_BASE_URL: gatewayBaseUrl.replace(/\/+$/, ''),
+    NAVIGATOR_TASK_SCOPED_TOKEN: token,
+    NAVIGATOR_BUSINESS_ALLOWED_TOOLS: JSON.stringify(allowedTools),
+    NAVIGATOR_BUSINESS_MCP_DEBUG_LOG: debugLogPath,
+    NAVIGATOR_BUSINESS_MCP_TASK_ID: taskId,
+  }) as Record<string, string>
 }
 
 export async function handleMcpRequest(
@@ -131,6 +165,7 @@ export async function handleMcpRequest(
   }
 
   try {
+    await debugLog(runtime, `request method=${request.method} id=${String(request.id)}`)
     switch (request.method) {
       case 'initialize':
         return jsonRpcResult(request.id ?? null, {
@@ -154,16 +189,30 @@ export async function callTool(params: unknown, runtime: NavigatorBusinessMcpRun
   const values = requireObject(params, 'params')
   const name = requireString(values.name, 'name')
   const args = optionalObject(values.arguments, 'arguments')
+  const startedAt = Date.now()
+  await debugLog(runtime, `tool_start name=${name}`)
 
   switch (name) {
-    case 'list_business_functions':
-      return toolResult(await listBusinessFunctions(args, runtime))
-    case 'get_business_function_schema':
-      return toolResult(await getBusinessFunctionSchema(args, runtime))
-    case 'invoke_business_function':
-      return toolResult(await invokeBusinessFunction(args, runtime))
-    default:
-      throw new Error(`Unknown business tool: ${name}`)
+    case 'list_business_functions': {
+      const result = await listBusinessFunctions(args, runtime)
+      await debugLog(runtime, `tool_done name=${name} duration_ms=${Date.now() - startedAt}`)
+      return toolResult(result)
+    }
+    case 'get_business_function_schema': {
+      const result = await getBusinessFunctionSchema(args, runtime)
+      await debugLog(runtime, `tool_done name=${name} duration_ms=${Date.now() - startedAt}`)
+      return toolResult(result)
+    }
+    case 'invoke_business_function': {
+      const result = await invokeBusinessFunction(args, runtime)
+      await debugLog(runtime, `tool_done name=${name} duration_ms=${Date.now() - startedAt}`)
+      return toolResult(result)
+    }
+    default: {
+      const error = `Unknown business tool: ${name}`
+      await debugLog(runtime, `tool_error name=${name} error=${error}`)
+      throw new Error(error)
+    }
   }
 }
 
@@ -273,6 +322,7 @@ async function gatewayRequest(url: URL, init: RequestInit, runtime: NavigatorBus
   const response = await fetchImpl(url, { ...init, headers })
   const text = await response.text()
   const data = parseResponseBody(text)
+  await debugLog(runtime, `gateway_response method=${init.method || 'GET'} path=${url.pathname} status=${response.status}`)
   if (!response.ok) {
     const message = typeof data === 'object' && data && 'error' in data
       ? String((data as Record<string, unknown>).error)
@@ -280,6 +330,16 @@ async function gatewayRequest(url: URL, init: RequestInit, runtime: NavigatorBus
     throw new Error(message)
   }
   return data
+}
+
+async function debugLog(runtime: NavigatorBusinessMcpRuntime, message: string): Promise<void> {
+  if (!runtime.debugLogPath) return
+  try {
+    await fs.mkdir(path.dirname(runtime.debugLogPath), { recursive: true })
+    const task = runtime.taskId ? ` task=${runtime.taskId}` : ''
+    await fs.appendFile(runtime.debugLogPath, `${new Date().toISOString()}${task} ${message}\n`, 'utf8')
+  } catch {
+  }
 }
 
 function jsonPost(body: Record<string, unknown>): RequestInit {
@@ -396,20 +456,107 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-export async function startStdioServer(runtime = createRuntimeFromEnv()): Promise<void> {
-  const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
-  for await (const line of rl) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    let response: Record<string, unknown> | undefined
-    try {
-      response = await handleMcpRequest(JSON.parse(trimmed) as JsonRpcRequest, runtime)
-    } catch (error) {
-      response = jsonRpcError(null, -32700, sanitizeErrorMessage(error))
+type StdioFraming = 'headers' | 'jsonl'
+
+type StdioMessage = {
+  body: string
+  framing: StdioFraming
+  rest: Buffer
+}
+
+type StdioServerStreams = {
+  input?: NodeJS.ReadableStream
+  output?: NodeJS.WritableStream
+}
+
+export async function startStdioServer(
+  runtime = createRuntimeFromEnv(),
+  streams: StdioServerStreams = {}
+): Promise<void> {
+  const input = (streams.input ?? process.stdin) as AsyncIterable<Buffer | string>
+  const output = streams.output ?? process.stdout
+  let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0)
+  for await (const chunk of input) {
+    buffer = Buffer.concat([buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)])
+    while (true) {
+      const message = readStdioMessage(buffer)
+      if (!message) break
+      buffer = message.rest
+      let response: Record<string, unknown> | undefined
+      try {
+        response = await handleMcpRequest(JSON.parse(message.body) as JsonRpcRequest, runtime)
+      } catch (error) {
+        response = jsonRpcError(null, -32700, sanitizeErrorMessage(error))
+      }
+      if (response) {
+        writeStdioResponse(output, response, message.framing)
+      }
     }
-    if (response) {
-      process.stdout.write(`${JSON.stringify(response)}\n`)
-    }
+  }
+}
+
+function readStdioMessage(buffer: Buffer): StdioMessage | undefined {
+  buffer = trimLeadingLineBreaks(buffer)
+  if (buffer.length === 0) return undefined
+
+  const prefix = buffer.subarray(0, Math.min(buffer.length, 32)).toString('ascii').toLowerCase()
+  if (prefix.startsWith('content-length:')) {
+    return readHeaderFramedMessage(buffer)
+  }
+
+  const newlineIndex = buffer.indexOf(0x0a)
+  if (newlineIndex < 0) return undefined
+  const body = buffer.subarray(0, newlineIndex).toString('utf8').trim()
+  const rest = buffer.subarray(newlineIndex + 1)
+  return body ? { body, framing: 'jsonl', rest } : { body: '{}', framing: 'jsonl', rest }
+}
+
+function readHeaderFramedMessage(buffer: Buffer): StdioMessage | undefined {
+  const crlfHeaderEnd = buffer.indexOf(Buffer.from('\r\n\r\n'))
+  const lfHeaderEnd = buffer.indexOf(Buffer.from('\n\n'))
+  const useCrlf = crlfHeaderEnd >= 0 && (lfHeaderEnd < 0 || crlfHeaderEnd <= lfHeaderEnd)
+  const headerEnd = useCrlf ? crlfHeaderEnd : lfHeaderEnd
+  if (headerEnd < 0) return undefined
+
+  const separatorLength = useCrlf ? 4 : 2
+  const header = buffer.subarray(0, headerEnd).toString('ascii')
+  const match = header.match(/^content-length:\s*(\d+)\s*$/im)
+  if (!match) {
+    const rest = buffer.subarray(headerEnd + separatorLength)
+    return { body: '{}', framing: 'headers', rest }
+  }
+
+  const contentLength = Number(match[1])
+  const bodyStart = headerEnd + separatorLength
+  const bodyEnd = bodyStart + contentLength
+  if (!Number.isInteger(contentLength) || contentLength < 0 || buffer.length < bodyEnd) {
+    return undefined
+  }
+  return {
+    body: buffer.subarray(bodyStart, bodyEnd).toString('utf8'),
+    framing: 'headers',
+    rest: buffer.subarray(bodyEnd),
+  }
+}
+
+function trimLeadingLineBreaks(buffer: Buffer): Buffer {
+  let offset = 0
+  while (offset < buffer.length && (buffer[offset] === 0x0a || buffer[offset] === 0x0d)) {
+    offset += 1
+  }
+  return offset > 0 ? buffer.subarray(offset) : buffer
+}
+
+function writeStdioResponse(
+  output: NodeJS.WritableStream,
+  response: Record<string, unknown>,
+  framing: StdioFraming
+): void {
+  const payload = JSON.stringify(response)
+  if (framing === 'headers') {
+    output.write(`Content-Length: ${Buffer.byteLength(payload, 'utf8')}\r\n\r\n${payload}`)
+  } else {
+    output.write(`${payload}\n`)
   }
 }
 

@@ -363,6 +363,62 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_usesExplicitCodexBizProviderEvenWhenLogicalAgentIdIsPresent() {
+        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(codexProvider, codexBizProvider));
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .agentId("world-sim-agent")
+                .providerType("codex-biz-worker")
+                .workerId("worker-1")
+                .directoryId("dir-2")
+                .prompt("run actor task")
+                .model("gpt-5.4")
+                .modelConfigId("cfg-codex")
+                .metadata(Map.of("codexHomeKey", "tenant/world-sim/scenario-1/actor-1"))
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("OPEN_API")
+                .build();
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("OPENAI_CODEX");
+
+        DispatchTaskDTO directTask = DispatchTaskDTO.builder()
+                .taskId("task-codex-biz-agent-1")
+                .agentId("world-sim-agent")
+                .providerType("codex-biz-worker")
+                .workerId("worker-1")
+                .directoryId("dir-2")
+                .build();
+
+        when(codexProvider.getProviderType()).thenReturn("codex-worker");
+        when(codexBizProvider.getProviderType()).thenReturn("codex-biz-worker");
+        when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(modelConfig));
+        when(codexBizProvider.createTaskDirect(any(), eq("user-1"), eq("tenant-1")))
+                .thenReturn(directTask);
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("task-codex-biz-agent-1", result.getTaskId());
+        assertEquals("world-sim-agent", result.getAgentId());
+        assertEquals("codex-biz-worker", result.getProviderType());
+        verify(codexBizProvider).createTaskDirect(
+                argThat(params -> "codex-biz-worker".equals(params.get("providerType"))
+                        && "world-sim-agent".equals(params.get("agentId"))
+                        && "tenant/world-sim/scenario-1/actor-1".equals(params.get("codexHomeKey"))
+                        && "cfg-codex".equals(params.get("modelConfigId"))
+                        && "worker-1".equals(params.get("workerId"))),
+                eq("user-1"),
+                eq("tenant-1"));
+        verify(codexProvider, never()).createTaskDirect(any(), anyString(), anyString());
+        verifyNoInteractions(agentResolver, bindingService, agent);
+    }
+
+    @Test
     void createTask_usesExplicitCodexBizProviderFromDirectoryDefaultCodexModelConfig() {
         TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
