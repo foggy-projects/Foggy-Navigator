@@ -219,6 +219,7 @@ packages/foggy-mobile/uniCloud-aliyun/
 /vt100-*.png
 /app102*.yaml
 /app102*.yml
+/forward-dialog-*.yml
 /.tmp-*.log
 /.tmp-*.err.log
 /.tmp-*.json
