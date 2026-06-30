@@ -83,6 +83,7 @@ const emit = defineEmits<{
   sent: [content: string]
   'update:modelValue': [value: string]
   'add-image': []
+  'take-photo': []
   'add-file': []
   'remove-attachment': [index: number]
 }>()
@@ -133,10 +134,11 @@ function showHistory() {
 
 function showAttachmentActions() {
   uni.showActionSheet({
-    itemList: ['选择图片', '选择文件'],
+    itemList: ['相册选图', '拍照', '选择文件'],
     success: (res) => {
       if (res.tapIndex === 0) emit('add-image')
-      if (res.tapIndex === 1) emit('add-file')
+      if (res.tapIndex === 1) emit('take-photo')
+      if (res.tapIndex === 2) emit('add-file')
     },
   })
 }

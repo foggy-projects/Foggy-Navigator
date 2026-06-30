@@ -86,7 +86,8 @@
             :history-items="historyItems"
             :enable-attachments="true"
             :attachments="attachments"
-            @add-image="chooseImages"
+            @add-image="chooseAlbumImages"
+            @take-photo="takePhoto"
             @add-file="chooseFiles"
             @remove-attachment="removeAttachment"
             @send="handleResume"
@@ -104,7 +105,8 @@
           :history-items="historyItems"
           :enable-attachments="true"
           :attachments="attachments"
-          @add-image="chooseImages"
+          @add-image="chooseAlbumImages"
+          @take-photo="takePhoto"
           @add-file="chooseFiles"
           @remove-attachment="removeAttachment"
           @send="handleResume"
@@ -152,7 +154,7 @@ const savingTitle = ref(false)
 
 // Model cache
 const { initFromTask, getSessionModel } = useSessionModelCache()
-const { attachments, chooseImages, chooseFiles, removeAttachment, clearAttachments } = useAttachments()
+const { attachments, chooseAlbumImages, takePhoto, chooseFiles, removeAttachment, clearAttachments } = useAttachments()
 
 // Draft & history
 const memoryScope = computed(() => sessionId.value ? 'pane-' + sessionId.value : '')
