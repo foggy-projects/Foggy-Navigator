@@ -14,6 +14,8 @@
 
 后续补充 `LANGGRAPH_BIZ` Actor-owned BizWorker 目录契约：Actor-owned 任务必须携带 `directoryId`，OpenAPI / BusinessAgentTaskService / LangGraph direct create 均 fail-fast；A2A / launcher / direct create 透传 `directoryId` 和 `cwd`；Python delegated workspace 文件工具写入 Actor Home，并在结果中标明 storage mode。
 
+CodexBizWorker 后续验收从 SIM 单点评估升级为通用上游接入闭环：以 Navigator effective directory 作为派发前置结果，而不是要求所有上游显式传 `directoryId`；先完成 self-owned smoke upstream，再分别沉淀 SIM / TMS 的 consumer 接入差异和验收证据。
+
 ## 版本状态
 
 - status: signed-off
@@ -22,6 +24,10 @@
 - acceptance_record: [acceptance/OPT-001-codex-biz-route-readiness-acceptance.md](./acceptance/OPT-001-codex-biz-route-readiness-acceptance.md)
 - follow_up_status: ready-for-signoff
 - follow_up_record: [workitems/OPT-002-langgraph-biz-actor-home-readiness.md](./workitems/OPT-002-langgraph-biz-actor-home-readiness.md)
+- upstream_acceptance_status: in-progress
+- upstream_acceptance_record: [workitems/OPT-003-codex-biz-upstream-acceptance.md](./workitems/OPT-003-codex-biz-upstream-acceptance.md)
+- worker_response_timeout_status: in-progress
+- worker_response_timeout_record: [workitems/OPT-004-worker-response-timeout-indicator.md](./workitems/OPT-004-worker-response-timeout-indicator.md)
 
 ## 文档清单
 
@@ -33,3 +39,5 @@
 - [quality/OPT-002-implementation-quality.md](./quality/OPT-002-implementation-quality.md) - OPT-002 实现质量门禁记录
 - [coverage/OPT-002-coverage-audit.md](./coverage/OPT-002-coverage-audit.md) - OPT-002 测试覆盖审计记录
 - [acceptance/OPT-002-langgraph-biz-actor-home-readiness-acceptance.md](./acceptance/OPT-002-langgraph-biz-actor-home-readiness-acceptance.md) - OPT-002 待签收记录
+- [workitems/OPT-003-codex-biz-upstream-acceptance.md](./workitems/OPT-003-codex-biz-upstream-acceptance.md) - CodexBizWorker 通用上游接入、self-owned smoke、SIM/TMS 灰度验收闭环
+- [workitems/OPT-004-worker-response-timeout-indicator.md](./workitems/OPT-004-worker-response-timeout-indicator.md) - Worker 任务长时间无用户可见输出时的响应超时辅助提示
