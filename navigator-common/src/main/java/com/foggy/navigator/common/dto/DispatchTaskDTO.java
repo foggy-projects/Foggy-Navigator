@@ -38,6 +38,10 @@ public class DispatchTaskDTO {
     private String resultText;
     private String errorMessage;
     private Integer lastAckedSeq;
+    private LocalDateTime lastOutputAt;
+    private Boolean responseTimedOut;
+    private Long silentForSeconds;
+    private Long responseTimeoutThresholdSeconds;
     private String source;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

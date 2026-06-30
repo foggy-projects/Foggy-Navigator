@@ -42,6 +42,10 @@ public class TaskDTO {
     /** JSON array of checkpoint objects */
     private String checkpoints;
     private Integer lastAckedSeq;
+    private LocalDateTime lastOutputAt;
+    private Boolean responseTimedOut;
+    private Long silentForSeconds;
+    private Long responseTimeoutThresholdSeconds;
     /** Whether file checkpointing was enabled for this task */
     private Boolean fileCheckpointingEnabled;
     /** Task source: "PLATFORM" or "SYNCED" */

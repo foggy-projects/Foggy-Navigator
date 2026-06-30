@@ -21,6 +21,7 @@ import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
@@ -330,6 +331,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Transactional
     public void recordWorkerProgress(String taskId, String workerTaskId, String codexThreadId,
                                       String model, Integer ackSeq) {
+        recordWorkerProgress(taskId, workerTaskId, codexThreadId, model, ackSeq, false);
+    }
+
+    @Transactional
+    public void recordWorkerProgress(String taskId, String workerTaskId, String codexThreadId,
+                                      String model, Integer ackSeq, boolean userVisibleOutput) {
         CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
         if (entity == null) {
             log.warn("recordWorkerProgress: task not found: {}", taskId);
@@ -349,7 +356,11 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             Integer current = entity.getLastAckedSeq();
             entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
         }
-        entity.setLastAliveAt(LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        entity.setLastAliveAt(now);
+        if (userVisibleOutput) {
+            entity.setLastOutputAt(now);
+        }
         persistTask(entity);
     }
 
@@ -481,7 +492,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (numTurns != null) entity.setNumTurns(numTurns);
         if (model != null) entity.setModel(model);
         entity.setErrorMessage(null);
-        entity.setLastAliveAt(LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        entity.setLastAliveAt(now);
+        entity.setLastOutputAt(now);
 
         persistTask(entity);
         log.info("Completed Codex task: taskId={}, cost={}", taskId, costUsd);
@@ -504,7 +517,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         entity.setErrorMessage(errorMessage);
         if (workerTaskId != null) entity.setWorkerTaskId(workerTaskId);
         if (codexThreadId != null) entity.setCodexThreadId(codexThreadId);
-        entity.setLastAliveAt(LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        entity.setLastAliveAt(now);
+        entity.setLastOutputAt(now);
 
         persistTask(entity);
         log.info("Failed Codex task: taskId={}, error={}", taskId, errorMessage);
@@ -708,6 +723,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .resultText(entity.getResultText())
                 .errorMessage(entity.getErrorMessage())
                 .lastAckedSeq(entity.getLastAckedSeq())
+                .lastOutputAt(entity.getLastOutputAt())
+                .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .silentForSeconds(TaskResponseTimeoutSupport.silentForSeconds(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
@@ -743,6 +764,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
         entity.setStatus("RUNNING");
         entity.setErrorMessage(null);
+        LocalDateTime now = LocalDateTime.now();
+        entity.setLastAliveAt(now);
+        entity.setLastOutputAt(now);
         persistTask(entity);
         log.info("Resync: reset task {} to RUNNING, attempting SSE reconnect", taskId);
 
@@ -934,6 +958,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         sessionTask.setSource(entity.getSource());
         sessionTask.setLastAckedSeq(entity.getLastAckedSeq());
         sessionTask.setLastAliveAt(entity.getLastAliveAt());
+        sessionTask.setLastOutputAt(entity.getLastOutputAt());
         sessionTask.setCreatedAt(entity.getCreatedAt());
         sessionTask.setUpdatedAt(entity.getUpdatedAt());
         sessionTask.setTaskStateJson(buildCodexTaskStateJson(entity, sessionTask.getTaskStateJson()));
@@ -1499,6 +1524,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .resultText(entity.getResultText())
                 .errorMessage(entity.getErrorMessage())
                 .lastAckedSeq(entity.getLastAckedSeq())
+                .lastOutputAt(entity.getLastOutputAt())
+                .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .silentForSeconds(TaskResponseTimeoutSupport.silentForSeconds(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())

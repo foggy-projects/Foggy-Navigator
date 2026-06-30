@@ -97,6 +97,8 @@ public class SessionTaskEntity {
 
     private LocalDateTime lastAliveAt;
 
+    private LocalDateTime lastOutputAt;
+
     @Column(columnDefinition = "TEXT")
     private String taskStateJson;
 

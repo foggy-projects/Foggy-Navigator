@@ -1145,6 +1145,16 @@
                 <span v-if="conv.config?.authBound" class="conv-auth-badge" :title="'Auth: ' + (conv.config.authMode || 'bound')">&#128273;</span>
                 <span class="conv-time">{{ formatTime(conv.latestTask.createdAt) }}</span>
                 <span class="conv-actions" @click.stop>
+                  <el-tooltip
+                    v-if="shouldShowResponseTimeout(conv.latestTask)"
+                    :content="responseTimeoutTooltip(conv.latestTask)"
+                    placement="top"
+                  >
+                    <span class="conv-timeout-badge">
+                      <el-icon><WarningFilled /></el-icon>
+                      <span>响应超时</span>
+                    </span>
+                  </el-tooltip>
                   <el-button
                     v-if="conv.latestTask.status === 'RUNNING'"
                     type="warning"
@@ -1267,6 +1277,16 @@
                     <span v-if="child.latestTask.model" class="conv-model">{{ shortModel(child.latestTask.model) }}</span>
                     <span v-if="child.totalCost > 0" class="conv-cost">${{ child.totalCost.toFixed(2) }}</span>
                     <span class="conv-time">{{ formatTime(child.latestTask.createdAt) }}</span>
+                    <el-tooltip
+                      v-if="shouldShowResponseTimeout(child.latestTask)"
+                      :content="responseTimeoutTooltip(child.latestTask)"
+                      placement="top"
+                    >
+                      <span class="conv-timeout-badge">
+                        <el-icon><WarningFilled /></el-icon>
+                        <span>响应超时</span>
+                      </span>
+                    </el-tooltip>
                     <el-button
                       v-if="child.latestTask.status === 'RUNNING'"
                       type="warning"
@@ -1434,6 +1454,16 @@
               <span class="conv-time">{{ formatTime(conv.latestTask.createdAt) }}</span>
               <!-- Visible action buttons -->
               <span class="conv-actions" @click.stop>
+                <el-tooltip
+                  v-if="shouldShowResponseTimeout(conv.latestTask)"
+                  :content="responseTimeoutTooltip(conv.latestTask)"
+                  placement="top"
+                >
+                  <span class="conv-timeout-badge">
+                    <el-icon><WarningFilled /></el-icon>
+                    <span>响应超时</span>
+                  </span>
+                </el-tooltip>
                 <el-button
                   v-if="conv.latestTask.status === 'RUNNING'"
                   type="warning"
@@ -1556,6 +1586,16 @@
                   <span v-if="child.latestTask.model" class="conv-model">{{ shortModel(child.latestTask.model) }}</span>
                   <span v-if="child.totalCost > 0" class="conv-cost">${{ child.totalCost.toFixed(2) }}</span>
                   <span class="conv-time">{{ formatTime(child.latestTask.createdAt) }}</span>
+                  <el-tooltip
+                    v-if="shouldShowResponseTimeout(child.latestTask)"
+                    :content="responseTimeoutTooltip(child.latestTask)"
+                    placement="top"
+                  >
+                    <span class="conv-timeout-badge">
+                      <el-icon><WarningFilled /></el-icon>
+                      <span>响应超时</span>
+                    </span>
+                  </el-tooltip>
                   <el-button
                     v-if="child.latestTask.status === 'RUNNING'"
                     type="warning"
@@ -2921,7 +2961,7 @@
 import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Loading } from '@element-plus/icons-vue'
+import { ArrowDown, Loading, WarningFilled } from '@element-plus/icons-vue'
 import { DEFAULT_TASK_PAGE_SIZE, useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useCodingAgent } from '@/composables/useCodingAgent'
 import { useInputMemory } from '@/composables/useInputMemory'
@@ -4261,6 +4301,24 @@ function taskSessionRefValue(task: ClaudeTask): string {
 
 function canResyncTask(task?: ClaudeTask | null): boolean {
   return !!task && isClaudeCodeTask(task)
+}
+
+type ResponseTimeoutTask = ClaudeTask & {
+  responseTimedOut?: boolean
+  silentForSeconds?: number
+  responseTimeoutThresholdSeconds?: number
+}
+
+function shouldShowResponseTimeout(task?: ClaudeTask | null): boolean {
+  const responseTask = task as ResponseTimeoutTask | null | undefined
+  return responseTask?.status === 'RUNNING' && responseTask.responseTimedOut === true
+}
+
+function responseTimeoutTooltip(task?: ClaudeTask | null): string {
+  const responseTask = task as ResponseTimeoutTask | null | undefined
+  const thresholdSeconds = responseTask?.responseTimeoutThresholdSeconds ?? 300
+  const thresholdMinutes = Math.max(1, Math.round(thresholdSeconds / 60))
+  return `超过 ${thresholdMinutes} 分钟没有收到 Worker 输出，任务未被自动中止`
 }
 
 function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] {
@@ -8685,6 +8743,27 @@ function handlePopOutTerminal() {
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
+}
+
+.conv-timeout-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  max-width: 76px;
+  padding: 0 5px;
+  border: 1px solid #f3d19e;
+  border-radius: 4px;
+  background: #fdf6ec;
+  color: #b88230;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.conv-timeout-badge .el-icon {
+  font-size: 12px;
 }
 
 .conv-more-trigger {

@@ -9,6 +9,7 @@ import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
@@ -167,6 +168,10 @@ final class UnifiedSessionTaskProjectionService {
         putIfPresent(item, "outputTokens", readProperty(task, "outputTokens"));
         putIfPresent(item, "durationMs", readProperty(task, "durationMs"));
         putIfPresent(item, "numTurns", readProperty(task, "numTurns"));
+        putIfPresent(item, "lastOutputAt", readProperty(task, "lastOutputAt"));
+        putIfPresent(item, "responseTimedOut", readProperty(task, "responseTimedOut"));
+        putIfPresent(item, "silentForSeconds", readProperty(task, "silentForSeconds"));
+        putIfPresent(item, "responseTimeoutThresholdSeconds", readProperty(task, "responseTimeoutThresholdSeconds"));
         putIfPresent(item, "source", readProperty(task, "source"));
         putIfPresent(item, "createdAt", readProperty(task, "createdAt"));
         putIfPresent(item, "updatedAt", readProperty(task, "updatedAt"));
@@ -448,6 +453,12 @@ final class UnifiedSessionTaskProjectionService {
         item.put("outputTokens", latestTask.getOutputTokens());
         item.put("durationMs", latestTask.getDurationMs());
         item.put("numTurns", latestTask.getNumTurns());
+        item.put("lastOutputAt", latestTask.getLastOutputAt());
+        item.put("responseTimedOut", TaskResponseTimeoutSupport.isResponseTimedOut(
+                latestTask.getStatus(), latestTask.getLastOutputAt(), latestTask.getCreatedAt(), LocalDateTime.now()));
+        item.put("silentForSeconds", TaskResponseTimeoutSupport.silentForSeconds(
+                latestTask.getStatus(), latestTask.getLastOutputAt(), latestTask.getCreatedAt(), LocalDateTime.now()));
+        item.put("responseTimeoutThresholdSeconds", TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS);
         item.put("source", latestTask.getSource());
         item.put("createdAt", latestTask.getCreatedAt());
         item.put("updatedAt", latestTask.getUpdatedAt());
@@ -561,6 +572,12 @@ final class UnifiedSessionTaskProjectionService {
                 .resultText(entity.getResultText())
                 .errorMessage(entity.getErrorMessage())
                 .lastAckedSeq(entity.getLastAckedSeq())
+                .lastOutputAt(entity.getLastOutputAt())
+                .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .silentForSeconds(TaskResponseTimeoutSupport.silentForSeconds(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())

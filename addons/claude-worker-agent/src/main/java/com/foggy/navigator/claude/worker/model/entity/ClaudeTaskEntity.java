@@ -131,6 +131,9 @@ public class ClaudeTaskEntity {
     @Column
     private LocalDateTime lastAliveAt;
 
+    @Column
+    private LocalDateTime lastOutputAt;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -144,6 +147,9 @@ public class ClaudeTaskEntity {
         }
         if (updatedAt == null) {
             updatedAt = LocalDateTime.now();
+        }
+        if (lastOutputAt == null) {
+            lastOutputAt = createdAt;
         }
         if (status == null) {
             status = "PENDING";

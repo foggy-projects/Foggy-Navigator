@@ -33,6 +33,7 @@ import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
@@ -764,7 +765,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 entity.setModel(model);
             }
             entity.setErrorMessage(null);
-            entity.setLastAliveAt(LocalDateTime.now());
+            LocalDateTime now = LocalDateTime.now();
+            entity.setLastAliveAt(now);
+            entity.setLastOutputAt(now);
             persistTask(entity);
             log.info("Task completed: taskId={}, model={}, costUsd={}, durationMs={}", taskId, model, costUsd, durationMs);
             publishStatusChange(entity, prev);
@@ -793,6 +796,12 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     @Transactional
     public void recordWorkerProgress(String taskId, String workerTaskId, String claudeSessionId,
                                       String model, Integer ackSeq) {
+        recordWorkerProgress(taskId, workerTaskId, claudeSessionId, model, ackSeq, false);
+    }
+
+    @Transactional
+    public void recordWorkerProgress(String taskId, String workerTaskId, String claudeSessionId,
+                                      String model, Integer ackSeq, boolean userVisibleOutput) {
         ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
         if (entity == null) {
             log.warn("recordWorkerProgress: task not found: {}", taskId);
@@ -814,7 +823,11 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             Integer current = entity.getLastAckedSeq();
             entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
         }
-        entity.setLastAliveAt(LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        entity.setLastAliveAt(now);
+        if (userVisibleOutput) {
+            entity.setLastOutputAt(now);
+        }
         persistTask(entity);
     }
 
@@ -893,7 +906,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             if (claudeSessionId != null && !claudeSessionId.isBlank()) {
                 entity.setClaudeSessionId(claudeSessionId);
             }
-            entity.setLastAliveAt(LocalDateTime.now());
+            LocalDateTime now = LocalDateTime.now();
+            entity.setLastAliveAt(now);
+            entity.setLastOutputAt(now);
             persistTask(entity);
             log.warn("Task failed: taskId={}, claudeSessionId={}, error={}", taskId, claudeSessionId, errorMessage);
             publishStatusChange(entity, prev);
@@ -909,6 +924,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String prev = entity.getStatus();
             entity.setStatus("AWAITING_PERMISSION");
+            LocalDateTime now = LocalDateTime.now();
+            entity.setLastAliveAt(now);
+            entity.setLastOutputAt(now);
             persistTask(entity);
             log.info("Task awaiting permission: taskId={}", taskId);
             publishStatusChange(entity, prev);
@@ -942,6 +960,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         String prev = entity.getStatus();
         entity.setStatus("RUNNING");
         entity.setErrorMessage(null); // 清除之前可能的错误信息
+        LocalDateTime now = LocalDateTime.now();
+        entity.setLastAliveAt(now);
+        entity.setLastOutputAt(now);
         persistTask(entity);
         log.info("Task resumed from permission: taskId={}, prev={}", taskId, prev);
         publishStatusChange(entity, prev);
@@ -2380,6 +2401,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         sessionTask.setSource(entity.getSource());
         sessionTask.setLastAckedSeq(entity.getLastAckedSeq());
         sessionTask.setLastAliveAt(entity.getLastAliveAt());
+        sessionTask.setLastOutputAt(entity.getLastOutputAt());
         sessionTask.setCreatedAt(entity.getCreatedAt());
         sessionTask.setUpdatedAt(entity.getUpdatedAt());
         sessionTask.setTaskStateJson(buildClaudeTaskStateJson(entity, sessionTask.getTaskStateJson()));
@@ -2987,6 +3009,12 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 .resultText(entity.getResultText())
                 .errorMessage(entity.getErrorMessage())
                 .lastAckedSeq(entity.getLastAckedSeq())
+                .lastOutputAt(entity.getLastOutputAt())
+                .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .silentForSeconds(TaskResponseTimeoutSupport.silentForSeconds(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
@@ -3064,6 +3092,12 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 .contextId(entity.getContextId())
                 .checkpoints(entity.getCheckpoints())
                 .lastAckedSeq(entity.getLastAckedSeq())
+                .lastOutputAt(entity.getLastOutputAt())
+                .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .silentForSeconds(TaskResponseTimeoutSupport.silentForSeconds(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
                 .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
                 .source(entity.getSource())
                 .agentTeamsConfigId(entity.getAgentTeamsConfigId())

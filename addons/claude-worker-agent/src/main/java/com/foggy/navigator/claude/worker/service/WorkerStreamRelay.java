@@ -28,6 +28,7 @@ import reactor.core.publisher.Flux;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -346,7 +347,8 @@ public class WorkerStreamRelay {
                             log.debug("Task {} mapped to worker task: {}", taskId, workerEvent.getTaskId());
                         }
                         taskService.recordWorkerProgress(taskId, workerEvent.getTaskId(),
-                                workerEvent.getSessionId(), workerEvent.getModel(), ackSeq);
+                                workerEvent.getSessionId(), workerEvent.getModel(), ackSeq,
+                                isUserVisibleOutputEvent(workerEvent));
                         try {
                             relayEvent(sessionId, taskId, workerEvent, detectedModel, detectedClaudeSessionId);
                         } catch (Exception relayEx) {
@@ -521,6 +523,35 @@ public class WorkerStreamRelay {
 
     private boolean isRecoverableTaskStatus(String status) {
         return "RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status);
+    }
+
+    private boolean isUserVisibleOutputEvent(WorkerEvent event) {
+        if (event == null || event.getType() == null) {
+            return false;
+        }
+        return switch (event.getType()) {
+            case "assistant_text", "tool_use", "tool_result", "result", "error",
+                    "permission_request", "user_question", "plan_review" -> true;
+            case "system" -> isVisibleSystemEvent(event);
+            default -> false;
+        };
+    }
+
+    private boolean isVisibleSystemEvent(WorkerEvent event) {
+        String subtype = event.getSubtype();
+        if (subtype == null || subtype.isBlank()) {
+            return event.getContent() != null && !event.getContent().isBlank();
+        }
+        String normalized = subtype.toLowerCase(Locale.ROOT);
+        if ("waiting".equals(normalized)
+                || normalized.contains("heartbeat")
+                || normalized.contains("keepalive")
+                || "sync_checkpoint".equals(normalized)) {
+            return false;
+        }
+        return "auto_compact".equals(normalized)
+                || "context_compression".equals(normalized)
+                || (event.getContent() != null && !event.getContent().isBlank());
     }
 
     private boolean isClosedAndAligned(ClaudeWorkerClient client, String workerTaskId, int ackSeq,
