@@ -198,6 +198,12 @@
           <span class="att-lightbox-close" @click="previewAttachmentIdx = -1">&times;</span>
         </div>
       </Teleport>
+      <Teleport to="body">
+        <div v-if="previewForwardAttachmentIdx >= 0 && forwardAttachments[previewForwardAttachmentIdx]?.isImage" class="att-lightbox" @click="previewForwardAttachmentIdx = -1">
+          <img :src="forwardAttachments[previewForwardAttachmentIdx]!.previewUrl" :alt="forwardAttachments[previewForwardAttachmentIdx]!.name" class="att-lightbox-img" @click.stop />
+          <span class="att-lightbox-close" @click="previewForwardAttachmentIdx = -1">&times;</span>
+        </div>
+      </Teleport>
       <!-- Directory selected: show git info + task form scoped to directory -->
       <template v-if="selectedDirectory">
         <!-- Compact directory header -->
@@ -2142,7 +2148,15 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showForwardDialog" :title="forwardDialogTitle" width="640px" @paste="forwardHandlePaste" @drop="forwardHandleDrop" @dragover="forwardHandleDragOver">
+    <el-dialog
+      v-model="showForwardDialog"
+      :title="forwardDialogTitle"
+      width="640px"
+      :close-on-click-modal="false"
+      @paste="forwardHandlePaste"
+      @drop="forwardHandleDrop"
+      @dragover="forwardHandleDragOver"
+    >
       <el-form :model="forwardForm" label-position="top">
         <el-form-item label="源回复">
           <div class="forward-source-preview">{{ forwardSourcePreview || '暂无内容' }}</div>
@@ -2179,7 +2193,7 @@
           <div v-if="forwardAttachments.length > 0" class="image-preview-strip" style="margin-top: 8px">
             <div v-for="(att, idx) in forwardAttachments" :key="idx" class="image-preview-item" :class="{ 'file-item': !att.isImage }">
               <template v-if="att.isImage">
-                <img :src="att.previewUrl" :alt="att.name" :title="att.name" />
+                <img :src="att.previewUrl" :alt="att.name" :title="att.name" @click="previewForwardAttachmentIdx = idx" />
               </template>
               <div v-else class="file-preview" :title="att.name">
                 <span class="file-icon">{{ fileIcon(att.mimeType) }}</span>
@@ -4111,6 +4125,7 @@ const showAnnotator = ref(false)
 const annotatorImageUrl = ref('')
 const annotatorImageIndex = ref(0)
 const previewAttachmentIdx = ref(-1)
+const previewForwardAttachmentIdx = ref(-1)
 
 function openAnnotator(idx: number) {
   const img = attachments.value[idx]
