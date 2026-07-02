@@ -35,6 +35,7 @@ def test_invoke_business_agent_schema_declares_child_agent_frame_contract():
     assert "skill/bundle name ends with '-agent'" in description
     assert "invoke_business_skill and continue there" in description
     assert "long-running wait" in description
+    assert "Nested Agent delegation is disabled by default" in description
     assert "Natural-language work order" in instruction_description
     assert "structured business inputs" in input_description
 
@@ -142,7 +143,7 @@ def test_tool_specs_enable_skill_discovery_when_business_skill_allowed():
     )}
 
     assert "invoke_business_skill" in names
-    assert "invoke_business_agent" in names
+    assert "invoke_business_agent" not in names
     assert "list_skill_resources" in names
     assert "read_skill_resource" in names
     assert "invoke_business_function" not in names

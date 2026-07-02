@@ -119,7 +119,7 @@ def test_execution_policy_allows_skill_discovery_when_skill_material_tool_allowe
     )
 
     assert policy.allows_tool("invoke_business_skill") is True
-    assert policy.allows_tool("invoke_business_agent") is True
+    assert policy.allows_tool("invoke_business_agent") is False
     assert policy.allows_tool("list_skill_resources") is True
     assert policy.allows_tool("read_skill_resource") is True
     assert policy.allows_tool("invoke_business_function") is False

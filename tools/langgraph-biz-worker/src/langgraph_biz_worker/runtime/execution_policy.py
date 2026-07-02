@@ -121,8 +121,6 @@ class ExecutionPolicy:
     def allows_tool(self, tool_name: str) -> bool:
         if self.allowed_tools is None:
             return True
-        if tool_name == "invoke_business_agent" and "invoke_business_skill" in self.allowed_tools:
-            return True
         if tool_name in _SKILL_DISCOVERY_TOOL_NAMES and self.allowed_tools & _SKILL_MATERIAL_TOOL_NAMES:
             return True
         return tool_name in self.allowed_tools

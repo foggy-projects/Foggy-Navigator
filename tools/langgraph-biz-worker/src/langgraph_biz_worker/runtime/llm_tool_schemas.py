@@ -108,8 +108,6 @@ def _tool_enabled(
 ) -> bool:
     if enabled_tool_names is None:
         return True
-    if name == "invoke_business_agent" and "invoke_business_skill" in enabled_tool_names:
-        return True
     if name in _SKILL_DISCOVERY_TOOL_NAMES and enabled_tool_names & _SKILL_MATERIAL_TOOL_NAMES:
         return True
     return name in enabled_tool_names or name in _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES
@@ -277,7 +275,9 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "the work truly needs an isolated loop, separate report, "
                 "long-running wait, handoff, or multi-agent delegation. Inside "
                 "the Agent frame, the Agent may load Skill materials and call "
-                "business functions."
+                "business functions. Nested Agent delegation is disabled by "
+                "default and is only available when the delegated Agent manifest "
+                "and upstream execution policy explicitly allow invoke_business_agent."
             ),
             "parameters": {
                 "type": "object",

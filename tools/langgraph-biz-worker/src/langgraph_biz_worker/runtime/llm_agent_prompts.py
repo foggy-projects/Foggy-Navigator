@@ -101,7 +101,7 @@ def _build_system_prompt(
         "普通业务领域请求默认先用 invoke_business_skill 加载 Skill 材料，并在当前 frame "
         "继续推理和调用业务函数；不要仅因为 bundle 名称包含 agent 就调用 "
         "invoke_business_agent。只有用户明确要求子 Agent/独立代理，或任务确实需要与当前 "
-        "frame 隔离的独立生命周期、独立报告、长任务等待或多层委派时，才使用 "
+        "frame 隔离的独立生命周期、独立报告、长任务等待或显式多 Agent 协作时，才使用 "
         "invoke_business_agent 打开 Agent frame。"
     )
     child_agent_contract = _build_sub_agent_base_contract_prompt(runtime_context)
@@ -157,8 +157,9 @@ def _build_sub_agent_base_contract_prompt(runtime_context: dict[str, Any] | None
         "如需业务 Skill，先在当前 Agent frame 内调用 list_skill_resources 查看可见技能，"
         "再调用 read_skill_resource 或 invoke_business_skill 读取 Skill 材料。"
         "invoke_business_skill 只在当前 Agent frame 内加载材料，不会创建新的 frame。"
-        "只有任务确实需要更深层独立生命周期，或用户明确要求子 Agent 时，才继续调用 "
-        "invoke_business_agent。完成、等待用户补充或交还父级时，优先调用 "
+        "默认不要再创建子 Agent；只有当前 Agent manifest 与上游执行策略显式授权 "
+        "invoke_business_agent，且任务确实需要更深层独立生命周期或用户明确要求时，才继续委派。"
+        "完成、等待用户补充或交还父级时，优先调用 "
         "submit_frame_result 或 handoff_to_parent 提交结构化状态、refs 和退出意图。"
     )
 

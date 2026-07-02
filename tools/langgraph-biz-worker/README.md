@@ -7,6 +7,7 @@
 - 受控工具调用与结构化结果
 - Skill 按需加载并进入当前 frame 的 tool protocol
 - 显式 Agent frame 的独立生命周期、`submit_frame_result` 结构化完成与 handoff
+- Codex 风格的委派边界：Root 可显式委派子 Agent，子 Agent 默认不可继续创建子 Agent，除非 manifest 与执行策略显式授权
 - 审批中断与恢复（Phase 6）
 - 可审计的执行痕迹
 

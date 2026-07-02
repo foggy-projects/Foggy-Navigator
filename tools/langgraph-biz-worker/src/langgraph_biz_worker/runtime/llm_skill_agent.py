@@ -1503,12 +1503,12 @@ def _generic_agent_manifest(frame: Any) -> SkillManifest:
             "如需业务 Skill，先调用 list_skill_resources 查看当前 ClientApp 可见技能，"
             "再调用 read_skill_resource 或 invoke_business_skill 读取 Skill 材料。"
             "invoke_business_skill 只在当前 Agent frame 内加载材料，不会创建新的 frame。"
-            "可以调用业务函数或其他已授权工具。"
+            "可以调用业务函数或其他已授权工具。默认不要再创建子 Agent；"
+            "只有当前 Agent manifest 和上游执行策略显式授权 invoke_business_agent 时才可继续委派。"
             "完成、等待用户补充或需要交还父级时，使用 frame 完成/交还工具提交受控结果。"
         ),
         allowed_tools=[
             "invoke_business_skill",
-            "invoke_business_agent",
             "invoke_business_function",
             "register_evidence_attachment",
             "analyze_attachment",
@@ -1524,9 +1524,8 @@ def _generic_agent_manifest(frame: Any) -> SkillManifest:
 
 def _agent_frame_manifest(manifest: SkillManifest) -> SkillManifest:
     allowed = list(manifest.allowed_tools or [])
-    for tool_name in ("invoke_business_skill", "invoke_business_agent"):
-        if tool_name not in allowed:
-            allowed.append(tool_name)
+    if "invoke_business_skill" not in allowed:
+        allowed.append("invoke_business_skill")
     return manifest.model_copy(update={"allowed_tools": allowed})
 
 

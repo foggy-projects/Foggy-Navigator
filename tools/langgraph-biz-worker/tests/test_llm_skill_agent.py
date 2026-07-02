@@ -14,7 +14,12 @@ from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.account_file_tools import FileToolError
 from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_state_for_tests
 from langgraph_biz_worker.runtime import command_tool
-from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent, _root_manifest_with_bound_skill
+from langgraph_biz_worker.runtime.llm_skill_agent import (
+    LlmSkillAgent,
+    _agent_frame_manifest,
+    _generic_agent_manifest,
+    _root_manifest_with_bound_skill,
+)
 from langgraph_biz_worker.runtime.context_memory import PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY
 from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
@@ -85,6 +90,48 @@ def test_root_manifest_merges_bound_agent_skill_material():
     assert "Use local order workflow." in merged.markdown_body
     assert "invoke_business_skill" in merged.allowed_tools
     assert "invoke_business_function" in merged.allowed_tools
+
+
+def test_generic_agent_manifest_does_not_allow_nested_agent_by_default():
+    runtime = SkillRuntime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_child_default_tools_001",
+        frame_kind=FrameKind.AGENT,
+        agent_id="child-agent",
+        frame_name="child-agent",
+    )
+
+    manifest = _generic_agent_manifest(runtime.get_frame(frame_id))
+
+    assert "invoke_business_skill" in manifest.allowed_tools
+    assert "invoke_business_agent" not in manifest.allowed_tools
+    assert "默认不要再创建子 Agent" in manifest.markdown_body
+
+
+def test_agent_frame_manifest_requires_explicit_nested_agent_tool():
+    manifest = SkillManifest(
+        id="agent-with-functions",
+        name="agent-with-functions",
+        allowed_tools=["invoke_business_function"],
+    )
+
+    merged = _agent_frame_manifest(manifest)
+
+    assert "invoke_business_skill" in merged.allowed_tools
+    assert "invoke_business_agent" not in merged.allowed_tools
+
+
+def test_agent_frame_manifest_preserves_explicit_nested_agent_tool():
+    manifest = SkillManifest(
+        id="recursive-agent",
+        name="recursive-agent",
+        allowed_tools=["invoke_business_agent"],
+    )
+
+    merged = _agent_frame_manifest(manifest)
+
+    assert "invoke_business_skill" in merged.allowed_tools
+    assert "invoke_business_agent" in merged.allowed_tools
 
 
 class TransientTimeoutModel:

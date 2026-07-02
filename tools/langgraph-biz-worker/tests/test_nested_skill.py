@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from langgraph_biz_worker.models import FrameStatus
+from langgraph_biz_worker.models import FrameKind, FrameStatus
 from langgraph_biz_worker.runtime.skill_runtime import (
     MaxNestingDepthExceeded,
     SkillRuntime,
@@ -134,6 +134,43 @@ class TestDepthProtection:
     def test_default_limit_is_5(self):
         runtime = SkillRuntime()
         assert runtime.max_nesting_depth == 5
+
+
+class TestAgentDepthProtection:
+    def test_default_agent_depth_allows_direct_child_and_blocks_nested_agent(self):
+        runtime = SkillRuntime()
+        root = runtime.invoke_skill("t1", "root_skill")
+        child_agent = runtime.invoke_agent(root, agent_id="child_agent")
+
+        assert runtime.max_agent_nesting_depth == 1
+        assert runtime.get_agent_nesting_depth(root) == 0
+        assert runtime.get_agent_nesting_depth(child_agent) == 1
+        assert runtime.get_frame(child_agent).frame_kind == FrameKind.AGENT
+
+        with pytest.raises(MaxNestingDepthExceeded) as exc_info:
+            runtime.invoke_agent(child_agent, agent_id="nested_agent")
+
+        assert exc_info.value.depth == 1
+        assert exc_info.value.max_depth == 1
+
+    def test_root_agent_frame_starts_at_agent_depth_zero(self):
+        runtime = SkillRuntime()
+        root_agent = runtime.invoke_skill("t1", frame_kind=FrameKind.AGENT, agent_id="root_agent")
+        child_agent = runtime.invoke_agent(root_agent, agent_id="child_agent")
+
+        assert runtime.get_agent_nesting_depth(root_agent) == 0
+        assert runtime.get_agent_nesting_depth(child_agent) == 1
+
+        with pytest.raises(MaxNestingDepthExceeded):
+            runtime.invoke_agent(child_agent, agent_id="nested_agent")
+
+    def test_agent_depth_limit_can_be_raised_explicitly(self):
+        runtime = SkillRuntime(max_agent_nesting_depth=2)
+        root = runtime.invoke_skill("t1", "root_skill")
+        child_agent = runtime.invoke_agent(root, agent_id="child_agent")
+        nested_agent = runtime.invoke_agent(child_agent, agent_id="nested_agent")
+
+        assert runtime.get_agent_nesting_depth(nested_agent) == 2
 
 
 class TestMultiChildSequence:
