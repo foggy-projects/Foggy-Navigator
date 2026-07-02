@@ -50,6 +50,11 @@ class TestSettingsDefaults:
         s = Settings(_env_file=None)
         assert s.enable_command is True
 
+    def test_default_max_agent_nesting_depth(self):
+        from langgraph_biz_worker.config import Settings
+        s = Settings(_env_file=None)
+        assert s.max_agent_nesting_depth == 1
+
 
 class TestSettingsEnvOverride:
     def test_port_from_env(self):
@@ -100,6 +105,12 @@ class TestSettingsEnvOverride:
         with patch.dict(os.environ, {"BIZ_WORKER_ENABLE_COMMAND": "false"}):
             s = Settings(_env_file=None)
             assert s.enable_command is False
+
+    def test_max_agent_nesting_depth_from_env(self):
+        from langgraph_biz_worker.config import Settings
+        with patch.dict(os.environ, {"BIZ_WORKER_MAX_AGENT_NESTING_DEPTH": "2"}):
+            s = Settings(_env_file=None)
+            assert s.max_agent_nesting_depth == 2
 
     def test_biz_worker_env_file_selects_env_file(self, tmp_path):
         env_file = tmp_path / "real.env"

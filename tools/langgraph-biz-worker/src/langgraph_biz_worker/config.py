@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     standalone_tool_modules: str = ""
     standalone_model_provider: str = ""
 
+    # Agent delegation. Root starts at delegated agent depth 0, so the default
+    # allows one direct child Agent and blocks child-Agent nesting.
+    max_agent_nesting_depth: int = 1
+
     # LLM execution — leave llm_provider empty to disable (use rule-based fallback)
     llm_provider: str = ""          # "anthropic" or "openai"
     llm_api_key: str = ""

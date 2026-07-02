@@ -64,6 +64,20 @@ def _install_isolated_runtime(monkeypatch, tmp_path) -> SkillRuntime:
     return runtime
 
 
+def test_build_skill_runtime_uses_configured_agent_depth(monkeypatch, tmp_path):
+    registry = SkillRegistry(skills_root=tmp_path / "skills", data_root=tmp_path / "data")
+    journal = FileFrameJournal(tmp_path / "data")
+    monkeypatch.setattr(root_graph_module.settings, "max_agent_nesting_depth", 2)
+
+    runtime = root_graph_module._build_skill_runtime(
+        FrameStore(),
+        registry,
+        journal,
+    )
+
+    assert runtime.max_agent_nesting_depth == 2
+
+
 def test_llm_skill_max_iterations_uses_runtime_context(monkeypatch):
     monkeypatch.setattr(root_graph_module.settings, "llm_skill_max_iterations", 6)
     state = _state("task_runtime_max_turns_001")

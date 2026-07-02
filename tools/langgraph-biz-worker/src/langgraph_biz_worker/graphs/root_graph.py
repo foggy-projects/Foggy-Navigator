@@ -76,7 +76,21 @@ _skill_registry = SkillRegistry(data_root=Path(_data_root))
 _skill_registry.load()
 _journal = FileFrameJournal(_data_root)
 
-_runtime = SkillRuntime(frame_store=_frame_store, skill_registry=_skill_registry, journal=_journal)
+
+def _build_skill_runtime(
+    frame_store: FrameStore,
+    skill_registry: SkillRegistry,
+    journal: FileFrameJournal,
+) -> SkillRuntime:
+    return SkillRuntime(
+        frame_store=frame_store,
+        skill_registry=skill_registry,
+        journal=journal,
+        max_agent_nesting_depth=settings.max_agent_nesting_depth,
+    )
+
+
+_runtime = _build_skill_runtime(_frame_store, _skill_registry, _journal)
 
 ROOT_SKILL_ID = "system.root"
 ROOT_FRAME_OPEN_CONTENT = "Opening conversation root frame"

@@ -79,6 +79,7 @@ curl http://localhost:3061/health
 | `BIZ_WORKER_WORKER_TOKEN` | （空） | Bearer Token，空=开发模式免认证 |
 | `BIZ_WORKER_WORKER_NAME` | （空） | Worker 显示名称 |
 | `BIZ_WORKER_MAX_CONCURRENT_TASKS` | 5 | 最大并发任务数 |
+| `BIZ_WORKER_MAX_AGENT_NESTING_DEPTH` | 1 | Agent 委派深度；默认只允许 Root 创建直接子 Agent，不允许子 Agent 再创建子 Agent |
 | `BIZ_WORKER_LLM_PROVIDER` | （空） | `openai` / `anthropic`，空=禁用 LLM |
 | `BIZ_WORKER_LLM_BASE_URL` | （空） | 自定义 LLM API 地址，可指向 `tools/mock-llm-service` |
 | `BIZ_WORKER_LLM_EXECUTE_SKILLS` | false | 启用 LLM tool-call loop 执行 Skill |
