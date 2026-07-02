@@ -15,6 +15,8 @@ public class UpdateWorkingDirectoryForm {
     private String projectName;
     private String path;
     private String agentTeamsConfig;
+    /** 可修改目录类型：STANDARD | PROJECT，null 不改 */
+    private String directoryType;
     /** 仅 PROJECT 类型可编辑 */
     private String projectTaskPrompt;
     /** 可修改归属 PROJECT */

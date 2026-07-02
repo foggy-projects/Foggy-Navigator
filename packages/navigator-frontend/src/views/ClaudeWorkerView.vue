@@ -1934,6 +1934,12 @@
         <el-form-item label="路径">
           <el-input v-model="editDirForm.path" />
         </el-form-item>
+        <el-form-item v-if="!selectedDirectory?.worktree" label="目录类型">
+          <el-radio-group v-model="editDirForm.directoryType">
+            <el-radio value="STANDARD">普通目录</el-radio>
+            <el-radio value="PROJECT">项目目录</el-radio>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="Agent Teams 配置">
           <div class="agent-teams-configs-panel">
             <div v-if="agentTeamsConfigs.length === 0" class="form-tip" style="margin-bottom: 8px">
@@ -1981,7 +1987,7 @@
             <el-button type="primary" @click="handleSaveAgentTeamsConfig">保存</el-button>
           </template>
         </el-dialog>
-        <el-form-item v-if="selectedDirectory?.directoryType === 'PROJECT'" label="项目任务 Prompt">
+        <el-form-item v-if="editDirForm.directoryType === 'PROJECT'" label="项目任务 Prompt">
           <el-input
             v-model="editDirForm.projectTaskPrompt"
             type="textarea"
@@ -1992,10 +1998,10 @@
             项目编排器使用此 prompt 将任务分解并分派给子目录。
           </div>
         </el-form-item>
-        <el-form-item v-if="selectedDirectory?.directoryType === 'STANDARD' && projectDirectoriesForCurrentWorker.length > 0" label="所属项目">
+        <el-form-item v-if="editDirForm.directoryType === 'STANDARD' && editableParentProjectDirectories.length > 0" label="所属项目">
           <el-select v-model="editDirForm.parentProjectId" clearable placeholder="(独立目录)" style="width: 100%">
             <el-option
-              v-for="proj in projectDirectoriesForCurrentWorker"
+              v-for="proj in editableParentProjectDirectories"
               :key="proj.directoryId"
               :label="proj.projectName"
               :value="proj.directoryId"
@@ -3635,6 +3641,7 @@ const addDirForm = ref({
 const editDirForm = ref({
   projectName: '',
   path: '',
+  directoryType: 'STANDARD' as 'STANDARD' | 'PROJECT',
   agentTeamsConfig: '',
   projectTaskPrompt: '',
   parentProjectId: '' as string,
@@ -4571,6 +4578,12 @@ const projectDirectoriesForCurrentWorker = computed(() => {
   return projectDirectoriesForWorker(selectedWorkerId.value)
 })
 
+const editableParentProjectDirectories = computed(() => {
+  return projectDirectoriesForCurrentWorker.value.filter(
+    (dir) => dir.directoryId !== selectedDirectoryId.value,
+  )
+})
+
 function toggleProjectExpand(projectId: string) {
   if (expandedProjectIds.has(projectId)) {
     expandedProjectIds.delete(projectId)
@@ -5184,15 +5197,17 @@ async function handleEditDirectory() {
   if (!selectedDirectoryId.value) return
   saving.value = true
   try {
+    const previousDirectoryType = selectedDirectory.value?.directoryType
     const form: Parameters<typeof dirApi.updateDirectory>[1] = {
       projectName: editDirForm.value.projectName,
       path: editDirForm.value.path,
+      directoryType: editDirForm.value.directoryType,
       agentTeamsConfig: editDirForm.value.agentTeamsConfig,
     }
-    if (selectedDirectory.value?.directoryType === 'PROJECT') {
+    if (editDirForm.value.directoryType === 'PROJECT') {
       form.projectTaskPrompt = editDirForm.value.projectTaskPrompt
     }
-    if (selectedDirectory.value?.directoryType === 'STANDARD') {
+    if (editDirForm.value.directoryType === 'STANDARD') {
       form.parentProjectId = editDirForm.value.parentProjectId || ''
     }
     // Platform model config
@@ -5212,6 +5227,12 @@ async function handleEditDirectory() {
       (d) => d.directoryId === selectedDirectoryId.value,
     )
     if (idx >= 0) workerState.directories.value[idx] = updated
+    if (previousDirectoryType === 'PROJECT' && updated.directoryType !== 'PROJECT') {
+      workerState.directories.value = workerState.directories.value.map((dir) => (
+        dir.parentProjectId === updated.directoryId ? { ...dir, parentProjectId: undefined } : dir
+      ))
+      expandedProjectIds.delete(updated.directoryId)
+    }
     showEditDirectoryDialog.value = false
     ElMessage.success('更新成功')
   } catch {
@@ -7525,6 +7546,7 @@ watch(showEditDirectoryDialog, (val) => {
     editDirForm.value = {
       projectName: selectedDirectory.value.projectName,
       path: selectedDirectory.value.path,
+      directoryType: selectedDirectory.value.directoryType || 'STANDARD',
       agentTeamsConfig: selectedDirectory.value.agentTeamsConfig || '',
       projectTaskPrompt: selectedDirectory.value.projectTaskPrompt || '',
       parentProjectId: selectedDirectory.value.parentProjectId || '',
