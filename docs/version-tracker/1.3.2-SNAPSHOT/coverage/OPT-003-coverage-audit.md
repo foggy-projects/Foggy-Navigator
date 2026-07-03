@@ -33,18 +33,22 @@ This audit maps OPT-003 acceptance requirements to automated tests and live smok
 | MCP stdio works with Codex Content-Length framing | critical | yes | no | yes | no | yes | `navigator-business-mcp.test.ts`; live MCP debug log includes `tools/call` | covered |
 | BusinessFunction list/schema/invoke and tool-message audit | critical | yes | no | yes | no | yes | Worker log and MCP debug log for task `20260630-b499`; backend tool-message log | covered |
 | Task-scoped token hygiene | critical | yes | no | yes | no | yes | No token in scoped config, worker log or MCP debug log; backend logs only task/session ids | covered |
-| Context continuation positive and directory conflict negative | major | yes | no | yes | no | yes | Prior live tasks and `TaskDispatchFacadeTest` route guard | covered |
+| Context continuation positive and provider/directory conflict negative | major | yes | no | yes | no | yes | Prior live tasks and `TaskDispatchFacadeTest` route guard | covered |
+| Context-bound CodexBiz scoped-home replay and conflict guard | major | yes | no | no | no | yes | `TaskDispatchFacadeTest`; `CodexTaskServiceTest`; live tasks `20260630-d39b` and `20260630-00d8`; scoped-home conflict negative | covered |
 | `TaskEvidence.structuredOutput` auto-lifts OPEN_ARTIFACT | major | yes | no | no | no | yes | `OpenApiControllerMessageMappingTest`; live task `20260630-af4c` evidence reports `structuredOutput.available=true`, `source=message_content` | covered |
 | SIM/TMS consumer-specific smoke | major | no | no | no | no | no | Protocol handed off; consumer repos must record their own evidence | partially-covered |
 
 ## Evidence Summary
 
 - Java targeted tests previously passed: `UpstreamCliTest`, `TaskDispatchFacadeTest`.
+- Java targeted scoped-home replay tests passed on 2026-06-30: `mvn test -pl session-module,addons/codex-worker-agent -am "-Dtest=TaskDispatchFacadeTest,CodexTaskServiceTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`.
 - Java OpenAPI evidence regression passed on 2026-06-30: `mvn -q -am -pl addons/claude-worker-agent "-Dtest=OpenApiControllerMessageMappingTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`.
 - Worker tests passed on 2026-06-30: `npm test -- tests/navigator-business-mcp.test.ts tests/sdk-wrapper.test.ts`; the script ran the full Worker suite, 97 tests passed.
 - Worker typecheck passed: `npm run typecheck`.
 - Live submit smoke passed: task `20260630-b499` completed with marker `codex-biz-smoke-20260630-134920`.
 - Live structured output lift passed: task `20260630-af4c` completed with marker `codex-biz-smoke-20260630-continue-143306`; evidence re-read after service restart reported `structuredOutput.available=true`, `source=message_content`, `value.type=OPEN_ARTIFACT`.
+- Live strict context-only continuation passed: task `20260630-d39b` created context `bctx_20260630_96_960f31e76ab94c2f94c453d9b9fa6be8` with CodexBiz scoped-home; task `20260630-00d8` continued using only `contextId` plus auth/message and resolved back to providerType `codex-biz-worker`, workerBackend `OPENAI_CODEX`.
+- Live conflict checks passed: same context rejected conflicting providerType and conflicting `privateAccountId` with HTTP 400 `CONTEXT_WORKER_MISMATCH`.
 - MCP/WorkerGateway evidence passed: list/schema/invoke/tool-message all completed with HTTP 200.
 
 ## Gaps

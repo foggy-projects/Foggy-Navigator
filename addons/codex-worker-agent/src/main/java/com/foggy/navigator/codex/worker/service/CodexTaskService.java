@@ -226,6 +226,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         entity.setResolvedAgentId(effectiveAgentId);
         entity.setContextId(form.getContextId());
         entity.setProviderType(effectiveProviderType);
+        if (isCodexBizProvider(effectiveProviderType)) {
+            entity.setCodexHomeKey(form.getCodexHomeKey());
+            entity.setPrivateAccountId(firstNonBlank(form.getPrivateAccountId(), form.getCodexHomeKey()));
+        }
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setModel(effectiveModelResolution.model());
@@ -985,11 +989,17 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         session.setLatestModel(firstNonBlank(entity.getModel(), session.getLatestModel()));
         session.setLastActivityAt(firstNonNull(entity.getUpdatedAt(), entity.getLastAliveAt(), LocalDateTime.now()));
         session.setInteractionState(deriveInteractionState(entity.getStatus()));
-        session.setProviderStateJson(ProviderStateCodec.mergeSessionValue(
+        Map<String, Object> providerStateValues = new LinkedHashMap<>();
+        putIfNotBlank(providerStateValues, ProviderStateCodec.FIELD_CODEX_THREAD_ID, entity.getCodexThreadId());
+        if (isCodexBizProvider(providerType)) {
+            putIfNotBlank(providerStateValues, ProviderStateCodec.FIELD_CODEX_HOME_KEY, entity.getCodexHomeKey());
+            putIfNotBlank(providerStateValues, ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID,
+                    firstNonBlank(entity.getPrivateAccountId(), entity.getCodexHomeKey()));
+        }
+        session.setProviderStateJson(ProviderStateCodec.mergeSessionValues(
                 session.getProviderStateJson(),
                 providerType,
-                ProviderStateCodec.FIELD_CODEX_THREAD_ID,
-                entity.getCodexThreadId()));
+                providerStateValues));
         sessionEntityRepository.save(session);
     }
 

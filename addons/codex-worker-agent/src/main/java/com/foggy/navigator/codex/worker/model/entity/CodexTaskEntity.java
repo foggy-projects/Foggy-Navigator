@@ -58,6 +58,14 @@ public class CodexTaskEntity {
     @Transient
     private String providerType;
 
+    /** CodexBiz scoped CODEX_HOME logical key（不持久化到 codex_tasks，写入 SessionEntity.providerStateJson）。 */
+    @Transient
+    private String codexHomeKey;
+
+    /** CodexBiz upstream account alias（不持久化到 codex_tasks，写入 SessionEntity.providerStateJson）。 */
+    @Transient
+    private String privateAccountId;
+
     @Column(columnDefinition = "TEXT")
     private String prompt;
 

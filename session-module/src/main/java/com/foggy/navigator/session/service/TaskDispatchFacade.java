@@ -11,6 +11,7 @@ import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
@@ -1071,6 +1072,8 @@ public class TaskDispatchFacade {
                     "CONTEXT_WORKER_MISMATCH: directoryId " + requestedDirectoryId
                             + " conflicts with context/session-bound directory " + boundDirectoryId);
         }
+
+        validateContextScopedHomeCompatibility(request, session);
     }
 
     private void fillFromBoundSession(TaskDispatchRequest request, SessionEntity session) {
@@ -1083,6 +1086,7 @@ public class TaskDispatchFacade {
         if (trimToNull(request.getDirectoryId()) == null) {
             request.setDirectoryId(trimToNull(session.getCurrentDirectoryId()));
         }
+        fillCodexBizScopedHomeFromBoundSession(request, session);
     }
 
     private void persistContextBinding(DispatchTaskDTO dto,
@@ -1133,7 +1137,147 @@ public class TaskDispatchFacade {
         if (request.getContextAlias() != null && !request.getContextAlias().isBlank()) {
             entity.setContextAlias(request.getContextAlias().trim());
         }
+        persistCodexBizScopedHomeBinding(sessionId, resolvedProviderType, request);
         agentConversationContextRepository.save(entity);
+    }
+
+    private void validateContextScopedHomeCompatibility(TaskDispatchRequest request, SessionEntity session) {
+        if (!isCodexBizProvider(firstNonBlank(session.getProviderType(), request.getProviderType()))) {
+            return;
+        }
+        String boundScopedHome = boundScopedHome(session);
+        if (boundScopedHome == null) {
+            return;
+        }
+        ScopedHomeSelection requested = requestScopedHomeSelection(request);
+        if (requested.hasScopedHome()) {
+            if (!boundScopedHome.equals(requested.scopedHome())) {
+                throw new IllegalArgumentException(
+                        "CONTEXT_WORKER_MISMATCH: " + requested.fieldName() + " " + printable(requested.scopedHome())
+                                + " conflicts with context/session-bound scoped home " + boundScopedHome);
+            }
+        }
+    }
+
+    private void fillCodexBizScopedHomeFromBoundSession(TaskDispatchRequest request, SessionEntity session) {
+        if (!isCodexBizProvider(firstNonBlank(session.getProviderType(), request.getProviderType()))
+                || requestScopedHomeSelection(request).hasScopedHome()) {
+            return;
+        }
+
+        String boundScopedHome = boundScopedHome(session);
+        if (boundScopedHome == null) {
+            return;
+        }
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (request.getMetadata() != null) {
+            metadata.putAll(request.getMetadata());
+        }
+        metadata.put(ProviderStateCodec.FIELD_CODEX_HOME_KEY, boundScopedHome);
+        metadata.put(ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID,
+                firstNonBlank(readProviderState(session, ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID), boundScopedHome));
+        request.setMetadata(metadata);
+    }
+
+    private void persistCodexBizScopedHomeBinding(String sessionId, String providerType, TaskDispatchRequest request) {
+        if (!isCodexBizProvider(providerType)) {
+            return;
+        }
+        ScopedHomeSelection requested = requestScopedHomeSelection(request);
+        if (!requested.hasScopedHome()) {
+            return;
+        }
+        sessionRepository.findById(sessionId).ifPresent(session -> {
+            String boundScopedHome = boundScopedHome(session);
+            if (boundScopedHome != null && !boundScopedHome.equals(requested.scopedHome())) {
+                throw new IllegalArgumentException(
+                        "CONTEXT_WORKER_MISMATCH: " + requested.fieldName() + " " + printable(requested.scopedHome())
+                                + " conflicts with context/session-bound scoped home " + boundScopedHome);
+            }
+            String effectiveScopedHome = requested.scopedHome();
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put(ProviderStateCodec.FIELD_CODEX_HOME_KEY, effectiveScopedHome);
+            values.put(ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID,
+                    firstNonBlank(requested.privateAccountId(), effectiveScopedHome));
+            session.setProviderStateJson(ProviderStateCodec.mergeSessionValues(
+                    session.getProviderStateJson(),
+                    ProviderRouteRegistry.PROVIDER_CODEX_BIZ_WORKER,
+                    values));
+            sessionRepository.save(session);
+        });
+    }
+
+    private boolean isCodexBizProvider(String providerType) {
+        return ProviderRouteRegistry.PROVIDER_CODEX_BIZ_WORKER.equals(trimToNull(providerType));
+    }
+
+    private String boundScopedHome(SessionEntity session) {
+        return firstNonBlank(
+                readProviderState(session, ProviderStateCodec.FIELD_CODEX_HOME_KEY),
+                readProviderState(session, ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID));
+    }
+
+    private String readProviderState(SessionEntity session, String fieldName) {
+        if (session == null) {
+            return null;
+        }
+        return trimToNull(ProviderStateCodec.readStringOrNull(session.getProviderStateJson(), fieldName));
+    }
+
+    private ScopedHomeSelection requestScopedHomeSelection(TaskDispatchRequest request) {
+        if (request == null || request.getMetadata() == null || request.getMetadata().isEmpty()) {
+            return ScopedHomeSelection.empty();
+        }
+        ScopedHomeValue codexHome = firstMetadataValue(
+                request.getMetadata(),
+                ProviderStateCodec.FIELD_CODEX_HOME_KEY,
+                "codex_home_key");
+        ScopedHomeValue privateAccount = firstMetadataValue(
+                request.getMetadata(),
+                ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID,
+                "private_account_id");
+        ScopedHomeValue effective = codexHome != null ? codexHome : privateAccount;
+        if (effective == null) {
+            return ScopedHomeSelection.empty();
+        }
+        return new ScopedHomeSelection(
+                effective.fieldName(),
+                effective.value(),
+                codexHome != null ? codexHome.value() : null,
+                privateAccount != null ? privateAccount.value() : null);
+    }
+
+    private ScopedHomeValue firstMetadataValue(Map<String, Object> metadata, String... fieldNames) {
+        for (String fieldName : fieldNames) {
+            Object raw = metadata.get(fieldName);
+            if (raw instanceof String text) {
+                String normalized = trimToNull(text);
+                if (normalized != null) {
+                    return new ScopedHomeValue(fieldName, normalized);
+                }
+            }
+        }
+        return null;
+    }
+
+    private record ScopedHomeValue(String fieldName, String value) {}
+
+    private record ScopedHomeSelection(String fieldName,
+                                       String scopedHome,
+                                       String codexHomeKey,
+                                       String privateAccountId) {
+        private static ScopedHomeSelection empty() {
+            return new ScopedHomeSelection(null, null, null, null);
+        }
+
+        private boolean hasScopedHome() {
+            return scopedHome != null;
+        }
+    }
+
+    private String printable(String value) {
+        return "'" + value + "'";
     }
 
     private String trimToNull(String value) {

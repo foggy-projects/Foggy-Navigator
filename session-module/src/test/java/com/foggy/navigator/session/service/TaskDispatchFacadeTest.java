@@ -363,6 +363,73 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_directCodexBizPersistsScopedHomeBindingInSessionState() {
+        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(codexProvider, codexBizProvider));
+        ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .providerType("codex-biz-worker")
+                .workerId("worker-1")
+                .prompt("run actor task")
+                .modelConfigId("cfg-codex")
+                .metadata(Map.of(
+                        "codexHomeKey", "tenant/world-sim/scenario-1/home-1",
+                        "privateAccountId", "tenant/world-sim/scenario-1/actor-1"))
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("WORLD_SIM")
+                .build();
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("OPENAI_CODEX");
+
+        DispatchTaskDTO directTask = DispatchTaskDTO.builder()
+                .taskId("task-codex-biz-1")
+                .contextId("ctx-codex-biz-new")
+                .sessionId("session-codex-biz-new")
+                .providerType("codex-biz-worker")
+                .workerId("worker-1")
+                .build();
+
+        SessionEntity session = new SessionEntity();
+        session.setId("session-codex-biz-new");
+
+        when(codexProvider.getProviderType()).thenReturn("codex-worker");
+        when(codexBizProvider.getProviderType()).thenReturn("codex-biz-worker");
+        when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(modelConfig));
+        when(codexBizProvider.createTaskDirect(any(), eq("user-1"), eq("tenant-1"))).thenReturn(directTask);
+        when(agentConversationContextRepository.findById("ctx-codex-biz-new")).thenReturn(Optional.empty());
+        when(sessionRepository.findById("session-codex-biz-new")).thenReturn(Optional.of(session));
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("task-codex-biz-1", result.getTaskId());
+        verify(codexBizProvider).createTaskDirect(
+                argThat(params -> "tenant/world-sim/scenario-1/home-1".equals(params.get("codexHomeKey"))
+                        && "tenant/world-sim/scenario-1/actor-1".equals(params.get("privateAccountId"))),
+                eq("user-1"),
+                eq("tenant-1"));
+        verify(sessionRepository).save(argThat(saved -> {
+            Map<String, Object> state = ProviderStateCodec.parseObject(saved.getProviderStateJson());
+            return "session-codex-biz-new".equals(saved.getId())
+                    && "tenant/world-sim/scenario-1/home-1".equals(
+                    state.get(ProviderStateCodec.FIELD_CODEX_HOME_KEY))
+                    && "tenant/world-sim/scenario-1/actor-1".equals(
+                    state.get(ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID));
+        }));
+        verify(agentConversationContextRepository).save(argThat(saved ->
+                "ctx-codex-biz-new".equals(saved.getContextId())
+                        && "session-codex-biz-new".equals(saved.getNavigatorSessionId())
+                        && "codex-biz-worker".equals(saved.getAgentType())));
+        verify(codexProvider, never()).createTaskDirect(any(), anyString(), anyString());
+        verifyNoInteractions(agentResolver, bindingService, agent);
+    }
+
+    @Test
     void createTask_usesExplicitCodexBizProviderEvenWhenLogicalAgentIdIsPresent() {
         TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
@@ -1818,7 +1885,6 @@ class TaskDispatchFacadeTest {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .contextId("ctx-codex-biz-1")
                 .prompt("continue actor task")
-                .metadata(Map.of("codexHomeKey", "tenant/world-sim/scenario-1/actor-1"))
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")
@@ -1840,6 +1906,12 @@ class TaskDispatchFacadeTest {
         session.setProviderType("codex-biz-worker");
         session.setCurrentWorkerId("worker-1");
         session.setCurrentDirectoryId("dir-1");
+        session.setProviderStateJson(ProviderStateCodec.mergeSessionValues(
+                null,
+                "codex-biz-worker",
+                Map.of(
+                        ProviderStateCodec.FIELD_CODEX_HOME_KEY, "tenant/world-sim/scenario-1/home-1",
+                        ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID, "tenant/world-sim/scenario-1/actor-1")));
 
         DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
                 .taskId("task-codex-biz-context")
@@ -1866,7 +1938,8 @@ class TaskDispatchFacadeTest {
                         && "worker-1".equals(params.get("workerId"))
                         && "dir-1".equals(params.get("directoryId"))
                         && "ctx-codex-biz-1".equals(params.get("contextId"))
-                        && "tenant/world-sim/scenario-1/actor-1".equals(params.get("codexHomeKey"))));
+                        && "tenant/world-sim/scenario-1/home-1".equals(params.get("codexHomeKey"))
+                        && "tenant/world-sim/scenario-1/actor-1".equals(params.get("privateAccountId"))));
         verify(codexProvider, never()).resumeTask(anyString(), anyString(), any());
         verifyNoInteractions(agentResolver);
     }
@@ -1907,6 +1980,54 @@ class TaskDispatchFacadeTest {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
                 () -> facade.createTask(request, context));
         assertTrue(error.getMessage().contains("CONTEXT_WORKER_MISMATCH"));
+        verify(codexBizProvider, never()).resumeTask(anyString(), anyString(), any());
+        verify(codexProvider, never()).resumeTask(anyString(), anyString(), any());
+        verifyNoInteractions(agentResolver);
+    }
+
+    @Test
+    void createTask_withKnownContextIdRejectsConflictingCodexBizScopedHome() {
+        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(codexProvider, codexBizProvider));
+        ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextId("ctx-codex-biz-1")
+                .prompt("continue actor task")
+                .metadata(Map.of("privateAccountId", "tenant/world-sim/scenario-1/actor-other"))
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("WORLD_SIM")
+                .build();
+
+        AgentConversationContextEntity boundContext = new AgentConversationContextEntity();
+        boundContext.setContextId("ctx-codex-biz-1");
+        boundContext.setUserId("user-1");
+        boundContext.setTargetAgentId("world-sim-agent");
+        boundContext.setAgentType("codex-biz-worker");
+        boundContext.setNavigatorSessionId("session-codex-biz-bound");
+
+        SessionEntity session = new SessionEntity();
+        session.setId("session-codex-biz-bound");
+        session.setProviderType("codex-biz-worker");
+        session.setProviderStateJson(ProviderStateCodec.mergeSessionValues(
+                null,
+                "codex-biz-worker",
+                Map.of(
+                        ProviderStateCodec.FIELD_CODEX_HOME_KEY, "tenant/world-sim/scenario-1/home-1",
+                        ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID, "tenant/world-sim/scenario-1/actor-1")));
+
+        when(agentConversationContextRepository.findByContextIdAndUserId("ctx-codex-biz-1", "user-1"))
+                .thenReturn(Optional.of(boundContext));
+        when(sessionRepository.findById("session-codex-biz-bound")).thenReturn(Optional.of(session));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> facade.createTask(request, context));
+        assertTrue(error.getMessage().contains("CONTEXT_WORKER_MISMATCH"));
+        assertTrue(error.getMessage().contains("privateAccountId"));
         verify(codexBizProvider, never()).resumeTask(anyString(), anyString(), any());
         verify(codexProvider, never()).resumeTask(anyString(), anyString(), any());
         verifyNoInteractions(agentResolver);

@@ -457,9 +457,16 @@ class CodexTaskServiceTest {
                         && "codex-biz-worker".equals(entity.getProviderType())
         ));
         verify(sessionEntityRepository).save(argThat((SessionEntity entity) ->
-                "session-biz-1".equals(entity.getId())
-                        && "codex-biz-worker".equals(entity.getProviderType())
-                        && "worker-1".equals(entity.getCurrentWorkerId())
+        {
+            Map<String, Object> state = ProviderStateCodec.parseObject(entity.getProviderStateJson());
+            return "session-biz-1".equals(entity.getId())
+                    && "codex-biz-worker".equals(entity.getProviderType())
+                    && "worker-1".equals(entity.getCurrentWorkerId())
+                    && "tenant/world-sim/scenario-1/actor-1".equals(
+                    state.get(ProviderStateCodec.FIELD_CODEX_HOME_KEY))
+                    && "tenant/world-sim/scenario-1/actor-1".equals(
+                    state.get(ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID));
+        }
         ));
     }
 
