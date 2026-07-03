@@ -183,20 +183,52 @@ public class BusinessFunctionRegistryService {
         requireText(tenantId, "tenantId is required");
         requireText(clientAppId, "clientAppId is required");
         requireText(functionId, "functionId is required");
-        requireText(version, "version is required");
 
         // Validate App
         clientAppService.requireActiveClientApp(tenantId, clientAppId);
 
-        // Validate Function
+        FunctionRef functionRef = normalizeFunctionRef(functionId, version);
+        Optional<BusinessFunctionRuntimeContextDTO> exact = resolveClientAppFunctionCandidate(
+                tenantId, clientAppId, functionRef.functionId(), functionRef.version());
+        if (exact.isPresent()) {
+            return exact.get();
+        }
+
+        if (StringUtils.hasText(functionRef.version())) {
+            String versionedFunctionId = functionRef.functionId() + "." + functionRef.version();
+            if (!versionedFunctionId.equals(functionRef.functionId())) {
+                Optional<BusinessFunctionRuntimeContextDTO> compatible = resolveClientAppFunctionCandidate(
+                        tenantId, clientAppId, versionedFunctionId, functionRef.version());
+                if (compatible.isPresent()) {
+                    return compatible.get();
+                }
+            }
+        }
+
+        throw new IllegalArgumentException("function not found");
+    }
+
+    private Optional<BusinessFunctionRuntimeContextDTO> resolveClientAppFunctionCandidate(
+            String tenantId,
+            String clientAppId,
+            String functionId,
+            String requestedVersion) {
         BusinessFunctionEntity function = functionRepository.findByTenantIdAndFunctionId(tenantId, functionId)
-                .orElseThrow(() -> new IllegalArgumentException("function not found"));
+                .orElse(null);
+        if (function == null) {
+            return Optional.empty();
+        }
         if (!STATUS_ENABLED.equals(function.getStatus())) {
             throw new IllegalStateException("function is not enabled");
         }
 
+        String resolvedVersion = StringUtils.hasText(requestedVersion) ? requestedVersion : function.getCurrentVersion();
+        if (!StringUtils.hasText(resolvedVersion)) {
+            throw new IllegalArgumentException("function version not found");
+        }
+
         // Validate Version
-        BusinessFunctionVersionEntity funcVersion = versionRepository.findByTenantIdAndFunctionIdAndVersion(tenantId, functionId, version)
+        BusinessFunctionVersionEntity funcVersion = versionRepository.findByTenantIdAndFunctionIdAndVersion(tenantId, functionId, resolvedVersion)
                 .orElseThrow(() -> new IllegalArgumentException("function version not found"));
         if (!STATUS_ENABLED.equals(funcVersion.getStatus())) {
             throw new IllegalStateException("function version is not enabled");
@@ -204,13 +236,28 @@ public class BusinessFunctionRegistryService {
 
         // Validate Grant
         ClientAppFunctionGrantEntity grant = grantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion(
-                tenantId, clientAppId, functionId, version)
+                tenantId, clientAppId, functionId, resolvedVersion)
                 .orElseThrow(() -> new IllegalArgumentException("grant not found"));
         if (!STATUS_ENABLED.equals(grant.getStatus())) {
             throw new IllegalStateException("grant is not enabled");
         }
 
-        return BusinessFunctionRuntimeContextDTO.fromEntity(function, funcVersion);
+        return Optional.of(BusinessFunctionRuntimeContextDTO.fromEntity(function, funcVersion));
+    }
+
+    private FunctionRef normalizeFunctionRef(String functionId, String version) {
+        String normalizedFunctionId = functionId.trim();
+        String normalizedVersion = StringUtils.hasText(version) ? version.trim() : null;
+        int inlineVersionIndex = normalizedFunctionId.lastIndexOf('@');
+        if (inlineVersionIndex > 0 && inlineVersionIndex < normalizedFunctionId.length() - 1) {
+            String inlineVersion = normalizedFunctionId.substring(inlineVersionIndex + 1).trim();
+            normalizedFunctionId = normalizedFunctionId.substring(0, inlineVersionIndex).trim();
+            if (!StringUtils.hasText(normalizedVersion) && StringUtils.hasText(inlineVersion)) {
+                normalizedVersion = inlineVersion;
+            }
+        }
+        requireText(normalizedFunctionId, "functionId is required");
+        return new FunctionRef(normalizedFunctionId, normalizedVersion);
     }
 
     @Transactional(readOnly = true)
@@ -260,5 +307,8 @@ public class BusinessFunctionRegistryService {
         if (!StringUtils.hasText(value)) {
             throw new IllegalArgumentException(message);
         }
+    }
+
+    private record FunctionRef(String functionId, String version) {
     }
 }

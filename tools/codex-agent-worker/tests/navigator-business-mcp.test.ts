@@ -121,10 +121,10 @@ test('callTool maps get_business_function_schema to WorkerGateway schema endpoin
   )
 })
 
-test('callTool requires schema version before calling gateway', async () => {
+test('callTool maps get_business_function_schema without version to WorkerGateway schema endpoint', async () => {
   const recorder = createFetchRecorder({ ok: true })
 
-  await assert.rejects(() => callTool({
+  await callTool({
     name: 'get_business_function_schema',
     arguments: {
       function_id: 'submit_skill_result',
@@ -133,13 +133,20 @@ test('callTool requires schema version before calling gateway', async () => {
     gatewayBaseUrl: 'http://navigator.example.com:8080',
     taskScopedToken: 'task-token',
     fetchImpl: recorder.fetchImpl,
-  }), /version must be a non-empty string/)
+  })
 
-  assert.equal(recorder.calls.length, 0)
+  assert.equal(recorder.calls.length, 1)
+  assert.equal(
+    recorder.calls[0]?.url,
+    'http://navigator.example.com:8080/internal/worker-gateway/v1/business-functions/submit_skill_result/schema'
+  )
 })
 
 test('callTool maps invoke_business_function body to WorkerGateway invoke form', async () => {
-  const recorder = createFetchSequenceRecorder([{ status: 'COMPLETED' }, { accepted: true }])
+  const recorder = createFetchSequenceRecorder([
+    { functionId: 'submit_skill_result.v1', version: 'v1', status: 'COMPLETED' },
+    { accepted: true },
+  ])
 
   await callTool({
     name: 'invoke_business_function',
@@ -172,7 +179,7 @@ test('callTool maps invoke_business_function body to WorkerGateway invoke form',
   )
   assert.deepEqual(JSON.parse(String(recorder.calls[1]?.init?.body)), {
     toolName: 'invoke_business_function',
-    functionId: 'submit_skill_result',
+    functionId: 'submit_skill_result.v1',
     status: 'COMPLETED',
   })
 })
@@ -205,27 +212,30 @@ test('callTool maps string invoke input to inputJson and reports suspended statu
   })
 })
 
-test('callTool requires invoke version and input before calling gateway', async () => {
+test('callTool allows omitted invoke version and still requires input before calling gateway', async () => {
   const recorder = createFetchRecorder({ ok: true })
 
-  await assert.rejects(() => callTool({
+  await callTool({
     name: 'invoke_business_function',
     arguments: {
       function_id: 'submit_skill_result',
+      input: { reportId: 'report-1' },
     },
   }, {
     gatewayBaseUrl: 'http://navigator.example.com:8080',
     taskScopedToken: 'task-token',
     fetchImpl: recorder.fetchImpl,
-  }), /version must be a non-empty string/)
+  })
 
-  assert.equal(recorder.calls.length, 0)
+  assert.equal(recorder.calls.length, 2)
+  assert.deepEqual(JSON.parse(String(recorder.calls[0]?.init?.body)), {
+    input: { reportId: 'report-1' },
+  })
 
   await assert.rejects(() => callTool({
     name: 'invoke_business_function',
     arguments: {
       function_id: 'submit_skill_result',
-      version: 'v1',
     },
   }, {
     gatewayBaseUrl: 'http://navigator.example.com:8080',
@@ -233,7 +243,7 @@ test('callTool requires invoke version and input before calling gateway', async 
     fetchImpl: recorder.fetchImpl,
   }), /input is required/)
 
-  assert.equal(recorder.calls.length, 0)
+  assert.equal(recorder.calls.length, 2)
 })
 
 test('handleMcpRequest returns JSON-RPC tool list and sanitized errors', async () => {

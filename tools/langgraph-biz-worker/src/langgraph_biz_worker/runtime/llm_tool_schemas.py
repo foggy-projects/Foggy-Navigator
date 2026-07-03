@@ -191,10 +191,19 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "function_id": {"type": "string"},
-                    "version": {"type": "string"},
+                    "function_id": {
+                        "type": "string",
+                        "description": (
+                            "Use the exact functionId returned by Navigator. "
+                            "Do not strip suffixes such as .v1."
+                        ),
+                    },
+                    "version": {
+                        "type": "string",
+                        "description": "Optional. May be omitted or set to the returned version.",
+                    },
                 },
-                "required": ["function_id", "version"],
+                "required": ["function_id"],
             },
         },
     },
@@ -206,12 +215,21 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "function_id": {"type": "string"},
-                    "version": {"type": "string"},
+                    "function_id": {
+                        "type": "string",
+                        "description": (
+                            "Use the exact functionId returned by Navigator. "
+                            "Do not strip suffixes such as .v1."
+                        ),
+                    },
+                    "version": {
+                        "type": "string",
+                        "description": "Optional. May be omitted or set to the returned version.",
+                    },
                     "input": {"type": "object"},
                     "idempotency_key": {"type": "string"},
                 },
-                "required": ["function_id", "version", "input"],
+                "required": ["function_id", "input"],
             },
         },
     },

@@ -92,8 +92,9 @@ def invoke_business_function(
 def _normalize_function_ref(function_id: str, version: str | None) -> tuple[str, str | None]:
     """Accept both split and compact business function refs.
 
-    Skill markdown often lists functions as ``domain.name@v1`` while gateway
-    APIs expect ``function_id=domain.name`` and ``version=v1`` separately.
+    New contracts use the exact Navigator ``function_id`` and an optional
+    ``version``. Older materialized markdown may still contain
+    ``domain.name@v1``; keep accepting that compact form for compatibility.
     """
     if "@" not in function_id:
         return function_id, version

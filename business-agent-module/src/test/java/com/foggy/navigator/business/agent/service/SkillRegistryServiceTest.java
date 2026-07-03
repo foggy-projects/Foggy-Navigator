@@ -212,7 +212,8 @@ class SkillRegistryServiceTest {
             assertTrue(bodyRef.get().contains("\"display_name\":\"TMS Skill\""));
             assertTrue(bodyRef.get().contains("\"context_visibility\":\"summary\""));
             assertTrue(bodyRef.get().contains("\"resources\":[{\"path\":\"references/usage.md\",\"content\":\"Use this reference.\"}]"));
-            assertTrue(bodyRef.get().contains("tms.order.submit@v1"));
+            assertTrue(bodyRef.get().contains("tms.order.submit (version v1)"));
+            assertTrue(bodyRef.get().contains("Invoke with function_id=`tms.order.submit`; version may be omitted or set to `v1`"));
             assertTrue(bodyRef.get().contains("Submit by orderIdentifier."));
         } finally {
             server.stop(0);
@@ -276,7 +277,8 @@ class SkillRegistryServiceTest {
             assertNotNull(bodyRef.get());
             assertTrue(bodyRef.get().contains("\"skill_id\":\"tms_skill\""));
             assertTrue(bodyRef.get().contains("\"client_app_id\":\"tms_app\""));
-            assertTrue(bodyRef.get().contains("tms.order.submit@v1"));
+            assertTrue(bodyRef.get().contains("tms.order.submit (version v1)"));
+            assertTrue(bodyRef.get().contains("Invoke with function_id=`tms.order.submit`; version may be omitted or set to `v1`"));
         } finally {
             server.stop(0);
         }
@@ -574,7 +576,8 @@ class SkillRegistryServiceTest {
 
             assertEquals("MATERIALIZED", dto.getMaterializeResult().getStatus());
             assertNotNull(bodyRef.get());
-            assertTrue(bodyRef.get().contains("### tms.order.createOpeningDraft@v1"));
+            assertTrue(bodyRef.get().contains("### tms.order.createOpeningDraft (version v1)"));
+            assertTrue(bodyRef.get().contains("Invoke contract: use `function_id` = `tms.order.createOpeningDraft`; `version` may be omitted or set to `v1`"));
             assertTrue(bodyRef.get().contains("#### Input JSON Schema"));
             assertTrue(bodyRef.get().contains("```json"));
             assertTrue(bodyRef.get().contains("requestIntent"));
@@ -591,7 +594,7 @@ class SkillRegistryServiceTest {
             assertFalse(bodyRef.get().contains("secret"));
             JsonNode payload = objectMapper.readTree(bodyRef.get());
             assertTrue(payload.get("resources").get(0).get("content").asText()
-                    .contains("### tms.order.createOpeningDraft@v1"));
+                    .contains("### tms.order.createOpeningDraft (version v1)"));
             assertNotEquals("placeholder-hash", payload.get("resources").get(0).get("sha256").asText());
         } finally {
             server.stop(0);

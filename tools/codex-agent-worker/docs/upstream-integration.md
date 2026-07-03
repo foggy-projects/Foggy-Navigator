@@ -210,7 +210,7 @@ Codex Biz route 在 Navigator 侧使用 `providerType=codex-biz-worker`。它可
 - `get_business_function_schema`
 - `invoke_business_function`
 
-`get_business_function_schema` 和 `invoke_business_function` 都要求传 `version`；`invoke_business_function` 还要求传 `input`，对象输入会转发为 `input`，字符串输入会转发为 `inputJson`。`report_tool_message` 不是模型可见工具；Worker 会在 `invoke_business_function` 后对 Navigator WorkerGateway 做 best-effort 内部审计上报。
+`get_business_function_schema` 和 `invoke_business_function` 使用 Navigator 返回的完整 `function_id`；不要删除 `.v1` 等函数 id 后缀。`version` 可省略，也可重复传入返回的同一版本。`invoke_business_function` 还要求传 `input`，对象输入会转发为 `input`，字符串输入会转发为 `inputJson`。`report_tool_message` 不是模型可见工具；Worker 会在 `invoke_business_function` 后对 Navigator WorkerGateway 做 best-effort 内部审计上报。
 
 上游不需要、也不应该把 `task_scoped_token` 写入 prompt、developer instructions、`codex_config` 或模型可见参数。业务函数的真实授权仍由 Navigator WorkerGateway 根据 task-scoped token、skill grants 和 client-app visibility 校验。若未来要扩大到正式业务链路，仍需针对原 BizWorker 依赖的 `submit_skill_result`、BusinessFunction side effect、tool result/message 形态做端到端 smoke；在此之前，本能力只证明 Codex Worker 具备第一段 MCP 桥接能力，不改变 LangBizWorker 的企业应用默认定位。
 

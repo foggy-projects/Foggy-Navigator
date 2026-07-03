@@ -112,6 +112,7 @@ public class UpstreamCli {
     private static final String BIZ_WORKER_INSTALL_BASE_URL =
             "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/langgraph-biz-worker";
     private static final String LANGGRAPH_BIZ_BACKEND = "LANGGRAPH_BIZ";
+    private static final String OPENAI_CODEX_BACKEND = "OPENAI_CODEX";
     private static final Pattern BIZ_CONTEXT_ID_PATTERN =
             Pattern.compile("^bctx_(\\d{8})_([0-9a-fA-F]{2})_[A-Za-z0-9._-]+$");
     private static final DateTimeFormatter BIZ_CONTEXT_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
@@ -150,6 +151,7 @@ public class UpstreamCli {
     public int run(String[] args, Map<String, String> env) {
         CliArguments parsed = CliArguments.parse(args);
         try {
+            parsed.rejectUnknownOptions();
             this.env = env != null ? env : Map.of();
             config = UpstreamCliConfig.load(parsed, env, cwd);
             return dispatch(parsed);
@@ -303,7 +305,7 @@ public class UpstreamCli {
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
         out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
-        out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>]");
+        out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--provider-task-id <providerTaskId>] [--worker-backend LANGGRAPH_BIZ|OPENAI_CODEX] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>] [--codex-workspace-root <path>]");
         out.println("  evidence --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
         out.println("  model create/update uses NAVI_CONTROL_API_KEY and creates ClientApp-owned models.");
@@ -411,8 +413,9 @@ public class UpstreamCli {
         out.println("Usage: navi upstream diagnostics <command|options> [options]");
         out.println("Commands: session-dir");
         out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
-        out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>]");
-        out.println("    session-dir resolves the local LangGraph BizWorker runtime session path from a bctx_yyyyMMdd_<shard>_<id> contextId.");
+        out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--provider-task-id <providerTaskId>] [--worker-backend LANGGRAPH_BIZ|OPENAI_CODEX] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>] [--codex-workspace-root <path>]");
+        out.println("    LANGGRAPH_BIZ resolves the local LangGraph BizWorker runtime session path from a bctx_yyyyMMdd_<shard>_<id> contextId.");
+        out.println("    OPENAI_CODEX resolves the Codex navigator_business MCP debug log; pass --provider-task-id for the Codex worker task UUID when available.");
         out.println("    It prints paths and worker hints only; it does not print tokens, headers, credentials, or log contents.");
         return 0;
     }
@@ -2056,11 +2059,16 @@ public class UpstreamCli {
                 config.get("NAVI_BIZ_WORKER_ID"),
                 config.get("NAVI_WORKER_ID"));
 
+        if (isOpenAiCodexBackend(workerBackend)) {
+            return resolveCodexSessionDiagnostics(
+                    args, contextId, taskId, workerBackend, physicalWorkerId, workerHost, hostname);
+        }
+
         ContextLocator locator = parseContextLocator(contextId);
         if (locator == null) {
-            return new SessionDirectoryDiagnostics(contextId, taskId, false, workerBackend, physicalWorkerId,
+            return new SessionDirectoryDiagnostics(contextId, taskId, null, false, workerBackend, physicalWorkerId,
                     workerHost, hostname, null, null, null, null, null, null, null,
-                    "unavailable", "context-not-found");
+                    null, "langgraph-session", "unavailable", "context-not-found");
         }
 
         List<Path> dataRoots = candidateBizWorkerDataRoots(args);
@@ -2099,10 +2107,67 @@ public class UpstreamCli {
         String accessHint = exists
                 ? "local"
                 : (!isLikelyLocalHost(workerHost, hostname) ? "ssh-required" : "unavailable");
-        return new SessionDirectoryDiagnostics(contextId, taskId, exists, workerBackend, physicalWorkerId,
+        return new SessionDirectoryDiagnostics(contextId, taskId, null, exists, workerBackend, physicalWorkerId,
                 workerHost, hostname, sessionDirectory, logsDirectory, skillToolCallsDirectory, skillToolCallsFile,
                 runtimeMessageEventsDirectory, runtimeMessageEventsFile, llmSubmissionsDirectory,
-                accessHint, notFoundReason);
+                null, "langgraph-session", accessHint, notFoundReason);
+    }
+
+    private SessionDirectoryDiagnostics resolveCodexSessionDiagnostics(CliArguments args,
+                                                                       String contextId,
+                                                                       String taskId,
+                                                                       String workerBackend,
+                                                                       String physicalWorkerId,
+                                                                       String workerHost,
+                                                                       String hostname) {
+        String providerTaskId = firstNonBlank(
+                args.option("provider-task-id"),
+                args.option("codex-provider-task-id"),
+                taskId);
+        Path debugLogFile = null;
+        boolean exists = false;
+        String notFoundReason = "business-mcp-debug-log-task-id-missing";
+        if (hasText(providerTaskId)) {
+            Path workspaceRoot = candidateCodexWorkspaceRoots(args).stream()
+                    .findFirst()
+                    .orElse(cwd.toAbsolutePath().normalize());
+            debugLogFile = codexBusinessMcpDebugLogFile(workspaceRoot, providerTaskId);
+            exists = Files.isRegularFile(debugLogFile);
+            notFoundReason = exists ? null : "business-mcp-debug-log-not-found";
+        }
+        String accessHint = exists
+                ? "local"
+                : (!isLikelyLocalHost(workerHost, hostname) ? "ssh-required" : "unavailable");
+        return new SessionDirectoryDiagnostics(contextId, taskId, providerTaskId, exists, workerBackend, physicalWorkerId,
+                workerHost, hostname, null, null, null, null, null, null, null,
+                debugLogFile, "codex-business-mcp", accessHint, notFoundReason);
+    }
+
+    private boolean isOpenAiCodexBackend(String workerBackend) {
+        return OPENAI_CODEX_BACKEND.equalsIgnoreCase(valueOrEmpty(workerBackend))
+                || "codex-biz-worker".equalsIgnoreCase(valueOrEmpty(workerBackend));
+    }
+
+    private List<Path> candidateCodexWorkspaceRoots(CliArguments args) {
+        List<Path> candidates = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        addDataRootCandidate(candidates, seen, args.option("codex-workspace-root"), cwd);
+        addDataRootCandidate(candidates, seen, args.option("workspace-root"), cwd);
+        addDataRootCandidate(candidates, seen, env.get("NAVI_CODEX_WORKSPACE_ROOT"), cwd);
+        addDataRootCandidate(candidates, seen, env.get("CODEX_WORKSPACE_ROOT"), cwd);
+        addDataRootCandidate(candidates, seen, config.get("NAVI_CODEX_WORKSPACE_ROOT"), cwd);
+        addDataRootCandidate(candidates, seen, config.get("CODEX_WORKSPACE_ROOT"), cwd);
+        addDataRootPathCandidate(candidates, seen, cwd);
+        return candidates;
+    }
+
+    private Path codexBusinessMcpDebugLogFile(Path workspaceRoot, String providerTaskId) {
+        return workspaceRoot
+                .resolve("temp")
+                .resolve("codex-worker-3070")
+                .resolve("business-mcp-" + safePathSegment(providerTaskId) + ".log")
+                .toAbsolutePath()
+                .normalize();
     }
 
     private List<Path> candidateBizWorkerDataRoots(CliArguments args) {
@@ -2306,8 +2371,12 @@ public class UpstreamCli {
         if (hasText(diagnostics.taskId())) {
             out.println("taskId=" + valueOrEmpty(diagnostics.taskId()));
         }
+        if (hasText(diagnostics.providerTaskId())) {
+            out.println("providerTaskId=" + valueOrEmpty(diagnostics.providerTaskId()));
+        }
         out.println("exists=" + diagnostics.exists());
         out.println("workerBackend=" + valueOrEmpty(diagnostics.workerBackend()));
+        out.println("diagnosticMode=" + valueOrEmpty(diagnostics.diagnosticMode()));
         out.println("physicalWorkerId=" + valueOrEmpty(diagnostics.physicalWorkerId()));
         out.println("workerHost=" + redact(valueOrEmpty(diagnostics.workerHost())));
         out.println("hostname=" + redact(valueOrEmpty(diagnostics.hostname())));
@@ -2322,6 +2391,7 @@ public class UpstreamCli {
             out.println("runtimeMessageEventsFile=" + valueOrEmpty(diagnostics.runtimeMessageEventsFile()));
         }
         out.println("llmSubmissionsDirectory=" + valueOrEmpty(diagnostics.llmSubmissionsDirectory()));
+        out.println("businessMcpDebugLogFile=" + valueOrEmpty(diagnostics.businessMcpDebugLogFile()));
         out.println("accessHint=" + valueOrEmpty(diagnostics.accessHint()));
         if (!diagnostics.exists()) {
             out.println("notFoundReason=" + valueOrEmpty(diagnostics.notFoundReason()));
@@ -4405,6 +4475,7 @@ public class UpstreamCli {
 
     private record SessionDirectoryDiagnostics(String contextId,
                                                String taskId,
+                                               String providerTaskId,
                                                boolean exists,
                                                String workerBackend,
                                                String physicalWorkerId,
@@ -4417,6 +4488,8 @@ public class UpstreamCli {
                                                Path runtimeMessageEventsDirectory,
                                                Path runtimeMessageEventsFile,
                                                Path llmSubmissionsDirectory,
+                                               Path businessMcpDebugLogFile,
+                                               String diagnosticMode,
                                                String accessHint,
                                                String notFoundReason) {
     }

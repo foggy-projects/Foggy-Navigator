@@ -67,9 +67,10 @@ def _build_system_prompt(
         prompt += f"\n---\n技能说明:\n{manifest.markdown_body}\n---\n\n"
 
     prompt += (
-        "业务函数可能以 `function_id@version` 的形式展示；调用 "
-        "invoke_business_function 时，`function_id` 只传不带 @version 的函数 id，"
-        "`version` 单独传入。"
+        "业务函数调用时使用列表或契约返回的完整 `function_id`；"
+        "`version` 可省略，若契约展示版本也可重复传入同一 `version`。"
+        "不要自行删除 `.v1` 等函数 id 后缀；只有遇到 `function_id@version` 展示格式时，"
+        "才把 `@` 后面的版本拆到 `version`。"
         "Navigator 运行时标识，例如 skillId、functionId、frameId、"
         "skillFrameId、function_frame_id、taskId、sessionId、messageId，"
         "以及 frm_、lgt_、msg_、sess_ 前缀的值，都是内部追踪 id。"

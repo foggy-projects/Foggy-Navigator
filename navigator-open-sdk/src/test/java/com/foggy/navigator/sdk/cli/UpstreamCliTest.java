@@ -1283,6 +1283,24 @@ class UpstreamCliTest {
     }
 
     @Test
+    void askRejectsUnknownOptionBeforeHttpCall() {
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "hello",
+                "--allowed-tool", "business.functions.invoke"}, Map.of());
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertNull(lastPath);
+        assertTrue(error.contains("Unknown option: --allowed-tool"));
+        assertFalse(error.contains("cat-runtime-secret"));
+    }
+
+    @Test
     void askTaskDirectoryRequiredErrorSuggestsDirectoryId() {
         responseOverride = "{\"code\":600,\"msg\":\"TASK_DIRECTORY_REQUIRED: directoryId is required for Actor-owned BizWorker task\"}";
 
@@ -1444,6 +1462,8 @@ class UpstreamCliTest {
         assertTrue(output.contains("Usage: navi upstream diagnostics"));
         assertTrue(output.contains("diagnostics session-dir --context-id <contextId>"));
         assertTrue(output.contains("[--data-root <bizWorkerDataRoot>]"));
+        assertTrue(output.contains("[--codex-workspace-root <path>]"));
+        assertTrue(output.contains("OPENAI_CODEX resolves the Codex navigator_business MCP debug log"));
         assertTrue(output.contains("does not print tokens, headers, credentials, or log contents"));
     }
 
@@ -1523,6 +1543,43 @@ class UpstreamCliTest {
                 .toAbsolutePath().normalize()));
         assertTrue(output.contains("accessHint=unavailable"));
         assertTrue(output.contains("notFoundReason=context-not-found"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
+    void diagnosticsSessionDirLocatesCodexBusinessMcpDebugLog() throws Exception {
+        String contextId = "bctx_20260701_d3_d30e09334a674aabbf5e0f26d395e073";
+        String taskId = "20260701-8bc8";
+        String providerTaskId = "7314034b-d9b4-4231-9781-beb5f6f6c349";
+        Path workspaceRoot = tempDir.resolve("codex-workspace");
+        Path debugLogFile = workspaceRoot.resolve("temp").resolve("codex-worker-3070")
+                .resolve("business-mcp-" + providerTaskId + ".log");
+        Files.createDirectories(debugLogFile.getParent());
+        Files.writeString(debugLogFile, "tool_start name=invoke_business_function\n", StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "diagnostics", "session-dir",
+                "--context-id", contextId,
+                "--task-id", taskId,
+                "--provider-task-id", providerTaskId,
+                "--worker-backend", "OPENAI_CODEX",
+                "--codex-workspace-root", workspaceRoot.toString(),
+                "--physical-worker-id", "worker-codex-1"}, env("NAVI_CLIENT_APP_ACCESS_TOKEN", "cat-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastPath);
+        assertTrue(output.contains("contextId=" + contextId));
+        assertTrue(output.contains("taskId=" + taskId));
+        assertTrue(output.contains("providerTaskId=" + providerTaskId));
+        assertTrue(output.contains("exists=true"));
+        assertTrue(output.contains("workerBackend=OPENAI_CODEX"));
+        assertTrue(output.contains("diagnosticMode=codex-business-mcp"));
+        assertTrue(output.contains("physicalWorkerId=worker-codex-1"));
+        assertTrue(output.contains("businessMcpDebugLogFile=" + debugLogFile.toAbsolutePath().normalize()));
+        assertTrue(output.contains("accessHint=local"));
+        assertFalse(output.contains("notFoundReason="));
+        assertFalse(output.contains("skillToolCallsFile=" + taskId + ".jsonl"));
+        assertFalse(output.contains("tool_start name=invoke_business_function"));
         assertFalse(output.contains("cat-runtime-secret"));
     }
 
@@ -3252,6 +3309,7 @@ class UpstreamCliTest {
         assertTrue(output.contains("Internal compatibility: worker-pool list/create/register-worker/add-member/status"));
         assertTrue(output.contains("model system-list/system-create/system-update/system-rotate-key"));
         assertTrue(output.contains("[--max-turns <n>]"));
+        assertTrue(output.contains("[--allowed-tools <csv>]"));
     }
 
     @Test

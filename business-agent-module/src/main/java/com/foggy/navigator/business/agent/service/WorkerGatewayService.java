@@ -107,7 +107,6 @@ public class WorkerGatewayService {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
-        requireText(form.getVersion(), "version is required");
         if (!StringUtils.hasText(form.getInputJson()) && form.getInput() == null) {
             throw new IllegalArgumentException("inputJson or input is required");
         }
@@ -125,6 +124,8 @@ public class WorkerGatewayService {
                 form.getVersion()
         );
         attachTokenContext(context, token);
+        String resolvedFunctionId = context.getFunction().getFunctionId();
+        String resolvedVersion = context.getVersionData().getVersion();
 
         // Normalize inputJson
         String finalInputJson = form.getInputJson();
@@ -139,21 +140,21 @@ public class WorkerGatewayService {
 
         // Audit: invoke started (best-effort)
         String inputHash = BusinessFunctionRuntimeAuditService.sha256(finalInputJson);
-        auditService.recordInvokeStarted(token, functionId, form.getVersion(), inputHash);
+        auditService.recordInvokeStarted(token, resolvedFunctionId, resolvedVersion, inputHash);
         long startTime = System.currentTimeMillis();
 
         WorkerGatewayInvokeResponseDTO response = new WorkerGatewayInvokeResponseDTO();
-        response.setFunctionId(context.getFunction().getFunctionId());
-        response.setVersion(context.getVersionData().getVersion());
+        response.setFunctionId(resolvedFunctionId);
+        response.setVersion(resolvedVersion);
         response.setApprovalRequired(context.getFunction().getApprovalRequired());
 
         if (Boolean.TRUE.equals(context.getFunction().getApprovalRequired())) {
-            com.foggy.navigator.business.agent.model.entity.BusinessFunctionSuspensionEntity suspension = suspensionService.createSuspension(token, functionId, form.getVersion(), finalInputJson, form.getIdempotencyKey());
+            com.foggy.navigator.business.agent.model.entity.BusinessFunctionSuspensionEntity suspension = suspensionService.createSuspension(token, resolvedFunctionId, resolvedVersion, finalInputJson, form.getIdempotencyKey());
             response.setStatus(WorkerGatewayInvokeResponseDTO.STATUS_SUSPENDED);
             response.setSuspendId(suspension.getSuspendId());
             response.setMessage("Approval required, execution suspended.");
             // Audit: invoke suspended (best-effort)
-            auditService.recordInvokeSuspended(token, functionId, form.getVersion(), suspension.getSuspendId());
+            auditService.recordInvokeSuspended(token, resolvedFunctionId, resolvedVersion, suspension.getSuspendId());
         } else {
             try {
                 BusinessFunctionAdapterResult adapterResult = adapterInvoker.invoke(context, finalInputJson);
@@ -172,11 +173,11 @@ public class WorkerGatewayService {
                 // Audit: invoke success (best-effort)
                 long durationMs = System.currentTimeMillis() - startTime;
                 String outputHash = BusinessFunctionRuntimeAuditService.sha256(adapterResult.getOutputJson());
-                auditService.recordInvokeSuccess(token, functionId, form.getVersion(), outputHash, durationMs);
+                auditService.recordInvokeSuccess(token, resolvedFunctionId, resolvedVersion, outputHash, durationMs);
             } catch (Exception e) {
                 // Audit: invoke failed (best-effort)
                 long durationMs = System.currentTimeMillis() - startTime;
-                auditService.recordInvokeFailed(token, functionId, form.getVersion(), "ADAPTER_ERROR", e.getMessage(), durationMs);
+                auditService.recordInvokeFailed(token, resolvedFunctionId, resolvedVersion, "ADAPTER_ERROR", e.getMessage(), durationMs);
                 throw e;
             }
         }

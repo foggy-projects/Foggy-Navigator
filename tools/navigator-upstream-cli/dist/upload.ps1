@@ -66,9 +66,26 @@ function Invoke-RemoteInstallSmoke {
         $codexBizAskHelpOk = $helpOutput -match "--provider-type codex-biz-worker" `
             -and $helpOutput -match "--private-account-id" `
             -and $helpOutput -match "--codex-home-key" `
-            -and $helpOutput -match "--directory-id"
+            -and $helpOutput -match "--directory-id" `
+            -and $helpOutput -match "--allowed-tools"
         if (-not $codexBizAskHelpOk) {
             throw "upstream help smoke did not list Codex Biz ask runtime options: $helpOutput"
+        }
+
+        $unknownStdout = Join-Path $tmpRoot "unknown-option.stdout.txt"
+        $unknownStderr = Join-Path $tmpRoot "unknown-option.stderr.txt"
+        $unknownProcess = Start-Process -FilePath "powershell" `
+            -ArgumentList @("-ExecutionPolicy", "Bypass", "-File", $navi, "upstream", "ask", "--not-a-real-option") `
+            -Wait `
+            -PassThru `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $unknownStdout `
+            -RedirectStandardError $unknownStderr
+        $unknownOptionExitCode = $unknownProcess.ExitCode
+        $unknownOptionOutput = ((Get-Content -Path $unknownStdout -Raw -ErrorAction SilentlyContinue),
+                (Get-Content -Path $unknownStderr -Raw -ErrorAction SilentlyContinue)) -join ""
+        if ($unknownOptionExitCode -eq 0 -or $unknownOptionOutput -notmatch "Unknown option: --not-a-real-option") {
+            throw "unknown option smoke did not fail fast: $unknownOptionOutput"
         }
 
         $sessionDirHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream diagnostics session-dir --help 2>&1 | Out-String

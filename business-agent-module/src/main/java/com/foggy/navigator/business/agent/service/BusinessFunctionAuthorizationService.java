@@ -44,7 +44,6 @@ public class BusinessFunctionAuthorizationService {
         Assert.hasText(upstreamUserId, "upstreamUserId is required");
         Assert.hasText(skillId, "skillId is required");
         Assert.hasText(functionId, "functionId is required");
-        Assert.hasText(version, "version is required");
 
         // 1. ClientApp active
         clientAppService.requireActiveClientApp(tenantId, clientAppId);

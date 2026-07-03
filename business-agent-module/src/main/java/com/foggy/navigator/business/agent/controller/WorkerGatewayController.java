@@ -26,7 +26,7 @@ public class WorkerGatewayController {
     public WorkerGatewayFunctionSchemaDTO getBusinessFunctionSchema(
             @RequestHeader("X-Task-Scoped-Token") String tokenStr,
             @PathVariable String functionId,
-            @RequestParam String version) {
+            @RequestParam(required = false) String version) {
         return workerGatewayService.getBusinessFunctionSchema(tokenStr, functionId, version);
     }
 

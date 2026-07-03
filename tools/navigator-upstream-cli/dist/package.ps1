@@ -84,6 +84,7 @@ $features = @(
     "navi-routed-codex-config",
     "codex-biz-worker-route",
     "codex-biz-runtime-options",
+    "ask-allowed-tools",
     "ask-directory-actionable-error"
 )
 

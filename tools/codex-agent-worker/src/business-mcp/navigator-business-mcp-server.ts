@@ -63,10 +63,16 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        function_id: { type: 'string' },
-        version: { type: 'string' },
+        function_id: {
+          type: 'string',
+          description: 'Exact functionId returned by Navigator. Do not strip suffixes such as .v1.',
+        },
+        version: {
+          type: 'string',
+          description: 'Optional version. May be omitted or set to the returned version.',
+        },
       },
-      required: ['function_id', 'version'],
+      required: ['function_id'],
       additionalProperties: false,
     },
   },
@@ -76,12 +82,18 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        function_id: { type: 'string' },
-        version: { type: 'string' },
+        function_id: {
+          type: 'string',
+          description: 'Exact functionId returned by Navigator. Do not strip suffixes such as .v1.',
+        },
+        version: {
+          type: 'string',
+          description: 'Optional version. May be omitted or set to the returned version.',
+        },
         input: { type: 'object' },
         idempotency_key: { type: 'string' },
       },
-      required: ['function_id', 'version', 'input'],
+      required: ['function_id', 'input'],
       additionalProperties: false,
     },
   },
@@ -303,8 +315,8 @@ async function getBusinessFunctionSchema(
     runtime.gatewayBaseUrl,
     `/internal/worker-gateway/v1/business-functions/${encodeURIComponent(functionId)}/schema`
   )
-  const version = requireString(args.version, 'version')
-  url.searchParams.set('version', version)
+  const version = optionalString(args.version, 'version')
+  if (version) url.searchParams.set('version', version)
   return gatewayRequest(url, { method: 'GET' }, runtime)
 }
 
@@ -317,10 +329,10 @@ async function invokeBusinessFunction(
     runtime.gatewayBaseUrl,
     `/internal/worker-gateway/v1/business-functions/${encodeURIComponent(functionId)}/invoke`
   )
-  const version = requireString(args.version, 'version')
+  const version = optionalString(args.version, 'version')
   const input = requireInput(args)
   const body: Record<string, unknown> = {
-    version,
+    version: version || undefined,
     idempotencyKey: optionalString(args.idempotency_key ?? args.idempotencyKey, 'idempotency_key') || undefined,
   }
   if (typeof input === 'string') {
@@ -362,9 +374,10 @@ async function reportInvokeToolMessageSafely(
 ): Promise<void> {
   try {
     const result = isPlainObject(invokeResult) ? invokeResult : {}
+    const reportedFunctionId = typeof result.functionId === 'string' ? result.functionId : functionId
     await reportToolMessage({
       tool_name: 'invoke_business_function',
-      function_id: functionId,
+      function_id: reportedFunctionId,
       status: mapGatewayStatusToToolMessageStatus(typeof result.status === 'string' ? result.status : 'ERROR'),
       suspend_id: typeof result.suspendId === 'string' ? result.suspendId : undefined,
     }, runtime)

@@ -256,6 +256,104 @@ class BusinessFunctionRegistryServiceTest {
     }
 
     @Test
+    void resolveClientAppFunction_usesCurrentVersionWhenVersionOmitted() {
+        when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
+
+        BusinessFunctionEntity func = new BusinessFunctionEntity();
+        func.setFunctionId("world-sim.actor.tms-order-save-print.v1");
+        func.setCurrentVersion("v1");
+        func.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
+        when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "world-sim.actor.tms-order-save-print.v1"))
+                .thenReturn(Optional.of(func));
+
+        BusinessFunctionVersionEntity ver = new BusinessFunctionVersionEntity();
+        ver.setFunctionId("world-sim.actor.tms-order-save-print.v1");
+        ver.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
+        ver.setVersion("v1");
+        when(versionRepository.findByTenantIdAndFunctionIdAndVersion(
+                "tenant_1", "world-sim.actor.tms-order-save-print.v1", "v1"))
+                .thenReturn(Optional.of(ver));
+
+        ClientAppFunctionGrantEntity grant = new ClientAppFunctionGrantEntity();
+        grant.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
+        when(grantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion(
+                "tenant_1", "app_01", "world-sim.actor.tms-order-save-print.v1", "v1"))
+                .thenReturn(Optional.of(grant));
+
+        BusinessFunctionRuntimeContextDTO result = registryService.resolveClientAppFunction(
+                "tenant_1", "app_01", "world-sim.actor.tms-order-save-print.v1", null);
+
+        assertEquals("world-sim.actor.tms-order-save-print.v1", result.getFunctionId());
+        assertEquals("v1", result.getVersion());
+    }
+
+    @Test
+    void resolveClientAppFunction_acceptsVersionedIdWithRepeatedVersion() {
+        when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
+
+        BusinessFunctionEntity func = new BusinessFunctionEntity();
+        func.setFunctionId("world-sim.actor.tms-order-save-print.v1");
+        func.setCurrentVersion("v1");
+        func.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
+        when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "world-sim.actor.tms-order-save-print.v1"))
+                .thenReturn(Optional.of(func));
+
+        BusinessFunctionVersionEntity ver = new BusinessFunctionVersionEntity();
+        ver.setFunctionId("world-sim.actor.tms-order-save-print.v1");
+        ver.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
+        ver.setVersion("v1");
+        when(versionRepository.findByTenantIdAndFunctionIdAndVersion(
+                "tenant_1", "world-sim.actor.tms-order-save-print.v1", "v1"))
+                .thenReturn(Optional.of(ver));
+
+        ClientAppFunctionGrantEntity grant = new ClientAppFunctionGrantEntity();
+        grant.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
+        when(grantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion(
+                "tenant_1", "app_01", "world-sim.actor.tms-order-save-print.v1", "v1"))
+                .thenReturn(Optional.of(grant));
+
+        BusinessFunctionRuntimeContextDTO result = registryService.resolveClientAppFunction(
+                "tenant_1", "app_01", "world-sim.actor.tms-order-save-print.v1", "v1");
+
+        assertEquals("world-sim.actor.tms-order-save-print.v1", result.getFunctionId());
+        assertEquals("v1", result.getVersion());
+    }
+
+    @Test
+    void resolveClientAppFunction_acceptsBaseIdWithVersionWhenStoredIdIsVersioned() {
+        when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
+        when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "world-sim.actor.tms-order-save-print"))
+                .thenReturn(Optional.empty());
+
+        BusinessFunctionEntity func = new BusinessFunctionEntity();
+        func.setFunctionId("world-sim.actor.tms-order-save-print.v1");
+        func.setCurrentVersion("v1");
+        func.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
+        when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "world-sim.actor.tms-order-save-print.v1"))
+                .thenReturn(Optional.of(func));
+
+        BusinessFunctionVersionEntity ver = new BusinessFunctionVersionEntity();
+        ver.setFunctionId("world-sim.actor.tms-order-save-print.v1");
+        ver.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
+        ver.setVersion("v1");
+        when(versionRepository.findByTenantIdAndFunctionIdAndVersion(
+                "tenant_1", "world-sim.actor.tms-order-save-print.v1", "v1"))
+                .thenReturn(Optional.of(ver));
+
+        ClientAppFunctionGrantEntity grant = new ClientAppFunctionGrantEntity();
+        grant.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
+        when(grantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion(
+                "tenant_1", "app_01", "world-sim.actor.tms-order-save-print.v1", "v1"))
+                .thenReturn(Optional.of(grant));
+
+        BusinessFunctionRuntimeContextDTO result = registryService.resolveClientAppFunction(
+                "tenant_1", "app_01", "world-sim.actor.tms-order-save-print", "v1");
+
+        assertEquals("world-sim.actor.tms-order-save-print.v1", result.getFunctionId());
+        assertEquals("v1", result.getVersion());
+    }
+
+    @Test
     void resolveClientAppFunction_rejects_missing_grant() {
         when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
         BusinessFunctionEntity func = new BusinessFunctionEntity();
