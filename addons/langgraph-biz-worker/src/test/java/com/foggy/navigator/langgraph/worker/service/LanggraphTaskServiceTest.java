@@ -241,6 +241,47 @@ class LanggraphTaskServiceTest {
         }
 
         @Test
+        @SuppressWarnings("unchecked")
+        void createTaskDirect_merges_top_level_allowed_tools_into_runtime_execution_policy() {
+            var savedTask = new java.util.concurrent.atomic.AtomicReference<LanggraphTaskEntity>();
+            when(taskRepository.save(any(LanggraphTaskEntity.class))).thenAnswer(inv -> {
+                LanggraphTaskEntity entity = inv.getArgument(0);
+                savedTask.set(entity);
+                return entity;
+            });
+            when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> {
+                LanggraphTaskEntity entity = savedTask.get();
+                return entity != null && invocation.getArgument(0).equals(entity.getTaskId())
+                        ? Optional.of(entity)
+                        : Optional.empty();
+            });
+
+            Map<String, Object> params = directTaskParams();
+            params.put("allowedTools", "business.functions.schema,business.functions.invoke");
+            params.put("runtime_context", Map.of(
+                    "execution_policy", Map.of(
+                            "workdir", "/workspace/user",
+                            "allowed_dirs", List.of("/workspace/user"))));
+
+            service.createTaskDirect(params, USER_ID, TENANT_ID);
+
+            ArgumentCaptor<WorkerTaskStartEvent> captor =
+                    ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
+            verify(eventPublisher).publishEvent(captor.capture());
+
+            Map<String, Object> runtimeContext =
+                    (Map<String, Object>) captor.getValue().getProviderConfig().get("runtimeContext");
+            assertNotNull(runtimeContext);
+            Map<String, Object> executionPolicy =
+                    (Map<String, Object>) runtimeContext.get("execution_policy");
+            assertEquals("/workspace/user", executionPolicy.get("workdir"));
+            assertEquals(List.of("/workspace/user"), executionPolicy.get("allowed_dirs"));
+            assertEquals(
+                    List.of("business.functions.schema", "business.functions.invoke"),
+                    executionPolicy.get("allowed_tools"));
+        }
+
+        @Test
         void createTaskDirect_rejects_conflicting_skill_aliases() {
             Map<String, Object> params = directTaskParams();
             params.put("skill_name", "canonical.skill");

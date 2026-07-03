@@ -125,6 +125,14 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
         form.setMaxTurns(positiveInteger(firstPresent(params, "maxTurns", "max_turns")));
+        form.setAllowedTools(stringListParam(firstPresent(
+                params,
+                "allowedTools",
+                "allowed_tools",
+                "authorizedTools",
+                "authorized_tools",
+                "toolAllowlist",
+                "tool_allowlist")));
         form.setContextId((String) params.get("contextId"));
         form.setSessionId((String) params.get("sessionId"));
         form.setAttachments(attachmentsParam(params.get("attachments")));
@@ -149,6 +157,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     @Transactional
     public LanggraphTaskDTO createTask(String userId, String tenantId, CreateLanggraphTaskForm form) {
         requireTaskDirectoryId(form);
+        mergeAllowedToolsIntoRuntimeContext(form);
         String workerId = resolveCompatibleWorkerId(tenantId, form.getWorkerId());
 
         // 1. Create or reuse session
@@ -745,6 +754,77 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
             return (List<Map<String, Object>>) list;
         }
         return null;
+    }
+
+    private static List<String> stringListParam(Object value) {
+        if (value == null) {
+            return null;
+        }
+        List<String> items = new ArrayList<>();
+        if (value instanceof String text) {
+            for (String item : text.replace(";", ",").split(",")) {
+                if (StringUtils.hasText(item)) {
+                    items.add(item.trim());
+                }
+            }
+        } else if (value instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof String text && StringUtils.hasText(text)) {
+                    items.add(text.trim());
+                }
+            }
+        }
+        return items.isEmpty() ? null : List.copyOf(items);
+    }
+
+    private static void mergeAllowedToolsIntoRuntimeContext(CreateLanggraphTaskForm form) {
+        if (form == null || form.getAllowedTools() == null || form.getAllowedTools().isEmpty()) {
+            return;
+        }
+        Map<String, Object> runtimeContext = new LinkedHashMap<>();
+        if (form.getRuntimeContext() != null) {
+            runtimeContext.putAll(form.getRuntimeContext());
+        }
+
+        Map<String, Object> executionPolicy = new LinkedHashMap<>();
+        copyStringKeyedMap(runtimeContext.get("execution_policy"), executionPolicy);
+        copyStringKeyedMap(runtimeContext.get("executionPolicy"), executionPolicy);
+        if (!hasAnyKey(
+                executionPolicy,
+                "allowed_tools",
+                "allowedTools",
+                "authorized_tools",
+                "authorizedTools",
+                "tool_allowlist",
+                "toolAllowlist")) {
+            executionPolicy.put("allowed_tools", form.getAllowedTools());
+        }
+        runtimeContext.remove("executionPolicy");
+        runtimeContext.put("execution_policy", executionPolicy);
+        form.setRuntimeContext(runtimeContext);
+    }
+
+    private static void copyStringKeyedMap(Object source, Map<String, Object> target) {
+        if (!(source instanceof Map<?, ?> sourceMap)) {
+            return;
+        }
+        sourceMap.forEach((key, value) -> {
+            if (key instanceof String text) {
+                target.put(text, value);
+            }
+        });
+    }
+
+    private static boolean hasAnyKey(Map<String, Object> source, String... keys) {
+        if (source == null || source.isEmpty()) {
+            return false;
+        }
+        for (String key : keys) {
+            if (source.containsKey(key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String firstNotBlank(String... values) {
