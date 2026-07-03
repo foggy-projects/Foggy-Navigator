@@ -30,6 +30,33 @@ def test_execution_policy_normalizes_aliases(tmp_path):
     assert policy.allows_tool("delete_order") is False
 
 
+def test_execution_policy_normalizes_business_function_tool_aliases():
+    policy = ExecutionPolicy.from_context({
+        "allowedTools": "business.functions.schema,business.functions.invoke"
+    })
+
+    assert policy.allowed_tools == frozenset({
+        "get_business_function_schema",
+        "invoke_business_function",
+    })
+    assert policy.allows_tool("get_business_function_schema") is True
+    assert policy.allows_tool("invoke_business_function") is True
+    assert policy.allows_tool("read_file") is False
+    assert policy.allows_tool("command") is False
+
+
+def test_execution_policy_normalizes_business_function_wildcard_alias():
+    policy = ExecutionPolicy.from_context({
+        "allowedTools": ["business.functions.*"]
+    })
+
+    assert policy.allowed_tools == frozenset({
+        "list_business_functions",
+        "get_business_function_schema",
+        "invoke_business_function",
+    })
+
+
 def test_execution_policy_normalizes_workspace_governance_payloads(tmp_path):
     workdir = tmp_path / "project"
     workdir.mkdir()

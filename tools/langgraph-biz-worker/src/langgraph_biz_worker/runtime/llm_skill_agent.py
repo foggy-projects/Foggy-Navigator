@@ -893,7 +893,7 @@ class LlmSkillAgent:
         execution_policy: ExecutionPolicy | None = None,
     ) -> dict[str, Any]:
         if not _tool_authorized(name, execution_policy):
-            return {"ok": False, "error": _tool_not_authorized_error(name)}
+            return _tool_not_authorized_result(name, execution_policy)
 
         dispatch_context = LlmToolDispatchContext(
             frame_id=frame_id,
@@ -1473,6 +1473,43 @@ def _runtime_memory_checkpoint_messages(runtime_context: dict[str, Any] | None) 
 
 def _tool_not_authorized_error(name: str) -> str:
     return f"TOOL_NOT_AUTHORIZED: tool '{name}' is not allowed by upstream execution_policy"
+
+
+def _tool_not_authorized_result(name: str, execution_policy: ExecutionPolicy | None) -> dict[str, Any]:
+    allowed_tools = (
+        sorted(execution_policy.allowed_tools)
+        if execution_policy and execution_policy.allowed_tools
+        else []
+    )
+    alert_type = (
+        "business_function_allowed_tools_boundary_violation"
+        if _business_function_only_policy(allowed_tools)
+        else "allowed_tools_boundary_violation"
+    )
+    return {
+        "ok": False,
+        "error": _tool_not_authorized_error(name),
+        "error_code": "tool_not_authorized",
+        "error_category": "TOOL_AUTHORIZATION",
+        "recoverable": False,
+        "llm_retry_allowed": False,
+        "reason": "tool_not_authorized",
+        "blocked_tool": name,
+        "allowed_tools": allowed_tools,
+        "audit_alert": {
+            "type": alert_type,
+            "blocked_tool": name,
+            "allowed_tools": allowed_tools,
+        },
+    }
+
+
+def _business_function_only_policy(allowed_tools: list[str]) -> bool:
+    return bool(allowed_tools) and set(allowed_tools).issubset({
+        "list_business_functions",
+        "get_business_function_schema",
+        "invoke_business_function",
+    })
 
 
 def _frame_runtime_identity(frame: Any) -> str:

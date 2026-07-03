@@ -55,6 +55,19 @@ _SKILL_MATERIAL_TOOL_NAMES = frozenset({
     "invoke_business_skill",
     "invoke_business_agent",
 })
+_BUSINESS_FUNCTION_TOOL_NAMES = frozenset({
+    "list_business_functions",
+    "get_business_function_schema",
+    "invoke_business_function",
+})
+_TOOL_NAME_ALIASES: dict[str, frozenset[str]] = {
+    "business.functions.list": frozenset({"list_business_functions"}),
+    "business.functions.schema": frozenset({"get_business_function_schema"}),
+    "business.functions.invoke": frozenset({"invoke_business_function"}),
+    "business.functions": _BUSINESS_FUNCTION_TOOL_NAMES,
+    "business.functions.*": _BUSINESS_FUNCTION_TOOL_NAMES,
+    "business.*": _BUSINESS_FUNCTION_TOOL_NAMES,
+}
 
 
 @dataclass(frozen=True)
@@ -285,7 +298,8 @@ def _tool_names(value: Any) -> frozenset[str]:
     for item in raw_values:
         if not isinstance(item, str) or not item.strip():
             raise ValueError("INVALID_EXECUTION_POLICY: allowed_tools must contain non-empty strings")
-        names.add(item.strip())
+        normalized = item.strip()
+        names.update(_TOOL_NAME_ALIASES.get(normalized, frozenset({normalized})))
     return frozenset(names)
 
 

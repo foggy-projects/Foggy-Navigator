@@ -17,7 +17,10 @@ def _tool_specs(
 ) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     for name in [*_GLOBAL_TOOL_NAMES, *manifest.allowed_tools]:
-        if name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES:
+        if (
+            name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES
+            and not _explicitly_enabled(name, enabled_tool_names)
+        ):
             continue
         if not _tool_enabled(name, enabled_tool_names):
             continue
@@ -60,6 +63,8 @@ def _bind_tools(
 
 _GLOBAL_TOOL_NAMES = [
     "invoke_business_function",
+    "list_business_functions",
+    "get_business_function_schema",
     "list_skill_resources",
     "read_skill_resource",
     "read_frame_execution_report",
@@ -87,7 +92,6 @@ _FRAME_RESULT_TOOL_NAMES = frozenset({
 _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     _FRAME_RESULT_TOOL_NAME,
     _LEGACY_FRAME_RESULT_TOOL_NAME,
-    "command",
     "handoff_to_parent",
     "resume_recoverable_child_skill",
     "shelve_interrupted_frame",
@@ -111,6 +115,13 @@ def _tool_enabled(
     if name in _SKILL_DISCOVERY_TOOL_NAMES and enabled_tool_names & _SKILL_MATERIAL_TOOL_NAMES:
         return True
     return name in enabled_tool_names or name in _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES
+
+
+def _explicitly_enabled(
+    name: str,
+    enabled_tool_names: set[str] | frozenset[str] | None,
+) -> bool:
+    return enabled_tool_names is not None and name in enabled_tool_names
 
 
 def _preferred_tool_schema_name(name: str) -> str:

@@ -452,7 +452,7 @@ def test_llm_agent_exposes_command_when_linux_enabled_and_workspace_configured(t
         runtime_context={
             "execution_policy": {
                 "workdir": str(workdir),
-                "allowed_tools": ["read_file", "submit_skill_result"],
+                "allowed_tools": ["read_file", "command", "submit_skill_result"],
             },
         },
         persistent_frame=True,
@@ -460,6 +460,93 @@ def test_llm_agent_exposes_command_when_linux_enabled_and_workspace_configured(t
 
     tool_names = _bound_tool_names(model)
     assert "command" in tool_names
+
+
+def test_llm_agent_hides_command_when_workspace_policy_does_not_allow_it(tmp_path, monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_command_tool_policy_hidden_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    workdir = tmp_path / "delegated-workspace"
+    workdir.mkdir()
+    model = FakeToolCallModel([AIMessage(content="ok")])
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path).run(
+        task_id="task_command_tool_policy_hidden_001",
+        frame_id=frame_id,
+        prompt="hi",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_tools": ["read_file", "submit_skill_result"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    assert "command" not in _bound_tool_names(model)
+
+
+def test_llm_agent_business_function_only_policy_blocks_file_and_command_tools(tmp_path, monkeypatch):
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+
+    blocked_tool_args = {
+        "read_file": {"relative_path": "old-task.md"},
+        "list_files": {"relative_path": "."},
+        "command": {"command": "find / -name sidecar.json"},
+    }
+
+    for blocked_tool, args in blocked_tool_args.items():
+        runtime = _root_runtime()
+        frame_id = runtime.invoke_skill(
+            task_id=f"task_business_function_only_blocks_{blocked_tool}",
+            skill_id="system.root",
+            skill_input={},
+        )
+        workdir = tmp_path / blocked_tool
+        workdir.mkdir()
+        model = FakeToolCallModel([AIMessage(content="", tool_calls=[{
+            "id": f"call_{blocked_tool}",
+            "name": blocked_tool,
+            "args": args,
+        }])])
+
+        events = LlmSkillAgent(model, runtime, data_root=tmp_path / "data").run(
+            task_id=f"task_business_function_only_blocks_{blocked_tool}",
+            frame_id=frame_id,
+            prompt="Only use BusinessFunction schema/invoke.",
+            runtime_context={
+                "task_scoped_token": "runtime-token",
+                "execution_policy": {
+                    "workdir": str(workdir),
+                    "allowed_tools": [
+                        "business.functions.schema",
+                        "business.functions.invoke",
+                    ],
+                },
+            },
+            persistent_frame=True,
+        )
+
+        bound_tool_names = _bound_tool_names(model)
+        assert "get_business_function_schema" in bound_tool_names
+        assert "invoke_business_function" in bound_tool_names
+        assert not ({"read_file", "list_files", "command"} & bound_tool_names)
+
+        tool_result = next(event for event in events if event.type == "tool_result")
+        payload = json.loads(tool_result.content)
+        assert "TOOL_NOT_AUTHORIZED" in tool_result.error
+        assert payload["error_category"] == "TOOL_AUTHORIZATION"
+        assert payload["blocked_tool"] == blocked_tool
+        assert payload["recoverable"] is False
+        assert payload["llm_retry_allowed"] is False
+        assert payload["audit_alert"]["type"] == "business_function_allowed_tools_boundary_violation"
+        assert payload["audit_alert"]["blocked_tool"] == blocked_tool
 
 
 def test_llm_agent_hides_command_on_windows_or_without_workspace(tmp_path, monkeypatch):
