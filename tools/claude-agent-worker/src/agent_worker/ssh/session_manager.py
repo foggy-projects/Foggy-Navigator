@@ -39,11 +39,15 @@ class SshSession:
     cols: int = 80
     rows: int = 24
     directory_id: str | None = None
+    cwd: str | None = None
+    image_upload_count: int = 0
+    image_upload_dirs: set[str] = field(default_factory=set)
 
     def touch(self) -> None:
         self.last_activity = datetime.now(timezone.utc)
 
     async def close(self) -> None:
+        await self.cleanup_image_uploads()
         for label, action in [
             ("write_eof", lambda: self.process.stdin.write_eof()),
             ("process.close", lambda: self.process.close()),
@@ -57,6 +61,25 @@ class SshSession:
             await self.conn.wait_closed()
         except Exception:
             pass
+
+    async def cleanup_image_uploads(self) -> None:
+        if not self.image_upload_dirs:
+            return
+        dirs = list(self.image_upload_dirs)
+        self.image_upload_dirs.clear()
+        try:
+            async with self.conn.start_sftp_client() as sftp:
+                for directory in dirs:
+                    try:
+                        await sftp.rmtree(directory, ignore_errors=True)
+                    except Exception as exc:
+                        logger.debug(
+                            "Failed to remove SSH image upload dir for session %s: %s",
+                            self.session_id,
+                            exc,
+                        )
+        except Exception as exc:
+            logger.debug("Failed to start SFTP cleanup for SSH session %s: %s", self.session_id, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +148,7 @@ async def create_ssh_session(
         cols=cols,
         rows=rows,
         directory_id=directory_id,
+        cwd=cwd,
     )
     ssh_sessions[session_id] = session
 

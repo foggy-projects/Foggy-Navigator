@@ -905,6 +905,7 @@
         :height="activeWorkspace.terminalHeight.value"
         :tabs="activeWorkspace.terminalTabs.value"
         :active-tab-id="activeWorkspace.activeTermTabId.value"
+        :uploading-image="sshImageUploading"
         @add-tab="handleAddTerminalTab"
         @close-tab="handleCloseTerminalTab"
         @activate-tab="(id) => activeWorkspace!.activeTermTabId.value = id"
@@ -914,6 +915,7 @@
         @resize="(h) => activeWorkspace!.terminalHeight.value = h"
         @pop-out="handlePopOutTerminal"
         @sync="syncSshSessions(true)"
+        @attach-image="handleTerminalImageFiles"
       >
         <SshTerminal
           v-for="tab in activeWorkspace.terminalTabs.value"
@@ -921,6 +923,7 @@
           :tab="tab"
           :active="tab.tabId === activeWorkspace.activeTermTabId.value"
           :worker-id="selectedWorkerId!"
+          @paste-image="handleTerminalImageFiles"
         />
       </SshTerminalPanel>
     </main>
@@ -2995,7 +2998,7 @@ import PencilCanvas from '@/components/ipad/PencilCanvas.vue'
 import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
 import { useForwardSession } from '@/composables/useForwardSession'
 import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
-import { useAttachments, compressImage, fileIcon, toImagesJson } from '@/composables/useAttachments'
+import { useAttachments, compressImage, fileIcon, MAX_IMAGE_SIZE, toImagesJson } from '@/composables/useAttachments'
 import { useUserPreferences } from '@/composables/useUserPreferences'
 import * as dirApi from '@/api/claudeWorker'
 import {
@@ -3588,6 +3591,7 @@ const focusedSessionId = computed(() => {
 const showSshDialog = ref(false)
 const sshForm = ref({ host: '', port: 22, username: '', password: '' })
 const sshConnecting = ref(false)
+const sshImageUploading = ref(false)
 
 const addForm = ref({
   workerBackend: 'CLAUDE_CODE' as RegisterableWorkerBackend,
@@ -4424,8 +4428,33 @@ const childConversationMap = computed(() => {
   return map
 })
 
+const allChildConversationMap = computed(() => {
+  const map = new Map<string, ConversationGroup[]>()
+  for (const conv of relationConversationPool.value) {
+    if (!conv.parentSessionId) continue
+    const root = rootConversation(conv)
+    if (root.sessionId === conv.sessionId) continue
+    const existing = map.get(root.sessionId)
+    if (existing) {
+      existing.push(conv)
+    } else {
+      map.set(root.sessionId, [conv])
+    }
+  }
+  for (const children of map.values()) {
+    children.sort((a, b) =>
+      new Date(b.latestTask.createdAt).getTime() - new Date(a.latestTask.createdAt).getTime(),
+    )
+  }
+  return map
+})
+
 function childConversations(conv: ConversationGroup): ConversationGroup[] {
   return childConversationMap.value.get(conv.sessionId) || []
+}
+
+function allChildConversations(conv: ConversationGroup): ConversationGroup[] {
+  return allChildConversationMap.value.get(conv.sessionId) || []
 }
 
 function rootConversation(conv: ConversationGroup): ConversationGroup {
@@ -5934,15 +5963,19 @@ function exitBatchSelectMode() {
 }
 
 async function handleBatchDelete() {
-  const count = selectedConvIds.value.size
+  const sessionIds = [...selectedConvIds.value]
+  const count = sessionIds.length
   if (count === 0) return
+  const convs = activeConversations.value.filter((c) => selectedConvIds.value.has(c.sessionId))
+  const includesParentConversation = convs.some(cascadesToChildren)
   try {
     await ElMessageBox.confirm(
-      `确认删除选中的 ${count} 个会话？此操作不可恢复。`,
+      includesParentConversation
+        ? `确认删除选中的 ${count} 个会话？其中父会话会同时删除所有子会话。此操作不可恢复。`
+        : `确认删除选中的 ${count} 个会话？此操作不可恢复。`,
       '提示',
       { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
     )
-    const convs = activeConversations.value.filter((c) => selectedConvIds.value.has(c.sessionId))
     let deleted = 0
     for (const conv of convs) {
       await deleteConversationBySessionId(conv.sessionId, { refresh: false })
@@ -5966,8 +5999,8 @@ async function handleBatchArchive() {
   const count = sessionIds.length
   if (count === 0) return
   const includesParentConversation = sessionIds
-    .map((sessionId) => conversationBySessionId.value.get(sessionId))
-    .some((conv) => conv && !conv.parentSessionId && childConversations(conv).length > 0)
+    .map((sessionId) => conversationForSessionId(sessionId))
+    .some((conv) => cascadesToChildren(conv))
   try {
     await ElMessageBox.confirm(
       includesParentConversation
@@ -7259,9 +7292,13 @@ async function deleteConversationBySessionId(
   sessionId: string,
   options: { refresh?: boolean } = {},
 ) {
+  const conv = conversationForSessionId(sessionId)
+  const affectedSessionIds = affectedConversationSessionIds(conv, sessionId)
   await workerState.deleteConversation(sessionId)
-  taskMemory.deleteDraft('pane-' + sessionId)
-  closePanesForSession(sessionId)
+  for (const affectedSessionId of affectedSessionIds) {
+    taskMemory.deleteDraft('pane-' + affectedSessionId)
+    closePanesForSession(affectedSessionId)
+  }
   if (options.refresh !== false) {
     await reloadWorkerTasks()
     if (selectedDirectoryId.value) {
@@ -7273,7 +7310,7 @@ async function deleteConversationBySessionId(
 async function handleDeleteConversation(conv: ConversationGroup) {
   try {
     await ElMessageBox.confirm(
-      `确认删除该会话？包含 ${conv.taskCount} 个任务，此操作不可恢复。`,
+      deleteConversationConfirmMessage(conv),
       '提示',
       { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
     )
@@ -7303,7 +7340,7 @@ async function handleArchiveConversation(conv: ConversationGroup) {
 
 async function handlePaneArchive(sessionId?: string) {
   if (!sessionId) return
-  const conv = conversationBySessionId.value.get(sessionId)
+  const conv = conversationForSessionId(sessionId)
   try {
     await ElMessageBox.confirm(
       archiveConversationConfirmMessage(conv),
@@ -7330,22 +7367,69 @@ async function handlePaneUnarchive(sessionId?: string) {
 }
 
 function archiveConversationConfirmMessage(conv?: ConversationGroup | null): string {
-  const archivesChildren = !!conv && !conv.parentSessionId && childConversations(conv).length > 0
-  if (archivesChildren) {
+  if (cascadesToChildren(conv)) {
     return '确认归档该会话？该操作会同时归档所有子会话。归档后默认不在列表中显示，可通过"已归档"筛选查看。'
   }
   return '确认归档该会话？归档后默认不在列表中显示，可通过"已归档"筛选查看。'
 }
 
+function holdConversationConfirmMessage(conv?: ConversationGroup | null): string {
+  if (cascadesToChildren(conv)) {
+    return '确认搁置该会话？该操作会同时搁置所有子会话。搁置后不再出现在默认筛选中，可通过"已搁置"筛选查看。'
+  }
+  return '确认搁置该会话？搁置后不再出现在默认筛选中，可通过"已搁置"筛选查看。'
+}
+
+function deleteConversationConfirmMessage(conv?: ConversationGroup | null): string {
+  const taskCount = affectedTaskCount(conv)
+  if (cascadesToChildren(conv)) {
+    return `确认删除该会话？该操作会同时删除所有子会话，合计包含 ${taskCount ?? 0} 个任务，此操作不可恢复。`
+  }
+  return taskCount == null
+    ? '确认删除该会话？此操作不可恢复。'
+    : `确认删除该会话？包含 ${taskCount} 个任务，此操作不可恢复。`
+}
+
+function cascadesToChildren(conv?: ConversationGroup | null): boolean {
+  return !!conv && !conv.parentSessionId && allChildConversations(conv).length > 0
+}
+
+function affectedConversationSessionIds(
+  conv?: ConversationGroup | null,
+  fallbackSessionId?: string,
+): string[] {
+  const sessionIds = new Set<string>()
+  if (conv) {
+    sessionIds.add(conv.sessionId)
+    if (cascadesToChildren(conv)) {
+      for (const child of allChildConversations(conv)) {
+        sessionIds.add(child.sessionId)
+      }
+    }
+  } else if (fallbackSessionId) {
+    sessionIds.add(fallbackSessionId)
+  }
+  return [...sessionIds]
+}
+
+function affectedTaskCount(conv?: ConversationGroup | null): number | undefined {
+  if (!conv) return undefined
+  if (!cascadesToChildren(conv)) return conv.taskCount
+  return allChildConversations(conv).reduce((sum, child) => sum + child.taskCount, conv.taskCount)
+}
+
+function conversationForSessionId(sessionId: string): ConversationGroup | undefined {
+  return conversationBySessionId.value.get(sessionId)
+    || activeSessionConvs.value.find((c) => c.sessionId === sessionId)
+    || activeConversations.value.find((c) => c.sessionId === sessionId)
+}
+
 async function handlePaneDelete(sessionId?: string) {
   if (!sessionId) return
-  const conv = [...activeSessionConvs.value, ...activeConversations.value]
-    .find(c => c.sessionId === sessionId)
+  const conv = conversationForSessionId(sessionId)
   try {
     await ElMessageBox.confirm(
-      conv
-        ? `确认删除该会话？包含 ${conv.taskCount} 个任务，此操作不可恢复。`
-        : '确认删除该会话？此操作不可恢复。',
+      deleteConversationConfirmMessage(conv),
       '提示',
       { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
     )
@@ -7371,7 +7455,7 @@ async function handleUnarchiveConversation(conv: ConversationGroup) {
 async function handleHoldConversation(conv: ConversationGroup) {
   try {
     await ElMessageBox.confirm(
-      '确认搁置该会话？搁置后不再出现在默认筛选中，可通过"已搁置"筛选查看。',
+      holdConversationConfirmMessage(conv),
       '搁置会话',
       { type: 'info', confirmButtonText: '确认搁置', cancelButtonText: '取消' },
     )
@@ -7385,9 +7469,10 @@ async function handleHoldConversation(conv: ConversationGroup) {
 
 async function handlePaneHold(sessionId?: string) {
   if (!sessionId) return
+  const conv = conversationForSessionId(sessionId)
   try {
     await ElMessageBox.confirm(
-      '确认搁置该会话？搁置后不再出现在默认筛选中，可通过"已搁置"筛选查看。',
+      holdConversationConfirmMessage(conv),
       '搁置会话',
       { type: 'info', confirmButtonText: '确认搁置', cancelButtonText: '取消' },
     )
@@ -7650,6 +7735,80 @@ async function syncSshSessions(force = false) {
     console.warn('SSH session sync failed:', e)
   } finally {
     markDirectorySynced(dId)
+  }
+}
+
+function getActiveTerminalTab(): SshTerminalTab | null {
+  const ws = activeWorkspace.value
+  if (!ws) return null
+  return ws.terminalTabs.value.find((tab) => tab.tabId === ws.activeTermTabId.value) ?? null
+}
+
+function sendTerminalBracketedPaste(tab: SshTerminalTab, text: string) {
+  if (!tab.ws || tab.ws.readyState !== WebSocket.OPEN) {
+    throw new Error('终端连接未打开')
+  }
+  tab.ws.send(`\x1b[200~${text}\x1b[201~`)
+}
+
+async function handleTerminalImageFiles(inputFiles: File[] | FileList) {
+  const workerId = selectedWorkerId.value
+  const tab = getActiveTerminalTab()
+  if (!workerId || !tab) {
+    ElMessage.warning('请先打开一个 SSH 终端')
+    return
+  }
+  if (!tab.ws || tab.ws.readyState !== WebSocket.OPEN) {
+    ElMessage.warning('终端连接未打开，无法发送图片路径')
+    return
+  }
+
+  const imageFiles = Array.from(inputFiles).filter((file) => file.type.startsWith('image/'))
+  if (imageFiles.length === 0) {
+    ElMessage.warning('请选择图片文件')
+    return
+  }
+
+  sshImageUploading.value = true
+  let uploadedCount = 0
+  let skippedCount = 0
+  try {
+    for (const file of imageFiles) {
+      if (file.size > MAX_IMAGE_SIZE) {
+        skippedCount += 1
+        ElMessage.warning(`${file.name || '图片'} 超过 50MB，已跳过`)
+        continue
+      }
+
+      const attachment = await compressImage(file)
+      try {
+        const result = await sshApi.sshUploadImage(tab.sshSessionId, {
+          workerId,
+          name: attachment.name,
+          data: attachment.base64,
+          mimeType: attachment.mimeType,
+        })
+        const text = uploadedCount === 0 ? result.targetImagePath : ` ${result.targetImagePath}`
+        sendTerminalBracketedPaste(tab, text)
+        uploadedCount += 1
+      } finally {
+        URL.revokeObjectURL(attachment.previewUrl)
+      }
+    }
+
+    if (uploadedCount > 0) {
+      ElMessage.success(
+        uploadedCount === 1
+          ? '图片路径已写入 Codex 输入框'
+          : `已写入 ${uploadedCount} 张图片路径`,
+      )
+    } else if (skippedCount > 0) {
+      ElMessage.warning('没有可上传的图片')
+    }
+  } catch (e: unknown) {
+    ElMessage.error('图片发送失败: ' + ((e as Error).message || '未知错误'))
+  } finally {
+    sshImageUploading.value = false
   }
 }
 

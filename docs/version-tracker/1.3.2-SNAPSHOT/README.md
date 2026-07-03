@@ -28,6 +28,8 @@ CodexBizWorker 后续验收从 SIM 单点评估升级为通用上游接入闭环
 - upstream_acceptance_record: [workitems/OPT-003-codex-biz-upstream-acceptance.md](./workitems/OPT-003-codex-biz-upstream-acceptance.md)
 - worker_response_timeout_status: ready-for-signoff
 - worker_response_timeout_record: [workitems/OPT-004-worker-response-timeout-indicator.md](./workitems/OPT-004-worker-response-timeout-indicator.md)
+- codex_tui_image_paste_status: planned
+- codex_tui_image_paste_record: [workitems/OPT-005-codex-tui-image-paste.md](./workitems/OPT-005-codex-tui-image-paste.md)
 
 ## 文档清单
 
@@ -45,3 +47,4 @@ CodexBizWorker 后续验收从 SIM 单点评估升级为通用上游接入闭环
 - [acceptance/OPT-003-codex-biz-upstream-acceptance.md](./acceptance/OPT-003-codex-biz-upstream-acceptance.md) - OPT-003 功能级签收记录
 - [handoff/OPT-003-consumer-handoff.md](./handoff/OPT-003-consumer-handoff.md) - SIM / TMS consumer smoke 交接清单与 wrapper gate
 - [workitems/OPT-004-worker-response-timeout-indicator.md](./workitems/OPT-004-worker-response-timeout-indicator.md) - Worker 任务长时间无用户可见输出时的响应超时辅助提示
+- [workitems/OPT-005-codex-tui-image-paste.md](./workitems/OPT-005-codex-tui-image-paste.md) - 浏览器 SSH 终端向已运行 Codex TUI 注入图片路径附件的上传、落盘与 bracketed paste 方案

@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # SSH settings
     max_ssh_sessions: int = 5
     ssh_idle_timeout_seconds: int = 1800  # 30 min
+    ssh_image_max_bytes: int = 10 * 1024 * 1024
+    ssh_image_max_files_per_session: int = 50
 
     # Navigator platform URL (injected into SKILL.md templates at deploy time)
     navigator_api_base: str = "http://localhost:8112"
