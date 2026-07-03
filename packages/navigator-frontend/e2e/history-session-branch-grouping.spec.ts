@@ -128,6 +128,8 @@ async function fulfill(route: Route, data: unknown) {
 
 async function mockApi(page: Page, options: MockApiOptions = {}) {
   const archivedSessionIds = new Set<string>()
+  const heldSessionIds = new Set<string>()
+  const deletedSessionIds = new Set<string>()
   let resumeCalled = false
   const resumedBranchA = {
     ...tasks[1]!,
@@ -139,10 +141,19 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
     createdAt: '2026-06-19T08:30:00Z',
     updatedAt: '2026-06-19T08:30:00Z',
   }
+  const markSessionWithChildren = (target: Set<string>, sessionId: string) => {
+    target.add(sessionId)
+    for (const task of tasks.filter((item) => item.parentSessionId === sessionId)) {
+      markSessionWithChildren(target, task.sessionId)
+    }
+  }
   const listedTasks = () => {
     const sourceTasks = resumeCalled ? [resumedBranchA, ...tasks] : tasks
-    if (options.keepArchivedTasksInList) return sourceTasks
-    return sourceTasks.filter((task) => !archivedSessionIds.has(task.sessionId))
+    const withoutDeleted = sourceTasks.filter((task) => !deletedSessionIds.has(task.sessionId))
+    if (options.keepArchivedTasksInList) return withoutDeleted
+    return withoutDeleted.filter((task) =>
+      !archivedSessionIds.has(task.sessionId) && !heldSessionIds.has(task.sessionId),
+    )
   }
 
   await page.addInitScript(() => {
@@ -237,13 +248,17 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         : (url.searchParams.get('sessionIds') || '').split(',').filter(Boolean)
       await fulfill(
         route,
-        sessionIds.map((sessionId) => ({
-          sessionId,
-          pinned: false,
-          authBound: false,
-          interactionState: archivedSessionIds.has(sessionId) ? 'ARCHIVED' : 'PROCESSING',
-          tags: [],
-        })),
+        sessionIds
+          .filter((sessionId) => !deletedSessionIds.has(sessionId))
+          .map((sessionId) => ({
+            sessionId,
+            pinned: false,
+            authBound: false,
+            interactionState: archivedSessionIds.has(sessionId)
+              ? 'ARCHIVED'
+              : heldSessionIds.has(sessionId) ? 'ON_HOLD' : 'PROCESSING',
+            tags: [],
+          })),
       )
       return
     }
@@ -251,12 +266,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
     const archiveMatch = path.match(/^\/sessions\/([^/]+)\/config\/archive$/)
     if (archiveMatch) {
       const sessionId = archiveMatch[1]!
-      archivedSessionIds.add(sessionId)
-      if (sessionId === 'session-root') {
-        tasks
-          .filter((task) => task.parentSessionId === 'session-root')
-          .forEach((task) => archivedSessionIds.add(task.sessionId))
-      }
+      markSessionWithChildren(archivedSessionIds, sessionId)
       await fulfill(route, {
         sessionId,
         pinned: false,
@@ -264,6 +274,27 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         interactionState: 'ARCHIVED',
         tags: [],
       })
+      return
+    }
+
+    const holdMatch = path.match(/^\/sessions\/([^/]+)\/config\/hold$/)
+    if (holdMatch) {
+      const sessionId = holdMatch[1]!
+      markSessionWithChildren(heldSessionIds, sessionId)
+      await fulfill(route, {
+        sessionId,
+        pinned: false,
+        authBound: false,
+        interactionState: 'ON_HOLD',
+        tags: [],
+      })
+      return
+    }
+
+    const deleteMatch = path.match(/^\/sessions\/([^/]+)$/)
+    if (request.method() === 'DELETE' && deleteMatch) {
+      markSessionWithChildren(deletedSessionIds, deleteMatch[1]!)
+      await fulfill(route, null)
       return
     }
 
@@ -382,6 +413,50 @@ test.describe('history session branch grouping', () => {
     await expect(confirmDialog).toBeVisible()
     await expect(confirmDialog.getByText('该操作会同时归档所有子会话')).toBeVisible()
     await confirmDialog.getByRole('button', { name: '确认归档' }).click()
+
+    await expect(page.locator('.conv-item', { hasText: 'Main task domain' })).toHaveCount(0)
+  })
+
+  test('holds root conversation with cascade confirmation for branches', async ({ page }) => {
+    await mockApi(page, { keepArchivedTasksInList: true })
+    await page.goto('/')
+    await page.getByText('History Worker', { exact: true }).click()
+
+    const root = page.locator('.conv-item', { hasText: 'Main task domain' }).first()
+    await expect(root).toBeVisible()
+    await expect(root.locator('.branch-session-item')).toHaveCount(2)
+
+    await root.locator('.conv-more-trigger').click()
+    const menu = page.locator('.el-dropdown__popper:visible').last()
+    await expect(menu).toBeVisible()
+    await menu.getByText('搁置', { exact: true }).click()
+
+    const confirmDialog = page.getByRole('dialog', { name: '搁置会话' })
+    await expect(confirmDialog).toBeVisible()
+    await expect(confirmDialog.getByText('该操作会同时搁置所有子会话')).toBeVisible()
+    await confirmDialog.getByRole('button', { name: '确认搁置' }).click()
+
+    await expect(page.locator('.conv-item', { hasText: 'Main task domain' })).toHaveCount(0)
+  })
+
+  test('deletes root conversation with cascade confirmation for branches', async ({ page }) => {
+    await mockApi(page, { keepArchivedTasksInList: true })
+    await page.goto('/')
+    await page.getByText('History Worker', { exact: true }).click()
+
+    const root = page.locator('.conv-item', { hasText: 'Main task domain' }).first()
+    await expect(root).toBeVisible()
+    await expect(root.locator('.branch-session-item')).toHaveCount(2)
+
+    await root.locator('.conv-more-trigger').click()
+    const menu = page.locator('.el-dropdown__popper:visible').last()
+    await expect(menu).toBeVisible()
+    await menu.getByText('删除', { exact: true }).click()
+
+    const confirmDialog = page.getByRole('dialog', { name: '提示' })
+    await expect(confirmDialog).toBeVisible()
+    await expect(confirmDialog.getByText('该操作会同时删除所有子会话')).toBeVisible()
+    await confirmDialog.getByRole('button', { name: '确认' }).click()
 
     await expect(page.locator('.conv-item', { hasText: 'Main task domain' })).toHaveCount(0)
   })

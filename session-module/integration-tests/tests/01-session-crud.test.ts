@@ -202,4 +202,97 @@ describe('01 - 会话 CRUD (Session CRUD)', () => {
       }
     }
   });
+
+  test('父会话搁置应该级联搁置子会话且取消搁置只恢复父会话', async () => {
+    const createdIds: string[] = [];
+    const parent = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId
+    });
+    createdIds.push(parent.id);
+
+    const childA = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId,
+      parentSessionId: parent.id
+    });
+    createdIds.push(childA.id);
+
+    const childB = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId,
+      parentSessionId: parent.id
+    });
+    createdIds.push(childB.id);
+
+    try {
+      await client.holdConversation(parent.id);
+
+      const heldConfigs = await client.listSessionConfigs(createdIds);
+      const heldById = new Map(heldConfigs.map(config => [config.sessionId, config]));
+      expect(heldById.get(parent.id)?.interactionState).toBe('ON_HOLD');
+      expect(heldById.get(childA.id)?.interactionState).toBe('ON_HOLD');
+      expect(heldById.get(childB.id)?.interactionState).toBe('ON_HOLD');
+
+      await client.unholdConversation(parent.id);
+
+      const unheldConfigs = await client.listSessionConfigs(createdIds);
+      const unheldById = new Map(unheldConfigs.map(config => [config.sessionId, config]));
+      expect(unheldById.get(parent.id)?.interactionState).toBe('AWAITING_REPLY');
+      expect(unheldById.get(childA.id)?.interactionState).toBe('ON_HOLD');
+      expect(unheldById.get(childB.id)?.interactionState).toBe('ON_HOLD');
+    } finally {
+      for (const id of createdIds.reverse()) {
+        try {
+          await client.deleteSession(id);
+        } catch {
+          // best effort
+        }
+      }
+    }
+  });
+
+  test('父会话删除应该级联删除子会话', async () => {
+    const createdIds: string[] = [];
+    const parent = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId
+    });
+    createdIds.push(parent.id);
+
+    const childA = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId,
+      parentSessionId: parent.id
+    });
+    createdIds.push(childA.id);
+
+    const childB = await client.createSession({
+      title: generateTestSessionTitle(),
+      agentId: TEST_CONFIG.defaultAgentId,
+      parentSessionId: parent.id
+    });
+    createdIds.push(childB.id);
+
+    try {
+      await client.deleteSession(parent.id);
+
+      const sessions = await client.listSessions();
+      const visibleIds = new Set(sessions.map(session => session.id));
+      for (const id of createdIds) {
+        expect(visibleIds.has(id)).toBe(false);
+      }
+
+      const configs = await client.listSessionConfigs(createdIds);
+      expect(configs).toHaveLength(0);
+    } finally {
+      for (const id of createdIds.reverse()) {
+        try {
+          await client.deleteSession(id);
+        } catch {
+          // best effort
+        }
+      }
+    }
+  });
 });

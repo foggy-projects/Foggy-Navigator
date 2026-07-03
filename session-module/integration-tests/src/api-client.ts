@@ -131,6 +131,26 @@ export class SessionClient {
   }
 
   /**
+   * 搁置会话
+   */
+  async holdConversation(sessionId: string): Promise<SessionConfig> {
+    const response = await this.client.post<RXResponse<SessionConfig>>(
+      `/api/v1/sessions/${sessionId}/config/hold`
+    );
+    return response.data.data!;
+  }
+
+  /**
+   * 取消搁置会话
+   */
+  async unholdConversation(sessionId: string): Promise<SessionConfig> {
+    const response = await this.client.post<RXResponse<SessionConfig>>(
+      `/api/v1/sessions/${sessionId}/config/unhold`
+    );
+    return response.data.data!;
+  }
+
+  /**
    * 获取消息列表
    */
   async getMessages(sessionId: string): Promise<Message[]> {
