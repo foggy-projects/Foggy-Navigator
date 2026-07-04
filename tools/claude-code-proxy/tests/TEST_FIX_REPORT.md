@@ -137,7 +137,7 @@ def test_combined_truncation(self):
 - API endpoint 签名变更
 - 认证流程变化
 
-**建议**: 单独运行 `start-launcher.ps1` 后测试，或使用 Mock 服务器
+**建议**: 单独运行 `scripts/start-launcher.ps1` 后测试，或使用 Mock 服务器
 
 ### test_client.py (8 失败)
 

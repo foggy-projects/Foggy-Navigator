@@ -204,7 +204,7 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; 
     echo -e "${CYAN}  Login:      root / root123${NC}"
     echo ""
     echo -e "${GRAY}  Rebuild:    ./tmpfs-build-frontend.sh${NC}"
-    echo -e "${GRAY}  Nginx only: ./start-build-frontend.sh --skip-build${NC}"
+    echo -e "${GRAY}  Nginx only: ./scripts/start-build-frontend.sh --skip-build${NC}"
     echo -e "${GRAY}  Clean:      ./tmpfs-build-frontend.sh --clean${NC}"
     echo ""
 else

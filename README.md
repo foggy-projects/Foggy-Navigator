@@ -69,7 +69,7 @@ packages/
 
 ```powershell
 # 推荐：一键启动脚本
-powershell -ExecutionPolicy Bypass -File start-launcher.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-launcher.ps1
 
 # 手动启动
 mvn clean package -pl launcher -am -DskipTests

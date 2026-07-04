@@ -64,10 +64,10 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 
 | 脚本 | 说明 | 端口 |
 |------|------|------|
-| `start-launcher.ps1` | 后端（编译+启动） | 8112 |
-| `start-launcher-mock.ps1` | 后端（Mock LLM 模式） | 8112 |
-| `stop-launcher.ps1` | 停止后端 | - |
-| `start-frontend.ps1` | 前端开发服务器 | 5174 |
+| `scripts/start-launcher.ps1` | 后端（编译+启动） | 8112 |
+| `scripts/start-launcher-mock.ps1` | 后端（Mock LLM 模式） | 8112 |
+| `scripts/stop-launcher.ps1` | 停止后端 | - |
+| `scripts/start-frontend.ps1` | 前端开发服务器 | 5174 |
 | `tools/claude-agent-worker/start.ps1` | Claude Worker | 3031 |
 | `tools/claude-agent-worker/stop.ps1` | 停止 Claude Worker | - |
 | `tools/codex-agent-worker/start.ps1` | Codex Worker | 3051 |
@@ -90,20 +90,20 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 本机联调时注意区分两类 Biz Worker：
 
 - `tools/langgraph-biz-worker/start.ps1` 默认启动 Windows 本地 3061。
-- `start-launcher.ps1` 未显式设置 `BUSINESS_AGENT_DEV_SYNC_WORKER_URL` 时，会默认把 Skill 同步指向 `http://127.0.0.1:3161`，用于当前 WSL / 上游联调链路。
+- `scripts/start-launcher.ps1` 未显式设置 `BUSINESS_AGENT_DEV_SYNC_WORKER_URL` 时，会默认把 Skill 同步指向 `http://127.0.0.1:3161`，用于当前 WSL / 上游联调链路。
 
 ### 后端启动
 
 ```powershell
 # 推荐：一键启动脚本（仅停止 8112 端口进程，不影响其他 Java/Node 进程）
-powershell -ExecutionPolicy Bypass -File start-launcher.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-launcher.ps1
 
 # 手动启动
 mvn package -pl launcher -am -DskipTests
 java -jar launcher/target/launcher-1.0.0-SNAPSHOT.jar --spring.profiles.active=docker
 
 # 停止
-powershell -ExecutionPolicy Bypass -File stop-launcher.ps1
+powershell -ExecutionPolicy Bypass -File scripts/stop-launcher.ps1
 ```
 
 后端端口：8112，健康检查：`curl http://localhost:8112/actuator/health`
@@ -112,7 +112,7 @@ powershell -ExecutionPolicy Bypass -File stop-launcher.ps1
 
 ```powershell
 # 推荐：一键启动脚本
-powershell -ExecutionPolicy Bypass -File start-frontend.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-frontend.ps1
 
 # 手动启动
 cd packages/navigator-frontend
@@ -166,7 +166,7 @@ cd packages/navigator-frontend && pnpm exec vite build
 9. **Vite HMR 缓存陷阱**：修改 Vue 文件后如果浏览器行为与源码不符（如字段未传递、逻辑未生效），**首先怀疑 Vite HMR 缓存过期**，而非代码错误。排查步骤：
    - 用 Playwright 读取浏览器实际运行的函数源码（`comp.setupState.xxx.toString()`），与磁盘源文件对比
    - 如果不一致，执行：`Remove-Item -Recurse -Force packages/navigator-frontend/node_modules/.vite`，然后刷新页面
-   - 若仍不一致，重启 Vite dev server（`stop-frontend.ps1` → `start-frontend.ps1`）
+   - 若仍不一致，重启 Vite dev server（停止 5174 端口进程后执行 `scripts/start-frontend.ps1`）
 10. **会话 modelConfigId 绑定原则**：一个会话使用 `modelConfigId` 创建后（创建新会话必须指定 modelConfigId），该值永远固定，除非用户主动修改。会话内可以切换 `model`（如 opus → sonnet），但不能自动切换 `modelConfigId`（即 API 凭证/订阅不变）。
 11. **测试产物落点规范**：根目录禁止新增临时测试产物（如 `*.yaml`、`*.yml`、`*.png`、`.tmp-*.log`、`.tmp-*.json`）。临时调试/回归产物统一写入 `temp/test-artifacts/<任务或日期>/`，该目录仅用于本地暂存并保持 git ignore；需要长期保留的验收证据，写入对应版本目录下的 `docs/version-tracker/<version>/evidence/`。编写 Playwright、脚本或临时验证命令时，必须显式指定输出目录，避免再次把大量测试文件落到仓库根目录。
 12. **异常与事务治理规范**：后端可预期业务异常、资源 not-ready、readiness/preflight blocker 不得被裸抛成 HTTP 500。Service 层需要区分系统缺陷与业务/资源状态异常；会被外层捕获并转换为 structured response 的事务方法，优先使用统一的 `@ReadinessTransactional` 或等价 `noRollbackFor` 策略，self-healing/readiness 聚合入口优先隔离大外层事务，避免 `UnexpectedRollbackException` 覆盖真实响应。详细规范见 [后端异常处理与事务治理规范](docs/dev-specs/exception-handling-and-transaction-governance.md)。

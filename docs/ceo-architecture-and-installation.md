@@ -243,13 +243,13 @@ docker compose up -d mysql
 Windows 环境可以使用仓库脚本：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File start-launcher.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-launcher.ps1
 ```
 
 如果 JAR 已经构建过，可以跳过构建：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File start-launcher.ps1 -SkipBuild
+powershell -ExecutionPolicy Bypass -File scripts/start-launcher.ps1 -SkipBuild
 ```
 
 后端默认端口：
@@ -272,7 +272,7 @@ java -jar launcher/target/launcher-1.0.0-SNAPSHOT.jar --spring.profiles.active=d
 开发或演示环境可以启动 Vite：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File start-frontend.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-frontend.ps1
 ```
 
 默认访问地址：
@@ -285,7 +285,7 @@ powershell -ExecutionPolicy Bypass -File start-frontend.ps1
 生产或内网部署通常先构建静态资源，再由 Nginx 提供访问：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File start-frontend.ps1 -BuildOnly
+powershell -ExecutionPolicy Bypass -File scripts/start-frontend.ps1 -BuildOnly
 cd docker
 docker compose up -d nginx
 ```

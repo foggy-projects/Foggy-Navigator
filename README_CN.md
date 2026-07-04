@@ -8,16 +8,16 @@
 
 ```powershell
 # 完整启动（编译 + 启动），首次或代码有改动时使用
-powershell -ExecutionPolicy Bypass -File start-launcher.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-launcher.ps1
 
 # 跳过编译，直接用上次的 JAR 启动（代码没改动时用，省 30-60 秒）
-powershell -ExecutionPolicy Bypass -File start-launcher.ps1 -SkipBuild
+powershell -ExecutionPolicy Bypass -File scripts/start-launcher.ps1 -SkipBuild
 
 # Mock LLM 模式（不需要真实 LLM API Key）
-powershell -ExecutionPolicy Bypass -File start-launcher-mock.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-launcher-mock.ps1
 
 # 停止
-powershell -ExecutionPolicy Bypass -File stop-launcher.ps1
+powershell -ExecutionPolicy Bypass -File scripts/stop-launcher.ps1
 ```
 
 - 端口：`8112`
@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -File stop-launcher.ps1
 
 ```powershell
 # 一键启动
-powershell -ExecutionPolicy Bypass -File start-frontend.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-frontend.ps1
 
 # 或手动
 cd packages/navigator-frontend
@@ -65,8 +65,8 @@ cd packages/navigator-frontend && pnpm exec vite build
 
 | 脚本 | 参数 | 说明 |
 |------|------|------|
-| `start-launcher.ps1` | （无） | 编译 + 启动 |
-| `start-launcher.ps1` | `-SkipBuild` | 跳过 mvn package，直接启动已有 JAR |
+| `scripts/start-launcher.ps1` | （无） | 编译 + 启动 |
+| `scripts/start-launcher.ps1` | `-SkipBuild` | 跳过 mvn package，直接启动已有 JAR |
 
 ## 配置
 
