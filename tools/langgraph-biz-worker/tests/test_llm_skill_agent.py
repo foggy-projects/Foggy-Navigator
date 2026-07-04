@@ -2051,6 +2051,79 @@ def test_llm_agent_root_skill_can_invoke_business_function_directly(monkeypatch)
     assert any(event.tool_name == "invoke_business_function" for event in events)
 
 
+def test_llm_agent_can_get_business_function_schema_when_policy_explicitly_allows_it(monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_function_schema_001",
+        skill_id="system.root",
+        skill_input={"request": "inspect schema"},
+    )
+    calls = []
+
+    def fake_get_schema(task_scoped_token, function_id=None, version=None):
+        calls.append({
+            "task_scoped_token": task_scoped_token,
+            "function_id": function_id,
+            "version": version,
+        })
+        return {
+            "functionId": function_id,
+            "version": version,
+            "inputSchema": {"type": "object"},
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.get_business_function_schema",
+        fake_get_schema,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_schema",
+            "name": "get_business_function_schema",
+            "args": {
+                "function_id": "tms.order.save",
+                "version": "v1",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Schema inspected.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_root_function_schema_001",
+        frame_id=frame_id,
+        prompt="inspect schema",
+        runtime_context={
+            "task_scoped_token": "runtime-token",
+            "execution_policy": {
+                "allowed_tools": ["business.functions.schema"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    bound_tool_names = {tool["function"]["name"] for tool in model.bound_tools}
+    tool_result = next(e for e in events if e.type == "tool_result" and e.tool_name == "get_business_function_schema")
+    payload = json.loads(tool_result.content)
+
+    assert "get_business_function_schema" in bound_tool_names
+    assert "invoke_business_function" not in bound_tool_names
+    assert calls == [{
+        "task_scoped_token": "runtime-token",
+        "function_id": "tms.order.save",
+        "version": "v1",
+    }]
+    assert payload["ok"] is True
+    assert payload["result"]["functionId"] == "tms.order.save"
+
+
 def test_llm_agent_stops_on_non_recoverable_business_function_configuration_error(monkeypatch):
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
