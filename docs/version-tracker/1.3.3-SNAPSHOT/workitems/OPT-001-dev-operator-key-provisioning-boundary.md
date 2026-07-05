@@ -233,7 +233,8 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
   - 停运后重启自动恢复 runtime token 的 smoke 步骤。
 - evidence:
   - 2026-07-05 verified `navi upstream --help`, `navi upstream worker-host --help`, and `navi upstream client-app --help` locally without credentials.
-  - Current CLI has dedicated help for `worker-host` and `client-app`; `upstream model --help` and `upstream agent --help` return `Unknown command`, so the command matrix currently depends on top-level `upstream --help` and skill references.
+  - 2026-07-05 source fix added dedicated `upstream model --help` and `upstream agent --help` routes with explicit admin/control lane guidance.
+  - 2026-07-05 CLI regression: `mvn -pl navigator-open-sdk -am "-Dtest=UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`; result: 98 tests run, 0 failures, 0 errors, 0 skipped.
 
 ### Stage 4 - Regression Matrix
 
@@ -253,22 +254,41 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
   - Result: 26 tests run, 0 failures, 0 errors, 0 skipped.
   - 2026-07-05 expanded unit regression: `mvn -pl business-agent-module -am "-Dtest=AgentModelBindingServiceTest,AgentWorkspaceBindingServiceTest,AgentWorkerBindingServiceTest,ClientAppModelConfigGrantServiceTest,ClientAppUserGrantServiceTest,BizWorkerPoolServiceTest,UpstreamAdminModelConfigServiceTest,UpstreamAdminWorkerIdentityControllerTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
   - Result: 85 tests run, 0 failures, 0 errors, 0 skipped.
+  - 2026-07-05 CLI regression: `mvn -pl navigator-open-sdk -am "-Dtest=UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  - Result: 98 tests run, 0 failures, 0 errors, 0 skipped.
+  - Added CLI coverage for parent `model` / `agent` help, expired admin key HTTP 401 redaction, insufficient control key HTTP 403 redaction, and runtime-token exchange ignoring stale admin/control credentials.
 
 ### Stage 5 - SIM / TMS Provisioning Smoke
 
-- status: blocked-by-credential
-- goal: 用真实 sandbox profile 验证完整闭环。
+- status: tms-live-smoke-passed
+- goal: 先用 Navigator 自测闭环证明 provisioning 能力，再用真实 sandbox profile 验证 SIM / TMS 完整闭环。
 - actions:
+  - 先执行 `tools/navigator-upstream/scripts/navigator-provisioning-selftest.ps1 -PrepareOnly`，确认本地 worker-host manifest / Agent / directory fixture 可生成且 `worker-host verify` 不依赖上游。
+  - 在提供 LLM 资源后，使用 gitignored selftest profiles 执行 live selftest，覆盖 ClientApp、modelConfig、Agent、directory、readiness、owner-smoke。
   - 给 SIM 发放受限 dev provisioning credentials，执行 `worker-host apply`，确认 `school-sim-wsl-biz` 解析为 `BIZ_WORKER_IDENTITY`。
   - 给 TMS 发放受限 dev provisioning credentials，完成自己的 modelConfig、Agent sync、workspace binding、worker-host apply。
   - 分别执行 `verify-agent-readiness`、`owner-smoke`、Actor Home live smoke。
   - 执行停运超过 access token TTL 后重启 smoke，确认 runtime credential 自动换 token。
 - output:
+  - Navigator selftest smoke 记录。
   - SIM smoke 记录。
   - TMS smoke 记录。
   - secret leakage scan 记录。
-- blocker:
-  - 需要有效的 gitignored SIM / TMS sandbox provisioning credentials 和 runtime credentials。当前执行不读取 `.navigator/upstream.env` 内容，不访问真实 TMS，也不读取 `accounts/`。
+- evidence:
+  - 2026-07-05 Navigator prepare-only selftest passed without SIM / TMS credentials; local `worker-host verify` resolved Biz role from `BIZ_WORKER_IDENTITY`.
+  - 2026-07-05 Navigator live selftest passed with gitignored selftest profiles, tenant `navi-codex-biz-smoke-local`, ClientApp `capp_1d1b426a-92cb-4865-bed7-339c29c5d1ac`, modelConfig `7f43fd7c-4f36-4196-8ee8-b66c12aad2ea`, directory `20260705-c00b`, and agent `navigator-provisioning-selftest-agent-a`.
+  - 2026-07-05 readiness and owner-smoke both resolved `workerRole role=biz ... source=BIZ_WORKER_IDENTITY`; owner-smoke reported readiness OK and resources OK.
+  - 2026-07-05 selftest script was corrected so ClientApp directory creation uses the Claude anchor worker id while LangBiz execution uses the Biz worker identity.
+  - 2026-07-05 `-RunIsolationChecks` passed: Tenant A profile could not list Tenant B ClientApp model grants.
+  - 2026-07-05 SIM worker-host apply / verify passed with gitignored SIM profile; readiness / owner-smoke resolved `school-sim-wsl-biz` from `BIZ_WORKER_IDENTITY`.
+  - 2026-07-05 TMS worker-host apply / verify passed with gitignored TMS profile; readiness / owner-smoke resolved `tms-ui-experience-reviewer-biz` from `BIZ_WORKER_IDENTITY`.
+  - 2026-07-05 TMS Actor Home live smoke passed for `tms-ui-experience-reviewer-a`; task `lgt_5f997dcdb8834d51` completed and confirmed effective directory `20260705-228b`.
+  - 2026-07-05 TMS runtime profile recorded at `docs/scopes/tms/tms-ltl-ui-qa/runtime/actor-runtime-profiles.yml`.
+  - 2026-07-05 TMS provisioning run recorded at `docs/scopes/tms/tms-ltl-ui-qa/rehearsals/ui-experience-reviewer-navi-provisioning-run-20260705.md`.
+  - 2026-07-05 cross-upstream CLI negative smoke passed: SIM profile querying TMS ClientApp model grants and TMS profile querying SIM ClientApp model grants both failed with control-plane ClientApp mismatch.
+- remaining:
+  - Production still needs the final bootstrap / provisioning / runtime / break-glass SOP and credential expiry pre-warning.
+  - Stop/restart smoke after runtime access token TTL remains a follow-up; current live smoke proves runtime can execute with the available gitignored runtime credentials.
 
 ### Stage 6 - Production Policy
 
@@ -316,7 +336,7 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 
 ### CLI Experience Gaps
 
-1. `upstream model --help` and `upstream agent --help` currently return `Unknown command`; the top-level `upstream --help` contains the command list, but focused help should be added before formal production handoff.
+1. `upstream model --help` and `upstream agent --help` are fixed in source and covered by `UpstreamCliTest`; packaged CLI wrappers should be rebuilt before formal handoff.
 2. Error messages should distinguish at least four cases: runtime token expired, provisioning key expired, insufficient scope, and cross-boundary resource rejection.
 3. Profile-write commands must keep the current behavior of requiring `--write-profile` for credential material and refusing unsafe target profiles where implemented.
 
@@ -342,6 +362,17 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 
 ## Sandbox Smoke Plan
 
+### Navigator Selftest First
+
+1. Run `.\tools\navigator-upstream\scripts\navigator-provisioning-selftest.ps1 -PrepareOnly`.
+2. Confirm the generated worker-host manifest verifies locally without SIM / TMS credentials.
+3. Create gitignored selftest profiles from placeholder references under `tools/navigator-upstream/fixtures/provisioning-selftest/`.
+4. Provide `NAVI_SELFTEST_WORKER_TOKEN` for live worker-host registration; use `-GenerateEphemeralWorkerToken` only for disposable local registration where no real worker token exists.
+5. Provide `NAVI_SELFTEST_LLM_API_KEY` or prefill a selftest `NAVI_MODEL_CONFIG_ID` in a gitignored tenant profile.
+6. Run live selftest to cover ClientApp ensure, runtime/control key issue, runtime-token exchange, worker-host apply, ClientApp-owned modelConfig, Agent sync, directory bind, readiness, owner-smoke.
+7. Optional: run `-RunIsolationChecks` to prove one selftest ClientApp control key cannot operate the other selftest ClientApp.
+8. Only after this path passes, deliver scoped SIM / TMS dev provisioning credentials.
+
 ### SIM First
 
 1. Use SIM upstream admin key from gitignored profile.
@@ -363,11 +394,12 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 
 ## 立即行动清单
 
-1. 对照 `navigator-open-sdk` 的 `worker-host apply`、`model`、`agent sync`、`bind` 命令，补齐 CLI 侧 action scope 与 profile 依赖清单。
-2. 固化 SIM / TMS dev provisioning credentials 的 scope 模板和 profile 写入规则。
-3. 先验证 SIM dev provisioning credentials，再复制到 TMS；不要先发一个跨上游大权限凭据。
-4. 在补实现前先写隔离负向测试用例清单，尤其覆盖 modelConfig、Agent、directory、Biz Worker identity、upstream user grant。
-5. 保留当前 TMS UI Experience Reviewer provisioning 作为首个端到端验收样本，但在 readiness / owner-smoke 通过前不派发首轮 UI 巡检任务。
+1. 以 Navigator selftest live-passed 结果作为平台 provisioning 基线，不再把 SIM / TMS smoke 作为平台能力的首个证明。
+2. 分别签发 SIM 与 TMS 受限 dev provisioning credentials，scope 使用本文 upstream admin lane 与 ClientApp control lane 模板。
+3. 先验证 SIM dev provisioning credentials：`worker-host apply` 后 readiness / owner-smoke 必须显示 `workerRole role=biz ... source=BIZ_WORKER_IDENTITY`。
+4. 再验证 TMS dev provisioning credentials：完成 modelConfig、Agent sync、directory binding、worker-host apply、readiness、owner-smoke、Actor Home live smoke。
+5. 补 CLI / live smoke 隔离负向验证：SIM credentials 操作 TMS 资源失败，TMS credentials 操作 SIM 资源失败。
+6. 在 TMS UI Experience Reviewer owner-smoke 与 live smoke 通过前，不派发首轮 UI 巡检任务。
 
 ## 验收标准
 
@@ -410,8 +442,9 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 | dev provisioning credentials 方案设计 | in-progress | 已确认应拆分 upstream admin lane 与 ClientApp control lane；待补 profile / rotation 细节 |
 | 权限入口清单 | done | 已盘点 admin/control/runtime 三条 lane 与关键 controller/service 校验点 |
 | 权限校验实现 / 调整 | review-complete | 初步 review 未发现需要先改代码的核心越权点；已补 binding 层跨 ClientApp / 跨 upstream 负向回归 |
-| CLI / profile flow 梳理 | done | 已记录 admin/control/runtime lane 的命令矩阵、profile 写入规则和当前 CLI help 缺口 |
-| worker-host apply 闭环验证 | not-started | 需要有效 operator credential 和 sandbox evidence |
+| CLI / profile flow 梳理 | tested | 已记录 admin/control/runtime lane 的命令矩阵、profile 写入规则；已补 `model/agent --help` route 与 CLI 回归 |
+| Navigator provisioning selftest | live-passed | 已新增 selftest 脚本、fixture README 和 profile placeholder；`-PrepareOnly` 与 live provisioning 均通过；readiness / owner-smoke 确认 Biz role source 为 `BIZ_WORKER_IDENTITY` |
+| worker-host apply 闭环验证 | tms-live-passed | 本地 selftest、SIM、TMS 均完成 worker-host apply / readiness / owner-smoke；TMS Actor Home live smoke 已确认 `20260705-228b` |
 | 正式环境授权文档 | planned | 需沉淀 production bootstrap / provisioning / runtime / break-glass 四层口径 |
 | Credential lifecycle 设计 | draft-complete | 已记录 dev/sandbox 与 production TTL、轮换、停运后 runtime token 自动恢复策略；待实现预警 / scheduled check |
 | Sandbox smoke plan | draft-complete | 已记录 SIM first、TMS second 的 smoke 顺序和禁止访问真实 TMS / accounts 的边界 |
@@ -421,11 +454,11 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 | Test Area | Status | Required Evidence |
 | --- | --- | --- |
 | SIM dev credentials provisioning smoke | not-run | `worker-host apply` + readiness + owner-smoke |
-| TMS dev credentials provisioning smoke | not-run | model / Agent / directory / worker-host provisioning |
-| Cross-upstream isolation regression | partial | 已覆盖 model grant/default、user grant、upstream model、worker identity/pool、model/workspace/worker binding 层跨 ClientApp / 跨 upstream 资源拒绝；仍需 CLI / smoke 覆盖 SIM credential 操作 TMS、TMS credential 操作 SIM |
-| Expired / insufficient key negative cases | not-run | 401 / 403 行为清晰且不打印敏感信息 |
-| Runtime/admin credential separation regression | not-run | admin/operator key 过期时，已有 runtime ask / readiness / owner-smoke 不受影响 |
-| Secret leakage scan | not-run | 可提交文件不包含 key、token、cookie、真实账号密码 |
+| TMS dev credentials provisioning smoke | passed | modelConfig `a8ed6f14-949c-4003-b108-99b78de65ff5`、Agent sync、directory `20260705-228b` binding、worker-host apply、readiness、owner-smoke、Actor Home live smoke 均通过 |
+| Cross-upstream isolation regression | passed | 已覆盖 service-level regression、Navigator selftest 同租户跨 ClientApp control 负向 smoke；CLI 负向 smoke 覆盖 SIM profile 查询 TMS ClientApp grant 与 TMS profile 查询 SIM ClientApp grant 均失败 |
+| Expired / insufficient key negative cases | partial | CLI 回归覆盖 admin lane HTTP 401、control lane HTTP 403，均断言不打印敏感值；仍需 live sandbox provisioning smoke |
+| Runtime/admin credential separation regression | partial | CLI 回归覆盖 runtime-token exchange 不发送 stale admin/control key；Navigator selftest 与 TMS Actor Home live smoke 已覆盖 readiness / owner-smoke / ask 成功路径；仍需停运后重启 token exchange smoke |
+| Secret leakage scan | partial | post-live 已扫描 1.3.3 文档、selftest 脚本、provisioning selftest fixtures、CLI source/test 文件，无真实 secret-like 值命中；提交前仍需按最终 staged 范围复扫 |
 
 ### Experience Progress
 
@@ -436,8 +469,6 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 
 - current_status: not-ready
 - blockers:
-  - dev provisioning credentials 尚未正式创建和验证。
-  - 跨上游隔离已有 service-level regression，但尚未补 CLI / live sandbox smoke evidence。
   - 正式环境 request/approve 分层策略已有 draft，尚未形成最终运维 SOP。
   - credential 到期预警、轮换和 runtime 隔离策略已有 draft，尚未补自动化预警和停运后重启 smoke 证据。
 - required_follow_up:

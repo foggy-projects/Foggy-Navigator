@@ -38,6 +38,7 @@ class UpstreamCliTest {
     private static String lastClientAppControlKeyHeader;
     private static String lastUpstreamUserIdHeader;
     private static String responseOverride;
+    private static int responseStatusOverride;
     private static List<String> requestPaths;
     private static List<String> requestBodies;
 
@@ -211,7 +212,7 @@ class UpstreamCliTest {
             }
             byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.sendResponseHeaders(responseStatusOverride, bytes.length);
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(bytes);
             }
@@ -243,8 +244,32 @@ class UpstreamCliTest {
         requestPaths = new ArrayList<>();
         requestBodies = new ArrayList<>();
         responseOverride = "{\"code\":0,\"data\":{}}";
+        responseStatusOverride = 200;
         stdout = new ByteArrayOutputStream();
         stderr = new ByteArrayOutputStream();
+    }
+
+    @Test
+    void modelAndAgentParentHelpAreAvailable() {
+        int modelCode = run(new String[]{"upstream", "model", "--help"}, Map.of());
+        String modelOutput = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, modelCode);
+        assertTrue(modelOutput.contains("Usage: navi upstream model <command> [options]"));
+        assertTrue(modelOutput.contains("ClientApp model create/update/grant/default commands use NAVI_CONTROL_API_KEY"));
+        assertTrue(modelOutput.contains("System model commands use NAVI_ADMIN_API_KEY"));
+        assertTrue(requestPaths.isEmpty());
+
+        stdout.reset();
+        stderr.reset();
+        int agentCode = run(new String[]{"upstream", "agent", "--help"}, Map.of());
+        String agentOutput = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, agentCode);
+        assertTrue(agentOutput.contains("Usage: navi upstream agent <command> [options]"));
+        assertTrue(agentOutput.contains("ClientApp agent sync/bind commands use NAVI_CONTROL_API_KEY"));
+        assertTrue(agentOutput.contains("System agent commands use NAVI_ADMIN_API_KEY"));
+        assertTrue(requestPaths.isEmpty());
     }
 
     @Test
@@ -383,6 +408,36 @@ class UpstreamCliTest {
     }
 
     @Test
+    void runtimeTokenIgnoresAdminAndControlCredentialsFromProfile() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Files.writeString(profileDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_CLIENT_APP_KEY=cak-runtime-key
+                NAVI_CLIENT_APP_SECRET=cas-runtime-secret
+                NAVI_ADMIN_API_KEY=naa-expired-admin-key
+                NAVI_CONTROL_API_KEY=cac-expired-control-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = "{\"accessToken\":\"cat-runtime-secret\",\"appKey\":\"cak-runtime-key\",\"clientAppId\":\"app-1\",\"expiresInSeconds\":1800}";
+
+        int code = run(new String[]{"upstream", "runtime-token"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/client-apps/runtime-token", lastPath);
+        assertEquals("cak-runtime-key", lastClientAppKeyHeader);
+        assertEquals("cas-runtime-secret", lastClientAppSecretHeader);
+        assertNull(lastUpstreamAdminKeyHeader);
+        assertNull(lastClientAppControlKeyHeader);
+        assertTrue(output.contains("runtime-token ok"));
+        assertFalse(output.contains("naa-expired-admin-key"));
+        assertFalse(output.contains("cac-expired-control-key"));
+        assertFalse(output.contains("cas-runtime-secret"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
     void runtimeTokenWriteProfileStoresAccessTokenWithoutPrintingIt() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
         Path profileDir = tempDir.resolve(".navigator");
@@ -500,6 +555,29 @@ class UpstreamCliTest {
         assertTrue(output.contains("credential sourceRequestId=uabr-1"));
         assertTrue(output.contains("rotation=use admin-key rotate --credential-id ucaac-1"));
         assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
+    void adminKeyInspectReportsUnauthorizedWithoutLeakingExpiredAdminKey() throws Exception {
+        Files.writeString(tempDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-expired-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseStatusOverride = 401;
+        responseOverride = """
+                {"code":401,"msg":"credential expired for key=naa-expired-admin-key"}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "inspect",
+                "--profile", "upstream.env"}, Map.of());
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(1, code);
+        assertEquals("/api/v1/upstream-admin/admin-credential/current", lastPath);
+        assertEquals("naa-expired-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(error.contains("HTTP 401"));
+        assertTrue(error.contains("credential expired"));
+        assertFalse(error.contains("naa-expired-admin-key"));
     }
 
     @Test
@@ -2746,6 +2824,29 @@ class UpstreamCliTest {
         assertTrue(output.contains("stored=NAVI_MODEL_CONFIG_ID"));
         assertTrue(profileContent.contains("NAVI_MODEL_CONFIG_ID=model-live"));
         assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void modelGrantReportsForbiddenWithoutLeakingControlCredential() {
+        responseStatusOverride = 403;
+        responseOverride = """
+                {"code":403,"msg":"insufficient scope for token=control-key-secret"}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "grant",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--model-config-id", "model-live"}, Map.of());
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(1, code);
+        assertEquals("/api/v1/client-apps/app-1/model-config-grants", lastPath);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(error.contains("HTTP 403"));
+        assertTrue(error.contains("insufficient scope"));
+        assertFalse(error.contains("control-key-secret"));
     }
 
     @Test

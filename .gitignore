@@ -126,6 +126,7 @@ build/
 .navi-upstream.env
 .navigator/upstream.env
 .navigator/*.env
+.navigator/*.json
 .navigator/tenants/*.env
 
 # Configuration files with sensitive data

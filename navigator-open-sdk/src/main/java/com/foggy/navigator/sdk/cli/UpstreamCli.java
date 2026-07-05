@@ -187,6 +187,7 @@ public class UpstreamCli {
             case "skill sync" -> skillSync(args);
             case "skill clear-public" -> skillClearPublic(args);
             case "skill clear-account" -> skillClearAccount(args);
+            case "agent", "agent help" -> agentUsage();
             case "agent sync" -> agentSync(args);
             case "agent model-bindings" -> agentModelBindings(args);
             case "agent bind-model" -> agentBindModel(args);
@@ -225,6 +226,7 @@ public class UpstreamCli {
             case "route list" -> routeList(args);
             case "route set" -> routeSet(args);
             case "route status" -> routeStatus(args);
+            case "model", "model help" -> modelUsage();
             case "model grants" -> modelGrants(args);
             case "model grant" -> modelGrant(args);
             case "model set-default" -> modelSetDefault(args);
@@ -338,6 +340,30 @@ public class UpstreamCli {
         out.println("  ensure-tenant --source-system <system> --source-tenant-id <id> [--name <name>] [--upstream-ref <ref>] [--agent-code <id>] [--worker-backend <backend>] [--physical-worker-id <id>] [--directory-id <id>] [--biz-worker-base-url <url>] [--tenant-profile <path>] [--rotate-credentials] --write-profile");
         out.println("  issue-runtime-key --client-app-id <id> [--tenant-profile <path>] [--rotate-runtime-credential] --write-profile");
         out.println("  issue-control-key --client-app-id <id> [--scopes <scope[,scope]>] [--tenant-profile <path>] --write-profile");
+        return 0;
+    }
+
+    private int agentUsage() {
+        out.println("Usage: navi upstream agent <command> [options]");
+        out.println("Commands: sync, model-bindings, bind-model, unbind-model, set-default-model, workspace-bindings, bind-workspace, unbind-workspace, set-default-workspace, worker-bindings, bind-worker, unbind-worker, set-default-worker, system-list, system-create, system-get, system-update, system-model-bindings, system-bind-model, system-unbind-model, system-set-default-model, system-workspace-bindings, system-bind-workspace, system-unbind-workspace, system-set-default-workspace, system-worker-bindings, system-bind-worker, system-unbind-worker, system-set-default-worker");
+        out.println("  sync --manifest <json> --client-app-id <id>");
+        out.println("  bind-model|set-default-model --client-app-id <id> --agent-code <id> --model-config-id <id>");
+        out.println("  bind-workspace|set-default-workspace --client-app-id <id> --agent-code <id> --directory-id <id>");
+        out.println("  bind-worker|set-default-worker --client-app-id <id> --agent-code <id> --worker-pool-id <id>");
+        out.println("  system-create|system-update --file <json> [--target-tenant-id <tenantId>]");
+        out.println("ClientApp agent sync/bind commands use NAVI_CONTROL_API_KEY. System agent commands use NAVI_ADMIN_API_KEY.");
+        return 0;
+    }
+
+    private int modelUsage() {
+        out.println("Usage: navi upstream model <command> [options]");
+        out.println("Commands: grants, grant, set-default, create, update, rotate-key, clear-key, system-list, system-create, system-update, system-rotate-key, system-clear-key");
+        out.println("  grants --client-app-id <id>");
+        out.println("  grant --client-app-id <id> --model-config-id <id> [--set-default] [--write-profile]");
+        out.println("  create|update --client-app-id <id> --name <name> --model-name <name> [--worker-backend <backend>] [--api-key-env <env>] [--set-default]");
+        out.println("  rotate-key --client-app-id <id> --model-config-id <id> --api-key-env <env>");
+        out.println("  system-create|system-update --name <name> --model-name <name> [--target-tenant-id <tenantId>] [--api-key-env <env>]");
+        out.println("ClientApp model create/update/grant/default commands use NAVI_CONTROL_API_KEY. System model commands use NAVI_ADMIN_API_KEY.");
         return 0;
     }
 
