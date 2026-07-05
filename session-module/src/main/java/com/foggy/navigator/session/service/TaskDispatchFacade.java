@@ -56,6 +56,12 @@ import java.util.*;
 public class TaskDispatchFacade {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final List<String> CONTEXT_BUSY_STATES = List.of(
+            "PENDING",
+            "SUBMITTED",
+            "RUNNING",
+            "AWAITING_PERMISSION",
+            "AWAITING_INPUT");
 
     private final UnifiedAgentResolver agentResolver;
     private final SessionBindingService bindingService;
@@ -133,6 +139,7 @@ public class TaskDispatchFacade {
 
         TaskCreateTargetResolver.CreateExecutionTarget target = createTargetResolver().resolveCreateExecutionTarget(request);
         if (target.directProviderRoute()) {
+            rejectBusyContextContinuationIfNeeded(target.providerType(), request, context);
             return createTaskDirect(target.providerType(), request, context);
         }
 
@@ -953,6 +960,39 @@ public class TaskDispatchFacade {
         persistTaskRequestFields(dto.getTaskId(), request);
         persistContextBinding(dto, request, context, providerType);
         return dto;
+    }
+
+    private void rejectBusyContextContinuationIfNeeded(String providerType,
+                                                       TaskDispatchRequest request,
+                                                       AgentResolveContext context) {
+        if (!ProviderRouteRegistry.PROVIDER_LANGGRAPH_BIZ_WORKER.equals(trimToNull(providerType))
+                || sessionTaskRepository == null
+                || request == null) {
+            return;
+        }
+        String contextId = trimToNull(request.getContextId());
+        String sessionId = trimToNull(request.getSessionId());
+        String userId = context != null ? trimToNull(context.getUserId()) : null;
+        if (contextId == null || sessionId == null || userId == null) {
+            return;
+        }
+
+        List<SessionTaskEntity> activeTasks =
+                sessionTaskRepository.findBySessionIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
+                        sessionId,
+                        userId,
+                        providerType,
+                        CONTEXT_BUSY_STATES);
+        if (activeTasks == null || activeTasks.isEmpty()) {
+            return;
+        }
+
+        SessionTaskEntity activeTask = activeTasks.get(0);
+        throw new IllegalStateException(
+                "CONTEXT_RUNTIME_BUSY: contextId " + contextId
+                        + " already has active task " + activeTask.getTaskId()
+                        + " in status " + activeTask.getStatus()
+                        + "; retry after the active task reaches a terminal state");
     }
 
     private boolean bindContinuationFromContext(TaskDispatchRequest request, AgentResolveContext context) {

@@ -36,6 +36,12 @@ public interface SessionTaskRepository extends JpaRepository<SessionTaskEntity, 
 
     List<SessionTaskEntity> findByUserIdAndStatusInOrderByCreatedAtDesc(String userId, Collection<String> statuses);
 
+    List<SessionTaskEntity> findBySessionIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
+            String sessionId,
+            String userId,
+            String providerType,
+            Collection<String> statuses);
+
     /** 批量按 sessionId 查询任务（用于 N+1 消除） */
     List<SessionTaskEntity> findBySessionIdInOrderByCreatedAtDesc(Collection<String> sessionIds);
 

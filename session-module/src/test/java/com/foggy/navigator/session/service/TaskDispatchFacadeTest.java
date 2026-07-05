@@ -1950,6 +1950,7 @@ class TaskDispatchFacadeTest {
         TaskQueryProvider langgraphBizProvider = mock(TaskQueryProvider.class);
         facade = createFacade(List.of(langgraphBizProvider));
         ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .contextId("bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28")
@@ -1993,6 +1994,12 @@ class TaskDispatchFacadeTest {
                 .thenReturn(Optional.of(boundContext));
         when(sessionRepository.findById("session-langgraph-biz-bound")).thenReturn(Optional.of(session));
         when(langgraphBizProvider.getProviderType()).thenReturn("langgraph-biz-worker");
+        when(sessionTaskRepository.findBySessionIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
+                eq("session-langgraph-biz-bound"),
+                eq("agent-owner-1"),
+                eq("langgraph-biz-worker"),
+                any()))
+                .thenReturn(List.of());
         when(langgraphBizProvider.createTaskDirect(any(), eq("agent-owner-1"), eq("tenant-1")))
                 .thenReturn(directTask);
 
@@ -2015,6 +2022,73 @@ class TaskDispatchFacadeTest {
                         && "session-langgraph-biz-bound".equals(saved.getNavigatorSessionId())
                         && "tms-tenant-88800-root-agent".equals(saved.getTargetAgentId())
                         && "langgraph-biz-worker".equals(saved.getAgentType())));
+        verifyNoInteractions(agentResolver);
+    }
+
+    @Test
+    void createTask_withKnownLangGraphBizContextRejectsDirectTaskWhenSessionHasActiveTask() {
+        TaskQueryProvider langgraphBizProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(langgraphBizProvider));
+        ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+
+        String contextId = "bctx_20260705_e2_e277c060b1f64d93bd1477ef23f9eb2e";
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextId(contextId)
+                .prompt("immediate second ask")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("agent-owner-1")
+                .tenantId("tenant-1")
+                .requestSource("OPEN_API")
+                .build();
+
+        AgentConversationContextEntity boundContext = new AgentConversationContextEntity();
+        boundContext.setContextId(contextId);
+        boundContext.setUserId("agent-owner-1");
+        boundContext.setTargetAgentId("tms-tenant-88800-root-agent");
+        boundContext.setAgentType("langgraph-biz-worker");
+        boundContext.setNavigatorSessionId("session-langgraph-biz-bound");
+
+        SessionEntity session = new SessionEntity();
+        session.setId("session-langgraph-biz-bound");
+        session.setUserId("agent-owner-1");
+        session.setAgentId("tms-tenant-88800-root-agent");
+        session.setProviderType("langgraph-biz-worker");
+        session.setCurrentWorkerId("worker-langgraph-1");
+        session.setCurrentDirectoryId("dir-langgraph-1");
+
+        SessionTaskEntity activeTask = sessionTask(
+                "lgt_45e01f2e4dfd42e9",
+                "session-langgraph-biz-bound",
+                "langgraph-biz-worker",
+                "worker-langgraph-1",
+                "dir-langgraph-1",
+                "RUNNING",
+                LocalDateTime.of(2026, 7, 5, 22, 13, 26),
+                "{}");
+        activeTask.setUserId("agent-owner-1");
+
+        when(agentConversationContextRepository.findById(contextId)).thenReturn(Optional.of(boundContext));
+        when(agentConversationContextRepository.findByContextIdAndUserId(contextId, "agent-owner-1"))
+                .thenReturn(Optional.of(boundContext));
+        when(sessionRepository.findById("session-langgraph-biz-bound")).thenReturn(Optional.of(session));
+        when(langgraphBizProvider.getProviderType()).thenReturn("langgraph-biz-worker");
+        when(sessionTaskRepository.findBySessionIdAndUserIdAndProviderTypeAndStatusInOrderByCreatedAtDesc(
+                eq("session-langgraph-biz-bound"),
+                eq("agent-owner-1"),
+                eq("langgraph-biz-worker"),
+                any()))
+                .thenReturn(List.of(activeTask));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> facade.createTask(request, context));
+
+        assertTrue(error.getMessage().contains("CONTEXT_RUNTIME_BUSY"));
+        assertTrue(error.getMessage().contains(contextId));
+        assertTrue(error.getMessage().contains("lgt_45e01f2e4dfd42e9"));
+        verify(langgraphBizProvider, never()).createTaskDirect(any(), anyString(), anyString());
+        verify(langgraphBizProvider, never()).resumeTask(anyString(), anyString(), any());
         verifyNoInteractions(agentResolver);
     }
 

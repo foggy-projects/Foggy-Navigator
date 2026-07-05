@@ -1595,6 +1595,54 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void askAgent_returnsRxFailureWhenSubmitRejectsBusyContext() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentSessionService sessionService = mock(BusinessAgentSessionService.class);
+        CodingAgentRepository codingAgentRepository = mock(CodingAgentRepository.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                codingAgentRepository,
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("立即继续");
+        form.setContextId(STANDARD_CONTEXT_ID);
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(sessionService.getSession("tenant-1", "app-1", "upstream-a", STANDARD_CONTEXT_ID))
+                .thenReturn(new BusinessAgentSessionDTO());
+        CodingAgentEntity agentEntity = new CodingAgentEntity();
+        agentEntity.setAgentId("agent-1");
+        agentEntity.setTenantId("tenant-1");
+        agentEntity.setUserId("owner-1");
+        when(codingAgentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
+                .thenReturn(Optional.of(agentEntity));
+        when(sessionQueryService.resolveSessionId(STANDARD_CONTEXT_ID, "owner-1"))
+                .thenReturn(Optional.of("session-1"));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenThrow(new IllegalStateException(
+                "CONTEXT_RUNTIME_BUSY: contextId " + STANDARD_CONTEXT_ID
+                        + " already has active task lgt_45e01f2e4dfd42e9"));
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("CONTEXT_RUNTIME_BUSY"));
+        assertTrue(result.getMsg().contains("lgt_45e01f2e4dfd42e9"));
+        verify(sessionService, never()).bindOpenApiSession(
+                any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void getSessionMessages_hidesInternalRuntimeMessagesByDefault() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);

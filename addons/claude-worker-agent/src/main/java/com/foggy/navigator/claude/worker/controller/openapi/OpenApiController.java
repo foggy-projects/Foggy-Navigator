@@ -529,22 +529,29 @@ public class OpenApiController {
 
         TaskSubmittingA2aAgent submittingAgent = new TaskSubmittingA2aAgentDecorator(
                 agent, agentSubmitPipeline, route.agentId(), ctx);
-        A2aTask task = submittingAgent.submitTask(AgentTaskSubmitRequest.builder()
-                .agentId(route.agentId())
-                .providerType(stringValue(metadata.get("providerType")))
-                .resolveContext(ctx)
-                .message(message)
-                .prompt(messageContent)
-                .contextId(contextId)
-                .metadata(metadata)
-                .modelConfigId(modelConfigId)
-                .model(modelResource.modelName())
-                .workerId(stringValue(metadata.get("workerId")))
-                .directoryId(stringValue(metadata.get("directoryId")))
-                .cwd(stringValue(metadata.get("cwd")))
-                .maxTurns(form.getMaxTurns())
-                .attachments(normalizedAttachments.isEmpty() ? null : normalizedAttachments)
-                .build());
+        A2aTask task;
+        try {
+            task = submittingAgent.submitTask(AgentTaskSubmitRequest.builder()
+                    .agentId(route.agentId())
+                    .providerType(stringValue(metadata.get("providerType")))
+                    .resolveContext(ctx)
+                    .message(message)
+                    .prompt(messageContent)
+                    .contextId(contextId)
+                    .metadata(metadata)
+                    .modelConfigId(modelConfigId)
+                    .model(modelResource.modelName())
+                    .workerId(stringValue(metadata.get("workerId")))
+                    .directoryId(stringValue(metadata.get("directoryId")))
+                    .cwd(stringValue(metadata.get("cwd")))
+                    .maxTurns(form.getMaxTurns())
+                    .attachments(normalizedAttachments.isEmpty() ? null : normalizedAttachments)
+                    .build());
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            return RX.failB(firstNonBlank(
+                    sanitizeDiagnosticText(e.getMessage()),
+                    "open api request rejected"));
+        }
         if (task != null && !StringUtils.hasText(task.getContextId())) {
             task.setContextId(contextId);
         }
