@@ -235,6 +235,8 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
   - 2026-07-05 verified `navi upstream --help`, `navi upstream worker-host --help`, and `navi upstream client-app --help` locally without credentials.
   - 2026-07-05 source fix added dedicated `upstream model --help` and `upstream agent --help` routes with explicit admin/control lane guidance.
   - 2026-07-05 CLI regression: `mvn -pl navigator-open-sdk -am "-Dtest=UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`; result: 98 tests run, 0 failures, 0 errors, 0 skipped.
+  - 2026-07-05 CLI now reports `runtimeToken.expiryStatus` and automatic refresh guidance from ClientApp key-secret, plus `credential expiryStatus` / `expiresInDays` / `expiryAction` for upstream admin credential inspect.
+  - 2026-07-05 CLI regression re-run: `mvn -pl navigator-open-sdk -am "-Dtest=UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`; result: 99 tests run, 0 failures, 0 errors, 0 skipped.
 
 ### Stage 4 - Regression Matrix
 
@@ -287,8 +289,8 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
   - 2026-07-05 TMS provisioning run recorded at `docs/scopes/tms/tms-ltl-ui-qa/rehearsals/ui-experience-reviewer-navi-provisioning-run-20260705.md`.
   - 2026-07-05 cross-upstream CLI negative smoke passed: SIM profile querying TMS ClientApp model grants and TMS profile querying SIM ClientApp model grants both failed with control-plane ClientApp mismatch.
 - remaining:
-  - Production bootstrap / provisioning / runtime / break-glass SOP 已沉淀为 draft-complete runbook；credential expiry pre-warning 仍需实现。
-  - Stop/restart smoke after runtime access token TTL remains a follow-up; current live smoke proves runtime can execute with the available gitignored runtime credentials.
+  - Production bootstrap / provisioning / runtime / break-glass SOP 已沉淀为 draft-complete runbook；CLI 到期预警输出已实现，production scheduled check 仍作为上线运维接入项。
+  - Runtime token 恢复已由 CLI regression 覆盖 key-secret 重新换 token 与 `--write-profile` 替换旧 token；真实停运超过 access token TTL 的 live smoke 仍作为后续环境演练项。
 
 ### Stage 6 - Production Policy
 
@@ -304,6 +306,7 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 - evidence:
   - 2026-07-05 项目级 skill `.agents/skills/navigator-runtime-provisioning/SKILL.md` 已沉淀标准 provisioning 顺序、凭据 lane、排障检查和文档目标。
   - 2026-07-05 runbook 已明确真实 KEY 只进入 gitignored profile 或平台 secret，tracked docs 只记录资源 ID、命令类别和 smoke 结果。
+  - 2026-07-05 handoff prompt 已沉淀为 `docs/version-tracker/1.3.3-SNAPSHOT/runbooks/upstream-runtime-provisioning-handoff-prompt.md`，只包含占位符、资源 ID 和执行顺序，不包含真实 key。
 
 ## CLI / Profile Flow Inventory
 
@@ -449,19 +452,20 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 | Navigator provisioning selftest | live-passed | 已新增 selftest 脚本、fixture README 和 profile placeholder；`-PrepareOnly` 与 live provisioning 均通过；readiness / owner-smoke 确认 Biz role source 为 `BIZ_WORKER_IDENTITY` |
 | worker-host apply 闭环验证 | tms-live-passed | 本地 selftest、SIM、TMS 均完成 worker-host apply / readiness / owner-smoke；TMS Actor Home live smoke 已确认 `20260705-228b` |
 | 正式环境授权文档 | draft-complete | 已新增 `navigator-runtime-provisioning-sop.md`，沉淀 production bootstrap / provisioning / runtime / break-glass 四层口径和审批边界 |
-| Credential lifecycle 设计 | draft-complete | 已记录 dev/sandbox 与 production TTL、轮换、停运后 runtime token 自动恢复策略；待实现预警 / scheduled check |
+| Credential lifecycle 设计 | tested | 已记录 dev/sandbox 与 production TTL、轮换、停运后 runtime token 自动恢复策略；CLI 已输出 expiryStatus / expiryAction，production scheduled check 留给上线运维接入 |
 | Sandbox smoke plan | draft-complete | 已记录 SIM first、TMS second 的 smoke 顺序和禁止访问真实 TMS / accounts 的边界 |
 | 项目级 Skill 沉淀 | done | 已新增 `.agents/skills/navigator-runtime-provisioning/SKILL.md`，只记录流程和禁止事项，不包含真实 KEY |
+| 上游交付提示词 | done | 已新增 handoff prompt；真实 dev key 通过安全渠道或 gitignored profile 交付，不进入 tracked docs |
 
 ### Testing Progress
 
 | Test Area | Status | Required Evidence |
 | --- | --- | --- |
-| SIM dev credentials provisioning smoke | not-run | `worker-host apply` + readiness + owner-smoke |
+| SIM dev credentials provisioning smoke | passed | `worker-host apply` + readiness + owner-smoke；Biz role source 为 `BIZ_WORKER_IDENTITY` |
 | TMS dev credentials provisioning smoke | passed | modelConfig `a8ed6f14-949c-4003-b108-99b78de65ff5`、Agent sync、directory `20260705-228b` binding、worker-host apply、readiness、owner-smoke、Actor Home live smoke 均通过 |
 | Cross-upstream isolation regression | passed | 已覆盖 service-level regression、Navigator selftest 同租户跨 ClientApp control 负向 smoke；CLI 负向 smoke 覆盖 SIM profile 查询 TMS ClientApp grant 与 TMS profile 查询 SIM ClientApp grant 均失败 |
-| Expired / insufficient key negative cases | partial | CLI 回归覆盖 admin lane HTTP 401、control lane HTTP 403，均断言不打印敏感值；仍需 live sandbox provisioning smoke |
-| Runtime/admin credential separation regression | partial | CLI 回归覆盖 runtime-token exchange 不发送 stale admin/control key；Navigator selftest 与 TMS Actor Home live smoke 已覆盖 readiness / owner-smoke / ask 成功路径；仍需停运后重启 token exchange smoke |
+| Expired / insufficient key negative cases | tested | CLI 回归覆盖 admin lane HTTP 401、control lane HTTP 403、admin inspect expired expiryStatus，均断言不打印敏感值 |
+| Runtime/admin credential separation regression | tested | CLI 回归覆盖 runtime-token exchange 不发送 stale admin/control key、`--write-profile` 用 key-secret 替换旧 access token；Navigator selftest 与 TMS Actor Home live smoke 已覆盖 readiness / owner-smoke / ask 成功路径 |
 | Secret leakage scan | partial | post-live 已扫描 1.3.3 文档、selftest 脚本、provisioning selftest fixtures、CLI source/test 文件，无真实 secret-like 值命中；提交前仍需按最终 staged 范围复扫 |
 
 ### Experience Progress
@@ -471,9 +475,9 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 
 ## Acceptance Readiness
 
-- current_status: not-ready
+- current_status: handoff-ready
 - blockers:
-  - credential 到期预警、轮换和 runtime 隔离策略已有 draft，尚未补自动化预警和停运后重启 smoke 证据。
+  - none for dev upstream handoff; production scheduled credential check and formal acceptance remain follow-up gates.
 - required_follow_up:
   - implementation quality gate
   - test coverage audit

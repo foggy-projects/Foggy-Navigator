@@ -63,6 +63,10 @@
 - CLI regression re-run passed:
   - command: `mvn -pl navigator-open-sdk -am "-Dtest=UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
   - result: 98 tests run, 0 failures, 0 errors, 0 skipped.
+- credential lifecycle CLI regression passed:
+  - command: `mvn -pl navigator-open-sdk -am "-Dtest=UpstreamCliTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  - result: 99 tests run, 0 failures, 0 errors, 0 skipped.
+  - covered `runtimeToken.expiryStatus=OK`, automatic runtime-token refresh guidance from ClientApp key-secret, stale access token replacement with `--write-profile`, stale admin/control key exclusion from runtime-token exchange, and expired admin credential `expiryStatus=EXPIRED` without key leakage.
 - post-live prepare-only re-run passed:
   - command: `.\tools\navigator-upstream\scripts\navigator-provisioning-selftest.ps1 -PrepareOnly`
   - result: generated fixtures remained valid and local verify still resolved Biz role from `BIZ_WORKER_IDENTITY`.
@@ -94,9 +98,10 @@
 - provisioning knowledge capture completed:
   - project skill: `.agents/skills/navigator-runtime-provisioning/SKILL.md`.
   - runbook: `docs/version-tracker/1.3.3-SNAPSHOT/runbooks/navigator-runtime-provisioning-sop.md`.
+  - handoff prompt: `docs/version-tracker/1.3.3-SNAPSHOT/runbooks/upstream-runtime-provisioning-handoff-prompt.md`.
   - rule: real keys stay only in gitignored local profiles or platform secrets; tracked files contain IDs, placeholders, commands, and smoke outcomes only.
 
 ## Follow-up
 
 - Before formal handoff, run the same selftest with a non-ephemeral worker token instead of `-GenerateEphemeralWorkerToken`.
-- Add production credential expiry pre-warning and stop/restart runtime-token exchange smoke before final acceptance.
+- Wire production scheduled credential expiry checks to the new CLI `expiryStatus` output before final production acceptance.

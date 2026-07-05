@@ -482,6 +482,7 @@ public class UpstreamCli {
         out.println("accessToken=" + SecretMasker.mask(token.getAccessToken()));
         out.println("expiresInSeconds=" + valueOrEmpty(token.getExpiresInSeconds()));
         out.println("expiresAt=" + valueOrEmpty(token.getExpiresAt()));
+        printRuntimeTokenExpiry(token);
         return 0;
     }
 
@@ -3771,9 +3772,55 @@ public class UpstreamCli {
         out.println(prefix + " authorizedClientAppNamespace=" + valueOrEmpty(credential.getAuthorizedClientAppNamespace()));
         out.println(prefix + " scopes=" + joinList(credential.getScopes()));
         out.println(prefix + " expiresAt=" + valueOrEmpty(credential.getExpiresAt()));
+        printCredentialExpiry(prefix, credential.getExpiresAt());
         out.println(prefix + " revokedAt=" + valueOrEmpty(credential.getRevokedAt()));
         out.println(prefix + " lastUsedAt=" + valueOrEmpty(credential.getLastUsedAt()));
         out.println(prefix + " sourceRequestId=" + valueOrEmpty(credential.getSourceRequestId()));
+    }
+
+    private void printRuntimeTokenExpiry(ClientAppRuntimeAccessTokenDTO token) {
+        if (token == null) {
+            out.println("runtimeToken.expiryStatus=UNKNOWN");
+            out.println("runtimeToken.expiryAction=exchange runtime token from client app key-secret");
+            return;
+        }
+        Long remainingSeconds = token.getExpiresInSeconds();
+        LocalDateTime now = LocalDateTime.now();
+        if (remainingSeconds == null && token.getExpiresAt() != null) {
+            remainingSeconds = Duration.between(now, token.getExpiresAt()).getSeconds();
+        }
+        if (remainingSeconds == null) {
+            out.println("runtimeToken.expiryStatus=UNKNOWN");
+            out.println("runtimeToken.refresh=automatic when NAVI_CLIENT_APP_SECRET is present");
+            return;
+        }
+        out.println("runtimeToken.expiryStatus=" + (remainingSeconds <= 0 ? "EXPIRED" : "OK"));
+        out.println("runtimeToken.refresh=automatic when NAVI_CLIENT_APP_SECRET is present");
+        if (remainingSeconds <= 0) {
+            out.println("runtimeToken.expiryAction=run upstream runtime-token --write-profile with a valid ClientApp key-secret");
+        }
+    }
+
+    private void printCredentialExpiry(String prefix, LocalDateTime expiresAt) {
+        if (expiresAt == null) {
+            out.println(prefix + " expiryStatus=NO_EXPIRY");
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        Duration remaining = Duration.between(now, expiresAt);
+        long remainingDays = remaining.toDays();
+        out.println(prefix + " expiresInDays=" + remainingDays);
+        if (!expiresAt.isAfter(now)) {
+            out.println(prefix + " expiryStatus=EXPIRED");
+            out.println(prefix + " expiryAction=rotate or re-issue provisioning credential before management operations");
+            return;
+        }
+        if (remaining.compareTo(Duration.ofDays(14)) <= 0) {
+            out.println(prefix + " expiryStatus=EXPIRING_SOON");
+            out.println(prefix + " expiryAction=schedule credential rotation before provisioning changes");
+            return;
+        }
+        out.println(prefix + " expiryStatus=OK");
     }
 
     private void printClientApp(String prefix, ClientAppDTO app) {

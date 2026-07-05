@@ -405,6 +405,8 @@ class UpstreamCliTest {
         assertFalse(output.contains("cas-secret-value"));
         assertFalse(output.contains("cat-runtime-secret"));
         assertTrue(output.contains("runtime-token ok"));
+        assertTrue(output.contains("runtimeToken.expiryStatus=OK"));
+        assertTrue(output.contains("runtimeToken.refresh=automatic when NAVI_CLIENT_APP_SECRET is present"));
     }
 
     @Test
@@ -431,6 +433,7 @@ class UpstreamCliTest {
         assertNull(lastUpstreamAdminKeyHeader);
         assertNull(lastClientAppControlKeyHeader);
         assertTrue(output.contains("runtime-token ok"));
+        assertTrue(output.contains("runtimeToken.expiryStatus=OK"));
         assertFalse(output.contains("naa-expired-admin-key"));
         assertFalse(output.contains("cac-expired-control-key"));
         assertFalse(output.contains("cas-runtime-secret"));
@@ -460,6 +463,8 @@ class UpstreamCliTest {
         assertFalse(profileText.contains("cat-old-secret"));
         assertTrue(output.contains("runtime-token ok"));
         assertTrue(output.contains("profileUpdated="));
+        assertTrue(output.contains("runtimeToken.expiryStatus=OK"));
+        assertTrue(output.contains("runtimeToken.refresh=automatic when NAVI_CLIENT_APP_SECRET is present"));
         assertFalse(output.contains("cak-test"));
         assertFalse(output.contains("cas-secret-value"));
         assertFalse(output.contains("cat-written-secret"));
@@ -536,7 +541,7 @@ class UpstreamCliTest {
                   "authorizedClientAppNamespace":"TMS",
                   "scopes":["CLIENT_APP_MANAGE","CLIENT_APP_CONTROL_KEY_ISSUE"],
                   "status":"ACTIVE",
-                  "expiresAt":"2026-06-01T00:00:00",
+                  "expiresAt":"2099-06-01T00:00:00",
                   "sourceRequestId":"uabr-1"
                 }}
                 """;
@@ -552,8 +557,42 @@ class UpstreamCliTest {
         assertTrue(output.contains("credential credentialId=ucaac-1 principalId=TMS upstreamSystemId=TMS status=ACTIVE"));
         assertTrue(output.contains("credential authorizedTenantIds=TMS"));
         assertTrue(output.contains("credential scopes=CLIENT_APP_MANAGE,CLIENT_APP_CONTROL_KEY_ISSUE"));
+        assertTrue(output.contains("credential expiryStatus=OK"));
         assertTrue(output.contains("credential sourceRequestId=uabr-1"));
         assertTrue(output.contains("rotation=use admin-key rotate --credential-id ucaac-1"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
+    void adminKeyInspectReportsExpiredCredentialWithoutSecret() throws Exception {
+        Files.writeString(tempDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "credentialId":"ucaac-expired",
+                  "principalId":"TMS",
+                  "credentialKeyPrefix":"naa_",
+                  "credentialKeySuffix":"-key",
+                  "upstreamSystemId":"TMS",
+                  "authorizedTenantIds":["TMS"],
+                  "authorizedClientAppNamespace":"TMS",
+                  "scopes":["CLIENT_APP_MANAGE"],
+                  "status":"ACTIVE",
+                  "expiresAt":"2000-01-01T00:00:00",
+                  "sourceRequestId":"uabr-expired"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "inspect",
+                "--profile", "upstream.env"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertTrue(output.contains("admin-key inspect ok"));
+        assertTrue(output.contains("credential expiryStatus=EXPIRED"));
+        assertTrue(output.contains("credential expiryAction=rotate or re-issue provisioning credential before management operations"));
         assertFalse(output.contains("naa-secret-admin-key"));
     }
 

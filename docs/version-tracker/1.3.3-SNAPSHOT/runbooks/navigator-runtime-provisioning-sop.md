@@ -98,8 +98,20 @@
 
 - runtime access token 允许短 TTL；服务恢复后应使用 ClientApp key-secret 自动换取新 token。
 - upstream admin / provisioning operator 过期只应阻断 provisioning，不应影响已有 runtime ask / readiness / owner-smoke。
-- production 需要补 scheduled check：在 credential 到期前预警，并记录轮换窗口。
+- `upstream admin-key inspect` 会输出 `credential expiryStatus`、`credential expiresInDays` 和必要的 `credential expiryAction`，用于人工或计划任务提前发现 provisioning credential 到期风险。
+- `upstream runtime-token` 会输出 `runtimeToken.expiryStatus` 和 `runtimeToken.refresh=automatic when NAVI_CLIENT_APP_SECRET is present`，用于确认短期 runtime token 可从 ClientApp key-secret 恢复。
+- production 仍建议接入 scheduled check：定期执行 inspect/status，采集 `EXPIRING_SOON` / `EXPIRED` 并记录轮换窗口。
 - 轮换 provisioning credential 不应要求重发业务 runtime key，除非 ClientApp runtime key-secret 本身被轮换。
+
+停运后恢复 smoke：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream runtime-token --profile .navigator\tenants\<tenant>.env --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream verify-agent-readiness --profile .navigator\tenants\<tenant>.env --agent-code <agentCode> --upstream-user-id <upstreamUserId> --model-config-id <modelConfigId> --directory-id <directoryId>
+.\tools\navigator-upstream\navi.ps1 upstream owner-smoke --profile .navigator\tenants\<tenant>.env --agent-code <agentCode> --upstream-user-id <upstreamUserId> --model-config-id <modelConfigId> --directory-id <directoryId>
+```
+
+期望：`runtimeToken.expiryStatus=OK`，readiness / owner-smoke 不需要 upstream admin key 或 operator key。
 
 ## 提交前检查
 
