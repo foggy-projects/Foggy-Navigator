@@ -1876,7 +1876,7 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
-    void createTask_withKnownContextIdContinuesBoundCodexBizSessionWithoutProviderType() {
+    void createTask_withKnownContextIdAndResumeFlagContinuesBoundCodexBizSessionWithoutProviderType() {
         TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
@@ -1885,6 +1885,7 @@ class TaskDispatchFacadeTest {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .contextId("ctx-codex-biz-1")
                 .prompt("continue actor task")
+                .resume(true)
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")
@@ -1941,6 +1942,79 @@ class TaskDispatchFacadeTest {
                         && "tenant/world-sim/scenario-1/home-1".equals(params.get("codexHomeKey"))
                         && "tenant/world-sim/scenario-1/actor-1".equals(params.get("privateAccountId"))));
         verify(codexProvider, never()).resumeTask(anyString(), anyString(), any());
+        verifyNoInteractions(agentResolver);
+    }
+
+    @Test
+    void createTask_withKnownLangGraphBizContextCreatesDirectTaskWhenNotExplicitResume() {
+        TaskQueryProvider langgraphBizProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(langgraphBizProvider));
+        ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextId("bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28")
+                .prompt("BUG-148 smoke second 20260705-200741")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("agent-owner-1")
+                .tenantId("tenant-1")
+                .requestSource("OPEN_API")
+                .build();
+
+        AgentConversationContextEntity boundContext = new AgentConversationContextEntity();
+        boundContext.setContextId("bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28");
+        boundContext.setUserId("agent-owner-1");
+        boundContext.setTargetAgentId("tms-tenant-88800-root-agent");
+        boundContext.setAgentType("langgraph-biz-worker");
+        boundContext.setNavigatorSessionId("session-langgraph-biz-bound");
+
+        SessionEntity session = new SessionEntity();
+        session.setId("session-langgraph-biz-bound");
+        session.setUserId("agent-owner-1");
+        session.setAgentId("tms-tenant-88800-root-agent");
+        session.setProviderType("langgraph-biz-worker");
+        session.setCurrentWorkerId("worker-langgraph-1");
+        session.setCurrentDirectoryId("dir-langgraph-1");
+
+        DispatchTaskDTO directTask = DispatchTaskDTO.builder()
+                .taskId("lgt_second")
+                .providerType("langgraph-biz-worker")
+                .sessionId("session-langgraph-biz-bound")
+                .agentId("tms-tenant-88800-root-agent")
+                .contextId("bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28")
+                .workerId("worker-langgraph-1")
+                .directoryId("dir-langgraph-1")
+                .build();
+
+        when(agentConversationContextRepository.findById("bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28"))
+                .thenReturn(Optional.of(boundContext));
+        when(agentConversationContextRepository.findByContextIdAndUserId(
+                "bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28", "agent-owner-1"))
+                .thenReturn(Optional.of(boundContext));
+        when(sessionRepository.findById("session-langgraph-biz-bound")).thenReturn(Optional.of(session));
+        when(langgraphBizProvider.getProviderType()).thenReturn("langgraph-biz-worker");
+        when(langgraphBizProvider.createTaskDirect(any(), eq("agent-owner-1"), eq("tenant-1")))
+                .thenReturn(directTask);
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("lgt_second", result.getTaskId());
+        verify(langgraphBizProvider).createTaskDirect(
+                argThat(params -> "langgraph-biz-worker".equals(params.get("providerType"))
+                        && "session-langgraph-biz-bound".equals(params.get("sessionId"))
+                        && "worker-langgraph-1".equals(params.get("workerId"))
+                        && "dir-langgraph-1".equals(params.get("directoryId"))
+                        && "tms-tenant-88800-root-agent".equals(params.get("agentId"))
+                        && "bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28".equals(params.get("contextId"))
+                        && "BUG-148 smoke second 20260705-200741".equals(params.get("prompt"))),
+                eq("agent-owner-1"),
+                eq("tenant-1"));
+        verify(langgraphBizProvider, never()).resumeTask(anyString(), anyString(), any());
+        verify(agentConversationContextRepository).save(argThat(saved ->
+                "bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28".equals(saved.getContextId())
+                        && "session-langgraph-biz-bound".equals(saved.getNavigatorSessionId())
+                        && "tms-tenant-88800-root-agent".equals(saved.getTargetAgentId())
+                        && "langgraph-biz-worker".equals(saved.getAgentType())));
         verifyNoInteractions(agentResolver);
     }
 

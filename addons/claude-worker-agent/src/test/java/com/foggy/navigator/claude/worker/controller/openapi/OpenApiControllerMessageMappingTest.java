@@ -607,6 +607,52 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void askAgent_bindsBusinessSessionFromTaskMetadataWhenContextMappingIsDelayed() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentSessionService sessionService = mock(BusinessAgentSessionService.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                null,
+                mock(CodingAgentRepository.class),
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("创建一个新会话");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .metadata(Map.of("sessionId", "session-1"))
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNotNull(result.getData());
+        assertTrue(result.getData().getContextId().matches("^bctx_\\d{8}_[0-9a-f]{2}_[A-Za-z0-9._-]+$"));
+        verify(sessionService).bindOpenApiSession(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                argThat(contextId -> contextId != null
+                        && contextId.matches("^bctx_\\d{8}_[0-9a-f]{2}_[A-Za-z0-9._-]+$")),
+                eq("session-1"),
+                eq("agent-1"),
+                eq("task-1"),
+                nullable(String.class));
+    }
+
+    @Test
     void askAgent_bindsOpenApiBusinessRuntimeTokenToVisibleWorkerTask() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
@@ -1277,11 +1323,10 @@ class OpenApiControllerMessageMappingTest {
                 nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
 
-        RuntimeException error = assertThrows(
-                RuntimeException.class,
-                () -> controller.askAgent("agent-1", form, mock(HttpServletRequest.class)));
+        var result = controller.askAgent("agent-1", form, mock(HttpServletRequest.class));
 
-        assertTrue(error.getMessage().contains("upstream user id is required"));
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("upstream user id is required"));
         verify(agentResolver, never()).resolveAgent(any(), any());
     }
 
@@ -1312,11 +1357,131 @@ class OpenApiControllerMessageMappingTest {
         when(sessionService.getSession("tenant-1", "app-1", "upstream-b", STANDARD_CONTEXT_ID))
                 .thenThrow(new IllegalArgumentException("business agent session not found: " + STANDARD_CONTEXT_ID));
 
-        RuntimeException error = assertThrows(
-                RuntimeException.class,
-                () -> controller.askAgent("agent-1", form, request));
+        var result = controller.askAgent("agent-1", form, request);
 
-        assertTrue(error.getMessage().contains("business agent session not found"));
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("business agent session not found"));
+        verify(agentResolver, never()).resolveAgent(any(), any());
+        verify(agent, never()).sendTask(any());
+    }
+
+    @Test
+    void askAgent_recoversMissingBusinessSessionWhenNavigatorContextExists() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentSessionService sessionService = mock(BusinessAgentSessionService.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        CodingAgentRepository codingAgentRepository = mock(CodingAgentRepository.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                taskService,
+                codingAgentRepository,
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("继续处理");
+        form.setContextId(STANDARD_CONTEXT_ID);
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(sessionService.getSession("tenant-1", "app-1", "upstream-a", STANDARD_CONTEXT_ID))
+                .thenThrow(new IllegalArgumentException("business agent session not found: " + STANDARD_CONTEXT_ID));
+        CodingAgentEntity agentEntity = new CodingAgentEntity();
+        agentEntity.setAgentId("agent-1");
+        agentEntity.setTenantId("tenant-1");
+        agentEntity.setUserId("owner-1");
+        when(codingAgentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
+                .thenReturn(Optional.of(agentEntity));
+        AgentConversationContextEntity contextEntity = new AgentConversationContextEntity();
+        contextEntity.setContextId(STANDARD_CONTEXT_ID);
+        contextEntity.setUserId("owner-1");
+        contextEntity.setTargetAgentId("agent-1");
+        contextEntity.setNavigatorSessionId("session-1");
+        when(sessionQueryService.findContextForUser(STANDARD_CONTEXT_ID, "owner-1"))
+                .thenReturn(Optional.of(contextEntity));
+        when(taskService.hasOpenApiTaskScopedTokenForContext(
+                "tenant-1", "app-1", "upstream-a", STANDARD_CONTEXT_ID))
+                .thenReturn(true);
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-2")
+                .contextId(STANDARD_CONTEXT_ID)
+                .metadata(Map.of("sessionId", "session-1"))
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNotNull(result.getData());
+        assertEquals(STANDARD_CONTEXT_ID, result.getData().getContextId());
+        verify(agent).sendTask(any());
+        verify(sessionService).bindOpenApiSession(
+                "tenant-1",
+                "app-1",
+                "upstream-a",
+                STANDARD_CONTEXT_ID,
+                "session-1",
+                "agent-1",
+                "task-2",
+                null);
+    }
+
+    @Test
+    void askAgent_rejectsMissingBusinessSessionWhenNavigatorContextBelongsToDifferentUpstreamUser() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentSessionService sessionService = mock(BusinessAgentSessionService.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        CodingAgentRepository codingAgentRepository = mock(CodingAgentRepository.class);
+        OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                taskService,
+                codingAgentRepository,
+                sessionQueryService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("继续处理");
+        form.setContextId(STANDARD_CONTEXT_ID);
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-b");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(sessionService.getSession("tenant-1", "app-1", "upstream-b", STANDARD_CONTEXT_ID))
+                .thenThrow(new IllegalArgumentException("business agent session not found: " + STANDARD_CONTEXT_ID));
+        CodingAgentEntity agentEntity = new CodingAgentEntity();
+        agentEntity.setAgentId("agent-1");
+        agentEntity.setTenantId("tenant-1");
+        agentEntity.setUserId("owner-1");
+        when(codingAgentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
+                .thenReturn(Optional.of(agentEntity));
+        AgentConversationContextEntity contextEntity = new AgentConversationContextEntity();
+        contextEntity.setContextId(STANDARD_CONTEXT_ID);
+        contextEntity.setUserId("owner-1");
+        contextEntity.setTargetAgentId("agent-1");
+        contextEntity.setNavigatorSessionId("session-1");
+        when(sessionQueryService.findContextForUser(STANDARD_CONTEXT_ID, "owner-1"))
+                .thenReturn(Optional.of(contextEntity));
+        when(taskService.hasOpenApiTaskScopedTokenForContext(
+                "tenant-1", "app-1", "upstream-b", STANDARD_CONTEXT_ID))
+                .thenReturn(false);
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("business agent session not found"));
         verify(agentResolver, never()).resolveAgent(any(), any());
         verify(agent, never()).sendTask(any());
     }

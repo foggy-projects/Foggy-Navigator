@@ -314,6 +314,25 @@ public class BusinessAgentTaskService {
         return plainToken;
     }
 
+    @Transactional(readOnly = true)
+    public boolean hasOpenApiTaskScopedTokenForContext(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String contextId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(clientAppId, "clientAppId is required");
+        requireText(upstreamUserId, "upstreamUserId is required");
+        requireText(contextId, "contextId is required");
+        return tokenRepository.existsByTenantIdAndClientAppIdAndUpstreamUserIdAndSessionIdAndStatusAndExpiresAtAfter(
+                tenantId,
+                clientAppId,
+                upstreamUserId,
+                contextId,
+                STATUS_ACTIVE,
+                LocalDateTime.now());
+    }
+
     @Transactional
     public void bindOpenApiTaskScopedTokenToWorkerTask(
             String tenantId,

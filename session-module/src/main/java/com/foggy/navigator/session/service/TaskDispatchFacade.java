@@ -127,7 +127,7 @@ public class TaskDispatchFacade {
      */
     public DispatchTaskDTO createTask(TaskDispatchRequest request, AgentResolveContext context) {
         validateContextBindingBeforeDispatch(request, context);
-        if (bindContinuationFromContext(request, context)) {
+        if (bindContinuationFromContext(request, context) && request.isResume()) {
             return resumeTask(request, context);
         }
 

@@ -410,12 +410,9 @@ public class OpenApiController {
         String contextId = requestedContextId
                 ? form.getContextId().trim()
                 : BusinessAgentSessionService.generateContextId();
-        validateBusinessAgentContextOwnershipIfNeeded(
-                tenantId,
-                clientAppCredential.getClientAppId(),
-                upstreamUserId,
-                contextId,
-                requestedContextId);
+        if (requestedContextId && !StringUtils.hasText(upstreamUserId)) {
+            return RX.failB("upstream user id is required when contextId is provided");
+        }
 
         A2AgentResourceResolver resourceResolver = requireA2AgentResourceResolver();
         A2AgentResourceResolver.ResolvedAgentResource agentResource = resourceResolver.resolveRequiredAgent(
@@ -446,6 +443,21 @@ public class OpenApiController {
             return RX.failB(TASK_DIRECTORY_REQUIRED_MESSAGE);
         }
         String agentOwnerUserId = resolveAgentOwnerUserId(route.agentId(), tenantId);
+        if (requestedContextId) {
+            try {
+                validateBusinessAgentContextOwnershipIfNeeded(
+                        tenantId,
+                        clientAppCredential.getClientAppId(),
+                        upstreamUserId,
+                        contextId,
+                        route.agentId(),
+                        agentOwnerUserId);
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                return RX.failB(firstNonBlank(
+                        sanitizeDiagnosticText(e.getMessage()),
+                        "open api request rejected"));
+            }
+        }
         String modelConfigId = modelResource.modelConfigId();
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .userId(agentOwnerUserId)
@@ -1049,18 +1061,75 @@ public class OpenApiController {
             String clientAppId,
             String upstreamUserId,
             String contextId,
-            boolean requestedContextId) {
-        if (!requestedContextId) {
-            return;
-        }
+            String agentId,
+            String agentOwnerUserId) {
         if (!StringUtils.hasText(upstreamUserId)) {
-            throw RX.throwB("upstream user id is required when contextId is provided");
+            throw new IllegalArgumentException("upstream user id is required when contextId is provided");
         }
         BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
         if (service == null) {
-            throw RX.throwB("business agent session service is not available");
+            throw new IllegalStateException("business agent session service is not available");
         }
-        service.getSession(tenantId, clientAppId, upstreamUserId, contextId);
+        try {
+            service.getSession(tenantId, clientAppId, upstreamUserId, contextId);
+        } catch (IllegalArgumentException e) {
+            if (isBusinessAgentSessionNotFound(e)
+                    && hasRecoverableBusinessAgentSession(
+                            tenantId,
+                            clientAppId,
+                            upstreamUserId,
+                            contextId,
+                            agentId,
+                            agentOwnerUserId)) {
+                log.warn("Open API business session row missing but Navigator context exists; "
+                                + "contextId={}, upstreamUserId={}",
+                        contextId, upstreamUserId);
+                return;
+            }
+            throw e;
+        }
+    }
+
+    private boolean isBusinessAgentSessionNotFound(IllegalArgumentException e) {
+        String message = e != null ? e.getMessage() : null;
+        return StringUtils.hasText(message) && message.startsWith("business agent session not found:");
+    }
+
+    private boolean hasRecoverableBusinessAgentSession(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String contextId,
+            String agentId,
+            String agentOwnerUserId) {
+        Optional<String> sessionId = resolveNavigatorSessionId(contextId, agentOwnerUserId, agentId);
+        if (sessionId.isEmpty()) {
+            return false;
+        }
+        BusinessAgentTaskService taskService = businessAgentTaskService.getIfAvailable();
+        if (taskService == null) {
+            return false;
+        }
+        return taskService.hasOpenApiTaskScopedTokenForContext(
+                tenantId,
+                clientAppId,
+                upstreamUserId,
+                contextId);
+    }
+
+    private Optional<String> resolveNavigatorSessionId(String contextId, String agentOwnerUserId, String agentId) {
+        if (!StringUtils.hasText(contextId) || !StringUtils.hasText(agentOwnerUserId)) {
+            return Optional.empty();
+        }
+        Optional<AgentConversationContextEntity> context =
+                sessionQueryService.findContextForUser(contextId, agentOwnerUserId);
+        if (context == null || context.isEmpty()) {
+            return Optional.empty();
+        }
+        return context
+                .filter(entity -> !StringUtils.hasText(agentId) || agentId.equals(entity.getTargetAgentId()))
+                .map(AgentConversationContextEntity::getNavigatorSessionId)
+                .filter(StringUtils::hasText);
     }
 
     private String enrichBusinessRuntimeContext(
@@ -1352,10 +1421,13 @@ public class OpenApiController {
         String agentOwnerUserId = StringUtils.hasText(resolvedAgentOwnerUserId)
                 ? resolvedAgentOwnerUserId
                 : resolveAgentOwnerUserId(agentId, tenantId);
-        String sessionId = sessionQueryService.resolveSessionId(contextId, agentOwnerUserId)
-                .orElse(null);
+        String sessionId = resolveTaskNavigatorSessionId(task);
         if (!StringUtils.hasText(sessionId)) {
-            log.debug("Skip binding business agent session because context has no navigator session yet: contextId={}", contextId);
+            sessionId = resolveNavigatorSessionId(contextId, agentOwnerUserId, agentId).orElse(null);
+        }
+        if (!StringUtils.hasText(sessionId)) {
+            log.warn("Skip binding business agent session because no Navigator sessionId is available: "
+                    + "contextId={}, taskId={}", contextId, task != null ? task.getId() : null);
             return;
         }
         service.bindOpenApiSession(
@@ -1367,6 +1439,16 @@ public class OpenApiController {
                 agentId,
                 task != null ? task.getId() : null,
                 clientContextJson);
+    }
+
+    private String resolveTaskNavigatorSessionId(A2aTask task) {
+        if (task != null && task.getMetadata() != null) {
+            Object sessionId = task.getMetadata().get("sessionId");
+            if (sessionId instanceof String value && StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String firstHeader(HttpServletRequest request, String... names) {
