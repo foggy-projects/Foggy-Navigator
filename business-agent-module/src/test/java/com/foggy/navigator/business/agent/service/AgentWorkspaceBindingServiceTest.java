@@ -76,6 +76,20 @@ class AgentWorkspaceBindingServiceTest {
     }
 
     @Test
+    void bind_rejectsOtherClientAppSharedDirectoryFromClientAppPlane() {
+        WorkingDirectoryEntity directory = clientAppDirectory("dir-1");
+        directory.setOwnerId("capp-2");
+        directory.setClientAppId("capp-2");
+        when(workingDirectoryRepository.findByDirectoryId("dir-1"))
+                .thenReturn(Optional.of(directory));
+
+        assertThrows(SecurityException.class,
+                () -> service.bind("tenant-1", "capp-1", "agent-1", bindForm("dir-1")));
+
+        verify(bindingRepository, never()).save(any());
+    }
+
+    @Test
     void setDefault_updatesAgentDefaultAndEnsuresBinding() {
         CodingAgentEntity agent = clientAppAgent();
         when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
@@ -131,6 +145,22 @@ class AgentWorkspaceBindingServiceTest {
 
         assertThrows(SecurityException.class,
                 () -> service.bindSystemOwned("tenant-1", principal(), "agent-1", bindForm("dir-1")));
+    }
+
+    @Test
+    void bindSystemOwned_rejectsForeignUpstreamSystemDirectory() {
+        CodingAgentEntity agent = systemAgent();
+        when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
+                .thenReturn(Optional.of(agent));
+        WorkingDirectoryEntity directory = systemDirectory("dir-1");
+        directory.setOwnerId("ups-2");
+        when(workingDirectoryRepository.findByDirectoryId("dir-1"))
+                .thenReturn(Optional.of(directory));
+
+        assertThrows(SecurityException.class,
+                () -> service.bindSystemOwned("tenant-1", principal(), "agent-1", bindForm("dir-1")));
+
+        verify(bindingRepository, never()).save(any());
     }
 
     private BindAgentWorkspaceForm bindForm(String directoryId) {

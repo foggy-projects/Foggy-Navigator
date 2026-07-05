@@ -83,6 +83,21 @@ class AgentModelBindingServiceTest {
     }
 
     @Test
+    void bind_rejectsOtherClientAppOwnedAgentFromClientAppPlane() {
+        CodingAgentEntity agent = clientAppAgent();
+        agent.setOwnerId("capp-2");
+        agent.setClientAppId("capp-2");
+        when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
+                .thenReturn(Optional.of(agent));
+
+        assertThrows(SecurityException.class,
+                () -> service.bind("tenant-1", "capp-1", "agent-1", bindForm("cfg-1")));
+
+        verify(modelConfigGrantService, never()).resolveEffectiveModelConfigId(anyString(), anyString(), anyString());
+        verify(bindingRepository, never()).save(any());
+    }
+
+    @Test
     void unbind_rejectsDefaultModelBinding() {
         assertThrows(IllegalArgumentException.class,
                 () -> service.unbind("tenant-1", "capp-1", "agent-1", " cfg-default "));
@@ -137,6 +152,21 @@ class AgentModelBindingServiceTest {
     void bindSystemOwned_rejectsClientAppOwnedAgent() {
         assertThrows(SecurityException.class,
                 () -> service.bindSystemOwned("tenant-1", principal(), "agent-1", bindForm("cfg-1")));
+    }
+
+    @Test
+    void bindSystemOwned_rejectsForeignUpstreamSystemModel() {
+        CodingAgentEntity agent = systemAgent();
+        when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
+                .thenReturn(Optional.of(agent));
+        LlmModelConfigDTO foreignModel = systemModel("cfg-foreign");
+        foreignModel.setOwnerId("ups-2");
+        when(llmModelManager.getModelConfig("cfg-foreign")).thenReturn(Optional.of(foreignModel));
+
+        assertThrows(SecurityException.class,
+                () -> service.bindSystemOwned("tenant-1", principal(), "agent-1", bindForm("cfg-foreign")));
+
+        verify(bindingRepository, never()).save(any());
     }
 
     private BindAgentModelForm bindForm(String modelConfigId) {

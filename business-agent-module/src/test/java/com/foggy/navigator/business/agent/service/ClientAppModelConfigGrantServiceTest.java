@@ -269,6 +269,16 @@ class ClientAppModelConfigGrantServiceTest {
     }
 
     @Test
+    void updateStatus_rejectsGrantOutsideClientAppScope() {
+        when(grantRepository.findByIdAndClientAppId(7L, "capp-1")).thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.updateStatus("tenant-1", "capp-1", 7L, ClientAppModelConfigGrantService.STATUS_DISABLED));
+
+        verify(grantRepository, never()).save(any());
+    }
+
+    @Test
     void setDefault_rejects_disabled_grant() {
         ClientAppModelConfigGrantEntity grant =
                 grant("cfg-1", false, ClientAppModelConfigGrantService.STATUS_DISABLED);
@@ -277,6 +287,17 @@ class ClientAppModelConfigGrantServiceTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> service.setDefault("tenant-1", "capp-1", 7L));
+    }
+
+    @Test
+    void setDefault_rejectsGrantOutsideClientAppScope() {
+        when(grantRepository.findByIdAndClientAppId(7L, "capp-1")).thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.setDefault("tenant-1", "capp-1", 7L));
+
+        verify(grantRepository, never()).save(any());
+        verify(grantRepository, never()).saveAll(any());
     }
 
     @Test

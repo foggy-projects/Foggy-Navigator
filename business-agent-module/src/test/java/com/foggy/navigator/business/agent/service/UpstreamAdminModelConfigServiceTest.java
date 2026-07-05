@@ -131,6 +131,17 @@ class UpstreamAdminModelConfigServiceTest {
     }
 
     @Test
+    void rotateKey_rejectsModelOwnedByAnotherUpstreamSystem() {
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setApiKey("new-secret");
+        when(llmModelManager.getModelConfig("model-1")).thenReturn(Optional.of(model("model-1", "ups-2")));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.rotateKey("tenant-1", principal(), "model-1", form));
+        verify(llmModelManager, never()).updateModelConfig(anyString(), any());
+    }
+
+    @Test
     void list_returnsOnlyCurrentUpstreamSystemModels() {
         when(llmModelManager.listModelConfigs("tenant-1")).thenReturn(List.of(
                 model("model-1", "ups-1"),
