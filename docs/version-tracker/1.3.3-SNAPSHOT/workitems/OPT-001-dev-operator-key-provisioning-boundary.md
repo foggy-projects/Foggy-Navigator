@@ -287,20 +287,23 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
   - 2026-07-05 TMS provisioning run recorded at `docs/scopes/tms/tms-ltl-ui-qa/rehearsals/ui-experience-reviewer-navi-provisioning-run-20260705.md`.
   - 2026-07-05 cross-upstream CLI negative smoke passed: SIM profile querying TMS ClientApp model grants and TMS profile querying SIM ClientApp model grants both failed with control-plane ClientApp mismatch.
 - remaining:
-  - Production still needs the final bootstrap / provisioning / runtime / break-glass SOP and credential expiry pre-warning.
+  - Production bootstrap / provisioning / runtime / break-glass SOP 已沉淀为 draft-complete runbook；credential expiry pre-warning 仍需实现。
   - Stop/restart smoke after runtime access token TTL remains a follow-up; current live smoke proves runtime can execute with the available gitignored runtime credentials.
 
 ### Stage 6 - Production Policy
 
-- status: in-progress
+- status: draft-complete
 - goal: 明确上线后哪些动作自助、哪些动作审批。
 - actions:
   - 固化四层凭据：bootstrap operator、provisioning operator、runtime key、break-glass admin。
   - 明确生产 key TTL、轮换、提前告警、撤销和审计。
   - 明确 request/approve 只用于跨边界或高风险操作，不作为日常 provisioning 主路径。
 - output:
-  - 生产授权策略文档。
+  - 生产授权策略文档：`docs/version-tracker/1.3.3-SNAPSHOT/runbooks/navigator-runtime-provisioning-sop.md`。
   - 上线前验收 checklist。
+- evidence:
+  - 2026-07-05 项目级 skill `.agents/skills/navigator-runtime-provisioning/SKILL.md` 已沉淀标准 provisioning 顺序、凭据 lane、排障检查和文档目标。
+  - 2026-07-05 runbook 已明确真实 KEY 只进入 gitignored profile 或平台 secret，tracked docs 只记录资源 ID、命令类别和 smoke 结果。
 
 ## CLI / Profile Flow Inventory
 
@@ -445,9 +448,10 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 | CLI / profile flow 梳理 | tested | 已记录 admin/control/runtime lane 的命令矩阵、profile 写入规则；已补 `model/agent --help` route 与 CLI 回归 |
 | Navigator provisioning selftest | live-passed | 已新增 selftest 脚本、fixture README 和 profile placeholder；`-PrepareOnly` 与 live provisioning 均通过；readiness / owner-smoke 确认 Biz role source 为 `BIZ_WORKER_IDENTITY` |
 | worker-host apply 闭环验证 | tms-live-passed | 本地 selftest、SIM、TMS 均完成 worker-host apply / readiness / owner-smoke；TMS Actor Home live smoke 已确认 `20260705-228b` |
-| 正式环境授权文档 | planned | 需沉淀 production bootstrap / provisioning / runtime / break-glass 四层口径 |
+| 正式环境授权文档 | draft-complete | 已新增 `navigator-runtime-provisioning-sop.md`，沉淀 production bootstrap / provisioning / runtime / break-glass 四层口径和审批边界 |
 | Credential lifecycle 设计 | draft-complete | 已记录 dev/sandbox 与 production TTL、轮换、停运后 runtime token 自动恢复策略；待实现预警 / scheduled check |
 | Sandbox smoke plan | draft-complete | 已记录 SIM first、TMS second 的 smoke 顺序和禁止访问真实 TMS / accounts 的边界 |
+| 项目级 Skill 沉淀 | done | 已新增 `.agents/skills/navigator-runtime-provisioning/SKILL.md`，只记录流程和禁止事项，不包含真实 KEY |
 
 ### Testing Progress
 
@@ -469,7 +473,6 @@ TMS UI Experience Reviewer runtime provisioning 已完成 model / Agent / worksp
 
 - current_status: not-ready
 - blockers:
-  - 正式环境 request/approve 分层策略已有 draft，尚未形成最终运维 SOP。
   - credential 到期预警、轮换和 runtime 隔离策略已有 draft，尚未补自动化预警和停运后重启 smoke 证据。
 - required_follow_up:
   - implementation quality gate

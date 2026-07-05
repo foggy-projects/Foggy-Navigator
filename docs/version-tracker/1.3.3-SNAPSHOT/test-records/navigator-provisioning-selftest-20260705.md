@@ -91,6 +91,10 @@
 - cross-upstream CLI isolation smoke passed:
   - SIM profile attempting to list the TMS ClientApp grants failed with `HTTP 403: control-plane credential clientAppId mismatch`.
   - TMS profile attempting to list the SIM ClientApp grants failed with `HTTP 403: control-plane credential clientAppId mismatch`.
+- provisioning knowledge capture completed:
+  - project skill: `.agents/skills/navigator-runtime-provisioning/SKILL.md`.
+  - runbook: `docs/version-tracker/1.3.3-SNAPSHOT/runbooks/navigator-runtime-provisioning-sop.md`.
+  - rule: real keys stay only in gitignored local profiles or platform secrets; tracked files contain IDs, placeholders, commands, and smoke outcomes only.
 
 ## Follow-up
 

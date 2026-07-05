@@ -20,3 +20,5 @@
 ## 文档清单
 
 - [workitems/OPT-001-dev-operator-key-provisioning-boundary.md](./workitems/OPT-001-dev-operator-key-provisioning-boundary.md) - dev provisioning credentials、WorkerHost apply 授权闭环、跨上游隔离与正式环境审批策略
+- [runbooks/navigator-runtime-provisioning-sop.md](./runbooks/navigator-runtime-provisioning-sop.md) - runtime provisioning 经验沉淀、凭据落盘边界、旧数据排障、正式环境审批与恢复 SOP
+- [test-records/navigator-provisioning-selftest-20260705.md](./test-records/navigator-provisioning-selftest-20260705.md) - Navigator selftest、SIM/TMS smoke、跨 ClientApp 隔离与敏感扫描记录
