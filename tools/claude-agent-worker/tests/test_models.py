@@ -375,6 +375,11 @@ class TestFileModels:
         f = FileEntry(name="test.py", path="/project/test.py", is_dir=False)
         assert f.size == 0
         assert f.modified == ""
+        assert f.is_symlink is False
+        assert f.link_target is None
+        assert f.target_exists is None
+        assert f.target_is_dir is None
+        assert f.target_allowed is None
 
     def test_content_match(self):
         m = ContentMatch(file="main.py", line_number=42, line_content="def foo():")

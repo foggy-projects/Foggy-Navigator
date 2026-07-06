@@ -219,6 +219,11 @@ class FileEntry(BaseModel):
     is_dir: bool
     size: int = 0
     modified: str = ""
+    is_symlink: bool = False
+    link_target: str | None = None
+    target_exists: bool | None = None
+    target_is_dir: bool | None = None
+    target_allowed: bool | None = None
 
 
 class DirectoryListingResponse(BaseModel):
