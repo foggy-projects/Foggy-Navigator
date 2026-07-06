@@ -6,6 +6,20 @@ This reference was split from the navigator-upstream-cli skill main file. Read i
 
 For multi-tenant upstream systems, use `upstream admin-key` to request and claim a system-scoped ClientApp admin credential. These commands require Navigator Upstream CLI `1.0.4+`.
 
+When the handoff only has a Navigator admin username/password, first store a temporary login JWT in the gitignored profile with Navigator Upstream CLI `1.0.19+`. The password must come from an environment variable and must not be printed:
+
+```powershell
+$env:NAVI_LOGIN_PASSWORD = "<provided out of band>"
+.\tools\navigator-upstream\navi.ps1 upstream auth login `
+  --base-url <navigatorBaseUrl> `
+  --username <username> `
+  --password-env NAVI_LOGIN_PASSWORD `
+  --write-profile
+Remove-Item Env:\NAVI_LOGIN_PASSWORD
+```
+
+`auth login` writes `NAVI_ADMIN_TOKEN`. That token is accepted by `admin-key approve` for admin/operator bootstrap, but it is not the upstream admin credential used by provisioning commands. Run `admin-key claim --write-profile` to write `NAVI_ADMIN_API_KEY` before provisioning ClientApps, workers, models, directories, or agents.
+
 Upstream-side flow, from the upstream project root:
 
 ```powershell
@@ -24,7 +38,7 @@ Upstream-side flow, from the upstream project root:
 
 `request` writes the one-time claim token to the gitignored project profile and does not print the final key. `claim --write-profile` writes `NAVI_ADMIN_API_KEY` to the same profile only after a Navigator operator/admin has approved the request.
 
-Navigator-side approval is separate and must not run from the upstream project. It requires `NAVI_OPERATOR_API_KEY` in a Navigator admin/ops environment:
+Navigator-side approval can use either `NAVI_OPERATOR_API_KEY` in a Navigator admin/ops environment or the `NAVI_ADMIN_TOKEN` written by `auth login` for the provided Navigator admin account:
 
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream admin-key list --status PENDING

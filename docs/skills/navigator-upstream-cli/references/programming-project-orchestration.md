@@ -15,10 +15,60 @@ Worker lifecycle:
 .\tools\navigator-upstream\navi.ps1 upstream worker processes
 ```
 
-For a LangGraph BizWorker trial, install the worker package first, start it on a reachable port, then use that `baseUrl` in `worker.json`. Linux is the preferred runtime for command-enabled trials:
+## Worker Runtime Installers
+
+Install or update local worker runtimes with the published OBS installer scripts before registering them in Navigator. Prefer these scripts over manual archive download, workspace copy, or ad hoc install steps.
+
+Claude Worker:
+
+```bash
+curl -sSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/claude-worker/install.sh | bash
+```
+
+```powershell
+irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/claude-worker/install.ps1 | iex
+```
+
+Codex Worker:
+
+```bash
+curl -sSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-worker/install.sh | bash
+```
+
+```powershell
+irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-worker/install.ps1 | iex
+```
+
+LangGraph Biz Worker:
 
 ```bash
 curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/langgraph-biz-worker/install.sh | bash
+```
+
+```powershell
+irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/langgraph-biz-worker/install.ps1 | iex
+```
+
+Codex Biz Worker is not a separate runtime package. It is an explicit Navigator route over the Codex Worker runtime. Install/update `codex-worker`, then use `--provider-type codex-biz-worker` only for deliberate Codex-native business execution or diagnostics.
+
+For local multi-worker bootstrap, `worker-host install` can run the same installers for `claudeCode`, `codex`, and `biz` roles from a single manifest:
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream worker-host install --file .navigator/worker-host.json --dry-run
+.\tools\navigator-upstream\navi.ps1 upstream worker-host install --file .navigator/worker-host.json --install-shell powershell
+```
+
+On Windows targeting WSL:
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream worker-host install --file .navigator/worker-host.json --install-shell wsl --wsl-distro Ubuntu
+```
+
+Use `worker-host apply --file .navigator/worker-host.json --write-profile` after install to register/update Navigator-side worker resources. In Navi-routed mode, Codex is stored under `claudeCode.codexConfig`; do not set `workers.codex.workerId`.
+
+For a LangGraph BizWorker trial, start it on a reachable port, then use that `baseUrl` in `worker.json`. Linux is the preferred runtime for command-enabled trials:
+
+```bash
 cd ~/.langgraph-biz-worker
 cp .env.example .env
 printf '\nBIZ_WORKER_ENABLE_COMMAND=true\n' >> .env

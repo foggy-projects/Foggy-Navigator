@@ -27,7 +27,29 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/ins
 ```
 
 5. Keep real credentials only in the upstream project's gitignored `.navigator/upstream.env`.
-6. If the upstream project also needs a local LangGraph BizWorker, install or update it from OBS before registering the worker:
+6. Prefer the published OBS installer scripts for local worker runtimes instead of manually downloading archives or copying workspace folders. Use the relevant installer before registering the worker in Navigator:
+
+Claude Worker:
+
+```bash
+curl -sSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/claude-worker/install.sh | bash
+```
+
+```powershell
+irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/claude-worker/install.ps1 | iex
+```
+
+Codex Worker:
+
+```bash
+curl -sSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-worker/install.sh | bash
+```
+
+```powershell
+irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-worker/install.ps1 | iex
+```
+
+LangGraph Biz Worker:
 
 ```bash
 curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/langgraph-biz-worker/install.sh | bash
@@ -36,6 +58,10 @@ curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/langgraph-biz-worke
 ```powershell
 irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/langgraph-biz-worker/install.ps1 | iex
 ```
+
+Codex Biz Worker is a Navigator route over the Codex Worker runtime. There is no separate `codex-biz-worker` installer; install/update `codex-worker`, then use the `codex-biz-worker` provider route only when that explicit route is intended.
+
+For local multi-worker bootstrap, `navi upstream worker-host install --file .navigator/worker-host.json` can orchestrate the same published installers for `claudeCode`, `codex`, and `biz` roles. Use `--dry-run` first to inspect the installer commands, then register/update Navigator resources with `worker-host apply` or `worker-host update`.
 
 ## Project Local Config
 
@@ -58,6 +84,9 @@ NAVI_CLIENT_APP_SECRET=<clientAppSecret>
 NAVI_CLIENT_APP_ACCESS_TOKEN=
 NAVI_CONTROL_API_KEY=<clientAppScopedControlKey>
 NAVI_ADMIN_API_KEY=<upstreamSystemScopedClientAppAdminKey>
+NAVI_ADMIN_TOKEN=<temporaryNavigatorLoginJwtForAdminKeyApproval>
+NAVI_ADMIN_USER_ID=<optionalNavigatorAdminUserId>
+NAVI_ADMIN_USERNAME=<optionalNavigatorAdminUsername>
 NAVI_USER_API_KEY=<optionalTenantAdminUserApiKey>
 NAVI_ADMIN_KEY_REQUEST_CODE=<requestCode>
 NAVI_ADMIN_KEY_CLAIM_TOKEN=<claimToken>
@@ -95,6 +124,7 @@ Read the smallest matching reference before using detailed flows:
 - `references/runtime-contract.md`: BizWorker context/session rules, `clientContext`, hidden skill routing, command gates, diagnostics session-dir, model runtime budget presets, and owner-aware runtime diagnostics.
 - `references/tms-db-binding.md`: TMS X3 DB-backed ClientApp binding, readiness smoke, and why `.navigator/upstream.env` is CLI/bootstrap only for TMS.
 - `references/admin-key-bootstrap.md`: multi-tenant upstream admin-key request/claim/approval, ClientApp ensure, runtime/control credential issue, and aggregate tenant provisioning.
+- `references/worker-setup-handoff.md`: external AI handoff package for installing Claude/Codex workers, verifying local runtimes, and configuring/updating them in a provided Navigator account.
 - `references/programming-project-orchestration.md`: non-TMS coding-project bootstrap for worker, directory, ClientApp, model config, and A2A agent sync.
 - `references/smoke-and-diagnostics.md`: owner-smoke, verify-agent-readiness, live ask/messages polling, Codex Biz Worker local sim lane, skill artifact reads, sessions, and session-messages.
 - `references/model-and-e2e.md`: model grant management, ClientApp-owned model create/update/rotate-key, runtime budget preset options, deterministic E2E model, and `navi-e2e` wrapper.
@@ -133,7 +163,7 @@ Read `references/smoke-and-diagnostics.md` before changing the smoke shape, usin
 ## Safety Rules
 
 - Do not print or paste token, secret, runtime access token, upstream user token, admin token, or staff session token.
-- Do not print or paste `NAVI_ADMIN_API_KEY`, `NAVI_ADMIN_KEY_CLAIM_TOKEN`, or `NAVI_OPERATOR_API_KEY`.
+- Do not print or paste `NAVI_ADMIN_API_KEY`, `NAVI_ADMIN_TOKEN`, `NAVI_ADMIN_KEY_CLAIM_TOKEN`, or `NAVI_OPERATOR_API_KEY`.
 - Do not print or paste `NAVI_USER_API_KEY`.
 - Do not print or paste `NAVI_CONTROL_API_KEY`.
 - Do not include `adapterConfigJson`, `manifestJson`, private business data, or credentials in prompts, docs, logs, screenshots, or GitHub issues.
