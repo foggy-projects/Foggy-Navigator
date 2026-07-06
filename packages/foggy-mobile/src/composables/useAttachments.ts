@@ -42,6 +42,9 @@ type UniWithFileApi = typeof uni & {
 
 const uniFile = uni as UniWithFileApi
 
+type ImageSource = 'album' | 'camera'
+type ImagePickSource = ImageSource | 'all'
+
 export const MAX_ATTACHMENTS = 10
 export const MAX_IMAGE_SIZE = 50 * 1024 * 1024
 export const MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -68,7 +71,7 @@ export function fileIcon(mimeType: string): string {
 export function useAttachments() {
   const attachments = ref<Attachment[]>([])
 
-  async function chooseImages() {
+  async function chooseImages(source: ImagePickSource = 'all') {
     const remaining = MAX_ATTACHMENTS - attachments.value.length
     if (remaining <= 0) {
       uni.showToast({ title: `最多附加 ${MAX_ATTACHMENTS} 个文件`, icon: 'none' })
@@ -76,11 +79,19 @@ export function useAttachments() {
     }
 
     try {
-      const files = await pickImages(remaining)
+      const files = await pickImages(remaining, source)
       await addTempFiles(files, true)
     } catch {
       // User cancellation is reported as fail on some platforms; keep quiet.
     }
+  }
+
+  function chooseAlbumImages() {
+    return chooseImages('album')
+  }
+
+  function takePhoto() {
+    return chooseImages('camera')
   }
 
   async function chooseFiles() {
@@ -148,18 +159,20 @@ export function useAttachments() {
   return {
     attachments,
     chooseImages,
+    chooseAlbumImages,
+    takePhoto,
     chooseFiles,
     removeAttachment,
     clearAttachments,
   }
 }
 
-function pickImages(count: number): Promise<UniTempFile[]> {
+function pickImages(count: number, source: ImagePickSource): Promise<UniTempFile[]> {
   return new Promise((resolve, reject) => {
     uni.chooseImage({
       count,
       sizeType: ['compressed'],
-      sourceType: ['album', 'camera'],
+      sourceType: resolveImageSourceTypes(source),
       success: (res) => {
         const tempFilePaths = normalizePathList(res.tempFilePaths)
         const tempFiles = (res.tempFiles || []) as UniTempFile[]
@@ -175,6 +188,11 @@ function pickImages(count: number): Promise<UniTempFile[]> {
       fail: reject,
     })
   })
+}
+
+function resolveImageSourceTypes(source: ImagePickSource): ImageSource[] {
+  if (source === 'all') return ['album', 'camera']
+  return [source]
 }
 
 function pickFiles(count: number): Promise<UniTempFile[]> {

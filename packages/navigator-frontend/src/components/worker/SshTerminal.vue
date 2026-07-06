@@ -3,6 +3,7 @@
     class="ssh-terminal-wrap"
     v-show="active"
     @click="focusTerminal"
+    @paste.capture="handlePaste"
   >
     <div ref="termRef" class="ssh-terminal" />
     <!-- Focus-lost overlay: click anywhere to re-focus -->
@@ -27,6 +28,10 @@ const props = defineProps<{
   workerId: string
 }>()
 
+const emit = defineEmits<{
+  'paste-image': [files: File[]]
+}>()
+
 const termRef = ref<HTMLElement | null>(null)
 const focused = ref(true) // optimistic; onBlur will set false
 let terminal: Terminal | null = null
@@ -36,6 +41,40 @@ let wsMessageHandler: ((ev: MessageEvent) => void) | null = null
 
 function focusTerminal() {
   terminal?.focus()
+}
+
+function normalizeImageFile(file: File, index: number): File {
+  if (file.name) return file
+  const subtype = file.type.split('/')[1] || 'png'
+  return new File([file], `terminal-paste-${Date.now()}-${index}.${subtype}`, { type: file.type })
+}
+
+function handlePaste(e: ClipboardEvent) {
+  if (!props.active) return
+
+  const files: File[] = []
+  const items = Array.from(e.clipboardData?.items ?? [])
+  for (const item of items) {
+    if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
+    const file = item.getAsFile()
+    if (file) {
+      files.push(normalizeImageFile(file, files.length))
+    }
+  }
+
+  if (files.length === 0 && e.clipboardData?.files?.length) {
+    for (const file of Array.from(e.clipboardData.files)) {
+      if (file.type.startsWith('image/')) {
+        files.push(normalizeImageFile(file, files.length))
+      }
+    }
+  }
+
+  if (files.length === 0) return
+  e.preventDefault()
+  e.stopPropagation()
+  emit('paste-image', files)
+  focusTerminal()
 }
 
 onMounted(() => {

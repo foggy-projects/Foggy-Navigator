@@ -19,8 +19,8 @@
 
 | 组件 | 当前启动方式 | 新镜像 | 端口 | 健康检查 |
 | --- | --- | --- | --- | --- |
-| Launcher 后端 | `start-launcher.sh` 后台 jar | `navigator-backend` | `8112` | `/actuator/health` |
-| Navigator 前端 | `start-build-frontend.sh` + Nginx | `navigator-frontend` | `80` | `/health` |
+| Launcher 后端 | `scripts/start-launcher.sh` 后台 jar | `navigator-backend` | `8112` | `/actuator/health` |
+| Navigator 前端 | `scripts/start-build-frontend.sh` + Nginx | `navigator-frontend` | `80` | `/health` |
 | Claude Agent Worker | OBS 安装包 / `claude-worker` CLI | 不进入 Navigator 镜像链路 | `3031` | `/health` |
 | Codex Worker | OBS 安装包 / `codex-worker` CLI | 不进入 Navigator 镜像链路 | `3051` | `/health` |
 | Gemini Worker | OBS 安装包 / `gemini-worker` CLI | 不进入 Navigator 镜像链路 | `3071` | `/health` |

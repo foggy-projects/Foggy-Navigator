@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import os from 'node:os'
 import path from 'node:path'
 import { Codex } from '@openai/codex-sdk'
@@ -10,7 +11,12 @@ import { config } from '../config.js'
 import type { CodexApprovalPolicy, CodexSandboxMode, CodexWebSearchMode, ImageAttachment, TaskEntry, WorkerEvent } from '../models.js'
 import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
+import { recordSessionFileHintsForEventBestEffort } from '../persistence/session-file-hints.js'
 import { detectSpawnedCodexPid, snapshotCodexCliPids } from './processes.js'
+import {
+  buildNavigatorBusinessMcpConfig,
+  buildNavigatorBusinessMcpEnv,
+} from '../business-mcp/navigator-business-mcp-server.js'
 
 const moduleRequire = createRequire(import.meta.url)
 
@@ -23,6 +29,7 @@ export type CodexRunOptions = {
   approvalPolicy?: CodexApprovalPolicy
   networkAccessEnabled?: boolean
   webSearchMode?: CodexWebSearchMode
+  businessRuntimeContext?: Record<string, unknown>
   additionalDirectories?: string[]
 }
 
@@ -35,6 +42,8 @@ export const taskRegistry = new Map<string, TaskEntry>()
  * Event broadcasts per task — subscribers receive real-time events
  */
 export const taskBroadcasts = new Map<string, EventBroadcast>()
+
+export const CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR = 'CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided'
 
 /**
  * 解析 model:reasoning_level 后缀
@@ -208,13 +217,53 @@ export function buildCodexProcessEnv(
   return env
 }
 
+function deleteEnvKeyCaseInsensitive(env: NodeJS.ProcessEnv, key: string): void {
+  const normalizedKey = key.toUpperCase()
+  for (const existingKey of Object.keys(env)) {
+    if (existingKey.toUpperCase() === normalizedKey) {
+      delete env[existingKey]
+    }
+  }
+}
+
+function setEnvKeyCaseInsensitive(env: NodeJS.ProcessEnv, key: string, value: string | undefined): void {
+  deleteEnvKeyCaseInsensitive(env, key)
+  if (value !== undefined && value !== '') {
+    env[key] = value
+  }
+}
+
+export function buildCodexTaskEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  options: {
+    effectiveApiKey?: string
+    effectiveBaseUrl?: string
+    codexHome?: string
+    taskId: string
+    threadId?: string
+  }
+): Record<string, string> {
+  const envSource: NodeJS.ProcessEnv = { ...baseEnv }
+  setEnvKeyCaseInsensitive(envSource, 'OPENAI_API_KEY', options.effectiveApiKey)
+  setEnvKeyCaseInsensitive(envSource, 'CODEX_API_KEY', options.effectiveApiKey)
+  setEnvKeyCaseInsensitive(envSource, 'OPENAI_BASE_URL', options.effectiveBaseUrl)
+  if (options.codexHome) {
+    envSource.CODEX_HOME = options.codexHome
+  }
+  envSource.FOGGY_CODEX_TASK_ID = options.taskId
+  if (options.threadId) {
+    envSource.FOGGY_CODEX_THREAD_ID = options.threadId
+  }
+  return buildCodexProcessEnv(envSource)
+}
+
 export function resolveCodexHome(codexHomeKey: string | undefined, codexBizHomeRoot = config.codexBizHomeRoot): string | undefined {
   const key = codexHomeKey?.trim()
   if (!key) {
     return undefined
   }
   if (!codexBizHomeRoot) {
-    throw new Error('CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided')
+    throw new Error(CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR)
   }
   const safePrefix = key
     .replace(/[^A-Za-z0-9._-]+/g, '_')
@@ -222,6 +271,174 @@ export function resolveCodexHome(codexHomeKey: string | undefined, codexBizHomeR
     .slice(0, 80) || 'codex-home'
   const digest = createHash('sha256').update(key).digest('hex').slice(0, 16)
   return path.join(codexBizHomeRoot, `${safePrefix}-${digest}`)
+}
+
+export function resolveDefaultCodexHome(env: NodeJS.ProcessEnv = process.env, homeDir = os.homedir()): string {
+  const configured = env.CODEX_HOME?.trim()
+  return path.resolve(configured || path.join(homeDir, '.codex'))
+}
+
+export function resolveNavigatorBusinessMcpServerPath(currentModulePath = fileURLToPath(import.meta.url)): string {
+  const ext = path.extname(currentModulePath) || '.js'
+  return path.resolve(path.dirname(currentModulePath), '..', 'business-mcp', `navigator-business-mcp-server${ext}`)
+}
+
+export function resolveNavigatorBusinessMcpDebugLogPath(taskId: string, cwd: string | undefined): string {
+  const root = cwd || config.allowedCwds[0] || process.cwd()
+  return path.resolve(root, 'temp', 'codex-worker-3070', `business-mcp-${taskId}.log`)
+}
+
+export function mergeCodexConfig(...configs: Array<Record<string, unknown> | undefined>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const configPart of configs) {
+    if (!configPart) continue
+    mergeObjectInto(result, configPart)
+  }
+  return result
+}
+
+function mergeObjectInto(target: Record<string, unknown>, source: Record<string, unknown>): void {
+  for (const [key, sourceValue] of Object.entries(source)) {
+    const targetValue = target[key]
+    if (isPlainObject(targetValue) && isPlainObject(sourceValue)) {
+      mergeObjectInto(targetValue, sourceValue)
+    } else {
+      target[key] = sourceValue
+    }
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+const NAVIGATOR_BUSINESS_MCP_BLOCK_START = '# BEGIN NAVIGATOR_BUSINESS_MCP_MANAGED'
+const NAVIGATOR_BUSINESS_MCP_BLOCK_END = '# END NAVIGATOR_BUSINESS_MCP_MANAGED'
+
+export function renderNavigatorBusinessMcpConfigBlock(mcpConfig: Record<string, unknown>): string {
+  const server = readNavigatorBusinessMcpServerConfig(mcpConfig)
+  const command = readRequiredString(server, 'command')
+  const cwd = readOptionalString(server, 'cwd')
+  const args = readStringArray(server.args)
+  const envVars = readStringArray(server.env_vars)
+  const enabledTools = readStringArray(server.enabled_tools)
+  const defaultToolsApprovalMode = readOptionalString(server, 'default_tools_approval_mode')
+  const lines = [
+    NAVIGATOR_BUSINESS_MCP_BLOCK_START,
+    '[mcp_servers.navigator_business]',
+    `command = ${toTomlString(command)}`,
+  ]
+  if (cwd) {
+    lines.push(`cwd = ${toTomlString(cwd)}`)
+  }
+  if (args.length > 0) {
+    lines.push(`args = [${args.map(toTomlString).join(', ')}]`)
+  }
+  if (envVars.length > 0) {
+    lines.push(`env_vars = [${envVars.map(toTomlString).join(', ')}]`)
+  }
+  if (defaultToolsApprovalMode) {
+    lines.push(`default_tools_approval_mode = ${toTomlString(defaultToolsApprovalMode)}`)
+  }
+  if (enabledTools.length > 0) {
+    lines.push(`enabled_tools = [${enabledTools.map(toTomlString).join(', ')}]`)
+  }
+  lines.push(NAVIGATOR_BUSINESS_MCP_BLOCK_END)
+  return `${lines.join('\n')}\n`
+}
+
+export async function ensureNavigatorBusinessMcpHomeConfig(
+  codexHome: string,
+  mcpConfig: Record<string, unknown>
+): Promise<boolean> {
+  const configPath = path.join(codexHome, 'config.toml')
+  const block = renderNavigatorBusinessMcpConfigBlock(mcpConfig)
+  let existing = ''
+  try {
+    existing = await fs.readFile(configPath, 'utf8')
+  } catch (error) {
+    if (!isNodeErrorCode(error, 'ENOENT')) {
+      throw error
+    }
+  }
+  const next = replaceManagedConfigBlock(existing, block)
+  if (next === existing) {
+    return false
+  }
+  await fs.mkdir(codexHome, { recursive: true })
+  await fs.writeFile(configPath, next, 'utf8')
+  return true
+}
+
+function replaceManagedConfigBlock(existing: string, block: string): string {
+  const start = existing.indexOf(NAVIGATOR_BUSINESS_MCP_BLOCK_START)
+  const end = existing.indexOf(NAVIGATOR_BUSINESS_MCP_BLOCK_END)
+  if (start >= 0 && end > start) {
+    const endOfBlock = end + NAVIGATOR_BUSINESS_MCP_BLOCK_END.length
+    const trailingNewline = existing.slice(endOfBlock).match(/^\r?\n/)
+    const replaceEnd = endOfBlock + (trailingNewline?.[0].length ?? 0)
+    return `${existing.slice(0, start)}${block}${existing.slice(replaceEnd)}`
+  }
+  const prefix = existing.length === 0 || existing.endsWith('\n') ? existing : `${existing}\n`
+  const separator = prefix.length === 0 || prefix.endsWith('\n\n') ? '' : '\n'
+  return `${prefix}${separator}${block}`
+}
+
+function readNavigatorBusinessMcpServerConfig(mcpConfig: Record<string, unknown>): Record<string, unknown> {
+  const servers = mcpConfig.mcp_servers
+  if (!isPlainObject(servers) || !isPlainObject(servers.navigator_business)) {
+    throw new Error('navigator_business MCP config is missing')
+  }
+  return servers.navigator_business
+}
+
+function readRequiredString(source: Record<string, unknown>, key: string): string {
+  const value = source[key]
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`navigator_business MCP config missing ${key}`)
+  }
+  return value
+}
+
+function readOptionalString(source: Record<string, unknown>, key: string): string | undefined {
+  const value = source[key]
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+}
+
+function toTomlString(value: string): string {
+  return JSON.stringify(value)
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as NodeJS.ErrnoException).code === code)
+}
+
+export async function seedCodexHomeAuthIfAvailable(
+  targetCodexHome: string,
+  sourceCodexHome = resolveDefaultCodexHome()
+): Promise<boolean> {
+  const sourceHome = path.resolve(sourceCodexHome)
+  const targetHome = path.resolve(targetCodexHome)
+  if (sourceHome.toLowerCase() === targetHome.toLowerCase()) {
+    return false
+  }
+
+  const sourceAuth = path.join(sourceHome, 'auth.json')
+  const targetAuth = path.join(targetHome, 'auth.json')
+  try {
+    await fs.access(sourceAuth)
+  } catch {
+    return false
+  }
+
+  await fs.mkdir(targetHome, { recursive: true })
+  await fs.copyFile(sourceAuth, targetAuth)
+  return true
 }
 
 export function getRunningTaskCount(): number {
@@ -378,6 +595,24 @@ function createToolUseEvent(
   }
 }
 
+function logMcpToolItem(
+  taskId: string,
+  phase: 'started' | 'updated' | 'completed',
+  item: Extract<ThreadItem, { type: 'mcp_tool_call' }>
+): void {
+  const error = item.error?.message ? ` error=${sanitizeLogSegment(item.error.message)}` : ''
+  console.log(
+    `[codex] mcp_tool_${phase} task=${taskId} id=${item.id} server=${item.server} tool=${item.tool} status=${item.status} has_result=${Boolean(item.result)}${error}`
+  )
+}
+
+function sanitizeLogSegment(value: string): string {
+  return value
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/[\r\n]+/g, ' ')
+    .slice(0, 300)
+}
+
 /**
  * 将 Codex SDK ThreadItem 映射为 WorkerEvent
  */
@@ -431,7 +666,7 @@ export function mapThreadItemToEvents(
         task_id: taskId,
         session_id: threadId,
         tool: 'file_change',
-        input: { changes: item.changes },
+        input: { changes: item.changes, status: item.status },
         tool_use_id: item.id,
         seq: nextSeq(),
       })
@@ -516,6 +751,9 @@ export async function runQuery(
 ): Promise<void> {
   const broadcast = new EventBroadcast(taskId)
   taskBroadcasts.set(taskId, broadcast)
+  const recordFileHints = (event: WorkerEvent): void => {
+    recordSessionFileHintsForEventBestEffort(event, { cwd })
+  }
 
   const abortController = new AbortController()
   // 1.0.4 起：alias-first
@@ -574,13 +812,17 @@ export async function runQuery(
     const codexHome = resolveCodexHome(runOptions.codexHomeKey)
     if (codexHome) {
       await fs.mkdir(codexHome, { recursive: true })
+      if (!effectiveApiKey) {
+        await seedCodexHomeAuthIfAvailable(codexHome)
+      }
     }
     const codexOptions: CodexOptions = {
-      env: buildCodexProcessEnv({
-        ...process.env,
-        ...(codexHome ? { CODEX_HOME: codexHome } : {}),
-        FOGGY_CODEX_TASK_ID: taskId,
-        ...(threadId ? { FOGGY_CODEX_THREAD_ID: threadId } : {}),
+      env: buildCodexTaskEnv(process.env, {
+        effectiveApiKey,
+        effectiveBaseUrl,
+        codexHome,
+        taskId,
+        threadId,
       }),
     }
     if (effectiveApiKey) {
@@ -615,7 +857,36 @@ export async function runQuery(
     if (runOptions.developerInstructions) {
       codexConfig.developer_instructions = runOptions.developerInstructions
     }
-    codexOptions.config = { ...codexOptions.config, ...codexConfig } as CodexOptions['config']
+    const navigatorBusinessMcpConfig = buildNavigatorBusinessMcpConfig(
+      runOptions.businessRuntimeContext,
+      config.navigatorWorkerGatewayBaseUrl,
+      resolveNavigatorBusinessMcpServerPath()
+    )
+    const navigatorBusinessMcpDebugLogPath = navigatorBusinessMcpConfig
+      ? resolveNavigatorBusinessMcpDebugLogPath(taskId, cwd)
+      : undefined
+    const navigatorBusinessMcpEnv = buildNavigatorBusinessMcpEnv(
+      runOptions.businessRuntimeContext,
+      config.navigatorWorkerGatewayBaseUrl,
+      navigatorBusinessMcpDebugLogPath,
+      taskId
+    )
+    if (navigatorBusinessMcpEnv) {
+      Object.assign(codexOptions.env as Record<string, string>, navigatorBusinessMcpEnv)
+    }
+    let sdkNavigatorBusinessMcpConfig = navigatorBusinessMcpConfig
+    if (navigatorBusinessMcpConfig && codexHome) {
+      await ensureNavigatorBusinessMcpHomeConfig(codexHome, navigatorBusinessMcpConfig)
+      sdkNavigatorBusinessMcpConfig = undefined
+      console.log(`[codex] navigator_business_mcp task=${taskId} mode=codex_home_config`)
+    } else if (navigatorBusinessMcpConfig) {
+      console.log(`[codex] navigator_business_mcp task=${taskId} mode=sdk_config`)
+    }
+    codexOptions.config = mergeCodexConfig(
+      codexOptions.config as Record<string, unknown> | undefined,
+      codexConfig,
+      sdkNavigatorBusinessMcpConfig
+    ) as CodexOptions['config']
 
     const codex = new Codex(codexOptions)
 
@@ -670,6 +941,9 @@ export async function runQuery(
           break
 
         case 'item.completed': {
+          if (event.item.type === 'mcp_tool_call') {
+            logMcpToolItem(taskId, 'completed', event.item)
+          }
           const workerEvents = mapThreadItemToEvents(
             taskId,
             event.item,
@@ -682,6 +956,7 @@ export async function runQuery(
             if (we.type === 'assistant_text' && we.content && we.subtype !== 'reasoning') {
               lastAssistantText += we.content
             }
+            recordFileHints(we)
             broadcast.emit(we)
           }
           break
@@ -692,13 +967,15 @@ export async function runQuery(
           if (event.type === 'item.started') {
             if (event.item.type === 'command_execution') {
               startedToolUses.add(event.item.id)
-              emitWorkerEvent(
+              const workerEvent = emitWorkerEvent(
                 broadcast,
                 createToolUseEvent(taskId, resolvedThreadId, 'command_execution', { command: event.item.command }, event.item.id)
               )
+              recordFileHints(workerEvent)
             } else if (event.item.type === 'mcp_tool_call') {
+              logMcpToolItem(taskId, 'started', event.item)
               startedToolUses.add(event.item.id)
-              emitWorkerEvent(
+              const workerEvent = emitWorkerEvent(
                 broadcast,
                 createToolUseEvent(
                   taskId,
@@ -708,7 +985,10 @@ export async function runQuery(
                   event.item.id
                 )
               )
+              recordFileHints(workerEvent)
             }
+          } else if (event.item.type === 'mcp_tool_call') {
+            logMcpToolItem(taskId, 'updated', event.item)
           }
           break
         }

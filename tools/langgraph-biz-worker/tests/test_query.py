@@ -119,6 +119,20 @@ def test_query_request_accepts_max_turns_aliases():
     assert snake.max_turns == 10
 
 
+def test_query_request_accepts_allowed_tools_aliases():
+    camel = QueryRequest.model_validate({
+        "prompt": "test",
+        "allowedTools": "business.functions.schema,business.functions.invoke",
+    })
+    snake = QueryRequest.model_validate({
+        "prompt": "test",
+        "allowed_tools": ["business.functions.invoke"],
+    })
+
+    assert camel.allowed_tools == "business.functions.schema,business.functions.invoke"
+    assert snake.allowed_tools == ["business.functions.invoke"]
+
+
 def test_query_request_accepts_message_and_skill_name_aliases():
     request = QueryRequest.model_validate({
         "message": "check order",
@@ -361,6 +375,42 @@ async def test_query_generator_forwards_max_turns_to_runtime_context():
 
     assert events[-1]["type"] == "result"
     assert captured_state["runtime_context"]["max_turns"] == 11
+
+
+@pytest.mark.asyncio
+async def test_query_generator_merges_top_level_allowed_tools_into_runtime_policy():
+    captured_state = {}
+
+    def invoke_and_capture(state):
+        captured_state.update(state)
+        return {"events": [QueryEvent(type="result", task_id="task-allowed-tools", content="done")]}
+
+    with patch("langgraph_biz_worker.routes.query.root_graph") as mock_graph:
+        mock_graph.invoke.side_effect = invoke_and_capture
+        generator = _event_generator(
+            "task-allowed-tools",
+            QueryRequest.model_validate({
+                "prompt": "use allowed tools",
+                "allowedTools": "business.functions.schema,business.functions.invoke",
+                "runtime_context": {
+                    "execution_policy": {
+                        "workdir": "/workspace/user",
+                        "allowed_dirs": ["/workspace/user"],
+                    }
+                },
+            }),
+        )
+        events = []
+        async for item in generator:
+            events.append(json.loads(item["data"]))
+
+    assert events[-1]["type"] == "result"
+    assert "allowed_tools" not in captured_state["context"]
+    assert captured_state["runtime_context"]["execution_policy"] == {
+        "workdir": "/workspace/user",
+        "allowed_dirs": ["/workspace/user"],
+        "allowed_tools": "business.functions.schema,business.functions.invoke",
+    }
 
 
 @pytest.mark.asyncio

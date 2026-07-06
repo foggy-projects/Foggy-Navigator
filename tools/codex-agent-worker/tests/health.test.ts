@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { checkCodexSdkAvailable, resolveCodexAuthMode } from '../src/routes/health.ts'
+import { checkCodexSdkAvailable, resolveCodexAuthMode, resolveCodexBizReadiness } from '../src/routes/health.ts'
 
 test('resolveCodexAuthMode prefers api key over codex login', () => {
   assert.equal(resolveCodexAuthMode('sk-test', true), 'api_key')
@@ -16,4 +16,15 @@ test('checkCodexSdkAvailable returns false when Codex construction throws', () =
 
 test('checkCodexSdkAvailable returns true when Codex construction succeeds', () => {
   assert.equal(checkCodexSdkAvailable(() => ({})), true)
+})
+
+test('resolveCodexBizReadiness exposes only non-sensitive scoped home state', () => {
+  assert.deepEqual(resolveCodexBizReadiness('/tmp/foggy/codex-biz-homes'), {
+    codex_biz_home_root_configured: true,
+    codex_biz_scoped_home_ready: true,
+  })
+  assert.deepEqual(resolveCodexBizReadiness('  '), {
+    codex_biz_home_root_configured: false,
+    codex_biz_scoped_home_ready: false,
+  })
 })

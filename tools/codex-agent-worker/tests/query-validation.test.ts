@@ -99,6 +99,7 @@ test('validateQueryRequest accepts CodexBiz execution options', () => {
     approval_policy: 'never',
     network_access_enabled: false,
     web_search_mode: 'disabled',
+    business_runtime_context: { task_scoped_token: 'token-1' },
     additional_directories: ['D:\\shared'],
   })
 
@@ -110,6 +111,7 @@ test('validateQueryRequest accepts CodexBiz execution options', () => {
   assert.equal(result.value.sandbox_mode, 'workspace-write')
   assert.equal(result.value.approval_policy, 'never')
   assert.equal(result.value.network_access_enabled, false)
+  assert.deepEqual(result.value.business_runtime_context, { task_scoped_token: 'token-1' })
   assert.deepEqual(result.value.additional_directories, ['D:\\shared'])
 })
 

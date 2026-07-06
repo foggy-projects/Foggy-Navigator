@@ -18,6 +18,7 @@ public class CreateBusinessAgentTaskForm {
     @JsonAlias({"skillName"})
     private String skillName;
     private String workerPoolId;
+    private String directoryId;
     private String requestedModelConfigId;
     @JsonAlias({"model", "modelName", "model_name", "model_variant"})
     private String modelVariant;
@@ -46,6 +47,8 @@ public class CreateBusinessAgentTaskForm {
     public void setSkillName(String skillName) { this.skillName = skillName; }
     public String getWorkerPoolId() { return workerPoolId; }
     public void setWorkerPoolId(String workerPoolId) { this.workerPoolId = workerPoolId; }
+    public String getDirectoryId() { return directoryId; }
+    public void setDirectoryId(String directoryId) { this.directoryId = directoryId; }
     public String getRequestedModelConfigId() { return requestedModelConfigId; }
     public void setRequestedModelConfigId(String requestedModelConfigId) { this.requestedModelConfigId = requestedModelConfigId; }
     public String getModelVariant() { return modelVariant; }

@@ -181,7 +181,7 @@ async def test_skill_agent_filters_and_rejects_tools_not_allowed_by_upstream_pol
         context={"execution_policy": {"allowed_tools": ["other_tool"]}},
     )
 
-    assert result["ok"] is True
+    assert result["ok"] is False
     assert "query_order" not in {tool["function"]["name"] for tool in model.bound_tools}
     assert provider.calls == []
     errors = [
@@ -193,6 +193,19 @@ async def test_skill_agent_filters_and_rejects_tools_not_allowed_by_upstream_pol
     assert errors == [
         "TOOL_NOT_AUTHORIZED: tool 'query_order' is not allowed by upstream execution_policy"
     ]
+    terminal_errors = [
+        event
+        for event in result["events"]
+        if event.get("type") == "error"
+    ]
+    assert terminal_errors == [{
+        "type": "error",
+        "task_id": result["task_id"],
+        "skill_frame_id": result["frame_id"],
+        "skill_id": "order-assistant",
+        "reason": "tool_not_authorized",
+        "error": "TOOL_NOT_AUTHORIZED: tool 'query_order' is not allowed by upstream execution_policy",
+    }]
 
 
 @pytest.mark.asyncio

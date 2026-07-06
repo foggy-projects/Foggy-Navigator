@@ -15,6 +15,10 @@ public class BusinessAgentSessionDTO {
     private String sessionId;
     private String skillId;
     private String agentId;
+    private String directoryId;
+    private String workerId;
+    private String workerProviderType;
+    private String modelConfigId;
     private String title;
     private String latestTaskId;
     private String status;
@@ -36,6 +40,10 @@ public class BusinessAgentSessionDTO {
         dto.setSessionId(entity.getSessionId());
         dto.setSkillId(entity.getSkillId());
         dto.setAgentId(entity.getAgentId());
+        dto.setDirectoryId(entity.getDirectoryId());
+        dto.setWorkerId(entity.getWorkerId());
+        dto.setWorkerProviderType(entity.getWorkerProviderType());
+        dto.setModelConfigId(entity.getModelConfigId());
         dto.setLatestTaskId(entity.getLatestTaskId());
         dto.setStatus(entity.getStatus());
         dto.setClientContextJson(entity.getClientContextJson());

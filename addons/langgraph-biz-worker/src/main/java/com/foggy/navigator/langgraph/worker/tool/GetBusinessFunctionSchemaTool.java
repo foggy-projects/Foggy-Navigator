@@ -44,15 +44,15 @@ public class GetBusinessFunctionSchemaTool implements BuiltInTool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("function_id", Map.of(
                 "type", "string",
-                "description", "The ID of the business function"
+                "description", "The exact business function ID returned by Navigator. Do not strip suffixes such as .v1."
         ));
         properties.put("version", Map.of(
                 "type", "string",
-                "description", "The version of the business function"
+                "description", "Optional business function version. May be omitted or set to the returned version."
         ));
 
         schema.put("properties", properties);
-        schema.put("required", new String[]{"function_id", "version"});
+        schema.put("required", new String[]{"function_id"});
         return schema;
     }
 
@@ -75,9 +75,6 @@ public class GetBusinessFunctionSchemaTool implements BuiltInTool {
         }
 
         String version = (String) params.get("version");
-        if (version == null || version.isBlank()) {
-            return ToolExecutionResult.error("MISSING_VERSION", "version is required");
-        }
 
         try {
             Map<String, Object> result = workerGatewayClient.getBusinessFunctionSchema(token, functionId, version);

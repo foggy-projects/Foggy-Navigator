@@ -313,6 +313,59 @@ class WorkingDirectoryServiceTest {
 
             assertNull(result.getParentProjectId());
         }
+
+        @Test
+        void updateDirectoryType_projectToStandard_detachesChildren() {
+            WorkingDirectoryEntity entity = createEntity("proj-1", "PROJECT");
+            entity.setProjectTaskPrompt("dispatch prompt");
+            WorkingDirectoryEntity child = createEntity("child-1", "STANDARD");
+            child.setParentProjectId("proj-1");
+            when(repository.findByDirectoryIdAndUserId("proj-1", USER_ID)).thenReturn(Optional.of(entity));
+            when(repository.findByParentProjectIdAndUserIdOrderByProjectNameAsc("proj-1", USER_ID))
+                    .thenReturn(List.of(child));
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateWorkingDirectoryForm form = new UpdateWorkingDirectoryForm();
+            form.setDirectoryType("STANDARD");
+
+            WorkingDirectoryDTO result = service.updateDirectory(USER_ID, "proj-1", form);
+
+            assertEquals("STANDARD", result.getDirectoryType());
+            assertNull(result.getProjectTaskPrompt());
+            assertNull(result.getParentProjectId());
+            assertNull(child.getParentProjectId());
+            verify(repository).saveAll(List.of(child));
+        }
+
+        @Test
+        void updateDirectoryType_standardToProject_clearsParentAndAcceptsPrompt() {
+            WorkingDirectoryEntity entity = createEntity("std-1", "STANDARD");
+            entity.setParentProjectId("proj-1");
+            when(repository.findByDirectoryIdAndUserId("std-1", USER_ID)).thenReturn(Optional.of(entity));
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateWorkingDirectoryForm form = new UpdateWorkingDirectoryForm();
+            form.setDirectoryType("PROJECT");
+            form.setProjectTaskPrompt("dispatch prompt");
+
+            WorkingDirectoryDTO result = service.updateDirectory(USER_ID, "std-1", form);
+
+            assertEquals("PROJECT", result.getDirectoryType());
+            assertNull(result.getParentProjectId());
+            assertEquals("dispatch prompt", result.getProjectTaskPrompt());
+        }
+
+        @Test
+        void updateDirectoryType_invalidType_throws() {
+            WorkingDirectoryEntity entity = createEntity("std-1", "STANDARD");
+            when(repository.findByDirectoryIdAndUserId("std-1", USER_ID)).thenReturn(Optional.of(entity));
+
+            UpdateWorkingDirectoryForm form = new UpdateWorkingDirectoryForm();
+            form.setDirectoryType("UNKNOWN");
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> service.updateDirectory(USER_ID, "std-1", form));
+        }
     }
 
     // ========== listChildDirectories ==========

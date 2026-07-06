@@ -14,7 +14,12 @@ from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.account_file_tools import FileToolError
 from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_state_for_tests
 from langgraph_biz_worker.runtime import command_tool
-from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent, _root_manifest_with_bound_skill
+from langgraph_biz_worker.runtime.llm_skill_agent import (
+    LlmSkillAgent,
+    _agent_frame_manifest,
+    _generic_agent_manifest,
+    _root_manifest_with_bound_skill,
+)
 from langgraph_biz_worker.runtime.context_memory import PENDING_ROOT_TURN_PROTOCOL_MESSAGES_KEY
 from langgraph_biz_worker.runtime.execution_policy import ExecutionPolicy
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
@@ -85,6 +90,48 @@ def test_root_manifest_merges_bound_agent_skill_material():
     assert "Use local order workflow." in merged.markdown_body
     assert "invoke_business_skill" in merged.allowed_tools
     assert "invoke_business_function" in merged.allowed_tools
+
+
+def test_generic_agent_manifest_does_not_allow_nested_agent_by_default():
+    runtime = SkillRuntime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_child_default_tools_001",
+        frame_kind=FrameKind.AGENT,
+        agent_id="child-agent",
+        frame_name="child-agent",
+    )
+
+    manifest = _generic_agent_manifest(runtime.get_frame(frame_id))
+
+    assert "invoke_business_skill" in manifest.allowed_tools
+    assert "invoke_business_agent" not in manifest.allowed_tools
+    assert "默认不要再创建子 Agent" in manifest.markdown_body
+
+
+def test_agent_frame_manifest_requires_explicit_nested_agent_tool():
+    manifest = SkillManifest(
+        id="agent-with-functions",
+        name="agent-with-functions",
+        allowed_tools=["invoke_business_function"],
+    )
+
+    merged = _agent_frame_manifest(manifest)
+
+    assert "invoke_business_skill" in merged.allowed_tools
+    assert "invoke_business_agent" not in merged.allowed_tools
+
+
+def test_agent_frame_manifest_preserves_explicit_nested_agent_tool():
+    manifest = SkillManifest(
+        id="recursive-agent",
+        name="recursive-agent",
+        allowed_tools=["invoke_business_agent"],
+    )
+
+    merged = _agent_frame_manifest(manifest)
+
+    assert "invoke_business_skill" in merged.allowed_tools
+    assert "invoke_business_agent" in merged.allowed_tools
 
 
 class TransientTimeoutModel:
@@ -405,7 +452,7 @@ def test_llm_agent_exposes_command_when_linux_enabled_and_workspace_configured(t
         runtime_context={
             "execution_policy": {
                 "workdir": str(workdir),
-                "allowed_tools": ["read_file", "submit_skill_result"],
+                "allowed_tools": ["read_file", "command", "submit_skill_result"],
             },
         },
         persistent_frame=True,
@@ -413,6 +460,93 @@ def test_llm_agent_exposes_command_when_linux_enabled_and_workspace_configured(t
 
     tool_names = _bound_tool_names(model)
     assert "command" in tool_names
+
+
+def test_llm_agent_hides_command_when_workspace_policy_does_not_allow_it(tmp_path, monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_command_tool_policy_hidden_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    workdir = tmp_path / "delegated-workspace"
+    workdir.mkdir()
+    model = FakeToolCallModel([AIMessage(content="ok")])
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+
+    LlmSkillAgent(model, runtime, data_root=tmp_path).run(
+        task_id="task_command_tool_policy_hidden_001",
+        frame_id=frame_id,
+        prompt="hi",
+        runtime_context={
+            "execution_policy": {
+                "workdir": str(workdir),
+                "allowed_tools": ["read_file", "submit_skill_result"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    assert "command" not in _bound_tool_names(model)
+
+
+def test_llm_agent_business_function_only_policy_blocks_file_and_command_tools(tmp_path, monkeypatch):
+    monkeypatch.setattr(command_tool.settings, "enable_command", True)
+    monkeypatch.setattr(command_tool.platform, "system", lambda: "Linux")
+
+    blocked_tool_args = {
+        "read_file": {"relative_path": "old-task.md"},
+        "list_files": {"relative_path": "."},
+        "command": {"command": "find / -name sidecar.json"},
+    }
+
+    for blocked_tool, args in blocked_tool_args.items():
+        runtime = _root_runtime()
+        frame_id = runtime.invoke_skill(
+            task_id=f"task_business_function_only_blocks_{blocked_tool}",
+            skill_id="system.root",
+            skill_input={},
+        )
+        workdir = tmp_path / blocked_tool
+        workdir.mkdir()
+        model = FakeToolCallModel([AIMessage(content="", tool_calls=[{
+            "id": f"call_{blocked_tool}",
+            "name": blocked_tool,
+            "args": args,
+        }])])
+
+        events = LlmSkillAgent(model, runtime, data_root=tmp_path / "data").run(
+            task_id=f"task_business_function_only_blocks_{blocked_tool}",
+            frame_id=frame_id,
+            prompt="Only use BusinessFunction schema/invoke.",
+            runtime_context={
+                "task_scoped_token": "runtime-token",
+                "execution_policy": {
+                    "workdir": str(workdir),
+                    "allowed_tools": [
+                        "business.functions.schema",
+                        "business.functions.invoke",
+                    ],
+                },
+            },
+            persistent_frame=True,
+        )
+
+        bound_tool_names = _bound_tool_names(model)
+        assert "get_business_function_schema" in bound_tool_names
+        assert "invoke_business_function" in bound_tool_names
+        assert not ({"read_file", "list_files", "command"} & bound_tool_names)
+
+        tool_result = next(event for event in events if event.type == "tool_result")
+        payload = json.loads(tool_result.content)
+        assert "TOOL_NOT_AUTHORIZED" in tool_result.error
+        assert payload["error_category"] == "TOOL_AUTHORIZATION"
+        assert payload["blocked_tool"] == blocked_tool
+        assert payload["recoverable"] is False
+        assert payload["llm_retry_allowed"] is False
+        assert payload["audit_alert"]["type"] == "business_function_allowed_tools_boundary_violation"
+        assert payload["audit_alert"]["blocked_tool"] == blocked_tool
 
 
 def test_llm_agent_hides_command_on_windows_or_without_workspace(tmp_path, monkeypatch):
@@ -1915,6 +2049,79 @@ def test_llm_agent_root_skill_can_invoke_business_function_directly(monkeypatch)
     assert function_frames[0].parent_frame_id == frame_id
     assert function_frames[0].output["functionId"] == "tms.order.close"
     assert any(event.tool_name == "invoke_business_function" for event in events)
+
+
+def test_llm_agent_can_get_business_function_schema_when_policy_explicitly_allows_it(monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_function_schema_001",
+        skill_id="system.root",
+        skill_input={"request": "inspect schema"},
+    )
+    calls = []
+
+    def fake_get_schema(task_scoped_token, function_id=None, version=None):
+        calls.append({
+            "task_scoped_token": task_scoped_token,
+            "function_id": function_id,
+            "version": version,
+        })
+        return {
+            "functionId": function_id,
+            "version": version,
+            "inputSchema": {"type": "object"},
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.get_business_function_schema",
+        fake_get_schema,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_schema",
+            "name": "get_business_function_schema",
+            "args": {
+                "function_id": "tms.order.save",
+                "version": "v1",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Schema inspected.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_root_function_schema_001",
+        frame_id=frame_id,
+        prompt="inspect schema",
+        runtime_context={
+            "task_scoped_token": "runtime-token",
+            "execution_policy": {
+                "allowed_tools": ["business.functions.schema"],
+            },
+        },
+        persistent_frame=True,
+    )
+
+    bound_tool_names = {tool["function"]["name"] for tool in model.bound_tools}
+    tool_result = next(e for e in events if e.type == "tool_result" and e.tool_name == "get_business_function_schema")
+    payload = json.loads(tool_result.content)
+
+    assert "get_business_function_schema" in bound_tool_names
+    assert "invoke_business_function" not in bound_tool_names
+    assert calls == [{
+        "task_scoped_token": "runtime-token",
+        "function_id": "tms.order.save",
+        "version": "v1",
+    }]
+    assert payload["ok"] is True
+    assert payload["result"]["functionId"] == "tms.order.save"
 
 
 def test_llm_agent_stops_on_non_recoverable_business_function_configuration_error(monkeypatch):

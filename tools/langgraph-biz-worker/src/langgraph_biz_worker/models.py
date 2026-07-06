@@ -37,6 +37,10 @@ class QueryRequest(BaseModel):
     context: dict[str, Any] | None = None
     # Hidden runtime data from Navigator Java. Never include this in LLM prompts.
     runtime_context: dict[str, Any] | None = None
+    allowed_tools: list[str] | str | None = Field(
+        None,
+        validation_alias=AliasChoices("allowedTools", "allowed_tools"),
+    )
     attachments: list[dict[str, Any]] | None = None
 
     # Tracking IDs forwarded by Java side
@@ -323,6 +327,39 @@ class ValidationResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Worker capability declaration
+# ---------------------------------------------------------------------------
+
+
+class AgentDelegationToolCapability(BaseModel):
+    """One tool-family capability in the Agent delegation contract."""
+
+    supported: bool
+    tool_name: str | None = None
+    mode: str
+
+
+class AgentDelegationCapabilities(BaseModel):
+    """Stable online capability declaration for delegated Agent behavior."""
+
+    contract_version: str = "agent-delegation.v1"
+    max_agent_nesting_depth: int
+    root_agent_depth: int = 0
+    root_agent_delegation_allowed: bool
+    nested_agent_delegation_allowed: bool
+    child_agent_inherits_parent_tools: bool = False
+    explicit_nested_agent_authorization_required: bool = True
+    nested_agent_authorization_gates: list[str] = Field(default_factory=list)
+    tools: dict[str, AgentDelegationToolCapability] = Field(default_factory=dict)
+
+
+class WorkerCapabilities(BaseModel):
+    """Online Worker capability declaration exposed to Java/SDK clients."""
+
+    agent_delegation: AgentDelegationCapabilities
+
+
+# ---------------------------------------------------------------------------
 # Health response
 # ---------------------------------------------------------------------------
 
@@ -334,3 +371,4 @@ class HealthResponse(BaseModel):
     version: str
     active_tasks: int
     worker_name: str
+    capabilities: WorkerCapabilities

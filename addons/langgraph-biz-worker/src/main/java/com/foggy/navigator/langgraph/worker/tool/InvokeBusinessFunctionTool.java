@@ -47,11 +47,11 @@ public class InvokeBusinessFunctionTool implements BuiltInTool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("function_id", Map.of(
                 "type", "string",
-                "description", "The ID of the business function to invoke"
+                "description", "The exact business function ID returned by Navigator. Do not strip suffixes such as .v1."
         ));
         properties.put("version", Map.of(
                 "type", "string",
-                "description", "The version of the business function"
+                "description", "Optional business function version. May be omitted or set to the returned version."
         ));
         properties.put("input", Map.of(
                 "type", "object",
@@ -63,7 +63,7 @@ public class InvokeBusinessFunctionTool implements BuiltInTool {
         ));
 
         schema.put("properties", properties);
-        schema.put("required", new String[]{"function_id", "version", "input"});
+        schema.put("required", new String[]{"function_id", "input"});
         return schema;
     }
 
@@ -87,9 +87,6 @@ public class InvokeBusinessFunctionTool implements BuiltInTool {
         }
 
         String version = (String) params.get("version");
-        if (version == null || version.isBlank()) {
-            return ToolExecutionResult.error("MISSING_VERSION", "version is required");
-        }
 
         Object input = params.get("input");
         if (input == null) {
@@ -100,7 +97,9 @@ public class InvokeBusinessFunctionTool implements BuiltInTool {
 
         // Build invoke body
         Map<String, Object> invokeBody = new LinkedHashMap<>();
-        invokeBody.put("version", version);
+        if (version != null && !version.isBlank()) {
+            invokeBody.put("version", version);
+        }
         if (input instanceof Map) {
             invokeBody.put("input", input);
         } else if (input instanceof String) {
@@ -133,7 +132,10 @@ public class InvokeBusinessFunctionTool implements BuiltInTool {
             }
 
             // Report tool message to Java for audit
-            reportToolMessageSafely(token, functionId, status, (String) result.get("suspendId"));
+            String reportedFunctionId = result.get("functionId") instanceof String canonicalFunctionId
+                    ? canonicalFunctionId
+                    : functionId;
+            reportToolMessageSafely(token, reportedFunctionId, status, (String) result.get("suspendId"));
 
             return ToolExecutionResult.success(toolResult);
         } catch (Exception e) {

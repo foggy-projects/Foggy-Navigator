@@ -50,8 +50,10 @@ class InvokeBusinessFunctionToolTest {
         List<String> requiredList = Arrays.asList((String[]) required);
         assertFalse(requiredList.contains("task_scoped_token"),
                 "task_scoped_token must not appear in required field list");
-        assertTrue(requiredList.containsAll(List.of("function_id", "version", "input")),
-                "function_id, version, input must remain required");
+        assertTrue(requiredList.containsAll(List.of("function_id", "input")),
+                "function_id and input must remain required");
+        assertFalse(requiredList.contains("version"),
+                "version must be optional because function_id is canonical");
     }
 
     // ===== Success path: SUSPENDED — token from runtimeContext =====
@@ -115,6 +117,38 @@ class InvokeBusinessFunctionToolTest {
         Map<String, Object> data = (Map<String, Object>) result.getData();
         assertEquals("ADAPTER_NOT_IMPLEMENTED", data.get("status"));
         assertEquals(false, data.get("approval_wait"));
+    }
+
+    @Test
+    void execute_allowsOmittedVersion() {
+        Map<String, Object> gatewayResponse = new HashMap<>();
+        gatewayResponse.put("functionId", "world-sim.actor.tms-order-save-print.v1");
+        gatewayResponse.put("version", "v1");
+        gatewayResponse.put("status", "ADAPTER_NOT_IMPLEMENTED");
+        gatewayResponse.put("approvalRequired", false);
+        gatewayResponse.put("message", "Authorized, adapter not implemented");
+
+        when(workerGatewayClient.invokeBusinessFunction(eq("rt_token"), eq("world-sim.actor.tms-order-save-print.v1"), any()))
+                .thenReturn(gatewayResponse);
+        when(workerGatewayClient.reportToolMessage(eq("rt_token"), any()))
+                .thenReturn(Map.of("accepted", true));
+
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .parameters(Map.of("function_id", "world-sim.actor.tms-order-save-print.v1", "input", Map.of("key", "value")))
+                .runtimeContext(Map.of(TaskScopedTokenResolver.TOKEN_KEY, "rt_token"))
+                .build();
+
+        ToolExecutionResult result = tool.execute(request);
+
+        assertTrue(result.isSuccess());
+        verify(workerGatewayClient).invokeBusinessFunction(
+                eq("rt_token"),
+                eq("world-sim.actor.tms-order-save-print.v1"),
+                argThat(body -> !body.containsKey("version") && body.containsKey("input")));
+        verify(workerGatewayClient).reportToolMessage(eq("rt_token"), argThat(body -> {
+            assertEquals("world-sim.actor.tms-order-save-print.v1", body.get("functionId"));
+            return true;
+        }));
     }
 
     // ===== Fail-closed: missing runtime token =====

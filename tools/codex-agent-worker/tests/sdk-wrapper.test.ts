@@ -7,15 +7,27 @@ import type { ThreadItem } from '@openai/codex-sdk'
 import {
   buildCodexInput,
   buildCodexProcessEnv,
+  buildCodexTaskEnv,
+  ensureNavigatorBusinessMcpHomeConfig,
   getRunningTaskCount,
   mapThreadItemToEvents,
+  mergeCodexConfig,
   parseModelString,
+  renderNavigatorBusinessMcpConfigBlock,
+  resolveDefaultCodexHome,
   resolveCodexHome,
+  resolveNavigatorBusinessMcpServerPath,
   resolveModelAlias,
+  seedCodexHomeAuthIfAvailable,
   saveAttachments,
   taskRegistry,
   shouldAbortBeforeTurnStart,
 } from '../src/codex/sdk-wrapper.ts'
+import {
+  buildNavigatorBusinessMcpConfig,
+  buildNavigatorBusinessMcpEnv,
+  isNavigatorBusinessMcpEnabled,
+} from '../src/business-mcp/navigator-business-mcp-server.ts'
 
 function createSeq(): () => number {
   let seq = 0
@@ -207,6 +219,52 @@ test('buildCodexProcessEnv preserves existing Windows variables and avoids dupli
   assert.equal(env.Path, ['D:\\codex\\vendor\\path', 'C:\\Tools'].join(';'))
 })
 
+test('buildCodexTaskEnv removes stale OpenAI settings when no effective values are present', () => {
+  const env = buildCodexTaskEnv(
+    {
+      Path: 'C:\\Tools',
+      OpenAI_Api_Key: 'stale-key',
+      CODEX_API_KEY: 'stale-codex-key',
+      OPENAI_BASE_URL: 'https://stale.example.com',
+    },
+    {
+      taskId: 'task-1',
+      codexHome: 'D:\\codex-homes\\actor-a',
+    }
+  )
+
+  assert.equal(env.OpenAI_Api_Key, undefined)
+  assert.equal(env.OPENAI_API_KEY, undefined)
+  assert.equal(env.CODEX_API_KEY, undefined)
+  assert.equal(env.OPENAI_BASE_URL, undefined)
+  assert.equal(env.CODEX_HOME, 'D:\\codex-homes\\actor-a')
+  assert.equal(env.FOGGY_CODEX_TASK_ID, 'task-1')
+})
+
+test('buildCodexTaskEnv pins effective OpenAI settings into child env', () => {
+  const env = buildCodexTaskEnv(
+    {
+      OPENAI_API_KEY: 'stale-key',
+      Codex_Api_Key: 'stale-codex-key',
+      OpenAI_Base_Url: 'https://stale.example.com',
+    },
+    {
+      effectiveApiKey: 'sk-effective',
+      effectiveBaseUrl: 'https://api.example.com/v1',
+      taskId: 'task-2',
+      threadId: 'thread-2',
+    }
+  )
+
+  assert.equal(env.OPENAI_API_KEY, 'sk-effective')
+  assert.equal(env.Codex_Api_Key, undefined)
+  assert.equal(env.CODEX_API_KEY, 'sk-effective')
+  assert.equal(env.OpenAI_Base_Url, undefined)
+  assert.equal(env.OPENAI_BASE_URL, 'https://api.example.com/v1')
+  assert.equal(env.FOGGY_CODEX_TASK_ID, 'task-2')
+  assert.equal(env.FOGGY_CODEX_THREAD_ID, 'thread-2')
+})
+
 test('saveAttachments writes image and non-image attachments separately', async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-images-'))
   const saved = await saveAttachments('task-images', cwd, [
@@ -260,4 +318,167 @@ test('resolveCodexHome derives stable sanitized paths under configured root', ()
 test('resolveCodexHome requires CODEX_BIZ_HOME_ROOT for scoped homes', () => {
   assert.throws(() => resolveCodexHome('actor-1', ''), /CODEX_BIZ_HOME_ROOT is required/)
   assert.equal(resolveCodexHome(undefined, ''), undefined)
+})
+
+test('resolveDefaultCodexHome uses CODEX_HOME or user home fallback', () => {
+  const configuredHome = path.join(os.tmpdir(), 'custom-codex')
+  const userHome = path.join(os.tmpdir(), 'worker-home')
+  assert.equal(resolveDefaultCodexHome({ CODEX_HOME: configuredHome }, userHome), path.resolve(configuredHome))
+  assert.equal(resolveDefaultCodexHome({}, userHome), path.resolve(path.join(userHome, '.codex')))
+})
+
+test('resolveNavigatorBusinessMcpServerPath follows sdk wrapper module extension', () => {
+  const currentModule = path.join('D:\\worker', 'src', 'codex', 'sdk-wrapper.ts')
+  assert.equal(
+    resolveNavigatorBusinessMcpServerPath(currentModule),
+    path.join('D:\\worker', 'src', 'business-mcp', 'navigator-business-mcp-server.ts')
+  )
+})
+
+test('buildNavigatorBusinessMcpConfig inherits token through named env vars only', () => {
+  const config = buildNavigatorBusinessMcpConfig(
+    {
+      task_scoped_token: 'task-token',
+      allowed_tools: ['business.functions.invoke'],
+    },
+    'http://navigator.example.com:8080/',
+    '/worker/src/business-mcp/navigator-business-mcp-server.ts'
+  ) as Record<string, any>
+
+  const server = config.mcp_servers.navigator_business
+  assert.equal(server.command, process.execPath)
+  assert.deepEqual(server.args, ['--import', 'tsx', '/worker/src/business-mcp/navigator-business-mcp-server.ts'])
+  assert.equal(server.cwd, path.resolve('/worker/src/business-mcp', '..', '..'))
+  assert.deepEqual(server.env_vars, [
+    'NAVIGATOR_WORKER_GATEWAY_BASE_URL',
+    'NAVIGATOR_TASK_SCOPED_TOKEN',
+    'NAVIGATOR_BUSINESS_ALLOWED_TOOLS',
+    'NAVIGATOR_BUSINESS_MCP_DEBUG_LOG',
+    'NAVIGATOR_BUSINESS_MCP_TASK_ID',
+  ])
+  assert.equal(server.default_tools_approval_mode, 'approve')
+  assert.deepEqual(server.enabled_tools, [
+    'invoke_business_function',
+  ])
+  assert.equal(server.env, undefined)
+
+  const env = buildNavigatorBusinessMcpEnv(
+    {
+      task_scoped_token: 'task-token',
+      allowed_tools: ['business.functions.invoke'],
+    },
+    'http://navigator.example.com:8080/',
+    'D:\\logs\\business-mcp.log',
+    'task-1'
+  )
+  assert.deepEqual(env, {
+    NAVIGATOR_WORKER_GATEWAY_BASE_URL: 'http://navigator.example.com:8080',
+    NAVIGATOR_TASK_SCOPED_TOKEN: 'task-token',
+    NAVIGATOR_BUSINESS_ALLOWED_TOOLS: JSON.stringify(['business.functions.invoke']),
+    NAVIGATOR_BUSINESS_MCP_DEBUG_LOG: 'D:\\logs\\business-mcp.log',
+    NAVIGATOR_BUSINESS_MCP_TASK_ID: 'task-1',
+  })
+})
+
+test('buildNavigatorBusinessMcpConfig runs compiled server without tsx', () => {
+  const config = buildNavigatorBusinessMcpConfig(
+    { task_scoped_token: 'task-token' },
+    'http://navigator.example.com:8080',
+    '/worker/dist/business-mcp/navigator-business-mcp-server.js'
+  ) as Record<string, any>
+
+  assert.deepEqual(config.mcp_servers.navigator_business.args, [
+    '/worker/dist/business-mcp/navigator-business-mcp-server.js',
+  ])
+  assert.equal(config.mcp_servers.navigator_business.cwd, path.resolve('/worker/dist/business-mcp', '..', '..'))
+})
+
+test('buildNavigatorBusinessMcpConfig stays disabled without token or business tool grant', () => {
+  assert.equal(buildNavigatorBusinessMcpConfig({}, 'http://localhost:8080', '/server.ts'), undefined)
+  assert.equal(isNavigatorBusinessMcpEnabled({
+    task_scoped_token: 'task-token',
+    allowed_tools: ['filesystem.read'],
+  }), false)
+})
+
+test('mergeCodexConfig deep merges MCP servers and lets runtime config win', () => {
+  const merged = mergeCodexConfig(
+    {
+      tool_output_token_limit: 1000,
+      mcp_servers: {
+        custom: { command: 'custom' },
+        navigator_business: { command: 'unsafe', env: { NAVIGATOR_TASK_SCOPED_TOKEN: 'unsafe' } },
+      },
+    },
+    {
+      mcp_servers: {
+        navigator_business: { command: 'node', env: { NAVIGATOR_TASK_SCOPED_TOKEN: 'runtime' } },
+      },
+    }
+  ) as Record<string, any>
+
+  assert.equal(merged.tool_output_token_limit, 1000)
+  assert.equal(merged.mcp_servers.custom.command, 'custom')
+  assert.equal(merged.mcp_servers.navigator_business.command, 'node')
+  assert.equal(merged.mcp_servers.navigator_business.env.NAVIGATOR_TASK_SCOPED_TOKEN, 'runtime')
+})
+
+test('renderNavigatorBusinessMcpConfigBlock writes no task token', () => {
+  const config = buildNavigatorBusinessMcpConfig(
+    { task_scoped_token: 'task-token' },
+    'http://navigator.example.com:8080',
+    'D:\\worker\\src\\business-mcp\\navigator-business-mcp-server.ts'
+  ) as Record<string, any>
+
+  const block = renderNavigatorBusinessMcpConfigBlock(config)
+
+  assert.match(block, /\[mcp_servers\.navigator_business]/)
+  assert.match(block, /cwd = "D:\\\\worker"/)
+  assert.match(block, /args = \["--import", "tsx", "D:\\\\worker\\\\src\\\\business-mcp\\\\navigator-business-mcp-server\.ts"]/)
+  assert.match(block, /env_vars = \["NAVIGATOR_WORKER_GATEWAY_BASE_URL", "NAVIGATOR_TASK_SCOPED_TOKEN", "NAVIGATOR_BUSINESS_ALLOWED_TOOLS", "NAVIGATOR_BUSINESS_MCP_DEBUG_LOG", "NAVIGATOR_BUSINESS_MCP_TASK_ID"]/)
+  assert.match(block, /default_tools_approval_mode = "approve"/)
+  assert.match(block, /enabled_tools = \["list_business_functions", "get_business_function_schema", "invoke_business_function"]/)
+  assert.doesNotMatch(block, /task-token/)
+})
+
+test('ensureNavigatorBusinessMcpHomeConfig upserts managed block without token', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-mcp-config-'))
+  const config = buildNavigatorBusinessMcpConfig(
+    { task_scoped_token: 'task-token' },
+    'http://navigator.example.com:8080',
+    '/worker/dist/business-mcp/navigator-business-mcp-server.js'
+  ) as Record<string, any>
+
+  assert.equal(await ensureNavigatorBusinessMcpHomeConfig(root, config), true)
+  assert.equal(await ensureNavigatorBusinessMcpHomeConfig(root, config), false)
+  const file = await fs.readFile(path.join(root, 'config.toml'), 'utf8')
+
+  assert.match(file, /\[mcp_servers\.navigator_business]/)
+  assert.match(file, new RegExp(`cwd = ${JSON.stringify(path.resolve('/worker/dist/business-mcp', '..', '..')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+  assert.match(file, /env_vars = \["NAVIGATOR_WORKER_GATEWAY_BASE_URL", "NAVIGATOR_TASK_SCOPED_TOKEN", "NAVIGATOR_BUSINESS_ALLOWED_TOOLS", "NAVIGATOR_BUSINESS_MCP_DEBUG_LOG", "NAVIGATOR_BUSINESS_MCP_TASK_ID"]/)
+  assert.match(file, /default_tools_approval_mode = "approve"/)
+  assert.match(file, /enabled_tools = \["list_business_functions", "get_business_function_schema", "invoke_business_function"]/)
+  assert.doesNotMatch(file, /task-token/)
+})
+
+test('seedCodexHomeAuthIfAvailable copies auth into scoped home', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-auth-seed-'))
+  const sourceHome = path.join(root, 'source')
+  const targetHome = path.join(root, 'target')
+  await fs.mkdir(sourceHome, { recursive: true })
+  await fs.writeFile(path.join(sourceHome, 'auth.json'), '{"token":"fake"}')
+
+  const copied = await seedCodexHomeAuthIfAvailable(targetHome, sourceHome)
+
+  assert.equal(copied, true)
+  assert.equal(await fs.readFile(path.join(targetHome, 'auth.json'), 'utf8'), '{"token":"fake"}')
+})
+
+test('seedCodexHomeAuthIfAvailable skips when source auth is unavailable or target equals source', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-auth-seed-skip-'))
+  const sourceHome = path.join(root, 'source')
+  await fs.mkdir(sourceHome, { recursive: true })
+
+  assert.equal(await seedCodexHomeAuthIfAvailable(path.join(root, 'target'), sourceHome), false)
+  assert.equal(await seedCodexHomeAuthIfAvailable(sourceHome, sourceHome), false)
 })

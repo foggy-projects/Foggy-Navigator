@@ -265,6 +265,9 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
   const webSearchMode = validateOptionalEnum(body.web_search_mode, 'web_search_mode', VALID_WEB_SEARCH_MODES)
   if (webSearchMode && typeof webSearchMode !== 'string') return webSearchMode
 
+  const businessRuntimeContext = validateOptionalObject(body.business_runtime_context, 'business_runtime_context')
+  if (isValidationFailure(businessRuntimeContext)) return businessRuntimeContext
+
   const additionalDirectories = validateOptionalStringArray(body.additional_directories, 'additional_directories')
   if (additionalDirectories && !Array.isArray(additionalDirectories)) return additionalDirectories
 
@@ -320,6 +323,9 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
   }
   if (webSearchMode !== undefined) {
     value.web_search_mode = webSearchMode
+  }
+  if (businessRuntimeContext !== undefined) {
+    value.business_runtime_context = businessRuntimeContext as Record<string, unknown>
   }
   if (additionalDirectories !== undefined) {
     value.additional_directories = additionalDirectories

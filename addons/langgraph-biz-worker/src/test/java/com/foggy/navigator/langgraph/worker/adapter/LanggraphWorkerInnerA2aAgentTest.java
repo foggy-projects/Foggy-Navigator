@@ -35,6 +35,8 @@ class LanggraphWorkerInnerA2aAgentTest {
                         .taskId("lgt_01")
                         .sessionId("session_01")
                         .workerId("worker_01")
+                        .directoryId("dir_default")
+                        .cwd("D:/workspace/default")
                         .build());
 
         CodingAgentEntity entity = new CodingAgentEntity();
@@ -45,6 +47,7 @@ class LanggraphWorkerInnerA2aAgentTest {
         entity.setWorkerId("worker_01");
         entity.setDefaultModelConfigId("model_default");
         entity.setDefaultModel("sonnet");
+        entity.setDefaultDirectoryId("dir_default");
 
         LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
@@ -64,7 +67,47 @@ class LanggraphWorkerInnerA2aAgentTest {
         assertEquals("model_default", captor.getValue().getModelConfigId());
         assertEquals("sonnet", captor.getValue().getModel());
         assertEquals("worker_01", captor.getValue().getWorkerId());
+        assertEquals("dir_default", captor.getValue().getDirectoryId());
         assertNull(captor.getValue().getSkillName());
+    }
+
+    @Test
+    void sendTask_usesRuntimeDirectoryAndCwdFromMetadataWhenPresent() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        when(taskService.createTask(eq("admin_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class)))
+                .thenReturn(LanggraphTaskDTO.builder()
+                        .taskId("lgt_01")
+                        .sessionId("session_01")
+                        .workerId("worker_01")
+                        .directoryId("dir_runtime")
+                        .cwd("/home/navigator/actor-home")
+                        .build());
+
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setAgentId("agent_01");
+        entity.setName("Agent");
+        entity.setUserId("admin_01");
+        entity.setTenantId("tenant_01");
+        entity.setDefaultDirectoryId("dir_default");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
+        A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
+        message.setMetadata(Map.of(
+                "directoryId", "dir_runtime",
+                "cwd", "/home/navigator/actor-home"));
+
+        A2aTask task = agent.sendTask(A2aContext.builder()
+                .message(message)
+                .contextId("ctx_01")
+                .navigatorSessionId("session_01")
+                .build());
+
+        ArgumentCaptor<CreateLanggraphTaskForm> captor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("admin_01"), eq("tenant_01"), captor.capture());
+        assertEquals("dir_runtime", captor.getValue().getDirectoryId());
+        assertEquals("/home/navigator/actor-home", captor.getValue().getCwd());
+        assertEquals("dir_runtime", task.getMetadata().get("directoryId"));
+        assertEquals("/home/navigator/actor-home", task.getMetadata().get("cwd"));
     }
 
     @Test
@@ -122,6 +165,46 @@ class LanggraphWorkerInnerA2aAgentTest {
         Map<String, Object> echoedRuntimeContext = (Map<String, Object>) echoedMetadata.get("runtimeContext");
         assertEquals("btt_01", echoedRuntimeContext.get("task_scoped_token"));
         assertFalse(echoedRuntimeContext.containsKey("skill_name"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void sendTask_acceptsSnakeCaseRuntimeContextAlias() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        when(taskService.createTask(eq("admin_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class)))
+                .thenReturn(LanggraphTaskDTO.builder().taskId("lgt_01").sessionId("session_01").build());
+
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setAgentId("agent_01");
+        entity.setName("Agent");
+        entity.setUserId("admin_01");
+        entity.setTenantId("tenant_01");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
+        A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
+        message.setMetadata(Map.of(
+                "runtime_context", Map.of(
+                        "execution_policy", Map.of("workdir", "/workspace/user"),
+                        "skill_name", "hidden.skill"
+                )));
+
+        A2aTask task = agent.sendTask(A2aContext.builder()
+                .message(message)
+                .contextId("ctx_01")
+                .navigatorSessionId("session_01")
+                .build());
+
+        ArgumentCaptor<CreateLanggraphTaskForm> captor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("admin_01"), eq("tenant_01"), captor.capture());
+        Map<String, Object> runtimeContext = captor.getValue().getRuntimeContext();
+        Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
+        assertEquals("/workspace/user", executionPolicy.get("workdir"));
+        assertFalse(runtimeContext.containsKey("skill_name"));
+
+        Map<String, Object> echoedMetadata = task.getHistory().get(0).getMetadata();
+        Map<String, Object> echoedRuntimeContext = (Map<String, Object>) echoedMetadata.get("runtime_context");
+        assertFalse(echoedRuntimeContext.containsKey("skill_name"));
+        assertEquals(Map.of("workdir", "/workspace/user"), echoedRuntimeContext.get("execution_policy"));
     }
 
     @Test

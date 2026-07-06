@@ -5,6 +5,7 @@ import com.foggy.navigator.claude.worker.model.dto.SshSessionDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.SshConnectForm;
+import com.foggy.navigator.claude.worker.model.form.SshImageUploadForm;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
 import com.foggy.navigator.claude.worker.service.WorkingDirectoryService;
 import com.foggy.navigator.common.annotation.RequireAuth;
@@ -15,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -188,6 +190,59 @@ public class SshProxyController {
     }
 
     /**
+     * 上传图片到 SSH 目标机工作目录，返回 Codex TUI 可读取的绝对路径。
+     */
+    @PostMapping("/{sessionId}/images")
+    public RX<Map<String, Object>> uploadImage(@PathVariable String sessionId,
+                                                @RequestBody SshImageUploadForm form) {
+        if (form == null || isBlank(form.getWorkerId())) {
+            return RX.failB("workerId is required");
+        }
+        if (isBlank(form.getName()) || isBlank(form.getData()) || isBlank(form.getMimeType())) {
+            return RX.failB("name, data and mimeType are required");
+        }
+
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(form.getWorkerId());
+        if (worker == null) {
+            return RX.failB("Worker not found: " + form.getWorkerId());
+        }
+
+        ClaudeWorkerClient client = workerService.createClient(worker);
+        try {
+            verifyOwnedSshSession(client, sessionId);
+        } catch (Exception e) {
+            log.warn("SSH image upload ownership check failed for session {}: {}", sessionId, e.getMessage());
+            return RX.failB(e.getMessage());
+        }
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", form.getName());
+        body.put("data", form.getData());
+        body.put("mime_type", form.getMimeType());
+
+        Map<String, Object> workerResult;
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> r = client.sshUploadImage(sessionId, body)
+                    .block(java.time.Duration.ofSeconds(30));
+            workerResult = r;
+        } catch (Exception e) {
+            String msg = extractWorkerDetail(e);
+            log.warn("SSH image upload via Worker failed: {}", msg);
+            return RX.failB("SSH 图片上传失败: " + msg);
+        }
+        if (workerResult == null) {
+            return RX.failB("SSH 图片上传失败: no response");
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("targetImagePath", workerResult.get("target_image_path"));
+        result.put("mimeType", workerResult.get("mime_type"));
+        result.put("size", workerResult.get("size"));
+        return RX.ok(result);
+    }
+
+    /**
      * 关闭 SSH 会话
      */
     @PostMapping("/{sessionId}/close")
@@ -216,5 +271,52 @@ public class SshProxyController {
         ClaudeWorkerClient client = workerService.createClient(worker);
         client.sshResize(sessionId, body).block(java.time.Duration.ofSeconds(5));
         return RX.ok(null);
+    }
+
+    private void verifyOwnedSshSession(ClaudeWorkerClient client, String sessionId) {
+        List<Map<String, Object>> workerSessions = client.listSshSessions()
+                .block(java.time.Duration.ofSeconds(10));
+        if (workerSessions == null) {
+            throw new IllegalStateException("SSH session not found: " + sessionId);
+        }
+
+        Map<String, Object> matched = null;
+        for (Map<String, Object> session : workerSessions) {
+            if (sessionId.equals(session.get("session_id"))) {
+                matched = session;
+                break;
+            }
+        }
+        if (matched == null) {
+            throw new IllegalStateException("SSH session not found: " + sessionId);
+        }
+
+        String dirId = (String) matched.get("directory_id");
+        if (isBlank(dirId)) {
+            throw new SecurityException("SSH 会话未绑定目录，无法上传图片");
+        }
+
+        String userId = UserContext.getCurrentUserId();
+        directoryService.getDirectoryEntity(userId, dirId);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private static String extractWorkerDetail(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null) {
+            return e.getClass().getSimpleName();
+        }
+        int start = msg.indexOf("\"detail\":\"");
+        if (start >= 0) {
+            start += 10;
+            int end = msg.indexOf("\"", start);
+            if (end > start) {
+                return msg.substring(start, end);
+            }
+        }
+        return msg;
     }
 }

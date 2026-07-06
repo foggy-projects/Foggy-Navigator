@@ -103,7 +103,7 @@ class CodexStreamRelayTest {
         when(clientFactory.getOrCreate("worker-1:codex", "http://localhost:3051", "worker-token"))
                 .thenReturn(client);
         when(client.streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Flux.error(new RuntimeException("401 Unauthorized")));
 
         relay.onTaskStart(WorkerTaskStartEvent.builder()
@@ -131,7 +131,7 @@ class CodexStreamRelayTest {
         when(clientFactory.getOrCreate("worker-1:codex", "http://localhost:3051", "worker-token"))
                 .thenReturn(client);
         when(client.streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Flux.never());
 
         relay.onTaskStart(WorkerTaskStartEvent.builder()
@@ -150,6 +150,7 @@ class CodexStreamRelayTest {
                         "approvalPolicy", "never",
                         "networkAccessEnabled", false,
                         "webSearchMode", "disabled",
+                        "businessRuntimeContext", Map.of("task_scoped_token", "token-1"),
                         "additionalDirectories", List.of("D:/shared")
                 ))
                 .build());
@@ -173,6 +174,7 @@ class CodexStreamRelayTest {
                 eq("never"),
                 eq(false),
                 eq("disabled"),
+                eq(Map.of("task_scoped_token", "token-1")),
                 eq(List.of("D:/shared")));
     }
 }

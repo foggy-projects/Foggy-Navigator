@@ -88,7 +88,11 @@ for i in \$(seq 1 60); do
 done
 
 echo "[3/4] Starting Navigator stack"
-bash ./start-all.sh $start_arg
+if [ -f ./scripts/start-all.sh ]; then
+  bash ./scripts/start-all.sh $start_arg
+else
+  bash ./start-all.sh $start_arg
+fi
 
 echo "[4/4] Checking HTTP endpoints"
 curl -fsS http://127.0.0.1:8112/actuator/health >/dev/null || echo "Backend health is not UP yet."

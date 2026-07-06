@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import platform
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
+
+try:
+    import pwd
+except ImportError:  # pragma: no cover - command execution is Linux-only.
+    pwd = None  # type: ignore[assignment]
 
 from ..config import settings
 from .execution_policy import ExecutionPolicy
@@ -15,6 +22,9 @@ DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_TIMEOUT_SECONDS = 600.0
 DEFAULT_MAX_OUTPUT_CHARS = 30_000
 MAX_OUTPUT_CHARS = 200_000
+COMMAND_UMASK = 0o022
+
+logger = logging.getLogger(__name__)
 
 
 def command_tool_available(execution_policy: ExecutionPolicy | None) -> bool:
@@ -82,6 +92,7 @@ def run_command_tool(
             errors="replace",
             timeout=timeout_seconds,
             check=False,
+            **_subprocess_identity_kwargs(execution_policy),
         )
         duration_ms = int((time.monotonic() - started) * 1000)
         stdout, stdout_truncated = _truncate_text(completed.stdout or "", max_output_chars)
@@ -141,6 +152,81 @@ def _resolve_cwd(value: Any, execution_policy: ExecutionPolicy) -> Path:
     ):
         raise ValueError("workdir must be inside allowed_dirs")
     return resolved
+
+
+def _subprocess_identity_kwargs(execution_policy: ExecutionPolicy) -> dict[str, Any]:
+    """Return POSIX subprocess options that keep command-created files workspace-owned."""
+
+    options: dict[str, Any] = {"umask": COMMAND_UMASK}
+    if execution_policy.workdir is None:
+        return options
+    try:
+        effective_uid = os.geteuid()
+    except AttributeError:
+        return options
+    if effective_uid != 0:
+        return options
+
+    owner = _workspace_owner_ids(execution_policy.workdir)
+    if owner is None:
+        return options
+    uid, gid = owner
+    if uid == 0:
+        return options
+
+    options["user"] = uid
+    options["group"] = gid
+    options["extra_groups"] = _supplementary_groups_for_uid(uid, gid)
+    env = _command_env_for_uid(uid)
+    if env is not None:
+        options["env"] = env
+    logger.info(
+        "Running command tool as workspace owner uid=%s gid=%s workdir=%s",
+        uid,
+        gid,
+        execution_policy.workdir,
+    )
+    return options
+
+
+def _workspace_owner_ids(workdir: Path) -> tuple[int, int] | None:
+    try:
+        stat_result = workdir.stat()
+    except OSError:
+        logger.warning("Unable to stat command workspace owner: %s", workdir, exc_info=True)
+        return None
+    return int(stat_result.st_uid), int(stat_result.st_gid)
+
+
+def _supplementary_groups_for_uid(uid: int, gid: int) -> tuple[int, ...]:
+    if pwd is None:
+        return ()
+    try:
+        user_name = pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return ()
+    if not hasattr(os, "getgrouplist"):
+        return (gid,)
+    try:
+        group_ids = os.getgrouplist(user_name, gid)
+    except OSError:
+        logger.debug("Unable to resolve supplementary groups for uid=%s", uid, exc_info=True)
+        return (gid,)
+    return tuple(sorted({int(group_id) for group_id in group_ids}))
+
+
+def _command_env_for_uid(uid: int) -> dict[str, str] | None:
+    if pwd is None:
+        return None
+    try:
+        user_info = pwd.getpwuid(uid)
+    except KeyError:
+        return None
+    env = os.environ.copy()
+    env["HOME"] = user_info.pw_dir
+    env["USER"] = user_info.pw_name
+    env["LOGNAME"] = user_info.pw_name
+    return env
 
 
 def _bounded_float(value: Any, *, default: float, minimum: float, maximum: float) -> float:

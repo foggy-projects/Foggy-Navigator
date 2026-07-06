@@ -544,8 +544,7 @@ public class A2AgentResourceResolver {
             }
             case UPSTREAM_SYSTEM_SHARED -> {
                 requireOwner(directory, ResourceOwnerType.UPSTREAM_SYSTEM);
-                if (!StringUtils.hasText(clientApp.getUpstreamSystemId())
-                        || !clientApp.getUpstreamSystemId().equals(directory.getOwnerId())) {
+                if (!sameUpstreamSystemId(clientApp.getUpstreamSystemId(), directory.getOwnerId())) {
                     throw new SecurityException("working directory is not visible to upstream system: " + directory.getDirectoryId());
                 }
             }
@@ -572,8 +571,7 @@ public class A2AgentResourceResolver {
                 }
             }
             case UPSTREAM_SYSTEM -> {
-                if (!StringUtils.hasText(clientApp.getUpstreamSystemId())
-                        || !clientApp.getUpstreamSystemId().equals(agent.getOwnerId())) {
+                if (!sameUpstreamSystemId(clientApp.getUpstreamSystemId(), agent.getOwnerId())) {
                     throw new SecurityException("agent is not visible to upstream system: " + agent.getAgentId());
                 }
             }
@@ -658,8 +656,7 @@ public class A2AgentResourceResolver {
                 // Platform-owned pools are tenant-scoped shared infrastructure.
             }
             case UPSTREAM_SYSTEM -> {
-                if (!StringUtils.hasText(clientApp.getUpstreamSystemId())
-                        || !clientApp.getUpstreamSystemId().equals(pool.getOwnerId())) {
+                if (!sameUpstreamSystemId(clientApp.getUpstreamSystemId(), pool.getOwnerId())) {
                     throw new SecurityException("worker pool is not visible to upstream system: " + pool.getPoolId());
                 }
             }
@@ -672,6 +669,13 @@ public class A2AgentResourceResolver {
         if (directory.getOwnerType() != expectedOwnerType) {
             throw new SecurityException("working directory ownerType mismatch: " + directory.getDirectoryId());
         }
+    }
+
+    private boolean sameUpstreamSystemId(String left, String right) {
+        String normalizedLeft = trimToNull(left);
+        String normalizedRight = trimToNull(right);
+        return normalizedLeft != null && normalizedRight != null
+                && normalizedLeft.equalsIgnoreCase(normalizedRight);
     }
 
     private void requireAgentResource(ResolvedAgentResource agentResource) {

@@ -728,6 +728,21 @@ public class ClaudeWorkerClient {
                 .doOnError(e -> log.warn("SSH resize failed for worker {}, session {}: {}", workerId, sessionId, e.getMessage()));
     }
 
+    /**
+     * 上传图片到 SSH 目标机工作目录，返回目标机可读的绝对路径。
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> sshUploadImage(String sessionId, Map<String, Object> body) {
+        return webClient.post()
+                .uri("/api/v1/ssh/" + sessionId + "/images")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("SSH image upload failed for worker {}, session {}: {}", workerId, sessionId, e.getMessage()));
+    }
+
     // ===== CLI Process Management =====
 
     /**

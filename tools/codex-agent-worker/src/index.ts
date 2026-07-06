@@ -5,8 +5,10 @@ import { authMiddleware } from './auth.js'
 import healthRouter from './routes/health.js'
 import processesRouter from './routes/processes.js'
 import queryRouter from './routes/query.js'
+import initDirectoryRouter from './routes/init-directory.js'
 import tasksRouter from './routes/tasks.js'
 import sessionsRouter from './routes/sessions.js'
+import sessionFileHintsRouter from './routes/session-file-hints.js'
 import { ensureUserAgentsSkillsDir } from './startup/skills-link.js'
 
 const app = express()
@@ -20,8 +22,10 @@ app.use(authMiddleware)
 app.use(healthRouter)
 app.use(processesRouter)
 app.use(queryRouter)
+app.use(initDirectoryRouter)
 app.use(tasksRouter)
 app.use(sessionsRouter)
+app.use(sessionFileHintsRouter)
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

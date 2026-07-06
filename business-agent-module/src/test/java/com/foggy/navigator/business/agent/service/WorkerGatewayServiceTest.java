@@ -249,6 +249,43 @@ class WorkerGatewayServiceTest {
     }
 
     @Test
+    void invoke_usesResolvedCanonicalFunctionForAuditAndSuspensionWhenVersionOmitted() {
+        when(taskService.resolveTaskScopedToken("valid_token")).thenReturn(tokenDTO);
+
+        BusinessFunctionRuntimeContextDTO context = new BusinessFunctionRuntimeContextDTO();
+        BusinessFunctionDTO functionDTO = new BusinessFunctionDTO();
+        functionDTO.setFunctionId("world-sim.actor.tms-order-save-print.v1");
+        functionDTO.setApprovalRequired(true);
+        context.setFunction(functionDTO);
+
+        BusinessFunctionVersionDTO versionDTO = new BusinessFunctionVersionDTO();
+        versionDTO.setVersion("v1");
+        context.setVersionData(versionDTO);
+
+        when(authorizationService.resolveExecutableBusinessFunction(
+                eq("tenant1"), eq("app1"), eq("user1"), eq("skill1"),
+                eq("world-sim.actor.tms-order-save-print"), isNull()
+        )).thenReturn(context);
+
+        com.foggy.navigator.business.agent.model.entity.BusinessFunctionSuspensionEntity mockSuspension = new com.foggy.navigator.business.agent.model.entity.BusinessFunctionSuspensionEntity();
+        mockSuspension.setSuspendId("sus_123");
+        when(suspensionService.createSuspension(
+                tokenDTO, "world-sim.actor.tms-order-save-print.v1", "v1", "{}", null))
+                .thenReturn(mockSuspension);
+
+        com.foggy.navigator.business.agent.model.form.WorkerGatewayInvokeForm form = new com.foggy.navigator.business.agent.model.form.WorkerGatewayInvokeForm();
+        form.setInputJson("{}");
+
+        com.foggy.navigator.business.agent.model.dto.WorkerGatewayInvokeResponseDTO response = workerGatewayService.invokeBusinessFunction(
+                "valid_token", "world-sim.actor.tms-order-save-print", form);
+
+        assertEquals("world-sim.actor.tms-order-save-print.v1", response.getFunctionId());
+        assertEquals("v1", response.getVersion());
+        verify(auditService).recordInvokeStarted(eq(tokenDTO), eq("world-sim.actor.tms-order-save-print.v1"), eq("v1"), anyString());
+        verify(auditService).recordInvokeSuspended(tokenDTO, "world-sim.actor.tms-order-save-print.v1", "v1", "sus_123");
+    }
+
+    @Test
     void invokeBusinessFunction_nonApproval_echoAdapter_success() {
         when(taskService.resolveTaskScopedToken("valid_token")).thenReturn(tokenDTO);
 

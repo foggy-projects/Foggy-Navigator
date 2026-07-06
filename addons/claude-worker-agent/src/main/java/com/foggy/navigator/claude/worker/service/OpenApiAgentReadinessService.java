@@ -262,6 +262,7 @@ public class OpenApiAgentReadinessService {
             result.getChecks().add(AgentReadinessCheckDTO.ok(
                     "WORKSPACE_RESOURCE",
                     "no working directory requested or bound"));
+            applyManagedAccountFileToolDiagnostic(result);
             return;
         }
         try {
@@ -286,6 +287,7 @@ public class OpenApiAgentReadinessService {
             result.setWorkspaceReadOnly(workspaceResource.readOnly());
             result.setWorkspaceSource(workspaceResource.source());
             result.getChecks().add(AgentReadinessCheckDTO.ok("WORKSPACE_RESOURCE"));
+            applyDelegatedActorHomeFileToolDiagnostic(result, workspaceResource);
         } catch (Exception e) {
             WorkspaceResourceDiagnostic diagnostic = workspaceResourceDiagnostic(
                     e,
@@ -297,6 +299,82 @@ public class OpenApiAgentReadinessService {
                     diagnostic.errorCode(),
                     diagnostic.action()));
         }
+    }
+
+    private void applyManagedAccountFileToolDiagnostic(AgentReadinessDTO result) {
+        if (!shouldReportBizFileToolRoot(result)) {
+            return;
+        }
+        result.setFileToolRootMode("MANAGED_ACCOUNT_LAYER");
+        result.setCommandWorkdirRoot(null);
+        result.setFileToolRoot(null);
+        result.setFileToolAgentRoot(null);
+        result.setFileToolWorkdirAligned(null);
+        result.getChecks().add(AgentReadinessCheckDTO.ok(
+                "FILE_TOOL_ROOT_ALIGNMENT",
+                "BizWorker file tool uses managed account layer because no working directory is resolved"));
+    }
+
+    private void applyDelegatedActorHomeFileToolDiagnostic(
+            AgentReadinessDTO result,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        if (!shouldReportBizFileToolRoot(result)) {
+            return;
+        }
+        String workdir = trimToNull(workspaceResource != null ? workspaceResource.workdir() : null);
+        result.setCommandWorkdirRoot(workdir);
+        result.setFileToolRootMode("DELEGATED_ACTOR_HOME");
+        result.setFileToolRoot(workdir);
+        result.setFileToolAgentRoot(workdir != null ? appendLogicalPath(workdir, "agent") : null);
+        boolean aligned = workdir != null && samePath(workdir, result.getFileToolRoot());
+        result.setFileToolWorkdirAligned(aligned);
+        if (aligned) {
+            result.getChecks().add(AgentReadinessCheckDTO.ok(
+                    "FILE_TOOL_ROOT_ALIGNMENT",
+                    "BizWorker file tool root aligns with command workdir; agent/ resolves under Actor Home"));
+            return;
+        }
+        result.getChecks().add(AgentReadinessCheckDTO.fail(
+                "FILE_TOOL_ROOT_ALIGNMENT",
+                "BizWorker file tool root is not aligned with command workdir"));
+    }
+
+    private boolean shouldReportBizFileToolRoot(AgentReadinessDTO result) {
+        return isBackend(result.getEffectiveWorkerBackend(), BACKEND_LANGGRAPH_BIZ);
+    }
+
+    private String appendLogicalPath(String root, String child) {
+        String normalizedRoot = trimToNull(root);
+        String normalizedChild = trimToNull(child);
+        if (normalizedRoot == null) {
+            return normalizedChild;
+        }
+        if (normalizedChild == null) {
+            return normalizedRoot;
+        }
+        String trimmedRoot = normalizedRoot.replace('\\', '/');
+        while (trimmedRoot.endsWith("/") && trimmedRoot.length() > 1) {
+            trimmedRoot = trimmedRoot.substring(0, trimmedRoot.length() - 1);
+        }
+        return trimmedRoot + "/" + normalizedChild.replace('\\', '/');
+    }
+
+    private boolean samePath(String left, String right) {
+        String normalizedLeft = normalizePath(left);
+        String normalizedRight = normalizePath(right);
+        return normalizedLeft != null && normalizedLeft.equals(normalizedRight);
+    }
+
+    private String normalizePath(String value) {
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        normalized = normalized.replace('\\', '/');
+        while (normalized.endsWith("/") && normalized.length() > 1) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 
     private WorkspaceResourceDiagnostic workspaceResourceDiagnostic(

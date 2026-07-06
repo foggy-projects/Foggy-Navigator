@@ -261,12 +261,70 @@ class SessionMetadataServiceTest {
     }
 
     @Test
+    void holdConversation_holdsChildrenWhenParentHeld() {
+        SessionEntity parent = session("parent-session");
+        SessionEntity childA = session("child-a");
+        childA.setParentSessionId("parent-session");
+        SessionEntity childB = session("child-b");
+        childB.setParentSessionId("parent-session");
+
+        when(sessionRepository.findByIdAndUserId("parent-session", "user-1")).thenReturn(Optional.of(parent));
+        when(sessionRepository.findActiveChildrenByParentSessionId("user-1", "parent-session"))
+                .thenReturn(List.of(childA, childB));
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        SessionConfigDTO result = service.holdConversation("parent-session", "user-1");
+
+        assertEquals("parent-session", result.getSessionId());
+        assertEquals("ON_HOLD", result.getInteractionState());
+        assertEquals("ON_HOLD", parent.getInteractionState());
+        assertEquals("ON_HOLD", childA.getInteractionState());
+        assertEquals("ON_HOLD", childB.getInteractionState());
+        verify(sessionRepository).save(parent);
+        verify(sessionRepository).save(childA);
+        verify(sessionRepository).save(childB);
+    }
+
+    @Test
+    void holdConversation_holdsOnlyChildWhenChildHeld() {
+        SessionEntity child = session("child-session");
+        child.setParentSessionId("parent-session");
+
+        when(sessionRepository.findByIdAndUserId("child-session", "user-1")).thenReturn(Optional.of(child));
+        when(sessionRepository.save(child)).thenReturn(child);
+
+        SessionConfigDTO result = service.holdConversation("child-session", "user-1");
+
+        assertEquals("child-session", result.getSessionId());
+        assertEquals("ON_HOLD", child.getInteractionState());
+        verify(sessionRepository, never()).findActiveChildrenByParentSessionId(anyString(), anyString());
+        verify(sessionRepository).save(child);
+    }
+
+    @Test
+    void unholdConversation_onlyUpdatesCurrentSession() {
+        SessionEntity parent = session("parent-session");
+        parent.setInteractionState("ON_HOLD");
+
+        when(sessionRepository.findByIdAndUserId("parent-session", "user-1")).thenReturn(Optional.of(parent));
+        when(sessionRepository.save(parent)).thenReturn(parent);
+
+        SessionConfigDTO result = service.unholdConversation("parent-session", "user-1");
+
+        assertEquals("parent-session", result.getSessionId());
+        assertEquals("AWAITING_REPLY", result.getInteractionState());
+        verify(sessionRepository, never()).findActiveChildrenByParentSessionId(anyString(), anyString());
+        verify(sessionRepository).save(parent);
+    }
+
+    @Test
     void deleteConversation_softDeletesExistingSessionWithoutRemovingTaskProjection() {
         SessionEntity session = session("session-1");
         SessionTaskEntity task = taskProjection("session-1", "task-1", "COMPLETED");
-        when(sessionTaskRepository.findBySessionIdAndUserIdOrderByCreatedAtDesc("session-1", "user-1"))
-                .thenReturn(List.of(task));
         when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
+        when(sessionRepository.findActiveChildrenByParentSessionId("user-1", "session-1")).thenReturn(List.of());
+        when(sessionTaskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(List.of("session-1"), "user-1"))
+                .thenReturn(List.of(task));
         when(sessionRepository.save(session)).thenReturn(session);
 
         boolean deleted = service.deleteConversation("session-1", "user-1");
@@ -276,6 +334,87 @@ class SessionMetadataServiceTest {
         assertEquals("DELETED", session.getInteractionState());
         assertNotNull(session.getDeletedAt());
         verify(sessionRepository).save(session);
+    }
+
+    @Test
+    void deleteConversation_deletesChildrenWhenParentDeleted() {
+        SessionEntity parent = session("parent-session");
+        SessionEntity childA = session("child-a");
+        childA.setParentSessionId("parent-session");
+        SessionEntity childB = session("child-b");
+        childB.setParentSessionId("parent-session");
+
+        when(sessionRepository.findByIdAndUserId("parent-session", "user-1")).thenReturn(Optional.of(parent));
+        when(sessionRepository.findActiveChildrenByParentSessionId("user-1", "parent-session"))
+                .thenReturn(List.of(childA, childB));
+        when(sessionTaskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(
+                List.of("parent-session", "child-a", "child-b"), "user-1"))
+                .thenReturn(List.of(
+                        taskProjection("parent-session", "task-parent", "COMPLETED"),
+                        taskProjection("child-a", "task-child-a", "FAILED"),
+                        taskProjection("child-b", "task-child-b", "COMPLETED")
+                ));
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        boolean deleted = service.deleteConversation("parent-session", "user-1");
+
+        assertTrue(deleted);
+        assertEquals("DELETED", parent.getStatus());
+        assertEquals("DELETED", childA.getStatus());
+        assertEquals("DELETED", childB.getStatus());
+        assertEquals("DELETED", parent.getInteractionState());
+        assertEquals("DELETED", childA.getInteractionState());
+        assertEquals("DELETED", childB.getInteractionState());
+        assertNotNull(parent.getDeletedAt());
+        assertNotNull(childA.getDeletedAt());
+        assertNotNull(childB.getDeletedAt());
+        verify(sessionRepository).save(parent);
+        verify(sessionRepository).save(childA);
+        verify(sessionRepository).save(childB);
+    }
+
+    @Test
+    void deleteConversation_deletesOnlyChildWhenChildDeleted() {
+        SessionEntity child = session("child-session");
+        child.setParentSessionId("parent-session");
+
+        when(sessionRepository.findByIdAndUserId("child-session", "user-1")).thenReturn(Optional.of(child));
+        when(sessionTaskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(List.of("child-session"), "user-1"))
+                .thenReturn(List.of(taskProjection("child-session", "task-child", "COMPLETED")));
+        when(sessionRepository.save(child)).thenReturn(child);
+
+        boolean deleted = service.deleteConversation("child-session", "user-1");
+
+        assertTrue(deleted);
+        assertEquals("DELETED", child.getStatus());
+        assertEquals("DELETED", child.getInteractionState());
+        assertNotNull(child.getDeletedAt());
+        verify(sessionRepository, never()).findActiveChildrenByParentSessionId(anyString(), anyString());
+        verify(sessionRepository).save(child);
+    }
+
+    @Test
+    void deleteConversation_rejectsParentWhenAnyChildHasActiveTask() {
+        SessionEntity parent = session("parent-session");
+        SessionEntity child = session("child-session");
+        child.setParentSessionId("parent-session");
+
+        when(sessionRepository.findByIdAndUserId("parent-session", "user-1")).thenReturn(Optional.of(parent));
+        when(sessionRepository.findActiveChildrenByParentSessionId("user-1", "parent-session"))
+                .thenReturn(List.of(child));
+        when(sessionTaskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(
+                List.of("parent-session", "child-session"), "user-1"))
+                .thenReturn(List.of(taskProjection("child-session", "task-child", "AWAITING_PERMISSION")));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.deleteConversation("parent-session", "user-1"));
+
+        assertEquals("Cannot delete a session with active tasks. Please abort it first.", error.getMessage());
+        assertEquals("ACTIVE", parent.getStatus());
+        assertEquals("ACTIVE", child.getStatus());
+        assertNull(parent.getDeletedAt());
+        assertNull(child.getDeletedAt());
+        verify(sessionRepository, never()).save(any());
     }
 
     @Test
@@ -301,6 +440,7 @@ class SessionMetadataServiceTest {
     @Test
     void deleteConversation_rejectsActiveTask() {
         SessionTaskEntity task = taskProjection("session-1", "task-1", "RUNNING");
+        when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.empty());
         when(sessionTaskRepository.findBySessionIdAndUserIdOrderByCreatedAtDesc("session-1", "user-1"))
                 .thenReturn(List.of(task));
 

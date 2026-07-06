@@ -30,6 +30,7 @@ import reactor.core.publisher.Flux;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -107,6 +108,8 @@ public class CodexStreamRelay {
             String codexHomeKey = blankToNull(event.getProviderConfigString("codexHomeKey"));
             String developerInstructions = blankToNull(event.getProviderConfigString("developerInstructions"));
             @SuppressWarnings("unchecked")
+            Map<String, Object> businessRuntimeContext = event.getProviderConfigValue("businessRuntimeContext");
+            @SuppressWarnings("unchecked")
             Map<String, Object> outputSchema = event.getProviderConfigValue("outputSchema");
             @SuppressWarnings("unchecked")
             Map<String, Object> codexConfig = event.getProviderConfigValue("codexConfig");
@@ -138,7 +141,8 @@ public class CodexStreamRelay {
                     codexThreadId, event.getModel(),
                     event.getMaxTurns(), images, attachments, event.getApiKey(), baseUrl, extraEnvVars,
                     codexHomeKey, developerInstructions, outputSchema, codexConfig,
-                    sandboxMode, approvalPolicy, networkAccessEnabled, webSearchMode, additionalDirectories);
+                    sandboxMode, approvalPolicy, networkAccessEnabled, webSearchMode,
+                    businessRuntimeContext, additionalDirectories);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId, providerType,
                     detectedModel, detectedCodexThreadId, 0);
@@ -390,7 +394,7 @@ public class CodexStreamRelay {
             }
 
             taskService.recordWorkerProgress(taskId, event.getTaskId(), event.getSessionId(),
-                    event.getModel(), event.getSeq());
+                    event.getModel(), event.getSeq(), isUserVisibleOutputEvent(event));
 
             String type = event.getType();
             if (type == null) return;
@@ -489,6 +493,33 @@ public class CodexStreamRelay {
 
     private void publishEvent(AgentMessage message) {
         eventPublisher.publishEvent(message);
+    }
+
+    private boolean isUserVisibleOutputEvent(WorkerEvent event) {
+        if (event == null || event.getType() == null) {
+            return false;
+        }
+        return switch (event.getType()) {
+            case "assistant_text" -> !"sync_checkpoint".equals(event.getSubtype());
+            case "tool_use", "tool_result", "result", "error" -> true;
+            case "system", "progress" -> isVisibleStatusEvent(event);
+            default -> false;
+        };
+    }
+
+    private boolean isVisibleStatusEvent(WorkerEvent event) {
+        String subtype = event.getSubtype();
+        if (subtype == null || subtype.isBlank()) {
+            return event.getContent() != null && !event.getContent().isBlank();
+        }
+        String normalized = subtype.toLowerCase(Locale.ROOT);
+        if ("waiting".equals(normalized)
+                || normalized.contains("heartbeat")
+                || normalized.contains("keepalive")
+                || "sync_checkpoint".equals(normalized)) {
+            return false;
+        }
+        return event.getContent() != null && !event.getContent().isBlank();
     }
 
     private String truncateResult(String text) {

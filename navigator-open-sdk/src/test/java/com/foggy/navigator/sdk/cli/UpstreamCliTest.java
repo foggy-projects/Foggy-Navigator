@@ -38,6 +38,7 @@ class UpstreamCliTest {
     private static String lastClientAppControlKeyHeader;
     private static String lastUpstreamUserIdHeader;
     private static String responseOverride;
+    private static int responseStatusOverride;
     private static List<String> requestPaths;
     private static List<String> requestBodies;
 
@@ -211,7 +212,7 @@ class UpstreamCliTest {
             }
             byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.sendResponseHeaders(responseStatusOverride, bytes.length);
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(bytes);
             }
@@ -243,8 +244,32 @@ class UpstreamCliTest {
         requestPaths = new ArrayList<>();
         requestBodies = new ArrayList<>();
         responseOverride = "{\"code\":0,\"data\":{}}";
+        responseStatusOverride = 200;
         stdout = new ByteArrayOutputStream();
         stderr = new ByteArrayOutputStream();
+    }
+
+    @Test
+    void modelAndAgentParentHelpAreAvailable() {
+        int modelCode = run(new String[]{"upstream", "model", "--help"}, Map.of());
+        String modelOutput = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, modelCode);
+        assertTrue(modelOutput.contains("Usage: navi upstream model <command> [options]"));
+        assertTrue(modelOutput.contains("ClientApp model create/update/grant/default commands use NAVI_CONTROL_API_KEY"));
+        assertTrue(modelOutput.contains("System model commands use NAVI_ADMIN_API_KEY"));
+        assertTrue(requestPaths.isEmpty());
+
+        stdout.reset();
+        stderr.reset();
+        int agentCode = run(new String[]{"upstream", "agent", "--help"}, Map.of());
+        String agentOutput = stdout.toString(StandardCharsets.UTF_8);
+
+        assertEquals(0, agentCode);
+        assertTrue(agentOutput.contains("Usage: navi upstream agent <command> [options]"));
+        assertTrue(agentOutput.contains("ClientApp agent sync/bind commands use NAVI_CONTROL_API_KEY"));
+        assertTrue(agentOutput.contains("System agent commands use NAVI_ADMIN_API_KEY"));
+        assertTrue(requestPaths.isEmpty());
     }
 
     @Test
@@ -361,6 +386,63 @@ class UpstreamCliTest {
     }
 
     @Test
+    void authLoginWritesAdminTokenWithoutPrintingSecrets() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "token":"jwt-secret-token",
+                  "tokenType":"Bearer",
+                  "expiresIn":86400,
+                  "user":{
+                    "id":"user-1",
+                    "tenantId":"tenant-1",
+                    "username":"tenant-admin",
+                    "roles":["TENANT_ADMIN"]
+                  }
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "auth", "login",
+                "--base-url", baseUrl(),
+                "--username", "tenant-admin",
+                "--password-env", "NAVI_LOGIN_PASSWORD",
+                "--write-profile"}, env("NAVI_LOGIN_PASSWORD", "pw-secret-value"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tempDir.resolve(".navigator").resolve("upstream.env"), StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/auth/login", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastAuthorizationHeader);
+        assertTrue(lastBody.contains("\"username\":\"tenant-admin\""));
+        assertTrue(lastBody.contains("\"password\":\"pw-secret-value\""));
+        assertTrue(profile.contains("NAVI_BASE_URL=" + baseUrl()));
+        assertTrue(profile.contains("NAVI_ADMIN_TOKEN=jwt-secret-token"));
+        assertTrue(profile.contains("NAVI_TENANT_ID=tenant-1"));
+        assertTrue(profile.contains("NAVI_ADMIN_USER_ID=user-1"));
+        assertTrue(profile.contains("NAVI_ADMIN_USERNAME=tenant-admin"));
+        assertTrue(output.contains("auth login ok"));
+        assertTrue(output.contains("userId=user-1"));
+        assertTrue(output.contains("tenantId=tenant-1"));
+        assertTrue(output.contains("stored=NAVI_BASE_URL,NAVI_ADMIN_TOKEN,NAVI_TENANT_ID,NAVI_ADMIN_USER_ID,NAVI_ADMIN_USERNAME"));
+        assertFalse(output.contains("jwt-secret-token"));
+        assertFalse(output.contains("pw-secret-value"));
+    }
+
+    @Test
+    void authLoginRequiresWriteProfileBeforeExchange() {
+        int code = run(new String[]{"upstream", "auth", "login",
+                "--base-url", baseUrl(),
+                "--username", "tenant-admin",
+                "--password-env", "NAVI_LOGIN_PASSWORD"}, env("NAVI_LOGIN_PASSWORD", "pw-secret-value"));
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("auth login requires --write-profile"));
+        assertTrue(requestPaths.isEmpty());
+        assertFalse(stderr.toString(StandardCharsets.UTF_8).contains("pw-secret-value"));
+    }
+
+    @Test
     void runtimeTokenUsesSecretHeaderAndMasksOutput() {
         responseOverride = "{\"accessToken\":\"cat-runtime-secret\",\"appKey\":\"cak-test\",\"clientAppId\":\"app-1\",\"expiresInSeconds\":1800}";
         Map<String, String> env = env("NAVI_SECRET_ENV", "cas-secret-value");
@@ -380,6 +462,39 @@ class UpstreamCliTest {
         assertFalse(output.contains("cas-secret-value"));
         assertFalse(output.contains("cat-runtime-secret"));
         assertTrue(output.contains("runtime-token ok"));
+        assertTrue(output.contains("runtimeToken.expiryStatus=OK"));
+        assertTrue(output.contains("runtimeToken.refresh=automatic when NAVI_CLIENT_APP_SECRET is present"));
+    }
+
+    @Test
+    void runtimeTokenIgnoresAdminAndControlCredentialsFromProfile() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Files.writeString(profileDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_CLIENT_APP_KEY=cak-runtime-key
+                NAVI_CLIENT_APP_SECRET=cas-runtime-secret
+                NAVI_ADMIN_API_KEY=naa-expired-admin-key
+                NAVI_CONTROL_API_KEY=cac-expired-control-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = "{\"accessToken\":\"cat-runtime-secret\",\"appKey\":\"cak-runtime-key\",\"clientAppId\":\"app-1\",\"expiresInSeconds\":1800}";
+
+        int code = run(new String[]{"upstream", "runtime-token"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/client-apps/runtime-token", lastPath);
+        assertEquals("cak-runtime-key", lastClientAppKeyHeader);
+        assertEquals("cas-runtime-secret", lastClientAppSecretHeader);
+        assertNull(lastUpstreamAdminKeyHeader);
+        assertNull(lastClientAppControlKeyHeader);
+        assertTrue(output.contains("runtime-token ok"));
+        assertTrue(output.contains("runtimeToken.expiryStatus=OK"));
+        assertFalse(output.contains("naa-expired-admin-key"));
+        assertFalse(output.contains("cac-expired-control-key"));
+        assertFalse(output.contains("cas-runtime-secret"));
+        assertFalse(output.contains("cat-runtime-secret"));
     }
 
     @Test
@@ -405,6 +520,8 @@ class UpstreamCliTest {
         assertFalse(profileText.contains("cat-old-secret"));
         assertTrue(output.contains("runtime-token ok"));
         assertTrue(output.contains("profileUpdated="));
+        assertTrue(output.contains("runtimeToken.expiryStatus=OK"));
+        assertTrue(output.contains("runtimeToken.refresh=automatic when NAVI_CLIENT_APP_SECRET is present"));
         assertFalse(output.contains("cak-test"));
         assertFalse(output.contains("cas-secret-value"));
         assertFalse(output.contains("cat-written-secret"));
@@ -481,7 +598,7 @@ class UpstreamCliTest {
                   "authorizedClientAppNamespace":"TMS",
                   "scopes":["CLIENT_APP_MANAGE","CLIENT_APP_CONTROL_KEY_ISSUE"],
                   "status":"ACTIVE",
-                  "expiresAt":"2026-06-01T00:00:00",
+                  "expiresAt":"2099-06-01T00:00:00",
                   "sourceRequestId":"uabr-1"
                 }}
                 """;
@@ -497,9 +614,66 @@ class UpstreamCliTest {
         assertTrue(output.contains("credential credentialId=ucaac-1 principalId=TMS upstreamSystemId=TMS status=ACTIVE"));
         assertTrue(output.contains("credential authorizedTenantIds=TMS"));
         assertTrue(output.contains("credential scopes=CLIENT_APP_MANAGE,CLIENT_APP_CONTROL_KEY_ISSUE"));
+        assertTrue(output.contains("credential expiryStatus=OK"));
         assertTrue(output.contains("credential sourceRequestId=uabr-1"));
         assertTrue(output.contains("rotation=use admin-key rotate --credential-id ucaac-1"));
         assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
+    void adminKeyInspectReportsExpiredCredentialWithoutSecret() throws Exception {
+        Files.writeString(tempDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "credentialId":"ucaac-expired",
+                  "principalId":"TMS",
+                  "credentialKeyPrefix":"naa_",
+                  "credentialKeySuffix":"-key",
+                  "upstreamSystemId":"TMS",
+                  "authorizedTenantIds":["TMS"],
+                  "authorizedClientAppNamespace":"TMS",
+                  "scopes":["CLIENT_APP_MANAGE"],
+                  "status":"ACTIVE",
+                  "expiresAt":"2000-01-01T00:00:00",
+                  "sourceRequestId":"uabr-expired"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "inspect",
+                "--profile", "upstream.env"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertTrue(output.contains("admin-key inspect ok"));
+        assertTrue(output.contains("credential expiryStatus=EXPIRED"));
+        assertTrue(output.contains("credential expiryAction=rotate or re-issue provisioning credential before management operations"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
+    void adminKeyInspectReportsUnauthorizedWithoutLeakingExpiredAdminKey() throws Exception {
+        Files.writeString(tempDir.resolve("upstream.env"), """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-expired-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseStatusOverride = 401;
+        responseOverride = """
+                {"code":401,"msg":"credential expired for key=naa-expired-admin-key"}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "inspect",
+                "--profile", "upstream.env"}, Map.of());
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(1, code);
+        assertEquals("/api/v1/upstream-admin/admin-credential/current", lastPath);
+        assertEquals("naa-expired-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(error.contains("HTTP 401"));
+        assertTrue(error.contains("credential expired"));
+        assertFalse(error.contains("naa-expired-admin-key"));
     }
 
     @Test
@@ -1237,7 +1411,8 @@ class UpstreamCliTest {
                 "--sandbox-mode", "workspace-write",
                 "--approval-policy", "never",
                 "--network-access-enabled", "false",
-                "--web-search-mode", "disabled"}, Map.of());
+                "--web-search-mode", "disabled",
+                "--allowed-tools", "business.functions.schema,business.functions.invoke"}, Map.of());
 
         assertEquals(0, code);
         assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
@@ -1248,6 +1423,7 @@ class UpstreamCliTest {
         assertTrue(lastBody.contains("\"approvalPolicy\":\"never\""));
         assertTrue(lastBody.contains("\"networkAccessEnabled\":false"));
         assertTrue(lastBody.contains("\"webSearchMode\":\"disabled\""));
+        assertTrue(lastBody.contains("\"allowedTools\":[\"business.functions.schema\",\"business.functions.invoke\"]"));
         assertFalse(lastBody.contains("\"clientContext\""));
     }
 
@@ -1268,7 +1444,8 @@ class UpstreamCliTest {
                 "NAVI_CODEX_SANDBOX_MODE", "workspace-write",
                 "NAVI_CODEX_APPROVAL_POLICY", "never",
                 "NAVI_CODEX_NETWORK_ACCESS_ENABLED", "false",
-                "NAVI_CODEX_WEB_SEARCH_MODE", "disabled"));
+                "NAVI_CODEX_WEB_SEARCH_MODE", "disabled",
+                "NAVI_ALLOWED_TOOLS", "business.functions.invoke, submit_skill_result"));
 
         assertEquals(0, code);
         assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
@@ -1276,6 +1453,45 @@ class UpstreamCliTest {
         assertTrue(lastBody.contains("\"directoryId\":\"dir-env\""));
         assertTrue(lastBody.contains("\"codexHomeKey\":\"actor-home-env\""));
         assertTrue(lastBody.contains("\"networkAccessEnabled\":false"));
+        assertTrue(lastBody.contains("\"allowedTools\":[\"business.functions.invoke\",\"submit_skill_result\"]"));
+    }
+
+    @Test
+    void askRejectsUnknownOptionBeforeHttpCall() {
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "hello",
+                "--allowed-tool", "business.functions.invoke"}, Map.of());
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertNull(lastPath);
+        assertTrue(error.contains("Unknown option: --allowed-tool"));
+        assertFalse(error.contains("cat-runtime-secret"));
+    }
+
+    @Test
+    void askTaskDirectoryRequiredErrorSuggestsDirectoryId() {
+        responseOverride = "{\"code\":600,\"msg\":\"TASK_DIRECTORY_REQUIRED: directoryId is required for Actor-owned BizWorker task\"}";
+
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "hello"}, Map.of());
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(2, code);
+        assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
+        assertTrue(error.contains("TASK_DIRECTORY_REQUIRED"));
+        assertTrue(error.contains("--directory-id <id>"));
+        assertFalse(error.contains("cat-runtime-secret"));
     }
 
     @Test
@@ -1420,6 +1636,8 @@ class UpstreamCliTest {
         assertTrue(output.contains("Usage: navi upstream diagnostics"));
         assertTrue(output.contains("diagnostics session-dir --context-id <contextId>"));
         assertTrue(output.contains("[--data-root <bizWorkerDataRoot>]"));
+        assertTrue(output.contains("[--codex-workspace-root <path>]"));
+        assertTrue(output.contains("OPENAI_CODEX resolves the Codex navigator_business MCP debug log"));
         assertTrue(output.contains("does not print tokens, headers, credentials, or log contents"));
     }
 
@@ -1499,6 +1717,43 @@ class UpstreamCliTest {
                 .toAbsolutePath().normalize()));
         assertTrue(output.contains("accessHint=unavailable"));
         assertTrue(output.contains("notFoundReason=context-not-found"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
+    void diagnosticsSessionDirLocatesCodexBusinessMcpDebugLog() throws Exception {
+        String contextId = "bctx_20260701_d3_d30e09334a674aabbf5e0f26d395e073";
+        String taskId = "20260701-8bc8";
+        String providerTaskId = "7314034b-d9b4-4231-9781-beb5f6f6c349";
+        Path workspaceRoot = tempDir.resolve("codex-workspace");
+        Path debugLogFile = workspaceRoot.resolve("temp").resolve("codex-worker-3070")
+                .resolve("business-mcp-" + providerTaskId + ".log");
+        Files.createDirectories(debugLogFile.getParent());
+        Files.writeString(debugLogFile, "tool_start name=invoke_business_function\n", StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "diagnostics", "session-dir",
+                "--context-id", contextId,
+                "--task-id", taskId,
+                "--provider-task-id", providerTaskId,
+                "--worker-backend", "OPENAI_CODEX",
+                "--codex-workspace-root", workspaceRoot.toString(),
+                "--physical-worker-id", "worker-codex-1"}, env("NAVI_CLIENT_APP_ACCESS_TOKEN", "cat-runtime-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastPath);
+        assertTrue(output.contains("contextId=" + contextId));
+        assertTrue(output.contains("taskId=" + taskId));
+        assertTrue(output.contains("providerTaskId=" + providerTaskId));
+        assertTrue(output.contains("exists=true"));
+        assertTrue(output.contains("workerBackend=OPENAI_CODEX"));
+        assertTrue(output.contains("diagnosticMode=codex-business-mcp"));
+        assertTrue(output.contains("physicalWorkerId=worker-codex-1"));
+        assertTrue(output.contains("businessMcpDebugLogFile=" + debugLogFile.toAbsolutePath().normalize()));
+        assertTrue(output.contains("accessHint=local"));
+        assertFalse(output.contains("notFoundReason="));
+        assertFalse(output.contains("skillToolCallsFile=" + taskId + ".jsonl"));
+        assertFalse(output.contains("tool_start name=invoke_business_function"));
         assertFalse(output.contains("cat-runtime-secret"));
     }
 
@@ -2668,6 +2923,29 @@ class UpstreamCliTest {
     }
 
     @Test
+    void modelGrantReportsForbiddenWithoutLeakingControlCredential() {
+        responseStatusOverride = 403;
+        responseOverride = """
+                {"code":403,"msg":"insufficient scope for token=control-key-secret"}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "grant",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--model-config-id", "model-live"}, Map.of());
+
+        String error = stderr.toString(StandardCharsets.UTF_8);
+        assertEquals(1, code);
+        assertEquals("/api/v1/client-apps/app-1/model-config-grants", lastPath);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(error.contains("HTTP 403"));
+        assertTrue(error.contains("insufficient scope"));
+        assertFalse(error.contains("control-key-secret"));
+    }
+
+    @Test
     void modelSetDefaultCanResolveGrantIdByModelConfigId() {
         responseOverride = "__MODEL_GRANTS_THEN_DEFAULT__";
 
@@ -2807,6 +3085,72 @@ class UpstreamCliTest {
         assertTrue(output.contains("model rotate-key ok"));
         assertFalse(output.contains("control-key-secret"));
         assertFalse(output.contains("new-llm-secret"));
+    }
+
+    @Test
+    void modelClearKeyUsesControlCredentialWithoutApiKey() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":43,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-owned",
+                  "modelConfigName":"Upstream Codex",
+                  "workerBackend":"OPENAI_CODEX",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP_OWNED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "clear-key",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--model-config-id", "model-owned"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs/model-owned/key", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"clearApiKey\":true"));
+        assertFalse(lastBody.contains("apiKey"));
+        assertTrue(output.contains("model clear-key ok"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void modelSystemClearKeyUsesUpstreamAdminKey() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":"model-upstream",
+                  "tenantId":"tenant-1",
+                  "name":"Upstream Codex",
+                  "modelName":"codex-mini",
+                  "workerBackend":"OPENAI_CODEX",
+                  "ownerType":"UPSTREAM_SYSTEM",
+                  "ownerId":"ups-1",
+                  "enabled":true
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "system-clear-key",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--admin-api-key", "naa-secret-admin-key",
+                "--target-tenant-id", "tenant-1",
+                "--model-config-id", "model-upstream"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/model-configs/model-upstream/key?targetTenantId=tenant-1", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"clearApiKey\":true"));
+        assertFalse(lastBody.contains("apiKey"));
+        assertTrue(output.contains("model system-clear-key ok"));
+        assertFalse(output.contains("naa-secret-admin-key"));
     }
 
     @Test
@@ -3162,6 +3506,7 @@ class UpstreamCliTest {
         assertTrue(output.contains("Internal compatibility: worker-pool list/create/register-worker/add-member/status"));
         assertTrue(output.contains("model system-list/system-create/system-update/system-rotate-key"));
         assertTrue(output.contains("[--max-turns <n>]"));
+        assertTrue(output.contains("[--allowed-tools <csv>]"));
     }
 
     @Test

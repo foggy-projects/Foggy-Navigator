@@ -1,0 +1,49 @@
+version: 1
+scope: tms-ltl-ui-qa
+updatedAt: 2026-07-05
+profiles:
+  - actorId: tms-ui-experience-reviewer-a
+    role: ui-experience-reviewer
+    status: live-smoke-passed
+    boundaries:
+      - do-not-access-real-tms
+      - do-not-read-accounts
+      - do-not-print-secrets
+      - do-not-dispatch-ui-inspection-before-smoke
+    navigator:
+      baseUrl: http://localhost:8112
+      tenantId: "88800"
+      upstreamSystemId: TMS
+      upstreamRef: TMS-88800
+      clientAppId: capp_2852124a-48f7-4098-9d5e-33eb736c4375
+      clientAppName: tms-x3-agent-v305
+      profilePath: .navigator/upstream.env
+      profileGitIgnored: true
+    runtime:
+      agentCode: world-sim.biz-worker-browser-smoke.v1
+      upstreamUserId: tms-ui-experience-reviewer-a
+      directoryId: 20260705-228b
+      directoryPath: /home/navigator/foggy-world-sim-navi-validation/owner-aware-107fix/developer/tms-ui-experience-reviewer-a
+      modelConfigId: a8ed6f14-949c-4003-b108-99b78de65ff5
+      modelConfigName: tms-ui-experience-reviewer-langbiz-20260705b
+      modelName: gpt-oss-120b-medium
+      workerBackend: LANGGRAPH_BIZ
+      bizWorkerId: tms-ui-experience-reviewer-biz
+      claudeAnchorWorkerId: 96aab377
+      workerRoleSource: BIZ_WORKER_IDENTITY
+      workspaceScope: CLIENT_APP_SHARED
+      resolverType: DELEGATED
+    route:
+      upstreamRef: TMS-88800
+      url: http://localhost:8200
+      purpose: local mock route for Navigator readiness only; no real TMS access
+    evidence:
+      readiness: passed
+      ownerSmoke: passed
+      actorHomeLiveSmoke: passed
+      liveSmokeTaskId: lgt_5f997dcdb8834d51
+      liveSmokeContextId: bctx_20260705_39_39d465b61ad44639a32af9db045fd723
+    notes:
+      - Existing directory 20260705-228b was migrated from an old sandbox owner to the current TMS ClientApp in local dev data.
+      - The old requested modelConfig e8b12e11-bebc-4446-9601-20418d11c28a was not usable because it belonged to a different tenant.
+      - A new current-ClientApp-owned modelConfig was created and granted for this actor smoke.

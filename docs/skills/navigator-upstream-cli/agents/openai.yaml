@@ -1,0 +1,4 @@
+interface:
+  display_name: "Navigator Upstream CLI"
+  short_description: "Install and use the Navigator Upstream CLI in upstream projects."
+  default_prompt: "Use the Navigator Upstream CLI to install, configure, smoke test, and troubleshoot a Foggy Navigator upstream integration."

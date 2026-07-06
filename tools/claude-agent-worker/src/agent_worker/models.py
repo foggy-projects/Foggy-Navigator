@@ -343,6 +343,22 @@ class SshResizeRequest(BaseModel):
     rows: int = Field(..., ge=1, le=500, description="New terminal rows")
 
 
+class SshImageUploadRequest(BaseModel):
+    """Payload for ``POST /api/v1/ssh/{session_id}/images``."""
+
+    name: str = Field(..., min_length=1, max_length=255, description="Original image file name")
+    data: str = Field(..., description="Base64-encoded image data")
+    mime_type: str = Field("application/octet-stream", description="Declared image MIME type")
+
+
+class SshImageUploadResponse(BaseModel):
+    """Response for a target-side SSH image upload."""
+
+    target_image_path: str = Field(..., description="Absolute path readable by the SSH target process")
+    mime_type: str = Field(..., description="Validated image MIME type")
+    size: int = Field(..., ge=0, description="Decoded image byte size")
+
+
 class SshSessionInfo(BaseModel):
     """A single active SSH session."""
 

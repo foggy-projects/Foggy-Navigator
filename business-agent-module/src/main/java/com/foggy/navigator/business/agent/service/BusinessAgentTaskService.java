@@ -35,6 +35,9 @@ public class BusinessAgentTaskService {
 
     public static final String STATUS_CREATED = "CREATED";
     public static final String STATUS_ACTIVE = "ACTIVE";
+    public static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
+    private static final String TASK_DIRECTORY_REQUIRED_MESSAGE =
+            TASK_DIRECTORY_REQUIRED + ": directoryId is required for Actor-owned BizWorker task";
     private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
     private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
 
@@ -147,6 +150,26 @@ public class BusinessAgentTaskService {
                 form,
                 existingResumeTask,
                 agentResource);
+        String workerBackend = firstNonBlank(
+                agentResource.workerBackend(),
+                workerPool != null ? workerPool.getWorkerBackend() : null,
+                finalModelResource.workerBackend());
+        requireTaskDirectoryForBizWorker(workerBackend, workspaceResource);
+        String contextId = businessAgentSessionService.resolveReusableContextId(
+                tenantId,
+                form.getClientAppId(),
+                form.getUpstreamUserId(),
+                form.getContextId(),
+                form.getSessionId());
+        businessAgentSessionService.validateContextResourceCompatibility(
+                tenantId,
+                form.getClientAppId(),
+                form.getUpstreamUserId(),
+                contextId,
+                agentResource.agentId(),
+                agentResource.skillId(),
+                workspaceResource != null ? workspaceResource.directoryId() : null,
+                finalModelConfigId);
 
         // 7. task 创建后固定最终 modelConfigId
         BusinessAgentTaskEntity task = new BusinessAgentTaskEntity();
@@ -187,18 +210,17 @@ public class BusinessAgentTaskService {
         token = tokenRepository.save(token);
         tokenRuntimeStore.registerToken(tenantId, task.getSessionId(), task.getTaskId(), plainToken, expiresAt);
 
-        String contextId = businessAgentSessionService.resolveReusableContextId(
-                tenantId,
-                form.getClientAppId(),
-                form.getUpstreamUserId(),
-                form.getContextId(),
-                task.getSessionId());
-
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
                 tenantId, actorUserId, task, workerPool, agentResource, finalModelResource, plainToken,
                 finalVisionModelConfigId, contextId, skillName, form, workspaceResource, clientApp);
-        if (launchResult != null && StringUtils.hasText(launchResult.getContextId())) {
-            contextId = launchResult.getContextId();
+        if (launchResult != null) {
+            if (StringUtils.hasText(launchResult.getContextId())) {
+                contextId = launchResult.getContextId();
+            }
+            task.setWorkerTaskId(launchResult.getWorkerTaskId());
+            task.setWorkerSessionId(launchResult.getWorkerSessionId());
+            task.setWorkerId(launchResult.getWorkerId());
+            task.setWorkerProviderType(launchResult.getProviderType());
         }
 
         contextId = businessAgentSessionService
@@ -206,10 +228,6 @@ public class BusinessAgentTaskService {
                 .getContextId();
 
         if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
-            task.setWorkerTaskId(launchResult.getWorkerTaskId());
-            task.setWorkerSessionId(launchResult.getWorkerSessionId());
-            task.setWorkerId(launchResult.getWorkerId());
-            task.setWorkerProviderType(launchResult.getProviderType());
             task = taskRepository.save(task);
             token.setWorkerTaskId(task.getWorkerTaskId());
             token.setWorkerSessionId(task.getWorkerSessionId());
@@ -294,6 +312,25 @@ public class BusinessAgentTaskService {
 
         tokenRuntimeStore.registerToken(tenantId, sessionId, taskId, plainToken, expiresAt);
         return plainToken;
+    }
+
+    @Transactional(readOnly = true)
+    public boolean hasOpenApiTaskScopedTokenForContext(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String contextId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(clientAppId, "clientAppId is required");
+        requireText(upstreamUserId, "upstreamUserId is required");
+        requireText(contextId, "contextId is required");
+        return tokenRepository.existsByTenantIdAndClientAppIdAndUpstreamUserIdAndSessionIdAndStatusAndExpiresAtAfter(
+                tenantId,
+                clientAppId,
+                upstreamUserId,
+                contextId,
+                STATUS_ACTIVE,
+                LocalDateTime.now());
     }
 
     @Transactional
@@ -457,6 +494,14 @@ public class BusinessAgentTaskService {
             return modelWorkerBackend;
         }
         throw new IllegalStateException("agent worker backend is not configured");
+    }
+
+    private void requireTaskDirectoryForBizWorker(
+            String workerBackend,
+            A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource) {
+        if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ) && workspaceResource == null) {
+            throw new IllegalArgumentException(TASK_DIRECTORY_REQUIRED_MESSAGE);
+        }
     }
 
     private String resolveLaunchPhysicalWorkerId(

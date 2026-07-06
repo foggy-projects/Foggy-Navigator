@@ -56,6 +56,21 @@ class ClientAppUserGrantServiceTest {
     }
 
     @Test
+    void grantUpstreamUserAccess_rejectsClientAppOutsideScope() {
+        GrantUpstreamUserForm form = new GrantUpstreamUserForm();
+        form.setUpstreamUserId("user_01");
+        form.setUpstreamUserToken("tms-token-01");
+        doThrow(new SecurityException("client app outside credential scope"))
+                .when(clientAppService).requireActiveClientApp("tenant_1", "app_01");
+
+        assertThrows(SecurityException.class, () ->
+                clientAppUserGrantService.grantUpstreamUserAccess("tenant_1", "app_01", "admin_1", form));
+
+        verify(grantRepository, never()).findByTenantIdAndClientAppIdAndUpstreamUserId(anyString(), anyString(), anyString());
+        verify(grantRepository, never()).save(any());
+    }
+
+    @Test
     void resolveUpstreamUserToken_success() {
         when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
         ClientAppUpstreamUserGrantEntity grant = new ClientAppUpstreamUserGrantEntity();
@@ -66,6 +81,17 @@ class ClientAppUserGrantServiceTest {
         String token = clientAppUserGrantService.resolveUpstreamUserToken("tenant_1", "app_01", "user_01");
 
         assertEquals("tms-token-01", token);
+    }
+
+    @Test
+    void resolveUpstreamUserToken_rejectsClientAppOutsideScope() {
+        doThrow(new SecurityException("client app outside credential scope"))
+                .when(clientAppService).requireActiveClientApp("tenant_1", "app_01");
+
+        assertThrows(SecurityException.class, () ->
+                clientAppUserGrantService.resolveUpstreamUserToken("tenant_1", "app_01", "user_01"));
+
+        verify(grantRepository, never()).findByTenantIdAndClientAppIdAndUpstreamUserId(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -124,5 +150,8 @@ class ClientAppUserGrantServiceTest {
         assertThrows(IllegalArgumentException.class, () -> {
             clientAppUserGrantService.updateUpstreamUserGrantStatus("tenant_1", "app_01", "user_01", "DISABLED");
         });
+
+        verify(grantRepository, never()).findByTenantIdAndClientAppIdAndUpstreamUserId(anyString(), anyString(), anyString());
+        verify(grantRepository, never()).save(any());
     }
 }

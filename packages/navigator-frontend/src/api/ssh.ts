@@ -18,6 +18,12 @@ export interface SshSessionDTO {
   lastActivity: string
 }
 
+export interface SshImageUploadResult {
+  targetImagePath: string
+  mimeType: string
+  size: number
+}
+
 /**
  * 将后端返回的相对 wsUrl 路径构建为完整 WebSocket URL。
  * 自动处理 ws/wss 协议、host、JWT token 拼接。
@@ -64,4 +70,17 @@ export async function listSshSessions(workerId: string): Promise<SshSessionDTO[]
     `/ssh/sessions?workerId=${encodeURIComponent(workerId)}`,
   )) as unknown as RX<SshSessionDTO[]>
   return rx.data ?? []
+}
+
+export async function sshUploadImage(
+  sessionId: string,
+  form: {
+    workerId: string
+    name: string
+    data: string
+    mimeType: string
+  },
+): Promise<SshImageUploadResult> {
+  const rx = (await client.post(`/ssh/${sessionId}/images`, form)) as unknown as RX<SshImageUploadResult>
+  return rx.data
 }

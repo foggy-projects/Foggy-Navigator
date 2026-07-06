@@ -11,7 +11,9 @@ remote_cmd=$(cat <<REMOTE
 set -euo pipefail
 cd "$(remote_quote "$REMOTE_CURRENT_DIR")"
 
-if [ -f ./stop-all.sh ]; then
+if [ -f ./scripts/stop-all.sh ]; then
+  bash ./scripts/stop-all.sh || true
+elif [ -f ./stop-all.sh ]; then
   bash ./stop-all.sh || true
 fi
 

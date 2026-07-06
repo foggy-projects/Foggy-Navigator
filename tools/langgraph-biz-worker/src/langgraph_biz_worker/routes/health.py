@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from .. import __version__
 from ..config import settings
 from ..models import HealthResponse
+from ..runtime.agent_capabilities import build_worker_capabilities
 
 router = APIRouter(tags=["health"])
 
@@ -21,4 +22,5 @@ async def health() -> HealthResponse:
         version=__version__,
         active_tasks=len(active_tasks),
         worker_name=settings.worker_name,
+        capabilities=build_worker_capabilities(settings.max_agent_nesting_depth),
     )

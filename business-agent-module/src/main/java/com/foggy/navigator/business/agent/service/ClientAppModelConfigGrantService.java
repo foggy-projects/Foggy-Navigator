@@ -212,14 +212,20 @@ public class ClientAppModelConfigGrantService {
             return;
         }
         if (ownerType == ResourceOwnerType.UPSTREAM_SYSTEM
-                && StringUtils.hasText(clientApp.getUpstreamSystemId())
-                && clientApp.getUpstreamSystemId().equals(model.getOwnerId())) {
+                && sameUpstreamSystemId(clientApp.getUpstreamSystemId(), model.getOwnerId())) {
             return;
         }
         if (ownerType == ResourceOwnerType.CLIENT_APP && clientApp.getClientAppId().equals(model.getOwnerId())) {
             return;
         }
         throw new IllegalArgumentException("model config is not visible to this ClientApp");
+    }
+
+    private boolean sameUpstreamSystemId(String left, String right) {
+        String normalizedLeft = trimToNull(left);
+        String normalizedRight = trimToNull(right);
+        return normalizedLeft != null && normalizedRight != null
+                && normalizedLeft.equalsIgnoreCase(normalizedRight);
     }
 
     private void clearDefaults(String clientAppId, LlmModelCategory category) {
@@ -246,6 +252,10 @@ public class ClientAppModelConfigGrantService {
         if (!StringUtils.hasText(value)) {
             throw new IllegalArgumentException(message);
         }
+    }
+
+    private String trimToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
     }
 
     private boolean matchesDefaultBucket(String tenantId, ClientAppModelConfigGrantEntity grant, LlmModelCategory category) {

@@ -60,10 +60,13 @@ public class WorkerGatewayClient {
         requireToken(token);
 
         WebClient.RequestHeadersSpec<?> spec = webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/internal/worker-gateway/v1/business-functions/{functionId}/schema")
-                        .queryParam("version", version)
-                        .build(functionId))
+                .uri(uriBuilder -> {
+                    uriBuilder.path("/internal/worker-gateway/v1/business-functions/{functionId}/schema");
+                    if (StringUtils.hasText(version)) {
+                        uriBuilder.queryParam("version", version);
+                    }
+                    return uriBuilder.build(functionId);
+                })
                 .header(HEADER_TASK_SCOPED_TOKEN, token);
 
         return executeBlocking(spec.retrieve().bodyToMono(mapType()), "getBusinessFunctionSchema");

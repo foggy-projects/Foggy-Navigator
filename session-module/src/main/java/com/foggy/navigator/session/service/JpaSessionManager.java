@@ -117,11 +117,14 @@ public class JpaSessionManager implements SessionManager {
 
     private LocalDateTime resolveMessageCreatedAt(String sessionId, LocalDateTime requestedCreatedAt) {
         LocalDateTime candidate = requestedCreatedAt != null ? requestedCreatedAt : LocalDateTime.now();
-        LocalDateTime latestCreatedAt = messageRepository.findFirstBySessionIdOrderByCreatedAtDesc(sessionId)
+        LocalDateTime latestCreatedAt = messageRepository.findFirstBySessionIdOrderByCreatedAtDescIdDesc(sessionId)
                 .map(SessionMessageEntity::getCreatedAt)
                 .orElse(null);
-        if (latestCreatedAt != null && !candidate.isAfter(latestCreatedAt)) {
-            return latestCreatedAt.plusNanos(1);
+        if (latestCreatedAt != null) {
+            LocalDateTime minimumNext = latestCreatedAt.plusNanos(1_000_000);
+            if (candidate.isBefore(minimumNext)) {
+                return minimumNext;
+            }
         }
         return candidate;
     }
@@ -130,7 +133,7 @@ public class JpaSessionManager implements SessionManager {
     @Transactional(readOnly = true)
     public List<Message> getRecentMessages(String sessionId, int limit) {
         List<SessionMessageEntity> entities = messageRepository
-                .findTop50BySessionIdOrderByCreatedAtDesc(sessionId);
+                .findTop50BySessionIdOrderByCreatedAtDescIdDesc(sessionId);
         // Take only 'limit' items and reverse to chronological order
         List<SessionMessageEntity> limited = entities.stream()
                 .limit(limit)
@@ -142,7 +145,7 @@ public class JpaSessionManager implements SessionManager {
     @Override
     @Transactional(readOnly = true)
     public List<Message> getAllMessages(String sessionId) {
-        return messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId)
+        return messageRepository.findBySessionIdOrderByCreatedAtAscIdAsc(sessionId)
                 .stream()
                 .map(this::toMessage)
                 .collect(Collectors.toList());
@@ -154,7 +157,7 @@ public class JpaSessionManager implements SessionManager {
         // Query (offset + limit) messages in DESC order, then skip offset, take limit
         Pageable pageable = PageRequest.of(0, offset + limit);
         List<SessionMessageEntity> descEntities =
-                messageRepository.findBySessionIdOrderByCreatedAtDesc(sessionId, pageable);
+                messageRepository.findBySessionIdOrderByCreatedAtDescIdDesc(sessionId, pageable);
 
         // Skip 'offset' items from the DESC result (these are the newest, already loaded)
         List<SessionMessageEntity> slice = descEntities.stream()
@@ -193,7 +196,7 @@ public class JpaSessionManager implements SessionManager {
     @Override
     @Transactional
     public int truncateMessagesFromTurn(String sessionId, int fromUserTurnIndex) {
-        List<SessionMessageEntity> all = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        List<SessionMessageEntity> all = messageRepository.findBySessionIdOrderByCreatedAtAscIdAsc(sessionId);
         int userTurn = 0;
         List<String> toDelete = new java.util.ArrayList<>();
         boolean cutting = false;
@@ -235,7 +238,7 @@ public class JpaSessionManager implements SessionManager {
     @Override
     @Transactional(readOnly = true)
     public List<Message> getFirstAndRecentMessages(String sessionId, int recentCount) {
-        List<SessionMessageEntity> all = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        List<SessionMessageEntity> all = messageRepository.findBySessionIdOrderByCreatedAtAscIdAsc(sessionId);
         if (all.isEmpty()) {
             return List.of();
         }

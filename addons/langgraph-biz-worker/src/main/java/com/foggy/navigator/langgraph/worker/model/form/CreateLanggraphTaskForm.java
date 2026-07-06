@@ -23,6 +23,8 @@ public class CreateLanggraphTaskForm {
     private Map<String, Object> context;
     /** Hidden runtime context for Worker internals. Never include this in LLM-visible prompts. */
     private Map<String, Object> runtimeContext;
+    /** Tool allowlist accepted from direct task callers and normalized by Python Worker. */
+    private List<String> allowedTools;
     /** 上游已上传附件元数据和 URL */
     private List<Map<String, Object>> attachments;
 }

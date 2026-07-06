@@ -4,8 +4,151 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 final class CliArguments {
+    private static final Set<String> KNOWN_OPTIONS = Set.of(
+            "account-id",
+            "admin-api-key",
+            "admin-api-key-env",
+            "admin-token",
+            "admin-token-env",
+            "agent",
+            "agent-bundle-code",
+            "agent-code",
+            "agent-role",
+            "allowed-tools",
+            "api-key-env",
+            "applicant-label",
+            "approval-policy",
+            "authorized-client-app-namespace",
+            "authorized-tenant-id",
+            "authorized-tenant-ids",
+            "available-models",
+            "base-url",
+            "biz-worker-base-url",
+            "biz-worker-data-root",
+            "biz-worker-env-file",
+            "biz-worker-id",
+            "capability-domain",
+            "category",
+            "claim-token",
+            "claim-token-env",
+            "claim-ttl-minutes",
+            "client-app-access-token",
+            "client-app-access-token-env",
+            "client-app-id",
+            "client-app-key",
+            "client-app-secret",
+            "client-app-secret-env",
+            "client-context-file",
+            "client-context-json",
+            "codex-home-key",
+            "codex-provider-task-id",
+            "codex-workspace-root",
+            "context-id",
+            "control-api-key",
+            "control-api-key-env",
+            "credential-expires-at",
+            "credential-id",
+            "cursor",
+            "data-root",
+            "default",
+            "description",
+            "directory-id",
+            "dry-run",
+            "effective-user-id",
+            "expected-sha256",
+            "expires-at",
+            "file",
+            "force",
+            "from",
+            "function-id",
+            "grant-id",
+            "grant-scope",
+            "help",
+            "install-shell",
+            "interval",
+            "limit",
+            "manifest",
+            "max-chars",
+            "max-turns",
+            "message",
+            "mock-url",
+            "model",
+            "model-base-url",
+            "model-config-id",
+            "model-name",
+            "model-profile-code",
+            "model-variant",
+            "multi-tenant",
+            "name",
+            "namespace",
+            "network-access-enabled",
+            "no-directory-required",
+            "no-start",
+            "operator-api-key",
+            "operator-api-key-env",
+            "owner-user-id",
+            "path",
+            "password-env",
+            "physical-worker-id",
+            "pid",
+            "poll",
+            "pool-id",
+            "private-account-id",
+            "profile",
+            "provider",
+            "provider-task-id",
+            "provider-type",
+            "reason",
+            "request-code",
+            "requested-tenant-id",
+            "rotate-credentials",
+            "rotate-runtime-credential",
+            "runtime-budget-override-json",
+            "runtime-budget-preset",
+            "sandbox-mode",
+            "scope",
+            "scopes",
+            "set-default",
+            "skill-id",
+            "source-system",
+            "source-tenant-id",
+            "standard",
+            "start-column",
+            "start-line",
+            "status",
+            "target-tenant-id",
+            "task-id",
+            "tenant-id",
+            "tenant-name",
+            "tenant-profile",
+            "timeout-seconds",
+            "trace-id",
+            "upstream-ref",
+            "upstream-system-id",
+            "upstream-user-id",
+            "upstream-user-token",
+            "upstream-user-token-env",
+            "url",
+            "user-api-key",
+            "user-api-key-env",
+            "username",
+            "user-token-header",
+            "version",
+            "web-search-mode",
+            "worker-backend",
+            "worker-host",
+            "worker-id",
+            "worker-pool-id",
+            "workspace-root",
+            "workspace-scope",
+            "write-profile",
+            "wsl-distro",
+            "wsl-user",
+            "yes");
+
     private final List<String> words;
     private final Map<String, String> options;
 
@@ -73,6 +216,9 @@ final class CliArguments {
         if (words.size() >= 2 && "account-context".equals(words.get(0))) {
             return "account-context " + words.get(1);
         }
+        if (words.size() >= 2 && "auth".equals(words.get(0))) {
+            return "auth " + words.get(1);
+        }
         if (words.size() >= 2 && "admin-key".equals(words.get(0))) {
             return "admin-key " + words.get(1);
         }
@@ -99,6 +245,20 @@ final class CliArguments {
 
     boolean flag(String name) {
         return Boolean.parseBoolean(options.getOrDefault(name, "false"));
+    }
+
+    void rejectUnknownOptions() {
+        List<String> unknown = options.keySet().stream()
+                .filter(option -> !KNOWN_OPTIONS.contains(option))
+                .map(option -> "--" + option)
+                .toList();
+        if (unknown.isEmpty()) {
+            return;
+        }
+        if (unknown.size() == 1) {
+            throw new UpstreamCliException("Unknown option: " + unknown.get(0));
+        }
+        throw new UpstreamCliException("Unknown options: " + String.join(", ", unknown));
     }
 
     Map<String, String> options() {

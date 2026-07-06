@@ -24,6 +24,7 @@ import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -152,7 +153,8 @@ public class GeminiStreamRelay {
                 detectedModel.set(eventModel);
             }
 
-            taskService.recordWorkerProgress(taskId, event.getTaskId(), detectedSessionId.get(), detectedModel.get(), ackSeq);
+            taskService.recordWorkerProgress(taskId, event.getTaskId(), detectedSessionId.get(), detectedModel.get(),
+                    ackSeq, isUserVisibleOutputEvent(event));
             relayWorkerEvent(sessionId, taskId, event, detectedSessionId.get());
         } catch (Exception e) {
             log.warn("Failed to decode Gemini worker event: taskId={}, error={}", taskId, e.getMessage());
@@ -229,6 +231,33 @@ public class GeminiStreamRelay {
 
     private void publishEvent(AgentMessage message) {
         eventPublisher.publishEvent(message);
+    }
+
+    private boolean isUserVisibleOutputEvent(WorkerEvent event) {
+        if (event == null || event.getType() == null) {
+            return false;
+        }
+        return switch (event.getType()) {
+            case "assistant_text" -> !"sync_checkpoint".equals(event.getSubtype());
+            case "tool_use", "tool_result", "result", "error" -> true;
+            case "system", "progress" -> isVisibleStatusEvent(event);
+            default -> false;
+        };
+    }
+
+    private boolean isVisibleStatusEvent(WorkerEvent event) {
+        String subtype = event.getSubtype();
+        if (subtype == null || subtype.isBlank()) {
+            return event.getContent() != null && !event.getContent().isBlank();
+        }
+        String normalized = subtype.toLowerCase(Locale.ROOT);
+        if ("waiting".equals(normalized)
+                || normalized.contains("heartbeat")
+                || normalized.contains("keepalive")
+                || "sync_checkpoint".equals(normalized)) {
+            return false;
+        }
+        return event.getContent() != null && !event.getContent().isBlank();
     }
 
     private GeminiWorkerClient getGeminiClient(String workerId) {

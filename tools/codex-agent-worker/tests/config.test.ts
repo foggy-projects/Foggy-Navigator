@@ -18,6 +18,7 @@ test('createConfig normalizes placeholder api key and valid defaults', () => {
   assert.deepEqual(config.allowedCwds, ['D:\\repo'])
   assert.equal(config.logLevel, 'warn')
   assert.equal(config.codexBizHomeRoot, '')
+  assert.equal(config.navigatorWorkerGatewayBaseUrl, 'http://localhost:8080')
 })
 
 test('createConfig rejects invalid port', () => {
@@ -88,6 +89,20 @@ test('createConfig parses absolute CODEX_BIZ_HOME_ROOT and rejects relative valu
   assert.throws(() => createConfig({
     CODEX_BIZ_HOME_ROOT: 'relative/codex-homes',
   }), /CODEX_BIZ_HOME_ROOT must be an absolute path/)
+})
+
+test('createConfig parses Navigator worker gateway base URL and trims trailing slash', () => {
+  const config = createConfig({
+    CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL: 'http://navigator.example.com:8080/',
+  })
+
+  assert.equal(config.navigatorWorkerGatewayBaseUrl, 'http://navigator.example.com:8080')
+})
+
+test('createConfig rejects invalid Navigator worker gateway base URL', () => {
+  assert.throws(() => createConfig({
+    CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL: 'file:///tmp/gateway',
+  }), /CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL must use http or https/)
 })
 
 test('createConfig CODEX_MODEL_ALIASES JSON override merges into defaults', () => {

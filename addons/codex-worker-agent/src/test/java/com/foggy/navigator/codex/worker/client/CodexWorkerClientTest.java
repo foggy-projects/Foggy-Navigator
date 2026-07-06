@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 class CodexWorkerClientTest {
@@ -48,6 +49,7 @@ class CodexWorkerClientTest {
                     "never",
                     false,
                     "disabled",
+                    Map.of("task_scoped_token", "token-1"),
                     List.of("D:/shared")
             ).blockFirst(Duration.ofSeconds(5));
 
@@ -63,13 +65,65 @@ class CodexWorkerClientTest {
             assertEquals("never", body.get("approval_policy"));
             assertEquals(false, body.get("network_access_enabled"));
             assertEquals("disabled", body.get("web_search_mode"));
+            assertEquals(Map.of("task_scoped_token", "token-1"), body.get("business_runtime_context"));
             assertEquals(List.of("D:/shared"), body.get("additional_directories"));
+        }
+    }
+
+    @Test
+    void streamQuery_omitsCodexBizFieldsWhenNotProvided() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            client.streamQuery(
+                    "plain codex",
+                    "D:/repo",
+                    null,
+                    "gpt-5.4",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            ).blockFirst(Duration.ofSeconds(5));
+
+            Map<String, Object> body = objectMapper.readValue(server.body(),
+                    new TypeReference<>() {});
+            assertEquals("plain codex", body.get("prompt"));
+            assertEquals("D:/repo", body.get("cwd"));
+            assertEquals("gpt-5.4", body.get("model"));
+            assertFalse(body.containsKey("codex_home_key"));
+            assertFalse(body.containsKey("developer_instructions"));
+            assertFalse(body.containsKey("output_schema"));
+            assertFalse(body.containsKey("codex_config"));
+            assertFalse(body.containsKey("sandbox_mode"));
+            assertFalse(body.containsKey("approval_policy"));
+            assertFalse(body.containsKey("network_access_enabled"));
+            assertFalse(body.containsKey("web_search_mode"));
+            assertFalse(body.containsKey("business_runtime_context"));
+            assertFalse(body.containsKey("additional_directories"));
+        }
+    }
+
+    @Test
+    void getSessionFileHints_sendsSessionAndDateQueryParams() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            Map<String, Object> response = client.getSessionFileHints(
+                    "thread-1", 7, "2026-06-01", "2026-06-28")
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("thread-1", response.get("session_id"));
+            assertEquals("session_id=thread-1&days=7&from=2026-06-01&to=2026-06-28", server.query());
         }
     }
 
     private static class CaptureServer implements AutoCloseable {
         private final HttpServer server;
         private final AtomicReference<String> body = new AtomicReference<>();
+        private final AtomicReference<String> query = new AtomicReference<>();
 
         private CaptureServer(HttpServer server) {
             this.server = server;
@@ -86,6 +140,14 @@ class CodexWorkerClientTest {
                 exchange.getResponseBody().write(response);
                 exchange.close();
             });
+            server.createContext("/api/v1/session-file-hints", exchange -> {
+                capture.query.set(exchange.getRequestURI().getRawQuery());
+                byte[] response = "{\"session_id\":\"thread-1\",\"files\":[],\"total\":0}".getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+            });
             server.start();
             return capture;
         }
@@ -96,6 +158,10 @@ class CodexWorkerClientTest {
 
         String body() {
             return body.get();
+        }
+
+        String query() {
+            return query.get();
         }
 
         @Override

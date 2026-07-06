@@ -8,6 +8,7 @@ import com.foggy.navigator.sdk.api.AgentApi;
 import com.foggy.navigator.sdk.api.BusinessAgentApi;
 import com.foggy.navigator.sdk.api.DirectoryApi;
 import com.foggy.navigator.sdk.api.WorkerApi;
+import com.foggy.navigator.sdk.exception.NavigatorApiException;
 import com.foggy.navigator.sdk.internal.HttpHelper;
 import com.foggy.navigator.sdk.model.AgentTask;
 import com.foggy.navigator.sdk.model.AgentReadiness;
@@ -111,6 +112,7 @@ public class UpstreamCli {
     private static final String BIZ_WORKER_INSTALL_BASE_URL =
             "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/langgraph-biz-worker";
     private static final String LANGGRAPH_BIZ_BACKEND = "LANGGRAPH_BIZ";
+    private static final String OPENAI_CODEX_BACKEND = "OPENAI_CODEX";
     private static final Pattern BIZ_CONTEXT_ID_PATTERN =
             Pattern.compile("^bctx_(\\d{8})_([0-9a-fA-F]{2})_[A-Za-z0-9._-]+$");
     private static final DateTimeFormatter BIZ_CONTEXT_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
@@ -149,6 +151,7 @@ public class UpstreamCli {
     public int run(String[] args, Map<String, String> env) {
         CliArguments parsed = CliArguments.parse(args);
         try {
+            parsed.rejectUnknownOptions();
             this.env = env != null ? env : Map.of();
             config = UpstreamCliConfig.load(parsed, env, cwd);
             return dispatch(parsed);
@@ -166,6 +169,8 @@ public class UpstreamCli {
     private int dispatch(CliArguments args) throws Exception {
         return switch (args.command()) {
             case "config check" -> configCheck();
+            case "auth", "auth help" -> authUsage();
+            case "auth login" -> authLogin(args);
             case "runtime-token" -> runtimeToken(args);
             case "owner-smoke" -> ownerSmoke(args);
             case "verify-agent-readiness", "verify-agent-grant" -> verifyAgentReadiness(args);
@@ -184,6 +189,7 @@ public class UpstreamCli {
             case "skill sync" -> skillSync(args);
             case "skill clear-public" -> skillClearPublic(args);
             case "skill clear-account" -> skillClearAccount(args);
+            case "agent", "agent help" -> agentUsage();
             case "agent sync" -> agentSync(args);
             case "agent model-bindings" -> agentModelBindings(args);
             case "agent bind-model" -> agentBindModel(args);
@@ -222,16 +228,19 @@ public class UpstreamCli {
             case "route list" -> routeList(args);
             case "route set" -> routeSet(args);
             case "route status" -> routeStatus(args);
+            case "model", "model help" -> modelUsage();
             case "model grants" -> modelGrants(args);
             case "model grant" -> modelGrant(args);
             case "model set-default" -> modelSetDefault(args);
             case "model create" -> modelCreate(args);
             case "model update" -> modelUpdate(args);
             case "model rotate-key" -> modelRotateKey(args);
+            case "model clear-key" -> modelClearKey(args);
             case "model system-list" -> modelSystemList(args);
             case "model system-create" -> modelSystemCreate(args);
             case "model system-update" -> modelSystemUpdate(args);
             case "model system-rotate-key" -> modelSystemRotateKey(args);
+            case "model system-clear-key" -> modelSystemClearKey(args);
             case "admin-key", "admin-key help" -> adminKeyUsage();
             case "admin-key inspect" -> adminKeyInspect(args);
             case "admin-key request" -> adminKeyRequest(args);
@@ -294,18 +303,79 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model system-list/system-create/system-update/system-rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, auth login, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model clear-key, model system-list/system-create/system-update/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker-host apply.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
-        out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--client-context-json <json>|--client-context-file <path>]");
+        out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv>] [--client-context-json <json>|--client-context-file <path>]");
         out.println("  messages --task-id <taskId> --agent-code <agentId> [--poll] [--interval <seconds>]");
         out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
-        out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>]");
+        out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--provider-task-id <providerTaskId>] [--worker-backend LANGGRAPH_BIZ|OPENAI_CODEX] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>] [--codex-workspace-root <path>]");
         out.println("  evidence --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
         out.println("  model create/update uses NAVI_CONTROL_API_KEY and creates ClientApp-owned models.");
         out.println("  model system-create/system-update uses NAVI_ADMIN_API_KEY and creates UpstreamSystem-owned shared models.");
         out.println("  model create/system-create accepts --worker-backend LANGGRAPH_BIZ|OPENAI_CODEX|CLAUDE_CODE|GEMINI_CLI.");
+        return 0;
+    }
+
+    private int authUsage() {
+        out.println("Usage: navi upstream auth <command> [options]");
+        out.println("Commands: login");
+        out.println("  login --base-url <navigatorBaseUrl> --username <username> --password-env <envName> --write-profile");
+        out.println("Stores NAVI_ADMIN_TOKEN in the gitignored project profile for admin-key approval. The password is read from an environment variable and is never printed.");
+        return 0;
+    }
+
+    private int authLogin(CliArguments args) throws Exception {
+        if (!args.flag("write-profile")) {
+            throw new UpstreamCliException("auth login requires --write-profile to store NAVI_ADMIN_TOKEN without printing it");
+        }
+        config.assertProfileWritable();
+        String baseUrl = requiredOptionOrConfig(args, "base-url", "NAVI_BASE_URL", "Navigator base URL");
+        String username = requiredOption(args, "username", "Navigator username");
+        String passwordEnv = requiredOption(args, "password-env", "Navigator password env");
+        String password = env.get(passwordEnv);
+        if (!hasText(password)) {
+            throw new UpstreamCliException("environment variable " + passwordEnv + " is required");
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("username", username);
+        body.put("password", password);
+        Map<String, Object> login = new HttpHelper(baseUrl, null, Duration.ofSeconds(30))
+                .postNoAuth("/api/v1/auth/login", body, new TypeReference<>() {});
+        String token = stringValue(login.get("token"));
+        if (!hasText(token)) {
+            throw new UpstreamCliException("auth login response did not include token");
+        }
+        Map<String, Object> user = objectMap(login.get("user"));
+        String tenantId = stringValue(user.get("tenantId"));
+        String userId = stringValue(user.get("id"));
+        String resolvedUsername = firstNonBlank(stringValue(user.get("username")), username);
+        String roles = stringValue(user.get("roles"));
+
+        config.writeProfileValue("NAVI_BASE_URL", baseUrl);
+        config.writeProfileValue("NAVI_ADMIN_TOKEN", token);
+        if (hasText(tenantId)) {
+            config.writeProfileValue("NAVI_TENANT_ID", tenantId);
+        }
+        if (hasText(userId)) {
+            config.writeProfileValue("NAVI_ADMIN_USER_ID", userId);
+        }
+        if (hasText(resolvedUsername)) {
+            config.writeProfileValue("NAVI_ADMIN_USERNAME", resolvedUsername);
+        }
+
+        out.println("auth login ok");
+        out.println("userId=" + valueOrEmpty(userId));
+        out.println("username=" + redact(resolvedUsername));
+        out.println("tenantId=" + valueOrEmpty(tenantId));
+        out.println("roles=" + valueOrEmpty(roles));
+        out.println("profileUpdated=" + config.profilePath());
+        out.println("stored=NAVI_BASE_URL,NAVI_ADMIN_TOKEN"
+                + (hasText(tenantId) ? ",NAVI_TENANT_ID" : "")
+                + (hasText(userId) ? ",NAVI_ADMIN_USER_ID" : "")
+                + (hasText(resolvedUsername) ? ",NAVI_ADMIN_USERNAME" : ""));
         return 0;
     }
 
@@ -333,6 +403,30 @@ public class UpstreamCli {
         out.println("  ensure-tenant --source-system <system> --source-tenant-id <id> [--name <name>] [--upstream-ref <ref>] [--agent-code <id>] [--worker-backend <backend>] [--physical-worker-id <id>] [--directory-id <id>] [--biz-worker-base-url <url>] [--tenant-profile <path>] [--rotate-credentials] --write-profile");
         out.println("  issue-runtime-key --client-app-id <id> [--tenant-profile <path>] [--rotate-runtime-credential] --write-profile");
         out.println("  issue-control-key --client-app-id <id> [--scopes <scope[,scope]>] [--tenant-profile <path>] --write-profile");
+        return 0;
+    }
+
+    private int agentUsage() {
+        out.println("Usage: navi upstream agent <command> [options]");
+        out.println("Commands: sync, model-bindings, bind-model, unbind-model, set-default-model, workspace-bindings, bind-workspace, unbind-workspace, set-default-workspace, worker-bindings, bind-worker, unbind-worker, set-default-worker, system-list, system-create, system-get, system-update, system-model-bindings, system-bind-model, system-unbind-model, system-set-default-model, system-workspace-bindings, system-bind-workspace, system-unbind-workspace, system-set-default-workspace, system-worker-bindings, system-bind-worker, system-unbind-worker, system-set-default-worker");
+        out.println("  sync --manifest <json> --client-app-id <id>");
+        out.println("  bind-model|set-default-model --client-app-id <id> --agent-code <id> --model-config-id <id>");
+        out.println("  bind-workspace|set-default-workspace --client-app-id <id> --agent-code <id> --directory-id <id>");
+        out.println("  bind-worker|set-default-worker --client-app-id <id> --agent-code <id> --worker-pool-id <id>");
+        out.println("  system-create|system-update --file <json> [--target-tenant-id <tenantId>]");
+        out.println("ClientApp agent sync/bind commands use NAVI_CONTROL_API_KEY. System agent commands use NAVI_ADMIN_API_KEY.");
+        return 0;
+    }
+
+    private int modelUsage() {
+        out.println("Usage: navi upstream model <command> [options]");
+        out.println("Commands: grants, grant, set-default, create, update, rotate-key, clear-key, system-list, system-create, system-update, system-rotate-key, system-clear-key");
+        out.println("  grants --client-app-id <id>");
+        out.println("  grant --client-app-id <id> --model-config-id <id> [--set-default] [--write-profile]");
+        out.println("  create|update --client-app-id <id> --name <name> --model-name <name> [--worker-backend <backend>] [--api-key-env <env>] [--set-default]");
+        out.println("  rotate-key --client-app-id <id> --model-config-id <id> --api-key-env <env>");
+        out.println("  system-create|system-update --name <name> --model-name <name> [--target-tenant-id <tenantId>] [--api-key-env <env>]");
+        out.println("ClientApp model create/update/grant/default commands use NAVI_CONTROL_API_KEY. System model commands use NAVI_ADMIN_API_KEY.");
         return 0;
     }
 
@@ -408,8 +502,9 @@ public class UpstreamCli {
         out.println("Usage: navi upstream diagnostics <command|options> [options]");
         out.println("Commands: session-dir");
         out.println("  diagnostics --task-id <taskId> --agent-code <agentId> [--upstream-user-id <id>]");
-        out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>]");
-        out.println("    session-dir resolves the local LangGraph BizWorker runtime session path from a bctx_yyyyMMdd_<shard>_<id> contextId.");
+        out.println("  diagnostics session-dir --context-id <contextId> [--task-id <taskId>] [--provider-task-id <providerTaskId>] [--worker-backend LANGGRAPH_BIZ|OPENAI_CODEX] [--data-root <bizWorkerDataRoot>] [--biz-worker-env-file <path>] [--codex-workspace-root <path>]");
+        out.println("    LANGGRAPH_BIZ resolves the local LangGraph BizWorker runtime session path from a bctx_yyyyMMdd_<shard>_<id> contextId.");
+        out.println("    OPENAI_CODEX resolves the Codex navigator_business MCP debug log; pass --provider-task-id for the Codex worker task UUID when available.");
         out.println("    It prints paths and worker hints only; it does not print tokens, headers, credentials, or log contents.");
         return 0;
     }
@@ -450,6 +545,7 @@ public class UpstreamCli {
         out.println("accessToken=" + SecretMasker.mask(token.getAccessToken()));
         out.println("expiresInSeconds=" + valueOrEmpty(token.getExpiresInSeconds()));
         out.println("expiresAt=" + valueOrEmpty(token.getExpiresAt()));
+        printRuntimeTokenExpiry(token);
         return 0;
     }
 
@@ -1925,21 +2021,35 @@ public class UpstreamCli {
         String message = requiredOption(args, "message", "message");
         Map<String, Object> clientContext = parseClientContext(args);
         Map<String, Object> runtimeOptions = buildAskRuntimeOptions(args);
-        AgentTask task = agentApi().askWithClientAppAccessToken(
-                agent,
-                message,
-                args.option("context-id"),
-                parseInteger(args.option("max-turns")),
-                clientContext,
-                modelConfigId(args),
-                modelVariant(args),
-                null,
-                runtimeOptions,
-                clientAppKey(args),
-                clientAppAccessToken(args),
-                upstreamUserId);
+        AgentTask task;
+        try {
+            task = agentApi().askWithClientAppAccessToken(
+                    agent,
+                    message,
+                    args.option("context-id"),
+                    parseInteger(args.option("max-turns")),
+                    clientContext,
+                    modelConfigId(args),
+                    modelVariant(args),
+                    null,
+                    runtimeOptions,
+                    clientAppKey(args),
+                    clientAppAccessToken(args),
+                    upstreamUserId);
+        } catch (NavigatorApiException e) {
+            throw actionableAskException(e);
+        }
         printTask(task);
         return 0;
+    }
+
+    private UpstreamCliException actionableAskException(NavigatorApiException e) {
+        String message = e.getMessage();
+        if (message != null && message.contains("TASK_DIRECTORY_REQUIRED")) {
+            return new UpstreamCliException(message
+                    + ". Multiple or ambiguous Actor-owned directories may be available; rerun upstream ask with --directory-id <id>.");
+        }
+        return new UpstreamCliException(message != null ? message : "Navigator ask request failed", e);
     }
 
     private Map<String, Object> buildAskRuntimeOptions(CliArguments args) {
@@ -1951,6 +2061,10 @@ public class UpstreamCli {
         putText(options, "sandboxMode", optionalOptionOrConfig(args, "sandbox-mode", "NAVI_CODEX_SANDBOX_MODE"));
         putText(options, "approvalPolicy", optionalOptionOrConfig(args, "approval-policy", "NAVI_CODEX_APPROVAL_POLICY"));
         putText(options, "webSearchMode", optionalOptionOrConfig(args, "web-search-mode", "NAVI_CODEX_WEB_SEARCH_MODE"));
+        List<String> allowedTools = parseCsv(optionalOptionOrConfig(args, "allowed-tools", "NAVI_ALLOWED_TOOLS"));
+        if (allowedTools != null) {
+            options.put("allowedTools", allowedTools);
+        }
         Boolean networkAccessEnabled = optionalBooleanOptionOrConfig(
                 args, "network-access-enabled", "NAVI_CODEX_NETWORK_ACCESS_ENABLED");
         if (networkAccessEnabled != null) {
@@ -2035,11 +2149,16 @@ public class UpstreamCli {
                 config.get("NAVI_BIZ_WORKER_ID"),
                 config.get("NAVI_WORKER_ID"));
 
+        if (isOpenAiCodexBackend(workerBackend)) {
+            return resolveCodexSessionDiagnostics(
+                    args, contextId, taskId, workerBackend, physicalWorkerId, workerHost, hostname);
+        }
+
         ContextLocator locator = parseContextLocator(contextId);
         if (locator == null) {
-            return new SessionDirectoryDiagnostics(contextId, taskId, false, workerBackend, physicalWorkerId,
+            return new SessionDirectoryDiagnostics(contextId, taskId, null, false, workerBackend, physicalWorkerId,
                     workerHost, hostname, null, null, null, null, null, null, null,
-                    "unavailable", "context-not-found");
+                    null, "langgraph-session", "unavailable", "context-not-found");
         }
 
         List<Path> dataRoots = candidateBizWorkerDataRoots(args);
@@ -2078,10 +2197,67 @@ public class UpstreamCli {
         String accessHint = exists
                 ? "local"
                 : (!isLikelyLocalHost(workerHost, hostname) ? "ssh-required" : "unavailable");
-        return new SessionDirectoryDiagnostics(contextId, taskId, exists, workerBackend, physicalWorkerId,
+        return new SessionDirectoryDiagnostics(contextId, taskId, null, exists, workerBackend, physicalWorkerId,
                 workerHost, hostname, sessionDirectory, logsDirectory, skillToolCallsDirectory, skillToolCallsFile,
                 runtimeMessageEventsDirectory, runtimeMessageEventsFile, llmSubmissionsDirectory,
-                accessHint, notFoundReason);
+                null, "langgraph-session", accessHint, notFoundReason);
+    }
+
+    private SessionDirectoryDiagnostics resolveCodexSessionDiagnostics(CliArguments args,
+                                                                       String contextId,
+                                                                       String taskId,
+                                                                       String workerBackend,
+                                                                       String physicalWorkerId,
+                                                                       String workerHost,
+                                                                       String hostname) {
+        String providerTaskId = firstNonBlank(
+                args.option("provider-task-id"),
+                args.option("codex-provider-task-id"),
+                taskId);
+        Path debugLogFile = null;
+        boolean exists = false;
+        String notFoundReason = "business-mcp-debug-log-task-id-missing";
+        if (hasText(providerTaskId)) {
+            Path workspaceRoot = candidateCodexWorkspaceRoots(args).stream()
+                    .findFirst()
+                    .orElse(cwd.toAbsolutePath().normalize());
+            debugLogFile = codexBusinessMcpDebugLogFile(workspaceRoot, providerTaskId);
+            exists = Files.isRegularFile(debugLogFile);
+            notFoundReason = exists ? null : "business-mcp-debug-log-not-found";
+        }
+        String accessHint = exists
+                ? "local"
+                : (!isLikelyLocalHost(workerHost, hostname) ? "ssh-required" : "unavailable");
+        return new SessionDirectoryDiagnostics(contextId, taskId, providerTaskId, exists, workerBackend, physicalWorkerId,
+                workerHost, hostname, null, null, null, null, null, null, null,
+                debugLogFile, "codex-business-mcp", accessHint, notFoundReason);
+    }
+
+    private boolean isOpenAiCodexBackend(String workerBackend) {
+        return OPENAI_CODEX_BACKEND.equalsIgnoreCase(valueOrEmpty(workerBackend))
+                || "codex-biz-worker".equalsIgnoreCase(valueOrEmpty(workerBackend));
+    }
+
+    private List<Path> candidateCodexWorkspaceRoots(CliArguments args) {
+        List<Path> candidates = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        addDataRootCandidate(candidates, seen, args.option("codex-workspace-root"), cwd);
+        addDataRootCandidate(candidates, seen, args.option("workspace-root"), cwd);
+        addDataRootCandidate(candidates, seen, env.get("NAVI_CODEX_WORKSPACE_ROOT"), cwd);
+        addDataRootCandidate(candidates, seen, env.get("CODEX_WORKSPACE_ROOT"), cwd);
+        addDataRootCandidate(candidates, seen, config.get("NAVI_CODEX_WORKSPACE_ROOT"), cwd);
+        addDataRootCandidate(candidates, seen, config.get("CODEX_WORKSPACE_ROOT"), cwd);
+        addDataRootPathCandidate(candidates, seen, cwd);
+        return candidates;
+    }
+
+    private Path codexBusinessMcpDebugLogFile(Path workspaceRoot, String providerTaskId) {
+        return workspaceRoot
+                .resolve("temp")
+                .resolve("codex-worker-3070")
+                .resolve("business-mcp-" + safePathSegment(providerTaskId) + ".log")
+                .toAbsolutePath()
+                .normalize();
     }
 
     private List<Path> candidateBizWorkerDataRoots(CliArguments args) {
@@ -2285,8 +2461,12 @@ public class UpstreamCli {
         if (hasText(diagnostics.taskId())) {
             out.println("taskId=" + valueOrEmpty(diagnostics.taskId()));
         }
+        if (hasText(diagnostics.providerTaskId())) {
+            out.println("providerTaskId=" + valueOrEmpty(diagnostics.providerTaskId()));
+        }
         out.println("exists=" + diagnostics.exists());
         out.println("workerBackend=" + valueOrEmpty(diagnostics.workerBackend()));
+        out.println("diagnosticMode=" + valueOrEmpty(diagnostics.diagnosticMode()));
         out.println("physicalWorkerId=" + valueOrEmpty(diagnostics.physicalWorkerId()));
         out.println("workerHost=" + redact(valueOrEmpty(diagnostics.workerHost())));
         out.println("hostname=" + redact(valueOrEmpty(diagnostics.hostname())));
@@ -2301,6 +2481,7 @@ public class UpstreamCli {
             out.println("runtimeMessageEventsFile=" + valueOrEmpty(diagnostics.runtimeMessageEventsFile()));
         }
         out.println("llmSubmissionsDirectory=" + valueOrEmpty(diagnostics.llmSubmissionsDirectory()));
+        out.println("businessMcpDebugLogFile=" + valueOrEmpty(diagnostics.businessMcpDebugLogFile()));
         out.println("accessHint=" + valueOrEmpty(diagnostics.accessHint()));
         if (!diagnostics.exists()) {
             out.println("notFoundReason=" + valueOrEmpty(diagnostics.notFoundReason()));
@@ -3048,6 +3229,19 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int modelClearKey(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setClearApiKey(true);
+
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi()
+                .rotateClientAppModelConfigKey(clientAppId, modelConfigId, form);
+        out.println("model clear-key ok");
+        printModelConfigGrant("modelGrant", grant);
+        return 0;
+    }
+
     private int modelSystemList(CliArguments args) {
         List<LlmModelConfigDTO> models = upstreamAdminApi()
                 .listUpstreamSystemModelConfigs(args.option("target-tenant-id"));
@@ -3107,6 +3301,18 @@ public class UpstreamCli {
         LlmModelConfigDTO model = upstreamAdminApi()
                 .rotateUpstreamSystemModelConfigKey(modelConfigId, form, args.option("target-tenant-id"));
         out.println("model system-rotate-key ok");
+        printLlmModelConfig("modelConfig", model);
+        return 0;
+    }
+
+    private int modelSystemClearKey(CliArguments args) {
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setClearApiKey(true);
+
+        LlmModelConfigDTO model = upstreamAdminApi()
+                .rotateUpstreamSystemModelConfigKey(modelConfigId, form, args.option("target-tenant-id"));
+        out.println("model system-clear-key ok");
         printLlmModelConfig("modelConfig", model);
         return 0;
     }
@@ -3629,9 +3835,55 @@ public class UpstreamCli {
         out.println(prefix + " authorizedClientAppNamespace=" + valueOrEmpty(credential.getAuthorizedClientAppNamespace()));
         out.println(prefix + " scopes=" + joinList(credential.getScopes()));
         out.println(prefix + " expiresAt=" + valueOrEmpty(credential.getExpiresAt()));
+        printCredentialExpiry(prefix, credential.getExpiresAt());
         out.println(prefix + " revokedAt=" + valueOrEmpty(credential.getRevokedAt()));
         out.println(prefix + " lastUsedAt=" + valueOrEmpty(credential.getLastUsedAt()));
         out.println(prefix + " sourceRequestId=" + valueOrEmpty(credential.getSourceRequestId()));
+    }
+
+    private void printRuntimeTokenExpiry(ClientAppRuntimeAccessTokenDTO token) {
+        if (token == null) {
+            out.println("runtimeToken.expiryStatus=UNKNOWN");
+            out.println("runtimeToken.expiryAction=exchange runtime token from client app key-secret");
+            return;
+        }
+        Long remainingSeconds = token.getExpiresInSeconds();
+        LocalDateTime now = LocalDateTime.now();
+        if (remainingSeconds == null && token.getExpiresAt() != null) {
+            remainingSeconds = Duration.between(now, token.getExpiresAt()).getSeconds();
+        }
+        if (remainingSeconds == null) {
+            out.println("runtimeToken.expiryStatus=UNKNOWN");
+            out.println("runtimeToken.refresh=automatic when NAVI_CLIENT_APP_SECRET is present");
+            return;
+        }
+        out.println("runtimeToken.expiryStatus=" + (remainingSeconds <= 0 ? "EXPIRED" : "OK"));
+        out.println("runtimeToken.refresh=automatic when NAVI_CLIENT_APP_SECRET is present");
+        if (remainingSeconds <= 0) {
+            out.println("runtimeToken.expiryAction=run upstream runtime-token --write-profile with a valid ClientApp key-secret");
+        }
+    }
+
+    private void printCredentialExpiry(String prefix, LocalDateTime expiresAt) {
+        if (expiresAt == null) {
+            out.println(prefix + " expiryStatus=NO_EXPIRY");
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        Duration remaining = Duration.between(now, expiresAt);
+        long remainingDays = remaining.toDays();
+        out.println(prefix + " expiresInDays=" + remainingDays);
+        if (!expiresAt.isAfter(now)) {
+            out.println(prefix + " expiryStatus=EXPIRED");
+            out.println(prefix + " expiryAction=rotate or re-issue provisioning credential before management operations");
+            return;
+        }
+        if (remaining.compareTo(Duration.ofDays(14)) <= 0) {
+            out.println(prefix + " expiryStatus=EXPIRING_SOON");
+            out.println(prefix + " expiryAction=schedule credential rotation before provisioning changes");
+            return;
+        }
+        out.println(prefix + " expiryStatus=OK");
     }
 
     private void printClientApp(String prefix, ClientAppDTO app) {
@@ -4359,6 +4611,7 @@ public class UpstreamCli {
 
     private record SessionDirectoryDiagnostics(String contextId,
                                                String taskId,
+                                               String providerTaskId,
                                                boolean exists,
                                                String workerBackend,
                                                String physicalWorkerId,
@@ -4371,6 +4624,8 @@ public class UpstreamCli {
                                                Path runtimeMessageEventsDirectory,
                                                Path runtimeMessageEventsFile,
                                                Path llmSubmissionsDirectory,
+                                               Path businessMcpDebugLogFile,
+                                               String diagnosticMode,
                                                String accessHint,
                                                String notFoundReason) {
     }
@@ -4483,6 +4738,18 @@ public class UpstreamCli {
 
     private static String emptyIfNull(Object value) {
         return value == null ? "" : String.valueOf(value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> objectMap(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        return Map.of();
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 
     private static String truncate(String value, int maxLength) {

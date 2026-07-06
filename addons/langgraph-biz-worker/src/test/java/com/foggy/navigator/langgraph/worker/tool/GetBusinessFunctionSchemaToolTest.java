@@ -44,8 +44,10 @@ class GetBusinessFunctionSchemaToolTest {
         List<String> requiredList = Arrays.asList((String[]) required);
         assertFalse(requiredList.contains("task_scoped_token"),
                 "task_scoped_token must not appear in required field list");
-        assertTrue(requiredList.containsAll(List.of("function_id", "version")),
-                "function_id and version must remain required");
+        assertTrue(requiredList.contains("function_id"),
+                "function_id must remain required");
+        assertFalse(requiredList.contains("version"),
+                "version must be optional because function_id is canonical");
     }
 
     // ===== Success path: token from runtimeContext =====
@@ -132,7 +134,11 @@ class GetBusinessFunctionSchemaToolTest {
     }
 
     @Test
-    void execute_failsOnMissingVersion() {
+    void execute_allowsOmittedVersion() {
+        Map<String, Object> gatewayResponse = Map.of("functionId", "f1", "version", "v1");
+        when(workerGatewayClient.getBusinessFunctionSchema("rt_token", "f1", null))
+                .thenReturn(gatewayResponse);
+
         ToolExecutionRequest request = ToolExecutionRequest.builder()
                 .parameters(Map.of("function_id", "f1"))
                 .runtimeContext(Map.of(TaskScopedTokenResolver.TOKEN_KEY, "rt_token"))
@@ -140,8 +146,7 @@ class GetBusinessFunctionSchemaToolTest {
 
         ToolExecutionResult result = tool.execute(request);
 
-        assertFalse(result.isSuccess());
-        assertEquals("MISSING_VERSION", result.getErrorCode());
-        verifyNoInteractions(workerGatewayClient);
+        assertTrue(result.isSuccess());
+        verify(workerGatewayClient).getBusinessFunctionSchema("rt_token", "f1", null);
     }
 }

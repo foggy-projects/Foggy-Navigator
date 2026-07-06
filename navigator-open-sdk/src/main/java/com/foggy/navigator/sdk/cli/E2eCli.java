@@ -47,6 +47,7 @@ public class E2eCli {
     public int run(String[] args, Map<String, String> env) {
         CliArguments parsed = CliArguments.parse(args);
         try {
+            parsed.rejectUnknownOptions();
             config = UpstreamCliConfig.load(parsed, env, cwd);
             return dispatch(parsed);
         } catch (UpstreamCliException e) {

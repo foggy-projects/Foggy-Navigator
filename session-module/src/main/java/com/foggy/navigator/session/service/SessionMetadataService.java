@@ -147,18 +147,9 @@ public class SessionMetadataService {
     @Transactional
     public SessionConfigDTO archiveConversation(String sessionId, String userId) {
         SessionEntity session = requireOwnedSessionForInteractionState(sessionId, userId);
-        List<SessionEntity> sessionsToArchive = sessionsToArchive(session, userId);
-        assertNoActiveTasksForArchive(sessionsToArchive, userId);
-
-        SessionEntity savedCurrent = null;
-        for (SessionEntity target : sessionsToArchive) {
-            target.setInteractionState("ARCHIVED");
-            SessionEntity saved = sessionRepository.save(target);
-            if (target.getId().equals(session.getId())) {
-                savedCurrent = saved;
-            }
-        }
-        return toDTO(savedCurrent != null ? savedCurrent : session);
+        List<SessionEntity> sessionsToArchive = sessionsForParentCascade(session, userId);
+        assertNoActiveTasksForOperation(sessionsToArchive, userId, "archive");
+        return updateInteractionState(sessionsToArchive, session, "ARCHIVED");
     }
 
     @Transactional
@@ -168,7 +159,8 @@ public class SessionMetadataService {
 
     @Transactional
     public SessionConfigDTO holdConversation(String sessionId, String userId) {
-        return updateInteractionState(sessionId, userId, "ON_HOLD");
+        SessionEntity session = requireOwnedSessionForInteractionState(sessionId, userId);
+        return updateInteractionState(sessionsForParentCascade(session, userId), session, "ON_HOLD");
     }
 
     @Transactional
@@ -178,33 +170,33 @@ public class SessionMetadataService {
 
     @Transactional
     public boolean deleteConversation(String sessionId, String userId) {
+        SessionEntity session = sessionRepository.findByIdAndUserId(sessionId, userId).orElse(null);
+        if (session != null) {
+            List<SessionEntity> sessionsToDelete = sessionsForParentCascade(session, userId);
+            assertNoActiveTasksForOperation(sessionsToDelete, userId, "delete");
+            LocalDateTime now = LocalDateTime.now();
+            for (SessionEntity target : sessionsToDelete) {
+                softDeleteSession(target, now);
+            }
+            log.info("Session soft-deleted with cascade: sessionId={}, userId={}, affected={}",
+                    sessionId, userId, sessionsToDelete.size());
+            return true;
+        }
+
         List<SessionTaskEntity> tasks = sessionTaskRepository
                 .findBySessionIdAndUserIdOrderByCreatedAtDesc(sessionId, userId);
         if (tasks.stream().anyMatch(task -> isActiveTaskStatus(task.getStatus()))) {
             throw new IllegalStateException("Cannot delete a session with active tasks. Please abort it first.");
         }
 
-        SessionEntity session = sessionRepository.findByIdAndUserId(sessionId, userId).orElse(null);
-        if (session == null) {
-            if (tasks.isEmpty()) {
-                log.info("Delete session ignored because no owned session or task projection exists: sessionId={}, userId={}",
-                        sessionId, userId);
-                return false;
-            }
-            session = createSessionMetadataFromTaskProjection(sessionId, userId, tasks.get(0));
+        if (tasks.isEmpty()) {
+            log.info("Delete session ignored because no owned session or task projection exists: sessionId={}, userId={}",
+                    sessionId, userId);
+            return false;
         }
-
-        if (session.getDeletedAt() == null) {
-            LocalDateTime now = LocalDateTime.now();
-            session.setDeletedAt(now);
-            session.setStatus("DELETED");
-            session.setInteractionState("DELETED");
-            session.setPinned(false);
-            session.setPinnedAt(null);
-            session.setLastActivityAt(now);
-            sessionRepository.save(session);
-            log.info("Session soft-deleted: sessionId={}, userId={}", sessionId, userId);
-        }
+        session = createSessionMetadataFromTaskProjection(sessionId, userId, tasks.get(0));
+        softDeleteSession(session, LocalDateTime.now());
+        log.info("Session soft-deleted from task projection: sessionId={}, userId={}", sessionId, userId);
         return true;
     }
 
@@ -212,7 +204,7 @@ public class SessionMetadataService {
         return status != null && ACTIVE_TASK_STATUSES.contains(status.toUpperCase(Locale.ROOT));
     }
 
-    private List<SessionEntity> sessionsToArchive(SessionEntity session, String userId) {
+    private List<SessionEntity> sessionsForParentCascade(SessionEntity session, String userId) {
         if (blankToNull(session.getParentSessionId()) != null) {
             return List.of(session);
         }
@@ -226,7 +218,7 @@ public class SessionMetadataService {
         return result;
     }
 
-    private void assertNoActiveTasksForArchive(List<SessionEntity> sessions, String userId) {
+    private void assertNoActiveTasksForOperation(List<SessionEntity> sessions, String userId, String operation) {
         List<String> sessionIds = sessions.stream()
                 .map(SessionEntity::getId)
                 .toList();
@@ -238,8 +230,33 @@ public class SessionMetadataService {
                 .stream()
                 .anyMatch(task -> isActiveTaskStatus(task.getStatus()));
         if (hasActiveTask) {
-            throw new IllegalStateException("Cannot archive a session with active tasks. Please abort it first.");
+            throw new IllegalStateException("Cannot " + operation + " a session with active tasks. Please abort it first.");
         }
+    }
+
+    private void softDeleteSession(SessionEntity session, LocalDateTime deletedAt) {
+        if (session.getDeletedAt() != null) {
+            return;
+        }
+        session.setDeletedAt(deletedAt);
+        session.setStatus("DELETED");
+        session.setInteractionState("DELETED");
+        session.setPinned(false);
+        session.setPinnedAt(null);
+        session.setLastActivityAt(deletedAt);
+        sessionRepository.save(session);
+    }
+
+    private SessionConfigDTO updateInteractionState(List<SessionEntity> sessions, SessionEntity currentSession, String interactionState) {
+        SessionEntity savedCurrent = null;
+        for (SessionEntity target : sessions) {
+            target.setInteractionState(interactionState);
+            SessionEntity saved = sessionRepository.save(target);
+            if (target.getId().equals(currentSession.getId())) {
+                savedCurrent = saved;
+            }
+        }
+        return toDTO(savedCurrent != null ? savedCurrent : currentSession);
     }
 
     private SessionConfigDTO updateInteractionState(String sessionId, String userId, String interactionState) {

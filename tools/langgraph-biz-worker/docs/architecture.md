@@ -40,6 +40,7 @@ business_rules: { ... }      # 额外业务校验规则
 - 普通 Skill 调用通过 `invoke_business_skill` 把说明和资源加载到当前 frame，不默认创建 child frame
 - Skill 材料进入当前 runtime-visible tool protocol，后续是否保留由 runtime context governance 决定
 - 只有显式 `invoke_business_agent` 才打开独立 Agent frame，并通过 promoted result 向 parent 上浮摘要、结构化输出和 refs
+- Agent 委派遵循 Codex 风格的保守默认：Root 可以创建直接子 Agent；子 Agent 默认不暴露继续创建 Agent 的工具，运行时默认 `max_agent_nesting_depth = 1` 兜底；只有 Agent manifest 与上游 execution_policy 显式允许 `invoke_business_agent`，且运行时深度配置放宽时，才允许更深层委派
 
 ### 2.2 Frame
 

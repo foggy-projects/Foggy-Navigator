@@ -39,6 +39,11 @@ public class LlmModelConfigForm {
     private String apiKey;
 
     /**
+     * Clear the stored API Key when true.
+     */
+    private Boolean clearApiKey;
+
+    /**
      * 是否设为该 category 的默认模型
      */
     private Boolean isDefault;

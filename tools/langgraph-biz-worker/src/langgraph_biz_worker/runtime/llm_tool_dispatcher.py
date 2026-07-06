@@ -188,7 +188,10 @@ class LlmToolDispatcher:
         get_business_function_schema_fn: Any = get_business_function_schema,
         invoke_business_function_fn: Any = invoke_business_function,
     ) -> dict[str, Any] | object:
-        if name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES:
+        if (
+            name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES
+            and not _business_discovery_tool_explicitly_enabled(name, context.execution_policy)
+        ):
             return {"ok": False, "error": f"Tool not available: {name}"}
 
         if name == "list_business_functions":
@@ -335,6 +338,17 @@ class LlmToolDispatcher:
                 }
 
         return _TOOL_UNHANDLED
+
+
+def _business_discovery_tool_explicitly_enabled(
+    name: str,
+    execution_policy: ExecutionPolicy | None,
+) -> bool:
+    return (
+        execution_policy is not None
+        and execution_policy.allowed_tools is not None
+        and name in execution_policy.allowed_tools
+    )
 
 
 def _emit_progress_event(runtime_context: dict[str, Any] | None, event: QueryEvent) -> None:

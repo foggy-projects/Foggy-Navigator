@@ -53,6 +53,18 @@ public class BusinessAgentSessionEntity {
     private String agentId;
 
     @Column(length = 64)
+    private String directoryId;
+
+    @Column(length = 64)
+    private String workerId;
+
+    @Column(length = 64)
+    private String workerProviderType;
+
+    @Column(length = 64)
+    private String modelConfigId;
+
+    @Column(length = 64)
     private String latestTaskId;
 
     @Column(length = 32, nullable = false)

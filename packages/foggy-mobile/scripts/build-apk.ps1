@@ -59,6 +59,8 @@ $envConfig = Read-EnvFile $EnvPath
 $KEYSTORE_PASSWORD = $envConfig['KEYSTORE_PASSWORD']
 $KEY_ALIAS = $envConfig['KEY_ALIAS']
 $KEY_PASSWORD = $envConfig['KEY_PASSWORD']
+$DCLOUD_USERNAME = $envConfig['DCLOUD_USERNAME']
+$DCLOUD_PASSWORD = $envConfig['DCLOUD_PASSWORD']
 
 # 默认值
 if ([string]::IsNullOrWhiteSpace($KEY_ALIAS)) { $KEY_ALIAS = "foggy-navi" }
@@ -80,6 +82,18 @@ Write-Host ""
 Write-Host "版本: v$version" -ForegroundColor Yellow
 Write-Host "CLI:  $HBUILDERX_CLI" -ForegroundColor Yellow
 Write-Host ""
+
+if (-not [string]::IsNullOrWhiteSpace($DCLOUD_USERNAME) -and -not [string]::IsNullOrWhiteSpace($DCLOUD_PASSWORD)) {
+    Write-Host "登录 DCloud CLI 账号..." -ForegroundColor Cyan
+    & $HBUILDERX_CLI user login --username $DCLOUD_USERNAME --password $DCLOUD_PASSWORD | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: DCloud CLI 登录失败" -ForegroundColor Red
+        exit 1
+    }
+} else {
+    Write-Host "未配置 DCLOUD_USERNAME/DCLOUD_PASSWORD，将使用 HBuilderX 当前登录状态" -ForegroundColor Gray
+}
+
 
 # --- 验证签名文件 ---
 if (-not (Test-Path $KeystorePath)) {

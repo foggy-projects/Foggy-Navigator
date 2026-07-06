@@ -81,7 +81,7 @@ public class CodexWorkerClient {
                                                       java.util.Map<String, String> envVars) {
         return streamQuery(prompt, cwd, codexThreadId, model, maxTurns, images, attachments,
                 apiKey, baseUrl, envVars,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd,
@@ -98,6 +98,7 @@ public class CodexWorkerClient {
                                                       String approvalPolicy,
                                                       Boolean networkAccessEnabled,
                                                       String webSearchMode,
+                                                      Map<String, Object> businessRuntimeContext,
                                                       List<String> additionalDirectories) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("prompt", prompt);
@@ -129,6 +130,9 @@ public class CodexWorkerClient {
         if (approvalPolicy != null && !approvalPolicy.isBlank()) body.put("approval_policy", approvalPolicy);
         if (networkAccessEnabled != null) body.put("network_access_enabled", networkAccessEnabled);
         if (webSearchMode != null && !webSearchMode.isBlank()) body.put("web_search_mode", webSearchMode);
+        if (businessRuntimeContext != null && !businessRuntimeContext.isEmpty()) {
+            body.put("business_runtime_context", businessRuntimeContext);
+        }
         if (additionalDirectories != null && !additionalDirectories.isEmpty()) {
             body.put("additional_directories", additionalDirectories);
         }
@@ -192,6 +196,33 @@ public class CodexWorkerClient {
                 .retrieve()
                 .bodyToMono(List.class)
                 .map(list -> (List<Map<String, Object>>) list)
+                .timeout(Duration.ofSeconds(10));
+    }
+
+    /**
+     * 查询 Worker 本地记录的 Codex session 文件改动线索。
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getSessionFileHints(String sessionId, Integer days, String from, String to) {
+        return webClient.get()
+                .uri(uriBuilder -> {
+                    var builder = uriBuilder
+                            .path("/api/v1/session-file-hints")
+                            .queryParam("session_id", sessionId);
+                    if (days != null) {
+                        builder.queryParam("days", days);
+                    }
+                    if (from != null && !from.isBlank()) {
+                        builder.queryParam("from", from);
+                    }
+                    if (to != null && !to.isBlank()) {
+                        builder.queryParam("to", to);
+                    }
+                    return builder.build();
+                })
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
                 .timeout(Duration.ofSeconds(10));
     }
 

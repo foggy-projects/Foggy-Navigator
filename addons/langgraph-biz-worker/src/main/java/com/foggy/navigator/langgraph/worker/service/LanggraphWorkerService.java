@@ -1,10 +1,14 @@
 package com.foggy.navigator.langgraph.worker.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.entity.BizWorkerIdentityEntity;
 import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
+import com.foggy.navigator.langgraph.worker.model.dto.LanggraphWorkerHealthDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphWorkerRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -15,15 +19,20 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Slf4j
 @Service
 public class LanggraphWorkerService {
 
+    private static final TypeReference<Map<String, Object>> PROVIDER_EXT_TYPE = new TypeReference<>() {};
+
     private final LanggraphWorkerRepository workerRepository;
     private final BizWorkerIdentityRepository workerIdentityRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${navigator.langgraph.worker.connect-timeout-ms:10000}")
     private long connectTimeoutMillis = 10_000;
@@ -106,6 +115,25 @@ public class LanggraphWorkerService {
         );
     }
 
+    public void applyHealthSnapshot(LanggraphWorkerEntity worker, LanggraphWorkerHealthDTO health) {
+        if (worker == null) {
+            throw new IllegalArgumentException("LangGraph worker is required");
+        }
+        worker.setStatus("ONLINE");
+        if (health == null) {
+            return;
+        }
+        if (StringUtils.hasText(health.getHostname())) {
+            worker.setHostname(health.getHostname().trim());
+        }
+        if (StringUtils.hasText(health.getVersion())) {
+            worker.setWorkerVersion(health.getVersion().trim());
+        }
+        if (health.getCapabilities() != null) {
+            worker.setProviderExt(mergeProviderExtCapabilities(worker.getProviderExt(), health.getCapabilities()));
+        }
+    }
+
     private Optional<LanggraphWorkerEntity> findIdentityBackedWorker(String workerId) {
         if (workerIdentityRepository == null || !StringUtils.hasText(workerId)) {
             return Optional.empty();
@@ -141,8 +169,59 @@ public class LanggraphWorkerService {
         worker.setAuthMode("IDENTITY");
         worker.setStatus("ONLINE");
         worker.setWorkerVersion(identity.getVersion());
-        worker.setProviderExt("{\"source\":\"BIZ_WORKER_IDENTITY\"}");
+        worker.setProviderExt(identityProviderExt(identity));
         return worker;
+    }
+
+    private String mergeProviderExtCapabilities(
+            String providerExt,
+            LanggraphWorkerHealthDTO.WorkerCapabilitiesDTO capabilities
+    ) {
+        Map<String, Object> merged = readProviderExt(providerExt);
+        merged.put("capabilities", capabilities);
+        return writeProviderExt(merged, providerExt);
+    }
+
+    private String identityProviderExt(BizWorkerIdentityEntity identity) {
+        Map<String, Object> providerExt = new LinkedHashMap<>();
+        providerExt.put("source", "BIZ_WORKER_IDENTITY");
+        if (StringUtils.hasText(identity.getCapabilitiesJson())) {
+            providerExt.put("capabilities", readCapabilitiesJson(identity.getCapabilitiesJson()));
+        }
+        return writeProviderExt(providerExt, "{\"source\":\"BIZ_WORKER_IDENTITY\"}");
+    }
+
+    private Map<String, Object> readProviderExt(String providerExt) {
+        Map<String, Object> parsed = new LinkedHashMap<>();
+        if (!StringUtils.hasText(providerExt)) {
+            return parsed;
+        }
+        try {
+            Map<String, Object> existing = objectMapper.readValue(providerExt, PROVIDER_EXT_TYPE);
+            if (existing != null) {
+                parsed.putAll(existing);
+            }
+        } catch (Exception ex) {
+            parsed.put("rawProviderExt", providerExt);
+        }
+        return parsed;
+    }
+
+    private Object readCapabilitiesJson(String capabilitiesJson) {
+        try {
+            return objectMapper.readValue(capabilitiesJson, PROVIDER_EXT_TYPE);
+        } catch (Exception ex) {
+            return capabilitiesJson;
+        }
+    }
+
+    private String writeProviderExt(Map<String, Object> providerExt, String fallback) {
+        try {
+            return objectMapper.writeValueAsString(providerExt);
+        } catch (JsonProcessingException ex) {
+            log.warn("Failed to serialize LangGraph worker providerExt: {}", ex.getMessage());
+            return fallback;
+        }
     }
 
     private String requireWorkerId(String workerId) {

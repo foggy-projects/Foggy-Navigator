@@ -131,6 +131,26 @@ export class SessionClient {
   }
 
   /**
+   * 搁置会话
+   */
+  async holdConversation(sessionId: string): Promise<SessionConfig> {
+    const response = await this.client.post<RXResponse<SessionConfig>>(
+      `/api/v1/sessions/${sessionId}/config/hold`
+    );
+    return response.data.data!;
+  }
+
+  /**
+   * 取消搁置会话
+   */
+  async unholdConversation(sessionId: string): Promise<SessionConfig> {
+    const response = await this.client.post<RXResponse<SessionConfig>>(
+      `/api/v1/sessions/${sessionId}/config/unhold`
+    );
+    return response.data.data!;
+  }
+
+  /**
    * 获取消息列表
    */
   async getMessages(sessionId: string): Promise<Message[]> {
@@ -164,7 +184,7 @@ export class SessionClient {
     }
   ): EventSource {
     const url = new URL(
-      `/api/v1/sessions/${sessionId}/stream`,
+      '/api/v1/sse/unified',
       this.client.defaults.baseURL
     );
 
@@ -172,6 +192,16 @@ export class SessionClient {
     const eventSource = new EventSource(url.toString(), {
       headers: authHeader ? { Authorization: authHeader } : {}
     } as any);
+    const originalClose = eventSource.close.bind(eventSource);
+    let subscribed = false;
+
+    const subscribe = async () => {
+      if (subscribed) {
+        return;
+      }
+      await this.client.post('/api/v1/sse/subscribe', { sessionIds: [sessionId] });
+      subscribed = true;
+    };
 
     eventSource.onopen = () => {
       console.log('SSE connection opened');
@@ -184,17 +214,19 @@ export class SessionClient {
     };
 
     // 监听默认 message 事件（连接确认等）
-    eventSource.onmessage = (e: any) => {
+    eventSource.onmessage = async (e: any) => {
       try {
         const data = JSON.parse(e.data);
+        await subscribe();
         callbacks.onConnected?.(data);
       } catch (error) {
         console.error('Failed to parse SSE message:', error);
+        callbacks.onError?.(error);
       }
     };
 
-    // 监听命名事件 "event"（AgentMessage）
-    eventSource.addEventListener('event', (e: any) => {
+    // 监听命名事件 "session_event"（AgentMessage）
+    eventSource.addEventListener('session_event', (e: any) => {
       try {
         const agentMessage: AgentMessage = JSON.parse(e.data);
         callbacks.onEvent?.(agentMessage);
@@ -202,6 +234,26 @@ export class SessionClient {
         console.error('Failed to parse SSE event:', error);
       }
     });
+
+    eventSource.addEventListener('heartbeat', () => {
+      callbacks.onEvent?.({
+        messageId: 'heartbeat',
+        sessionId,
+        agentId: '',
+        timestamp: Date.now(),
+        version: '1.0',
+        type: 'HEARTBEAT',
+        payload: {}
+      });
+    });
+
+    eventSource.close = () => {
+      if (subscribed) {
+        this.client.post('/api/v1/sse/unsubscribe', { sessionIds: [sessionId] })
+          .catch(error => console.warn('SSE unsubscribe failed:', error?.message ?? error));
+      }
+      originalClose();
+    };
 
     return eventSource;
   }

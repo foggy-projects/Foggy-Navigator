@@ -6,6 +6,129 @@
 # anthropic_stream.fixture_file 可指定 JSONL fixture 文件路径（相对于 MOCK_LLM_FIXTURES_DIR）
 
 responses:
+  # ========== NAVI / TMS 开单与工单链路 ==========
+
+  - name: "tms-opening-draft-final"
+    match:
+      message_role: "tool"
+      keywords: ["OPEN_TMS_PAGE", "aiDraftId", "afd_"]
+    response:
+      content: |
+        已调用 tms.order.createOpeningDraft 创建开单草稿。
+        函数返回 structured_output.type=OPEN_TMS_PAGE，可点击“去下单”打开 OrderWorkbench。
+        OPEN_TMS_PAGE 动作包含 aiDraftId，请在开单工作台继续确认并提交。
+
+  - name: "tms-opening-draft-create-full"
+    match:
+      keywords: ["上海明辉贸易有限公司", "电子配件", "6222020202020202020"]
+    response:
+      content: "我会使用 tms.order.createOpeningDraft 按线索生成开单草稿，不会正式下单。"
+      tool_calls:
+        - id: "call_tms_opening_draft_full"
+          type: "function"
+          function:
+            name: "invoke_business_function"
+            arguments:
+              function_id: "tms.order.createOpeningDraft"
+              version: "v1"
+              input:
+                requestIntent: "PREFILL_FROM_CLUES"
+                formType: "ORDER_OPENING"
+                sourceText: "帮客户上海明辉贸易有限公司下单，发货联系人王强，电话 18911897361，发货地址上海市浦东新区世纪大道 100 号，收货人李娜，电话 13800138000，收货地址杭州市余杭区文一西路 998 号，货物是电子配件，5 件，重量 120KG，体积 1.8 方，运费 260 元，代收货款 3600 元，付款方式到付，收款人陈丽，收款账号 6222020202020202020，开户行中国工商银行，支行杭州余杭支行"
+                customerName: "上海明辉贸易有限公司"
+                customerCompany: "上海明辉贸易有限公司"
+                customerPhone: "18911897361"
+                consignorName: "王强"
+                consignorPhone: "18911897361"
+                consignorCompany: "上海明辉贸易有限公司"
+                consignorAddressText: "上海市浦东新区世纪大道 100 号"
+                consignorProvinceName: "上海市"
+                consignorCityName: "上海市"
+                consignorCountyName: "浦东新区"
+                consigneeName: "李娜"
+                consigneePhone: "13800138000"
+                consigneeAddressText: "浙江省杭州市余杭区文一西路 998 号"
+                consigneeProvinceName: "浙江省"
+                consigneeCityName: "杭州市"
+                consigneeCountyName: "余杭区"
+                goodsName: "电子配件"
+                numberOfPackages: 5
+                cargoWeightKg: 120
+                cargoVolumeM3: 1.8
+                freightAmountYuan: 260
+                codAmountYuan: 3600
+                paymentMethodText: "到付"
+                payeeName: "陈丽"
+                payeeBankAccount: "6222020202020202020"
+                payeeBankName: "中国工商银行"
+                payeeBankBranch: "杭州余杭支行"
+                idempotencyContext: "navigator-opening-draft-full-mock"
+              idempotency_key: "navigator-opening-draft-full-mock"
+
+  - name: "tms-opening-draft-create-simple"
+    match:
+      keywords: ["开单草稿"]
+    response:
+      content: "我会使用 tms.order.createOpeningDraft 生成开单草稿，不会正式下单。"
+      tool_calls:
+        - id: "call_tms_opening_draft_simple"
+          type: "function"
+          function:
+            name: "invoke_business_function"
+            arguments:
+              function_id: "tms.order.createOpeningDraft"
+              version: "v1"
+              input:
+                requestIntent: "PREFILL_FROM_CLUES"
+                formType: "ORDER_OPENING"
+                sourceText: "18911897361客户要发个100KG的货，请使用开单草稿技能生成开单草稿，不要正式下单。"
+                customerPhone: "18911897361"
+                cargoWeightKg: 100
+                idempotencyContext: "navigator-opening-draft-simple-mock"
+              idempotency_key: "navigator-opening-draft-simple-mock"
+
+  - name: "tms-ticket-platform-feedback-final"
+    match:
+      message_role: "tool"
+      keywords: ["TKT", "ticketNo"]
+    response:
+      content: |
+        已调用 tms.ticket.createPlatformFeedback 创建平台 BUG 工单。
+        返回结果包含工单编号、SUBMITTED 状态和截图附件 URL，可继续用工单号查询详情或补充沟通。
+
+  - name: "tms-ticket-platform-feedback-create"
+    match:
+      keywords: ["TMS BUG 报告", "vitest-ticket-navigator-mock", "assets.example.com/vitest-ticket-bug.png"]
+    response:
+      content: "我会直接调用 tms.ticket.createPlatformFeedback 创建 TMS BUG 报告工单。"
+      tool_calls:
+        - id: "call_tms_ticket_platform_feedback"
+          type: "function"
+          function:
+            name: "invoke_business_function"
+            arguments:
+              function_id: "tms.ticket.createPlatformFeedback"
+              version: "v1"
+              input:
+                subType: "BUG_REPORT"
+                title: "vitest-ticket-navigator-mock"
+                summary: "问题现象：运单详情页点击保存按钮无响应，没有成功或失败提示。复现步骤：打开运单详情页，修改备注，点击保存。"
+                priority: "NORMAL"
+                severity: "MEDIUM"
+                diagnosticConsent: true
+                diagnosticPolicy: "BASIC"
+                tags:
+                  - "vitest"
+                  - "navigator"
+                  - "bug"
+                attachmentRefs:
+                  - attachmentName: "vitest-ticket-bug.png"
+                    attachmentType: "IMAGE"
+                    refType: "SCREENSHOT"
+                    attachmentUrl: "https://assets.example.com/vitest-ticket-bug.png"
+                    contentType: "image/png"
+              idempotency_key: "navigator-ticket-platform-feedback-mock"
+
   # ========== NAVI / TMS 打印模板链路 ==========
 
   - name: "tms-print-template-upstream-token-missing"

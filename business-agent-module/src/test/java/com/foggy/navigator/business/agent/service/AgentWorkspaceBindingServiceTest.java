@@ -76,6 +76,20 @@ class AgentWorkspaceBindingServiceTest {
     }
 
     @Test
+    void bind_rejectsOtherClientAppSharedDirectoryFromClientAppPlane() {
+        WorkingDirectoryEntity directory = clientAppDirectory("dir-1");
+        directory.setOwnerId("capp-2");
+        directory.setClientAppId("capp-2");
+        when(workingDirectoryRepository.findByDirectoryId("dir-1"))
+                .thenReturn(Optional.of(directory));
+
+        assertThrows(SecurityException.class,
+                () -> service.bind("tenant-1", "capp-1", "agent-1", bindForm("dir-1")));
+
+        verify(bindingRepository, never()).save(any());
+    }
+
+    @Test
     void setDefault_updatesAgentDefaultAndEnsuresBinding() {
         CodingAgentEntity agent = clientAppAgent();
         when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
@@ -133,6 +147,22 @@ class AgentWorkspaceBindingServiceTest {
                 () -> service.bindSystemOwned("tenant-1", principal(), "agent-1", bindForm("dir-1")));
     }
 
+    @Test
+    void bindSystemOwned_rejectsForeignUpstreamSystemDirectory() {
+        CodingAgentEntity agent = systemAgent();
+        when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
+                .thenReturn(Optional.of(agent));
+        WorkingDirectoryEntity directory = systemDirectory("dir-1");
+        directory.setOwnerId("ups-2");
+        when(workingDirectoryRepository.findByDirectoryId("dir-1"))
+                .thenReturn(Optional.of(directory));
+
+        assertThrows(SecurityException.class,
+                () -> service.bindSystemOwned("tenant-1", principal(), "agent-1", bindForm("dir-1")));
+
+        verify(bindingRepository, never()).save(any());
+    }
+
     private BindAgentWorkspaceForm bindForm(String directoryId) {
         BindAgentWorkspaceForm form = new BindAgentWorkspaceForm();
         form.setDirectoryId(directoryId);
@@ -156,7 +186,7 @@ class AgentWorkspaceBindingServiceTest {
         agent.setTenantId("tenant-1");
         agent.setAgentId("agent-1");
         agent.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
-        agent.setOwnerId("ups-1");
+        agent.setOwnerId("UPS-1");
         agent.setDefaultDirectoryId("dir-default");
         agent.setEnabled(true);
         return agent;
@@ -174,7 +204,7 @@ class AgentWorkspaceBindingServiceTest {
     private WorkingDirectoryEntity systemDirectory(String directoryId) {
         WorkingDirectoryEntity directory = directory(directoryId);
         directory.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);
-        directory.setOwnerId("ups-1");
+        directory.setOwnerId("UPS-1");
         directory.setWorkspaceScope(WorkspaceScope.UPSTREAM_SYSTEM_SHARED);
         return directory;
     }

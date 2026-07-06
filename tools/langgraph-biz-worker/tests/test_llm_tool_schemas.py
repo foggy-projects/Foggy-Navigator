@@ -35,6 +35,7 @@ def test_invoke_business_agent_schema_declares_child_agent_frame_contract():
     assert "skill/bundle name ends with '-agent'" in description
     assert "invoke_business_skill and continue there" in description
     assert "long-running wait" in description
+    assert "Nested Agent delegation is disabled by default" in description
     assert "Natural-language work order" in instruction_description
     assert "structured business inputs" in input_description
 
@@ -142,7 +143,7 @@ def test_tool_specs_enable_skill_discovery_when_business_skill_allowed():
     )}
 
     assert "invoke_business_skill" in names
-    assert "invoke_business_agent" in names
+    assert "invoke_business_agent" not in names
     assert "list_skill_resources" in names
     assert "read_skill_resource" in names
     assert "invoke_business_function" not in names
@@ -181,3 +182,26 @@ def test_tool_specs_do_not_enable_skill_discovery_for_unrelated_tools():
     assert "invoke_business_function" in names
     assert "list_skill_resources" not in names
     assert "read_skill_resource" not in names
+
+
+def test_tool_specs_exposes_business_function_schema_only_when_policy_allows_it():
+    manifest = SkillManifest(
+        id="business-function-only",
+        name="Business Function Only",
+        allowed_tools=[],
+    )
+
+    names = {spec["function"]["name"] for spec in _tool_specs(
+        manifest,
+        enabled_tool_names=frozenset({
+            "get_business_function_schema",
+            "invoke_business_function",
+        }),
+    )}
+
+    assert "get_business_function_schema" in names
+    assert "invoke_business_function" in names
+    assert "list_business_functions" not in names
+    assert "read_file" not in names
+    assert "list_files" not in names
+    assert "command" not in names

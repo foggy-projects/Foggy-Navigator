@@ -29,6 +29,12 @@ final class TaskCreateTargetResolver {
 
     CreateExecutionTarget resolveCreateExecutionTarget(TaskDispatchRequest request) {
         String agentId = request.getAgentId();
+        String requestedProviderType = request.getProviderType();
+
+        if ((agentId == null || !DirectoryAgentId.isDirectoryAgent(agentId))
+                && isKnownCommandProvider(requestedProviderType)) {
+            return CreateExecutionTarget.direct(requestedProviderType);
+        }
 
         if (agentId != null && DirectoryAgentId.isDirectoryAgent(agentId)) {
             return resolveDirectoryAgentTarget(request, agentId);
@@ -46,9 +52,7 @@ final class TaskCreateTargetResolver {
             return CreateExecutionTarget.a2a(new AgentLookup(sessionAgentId, "SESSION_AGENT"));
         }
 
-        String requestedProviderType = request.getProviderType();
-        if (requestedProviderType != null && !requestedProviderType.isBlank()
-                && taskQueryProviderRegistry.findCommandProviderByType(requestedProviderType).isPresent()) {
+        if (isKnownCommandProvider(requestedProviderType)) {
             return CreateExecutionTarget.direct(requestedProviderType);
         }
 
@@ -78,12 +82,16 @@ final class TaskCreateTargetResolver {
             throw new IllegalArgumentException("modelConfigId " + modelConfigId + " 无法推导执行后端类型");
         }
         String requestedProviderType = request.getProviderType();
-        if (requestedProviderType != null && !requestedProviderType.isBlank()
-                && taskQueryProviderRegistry.findCommandProviderByType(requestedProviderType).isPresent()
+        if (isKnownCommandProvider(requestedProviderType)
                 && isModelProviderCompatible(providerType, requestedProviderType)) {
             return CreateExecutionTarget.direct(requestedProviderType);
         }
         return CreateExecutionTarget.direct(providerType);
+    }
+
+    private boolean isKnownCommandProvider(String providerType) {
+        return providerType != null && !providerType.isBlank()
+                && taskQueryProviderRegistry.findCommandProviderByType(providerType).isPresent();
     }
 
     String resolveModelConfigIdFromDirectory(String explicitModelConfigId, String directoryId) {

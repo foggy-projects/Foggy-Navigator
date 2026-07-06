@@ -11,8 +11,11 @@ import com.foggy.navigator.business.agent.service.adapter.*;
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.enums.WorkingDirectoryResolverType;
+import com.foggy.navigator.common.enums.WorkspaceScope;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.sun.net.httpserver.HttpServer;
@@ -64,6 +67,7 @@ class RestAdapterUpstreamE2ETest {
     static final String VERSION = "v1";
     static final String POOL_ID = "rest_e2e_pool";
     static final String MODEL_ID = "model_rest_e2e";
+    static final String DIRECTORY_ID = "dir_rest_e2e";
     static final String ORDER_IDENTIFIER = "TMS-ORDER-9001";
 
     // repos
@@ -565,9 +569,25 @@ class RestAdapterUpstreamE2ETest {
         agent.setAgentType(BusinessAgentBundleService.AGENT_TYPE_LANGGRAPH);
         agent.setWorkerId(POOL_ID);
         agent.setDefaultModelConfigId(MODEL_ID);
+        agent.setDefaultDirectoryId(DIRECTORY_ID);
         agent.setAgentProfile("{\"skillId\":\"" + SKILL_ID + "\"}");
         agent.setEnabled(true);
         when(agentRepository.findByAgentIdAndTenantId(AGENT_ID, TENANT)).thenReturn(Optional.of(agent));
+
+        WorkingDirectoryEntity directory = new WorkingDirectoryEntity();
+        directory.setDirectoryId(DIRECTORY_ID);
+        directory.setTenantId(TENANT);
+        directory.setOwnerType(ResourceOwnerType.CLIENT_APP);
+        directory.setOwnerId(APP_ID);
+        directory.setClientAppId(APP_ID);
+        directory.setWorkspaceScope(WorkspaceScope.CLIENT_APP_SHARED);
+        directory.setResolverType(WorkingDirectoryResolverType.DELEGATED);
+        directory.setEnabled(true);
+        directory.setReadOnly(false);
+        directory.setWorkerId(POOL_ID);
+        directory.setProjectName("REST E2E Workspace");
+        directory.setPath("D:/workspace/rest-e2e");
+        when(workingDirectoryRepository.findByDirectoryId(DIRECTORY_ID)).thenReturn(Optional.of(directory));
 
         when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(inv -> {
             taskEntity = inv.getArgument(0);

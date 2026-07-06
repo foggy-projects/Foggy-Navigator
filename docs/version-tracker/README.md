@@ -25,6 +25,7 @@
 - [1.2.0-SNAPSHOT](./1.2.0-SNAPSHOT/)
 - [1.3.0-SNAPSHOT](./1.3.0-SNAPSHOT/)
 - [1.3.1-SNAPSHOT](./1.3.1-SNAPSHOT/)
+- [1.3.3-SNAPSHOT](./1.3.3-SNAPSHOT/)
 - [1.0.2-APP](./1.0.2-APP/)
 
 ## 说明

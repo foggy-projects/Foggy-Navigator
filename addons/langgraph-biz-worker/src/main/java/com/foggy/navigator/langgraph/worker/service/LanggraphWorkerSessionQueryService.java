@@ -75,7 +75,7 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
     public WorkerSessionMessageCount getWorkerSessionMessageCountResult(String workerId, String sessionId, String userId) {
         assertSessionOwnedByWorker(workerId, sessionId, userId);
 
-        List<SessionMessageEntity> messages = sessionMessageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        List<SessionMessageEntity> messages = sessionMessageRepository.findBySessionIdOrderByCreatedAtAscIdAsc(sessionId);
         long userCount = messages.stream().filter(message -> "user".equalsIgnoreCase(message.getRole())).count();
         long assistantCount = messages.stream().filter(message -> "assistant".equalsIgnoreCase(message.getRole())).count();
 
@@ -97,7 +97,7 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
                                                                 String userId, Integer offset, Integer limit) {
         assertSessionOwnedByWorker(workerId, sessionId, userId);
 
-        List<SessionMessageEntity> messages = sessionMessageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        List<SessionMessageEntity> messages = sessionMessageRepository.findBySessionIdOrderByCreatedAtAscIdAsc(sessionId);
         int fromIndex = Math.max(0, offset == null ? 0 : offset);
         if (fromIndex >= messages.size()) {
             return List.of();

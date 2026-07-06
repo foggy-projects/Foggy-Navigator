@@ -25,7 +25,7 @@
         />
         <button
           class="run-btn"
-          :disabled="!promptInput.trim() || creating"
+          :disabled="creating || (!promptInput.trim() && attachments.length === 0)"
           :loading="creating"
           @tap="handleCreateTask"
         >
@@ -169,7 +169,7 @@ const projectName = ref('')
 const promptInput = ref('')
 const creating = ref(false)
 const loading = ref(false)
-const { attachments, chooseImages, chooseFiles, removeAttachment, clearAttachments } = useAttachments()
+const { attachments, chooseAlbumImages, takePhoto, chooseFiles, removeAttachment, clearAttachments } = useAttachments()
 
 // Session-driven data
 const tasks = ref<DispatchTask[]>([])
@@ -467,13 +467,14 @@ function resolveMilestone(group: ConversationGroup): DirectoryMilestone | undefi
 }
 
 async function handleCreateTask() {
-  if (!promptInput.value.trim() || !workerId.value) return
+  const prompt = promptInput.value.trim() || '请查看附件'
+  if ((!promptInput.value.trim() && attachments.value.length === 0) || !workerId.value) return
   creating.value = true
   try {
     const imagesJson = toImagesJson(attachments.value)
     const form: Parameters<typeof createTaskUnified>[0] = {
       workerId: workerId.value,
-      prompt: promptInput.value.trim(),
+      prompt,
       directoryId: directoryId.value,
     }
     if (selectedModelConfigId.value) form.modelConfigId = selectedModelConfigId.value
@@ -483,7 +484,7 @@ async function handleCreateTask() {
     if (imagesJson) form.images = imagesJson
 
     const task = await createTaskUnified(form)
-    addToHistory(promptInput.value.trim())
+    if (promptInput.value.trim()) addToHistory(promptInput.value.trim())
     clearDraft()
     promptInput.value = ''
     clearAttachments()
@@ -642,10 +643,11 @@ async function showTitleEditor(group: ConversationGroup): Promise<void> {
 
 function showAttachmentActions() {
   uni.showActionSheet({
-    itemList: ['选择图片', '选择文件'],
+    itemList: ['相册选图', '拍照', '选择文件'],
     success: (res) => {
-      if (res.tapIndex === 0) chooseImages()
-      if (res.tapIndex === 1) chooseFiles()
+      if (res.tapIndex === 0) chooseAlbumImages()
+      if (res.tapIndex === 1) takePhoto()
+      if (res.tapIndex === 2) chooseFiles()
     },
   })
 }

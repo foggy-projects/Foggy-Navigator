@@ -88,6 +88,10 @@ public class OpenApiController {
     private static final String BACKEND_OPENAI_CODEX = ProviderRouteRegistry.BACKEND_OPENAI_CODEX;
     private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
     private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
+    private static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
+    private static final String TASK_DIRECTORY_REQUIRED_MESSAGE =
+            TASK_DIRECTORY_REQUIRED + ": directoryId is required for Actor-owned BizWorker task";
+    private static final int MAX_STRUCTURED_OUTPUT_CONTENT_LENGTH = 64 * 1024;
 
     private final OpenApiProvisioningService provisioningService;
     private final ClaudeWorkerService workerService;
@@ -406,12 +410,9 @@ public class OpenApiController {
         String contextId = requestedContextId
                 ? form.getContextId().trim()
                 : BusinessAgentSessionService.generateContextId();
-        validateBusinessAgentContextOwnershipIfNeeded(
-                tenantId,
-                clientAppCredential.getClientAppId(),
-                upstreamUserId,
-                contextId,
-                requestedContextId);
+        if (requestedContextId && !StringUtils.hasText(upstreamUserId)) {
+            return RX.failB("upstream user id is required when contextId is provided");
+        }
 
         A2AgentResourceResolver resourceResolver = requireA2AgentResourceResolver();
         A2AgentResourceResolver.ResolvedAgentResource agentResource = resourceResolver.resolveRequiredAgent(
@@ -438,8 +439,28 @@ public class OpenApiController {
                 upstreamUserId,
                 agentResource,
                 form);
+        if (requiresTaskDirectory(agentResource, modelResource) && workspaceResource == null) {
+            return RX.failB(TASK_DIRECTORY_REQUIRED_MESSAGE);
+        }
+        String agentOwnerUserId = resolveAgentOwnerUserId(route.agentId(), tenantId);
+        if (requestedContextId) {
+            try {
+                validateBusinessAgentContextOwnershipIfNeeded(
+                        tenantId,
+                        clientAppCredential.getClientAppId(),
+                        upstreamUserId,
+                        contextId,
+                        route.agentId(),
+                        agentOwnerUserId);
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                return RX.failB(firstNonBlank(
+                        sanitizeDiagnosticText(e.getMessage()),
+                        "open api request rejected"));
+            }
+        }
         String modelConfigId = modelResource.modelConfigId();
         AgentResolveContext ctx = AgentResolveContext.builder()
+                .userId(agentOwnerUserId)
                 .tenantId(tenantId)
                 .modelConfigId(modelConfigId)
                 .requestSource("OPEN_API")
@@ -508,29 +529,34 @@ public class OpenApiController {
 
         TaskSubmittingA2aAgent submittingAgent = new TaskSubmittingA2aAgentDecorator(
                 agent, agentSubmitPipeline, route.agentId(), ctx);
-        A2aTask task = submittingAgent.submitTask(AgentTaskSubmitRequest.builder()
-                .agentId(route.agentId())
-                .providerType(stringValue(metadata.get("providerType")))
-                .resolveContext(ctx)
-                .message(message)
-                .prompt(messageContent)
-                .contextId(contextId)
-                .metadata(metadata)
-                .modelConfigId(modelConfigId)
-                .model(modelResource.modelName())
-                .workerId(stringValue(metadata.get("workerId")))
-                .directoryId(stringValue(metadata.get("directoryId")))
-                .cwd(stringValue(metadata.get("cwd")))
-                .maxTurns(form.getMaxTurns())
-                .attachments(normalizedAttachments.isEmpty() ? null : normalizedAttachments)
-                .build());
+        A2aTask task;
+        try {
+            task = submittingAgent.submitTask(AgentTaskSubmitRequest.builder()
+                    .agentId(route.agentId())
+                    .providerType(stringValue(metadata.get("providerType")))
+                    .resolveContext(ctx)
+                    .message(message)
+                    .prompt(messageContent)
+                    .contextId(contextId)
+                    .metadata(metadata)
+                    .modelConfigId(modelConfigId)
+                    .model(modelResource.modelName())
+                    .workerId(stringValue(metadata.get("workerId")))
+                    .directoryId(stringValue(metadata.get("directoryId")))
+                    .cwd(stringValue(metadata.get("cwd")))
+                    .maxTurns(form.getMaxTurns())
+                    .attachments(normalizedAttachments.isEmpty() ? null : normalizedAttachments)
+                    .build());
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            return RX.failB(firstNonBlank(
+                    sanitizeDiagnosticText(e.getMessage()),
+                    "open api request rejected"));
+        }
         if (task != null && !StringUtils.hasText(task.getContextId())) {
             task.setContextId(contextId);
         }
         bindBusinessRuntimeTokenToWorkerTaskIfPossible(tenantId, businessRuntimeToken, task);
-        String agentOwnerUserId = null;
         if (clientContextJson != null) {
-            agentOwnerUserId = resolveAgentOwnerUserId(route.agentId(), tenantId);
             sessionQueryService.updateClientContextJson(contextId, agentOwnerUserId, route.agentId(), clientContextJson);
         }
         bindBusinessAgentSessionIfPossible(
@@ -688,6 +714,15 @@ public class OpenApiController {
 
     private boolean isBackend(String actual, String expected) {
         return expected.equals(ProviderRouteRegistry.canonicalWorkerBackendOrNull(actual));
+    }
+
+    private boolean requiresTaskDirectory(
+            A2AgentResourceResolver.ResolvedAgentResource agentResource,
+            A2AgentResourceResolver.ResolvedModelResource modelResource) {
+        String workerBackend = firstNonBlank(
+                modelResource != null ? modelResource.workerBackend() : null,
+                agentResource != null ? agentResource.workerBackend() : null);
+        return isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ);
     }
 
     private void injectWorkspaceExecutionPolicy(
@@ -1033,18 +1068,75 @@ public class OpenApiController {
             String clientAppId,
             String upstreamUserId,
             String contextId,
-            boolean requestedContextId) {
-        if (!requestedContextId) {
-            return;
-        }
+            String agentId,
+            String agentOwnerUserId) {
         if (!StringUtils.hasText(upstreamUserId)) {
-            throw RX.throwB("upstream user id is required when contextId is provided");
+            throw new IllegalArgumentException("upstream user id is required when contextId is provided");
         }
         BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
         if (service == null) {
-            throw RX.throwB("business agent session service is not available");
+            throw new IllegalStateException("business agent session service is not available");
         }
-        service.getSession(tenantId, clientAppId, upstreamUserId, contextId);
+        try {
+            service.getSession(tenantId, clientAppId, upstreamUserId, contextId);
+        } catch (IllegalArgumentException e) {
+            if (isBusinessAgentSessionNotFound(e)
+                    && hasRecoverableBusinessAgentSession(
+                            tenantId,
+                            clientAppId,
+                            upstreamUserId,
+                            contextId,
+                            agentId,
+                            agentOwnerUserId)) {
+                log.warn("Open API business session row missing but Navigator context exists; "
+                                + "contextId={}, upstreamUserId={}",
+                        contextId, upstreamUserId);
+                return;
+            }
+            throw e;
+        }
+    }
+
+    private boolean isBusinessAgentSessionNotFound(IllegalArgumentException e) {
+        String message = e != null ? e.getMessage() : null;
+        return StringUtils.hasText(message) && message.startsWith("business agent session not found:");
+    }
+
+    private boolean hasRecoverableBusinessAgentSession(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String contextId,
+            String agentId,
+            String agentOwnerUserId) {
+        Optional<String> sessionId = resolveNavigatorSessionId(contextId, agentOwnerUserId, agentId);
+        if (sessionId.isEmpty()) {
+            return false;
+        }
+        BusinessAgentTaskService taskService = businessAgentTaskService.getIfAvailable();
+        if (taskService == null) {
+            return false;
+        }
+        return taskService.hasOpenApiTaskScopedTokenForContext(
+                tenantId,
+                clientAppId,
+                upstreamUserId,
+                contextId);
+    }
+
+    private Optional<String> resolveNavigatorSessionId(String contextId, String agentOwnerUserId, String agentId) {
+        if (!StringUtils.hasText(contextId) || !StringUtils.hasText(agentOwnerUserId)) {
+            return Optional.empty();
+        }
+        Optional<AgentConversationContextEntity> context =
+                sessionQueryService.findContextForUser(contextId, agentOwnerUserId);
+        if (context == null || context.isEmpty()) {
+            return Optional.empty();
+        }
+        return context
+                .filter(entity -> !StringUtils.hasText(agentId) || agentId.equals(entity.getTargetAgentId()))
+                .map(AgentConversationContextEntity::getNavigatorSessionId)
+                .filter(StringUtils::hasText);
     }
 
     private String enrichBusinessRuntimeContext(
@@ -1336,10 +1428,13 @@ public class OpenApiController {
         String agentOwnerUserId = StringUtils.hasText(resolvedAgentOwnerUserId)
                 ? resolvedAgentOwnerUserId
                 : resolveAgentOwnerUserId(agentId, tenantId);
-        String sessionId = sessionQueryService.resolveSessionId(contextId, agentOwnerUserId)
-                .orElse(null);
+        String sessionId = resolveTaskNavigatorSessionId(task);
         if (!StringUtils.hasText(sessionId)) {
-            log.debug("Skip binding business agent session because context has no navigator session yet: contextId={}", contextId);
+            sessionId = resolveNavigatorSessionId(contextId, agentOwnerUserId, agentId).orElse(null);
+        }
+        if (!StringUtils.hasText(sessionId)) {
+            log.warn("Skip binding business agent session because no Navigator sessionId is available: "
+                    + "contextId={}, taskId={}", contextId, task != null ? task.getId() : null);
             return;
         }
         service.bindOpenApiSession(
@@ -1351,6 +1446,16 @@ public class OpenApiController {
                 agentId,
                 task != null ? task.getId() : null,
                 clientContextJson);
+    }
+
+    private String resolveTaskNavigatorSessionId(A2aTask task) {
+        if (task != null && task.getMetadata() != null) {
+            Object sessionId = task.getMetadata().get("sessionId");
+            if (sessionId instanceof String value && StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String firstHeader(HttpServletRequest request, String... names) {
@@ -2260,7 +2365,8 @@ public class OpenApiController {
         }
         if (messages != null) {
             for (int i = messages.size() - 1; i >= 0; i--) {
-                Map<String, Object> metadata = parseMessageMetadata(messages.get(i));
+                SessionMessageEntity message = messages.get(i);
+                Map<String, Object> metadata = parseMessageMetadata(message);
                 value = firstPresent(metadata,
                         "structuredOutput", "structured_output", "outputJson", "output_json");
                 if (value != null) {
@@ -2270,11 +2376,100 @@ public class OpenApiController {
                             .source("message_metadata")
                             .build();
                 }
+                if (BusinessAgentSessionMessageVisibility.isVisibleByDefault(message)) {
+                    value = extractStructuredOutputFromMessageContent(message.getContent());
+                    if (value != null) {
+                        return OpenTaskStructuredOutputDTO.builder()
+                                .available(true)
+                                .value(sanitizeEvidenceValue(value))
+                                .source("message_content")
+                                .build();
+                    }
+                }
             }
         }
         return OpenTaskStructuredOutputDTO.builder()
                 .available(false)
                 .build();
+    }
+
+    private Object extractStructuredOutputFromMessageContent(String content) {
+        if (!StringUtils.hasText(content)) {
+            return null;
+        }
+        String text = content.trim();
+        if (text.length() > MAX_STRUCTURED_OUTPUT_CONTENT_LENGTH
+                || !text.startsWith("{")
+                || !text.endsWith("}")) {
+            return null;
+        }
+        try {
+            Map<String, Object> contentMap = objectMapper.readValue(
+                    text,
+                    new TypeReference<Map<String, Object>>() {});
+            Object direct = firstPresent(contentMap,
+                    "structuredOutput", "structured_output", "outputJson", "output_json");
+            if (direct != null) {
+                return direct;
+            }
+            Map<String, Object> flattened = extractFlattenedStructuredOutput(contentMap);
+            if (!flattened.isEmpty()) {
+                return flattened;
+            }
+            if (isOpenArtifactType(contentMap.get("type"))) {
+                return contentMap;
+            }
+        } catch (Exception e) {
+            log.debug("Failed to parse structured output from message content: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    private Map<String, Object> extractFlattenedStructuredOutput(Map<String, Object> contentMap) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (contentMap == null || contentMap.isEmpty()) {
+            return result;
+        }
+        contentMap.forEach((key, value) -> {
+            String path = null;
+            if (key.startsWith("structured_output.")) {
+                path = key.substring("structured_output.".length());
+            } else if (key.startsWith("structuredOutput.")) {
+                path = key.substring("structuredOutput.".length());
+            }
+            if (StringUtils.hasText(path)) {
+                putDottedPath(result, path, value);
+            }
+        });
+        return result;
+    }
+
+    private void putDottedPath(Map<String, Object> target, String dottedPath, Object value) {
+        String[] parts = dottedPath.split("\\.");
+        Map<String, Object> current = target;
+        for (int i = 0; i < parts.length; i++) {
+            String part = parts[i];
+            if (!StringUtils.hasText(part)) {
+                return;
+            }
+            if (i == parts.length - 1) {
+                current.put(part, value);
+                return;
+            }
+            Object child = current.get(part);
+            Map<String, Object> childMap;
+            if (child instanceof Map<?, ?> rawMap) {
+                childMap = toStringObjectMap(rawMap);
+            } else {
+                childMap = new LinkedHashMap<>();
+            }
+            current.put(part, childMap);
+            current = childMap;
+        }
+    }
+
+    private boolean isOpenArtifactType(Object value) {
+        return value instanceof String text && "OPEN_ARTIFACT".equalsIgnoreCase(text.trim());
     }
 
     private SessionTaskEntity requireOpenApiTask(String taskId, String tenantId, String agentId) {

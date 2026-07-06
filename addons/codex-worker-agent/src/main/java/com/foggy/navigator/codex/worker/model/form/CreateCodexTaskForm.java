@@ -1,5 +1,6 @@
 package com.foggy.navigator.codex.worker.model.form;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import lombok.Data;
 
 import java.util.List;
@@ -35,23 +36,39 @@ public class CreateCodexTaskForm {
     /** OpenAPI/A2A 多轮上下文 ID，用于统一任务投影诊断 */
     private String contextId;
     /** Effective TaskQueryProvider route; defaults to codex-worker when omitted. */
+    @JsonAlias("provider_type")
     private String providerType;
     /** CodexBiz: actor/account scoped CODEX_HOME logical key; worker resolves it under CODEX_BIZ_HOME_ROOT. */
+    @JsonAlias("codex_home_key")
     private String codexHomeKey;
+    /** CodexBiz compatibility alias for upstream account scoped home key. */
+    @JsonAlias("private_account_id")
+    private String privateAccountId;
     /** Codex SDK developer_instructions config, used for account/task contract injection. */
+    @JsonAlias("developer_instructions")
     private String developerInstructions;
+    /** CodexBiz runtime-only context. This must not be injected into model-visible prompts/config. */
+    @JsonAlias("business_runtime_context")
+    private Map<String, Object> businessRuntimeContext;
     /** Codex SDK turn outputSchema. */
+    @JsonAlias("output_schema")
     private Map<String, Object> outputSchema;
     /** Additional Codex SDK config overrides. */
+    @JsonAlias("codex_config")
     private Map<String, Object> codexConfig;
     /** Codex SDK sandboxMode override. */
+    @JsonAlias("sandbox_mode")
     private String sandboxMode;
     /** Codex SDK approvalPolicy override. */
+    @JsonAlias("approval_policy")
     private String approvalPolicy;
     /** Codex SDK networkAccessEnabled override. */
+    @JsonAlias("network_access_enabled")
     private Boolean networkAccessEnabled;
     /** Codex SDK webSearchMode override. */
+    @JsonAlias("web_search_mode")
     private String webSearchMode;
     /** Codex SDK additionalDirectories override. */
+    @JsonAlias("additional_directories")
     private List<String> additionalDirectories;
 }

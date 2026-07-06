@@ -17,7 +17,10 @@ def _tool_specs(
 ) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     for name in [*_GLOBAL_TOOL_NAMES, *manifest.allowed_tools]:
-        if name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES:
+        if (
+            name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES
+            and not _explicitly_enabled(name, enabled_tool_names)
+        ):
             continue
         if not _tool_enabled(name, enabled_tool_names):
             continue
@@ -60,6 +63,8 @@ def _bind_tools(
 
 _GLOBAL_TOOL_NAMES = [
     "invoke_business_function",
+    "list_business_functions",
+    "get_business_function_schema",
     "list_skill_resources",
     "read_skill_resource",
     "read_frame_execution_report",
@@ -87,7 +92,6 @@ _FRAME_RESULT_TOOL_NAMES = frozenset({
 _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     _FRAME_RESULT_TOOL_NAME,
     _LEGACY_FRAME_RESULT_TOOL_NAME,
-    "command",
     "handoff_to_parent",
     "resume_recoverable_child_skill",
     "shelve_interrupted_frame",
@@ -108,11 +112,16 @@ def _tool_enabled(
 ) -> bool:
     if enabled_tool_names is None:
         return True
-    if name == "invoke_business_agent" and "invoke_business_skill" in enabled_tool_names:
-        return True
     if name in _SKILL_DISCOVERY_TOOL_NAMES and enabled_tool_names & _SKILL_MATERIAL_TOOL_NAMES:
         return True
     return name in enabled_tool_names or name in _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES
+
+
+def _explicitly_enabled(
+    name: str,
+    enabled_tool_names: set[str] | frozenset[str] | None,
+) -> bool:
+    return enabled_tool_names is not None and name in enabled_tool_names
 
 
 def _preferred_tool_schema_name(name: str) -> str:
@@ -193,10 +202,19 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "function_id": {"type": "string"},
-                    "version": {"type": "string"},
+                    "function_id": {
+                        "type": "string",
+                        "description": (
+                            "Use the exact functionId returned by Navigator. "
+                            "Do not strip suffixes such as .v1."
+                        ),
+                    },
+                    "version": {
+                        "type": "string",
+                        "description": "Optional. May be omitted or set to the returned version.",
+                    },
                 },
-                "required": ["function_id", "version"],
+                "required": ["function_id"],
             },
         },
     },
@@ -208,12 +226,21 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "function_id": {"type": "string"},
-                    "version": {"type": "string"},
+                    "function_id": {
+                        "type": "string",
+                        "description": (
+                            "Use the exact functionId returned by Navigator. "
+                            "Do not strip suffixes such as .v1."
+                        ),
+                    },
+                    "version": {
+                        "type": "string",
+                        "description": "Optional. May be omitted or set to the returned version.",
+                    },
                     "input": {"type": "object"},
                     "idempotency_key": {"type": "string"},
                 },
-                "required": ["function_id", "version", "input"],
+                "required": ["function_id", "input"],
             },
         },
     },
@@ -277,7 +304,9 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "the work truly needs an isolated loop, separate report, "
                 "long-running wait, handoff, or multi-agent delegation. Inside "
                 "the Agent frame, the Agent may load Skill materials and call "
-                "business functions."
+                "business functions. Nested Agent delegation is disabled by "
+                "default and is only available when the delegated Agent manifest "
+                "and upstream execution policy explicitly allow invoke_business_agent."
             ),
             "parameters": {
                 "type": "object",

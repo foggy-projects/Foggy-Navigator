@@ -2,6 +2,7 @@ package com.foggy.navigator.langgraph.worker.client;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.langgraph.worker.model.dto.LanggraphWorkerHealthDTO;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
@@ -13,12 +14,33 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LanggraphWorkerClientTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Test
+    void healthCheckTyped_parsesAgentDelegationCapabilities() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            LanggraphWorkerClient client = new LanggraphWorkerClient("worker-1", server.baseUrl(), "token");
+
+            LanggraphWorkerHealthDTO health = client.healthCheckTyped().block(Duration.ofSeconds(5));
+
+            assertEquals("/health", server.path());
+            assertEquals("worker-host-1", health.getHostname());
+            assertEquals("1.0.0", health.getVersion());
+            assertEquals("agent-delegation.v1",
+                    health.getCapabilities().getAgentDelegation().getContractVersion());
+            assertEquals(1, health.getCapabilities().getAgentDelegation().getMaxAgentNestingDepth());
+            assertFalse(health.getCapabilities().getAgentDelegation().getNestedAgentDelegationAllowed());
+            assertEquals("invoke_business_agent",
+                    health.getCapabilities().getAgentDelegation().getTools().get("spawn_agent").getToolName());
+            assertFalse(health.getCapabilities().getAgentDelegation().getTools().get("send_input").getSupported());
+        }
+    }
 
     @Test
     void streamQuery_sendsAttachmentsInRequestBody() throws Exception {
@@ -217,6 +239,35 @@ class LanggraphWorkerClientTest {
                 capture.path.set(exchange.getRequestURI().getPath());
                 capture.body.set(exchange.getRequestURI().getQuery());
                 byte[] response = "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+            });
+            server.createContext("/health", exchange -> {
+                capture.path.set(exchange.getRequestURI().getPath());
+                capture.body.set("");
+                byte[] response = ("{"
+                        + "\"status\":\"ok\","
+                        + "\"hostname\":\"worker-host-1\","
+                        + "\"version\":\"1.0.0\","
+                        + "\"active_tasks\":0,"
+                        + "\"worker_name\":\"LangGraph Biz Worker\","
+                        + "\"capabilities\":{"
+                        + "\"agent_delegation\":{"
+                        + "\"contract_version\":\"agent-delegation.v1\","
+                        + "\"max_agent_nesting_depth\":1,"
+                        + "\"root_agent_depth\":0,"
+                        + "\"root_agent_delegation_allowed\":true,"
+                        + "\"nested_agent_delegation_allowed\":false,"
+                        + "\"child_agent_inherits_parent_tools\":false,"
+                        + "\"explicit_nested_agent_authorization_required\":true,"
+                        + "\"nested_agent_authorization_gates\":[\"agent_manifest.allowed_tools\",\"execution_policy.allowed_tools\",\"runtime.max_agent_nesting_depth\"],"
+                        + "\"tools\":{"
+                        + "\"spawn_agent\":{\"supported\":true,\"tool_name\":\"invoke_business_agent\",\"mode\":\"open_child_agent_and_sync_wait\"},"
+                        + "\"send_input\":{\"supported\":false,\"tool_name\":null,\"mode\":\"not_supported\"}"
+                        + "}}}}"
+                        ).getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
                 exchange.sendResponseHeaders(200, response.length);
                 exchange.getResponseBody().write(response);

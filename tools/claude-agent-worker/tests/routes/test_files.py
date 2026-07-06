@@ -130,6 +130,39 @@ class TestIsBinary:
 
 
 # ---------------------------------------------------------------------------
+# read_file_content
+# ---------------------------------------------------------------------------
+
+class TestReadFileContent:
+    """File content preview size limits."""
+
+    @pytest.mark.asyncio
+    async def test_allows_text_file_up_to_10mb(self, tmp_path, monkeypatch):
+        file_path = tmp_path / "large.txt"
+        file_path.write_bytes(b"a" * files_routes._MAX_FILE_SIZE)
+        monkeypatch.setattr(files_routes, "validate_path", lambda path: path)
+
+        result = await files_routes.read_file_content(str(file_path))
+
+        assert result.too_large is False
+        assert result.is_binary is False
+        assert result.size == files_routes._MAX_FILE_SIZE
+        assert len(result.content or "") == files_routes._MAX_FILE_SIZE
+
+    @pytest.mark.asyncio
+    async def test_marks_text_file_over_10mb_as_too_large(self, tmp_path, monkeypatch):
+        file_path = tmp_path / "too-large.txt"
+        file_path.write_bytes(b"a" * (files_routes._MAX_FILE_SIZE + 1))
+        monkeypatch.setattr(files_routes, "validate_path", lambda path: path)
+
+        result = await files_routes.read_file_content(str(file_path))
+
+        assert result.too_large is True
+        assert result.content is None
+        assert result.size == files_routes._MAX_FILE_SIZE + 1
+
+
+# ---------------------------------------------------------------------------
 # _safe_subpath
 # ---------------------------------------------------------------------------
 

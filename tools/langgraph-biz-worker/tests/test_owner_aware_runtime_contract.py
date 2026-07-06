@@ -141,3 +141,88 @@ def test_owner_aware_runtime_loads_private_skill_and_account_context(tmp_path, m
     assert "PRIVATE_ACTOR_WORKSPACE" in system_prompt
     assert "PUBLIC_SHARED_ROOT" not in system_prompt
     assert runtime.get_frame(frame.frame_id).status == FrameStatus.COMPLETED
+
+
+def test_owner_aware_runtime_writes_agent_paths_to_delegated_actor_home(tmp_path, monkeypatch):
+    skills_root = tmp_path / "skills"
+    data_root = tmp_path / "data"
+    actor_home = tmp_path / "actor-home"
+    client_app_id = "school-sim"
+    account_id = "school-pm-001"
+    skill_name = "school-sim.actor.pm.m2.v1"
+    relative_report_path = "agent/tasks/task-owner-file-contract/REPORT.md"
+
+    _write_skill(
+        skills_root / "public" / "apps" / client_app_id / "school-sim-actor-pm",
+        name=skill_name,
+        description="public PM actor",
+        body="Write owner-aware task sidecars under the current Actor Home.",
+    )
+
+    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
+    runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(tmp_path / "frames"),
+    )
+    monkeypatch.setattr(root_module, "_skill_registry", registry)
+    monkeypatch.setattr(root_module, "_runtime", runtime)
+    monkeypatch.setattr(root_module.settings, "llm_execute_skills", False)
+
+    result = root_module.route_skill({
+        "task_id": "task-owner-file-contract",
+        "session_id": None,
+        "prompt": "write the task report",
+        "model": None,
+        "context": {
+            "skill": skill_name,
+            "clientAppId": client_app_id,
+            "upstreamUserId": account_id,
+        },
+        "user_id": "navigator-task-owner",
+        "tenant_id": None,
+        "events": [],
+        "started_at": 0.0,
+        "active_frame_id": None,
+        "skill_results": [],
+    })
+
+    frame = runtime.get_frame(result["active_frame_id"])
+    model = _FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "write_report",
+            "name": "write_file",
+            "args": {
+                "relative_path": relative_report_path,
+                "content": "owner-aware report",
+                "mode": "create",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "submit_owner_file",
+            "name": "submit_frame_result",
+            "args": {
+                "summary": "Owner-aware file contract verified.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime, data_root=data_root).run(
+        task_id="task-owner-file-contract",
+        frame_id=frame.frame_id,
+        prompt="write the task report",
+        account_id=account_id,
+        runtime_context={
+            "client_app_id": client_app_id,
+            "execution_policy": {
+                "directory_id": "dir-owner-file",
+                "workdir": str(actor_home),
+                "allowed_dirs": [str(actor_home)],
+            },
+        },
+    )
+
+    assert (actor_home / relative_report_path).read_text(encoding="utf-8") == "owner-aware report"
+    assert not (data_root / "accounts" / account_id / relative_report_path).exists()
+    assert runtime.get_frame(frame.frame_id).status == FrameStatus.COMPLETED

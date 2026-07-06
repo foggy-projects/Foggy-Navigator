@@ -173,7 +173,8 @@ class GeminiStreamRelayTest {
                 "worker-task-2",
                 "gemini-session-from-data",
                 "gemini-2.5-flash-lite",
-                5
+                5,
+                true
         );
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);

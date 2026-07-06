@@ -32,6 +32,7 @@ export interface QueryRequest {
   approval_policy?: CodexApprovalPolicy
   network_access_enabled?: boolean
   web_search_mode?: CodexWebSearchMode
+  business_runtime_context?: Record<string, unknown>
   additional_directories?: string[]
 }
 
@@ -72,6 +73,8 @@ export interface HealthResponse {
   codex_sdk_available: boolean
   codex_auth_configured?: boolean
   codex_auth_mode?: 'api_key' | 'codex_login' | 'none'
+  codex_biz_home_root_configured?: boolean
+  codex_biz_scoped_home_ready?: boolean
 }
 
 /**

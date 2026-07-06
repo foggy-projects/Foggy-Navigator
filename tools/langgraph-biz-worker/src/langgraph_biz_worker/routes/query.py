@@ -81,6 +81,8 @@ async def _event_generator(
         navigator_session_id = _resolve_session_id(request)
         context_id = _resolve_context_id(request)
         request_context = _context_with_context_id(request.context, context_id)
+        if request.allowed_tools is not None:
+            request_context["allowed_tools"] = request.allowed_tools
         fsscript = extract_fsscript_script(request_context)
         if fsscript is not None:
             async for event in get_fsscript_bridge().stream_events(

@@ -31,7 +31,7 @@ _HASH_RE = re.compile(r"[0-9a-fA-F]{4,40}")
 _RS = "\x1e"  # record separator
 _FS = "\x1f"  # field separator
 
-_MAX_FILE_SIZE = 1 * 1024 * 1024  # 1 MB — same as files module
+_MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB — same as files module
 
 
 def _validate_hash(h: str) -> str:

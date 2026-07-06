@@ -83,7 +83,7 @@ listening_pid() {
     | head -n 1
 }
 
-pid="`$(listening_pid)"
+pid="`$(listening_pid || true)"
 if [ -n "`$pid" ]; then
   echo "Stopping existing listener on port `$port (pid=`$pid)"
   kill "`$pid" || true
@@ -117,8 +117,8 @@ port="`$4"
 cd "`$worker_dir"
 export PYTHONPATH="`$worker_dir/src"
 export BIZ_WORKER_ENV_FILE="`$worker_dir/`$env_file"
-exec nohup "`$python_bin" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port "`$port" > "`$worker_dir/logs/worker-`$port.log" 2> "`$worker_dir/logs/worker-`$port-error.log" < /dev/null
-' bash "`$worker_dir" "`$env_file" "`$python_bin" "`$port" &
+nohup "`$python_bin" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port "`$port" > "`$worker_dir/logs/worker-`$port.log" 2> "`$worker_dir/logs/worker-`$port-error.log" < /dev/null &
+' bash "`$worker_dir" "`$env_file" "`$python_bin" "`$port"
 
 for _ in `$(seq 1 30); do
   if health="`$(curl -fsS "http://127.0.0.1:`$port/health" 2>/dev/null)"; then

@@ -1245,7 +1245,11 @@ public class SkillRegistryService {
         }
 
         StringBuilder md = new StringBuilder();
-        md.append("### ").append(functionId).append("@").append(versionId).append("\n\n");
+        md.append("### ").append(functionId);
+        if (StringUtils.hasText(versionId)) {
+            md.append(" (version ").append(versionId).append(")");
+        }
+        md.append("\n\n");
         if (StringUtils.hasText(function.getName())) {
             md.append("- Name: ").append(cleanInline(function.getName())).append("\n");
         }
@@ -1254,6 +1258,13 @@ public class SkillRegistryService {
         }
         md.append("- Approval required: ").append(Boolean.TRUE.equals(function.getApprovalRequired())).append("\n");
         md.append("- Idempotency required: ").append(Boolean.TRUE.equals(function.getIdempotencyRequired())).append("\n");
+        md.append("- Invoke contract: use `function_id` = `").append(cleanInline(functionId)).append("`");
+        if (StringUtils.hasText(versionId)) {
+            md.append("; `version` may be omitted or set to `").append(cleanInline(versionId)).append("`");
+        } else {
+            md.append("; `version` may be omitted");
+        }
+        md.append(". Do not strip suffixes such as `.v1` from the function id.\n");
         if (StringUtils.hasText(version.getLlmVisibleSummary())) {
             md.append("- When to call: ").append(cleanInline(version.getLlmVisibleSummary())).append("\n");
         }
@@ -1364,7 +1375,7 @@ public class SkillRegistryService {
     private void appendFunctionSummary(StringBuilder md, String tenantId, BusinessFunctionEntity function) {
         md.append("- ").append(function.getFunctionId());
         if (StringUtils.hasText(function.getCurrentVersion())) {
-            md.append("@").append(function.getCurrentVersion());
+            md.append(" (version ").append(function.getCurrentVersion()).append(")");
         }
         if (StringUtils.hasText(function.getName())) {
             md.append(": ").append(function.getName());
@@ -1380,6 +1391,15 @@ public class SkillRegistryService {
                     .filter(StringUtils::hasText)
                     .ifPresent(summary -> md.append(" ").append(summary.replace("\r", " ").replace("\n", " ")));
         }
+        md.append(" Invoke with function_id=`").append(cleanInline(function.getFunctionId())).append("`");
+        if (StringUtils.hasText(function.getCurrentVersion())) {
+            md.append("; version may be omitted or set to `")
+                    .append(cleanInline(function.getCurrentVersion()))
+                    .append("`");
+        } else {
+            md.append("; version may be omitted");
+        }
+        md.append(". Do not strip suffixes such as `.v1` from the function id.");
         md.append("\n");
     }
 

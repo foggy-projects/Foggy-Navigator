@@ -74,6 +74,19 @@ class BizWorkerPoolServiceTest {
     }
 
     @Test
+    void registerWorkerIdentity_rejectsClientAppOwner() {
+        RegisterWorkerIdentityForm form = new RegisterWorkerIdentityForm();
+        form.setWorkerId("worker-1");
+        form.setWorkerBackend("LANGGRAPH_BIZ");
+        form.setBaseUrl("http://worker");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.registerWorkerIdentity(ResourceOwnerType.CLIENT_APP, "capp-1", form));
+
+        verify(identityRepository, never()).save(any());
+    }
+
+    @Test
     void createPool_rejects_duplicate_pool_id() {
         when(poolRepository.findByPoolId("pool-1")).thenReturn(Optional.of(pool("tenant-1")));
 
@@ -137,6 +150,18 @@ class BizWorkerPoolServiceTest {
     }
 
     @Test
+    void createPool_rejectsClientAppOwner() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.createPool(
+                        "tenant-1",
+                        ResourceOwnerType.CLIENT_APP,
+                        "capp-1",
+                        createPoolForm("pool-1")));
+
+        verify(poolRepository, never()).save(any());
+    }
+
+    @Test
     void addMember_rejects_upstreamSystem_worker_from_other_owner() {
         when(poolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
                 .thenReturn(Optional.of(pool("tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1")));
@@ -145,6 +170,19 @@ class BizWorkerPoolServiceTest {
 
         assertThrows(SecurityException.class,
                 () -> service.addMember("tenant-1", "pool-1", addMemberForm("worker-1")));
+    }
+
+    @Test
+    void addMember_rejectsUpstreamSystemWorkerInPlatformPool() {
+        when(poolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+                .thenReturn(Optional.of(pool("tenant-1", ResourceOwnerType.PLATFORM, BizWorkerPoolService.PLATFORM_OWNER_ID)));
+        BizWorkerIdentityEntity worker = worker("LANGGRAPH_BIZ", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
+        when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker));
+
+        assertThrows(SecurityException.class,
+                () -> service.addMember("tenant-1", "pool-1", addMemberForm("worker-1")));
+
+        verify(memberRepository, never()).save(any());
     }
 
     private CreateWorkerPoolForm createPoolForm(String poolId) {

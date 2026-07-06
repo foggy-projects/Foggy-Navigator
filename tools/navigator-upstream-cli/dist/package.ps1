@@ -48,6 +48,7 @@ catch {
 }
 $features = @(
     "config-check",
+    "auth-login",
     "runtime-token",
     "owner-smoke",
     "agent-readiness",
@@ -83,7 +84,9 @@ $features = @(
     "worker-host-suite",
     "navi-routed-codex-config",
     "codex-biz-worker-route",
-    "codex-biz-runtime-options"
+    "codex-biz-runtime-options",
+    "ask-allowed-tools",
+    "ask-directory-actionable-error"
 )
 
 Push-Location $RepoRoot
@@ -146,4 +149,5 @@ Write-Host "SHA256:  $sha" -ForegroundColor Green
 
 if ($Upload) {
     & powershell -ExecutionPolicy Bypass -File (Join-Path $ScriptDir "upload.ps1") -Version $version
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $ScriptDir "package-skill.ps1") -Version $version -Upload
 }

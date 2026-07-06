@@ -22,6 +22,7 @@ import {
   syncWorkerSessionsUnified,
 } from './unifiedTask'
 import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig, SessionSearchPage, DirectoryMilestone, MilestonePageResult } from '@/types'
+import type { SessionFileHintsResponse } from '@/types/sessionFileHints'
 
 // ===== Worker API =====
 
@@ -382,6 +383,14 @@ export async function getTask(taskId: string): Promise<ClaudeTask> {
     throw new Error(`Task not found: ${taskId}`)
   }
   return task as unknown as ClaudeTask
+}
+
+export async function getCodexTaskFileHints(taskId: string): Promise<SessionFileHintsResponse> {
+  const rx = (await client.get(
+    `/codex-tasks/${taskId}/file-hints`,
+    { suppressErrorMessage: true } as any,
+  )) as unknown as RX<SessionFileHintsResponse>
+  return rx.data
 }
 
 export async function listTasks(): Promise<ClaudeTask[]> {

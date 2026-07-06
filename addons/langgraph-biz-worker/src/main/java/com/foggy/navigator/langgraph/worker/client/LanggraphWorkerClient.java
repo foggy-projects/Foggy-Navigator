@@ -1,5 +1,6 @@
 package com.foggy.navigator.langgraph.worker.client;
 
+import com.foggy.navigator.langgraph.worker.model.dto.LanggraphWorkerHealthDTO;
 import io.netty.channel.ChannelOption;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;
@@ -67,6 +68,17 @@ public class LanggraphWorkerClient {
                 .retrieve()
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
                 .doOnError(e -> log.warn("Health check failed for langgraph worker {}: {}", workerId, e.getMessage()));
+    }
+
+    /**
+     * Typed health check, including Worker capability contracts exposed by /health.capabilities.
+     */
+    public Mono<LanggraphWorkerHealthDTO> healthCheckTyped() {
+        return webClient.get()
+                .uri("/health")
+                .retrieve()
+                .bodyToMono(LanggraphWorkerHealthDTO.class)
+                .doOnError(e -> log.warn("Typed health check failed for langgraph worker {}: {}", workerId, e.getMessage()));
     }
 
     /**

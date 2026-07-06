@@ -26,6 +26,14 @@
         <button class="tab-add" @click="$emit('add-tab')" title="新建终端">+</button>
       </div>
       <div class="tab-actions">
+        <button
+          v-if="!minimized"
+          :disabled="uploadingImage || tabs.length === 0"
+          @click="openImagePicker"
+          title="发送图片到 Codex"
+        >
+          <Picture class="action-icon" />
+        </button>
         <button @click="$emit('sync')" title="同步会话">&#8635;</button>
         <button @click="$emit('toggle-minimize')" :title="minimized ? '展开' : '最小化'">
           {{ minimized ? '&#9650;' : '&#9660;' }}
@@ -37,6 +45,14 @@
         <button @click="$emit('close-panel')" title="关闭面板">&times;</button>
       </div>
     </div>
+    <input
+      ref="imageInputRef"
+      class="sr-only"
+      type="file"
+      accept="image/png,image/jpeg,image/webp"
+      multiple
+      @change="handleImageSelect"
+    >
 
     <!-- Terminal content area -->
     <div v-show="!minimized" class="terminal-content">
@@ -46,6 +62,8 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
+import { Picture } from '@element-plus/icons-vue'
 import type { SshTerminalTab } from '@/composables/useWorkspaceContext'
 
 defineProps<{
@@ -55,6 +73,7 @@ defineProps<{
   height: number
   tabs: SshTerminalTab[]
   activeTabId: string | null
+  uploadingImage?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -67,7 +86,23 @@ const emit = defineEmits<{
   'close-panel': []
   'resize': [height: number]
   'sync': []
+  'attach-image': [files: File[]]
 }>()
+
+const imageInputRef = ref<HTMLInputElement | null>(null)
+
+function openImagePicker() {
+  imageInputRef.value?.click()
+}
+
+function handleImageSelect(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  if (files.length > 0) {
+    emit('attach-image', files)
+  }
+  input.value = ''
+}
 
 function handleTabBarDblClick() {
   emit('toggle-minimize')
@@ -217,6 +252,29 @@ function startResize(e: MouseEvent) {
 
 .tab-actions button:hover {
   color: #d4d4d4;
+}
+
+.tab-actions button:disabled {
+  color: #555;
+  cursor: not-allowed;
+}
+
+.action-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .terminal-content {

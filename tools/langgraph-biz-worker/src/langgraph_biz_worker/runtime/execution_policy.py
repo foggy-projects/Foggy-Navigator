@@ -55,6 +55,19 @@ _SKILL_MATERIAL_TOOL_NAMES = frozenset({
     "invoke_business_skill",
     "invoke_business_agent",
 })
+_BUSINESS_FUNCTION_TOOL_NAMES = frozenset({
+    "list_business_functions",
+    "get_business_function_schema",
+    "invoke_business_function",
+})
+_TOOL_NAME_ALIASES: dict[str, frozenset[str]] = {
+    "business.functions.list": frozenset({"list_business_functions"}),
+    "business.functions.schema": frozenset({"get_business_function_schema"}),
+    "business.functions.invoke": frozenset({"invoke_business_function"}),
+    "business.functions": _BUSINESS_FUNCTION_TOOL_NAMES,
+    "business.functions.*": _BUSINESS_FUNCTION_TOOL_NAMES,
+    "business.*": _BUSINESS_FUNCTION_TOOL_NAMES,
+}
 
 
 @dataclass(frozen=True)
@@ -120,8 +133,6 @@ class ExecutionPolicy:
 
     def allows_tool(self, tool_name: str) -> bool:
         if self.allowed_tools is None:
-            return True
-        if tool_name == "invoke_business_agent" and "invoke_business_skill" in self.allowed_tools:
             return True
         if tool_name in _SKILL_DISCOVERY_TOOL_NAMES and self.allowed_tools & _SKILL_MATERIAL_TOOL_NAMES:
             return True
@@ -203,9 +214,14 @@ def copy_execution_policy_from_context(
     """Copy visible policy aliases into hidden runtime context when absent there."""
 
     merged = dict(runtime_context or {})
-    if has_execution_policy(merged) or not has_execution_policy(visible_context):
+    runtime_policy = _policy_payload(merged)
+    if not has_execution_policy(visible_context):
         return merged
-    merged["execution_policy"] = _policy_payload(visible_context)
+    visible_policy = _policy_payload(visible_context or {})
+    if not runtime_policy:
+        merged["execution_policy"] = visible_policy
+        return merged
+    merged["execution_policy"] = _merge_policy_payloads(runtime_policy, visible_policy)
     return merged
 
 
@@ -238,6 +254,27 @@ def _policy_payload(context: Mapping[str, Any]) -> dict[str, Any]:
         if key in context:
             payload.setdefault(key, context[key])
     return payload
+
+
+def _merge_policy_payloads(runtime_policy: Mapping[str, Any], visible_policy: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge policy payloads by alias family, preserving runtime values."""
+
+    merged: dict[str, Any] = {}
+    for canonical_key, aliases in (
+        ("workdir", WORKDIR_KEYS),
+        ("allowed_dirs", ALLOWED_DIRS_KEYS),
+        ("allowed_tools", ALLOWED_TOOLS_KEYS),
+        ("read_only", READ_ONLY_KEYS),
+        ("quota_policy", QUOTA_POLICY_KEYS),
+        ("retention_policy", RETENTION_POLICY_KEYS),
+        ("concurrency_policy", CONCURRENCY_POLICY_KEYS),
+    ):
+        value = _first_value(runtime_policy, aliases)
+        if value is None:
+            value = _first_value(visible_policy, aliases)
+        if value is not None:
+            merged[canonical_key] = value
+    return merged
 
 
 def _first_value(source: Mapping[str, Any], keys: Sequence[str]) -> Any:
@@ -287,7 +324,8 @@ def _tool_names(value: Any) -> frozenset[str]:
     for item in raw_values:
         if not isinstance(item, str) or not item.strip():
             raise ValueError("INVALID_EXECUTION_POLICY: allowed_tools must contain non-empty strings")
-        names.add(item.strip())
+        normalized = item.strip()
+        names.update(_TOOL_NAME_ALIASES.get(normalized, frozenset({normalized})))
     return frozenset(names)
 
 

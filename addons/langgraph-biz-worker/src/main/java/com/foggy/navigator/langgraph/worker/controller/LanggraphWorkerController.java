@@ -84,8 +84,8 @@ public class LanggraphWorkerController {
         assertOwned(worker);
         var client = workerService.createClient(worker);
         try {
-            client.healthCheck().block(java.time.Duration.ofSeconds(10));
-            worker.setStatus("ONLINE");
+            var health = client.healthCheckTyped().block(java.time.Duration.ofSeconds(10));
+            workerService.applyHealthSnapshot(worker, health);
         } catch (Exception e) {
             worker.setStatus("OFFLINE");
         }

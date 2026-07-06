@@ -315,7 +315,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals(CONTEXT_ID, context.get("context_id"));
         assertEquals(SESSION_ID, context.get("session_id"));
         assertFalse(context.containsKey("recentConversation"));
-        verify(sessionMessageRepository, never()).findBySessionIdOrderByCreatedAtDesc(eq(SESSION_ID), any());
+        verify(sessionMessageRepository, never()).findBySessionIdOrderByCreatedAtDescIdDesc(eq(SESSION_ID), any());
 
         verify(sessionManager, times(2)).addMessage(eq(SESSION_ID), argThat(message ->
                 message.getRole() != null

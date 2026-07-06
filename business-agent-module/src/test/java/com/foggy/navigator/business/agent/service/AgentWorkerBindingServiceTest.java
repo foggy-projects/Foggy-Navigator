@@ -91,6 +91,32 @@ class AgentWorkerBindingServiceTest {
     }
 
     @Test
+    void bind_rejectsOtherClientAppPoolFromClientAppPlane() {
+        when(workerPoolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+                .thenReturn(Optional.of(workerPool("pool-1", ResourceOwnerType.CLIENT_APP, "capp-2")));
+
+        assertThrows(SecurityException.class,
+                () -> service.bind("tenant-1", "capp-1", "agent-1", bindForm("pool-1")));
+
+        verify(bindingRepository, never()).save(any());
+    }
+
+    @Test
+    void bind_rejectsOtherClientAppOwnedAgentFromClientAppPlane() {
+        CodingAgentEntity agent = clientAppAgent();
+        agent.setOwnerId("capp-2");
+        agent.setClientAppId("capp-2");
+        when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))
+                .thenReturn(Optional.of(agent));
+
+        assertThrows(SecurityException.class,
+                () -> service.bind("tenant-1", "capp-1", "agent-1", bindForm("pool-1")));
+
+        verify(workerPoolRepository, never()).findByPoolIdAndTenantId(anyString(), anyString());
+        verify(bindingRepository, never()).save(any());
+    }
+
+    @Test
     void setDefault_updatesAgentWorkerIdAndEnsuresBinding() {
         CodingAgentEntity agent = clientAppAgent();
         when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1"))

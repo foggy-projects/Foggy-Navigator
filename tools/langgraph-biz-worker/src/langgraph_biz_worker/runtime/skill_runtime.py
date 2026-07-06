@@ -62,6 +62,9 @@ class MaxNestingDepthExceeded(Exception):
 
 # Default maximum nesting depth for Skill calls.
 DEFAULT_MAX_NESTING_DEPTH = 5
+# Default maximum nested Agent delegation depth. Root starts at agent depth 0,
+# so the default allows one direct child Agent and blocks deeper Agent nesting.
+DEFAULT_MAX_AGENT_NESTING_DEPTH = 1
 PERSISTENT_FRAME_MAX_TURN_RESULTS = 20
 PERSISTENT_FRAME_MAX_RECENT_SUMMARIES = 10
 PERSISTENT_FRAME_MAX_PRIVATE_MESSAGES = 40
@@ -134,12 +137,14 @@ class SkillRuntime:
         journal: FileFrameJournal | None = None,
         report_generator: FrameExecutionReportGenerator | None = None,
         max_nesting_depth: int = DEFAULT_MAX_NESTING_DEPTH,
+        max_agent_nesting_depth: int = DEFAULT_MAX_AGENT_NESTING_DEPTH,
     ) -> None:
         self.store = frame_store or FrameStore()
         self.registry = skill_registry or SkillRegistry()
         self._journal = journal
         self._report_generator = report_generator or _report_generator_from_journal(journal)
         self._max_nesting_depth = max_nesting_depth
+        self._max_agent_nesting_depth = max_agent_nesting_depth
 
     # -- Frame creation ------------------------------------------------------
 
@@ -1263,9 +1268,9 @@ class SkillRuntime:
         legacy_skill_id: str | None = None,
     ) -> str:
         """Standard delegated Agent frame invocation with depth check."""
-        depth = self.get_nesting_depth(parent_frame_id)
-        if depth >= self._max_nesting_depth:
-            raise MaxNestingDepthExceeded(depth, self._max_nesting_depth)
+        agent_depth = self.get_agent_nesting_depth(parent_frame_id)
+        if agent_depth >= self._max_agent_nesting_depth:
+            raise MaxNestingDepthExceeded(agent_depth, self._max_agent_nesting_depth)
 
         parent = self._get_frame(parent_frame_id)
         self.mark_waiting_child(parent_frame_id)
@@ -1286,8 +1291,11 @@ class SkillRuntime:
         )
 
         logger.info(
-            "Child agent invoked: parent=%s child=%s agent=%s depth=%d",
-            parent_frame_id, child_frame_id, agent_id or frame_name or legacy_skill_id or "", depth + 1,
+            "Child agent invoked: parent=%s child=%s agent=%s agent_depth=%d",
+            parent_frame_id,
+            child_frame_id,
+            agent_id or frame_name or legacy_skill_id or "",
+            agent_depth + 1,
         )
         return child_frame_id
 
@@ -1337,9 +1345,21 @@ class SkillRuntime:
         """Return nesting depth of a frame (root frame = 0)."""
         return len(self.get_call_stack(frame_id)) - 1
 
+    def get_agent_nesting_depth(self, frame_id: str) -> int:
+        """Return delegated Agent nesting depth for a frame (root/non-agent = 0)."""
+        return sum(
+            1
+            for frame in self.get_call_stack(frame_id)
+            if frame.frame_kind == FrameKind.AGENT and frame.parent_frame_id is not None
+        )
+
     @property
     def max_nesting_depth(self) -> int:
         return self._max_nesting_depth
+
+    @property
+    def max_agent_nesting_depth(self) -> int:
+        return self._max_agent_nesting_depth
 
     # -- Queries -------------------------------------------------------------
 

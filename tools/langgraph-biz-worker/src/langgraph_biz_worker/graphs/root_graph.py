@@ -76,7 +76,21 @@ _skill_registry = SkillRegistry(data_root=Path(_data_root))
 _skill_registry.load()
 _journal = FileFrameJournal(_data_root)
 
-_runtime = SkillRuntime(frame_store=_frame_store, skill_registry=_skill_registry, journal=_journal)
+
+def _build_skill_runtime(
+    frame_store: FrameStore,
+    skill_registry: SkillRegistry,
+    journal: FileFrameJournal,
+) -> SkillRuntime:
+    return SkillRuntime(
+        frame_store=frame_store,
+        skill_registry=skill_registry,
+        journal=journal,
+        max_agent_nesting_depth=settings.max_agent_nesting_depth,
+    )
+
+
+_runtime = _build_skill_runtime(_frame_store, _skill_registry, _journal)
 
 ROOT_SKILL_ID = "system.root"
 ROOT_FRAME_OPEN_CONTENT = "Opening conversation root frame"
@@ -406,7 +420,7 @@ def _system_root_manifest() -> SkillManifest:
             "读取业务技能说明，并在当前 Root 上下文中继续推理和调用业务函数；"
             "不要仅因为技能或目录名称包含 agent 就打开子 Agent frame。"
             "只有用户明确要求使用子 Agent/独立代理，或任务确实需要与 Root 隔离的"
-            "独立生命周期、独立报告、长任务等待或多层委派时，才使用 invoke_business_agent。"
+            "独立生命周期、独立报告、长任务等待或显式多 Agent 协作时，才使用 invoke_business_agent。"
             "附件默认只是元数据或 URL；只有在用户要求检查图片/文件内容，"
             "或必须从附件中提取字段时，才使用 analyze_attachment。"
             "Excel 或 CSV 表格内容应使用 analyze_spreadsheet，不要当作图片分析。"

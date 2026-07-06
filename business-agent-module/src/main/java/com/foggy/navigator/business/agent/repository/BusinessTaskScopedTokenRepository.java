@@ -4,6 +4,7 @@ import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEn
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 @Repository
@@ -17,5 +18,13 @@ public interface BusinessTaskScopedTokenRepository extends JpaRepository<Busines
 
     Optional<BusinessTaskScopedTokenEntity> findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
             String workerTaskId, String tenantId, String clientAppId);
+
+    boolean existsByTenantIdAndClientAppIdAndUpstreamUserIdAndSessionIdAndStatusAndExpiresAtAfter(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String sessionId,
+            String status,
+            LocalDateTime expiresAt);
 
 }

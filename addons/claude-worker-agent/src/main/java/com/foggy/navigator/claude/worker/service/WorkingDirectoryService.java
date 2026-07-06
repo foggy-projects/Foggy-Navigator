@@ -219,6 +219,9 @@ public class WorkingDirectoryService {
         if (form.getAgentTeamsConfig() != null) {
             entity.setAgentTeamsConfig(form.getAgentTeamsConfig().isEmpty() ? null : form.getAgentTeamsConfig());
         }
+        if (form.getDirectoryType() != null) {
+            applyDirectoryTypeChange(userId, entity, form.getDirectoryType());
+        }
         // projectTaskPrompt 仅 PROJECT 类型有效
         if (form.getProjectTaskPrompt() != null && "PROJECT".equals(entity.getDirectoryType())) {
             entity.setProjectTaskPrompt(form.getProjectTaskPrompt().isEmpty() ? null : form.getProjectTaskPrompt());
@@ -227,6 +230,10 @@ public class WorkingDirectoryService {
         if (form.getParentProjectId() != null) {
             if (form.getParentProjectId().isEmpty()) {
                 entity.setParentProjectId(null);
+            } else if ("PROJECT".equals(entity.getDirectoryType())) {
+                throw new IllegalArgumentException("PROJECT directory cannot have a parentProjectId");
+            } else if (form.getParentProjectId().equals(entity.getDirectoryId())) {
+                throw new IllegalArgumentException("Directory cannot belong to itself");
             } else {
                 // 验证目标是 PROJECT 类型
                 WorkingDirectoryEntity parent = directoryRepository
@@ -274,6 +281,34 @@ public class WorkingDirectoryService {
         directoryRepository.save(entity);
         log.info("Working directory updated: directoryId={}", directoryId);
         return toDTO(entity);
+    }
+
+    private void applyDirectoryTypeChange(String userId, WorkingDirectoryEntity entity, String directoryType) {
+        if (!"STANDARD".equals(directoryType) && !"PROJECT".equals(directoryType)) {
+            throw new IllegalArgumentException("Invalid directoryType: " + directoryType);
+        }
+        if (directoryType.equals(entity.getDirectoryType())) {
+            return;
+        }
+        if (Boolean.TRUE.equals(entity.getWorktree()) && "PROJECT".equals(directoryType)) {
+            throw new IllegalArgumentException("Worktree directory cannot be converted to PROJECT");
+        }
+        if ("PROJECT".equals(directoryType)) {
+            entity.setDirectoryType("PROJECT");
+            entity.setParentProjectId(null);
+            return;
+        }
+
+        entity.setDirectoryType("STANDARD");
+        entity.setParentProjectId(null);
+        entity.setProjectTaskPrompt(null);
+
+        List<WorkingDirectoryEntity> children = directoryRepository
+                .findByParentProjectIdAndUserIdOrderByProjectNameAsc(entity.getDirectoryId(), userId);
+        if (!children.isEmpty()) {
+            children.forEach(child -> child.setParentProjectId(null));
+            directoryRepository.saveAll(children);
+        }
     }
 
     /**

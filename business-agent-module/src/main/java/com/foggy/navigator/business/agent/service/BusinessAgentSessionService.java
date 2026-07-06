@@ -34,6 +34,7 @@ import java.util.stream.Collectors;
 public class BusinessAgentSessionService {
 
     public static final String STATUS_ACTIVE = "ACTIVE";
+    public static final String CONTEXT_WORKER_MISMATCH = "CONTEXT_WORKER_MISMATCH";
     private static final String CONTEXT_ID_FORMAT = "bctx_yyyyMMdd_<hash>_<id>";
     private static final Pattern CONTEXT_ID_PATTERN =
             Pattern.compile("^bctx_(\\d{8})_[0-9a-f]{2}_[A-Za-z0-9._-]+$");
@@ -59,9 +60,13 @@ public class BusinessAgentSessionService {
                 requestedContextId,
                 task.getSessionId(),
                 task.getSkillId(),
-                task.getSkillId(),
+                task.getAgentId(),
                 task.getTaskId(),
-                clientContextJson);
+                clientContextJson,
+                task.getDirectoryId(),
+                task.getWorkerId(),
+                task.getWorkerProviderType(),
+                task.getModelConfigId());
     }
 
     @Transactional
@@ -84,7 +89,11 @@ public class BusinessAgentSessionService {
                 skillId,
                 skillId,
                 taskId,
-                clientContextJson);
+                clientContextJson,
+                null,
+                null,
+                null,
+                null);
     }
 
     @Transactional(readOnly = true)
@@ -123,6 +132,38 @@ public class BusinessAgentSessionService {
             throw new IllegalArgumentException("business agent session context mismatch");
         }
         return normalizedContextId;
+    }
+
+    @Transactional(readOnly = true)
+    public void validateContextResourceCompatibility(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String contextId,
+            String agentId,
+            String skillId,
+            String directoryId,
+            String modelConfigId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(clientAppId, "clientAppId is required");
+        requireText(upstreamUserId, "upstreamUserId is required");
+
+        String normalizedContextId = normalizeContextId(contextId);
+        if (normalizedContextId == null) {
+            return;
+        }
+
+        BusinessAgentSessionEntity entity = sessionRepository
+                .findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
+                        tenantId, clientAppId, upstreamUserId, normalizedContextId)
+                .orElse(null);
+        if (entity == null) {
+            return;
+        }
+
+        validateAgentCompatibility(entity, agentId, skillId, normalizedContextId);
+        validateBoundResource("directoryId", entity.getDirectoryId(), directoryId, normalizedContextId);
+        validateBoundResource("modelConfigId", entity.getModelConfigId(), modelConfigId, normalizedContextId);
     }
 
     @Transactional(readOnly = true)
@@ -255,7 +296,11 @@ public class BusinessAgentSessionService {
             String skillId,
             String agentId,
             String taskId,
-            String clientContextJson) {
+            String clientContextJson,
+            String directoryId,
+            String workerId,
+            String workerProviderType,
+            String modelConfigId) {
         requireText(tenantId, "tenantId is required");
         requireText(clientAppId, "clientAppId is required");
         requireText(upstreamUserId, "upstreamUserId is required");
@@ -291,6 +336,10 @@ public class BusinessAgentSessionService {
         entity.setAccountId(StringUtils.hasText(accountId) ? accountId : upstreamUserId);
         entity.setSkillId(skillId);
         entity.setAgentId(agentId);
+        setIfPresent(entity::setDirectoryId, directoryId);
+        setIfPresent(entity::setWorkerId, workerId);
+        setIfPresent(entity::setWorkerProviderType, workerProviderType);
+        setIfPresent(entity::setModelConfigId, modelConfigId);
         entity.setLatestTaskId(taskId);
         entity.setStatus(STATUS_ACTIVE);
         if (clientContextJson != null) {
@@ -340,6 +389,57 @@ public class BusinessAgentSessionService {
         userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
     }
 
+    private void validateAgentCompatibility(
+            BusinessAgentSessionEntity entity,
+            String requestedAgentId,
+            String requestedSkillId,
+            String contextId) {
+        String existingAgentId = trimToNull(entity.getAgentId());
+        if (existingAgentId == null) {
+            return;
+        }
+        String normalizedRequestedAgentId = trimToNull(requestedAgentId);
+        if (existingAgentId.equals(normalizedRequestedAgentId)) {
+            return;
+        }
+        // Older BusinessAgent sessions stored skillId in agentId. Allow one continuation to repair that row.
+        String normalizedRequestedSkillId = trimToNull(requestedSkillId);
+        if (existingAgentId.equals(normalizedRequestedSkillId)
+                && existingAgentId.equals(trimToNull(entity.getSkillId()))) {
+            return;
+        }
+        throw new IllegalArgumentException(CONTEXT_WORKER_MISMATCH
+                + ": agentId " + printable(normalizedRequestedAgentId)
+                + " conflicts with context-bound agentId " + existingAgentId
+                + " for contextId " + contextId);
+    }
+
+    private void validateBoundResource(
+            String fieldName,
+            String existingValue,
+            String requestedValue,
+            String contextId) {
+        String normalizedExisting = trimToNull(existingValue);
+        if (normalizedExisting == null) {
+            return;
+        }
+        String normalizedRequested = trimToNull(requestedValue);
+        if (normalizedExisting.equals(normalizedRequested)) {
+            return;
+        }
+        throw new IllegalArgumentException(CONTEXT_WORKER_MISMATCH
+                + ": " + fieldName + " " + printable(normalizedRequested)
+                + " conflicts with context-bound " + fieldName + " " + normalizedExisting
+                + " for contextId " + contextId);
+    }
+
+    private void setIfPresent(java.util.function.Consumer<String> setter, String value) {
+        String normalized = trimToNull(value);
+        if (normalized != null) {
+            setter.accept(normalized);
+        }
+    }
+
     public static String generateContextId() {
         String entropy = UUID.randomUUID().toString().replace("-", "").toLowerCase(Locale.ROOT);
         String shard = entropy.substring(0, 2);
@@ -375,5 +475,16 @@ public class BusinessAgentSessionService {
         if (!StringUtils.hasText(value)) {
             throw new IllegalArgumentException(message);
         }
+    }
+
+    private String trimToNull(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private String printable(String value) {
+        return value == null ? "<none>" : value;
     }
 }

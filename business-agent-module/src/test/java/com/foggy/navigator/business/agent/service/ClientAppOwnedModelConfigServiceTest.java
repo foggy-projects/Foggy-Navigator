@@ -136,6 +136,23 @@ class ClientAppOwnedModelConfigServiceTest {
         assertEquals("cfg-owned", dto.getModelConfigId());
     }
 
+    @Test
+    void rotateKey_can_clear_owned_model_key() {
+        ClientAppModelConfigGrantEntity grant = ownedGrant("cfg-owned");
+        when(grantRepository.findByClientAppIdAndModelConfigId("capp-1", "cfg-owned"))
+                .thenReturn(Optional.of(grant));
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setClearApiKey(true);
+
+        ClientAppModelConfigGrantDTO dto = service.rotateKey("tenant-1", "capp-1", "cfg-owned", form);
+
+        ArgumentCaptor<LlmModelConfigForm> captor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
+        verify(llmModelManager).updateModelConfig(eq("cfg-owned"), captor.capture());
+        assertTrue(Boolean.TRUE.equals(captor.getValue().getClearApiKey()));
+        assertNull(captor.getValue().getApiKey());
+        assertEquals("cfg-owned", dto.getModelConfigId());
+    }
+
     private ClientAppModelConfigForm createForm() {
         ClientAppModelConfigForm form = new ClientAppModelConfigForm();
         form.setName("Upstream GPT");

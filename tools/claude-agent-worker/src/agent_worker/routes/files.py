@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["files"], dependencies=[Depends(verify_token)])
 
-_MAX_FILE_SIZE = 1 * 1024 * 1024  # 1 MB
+_MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 _MAX_RAW_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 _MAX_DIR_ENTRIES = 2000
 _BINARY_CHECK_SIZE = 8 * 1024  # 8 KB

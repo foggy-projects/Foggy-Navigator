@@ -62,6 +62,11 @@ class BusinessAgentSessionServiceTest {
         assertEquals("upstream_01", result.getUpstreamUserId());
         assertEquals("upstream_01", result.getAccountId());
         assertEquals("skill_01", result.getSkillId());
+        assertEquals("agent_01", result.getAgentId());
+        assertEquals("dir_01", result.getDirectoryId());
+        assertEquals("worker_01", result.getWorkerId());
+        assertEquals("codex-biz-worker", result.getWorkerProviderType());
+        assertEquals("model_01", result.getModelConfigId());
         assertEquals("bt_01", result.getLatestTaskId());
         assertEquals(BusinessAgentSessionService.STATUS_ACTIVE, result.getStatus());
 
@@ -81,6 +86,55 @@ class BusinessAgentSessionServiceTest {
                 () -> service.bindTask(task(), CONTEXT_ID_2, null));
         assertTrue(ex.getMessage().contains("context mismatch"));
         verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void validateContextResourceCompatibility_rejectsDirectoryMismatch() {
+        BusinessAgentSessionEntity existing = session(CONTEXT_ID_1, "session_01");
+        existing.setAgentId("agent_01");
+        existing.setDirectoryId("dir_01");
+        existing.setModelConfigId("model_01");
+        when(sessionRepository.findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
+                "tenant_01", "app_01", "upstream_01", CONTEXT_ID_1))
+                .thenReturn(Optional.of(existing));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> service.validateContextResourceCompatibility(
+                        "tenant_01", "app_01", "upstream_01", CONTEXT_ID_1,
+                        "agent_01", "skill_01", "dir_02", "model_01"));
+
+        assertTrue(ex.getMessage().contains(BusinessAgentSessionService.CONTEXT_WORKER_MISMATCH));
+        assertTrue(ex.getMessage().contains("directoryId dir_02"));
+    }
+
+    @Test
+    void validateContextResourceCompatibility_allowsSameResources() {
+        BusinessAgentSessionEntity existing = session(CONTEXT_ID_1, "session_01");
+        existing.setAgentId("agent_01");
+        existing.setDirectoryId("dir_01");
+        existing.setModelConfigId("model_01");
+        when(sessionRepository.findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
+                "tenant_01", "app_01", "upstream_01", CONTEXT_ID_1))
+                .thenReturn(Optional.of(existing));
+
+        assertDoesNotThrow(() -> service.validateContextResourceCompatibility(
+                "tenant_01", "app_01", "upstream_01", CONTEXT_ID_1,
+                "agent_01", "skill_01", "dir_01", "model_01"));
+    }
+
+    @Test
+    void validateContextResourceCompatibility_allowsLegacySkillIdStoredAsAgentId() {
+        BusinessAgentSessionEntity existing = session(CONTEXT_ID_1, "session_01");
+        existing.setAgentId("skill_01");
+        existing.setDirectoryId("dir_01");
+        existing.setModelConfigId("model_01");
+        when(sessionRepository.findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
+                "tenant_01", "app_01", "upstream_01", CONTEXT_ID_1))
+                .thenReturn(Optional.of(existing));
+
+        assertDoesNotThrow(() -> service.validateContextResourceCompatibility(
+                "tenant_01", "app_01", "upstream_01", CONTEXT_ID_1,
+                "agent_01", "skill_01", "dir_01", "model_01"));
     }
 
     @Test
@@ -204,6 +258,11 @@ class BusinessAgentSessionServiceTest {
         task.setUpstreamUserId("upstream_01");
         task.setSessionId("session_01");
         task.setSkillId("skill_01");
+        task.setAgentId("agent_01");
+        task.setDirectoryId("dir_01");
+        task.setWorkerId("worker_01");
+        task.setWorkerProviderType("codex-biz-worker");
+        task.setModelConfigId("model_01");
         return task;
     }
 

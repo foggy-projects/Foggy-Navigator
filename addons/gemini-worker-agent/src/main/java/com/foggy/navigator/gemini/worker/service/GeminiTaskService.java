@@ -17,6 +17,7 @@ import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
 import com.foggy.navigator.gemini.worker.model.dto.GeminiTaskDTO;
 import com.foggy.navigator.gemini.worker.model.entity.GeminiTaskEntity;
 import com.foggy.navigator.gemini.worker.model.form.CreateGeminiTaskForm;
@@ -293,13 +294,23 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
     @Transactional
     public void recordWorkerProgress(String taskId, String workerTaskId, String geminiSessionId,
                                      String model, Integer ackSeq) {
+        recordWorkerProgress(taskId, workerTaskId, geminiSessionId, model, ackSeq, false);
+    }
+
+    @Transactional
+    public void recordWorkerProgress(String taskId, String workerTaskId, String geminiSessionId,
+                                     String model, Integer ackSeq, boolean userVisibleOutput) {
         GeminiTaskEntity entity = getTaskEntity(taskId);
         applyWorkerMetadata(entity, workerTaskId, geminiSessionId, model);
         if (ackSeq != null) {
             Integer current = entity.getLastAckedSeq();
             entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
         }
-        entity.setLastAliveAt(LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        entity.setLastAliveAt(now);
+        if (userVisibleOutput) {
+            entity.setLastOutputAt(now);
+        }
         persistTask(entity);
     }
 
@@ -317,6 +328,9 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
         entity.setDurationMs(durationMs);
         entity.setNumTurns(numTurns);
         entity.setStatus("COMPLETED");
+        LocalDateTime now = LocalDateTime.now();
+        entity.setLastAliveAt(now);
+        entity.setLastOutputAt(now);
         persistTask(entity);
         publishStatusChange(entity, previousStatus);
     }
@@ -328,6 +342,9 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
         applyWorkerMetadata(entity, workerTaskId, geminiSessionId, null);
         entity.setErrorMessage(errorMessage);
         entity.setStatus("FAILED");
+        LocalDateTime now = LocalDateTime.now();
+        entity.setLastAliveAt(now);
+        entity.setLastOutputAt(now);
         persistTask(entity);
         publishStatusChange(entity, previousStatus);
     }
@@ -520,6 +537,7 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
         projection.setErrorMessage(entity.getErrorMessage());
         projection.setLastAckedSeq(entity.getLastAckedSeq());
         projection.setLastAliveAt(entity.getLastAliveAt());
+        projection.setLastOutputAt(entity.getLastOutputAt());
         projection.setSource(entity.getSource());
         projection.setCreatedAt(entity.getCreatedAt());
         projection.setUpdatedAt(entity.getUpdatedAt());
@@ -587,6 +605,12 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
                 .resultText(entity.getResultText())
                 .errorMessage(entity.getErrorMessage())
                 .lastAckedSeq(entity.getLastAckedSeq())
+                .lastOutputAt(entity.getLastOutputAt())
+                .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .silentForSeconds(TaskResponseTimeoutSupport.silentForSeconds(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
@@ -614,6 +638,12 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
                 .resultText(entity.getResultText())
                 .errorMessage(entity.getErrorMessage())
                 .lastAckedSeq(entity.getLastAckedSeq())
+                .lastOutputAt(entity.getLastOutputAt())
+                .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .silentForSeconds(TaskResponseTimeoutSupport.silentForSeconds(
+                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
+                .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
