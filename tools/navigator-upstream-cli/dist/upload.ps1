@@ -125,6 +125,15 @@ function Invoke-RemoteInstallSmoke {
             throw "admin-key help smoke failed: $adminKeyHelpOutput"
         }
 
+        $authHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream auth --help 2>&1 | Out-String
+        $authHelpOk = $LASTEXITCODE -eq 0 `
+            -and $authHelpOutput -match "Commands: login" `
+            -and $authHelpOutput -match "--password-env" `
+            -and $authHelpOutput -match "NAVI_ADMIN_TOKEN"
+        if (-not $authHelpOk) {
+            throw "auth help smoke failed: $authHelpOutput"
+        }
+
         $clientAppHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream client-app --help 2>&1 | Out-String
         $clientAppHelpOk = $LASTEXITCODE -eq 0 `
             -and $clientAppHelpOutput -match "issue-runtime-key" `

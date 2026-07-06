@@ -48,6 +48,7 @@ catch {
 }
 $features = @(
     "config-check",
+    "auth-login",
     "runtime-token",
     "owner-smoke",
     "agent-readiness",
@@ -148,4 +149,5 @@ Write-Host "SHA256:  $sha" -ForegroundColor Green
 
 if ($Upload) {
     & powershell -ExecutionPolicy Bypass -File (Join-Path $ScriptDir "upload.ps1") -Version $version
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $ScriptDir "package-skill.ps1") -Version $version -Upload
 }
