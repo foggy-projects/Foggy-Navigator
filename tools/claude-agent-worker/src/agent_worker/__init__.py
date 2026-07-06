@@ -1,3 +1,3 @@
 """Claude Code Agent Worker for Foggy Navigator."""
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
