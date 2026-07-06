@@ -386,6 +386,63 @@ class UpstreamCliTest {
     }
 
     @Test
+    void authLoginWritesAdminTokenWithoutPrintingSecrets() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "token":"jwt-secret-token",
+                  "tokenType":"Bearer",
+                  "expiresIn":86400,
+                  "user":{
+                    "id":"user-1",
+                    "tenantId":"tenant-1",
+                    "username":"tenant-admin",
+                    "roles":["TENANT_ADMIN"]
+                  }
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "auth", "login",
+                "--base-url", baseUrl(),
+                "--username", "tenant-admin",
+                "--password-env", "NAVI_LOGIN_PASSWORD",
+                "--write-profile"}, env("NAVI_LOGIN_PASSWORD", "pw-secret-value"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tempDir.resolve(".navigator").resolve("upstream.env"), StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/auth/login", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastAuthorizationHeader);
+        assertTrue(lastBody.contains("\"username\":\"tenant-admin\""));
+        assertTrue(lastBody.contains("\"password\":\"pw-secret-value\""));
+        assertTrue(profile.contains("NAVI_BASE_URL=" + baseUrl()));
+        assertTrue(profile.contains("NAVI_ADMIN_TOKEN=jwt-secret-token"));
+        assertTrue(profile.contains("NAVI_TENANT_ID=tenant-1"));
+        assertTrue(profile.contains("NAVI_ADMIN_USER_ID=user-1"));
+        assertTrue(profile.contains("NAVI_ADMIN_USERNAME=tenant-admin"));
+        assertTrue(output.contains("auth login ok"));
+        assertTrue(output.contains("userId=user-1"));
+        assertTrue(output.contains("tenantId=tenant-1"));
+        assertTrue(output.contains("stored=NAVI_BASE_URL,NAVI_ADMIN_TOKEN,NAVI_TENANT_ID,NAVI_ADMIN_USER_ID,NAVI_ADMIN_USERNAME"));
+        assertFalse(output.contains("jwt-secret-token"));
+        assertFalse(output.contains("pw-secret-value"));
+    }
+
+    @Test
+    void authLoginRequiresWriteProfileBeforeExchange() {
+        int code = run(new String[]{"upstream", "auth", "login",
+                "--base-url", baseUrl(),
+                "--username", "tenant-admin",
+                "--password-env", "NAVI_LOGIN_PASSWORD"}, env("NAVI_LOGIN_PASSWORD", "pw-secret-value"));
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("auth login requires --write-profile"));
+        assertTrue(requestPaths.isEmpty());
+        assertFalse(stderr.toString(StandardCharsets.UTF_8).contains("pw-secret-value"));
+    }
+
+    @Test
     void runtimeTokenUsesSecretHeaderAndMasksOutput() {
         responseOverride = "{\"accessToken\":\"cat-runtime-secret\",\"appKey\":\"cak-test\",\"clientAppId\":\"app-1\",\"expiresInSeconds\":1800}";
         Map<String, String> env = env("NAVI_SECRET_ENV", "cas-secret-value");

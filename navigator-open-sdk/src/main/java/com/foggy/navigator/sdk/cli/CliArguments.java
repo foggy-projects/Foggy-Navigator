@@ -91,6 +91,7 @@ final class CliArguments {
             "operator-api-key-env",
             "owner-user-id",
             "path",
+            "password-env",
             "physical-worker-id",
             "pid",
             "poll",
@@ -133,6 +134,7 @@ final class CliArguments {
             "url",
             "user-api-key",
             "user-api-key-env",
+            "username",
             "user-token-header",
             "version",
             "web-search-mode",
@@ -213,6 +215,9 @@ final class CliArguments {
         }
         if (words.size() >= 2 && "account-context".equals(words.get(0))) {
             return "account-context " + words.get(1);
+        }
+        if (words.size() >= 2 && "auth".equals(words.get(0))) {
+            return "auth " + words.get(1);
         }
         if (words.size() >= 2 && "admin-key".equals(words.get(0))) {
             return "admin-key " + words.get(1);

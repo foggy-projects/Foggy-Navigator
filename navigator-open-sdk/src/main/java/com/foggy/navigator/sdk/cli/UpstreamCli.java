@@ -169,6 +169,8 @@ public class UpstreamCli {
     private int dispatch(CliArguments args) throws Exception {
         return switch (args.command()) {
             case "config check" -> configCheck();
+            case "auth", "auth help" -> authUsage();
+            case "auth login" -> authLogin(args);
             case "runtime-token" -> runtimeToken(args);
             case "owner-smoke" -> ownerSmoke(args);
             case "verify-agent-readiness", "verify-agent-grant" -> verifyAgentReadiness(args);
@@ -301,7 +303,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model clear-key, model system-list/system-create/system-update/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, auth login, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model clear-key, model system-list/system-create/system-update/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker-host apply.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv>] [--client-context-json <json>|--client-context-file <path>]");
@@ -313,6 +315,67 @@ public class UpstreamCli {
         out.println("  model create/update uses NAVI_CONTROL_API_KEY and creates ClientApp-owned models.");
         out.println("  model system-create/system-update uses NAVI_ADMIN_API_KEY and creates UpstreamSystem-owned shared models.");
         out.println("  model create/system-create accepts --worker-backend LANGGRAPH_BIZ|OPENAI_CODEX|CLAUDE_CODE|GEMINI_CLI.");
+        return 0;
+    }
+
+    private int authUsage() {
+        out.println("Usage: navi upstream auth <command> [options]");
+        out.println("Commands: login");
+        out.println("  login --base-url <navigatorBaseUrl> --username <username> --password-env <envName> --write-profile");
+        out.println("Stores NAVI_ADMIN_TOKEN in the gitignored project profile for admin-key approval. The password is read from an environment variable and is never printed.");
+        return 0;
+    }
+
+    private int authLogin(CliArguments args) throws Exception {
+        if (!args.flag("write-profile")) {
+            throw new UpstreamCliException("auth login requires --write-profile to store NAVI_ADMIN_TOKEN without printing it");
+        }
+        config.assertProfileWritable();
+        String baseUrl = requiredOptionOrConfig(args, "base-url", "NAVI_BASE_URL", "Navigator base URL");
+        String username = requiredOption(args, "username", "Navigator username");
+        String passwordEnv = requiredOption(args, "password-env", "Navigator password env");
+        String password = env.get(passwordEnv);
+        if (!hasText(password)) {
+            throw new UpstreamCliException("environment variable " + passwordEnv + " is required");
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("username", username);
+        body.put("password", password);
+        Map<String, Object> login = new HttpHelper(baseUrl, null, Duration.ofSeconds(30))
+                .postNoAuth("/api/v1/auth/login", body, new TypeReference<>() {});
+        String token = stringValue(login.get("token"));
+        if (!hasText(token)) {
+            throw new UpstreamCliException("auth login response did not include token");
+        }
+        Map<String, Object> user = objectMap(login.get("user"));
+        String tenantId = stringValue(user.get("tenantId"));
+        String userId = stringValue(user.get("id"));
+        String resolvedUsername = firstNonBlank(stringValue(user.get("username")), username);
+        String roles = stringValue(user.get("roles"));
+
+        config.writeProfileValue("NAVI_BASE_URL", baseUrl);
+        config.writeProfileValue("NAVI_ADMIN_TOKEN", token);
+        if (hasText(tenantId)) {
+            config.writeProfileValue("NAVI_TENANT_ID", tenantId);
+        }
+        if (hasText(userId)) {
+            config.writeProfileValue("NAVI_ADMIN_USER_ID", userId);
+        }
+        if (hasText(resolvedUsername)) {
+            config.writeProfileValue("NAVI_ADMIN_USERNAME", resolvedUsername);
+        }
+
+        out.println("auth login ok");
+        out.println("userId=" + valueOrEmpty(userId));
+        out.println("username=" + redact(resolvedUsername));
+        out.println("tenantId=" + valueOrEmpty(tenantId));
+        out.println("roles=" + valueOrEmpty(roles));
+        out.println("profileUpdated=" + config.profilePath());
+        out.println("stored=NAVI_BASE_URL,NAVI_ADMIN_TOKEN"
+                + (hasText(tenantId) ? ",NAVI_TENANT_ID" : "")
+                + (hasText(userId) ? ",NAVI_ADMIN_USER_ID" : "")
+                + (hasText(resolvedUsername) ? ",NAVI_ADMIN_USERNAME" : ""));
         return 0;
     }
 
@@ -4675,6 +4738,18 @@ public class UpstreamCli {
 
     private static String emptyIfNull(Object value) {
         return value == null ? "" : String.valueOf(value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> objectMap(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        return Map.of();
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 
     private static String truncate(String value, int maxLength) {
