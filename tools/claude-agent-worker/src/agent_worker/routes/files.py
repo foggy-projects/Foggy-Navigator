@@ -126,6 +126,76 @@ def _safe_subpath(base: str, sub: str) -> str:
     return joined
 
 
+def _display_path(path: str) -> str:
+    """Return an absolute, normalized path without resolving symlinks."""
+    return os.path.normpath(os.path.abspath(path)).replace("\\", "/")
+
+
+def _join_display_path(parent: str, name: str) -> str:
+    return os.path.normpath(os.path.join(parent, name)).replace("\\", "/")
+
+
+def _is_link_path(path: str) -> bool:
+    """Detect filesystem links, including Windows junctions when available."""
+    if os.path.islink(path):
+        return True
+    is_junction = getattr(os.path, "isjunction", None)
+    return bool(is_junction and is_junction(path))
+
+
+def _build_file_entry(entry: os.DirEntry[str], logical_parent: str) -> FileEntry:
+    """Build file metadata while preserving the logical path through links."""
+    logical_path = _join_display_path(logical_parent, entry.name)
+    stat = entry.stat(follow_symlinks=False)
+    modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    is_symlink = _is_link_path(entry.path)
+    is_dir = entry.is_dir(follow_symlinks=False)
+    size = stat.st_size if not is_dir else 0
+
+    link_target: str | None = None
+    target_exists: bool | None = None
+    target_is_dir: bool | None = None
+    target_allowed: bool | None = None
+
+    if is_symlink:
+        target_exists = os.path.exists(entry.path)
+        target_allowed = False
+        target_is_dir = False
+        is_dir = False
+
+        try:
+            resolved_target = validate_path(entry.path)
+            link_target = resolved_target.replace("\\", "/")
+            target_allowed = True
+            target_is_dir = os.path.isdir(resolved_target)
+            is_dir = target_is_dir
+            size = 0 if target_is_dir else size
+
+            if target_exists:
+                try:
+                    target_stat = os.stat(resolved_target)
+                    modified = datetime.fromtimestamp(target_stat.st_mtime, tz=timezone.utc).isoformat()
+                    size = 0 if target_is_dir else target_stat.st_size
+                except OSError:
+                    pass
+        except HTTPException:
+            # Keep the link visible, but do not expose or follow disallowed targets.
+            pass
+
+    return FileEntry(
+        name=entry.name,
+        path=logical_path,
+        is_dir=is_dir,
+        size=size,
+        modified=modified,
+        is_symlink=is_symlink,
+        link_target=link_target,
+        target_exists=target_exists,
+        target_is_dir=target_is_dir,
+        target_allowed=target_allowed,
+    )
+
+
 # ---- Endpoints -----------------------------------------------------------
 
 
@@ -136,6 +206,7 @@ async def list_directory(
 ) -> DirectoryListingResponse:
     """List files and directories at the given path."""
     resolved = validate_path(path)
+    logical_path = _display_path(path)
 
     if not os.path.isdir(resolved):
         raise HTTPException(
@@ -150,15 +221,7 @@ async def list_directory(
                 if not show_hidden and entry.name.startswith("."):
                     continue
                 try:
-                    stat = entry.stat(follow_symlinks=False)
-                    modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-                    entries.append(FileEntry(
-                        name=entry.name,
-                        path=entry.path.replace("\\", "/"),
-                        is_dir=entry.is_dir(follow_symlinks=False),
-                        size=stat.st_size if not entry.is_dir(follow_symlinks=False) else 0,
-                        modified=modified,
-                    ))
+                    entries.append(_build_file_entry(entry, logical_path))
                 except OSError:
                     continue
                 if len(entries) >= _MAX_DIR_ENTRIES:
@@ -173,7 +236,7 @@ async def list_directory(
     entries.sort(key=lambda e: (not e.is_dir, e.name.lower()))
 
     return DirectoryListingResponse(
-        path=resolved.replace("\\", "/"),
+        path=logical_path,
         entries=entries,
         total=len(entries),
     )

@@ -40,6 +40,12 @@
               @pointermove="handlePointerMove($event)"
             >
               <span class="tree-icon">{{ data.isDir ? '📁' : '📄' }}</span>
+              <span
+                v-if="data.isSymlink"
+                class="tree-link-badge"
+                :class="{ blocked: isBlockedLink(data) }"
+                :title="getLinkTitle(data)"
+              >↗</span>
               <span class="tree-label">{{ data.label }}</span>
               <span
                 v-if="isTouchDevice && selectedTreePath === data.fullPath"
@@ -452,6 +458,11 @@ interface TreeNode {
   fullPath: string
   isDir: boolean
   isLeaf: boolean
+  isSymlink?: boolean
+  linkTarget?: string | null
+  targetExists?: boolean | null
+  targetIsDir?: boolean | null
+  targetAllowed?: boolean | null
   children?: TreeNode[]
 }
 
@@ -465,6 +476,38 @@ const treeProps = {
   children: 'children',
 }
 
+function toTreeNode(e: FileEntry): TreeNode {
+  return {
+    label: e.name,
+    fullPath: e.path,
+    isDir: e.is_dir,
+    isLeaf: !e.is_dir,
+    isSymlink: e.is_symlink,
+    linkTarget: e.link_target,
+    targetExists: e.target_exists,
+    targetIsDir: e.target_is_dir,
+    targetAllowed: e.target_allowed,
+    children: e.is_dir ? [] : undefined,
+  }
+}
+
+function isBlockedLink(node: TreeNode): boolean {
+  return !!node.isSymlink && (node.targetExists === false || node.targetAllowed === false)
+}
+
+function getBlockedLinkMessage(node: TreeNode): string | null {
+  if (!node.isSymlink) return null
+  if (node.targetExists === false) return '链接目标不存在'
+  if (node.targetAllowed === false) return '链接目标不在允许目录内，无法打开'
+  return null
+}
+
+function getLinkTitle(node: TreeNode): string {
+  const blocked = getBlockedLinkMessage(node)
+  if (blocked) return blocked
+  return node.linkTarget ? `链接到 ${node.linkTarget}` : '链接'
+}
+
 async function loadDirectory(dirPath?: string) {
   if (!directoryId.value) return
   try {
@@ -473,13 +516,7 @@ async function loadDirectory(dirPath?: string) {
     const listing = await listDirectory(directoryId.value, subPath, showHidden.value)
     currentDirPath.value = listing.path
 
-    const nodes: TreeNode[] = listing.entries.map((e: FileEntry) => ({
-      label: e.name,
-      fullPath: e.path,
-      isDir: e.is_dir,
-      isLeaf: !e.is_dir,
-      children: e.is_dir ? [] : undefined,
-    }))
+    const nodes: TreeNode[] = listing.entries.map(toTreeNode)
 
     if (!dirPath) {
       // Root load
@@ -517,6 +554,11 @@ function isPreviewableImagePath(path: string): boolean {
 
 async function handleNodeClick(data: TreeNode) {
   selectedTreePath.value = data.fullPath
+  const blockedLinkMessage = getBlockedLinkMessage(data)
+  if (blockedLinkMessage) {
+    ElMessage.warning(blockedLinkMessage)
+    return
+  }
   if (data.isDir) {
     // Capture current expansion state before any rebuild
     const expanded = new Set<string>(treeRef.value?.getExpandedKeys?.() as string[] || [])
@@ -546,13 +588,7 @@ async function loadDirectoryForNode(node: TreeNode) {
   if (!directoryId.value) return
   try {
     const listing = await listDirectory(directoryId.value, getSubPath(node.fullPath), showHidden.value)
-    node.children = listing.entries.map((e: FileEntry) => ({
-      label: e.name,
-      fullPath: e.path,
-      isDir: e.is_dir,
-      isLeaf: !e.is_dir,
-      children: e.is_dir ? [] : undefined,
-    }))
+    node.children = listing.entries.map(toTreeNode)
   } catch (e) {
     console.error('Failed to load children:', e)
   }
@@ -1667,6 +1703,18 @@ watch([deepLinkFilePath, deepLinkLine], async ([newPath, newLine]) => {
   font-size: 14px;
   width: 18px;
   text-align: center;
+}
+
+.tree-link-badge {
+  color: #9cdcfe;
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  margin-left: -3px;
+}
+
+.tree-link-badge.blocked {
+  color: #f48771;
 }
 
 .tree-label {

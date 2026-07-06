@@ -25,6 +25,13 @@ from agent_worker.routes.files import (
 )
 
 
+def _symlink_or_skip(target: Path, link: Path, *, target_is_directory: bool = False) -> None:
+    try:
+        os.symlink(str(target), str(link), target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation is not available: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # _detect_language
 # ---------------------------------------------------------------------------
@@ -160,6 +167,155 @@ class TestReadFileContent:
         assert result.too_large is True
         assert result.content is None
         assert result.size == files_routes._MAX_FILE_SIZE + 1
+
+
+# ---------------------------------------------------------------------------
+# list_directory
+# ---------------------------------------------------------------------------
+
+class TestListDirectoryLinks:
+    """Symlink and junction handling in directory listings."""
+
+    @pytest.mark.asyncio
+    async def test_resolved_directory_keeps_requested_logical_child_paths(self, tmp_path, monkeypatch):
+        target = tmp_path / "target"
+        logical = tmp_path / "linked-dir"
+        target.mkdir()
+        (target / "child.txt").write_text("hello", encoding="utf-8")
+
+        def fake_validate_path(path: str) -> str:
+            if os.path.normcase(os.path.normpath(path)) == os.path.normcase(os.path.normpath(str(logical))):
+                return str(target)
+            return os.path.realpath(path)
+
+        monkeypatch.setattr(files_routes, "validate_path", fake_validate_path)
+
+        listing = await files_routes.list_directory(str(logical), show_hidden=False)
+        child = next(entry for entry in listing.entries if entry.name == "child.txt")
+
+        assert listing.path == str(logical).replace("\\", "/")
+        assert child.path == str(logical / "child.txt").replace("\\", "/")
+
+    @pytest.mark.asyncio
+    async def test_link_metadata_uses_allowed_target_without_real_symlink(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        target = tmp_path / "target"
+        link_marker = root / "linked-dir"
+        root.mkdir()
+        target.mkdir()
+        link_marker.mkdir()
+
+        link_marker_resolved = os.path.normcase(os.path.realpath(link_marker))
+
+        def fake_is_link(path: str) -> bool:
+            return os.path.normcase(os.path.realpath(path)) == link_marker_resolved
+
+        def fake_validate_path(path: str) -> str:
+            if fake_is_link(path):
+                return str(target)
+            return os.path.realpath(path)
+
+        monkeypatch.setattr(files_routes, "_is_link_path", fake_is_link)
+        monkeypatch.setattr(files_routes, "validate_path", fake_validate_path)
+
+        listing = await files_routes.list_directory(str(root), show_hidden=False)
+        node = next(entry for entry in listing.entries if entry.name == "linked-dir")
+
+        assert node.is_symlink is True
+        assert node.is_dir is True
+        assert node.target_exists is True
+        assert node.target_is_dir is True
+        assert node.target_allowed is True
+        assert node.link_target == str(target).replace("\\", "/")
+
+    @pytest.mark.asyncio
+    async def test_disallowed_link_target_is_not_expandable_without_real_symlink(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        link_marker = root / "outside-link"
+        root.mkdir()
+        link_marker.mkdir()
+
+        link_marker_resolved = os.path.normcase(os.path.realpath(link_marker))
+
+        def fake_is_link(path: str) -> bool:
+            return os.path.normcase(os.path.realpath(path)) == link_marker_resolved
+
+        def fake_validate_path(path: str) -> str:
+            if fake_is_link(path):
+                raise HTTPException(status_code=403, detail="blocked")
+            return os.path.realpath(path)
+
+        monkeypatch.setattr(files_routes, "_is_link_path", fake_is_link)
+        monkeypatch.setattr(files_routes, "validate_path", fake_validate_path)
+
+        listing = await files_routes.list_directory(str(root), show_hidden=False)
+        node = next(entry for entry in listing.entries if entry.name == "outside-link")
+
+        assert node.is_symlink is True
+        assert node.is_dir is False
+        assert node.target_exists is True
+        assert node.target_is_dir is False
+        assert node.target_allowed is False
+        assert node.link_target is None
+
+    @pytest.mark.asyncio
+    async def test_symlink_directory_is_expandable_with_logical_child_paths(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        target = root / "target"
+        link = root / "linked-dir"
+        root.mkdir()
+        target.mkdir()
+        (target / "child.txt").write_text("hello", encoding="utf-8")
+        _symlink_or_skip(target, link, target_is_directory=True)
+
+        monkeypatch.setattr(files_routes, "validate_path", lambda path: os.path.realpath(path))
+
+        listing = await files_routes.list_directory(str(root), show_hidden=False)
+        node = next(entry for entry in listing.entries if entry.name == "linked-dir")
+
+        assert node.is_symlink is True
+        assert node.is_dir is True
+        assert node.target_exists is True
+        assert node.target_is_dir is True
+        assert node.target_allowed is True
+        assert node.link_target == os.path.realpath(link).replace("\\", "/")
+        assert node.path == str(link).replace("\\", "/")
+
+        linked_listing = await files_routes.list_directory(str(link), show_hidden=False)
+        child = next(entry for entry in linked_listing.entries if entry.name == "child.txt")
+
+        assert linked_listing.path == str(link).replace("\\", "/")
+        assert child.path == str(link / "child.txt").replace("\\", "/")
+        assert child.is_symlink is False
+
+    @pytest.mark.asyncio
+    async def test_disallowed_symlink_target_is_visible_but_not_expandable(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        outside = tmp_path / "outside"
+        link = root / "outside-link"
+        root.mkdir()
+        outside.mkdir()
+        _symlink_or_skip(outside, link, target_is_directory=True)
+
+        outside_resolved = os.path.normcase(os.path.realpath(outside))
+
+        def fake_validate_path(path: str) -> str:
+            resolved = os.path.realpath(path)
+            if os.path.normcase(resolved) == outside_resolved:
+                raise HTTPException(status_code=403, detail="blocked")
+            return resolved
+
+        monkeypatch.setattr(files_routes, "validate_path", fake_validate_path)
+
+        listing = await files_routes.list_directory(str(root), show_hidden=False)
+        node = next(entry for entry in listing.entries if entry.name == "outside-link")
+
+        assert node.is_symlink is True
+        assert node.is_dir is False
+        assert node.target_exists is True
+        assert node.target_is_dir is False
+        assert node.target_allowed is False
+        assert node.link_target is None
 
 
 # ---------------------------------------------------------------------------

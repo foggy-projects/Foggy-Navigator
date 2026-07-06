@@ -9,6 +9,11 @@ export interface FileEntry {
   is_dir: boolean
   size: number
   modified: string
+  is_symlink?: boolean
+  link_target?: string | null
+  target_exists?: boolean | null
+  target_is_dir?: boolean | null
+  target_allowed?: boolean | null
 }
 
 export interface DirectoryListing {
