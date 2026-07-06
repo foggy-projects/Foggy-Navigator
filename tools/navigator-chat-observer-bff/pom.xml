@@ -20,7 +20,7 @@
         <dependency>
             <groupId>com.foggy.navigator</groupId>
             <artifactId>navigator-open-sdk</artifactId>
-            <version>1.0.5</version>
+            <version>1.0.19</version>
         </dependency>
 
         <dependency>
