@@ -391,7 +391,7 @@ class CodexTaskServiceTest {
         params.put("approvalPolicy", "never");
         params.put("networkAccessEnabled", false);
         params.put("webSearchMode", "disabled");
-        params.put("additionalDirectories", List.of("D:/shared"));
+        params.put("additionalDirectories", List.of("/home/sa/workspace/shared"));
         service.createTaskDirect(params, "user-1", "tenant-1");
 
         verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
@@ -435,7 +435,7 @@ class CodexTaskServiceTest {
         params.put("approvalPolicy", "never");
         params.put("networkAccessEnabled", false);
         params.put("webSearchMode", "disabled");
-        params.put("additionalDirectories", List.of("D:/shared"));
+        params.put("additionalDirectories", List.of("/home/sa/workspace/shared"));
         DispatchTaskDTO result = service.createTaskDirect(params, "user-1", "tenant-1");
 
         assertEquals("codex-biz-worker", result.getProviderType());
@@ -450,7 +450,7 @@ class CodexTaskServiceTest {
                         && "never".equals(event.getProviderConfigString("approvalPolicy"))
                         && Boolean.FALSE.equals(event.getProviderConfigValue("networkAccessEnabled"))
                         && "disabled".equals(event.getProviderConfigString("webSearchMode"))
-                        && List.of("D:/shared").equals(event.getProviderConfigValue("additionalDirectories"))
+                        && List.of("/home/sa/workspace/shared").equals(event.getProviderConfigValue("additionalDirectories"))
         ));
         verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
                 "session-biz-1".equals(entity.getSessionId())
@@ -495,7 +495,7 @@ class CodexTaskServiceTest {
         params.put("approval_policy", "never");
         params.put("network_access_enabled", "false");
         params.put("web_search_mode", "disabled");
-        params.put("additional_directories", List.of("D:/shared", " "));
+        params.put("additional_directories", List.of("/home/sa/workspace/shared", " "));
 
         DispatchTaskDTO result = service.createTaskDirect(params, "user-1", "tenant-1");
 
@@ -511,7 +511,7 @@ class CodexTaskServiceTest {
                         && "never".equals(event.getProviderConfigString("approvalPolicy"))
                         && Boolean.FALSE.equals(event.getProviderConfigValue("networkAccessEnabled"))
                         && "disabled".equals(event.getProviderConfigString("webSearchMode"))
-                        && List.of("D:/shared").equals(event.getProviderConfigValue("additionalDirectories"))
+                        && List.of("/home/sa/workspace/shared").equals(event.getProviderConfigValue("additionalDirectories"))
         ));
     }
 

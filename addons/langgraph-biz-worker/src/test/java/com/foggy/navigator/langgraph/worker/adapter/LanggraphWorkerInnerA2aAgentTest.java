@@ -36,7 +36,7 @@ class LanggraphWorkerInnerA2aAgentTest {
                         .sessionId("session_01")
                         .workerId("worker_01")
                         .directoryId("dir_default")
-                        .cwd("D:/workspace/default")
+                        .cwd("/home/sa/workspace/default")
                         .build());
 
         CodingAgentEntity entity = new CodingAgentEntity();
@@ -184,7 +184,7 @@ class LanggraphWorkerInnerA2aAgentTest {
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
         message.setMetadata(Map.of(
                 "runtime_context", Map.of(
-                        "execution_policy", Map.of("workdir", "/workspace/user"),
+                        "execution_policy", Map.of("workdir", "/home/sa/workspace/user"),
                         "skill_name", "hidden.skill"
                 )));
 
@@ -198,13 +198,13 @@ class LanggraphWorkerInnerA2aAgentTest {
         verify(taskService).createTask(eq("admin_01"), eq("tenant_01"), captor.capture());
         Map<String, Object> runtimeContext = captor.getValue().getRuntimeContext();
         Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
-        assertEquals("/workspace/user", executionPolicy.get("workdir"));
+        assertEquals("/home/sa/workspace/user", executionPolicy.get("workdir"));
         assertFalse(runtimeContext.containsKey("skill_name"));
 
         Map<String, Object> echoedMetadata = task.getHistory().get(0).getMetadata();
         Map<String, Object> echoedRuntimeContext = (Map<String, Object>) echoedMetadata.get("runtime_context");
         assertFalse(echoedRuntimeContext.containsKey("skill_name"));
-        assertEquals(Map.of("workdir", "/workspace/user"), echoedRuntimeContext.get("execution_policy"));
+        assertEquals(Map.of("workdir", "/home/sa/workspace/user"), echoedRuntimeContext.get("execution_policy"));
     }
 
     @Test

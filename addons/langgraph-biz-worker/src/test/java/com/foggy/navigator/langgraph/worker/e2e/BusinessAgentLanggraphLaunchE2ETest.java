@@ -92,7 +92,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
     private static final String WORKER_ID = "worker_langgraph_e2e";
     private static final String MODEL_CONFIG_ID = "model_e2e_scripted";
     private static final String DIRECTORY_ID = "dir_e2e";
-    private static final String WORKDIR = "D:/workspace/world-sim";
+    private static final String WORKDIR = "/home/sa/workspace/world-sim";
 
     @Mock private BusinessAgentTaskRepository businessTaskRepository;
     @Mock private BusinessTaskScopedTokenRepository tokenRepository;
@@ -270,7 +270,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals("DELEGATED", executionPolicy.get("workspace_resolver_type"));
         assertEquals(false, executionPolicy.get("read_only"));
         assertEquals(WORKDIR, executionPolicy.get("workdir"));
-        assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
+        assertEquals(List.of("/home/sa/workspace"), executionPolicy.get("allowed_dirs"));
         assertEquals(List.of("read_file", "invoke_business_function"), executionPolicy.get("allowed_tools"));
         assertNotNull(runtimeContext.get("current_time"));
         assertNotNull(runtimeContext.get("timezone"));
@@ -393,7 +393,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
         entity.setEnabled(true);
         entity.setReadOnly(false);
         entity.setPath(WORKDIR);
-        entity.setAllowedPathPrefixesJson("[\"D:/workspace\"]");
+        entity.setAllowedPathPrefixesJson("[\"/home/sa/workspace\"]");
         return entity;
     }
 

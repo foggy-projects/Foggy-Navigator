@@ -3627,7 +3627,7 @@ class UpstreamCliTest {
                 {
                   "workerId": "worker-1",
                   "workspaceScope": "CLIENT_APP_SHARED",
-                  "path": "D:/workspace/app-shared",
+                  "path": "/home/sa/workspace/app-shared",
                   "projectName": "app-shared",
                   "files": {
                     "CLAUDE.md": "# App"
@@ -3640,7 +3640,7 @@ class UpstreamCliTest {
                   "clientAppId":"app-1",
                   "workerId":"worker-1",
                   "workspaceScope":"CLIENT_APP_SHARED",
-                  "path":"D:/workspace/app-shared"
+                  "path":"/home/sa/workspace/app-shared"
                 }}
                 """;
 
@@ -3656,7 +3656,7 @@ class UpstreamCliTest {
         assertEquals("POST", lastMethod);
         assertEquals("control-key-secret", lastClientAppControlKeyHeader);
         assertTrue(lastBody.contains("\"workspaceScope\":\"CLIENT_APP_SHARED\""));
-        assertTrue(lastBody.contains("\"path\":\"D:/workspace/app-shared\""));
+        assertTrue(lastBody.contains("\"path\":\"/home/sa/workspace/app-shared\""));
         assertTrue(profile.contains("NAVI_DIRECTORY_ID=dir-client-1"));
         assertTrue(output.contains("directory client-init ok"));
         assertTrue(output.contains("stored=NAVI_DIRECTORY_ID"));

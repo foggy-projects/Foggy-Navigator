@@ -195,7 +195,7 @@ rg -n "task_scoped_token|adapterConfigJson|manifestJson|X-TMS-Agent-Token|Author
 
 你正在处理 Navigator 自研项目：
 
-- 工作区：D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev
+- 工作区：/home/sa/workspace/Foggy-Navigator
 - 版本：1.1.3-SNAPSHOT
 - 目标：为上游 LLM / TMS 后端补齐 navigator-open-sdk 的 Business Agent 控制面 API，避免上游长期手写 REST。
 

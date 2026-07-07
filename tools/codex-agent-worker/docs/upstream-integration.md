@@ -161,7 +161,7 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 CODEX_WORKER_HOST=0.0.0.0
 CODEX_WORKER_PORT=3051
 CODEX_BIZ_HOME_ROOT=/home/$USER/.foggy/codex-biz-homes
-CODEX_ALLOWED_CWDS=/mnt/d/foggy-projects
+CODEX_ALLOWED_CWDS=/home/sa/workspace
 ```
 
 请求示例：
@@ -686,7 +686,7 @@ powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-
 执行真实 Codex actor A/B 隔离与 resume 验证：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3051 -Cwd D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev -RunLiveQueries
+powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3051 -Cwd /home/sa/workspace/Foggy-Navigator -RunLiveQueries
 ```
 
 预期结果：

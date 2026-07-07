@@ -60,7 +60,7 @@ class LanggraphTaskServiceTest {
     private static final String SESSION_ID = "session-001";
     private static final String AGENT_ID = "tms-agent-v305";
     private static final String DIRECTORY_ID = "dir-001";
-    private static final String CWD = "D:/workspace/tms-order-clerk";
+    private static final String CWD = "/home/sa/workspace/tms-order-clerk";
 
     @BeforeEach
     void setUp() {
@@ -222,8 +222,8 @@ class LanggraphTaskServiceTest {
             Map<String, Object> params = directTaskParams();
             params.put("runtime_context", Map.of(
                     "execution_policy", Map.of(
-                            "workdir", "/workspace/user",
-                            "allowed_dirs", List.of("/workspace/user"))));
+                            "workdir", "/home/sa/workspace/user",
+                            "allowed_dirs", List.of("/home/sa/workspace/user"))));
 
             service.createTaskDirect(params, USER_ID, TENANT_ID);
 
@@ -236,8 +236,8 @@ class LanggraphTaskServiceTest {
             assertNotNull(runtimeContext);
             Map<String, Object> executionPolicy =
                     (Map<String, Object>) runtimeContext.get("execution_policy");
-            assertEquals("/workspace/user", executionPolicy.get("workdir"));
-            assertEquals(List.of("/workspace/user"), executionPolicy.get("allowed_dirs"));
+            assertEquals("/home/sa/workspace/user", executionPolicy.get("workdir"));
+            assertEquals(List.of("/home/sa/workspace/user"), executionPolicy.get("allowed_dirs"));
         }
 
         @Test
@@ -260,8 +260,8 @@ class LanggraphTaskServiceTest {
             params.put("allowedTools", "business.functions.schema,business.functions.invoke");
             params.put("runtime_context", Map.of(
                     "execution_policy", Map.of(
-                            "workdir", "/workspace/user",
-                            "allowed_dirs", List.of("/workspace/user"))));
+                            "workdir", "/home/sa/workspace/user",
+                            "allowed_dirs", List.of("/home/sa/workspace/user"))));
 
             service.createTaskDirect(params, USER_ID, TENANT_ID);
 
@@ -274,8 +274,8 @@ class LanggraphTaskServiceTest {
             assertNotNull(runtimeContext);
             Map<String, Object> executionPolicy =
                     (Map<String, Object>) runtimeContext.get("execution_policy");
-            assertEquals("/workspace/user", executionPolicy.get("workdir"));
-            assertEquals(List.of("/workspace/user"), executionPolicy.get("allowed_dirs"));
+            assertEquals("/home/sa/workspace/user", executionPolicy.get("workdir"));
+            assertEquals(List.of("/home/sa/workspace/user"), executionPolicy.get("allowed_dirs"));
             assertEquals(
                     List.of("business.functions.schema", "business.functions.invoke"),
                     executionPolicy.get("allowed_tools"));

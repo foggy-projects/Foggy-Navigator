@@ -212,8 +212,8 @@ class OpenApiAgentReadinessServiceTest {
                         "worker_claude",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.MANAGED,
-                        "/workspace/user",
-                        List.of("/workspace/user"),
+                        "/home/sa/workspace/user",
+                        List.of("/home/sa/workspace/user"),
                         false,
                         null,
                         null,
@@ -250,10 +250,10 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals("USER_PRIVATE", result.getWorkspaceScope());
         assertEquals("MANAGED", result.getWorkspaceResolverType());
         assertEquals(Boolean.FALSE, result.getWorkspaceReadOnly());
-        assertEquals("/workspace/user", result.getCommandWorkdirRoot());
+        assertEquals("/home/sa/workspace/user", result.getCommandWorkdirRoot());
         assertEquals("DELEGATED_ACTOR_HOME", result.getFileToolRootMode());
-        assertEquals("/workspace/user", result.getFileToolRoot());
-        assertEquals("/workspace/user/agent", result.getFileToolAgentRoot());
+        assertEquals("/home/sa/workspace/user", result.getFileToolRoot());
+        assertEquals("/home/sa/workspace/user/agent", result.getFileToolAgentRoot());
         assertEquals(Boolean.TRUE, result.getFileToolWorkdirAligned());
         assertNotNull(result.getPhysicalWorkerDiagnostic());
         assertEquals("worker_biz", result.getPhysicalWorkerDiagnostic().getPhysicalWorkerId());
@@ -312,8 +312,8 @@ class OpenApiAgentReadinessServiceTest {
                         "worker_claude",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.MANAGED,
-                        "/workspace/user",
-                        List.of("/workspace/user"),
+                        "/home/sa/workspace/user",
+                        List.of("/home/sa/workspace/user"),
                         false,
                         null,
                         null,
@@ -382,8 +382,8 @@ class OpenApiAgentReadinessServiceTest {
                         "worker_claude",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.MANAGED,
-                        "/workspace/user",
-                        List.of("/workspace/user"),
+                        "/home/sa/workspace/user",
+                        List.of("/home/sa/workspace/user"),
                         false,
                         null,
                         null,
@@ -478,8 +478,8 @@ class OpenApiAgentReadinessServiceTest {
                         "worker_codex_host",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.MANAGED,
-                        "/workspace/user",
-                        List.of("/workspace/user"),
+                        "/home/sa/workspace/user",
+                        List.of("/home/sa/workspace/user"),
                         false,
                         null,
                         null,
@@ -578,8 +578,8 @@ class OpenApiAgentReadinessServiceTest {
                         "worker_codex_host",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.MANAGED,
-                        "/workspace/user",
-                        List.of("/workspace/user"),
+                        "/home/sa/workspace/user",
+                        List.of("/home/sa/workspace/user"),
                         false,
                         null,
                         null,
@@ -631,8 +631,8 @@ class OpenApiAgentReadinessServiceTest {
                         null,
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.MANAGED,
-                        "/workspace/user",
-                        List.of("/workspace/user"),
+                        "/home/sa/workspace/user",
+                        List.of("/home/sa/workspace/user"),
                         false,
                         null,
                         null,

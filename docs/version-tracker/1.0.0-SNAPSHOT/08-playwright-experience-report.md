@@ -37,7 +37,7 @@
 - `本机测试(4bd44b86) / Foggy Navigator(20260310-7dfb)`
   - 路径：`D:/foggy-projects/Foggy-Navigator-wt-qd-win11-dev`
 - `LocalDev(e80af483) / TestProject(20260312-94b5)`
-  - 路径：`D:\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev`
+  - 路径：`/home/sa/workspace/Foggy-Navigator`
 
 其中第二个目录记录存在明显路径异常：盘符后缺少 `/`，同时斜杠混用。
 
@@ -106,7 +106,7 @@
 结合目录记录里的路径值：
 
 ```text
-D:\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev
+/home/sa/workspace/Foggy-Navigator
 ```
 
 可以基本判断这是同一个根因：目录路径持久化错误，导致 Worker 侧文件接口和任务执行共用失败。
@@ -209,7 +209,7 @@ D:\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev
 复测时，`TestProject` 页面展示的目录路径已变为：
 
 ```text
-D:\workspace\fsbi
+/home/sa/workspace/fsbi
 ```
 
 再次点击“浏览文件”后，新标签页可正常打开文件浏览器，且根目录树成功加载，能看到：
@@ -252,13 +252,13 @@ D:\workspace\fsbi
 后续同样问法又出现过另一种回答：
 
 ```text
-当前工作目录是：D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev
+当前工作目录是：/home/sa/workspace/Foggy-Navigator
 ```
 
 但 Worker 日志显示，这两次任务实际传给 SDK 的都是：
 
 ```text
-cwd=D:\workspace\fsbi
+cwd=/home/sa/workspace/fsbi
 ```
 
 同时日志里没有对应的 `ToolUse / ToolResult` 记录，说明模型并没有实际执行 `pwd / Get-Location` 之类的命令，而是在直接自然语言回答。

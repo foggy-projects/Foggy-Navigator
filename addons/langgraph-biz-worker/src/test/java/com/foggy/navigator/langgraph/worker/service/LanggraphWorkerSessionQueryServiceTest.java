@@ -64,12 +64,12 @@ class LanggraphWorkerSessionQueryServiceTest {
         SessionTaskEntity older = sessionTask("lgt_older", SESSION_ID, "COMPLETED",
                 LocalDateTime.of(2026, 4, 1, 10, 0));
         older.setModel("biz-default");
-        older.setCwd("/workspace/orders");
+        older.setCwd("/home/sa/workspace/orders");
 
         SessionTaskEntity latest = sessionTask("lgt_latest", SESSION_ID, "RUNNING",
                 LocalDateTime.of(2026, 4, 1, 10, 5));
         latest.setModel("biz-default");
-        latest.setCwd("/workspace/orders");
+        latest.setCwd("/home/sa/workspace/orders");
 
         when(sessionTaskRepository.findByWorkerIdAndUserIdOrderByCreatedAtDesc(WORKER_ID, USER_ID))
                 .thenReturn(List.of(latest, older));
@@ -79,7 +79,7 @@ class LanggraphWorkerSessionQueryServiceTest {
         assertEquals(1, result.size());
         assertEquals(SESSION_ID, result.get(0).sessionId());
         assertEquals("lgt_latest", result.get(0).latestTaskId());
-        assertEquals("/workspace/orders", result.get(0).project());
+        assertEquals("/home/sa/workspace/orders", result.get(0).project());
         assertEquals(SESSION_ID, service.listWorkerSessions(WORKER_ID, USER_ID).get(0).get("session_id"));
     }
 

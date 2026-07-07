@@ -235,7 +235,7 @@ node --import tsx
 GEMINI_WORKER_PORT=3052
 GEMINI_WORKER_HOST=127.0.0.1
 GEMINI_WORKER_NAME=gemini-worker-test
-GEMINI_ALLOWED_CWDS=D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev
+GEMINI_ALLOWED_CWDS=/home/sa/workspace/Foggy-Navigator
 GEMINI_DEFAULT_MODEL=gemini-2.5-flash-lite
 ```
 
@@ -401,7 +401,7 @@ SSE 结果：
 GEMINI_WORKER_PORT=3061
 GEMINI_WORKER_HOST=127.0.0.1
 GEMINI_WORKER_NAME=gemini-worker-test
-GEMINI_ALLOWED_CWDS=D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev
+GEMINI_ALLOWED_CWDS=/home/sa/workspace/Foggy-Navigator
 GEMINI_DEFAULT_MODEL=gemini-flash-lite
 ```
 
@@ -700,7 +700,7 @@ cmd /c "set GEMINI_CLI_TRUST_WORKSPACE=true&& gemini skills list"
 
 1. 项目级 skills 可被 Gemini 发现
 2. 输出中已出现 `gemini-link-smoke [Enabled]`
-3. 位置为 `D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev\.agents\skills\gemini-link-smoke\SKILL.md`
+3. 位置为 `/home/sa/workspace/Foggy-Navigator/.agents/skills/gemini-link-smoke/SKILL.md`
 
 再用 headless 直接验证激活：
 
@@ -712,7 +712,7 @@ gemini -p "You are verifying workspace agent linkage. If you can access the loca
 
 1. 出现 `tool_use = activate_skill`
 2. `parameters.name = gemini-link-smoke`
-3. `tool_result` 明确返回已从 `D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev\.agents\skills\gemini-link-smoke` 加载
+3. `tool_result` 明确返回已从 `/home/sa/workspace/Foggy-Navigator/.agents/skills/gemini-link-smoke` 加载
 4. 最终输出包含 `GEMINI_SKILL_LINK_OK`
 
 结论：
@@ -857,7 +857,7 @@ SSE 实际返回：
 
 1. `tool_use = activate_skill`
 2. `input.name = file-browser-dev`
-3. `tool_result` 明确从 `D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev\.agents\skills\file-browser-dev` 加载成功
+3. `tool_result` 明确从 `/home/sa/workspace/Foggy-Navigator/.agents/skills/file-browser-dev` 加载成功
 4. 最终 `result` 返回 `FILE_BROWSER_SKILL_OK`，并补充了 `.foggy-ignore` 的三层透传说明
 
 结论：

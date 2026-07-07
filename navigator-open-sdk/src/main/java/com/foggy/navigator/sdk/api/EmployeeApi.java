@@ -15,7 +15,7 @@ import java.util.Map;
  * <pre>
  * // 一站式创建员工（用户 + 目录 + Agent）
  * ProvisionResult emp = client.employees().provision(
- *     "EMP-001", "张三", "worker-id", "/workspace/emp-001",
+ *     "EMP-001", "张三", "worker-id", "/home/sa/workspace/emp-001",
  *     "my-project", Map.of("CLAUDE.md", "# Project"));
  *
  * // 后续用 emp.getAgentId() 发送任务

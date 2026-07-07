@@ -38,7 +38,7 @@ class WorkingDirectoryAdminRepairServiceTest {
         WorkingDirectoryEntity directory = new WorkingDirectoryEntity();
         directory.setDirectoryId("20260525-8fa8");
         directory.setTenantId("old-tenant");
-        directory.setPath("/workspace/tms");
+        directory.setPath("/home/sa/workspace/tms");
         directory.setEnabled(true);
         CodingAgentEntity agent = new CodingAgentEntity();
         agent.setTenantId("nav_tms_110");
@@ -111,7 +111,7 @@ class WorkingDirectoryAdminRepairServiceTest {
     void repairUpstreamSystemDirectoryCanRepairLegacyRootAgentOwnerWhenExplicitlyRequested() {
         WorkingDirectoryEntity directory = new WorkingDirectoryEntity();
         directory.setDirectoryId("dir-1");
-        directory.setPath("/workspace/tms");
+        directory.setPath("/home/sa/workspace/tms");
         CodingAgentEntity agent = new CodingAgentEntity();
         agent.setAgentId("tms.ops-root-agent");
         agent.setOwnerType(ResourceOwnerType.UPSTREAM_SYSTEM);

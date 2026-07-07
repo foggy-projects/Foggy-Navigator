@@ -85,6 +85,6 @@ TMS 在 `2026-05-23 11:21-11:26` 完成复测，结论：全部通过。
 
 证据：
 
-- `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\report.json`
-- `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\04-before-refresh-attachment.png`
-- `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\06-reopened-history-session.png`
+- `/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake3-1779506477281/report.json`
+- `/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake3-1779506477281/04-before-refresh-attachment.png`
+- `/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake3-1779506477281/06-reopened-history-session.png`

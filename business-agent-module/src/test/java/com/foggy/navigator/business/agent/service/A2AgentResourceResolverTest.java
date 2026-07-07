@@ -455,8 +455,8 @@ class A2AgentResourceResolverTest {
         directory.setClientAppId("capp-1");
         directory.setUpstreamUserId("user-1");
         directory.setOwnerId("capp-1:user-1");
-        directory.setPath("D:/workspace/user-1");
-        directory.setAllowedPathPrefixesJson("[\"D:/workspace\"]");
+        directory.setPath("/home/sa/workspace/user-1");
+        directory.setAllowedPathPrefixesJson("[\"/home/sa/workspace\"]");
         when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp);
         when(workingDirectoryRepository.findByDirectoryId("dir-1")).thenReturn(Optional.of(directory));
 
@@ -466,8 +466,8 @@ class A2AgentResourceResolverTest {
         assertEquals("dir-1", result.directoryId());
         assertEquals(WorkspaceScope.USER_PRIVATE, result.workspaceScope());
         assertEquals(WorkingDirectoryResolverType.DELEGATED, result.resolverType());
-        assertEquals("D:/workspace/user-1", result.workdir());
-        assertEquals(List.of("D:/workspace"), result.allowedDirs());
+        assertEquals("/home/sa/workspace/user-1", result.workdir());
+        assertEquals(List.of("/home/sa/workspace"), result.allowedDirs());
         assertEquals("worker-1", result.physicalWorkerId());
         assertEquals("WORKING_DIRECTORY:USER_PRIVATE", result.source());
     }
@@ -513,7 +513,7 @@ class A2AgentResourceResolverTest {
         WorkingDirectoryEntity directory = directory("dir-2", WorkspaceScope.CLIENT_APP_SHARED, ResourceOwnerType.CLIENT_APP);
         directory.setClientAppId("capp-1");
         directory.setOwnerId("capp-1");
-        directory.setRootRef("D:/workspace/app-shared");
+        directory.setRootRef("/home/sa/workspace/app-shared");
         when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp);
         when(workingDirectoryRepository.findByDirectoryId("dir-2")).thenReturn(Optional.of(directory));
 
@@ -521,8 +521,8 @@ class A2AgentResourceResolverTest {
                 "tenant-1", "capp-1", "user-1", "dir-2");
 
         assertEquals(WorkspaceScope.CLIENT_APP_SHARED, result.workspaceScope());
-        assertEquals("D:/workspace/app-shared", result.workdir());
-        assertEquals(List.of("D:/workspace/app-shared"), result.allowedDirs());
+        assertEquals("/home/sa/workspace/app-shared", result.workdir());
+        assertEquals(List.of("/home/sa/workspace/app-shared"), result.allowedDirs());
     }
 
     @Test
@@ -530,7 +530,7 @@ class A2AgentResourceResolverTest {
         ClientAppEntity clientApp = clientApp("tenant-1", "capp-1", "system-1");
         WorkingDirectoryEntity directory = directory("dir-3", WorkspaceScope.UPSTREAM_SYSTEM_SHARED, ResourceOwnerType.UPSTREAM_SYSTEM);
         directory.setOwnerId("SYSTEM-1");
-        directory.setRootRef("D:/workspace/system-shared");
+        directory.setRootRef("/home/sa/workspace/system-shared");
         when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp);
         when(workingDirectoryRepository.findByDirectoryId("dir-3")).thenReturn(Optional.of(directory));
 
@@ -538,7 +538,7 @@ class A2AgentResourceResolverTest {
                 "tenant-1", "capp-1", "user-1", "dir-3");
 
         assertEquals(WorkspaceScope.UPSTREAM_SYSTEM_SHARED, result.workspaceScope());
-        assertEquals("D:/workspace/system-shared", result.workdir());
+        assertEquals("/home/sa/workspace/system-shared", result.workdir());
     }
 
     @Test
@@ -559,7 +559,7 @@ class A2AgentResourceResolverTest {
         WorkingDirectoryEntity directory = directory("dir-default", WorkspaceScope.CLIENT_APP_SHARED, ResourceOwnerType.CLIENT_APP);
         directory.setClientAppId("capp-1");
         directory.setOwnerId("capp-1");
-        directory.setRootRef("D:/workspace/app-shared");
+        directory.setRootRef("/home/sa/workspace/app-shared");
         when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp);
         when(workingDirectoryRepository.findByDirectoryId("dir-default")).thenReturn(Optional.of(directory));
 
@@ -580,7 +580,7 @@ class A2AgentResourceResolverTest {
         WorkingDirectoryEntity directory = directory("dir-bound", WorkspaceScope.CLIENT_APP_SHARED, ResourceOwnerType.CLIENT_APP);
         directory.setClientAppId("capp-1");
         directory.setOwnerId("capp-1");
-        directory.setRootRef("D:/workspace/app-bound");
+        directory.setRootRef("/home/sa/workspace/app-bound");
         AgentDirectoryBindingEntity binding = new AgentDirectoryBindingEntity();
         binding.setTenantId("tenant-1");
         binding.setAgentId("agent-1");
@@ -607,7 +607,7 @@ class A2AgentResourceResolverTest {
         WorkingDirectoryEntity directory = directory("dir-other", WorkspaceScope.CLIENT_APP_SHARED, ResourceOwnerType.CLIENT_APP);
         directory.setClientAppId("capp-1");
         directory.setOwnerId("capp-1");
-        directory.setRootRef("D:/workspace/app-other");
+        directory.setRootRef("/home/sa/workspace/app-other");
         when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp);
         when(workingDirectoryRepository.findByDirectoryId("dir-other")).thenReturn(Optional.of(directory));
         when(agentDirectoryBindingRepository.findByTenantIdAndAgentIdAndDirectoryId(
@@ -645,7 +645,7 @@ class A2AgentResourceResolverTest {
         entity.setEnabled(true);
         entity.setReadOnly(false);
         entity.setWorkerId("worker-1");
-        entity.setPath("D:/workspace/default");
+        entity.setPath("/home/sa/workspace/default");
         return entity;
     }
 

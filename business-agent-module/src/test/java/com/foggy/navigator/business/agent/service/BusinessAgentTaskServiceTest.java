@@ -98,8 +98,8 @@ class BusinessAgentTaskServiceTest {
                         "worker_01",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.DELEGATED,
-                        "D:/workspace/app",
-                        List.of("D:/workspace"),
+                        "/home/sa/workspace/app",
+                        List.of("/home/sa/workspace"),
                         false,
                         null,
                         null,
@@ -210,8 +210,8 @@ class BusinessAgentTaskServiceTest {
                         "worker_01",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.DELEGATED,
-                        "D:/workspace/app",
-                        List.of("D:/workspace"),
+                        "/home/sa/workspace/app",
+                        List.of("/home/sa/workspace"),
                         false,
                         null,
                         null,
@@ -261,8 +261,8 @@ class BusinessAgentTaskServiceTest {
         assertEquals("USER_PRIVATE", requestCaptor.getValue().getWorkspaceScope());
         assertEquals("DELEGATED", requestCaptor.getValue().getWorkspaceResolverType());
         assertEquals(false, requestCaptor.getValue().getWorkspaceReadOnly());
-        assertEquals("D:/workspace/app", requestCaptor.getValue().getWorkdir());
-        assertEquals(List.of("D:/workspace"), requestCaptor.getValue().getAllowedDirs());
+        assertEquals("/home/sa/workspace/app", requestCaptor.getValue().getWorkdir());
+        assertEquals(List.of("/home/sa/workspace"), requestCaptor.getValue().getAllowedDirs());
         assertEquals(List.of("read_file", "invoke_business_function"), requestCaptor.getValue().getAllowedTools());
 
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor = ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
@@ -324,8 +324,8 @@ class BusinessAgentTaskServiceTest {
                         "directory_worker_01",
                         WorkspaceScope.CLIENT_APP_SHARED,
                         WorkingDirectoryResolverType.DELEGATED,
-                        "D:/workspace/app",
-                        List.of("D:/workspace"),
+                        "/home/sa/workspace/app",
+                        List.of("/home/sa/workspace"),
                         false,
                         null,
                         null,
@@ -425,8 +425,8 @@ class BusinessAgentTaskServiceTest {
                         "directory_worker_01",
                         WorkspaceScope.CLIENT_APP_SHARED,
                         WorkingDirectoryResolverType.DELEGATED,
-                        "D:/workspace/app",
-                        List.of("D:/workspace"),
+                        "/home/sa/workspace/app",
+                        List.of("/home/sa/workspace"),
                         false,
                         null,
                         null,
@@ -479,7 +479,7 @@ class BusinessAgentTaskServiceTest {
 
     @Test
     void createTask_rejects_legacy_runtime_workspace_selectors() {
-        form.setWorkdir("D:/workspace/app");
+        form.setWorkdir("/home/sa/workspace/app");
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
 
         IllegalArgumentException error = assertThrows(
@@ -547,8 +547,8 @@ class BusinessAgentTaskServiceTest {
                         "worker_01",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.DELEGATED,
-                        "D:/workspace/app-2",
-                        List.of("D:/workspace"),
+                        "/home/sa/workspace/app-2",
+                        List.of("/home/sa/workspace"),
                         false,
                         null,
                         null,

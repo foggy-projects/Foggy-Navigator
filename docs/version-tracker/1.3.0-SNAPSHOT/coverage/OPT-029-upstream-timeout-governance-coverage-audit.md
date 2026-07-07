@@ -30,7 +30,7 @@ OPT-029 covers interruption recovery and timeout governance across Navigator ups
 - `tools/langgraph-biz-worker/tests/test_query.py`
 - `addons/langgraph-biz-worker/src/test/java/com/foggy/navigator/langgraph/worker/client/LanggraphWorkerClientTest.java`
 - `addons/langgraph-biz-worker/src/test/java/com/foggy/navigator/langgraph/worker/service/LanggraphStreamRelayTest.java`
-- `D:/workspace/tms-x6-dev/x3-web-tms/tests/playwright/navigator-chat-timeout-recovery.spec.ts`
+- `/home/sa/workspace/tms-x6-dev/x3-web-tms/tests/playwright/navigator-chat-timeout-recovery.spec.ts`
 
 ## Coverage Matrix
 

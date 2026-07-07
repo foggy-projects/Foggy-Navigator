@@ -26,15 +26,15 @@ TMS 正在把 `foggy-query-agent` 收敛为通用 Foggy dataset query DSL skill�
 
 TMS 已对齐 Foggy Data MCP 引擎侧 schema / 描述：
 
-- `D:\foggy-projects\foggy-data-mcp\foggy-data-mcp-bridge\foggy-dataset-mcp\src\main\resources\schemas\descriptions\compose_script_m2.md`
-- `D:\foggy-projects\foggy-data-mcp\foggy-data-mcp-bridge\foggy-dataset-mcp\src\main\resources\schemas\descriptions\query_model_v3_basic.md`
-- `D:\foggy-projects\foggy-data-mcp\foggy-data-mcp-bridge\foggy-dataset-mcp\src\main\resources\schemas\query_model_v3_schema.json`
-- `D:\foggy-projects\foggy-data-mcp\foggy-data-mcp-bridge\foggy-dataset-mcp\src\main\resources\schemas\compose_query_schema.json`
+- `/home/sa/workspace/foggy-data-mcp/foggy-data-mcp-bridge/foggy-dataset-mcp/src/main/resources/schemas/descriptions/compose_script_m2.md`
+- `/home/sa/workspace/foggy-data-mcp/foggy-data-mcp-bridge/foggy-dataset-mcp/src/main/resources/schemas/descriptions/query_model_v3_basic.md`
+- `/home/sa/workspace/foggy-data-mcp/foggy-data-mcp-bridge/foggy-dataset-mcp/src/main/resources/schemas/query_model_v3_schema.json`
+- `/home/sa/workspace/foggy-data-mcp/foggy-data-mcp-bridge/foggy-dataset-mcp/src/main/resources/schemas/compose_query_schema.json`
 
 当前 Navi materialized runtime 文件仍可观察到旧内容：
 
 ```text
-D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev\tools\langgraph-biz-worker\skills\public\apps\capp_c958991d-bcf1-40b9-b54a-78248ccdc56c\foggy-query-agent\SKILL.md
+/home/sa/workspace/Foggy-Navigator/tools/langgraph-biz-worker/skills/public/apps/capp_c958991d-bcf1-40b9-b54a-78248ccdc56c/foggy-query-agent/SKILL.md
 ```
 
 该文件仍包含旧 SOA 查询示例，说明 skill sync / materialize 状态可能滞后。同时，Function Contracts 当前更像 markdown field list，不是标准 JSON Schema。对于 `queryModel` 这类深层嵌套、带 `$or` / `$and` 递归逻辑组的入参，field list 容易丢失结构约束，导致 LLM 生成字符串化 `$or` 或旧式 shorthand。

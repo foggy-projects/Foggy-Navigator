@@ -86,7 +86,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertEquals("ctx_01", form.getContextId());
         assertEquals("model_01", form.getModelConfigId());
         assertEquals("dir_01", form.getDirectoryId());
-        assertEquals("D:/workspace/app", form.getCwd());
+        assertEquals("/home/sa/workspace/app", form.getCwd());
         assertFalse(form.getPrompt().contains("skill_01"));
         assertEquals("bt_01", form.getContext().get("businessTaskId"));
         assertEquals("ctx_01", form.getContext().get("contextId"));
@@ -119,8 +119,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertEquals("USER_PRIVATE", executionPolicy.get("workspace_scope"));
         assertEquals("DELEGATED", executionPolicy.get("workspace_resolver_type"));
         assertEquals(false, executionPolicy.get("read_only"));
-        assertEquals("D:/workspace/app", executionPolicy.get("workdir"));
-        assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
+        assertEquals("/home/sa/workspace/app", executionPolicy.get("workdir"));
+        assertEquals(List.of("/home/sa/workspace"), executionPolicy.get("allowed_dirs"));
         assertEquals(List.of("read_file", "invoke_business_function"), executionPolicy.get("allowed_tools"));
         assertDoesNotThrow(() -> OffsetDateTime.parse((String) runtimeContext.get("current_time")));
         assertDoesNotThrow(() -> LocalDate.parse((String) runtimeContext.get("business_date")));
@@ -237,8 +237,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
         assertEquals("dir_01", executionPolicy.get("directory_id"));
-        assertEquals("D:/workspace/app", executionPolicy.get("workdir"));
-        assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
+        assertEquals("/home/sa/workspace/app", executionPolicy.get("workdir"));
+        assertEquals(List.of("/home/sa/workspace"), executionPolicy.get("allowed_dirs"));
         assertEquals(List.of("read_file", "write_file", "patch_file", "command"), executionPolicy.get("allowed_tools"));
     }
 
@@ -326,8 +326,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
                 .workspaceResolverType("DELEGATED")
                 .workspaceReadOnly(false)
                 .taskScopedToken("rt_token")
-                .workdir("D:/workspace/app")
-                .allowedDirs(List.of("D:/workspace"))
+                .workdir("/home/sa/workspace/app")
+                .allowedDirs(List.of("/home/sa/workspace"))
                 .allowedTools(List.of("read_file", "invoke_business_function"))
                 .build();
     }

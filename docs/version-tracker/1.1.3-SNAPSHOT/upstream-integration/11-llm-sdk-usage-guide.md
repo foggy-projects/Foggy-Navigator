@@ -25,7 +25,7 @@
 在 Navigator 工作区本机开发阶段，先把 SDK 安装到本地 Maven 仓库：
 
 ```powershell
-cd D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev
+cd /home/sa/workspace/Foggy-Navigator
 mvn -pl navigator-open-sdk -am install -DskipTests
 ```
 

@@ -394,8 +394,8 @@ async def test_query_generator_merges_top_level_allowed_tools_into_runtime_polic
                 "allowedTools": "business.functions.schema,business.functions.invoke",
                 "runtime_context": {
                     "execution_policy": {
-                        "workdir": "/workspace/user",
-                        "allowed_dirs": ["/workspace/user"],
+                        "workdir": "/home/sa/workspace/user",
+                        "allowed_dirs": ["/home/sa/workspace/user"],
                     }
                 },
             }),
@@ -407,8 +407,8 @@ async def test_query_generator_merges_top_level_allowed_tools_into_runtime_polic
     assert events[-1]["type"] == "result"
     assert "allowed_tools" not in captured_state["context"]
     assert captured_state["runtime_context"]["execution_policy"] == {
-        "workdir": "/workspace/user",
-        "allowed_dirs": ["/workspace/user"],
+        "workdir": "/home/sa/workspace/user",
+        "allowed_dirs": ["/home/sa/workspace/user"],
         "allowed_tools": "business.functions.schema,business.functions.invoke",
     }
 

@@ -83,7 +83,7 @@ ProvisionResult emp = client.employees().provision(
     "EMP-001",                   // 员工 ID
     "张三",                       // 显示名
     worker.getWorkerId(),        // 绑定的 Worker
-    "/workspace/emp-001",        // 工作目录
+    "/home/sa/workspace/emp-001",        // 工作目录
     "my-project",                // 项目名
     Map.of("CLAUDE.md", "# Project Context")
 );

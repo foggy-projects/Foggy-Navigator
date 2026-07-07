@@ -251,9 +251,9 @@ delegated workspace 只要提供合法 `workdir` / `allowed_dirs`，Linux worker
 {
   "runtime_context": {
     "execution_policy": {
-      "workdir": "/workspace/tms-task",
+      "workdir": "/home/sa/workspace/tms-task",
       "allowed_dirs": [
-        "/workspace/tms-task"
+        "/home/sa/workspace/tms-task"
       ],
       "allowed_tools": [
         "list_files",
@@ -272,9 +272,9 @@ delegated workspace 只要提供合法 `workdir` / `allowed_dirs`，Linux worker
 {
   "runtime_context": {
     "execution_policy": {
-      "workdir": "/workspace/delegated-task",
+      "workdir": "/home/sa/workspace/delegated-task",
       "allowed_dirs": [
-        "/workspace/delegated-task"
+        "/home/sa/workspace/delegated-task"
       ],
       "allowed_tools": [
         "list_files",

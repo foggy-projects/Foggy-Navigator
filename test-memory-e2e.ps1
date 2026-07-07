@@ -27,12 +27,12 @@ Write-Host "  Waiting for agent processing (15s)..."
 Start-Sleep -Seconds 15
 
 # Check logs
-$saved = Select-String -Path 'D:\foggy-projects\Foggy-Navigator\logs\backend.log' -Pattern 'Memory saved via tool.*Rust' | Select-Object -Last 1
+$saved = Select-String -Path '/home/sa/workspace/Foggy-Navigator/logs/backend.log' -Pattern 'Memory saved via tool.*Rust' | Select-Object -Last 1
 if ($saved) {
     Write-Host "  ✓ save_memory was called successfully"
 } else {
     Write-Host "  ✗ save_memory was NOT called - checking for errors..."
-    $errors = Select-String -Path 'D:\foggy-projects\Foggy-Navigator\logs\backend.log' -Pattern 'ERROR.*Agent invocation|invalid.*key' | Select-Object -Last 3
+    $errors = Select-String -Path '/home/sa/workspace/Foggy-Navigator/logs/backend.log' -Pattern 'ERROR.*Agent invocation|invalid.*key' | Select-Object -Last 3
     $errors | ForEach-Object { Write-Host "    $_" }
 }
 
@@ -55,7 +55,7 @@ $bodyBytes2 = [System.Text.Encoding]::UTF8.GetBytes($body2)
 Invoke-RestMethod -Uri "http://localhost:8112/api/v1/sessions/$session2/messages" -Method Post -Headers @{'Authorization'="Bearer $TOKEN"} -ContentType 'application/json; charset=utf-8' -Body $bodyBytes2 -TimeoutSec 60 | Out-Null
 
 Start-Sleep -Seconds 10
-$injected = Select-String -Path 'D:\foggy-projects\Foggy-Navigator\logs\backend.log' -Pattern 'Injected user memory' | Select-Object -Last 1
+$injected = Select-String -Path '/home/sa/workspace/Foggy-Navigator/logs/backend.log' -Pattern 'Injected user memory' | Select-Object -Last 1
 if ($injected) {
     Write-Host "  ✓ Memory was injected: $injected"
 } else {

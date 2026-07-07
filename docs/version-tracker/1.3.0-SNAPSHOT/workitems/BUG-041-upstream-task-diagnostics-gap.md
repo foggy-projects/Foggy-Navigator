@@ -22,7 +22,7 @@
 
 1. 上游本地 CLI 仍可能停在 `navigator-upstream-cli 1.0.7`，无法完整打印新增诊断字段。Navigator 需发布或交付 `1.0.8` 包，并提供本地覆盖安装方式。
 2. 历史 Codex tasks `20260525-a732` / `20260525-5ee1` 通过旧 CLI 仍显示 `RUNNING/messages=0`，但文件已出现在 repo-local workspace。这两个任务只作为诊断材料，不作为验收证据；新验收证据使用 `20260525-8d0e`。
-3. School Sim 的 `school-sim.developer.codex.m2.v1` 实际路由到哪个 Codex worker 仍需确认。当前已知 WSL 存在 `/home/navigator/.codex-worker`，Windows 也存在两个 `codex-agent-worker` 来源：`D:\foggy-projects\Foggy-Navigator` 与 `D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev`。缺少 admin credential 时，上游不能直接 `worker list` 映射 active worker。
+3. School Sim 的 `school-sim.developer.codex.m2.v1` 实际路由到哪个 Codex worker 仍需确认。当前已知 WSL 存在 `/home/navigator/.codex-worker`，Windows 也存在两个 `codex-agent-worker` 来源：`/home/sa/workspace/Foggy-Navigator` 与 `/home/sa/workspace/Foggy-Navigator`。缺少 admin credential 时，上游不能直接 `worker list` 映射 active worker。
 
 ## 2026-05-26 Live Ask Regression
 

@@ -23,10 +23,10 @@ TMS smoke 测试环境：`http://localhost:3199/tms/`
 
 ## 证据
 
-- 上传后截图：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-smoke-1779492201651\07-attachment-ticket.png`
-- 刷新后截图：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-smoke-1779492201651\08-after-reload.png`
-- 最终状态截图：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-smoke-1779492201651\99-final.png`
-- 完整报告：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-smoke-1779492201651\report.json`
+- 上传后截图：`/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-smoke-1779492201651/07-attachment-ticket.png`
+- 刷新后截图：`/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-smoke-1779492201651/08-after-reload.png`
+- 最终状态截图：`/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-smoke-1779492201651/99-final.png`
+- 完整报告：`/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-smoke-1779492201651/report.json`
 
 ## 根因
 
@@ -98,9 +98,9 @@ TMS 在 `2026-05-23 10:50-10:55` 复测确认：
 
 证据：
 
-- 完整报告：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake2-1779504639487\report.json`
-- 刷新前附件截图：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake2-1779504639487\04-before-refresh-attachment.png`
-- 刷新后历史会话截图：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake2-1779504639487\06-reopened-history-session.png`
+- 完整报告：`/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake2-1779504639487/report.json`
+- 刷新前附件截图：`/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake2-1779504639487/04-before-refresh-attachment.png`
+- 刷新后历史会话截图：`/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake2-1779504639487/06-reopened-history-session.png`
 
 三次根因补充：
 
@@ -138,8 +138,8 @@ TMS 在 `2026-05-23 11:21-11:26` 重新执行 smoke，结论：全部通过。
 
 证据：
 
-- 完整报告：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\report.json`
-- 刷新前附件截图：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\04-before-refresh-attachment.png`
-- 刷新后历史会话截图：`D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\06-reopened-history-session.png`
+- 完整报告：`/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake3-1779506477281/report.json`
+- 刷新前附件截图：`/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake3-1779506477281/04-before-refresh-attachment.png`
+- 刷新后历史会话截图：`/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake3-1779506477281/06-reopened-history-session.png`
 
 状态：closed。

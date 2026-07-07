@@ -110,7 +110,7 @@ AFTER_REWIND_D4R_OK
 
 | 项目 | 本次结论 | 说明 |
 |------|------|------|
-| `TestProject` 目录配置错误 | 已修复 | 页面仍保持 `D:\workspace\fsbi` |
+| `TestProject` 目录配置错误 | 已修复 | 页面仍保持 `/home/sa/workspace/fsbi` |
 | `TestProject` 文件浏览器打不开 | 已修复 | 本轮可正常进入 |
 | `TestProject` 基础任务启动失败 | 已修复 | 本轮基础启动正常 |
 | 文件浏览器同标签切换 `filePath` | 已修复 | 已正确从 `.gitignore` 切到 `pom.xml` |

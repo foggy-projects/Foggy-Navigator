@@ -140,7 +140,7 @@ class ClaudeTaskServiceSyncTest {
 
         // First lookup with original backslash cwd → miss
         when(directoryRepository.findByWorkerIdAndPathAndUserId(
-                WORKER_ID, "D:\\foggy-projects\\student-analytics", USER_ID))
+                WORKER_ID, "/home/sa/workspace/student-analytics", USER_ID))
                 .thenReturn(Optional.empty());
         // Second lookup with normalized forward-slash cwd → hit
         when(directoryRepository.findByWorkerIdAndPathAndUserId(
@@ -149,7 +149,7 @@ class ClaudeTaskServiceSyncTest {
 
         // Worker returns cwd with BACKSLASHES (Windows native)
         List<Map<String, Object>> sessions = List.of(
-                Map.of("session_id", "sess-bbb", "cwd", "D:\\foggy-projects\\student-analytics", "slug", "fix bug")
+                Map.of("session_id", "sess-bbb", "cwd", "/home/sa/workspace/student-analytics", "slug", "fix bug")
         );
 
         int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
@@ -164,7 +164,7 @@ class ClaudeTaskServiceSyncTest {
     @Test
     void syncLocalSessions_forwardSlashCwd_matchesBackslashDirectory() {
         // Directory stored with BACKSLASHES
-        WorkingDirectoryEntity dir = createDirectory("dir-2", "D:\\foggy-projects\\student-analytics");
+        WorkingDirectoryEntity dir = createDirectory("dir-2", "/home/sa/workspace/student-analytics");
 
         // First lookup with original forward-slash cwd → miss
         when(directoryRepository.findByWorkerIdAndPathAndUserId(
@@ -172,7 +172,7 @@ class ClaudeTaskServiceSyncTest {
                 .thenReturn(Optional.empty());
         // Second lookup with normalized backslash cwd → hit
         when(directoryRepository.findByWorkerIdAndPathAndUserId(
-                WORKER_ID, "D:\\foggy-projects\\student-analytics", USER_ID))
+                WORKER_ID, "/home/sa/workspace/student-analytics", USER_ID))
                 .thenReturn(Optional.of(dir));
 
         List<Map<String, Object>> sessions = List.of(
@@ -238,7 +238,7 @@ class ClaudeTaskServiceSyncTest {
         orphan.setTaskId("old-task");
         orphan.setWorkerId(WORKER_ID);
         orphan.setUserId(USER_ID);
-        orphan.setCwd("D:\\foggy-projects\\student-analytics");
+        orphan.setCwd("/home/sa/workspace/student-analytics");
         orphan.setDirectoryId(null);
         when(taskRepository.findByWorkerIdAndUserIdAndDirectoryIdIsNull(WORKER_ID, USER_ID))
                 .thenReturn(List.of(orphan));
@@ -246,14 +246,14 @@ class ClaudeTaskServiceSyncTest {
         // Directory stored with forward slashes
         WorkingDirectoryEntity dir = createDirectory("dir-sa", "D:/foggy-projects/student-analytics");
         when(directoryRepository.findByWorkerIdAndPathAndUserId(
-                WORKER_ID, "D:\\foggy-projects\\student-analytics", USER_ID))
+                WORKER_ID, "/home/sa/workspace/student-analytics", USER_ID))
                 .thenReturn(Optional.empty());
         when(directoryRepository.findByWorkerIdAndPathAndUserId(
                 WORKER_ID, "D:/foggy-projects/student-analytics", USER_ID))
                 .thenReturn(Optional.of(dir));
 
         List<Map<String, Object>> sessions = List.of(
-                Map.of("session_id", "sess-existing", "cwd", "D:\\foggy-projects\\student-analytics")
+                Map.of("session_id", "sess-existing", "cwd", "/home/sa/workspace/student-analytics")
         );
 
         int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);

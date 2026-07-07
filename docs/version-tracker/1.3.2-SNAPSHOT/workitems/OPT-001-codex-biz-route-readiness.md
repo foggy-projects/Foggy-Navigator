@@ -316,7 +316,7 @@ powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-
   - 2026-06-29 migration follow-up 3 verification: `npm --prefix tools/codex-agent-worker run typecheck` pass.
   - PowerShell parser check for `tools/codex-agent-worker/scripts/codex-biz-smoke.ps1`: pass.
   - `powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3070`: pass.
-  - `powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3070 -Cwd D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev -RunLiveQueries`: pass.
+  - `powershell -ExecutionPolicy Bypass -File tools/codex-agent-worker/scripts/codex-biz-smoke.ps1 -BaseUrl http://127.0.0.1:3070 -Cwd /home/sa/workspace/Foggy-Navigator -RunLiveQueries`: pass.
   - 2026-06-29 follow-up 5 verification: `navi.ps1 version` pass, CLI `1.0.16`; `upstream config check` pass with gitignored profile; `upstream model grants` shows 3 enabled grants, all `LANGGRAPH_BIZ`; `upstream directory client-list` shows `directoryCount=0`; `upstream route list` shows 2 enabled routes; `upstream function visible` shows 65 functions.
   - 2026-06-29 follow-up 5 verification: `upstream owner-smoke` blocked before Worker dispatch with `Agent is disabled: tms-agent-v305` and missing effective model config, worker backend, directory and physical worker.
   - 2026-06-29 follow-up 5 verification: `upstream verify-agent-readiness` blocked with the same disabled Agent readiness failure; live `ask` was skipped.

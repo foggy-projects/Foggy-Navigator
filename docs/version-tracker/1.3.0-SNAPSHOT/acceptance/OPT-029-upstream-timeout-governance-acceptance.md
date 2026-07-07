@@ -56,7 +56,7 @@ evidence_count: 10
 - Widget UX tests: `pnpm --filter @foggy/navigator-chat-widget test -- useNavigatorChat.ux.test.ts` -> 12 passed.
 - Python Worker targeted and E2E tests: frame recovery, LLM guard, slow Worker, and detach/reattach sets listed in the coverage audit -> passed.
 - Provider hang guard/soak: `tools/langgraph-biz-worker/tests/test_llm_call_guard.py` -> 4 passed.
-- TMS browser E2E: `D:/workspace/tms-x6-dev/x3-web-tms/tests/playwright/navigator-chat-timeout-recovery.spec.ts` -> 3 passed.
+- TMS browser E2E: `/home/sa/workspace/tms-x6-dev/x3-web-tms/tests/playwright/navigator-chat-timeout-recovery.spec.ts` -> 3 passed.
 
 ## Failed Items
 

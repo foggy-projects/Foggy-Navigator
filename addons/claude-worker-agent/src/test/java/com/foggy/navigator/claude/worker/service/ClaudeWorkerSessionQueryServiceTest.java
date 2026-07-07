@@ -68,7 +68,7 @@ class ClaudeWorkerSessionQueryServiceTest {
         when(client.listSessions()).thenReturn(Mono.just(List.of(Map.of(
                 "session_id", SESSION_ID,
                 "worker_id", WORKER_ID,
-                "project", "/workspace/app",
+                "project", "/home/sa/workspace/app",
                 "model", "claude-opus",
                 "status", "COMPLETED",
                 "latest_task_id", "ctask-1",
@@ -126,8 +126,8 @@ class ClaudeWorkerSessionQueryServiceTest {
     @Test
     void sync_worker_sessions_delegates_local_projection_to_task_service() {
         List<Map<String, Object>> sessions = List.of(
-                Map.of("session_id", "sess-1", "cwd", "/workspace/a"),
-                Map.of("session_id", "sess-2", "cwd", "/workspace/b")
+                Map.of("session_id", "sess-1", "cwd", "/home/sa/workspace/a"),
+                Map.of("session_id", "sess-2", "cwd", "/home/sa/workspace/b")
         );
         when(client.syncSessions()).thenReturn(Mono.just(Map.of("status", "ok")));
         when(client.listSessions()).thenReturn(Mono.just(sessions));

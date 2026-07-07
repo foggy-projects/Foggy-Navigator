@@ -50,7 +50,7 @@ class CodexWorkerClientTest {
                     false,
                     "disabled",
                     Map.of("task_scoped_token", "token-1"),
-                    List.of("D:/shared")
+                    List.of("/home/sa/workspace/shared")
             ).blockFirst(Duration.ofSeconds(5));
 
             Map<String, Object> body = objectMapper.readValue(server.body(),
@@ -66,7 +66,7 @@ class CodexWorkerClientTest {
             assertEquals(false, body.get("network_access_enabled"));
             assertEquals("disabled", body.get("web_search_mode"));
             assertEquals(Map.of("task_scoped_token", "token-1"), body.get("business_runtime_context"));
-            assertEquals(List.of("D:/shared"), body.get("additional_directories"));
+            assertEquals(List.of("/home/sa/workspace/shared"), body.get("additional_directories"));
         }
     }
 

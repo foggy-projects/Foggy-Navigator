@@ -30,7 +30,7 @@ import java.util.Map;
  *
  * // 员工 Provisioning
  * ProvisionResult emp = client.employees().provision(
- *     "EMP-001", "张三", worker.getWorkerId(), "/workspace/emp-001",
+ *     "EMP-001", "张三", worker.getWorkerId(), "/home/sa/workspace/emp-001",
  *     "my-project", Map.of("CLAUDE.md", "# Project"));
  *
  * // Upstream-system shared directories are managed by the upstream admin key.

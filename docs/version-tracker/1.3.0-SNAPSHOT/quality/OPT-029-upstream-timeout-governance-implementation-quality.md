@@ -42,7 +42,7 @@ OPT-029 closes the cross-layer timeout, detach, cancel, deadline, retry, and rec
 - `tools/langgraph-biz-worker/scripts/opt029_timeout_recovery_capture.py`
 - `deploy/dev-kvm-x3/scripts/54-smoke-tms-timeout-recovery.sh`
 - `deploy/dev-kvm-x3/remote/smoke-tms-timeout-recovery.sh`
-- `D:/workspace/tms-x6-dev/x3-web-tms/tests/playwright/navigator-chat-timeout-recovery.spec.ts`
+- `/home/sa/workspace/tms-x6-dev/x3-web-tms/tests/playwright/navigator-chat-timeout-recovery.spec.ts`
 
 ## Quality Checklist
 

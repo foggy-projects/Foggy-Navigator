@@ -14,7 +14,7 @@
 - status: in-progress
 - requester: TMS
 - owner: Navigator upstream skill 管理能力
-- upstream_source: `D:/workspace/tms-x6-dev/docs/v3.2.0/workitems/NAVI-CLI-public-skill-clear-command.md`
+- upstream_source: `/home/sa/workspace/tms-x6-dev/docs/v3.2.0/workitems/NAVI-CLI-public-skill-clear-command.md`
 - related_tms_commit: `305595f1 refactor navigator skills by business domain`
 - target_window: TMS Stage 3 下线旧 Skill 前提供可用清理入口
 

@@ -279,7 +279,7 @@ Navigator 管理员或 operator Agent 撤销、轮换上游系统级 admin key �
 {
   "workerId": "physical-or-directory-worker-id",
   "workspaceScope": "CLIENT_APP_SHARED",
-  "path": "/workspace/app-shared",
+  "path": "/home/sa/workspace/app-shared",
   "projectName": "app-shared"
 }
 ```
@@ -365,7 +365,7 @@ enabled=<true|false>
 ```json
 {
   "workerId": "codex-local-1",
-  "path": "/workspace/tms-agent",
+  "path": "/home/sa/workspace/tms-agent",
   "projectName": "tms-agent",
   "files": {
     "README.md": "# TMS Agent Workspace\n"
@@ -404,7 +404,7 @@ enabled=<true|false>
 {
   "workerId": "codex-local-1",
   "workspaceScope": "CLIENT_APP_SHARED",
-  "path": "/workspace/tms-shared",
+  "path": "/home/sa/workspace/tms-shared",
   "projectName": "tms-shared",
   "files": {
     "CLAUDE.md": "# TMS Shared Workspace\n"
@@ -419,7 +419,7 @@ enabled=<true|false>
   "workerId": "codex-local-1",
   "workspaceScope": "USER_PRIVATE",
   "upstreamUserId": "staff-10001",
-  "path": "/workspace/tms-users/staff-10001",
+  "path": "/home/sa/workspace/tms-users/staff-10001",
   "projectName": "staff-10001",
   "files": {
     "CLAUDE.md": "# Staff Workspace\n"
@@ -573,13 +573,13 @@ owner-smoke ready
 本机简化 sim 推荐在 WSL 中启动一个已有的 `tools/codex-agent-worker` 进程，并配置 `CODEX_BIZ_HOME_ROOT`，不需要新建单独二进制：
 
 ```bash
-cd /mnt/d/foggy-projects/Foggy-Navigator-wt-qd-win11-dev/tools/codex-agent-worker
+cd /home/sa/workspace/Foggy-Navigator/tools/codex-agent-worker
 cp .env.example .env
 # edit .env:
 # CODEX_WORKER_HOST=0.0.0.0
 # CODEX_WORKER_PORT=3051
 # CODEX_BIZ_HOME_ROOT=/home/$USER/.foggy/codex-biz-homes
-# CODEX_ALLOWED_CWDS=/mnt/d/foggy-projects
+# CODEX_ALLOWED_CWDS=/home/sa/workspace
 # OPENAI_API_KEY=<openai-key>
 npm install
 npm run start

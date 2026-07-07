@@ -18,7 +18,7 @@ import java.util.Map;
  * Directory dir = client.directories().initWithUpstreamAdmin(Map.of(
  *     "targetTenantId", "tenant-1",
  *     "workerId", "worker-id",
- *     "path", "/workspace/emp-001",
+ *     "path", "/home/sa/workspace/emp-001",
  *     "projectName", "my-project",
  *     "files", Map.of("CLAUDE.md", "# Project\n...")));
  *
@@ -34,7 +34,7 @@ import java.util.Map;
  * Directory appDir = client.directories().initWithClientAppControl("tms-app", Map.of(
  *     "workerId", "worker-id",
  *     "workspaceScope", "CLIENT_APP_SHARED",
- *     "path", "/workspace/tms/shared",
+ *     "path", "/home/sa/workspace/tms/shared",
  *     "projectName", "tms-shared",
  *     "files", Map.of("CLAUDE.md", "# Project\n...")));
  * </pre>

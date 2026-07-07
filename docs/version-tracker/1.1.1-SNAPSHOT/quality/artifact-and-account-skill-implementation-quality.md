@@ -199,7 +199,7 @@ Result: `304 passed, 6 skipped`
 Initial Linux/WSL symlink execution attempt:
 
 ```powershell
-wsl -e bash -lc "cd /mnt/d/foggy-projects/Foggy-Navigator-wt-qd-win11-dev/tools/langgraph-biz-worker && python3 --version && PYTHONPATH=src python3 -m pytest tests/test_account_path_guard.py tests/test_account_file_tools.py -k symlink"
+wsl -e bash -lc "cd /home/sa/workspace/Foggy-Navigator/tools/langgraph-biz-worker && python3 --version && PYTHONPATH=src python3 -m pytest tests/test_account_path_guard.py tests/test_account_file_tools.py -k symlink"
 ```
 
 Result: WSL was available with `Python 3.12.3`, but `pytest` was not installed. Creating a temporary venv was blocked because `python3-venv` was missing.
@@ -213,7 +213,7 @@ wsl -e bash -lc "sudo apt update && sudo apt install -y python3-venv python3-pip
 Executed after dependency installation:
 
 ```powershell
-wsl -e bash -lc "rm -rf /tmp/foggy-lg-worker-test-venv && cd /mnt/d/foggy-projects/Foggy-Navigator-wt-qd-win11-dev/tools/langgraph-biz-worker && python3 -m venv /tmp/foggy-lg-worker-test-venv && . /tmp/foggy-lg-worker-test-venv/bin/activate && python -m pip install -q -e '.[dev]' && PYTHONPATH=src python -m pytest tests/test_account_path_guard.py tests/test_account_file_tools.py -k symlink"
+wsl -e bash -lc "rm -rf /tmp/foggy-lg-worker-test-venv && cd /home/sa/workspace/Foggy-Navigator/tools/langgraph-biz-worker && python3 -m venv /tmp/foggy-lg-worker-test-venv && . /tmp/foggy-lg-worker-test-venv/bin/activate && python -m pip install -q -e '.[dev]' && PYTHONPATH=src python -m pytest tests/test_account_path_guard.py tests/test_account_file_tools.py -k symlink"
 ```
 
 Result: `6 passed, 67 deselected`

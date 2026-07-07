@@ -206,7 +206,7 @@ Key evidence:
 - TMS BFF real smoke:
 
 ```powershell
-# In D:\workspace\tms-x6-dev\tests, send a real TMS BFF ask with top-level attachments,
+# In /home/sa/workspace/tms-x6-dev/tests, send a real TMS BFF ask with top-level attachments,
 # then poll Navigator task messages through the BFF messages endpoint.
 ```
 

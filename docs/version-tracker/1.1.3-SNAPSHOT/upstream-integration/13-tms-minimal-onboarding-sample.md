@@ -42,7 +42,7 @@ current staff/session
 在 Navigator 工作区先安装 SDK：
 
 ```powershell
-cd D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev
+cd /home/sa/workspace/Foggy-Navigator
 mvn install -pl navigator-open-sdk -am -DskipTests
 ```
 

@@ -317,7 +317,7 @@ class BusinessAgentE2ESampleTest {
         directory.setReadOnly(false);
         directory.setWorkerId(POOL_ID);
         directory.setProjectName("Stage6 Workspace");
-        directory.setPath("D:/workspace/stage6");
+        directory.setPath("/home/sa/workspace/stage6");
         when(workingDirectoryRepository.findByDirectoryId(DIRECTORY_ID)).thenReturn(Optional.of(directory));
 
         when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(inv -> {

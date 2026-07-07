@@ -74,10 +74,10 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
         assertEquals("model_cfg_01", params.get("modelConfigId"));
         assertEquals("gpt-5-codex", params.get("model"));
         assertEquals("dir_01", params.get("directoryId"));
-        assertEquals("D:/workspaces/app-01", params.get("cwd"));
+        assertEquals("/home/sa/workspace/app-01", params.get("cwd"));
         assertEquals("tenant_01/app_01/scenario-1.actor-1", params.get("codexHomeKey"));
         assertEquals("tenant_01/app_01/scenario-1.actor-1", params.get("privateAccountId"));
-        assertIterableEquals(List.of("D:/workspaces/app-01", "D:/shared/reference"), (List<String>) params.get("additionalDirectories"));
+        assertIterableEquals(List.of("/home/sa/workspace/app-01", "/home/sa/workspace/shared/reference"), (List<String>) params.get("additionalDirectories"));
         String developerInstructions = (String) params.get("developerInstructions");
         assertTrue(developerInstructions.contains("business_task_id: bat_01"));
         assertFalse(developerInstructions.contains("task_scoped_token"));
@@ -127,8 +127,8 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
                 .modelConfigId("model_cfg_01")
                 .model("gpt-5-codex")
                 .directoryId("dir_01")
-                .workdir("D:/workspaces/app-01")
-                .allowedDirs(List.of("D:/workspaces/app-01", "D:/shared/reference"))
+                .workdir("/home/sa/workspace/app-01")
+                .allowedDirs(List.of("/home/sa/workspace/app-01", "/home/sa/workspace/shared/reference"))
                 .allowedTools(List.of("business.functions.invoke"))
                 .taskScopedToken("task_token_01");
     }

@@ -59,7 +59,7 @@ class ClientAppWorkingDirectoryControllerTest {
         ClaudeWorkerEntity worker = worker("worker-1", "user-1", "tenant-1");
         ClientAppDirectoryInitForm form = new ClientAppDirectoryInitForm();
         form.setWorkerId("worker-1");
-        form.setPath("/workspace/app-shared");
+        form.setPath("/home/sa/workspace/app-shared");
         form.setProjectName("app-shared");
         form.setWorkspaceScope(WorkspaceScope.CLIENT_APP_SHARED);
         form.setFiles(Map.of("README.md", "# app"));
@@ -72,10 +72,10 @@ class ClientAppWorkingDirectoryControllerTest {
                 eq("app-1")))
                 .thenReturn(principal);
         when(workerRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker));
-        when(directoryRepository.findByWorkerIdAndPathAndUserId("worker-1", "/workspace/app-shared", "user-1"))
+        when(directoryRepository.findByWorkerIdAndPathAndUserId("worker-1", "/home/sa/workspace/app-shared", "user-1"))
                 .thenReturn(Optional.empty());
         when(claudeWorkerFacade.initDirectory(
-                eq("user-1"), eq("worker-1"), eq("/workspace/app-shared"), same(form.getFiles()), eq("app-shared")))
+                eq("user-1"), eq("worker-1"), eq("/home/sa/workspace/app-shared"), same(form.getFiles()), eq("app-shared")))
                 .thenReturn("dir-1");
         when(directoryRepository.findByDirectoryId("dir-1")).thenReturn(Optional.of(directory));
 
@@ -97,7 +97,7 @@ class ClientAppWorkingDirectoryControllerTest {
         ClaudeWorkerEntity worker = worker("worker-1", "user-1", "tenant-1");
         ClientAppDirectoryInitForm form = new ClientAppDirectoryInitForm();
         form.setWorkerId("worker-1");
-        form.setPath("/workspace/user-a");
+        form.setPath("/home/sa/workspace/user-a");
         form.setProjectName("user-a");
         form.setWorkspaceScope(WorkspaceScope.USER_PRIVATE);
         form.setUpstreamUserId("u-1");
@@ -111,10 +111,10 @@ class ClientAppWorkingDirectoryControllerTest {
                 eq("app-1")))
                 .thenReturn(principal);
         when(workerRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker));
-        when(directoryRepository.findByWorkerIdAndPathAndUserId("worker-1", "/workspace/user-a", "user-1"))
+        when(directoryRepository.findByWorkerIdAndPathAndUserId("worker-1", "/home/sa/workspace/user-a", "user-1"))
                 .thenReturn(Optional.empty());
         when(claudeWorkerFacade.initDirectory(
-                eq("user-1"), eq("worker-1"), eq("/workspace/user-a"), same(form.getFiles()), eq("user-a")))
+                eq("user-1"), eq("worker-1"), eq("/home/sa/workspace/user-a"), same(form.getFiles()), eq("user-a")))
                 .thenReturn("dir-1");
         when(directoryRepository.findByDirectoryId("dir-1")).thenReturn(Optional.of(directory));
 
@@ -219,7 +219,7 @@ class ClientAppWorkingDirectoryControllerTest {
         directory.setWorkspaceScope(WorkspaceScope.CLIENT_APP_SHARED);
         directory.setResolverType(WorkingDirectoryResolverType.DELEGATED);
         directory.setProjectName(directoryId);
-        directory.setPath("/workspace/" + directoryId);
+        directory.setPath("/home/sa/workspace/" + directoryId);
         directory.setDirectoryType("STANDARD");
         directory.setEnabled(true);
         return directory;

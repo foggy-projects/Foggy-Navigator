@@ -70,7 +70,7 @@ class DirectoryApiTest {
     @Test
     @SuppressWarnings("removal")
     void legacyOpenDirectoryMethodsFailLocally() {
-        assertRemoved(() -> api.init("worker-1", "/workspace/demo", "demo", Map.of("CLAUDE.md", "# Demo")));
+        assertRemoved(() -> api.init("worker-1", "/home/sa/workspace/demo", "demo", Map.of("CLAUDE.md", "# Demo")));
         assertRemoved(() -> api.list());
         assertRemoved(() -> api.listByWorker("worker-1"));
         assertRemoved(() -> api.get("dir-1"));
@@ -88,7 +88,7 @@ class DirectoryApiTest {
         Directory directory = client.directories().initWithClientAppControl("app-1", Map.of(
                 "workerId", "worker-1",
                 "workspaceScope", "CLIENT_APP_SHARED",
-                "path", "/workspace/app",
+                "path", "/home/sa/workspace/app",
                 "files", Map.of("CLAUDE.md", "# App")));
 
         assertEquals("dir-1", directory.getDirectoryId());

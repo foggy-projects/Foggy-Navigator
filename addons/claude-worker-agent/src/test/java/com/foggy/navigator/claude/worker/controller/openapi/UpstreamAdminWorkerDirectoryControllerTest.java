@@ -63,11 +63,11 @@ class UpstreamAdminWorkerDirectoryControllerTest {
         ClaudeWorkerEntity worker = worker("worker-1", "user-1", "tenant-1");
         InitDirectoryOpenForm form = new InitDirectoryOpenForm();
         form.setWorkerId("worker-1");
-        form.setPath("/workspace/app");
+        form.setPath("/home/sa/workspace/app");
         form.setProjectName("app");
         form.setFiles(Map.of("README.md", "# app"));
         WorkingDirectoryEntity directory = directory("dir-1", "worker-1", "user-1", null, null, null);
-        directory.setPath("/workspace/app");
+        directory.setPath("/home/sa/workspace/app");
         directory.setProjectName("app");
 
         when(adminCredentialService.requireAccess(
@@ -75,10 +75,10 @@ class UpstreamAdminWorkerDirectoryControllerTest {
                 eq(UpstreamBootstrapRequestService.SCOPE_WORKING_DIRECTORY_MANAGE)))
                 .thenReturn(principal);
         when(workerRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker));
-        when(directoryRepository.findByWorkerIdAndPathAndUserId("worker-1", "/workspace/app", "user-1"))
+        when(directoryRepository.findByWorkerIdAndPathAndUserId("worker-1", "/home/sa/workspace/app", "user-1"))
                 .thenReturn(Optional.empty());
         when(claudeWorkerFacade.initDirectory(
-                eq("user-1"), eq("worker-1"), eq("/workspace/app"), same(form.getFiles()), eq("app")))
+                eq("user-1"), eq("worker-1"), eq("/home/sa/workspace/app"), same(form.getFiles()), eq("app")))
                 .thenReturn("dir-1");
         when(directoryRepository.findByDirectoryId("dir-1")).thenReturn(Optional.of(directory));
 
@@ -89,7 +89,7 @@ class UpstreamAdminWorkerDirectoryControllerTest {
         assertEquals("ups-1", directory.getOwnerId());
         assertEquals(WorkspaceScope.UPSTREAM_SYSTEM_SHARED, directory.getWorkspaceScope());
         assertEquals(WorkingDirectoryResolverType.DELEGATED, directory.getResolverType());
-        assertEquals("/workspace/app", directory.getRootRef());
+        assertEquals("/home/sa/workspace/app", directory.getRootRef());
         assertEquals(ResourceOwnerType.UPSTREAM_SYSTEM, result.getData().getOwnerType());
         assertEquals("ups-1", result.getData().getOwnerId());
         verify(directoryRepository).save(directory);
@@ -172,7 +172,7 @@ class UpstreamAdminWorkerDirectoryControllerTest {
         directory.setWorkspaceScope(WorkspaceScope.UPSTREAM_SYSTEM_SHARED);
         directory.setResolverType(WorkingDirectoryResolverType.DELEGATED);
         directory.setProjectName(directoryId);
-        directory.setPath("/workspace/" + directoryId);
+        directory.setPath("/home/sa/workspace/" + directoryId);
         directory.setDirectoryType("STANDARD");
         directory.setEnabled(true);
         return directory;

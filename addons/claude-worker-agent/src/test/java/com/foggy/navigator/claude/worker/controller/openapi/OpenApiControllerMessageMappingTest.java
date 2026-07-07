@@ -220,7 +220,7 @@ class OpenApiControllerMessageMappingTest {
                   "taskId": "task-1",
                   "reportRefs": ["frame-report://worker-task-1/frame-1"],
                   "artifactRefs": [
-                    {"path": "D:/workspace/report.md?signature=secret", "summary": "report ready"}
+                    {"path": "/home/sa/workspace/report.md?signature=secret", "summary": "report ready"}
                   ]
                 }
                 """);
@@ -236,7 +236,7 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("frame_report", dto.getReportRefs().get(0).getType());
         assertEquals("frame-1", dto.getReportRefs().get(0).getFrameId());
         assertEquals(1, dto.getArtifactRefs().size());
-        assertEquals("D:/workspace/report.md", dto.getArtifactRefs().get(0).getPath());
+        assertEquals("/home/sa/workspace/report.md", dto.getArtifactRefs().get(0).getPath());
         assertFalse(dto.getArtifactRefs().get(0).getPath().contains("signature=secret"));
     }
 
@@ -1022,8 +1022,8 @@ class OpenApiControllerMessageMappingTest {
                         "physical-worker",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.MANAGED,
-                        "D:/workspace/school",
-                        List.of("D:/workspace/school"),
+                        "/home/sa/workspace/school",
+                        List.of("/home/sa/workspace/school"),
                         false,
                         null,
                         null,
@@ -1056,7 +1056,7 @@ class OpenApiControllerMessageMappingTest {
         Map<String, Object> metadata = captor.getValue().getMetadata();
         assertEquals("physical-worker", metadata.get("workerId"));
         assertEquals("dir-default", metadata.get("directoryId"));
-        assertEquals("D:/workspace/school", metadata.get("cwd"));
+        assertEquals("/home/sa/workspace/school", metadata.get("cwd"));
         assertEquals("trace-1", metadata.get("traceId"));
         @SuppressWarnings("unchecked")
         Map<String, Object> runtimeContext = (Map<String, Object>) metadata.get("runtimeContext");
@@ -1066,8 +1066,8 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("USER_PRIVATE", executionPolicy.get("workspace_scope"));
         assertEquals("MANAGED", executionPolicy.get("workspace_resolver_type"));
         assertEquals(false, executionPolicy.get("read_only"));
-        assertEquals("D:/workspace/school", executionPolicy.get("workdir"));
-        assertEquals(List.of("D:/workspace/school"), executionPolicy.get("allowed_dirs"));
+        assertEquals("/home/sa/workspace/school", executionPolicy.get("workdir"));
+        assertEquals(List.of("/home/sa/workspace/school"), executionPolicy.get("allowed_dirs"));
         verify(resourceResolver).resolveRequiredWorkspaceForAgent(
                 "tenant-1", "app-1", "upstream-a", agentResource, "dir-default");
     }
@@ -1135,8 +1135,8 @@ class OpenApiControllerMessageMappingTest {
                         "directory-worker",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.MANAGED,
-                        "D:/workspace/school",
-                        List.of("D:/workspace/school"),
+                        "/home/sa/workspace/school",
+                        List.of("/home/sa/workspace/school"),
                         false,
                         null,
                         null,
@@ -1165,7 +1165,7 @@ class OpenApiControllerMessageMappingTest {
         Map<String, Object> metadata = captor.getValue().getMetadata();
         assertFalse(metadata.containsKey("workerId"));
         assertEquals("dir-default", metadata.get("directoryId"));
-        assertEquals("D:/workspace/school", metadata.get("cwd"));
+        assertEquals("/home/sa/workspace/school", metadata.get("cwd"));
     }
 
     @Test
@@ -1276,8 +1276,8 @@ class OpenApiControllerMessageMappingTest {
 
         OpenApiQueryForm form = new OpenApiQueryForm();
         form.setMessage("分析仓库");
-        form.setWorkdir("D:/workspace/app");
-        form.setAllowedDirs(List.of("D:/workspace"));
+        form.setWorkdir("/home/sa/workspace/app");
+        form.setAllowedDirs(List.of("/home/sa/workspace"));
         form.setAllowedTools(List.of("read_file", "invoke_business_function"));
         form.setMetadata(Map.of("context", Map.of("traceId", "trace-1")));
 
@@ -1304,8 +1304,8 @@ class OpenApiControllerMessageMappingTest {
         assertFalse(context.containsKey("businessSkillName"));
         @SuppressWarnings("unchecked")
         Map<String, Object> executionPolicy = (Map<String, Object>) context.get("execution_policy");
-        assertEquals("D:/workspace/app", executionPolicy.get("workdir"));
-        assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
+        assertEquals("/home/sa/workspace/app", executionPolicy.get("workdir"));
+        assertEquals(List.of("/home/sa/workspace"), executionPolicy.get("allowed_dirs"));
         assertEquals(List.of("read_file", "invoke_business_function"), executionPolicy.get("allowed_tools"));
     }
 
@@ -1832,7 +1832,7 @@ class OpenApiControllerMessageMappingTest {
                 {
                   "structuredOutput": {"status":"ok","token":"sk-secret-token"},
                   "reportRefs": ["frame-report://lgt_1/frm_2"],
-                  "artifactRefs": [{"path":"D:/workspace/report.md?signature=secret","summary":"final report"}]
+                  "artifactRefs": [{"path":"/home/sa/workspace/report.md?signature=secret","summary":"final report"}]
                 }
                 """);
 
@@ -1843,7 +1843,7 @@ class OpenApiControllerMessageMappingTest {
         when(sessionQueryService.resolveContextId("session-1")).thenReturn(Optional.of("ctx-1"));
         when(sessionQueryService.getLatestTaskMessages("task-1", 200)).thenReturn(List.of(
                 message("msg-1", "session-1", "ASSISTANT", "ignored",
-                        "{\"type\":\"TEXT\",\"artifactRefs\":[\"D:/workspace/log.txt?token=secret\"]}")));
+                        "{\"type\":\"TEXT\",\"artifactRefs\":[\"/home/sa/workspace/log.txt?token=secret\"]}")));
 
         OpenTaskEvidenceDTO evidence = controller.getTaskEvidence("agent-1", "task-1", request).getData();
 
@@ -1862,8 +1862,8 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("frame_report", evidence.getReportRefs().get(0).getType());
         assertEquals("frm_2", evidence.getReportRefs().get(0).getFrameId());
         assertEquals(2, evidence.getArtifactRefs().size());
-        assertEquals("D:/workspace/report.md", evidence.getArtifactRefs().get(0).getPath());
-        assertEquals("D:/workspace/log.txt", evidence.getArtifactRefs().get(1).getPath());
+        assertEquals("/home/sa/workspace/report.md", evidence.getArtifactRefs().get(0).getPath());
+        assertEquals("/home/sa/workspace/log.txt", evidence.getArtifactRefs().get(1).getPath());
     }
 
     @Test
@@ -2279,8 +2279,8 @@ class OpenApiControllerMessageMappingTest {
                         "physical-worker-default",
                         WorkspaceScope.USER_PRIVATE,
                         WorkingDirectoryResolverType.MANAGED,
-                        "D:/workspace/default",
-                        List.of("D:/workspace/default"),
+                        "/home/sa/workspace/default",
+                        List.of("/home/sa/workspace/default"),
                         false,
                         null,
                         null,

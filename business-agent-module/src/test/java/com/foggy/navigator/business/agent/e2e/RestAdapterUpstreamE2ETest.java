@@ -586,7 +586,7 @@ class RestAdapterUpstreamE2ETest {
         directory.setReadOnly(false);
         directory.setWorkerId(POOL_ID);
         directory.setProjectName("REST E2E Workspace");
-        directory.setPath("D:/workspace/rest-e2e");
+        directory.setPath("/home/sa/workspace/rest-e2e");
         when(workingDirectoryRepository.findByDirectoryId(DIRECTORY_ID)).thenReturn(Optional.of(directory));
 
         when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(inv -> {

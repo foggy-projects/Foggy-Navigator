@@ -151,7 +151,7 @@ class CodexStreamRelayTest {
                         "networkAccessEnabled", false,
                         "webSearchMode", "disabled",
                         "businessRuntimeContext", Map.of("task_scoped_token", "token-1"),
-                        "additionalDirectories", List.of("D:/shared")
+                        "additionalDirectories", List.of("/home/sa/workspace/shared")
                 ))
                 .build());
 
@@ -175,6 +175,6 @@ class CodexStreamRelayTest {
                 eq(false),
                 eq("disabled"),
                 eq(Map.of("task_scoped_token", "token-1")),
-                eq(List.of("D:/shared")));
+                eq(List.of("/home/sa/workspace/shared")));
     }
 }

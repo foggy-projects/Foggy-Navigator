@@ -139,9 +139,9 @@ TMS 在 `2026-05-23 11:21-11:26` 完成复测，结论：全部通过。
 
 证据：
 
-- `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\report.json`
-- `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\04-before-refresh-attachment.png`
-- `D:\workspace\tms-x6-dev\x3-web-tms\test-results\tms-assistant-retake3-1779506477281\06-reopened-history-session.png`
+- `/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake3-1779506477281/report.json`
+- `/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake3-1779506477281/04-before-refresh-attachment.png`
+- `/home/sa/workspace/tms-x6-dev/x3-web-tms/test-results/tms-assistant-retake3-1779506477281/06-reopened-history-session.png`
 
 ### TMS 上游发布升级回执
 
@@ -157,7 +157,7 @@ a12f806e chore(navigator): upgrade assistant runtime baseline
 
 1. `navigator-open-sdk` 升级到 `1.0.5`。
 2. 真实 Playwright smoke 增加 `/api/ai/frame-reports` 代理 `200` 校验。
-3. 更新 TMS 验收文档：`D:\workspace\tms-x6-dev\docs\v3.2.0\navigator-assistant-smoke-acceptance-20260523.md`。
+3. 更新 TMS 验收文档：`/home/sa/workspace/tms-x6-dev/docs/v3.2.0/navigator-assistant-smoke-acceptance-20260523.md`。
 
 上游验收结果：
 
