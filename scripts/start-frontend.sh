@@ -121,7 +121,7 @@ if [ "$started" = true ]; then
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo -e "${CYAN}  URL:   http://localhost:${FRONTEND_PORT}${NC}"
-    echo -e "${CYAN}  Login: admin / @Shundao888${NC}"
+    echo -e "${CYAN}  Login: root / root123${NC}"
     echo ""
     echo -e "${CYAN}  Logs:${NC}"
     echo -e "${GRAY}    - Output: ${LOG_DIR}/frontend.log${NC}"

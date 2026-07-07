@@ -6,8 +6,8 @@ Claude Code stores conversation history as JSONL files under
 Path encoding rules (filesystem path -> directory name):
 - Each ``:``  ``\\``  ``/`` is replaced by a single ``-``
 
-Example: ``D:\\foggy-projects\\Foggy-Navigator`` -> ``D--foggy-projects-Foggy-Navigator``
-(the ``--`` comes from ``:`` and ``\\`` each producing one ``-``)
+Example: ``/home/sa/workspace/Foggy-Navigator`` -> ``-home-sa-workspace-Foggy-Navigator``
+(the leading ``-`` comes from the leading ``/``)
 """
 
 from __future__ import annotations
@@ -554,8 +554,8 @@ def scan_all_sessions(allowed_cwds: list[str]) -> dict[str, dict]:
     In addition to scanning exact allowed_cwds, also discovers Claude Code
     project directories whose path is a subdirectory of any allowed_cwd.
     This handles the case where a user adds a parent directory (e.g.
-    ``D:\\foggy-projects``) and sessions exist in child directories (e.g.
-    ``D:\\foggy-projects\\student-analytics``).
+    ``/home/sa/workspace``) and sessions exist in child directories (e.g.
+    ``/home/sa/workspace/student-analytics``).
     """
     if not allowed_cwds:
         return {}

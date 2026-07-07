@@ -109,21 +109,37 @@ export PYTHONPATH="$WorkerDir/src"
 echo -e "${GREEN}Starting Agent Worker on port $Port in background...${NC}"
 echo -e "${GREEN}Logs: $LogFile${NC}"
 
-nohup "$PYTHON" -m uvicorn agent_worker.main:app --host 0.0.0.0 --port $Port > "$LogFile" 2>&1 &
-WorkerPid=$!
-
-# Save PID
-echo $WorkerPid > "$PidFile"
-
-# Wait a moment and check if started successfully
-sleep 2
-if ps -p $WorkerPid > /dev/null 2>&1; then
-    echo -e "${GREEN}Agent Worker started successfully (PID: $WorkerPid)${NC}"
+if command -v setsid >/dev/null 2>&1; then
+    setsid -f sh -c 'echo $$ > "$1"; exec "$2" -m uvicorn agent_worker.main:app --host 0.0.0.0 --port "$3"' sh "$PidFile" "$PYTHON" "$Port" > "$LogFile" 2>&1 < /dev/null
 else
-    echo -e "${RED}Failed to start Agent Worker. Check logs: $LogFile${NC}"
-    echo -e "${RED}常见问题：${NC}"
-    echo -e "${RED}  1. brew 升级覆盖了系统 python → 用 venv 的 python（本脚本已修复）${NC}"
-    echo -e "${RED}  2. 端口被占用 → lsof -i:$Port${NC}"
-    echo -e "${RED}  3. 依赖缺失 → uv pip install -e . --python $VenvDir/bin/python${NC}"
+    nohup sh -c 'echo $$ > "$1"; exec "$2" -m uvicorn agent_worker.main:app --host 0.0.0.0 --port "$3"' sh "$PidFile" "$PYTHON" "$Port" > "$LogFile" 2>&1 < /dev/null &
+    WorkerPid=$!
+    disown "$WorkerPid" 2>/dev/null || true
+fi
+
+WorkerPid=$(cat "$PidFile" 2>/dev/null || true)
+if [ -z "$WorkerPid" ]; then
+    echo -e "${RED}Failed to create PID file. Check logs: $LogFile${NC}"
     exit 1
 fi
+
+for i in $(seq 1 30); do
+    if curl -fsS --max-time 2 "http://127.0.0.1:$Port/health" >/dev/null 2>&1; then
+        echo -e "${GREEN}Agent Worker started successfully (PID: $WorkerPid)${NC}"
+        exit 0
+    fi
+    if ! ps -p $WorkerPid > /dev/null 2>&1; then
+        echo -e "${RED}Failed to start Agent Worker. Check logs: $LogFile${NC}"
+        echo -e "${RED}常见问题：${NC}"
+        echo -e "${RED}  1. brew 升级覆盖了系统 python → 用 venv 的 python（本脚本已修复）${NC}"
+        echo -e "${RED}  2. 端口被占用 → lsof -i:$Port${NC}"
+        echo -e "${RED}  3. 依赖缺失 → uv pip install -e . --python $VenvDir/bin/python${NC}"
+        tail -20 "$LogFile" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 1
+done
+
+echo -e "${RED}Agent Worker did not become healthy within 30s. Check logs: $LogFile${NC}"
+tail -20 "$LogFile" 2>/dev/null || true
+exit 1

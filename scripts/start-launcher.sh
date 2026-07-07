@@ -34,6 +34,8 @@ ROOT_PASSWORD=${ROOT_PASSWORD:-root123}
 ROOT_EMAIL=${ROOT_EMAIL:-root@foggy.local}
 ROOT_PASSWORD_RESET=${ROOT_PASSWORD_RESET:-false}
 SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
+MANAGEMENT_HEALTH_RABBIT_ENABLED=${MANAGEMENT_HEALTH_RABBIT_ENABLED:-false}
+export MANAGEMENT_HEALTH_RABBIT_ENABLED
 
 echo ""
 echo -e "${CYAN}========================================${NC}"
@@ -113,9 +115,15 @@ JAVA_OPTS="-Xms4g -Xmx8g \
     -XX:+HeapDumpOnOutOfMemoryError \
     -XX:HeapDumpPath=${LOG_DIR}/heap-dump.hprof"
 
-# Start service in background
+# Start service in background. Use a new session when available so callers that
+# clean up their process group do not take the backend down with them.
 cd "$REPO_ROOT"
-nohup java ${JAVA_OPTS} -Dfile.encoding=UTF-8 \
+START_PREFIX=()
+if command -v setsid >/dev/null 2>&1; then
+    START_PREFIX=(setsid)
+fi
+
+nohup "${START_PREFIX[@]}" "${JAVA_CMD}" ${JAVA_OPTS} -Dfile.encoding=UTF-8 \
     -Dsystem.root.username="${ROOT_USERNAME}" \
     -Dsystem.root.password="${ROOT_PASSWORD}" \
     -Dsystem.root.email="${ROOT_EMAIL}" \

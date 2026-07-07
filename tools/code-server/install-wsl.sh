@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Code Server - WSL Installation Script
-# Usage: wsl -d Ubuntu-24.04 -- bash /mnt/d/foggy-projects/Foggy-Navigator/tools/code-server/install-wsl.sh
+# Usage: wsl -d Ubuntu-24.04 -- bash /home/sa/workspace/Foggy-Navigator/tools/code-server/install-wsl.sh
 #
 # Installs code-server to D: drive (persists across WSL reinstalls).
 # Default port: 8443

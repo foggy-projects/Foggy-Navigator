@@ -7,11 +7,13 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 - 用户或上下文中提到 `navi`、`Navi`、`NAVI` 时，默认指当前项目 Foggy Navigator，也就是本仓库/当前工作区。
 - 如同时出现其他 Navigator 环境，先按工作区路径、端口和进程命令行确认具体目标，避免误操作其他环境。
 
-## 本机私有补充
+## 工作区与上游联调
 
-- 本机环境规则见 [CLAUDE.local.md](./CLAUDE.local.md)。
-- `CLAUDE.local.md` 是本机私有文件，不提交到 Git。
-- 如果当前 LLM/Agent 没有加载该文件，先重新读取 `CLAUDE.local.md` 后再继续本机联调、Worker 更新或 `dev-kvm-x3` 发布相关操作。
+- 当前 Navigator 工作区：`/home/sa/workspace/Foggy-Navigator`。
+- 当前同级上游：`/home/sa/workspace/tms-x3`、`/home/sa/workspace/foggy-world-sim`、`/home/sa/workspace/foggy-data-mcp`。
+- 默认只修改当前 Navigator 仓库；需要 TMS、SIM 或 Foggy Data MCP 配合时，优先给出 issue / handoff / 配置步骤，除非用户明确要求跨仓改动。
+- 本机上游拓扑、凭据边界、WSL Biz Worker、`dev-kvm-x3` 发布注意事项见 [本机上游联调说明](docs/dev-specs/local-upstream-collaboration.md)。
+- 不把明文 API key、admin key、credential secret 写入仓库文档；上游本地配置以各项目 `.navigator/upstream.env` 等本机文件为准。
 
 ## 模块结构
 
@@ -56,6 +58,7 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 | `tools/langgraph-biz-worker` | LangGraph Biz Worker Python 服务 |
 | `tools/mock-llm-service` | Mock LLM 端点 |
 | `tools/navigator-upstream`、`tools/navigator-upstream-cli` | 上游接入工具与 CLI |
+| `tools/code-server`、`tools/foggy-monitor` | 开发辅助与监控工具 |
 | `tools/claude-code-proxy`、`tools/llm-gateway`、`tools/llm-recorder-proxy` | LLM / Claude Code 调试与代理工具 |
 
 ## 项目启动
@@ -64,9 +67,14 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 
 | 脚本 | 说明 | 端口 |
 |------|------|------|
+| `scripts/local-dev-stack.sh` | Linux/WSL 本地栈（后端 + Claude/Codex + Biz Worker） | 8112/3031/3051/3061/3161 |
+| `scripts/local-dev-stack.ps1` | Windows 本地栈（后端 + Claude/Codex/Gemini + Biz Worker） | 8112/3031/3051/3071/3061/3161 |
+| `scripts/start-launcher.sh` | 后端（编译+启动，Linux/WSL） | 8112 |
 | `scripts/start-launcher.ps1` | 后端（编译+启动） | 8112 |
 | `scripts/start-launcher-mock.ps1` | 后端（Mock LLM 模式） | 8112 |
+| `scripts/stop-launcher.sh` | 停止后端（Linux/WSL） | - |
 | `scripts/stop-launcher.ps1` | 停止后端 | - |
+| `scripts/start-frontend.sh` | 前端开发服务器（Linux/WSL） | 5174 |
 | `scripts/start-frontend.ps1` | 前端开发服务器 | 5174 |
 | `tools/claude-agent-worker/start.ps1` | Claude Worker | 3031 |
 | `tools/claude-agent-worker/stop.ps1` | 停止 Claude Worker | - |
@@ -80,17 +88,19 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 
 ### Worker 更新边界
 
-当前工作区路径为 `D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev`。当需要更新、重启或排查 Worker 时，只处理以下实例：
+当前工作区路径为 `/home/sa/workspace/Foggy-Navigator`。当需要更新、重启或排查 Worker 时，只处理以下实例：
 
-- 当前 Windows 工作区内的 Worker：`D:\foggy-projects\Foggy-Navigator-wt-qd-win11-dev\tools\...`
+- 当前工作区内的 Worker：`/home/sa/workspace/Foggy-Navigator/tools/...`
 - WSL 中对应的 Worker，例如 `/home/navigator/.codex-worker` 或 3161 Biz Worker
 
-不要停止、重启或升级其他 Windows 工作区的 Worker，例如 `D:\foggy-projects\Foggy-Navigator` 下的进程。端口号只能作为线索，不能作为归属依据；如果端口或进程归属不明确，先用进程命令行确认工作区路径，再执行操作。
+不要停止、重启或升级其他工作区的 Worker。端口号只能作为线索，不能作为归属依据；如果端口或进程归属不明确，先用进程命令行确认工作区路径，再执行操作。当前同级上游目录也在 `/home/sa/workspace` 下，跨仓操作前必须确认用户授权。
 
 本机联调时注意区分两类 Biz Worker：
 
 - `tools/langgraph-biz-worker/start.ps1` 默认启动 Windows 本地 3061。
-- `scripts/start-launcher.ps1` 未显式设置 `BUSINESS_AGENT_DEV_SYNC_WORKER_URL` 时，会默认把 Skill 同步指向 `http://127.0.0.1:3161`，用于当前 WSL / 上游联调链路。
+- `application.yml` 默认 `BUSINESS_AGENT_DEV_SYNC_WORKER_URL=http://localhost:3061`。
+- `scripts/start-launcher.ps1` 未显式设置 `BUSINESS_AGENT_DEV_SYNC_WORKER_URL` 时，会默认把 Skill 同步指向 `http://127.0.0.1:3161`。
+- `scripts/local-dev-stack.sh` 会同时管理本地 3061 和 WSL 3161；需要固定同步目标时显式设置 `BUSINESS_AGENT_DEV_SYNC_WORKER_URL`。
 
 ### 后端启动
 
@@ -120,15 +130,16 @@ pnpm install && pnpm dev
 ```
 
 前端端口：5174，登录账号：root / root123
+后端 root 默认值来自 `launcher/.env.example` / `application.yml`，现有数据库或本机 `.env` 可覆盖。
 
 ### 编译（不启动）
 
 ```powershell
-# 后端编译
-mvn compile test -pl launcher -am 
+# 后端测试编译
+mvn test -pl launcher -am
 
 # 前端编译
-cd packages/navigator-frontend && pnpm exec vite build
+bash scripts/build-frontend.sh
 ```
 
 ## 重要配置

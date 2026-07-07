@@ -161,7 +161,7 @@ cd addons/coding-agent && ./start-and-test.sh stop
 - 服务必须在 `localhost:8112` 运行
 - 使用 `application-docker.yml` 配置启动
 - 测试前必须确保服务完全启动
-- 所有操作需要在 `D:\foggy-projects\Foggy-Navigator` 目录下执行
+- 所有操作需要在 `/home/sa/workspace/Foggy-Navigator` 目录下执行
 - 测试完成后必须清理所有资源（浏览器、后端服务、前端服务）
 
 ## 决策规则

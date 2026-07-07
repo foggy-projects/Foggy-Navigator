@@ -11,13 +11,13 @@ OPENAI_API_KEY="your-glm-api-key-here"
 ### 2. 启动代理服务器（Docker）
 **使用 PowerShell 脚本（推荐）：**
 ```bash
-cd d:\foggy-projects\Foggy-Navigator\tools\claude-code-proxy
+cd /home/sa/workspace/Foggy-Navigator/tools/claude-code-proxy
 powershell -ExecutionPolicy Bypass -File start-docker.ps1
 ```
 
 **或使用 Docker Compose：**
 ```bash
-cd d:\foggy-projects\Foggy-Navigator\tools\claude-code-proxy
+cd /home/sa/workspace/Foggy-Navigator/tools/claude-code-proxy
 docker-compose up -d
 ```
 
@@ -40,7 +40,7 @@ curl http://localhost:8082/health
 
 ### 1. 安装依赖
 ```bash
-cd d:\foggy-projects\Foggy-Navigator\tools\claude-code-proxy
+cd /home/sa/workspace/Foggy-Navigator/tools/claude-code-proxy
 pip install -r requirements.txt
 ```
 

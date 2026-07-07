@@ -2,8 +2,8 @@
 # Usage: powershell -ExecutionPolicy Bypass -File start.ps1
 #
 # Supports two modes:
-#   1. Windows native (npm global install) - default
-#   2. WSL (standalone binary)            - set CODE_SERVER_MODE=wsl in .env
+#   1. WSL (standalone binary)            - default
+#   2. Windows native (npm global install) - set CODE_SERVER_MODE=windows in .env
 #
 # HTTPS support:
 #   Set CODE_SERVER_HTTPS_PORT in .env to enable nginx reverse proxy with
@@ -16,9 +16,9 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $EnvFile = Join-Path $ScriptDir ".env"
 $Port = 8443
 $HttpsPort = 0  # 0 = disabled
-$Mode = "windows"  # windows | wsl
-$ProjectWin = "D:\foggy-projects\Foggy-Navigator"
-$ProjectWSL = "/mnt/d/foggy-projects/Foggy-Navigator"
+$Mode = "wsl"  # windows | wsl
+$ProjectWin = "/home/sa/workspace/Foggy-Navigator"
+$ProjectWSL = "/home/sa/workspace/Foggy-Navigator"
 $Install = "/mnt/d/foggy-tools/code-server"
 $DataDir = "/mnt/d/foggy-tools/code-server-data"
 
