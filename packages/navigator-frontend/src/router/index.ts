@@ -43,11 +43,6 @@ const routes = [
         component: () => import('@/views/CrossProjectTaskView.vue'),
       },
       {
-        path: 'monitoring',
-        name: 'Monitoring',
-        component: () => import('@/views/MonitoringView.vue'),
-      },
-      {
         path: 'files',
         name: 'FileBrowser',
         component: () => import('@/views/FileBrowserView.vue'),

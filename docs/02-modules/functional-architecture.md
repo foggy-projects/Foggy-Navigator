@@ -136,7 +136,6 @@
 
 - 设置
 - 用户
-- 监控
 
 ### 3.3 平台底座能力
 
@@ -152,13 +151,15 @@
 |------|------|
 | 聚合启动 | `launcher` |
 | 平台底座 | `navigator-common`、`navigator-spi`、`agent-framework` |
-| 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module`、`metadata-query-module`、`monitoring-module` |
+| 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module`、`metadata-query-module` |
 | Worker / Agent Addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/task-assistant`、`addons/echo-agent` |
 | 开放集成 | `navigator-open-sdk`、`tools/navigator-upstream`、`tools/navigator-upstream-cli`、`tools/navigator-chat-observer-bff` |
 | 前端与多端 | `packages/navigator-frontend`、`packages/foggy-chat`、`packages/foggy-chat-core`、`packages/navigator-chat-widget`、`packages/foggy-mobile` |
 | Worker 运行时工具 | `tools/claude-agent-worker`、`tools/codex-agent-worker`、`tools/gemini-agent-worker`、`tools/langgraph-biz-worker`、`tools/mock-llm-service` |
 
 旧独立会话入口及其配套 `tutor-agent` 已从源码目录、根 `pom.xml` 与 `launcher` 运行时依赖中移除；当前主线功能模块不再保留旧引导 Agent。
+
+`monitoring-module` 与 RabbitMQ 监控事件链路当前暂停，只保留源码，不属于主线 Maven reactor、`launcher` 或默认部署。
 
 ## 5. 推荐阅读顺序
 

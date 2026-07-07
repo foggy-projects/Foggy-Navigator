@@ -28,7 +28,7 @@ compose() {
   fi
 }
 
-(cd docker && compose stop nginx rabbitmq mysql) || true
+(cd docker && compose stop nginx mysql) || true
 echo "Stopped."
 REMOTE
 )

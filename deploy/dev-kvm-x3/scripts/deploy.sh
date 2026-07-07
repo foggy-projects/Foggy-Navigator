@@ -56,10 +56,10 @@ compose() {
   fi
 }
 
-echo "[1/4] Starting MySQL and RabbitMQ"
-(cd docker && compose up -d mysql rabbitmq)
+echo "[1/3] Starting MySQL"
+(cd docker && compose up -d mysql)
 
-echo "[2/4] Waiting for MySQL"
+echo "[2/3] Waiting for MySQL"
 for i in \$(seq 1 60); do
   if docker exec foggy-navigator-mysql sh -c 'mysqladmin ping -h localhost -u root -p"\$MYSQL_ROOT_PASSWORD" --silent' >/dev/null 2>&1; then
     echo "MySQL is ready."
@@ -73,28 +73,14 @@ for i in \$(seq 1 60); do
   sleep 2
 done
 
-echo "[2/4] Waiting for RabbitMQ"
-for i in \$(seq 1 60); do
-  if docker exec foggy-navigator-rabbitmq rabbitmq-diagnostics -q ping >/dev/null 2>&1; then
-    echo "RabbitMQ is ready."
-    break
-  fi
-  if [ "\$i" -eq 60 ]; then
-    echo "RabbitMQ did not become ready in time." >&2
-    docker logs --tail 80 foggy-navigator-rabbitmq || true
-    exit 1
-  fi
-  sleep 2
-done
-
-echo "[3/4] Starting Navigator stack"
+echo "[3/3] Starting Navigator stack"
 if [ -f ./scripts/start-all.sh ]; then
   bash ./scripts/start-all.sh $start_arg
 else
   bash ./start-all.sh $start_arg
 fi
 
-echo "[4/4] Checking HTTP endpoints"
+echo "Checking HTTP endpoints"
 curl -fsS http://127.0.0.1:8112/actuator/health >/dev/null || echo "Backend health is not UP yet."
 curl -fsS http://127.0.0.1/health >/dev/null || echo "Nginx health is not UP yet."
 

@@ -26,7 +26,6 @@
 | Gemini Worker | OBS 安装包 / `gemini-worker` CLI | 不进入 Navigator 镜像链路 | `3071` | `/health` |
 | LangGraph Biz Worker | `tools/langgraph-biz-worker` + venv | 不进入主应用镜像链路 | `3061` | `/health` |
 | MySQL | Docker Compose | `mysql:8.0` | `13309 -> 3306` | `mysqladmin ping` |
-| RabbitMQ | Docker Compose override | `rabbitmq:3-management-alpine` | `5672`, `15672` | `rabbitmq-diagnostics ping` |
 
 ## 运行态环境变量
 
@@ -40,7 +39,6 @@
 | `SPRING_DATASOURCE_URL` | 数据库连接串 | 可能 |
 | `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` | 数据库账号 | 是 |
 | `MYSQL_ROOT_PASSWORD` / `MYSQL_PASSWORD` | dev/demo 本地 MySQL | 是 |
-| `RABBITMQ_USER` / `RABBITMQ_PASS` | RabbitMQ 账号 | 是 |
 | `JWT_SECRET` | 应用 JWT 签名 | 是 |
 | `SYSTEM_ROOT_PASSWORD` | Navigator root 初始化密码 | 是 |
 | `NAVIGATOR_CREDENTIAL_KEY` / `NAVIGATOR_CREDENTIAL_SALT` | 凭证加密配置 | 是 |
@@ -71,7 +69,6 @@
 | 后端镜像 | `test.synthoflow.com:8080/x3/navigator-backend:dev-kvm-x3-20260515-1` |
 | 前端镜像 | `test.synthoflow.com:8080/x3/navigator-frontend:dev-kvm-x3-20260515-1` |
 | 本地数据库 | `foggy-navigator-mysql` / `coding_agent` / host port `13309` |
-| 本地消息队列 | `foggy-navigator-rabbitmq` / host ports `5672`,`15672` |
 | Worker 注册目标 | `http://dev-kvm-jdk17.foggysource.com/` 对应 Navi，当前 DNS 指向 `192.168.31.22` |
 | Worker 记录 | `dev-kvm-x3-worker` / `93bf1a65` / `ONLINE` |
 | Claude 工作目录 | Navigator 记录 `dev-kvm-x3-root` -> `/`；远端 Claude Worker 白名单 `AGENT_WORKER_ALLOWED_CWDS=["/"]` |
@@ -89,9 +86,7 @@
 | Backend container | `foggy-navigator-backend` |
 | Frontend container | `foggy-navigator-frontend` |
 | MySQL container | `foggy-navigator-mysql` |
-| RabbitMQ container | `foggy-navigator-rabbitmq` |
 | MySQL volume | `foggy-navigator-mysql-data` |
-| RabbitMQ volume | `foggy-navigator-rabbitmq-data` |
 
 ## Open Items
 
@@ -104,7 +99,7 @@
 | LangGraph Biz Worker 运行态 | 当前由源码目录创建 Python venv 并由脚本启动；生产前需要确认是否改为镜像或 OBS 包，以及 systemd、token 注入、升级回滚策略。 |
 | Agent bundle materialize | dev/demo 当前默认只在 Navigator 侧注册 bundle/grant，不立即 materialize 到 Worker；TMS 同步真实 skill/function bundle 后再按需启用。 |
 | Git provider | 未提供 GitHub token 时不要伪造平台 Git 配置；Business Agent/TMS 接入可先运行，生产前补齐平台 Git Provider。 |
-| 本地 MySQL/RabbitMQ | dev/demo 可继续使用；生产应切到外部数据库/消息队列并关闭本地 infra profile。 |
+| 本地 MySQL | dev/demo 可继续使用；生产应切到外部数据库并关闭本地 infra profile。 |
 | Harbor HTTP | 所有 build/run 节点都要配置 Docker `insecure-registries`。 |
 | Codex Worker 认证 | dev-kvm-x3 上 Codex Worker 已启动，但当前 health 显示 `codex_auth_configured=false`；生产或正式 demo 前需要固化 Codex CLI/API 认证。 |
 | dev-kvm-jdk17 会话列表 | `dev-kvm-jdk17.foggysource.com` 现有后端存在历史 `sessions.status=DELETED` 兼容问题，会影响会话列表 UI；需要在该后端修复枚举兼容或清理历史数据。 |

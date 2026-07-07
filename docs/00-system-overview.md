@@ -13,7 +13,7 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 2. 以 Worker 和目录为中心的远程编程工作台  
    用户可以管理远程 Worker、工作目录、Git 状态、Worktree、文件浏览、终端与编程任务。
 3. 以任务和事件为中心的平台治理能力  
-   平台提供统一任务分发、跨项目阶段编排、监控、通知、用户与配置治理能力。
+   平台提供统一任务分发、跨项目阶段编排、通知、用户与配置治理能力。
 
 ## 2. 当前功能架构
 
@@ -27,7 +27,7 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 | 跨项目编排 | `跨项目` | 把一个目标拆成多阶段、多目录、多 Agent 的串行协作流程 | `addons/claude-worker-agent` |
 | 平台设置与资源治理 | `设置` | 管理 Git、LLM、Worker、凭证、记忆、业务 Agent、Agent 模型覆盖等 | `metadata-config-module`、`business-agent-module`、`addons/task-assistant`、`addons/claude-worker-agent` |
 | 用户与访问控制 | `登录`、`用户` | 登录认证、用户管理、角色状态、API Key 管理 | `user-auth-module` |
-| 监控、通知与开放集成 | `监控`、SSE、Open API | 提供事件面板、通知流、对外 SDK、上游接入与嵌入式聊天入口 | `monitoring-module`、`session-module`、`navigator-open-sdk`、`business-agent-module`、`tools/navigator-chat-observer-bff`、`addons/claude-worker-agent` |
+| 通知与开放集成 | SSE、Open API | 提供通知流、对外 SDK、上游接入与嵌入式聊天入口 | `session-module`、`navigator-open-sdk`、`business-agent-module`、`tools/navigator-chat-observer-bff`、`addons/claude-worker-agent` |
 
 ### 2.2 前端功能地图
 
@@ -38,7 +38,7 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 - `/c/:id`：会话深链兼容入口，主要用于跨项目阶段回跳等历史路径
 - `/tasks`：任务看板
 - `/cross-tasks`：跨项目任务
-- `/monitoring`：监控事件
+- `/monitoring`：监控事件（当前暂停）
 - `/users`：用户管理
 - `/settings`：平台设置
 - `/files`：文件浏览器
@@ -69,7 +69,6 @@ Launcher
   -> user-auth-module
   -> metadata-config-module
   -> metadata-query-module
-  -> monitoring-module
   -> addons/claude-worker-agent
   -> addons/codex-worker-agent
   -> addons/gemini-worker-agent
@@ -108,9 +107,9 @@ Launcher
 | `user-auth-module` | 登录认证、用户管理、API Key 管理 |
 | `metadata-config-module` | 平台配置写接口，管理 Git/LLM/凭证/记忆/覆盖配置 |
 | `metadata-query-module` | 平台配置读接口与查询能力 |
-| `monitoring-module` | 监控事件与统计接口 |
-
 旧独立“会话”入口配套的 `tutor-agent` 已从源码目录、根 `pom.xml` 与 `launcher` 运行时依赖中移除；当前主线不再保留旧引导 Agent。
+
+`monitoring-module` 源码当前保留，但不纳入根 `pom.xml`、`launcher` 运行时依赖或部署脚本；RabbitMQ 不再是当前主线前置依赖。
 
 ### 3.3 Addon 能力模块
 

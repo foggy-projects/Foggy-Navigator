@@ -85,7 +85,7 @@
 
 | 模块 | 当前作用 |
 |------|------|
-| `monitoring-module` | 提供监控事件查询与统计接口 |
+| `monitoring-module` | 源码保留但当前暂停，不纳入 `launcher` 或默认部署 |
 | `session-module` | 提供统一 SSE 推送与通知通道 |
 | `addons/task-assistant` | 产出助手通知事件 |
 | `agent-framework` | 提供部分指标常量和执行上下文信息 |

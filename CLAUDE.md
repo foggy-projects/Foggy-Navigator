@@ -30,13 +30,15 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 |------|------|
 | 聚合启动 | `launcher` |
 | 底座与 SPI | `navigator-common`、`navigator-spi`、`agent-framework` |
-| 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module`、`metadata-query-module`、`monitoring-module` |
+| 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module`、`metadata-query-module` |
 | Worker / Agent addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/echo-agent`、`addons/task-assistant` |
 | 对外 SDK / 本地 BFF | `navigator-open-sdk`、`tools/navigator-chat-observer-bff` |
 
 `addons/code-review-agent` 目前存在源码目录，但未纳入根 `pom.xml`，开发前先确认是否仍为实验模块或待接入模块。
 
 旧独立“会话”入口及其配套 `tutor-agent` 模块已移除；不要再把它当作当前主线模块设计新能力。
+
+`monitoring-module` 与 `tools/foggy-monitor` 当前仅保留源码，不纳入根 Maven reactor、`launcher` 运行时或默认部署；不要把 RabbitMQ 作为启动前置依赖。
 
 ### 前端与移动端
 
@@ -58,7 +60,7 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 | `tools/langgraph-biz-worker` | LangGraph Biz Worker Python 服务 |
 | `tools/mock-llm-service` | Mock LLM 端点 |
 | `tools/navigator-upstream`、`tools/navigator-upstream-cli` | 上游接入工具与 CLI |
-| `tools/code-server`、`tools/foggy-monitor` | 开发辅助与监控工具 |
+| `tools/code-server`、`tools/foggy-monitor` | 开发辅助；`tools/foggy-monitor` 当前暂停接入 |
 | `tools/claude-code-proxy`、`tools/llm-gateway`、`tools/llm-recorder-proxy` | LLM / Claude Code 调试与代理工具 |
 
 ## 项目启动

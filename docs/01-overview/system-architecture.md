@@ -29,7 +29,7 @@ Foggy Navigator 是一个基于 LangChain4j 的企业级动态 Agent 编排系�
 - **编程语言**：Java 17+
 - **数据库**：MySQL 8.0+（关系型数据）、Redis（缓存）
 - **向量数据库**：Milvus / Qdrant / Weaviate（可选）
-- **消息队列**：RabbitMQ / Kafka（异步任务）
+- **消息队列**：当前主线不依赖 RabbitMQ / Kafka；历史监控链路源码保留但不纳入默认部署
 - **监控**：Prometheus + Grafana
 - **日志**：ELK Stack（Elasticsearch + Logstash + Kibana）
 
@@ -88,8 +88,8 @@ Foggy Navigator 是一个基于 LangChain4j 的企业级动态 Agent 编排系�
 ┌─────────────────────────────────────────────────────────────────┐
 │                  基础设施层 (Infrastructure)                │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   Database   │  │   Cache      │  │  Message Queue│     │
-│  │   (MySQL)    │  │   (Redis)    │  │  (RabbitMQ)  │     │
+│  │   Database   │  │   Cache      │  │ Message Queue │     │
+│  │   (MySQL)    │  │   (Redis)    │  │   (Paused)   │     │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
 │  │Vector DB     │  │  File Storage│  │  Monitoring  │     │
@@ -168,7 +168,7 @@ API 层（REST/WebSocket/SSE）
     ├── Database（MySQL）
     ├── Cache（Redis）
     ├── Vector DB（Milvus/Qdrant）
-    ├── Message Queue（RabbitMQ）
+    ├── Message Queue（当前暂停）
     └── File Storage（MinIO）
     ↓
 响应返回
@@ -340,11 +340,9 @@ API 层（REST/WebSocket/SSE）
 - 优势：高性能向量检索、支持大规模数据
 - 用途：长期记忆存储、知识库检索
 
-### 4.3 消息队列
+### 4.3 消息队列（当前暂停）
 
-**RabbitMQ / Kafka**
-- 优势：异步处理、解耦系统、削峰填谷
-- 用途：异步任务、事件驱动
+当前主线不把 RabbitMQ / Kafka 作为部署依赖。历史 RabbitMQ 监控事件链路源码仍保留，后续若恢复监控或事件驱动能力再重新纳入。
 
 ### 4.4 监控和日志
 
@@ -400,8 +398,8 @@ API 层（REST/WebSocket/SSE）
 │  │  (Master)   │  │  (Cluster)  │  │  (Cluster)  │ │
 │  └──────────────┘  └──────────────┘  └──────────────┘ │
 │  ┌──────────────┐  ┌──────────────┐                 │
-│  │  MySQL      │  │  RabbitMQ   │                 │
-│  │  (Slave)    │  │  (Cluster)  │                 │
+│  │  MySQL      │  │  MQ Paused  │                 │
+│  │  (Slave)    │  │ (Optional)  │                 │
 │  └──────────────┘  └──────────────┘                 │
 └─────────────────────────────────────────────────────────┘
                           ↓
@@ -455,7 +453,7 @@ API 层（REST/WebSocket/SSE）
 - **应用层**：多实例部署，负载均衡
 - **数据库层**：主从复制、自动故障转移
 - **缓存层**：Redis 集群
-- **消息队列**：RabbitMQ 集群
+- **消息队列**：当前主线不配置；恢复事件驱动能力时再引入高可用队列
 
 ### 8.2 灾备
 

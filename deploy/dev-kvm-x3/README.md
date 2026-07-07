@@ -229,7 +229,6 @@ bash remote/status-check.sh
 | `foggy-navigator-frontend` | `80:80` | 前端和 `/api` 反向代理 |
 | `foggy-navigator-backend` | `8112:8112` | Launcher API |
 | `foggy-navigator-mysql` | `13309:3306` | dev/demo 本地 MySQL，`NAVIGATOR_LOCAL_INFRA=true` 时启用 |
-| `foggy-navigator-rabbitmq` | `5672` / `15672` | dev/demo 本地 RabbitMQ，`NAVIGATOR_LOCAL_INFRA=true` 时启用 |
 
 重复部署前脚本只清理 Navigator 应用容器：
 
@@ -237,7 +236,7 @@ bash remote/status-check.sh
 - `foggy-navigator-frontend`
 - 旧源码部署的 `foggy-navigator-nginx`
 
-默认还会停止旧源码部署占用的 Navigator app 端口 `8112`，用于从旧流程切换到镜像流程。Claude/Codex/Gemini Worker 由 OBS 安装脚本独立管理，不在 Docker Compose 清理范围内；LangGraph Biz Worker 由部署脚本按 `IMAGE_TAG` 单独启动或重启，也不进入 Docker Compose 清理范围。脚本不会主动删除 TMS、Verdaccio、共享数据库或其他非 Navigator 管理容器。MySQL/RabbitMQ 数据卷也不会在部署脚本中删除。
+默认还会停止旧源码部署占用的 Navigator app 端口 `8112`，用于从旧流程切换到镜像流程。Claude/Codex/Gemini Worker 由 OBS 安装脚本独立管理，不在 Docker Compose 清理范围内；LangGraph Biz Worker 由部署脚本按 `IMAGE_TAG` 单独启动或重启，也不进入 Docker Compose 清理范围。脚本不会主动删除 TMS、Verdaccio、共享数据库或其他非 Navigator 管理容器。MySQL 数据卷也不会在部署脚本中删除。
 
 ## 验证
 
@@ -275,4 +274,4 @@ Worker 由 `remote/check-workers.sh` 单独检查：
 - 根目录 `pnpm-lock.yaml` 当前未跟踪，生产前需要决定是否提交锁文件，或将内部包发布到 Verdaccio 后切换成普通版本依赖。
 - Claude/Codex/Gemini Worker 继续使用 OBS 安装脚本分发，节点级运行态位于 `~/.claude-worker`、`~/.codex-worker`、`~/.gemini-worker`。生产前需要固化 Worker 配置、升级策略和账号/token 注入方式。
 - LangGraph Biz Worker 当前作为 Business Agent 的 Python 节点级运行态，`30-deploy-by-image.sh` 默认从 `/opt/foggy/navigator/build/source/<IMAGE_TAG>/tools/langgraph-biz-worker` 创建 venv 并重启，保证与镜像 tag 对齐。`BIZ_WORKER_SOURCE_DIR` 只作为应急兼容开关使用；生产前需要决定是否改为独立镜像或 OBS 包，并固化 systemd/自启动、token 注入和回滚策略。
-- `dev-kvm-x3` 可继续启用本地 MySQL/RabbitMQ；生产建议改为外部托管依赖并设置 `NAVIGATOR_LOCAL_INFRA=false`。
+- `dev-kvm-x3` 可继续启用本地 MySQL；生产建议改为外部托管数据库并设置 `NAVIGATOR_LOCAL_INFRA=false`。

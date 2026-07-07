@@ -13,10 +13,6 @@ services:
       SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
-      RABBITMQ_HOST: ${RABBITMQ_HOST:-foggy-navigator-rabbitmq}
-      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
-      RABBITMQ_USER: ${RABBITMQ_USER:-foggy}
-      RABBITMQ_PASS: ${RABBITMQ_PASS}
       NAVIGATOR_API_EXTERNAL_URL: ${NAVIGATOR_API_EXTERNAL_URL}
       JWT_SECRET: ${JWT_SECRET}
       SYSTEM_ROOT_USERNAME: ${SYSTEM_ROOT_USERNAME:-root}
@@ -81,33 +77,9 @@ services:
       timeout: 5s
       retries: 10
 
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: foggy-navigator-rabbitmq
-    profiles: ["local-infra"]
-    restart: unless-stopped
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-foggy}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
-      TZ: ${TZ:-Asia/Shanghai}
-    volumes:
-      - navigator_rabbitmq_data:/var/lib/rabbitmq
-    networks:
-      - foggy-navigator-network
-    healthcheck:
-      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
 volumes:
   navigator_mysql_data:
     name: foggy-navigator-mysql-data
-  navigator_rabbitmq_data:
-    name: foggy-navigator-rabbitmq-data
 networks:
   foggy-navigator-network:
     name: foggy-navigator-network

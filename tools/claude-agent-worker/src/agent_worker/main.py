@@ -98,17 +98,6 @@ def _configure_logging() -> None:
 _configure_logging()
 logger = logging.getLogger(__name__)
 
-# -- Foggy Monitor (optional RabbitMQ log forwarding) ----------------------
-_monitor_publisher = None
-try:
-    from foggy_monitor import setup_monitoring
-    _monitor_publisher = setup_monitoring("worker", instance_id=f"worker-{Path(__file__).resolve().parent.parent.parent.name}")
-except ImportError:
-    logger.debug("foggy-monitor not installed, skipping RabbitMQ log forwarding")
-except Exception as _exc:
-    logger.debug("foggy-monitor setup failed: %s", _exc)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Log the effective configuration on startup and perform cleanup on shutdown."""

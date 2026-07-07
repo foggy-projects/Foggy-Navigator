@@ -30,7 +30,7 @@ compose pull navigator-backend navigator-frontend
 
 if [ "${NAVIGATOR_LOCAL_INFRA:-false}" = "true" ]; then
   log "Ensuring local Navigator infra is running"
-  compose up -d mysql rabbitmq
+  compose up -d mysql
 fi
 
 if [ "${NAVIGATOR_STOP_LEGACY_SOURCE:-true}" = "true" ]; then
