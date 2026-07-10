@@ -1,10 +1,16 @@
 import path from 'node:path'
 
-const looksWindowsPath = (value: string): boolean =>
+export const looksWindowsPath = (value: string): boolean =>
   /^[a-zA-Z]:[\\/]/.test(value) || value.includes('\\')
 
-const pathApiFor = (...values: string[]): typeof path.win32 | typeof path.posix =>
+export const pathApiFor = (...values: string[]): typeof path.win32 | typeof path.posix =>
   values.some(looksWindowsPath) ? path.win32 : path.posix
+
+export const isAbsolutePlatformPath = (value: string): boolean =>
+  path.posix.isAbsolute(value) || path.win32.isAbsolute(value)
+
+export const normalizePlatformPath = (value: string): string =>
+  pathApiFor(value).normalize(value)
 
 const normalizeBoundary = (pathApi: typeof path.win32 | typeof path.posix, value: string): string => {
   const normalized = pathApi.normalize(value)

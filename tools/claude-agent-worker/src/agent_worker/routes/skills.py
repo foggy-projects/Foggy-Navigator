@@ -13,6 +13,7 @@ from ..auth import verify_token
 from ..config import settings
 from ..models import SkillInfo
 from ..skill_paths import project_skills_dir, user_skills_dir
+from .utils import is_path_within_allowed_root
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,7 @@ def _validate_path(path: str) -> str:
 
     for allowed in settings.allowed_cwds:
         allowed_resolved = os.path.realpath(allowed)
-        # rstrip(os.sep) avoids double-sep when allowed is a drive root like "D:\"
-        if resolved == allowed_resolved or resolved.startswith(allowed_resolved.rstrip(os.sep) + os.sep):
+        if is_path_within_allowed_root(resolved, allowed_resolved):
             return resolved
 
     raise HTTPException(

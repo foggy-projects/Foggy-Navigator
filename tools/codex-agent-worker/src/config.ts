@@ -1,6 +1,7 @@
 import dotenv from 'dotenv'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { isAbsolutePlatformPath, normalizePlatformPath } from './path-guards.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') })
@@ -113,10 +114,10 @@ function parseAllowedCwds(rawAllowedCwds: string | undefined): string[] {
 
   const normalized = new Set<string>()
   for (const cwd of values) {
-    if (!path.isAbsolute(cwd)) {
+    if (!isAbsolutePlatformPath(cwd)) {
       throw new Error(`CODEX_ALLOWED_CWDS entries must be absolute paths: ${cwd}`)
     }
-    normalized.add(path.normalize(cwd))
+    normalized.add(normalizePlatformPath(cwd))
   }
 
   return Array.from(normalized)
@@ -125,10 +126,10 @@ function parseAllowedCwds(rawAllowedCwds: string | undefined): string[] {
 function parseOptionalAbsolutePath(rawValue: string | undefined, field: string): string {
   const value = (rawValue || '').trim()
   if (!value) return ''
-  if (!path.isAbsolute(value)) {
+  if (!isAbsolutePlatformPath(value)) {
     throw new Error(`${field} must be an absolute path`)
   }
-  return path.normalize(value)
+  return normalizePlatformPath(value)
 }
 
 function parseHttpUrl(rawValue: string | undefined, field: string, fallback: string): string {

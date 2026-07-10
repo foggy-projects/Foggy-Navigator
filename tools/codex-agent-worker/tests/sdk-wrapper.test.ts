@@ -395,7 +395,7 @@ test('resolveNavigatorBusinessMcpServerPath follows sdk wrapper module extension
   const currentModule = path.join('D:\\worker', 'src', 'codex', 'sdk-wrapper.ts')
   assert.equal(
     resolveNavigatorBusinessMcpServerPath(currentModule),
-    path.join('D:\\worker', 'src', 'business-mcp', 'navigator-business-mcp-server.ts')
+    path.win32.join('D:\\worker', 'src', 'business-mcp', 'navigator-business-mcp-server.ts')
   )
 })
 

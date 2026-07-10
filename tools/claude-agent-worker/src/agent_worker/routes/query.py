@@ -19,6 +19,7 @@ from ..auth import verify_token
 from ..claude.sdk_wrapper import SdkWrapper, task_registry, permission_pending, _sdk_available, _use_agent_sdk, _find_sdk_cli_pids, EventBroadcast
 from ..config import settings
 from ..models import AbortResponse, PermissionResponse, QueryEvent, QueryRequest, RewindRequest
+from .utils import is_path_within_allowed_root
 
 logger = logging.getLogger(__name__)
 
@@ -118,9 +119,7 @@ def _validate_cwd(cwd: str | None) -> str:
 
     for allowed in settings.allowed_cwds:
         allowed_resolved = os.path.realpath(allowed)
-        # Accept *resolved* itself or any sub-directory of an allowed root.
-        # rstrip(os.sep) avoids double-sep when allowed is a drive root like "D:\"
-        if resolved == allowed_resolved or resolved.startswith(allowed_resolved.rstrip(os.sep) + os.sep):
+        if is_path_within_allowed_root(resolved, allowed_resolved):
             return resolved
 
     raise HTTPException(

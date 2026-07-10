@@ -14,6 +14,36 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 
+def _path_separator(path: str) -> str:
+    if "\\" in path and "/" not in path:
+        return "\\"
+    return os.sep
+
+
+def _rstrip_path_separators(path: str, sep: str) -> str:
+    if sep == "\\":
+        if len(path) == 3 and path[1:3] == ":\\":
+            return path
+        return path.rstrip("\\/")
+    return path.rstrip(sep) or sep
+
+
+def is_path_within_allowed_root(path: str, allowed_root: str) -> bool:
+    """Return whether ``path`` is equal to or below ``allowed_root``."""
+    if path == allowed_root:
+        return True
+
+    sep = _path_separator(allowed_root)
+    normalized_root = _rstrip_path_separators(allowed_root, sep)
+    if normalized_root == sep:
+        prefix = sep
+    elif sep == "\\" and len(normalized_root) == 3 and normalized_root[1:3] == ":\\":
+        prefix = normalized_root
+    else:
+        prefix = normalized_root + sep
+    return path.startswith(prefix)
+
+
 def decode_text_bytes(raw: bytes) -> str:
     """Decode text bytes with UTF-8 first, then common local fallbacks.
 
@@ -56,8 +86,7 @@ def validate_path(path: str) -> str:
 
     for allowed in settings.allowed_cwds:
         allowed_resolved = os.path.realpath(allowed)
-        # rstrip(os.sep) avoids double-sep when allowed is a drive root like "D:\"
-        if resolved == allowed_resolved or resolved.startswith(allowed_resolved.rstrip(os.sep) + os.sep):
+        if is_path_within_allowed_root(resolved, allowed_resolved):
             return resolved
 
     raise HTTPException(

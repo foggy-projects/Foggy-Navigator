@@ -18,6 +18,7 @@ import {
   buildNavigatorBusinessMcpEnv,
 } from '../business-mcp/navigator-business-mcp-server.js'
 import { normalizeCodexReasoningEffort, type CodexReasoningEffort } from './reasoning.js'
+import { pathApiFor } from '../path-guards.js'
 
 const moduleRequire = createRequire(import.meta.url)
 
@@ -197,12 +198,21 @@ export function buildCodexProcessEnv(
   const tempDir = options.tempDir ?? os.tmpdir()
   const pathKey = Object.keys(env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH'
   const existingPath = env[pathKey] || ''
+  const pathDelimiter = platform === 'win32' ? ';' : path.delimiter
+  const normalizePathEntry = platform === 'win32'
+    ? (entry: string) => entry.toLowerCase()
+    : (entry: string) => entry
+  const existingPathEntries = existingPath
+    .split(pathDelimiter)
+    .filter(Boolean)
+    .map(normalizePathEntry)
+  const existingPathSet = new Set(existingPathEntries)
   const extraPathEntries = (options.additionalPathEntries ?? resolveCodexPathEntries(platform))
     .filter(Boolean)
-    .filter(entry => !existingPath.split(path.delimiter).includes(entry))
+    .filter(entry => !existingPathSet.has(normalizePathEntry(entry)))
 
   if (extraPathEntries.length > 0) {
-    env[pathKey] = [ ...extraPathEntries, existingPath ].filter(Boolean).join(path.delimiter)
+    env[pathKey] = [ ...extraPathEntries, existingPath ].filter(Boolean).join(pathDelimiter)
   }
 
   if (!env.CODEX_MANAGED_BY_NPM) {
@@ -211,7 +221,7 @@ export function buildCodexProcessEnv(
 
   if (platform === 'win32') {
     env.SystemRoot = env.SystemRoot || 'C:\\WINDOWS'
-    env.ComSpec = env.ComSpec || path.join(env.SystemRoot, 'System32', 'cmd.exe')
+    env.ComSpec = env.ComSpec || path.win32.join(env.SystemRoot, 'System32', 'cmd.exe')
     env.TEMP = env.TEMP || tempDir
     env.TMP = env.TMP || tempDir
   }
@@ -282,7 +292,8 @@ export function resolveDefaultCodexHome(env: NodeJS.ProcessEnv = process.env, ho
 
 export function resolveNavigatorBusinessMcpServerPath(currentModulePath = fileURLToPath(import.meta.url)): string {
   const ext = path.extname(currentModulePath) || '.js'
-  return path.resolve(path.dirname(currentModulePath), '..', 'business-mcp', `navigator-business-mcp-server${ext}`)
+  const pathApi = pathApiFor(currentModulePath)
+  return pathApi.resolve(pathApi.dirname(currentModulePath), '..', 'business-mcp', `navigator-business-mcp-server${ext}`)
 }
 
 export function resolveNavigatorBusinessMcpDebugLogPath(taskId: string, cwd: string | undefined): string {

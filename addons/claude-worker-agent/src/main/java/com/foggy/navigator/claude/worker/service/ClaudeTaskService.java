@@ -1198,20 +1198,8 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             String cwd = (String) session.get("cwd");
             String slug = (String) session.get("slug");
 
-            // Match cwd to a WorkingDirectory for directoryId
-            String directoryId = null;
-            WorkingDirectoryEntity matchedDir = null;
-            if (cwd != null && !cwd.isEmpty()) {
-                var dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, cwd, userId);
-                if (dirOpt.isEmpty()) {
-                    String altCwd = cwd.contains("\\") ? cwd.replace('\\', '/') : cwd.replace('/', '\\');
-                    dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, altCwd, userId);
-                }
-                if (dirOpt.isPresent()) {
-                    matchedDir = dirOpt.get();
-                    directoryId = matchedDir.getDirectoryId();
-                }
-            }
+            WorkingDirectoryEntity matchedDir = resolveDirectoryForCwd(workerId, userId, cwd).orElse(null);
+            String directoryId = matchedDir == null ? null : matchedDir.getDirectoryId();
 
             String prompt = (slug != null && !slug.isEmpty()) ? slug : "(synced session)";
 
@@ -1279,11 +1267,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             String cwd = task.getCwd();
             if (cwd == null || cwd.isEmpty()) continue;
 
-            var dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, cwd, userId);
-            if (dirOpt.isEmpty()) {
-                String altCwd = cwd.contains("\\") ? cwd.replace('\\', '/') : cwd.replace('/', '\\');
-                dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, altCwd, userId);
-            }
+            var dirOpt = resolveDirectoryForCwd(workerId, userId, cwd);
             if (dirOpt.isPresent()) {
                 task.setDirectoryId(dirOpt.get().getDirectoryId());
                 persistTask(task);
@@ -1291,6 +1275,105 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             }
         }
         return fixed;
+    }
+
+    private Optional<WorkingDirectoryEntity> resolveDirectoryForCwd(String workerId, String userId, String cwd) {
+        if (cwd == null || cwd.isBlank()) {
+            return Optional.empty();
+        }
+
+        for (String candidate : buildPathLookupCandidates(cwd)) {
+            Optional<WorkingDirectoryEntity> exact =
+                    workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, candidate, userId);
+            if (exact.isPresent()) {
+                return exact;
+            }
+        }
+
+        return findUniqueDirectoryByLeaf(workerId, userId, cwd);
+    }
+
+    private List<String> buildPathLookupCandidates(String path) {
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        addPathCandidate(candidates, path);
+
+        String forward = normalizeSlashes(path);
+        addPathCandidate(candidates, forward);
+        addPathCandidate(candidates, forward.replace('/', '\\'));
+        addPathCandidate(candidates, toWindowsPathFromWslPath(forward));
+        addPathCandidate(candidates, toWslPathFromWindowsPath(forward));
+
+        return new ArrayList<>(candidates);
+    }
+
+    private void addPathCandidate(LinkedHashSet<String> candidates, String path) {
+        if (path == null || path.isBlank()) {
+            return;
+        }
+        candidates.add(stripTrailingPathSeparators(path.trim()));
+    }
+
+    private String normalizeSlashes(String path) {
+        return path.replace('\\', '/');
+    }
+
+    private String stripTrailingPathSeparators(String path) {
+        if (path.matches("^[A-Za-z]:[\\\\/]$")) {
+            return path;
+        }
+        while (path.length() > 1 && (path.endsWith("/") || path.endsWith("\\"))) {
+            path = path.substring(0, path.length() - 1);
+        }
+        return path;
+    }
+
+    private String toWindowsPathFromWslPath(String forwardPath) {
+        if (forwardPath.length() > 7
+                && forwardPath.startsWith("/mnt/")
+                && forwardPath.charAt(6) == '/') {
+            char drive = forwardPath.charAt(5);
+            if (Character.isLetter(drive)) {
+                return Character.toUpperCase(drive) + ":" + forwardPath.substring(6);
+            }
+        }
+        return null;
+    }
+
+    private String toWslPathFromWindowsPath(String forwardPath) {
+        if (forwardPath.length() > 2
+                && Character.isLetter(forwardPath.charAt(0))
+                && forwardPath.charAt(1) == ':') {
+            return "/mnt/" + Character.toLowerCase(forwardPath.charAt(0)) + forwardPath.substring(2);
+        }
+        return null;
+    }
+
+    private Optional<WorkingDirectoryEntity> findUniqueDirectoryByLeaf(String workerId, String userId, String cwd) {
+        String cwdLeaf = pathLeaf(cwd);
+        if (cwdLeaf == null) {
+            return Optional.empty();
+        }
+
+        List<WorkingDirectoryEntity> directories =
+                workingDirectoryRepository.findByWorkerIdAndUserIdOrderByProjectNameAsc(workerId, userId);
+        if (directories == null || directories.isEmpty()) {
+            return Optional.empty();
+        }
+
+        List<WorkingDirectoryEntity> matches = directories.stream()
+                .filter(dir -> cwdLeaf.equalsIgnoreCase(pathLeaf(dir.getPath())))
+                .toList();
+        return matches.size() == 1 ? Optional.of(matches.get(0)) : Optional.empty();
+    }
+
+    private String pathLeaf(String path) {
+        if (path == null || path.isBlank()) {
+            return null;
+        }
+        String normalized = stripTrailingPathSeparators(normalizeSlashes(path.trim()));
+        int index = normalized.lastIndexOf('/');
+        String leaf = index >= 0 ? normalized.substring(index + 1) : normalized;
+        return leaf.isBlank() ? null : leaf;
     }
 
     /**

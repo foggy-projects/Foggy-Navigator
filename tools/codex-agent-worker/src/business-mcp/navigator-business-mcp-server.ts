@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { pathApiFor } from '../path-guards.js'
 
 export type GatewayFetch = (input: string | URL, init?: RequestInit) => Promise<Response>
 
@@ -170,13 +171,14 @@ export function buildNavigatorBusinessMcpConfig(
 ): Record<string, unknown> | undefined {
   if (!buildNavigatorBusinessMcpEnv(context, gatewayBaseUrl)) return undefined
   const enabledTools = resolveNavigatorBusinessMcpToolNames(context)
+  const pathApi = pathApiFor(serverScriptPath)
 
   return {
     mcp_servers: {
       navigator_business: {
         command: process.execPath,
         args: serverScriptPath.endsWith('.ts') ? ['--import', 'tsx', serverScriptPath] : [serverScriptPath],
-        cwd: path.resolve(path.dirname(serverScriptPath), '..', '..'),
+        cwd: pathApi.resolve(pathApi.dirname(serverScriptPath), '..', '..'),
         env_vars: [...NAVIGATOR_BUSINESS_MCP_ENV_KEYS],
         default_tools_approval_mode: 'approve',
         enabled_tools: enabledTools,

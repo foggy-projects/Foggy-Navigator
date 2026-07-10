@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_worker.routes.utils import decode_text_bytes, run_git
+from agent_worker.routes.utils import decode_text_bytes, is_path_within_allowed_root, run_git
 
 
 class _FakeProcess:
@@ -27,6 +27,23 @@ class TestDecodeTextBytes:
     def test_falls_back_to_gbk_family(self):
         raw = "全球有哪些国家在“猛推”HPV疫苗？".encode("gbk")
         assert decode_text_bytes(raw) == "全球有哪些国家在“猛推”HPV疫苗？"
+
+
+@pytest.mark.parametrize(
+    ("path", "allowed_root", "expected"),
+    [
+        ("D:\\projects\\app", "D:\\projects", True),
+        ("D:\\projects-backup", "D:\\projects", False),
+        ("D:\\workspace", "D:\\", True),
+        ("E:\\workspace", "D:\\", False),
+        ("D:/workspace", "D:/", True),
+        ("/workspace/app", "/workspace", True),
+        ("/workspace-archive", "/workspace", False),
+        ("/workspace", "/", True),
+    ],
+)
+def test_is_path_within_allowed_root(path, allowed_root, expected):
+    assert is_path_within_allowed_root(path, allowed_root) is expected
 
 
 @pytest.mark.asyncio

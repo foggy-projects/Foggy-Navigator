@@ -25,12 +25,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Tests for ClaudeTaskService.syncLocalSessions — path normalization.
+ * Tests for ClaudeTaskService.syncLocalSessions — cross-platform path matching.
  *
- * Root cause: Worker returns cwd with backslashes (D:\foo\bar) on Windows,
- * but WorkingDirectory may store the path with forward slashes (D:/foo/bar).
- * The exact DB match fails, so synced tasks get directoryId=null and don't
- * appear in any directory's task list.
+ * Worker sessions may report Windows, WSL, or slash-normalized paths for the
+ * same directory. Exact path candidates are preferred; a unique leaf-name
+ * match is used only as a final fallback.
  */
 class ClaudeTaskServiceSyncTest {
 
@@ -77,6 +76,8 @@ class ClaudeTaskServiceSyncTest {
 
         // No orphan tasks to backfill by default
         when(taskRepository.findByWorkerIdAndUserIdAndDirectoryIdIsNull(anyString(), anyString()))
+                .thenReturn(List.of());
+        when(directoryRepository.findByWorkerIdAndUserIdOrderByProjectNameAsc(anyString(), anyString()))
                 .thenReturn(List.of());
 
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -134,22 +135,14 @@ class ClaudeTaskServiceSyncTest {
     }
 
     @Test
-    void syncLocalSessions_backslashCwd_matchesForwardSlashDirectory() {
-        // Directory stored with FORWARD slashes (as entered via frontend)
+    void syncLocalSessions_wslCwd_matchesWindowsDirectory() {
         WorkingDirectoryEntity dir = createDirectory("dir-1", "D:/foggy-projects/student-analytics");
-
-        // First lookup with original backslash cwd → miss
-        when(directoryRepository.findByWorkerIdAndPathAndUserId(
-                WORKER_ID, "/home/sa/workspace/student-analytics", USER_ID))
-                .thenReturn(Optional.empty());
-        // Second lookup with normalized forward-slash cwd → hit
         when(directoryRepository.findByWorkerIdAndPathAndUserId(
                 WORKER_ID, "D:/foggy-projects/student-analytics", USER_ID))
                 .thenReturn(Optional.of(dir));
 
-        // Worker returns cwd with BACKSLASHES (Windows native)
         List<Map<String, Object>> sessions = List.of(
-                Map.of("session_id", "sess-bbb", "cwd", "/home/sa/workspace/student-analytics", "slug", "fix bug")
+                Map.of("session_id", "sess-bbb", "cwd", "/mnt/d/foggy-projects/student-analytics", "slug", "fix bug")
         );
 
         int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
@@ -158,25 +151,18 @@ class ClaudeTaskServiceSyncTest {
         ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
         verify(taskRepository).save(captor.capture());
         assertEquals("dir-1", captor.getValue().getDirectoryId(),
-                "directoryId should be set even when cwd uses backslashes but directory uses forward slashes");
+                "WSL cwd should match the equivalent Windows working directory");
     }
 
     @Test
-    void syncLocalSessions_forwardSlashCwd_matchesBackslashDirectory() {
-        // Directory stored with BACKSLASHES
-        WorkingDirectoryEntity dir = createDirectory("dir-2", "/home/sa/workspace/student-analytics");
-
-        // First lookup with original forward-slash cwd → miss
+    void syncLocalSessions_windowsCwd_matchesWslDirectory() {
+        WorkingDirectoryEntity dir = createDirectory("dir-2", "/mnt/d/foggy-projects/student-analytics");
         when(directoryRepository.findByWorkerIdAndPathAndUserId(
-                WORKER_ID, "D:/foggy-projects/student-analytics", USER_ID))
-                .thenReturn(Optional.empty());
-        // Second lookup with normalized backslash cwd → hit
-        when(directoryRepository.findByWorkerIdAndPathAndUserId(
-                WORKER_ID, "/home/sa/workspace/student-analytics", USER_ID))
+                WORKER_ID, "/mnt/d/foggy-projects/student-analytics", USER_ID))
                 .thenReturn(Optional.of(dir));
 
         List<Map<String, Object>> sessions = List.of(
-                Map.of("session_id", "sess-ccc", "cwd", "D:/foggy-projects/student-analytics", "slug", "add feature")
+                Map.of("session_id", "sess-ccc", "cwd", "D:\\foggy-projects\\student-analytics", "slug", "add feature")
         );
 
         int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
@@ -185,7 +171,44 @@ class ClaudeTaskServiceSyncTest {
         ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
         verify(taskRepository).save(captor.capture());
         assertEquals("dir-2", captor.getValue().getDirectoryId(),
-                "directoryId should be set even when cwd uses forward slashes but directory uses backslashes");
+                "Windows cwd should match the equivalent WSL working directory");
+    }
+
+    @Test
+    void syncLocalSessions_uniqueLeafFallback_setsDirectoryId() {
+        WorkingDirectoryEntity dir = createDirectory("dir-leaf", "D:/foggy-projects/student-analytics");
+        when(directoryRepository.findByWorkerIdAndUserIdOrderByProjectNameAsc(WORKER_ID, USER_ID))
+                .thenReturn(List.of(dir));
+
+        List<Map<String, Object>> sessions = List.of(
+                Map.of("session_id", "sess-leaf", "cwd", "/home/sa/workspace/student-analytics", "slug", "fallback")
+        );
+
+        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
+
+        assertEquals(1, created);
+        ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
+        verify(taskRepository).save(captor.capture());
+        assertEquals("dir-leaf", captor.getValue().getDirectoryId());
+    }
+
+    @Test
+    void syncLocalSessions_ambiguousLeafFallback_leavesDirectoryIdNull() {
+        WorkingDirectoryEntity first = createDirectory("dir-first", "D:/projects/student-analytics");
+        WorkingDirectoryEntity second = createDirectory("dir-second", "E:/archive/student-analytics");
+        when(directoryRepository.findByWorkerIdAndUserIdOrderByProjectNameAsc(WORKER_ID, USER_ID))
+                .thenReturn(List.of(first, second));
+
+        List<Map<String, Object>> sessions = List.of(
+                Map.of("session_id", "sess-ambiguous", "cwd", "/home/sa/workspace/student-analytics", "slug", "ambiguous")
+        );
+
+        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
+
+        assertEquals(1, created);
+        ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
+        verify(taskRepository).save(captor.capture());
+        assertNull(captor.getValue().getDirectoryId());
     }
 
     @Test
@@ -238,22 +261,18 @@ class ClaudeTaskServiceSyncTest {
         orphan.setTaskId("old-task");
         orphan.setWorkerId(WORKER_ID);
         orphan.setUserId(USER_ID);
-        orphan.setCwd("/home/sa/workspace/student-analytics");
+        orphan.setCwd("/mnt/d/foggy-projects/student-analytics");
         orphan.setDirectoryId(null);
         when(taskRepository.findByWorkerIdAndUserIdAndDirectoryIdIsNull(WORKER_ID, USER_ID))
                 .thenReturn(List.of(orphan));
 
-        // Directory stored with forward slashes
         WorkingDirectoryEntity dir = createDirectory("dir-sa", "D:/foggy-projects/student-analytics");
-        when(directoryRepository.findByWorkerIdAndPathAndUserId(
-                WORKER_ID, "/home/sa/workspace/student-analytics", USER_ID))
-                .thenReturn(Optional.empty());
         when(directoryRepository.findByWorkerIdAndPathAndUserId(
                 WORKER_ID, "D:/foggy-projects/student-analytics", USER_ID))
                 .thenReturn(Optional.of(dir));
 
         List<Map<String, Object>> sessions = List.of(
-                Map.of("session_id", "sess-existing", "cwd", "/home/sa/workspace/student-analytics")
+                Map.of("session_id", "sess-existing", "cwd", "/mnt/d/foggy-projects/student-analytics")
         );
 
         int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
