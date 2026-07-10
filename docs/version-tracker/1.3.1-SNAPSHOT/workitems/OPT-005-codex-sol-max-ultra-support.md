@@ -5,7 +5,7 @@
 - doc_type: requirement-and-implementation-record
 - intended_for: implementation-agent | reviewer | release-owner
 - owner: `tools/codex-agent-worker` | `addons/codex-worker-agent` | `packages/navigator-frontend`
-- target_release: `codex-worker 1.0.11`（历史候选，未作为当前执行架构发布）
+- target_release: `codex-worker 1.0.11`（稳定 SDK Worker 已发布；旧混合 app-server lane 不在发布物中）
 - status: retained-scope-accepted-runtime-architecture-superseded
 - superseded_by: `docs/version-tracker/1.4.0-SNAPSHOT/workitems/OPT-001-independent-codex-app-server-worker-requirement.md`
 
@@ -62,7 +62,7 @@
 - 不改变 `codex-latest`、`codex-fast`、`codex-deep`、`codex-xhigh`、`codex-mini` 的现有映射。
 - 转发弹窗继续使用独立模型下拉；已有会话转发不暴露 `/model`，避免选择不生效。
 - 多 Pane 续接仍沿用现有全局模型上下文，但不显示 `/model`；pane 级异构 Provider 模型状态不在本项内重构。
-- 本事项只完成代码与验收准备，不打包、上传或发布 `1.0.11`。
+- 旧混合 SDK / app-server lane 不打包或发布；`1.0.11` 仅发布稳定 SDK Worker，并对新 Ultra 请求 fail closed 到独立 App Server Worker。
 - `[历史实现边界，已 superseded]` 旧 App-server lane 本阶段只支持 Ultra，固定 `approval_policy=never`，不接收 `additional_directories`，也不承诺处理 app-server 主动发起的交互式 server request；不满足时必须在 `turn/start` 前回到 SDK。当前边界以 1.4.0 独立 Worker 契约为准。
 
 ## 验收标准
@@ -131,8 +131,8 @@
 - date: 2026-07-10
 - implementation: completed for Max / Ultra mapping and Ultra native-subtask projection
 - readiness: alias / authorization / Java / Session / PC projection 保留范围已验收；执行架构和生产启用转入 1.4.0 OPT-001
-- release_state: not packaged, not uploaded, not published
-- current_package_version: `1.0.10`
+- release_state: `codex-worker 1.0.11` published to OBS for Windows / Linux / macOS
+- current_package_version: `1.0.11`
 
 ### 代码落点
 
@@ -155,10 +155,11 @@
 - Flag-on real Worker：health 报告 Worker `1.0.10`、SDK/CLI `0.144.1`、protocol compatible 和 native supported；只读 Ultra prompt 产生 1 个原生 child，6 条状态事件、1 条 result、0 error，工作区 Git 状态不变。
 - 原生子任务 Playwright：在 mocked API/订阅契约下调用快照 API，验证单 Pane 折叠摘要、4 行层级、状态、内部 ID 隐藏和 320px Pane 无溢出，1 / 1 passed；多 Pane 与重连由 Vitest 覆盖。
 - 临时 MySQL 8：迁移脚本连续执行两次成功；临时容器已清理。
+- `1.0.11` 发布物复核：三平台远端归档与本地 SHA-256 一致；`latest.json.version=1.0.11`；归档锁定 `@openai/codex-sdk 0.144.1`，包含 GPT-5.6 / Max 和 `CODEX_ULTRA_APP_SERVER_REQUIRED`，不包含旧混合 app-server lane。
 
 ### 剩余边界
 
-- 原计划 `codex-worker 1.0.11` 混合 lane 发版不再推进；独立 app-server Worker 的版本、产物和 rollout 由 1.4.0 OPT-001 管理。
+- 原计划 `codex-worker 1.0.11` 混合 lane 发版不再推进；同版本号现仅用于稳定 SDK Worker 发布。独立 app-server Worker 的版本、产物和 rollout 仍由 1.4.0 OPT-001 管理。
 - 实际生产数据库尚未执行迁移，也未完成生产 profile `ddl-auto=validate` 启动；这是部署门禁，不是代码验收缺陷。
 - 尚无真实独立 app-server Worker -> Java -> unified SSE -> PC 的单条全栈自动化；旧 Worker 外部协议 smoke 仅为历史证据，当前全链路 canary 必须在 1.4.0 重新完成。
 - 既有多 Pane 全局模型上下文未改为 pane 级 Provider 状态；本次通过隐藏续接 Pane 的 `/model` 避免新增错配入口。

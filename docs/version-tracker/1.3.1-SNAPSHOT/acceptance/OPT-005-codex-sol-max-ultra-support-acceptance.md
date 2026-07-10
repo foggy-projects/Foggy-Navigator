@@ -37,7 +37,8 @@ evidence_count: 9
 
 - Version: `1.3.1-SNAPSHOT`
 - Target: `OPT-005`
-- Historical Worker target release: `1.0.11`，当时包版本为 `1.0.10`；该混合 lane 候选不再作为当前发布目标
+- Historical mixed-lane target release: `1.0.11`，当时包版本为 `1.0.10`；该混合 lane 候选已取消
+- Current stable SDK Worker release: `1.0.11` 已发布，只承载 GPT-5.6 / Max 和旧 thread drain；新 Ultra fail closed 到独立 App Server Worker，不继承旧混合 lane 签收
 - Owner: Codex Worker / Codex Java addon / Session module / Navigator frontend
 - Goal: 保留稳定 Max / Ultra alias、显式授权与脱敏 native-subtask projection 的验收；执行 runtime 已转入 1.4.0 独立 Worker
 

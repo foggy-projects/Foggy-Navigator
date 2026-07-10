@@ -192,7 +192,9 @@ P3 数值门槛已定义，但仍需 release owner 在目标环境签收 cohort 
 - scope: 独立 app-server P0-P2 代码合入；SDK Worker `1.0.11` 稳定发布边界
 - changed_code_paths: `tools/codex-agent-worker/**`、`tools/codex-app-server-worker/**`、`addons/codex-worker-agent/**`、`navigator-common/**`、`agent-framework/**`、`session-module/**`、`user-auth-module/**`、`packages/navigator-frontend/**`、`docs/migration/**`
 - self_check_summary: 新 Ultra 在 SDK Worker 创建入口 fail closed，只有携带既有 `session_id` 的 SDK Ultra thread 可按 affinity drain；独立 app-server runtime 新注册默认 `DARK + disabled + 0%`，本次合入不改变生产默认路由
-- verification: SDK Worker 115/115 + typecheck/build；app-server Worker 89/89 + typecheck/build/schema verify；Codex addon 220/220；Session 302/302；User Auth 71/71；Navigator Common 37/37；Agent Framework 213/213；PC Vitest 169/169 + type-check/build
+- verification: SDK Worker 115/115 + typecheck/build；app-server Worker 101/101 + typecheck/build/schema verify；Codex addon 220/220；Session 302/302；User Auth 71/71；Navigator Common 37/37；Agent Framework 213/213；PC Vitest 169/169 + type-check/build；launcher `CommonRepositoryOwnershipContextTest` passed
 - baseline_note: `mvn test -pl launcher -am` 仍有未改动 `addons/claude-worker-agent` 的 3 个 Windows 路径归一化测试失败；本次实际变更模块的完整 Maven 测试均通过，不在本事项内扩大修复范围
 - obvious_risks_or_followups: 真实 Worker-Java-SSE-PC、N-1/多副本、生产迁移及 P3 canary 仍未完成；App Server 生产启用继续禁止
 - self_check_decision: ready-with-risks-for-main-merge; production-enablement-not-approved
+- sdk_worker_release: `1.0.11` published for Windows / Linux / macOS；OBS `latest.json` 已切换到 `1.0.11`，三平台下载归档 SHA-256 与本地发布物一致
+- sdk_worker_boundary: GPT-5.6 / Max 正常执行；新 Ultra 返回 `CODEX_ULTRA_APP_SERVER_REQUIRED`；既有 SDK Ultra thread 仅按 affinity drain
