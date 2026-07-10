@@ -551,14 +551,13 @@ async function requestWithDeclaredLength(
       method: 'POST',
       headers: { ...headers, 'Content-Length': String(contentLength) },
     }, response => {
-      response.resume()
-      response.once('end', () => {
-        request.destroy()
-        resolve({
-          status: response.statusCode || 0,
-          actualInstanceId: response.headers[ACTUAL_INSTANCE_HEADER.toLowerCase()] as string | undefined,
-        })
-      })
+      const result = {
+        status: response.statusCode || 0,
+        actualInstanceId: response.headers[ACTUAL_INSTANCE_HEADER.toLowerCase()] as string | undefined,
+      }
+      response.destroy()
+      request.destroy()
+      resolve(result)
     })
     request.once('error', reject)
     request.end('{')
