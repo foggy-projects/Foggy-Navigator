@@ -184,13 +184,17 @@ public class CodexRuntimeRegistryService {
     public CodexRuntimeDTO refreshCapabilities(String runtimeId, int revision) {
         CodexRuntimeEntity probeTarget = requireRevision(runtimeId, revision);
         Map<String, Object> manifest = null;
+        String actualInstanceId = null;
         String failureCode = null;
         try {
             CodexWorkerClient client = clientFor(probeTarget);
-            manifest = client.getCapabilities().block(Duration.ofSeconds(10));
-            if (manifest == null) {
+            CodexWorkerClient.CapabilityProbe probe = client.probeCapabilities()
+                    .block(Duration.ofSeconds(10));
+            if (probe == null || probe.manifest() == null) {
                 throw new IllegalStateException("empty capability manifest");
             }
+            manifest = probe.manifest();
+            actualInstanceId = probe.actualInstanceId();
         } catch (Exception e) {
             failureCode = capabilityFailureCode(e);
             log.warn("Codex runtime capability refresh failed: runtimeId={}, revision={}, code={}, type={}",
@@ -198,6 +202,7 @@ public class CodexRuntimeRegistryService {
         }
 
         Map<String, Object> probedManifest = manifest;
+        String probedActualInstanceId = actualInstanceId;
         String probedFailureCode = failureCode;
         CodexRuntimeEntity saved = capabilityStateService.updateLocked(runtimeId, revision, entity -> {
             if (probedManifest == null) {
@@ -205,12 +210,65 @@ public class CodexRuntimeRegistryService {
                 return;
             }
             try {
-                applyManifest(entity, probedManifest);
+                applyManifest(entity, probedManifest, probedActualInstanceId, true);
             } catch (Exception e) {
                 String code = capabilityFailureCode(e);
                 applyCapabilityFailure(entity, code);
                 log.warn("Codex runtime capability apply failed: runtimeId={}, revision={}, code={}, type={}",
                         runtimeId, revision, code, exceptionType(e));
+            }
+        });
+        return toDTO(saved);
+    }
+
+    /**
+     * Explicitly clears a latched instance quarantine after the owner has taken
+     * the revision out of routing and the original instance proves itself again.
+     */
+    public CodexRuntimeDTO recoverInstanceQuarantine(String runtimeId, int revision) {
+        CodexRuntimeEntity probeTarget = requireRevision(runtimeId, revision);
+        validateRecoveryEligibility(probeTarget);
+        if (!hasReadinessCode(probeTarget, "CAPABILITY_INSTANCE_ID_MISMATCH")) {
+            throw new IllegalStateException("CODEX_RUNTIME_INSTANCE_QUARANTINE_NOT_FOUND");
+        }
+
+        Map<String, Object> manifest = null;
+        String actualInstanceId = null;
+        String failureCode = null;
+        try {
+            CodexWorkerClient.CapabilityProbe probe = clientFor(probeTarget)
+                    .probeCapabilities()
+                    .block(Duration.ofSeconds(10));
+            if (probe == null || probe.manifest() == null) {
+                throw new IllegalStateException("empty capability manifest");
+            }
+            manifest = probe.manifest();
+            actualInstanceId = probe.actualInstanceId();
+        } catch (Exception e) {
+            failureCode = capabilityFailureCode(e);
+            log.warn("Codex runtime instance recovery probe failed: runtimeId={}, revision={}, code={}, type={}",
+                    runtimeId, revision, failureCode, exceptionType(e));
+        }
+
+        Map<String, Object> probedManifest = manifest;
+        String probedActualInstanceId = actualInstanceId;
+        String probedFailureCode = failureCode;
+        CodexRuntimeEntity saved = capabilityStateService.updateLocked(runtimeId, revision, entity -> {
+            validateRecoveryEligibility(entity);
+            if (!hasReadinessCode(entity, "CAPABILITY_INSTANCE_ID_MISMATCH")) {
+                throw new IllegalStateException("CODEX_RUNTIME_INSTANCE_QUARANTINE_NOT_FOUND");
+            }
+            if (probedManifest == null) {
+                applyCapabilityFailure(entity, probedFailureCode);
+                return;
+            }
+            try {
+                applyManifest(entity, probedManifest, probedActualInstanceId, false);
+            } catch (Exception e) {
+                applyCapabilityFailure(entity, capabilityFailureCode(e));
+            }
+            if (!"READY".equals(entity.getReadinessStatus())) {
+                retainInstanceQuarantine(entity);
             }
         });
         return toDTO(saved);
@@ -332,8 +390,9 @@ public class CodexRuntimeRegistryService {
         return requireRevision(runtimeId, revision).getWorkerId();
     }
 
-    private void applyManifest(CodexRuntimeEntity entity, Map<String, Object> manifest) throws Exception {
-        boolean instanceIdentityQuarantined = hasReadinessCode(
+    private void applyManifest(CodexRuntimeEntity entity, Map<String, Object> manifest,
+                               String actualInstanceId, boolean preserveInstanceQuarantine) throws Exception {
+        boolean instanceIdentityQuarantined = preserveInstanceQuarantine && hasReadinessCode(
                 entity, "CAPABILITY_INSTANCE_ID_MISMATCH");
         String contractVersion = stringValue(manifest, "contract_version", "contractVersion");
         String runtimeId = stringValue(manifest, "runtime_id", "runtimeId");
@@ -342,6 +401,7 @@ public class CodexRuntimeRegistryService {
         String cliVersion = stringValue(manifest, "cli_version", "cliVersion");
         String schemaDigest = stringValue(manifest, "schema_digest", "schemaDigest");
         String instanceId = blankToNull(stringValue(manifest, "instance_id", "instanceId"));
+        String responseInstanceId = blankToNull(actualInstanceId);
 
         entity.setContractVersion(contractVersion);
         entity.setCliVersion(cliVersion);
@@ -349,6 +409,7 @@ public class CodexRuntimeRegistryService {
         String registeredInstanceId = entity.getInstanceId();
         boolean mayBindInitialInstance = (registeredInstanceId == null || registeredInstanceId.isBlank())
                 && isValidIdentifier(instanceId, 128)
+                && instanceId.equals(responseInstanceId)
                 && !Boolean.TRUE.equals(entity.getEnabled())
                 && CodexRuntimeRoutingPolicy.DARK.name().equals(entity.getRoutingPolicy())
                 && !instanceIdentityQuarantined;
@@ -369,6 +430,11 @@ public class CodexRuntimeRegistryService {
                 || !isValidIdentifier(instanceId, 128)
                 || (!mayBindInitialInstance && (registeredInstanceId == null
                     || registeredInstanceId.isBlank() || !registeredInstanceId.equals(instanceId)))) {
+            incompatibilities.add("CAPABILITY_INSTANCE_ID_MISMATCH");
+        }
+        if (!isValidIdentifier(responseInstanceId, 128)) {
+            incompatibilities.add("CAPABILITY_INSTANCE_PROOF_MISSING");
+        } else if (!responseInstanceId.equals(instanceId)) {
             incompatibilities.add("CAPABILITY_INSTANCE_ID_MISMATCH");
         }
         if (!entity.getRuntimeType().equals(runtimeType)) {
@@ -403,7 +469,7 @@ public class CodexRuntimeRegistryService {
             entity.setReadinessMessage(null);
         } else {
             entity.setReadinessStatus("INCOMPATIBLE");
-            entity.setReadinessMessage(String.join("; ", incompatibilities));
+            entity.setReadinessMessage(String.join("; ", incompatibilities.stream().distinct().toList()));
         }
     }
 
@@ -945,6 +1011,26 @@ public class CodexRuntimeRegistryService {
                 ? "CAPABILITY_INSTANCE_ID_MISMATCH; " + currentFailure
                 : currentFailure);
         entity.setLastCapabilityAt(LocalDateTime.now());
+    }
+
+    private void validateRecoveryEligibility(CodexRuntimeEntity entity) {
+        if (Boolean.TRUE.equals(entity.getEnabled())
+                || !CodexRuntimeRoutingPolicy.DARK.name().equals(entity.getRoutingPolicy())) {
+            throw new IllegalStateException(
+                    "CODEX_RUNTIME_INSTANCE_RECOVERY_REQUIRES_DISABLED_DARK");
+        }
+        if (!isValidIdentifier(entity.getInstanceId(), 128)) {
+            throw new IllegalStateException("CODEX_RUNTIME_INSTANCE_AFFINITY_MISSING");
+        }
+    }
+
+    private void retainInstanceQuarantine(CodexRuntimeEntity entity) {
+        String current = entity.getReadinessMessage();
+        entity.setReadinessStatus("INCOMPATIBLE");
+        entity.setReadinessMessage(hasReadinessCode(entity, "CAPABILITY_INSTANCE_ID_MISMATCH")
+                ? current
+                : "CAPABILITY_INSTANCE_ID_MISMATCH"
+                    + (current == null || current.isBlank() ? "" : "; " + current));
     }
 
     private boolean hasReadinessCode(CodexRuntimeEntity entity, String code) {

@@ -3,7 +3,6 @@ import type { AppConfig } from '../config.js'
 import { isAllowedWorkingPath, resolveAllowedWorkingPath } from '../path-guards.js'
 import { IdempotencyConflictError } from '../persistence/task-store.js'
 import { resolveRuntimeReadiness } from '../runtime-capabilities.js'
-import { guardExpectedInstance } from '../instance-affinity.js'
 import {
   TaskManager,
   TaskManagerDrainingError,
@@ -17,9 +16,6 @@ const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
 export function createTasksRouter(config: AppConfig, manager: TaskManager): Router {
   const router = Router()
-
-  // This guard must stay ahead of every manager/store-backed task route.
-  router.use('/api/v1/tasks', guardExpectedInstance(config))
 
   router.post('/api/v1/tasks', async (req, res, next) => {
     try {

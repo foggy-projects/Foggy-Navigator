@@ -49,6 +49,13 @@ public class CodexRuntimeController {
         return RX.ok(runtimeRegistryService.refreshCapabilities(runtimeId, revision));
     }
 
+    @PostMapping("/{runtimeId}/revisions/{revision}/recover-instance")
+    public RX<CodexRuntimeDTO> recoverInstance(@PathVariable String runtimeId,
+                                               @PathVariable int revision) {
+        validateRuntimeOwner(runtimeId, revision);
+        return RX.ok(runtimeRegistryService.recoverInstanceQuarantine(runtimeId, revision));
+    }
+
     @PutMapping("/{runtimeId}/revisions/{revision}/routing")
     public RX<CodexRuntimeDTO> updateRouting(@PathVariable String runtimeId,
                                              @PathVariable int revision,

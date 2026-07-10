@@ -202,8 +202,8 @@ class CodexRuntimeRegistryServiceTest {
         when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1))
                 .thenReturn(Optional.of(lockedCurrent));
         when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
-        when(client.getCapabilities()).thenReturn(Mono.just(topLevelManifest(
-                "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST)));
+        when(client.probeCapabilities()).thenReturn(Mono.just(probe(topLevelManifest(
+                "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST))));
 
         var result = service.refreshCapabilities("app-main", 1);
 
@@ -258,6 +258,78 @@ class CodexRuntimeRegistryServiceTest {
         assertEquals("INCOMPATIBLE", result.getReadinessStatus());
         assertTrue(result.getReadinessMessage().contains("CAPABILITY_INSTANCE_ID_MISMATCH"));
         assertEquals(null, result.getInstanceId());
+    }
+
+    @Test
+    void initialInstanceBindingRequiresCapabilityResponseHeaderProof() {
+        CodexRuntimeEntity entity = runtime("DARK", 0);
+        entity.setEnabled(false);
+        entity.setInstanceId(null);
+        Map<String, Object> manifest = topLevelManifest(
+                "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+        when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1)).thenReturn(Optional.of(entity));
+        when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
+        when(client.probeCapabilities()).thenReturn(Mono.just(
+                new CodexWorkerClient.CapabilityProbe(manifest, null)));
+
+        var result = service.refreshCapabilities("app-main", 1);
+
+        assertEquals("INCOMPATIBLE", result.getReadinessStatus());
+        assertTrue(result.getReadinessMessage().contains("CAPABILITY_INSTANCE_PROOF_MISSING"));
+        assertEquals(null, result.getInstanceId());
+    }
+
+    @Test
+    void explicitRecoveryClearsQuarantineOnlyWhenOriginalInstanceFullyMatches() throws Exception {
+        CodexRuntimeEntity entity = runtime("DARK", 0);
+        entity.setEnabled(false);
+        entity.setReadinessStatus("INCOMPATIBLE");
+        entity.setReadinessMessage("CAPABILITY_INSTANCE_ID_MISMATCH");
+        stubRefresh(entity, topLevelManifest(
+                "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST));
+
+        var result = service.recoverInstanceQuarantine("app-main", 1);
+
+        assertEquals("READY", result.getReadinessStatus());
+        assertEquals(null, result.getReadinessMessage());
+        assertEquals("instance-a", result.getInstanceId());
+        verify(clientFactory).getOrCreate(
+                "runtime:app-main:1", "http://127.0.0.1:3062", "runtime-token", "instance-a");
+    }
+
+    @Test
+    void failedExplicitRecoveryRetainsInstanceQuarantine() {
+        CodexRuntimeEntity entity = runtime("DARK", 0);
+        entity.setEnabled(false);
+        entity.setReadinessStatus("INCOMPATIBLE");
+        entity.setReadinessMessage("CAPABILITY_INSTANCE_ID_MISMATCH");
+        Map<String, Object> manifest = topLevelManifest(
+                "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+        when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1)).thenReturn(Optional.of(entity));
+        when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
+        when(client.probeCapabilities()).thenReturn(Mono.just(
+                new CodexWorkerClient.CapabilityProbe(manifest, null)));
+
+        var result = service.recoverInstanceQuarantine("app-main", 1);
+
+        assertEquals("INCOMPATIBLE", result.getReadinessStatus());
+        assertTrue(result.getReadinessMessage().contains("CAPABILITY_INSTANCE_ID_MISMATCH"));
+        assertTrue(result.getReadinessMessage().contains("CAPABILITY_INSTANCE_PROOF_MISSING"));
+    }
+
+    @Test
+    void explicitRecoveryRequiresDisabledDarkRevision() {
+        CodexRuntimeEntity entity = runtime("DARK", 0);
+        entity.setReadinessMessage("CAPABILITY_INSTANCE_ID_MISMATCH");
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.recoverInstanceQuarantine("app-main", 1));
+
+        assertEquals("CODEX_RUNTIME_INSTANCE_RECOVERY_REQUIRES_DISABLED_DARK", error.getMessage());
+        verify(clientFactory, never()).getOrCreate(anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -425,7 +497,7 @@ class CodexRuntimeRegistryServiceTest {
         when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
         when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1)).thenReturn(Optional.of(entity));
         when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
-        when(client.getCapabilities()).thenReturn(Mono.error(new IllegalStateException(
+        when(client.probeCapabilities()).thenReturn(Mono.error(new IllegalStateException(
                 "Cannot connect to " + sentinelEndpoint + " using " + sentinelToken)));
 
         var result = service.refreshCapabilities("app-main", 1);
@@ -460,6 +532,26 @@ class CodexRuntimeRegistryServiceTest {
                         "codex-worker", "task-1"));
 
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", error.getCode());
+    }
+
+    @Test
+    void ultraCanaryTenPercentCohortIsStableAndBounded() throws Exception {
+        CodexRuntimeEntity entity = readyRuntime("ULTRA_CANARY", 10, "gpt-5.6-sol");
+        when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
+                "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
+        List<Boolean> firstPass = new java.util.ArrayList<>();
+
+        for (int i = 0; i < 1_000; i++) {
+            firstPass.add(isUltraCanarySelected("task-" + i));
+        }
+        for (int i = 0; i < 1_000; i++) {
+            assertEquals(firstPass.get(i), isUltraCanarySelected("task-" + i));
+        }
+
+        long selected = firstPass.stream().filter(Boolean::booleanValue).count();
+        assertTrue(selected >= 50 && selected <= 150,
+                "10% canary sample was outside a conservative bound: " + selected);
+        assertTrue(firstPass.contains(false));
     }
 
     @Test
@@ -699,16 +791,16 @@ class CodexRuntimeRegistryServiceTest {
         when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1)).thenReturn(Optional.of(first));
         when(repository.findByRuntimeIdAndRevisionForUpdate("app-second", 1)).thenReturn(Optional.of(second));
         when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
-        when(client.getCapabilities())
+        when(client.probeCapabilities())
                 .thenReturn(Mono.error(new IllegalStateException("offline")))
-                .thenReturn(Mono.just(topLevelManifest("app-second", 1,
-                        CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST)));
+                .thenReturn(Mono.just(probe(topLevelManifest("app-second", 1,
+                        CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST))));
 
         service.refreshEnabledCapabilities();
 
         assertEquals("UNREACHABLE", first.getReadinessStatus());
         assertEquals("READY", second.getReadinessStatus());
-        verify(client, times(2)).getCapabilities();
+        verify(client, times(2)).probeCapabilities();
     }
 
     private CodexRuntimeRegistrationForm registration() {
@@ -757,7 +849,17 @@ class CodexRuntimeRegistryServiceTest {
         when(repository.findByRuntimeIdAndRevisionForUpdate(entity.getRuntimeId(), entity.getRevision()))
                 .thenReturn(Optional.of(entity));
         when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
-        when(client.getCapabilities()).thenReturn(Mono.just(manifest));
+        when(client.probeCapabilities()).thenReturn(Mono.just(probe(manifest)));
+    }
+
+    private CodexWorkerClient.CapabilityProbe probe(Map<String, Object> manifest) {
+        Object instanceId = manifest.get("instance_id");
+        if (instanceId == null && manifest.get("runtime") instanceof Map<?, ?> runtime) {
+            instanceId = runtime.containsKey("instance_id")
+                    ? runtime.get("instance_id") : runtime.get("instanceId");
+        }
+        return new CodexWorkerClient.CapabilityProbe(
+                manifest, instanceId != null ? instanceId.toString() : null);
     }
 
     private Map<String, Object> topLevelManifest(String runtimeId, int revision, String schemaDigest) {

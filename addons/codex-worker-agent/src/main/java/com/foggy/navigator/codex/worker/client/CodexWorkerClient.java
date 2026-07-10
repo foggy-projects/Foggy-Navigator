@@ -127,13 +127,31 @@ public class CodexWorkerClient {
      */
     @SuppressWarnings("unchecked")
     public Mono<Map<String, Object>> getCapabilities() {
+        return probeCapabilities().map(CapabilityProbe::manifest);
+    }
+
+    /**
+     * Reads the capability body together with the response instance proof. The
+     * registry needs this even before it has an instance id to pin.
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<CapabilityProbe> probeCapabilities() {
         return webClient.get()
                 .uri("/api/v1/capabilities")
-                .retrieve()
-                .bodyToMono(Map.class)
-                .map(manifest -> (Map<String, Object>) manifest)
+                .exchangeToMono(response -> {
+                    if (!response.statusCode().is2xxSuccessful()) {
+                        return response.createException().flatMap(Mono::error);
+                    }
+                    String actualInstanceId = response.headers().asHttpHeaders()
+                            .getFirst(ACTUAL_INSTANCE_HEADER);
+                    return response.bodyToMono(Map.class)
+                            .map(manifest -> new CapabilityProbe(
+                                    (Map<String, Object>) manifest, actualInstanceId));
+                })
                 .timeout(Duration.ofSeconds(10));
     }
+
+    public record CapabilityProbe(Map<String, Object> manifest, String actualInstanceId) {}
 
     /**
      * Idempotently accepts an app-server task. Execution subscription is a separate

@@ -93,7 +93,12 @@ function Wait-LauncherStarted {
         }
         if ($Process.HasExited) {
             $stderr = if (Test-Path $StderrPath) { Get-Content -Raw $StderrPath } else { '' }
-            throw "$Label exited with code $($Process.ExitCode):`n$stdout`n$stderr"
+            $diagnostic = (($stdout + [Environment]::NewLine + $stderr) -split "`r?`n") |
+                Where-Object {
+                    $_ -match 'APPLICATION FAILED|Description:|Action:|ERROR|Exception|Caused by:|Schema-validation'
+                } |
+                Select-Object -Last 80
+            throw "$Label exited with code $($Process.ExitCode):`n$($diagnostic -join [Environment]::NewLine)"
         }
         Start-Sleep -Seconds 2
     }
@@ -140,7 +145,8 @@ function Start-And-ValidateLauncher {
         '--system.root.password=prod-root-password-value',
         '--navigator.security.credential-key=prod-credential-key-value',
         '--navigator.security.credential-salt=0123456789abcdef',
-        '--navigator.api.external-url=https://navigator.example.test'
+        '--navigator.api.external-url=https://navigator.example.test',
+        '--logging.level.com.foggyframework=WARN'
     )
 
     $process = $null

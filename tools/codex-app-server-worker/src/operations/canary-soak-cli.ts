@@ -20,13 +20,19 @@ export async function runCanarySoakCli(argv: string[]): Promise<number> {
     let state = await readCanarySoakState(config)
     if (args.report) {
       state ||= createInitialState(config, new Date())
-      process.stdout.write(`${renderCanarySoakReport(state, config.thresholds)}\n`)
+      process.stdout.write(`${renderCanarySoakReport(state, config.thresholds, {
+        now: new Date(),
+        maxSampleGapMs: config.maxSampleGapMs,
+      })}\n`)
       return 0
     }
 
     if (args.once) {
       const sampled = await sampleCanarySoak(config, state)
-      process.stdout.write(`${renderCanarySoakReport(sampled.state, config.thresholds)}\n`)
+      process.stdout.write(`${renderCanarySoakReport(sampled.state, config.thresholds, {
+        now: new Date(),
+        maxSampleGapMs: config.maxSampleGapMs,
+      })}\n`)
       if (sampled.errorCodes.length > 0) {
         process.stdout.write(`sample_errors: ${sampled.errorCodes.join(',')}\n`)
       }
@@ -54,7 +60,10 @@ export async function runCanarySoakCli(argv: string[]): Promise<number> {
       process.removeListener('SIGINT', stop)
       process.removeListener('SIGTERM', stop)
     }
-    process.stdout.write(`${renderCanarySoakReport(state, config.thresholds)}\n`)
+    process.stdout.write(`${renderCanarySoakReport(state, config.thresholds, {
+      now: new Date(),
+      maxSampleGapMs: config.maxSampleGapMs,
+    })}\n`)
     return 0
   } catch (error) {
     const code = error instanceof CanarySoakError ? error.code : 'CANARY_SOAK_UNEXPECTED_FAILURE'

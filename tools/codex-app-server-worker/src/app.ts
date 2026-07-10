@@ -4,14 +4,16 @@ import { createAuthMiddleware } from './auth.js'
 import { createHealthRouter } from './routes/health.js'
 import { createTasksRouter } from './routes/tasks.js'
 import { exposeActualInstance } from './instance-affinity.js'
+import { guardExpectedInstance } from './instance-affinity.js'
 import type { TaskManager } from './task-manager.js'
 
 export function createApp(config: AppConfig, manager: TaskManager): Express {
   const app = express()
   app.disable('x-powered-by')
-  app.use(express.json({ limit: '25mb' }))
   app.use(exposeActualInstance(config))
   app.use(createAuthMiddleware(config))
+  app.use('/api/v1/tasks', guardExpectedInstance(config))
+  app.use(express.json({ limit: '25mb' }))
   app.use(createHealthRouter(config, manager))
   app.use(createTasksRouter(config, manager))
   app.use((error: Error & { type?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

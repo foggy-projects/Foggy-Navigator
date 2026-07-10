@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
+import http from 'node:http'
 import test from 'node:test'
 import { createApp } from '../src/app.js'
 import type { ExecutionResult, TaskExecutor } from '../src/app-server/executor.js'
@@ -50,6 +51,18 @@ test('instance affinity guard rejects every task route before manager access', a
     assert.deepEqual(await response.json(), { error: 'RUNTIME_INSTANCE_MISMATCH' })
     assert.equal(response.headers.get(ACTUAL_INSTANCE_HEADER), config.instanceId)
   }
+  const malformed = await fetch(`${baseUrl}/api/v1/tasks`, {
+    method: 'POST',
+    headers,
+    body: '{malformed',
+  })
+  assert.equal(malformed.status, 409)
+  assert.equal(malformed.headers.get(ACTUAL_INSTANCE_HEADER), config.instanceId)
+  assert.deepEqual(await malformed.json(), { error: 'RUNTIME_INSTANCE_MISMATCH' })
+
+  const oversized = await requestWithDeclaredLength(baseUrl, headers, 26 * 1024 * 1024)
+  assert.equal(oversized.status, 409)
+  assert.equal(oversized.actualInstanceId, config.instanceId)
   assert.equal(managerAccesses, 0)
 })
 
@@ -522,6 +535,34 @@ async function postTask(baseUrl: string, key: string, body: Record<string, unkno
 
 function authHeaders(): Record<string, string> {
   return { Authorization: 'Bearer test-worker-token' }
+}
+
+async function requestWithDeclaredLength(
+  baseUrl: string,
+  headers: Record<string, string>,
+  contentLength: number,
+): Promise<{ status: number; actualInstanceId?: string }> {
+  const url = new URL('/api/v1/tasks', baseUrl)
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'POST',
+      headers: { ...headers, 'Content-Length': String(contentLength) },
+    }, response => {
+      response.resume()
+      response.once('end', () => {
+        request.destroy()
+        resolve({
+          status: response.statusCode || 0,
+          actualInstanceId: response.headers[ACTUAL_INSTANCE_HEADER.toLowerCase()] as string | undefined,
+        })
+      })
+    })
+    request.once('error', reject)
+    request.end('{')
+  })
 }
 
 class BlockingExecutor implements TaskExecutor {

@@ -61,9 +61,23 @@ export interface SanitizedTerminalTask {
 
 export interface SanitizedWorkerSample {
   instance_digest: string
+  created_counter: number
+  reused_counter: number
   retired_counter: number
+  rejected_counter: number
+  acquire_timeouts_counter: number
   rotations: number
   crashes_counter: number
+  crashes: number
+  rejections: number
+  acquire_timeouts: number
+  instances: number
+  busy: number
+  idle: number
+  creating: number
+  queued: number
+  lanes: number
+  draining: boolean
   sampled_at: string
 }
 
@@ -98,10 +112,20 @@ export interface GateResult {
   affinityMismatches: number
   privacyLeakages: number
   poolRotations: number
+  poolCrashes: number
+  poolRejections: number
+  poolAcquireTimeouts: number
   observationHours: number
   successRate: number
   internalErrorRate: number
+  checkpointFresh: boolean
+  sampleAgeSeconds: number | null
   checks: Record<string, boolean>
+}
+
+export interface GateEvaluationContext {
+  now: Date
+  maxSampleGapMs: number
 }
 
 export interface SampleResult {
@@ -161,9 +185,18 @@ export async function loadCanarySoakConfig(configPath: string): Promise<CanarySo
 
 export function resolveCanarySoakConfig(raw: unknown, baseDirectory = process.cwd()): CanarySoakConfig {
   const value = asRecord(raw, 'CANARY_CONFIG_INVALID')
+  assertOnlyKeys(value, [
+    'profile', 'navigator', 'workers', 'stateFile', 'sampleIntervalSeconds',
+    'maxSampleGapSeconds', 'requestTimeoutSeconds', 'privacyMarkerEnvNames', 'thresholds',
+  ], 'CANARY_CONFIG_FIELD_UNKNOWN')
   rejectEmbeddedSecrets(value)
   const profile = requiredProfile(value.profile)
   const navigator = asRecord(value.navigator, 'CANARY_CONFIG_NAVIGATOR_INVALID')
+  assertOnlyKeys(
+    navigator,
+    ['baseUrl', 'tasksPath', 'tokenEnv', 'runtimeId', 'workerId'],
+    'CANARY_CONFIG_NAVIGATOR_FIELD_UNKNOWN',
+  )
   const workers = requiredArray(value.workers, 'CANARY_CONFIG_WORKERS_INVALID')
   const navigatorBaseUrl = normalizedHttpUrl(navigator.baseUrl, false)
   const navigatorTasksPath = optionalString(navigator.tasksPath) || '/api/v1/codex-tasks'
@@ -175,6 +208,7 @@ export function resolveCanarySoakConfig(raw: unknown, baseDirectory = process.cw
   const workerId = optionalBoundedString(navigator.workerId, 128, 'CANARY_CONFIG_WORKER_ID_INVALID')
   const workerHealthUrls = [...new Set(workers.map((worker) => {
     const record = asRecord(worker, 'CANARY_CONFIG_WORKER_INVALID')
+    assertOnlyKeys(record, ['healthUrl'], 'CANARY_CONFIG_WORKER_FIELD_UNKNOWN')
     return normalizedHttpUrl(record.healthUrl, true)
   }))]
   if (workerHealthUrls.length === 0) throw new CanarySoakError('CANARY_CONFIG_WORKERS_REQUIRED')
@@ -240,9 +274,9 @@ export function resolveGateThresholds(
   const baseline = profile === 'production' ? PRODUCTION_THRESHOLDS : LOCAL_SMOKE_THRESHOLDS
   if (rawOverrides === undefined) return { ...baseline }
   const overrides = asRecord(rawOverrides, 'CANARY_CONFIG_THRESHOLDS_INVALID')
+  assertOnlyKeys(overrides, Object.keys(baseline), 'CANARY_CONFIG_THRESHOLD_UNKNOWN')
   const resolved = { ...baseline }
   for (const key of Object.keys(overrides)) {
-    if (!(key in baseline)) throw new CanarySoakError('CANARY_CONFIG_THRESHOLD_UNKNOWN')
     const raw = overrides[key]
     const isRate = key.endsWith('Rate')
     const number = numeric(raw, 0, isRate ? 1 : Number.MAX_SAFE_INTEGER, 'CANARY_CONFIG_THRESHOLD_INVALID')
@@ -313,7 +347,10 @@ export async function sampleCanarySoak(
   }
   let state = existingState || createInitialState(config, now)
   const lastSuccess = state.last_sample_at ? Date.parse(state.last_sample_at) : undefined
-  if (lastSuccess !== undefined && Number.isFinite(lastSuccess) && now.getTime() - lastSuccess > config.maxSampleGapMs) {
+  const continuityReference = lastSuccess !== undefined && Number.isFinite(lastSuccess)
+    ? lastSuccess
+    : Date.parse(state.window_started_at)
+  if (Number.isFinite(continuityReference) && now.getTime() - continuityReference > config.maxSampleGapMs) {
     state = createInitialState(config, now, state.continuity_resets + 1)
   }
   const fetchImpl = dependencies.fetch || fetch
@@ -341,7 +378,7 @@ export async function sampleCanarySoak(
   for (const healthUrl of config.workerHealthUrls) {
     try {
       const health = await fetchJson(healthUrl, {}, config.requestTimeoutMs, fetchImpl, 'CANARY_WORKER_HEALTH_FAILED')
-      incorporateWorkerHealth(nextState, healthUrl, health, markers, now)
+      incorporateWorkerHealth(nextState, healthUrl, health, markers, now, config.runtimeId)
     } catch (error) {
       workersComplete = false
       nextState.worker_poll_failures++
@@ -364,6 +401,7 @@ export async function sampleCanarySoak(
 export function evaluateCanarySoakGate(
   state: CanarySoakState,
   thresholds: GateThresholds,
+  context?: GateEvaluationContext,
 ): GateResult {
   const tasks = Object.values(state.terminal_tasks)
   const terminalTasks = tasks.length
@@ -374,12 +412,24 @@ export function evaluateCanarySoakGate(
   const affinityMismatches = tasks.filter(task => task.affinity_mismatch).length
   const privacyLeakages = tasks.filter(task => task.privacy_leakage).length + state.health_privacy_leakages
   const poolRotations = Object.values(state.worker_samples).reduce((sum, sample) => sum + sample.rotations, 0)
+  const poolCrashes = Object.values(state.worker_samples).reduce((sum, sample) => sum + sample.crashes, 0)
+  const poolRejections = Object.values(state.worker_samples).reduce((sum, sample) => sum + sample.rejections, 0)
+  const poolAcquireTimeouts = Object.values(state.worker_samples)
+    .reduce((sum, sample) => sum + sample.acquire_timeouts, 0)
   const end = state.last_sample_at ? Date.parse(state.last_sample_at) : Date.parse(state.window_started_at)
   const start = Date.parse(state.window_started_at)
   const observationHours = Math.max(0, end - start) / 3_600_000
   const successRate = terminalTasks === 0 ? 0 : completedTasks / terminalTasks
   const internalErrorRate = terminalTasks === 0 ? 0 : internalErrors / terminalTasks
+  const lastSample = state.last_sample_at ? Date.parse(state.last_sample_at) : Number.NaN
+  const sampleAgeSeconds = context && Number.isFinite(lastSample)
+    ? Math.max(0, context.now.getTime() - lastSample) / 1_000
+    : null
+  const checkpointFresh = context
+    ? sampleAgeSeconds !== null && sampleAgeSeconds * 1_000 <= context.maxSampleGapMs
+    : true
   const checks = {
+    checkpoint_fresh: checkpointFresh,
     has_complete_sample: state.completed_cycles > 0 && state.last_cycle_complete,
     terminal_tasks: terminalTasks >= thresholds.minTerminalTasks,
     observation_window: observationHours >= thresholds.minObservationHours,
@@ -400,15 +450,24 @@ export function evaluateCanarySoakGate(
     affinityMismatches,
     privacyLeakages,
     poolRotations,
+    poolCrashes,
+    poolRejections,
+    poolAcquireTimeouts,
     observationHours,
     successRate,
     internalErrorRate,
+    checkpointFresh,
+    sampleAgeSeconds,
     checks,
   }
 }
 
-export function renderCanarySoakReport(state: CanarySoakState, thresholds: GateThresholds): string {
-  const gate = evaluateCanarySoakGate(state, thresholds)
+export function renderCanarySoakReport(
+  state: CanarySoakState,
+  thresholds: GateThresholds,
+  context?: GateEvaluationContext,
+): string {
+  const gate = evaluateCanarySoakGate(state, thresholds, context)
   const heading = state.profile === 'production'
     ? 'PRODUCTION CANARY/SOAK EVIDENCE REPORT'
     : '!!! NON-PRODUCTION LOCAL SMOKE - CANNOT BE USED AS PRODUCTION EVIDENCE !!!'
@@ -421,11 +480,13 @@ export function renderCanarySoakReport(state: CanarySoakState, thresholds: GateT
     `production_evidence_eligible: ${gate.productionEvidenceEligible}`,
     `window_started_at: ${state.window_started_at}`,
     `last_successful_sample_at: ${state.last_sample_at || 'none'}`,
+    `checkpoint_age_seconds: ${gate.sampleAgeSeconds === null ? 'unknown' : gate.sampleAgeSeconds.toFixed(0)}`,
     `continuity_resets: ${state.continuity_resets}`,
     `terminal_tasks: ${gate.terminalTasks}/${thresholds.minTerminalTasks}`,
     `completed_failed_aborted: ${gate.completedTasks}/${gate.failedTasks}/${gate.abortedTasks}`,
     `observation_hours: ${gate.observationHours.toFixed(2)}/${thresholds.minObservationHours}`,
     `pool_rotations: ${gate.poolRotations}/${thresholds.minPoolRotations}`,
+    `pool_crashes_rejections_acquire_timeouts: ${gate.poolCrashes}/${gate.poolRejections}/${gate.poolAcquireTimeouts}`,
     `success_rate: ${(gate.successRate * 100).toFixed(2)}%/${(thresholds.minSuccessRate * 100).toFixed(2)}%`,
     `internal_errors: ${gate.internalErrors} (${(gate.internalErrorRate * 100).toFixed(2)}%)`,
     `affinity_mismatches: ${gate.affinityMismatches}`,
@@ -441,6 +502,7 @@ export async function writeAtomicCanarySoakState(
   state: CanarySoakState,
   forbiddenValues: string[] = [],
 ): Promise<void> {
+  validateState(state)
   assertSanitizedState(state, forbiddenValues)
   const directory = path.dirname(stateFile)
   await fs.mkdir(directory, { recursive: true })
@@ -576,24 +638,60 @@ function incorporateWorkerHealth(
   rawHealth: unknown,
   markers: string[],
   now: Date,
+  expectedRuntimeId: string,
 ): void {
   const health = asRecord(rawHealth, 'CANARY_WORKER_HEALTH_INVALID')
   if (containsMarker(JSON.stringify(health), markers)) state.health_privacy_leakages++
+  if (health.ready !== true) throw new CanarySoakError('CANARY_WORKER_NOT_READY')
+  if (optionalString(health.runtime_id) !== expectedRuntimeId) {
+    throw new CanarySoakError('CANARY_WORKER_RUNTIME_MISMATCH')
+  }
   const runtimeMetrics = asOptionalRecord(health.runtime_metrics)
   const pool = asOptionalRecord(runtimeMetrics?.pool)
   if (!pool) throw new CanarySoakError('CANARY_WORKER_POOL_METRICS_MISSING')
   const retiredCounter = nonNegativeInteger(pool.retired_total, 'CANARY_WORKER_POOL_METRICS_INVALID')
+  const createdCounter = nonNegativeInteger(pool.created_total, 'CANARY_WORKER_POOL_METRICS_INVALID')
+  const reusedCounter = nonNegativeInteger(pool.reused_total, 'CANARY_WORKER_POOL_METRICS_INVALID')
   const crashesCounter = nonNegativeInteger(pool.crashes_total, 'CANARY_WORKER_POOL_METRICS_INVALID')
+  const rejectedCounter = nonNegativeInteger(pool.rejected_total, 'CANARY_WORKER_POOL_METRICS_INVALID')
+  const acquireTimeoutsCounter = nonNegativeInteger(
+    pool.acquire_timeouts_total,
+    'CANARY_WORKER_POOL_METRICS_INVALID',
+  )
   const instanceId = boundedString(health.instance_id, 512, 'CANARY_WORKER_INSTANCE_INVALID')
   const workerDigest = digest(healthUrl)
   const previous = state.worker_samples[workerDigest]
+  const instanceDigest = digest(instanceId)
+  if (previous && previous.instance_digest !== instanceDigest) {
+    throw new CanarySoakError('CANARY_WORKER_INSTANCE_CHANGED')
+  }
   const rotations = (previous?.rotations || 0)
     + (previous && retiredCounter >= previous.retired_counter ? retiredCounter - previous.retired_counter : 0)
+  const crashes = (previous?.crashes || 0)
+    + counterDelta(previous?.crashes_counter, crashesCounter)
+  const rejections = (previous?.rejections || 0)
+    + counterDelta(previous?.rejected_counter, rejectedCounter)
+  const acquireTimeouts = (previous?.acquire_timeouts || 0)
+    + counterDelta(previous?.acquire_timeouts_counter, acquireTimeoutsCounter)
   state.worker_samples[workerDigest] = {
-    instance_digest: digest(instanceId),
+    instance_digest: instanceDigest,
+    created_counter: createdCounter,
+    reused_counter: reusedCounter,
     retired_counter: retiredCounter,
+    rejected_counter: rejectedCounter,
+    acquire_timeouts_counter: acquireTimeoutsCounter,
     rotations,
     crashes_counter: crashesCounter,
+    crashes,
+    rejections,
+    acquire_timeouts: acquireTimeouts,
+    instances: nonNegativeInteger(pool.instances, 'CANARY_WORKER_POOL_METRICS_INVALID'),
+    busy: nonNegativeInteger(pool.busy, 'CANARY_WORKER_POOL_METRICS_INVALID'),
+    idle: nonNegativeInteger(pool.idle, 'CANARY_WORKER_POOL_METRICS_INVALID'),
+    creating: nonNegativeInteger(pool.creating, 'CANARY_WORKER_POOL_METRICS_INVALID'),
+    queued: nonNegativeInteger(pool.queued, 'CANARY_WORKER_POOL_METRICS_INVALID'),
+    lanes: nonNegativeInteger(pool.lanes, 'CANARY_WORKER_POOL_METRICS_INVALID'),
+    draining: requiredBoolean(pool.draining, 'CANARY_WORKER_POOL_METRICS_INVALID'),
     sampled_at: now.toISOString(),
   }
 }
@@ -601,11 +699,78 @@ function incorporateWorkerHealth(
 function validateState(raw: unknown): CanarySoakState {
   assertSanitizedState(raw)
   const value = asRecord(raw, 'CANARY_STATE_INVALID')
+  assertOnlyKeys(value, [
+    'schema_version', 'profile', 'evidence_class', 'config_fingerprint', 'window_started_at',
+    'last_attempt_at', 'last_sample_at', 'next_due_at', 'continuity_resets', 'completed_cycles',
+    'incomplete_cycles', 'navigator_poll_failures', 'worker_poll_failures',
+    'health_privacy_leakages', 'last_cycle_complete', 'terminal_tasks', 'worker_samples',
+  ], 'CANARY_STATE_INVALID')
   if (value.schema_version !== 1) throw new CanarySoakError('CANARY_STATE_VERSION_UNSUPPORTED')
   if (value.profile !== 'production' && value.profile !== 'local-smoke') {
     throw new CanarySoakError('CANARY_STATE_INVALID')
   }
-  if (!value.terminal_tasks || !value.worker_samples) throw new CanarySoakError('CANARY_STATE_INVALID')
+  const expectedEvidence = value.profile === 'production' ? 'PRODUCTION_CANDIDATE' : 'NON_PRODUCTION_SMOKE'
+  if (value.evidence_class !== expectedEvidence) throw new CanarySoakError('CANARY_STATE_INVALID')
+  if (typeof value.config_fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(value.config_fingerprint)) {
+    throw new CanarySoakError('CANARY_STATE_INVALID')
+  }
+  requireIsoDate(value.window_started_at)
+  requireOptionalIsoDate(value.last_attempt_at)
+  requireOptionalIsoDate(value.last_sample_at)
+  requireIsoDate(value.next_due_at)
+  for (const key of [
+    'continuity_resets', 'completed_cycles', 'incomplete_cycles', 'navigator_poll_failures',
+    'worker_poll_failures', 'health_privacy_leakages',
+  ]) {
+    nonNegativeInteger(value[key], 'CANARY_STATE_INVALID')
+  }
+  if (typeof value.last_cycle_complete !== 'boolean') throw new CanarySoakError('CANARY_STATE_INVALID')
+
+  const terminalTasks = asRecord(value.terminal_tasks, 'CANARY_STATE_INVALID')
+  for (const [taskDigest, rawTask] of Object.entries(terminalTasks)) {
+    if (!/^[a-f0-9]{64}$/.test(taskDigest)) throw new CanarySoakError('CANARY_STATE_INVALID')
+    const task = asRecord(rawTask, 'CANARY_STATE_INVALID')
+    assertOnlyKeys(
+      task,
+      ['status', 'internal_error', 'affinity_mismatch', 'privacy_leakage', 'observed_at'],
+      'CANARY_STATE_INVALID',
+    )
+    if (!['completed', 'failed', 'aborted'].includes(String(task.status))) {
+      throw new CanarySoakError('CANARY_STATE_INVALID')
+    }
+    for (const key of ['internal_error', 'affinity_mismatch', 'privacy_leakage']) {
+      if (typeof task[key] !== 'boolean') throw new CanarySoakError('CANARY_STATE_INVALID')
+    }
+    requireIsoDate(task.observed_at)
+  }
+
+  const workerSamples = asRecord(value.worker_samples, 'CANARY_STATE_INVALID')
+  for (const [workerDigest, rawSample] of Object.entries(workerSamples)) {
+    if (!/^[a-f0-9]{64}$/.test(workerDigest)) throw new CanarySoakError('CANARY_STATE_INVALID')
+    const sample = asRecord(rawSample, 'CANARY_STATE_INVALID')
+    assertOnlyKeys(
+      sample,
+      [
+        'instance_digest', 'created_counter', 'reused_counter', 'retired_counter', 'rejected_counter',
+        'acquire_timeouts_counter', 'rotations', 'crashes_counter', 'crashes', 'rejections',
+        'acquire_timeouts', 'instances', 'busy', 'idle', 'creating', 'queued', 'lanes', 'draining',
+        'sampled_at',
+      ],
+      'CANARY_STATE_INVALID',
+    )
+    if (typeof sample.instance_digest !== 'string' || !/^[a-f0-9]{64}$/.test(sample.instance_digest)) {
+      throw new CanarySoakError('CANARY_STATE_INVALID')
+    }
+    for (const key of [
+      'created_counter', 'reused_counter', 'retired_counter', 'rejected_counter',
+      'acquire_timeouts_counter', 'rotations', 'crashes_counter', 'crashes', 'rejections',
+      'acquire_timeouts', 'instances', 'busy', 'idle', 'creating', 'queued', 'lanes',
+    ]) {
+      nonNegativeInteger(sample[key], 'CANARY_STATE_INVALID')
+    }
+    if (typeof sample.draining !== 'boolean') throw new CanarySoakError('CANARY_STATE_INVALID')
+    requireIsoDate(sample.sampled_at)
+  }
   return value as unknown as CanarySoakState
 }
 
@@ -677,6 +842,15 @@ function nonNegativeInteger(value: unknown, code: string): number {
   return result
 }
 
+function requiredBoolean(value: unknown, code: string): boolean {
+  if (typeof value !== 'boolean') throw new CanarySoakError(code)
+  return value
+}
+
+function counterDelta(previous: number | undefined, current: number): number {
+  return previous !== undefined && current >= previous ? current - previous : 0
+}
+
 function numeric(value: unknown, min: number, max: number, code: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
     throw new CanarySoakError(code)
@@ -722,6 +896,21 @@ function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
+}
+
+function assertOnlyKeys(value: Record<string, unknown>, allowed: string[], code: string): void {
+  const allowedKeys = new Set(allowed)
+  if (Object.keys(value).some(key => !allowedKeys.has(key))) throw new CanarySoakError(code)
+}
+
+function requireIsoDate(value: unknown): void {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
+    throw new CanarySoakError('CANARY_STATE_INVALID')
+  }
+}
+
+function requireOptionalIsoDate(value: unknown): void {
+  if (value !== undefined) requireIsoDate(value)
 }
 
 function stableErrorCode(error: unknown, fallback: string): string {
