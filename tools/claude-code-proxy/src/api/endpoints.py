@@ -126,11 +126,12 @@ def _select_backend(
     Returns (backend_key, None) for passthrough backends.
     """
     # Vision routing: if configured and request contains images
-    if has_image and config.vision_backend:
-        vision_key = config.key_pool.get_vision_backend(config.vision_backend)
+    vision_backend = getattr(config, "vision_backend", None)
+    if has_image and vision_backend:
+        vision_key = config.key_pool.get_vision_backend(vision_backend)
         if vision_key:
             logger.info(
-                "Image detected → routing to vision backend [%s]", config.vision_backend
+                "Image detected → routing to vision backend [%s]", vision_backend
             )
             client = openai_clients.get(vision_key.name)
             return vision_key, client
@@ -653,8 +654,9 @@ async def root():
         backends_info[name] = info
 
     vision_info = {}
-    if config.vision_backend:
-        vision_info["vision_backend"] = config.vision_backend
+    vision_backend = getattr(config, "vision_backend", None)
+    if vision_backend:
+        vision_info["vision_backend"] = vision_backend
     # Show which backends have vision models
     vision_models = {name: bk.vision_model for name, bk in key_pool.keys.items() if bk.vision_model}
     if vision_models:

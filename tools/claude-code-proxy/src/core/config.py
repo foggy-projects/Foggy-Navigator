@@ -159,8 +159,8 @@ class Config:
                 header_name = env_key[14:]  # Remove 'CUSTOM_HEADER_' prefix
 
                 if header_name:  # Make sure it's not empty
-                    # Convert underscores to hyphens for HTTP header format
-                    header_name = header_name.replace('_', '-')
+                    # Convert underscores to hyphens and normalize case for HTTP header format
+                    header_name = header_name.replace('_', '-').upper()
                     custom_headers[header_name] = env_value
 
         return custom_headers
