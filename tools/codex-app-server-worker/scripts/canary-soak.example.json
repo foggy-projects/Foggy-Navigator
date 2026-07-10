@@ -1,0 +1,22 @@
+{
+  "profile": "production",
+  "navigator": {
+    "baseUrl": "http://127.0.0.1:8112",
+    "tasksPath": "/api/v1/codex-tasks",
+    "tokenEnv": "NAVIGATOR_CANARY_TOKEN",
+    "runtimeId": "codex-app-server-canary",
+    "workerId": "replace-with-physical-worker-id"
+  },
+  "workers": [
+    {
+      "healthUrl": "http://127.0.0.1:3062/health"
+    }
+  ],
+  "stateFile": "../logs/operations/canary-soak-state.json",
+  "sampleIntervalSeconds": 60,
+  "maxSampleGapSeconds": 600,
+  "requestTimeoutSeconds": 20,
+  "privacyMarkerEnvNames": [
+    "CODEX_CANARY_PRIVACY_MARKER"
+  ]
+}
