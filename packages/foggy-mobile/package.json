@@ -9,6 +9,8 @@
                     "build:mp-weixin":  "uni build -p mp-weixin",
                     "build:app-android":  "uni build -p app-android",
                     "build:wgt":  "uni build -p app-android \u0026\u0026 node scripts/pack-wgt.js",
+                    "release:wgt:wsl":  "bash scripts/release-wgt.sh",
+                    "build:apk:wsl":  "bash scripts/build-apk-wsl.sh",
                     "test":  "vitest run --config vitest.config.ts",
                     "test:watch":  "vitest --config vitest.config.ts"
                 },

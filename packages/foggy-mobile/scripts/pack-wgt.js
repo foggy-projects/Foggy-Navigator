@@ -34,8 +34,6 @@ if (!fs.existsSync(DIST_DIR)) {
 const wgtName = `foggy-navigator-${version}.wgt`
 const wgtPath = path.join(DIST_DIR, wgtName)
 
-// 使用 PowerShell 的 Compress-Archive 打包（Windows 环境无需额外依赖）
-// wgt 本质是 zip 格式
 const tempZip = path.join(DIST_DIR, `${wgtName}.zip`)
 
 try {
@@ -43,9 +41,14 @@ try {
   if (fs.existsSync(wgtPath)) fs.unlinkSync(wgtPath)
   if (fs.existsSync(tempZip)) fs.unlinkSync(tempZip)
 
-  // 使用 PowerShell Compress-Archive
-  const psCmd = `Compress-Archive -Path "${BUILD_DIR}\\*" -DestinationPath "${tempZip}" -Force`
-  execSync(`powershell -NoProfile -Command "${psCmd}"`, { stdio: 'inherit' })
+  // wgt 本质是 zip 格式。Windows 使用 PowerShell，Linux/WSL 使用系统 zip。
+  if (process.platform === 'win32') {
+    const psCmd = `Compress-Archive -Path "${BUILD_DIR}\\*" -DestinationPath "${tempZip}" -Force`
+    execSync(`powershell -NoProfile -Command "${psCmd}"`, { stdio: 'inherit' })
+  } else {
+    execSync('command -v zip >/dev/null 2>&1', { stdio: 'ignore' })
+    execSync(`zip -qr "${tempZip}" .`, { cwd: BUILD_DIR, stdio: 'inherit' })
+  }
 
   // 重命名为 .wgt
   fs.renameSync(tempZip, wgtPath)
