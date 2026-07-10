@@ -12,6 +12,7 @@
 
 ## 文档清单
 
+- [workitems/OPT-004-codex-worker-sdk-startup-preflight.md](./workitems/OPT-004-codex-worker-sdk-startup-preflight.md) - Codex Worker SDK 最低版本检查、固定版本自修复与启动阻断
 - [workitems/BUG-145-bizworker-sidecar-permission-recovery.md](./workitems/BUG-145-bizworker-sidecar-permission-recovery.md) - BUG-145 BizWorker sidecar 写文件权限错误恢复
 - [quality/BUG-145-implementation-quality.md](./quality/BUG-145-implementation-quality.md) - BUG-145 实现质量门记录
 - [coverage/BUG-145-coverage-audit.md](./coverage/BUG-145-coverage-audit.md) - BUG-145 测试覆盖审计记录

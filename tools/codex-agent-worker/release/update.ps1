@@ -5,7 +5,8 @@
 # This script is shipped INSIDE the OBS-distributed archive and lives in
 # $InstallDir alongside start.ps1 / stop.ps1. End users normally invoke it via:
 #   codex-worker upgrade-sdk
-#   codex-worker upgrade-sdk -SdkVersion 0.130.0
+#   codex-worker upgrade-sdk -SdkVersion 0.144.1
+#   codex-worker upgrade-sdk -SdkVersion 0.142.5 -Force -NoRestart
 #   codex-worker upgrade-sdk -NoRestart
 #   codex-worker upgrade-sdk -Registry https://registry.npmjs.org/
 #
@@ -18,7 +19,8 @@
 param(
     [string]$SdkVersion = "",
     [switch]$NoRestart,
-    [string]$Registry = ""
+    [string]$Registry = "",
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -145,7 +147,9 @@ function Test-WorkerHealth {
     while ((Get-Date) -lt $deadline) {
         try {
             $resp = Invoke-RestMethod -Uri "http://localhost:$ListenPort/health" -TimeoutSec 3 -ErrorAction Stop
-            return @{ ok = $true; body = ($resp | ConvertTo-Json -Compress) }
+            if ($resp.status -eq "ok" -and $resp.codex_sdk_available -eq $true -and $resp.codex_sdk_compatible -eq $true) {
+                return @{ ok = $true; body = ($resp | ConvertTo-Json -Compress) }
+            }
         }
         catch {
             Start-Sleep -Seconds 1
@@ -164,6 +168,22 @@ if (-not (Test-Path (Join-Path $InstallDir "package.json"))) {
     Write-Host "ERROR: package.json not found in $InstallDir." -ForegroundColor Red
     Write-Host "This script must be run from a Codex Worker install directory." -ForegroundColor Yellow
     exit 1
+}
+
+if ($Force -and -not $SdkVersion) {
+    Write-Host "ERROR: -Force requires an explicit -SdkVersion." -ForegroundColor Red
+    exit 1
+}
+if ($SdkVersion) {
+    $EnsureSdkScript = Join-Path $InstallDir "scripts\ensure-sdk.mjs"
+    if (-not (Test-Path -LiteralPath $EnsureSdkScript)) {
+        Write-Host "ERROR: SDK preflight script not found: $EnsureSdkScript" -ForegroundColor Red
+        exit 1
+    }
+    $checkArgs = @($EnsureSdkScript, "--worker-dir", $InstallDir, "--check-target", $SdkVersion)
+    if ($Force) { $checkArgs += "--force" }
+    & node @checkArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 $wasRunning = (Get-WorkerPids -ListenPort $Port).Count -gt 0

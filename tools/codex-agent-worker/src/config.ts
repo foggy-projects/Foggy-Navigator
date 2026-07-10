@@ -27,7 +27,7 @@ export interface AppConfig {
    * 1.0.4 起：默认值为 alias `codex-latest`（与 Claude/Gemini 的 alias-first 风格一致）。
    * 升级模型版本时，仅修改 modelAliases 配置即可；前端、后端 Java 侧不需要任何改动。
    *
-   * 可通过环境变量 CODEX_DEFAULT_MODEL 覆盖。可填 alias（如 `codex-latest`）或真实模型名（如 `gpt-5.5:high`）。
+   * 可通过环境变量 CODEX_DEFAULT_MODEL 覆盖。可填 alias（如 `codex-latest`）或真实模型名（如 `gpt-5.6-sol:high`）。
    */
   defaultModel: string
   /**
@@ -39,13 +39,13 @@ export interface AppConfig {
    *   - 否则直接透传（按真实模型名处理，向后兼容）
    *
    * 默认映射（可通过 CODEX_MODEL_ALIASES 环境变量覆盖）：
-   *   codex-latest → gpt-5.5
-   *   codex-fast   → gpt-5.5:low
-   *   codex-deep   → gpt-5.5:high
-   *   codex-xhigh  → gpt-5.5:xhigh
-   *   codex-mini   → gpt-5.4-mini   (待 5.5-mini 发布后再升级，仅改 Worker 配置)
+   *   codex-latest → gpt-5.6-sol
+   *   codex-fast   → gpt-5.6-sol:low
+   *   codex-deep   → gpt-5.6-sol:high
+   *   codex-xhigh  → gpt-5.6-sol:xhigh
+   *   codex-mini   → gpt-5.4-mini
    *
-   * 环境变量格式：JSON 对象，如 {"codex-latest":"gpt-5.5","codex-fast":"gpt-5.5:low"}
+   * 环境变量格式：JSON 对象，如 {"codex-latest":"gpt-5.6-sol","codex-fast":"gpt-5.6-sol:low"}
    */
   modelAliases: Record<string, string>
 }
@@ -188,10 +188,10 @@ function parseDefaultModel(rawValue: string | undefined): string {
 }
 
 const DEFAULT_CODEX_MODEL_ALIASES: Readonly<Record<string, string>> = Object.freeze({
-  'codex-latest': 'gpt-5.5',
-  'codex-fast': 'gpt-5.5:low',
-  'codex-deep': 'gpt-5.5:high',
-  'codex-xhigh': 'gpt-5.5:xhigh',
+  'codex-latest': 'gpt-5.6-sol',
+  'codex-fast': 'gpt-5.6-sol:low',
+  'codex-deep': 'gpt-5.6-sol:high',
+  'codex-xhigh': 'gpt-5.6-sol:xhigh',
   'codex-mini': 'gpt-5.4-mini',
 })
 
@@ -199,7 +199,7 @@ const DEFAULT_CODEX_MODEL_ALIASES: Readonly<Record<string, string>> = Object.fre
  * 解析 CODEX_MODEL_ALIASES。
  *
  * - 未配置：返回 DEFAULT_CODEX_MODEL_ALIASES 浅拷贝
- * - JSON 格式 `{"codex-latest":"gpt-5.5","codex-fast":"gpt-5.5:low"}`：覆盖/扩展默认映射
+ * - JSON 格式 `{"codex-latest":"gpt-5.6-sol","codex-fast":"gpt-5.6-sol:low"}`：覆盖/扩展默认映射
  * - 其它形式抛错（避免静默吞掉配置错误）
  *
  * 校验项：

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "codexSdk": {
+    "minimumVersion": "0.144.1",
+    "repairVersion": "0.144.1"
+  }
+}

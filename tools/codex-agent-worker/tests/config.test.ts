@@ -72,10 +72,10 @@ test('createConfig rejects CODEX_DEFAULT_MODEL containing whitespace', () => {
 
 test('createConfig provides default Codex modelAliases when CODEX_MODEL_ALIASES is unset', () => {
   const config = createConfig({})
-  assert.equal(config.modelAliases['codex-latest'], 'gpt-5.5')
-  assert.equal(config.modelAliases['codex-fast'], 'gpt-5.5:low')
-  assert.equal(config.modelAliases['codex-deep'], 'gpt-5.5:high')
-  assert.equal(config.modelAliases['codex-xhigh'], 'gpt-5.5:xhigh')
+  assert.equal(config.modelAliases['codex-latest'], 'gpt-5.6-sol')
+  assert.equal(config.modelAliases['codex-fast'], 'gpt-5.6-sol:low')
+  assert.equal(config.modelAliases['codex-deep'], 'gpt-5.6-sol:high')
+  assert.equal(config.modelAliases['codex-xhigh'], 'gpt-5.6-sol:xhigh')
   assert.equal(config.modelAliases['codex-mini'], 'gpt-5.4-mini')
 })
 
@@ -108,16 +108,16 @@ test('createConfig rejects invalid Navigator worker gateway base URL', () => {
 test('createConfig CODEX_MODEL_ALIASES JSON override merges into defaults', () => {
   const config = createConfig({
     CODEX_MODEL_ALIASES: JSON.stringify({
-      'codex-latest': 'gpt-5.6',
-      'codex-experimental': 'gpt-5.6:high',
+      'codex-latest': 'gpt-5.6-terra',
+      'codex-experimental': 'gpt-5.6-luna',
     }),
   })
   // 覆盖 codex-latest
-  assert.equal(config.modelAliases['codex-latest'], 'gpt-5.6')
+  assert.equal(config.modelAliases['codex-latest'], 'gpt-5.6-terra')
   // 新增自定义 alias
-  assert.equal(config.modelAliases['codex-experimental'], 'gpt-5.6:high')
+  assert.equal(config.modelAliases['codex-experimental'], 'gpt-5.6-luna')
   // 未覆盖的 alias 保持默认
-  assert.equal(config.modelAliases['codex-fast'], 'gpt-5.5:low')
+  assert.equal(config.modelAliases['codex-fast'], 'gpt-5.6-sol:low')
 })
 
 test('createConfig CODEX_MODEL_ALIASES rejects non-JSON values', () => {

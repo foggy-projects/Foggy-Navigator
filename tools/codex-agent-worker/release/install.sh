@@ -99,7 +99,7 @@ fi
 mkdir -p "$INSTALL_DIR"
 
 echo -e "${CYAN}Copying files...${NC}"
-rm -rf "$INSTALL_DIR/dist" "$INSTALL_DIR/docs" "$INSTALL_DIR/bin"
+rm -rf "$INSTALL_DIR/dist" "$INSTALL_DIR/docs" "$INSTALL_DIR/bin" "$INSTALL_DIR/scripts"
 
 cp -r "$SCRIPT_DIR/dist" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/package.json" "$INSTALL_DIR/"
@@ -108,7 +108,12 @@ if [ -f "$SCRIPT_DIR/package-lock.json" ]; then
     cp "$SCRIPT_DIR/package-lock.json" "$INSTALL_DIR/"
 fi
 cp "$SCRIPT_DIR/.env.example" "$INSTALL_DIR/"
+cp "$SCRIPT_DIR/runtime-requirements.json" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/VERSION" "$INSTALL_DIR/"
+
+if [ -d "$SCRIPT_DIR/scripts" ]; then
+    cp -r "$SCRIPT_DIR/scripts" "$INSTALL_DIR/"
+fi
 
 if [ -d "$SCRIPT_DIR/docs" ]; then
     cp -r "$SCRIPT_DIR/docs" "$INSTALL_DIR/"

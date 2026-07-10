@@ -79,7 +79,7 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
 Write-Host "Copying files..." -ForegroundColor Cyan
 
-foreach ($pathName in @("dist", "docs", "bin")) {
+foreach ($pathName in @("dist", "docs", "bin", "scripts")) {
     $target = Join-Path $InstallDir $pathName
     if (Test-Path $target) {
         Remove-Item $target -Recurse -Force
@@ -97,7 +97,13 @@ if (Test-Path $PackageLock) {
     Copy-Item $PackageLock $InstallDir -Force
 }
 Copy-Item (Join-Path $ScriptDir ".env.example") $InstallDir -Force
+Copy-Item (Join-Path $ScriptDir "runtime-requirements.json") $InstallDir -Force
 Copy-Item (Join-Path $ScriptDir "VERSION") $InstallDir -Force
+
+$RuntimeScriptsDir = Join-Path $ScriptDir "scripts"
+if (Test-Path $RuntimeScriptsDir) {
+    Copy-Item $RuntimeScriptsDir (Join-Path $InstallDir "scripts") -Recurse -Force
+}
 
 $DocsDir = Join-Path $ScriptDir "docs"
 if (Test-Path $DocsDir) {

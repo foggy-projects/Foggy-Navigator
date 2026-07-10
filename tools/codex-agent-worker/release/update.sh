@@ -6,7 +6,8 @@
 # Shipped INSIDE the OBS-distributed archive; lives in $INSTALL_DIR alongside
 # start.sh / stop.sh. End users normally invoke it via:
 #   codex-worker upgrade-sdk
-#   codex-worker upgrade-sdk --sdk-version 0.130.0
+#   codex-worker upgrade-sdk --sdk-version 0.144.1
+#   codex-worker upgrade-sdk --sdk-version 0.142.5 --force --no-restart
 #   codex-worker upgrade-sdk --no-restart
 #   codex-worker upgrade-sdk --registry https://registry.npmjs.org/
 #
@@ -23,6 +24,7 @@ DEFAULT_PORT=3051
 SdkVersion=""
 NoRestart=false
 Registry=""
+Force=false
 OfficialNpmRegistry="https://registry.npmjs.org/"
 
 # Colors
@@ -56,18 +58,40 @@ while [ $# -gt 0 ]; do
             Registry="${1#*=}"
             shift
             ;;
+        --force)
+            Force=true
+            shift
+            ;;
         *)
             echo -e "${RED}Unknown argument: $1${NC}"
-            echo "Usage: $0 [--no-restart] [--sdk-version <version>] [--registry <url>]"
+            echo "Usage: $0 [--no-restart] [--sdk-version <version>] [--registry <url>] [--force]"
             exit 1
             ;;
     esac
 done
 
+if [ "$Force" = true ] && [ -z "$SdkVersion" ]; then
+    echo -e "${RED}--force requires an explicit --sdk-version.${NC}"
+    exit 1
+fi
+
 if [ ! -f "$INSTALL_DIR/package.json" ]; then
     echo -e "${RED}ERROR: package.json not found in $INSTALL_DIR.${NC}"
     echo -e "${YELLOW}This script must be run from a Codex Worker install directory.${NC}"
     exit 1
+fi
+
+if [ -n "$SdkVersion" ]; then
+    EnsureSdkScript="$INSTALL_DIR/scripts/ensure-sdk.mjs"
+    if [ ! -f "$EnsureSdkScript" ]; then
+        echo -e "${RED}ERROR: SDK preflight script not found: $EnsureSdkScript${NC}"
+        exit 1
+    fi
+    CheckArgs=("$EnsureSdkScript" --worker-dir "$INSTALL_DIR" --check-target "$SdkVersion")
+    if [ "$Force" = true ]; then
+        CheckArgs+=(--force)
+    fi
+    node "${CheckArgs[@]}"
 fi
 
 # Read port
@@ -152,8 +176,17 @@ health_check() {
     local timeout=$1
     local deadline=$(( $(date +%s) + timeout ))
     while [ $(date +%s) -lt $deadline ]; do
-        if curl -sS --max-time 3 "http://localhost:$Port/health" >/dev/null 2>&1; then
-            curl -sS --max-time 3 "http://localhost:$Port/health" 2>/dev/null
+        HealthBody=$(curl -sS --max-time 3 "http://localhost:$Port/health" 2>/dev/null || true)
+        if [ -n "$HealthBody" ] && printf '%s' "$HealthBody" | node -e '
+let input = "";
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  try {
+    const health = JSON.parse(input);
+    process.exit(health.status === "ok" && health.codex_sdk_available === true && health.codex_sdk_compatible === true ? 0 : 1);
+  } catch { process.exit(1); }
+});'; then
+            printf '%s' "$HealthBody"
             return 0
         fi
         sleep 1

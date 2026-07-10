@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { checkCodexSdkAvailable, resolveCodexAuthMode, resolveCodexBizReadiness } from '../src/routes/health.ts'
+import {
+  checkCodexSdkAvailable,
+  resolveCodexAuthMode,
+  resolveCodexBizReadiness,
+  resolveWorkerHealthStatus,
+} from '../src/routes/health.ts'
 
 test('resolveCodexAuthMode prefers api key over codex login', () => {
   assert.equal(resolveCodexAuthMode('sk-test', true), 'api_key')
@@ -16,6 +21,12 @@ test('checkCodexSdkAvailable returns false when Codex construction throws', () =
 
 test('checkCodexSdkAvailable returns true when Codex construction succeeds', () => {
   assert.equal(checkCodexSdkAvailable(() => ({})), true)
+})
+
+test('resolveWorkerHealthStatus requires both SDK availability and compatibility', () => {
+  assert.equal(resolveWorkerHealthStatus(true, true), 'ok')
+  assert.equal(resolveWorkerHealthStatus(false, true), 'degraded')
+  assert.equal(resolveWorkerHealthStatus(true, false), 'degraded')
 })
 
 test('resolveCodexBizReadiness exposes only non-sensitive scoped home state', () => {

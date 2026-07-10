@@ -6,6 +6,7 @@ import { Codex } from '@openai/codex-sdk'
 import { config } from '../config.js'
 import { taskRegistry } from '../codex/sdk-wrapper.js'
 import type { HealthResponse } from '../models.js'
+import { resolveCodexSdkRuntimeStatus } from '../runtime-requirements.js'
 import { APP_VERSION } from '../version.js'
 
 const router = Router()
@@ -26,6 +27,10 @@ export function checkCodexSdkAvailable(createCodex: () => unknown = () => new Co
   } catch {
     return false
   }
+}
+
+export function resolveWorkerHealthStatus(sdkAvailable: boolean, sdkCompatible: boolean): 'ok' | 'degraded' {
+  return sdkAvailable && sdkCompatible ? 'ok' : 'degraded'
 }
 
 export function resolveCodexBizReadiness(
@@ -50,15 +55,19 @@ router.get('/health', (_req: Request, res: Response) => {
   const codexSdkAvailable = checkCodexSdkAvailable(() => new Codex({
     apiKey: config.openaiApiKey || undefined,
   }))
+  const codexSdkStatus = resolveCodexSdkRuntimeStatus()
   const codexBizReadiness = resolveCodexBizReadiness(config.codexBizHomeRoot)
 
   const response: HealthResponse = {
-    status: 'ok',
+    status: resolveWorkerHealthStatus(codexSdkAvailable, codexSdkStatus.compatible),
     hostname: os.hostname(),
     version: APP_VERSION,
     worker_name: config.workerName,
     active_tasks: activeTasks,
     codex_sdk_available: codexSdkAvailable,
+    codex_sdk_version: codexSdkStatus.installedVersion,
+    codex_sdk_minimum_version: codexSdkStatus.minimumVersion,
+    codex_sdk_compatible: codexSdkStatus.compatible,
     codex_auth_configured: codexAuthMode !== 'none',
     codex_auth_mode: codexAuthMode,
     ...codexBizReadiness,

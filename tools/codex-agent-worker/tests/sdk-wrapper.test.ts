@@ -42,23 +42,23 @@ test('parseModelString maps extra-high to xhigh', () => {
 })
 
 test('parseModelString accepts xhigh reasoning directly', () => {
-  assert.deepEqual(parseModelString('gpt-5.5:xhigh'), {
-    model: 'gpt-5.5',
+  assert.deepEqual(parseModelString('gpt-5.6-sol:xhigh'), {
+    model: 'gpt-5.6-sol',
     reasoningLevel: 'xhigh',
   })
 })
 
 const TEST_ALIASES: Record<string, string> = {
-  'codex-latest': 'gpt-5.5',
-  'codex-fast': 'gpt-5.5:low',
-  'codex-deep': 'gpt-5.5:high',
-  'codex-xhigh': 'gpt-5.5:xhigh',
+  'codex-latest': 'gpt-5.6-sol',
+  'codex-fast': 'gpt-5.6-sol:low',
+  'codex-deep': 'gpt-5.6-sol:high',
+  'codex-xhigh': 'gpt-5.6-sol:xhigh',
   'codex-mini': 'gpt-5.4-mini',
 }
 
 test('resolveModelAlias returns the mapped real model when whole string hits an alias', () => {
   assert.deepEqual(resolveModelAlias('codex-latest', TEST_ALIASES), {
-    resolved: 'gpt-5.5',
+    resolved: 'gpt-5.6-sol',
     wasAlias: true,
   })
   assert.deepEqual(resolveModelAlias('codex-mini', TEST_ALIASES), {
@@ -66,36 +66,36 @@ test('resolveModelAlias returns the mapped real model when whole string hits an 
     wasAlias: true,
   })
   assert.deepEqual(resolveModelAlias('codex-xhigh', TEST_ALIASES), {
-    resolved: 'gpt-5.5:xhigh',
+    resolved: 'gpt-5.6-sol:xhigh',
     wasAlias: true,
   })
 })
 
 test('resolveModelAlias preserves alias-embedded reasoning when alias value already has colon', () => {
-  // codex-fast → gpt-5.5:low (alias value already includes reasoning)
+  // codex-fast → gpt-5.6-sol:low (alias value already includes reasoning)
   assert.deepEqual(resolveModelAlias('codex-fast', TEST_ALIASES), {
-    resolved: 'gpt-5.5:low',
+    resolved: 'gpt-5.6-sol:low',
     wasAlias: true,
   })
   // 请求 codex-fast:high — alias 自带 reasoning，请求的 high 被忽略（避免双重冒号）
   assert.deepEqual(resolveModelAlias('codex-fast:high', TEST_ALIASES), {
-    resolved: 'gpt-5.5:low',
+    resolved: 'gpt-5.6-sol:low',
     wasAlias: true,
   })
 })
 
 test('resolveModelAlias appends reasoning suffix when alias value has no colon', () => {
-  // codex-latest → gpt-5.5（无 reasoning）+ 请求 :high → gpt-5.5:high
+  // codex-latest → gpt-5.6-sol（无 reasoning）+ 请求 :high → gpt-5.6-sol:high
   assert.deepEqual(resolveModelAlias('codex-latest:high', TEST_ALIASES), {
-    resolved: 'gpt-5.5:high',
+    resolved: 'gpt-5.6-sol:high',
     wasAlias: true,
   })
   assert.deepEqual(resolveModelAlias('codex-latest:extra-high', TEST_ALIASES), {
-    resolved: 'gpt-5.5:extra-high',
+    resolved: 'gpt-5.6-sol:extra-high',
     wasAlias: true,
   })
   assert.deepEqual(resolveModelAlias('codex-latest:xhigh', TEST_ALIASES), {
-    resolved: 'gpt-5.5:xhigh',
+    resolved: 'gpt-5.6-sol:xhigh',
     wasAlias: true,
   })
 })

@@ -2,7 +2,8 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File update.ps1
 #   powershell -ExecutionPolicy Bypass -File update.ps1 -NoRestart
-#   powershell -ExecutionPolicy Bypass -File update.ps1 -SdkVersion 0.130.0
+#   powershell -ExecutionPolicy Bypass -File update.ps1 -SdkVersion 0.144.1
+#   powershell -ExecutionPolicy Bypass -File update.ps1 -SdkVersion 0.142.5 -Force -NoRestart
 #   powershell -ExecutionPolicy Bypass -File update.ps1 -Registry https://registry.npmjs.org/
 #
 # Notes:
@@ -14,7 +15,8 @@
 param(
     [string]$SdkVersion = "",
     [switch]$NoRestart,
-    [string]$Registry = ""
+    [string]$Registry = "",
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -149,6 +151,20 @@ $StopScript = Join-Path $WorkerDir "stop.ps1"
 $StartScript = Join-Path $WorkerDir "start.ps1"
 $Npm = Resolve-Npm
 $NpmRegistry = if ($Registry) { "$Registry (script override)" } else { Get-NpmRegistry -NpmPath $Npm }
+
+if ($Force -and -not $SdkVersion) {
+    throw "-Force requires an explicit -SdkVersion."
+}
+if ($SdkVersion) {
+    $EnsureSdkScript = Join-Path $WorkerDir "scripts\ensure-sdk.mjs"
+    if (-not (Test-Path -LiteralPath $EnsureSdkScript)) {
+        throw "SDK preflight script not found: $EnsureSdkScript"
+    }
+    $checkArgs = @($EnsureSdkScript, "--worker-dir", $WorkerDir, "--check-target", $SdkVersion)
+    if ($Force) { $checkArgs += "--force" }
+    & node @checkArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 
 $wasRunning = (Get-WorkerPids -ListenPort $Port).Count -gt 0
 

@@ -68,6 +68,12 @@ else
     echo "  node_modules exists, skipping install."
 fi
 
+if [ ! -f "scripts/ensure-sdk.mjs" ]; then
+    echo "  SDK preflight script not found: $SCRIPT_DIR/scripts/ensure-sdk.mjs"
+    exit 1
+fi
+node scripts/ensure-sdk.mjs --worker-dir "$SCRIPT_DIR" --omit-dev
+
 mkdir -p logs
 
 echo ""
@@ -100,11 +106,26 @@ echo "[4/4] Waiting for worker to be ready..."
 MAX_WAIT=30
 WAITED=0
 
+check_health() {
+    local health_body
+    health_body=$(curl -fsS --max-time 2 "http://localhost:$PORT/health" 2>/dev/null || true)
+    [ -n "$health_body" ] || return 1
+    printf '%s' "$health_body" | node -e '
+let input = "";
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  try {
+    const health = JSON.parse(input);
+    process.exit(health.status === "ok" && health.codex_sdk_available === true && health.codex_sdk_compatible === true ? 0 : 1);
+  } catch { process.exit(1); }
+});'
+}
+
 while [ $WAITED -lt $MAX_WAIT ]; do
     sleep 1
     WAITED=$((WAITED + 1))
 
-    if curl -fsS --max-time 2 "http://localhost:$PORT/health" >/dev/null 2>&1; then
+    if check_health; then
         sleep 3
         if ! kill -0 $WORKER_PID 2>/dev/null; then
             echo ""
@@ -113,7 +134,7 @@ while [ $WAITED -lt $MAX_WAIT ]; do
             tail -20 logs/worker-error.log 2>/dev/null || true
             exit 1
         fi
-        if ! curl -fsS --max-time 2 "http://localhost:$PORT/health" >/dev/null 2>&1; then
+        if ! check_health; then
             echo ""
             echo "  Worker health failed after readiness!"
             echo "  Error log:"

@@ -105,6 +105,10 @@ function Get-DotEnvValue {
 $null = "$ScriptDir"
 $ResolvedDotEnvPath = "$ScriptDir\.env"
 $envPort = Get-DotEnvValue -Path $ResolvedDotEnvPath -Name "CODEX_WORKER_PORT"
+$envAutoUpdateSdk = Get-DotEnvValue -Path $ResolvedDotEnvPath -Name "CODEX_WORKER_AUTO_UPDATE_SDK"
+if ($envAutoUpdateSdk) {
+    $env:CODEX_WORKER_AUTO_UPDATE_SDK = $envAutoUpdateSdk
+}
 Import-DotEnv -Path $ResolvedDotEnvPath
 $PORT = if ($envPort) {
     $envPort.Trim()
@@ -148,6 +152,17 @@ if (-not (Test-Path "node_modules")) {
     Write-Host "  node_modules exists, skipping install." -ForegroundColor Green
 }
 
+$EnsureSdkScript = Join-Path $ScriptDir "scripts\ensure-sdk.mjs"
+if (-not (Test-Path -LiteralPath $EnsureSdkScript)) {
+    Write-Host "  SDK preflight script not found: $EnsureSdkScript" -ForegroundColor Red
+    exit 1
+}
+& node $EnsureSdkScript --worker-dir $ScriptDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  Codex SDK preflight failed; worker will not start." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
 # 确保 logs 目录存在
 $LogDir = "$ScriptDir\logs"
 if (-not (Test-Path -LiteralPath $LogDir)) {
@@ -184,8 +199,10 @@ function Test-WorkerHealth {
 
     foreach ($url in $Urls) {
         try {
-            Invoke-RestMethod -Uri $url -TimeoutSec 2 -ErrorAction Stop | Out-Null
-            return $true
+            $health = Invoke-RestMethod -Uri $url -TimeoutSec 2 -ErrorAction Stop
+            if ($health.status -eq "ok" -and $health.codex_sdk_available -eq $true -and $health.codex_sdk_compatible -eq $true) {
+                return $true
+            }
         }
         catch {
         }

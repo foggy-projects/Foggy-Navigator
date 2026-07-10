@@ -81,6 +81,17 @@ else {
     Write-Host "  node_modules exists, skipping install." -ForegroundColor Green
 }
 
+$EnsureSdkScript = Join-Path $ScriptDir "scripts\ensure-sdk.mjs"
+if (-not (Test-Path -LiteralPath $EnsureSdkScript)) {
+    Write-Host "  SDK preflight script not found: $EnsureSdkScript" -ForegroundColor Red
+    exit 1
+}
+& node $EnsureSdkScript --worker-dir $ScriptDir --omit-dev
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  Codex SDK preflight failed; worker will not start." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
 if (-not (Test-Path "logs")) {
     New-Item -ItemType Directory -Path "logs" | Out-Null
 }
@@ -107,9 +118,11 @@ while ($waited -lt $maxWait) {
     $waited++
 
     try {
-        Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction Stop | Out-Null
-        $ready = $true
-        break
+        $health = Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction Stop
+        if ($health.status -eq "ok" -and $health.codex_sdk_available -eq $true -and $health.codex_sdk_compatible -eq $true) {
+            $ready = $true
+            break
+        }
     }
     catch {
     }

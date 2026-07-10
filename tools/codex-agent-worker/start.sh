@@ -65,6 +65,12 @@ else
     echo "  node_modules exists, skipping install."
 fi
 
+if [ ! -f "scripts/ensure-sdk.mjs" ]; then
+    echo "  SDK preflight script not found: $SCRIPT_DIR/scripts/ensure-sdk.mjs"
+    exit 1
+fi
+node scripts/ensure-sdk.mjs --worker-dir "$SCRIPT_DIR"
+
 # 确保 logs 目录存在
 mkdir -p logs
 
@@ -101,9 +107,18 @@ MAX_WAIT=60
 WAITED=0
 
 check_health() {
-    local base_url
+    local base_url health_body
     for base_url in "http://127.0.0.1:$PORT" "http://localhost:$PORT"; do
-        if curl -fsS --max-time 2 "$base_url/health" > /dev/null 2>&1; then
+        health_body=$(curl -fsS --max-time 2 "$base_url/health" 2>/dev/null || true)
+        if [ -n "$health_body" ] && printf '%s' "$health_body" | node -e '
+let input = "";
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  try {
+    const health = JSON.parse(input);
+    process.exit(health.status === "ok" && health.codex_sdk_available === true && health.codex_sdk_compatible === true ? 0 : 1);
+  } catch { process.exit(1); }
+});'; then
             return 0
         fi
     done

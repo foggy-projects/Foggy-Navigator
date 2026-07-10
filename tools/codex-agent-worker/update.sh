@@ -3,7 +3,8 @@
 # Usage:
 #   ./update.sh
 #   ./update.sh --no-restart
-#   ./update.sh --sdk-version 0.130.0
+#   ./update.sh --sdk-version 0.144.1
+#   ./update.sh --sdk-version 0.142.5 --force --no-restart
 #   ./update.sh --registry https://registry.npmjs.org/
 #
 # Notes:
@@ -19,6 +20,7 @@ DefaultPort=3051
 SdkVersion=""
 NoRestart=false
 Registry=""
+Force=false
 OfficialNpmRegistry="https://registry.npmjs.org/"
 
 # Colors
@@ -52,13 +54,35 @@ while [ $# -gt 0 ]; do
             Registry="${1#*=}"
             shift
             ;;
+        --force)
+            Force=true
+            shift
+            ;;
         *)
             echo -e "${RED}Unknown argument: $1${NC}"
-            echo "Usage: $0 [--no-restart] [--sdk-version <version>] [--registry <url>]"
+            echo "Usage: $0 [--no-restart] [--sdk-version <version>] [--registry <url>] [--force]"
             exit 1
             ;;
     esac
 done
+
+if [ "$Force" = true ] && [ -z "$SdkVersion" ]; then
+    echo -e "${RED}--force requires an explicit --sdk-version.${NC}"
+    exit 1
+fi
+
+if [ -n "$SdkVersion" ]; then
+    EnsureSdkScript="$WorkerDir/scripts/ensure-sdk.mjs"
+    if [ ! -f "$EnsureSdkScript" ]; then
+        echo -e "${RED}SDK preflight script not found: $EnsureSdkScript${NC}"
+        exit 1
+    fi
+    CheckArgs=("$EnsureSdkScript" --worker-dir "$WorkerDir" --check-target "$SdkVersion")
+    if [ "$Force" = true ]; then
+        CheckArgs+=(--force)
+    fi
+    node "${CheckArgs[@]}"
+fi
 
 # Read port from .env
 Port=$DefaultPort

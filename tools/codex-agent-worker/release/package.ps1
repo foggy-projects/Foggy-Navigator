@@ -108,6 +108,11 @@ function Build-ForOS {
         Write-Host "  package-lock.json not found; installer will use npm install." -ForegroundColor Yellow
     }
     Copy-Item (Join-Path $WorkerDir ".env.example") $StageDir
+    Copy-Item (Join-Path $WorkerDir "runtime-requirements.json") $StageDir
+
+    $RuntimeScriptsDir = Join-Path $StageDir "scripts"
+    New-Item -ItemType Directory -Force -Path $RuntimeScriptsDir | Out-Null
+    Copy-Item (Join-Path $WorkerDir "scripts\ensure-sdk.mjs") $RuntimeScriptsDir
 
     $DocsDir = Join-Path $WorkerDir "docs"
     if (Test-Path $DocsDir) {
@@ -127,7 +132,7 @@ function Build-ForOS {
     [System.IO.File]::WriteAllText((Join-Path $StageDir "VERSION"), $ReleaseVersion, $utf8NoBom)
 
     if ($OsTag -ne "windows") {
-        Get-ChildItem -Path $StageDir -Recurse -Include "*.sh","*.md","*.json","*.example","*.txt" -File | ForEach-Object {
+        Get-ChildItem -Path $StageDir -Recurse -Include "*.sh","*.mjs","*.md","*.json","*.example","*.txt" -File | ForEach-Object {
             ConvertTo-UnixLineEndings $_.FullName
         }
         foreach ($extraFile in @(
