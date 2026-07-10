@@ -862,6 +862,17 @@ class CodexRuntimeRegistryServiceTest {
                 manifest, instanceId != null ? instanceId.toString() : null);
     }
 
+    private boolean isUltraCanarySelected(String routingKey) {
+        try {
+            return service.selectForNewTask(
+                    "worker-1", "codex-ultra", "codex-worker", routingKey).getRuntimeType()
+                    == CodexRuntimeType.APP_SERVER;
+        } catch (CodexRuntimeUnavailableException e) {
+            assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", e.getCode());
+            return false;
+        }
+    }
+
     private Map<String, Object> topLevelManifest(String runtimeId, int revision, String schemaDigest) {
         Map<String, Object> manifest = new java.util.LinkedHashMap<>();
         manifest.put("contract_version", "1");

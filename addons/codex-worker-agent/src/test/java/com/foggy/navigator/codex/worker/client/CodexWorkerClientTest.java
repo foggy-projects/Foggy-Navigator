@@ -167,10 +167,13 @@ class CodexWorkerClientTest {
         try (CaptureServer server = CaptureServer.start()) {
             CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
 
-            Map<String, Object> manifest = client.getCapabilities().block(Duration.ofSeconds(5));
+            CodexWorkerClient.CapabilityProbe probe = client.probeCapabilities()
+                    .block(Duration.ofSeconds(5));
+            Map<String, Object> manifest = probe.manifest();
 
             assertEquals("APP_SERVER", manifest.get("runtime_type"));
             assertEquals("0.144.1", manifest.get("cli_version"));
+            assertEquals("instance-a", probe.actualInstanceId());
         }
     }
 
