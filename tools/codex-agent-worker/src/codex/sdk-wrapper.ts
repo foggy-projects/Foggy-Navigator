@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import os from 'node:os'
 import path from 'node:path'
 import { Codex } from '@openai/codex-sdk'
-import type { CodexOptions, Input, ThreadOptions, ModelReasoningEffort, ThreadItem } from '@openai/codex-sdk'
+import type { CodexOptions, Input, ThreadOptions, ThreadItem } from '@openai/codex-sdk'
 import fs from 'node:fs/promises'
 import { config } from '../config.js'
 import type { CodexApprovalPolicy, CodexSandboxMode, CodexWebSearchMode, ImageAttachment, TaskEntry, WorkerEvent } from '../models.js'
@@ -17,6 +17,7 @@ import {
   buildNavigatorBusinessMcpConfig,
   buildNavigatorBusinessMcpEnv,
 } from '../business-mcp/navigator-business-mcp-server.js'
+import { normalizeCodexReasoningEffort, type CodexReasoningEffort } from './reasoning.js'
 
 const moduleRequire = createRequire(import.meta.url)
 
@@ -50,24 +51,25 @@ export const CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR = 'CODEX_BIZ_HOME_ROOT is requir
  * 如 "gpt-5.4:high" → { model: "gpt-5.4", reasoningLevel: "high" }
  * 如 "gpt-5.4-mini" → { model: "gpt-5.4-mini", reasoningLevel: undefined }
  *
- * SDK ModelReasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh"
+ * Worker reasoning effort: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
  * 前端传 "extra-high" → 映射为 "xhigh"
  */
-export function parseModelString(rawModel: string): { model: string; reasoningLevel?: ModelReasoningEffort } {
+export function parseModelString(rawModel: string): { model: string; reasoningLevel?: CodexReasoningEffort } {
   const colonIdx = rawModel.indexOf(':')
-  if (colonIdx <= 0) return { model: rawModel }
+  if (colonIdx <= 0) return { model: rawModel.trim() }
 
-  const model = rawModel.substring(0, colonIdx)
-  let level = rawModel.substring(colonIdx + 1)
+  const model = rawModel.substring(0, colonIdx).trim()
+  const reasoningLevel = normalizeCodexReasoningEffort(rawModel.substring(colonIdx + 1))
+  return reasoningLevel ? { model, reasoningLevel } : { model }
+}
 
-  // 映射前端命名到 SDK 枚举
-  if (level === 'extra-high') level = 'xhigh'
-
-  const valid: ModelReasoningEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh']
-  if (valid.includes(level as ModelReasoningEffort)) {
-    return { model, reasoningLevel: level as ModelReasoningEffort }
+export function applyResolvedReasoningEffort(
+  codexConfig: Record<string, unknown>,
+  reasoningLevel: CodexReasoningEffort | undefined
+): void {
+  if (reasoningLevel) {
+    codexConfig.model_reasoning_effort = reasoningLevel
   }
-  return { model }
 }
 
 /**
@@ -106,8 +108,8 @@ export function resolveModelAlias(
   // Case 2/3: alias:reasoning 格式
   const colonIdx = rawModel.indexOf(':')
   if (colonIdx > 0) {
-    const aliasPart = rawModel.substring(0, colonIdx)
-    const reasoningPart = rawModel.substring(colonIdx + 1)
+    const aliasPart = rawModel.substring(0, colonIdx).trim()
+    const reasoningPart = rawModel.substring(colonIdx + 1).trim()
     if (Object.prototype.hasOwnProperty.call(aliases, aliasPart)) {
       const aliasResolved = aliases[aliasPart]!
       // alias 自身已含 reasoning，请求附带的 reasoning 被忽略
@@ -606,6 +608,49 @@ function logMcpToolItem(
   )
 }
 
+type CollabToolCallItem = {
+  type: 'collab_tool_call'
+  tool?: unknown
+  status?: unknown
+  receiver_thread_ids?: unknown
+  agents_states?: unknown
+  [key: string]: unknown
+}
+
+export function asCollabToolCallItem(item: unknown): CollabToolCallItem | undefined {
+  if (!item || typeof item !== 'object' || (item as Record<string, unknown>).type !== 'collab_tool_call') {
+    return undefined
+  }
+  return item as CollabToolCallItem
+}
+
+export function formatCollabToolDiagnostic(
+  taskId: string,
+  phase: 'started' | 'updated' | 'completed',
+  item: CollabToolCallItem
+): string {
+  const tool = sanitizeLogToken(item.tool, 'unknown')
+  const status = sanitizeLogToken(item.status, 'unknown')
+  const receiverCount = Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids.length : 0
+  const agentCount = item.agents_states && typeof item.agents_states === 'object' && !Array.isArray(item.agents_states)
+    ? Object.keys(item.agents_states).length
+    : 0
+  return `[codex] collab_tool_${phase} task=${sanitizeLogToken(taskId, 'unknown')} tool=${tool} status=${status} receiver_count=${receiverCount} agent_count=${agentCount}`
+}
+
+function logCollabToolItem(
+  taskId: string,
+  phase: 'started' | 'updated' | 'completed',
+  item: CollabToolCallItem
+): void {
+  console.log(formatCollabToolDiagnostic(taskId, phase, item))
+}
+
+function sanitizeLogToken(value: unknown, fallback: string): string {
+  if (typeof value !== 'string' || !value.trim()) return fallback
+  return sanitizeLogSegment(value).replace(/\s+/g, '_')
+}
+
 function sanitizeLogSegment(value: string): string {
   return value
     .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
@@ -854,6 +899,9 @@ export async function runQuery(
     if (runOptions.codexConfig) {
       Object.assign(codexConfig, runOptions.codexConfig)
     }
+    // The model suffix is the most specific request-level choice and must win over generic config.
+    // Use the SDK's public config channel because SDK 0.144.1 types do not yet list max/ultra.
+    applyResolvedReasoningEffort(codexConfig, reasoningLevel)
     if (runOptions.developerInstructions) {
       codexConfig.developer_instructions = runOptions.developerInstructions
     }
@@ -897,7 +945,6 @@ export async function runQuery(
       sandboxMode: runOptions.sandboxMode ?? 'danger-full-access',
     }
     if (cwd) threadOptions.workingDirectory = cwd
-    if (reasoningLevel) threadOptions.modelReasoningEffort = reasoningLevel
     const mutableThreadOptions = threadOptions as ThreadOptions & Record<string, unknown>
     if (runOptions.approvalPolicy) mutableThreadOptions.approvalPolicy = runOptions.approvalPolicy
     if (runOptions.networkAccessEnabled !== undefined) {
@@ -944,6 +991,10 @@ export async function runQuery(
           if (event.item.type === 'mcp_tool_call') {
             logMcpToolItem(taskId, 'completed', event.item)
           }
+          const collabItem = asCollabToolCallItem(event.item)
+          if (collabItem) {
+            logCollabToolItem(taskId, 'completed', collabItem)
+          }
           const workerEvents = mapThreadItemToEvents(
             taskId,
             event.item,
@@ -964,6 +1015,10 @@ export async function runQuery(
 
         case 'item.started':
         case 'item.updated': {
+          const collabItem = asCollabToolCallItem(event.item)
+          if (collabItem) {
+            logCollabToolItem(taskId, event.type === 'item.started' ? 'started' : 'updated', collabItem)
+          }
           if (event.type === 'item.started') {
             if (event.item.type === 'command_execution') {
               startedToolUses.add(event.item.id)

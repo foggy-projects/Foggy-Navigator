@@ -63,6 +63,14 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     public static final String CODEX_PROVIDER_TYPE = "codex-worker";
     public static final String CODEX_BIZ_PROVIDER_TYPE = "codex-biz-worker";
     private static final String AGENT_ID = CODEX_PROVIDER_TYPE;
+    private static final String CODEX_MAX_ALIAS = "codex-max";
+    private static final String CODEX_ULTRA_ALIAS = "codex-ultra";
+    private static final String CODEX_LATEST_MAX = "codex-latest:max";
+    private static final String CODEX_LATEST_ULTRA = "codex-latest:ultra";
+    private static final Set<String> GPT_5_6_SOL_MAX_GRANTS = Set.of(
+            CODEX_MAX_ALIAS, "gpt-5.6-sol:max");
+    private static final Set<String> GPT_5_6_SOL_ULTRA_GRANTS = Set.of(
+            CODEX_ULTRA_ALIAS, "gpt-5.6-sol:ultra");
     private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
             TaskQueryCapability.CREATE_TASK_DIRECT,
             TaskQueryCapability.RESUME_TASK,
@@ -206,15 +214,19 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
         String effectiveAgentId = resolveLogicalAgentId(form.getAgentId(), existingSessionId);
 
+        String effectiveModelConfigId = resolveEffectiveModelConfigId(form.getModelConfigId(), effectiveAgentId);
+        LlmModelConfigDTO effectiveModelConfig = validateAndResolveModelConfig(
+                effectiveModelConfigId, form.getWorkerId());
+        ModelResolution effectiveModelResolution = resolveEffectiveModel(
+                form.getModel(), effectiveAgentId, effectiveModelConfig);
+        validateEffectiveModelGrant(
+                effectiveModelResolution.model(), effectiveModelConfigId, effectiveModelConfig);
+        String modelConfigSource = resolveModelConfigSource(form.getModelConfigId(), effectiveAgentId);
+
         String taskId = IdGenerator.shortId();
 
         String sessionId = resolveSessionId(userId, tenantId, form.getPrompt(),
                 existingSessionId, effectiveAgentId, effectiveProviderType);
-
-        String effectiveModelConfigId = resolveEffectiveModelConfigId(form.getModelConfigId(), effectiveAgentId);
-        String modelConfigSource = resolveModelConfigSource(form.getModelConfigId(), effectiveAgentId);
-        ModelResolution effectiveModelResolution = resolveEffectiveModel(
-                form.getModel(), effectiveAgentId, effectiveModelConfigId);
 
         CodexTaskEntity entity = new CodexTaskEntity();
         entity.setTaskId(taskId);
@@ -1491,7 +1503,22 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return (defaultModelConfigId == null || defaultModelConfigId.isBlank()) ? "none" : "agent-default";
     }
 
-    private ModelResolution resolveEffectiveModel(String explicitModel, @Nullable String agentId, @Nullable String modelConfigId) {
+    private LlmModelConfigDTO validateAndResolveModelConfig(@Nullable String modelConfigId, String workerId) {
+        if (modelConfigId == null || modelConfigId.isBlank()) {
+            return null;
+        }
+        if (llmModelManager == null) {
+            throw new IllegalStateException(
+                    "LLM model manager is unavailable for modelConfigId=" + modelConfigId);
+        }
+        llmModelManager.validateModelAccessForWorker(modelConfigId, workerId);
+        return llmModelManager.getModelConfig(modelConfigId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "LLM model config not found: " + modelConfigId));
+    }
+
+    private ModelResolution resolveEffectiveModel(String explicitModel, @Nullable String agentId,
+                                                   @Nullable LlmModelConfigDTO modelConfig) {
         if (explicitModel != null && !explicitModel.isBlank()) {
             return new ModelResolution(explicitModel, "request");
         }
@@ -1501,14 +1528,68 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 return new ModelResolution(agentEntity.getDefaultModel(), "agent-default");
             }
         }
-        if (modelConfigId == null || modelConfigId.isBlank() || llmModelManager == null) {
+        if (modelConfig == null) {
             return new ModelResolution(null, "none");
         }
-        String model = llmModelManager.getModelConfig(modelConfigId)
-                .map(LlmModelConfigDTO::getModelName)
-                .filter(configModel -> !configModel.isBlank())
-                .orElse(null);
+        String model = modelConfig.getModelName();
+        if (model != null && model.isBlank()) {
+            model = null;
+        }
         return new ModelResolution(model, model != null ? "model-config" : "none");
+    }
+
+    private void validateEffectiveModelGrant(@Nullable String model, @Nullable String modelConfigId,
+                                             @Nullable LlmModelConfigDTO modelConfig) {
+        if (model == null || model.isBlank() || modelConfigId == null || modelConfigId.isBlank()) {
+            return;
+        }
+        String requestedModel = model.trim();
+        String normalizedModel = requestedModel.toLowerCase(Locale.ROOT);
+        if (!isGatedCodexModel(normalizedModel)) {
+            return;
+        }
+
+        List<String> availableModels = modelConfig != null ? modelConfig.getAvailableModels() : null;
+        if (availableModels == null || availableModels.isEmpty()) {
+            return;
+        }
+        boolean granted = availableModels.stream()
+                .filter(allowedModel -> allowedModel != null && !allowedModel.isBlank())
+                .map(String::trim)
+                .anyMatch(allowedModel -> isGatedModelGrant(requestedModel, normalizedModel, allowedModel));
+        if (!granted) {
+            throw new IllegalArgumentException("Codex model '" + requestedModel
+                    + "' requires an explicit availableModels grant in model config '"
+                    + modelConfigId + "'");
+        }
+    }
+
+    private boolean isGatedCodexModel(String normalizedModel) {
+        return CODEX_MAX_ALIAS.equals(normalizedModel)
+                || CODEX_ULTRA_ALIAS.equals(normalizedModel)
+                || normalizedModel.endsWith(":max")
+                || normalizedModel.endsWith(":ultra");
+    }
+
+    private boolean isGatedModelGrant(String requestedModel, String normalizedModel, String allowedModel) {
+        if (requestedModel.equals(allowedModel)) {
+            return true;
+        }
+
+        String normalizedAllowedModel = allowedModel.toLowerCase(Locale.ROOT);
+        if (GPT_5_6_SOL_MAX_GRANTS.contains(normalizedModel)) {
+            return GPT_5_6_SOL_MAX_GRANTS.contains(normalizedAllowedModel);
+        }
+        if (GPT_5_6_SOL_ULTRA_GRANTS.contains(normalizedModel)) {
+            return GPT_5_6_SOL_ULTRA_GRANTS.contains(normalizedAllowedModel);
+        }
+        if (CODEX_LATEST_MAX.equals(normalizedModel)) {
+            return CODEX_MAX_ALIAS.equals(normalizedAllowedModel);
+        }
+        if (CODEX_LATEST_ULTRA.equals(normalizedModel)) {
+            return CODEX_ULTRA_ALIAS.equals(normalizedAllowedModel);
+        }
+        return false;
     }
 
     private record ModelResolution(@Nullable String model, String source) {

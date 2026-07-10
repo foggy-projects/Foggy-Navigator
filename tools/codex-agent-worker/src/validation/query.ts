@@ -1,4 +1,5 @@
 import type { CodexApprovalPolicy, CodexSandboxMode, CodexWebSearchMode, ImageAttachment, NavigatorAttachment, QueryRequest } from '../models.js'
+import { normalizeCodexReasoningEffort } from '../codex/reasoning.js'
 
 const MAX_PROMPT_LENGTH = 200_000
 const MAX_PATH_LENGTH = 4_096
@@ -12,7 +13,6 @@ const MAX_IMAGE_NAME_LENGTH = 255
 const MAX_IMAGE_COUNT = 20
 const MAX_ATTACHMENT_COUNT = 20
 const MAX_ADDITIONAL_DIRECTORY_COUNT = 16
-const VALID_REASONING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'extra-high'])
 const VALID_SANDBOX_MODES = new Set<CodexSandboxMode>(['read-only', 'workspace-write', 'danger-full-access'])
 const VALID_APPROVAL_POLICIES = new Set<CodexApprovalPolicy>(['never', 'on-request', 'on-failure', 'untrusted'])
 const VALID_WEB_SEARCH_MODES = new Set<CodexWebSearchMode>(['disabled', 'cached', 'live'])
@@ -182,7 +182,7 @@ export function validateModelString(value: string): true | string {
   if (parts.length === 2) {
     const reasoningLevel = parts[1]?.trim()
     if (!reasoningLevel) return 'model reasoning level must not be empty'
-    if (!VALID_REASONING_LEVELS.has(reasoningLevel)) {
+    if (!normalizeCodexReasoningEffort(reasoningLevel)) {
       return 'unsupported model reasoning level'
     }
   }

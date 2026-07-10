@@ -5,10 +5,13 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ThreadItem } from '@openai/codex-sdk'
 import {
+  applyResolvedReasoningEffort,
+  asCollabToolCallItem,
   buildCodexInput,
   buildCodexProcessEnv,
   buildCodexTaskEnv,
   ensureNavigatorBusinessMcpHomeConfig,
+  formatCollabToolDiagnostic,
   getRunningTaskCount,
   mapThreadItemToEvents,
   mergeCodexConfig,
@@ -48,11 +51,60 @@ test('parseModelString accepts xhigh reasoning directly', () => {
   })
 })
 
+test('parseModelString accepts Sol max and ultra reasoning', () => {
+  assert.deepEqual(parseModelString('gpt-5.6-sol:max'), {
+    model: 'gpt-5.6-sol',
+    reasoningLevel: 'max',
+  })
+  assert.deepEqual(parseModelString('gpt-5.6-sol:ultra'), {
+    model: 'gpt-5.6-sol',
+    reasoningLevel: 'ultra',
+  })
+  assert.deepEqual(parseModelString(' gpt-5.6-sol : ultra '), {
+    model: 'gpt-5.6-sol',
+    reasoningLevel: 'ultra',
+  })
+})
+
+test('applyResolvedReasoningEffort lets explicit model suffix override generic config', () => {
+  const codexConfig: Record<string, unknown> = {
+    model_reasoning_effort: 'low',
+    tool_output_token_limit: 10000,
+  }
+
+  applyResolvedReasoningEffort(codexConfig, 'ultra')
+
+  assert.deepEqual(codexConfig, {
+    model_reasoning_effort: 'ultra',
+    tool_output_token_limit: 10000,
+  })
+})
+
+test('collab tool diagnostics expose counts without prompt or thread identifiers', () => {
+  const item = asCollabToolCallItem({
+    type: 'collab_tool_call',
+    tool: 'wait',
+    status: 'completed',
+    prompt: 'sensitive delegated prompt',
+    sender_thread_id: 'sender-secret',
+    receiver_thread_ids: ['receiver-secret'],
+    agents_states: { 'agent-secret': { status: 'completed' } },
+  })
+
+  assert.ok(item)
+  const diagnostic = formatCollabToolDiagnostic('task-1', 'completed', item)
+  assert.match(diagnostic, /collab_tool_completed task=task-1 tool=wait status=completed/)
+  assert.match(diagnostic, /receiver_count=1 agent_count=1/)
+  assert.doesNotMatch(diagnostic, /sensitive delegated prompt|sender-secret|receiver-secret|agent-secret/)
+})
+
 const TEST_ALIASES: Record<string, string> = {
   'codex-latest': 'gpt-5.6-sol',
   'codex-fast': 'gpt-5.6-sol:low',
   'codex-deep': 'gpt-5.6-sol:high',
   'codex-xhigh': 'gpt-5.6-sol:xhigh',
+  'codex-max': 'gpt-5.6-sol:max',
+  'codex-ultra': 'gpt-5.6-sol:ultra',
   'codex-mini': 'gpt-5.4-mini',
 }
 
@@ -67,6 +119,14 @@ test('resolveModelAlias returns the mapped real model when whole string hits an 
   })
   assert.deepEqual(resolveModelAlias('codex-xhigh', TEST_ALIASES), {
     resolved: 'gpt-5.6-sol:xhigh',
+    wasAlias: true,
+  })
+  assert.deepEqual(resolveModelAlias('codex-max', TEST_ALIASES), {
+    resolved: 'gpt-5.6-sol:max',
+    wasAlias: true,
+  })
+  assert.deepEqual(resolveModelAlias('codex-ultra', TEST_ALIASES), {
+    resolved: 'gpt-5.6-sol:ultra',
     wasAlias: true,
   })
 })
@@ -96,6 +156,10 @@ test('resolveModelAlias appends reasoning suffix when alias value has no colon',
   })
   assert.deepEqual(resolveModelAlias('codex-latest:xhigh', TEST_ALIASES), {
     resolved: 'gpt-5.6-sol:xhigh',
+    wasAlias: true,
+  })
+  assert.deepEqual(resolveModelAlias('codex-latest : ultra', TEST_ALIASES), {
+    resolved: 'gpt-5.6-sol:ultra',
     wasAlias: true,
   })
 })

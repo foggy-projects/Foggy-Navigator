@@ -54,7 +54,7 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 {
   "prompt": "请分析当前目录下最近失败的测试并给出修复建议",
   "cwd": "D:\\projects\\demo-repo",
-  "model": "gpt-5.4-mini"
+  "model": "codex-latest"
 }
 ```
 
@@ -78,7 +78,7 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 {
   "prompt": "总结这个仓库的构建方式",
   "cwd": "D:\\projects\\demo-repo",
-  "model": "gpt-5.4-mini",
+  "model": "codex-latest",
   "api_key": "sk-..."
 }
 ```
@@ -138,7 +138,7 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 {
   "prompt": "请阅读当前项目并总结启动方式",
   "cwd": "D:\\projects\\demo-repo",
-  "model": "gpt-5.4-mini",
+  "model": "codex-latest",
   "max_turns": 1
 }
 ```
@@ -240,7 +240,7 @@ event: message
 data: {"type":"assistant_text","task_id":"...","session_id":"019d...","content":"PONG","seq":1}
 
 event: message
-data: {"type":"result","task_id":"...","session_id":"019d...","content":"PONG","result":"PONG","duration_ms":9159,"input_tokens":10238,"output_tokens":22,"num_turns":1,"model":"gpt-5.4-mini","seq":2}
+data: {"type":"result","task_id":"...","session_id":"019d...","content":"PONG","result":"PONG","duration_ms":9159,"input_tokens":10238,"output_tokens":22,"num_turns":1,"model":"gpt-5.6-sol","seq":2}
 ```
 
 关键字段说明：
@@ -261,26 +261,28 @@ data: {"type":"result","task_id":"...","session_id":"019d...","content":"PONG","
 示例：
 
 ```json
-{ "model": "gpt-5.4-mini" }
+{ "model": "codex-latest" }
 ```
 
 ```json
-{ "model": "gpt-5.4:high" }
+{ "model": "gpt-5.6-sol:high" }
 ```
 
 ```json
-{ "model": "gpt-5.4-mini:medium" }
+{ "model": "codex-ultra" }
 ```
 
 ### 4.2 支持的思考等级
 
-当前 worker 会把 `model` 里的后缀映射到 Codex SDK 的 `modelReasoningEffort`，支持：
+当前 worker 会把 `model` 里的后缀透传为 Codex 的 `model_reasoning_effort`，支持：
 
 - `minimal`
 - `low`
 - `medium`
 - `high`
 - `xhigh`
+- `max`
+- `ultra`
 
 同时兼容一个前端别名：
 
@@ -292,7 +294,7 @@ data: {"type":"result","task_id":"...","session_id":"019d...","content":"PONG","
 {
   "prompt": "分析这个目录的主要风险",
   "cwd": "D:\\projects\\demo-repo",
-  "model": "gpt-5.4:extra-high"
+  "model": "gpt-5.6-sol:extra-high"
 }
 ```
 
@@ -300,16 +302,30 @@ data: {"type":"result","task_id":"...","session_id":"019d...","content":"PONG","
 
 ```json
 {
-  "model": "gpt-5.4:xhigh"
+  "model": "gpt-5.6-sol:xhigh"
 }
 ```
+
+GPT-5.6-Sol 的稳定 alias：
+
+| Alias | 实际模型 |
+|---|---|
+| `codex-latest` | `gpt-5.6-sol` |
+| `codex-fast` | `gpt-5.6-sol:low` |
+| `codex-deep` | `gpt-5.6-sol:high` |
+| `codex-xhigh` | `gpt-5.6-sol:xhigh` |
+| `codex-max` | `gpt-5.6-sol:max` |
+| `codex-ultra` | `gpt-5.6-sol:ultra` |
+| `codex-mini` | `gpt-5.4-mini` |
+
+`ultra` 会允许 Codex 自动委派子任务。Worker 会继续返回父任务的正常文本和最终结果，并对协作工具事件写入脱敏诊断日志；当前 SSE 协议不承诺完整的子 Agent 拓扑或逐 Agent 进度。
 
 ### 4.3 默认值
 
 如果不传 `model`，当前默认是：
 
 ```text
-gpt-5.4-mini
+codex-latest -> gpt-5.6-sol
 ```
 
 ## 5. 续接会话
@@ -636,7 +652,7 @@ Codex SDK 当前没有直接暴露 `max_turns` HTTP 参数，因此这里的限�
 ```bash
 curl -N -X POST http://localhost:3051/api/v1/query \
   -H "Content-Type: application/json" \
-  -d "{\"prompt\":\"请总结当前仓库结构\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"gpt-5.4-mini\"}"
+  -d "{\"prompt\":\"请总结当前仓库结构\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"codex-latest\"}"
 ```
 
 ### 12.2 继续会话
@@ -644,7 +660,7 @@ curl -N -X POST http://localhost:3051/api/v1/query \
 ```bash
 curl -N -X POST http://localhost:3051/api/v1/query \
   -H "Content-Type: application/json" \
-  -d "{\"prompt\":\"继续，重点看测试和部署\",\"session_id\":\"019d1b11-f816-7e21-8ff6-2f9958abaf0d\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"gpt-5.4:high\"}"
+  -d "{\"prompt\":\"继续，重点看测试和部署\",\"session_id\":\"019d1b11-f816-7e21-8ff6-2f9958abaf0d\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"codex-max\"}"
 ```
 
 ### 12.3 指定 API Key
@@ -652,16 +668,24 @@ curl -N -X POST http://localhost:3051/api/v1/query \
 ```bash
 curl -N -X POST http://localhost:3051/api/v1/query \
   -H "Content-Type: application/json" \
-  -d "{\"prompt\":\"检查这个目录的风险\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"gpt-5.4-mini\",\"api_key\":\"sk-...\"}"
+  -d "{\"prompt\":\"检查这个目录的风险\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"codex-latest\",\"api_key\":\"sk-...\"}"
 ```
 
-### 12.4 重连任务流
+### 12.4 使用 Ultra 自动委派
+
+```bash
+curl -N -X POST http://localhost:3051/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\":\"并行检查测试、构建和部署配置，再汇总结论\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"codex-ultra\"}"
+```
+
+### 12.5 重连任务流
 
 ```bash
 curl -N "http://localhost:3051/api/v1/tasks/44beb057-c03b-4aa1-aabf-fffa479114c8/subscribe?ack_seq=2"
 ```
 
-### 12.5 Codex Biz readiness
+### 12.6 Codex Biz readiness
 
 ```bash
 curl http://localhost:3051/health

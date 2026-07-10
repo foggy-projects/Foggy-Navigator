@@ -90,7 +90,15 @@ describe('llmModelOptions', () => {
   it('exposes Codex aliases for OPENAI_CODEX backend', () => {
     const codex = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
     const values = codex.map((opt) => opt.value)
-    expect(values).toEqual(['codex-latest', 'codex-fast', 'codex-deep', 'codex-xhigh', 'codex-mini'])
+    expect(values).toEqual([
+      'codex-latest',
+      'codex-fast',
+      'codex-deep',
+      'codex-xhigh',
+      'codex-max',
+      'codex-ultra',
+      'codex-mini',
+    ])
   })
 
   it('exposes LangGraph Biz aliases for LANGGRAPH_BIZ backend', () => {
@@ -116,15 +124,37 @@ describe('llmModelOptions', () => {
     expect(resolveModelOptions(config).map((m) => m.value)).toEqual(['codex-latest', 'codex-fast'])
   })
 
-  it('resolveModelOptions falls back to all aliases when legacy availableModels has no alias hit (backward compat)', () => {
+  it('requires explicit whitelist grants for Codex Max and Ultra when availableModels is restricted', () => {
+    const config = createModelConfig({
+      workerBackend: 'OPENAI_CODEX' as WorkerBackend,
+      availableModels: ['codex-max', 'codex-ultra'],
+    })
+    expect(resolveModelOptions(config).map((m) => m.value)).toEqual(['codex-max', 'codex-ultra'])
+  })
+
+  it('maps exact GPT-5.6-Sol Max and Ultra grants to their stable aliases', () => {
+    const config = createModelConfig({
+      workerBackend: 'OPENAI_CODEX' as WorkerBackend,
+      availableModels: ['gpt-5.6-sol:max', 'gpt-5.6-sol:ultra'],
+    })
+    expect(resolveModelOptions(config).map((m) => m.value)).toEqual(['codex-max', 'codex-ultra'])
+  })
+
+  it('keeps Max and Ultra gated when legacy availableModels has no alias hit', () => {
     // 历史 codex 配置存的是真实模型名，新前端按 whitelist 过滤会得到空集；
-    // 此时退化为"不限制"，让用户在新 UI 里看到全部 alias 完成迁移
+    // 迁移兜底仅开放普通 alias，Max/Ultra 必须由 alias whitelist 显式授权。
     const config = createModelConfig({
       workerBackend: 'OPENAI_CODEX' as WorkerBackend,
       availableModels: ['gpt-5.4', 'gpt-5.5', 'gpt-5.4-mini'],
     })
     const result = resolveModelOptions(config).map((m) => m.value)
-    expect(result).toEqual(['codex-latest', 'codex-fast', 'codex-deep', 'codex-xhigh', 'codex-mini'])
+    expect(result).toEqual([
+      'codex-latest',
+      'codex-fast',
+      'codex-deep',
+      'codex-xhigh',
+      'codex-mini',
+    ])
   })
 
   it('rejects Codex configs for workers without a Codex endpoint', () => {

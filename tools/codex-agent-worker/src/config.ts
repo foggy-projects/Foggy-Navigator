@@ -43,6 +43,8 @@ export interface AppConfig {
    *   codex-fast   → gpt-5.6-sol:low
    *   codex-deep   → gpt-5.6-sol:high
    *   codex-xhigh  → gpt-5.6-sol:xhigh
+   *   codex-max    → gpt-5.6-sol:max
+   *   codex-ultra  → gpt-5.6-sol:ultra
    *   codex-mini   → gpt-5.4-mini
    *
    * 环境变量格式：JSON 对象，如 {"codex-latest":"gpt-5.6-sol","codex-fast":"gpt-5.6-sol:low"}
@@ -192,6 +194,8 @@ const DEFAULT_CODEX_MODEL_ALIASES: Readonly<Record<string, string>> = Object.fre
   'codex-fast': 'gpt-5.6-sol:low',
   'codex-deep': 'gpt-5.6-sol:high',
   'codex-xhigh': 'gpt-5.6-sol:xhigh',
+  'codex-max': 'gpt-5.6-sol:max',
+  'codex-ultra': 'gpt-5.6-sol:ultra',
   'codex-mini': 'gpt-5.4-mini',
 })
 

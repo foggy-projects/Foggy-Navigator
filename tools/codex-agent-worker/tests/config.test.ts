@@ -76,6 +76,8 @@ test('createConfig provides default Codex modelAliases when CODEX_MODEL_ALIASES 
   assert.equal(config.modelAliases['codex-fast'], 'gpt-5.6-sol:low')
   assert.equal(config.modelAliases['codex-deep'], 'gpt-5.6-sol:high')
   assert.equal(config.modelAliases['codex-xhigh'], 'gpt-5.6-sol:xhigh')
+  assert.equal(config.modelAliases['codex-max'], 'gpt-5.6-sol:max')
+  assert.equal(config.modelAliases['codex-ultra'], 'gpt-5.6-sol:ultra')
   assert.equal(config.modelAliases['codex-mini'], 'gpt-5.4-mini')
 })
 
@@ -118,6 +120,7 @@ test('createConfig CODEX_MODEL_ALIASES JSON override merges into defaults', () =
   assert.equal(config.modelAliases['codex-experimental'], 'gpt-5.6-luna')
   // 未覆盖的 alias 保持默认
   assert.equal(config.modelAliases['codex-fast'], 'gpt-5.6-sol:low')
+  assert.equal(config.modelAliases['codex-ultra'], 'gpt-5.6-sol:ultra')
 })
 
 test('createConfig CODEX_MODEL_ALIASES rejects non-JSON values', () => {

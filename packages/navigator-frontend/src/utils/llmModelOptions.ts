@@ -26,10 +26,12 @@ const CLAUDE_MODEL_OPTIONS: SelectableModelOption[] = [
  * 模型版本升级（如 gpt-5.5 → gpt-5.6）只需修改 Worker 的 CODEX_MODEL_ALIASES 配置，前端无需任何改动。
  *
  * Worker 默认映射（见 tools/codex-agent-worker/src/config.ts → DEFAULT_CODEX_MODEL_ALIASES）：
- *   codex-latest → gpt-5.5
- *   codex-fast   → gpt-5.5:low
- *   codex-deep   → gpt-5.5:high
- *   codex-xhigh  → gpt-5.5:xhigh
+ *   codex-latest → gpt-5.6-sol
+ *   codex-fast   → gpt-5.6-sol:low
+ *   codex-deep   → gpt-5.6-sol:high
+ *   codex-xhigh  → gpt-5.6-sol:xhigh
+ *   codex-max    → gpt-5.6-sol:max
+ *   codex-ultra  → gpt-5.6-sol:ultra
  *   codex-mini   → gpt-5.4-mini
  *
  * 与 Claude（opus/sonnet/haiku）和 Gemini（gemini-pro/gemini-flash）的命名风格保持一致。
@@ -38,9 +40,17 @@ const CODEX_ALIAS_OPTIONS: SelectableModelOption[] = [
   { value: 'codex-latest', label: 'Codex Latest', backend: 'OPENAI_CODEX', description: 'Codex Latest (Alias) — 当前默认 Codex 模型' },
   { value: 'codex-fast', label: 'Codex Fast', backend: 'OPENAI_CODEX', description: 'Codex Fast (Alias) — 快速轻量推理' },
   { value: 'codex-deep', label: 'Codex Deep', backend: 'OPENAI_CODEX', description: 'Codex Deep (Alias) — 深度推理' },
-  { value: 'codex-xhigh', label: 'Codex Extra High', backend: 'OPENAI_CODEX', description: 'Codex Extra High (Alias) — 最高推理' },
+  { value: 'codex-xhigh', label: 'Codex Extra High', backend: 'OPENAI_CODEX', description: 'Codex Extra High (Alias) — 超高推理' },
+  { value: 'codex-max', label: 'Codex Max', backend: 'OPENAI_CODEX', description: 'Codex Max (Alias) — Sol 最大推理深度' },
+  { value: 'codex-ultra', label: 'Codex Ultra', backend: 'OPENAI_CODEX', description: 'Codex Ultra (Alias) — Sol 最大推理与自动任务委派' },
   { value: 'codex-mini', label: 'Codex Mini', backend: 'OPENAI_CODEX', description: 'Codex Mini (Alias) — 快速 Mini' },
 ]
+
+const CODEX_EXPLICIT_GRANT_ALIASES = new Set(['codex-max', 'codex-ultra'])
+const CODEX_REAL_MODEL_GRANT_ALIASES = new Map([
+  ['gpt-5.6-sol:max', 'codex-max'],
+  ['gpt-5.6-sol:ultra', 'codex-ultra'],
+])
 
 const GEMINI_MODEL_OPTIONS: SelectableModelOption[] = [
   { value: 'gemini-pro', label: 'Gemini Pro (Alias)', backend: 'GEMINI_CLI', description: 'Gemini Pro (Alias -> CLI Auto Gemini 3)' },
@@ -94,11 +104,10 @@ export function isModelConfigCompatibleWithWorker(
  * 根据 model 配置计算下拉候选项。
  *
  * 1.0.4 起的兼容兜底：
- * - 标准路径：当 `availableModels` 中至少命中一个新 alias 时，按 whitelist 过滤
+ * - 标准路径：当 `availableModels` 命中新 alias 或已知 GPT-5.6-Sol grant 时，按 whitelist 过滤
  * - 兼容路径：当 `availableModels` 全部是历史真实模型名（如 `gpt-5.4`、`gpt-5.5`）时，
- *   说明该配置是从旧版本继承下来的存量数据，新前端无法用这些值做有意义的过滤——
- *   此时退化为"不限制"，让用户在新 UI 上看到全部 alias 选项，重新勾选保存即可
- *   完成迁移。
+ *   说明该配置是从旧版本继承下来的存量数据，新前端无法用这些值做有意义的过滤。
+ *   此时开放普通 alias 帮助用户迁移，但 Max/Ultra 仍需在 whitelist 中显式授权。
  */
 export function resolveModelOptions(modelConfig: LlmModelConfig | null | undefined): SelectableModelOption[] {
   const backend = modelConfig?.workerBackend ?? 'CLAUDE_CODE'
@@ -107,10 +116,18 @@ export function resolveModelOptions(modelConfig: LlmModelConfig | null | undefin
   if (!allowed || allowed.length === 0) {
     return backendModels
   }
-  const filtered = backendModels.filter((model) => allowed.includes(model.value))
-  // OPENAI_CODEX 旧 availableModels（gpt-5.4 等）兼容兜底：完全无命中时退为"不限制"
+  const effectiveAllowed = new Set(allowed)
+  if (backend === 'OPENAI_CODEX') {
+    for (const allowedModel of allowed) {
+      if (!allowedModel) continue
+      const alias = CODEX_REAL_MODEL_GRANT_ALIASES.get(allowedModel.trim().toLowerCase())
+      if (alias) effectiveAllowed.add(alias)
+    }
+  }
+  const filtered = backendModels.filter((model) => effectiveAllowed.has(model.value))
+  // OPENAI_CODEX 旧 availableModels（gpt-5.4 等）兼容兜底：高权限 alias 不随迁移兜底开放。
   if (backend === 'OPENAI_CODEX' && filtered.length === 0) {
-    return backendModels
+    return backendModels.filter((model) => !CODEX_EXPLICIT_GRANT_ALIASES.has(model.value))
   }
   return filtered
 }

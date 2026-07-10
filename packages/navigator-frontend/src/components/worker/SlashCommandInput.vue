@@ -158,7 +158,11 @@ import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import type { SkillInfo } from '@/types'
 import { searchFiles as searchFilesApi } from '@/api/fileBrowser'
 import type { FileSearchResult } from '@/api/fileBrowser'
-import { resolveInputCursor } from './slashCommandInputUtils'
+import {
+  buildModelCommandChildren,
+  resolveInputCursor,
+  type ModelCommandOption,
+} from './slashCommandInputUtils'
 
 interface CommandChild {
   name: string
@@ -187,33 +191,18 @@ interface CliSkillItem {
   group: 'cli'
 }
 
-const BUILT_IN: BuiltInCommand[] = [
-  {
-    name: 'model',
-    description: '切换模型',
-    group: 'command',
-    children: [
-      { name: 'opus-1m', label: 'Claude Opus 4 (1M)', value: 'opus[1m]' },
-      { name: 'opus', label: 'Claude Opus 4', value: 'claude-opus-4-20250514' },
-      { name: 'sonnet-1m', label: 'Claude Sonnet 4 (1M)', value: 'sonnet[1m]' },
-      { name: 'sonnet', label: 'Claude Sonnet 4', value: 'claude-sonnet-4-20250514' },
-      { name: 'haiku', label: 'Claude Haiku 4', value: 'claude-haiku-4-20250514' },
-      { name: 'default', label: '默认模型', value: '' },
-    ],
-  },
-  {
-    name: 'turns',
-    description: '设置最大轮次',
-    group: 'command',
-    children: [
-      { name: '10', label: '10 轮', value: 10 },
-      { name: '25', label: '25 轮', value: 25 },
-      { name: '50', label: '50 轮', value: 50 },
-      { name: '200', label: '200 轮', value: 200 },
-      { name: '999', label: '999 轮', value: 999 },
-    ],
-  },
-]
+const TURNS_COMMAND: BuiltInCommand = {
+  name: 'turns',
+  description: '设置最大轮次',
+  group: 'command',
+  children: [
+    { name: '10', label: '10 轮', value: 10 },
+    { name: '25', label: '25 轮', value: 25 },
+    { name: '50', label: '50 轮', value: 50 },
+    { name: '200', label: '200 轮', value: 200 },
+    { name: '999', label: '999 轮', value: 999 },
+  ],
+}
 
 /** Claude Code CLI bundled skills — always available regardless of directory. */
 const CLI_SKILLS: CliSkillItem[] = [
@@ -244,6 +233,7 @@ const props = withDefaults(
     size?: '' | 'small' | 'large' | 'default'
     skills?: SkillInfo[]
     agents?: AgentItem[]
+    modelOptions?: ModelCommandOption[]
     autoGrow?: boolean
     maxRows?: number
     /** When set, enables ./ file path auto-complete for this directory */
@@ -256,6 +246,7 @@ const props = withDefaults(
     size: '',
     skills: () => [],
     agents: () => [],
+    modelOptions: () => [],
     autoGrow: false,
     maxRows: 6,
     directoryId: undefined,
@@ -263,6 +254,20 @@ const props = withDefaults(
 )
 
 const isTextarea = computed(() => props.rows > 1 || props.autoGrow)
+
+const builtInCommands = computed<BuiltInCommand[]>(() => {
+  const commands: BuiltInCommand[] = []
+  if (props.modelOptions.length > 0) {
+    commands.push({
+      name: 'model',
+      description: '切换模型',
+      group: 'command',
+      children: buildModelCommandChildren(props.modelOptions),
+    })
+  }
+  commands.push(TURNS_COMMAND)
+  return commands
+})
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
@@ -456,7 +461,7 @@ const skillItems = computed<SkillItem[]>(() =>
 
 const filteredCommands = computed(() => {
   const q = slashQuery.value.toLowerCase()
-  return BUILT_IN.filter((c) => c.name.toLowerCase().includes(q))
+  return builtInCommands.value.filter((c) => c.name.toLowerCase().includes(q))
 })
 
 const filteredCliSkills = computed(() => {

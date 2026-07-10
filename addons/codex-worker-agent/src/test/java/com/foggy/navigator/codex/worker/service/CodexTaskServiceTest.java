@@ -639,6 +639,174 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void createTaskDirect_rejectsLegacyWhitelistForGatedAliasBeforePersistence() {
+        LlmModelConfigDTO config = codexModelConfig(List.of("gpt-5.4", "gpt-5.5"));
+        when(llmModelManager.getModelConfig("cfg-legacy")).thenReturn(Optional.of(config));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.createTaskDirect(Map.of(
+                        "workerId", "worker-1",
+                        "prompt", "hello",
+                        "model", "codex-max",
+                        "modelConfigId", "cfg-legacy"
+                ), "user-1", "tenant-1"));
+
+        assertTrue(error.getMessage().contains("explicit availableModels grant"));
+        verify(llmModelManager).validateModelAccessForWorker("cfg-legacy", "worker-1");
+        verify(sessionManager, never()).createSession(any());
+        verify(taskRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any(WorkerTaskStartEvent.class));
+    }
+
+    @Test
+    void createTaskDirect_allowsStableAliasGrantForKnownGpt56SolModel() {
+        CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-max-alias");
+        LlmModelConfigDTO config = codexModelConfig(List.of("codex-max"));
+        when(llmModelManager.getModelConfig("cfg-max-alias")).thenReturn(Optional.of(config));
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "gpt-5.6-sol:max",
+                "modelConfigId", "cfg-max-alias"
+        ), "user-1", "tenant-1");
+
+        assertEquals("gpt-5.6-sol:max", savedTask[0].getModel());
+        verify(llmModelManager).validateModelAccessForWorker("cfg-max-alias", "worker-1");
+    }
+
+    @Test
+    void createTaskDirect_allowsKnownGpt56SolGrantForStableAlias() {
+        CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-ultra-real-grant");
+        LlmModelConfigDTO config = codexModelConfig(List.of("gpt-5.6-sol:ultra"));
+        when(llmModelManager.getModelConfig("cfg-ultra-real")).thenReturn(Optional.of(config));
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "codex-ultra",
+                "modelConfigId", "cfg-ultra-real"
+        ), "user-1", "tenant-1");
+
+        assertEquals("codex-ultra", savedTask[0].getModel());
+    }
+
+    @Test
+    void createTaskDirect_allowsStableAliasGrantForCodexLatestSuffix() {
+        CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-latest-ultra");
+        LlmModelConfigDTO config = codexModelConfig(List.of("codex-ultra"));
+        when(llmModelManager.getModelConfig("cfg-latest-ultra")).thenReturn(Optional.of(config));
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "codex-latest:ultra",
+                "modelConfigId", "cfg-latest-ultra"
+        ), "user-1", "tenant-1");
+
+        assertEquals("codex-latest:ultra", savedTask[0].getModel());
+    }
+
+    @Test
+    void createTaskDirect_allowsExactFutureGatedModelGrant() {
+        CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-future-exact");
+        LlmModelConfigDTO config = codexModelConfig(List.of("gpt-5.7-sol:ultra"));
+        when(llmModelManager.getModelConfig("cfg-future-exact")).thenReturn(Optional.of(config));
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "gpt-5.7-sol:ultra",
+                "modelConfigId", "cfg-future-exact"
+        ), "user-1", "tenant-1");
+
+        assertEquals("gpt-5.7-sol:ultra", savedTask[0].getModel());
+    }
+
+    @Test
+    void createTaskDirect_rejectsStableAliasGrantForFutureGatedModel() {
+        LlmModelConfigDTO config = codexModelConfig(List.of("codex-max"));
+        when(llmModelManager.getModelConfig("cfg-future-alias")).thenReturn(Optional.of(config));
+
+        assertThrows(IllegalArgumentException.class, () -> service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "gpt-5.7-sol:max",
+                "modelConfigId", "cfg-future-alias"
+        ), "user-1", "tenant-1"));
+
+        verify(sessionManager, never()).createSession(any());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void createTaskDirect_allowsGatedModelWhenWhitelistIsUnrestricted() {
+        CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-unrestricted");
+        LlmModelConfigDTO config = codexModelConfig(List.of());
+        when(llmModelManager.getModelConfig("cfg-unrestricted")).thenReturn(Optional.of(config));
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "codex-ultra",
+                "modelConfigId", "cfg-unrestricted"
+        ), "user-1", "tenant-1");
+
+        assertEquals("codex-ultra", savedTask[0].getModel());
+    }
+
+    @Test
+    void createTaskDirect_keepsNonGatedModelCompatibilityWithRestrictedWhitelist() {
+        CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-non-gated");
+        LlmModelConfigDTO config = codexModelConfig(List.of("gpt-5.4"));
+        when(llmModelManager.getModelConfig("cfg-non-gated")).thenReturn(Optional.of(config));
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "gpt-5.6-sol:xhigh",
+                "modelConfigId", "cfg-non-gated"
+        ), "user-1", "tenant-1");
+
+        assertEquals("gpt-5.6-sol:xhigh", savedTask[0].getModel());
+    }
+
+    @Test
+    void createTaskDirect_failsClosedWhenConfiguredModelDoesNotExist() {
+        when(llmModelManager.getModelConfig("cfg-missing")).thenReturn(Optional.empty());
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.createTaskDirect(Map.of(
+                        "workerId", "worker-1",
+                        "prompt", "hello",
+                        "model", "codex-ultra",
+                        "modelConfigId", "cfg-missing"
+                ), "user-1", "tenant-1"));
+
+        assertEquals("LLM model config not found: cfg-missing", error.getMessage());
+        verify(llmModelManager).validateModelAccessForWorker("cfg-missing", "worker-1");
+        verify(sessionManager, never()).createSession(any());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void createTaskDirect_failsClosedWhenModelManagerIsUnavailable() {
+        ReflectionTestUtils.setField(service, "llmModelManager", null);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.createTaskDirect(Map.of(
+                        "workerId", "worker-1",
+                        "prompt", "hello",
+                        "model", "codex-ultra",
+                        "modelConfigId", "cfg-ultra"
+                ), "user-1", "tenant-1"));
+
+        assertTrue(error.getMessage().contains("LLM model manager is unavailable"));
+        verify(sessionManager, never()).createSession(any());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
     void abortTask_relaysRemoteAbortAndClosesStreamBeforeMarkingAborted() {
         CodexTaskEntity entity = createTask(
                 "task-abort", "session-1", "worker-1", "dir-1", "RUNNING",
@@ -849,6 +1017,25 @@ class CodexTaskServiceTest {
                         && "worker timeout".equals(event.getErrorMessage())
                         && "AWAITING_REPLY".equals(event.getInteractionState())
         ));
+    }
+
+    private CodexTaskEntity[] stubSuccessfulTaskCreation(String sessionId) {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString()))
+                .thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+        when(sessionManager.createSession(any())).thenReturn(sessionId);
+        return savedTask;
+    }
+
+    private LlmModelConfigDTO codexModelConfig(List<String> availableModels) {
+        LlmModelConfigDTO config = new LlmModelConfigDTO();
+        config.setWorkerBackend("OPENAI_CODEX");
+        config.setAvailableModels(availableModels);
+        return config;
     }
 
     private CodexTaskEntity createTask(String taskId, String sessionId, String workerId,

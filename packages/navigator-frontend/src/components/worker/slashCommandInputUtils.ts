@@ -21,3 +21,25 @@ export function resolveInputCursor(
 
   return boundedDomCursor
 }
+
+export interface ModelCommandOption {
+  value: string
+  label: string
+}
+
+export interface ModelCommandChild {
+  name: string
+  label: string
+  value: string
+}
+
+export function buildModelCommandChildren(modelOptions: readonly ModelCommandOption[]): ModelCommandChild[] {
+  return [
+    ...modelOptions.map((option) => ({
+      name: option.value,
+      label: option.label,
+      value: option.value,
+    })),
+    { name: 'default', label: '默认模型', value: '' },
+  ]
+}

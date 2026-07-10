@@ -635,9 +635,13 @@ codex-worker status</pre>
     </el-dialog>
 
     <!-- LLM Model Dialog -->
-    <el-dialog v-model="showLlmDialog_" :title="llmDialogMode === 'add' ? '添加 AI 模型' : '编辑 AI 模型'" width="560px">
+    <el-dialog
+      v-model="showLlmDialog_"
+      :title="llmDialogMode === 'add' ? '添加 AI 模型' : '编辑 AI 模型'"
+      width="min(560px, calc(100vw - 24px))"
+    >
       <el-form :model="llmForm" label-position="top">
-        <el-row :gutter="12">
+        <el-row :gutter="12" class="llm-form-row">
           <el-col :span="12">
             <el-form-item label="显示名称" required>
               <el-input v-model="llmForm.name" placeholder="如：通义千问-Max" />
@@ -657,7 +661,7 @@ codex-worker status</pre>
         <el-form-item label="API Base URL" :required="!supportsSubscriptionBackend(llmForm.workerBackend)">
           <el-input v-model="llmForm.baseUrl" :placeholder="baseUrlPlaceholder(llmForm.workerBackend)" />
         </el-form-item>
-        <el-row :gutter="12">
+        <el-row :gutter="12" class="llm-form-row">
           <el-col :span="12">
             <el-form-item label="模型名称" required>
               <el-select
@@ -809,7 +813,7 @@ codex-worker status</pre>
           <el-checkbox v-model="llmForm.isDefault">设为该类别的默认模型</el-checkbox>
         </el-form-item>
         <el-form-item v-if="llmForm.category === 'CODING' || llmForm.category === 'VISION'" label="Worker 后端">
-          <el-radio-group v-model="llmForm.workerBackend">
+          <el-radio-group v-model="llmForm.workerBackend" class="worker-backend-options">
             <el-radio-button v-if="llmForm.category === 'CODING'" value="CLAUDE_CODE">Claude Code</el-radio-button>
             <el-radio-button v-if="llmForm.category === 'CODING'" value="OPENAI_CODEX">OpenAI Codex</el-radio-button>
             <el-radio-button v-if="llmForm.category === 'CODING'" value="GEMINI_CLI">Gemini CLI</el-radio-button>
@@ -2277,5 +2281,35 @@ onMounted(() => {
 
 .help-list li + li {
   margin-top: 6px;
+}
+
+@media (max-width: 640px) {
+  .llm-form-row :deep(.el-col-12) {
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+
+  .worker-backend-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .worker-backend-options :deep(.el-radio-button),
+  .worker-backend-options :deep(.el-radio-button__inner) {
+    width: 100%;
+  }
+
+  .worker-backend-options :deep(.el-radio-button__inner) {
+    padding-inline: 8px;
+    border: var(--el-border);
+    border-radius: var(--el-border-radius-base) !important;
+    box-shadow: none !important;
+  }
+
+  .worker-backend-options :deep(.el-radio-button.is-active .el-radio-button__inner) {
+    border-color: var(--el-color-primary);
+  }
 }
 </style>
