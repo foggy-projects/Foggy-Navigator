@@ -56,6 +56,7 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 |------|------|
 | `tools/claude-agent-worker` | Claude Worker Python 服务 |
 | `tools/codex-agent-worker` | Codex Worker TypeScript 服务 |
+| `tools/codex-app-server-worker` | 独立 Codex app-server Worker（默认 3062，dark/canary 目标 runtime） |
 | `tools/gemini-agent-worker` | Gemini Worker TypeScript 服务 |
 | `tools/langgraph-biz-worker` | LangGraph Biz Worker Python 服务 |
 | `tools/mock-llm-service` | Mock LLM 端点 |
@@ -82,6 +83,8 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 | `tools/claude-agent-worker/stop.ps1` | 停止 Claude Worker | - |
 | `tools/codex-agent-worker/start.ps1` | Codex Worker | 3051 |
 | `tools/codex-agent-worker/stop.ps1` | 停止 Codex Worker | - |
+| `tools/codex-app-server-worker/start.ps1` | Codex App Server Worker | 3062 |
+| `tools/codex-app-server-worker/stop.ps1` | 停止 Codex App Server Worker | - |
 | `tools/gemini-agent-worker/start.ps1` | Gemini Worker | 3071 |
 | `tools/gemini-agent-worker/stop.ps1` | 停止 Gemini Worker | - |
 | `tools/langgraph-biz-worker/start.ps1` | LangGraph Biz Worker（Windows 本地默认） | 3061 |

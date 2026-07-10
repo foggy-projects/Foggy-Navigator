@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
 import {
   CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR,
+  parseModelString,
+  resolveModelAlias,
   runQuery,
   taskBroadcasts,
   cleanupOldTasks,
@@ -13,6 +15,20 @@ import { validateQueryRequest } from '../validation/query.js'
 import { isPathWithinAllowedCwd } from '../path-guards.js'
 
 export { isPathWithinAllowedCwd }
+
+export const CODEX_ULTRA_APP_SERVER_REQUIRED = 'CODEX_ULTRA_APP_SERVER_REQUIRED'
+
+export function requiresAppServerForNewUltra(
+  model: string | undefined,
+  sessionId: string | undefined,
+  defaultModel: string = config.defaultModel,
+  aliases: Record<string, string> = config.modelAliases
+): boolean {
+  if (sessionId?.trim()) return false
+  const requestedModel = model?.trim() || defaultModel
+  const resolvedModel = resolveModelAlias(requestedModel, aliases).resolved
+  return parseModelString(resolvedModel).reasoningLevel === 'ultra'
+}
 
 const router = Router()
 
@@ -26,8 +42,15 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     return
   }
   const body = validation.value
+  if (requiresAppServerForNewUltra(body.model, body.session_id)) {
+    res.status(409).json({
+      code: CODEX_ULTRA_APP_SERVER_REQUIRED,
+      error: CODEX_ULTRA_APP_SERVER_REQUIRED,
+    })
+    return
+  }
   console.log(
-    `[query] received request: cwd=${body.cwd ?? ''} session_id=${body.session_id ?? ''} model=${body.model ?? ''} has_api_key=${Boolean(body.api_key)} base_url=${body.base_url ?? ''} env_var_keys=${body.env_vars ? Object.keys(body.env_vars).join(',') : ''} images=${body.images?.length ?? 0}`
+    `[query] received request: cwd=${body.cwd ?? ''} session_id=${body.session_id ?? ''} model=${body.model ?? ''} has_api_key=${Boolean(body.api_key)} has_base_url=${Boolean(body.base_url)} env_var_keys=${body.env_vars ? Object.keys(body.env_vars).join(',') : ''} images=${body.images?.length ?? 0}`
   )
 
   const isAllowedPath = (candidate: string): boolean => {

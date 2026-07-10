@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foggy.example/contracts/codex-app-server-worker/task-accept-v1.schema.json",
+  "title": "Codex App Server Worker Task Accept v1",
+  "type": "object",
+  "required": ["prompt"],
+  "properties": {
+    "prompt": { "type": "string", "minLength": 1, "maxLength": 200000 },
+    "cwd": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "session_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "model": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "sandbox_mode": { "enum": ["read-only", "workspace-write", "danger-full-access"] },
+    "approval_policy": { "const": "never" },
+    "network_access_enabled": { "type": "boolean" },
+    "web_search_mode": { "enum": ["disabled", "cached", "live"] },
+    "developer_instructions": { "type": "string", "minLength": 1, "maxLength": 64000 },
+    "output_schema": { "type": "object" },
+    "codex_config": { "type": "object" },
+    "env_vars": {
+      "type": "object",
+      "properties": {
+        "model_context_window": { "type": "string" },
+        "model_auto_compact_token_limit": { "type": "string" },
+        "tool_output_token_limit": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "images": { "type": "array", "maxItems": 20 },
+    "api_key": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "base_url": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "codex_home_key": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "attachments": { "type": "array", "maxItems": 0 },
+    "additional_directories": { "type": "array", "maxItems": 0 },
+    "business_runtime_context": false,
+    "max_turns": { "const": 1 }
+  },
+  "additionalProperties": false
+}

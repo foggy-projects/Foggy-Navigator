@@ -1,0 +1,9 @@
+{
+  "cli_version": "0.144.1",
+  "experimental": false,
+  "generation_command": "codex app-server generate-json-schema --out <dir>",
+  "digest_algorithm": "Parse each JSON file and recursively sort object keys before hashing canonical UTF-8 JSON. Sort relative paths; emit '<relative-path> <canonical-file-sha256>' per LF-terminated line; SHA-256 the resulting UTF-8 manifest.",
+  "file_count": 267,
+  "total_bytes": 2720160,
+  "schema_digest": "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f"
+}

@@ -877,7 +877,7 @@ export async function runQuery(
       codexOptions.baseUrl = effectiveBaseUrl
     }
     console.log(
-      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${reasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} base_url=${effectiveBaseUrl ?? ''} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''} scoped_codex_home=${Boolean(codexHome)} sandbox_mode=${runOptions.sandboxMode ?? ''} approval_policy=${runOptions.approvalPolicy ?? ''}`
+      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${reasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} has_base_url=${Boolean(effectiveBaseUrl)} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''} scoped_codex_home=${Boolean(codexHome)} sandbox_mode=${runOptions.sandboxMode ?? ''} approval_policy=${runOptions.approvalPolicy ?? ''}`
     )
 
     // Codex CLI 配置项默认值 + envVars 覆盖

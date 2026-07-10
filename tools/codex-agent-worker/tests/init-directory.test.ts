@@ -13,7 +13,7 @@ test('initializeDirectory creates nested files under the requested directory', a
       files: {
         'temp/codex-biz-smoke/.directory-smoke.md': 'ready',
       },
-    })
+    }, { allowedCwds: [] })
 
     assert.equal(result.path, path.resolve(rootDir))
     assert.deepEqual(result.files_created, ['temp/codex-biz-smoke/.directory-smoke.md'])
@@ -35,7 +35,7 @@ test('initializeDirectory rejects file paths that escape the directory', async (
         files: {
           '../outside.txt': 'bad',
         },
-      }),
+      }, { allowedCwds: [] }),
       (error: unknown) => error instanceof InitDirectoryError && error.statusCode === 400
     )
   } finally {

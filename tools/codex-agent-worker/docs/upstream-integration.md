@@ -671,12 +671,16 @@ curl -N -X POST http://localhost:3051/api/v1/query \
   -d "{\"prompt\":\"检查这个目录的风险\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"codex-latest\",\"api_key\":\"sk-...\"}"
 ```
 
-### 12.4 使用 Ultra 自动委派
+### 12.4 Ultra runtime 边界
+
+SDK Worker 不再接受新的 Ultra 会话。没有 `session_id` 的 `codex-ultra` 请求会在执行前返回 HTTP `409` 和稳定错误码 `CODEX_ULTRA_APP_SERVER_REQUIRED`，上游应把新会话路由到独立 App Server Worker。
+
+已有 SDK Ultra thread 为保持 runtime affinity，可以携带原 `session_id` 继续 drain：
 
 ```bash
 curl -N -X POST http://localhost:3051/api/v1/query \
   -H "Content-Type: application/json" \
-  -d "{\"prompt\":\"并行检查测试、构建和部署配置，再汇总结论\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"codex-ultra\"}"
+  -d "{\"prompt\":\"继续并汇总结论\",\"session_id\":\"019d1b11-f816-7e21-8ff6-2f9958abaf0d\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"codex-ultra\"}"
 ```
 
 ### 12.5 重连任务流

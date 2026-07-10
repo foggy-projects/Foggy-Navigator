@@ -1,12 +1,13 @@
 {
   "name": "codex-agent-worker",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "OpenAI Codex Agent Worker - TypeScript SSE service",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/**/*.test.ts"
   },
