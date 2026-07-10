@@ -3,8 +3,6 @@ package com.foggy.navigator.claude.worker.service;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
-import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
-import com.foggy.navigator.common.entity.CodingAgentEntity;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,14 +16,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 
 /**
  * 将平台 Skill（如 ask-agent）推送到在线 Worker 的 ~/.agents/skills/。
  * <p>
- * ask-agent 技能内容包含动态 Agent 列表，由 Navigator 后端生成后推送给 Worker，
- * Worker 自身无需反向调用 Navigator API。
+ * ask-agent 仅为 scheduled-task 的显式 A2A 调用提供协议参考。
  */
 @Slf4j
 @Component
@@ -34,7 +30,6 @@ public class PlatformSkillSyncer {
 
     private final ClaudeWorkerRepository workerRepository;
     private final ClaudeWorkerService workerService;
-    private final CodingAgentRepository codingAgentRepository;
 
     @Value("${navigator.api.external-url:http://localhost:${server.port:8112}}")
     private String navigatorApiBase;
@@ -79,7 +74,7 @@ public class PlatformSkillSyncer {
 
     private void syncWorkerSkills(ClaudeWorkerEntity worker) {
         try {
-            String skillContent = generateAskAgentSkill(worker);
+            String skillContent = generateAskAgentSkill();
             ClaudeWorkerClient client = workerService.createClient(worker);
             client.deploySkills(Map.of("ask-agent", skillContent))
                     .block(Duration.ofSeconds(10));
@@ -90,33 +85,8 @@ public class PlatformSkillSyncer {
         }
     }
 
-    private String generateAskAgentSkill(ClaudeWorkerEntity worker) {
-        String template = loadTemplate();
-
-        // 获取该 Worker 所属用户的所有 Claude Worker Agent
-        List<CodingAgentEntity> agents = codingAgentRepository
-                .findByUserIdOrderByCreatedAtDesc(worker.getUserId())
-                .stream()
-                .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
-                .toList();
-
-        StringBuilder table = new StringBuilder();
-        for (CodingAgentEntity agent : agents) {
-            String desc = agent.getDescription() != null ? agent.getDescription() : "";
-            // 截断过长描述，保留单行
-            if (desc.contains("\n")) {
-                desc = desc.substring(0, desc.indexOf('\n'));
-            }
-            if (desc.length() > 100) {
-                desc = desc.substring(0, 97) + "...";
-            }
-            table.append(String.format("| %s | %s | %s |\n",
-                    agent.getName(), agent.getAgentId(), desc));
-        }
-
-        return template
-                .replace("{{AGENT_TABLE}}", table.toString())
-                .replace("{{NAVIGATOR_API_BASE}}", navigatorApiBase);
+    private String generateAskAgentSkill() {
+        return loadTemplate().replace("{{NAVIGATOR_API_BASE}}", navigatorApiBase);
     }
 
     private String loadTemplate() {

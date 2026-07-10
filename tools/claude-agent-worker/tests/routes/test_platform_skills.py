@@ -49,6 +49,62 @@ class TestDeploySkills:
         assert "existing" in result["deployed"]
         assert (skill_dir / "SKILL.md").read_text() == "new content"
 
+    async def test_overwrites_managed_ask_agent(self, tmp_path):
+        skills_dir = tmp_path / ".agents" / "skills"
+        skill_dir = skills_dir / "ask-agent"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: ask-agent\n---\n# 咨询协作 Agent\nNAVIGATOR_TOKEN\n/api/v1/agents/{id}/ask\n",
+            encoding="utf-8",
+        )
+        narrowed = (
+            "---\nname: ask-agent\n---\n# 定时任务 A2A 调用\n"
+            "[NAVIGATOR_SCHEDULED_A2A]\n/api/v1/agents/$TARGET_AGENT_ID/ask\n"
+        )
+
+        req = DeploySkillsRequest(skills={"ask-agent": narrowed})
+        with (
+            patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir),
+            patch(
+                "agent_worker.routes.platform_skills.platform_skill_deployer.remove_legacy_ask_agent_copies"
+            ) as remove_legacy,
+        ):
+            result = await deploy_skills(req)
+
+        assert result["deployed"] == ["ask-agent"]
+        assert (skill_dir / "SKILL.md").read_text(encoding="utf-8") == narrowed
+        remove_legacy.assert_called_once_with()
+
+    async def test_preserves_unrecognized_ask_agent(self, tmp_path):
+        skills_dir = tmp_path / ".agents" / "skills"
+        skill_dir = skills_dir / "ask-agent"
+        skill_dir.mkdir(parents=True)
+        custom = "---\nname: ask-agent\n---\n# User-managed routing\n"
+        (skill_dir / "SKILL.md").write_text(custom, encoding="utf-8")
+
+        req = DeploySkillsRequest(skills={"ask-agent": "platform replacement"})
+        with patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir):
+            result = await deploy_skills(req)
+
+        assert result["deployed"] == []
+        assert (skill_dir / "SKILL.md").read_text(encoding="utf-8") == custom
+
+    async def test_skips_linked_ask_agent_target(self, tmp_path):
+        skills_dir = tmp_path / ".agents" / "skills"
+        req = DeploySkillsRequest(skills={"ask-agent": "platform replacement"})
+
+        with (
+            patch("agent_worker.routes.platform_skills.user_skills_dir", return_value=skills_dir),
+            patch(
+                "agent_worker.platform_skills.deployer._is_link_or_reparse_point",
+                return_value=True,
+            ),
+        ):
+            result = await deploy_skills(req)
+
+        assert result["deployed"] == []
+        assert not (skills_dir / "ask-agent" / "SKILL.md").exists()
+
     async def test_empty_skills_returns_empty(self, tmp_path):
         req = DeploySkillsRequest(skills={})
         skills_dir = tmp_path / ".agents" / "skills"

@@ -11,7 +11,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -25,13 +28,21 @@ import java.util.Map;
 public class PlatformSkillDeployer {
 
     private static final String SKILLS_RESOURCE_PATTERN = "classpath:platform-skills/*/SKILL.md";
+    private static final String RETIRED_SKILL_NAME = "cross-project-task";
+    private static final List<String> RETIRED_SKILL_SIGNATURES = List.of(
+            "name: cross-project-task",
+            "/api/v1/cross-project-tasks"
+    );
 
     @Value("${navigator.api.external-url:http://localhost:${server.port:8112}}")
     private String navigatorApiBase;
 
     @PostConstruct
     public void deploy() {
-        Path agentSkillsDir = Path.of(System.getProperty("user.home"), ".agents", "skills");
+        Path userHome = Path.of(System.getProperty("user.home"));
+        retireSkills(userHome);
+
+        Path agentSkillsDir = userHome.resolve(".agents").resolve("skills");
         PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
 
         Map<String, String> vars = Map.of(
@@ -46,6 +57,50 @@ public class PlatformSkillDeployer {
         } catch (IOException e) {
             log.warn("Failed to scan platform skills resources: {}", e.getMessage());
         }
+    }
+
+    void retireSkills(Path userHome) {
+        List<Path> retiredSkillDirs = List.of(
+                userHome.resolve(".agents").resolve("skills").resolve(RETIRED_SKILL_NAME),
+                userHome.resolve(".agent").resolve("skills").resolve(RETIRED_SKILL_NAME),
+                userHome.resolve(".claude").resolve("skills").resolve(RETIRED_SKILL_NAME)
+        );
+        retiredSkillDirs.forEach(this::retireSkill);
+    }
+
+    private void retireSkill(Path skillDir) {
+        try {
+            if (!Files.exists(skillDir, LinkOption.NOFOLLOW_LINKS) || isLinkOrReparsePoint(skillDir)) {
+                return;
+            }
+
+            Path skillFile = skillDir.resolve("SKILL.md");
+            if (!Files.isRegularFile(skillFile, LinkOption.NOFOLLOW_LINKS) || isLinkOrReparsePoint(skillFile)) {
+                return;
+            }
+
+            String content = Files.readString(skillFile, StandardCharsets.UTF_8);
+            if (RETIRED_SKILL_SIGNATURES.stream().anyMatch(signature -> !content.contains(signature))) {
+                log.warn("Skipped unrecognized retired skill file: {}", skillFile);
+                return;
+            }
+
+            Files.delete(skillFile);
+            try {
+                Files.delete(skillDir);
+            } catch (java.nio.file.DirectoryNotEmptyException ignored) {
+                // Preserve user-managed files next to the retired SKILL.md.
+            }
+            log.info("Retired platform skill: {}", skillFile);
+        } catch (IOException e) {
+            log.warn("Failed to retire platform skill {}: {}", skillDir, e.getMessage());
+        }
+    }
+
+    private boolean isLinkOrReparsePoint(Path path) throws IOException {
+        BasicFileAttributes attributes = Files.readAttributes(
+                path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        return attributes.isSymbolicLink() || attributes.isOther();
     }
 
     private void deploySkill(Resource resource, Path agentSkillsDir, Map<String, String> vars) {

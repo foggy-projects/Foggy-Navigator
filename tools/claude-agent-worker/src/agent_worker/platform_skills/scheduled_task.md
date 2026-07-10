@@ -57,19 +57,13 @@ echo "NAVIGATOR_TOKEN=${NAVIGATOR_TOKEN:+OK}" && echo "NAVIGATOR_API_BASE=${NAVI
 
 ### 关于 Agent 标识
 
-**前端 `@` 选择**：用户在输入框中 `@agentName` 选择 Agent 时，系统会自动插入 `@agentName(agentId:xxx)` 格式。如果用户已经通过 `@` 选择了 Agent，可以直接从消息中提取 agentId，**跳过 Step 1 的列表查询**。
+配置定时任务时必须查询或创建 Agent，并保存返回的准确 `agentId`。运行时 A2A 调用只允许使用这个 `agentId`，不得把 Agent 名称直接拼入 URL，也不得依赖裸 `@名称`、模糊匹配或语义推断。
 
-**后端支持 agentName 查找**：`POST /api/v1/agents/{identifier}/ask` 的 `identifier` 既可以是 `agentId`，也可以是 `agentName`（后端自动按优先级匹配）。
-
-**多 Agent 协作定时任务**：如果任务需要多个 Agent 协作（如 Agent A 拉代码分析 → Agent B 生成报告），有两种方式：
-1. **串行编排**：为每个 Agent 分别创建 Sharing Key，cron 脚本中按顺序调用
-2. **Prompt 内 `@agent`**：在单个任务的 Prompt 中使用 `@otherAgentName 请帮我...`，当前 Agent 会委派子任务给目标 Agent
+**多 Agent 协作定时任务**：默认为每个目标 Agent 分别创建 Sharing Key，由 cron 脚本按顺序调用。仅当确实需要当前任务在执行中调用另一个 Navigator A2A Agent 时，才使用下方的 scheduled A2A 标记。
 
 ### Step 1: 选择或创建 Agent
 
-**如果用户已通过 `@agentName` 选择了 Agent**：从消息上下文提取 agentId，跳到 Step 1.5。
-
-**否则，列出当前可用 Agent：**
+**列出当前可用 Agent：**
 
 ```bash
 curl -s {{NAVIGATOR_API_BASE}}/api/v1/agents \
@@ -205,6 +199,18 @@ curl -s {{NAVIGATOR_API_BASE}}/api/v1/agents/$AGENT_ID/card \
 - 如日期范围、分析对象、执行窗口等
 
 此时不要在 Sharing Key 中写 `systemPrompt`，保持为空。
+
+**需要嵌套调用 Navigator A2A Agent 时：**
+
+只有 scheduled-task 生成的定时 Prompt 可以加入以下显式块，并且必须填写已经确认的精确目标：
+
+```text
+[NAVIGATOR_SCHEDULED_A2A]
+targetAgentId: agent-xxx
+question: 请完成指定分析并返回可用于本次定时报告的结果
+```
+
+运行时使用 `ask-agent` Skill 提交并等待该 A2A 结果。不得把这个标记用于普通会话、代码并行分析或 Provider 原生子 Agent 委派；没有标记时不得自动调用 Navigator A2A。
 
 **设计示例 — 每日代码提交分析：**
 
