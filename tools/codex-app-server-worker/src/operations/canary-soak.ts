@@ -245,8 +245,9 @@ export function resolveGateThresholds(
     if (!(key in baseline)) throw new CanarySoakError('CANARY_CONFIG_THRESHOLD_UNKNOWN')
     const raw = overrides[key]
     const isRate = key.endsWith('Rate')
-    const number = numeric(raw, isRate ? 0 : 0, isRate ? 1 : Number.MAX_SAFE_INTEGER, 'CANARY_CONFIG_THRESHOLD_INVALID')
-    if (!isRate && !Number.isInteger(number)) throw new CanarySoakError('CANARY_CONFIG_THRESHOLD_INVALID')
+    const number = numeric(raw, 0, isRate ? 1 : Number.MAX_SAFE_INTEGER, 'CANARY_CONFIG_THRESHOLD_INVALID')
+    const integerGate = key !== 'minObservationHours' && !isRate
+    if (integerGate && !Number.isInteger(number)) throw new CanarySoakError('CANARY_CONFIG_THRESHOLD_INVALID')
     const minimumGate = key.startsWith('min')
     if (profile === 'production') {
       const productionValue = PRODUCTION_THRESHOLDS[key as keyof GateThresholds]
@@ -671,7 +672,9 @@ function integer(value: unknown, fallback: number, min: number, max: number, cod
 }
 
 function nonNegativeInteger(value: unknown, code: string): number {
-  return integer(value, 0, 0, Number.MAX_SAFE_INTEGER, code)
+  const result = numeric(value, 0, Number.MAX_SAFE_INTEGER, code)
+  if (!Number.isInteger(result)) throw new CanarySoakError(code)
+  return result
 }
 
 function numeric(value: unknown, min: number, max: number, code: string): number {
