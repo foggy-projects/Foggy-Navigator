@@ -128,7 +128,7 @@ class CodexBizTaskProviderTest {
         verify(codexTaskService).createTaskDirect(argThat(normalized ->
                         "codex-biz-worker".equals(normalized.get("providerType"))
                                 && "tenant/world-sim/scenario-1/actor-1".equals(normalized.get("codexHomeKey"))
-                                && "workspace-write".equals(normalized.get("sandboxMode"))
+                                && "danger-full-access".equals(normalized.get("sandboxMode"))
                                 && "never".equals(normalized.get("approvalPolicy"))
                                 && Boolean.FALSE.equals(normalized.get("networkAccessEnabled"))
                                 && "disabled".equals(normalized.get("webSearchMode"))),
@@ -215,7 +215,7 @@ class CodexBizTaskProviderTest {
         verify(codexTaskService).resumeTask(eq("user-1"), eq("tenant-1"), argThat(normalized ->
                 "codex-biz-worker".equals(normalized.get("providerType"))
                         && "tenant/world-sim/scenario-1/actor-3".equals(normalized.get("codexHomeKey"))
-                        && "workspace-write".equals(normalized.get("sandboxMode"))
+                        && "danger-full-access".equals(normalized.get("sandboxMode"))
                         && "never".equals(normalized.get("approvalPolicy"))
                         && Boolean.FALSE.equals(normalized.get("networkAccessEnabled"))
                         && "disabled".equals(normalized.get("webSearchMode"))));

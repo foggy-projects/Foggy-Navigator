@@ -26,7 +26,7 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class CodexBizTaskProvider implements TaskLookupProvider, TaskCommandProvider, TaskListingProvider {
 
-    private static final String DEFAULT_SANDBOX_MODE = "workspace-write";
+    private static final String DEFAULT_SANDBOX_MODE = "danger-full-access";
     private static final String DEFAULT_APPROVAL_POLICY = "never";
     private static final String DEFAULT_WEB_SEARCH_MODE = "disabled";
     private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(

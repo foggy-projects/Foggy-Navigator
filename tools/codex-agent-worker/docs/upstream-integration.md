@@ -117,7 +117,7 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 | `developer_instructions` | `string` | 否 | Codex SDK developer instructions |
 | `output_schema` | `object` | 否 | Codex SDK turn output schema |
 | `codex_config` | `object` | 否 | 额外 Codex SDK config override |
-| `sandbox_mode` | `string` | 否 | 覆盖 Codex SDK sandbox mode |
+| `sandbox_mode` | `string` | 否 | 覆盖 Codex SDK sandbox mode；默认 `danger-full-access` |
 | `approval_policy` | `string` | 否 | 覆盖 Codex SDK approval policy |
 | `network_access_enabled` | `boolean` | 否 | 是否允许网络访问 |
 | `web_search_mode` | `string` | 否 | 覆盖 Codex web search mode |
@@ -171,7 +171,6 @@ CODEX_ALLOWED_CWDS=/home/sa/workspace
   "prompt": "在 actor workspace 内完成本轮任务",
   "cwd": "/mnt/d/world-sim/scenario-1/actor-1",
   "codex_home_key": "scenario-1.actor-1",
-  "sandbox_mode": "workspace-write",
   "approval_policy": "never",
   "network_access_enabled": false,
   "web_search_mode": "disabled",
@@ -565,7 +564,11 @@ POST /api/v1/tasks/:taskId/abort
 
 ### 9.2 默认行为
 
-当请求未显式传入相关字段时，worker 侧保持 Codex SDK 默认行为或平台默认策略。业务侧需要强约束时，应由 Navigator 的 `codex-biz-worker` route 在请求中显式带上：
+当请求未显式传入 `sandbox_mode` 时，worker 与 Navigator 的 `codex-biz-worker` route 均默认使用 `danger-full-access`，即不启用 Codex 文件系统和命令网络沙箱限制。该模式不会突破 Worker 进程自身的操作系统用户、容器或服务权限边界。
+
+直接调用 worker 时，其他策略字段未显式传入则由 Codex SDK 配置决定。通过 Navigator 的 `codex-biz-worker` route 调用时，默认策略为 `approval_policy=never`、`network_access_enabled=false`、`web_search_mode=disabled`。其中 `network_access_enabled` 只配置 `workspace-write` 沙箱内的命令网络；使用 `danger-full-access` 时不会重新建立命令网络边界。
+
+调用方需要改用受限模式或覆盖策略时，可以显式带上：
 
 - `sandbox_mode`
 - `approval_policy`
