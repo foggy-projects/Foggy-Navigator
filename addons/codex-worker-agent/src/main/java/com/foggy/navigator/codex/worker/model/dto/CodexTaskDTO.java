@@ -19,6 +19,12 @@ import java.time.LocalDateTime;
 public class CodexTaskDTO {
     private String taskId;
     private String workerTaskId;
+    private String runtimeId;
+    private Integer runtimeRevision;
+    private String runtimeType;
+    private String runtimeInstanceId;
+    private Long routingEpoch;
+    private String runtimeAcceptanceState;
     private String sessionId;
     private String directoryId;
     private String workerId;

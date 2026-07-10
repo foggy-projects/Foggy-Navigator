@@ -1,5 +1,6 @@
 package com.foggy.navigator.codex.worker.client;
 
+import com.foggy.navigator.codex.worker.model.dto.CodexTaskAcceptanceDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
@@ -21,9 +22,16 @@ import java.util.Map;
 @Slf4j
 public class CodexWorkerClient {
 
+    public static final String EXPECTED_INSTANCE_HEADER = "X-Codex-Expected-Instance-Id";
+    public static final String ACTUAL_INSTANCE_HEADER = "X-Codex-Instance-Id";
+
     private final WebClient webClient;
 
     public CodexWorkerClient(String baseUrl, String authToken) {
+        this(baseUrl, authToken, null);
+    }
+
+    public CodexWorkerClient(String baseUrl, String authToken, String expectedInstanceId) {
         // 自定义 Netty HttpClient：30 分钟连接超时（SSE 长连接）
         HttpClient httpClient = HttpClient.create()
                 .responseTimeout(Duration.ofMinutes(30));
@@ -36,8 +44,37 @@ public class CodexWorkerClient {
         if (authToken != null && !authToken.isEmpty()) {
             builder.defaultHeader("Authorization", "Bearer " + authToken);
         }
+        if (expectedInstanceId != null && !expectedInstanceId.isBlank()) {
+            String expected = expectedInstanceId.trim();
+            builder.defaultHeader(EXPECTED_INSTANCE_HEADER, expected);
+            builder.filter((request, next) -> next.exchange(request).flatMap(response -> {
+                String actual = response.headers().asHttpHeaders().getFirst(ACTUAL_INSTANCE_HEADER);
+                if (actual != null && expected.equals(actual.trim())) {
+                    return Mono.just(response);
+                }
+                String code = actual == null || actual.isBlank()
+                        ? "CODEX_RUNTIME_INSTANCE_PROOF_MISSING"
+                        : "CODEX_RUNTIME_INSTANCE_PROOF_MISMATCH";
+                return response.releaseBody().then(Mono.error(
+                        new RuntimeInstanceProofException(code, expected, actual)));
+            }));
+        }
 
         this.webClient = builder.build();
+    }
+
+    public static final class RuntimeInstanceProofException extends IllegalStateException {
+        private final String code;
+
+        private RuntimeInstanceProofException(String code, String expected, String actual) {
+            super(code + ": expected=" + expected + ", actual="
+                    + (actual == null || actual.isBlank() ? "<missing>" : actual));
+            this.code = code;
+        }
+
+        public String getCode() {
+            return code;
+        }
     }
 
     /**
@@ -52,10 +89,10 @@ public class CodexWorkerClient {
                 .map(m -> (Map<String, Object>) m)
                 .timeout(Duration.ofSeconds(10))
                 .onErrorResume(e -> {
-                    log.warn("Health check failed: {}", e.getMessage());
+                    log.warn("Codex Worker health check failed: type={}", e.getClass().getSimpleName());
                     Map<String, Object> errorResult = new LinkedHashMap<>();
                     errorResult.put("status", "ERROR");
-                    errorResult.put("error", e.getMessage());
+                    errorResult.put("error", "CODEX_WORKER_HEALTH_UNAVAILABLE");
                     return Mono.just(errorResult);
                 });
     }
@@ -84,6 +121,38 @@ public class CodexWorkerClient {
                 null, null, null, null, null, null, null, null, null, null);
     }
 
+    /**
+     * Runtime capability manifest. Legacy SDK Workers may return 404; callers must
+     * treat that as a legacy lane rather than fabricating app-server support.
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getCapabilities() {
+        return webClient.get()
+                .uri("/api/v1/capabilities")
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(manifest -> (Map<String, Object>) manifest)
+                .timeout(Duration.ofSeconds(10));
+    }
+
+    /**
+     * Idempotently accepts an app-server task. Execution subscription is a separate
+     * operation so Navigator can persist the returned worker task id first.
+     */
+    public Mono<CodexTaskAcceptanceDTO> createTask(String idempotencyKey, Map<String, Object> body) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return Mono.error(new IllegalArgumentException("idempotencyKey is required"));
+        }
+        return webClient.post()
+                .uri("/api/v1/tasks")
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(CodexTaskAcceptanceDTO.class)
+                .timeout(Duration.ofSeconds(15));
+    }
+
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd,
                                                       String codexThreadId, String model,
                                                       Integer maxTurns, String images,
@@ -98,8 +167,37 @@ public class CodexWorkerClient {
                                                       String approvalPolicy,
                                                       Boolean networkAccessEnabled,
                                                       String webSearchMode,
-                                                      Map<String, Object> businessRuntimeContext,
-                                                      List<String> additionalDirectories) {
+                                                       Map<String, Object> businessRuntimeContext,
+                                                       List<String> additionalDirectories) {
+        Map<String, Object> body = buildTaskRequest(prompt, cwd, codexThreadId, model, maxTurns,
+                images, attachments, apiKey, baseUrl, envVars, codexHomeKey,
+                developerInstructions, outputSchema, codexConfig, sandboxMode, approvalPolicy,
+                networkAccessEnabled, webSearchMode, businessRuntimeContext, additionalDirectories);
+
+        return webClient.post()
+                .uri("/api/v1/query")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToFlux(new org.springframework.core.ParameterizedTypeReference<ServerSentEvent<String>>() {});
+    }
+
+    public Map<String, Object> buildTaskRequest(String prompt, String cwd,
+                                                 String codexThreadId, String model,
+                                                 Integer maxTurns, String images,
+                                                 List<Map<String, Object>> attachments,
+                                                 String apiKey, String baseUrl,
+                                                 Map<String, String> envVars,
+                                                 String codexHomeKey,
+                                                 String developerInstructions,
+                                                 Map<String, Object> outputSchema,
+                                                 Map<String, Object> codexConfig,
+                                                 String sandboxMode,
+                                                 String approvalPolicy,
+                                                 Boolean networkAccessEnabled,
+                                                 String webSearchMode,
+                                                 Map<String, Object> businessRuntimeContext,
+                                                 List<String> additionalDirectories) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) body.put("cwd", cwd);
@@ -111,7 +209,8 @@ public class CodexWorkerClient {
                 Object parsed = new com.fasterxml.jackson.databind.ObjectMapper().readValue(images, List.class);
                 body.put("images", parsed);
             } catch (Exception e) {
-                log.warn("Failed to parse images JSON, skipping: {}", e.getMessage());
+                throw new IllegalArgumentException(
+                        "INVALID_CODEX_IMAGES: images must be a valid JSON array", e);
             }
         }
         if (attachments != null && !attachments.isEmpty()) {
@@ -136,13 +235,7 @@ public class CodexWorkerClient {
         if (additionalDirectories != null && !additionalDirectories.isEmpty()) {
             body.put("additional_directories", additionalDirectories);
         }
-
-        return webClient.post()
-                .uri("/api/v1/query")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body)
-                .retrieve()
-                .bodyToFlux(new org.springframework.core.ParameterizedTypeReference<ServerSentEvent<String>>() {});
+        return body;
     }
 
     /**
@@ -178,11 +271,41 @@ public class CodexWorkerClient {
     /**
      * 中止任务
      */
-    public Mono<Void> abortTask(String taskId) {
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> abortTask(String taskId) {
         return webClient.post()
                 .uri("/api/v1/tasks/{taskId}/abort", taskId)
-                .retrieve()
-                .bodyToMono(Void.class)
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful() || response.statusCode().value() == 409) {
+                        return response.bodyToMono(Map.class)
+                                .map(body -> (Map<String, Object>) body);
+                    }
+                    return response.createException().flatMap(Mono::error);
+                })
+                .timeout(Duration.ofSeconds(10));
+    }
+
+    /**
+     * Removes durable payload/event projections for a terminal app-server task.
+     * A missing remote task is an idempotent success for Navigator deletion.
+     *
+     * @return {@code true} when the Worker removed the task, {@code false} for HTTP 404
+     */
+    public Mono<Boolean> deleteTask(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return Mono.error(new IllegalArgumentException("taskId is required"));
+        }
+        return webClient.delete()
+                .uri("/api/v1/tasks/{taskId}", taskId)
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.releaseBody().thenReturn(true);
+                    }
+                    if (response.statusCode().value() == 404) {
+                        return response.releaseBody().thenReturn(false);
+                    }
+                    return response.createException().flatMap(Mono::error);
+                })
                 .timeout(Duration.ofSeconds(10));
     }
 

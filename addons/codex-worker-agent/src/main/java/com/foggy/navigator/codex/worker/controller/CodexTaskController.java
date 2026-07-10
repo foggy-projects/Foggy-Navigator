@@ -6,6 +6,8 @@ import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.codex.worker.service.CodexStreamRelay;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
+import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggyframework.core.ex.RX;
@@ -31,6 +33,7 @@ public class CodexTaskController {
     private final CodexStreamRelay streamRelay;
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
+    private final CodexRuntimeRegistryService runtimeRegistryService;
 
     /**
      * 创建并启动 Codex 任务
@@ -75,16 +78,15 @@ public class CodexTaskController {
                     task.getCwd(), "Codex thread 尚未建立，暂时没有文件线索"));
         }
 
-        CodexConfig codexConfig = workerManagementFacade.getCodexConfig(task.getWorkerId());
-        if (codexConfig == null || codexConfig.getBaseUrl() == null || codexConfig.getBaseUrl().isBlank()) {
-            return RX.failA("Worker 未配置 Codex 服务");
-        }
-
         try {
-            var client = clientFactory.getOrCreate(
-                    task.getWorkerId() + ":codex",
-                    codexConfig.getBaseUrl(),
-                    codexConfig.getAuthToken());
+            var runtime = runtimeRegistryService.resolveBoundRuntime(
+                    task.getRuntimeId(), task.getRuntimeRevision(), task.getWorkerId(),
+                    task.getRuntimeInstanceId());
+            var client = runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER
+                    ? clientFactory.getOrCreate(
+                            "runtime:" + runtime.getRuntimeId() + ":" + runtime.getRuntimeRevision(),
+                            runtime.getEndpointUrl(), runtime.getAuthToken(), runtime.getInstanceId())
+                    : legacyClient(task.getWorkerId());
             Map<String, Object> workerResult = client.getSessionFileHints(
                             task.getCodexThreadId(), days, from, to)
                     .block(Duration.ofSeconds(10));
@@ -98,9 +100,19 @@ public class CodexTaskController {
             result.put("cwd", task.getCwd());
             return RX.ok(result);
         } catch (Exception e) {
-            log.warn("Failed to get Codex session file hints: taskId={}, error={}", taskId, e.getMessage());
-            return RX.failA("获取 Codex 文件线索失败: " + e.getMessage());
+            log.warn("Failed to get Codex session file hints: taskId={}, type={}",
+                    taskId, e.getClass().getSimpleName());
+            return RX.failA("获取 Codex 文件线索失败: CODEX_SESSION_FILE_HINTS_UNAVAILABLE");
         }
+    }
+
+    private com.foggy.navigator.codex.worker.client.CodexWorkerClient legacyClient(String workerId) {
+        CodexConfig codexConfig = workerManagementFacade.getCodexConfig(workerId);
+        if (codexConfig == null || codexConfig.getBaseUrl() == null || codexConfig.getBaseUrl().isBlank()) {
+            throw new IllegalStateException("Worker 未配置 Codex 服务");
+        }
+        return clientFactory.getOrCreate(
+                workerId + ":codex", codexConfig.getBaseUrl(), codexConfig.getAuthToken());
     }
 
     /**
@@ -130,7 +142,7 @@ public class CodexTaskController {
         }
 
         taskService.abortTask(taskId);
-        return RX.ok(Map.of("taskId", taskId, "status", "ABORTED"));
+        return RX.ok(Map.of("taskId", taskId, "status", taskService.getTaskEntity(taskId).getStatus()));
     }
 
     /**

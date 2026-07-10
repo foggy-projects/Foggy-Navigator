@@ -14,8 +14,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
@@ -72,6 +75,57 @@ class SessionEventListenerTest {
                 .agentId("agent-1")
                 .type(MessageType.STATE_SYNC)
                 .payload(Map.of("subtype", "system", "content", "worker started"))
+                .build();
+
+        listener.handleMessage(agentMessage);
+
+        verify(sessionManager, never()).addMessage(eq("session-1"), org.mockito.ArgumentMatchers.any());
+        verify(sseEmitter).sendSessionEvent("session-1", agentMessage);
+    }
+
+    @Test
+    void durableHandlingPropagatesPersistenceFailureAndDoesNotEmitSse() {
+        SessionEventListener listener = new SessionEventListener(sessionManager, sseEmitter);
+        AgentMessage agentMessage = AgentMessage.of(
+                "session-1", "codex-worker", MessageType.TEXT_COMPLETE,
+                Map.of("content", "assistant reply"));
+        doThrow(new IllegalStateException("database unavailable"))
+                .when(sessionManager).addMessage(eq("session-1"), org.mockito.ArgumentMatchers.any());
+
+        assertThrows(SessionEventListener.MessagePersistenceException.class,
+                () -> listener.handleMessageDurably(agentMessage));
+
+        verify(sseEmitter, never()).sendSessionEvent("session-1", agentMessage);
+    }
+
+    @Test
+    void durableHandlingIsNotRepeatedByAsyncEventEntryPoint() {
+        SessionEventListener listener = new SessionEventListener(sessionManager, sseEmitter);
+        AgentMessage agentMessage = AgentMessage.of(
+                "session-1", "codex-worker", MessageType.TEXT_COMPLETE,
+                Map.of("content", "assistant reply"));
+
+        listener.handleMessageDurably(agentMessage);
+        listener.onAgentMessage(agentMessage);
+
+        verify(sessionManager, times(1))
+                .addMessage(eq("session-1"), org.mockito.ArgumentMatchers.any());
+        verify(sseEmitter, times(1)).sendSessionEvent("session-1", agentMessage);
+    }
+
+    @Test
+    void nativeSubtaskUpdateIsPushedButNotPersistedAsChatHistory() {
+        SessionEventListener listener = new SessionEventListener(sessionManager, sseEmitter);
+        AgentMessage agentMessage = AgentMessage.builder()
+                .messageId("native-subtask:task-1:12")
+                .sessionId("session-1")
+                .taskId("task-1")
+                .agentId("codex-worker")
+                .type(MessageType.NATIVE_SUBTASK_UPDATE)
+                .payload(Map.of(
+                        "taskId", "task-1",
+                        "lastEventSeq", 12,
+                        "subtask", Map.of("subtaskId", "child-1", "status", "running")))
                 .build();
 
         listener.handleMessage(agentMessage);

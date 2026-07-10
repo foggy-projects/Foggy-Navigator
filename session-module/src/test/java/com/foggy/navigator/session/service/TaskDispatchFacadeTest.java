@@ -12,6 +12,7 @@ import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
@@ -72,6 +73,8 @@ class TaskDispatchFacadeTest {
     @Mock
     private SessionTaskRepository sessionTaskRepository;
     @Mock
+    private NativeSubtaskStateRepository nativeSubtaskStateRepository;
+    @Mock
     private WorkingDirectoryRepository workingDirectoryRepository;
     @Mock
     private AgentConversationContextRepository agentConversationContextRepository;
@@ -127,6 +130,30 @@ class TaskDispatchFacadeTest {
         assertEquals("agent-2", result.getAgentId());
         verify(agentResolver).resolveAgent(eq("agent-2"), any());
         verify(bindingService).getOrBind("session-1", "agent-2", "claude-worker", "SESSION_AGENT");
+    }
+
+    @Test
+    void createTaskRejectsAnExistingSessionOwnedByAnotherUserBeforeRouting() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-private")
+                .workerId("worker-1")
+                .prompt("inject")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("attacker")
+                .sessionId("session-private")
+                .requestSource("UI")
+                .build();
+        SessionEntity session = new SessionEntity();
+        session.setId("session-private");
+        session.setUserId("owner");
+        when(sessionRepository.findById("session-private")).thenReturn(Optional.of(session));
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class, () -> facade.createTask(request, context));
+
+        assertTrue(error.getMessage().contains("SESSION_ACCESS_DENIED"));
+        verifyNoInteractions(agentResolver, bindingService, taskQueryProvider);
     }
 
     @Test
@@ -2410,6 +2437,7 @@ class TaskDispatchFacadeTest {
     @Test
     void deleteTask_cleansUnifiedSessionStoreWhenProviderTaskIsAlreadyMissing() {
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(facade, "nativeSubtaskStateRepository", nativeSubtaskStateRepository);
 
         SessionTaskEntity staleTask = sessionTask(
                 "task-stale-1", "session-stale-1", "claude-worker", "worker-1", "dir-1",
@@ -2421,6 +2449,8 @@ class TaskDispatchFacadeTest {
 
         when(sessionTaskRepository.findByTaskId("task-stale-1"))
                 .thenAnswer(invocation -> Optional.ofNullable(store.get("task-stale-1")));
+        when(sessionTaskRepository.findByTaskIdAndUserId("task-stale-1", "user-1"))
+                .thenReturn(Optional.of(staleTask));
         when(sessionTaskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc("dir-1", "user-1"))
                 .thenAnswer(invocation -> store.values().stream()
                         .filter(entity -> "dir-1".equals(entity.getDirectoryId()) && "user-1".equals(entity.getUserId()))
@@ -2444,6 +2474,54 @@ class TaskDispatchFacadeTest {
         assertEquals(List.of(), afterDelete.get("content"));
         verify(taskQueryProvider).deleteTask("user-1", "task-stale-1");
         verify(sessionTaskRepository).deleteByTaskId("task-stale-1");
+        verify(nativeSubtaskStateRepository).deleteByTaskId("task-stale-1");
+    }
+
+    @Test
+    void deleteTask_keepsUnifiedProjectionAsRetryMarkerWhenNativeCleanupFails() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(facade, "nativeSubtaskStateRepository", nativeSubtaskStateRepository);
+        SessionTaskEntity staleTask = sessionTask(
+                "task-stale-retry", "session-stale-retry", "claude-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 7, 10, 12, 30), null
+        );
+        when(sessionTaskRepository.findByTaskId("task-stale-retry")).thenReturn(Optional.of(staleTask));
+        when(sessionTaskRepository.findByTaskIdAndUserId("task-stale-retry", "user-1"))
+                .thenReturn(Optional.of(staleTask));
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        doThrow(new IllegalArgumentException("Task not found: task-stale-retry"))
+                .when(taskQueryProvider).deleteTask("user-1", "task-stale-retry");
+        doThrow(new IllegalStateException("native store unavailable"))
+                .when(nativeSubtaskStateRepository).deleteByTaskId("task-stale-retry");
+
+        assertThrows(IllegalStateException.class,
+                () -> facade.deleteTask("task-stale-retry", "user-1"));
+
+        verify(sessionTaskRepository, never()).deleteByTaskId("task-stale-retry");
+    }
+
+    @Test
+    void deleteTask_doesNotCleanAnotherUsersProjectionWhenProviderReportsMissing() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(facade, "nativeSubtaskStateRepository", nativeSubtaskStateRepository);
+        SessionTaskEntity otherUsersTask = sessionTask(
+                "task-owned-by-other", "session-other", "claude-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 7, 10, 12, 0), null
+        );
+        otherUsersTask.setUserId("owner");
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        when(sessionTaskRepository.findByTaskId("task-owned-by-other"))
+                .thenReturn(Optional.of(otherUsersTask));
+        when(sessionTaskRepository.findByTaskIdAndUserId("task-owned-by-other", "attacker"))
+                .thenReturn(Optional.empty());
+        doThrow(new IllegalArgumentException("Task not found: task-owned-by-other"))
+                .when(taskQueryProvider).deleteTask("attacker", "task-owned-by-other");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> facade.deleteTask("task-owned-by-other", "attacker"));
+
+        verify(sessionTaskRepository, never()).deleteByTaskId("task-owned-by-other");
+        verify(nativeSubtaskStateRepository, never()).deleteByTaskId("task-owned-by-other");
     }
 
     private static final class WorkerSessionOnlyProvider implements WorkerSessionQueryProvider {

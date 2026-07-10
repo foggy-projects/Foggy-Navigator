@@ -3,10 +3,12 @@ package com.foggy.navigator.session.controller;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.dto.NativeSubtaskSnapshotResponseDTO;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.TaskDispatchRequest;
+import com.foggy.navigator.session.service.NativeSubtaskQueryService;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggyframework.core.ex.RX;
@@ -36,12 +38,14 @@ class TaskControllerTest {
     private TaskDispatchFacade taskDispatchFacade;
     @Mock
     private AgentSubmitPipeline agentSubmitPipeline;
+    @Mock
+    private NativeSubtaskQueryService nativeSubtaskQueryService;
 
     private TaskController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new TaskController(taskDispatchFacade, agentSubmitPipeline);
+        controller = new TaskController(taskDispatchFacade, agentSubmitPipeline, nativeSubtaskQueryService);
         UserContext.setCurrentUser(CurrentUser.builder()
                 .userId(USER_ID)
                 .tenantId(TENANT_ID)
@@ -107,6 +111,39 @@ class TaskControllerTest {
         RX<DispatchTaskDTO> result = controller.getTask("task-999");
 
         assertNull(result.getData());
+    }
+
+    @Test
+    void getNativeSubtasks_returnsSnapshotAfterOwnershipCheck() {
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
+                .taskId("task-1")
+                .sessionId("session-1")
+                .providerType("codex-worker")
+                .build();
+        NativeSubtaskSnapshotResponseDTO snapshot = NativeSubtaskSnapshotResponseDTO.builder()
+                .contractVersion(1)
+                .taskId("task-1")
+                .subtasks(List.of())
+                .build();
+        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(task));
+        when(nativeSubtaskQueryService.getSnapshot(task)).thenReturn(snapshot);
+
+        RX<NativeSubtaskSnapshotResponseDTO> result = controller.getNativeSubtasks("task-1");
+
+        assertSame(snapshot, result.getData());
+        verify(nativeSubtaskQueryService).getSnapshot(task);
+    }
+
+    @Test
+    void getNativeSubtasks_rejectsUnknownOrUnownedTask() {
+        when(taskDispatchFacade.getTask(eq("task-other"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.empty());
+
+        RX<NativeSubtaskSnapshotResponseDTO> result = controller.getNativeSubtasks("task-other");
+
+        assertNull(result.getData());
+        verifyNoInteractions(nativeSubtaskQueryService);
     }
 
     @Test

@@ -40,6 +40,7 @@ public enum MessageType {
 
     // ===== 任务通知 =====
     TASK_COMPLETED,         // 子任务完成通知
+    NATIVE_SUBTASK_UPDATE,  // 原生 Coding Agent 子任务状态快照（不创建 Navigator 子任务）
     CHECKPOINT,             // 文件快照点（Claude Code file checkpointing）
 
     // ===== 生命周期 =====

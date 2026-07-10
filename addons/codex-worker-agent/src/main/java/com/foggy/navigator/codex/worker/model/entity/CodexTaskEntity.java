@@ -29,6 +29,31 @@ public class CodexTaskEntity {
     @Column(length = 128)
     private String workerTaskId;
 
+    /** Immutable runtime affinity selected before the task is accepted. */
+    @Column(length = 128)
+    private String runtimeId;
+
+    private Integer runtimeRevision;
+
+    @Column(length = 32)
+    private String runtimeType;
+
+    @Column(length = 128)
+    private String runtimeInstanceId;
+
+    private Long routingEpoch;
+
+    /** PREPARED | ACCEPTING | ACCEPTED | SUBSCRIBED | COMMITTED | UNKNOWN | ABORT_REQUESTED | ABORTED_BEFORE_ACCEPT | TERMINAL | DELETE_REQUESTED */
+    @Column(length = 32)
+    private String runtimeAcceptanceState;
+
+    @Column(length = 64)
+    private String runtimeRequestHash;
+
+    /** Encrypted exact request envelope used for idempotent acceptance recovery. */
+    @Column(columnDefinition = "LONGTEXT")
+    private String runtimeRequestCiphertext;
+
     /** Foggy session ID */
     @Column(length = 64)
     private String sessionId;
@@ -126,6 +151,12 @@ public class CodexTaskEntity {
         }
         if (source == null) {
             source = "PLATFORM";
+        }
+        if (runtimeType == null) {
+            runtimeType = "SDK_EXEC";
+        }
+        if (runtimeAcceptanceState == null && "APP_SERVER".equals(runtimeType)) {
+            runtimeAcceptanceState = "PREPARED";
         }
     }
 

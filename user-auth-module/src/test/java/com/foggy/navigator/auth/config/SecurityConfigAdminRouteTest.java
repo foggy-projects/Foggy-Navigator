@@ -9,8 +9,10 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -38,6 +40,12 @@ class SecurityConfigAdminRouteTest {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    void codexRuntimeRoute_isPassedThroughToControllerAuthGuard() throws Exception {
+        mockMvc.perform(get("/api/v1/codex-runtimes").param("workerId", "worker-1"))
+                .andExpect(status().isOk());
+    }
+
     @RestController
     static class AdminRouteController {
 
@@ -48,6 +56,11 @@ class SecurityConfigAdminRouteTest {
 
         @PostMapping("/api/v1/admin/private-repair")
         String privateRepair() {
+            return "ok";
+        }
+
+        @GetMapping("/api/v1/codex-runtimes")
+        String listCodexRuntimes() {
             return "ok";
         }
     }

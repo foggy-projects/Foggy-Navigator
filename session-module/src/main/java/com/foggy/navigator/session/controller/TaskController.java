@@ -3,10 +3,12 @@ package com.foggy.navigator.session.controller;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.dto.NativeSubtaskSnapshotResponseDTO;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.agent.pipeline.AgentTaskSubmitResult;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.TaskDispatchRequest;
+import com.foggy.navigator.session.service.NativeSubtaskQueryService;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggyframework.core.ex.RX;
@@ -32,6 +34,7 @@ public class TaskController {
 
     private final TaskDispatchFacade taskDispatchFacade;
     private final AgentSubmitPipeline agentSubmitPipeline;
+    private final NativeSubtaskQueryService nativeSubtaskQueryService;
 
     /**
      * 创建任务（统一入口）
@@ -94,6 +97,24 @@ public class TaskController {
                 .build();
 
         return taskDispatchFacade.getTask(taskId, context)
+                .map(RX::ok)
+                .orElseGet(() -> RX.failA("Task not found: " + taskId));
+    }
+
+    /**
+     * Returns the latest provider-native subtask states for a task owned by the current user.
+     * Native subtasks are execution details and are not independent Navigator tasks.
+     */
+    @GetMapping("/{taskId}/native-subtasks")
+    public RX<NativeSubtaskSnapshotResponseDTO> getNativeSubtasks(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId(userId)
+                .requestSource("UI")
+                .build();
+
+        return taskDispatchFacade.getTask(taskId, context)
+                .map(nativeSubtaskQueryService::getSnapshot)
                 .map(RX::ok)
                 .orElseGet(() -> RX.failA("Task not found: " + taskId));
     }

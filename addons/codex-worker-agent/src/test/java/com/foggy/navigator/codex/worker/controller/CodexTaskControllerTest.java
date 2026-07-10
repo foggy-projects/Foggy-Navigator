@@ -3,10 +3,13 @@ package com.foggy.navigator.codex.worker.controller;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.codex.worker.service.CodexStreamRelay;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
+import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.model.CodexConfig;
@@ -30,6 +33,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -48,6 +52,9 @@ class CodexTaskControllerTest {
     private CodexWorkerClientFactory clientFactory;
 
     @Mock
+    private CodexRuntimeRegistryService runtimeRegistryService;
+
+    @Mock
     private CodexWorkerClient client;
 
     private CodexTaskController controller;
@@ -58,7 +65,8 @@ class CodexTaskControllerTest {
                 .userId("user-1")
                 .tenantId("tenant-1")
                 .build());
-        controller = new CodexTaskController(taskService, streamRelay, workerManagementFacade, clientFactory);
+        controller = new CodexTaskController(
+                taskService, streamRelay, workerManagementFacade, clientFactory, runtimeRegistryService);
     }
 
     @AfterEach
@@ -95,6 +103,9 @@ class CodexTaskControllerTest {
         workerResult.put("total", 1);
 
         when(taskService.getTaskEntity("task-1")).thenReturn(task);
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "legacy-sdk:worker-1", 1, "worker-1", null))
+                .thenReturn(CodexRuntimeBinding.legacySdk("worker-1"));
         when(workerManagementFacade.getCodexConfig("worker-1")).thenReturn(CodexConfig.builder()
                 .baseUrl("http://localhost:3051")
                 .authToken("worker-token")
@@ -128,6 +139,37 @@ class CodexTaskControllerTest {
         verifyNoInteractions(workerManagementFacade, clientFactory, client);
     }
 
+    @Test
+    void getSessionFileHintsUsesBoundAppServerRevision() {
+        CodexTaskEntity task = task("user-1");
+        task.setRuntimeId("app-main");
+        task.setRuntimeType("APP_SERVER");
+        task.setRuntimeInstanceId("instance-a");
+        when(taskService.getTaskEntity("task-1")).thenReturn(task);
+        CodexRuntimeBinding binding = CodexRuntimeBinding.builder()
+                .runtimeId("app-main")
+                .runtimeRevision(1)
+                .runtimeType(CodexRuntimeType.APP_SERVER)
+                .workerId("worker-1")
+                .endpointUrl("http://127.0.0.1:3062")
+                .authToken("runtime-token")
+                .instanceId("instance-a")
+                .build();
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a")).thenReturn(binding);
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:1", "http://127.0.0.1:3062", "runtime-token", "instance-a"))
+                .thenReturn(client);
+        when(client.getSessionFileHints("thread-1", 30, null, null))
+                .thenReturn(Mono.just(Map.of("files", List.of(), "total", 0)));
+
+        controller.getSessionFileHints("task-1", 30, null, null);
+
+        verify(clientFactory).getOrCreate(
+                "runtime:app-main:1", "http://127.0.0.1:3062", "runtime-token", "instance-a");
+        verify(workerManagementFacade, never()).getCodexConfig("worker-1");
+    }
+
     private CodexTaskEntity task(String userId) {
         CodexTaskEntity task = new CodexTaskEntity();
         task.setTaskId("task-1");
@@ -138,6 +180,9 @@ class CodexTaskControllerTest {
         task.setTenantId("tenant-1");
         task.setCwd("D:/repo");
         task.setCodexThreadId("thread-1");
+        task.setRuntimeId("legacy-sdk:worker-1");
+        task.setRuntimeRevision(1);
+        task.setRuntimeType("SDK_EXEC");
         task.setStatus("COMPLETED");
         return task;
     }

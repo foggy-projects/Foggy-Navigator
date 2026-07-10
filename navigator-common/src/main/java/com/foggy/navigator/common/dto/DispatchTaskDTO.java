@@ -17,6 +17,12 @@ public class DispatchTaskDTO {
     // ── 公共字段 ──
     private String taskId;
     private String workerTaskId;
+    private String runtimeId;
+    private Integer runtimeRevision;
+    private String runtimeType;
+    private String runtimeInstanceId;
+    private Long routingEpoch;
+    private String runtimeAcceptanceState;
     private String sessionId;
     private String parentSessionId;
     private String workerId;

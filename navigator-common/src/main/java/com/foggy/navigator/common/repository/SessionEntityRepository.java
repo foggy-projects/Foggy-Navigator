@@ -2,9 +2,11 @@ package com.foggy.navigator.common.repository;
 
 import com.foggy.navigator.common.entity.SessionEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
 
 import java.util.List;
 import java.util.Optional;
@@ -12,6 +14,11 @@ import java.util.Optional;
 public interface SessionEntityRepository extends JpaRepository<SessionEntity, String> {
 
     Optional<SessionEntity> findByIdAndUserId(String id, String userId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM SessionEntity s WHERE s.id = :id AND s.userId = :userId")
+    Optional<SessionEntity> findByIdAndUserIdForUpdate(@Param("id") String id,
+                                                       @Param("userId") String userId);
 
     @Query("SELECT s.id FROM SessionEntity s " +
            "WHERE s.userId = :userId AND s.interactionState = :state AND s.deletedAt IS NULL")

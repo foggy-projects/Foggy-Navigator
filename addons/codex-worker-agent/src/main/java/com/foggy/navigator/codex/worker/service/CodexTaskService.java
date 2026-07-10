@@ -1,6 +1,10 @@
 package com.foggy.navigator.codex.worker.service;
 
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
+import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
+import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
@@ -19,6 +23,7 @@ import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
@@ -40,11 +45,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -85,6 +92,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private final CodexTaskRepository taskRepository;
     private final WorkerManagementFacade workerManagementFacade;
     private final ApplicationEventPublisher eventPublisher;
+    private final CodexWorkerClientFactory clientFactory;
+    private final CodexTaskRuntimeStateService taskRuntimeStateService;
 
     @Autowired(required = false)
     @Nullable
@@ -104,11 +113,19 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     @Autowired(required = false)
     @Nullable
+    private NativeSubtaskStateRepository nativeSubtaskStateRepository;
+
+    @Autowired(required = false)
+    @Nullable
     private CodexCodingAgentRepository codingAgentRepository;
 
     @Autowired
     @Lazy
     private CodexStreamRelay streamRelay;
+
+    @Autowired(required = false)
+    @Nullable
+    private CodexRuntimeRegistryService runtimeRegistryService;
 
     /**
      * 创建并启动 Codex 任务
@@ -163,11 +180,19 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         }
 
         workerManagementFacade.validateWorkerAccess(userId, tenantId, form.getWorkerId());
+        validateExistingSession(userId, sessionId);
+        lockExistingSessionForResume(userId, sessionId);
+        if (sessionEntityRepository != null) {
+            String lockedCodexThreadId = ProviderStateCodec.readStringOrNull(
+                    sessionEntityRepository.findById(sessionId)
+                            .map(SessionEntity::getProviderStateJson).orElse(null),
+                    ProviderStateCodec.FIELD_CODEX_THREAD_ID);
+            form.setCodexThreadId(lockedCodexThreadId);
+        }
 
         if (form.getCodexThreadId() == null || form.getCodexThreadId().isBlank()) {
             // Platform-only rewind clears the native Codex thread. Continue by starting
             // a new Codex thread while reusing the Navigator session.
-            validateExistingSession(userId, sessionId);
             CodexTaskDTO task = createAndStartTask(userId, tenantId, form, sessionId);
             return getTaskByIdForProvider(task.getTaskId(), form.getProviderType()).orElseThrow();
         }
@@ -181,7 +206,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
         }
 
-        validateExistingSession(userId, sessionId);
         CodexTaskDTO task = createAndStartTask(userId, tenantId, form, sessionId);
         return getTaskByIdForProvider(task.getTaskId(), form.getProviderType()).orElseThrow();
     }
@@ -193,6 +217,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         }
         if (form.getPrompt() == null || form.getPrompt().isBlank()) {
             throw new IllegalArgumentException("prompt is required");
+        }
+        if (existingSessionId != null && !existingSessionId.isBlank()) {
+            validateExistingSession(userId, existingSessionId);
         }
         String effectiveProviderType = normalizeProviderType(form.getProviderType());
         form.setProviderType(effectiveProviderType);
@@ -248,6 +275,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         entity.setStatus("RUNNING");
         entity.setSource("PLATFORM");
         entity.setCodexThreadId(form.getCodexThreadId());
+        applyRuntimeBinding(entity, resolveRuntimeBinding(
+                form.getWorkerId(), entity.getModel(), effectiveProviderType, taskId, existingSessionId,
+                runtimeRequirements(form, effectiveProviderType)));
 
         persistTask(entity);
         log.info("Created Codex task: taskId={}, providerType={}, workerId={}, sessionId={}",
@@ -256,7 +286,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         // 解析 auth + envVars（apiKey + baseUrl + 环境变量，无配置时 Worker 使用本地凭证）
         CodexAuthResult auth = resolveCodexAuth(effectiveModelConfigId);
         log.info(
-                "Resolved Codex task auth: taskId={}, agentId={}, modelConfigId={}, modelConfigSource={}, model={}, modelSource={}, hasApiKey={}, baseUrl={}, envVarKeys={}",
+                "Resolved Codex task auth: taskId={}, agentId={}, modelConfigId={}, modelConfigSource={}, model={}, modelSource={}, hasApiKey={}, hasBaseUrl={}, envVarKeys={}",
                 taskId,
                 effectiveAgentId,
                 effectiveModelConfigId,
@@ -264,7 +294,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 entity.getModel(),
                 effectiveModelResolution.source(),
                 auth.apiKey != null && !auth.apiKey.isBlank(),
-                auth.baseUrl,
+                auth.baseUrl != null && !auth.baseUrl.isBlank(),
                 auth.envVars != null ? auth.envVars.keySet() : List.of()
         );
 
@@ -318,8 +348,19 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      */
     @Transactional
     public String createTrackedSyncTask(String userId, String workerId, String sessionId,
+                                          String prompt, String cwd, String directoryId,
+                                          String codexThreadId) {
+        return createTrackedSyncTask(userId, workerId, sessionId, prompt, cwd,
+                directoryId, codexThreadId, null);
+    }
+
+    @Transactional
+    public String createTrackedSyncTask(String userId, String workerId, String sessionId,
                                          String prompt, String cwd, String directoryId,
-                                         String codexThreadId) {
+                                         String codexThreadId, String model) {
+        if (sessionId != null && !sessionId.isBlank()) {
+            validateExistingSession(userId, sessionId);
+        }
         String taskId = IdGenerator.shortId();
         // Codex CLI (Rust) 不接受 Windows 反斜杠路径
         String normalizedCwd = cwd != null ? cwd.replace('\\', '/') : null;
@@ -335,6 +376,17 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         entity.setStatus("RUNNING");
         entity.setSource("PLATFORM");
         entity.setCodexThreadId(codexThreadId);
+        entity.setModel(model);
+        CodexRuntimeBinding binding;
+        if (sessionId != null && !sessionId.isBlank()) {
+            binding = resolveRuntimeBinding(
+                    workerId, model, CODEX_PROVIDER_TYPE, taskId, sessionId);
+        } else if (codexThreadId != null && !codexThreadId.isBlank()) {
+            binding = resolveThreadRuntimeBinding(codexThreadId, workerId, userId);
+        } else {
+            binding = resolveRuntimeBinding(workerId, model, CODEX_PROVIDER_TYPE, taskId, null);
+        }
+        applyRuntimeBinding(entity, binding);
 
         persistTask(entity);
         log.info("Created tracked sync Codex task: taskId={}, sessionId={}", taskId, sessionId);
@@ -347,19 +399,32 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Transactional
     public void recordWorkerProgress(String taskId, String workerTaskId, String codexThreadId,
                                       String model, Integer ackSeq) {
-        recordWorkerProgress(taskId, workerTaskId, codexThreadId, model, ackSeq, false);
+        recordWorkerProgress(taskId, workerTaskId, codexThreadId, model, ackSeq, false, false);
     }
 
     @Transactional
     public void recordWorkerProgress(String taskId, String workerTaskId, String codexThreadId,
                                       String model, Integer ackSeq, boolean userVisibleOutput) {
-        CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        recordWorkerProgress(taskId, workerTaskId, codexThreadId, model, ackSeq,
+                userVisibleOutput, userVisibleOutput);
+    }
+
+    @Transactional
+    public void recordWorkerProgress(String taskId, String workerTaskId, String codexThreadId,
+                                      String model, Integer ackSeq, boolean userVisibleOutput,
+                                      boolean executionCommitted) {
+        CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
         if (entity == null) {
             log.warn("recordWorkerProgress: task not found: {}", taskId);
             return;
         }
 
         if (workerTaskId != null && !workerTaskId.isBlank()) {
+            if (entity.getWorkerTaskId() != null && !entity.getWorkerTaskId().isBlank()
+                    && !entity.getWorkerTaskId().equals(workerTaskId)) {
+                throw new IllegalStateException(
+                        "CODEX_RUNTIME_IDEMPOTENCY_CONFLICT: worker task id changed for " + taskId);
+            }
             entity.setWorkerTaskId(workerTaskId);
         }
         if (codexThreadId != null && !codexThreadId.isBlank()) {
@@ -371,6 +436,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (ackSeq != null) {
             Integer current = entity.getLastAckedSeq();
             entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
+        }
+        if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())
+                && executionCommitted
+                && !isTerminalStatus(entity.getStatus())
+                && !"TERMINAL".equals(entity.getRuntimeAcceptanceState())) {
+            entity.setRuntimeAcceptanceState("COMMITTED");
         }
         LocalDateTime now = LocalDateTime.now();
         entity.setLastAliveAt(now);
@@ -430,6 +501,16 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         cancelTaskDirect(taskId, userId);
     }
 
+    @Override
+    public void reconnectTask(String taskId, String userId) {
+        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!"RUNNING".equals(entity.getStatus())) {
+            return;
+        }
+        streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
+    }
+
     /**
      * 检查指定 Codex 会话是否有正在运行的任务（并发保护）
      */
@@ -442,7 +523,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      * 中止任务（完整流程：terminal guard + doAbortWorkerTask）。
      * Provider Controller 和 SPI 入口调用此方法。
      */
-    @Transactional
     public void abortTask(String taskId) {
         CodexTaskEntity entity = taskRepository.findByTaskId(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
@@ -466,20 +546,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      * @param taskId       平台侧 taskId
      * @param remoteTaskId 已解析的远端 Worker 任务标识（可能为 null，由装饰层通过 resolveRemoteTaskId 提供）
      */
-    @Transactional
     public void doAbortWorkerTask(String taskId, String remoteTaskId) {
         CodexTaskEntity entity = taskRepository.findByTaskId(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-
-        // 通知远端 Worker 中止（复用 streamRelay 的远端中止能力）
-        streamRelay.abortRemoteTask(entity);
-        streamRelay.abortStream(taskId);
-
-        String previousStatus = entity.getStatus();
-        entity.setStatus("ABORTED");
-        persistTask(entity);
-        log.info("Aborted Codex task: taskId={}, previousStatus={}", taskId, previousStatus);
-        publishStatusChange(entity, previousStatus);
+        streamRelay.abortAndReconcileTask(entity);
     }
 
     /**
@@ -490,14 +560,23 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                               String resultText, BigDecimal costUsd, Long inputTokens,
                               Long outputTokens, Long durationMs, Integer numTurns,
                               String model) {
-        CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
         if (entity == null) {
             log.warn("completeTask: task not found: {}", taskId);
             return;
         }
 
         String previousStatus = entity.getStatus();
+        if (isTerminalStatus(previousStatus) && !"COMPLETED".equals(previousStatus)) {
+            log.warn("Ignoring late Codex completion for terminal task: taskId={}, status={}",
+                    taskId, previousStatus);
+            return;
+        }
+        validateTerminalWorkerTaskId(entity, workerTaskId);
         entity.setStatus("COMPLETED");
+        if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+            entity.setRuntimeAcceptanceState("TERMINAL");
+        }
         if (workerTaskId != null) entity.setWorkerTaskId(workerTaskId);
         if (codexThreadId != null) entity.setCodexThreadId(codexThreadId);
         if (resultText != null) entity.setResultText(resultText);
@@ -514,7 +593,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
         persistTask(entity);
         log.info("Completed Codex task: taskId={}, cost={}", taskId, costUsd);
-        publishStatusChange(entity, previousStatus);
+        if (!"COMPLETED".equals(previousStatus)) {
+            publishStatusChange(entity, previousStatus);
+        }
     }
 
     /**
@@ -522,15 +603,25 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      */
     @Transactional
     public void failTask(String taskId, String workerTaskId, String codexThreadId, String errorMessage) {
-        CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
         if (entity == null) {
             log.warn("failTask: task not found: {}", taskId);
             return;
         }
 
         String previousStatus = entity.getStatus();
+        if (isTerminalStatus(previousStatus) && !"FAILED".equals(previousStatus)) {
+            log.warn("Ignoring late Codex failure for terminal task: taskId={}, status={}",
+                    taskId, previousStatus);
+            return;
+        }
+        validateTerminalWorkerTaskId(entity, workerTaskId);
+        String stableError = stableTaskError(entity, errorMessage);
         entity.setStatus("FAILED");
-        entity.setErrorMessage(errorMessage);
+        if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+            entity.setRuntimeAcceptanceState("TERMINAL");
+        }
+        entity.setErrorMessage(stableError);
         if (workerTaskId != null) entity.setWorkerTaskId(workerTaskId);
         if (codexThreadId != null) entity.setCodexThreadId(codexThreadId);
         LocalDateTime now = LocalDateTime.now();
@@ -538,8 +629,84 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         entity.setLastOutputAt(now);
 
         persistTask(entity);
-        log.info("Failed Codex task: taskId={}, error={}", taskId, errorMessage);
+        log.info("Failed Codex task: taskId={}, error={}", taskId, stableError);
+        if (!"FAILED".equals(previousStatus)) {
+            publishStatusChange(entity, previousStatus);
+        }
+    }
+
+    @Transactional
+    public void reconcileAbortedTask(String taskId, String workerTaskId, String codexThreadId) {
+        CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
+        if (entity == null) return;
+        String previousStatus = entity.getStatus();
+        if (isTerminalStatus(previousStatus) && !"ABORTED".equals(previousStatus)) {
+            log.warn("Ignoring late Codex abort for terminal task: taskId={}, status={}",
+                    taskId, previousStatus);
+            return;
+        }
+        validateTerminalWorkerTaskId(entity, workerTaskId);
+        entity.setStatus("ABORTED");
+        entity.setRuntimeAcceptanceState("TERMINAL");
+        if (workerTaskId != null) entity.setWorkerTaskId(workerTaskId);
+        if (codexThreadId != null) entity.setCodexThreadId(codexThreadId);
+        entity.setLastAliveAt(LocalDateTime.now());
+        persistTask(entity);
+        log.info("Reconciled remotely aborted Codex task: taskId={}", taskId);
+        if (!"ABORTED".equals(previousStatus)) {
+            publishStatusChange(entity, previousStatus);
+        }
+    }
+
+    /** Atomically closes PREPARED only when no acceptance attempt has started. */
+    @Transactional
+    public boolean failTaskIfAcceptanceNotStarted(String taskId, String failureCode) {
+        CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
+        if (entity == null || isTerminalStatus(entity.getStatus())) {
+            return true;
+        }
+        if (!CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())
+                || !"PREPARED".equals(entity.getRuntimeAcceptanceState())) {
+            return false;
+        }
+        String previousStatus = entity.getStatus();
+        entity.setStatus("FAILED");
+        entity.setRuntimeAcceptanceState("TERMINAL");
+        entity.setErrorMessage(failureCode);
+        LocalDateTime now = LocalDateTime.now();
+        entity.setLastAliveAt(now);
+        entity.setLastOutputAt(now);
+        persistTask(entity);
         publishStatusChange(entity, previousStatus);
+        return true;
+    }
+
+    private boolean isTerminalStatus(String status) {
+        return "COMPLETED".equals(status) || "FAILED".equals(status) || "ABORTED".equals(status);
+    }
+
+    private void validateTerminalWorkerTaskId(CodexTaskEntity entity, String workerTaskId) {
+        if (workerTaskId != null && !workerTaskId.isBlank()
+                && entity.getWorkerTaskId() != null && !entity.getWorkerTaskId().isBlank()
+                && !entity.getWorkerTaskId().equals(workerTaskId)) {
+            throw new IllegalStateException(
+                    "CODEX_RUNTIME_IDEMPOTENCY_CONFLICT: worker task id changed for " + entity.getTaskId());
+        }
+    }
+
+    private String stableTaskError(CodexTaskEntity entity, String errorMessage) {
+        if (!CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+            return errorMessage;
+        }
+        if (errorMessage != null && errorMessage.startsWith("CODEX_")
+                && errorMessage.length() <= 256
+                && errorMessage.chars().noneMatch(Character::isISOControl)
+                && !errorMessage.toLowerCase(Locale.ROOT).contains("http://")
+                && !errorMessage.toLowerCase(Locale.ROOT).contains("https://")
+                && !errorMessage.toLowerCase(Locale.ROOT).contains("bearer ")) {
+            return errorMessage;
+        }
+        return "CODEX_RUNTIME_TASK_FAILED";
     }
 
     /**
@@ -721,6 +888,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return DispatchTaskDTO.builder()
                 .taskId(entity.getTaskId())
                 .workerTaskId(entity.getWorkerTaskId())
+                .runtimeId(entity.getRuntimeId())
+                .runtimeRevision(entity.getRuntimeRevision())
+                .runtimeType(entity.getRuntimeType())
+                .runtimeInstanceId(entity.getRuntimeInstanceId())
+                .routingEpoch(entity.getRoutingEpoch())
+                .runtimeAcceptanceState(entity.getRuntimeAcceptanceState())
                 .sessionId(entity.getSessionId())
                 .workerId(entity.getWorkerId())
                 .userId(entity.getUserId())
@@ -759,12 +932,47 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
 
-        if ("RUNNING".equals(entity.getStatus())) {
+        if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+            entity = taskRuntimeStateService.claimTerminalDeletion(taskId, userId);
+            deleteTerminalAppServerTask(entity);
+        } else if ("RUNNING".equals(entity.getStatus())) {
             throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
         }
-
+        if (nativeSubtaskStateRepository != null) {
+            nativeSubtaskStateRepository.deleteByTaskId(taskId);
+        }
         taskRepository.delete(entity);
         log.info("Codex task deleted: taskId={}, userId={}", taskId, userId);
+    }
+
+    private void deleteTerminalAppServerTask(CodexTaskEntity entity) {
+        if (!isTerminalStatus(entity.getStatus())) {
+            throw new IllegalStateException(
+                    "Cannot delete a non-terminal app-server task. Please abort it first.");
+        }
+        if (runtimeRegistryService == null) {
+            throw new IllegalStateException(
+                    "CODEX_RUNTIME_REGISTRY_UNAVAILABLE: cannot resolve task affinity for deletion");
+        }
+        CodexRuntimeBinding binding = runtimeRegistryService.resolveBoundRuntime(
+                entity.getRuntimeId(), entity.getRuntimeRevision(), entity.getWorkerId(),
+                entity.getRuntimeInstanceId());
+        if (binding.getRuntimeType() != CodexRuntimeType.APP_SERVER) {
+            throw new IllegalStateException(
+                    "CODEX_RUNTIME_AFFINITY_MISMATCH: app-server task resolved to another runtime type");
+        }
+
+        String remoteTaskId = firstNonBlank(entity.getWorkerTaskId(), entity.getTaskId());
+        CodexWorkerClient client = clientFactory.getOrCreate(
+                "runtime:" + binding.getRuntimeId() + ":" + binding.getRuntimeRevision(),
+                binding.getEndpointUrl(), binding.getAuthToken(), binding.getInstanceId());
+        Boolean removed = client.deleteTask(remoteTaskId).block(Duration.ofSeconds(15));
+        if (removed == null) {
+            throw new IllegalStateException(
+                    "CODEX_RUNTIME_DELETE_UNKNOWN: app-server returned no deletion result");
+        }
+        log.info("Codex app-server task cleanup confirmed: taskId={}, remoteTaskId={}, removed={}",
+                entity.getTaskId(), remoteTaskId, removed);
     }
 
     @Override
@@ -773,6 +981,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         if (!"FAILED".equals(entity.getStatus())) {
             throw new IllegalStateException("Only FAILED tasks can be resynced, current: " + entity.getStatus());
+        }
+        if ("DELETE_REQUESTED".equals(entity.getRuntimeAcceptanceState())) {
+            throw new IllegalStateException("Cannot resync a task while deletion is pending");
         }
         if (entity.getWorkerTaskId() == null) {
             throw new IllegalStateException("No worker task ID, cannot resync");
@@ -1003,6 +1214,13 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         session.setInteractionState(deriveInteractionState(entity.getStatus()));
         Map<String, Object> providerStateValues = new LinkedHashMap<>();
         putIfNotBlank(providerStateValues, ProviderStateCodec.FIELD_CODEX_THREAD_ID, entity.getCodexThreadId());
+        putIfNotBlank(providerStateValues, ProviderStateCodec.FIELD_CODEX_RUNTIME_ID, entity.getRuntimeId());
+        putIfNotNull(providerStateValues, ProviderStateCodec.FIELD_CODEX_RUNTIME_REVISION,
+                entity.getRuntimeRevision());
+        putIfNotBlank(providerStateValues, ProviderStateCodec.FIELD_CODEX_RUNTIME_TYPE, entity.getRuntimeType());
+        putIfNotBlank(providerStateValues, ProviderStateCodec.FIELD_CODEX_RUNTIME_INSTANCE_ID,
+                entity.getRuntimeInstanceId());
+        putIfNotNull(providerStateValues, ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH, entity.getRoutingEpoch());
         if (isCodexBizProvider(providerType)) {
             putIfNotBlank(providerStateValues, ProviderStateCodec.FIELD_CODEX_HOME_KEY, entity.getCodexHomeKey());
             putIfNotBlank(providerStateValues, ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID,
@@ -1036,6 +1254,11 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         Map<String, Object> state = new LinkedHashMap<>();
         putIfNotBlank(state, ProviderStateCodec.FIELD_CODEX_THREAD_ID, entity.getCodexThreadId());
         putIfNotBlank(state, ProviderStateCodec.FIELD_CONTEXT_ID, entity.getContextId());
+        putIfNotBlank(state, ProviderStateCodec.FIELD_CODEX_RUNTIME_ID, entity.getRuntimeId());
+        putIfNotNull(state, ProviderStateCodec.FIELD_CODEX_RUNTIME_REVISION, entity.getRuntimeRevision());
+        putIfNotBlank(state, ProviderStateCodec.FIELD_CODEX_RUNTIME_TYPE, entity.getRuntimeType());
+        putIfNotBlank(state, ProviderStateCodec.FIELD_CODEX_RUNTIME_INSTANCE_ID, entity.getRuntimeInstanceId());
+        putIfNotNull(state, ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH, entity.getRoutingEpoch());
         return ProviderStateCodec.mergeTaskValues(existingJson, AGENT_ID, state);
     }
 
@@ -1056,6 +1279,202 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private void putIfNotBlank(Map<String, Object> target, String key, String value) {
         if (value != null && !value.isBlank()) {
             target.put(key, value);
+        }
+    }
+
+    private void putIfNotNull(Map<String, Object> target, String key, Object value) {
+        if (value != null) {
+            target.put(key, value);
+        }
+    }
+
+    private CodexRuntimeBinding resolveRuntimeBinding(String workerId, String model, String providerType,
+                                                       String routingKey, String existingSessionId) {
+        return resolveRuntimeBinding(workerId, model, providerType, routingKey, existingSessionId, Set.of());
+    }
+
+    private CodexRuntimeBinding resolveRuntimeBinding(String workerId, String model, String providerType,
+                                                       String routingKey, String existingSessionId,
+                                                       Set<String> requiredFeatures) {
+        if (existingSessionId != null && !existingSessionId.isBlank()) {
+            CodexRuntimeBinding sessionBinding = resolveExistingSessionBinding(existingSessionId, workerId);
+            if (sessionBinding != null) {
+                return sessionBinding;
+            }
+            // Legacy sessions predate explicit affinity. Backfill them to the SDK lane
+            // instead of moving a resumable thread when rollout policy changes.
+            return CodexRuntimeBinding.legacySdk(workerId);
+        }
+        if (runtimeRegistryService == null) {
+            if (isUltraModel(model)) {
+                throw new CodexRuntimeUnavailableException("CODEX_ULTRA_RUNTIME_UNAVAILABLE",
+                        "Runtime registry is unavailable for a new Ultra session");
+            }
+            return CodexRuntimeBinding.legacySdk(workerId);
+        }
+        return runtimeRegistryService.selectForNewTask(
+                workerId, model, providerType, routingKey, requiredFeatures);
+    }
+
+    private Set<String> runtimeRequirements(CreateCodexTaskForm form, String providerType) {
+        Set<String> features = new LinkedHashSet<>();
+        if (form.getImages() != null && !form.getImages().isBlank()) features.add("images");
+        if (form.getAttachments() != null && !form.getAttachments().isEmpty()) features.add("attachments");
+        if (form.getOutputSchema() != null && !form.getOutputSchema().isEmpty()) features.add("output_schema");
+        if (form.getDeveloperInstructions() != null && !form.getDeveloperInstructions().isBlank()) {
+            features.add("developer_instructions");
+        }
+        if (form.getSandboxMode() != null && !form.getSandboxMode().isBlank()) features.add("sandbox");
+        if (form.getNetworkAccessEnabled() != null) features.add("network");
+        if (form.getWebSearchMode() != null && !form.getWebSearchMode().isBlank()) features.add("web");
+        if (form.getAdditionalDirectories() != null && !form.getAdditionalDirectories().isEmpty()) {
+            features.add("additional_directories");
+        }
+        if (form.getMaxTurns() != null && form.getMaxTurns() > 1) features.add("max_turns");
+        if (form.getApprovalPolicy() != null && !form.getApprovalPolicy().isBlank()) {
+            features.add("approval:" + form.getApprovalPolicy());
+        }
+        if (isCodexBizProvider(providerType)
+                || (form.getBusinessRuntimeContext() != null && !form.getBusinessRuntimeContext().isEmpty())) {
+            features.add("business_mcp");
+        }
+        return features;
+    }
+
+    private CodexRuntimeBinding resolveExistingSessionBinding(String sessionId, String workerId) {
+        String legacySessionWorkerId = null;
+        if (sessionEntityRepository != null) {
+            SessionEntity session = sessionEntityRepository.findById(sessionId).orElse(null);
+            if (session != null) {
+                Map<String, Object> state = ProviderStateCodec.parseObject(session.getProviderStateJson());
+                CodexRuntimeBinding binding = bindingFromState(state, workerId);
+                if (binding != null) return binding;
+                legacySessionWorkerId = session.getCurrentWorkerId();
+            }
+        }
+        CodexRuntimeBinding taskBinding = taskRepository.findFirstBySessionIdOrderByCreatedAtDesc(sessionId)
+                .map(task -> bindingFromTask(task, workerId))
+                .orElse(null);
+        if (taskBinding != null) return taskBinding;
+        if (legacySessionWorkerId != null && !legacySessionWorkerId.isBlank()) {
+            validateLegacyWorkerAffinity(legacySessionWorkerId, workerId);
+            return CodexRuntimeBinding.legacySdk(legacySessionWorkerId);
+        }
+        return null;
+    }
+
+    private CodexRuntimeBinding resolveThreadRuntimeBinding(String codexThreadId, String workerId, String userId) {
+        CodexRuntimeBinding existing = taskRepository
+                .findFirstByCodexThreadIdAndWorkerIdAndUserIdOrderByCreatedAtDesc(
+                        codexThreadId, workerId, userId)
+                .map(task -> bindingFromTask(task, workerId))
+                .orElse(null);
+        // Threads created before affinity columns were introduced belong to the
+        // legacy SDK lane and must not move during rollout.
+        return existing != null ? existing : CodexRuntimeBinding.legacySdk(workerId);
+    }
+
+    private CodexRuntimeBinding bindingFromState(Map<String, Object> state, String workerId) {
+        String runtimeId = stringValue(state.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_ID));
+        String runtimeType = stringValue(state.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_TYPE));
+        if (runtimeId == null && runtimeType == null) return null;
+        if (CodexRuntimeType.SDK_EXEC.name().equals(runtimeType)
+                || (runtimeId != null && runtimeId.startsWith("legacy-sdk:"))) {
+            if (runtimeId == null || !runtimeId.startsWith("legacy-sdk:")) {
+                // Pre-affinity state must fall back to the latest persisted task so its
+                // original physical Worker remains authoritative.
+                return null;
+            }
+            String boundWorkerId = runtimeId.substring("legacy-sdk:".length());
+            validateLegacyWorkerAffinity(boundWorkerId, workerId);
+            return CodexRuntimeBinding.legacySdk(boundWorkerId);
+        }
+        if (runtimeId == null || runtimeRegistryService == null) {
+            throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_INVALID",
+                    "Session runtime affinity is incomplete: " + runtimeId);
+        }
+        Integer revision = integerValue(state.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_REVISION));
+        String instanceId = stringValue(state.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_INSTANCE_ID));
+        CodexRuntimeBinding binding = runtimeRegistryService.resolveBoundRuntime(
+                runtimeId, revision, workerId, instanceId);
+        validateBoundWorker(binding, workerId);
+        return binding;
+    }
+
+    private CodexRuntimeBinding bindingFromTask(CodexTaskEntity task, String workerId) {
+        if (task.getRuntimeId() == null || task.getRuntimeId().isBlank()) return null;
+        if (CodexRuntimeType.SDK_EXEC.name().equals(task.getRuntimeType())
+                || task.getRuntimeId().startsWith("legacy-sdk:")) {
+            String boundWorkerId = task.getWorkerId();
+            if (task.getRuntimeId().startsWith("legacy-sdk:")) {
+                String encodedWorkerId = task.getRuntimeId().substring("legacy-sdk:".length());
+                if (!encodedWorkerId.equals(boundWorkerId)) {
+                    throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_INVALID",
+                            "Legacy SDK runtime and task worker affinity disagree");
+                }
+            }
+            validateLegacyWorkerAffinity(boundWorkerId, workerId);
+            return CodexRuntimeBinding.legacySdk(boundWorkerId);
+        }
+        if (runtimeRegistryService == null) {
+            throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_MISSING",
+                    "Runtime registry is unavailable for bound session " + task.getSessionId());
+        }
+        CodexRuntimeBinding binding = runtimeRegistryService.resolveBoundRuntime(
+                task.getRuntimeId(), task.getRuntimeRevision(), workerId, task.getRuntimeInstanceId());
+        validateBoundWorker(binding, workerId);
+        return binding;
+    }
+
+    private void validateBoundWorker(CodexRuntimeBinding binding, String workerId) {
+        if (binding.getWorkerId() != null && !binding.getWorkerId().equals(workerId)) {
+            throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_MISMATCH",
+                    "Bound runtime belongs to another worker");
+        }
+    }
+
+    private void validateLegacyWorkerAffinity(String boundWorkerId, String requestedWorkerId) {
+        if (boundWorkerId == null || boundWorkerId.isBlank()) {
+            throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_INVALID",
+                    "Legacy SDK runtime affinity has no worker");
+        }
+        if (requestedWorkerId != null && !requestedWorkerId.equals(boundWorkerId)) {
+            throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_MISMATCH",
+                    "Legacy SDK runtime belongs to another worker");
+        }
+    }
+
+    private void applyRuntimeBinding(CodexTaskEntity entity, CodexRuntimeBinding binding) {
+        validateBoundWorker(binding, entity.getWorkerId());
+        entity.setRuntimeId(binding.getRuntimeId());
+        entity.setRuntimeRevision(binding.getRuntimeRevision());
+        entity.setRuntimeType(binding.getRuntimeType().name());
+        entity.setRuntimeInstanceId(binding.getInstanceId());
+        entity.setRoutingEpoch(binding.getRoutingEpoch());
+        if (binding.getRuntimeType() == CodexRuntimeType.APP_SERVER) {
+            entity.setRuntimeAcceptanceState("PREPARED");
+        }
+    }
+
+    private boolean isUltraModel(String model) {
+        if (model == null) return false;
+        String normalized = model.trim().toLowerCase(Locale.ROOT);
+        return CODEX_ULTRA_ALIAS.equals(normalized) || normalized.endsWith(":ultra");
+    }
+
+    private String stringValue(Object value) {
+        if (value == null) return null;
+        String text = value.toString();
+        return text.isBlank() ? null : text;
+    }
+
+    private Integer integerValue(Object value) {
+        if (value instanceof Number number) return number.intValue();
+        if (value == null) return null;
+        try {
+            return Integer.valueOf(value.toString());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
@@ -1249,13 +1668,29 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     private void validateExistingSession(String userId, String sessionId) {
-        if (sessionManager == null) {
-            return;
+        if (sessionEntityRepository != null) {
+            SessionEntity entity = sessionEntityRepository.findById(sessionId).orElse(null);
+            if (entity != null) {
+                if (!userId.equals(entity.getUserId())) {
+                    throw new IllegalArgumentException("Session not found or access denied: " + sessionId);
+                }
+                return;
+            }
         }
-        Session session = sessionManager.getSession(sessionId);
-        if (session == null || !userId.equals(session.getUserId())) {
-            throw new IllegalArgumentException("Session not found or access denied: " + sessionId);
+        if (sessionManager != null) {
+            Session session = sessionManager.getSession(sessionId);
+            if (session != null && userId.equals(session.getUserId())) {
+                return;
+            }
         }
+        throw new IllegalArgumentException("Session not found or access denied: " + sessionId);
+    }
+
+    private void lockExistingSessionForResume(String userId, String sessionId) {
+        if (sessionEntityRepository == null) return;
+        sessionEntityRepository.findByIdAndUserIdForUpdate(sessionId, userId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Session not found or access denied: " + sessionId));
     }
 
     @Override
@@ -1599,6 +2034,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return CodexTaskDTO.builder()
                 .taskId(entity.getTaskId())
                 .workerTaskId(entity.getWorkerTaskId())
+                .runtimeId(entity.getRuntimeId())
+                .runtimeRevision(entity.getRuntimeRevision())
+                .runtimeType(entity.getRuntimeType())
+                .runtimeInstanceId(entity.getRuntimeInstanceId())
+                .routingEpoch(entity.getRoutingEpoch())
+                .runtimeAcceptanceState(entity.getRuntimeAcceptanceState())
                 .sessionId(entity.getSessionId())
                 .directoryId(entity.getDirectoryId())
                 .workerId(entity.getWorkerId())

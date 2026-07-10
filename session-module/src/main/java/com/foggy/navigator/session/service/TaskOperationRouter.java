@@ -4,6 +4,7 @@ import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.util.DirectoryAgentId;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
@@ -28,6 +29,8 @@ final class TaskOperationRouter {
     private final SessionRepository sessionRepository;
     @Nullable
     private final SessionTaskRepository sessionTaskRepository;
+    @Nullable
+    private final NativeSubtaskStateRepository nativeSubtaskStateRepository;
     private final TaskQueryProviderRegistry taskQueryProviderRegistry;
     private final TaskCreateTargetResolver createTargetResolver;
     private final UnifiedSessionTaskProjectionService projectionService;
@@ -36,6 +39,7 @@ final class TaskOperationRouter {
                         SessionBindingService bindingService,
                         SessionRepository sessionRepository,
                         @Nullable SessionTaskRepository sessionTaskRepository,
+                        @Nullable NativeSubtaskStateRepository nativeSubtaskStateRepository,
                         TaskQueryProviderRegistry taskQueryProviderRegistry,
                         TaskCreateTargetResolver createTargetResolver,
                         UnifiedSessionTaskProjectionService projectionService) {
@@ -43,6 +47,7 @@ final class TaskOperationRouter {
         this.bindingService = bindingService;
         this.sessionRepository = sessionRepository;
         this.sessionTaskRepository = sessionTaskRepository;
+        this.nativeSubtaskStateRepository = nativeSubtaskStateRepository;
         this.taskQueryProviderRegistry = taskQueryProviderRegistry;
         this.createTargetResolver = createTargetResolver;
         this.projectionService = projectionService;
@@ -152,20 +157,31 @@ final class TaskOperationRouter {
         return provider.resumeTask(context.getUserId(), context.getTenantId(), params);
     }
 
+    /**
+     * Deletes provider state first, then local projections in recoverable stages.
+     * The unified projection is deliberately removed last: if a later cleanup fails,
+     * it remains the ownership and routing marker for an idempotent retry.
+     */
     void deleteTask(String taskId, String userId) {
         TaskCommandProvider provider = findProviderForTask(taskId);
+        boolean ownsUnifiedProjection = sessionTaskRepository != null
+                && sessionTaskRepository.findByTaskIdAndUserId(taskId, userId).isPresent();
         boolean shouldCleanupSessionStore = false;
         try {
             provider.deleteTask(userId, taskId);
             shouldCleanupSessionStore = true;
         } catch (IllegalArgumentException e) {
-            if (!isProviderTaskAlreadyMissing(e, taskId)) {
+            if (!isProviderTaskAlreadyMissing(e, taskId) || !ownsUnifiedProjection) {
                 throw e;
             }
             log.warn("Provider task already missing during delete; cleaning unified session store only: taskId={}", taskId);
             shouldCleanupSessionStore = true;
         }
 
+        // Keep the unified projection as the retry marker until provider/native cleanup succeeds.
+        if (shouldCleanupSessionStore && nativeSubtaskStateRepository != null) {
+            nativeSubtaskStateRepository.deleteByTaskId(taskId);
+        }
         if (shouldCleanupSessionStore && sessionTaskRepository != null) {
             sessionTaskRepository.deleteByTaskId(taskId);
         }

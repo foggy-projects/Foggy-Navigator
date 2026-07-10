@@ -9,6 +9,7 @@ import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
@@ -75,6 +76,10 @@ public class TaskDispatchFacade {
 
     @Autowired(required = false)
     @Nullable
+    private NativeSubtaskStateRepository nativeSubtaskStateRepository;
+
+    @Autowired(required = false)
+    @Nullable
     private WorkingDirectoryRepository workingDirectoryRepository;
 
     @Autowired(required = false)
@@ -118,6 +123,7 @@ public class TaskDispatchFacade {
                 bindingService,
                 sessionRepository,
                 sessionTaskRepository,
+                nativeSubtaskStateRepository,
                 taskQueryProviderRegistry,
                 createTargetResolver(),
                 projectionService());
@@ -132,6 +138,7 @@ public class TaskDispatchFacade {
      * 4. 返回统一 DTO
      */
     public DispatchTaskDTO createTask(TaskDispatchRequest request, AgentResolveContext context) {
+        validateSessionOwnershipBeforeDispatch(request, context);
         validateContextBindingBeforeDispatch(request, context);
         if (bindContinuationFromContext(request, context) && request.isResume()) {
             return resumeTask(request, context);
@@ -1072,6 +1079,21 @@ public class TaskDispatchFacade {
                         "CONTEXT_SESSION_MISMATCH: contextId " + contextId
                                 + " is bound to session " + existingSessionId
                                 + ", but request sessionId is " + requestedSessionId);
+            }
+        });
+    }
+
+    private void validateSessionOwnershipBeforeDispatch(TaskDispatchRequest request, AgentResolveContext context) {
+        if (request == null) return;
+        String sessionId = trimToNull(request.getSessionId());
+        if (sessionId == null) return;
+        String userId = context != null ? trimToNull(context.getUserId()) : null;
+        if (userId == null) {
+            throw new IllegalArgumentException("SESSION_ACCESS_DENIED: user identity is required");
+        }
+        sessionRepository.findById(sessionId).ifPresent(session -> {
+            if (!userId.equals(trimToNull(session.getUserId()))) {
+                throw new IllegalArgumentException("SESSION_ACCESS_DENIED: session belongs to another user");
             }
         });
     }

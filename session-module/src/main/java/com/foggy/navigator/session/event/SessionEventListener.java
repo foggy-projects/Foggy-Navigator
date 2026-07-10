@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 监听AgentMessage事件，持久化 + SSE推送
@@ -25,10 +27,15 @@ public class SessionEventListener {
 
     private final SessionManager sessionManager;
     private final UnifiedSseEmitter sseEmitter;
+    private final Set<String> synchronouslyHandledMessageIds = ConcurrentHashMap.newKeySet();
 
     @Async("sessionEventExecutor")
     @EventListener
     public void onAgentMessage(AgentMessage message) {
+        if (message != null && message.getMessageId() != null
+                && synchronouslyHandledMessageIds.remove(message.getMessageId())) {
+            return;
+        }
         handleMessage(message);
     }
 
@@ -37,6 +44,21 @@ public class SessionEventListener {
      * visible before they advance task status.
      */
     public void handleMessage(AgentMessage message) {
+        handleMessage(message, false);
+    }
+
+    /**
+     * Persists and emits a message synchronously. Persistence failures are
+     * propagated so durable stream consumers do not advance their cursor.
+     */
+    public void handleMessageDurably(AgentMessage message) {
+        handleMessage(message, true);
+        if (message != null && message.getMessageId() != null) {
+            synchronouslyHandledMessageIds.add(message.getMessageId());
+        }
+    }
+
+    private void handleMessage(AgentMessage message, boolean propagatePersistenceFailure) {
         String sessionId = message.getSessionId();
         log.debug("Received AgentMessage: sessionId={}, type={}, agentId={}",
                 sessionId, message.getType(), message.getAgentId());
@@ -48,12 +70,21 @@ public class SessionEventListener {
                 sessionManager.addMessage(sessionId, msg);
             } catch (Exception e) {
                 log.error("Failed to persist message: sessionId={}, type={}", sessionId, message.getType(), e);
+                if (propagatePersistenceFailure) {
+                    throw new MessagePersistenceException(sessionId, message.getMessageId(), e);
+                }
             }
         }
 
         // 2. SSE推送（通过 UnifiedSseEmitter 路由到订阅了该 session 的用户）
         log.debug("Sending SSE event: sessionId={}, type={}", sessionId, message.getType());
         sseEmitter.sendSessionEvent(sessionId, message);
+    }
+
+    public static final class MessagePersistenceException extends RuntimeException {
+        private MessagePersistenceException(String sessionId, String messageId, Throwable cause) {
+            super("Failed to durably persist message " + messageId + " for session " + sessionId, cause);
+        }
     }
 
     private boolean shouldPersist(AgentMessage message) {
@@ -64,6 +95,7 @@ public class SessionEventListener {
         return type != MessageType.TEXT_CHUNK
                 && type != MessageType.HEARTBEAT
                 && type != MessageType.SESSION_START
+                && type != MessageType.NATIVE_SUBTASK_UPDATE
                 && !isInternalSystemState(message);
     }
 

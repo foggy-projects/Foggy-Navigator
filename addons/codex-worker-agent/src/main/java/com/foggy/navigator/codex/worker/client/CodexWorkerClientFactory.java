@@ -17,9 +17,17 @@ public class CodexWorkerClientFactory {
      * 获取或创建 Client 实例
      */
     public CodexWorkerClient getOrCreate(String workerId, String baseUrl, String authToken) {
+        return getOrCreate(workerId, baseUrl, authToken, null);
+    }
+
+    /**
+     * App-server clients pin every request and response to the persisted runtime instance.
+     */
+    public CodexWorkerClient getOrCreate(String workerId, String baseUrl, String authToken,
+                                          String expectedInstanceId) {
         return clientCache.compute(workerId, (id, existing) -> {
             // 每次都创建新实例以确保参数一致性
-            return new CodexWorkerClient(baseUrl, authToken);
+            return new CodexWorkerClient(baseUrl, authToken, expectedInstanceId);
         });
     }
 

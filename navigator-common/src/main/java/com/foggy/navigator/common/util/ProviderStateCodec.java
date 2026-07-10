@@ -21,6 +21,11 @@ public final class ProviderStateCodec {
     public static final String FIELD_CODEX_THREAD_ID = "codexThreadId";
     public static final String FIELD_CODEX_HOME_KEY = "codexHomeKey";
     public static final String FIELD_CODEX_PRIVATE_ACCOUNT_ID = "privateAccountId";
+    public static final String FIELD_CODEX_RUNTIME_ID = "codexRuntimeId";
+    public static final String FIELD_CODEX_RUNTIME_REVISION = "codexRuntimeRevision";
+    public static final String FIELD_CODEX_RUNTIME_TYPE = "codexRuntimeType";
+    public static final String FIELD_CODEX_RUNTIME_INSTANCE_ID = "codexRuntimeInstanceId";
+    public static final String FIELD_CODEX_ROUTING_EPOCH = "codexRoutingEpoch";
     public static final String FIELD_GEMINI_SESSION_ID = "geminiSessionId";
     public static final String FIELD_CONTEXT_ID = "contextId";
     public static final String FIELD_AGENT_TEAMS_CONFIG_ID = "agentTeamsConfigId";
