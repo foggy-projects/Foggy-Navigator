@@ -10,9 +10,19 @@
 
 本版本优先处理 Java 侧架构 review 暴露出的高风险维护点，重点围绕统一任务分发、Provider 路由、Provider 私有状态、SSE 部署边界和运行配置治理；同时承接少量与 Codex 会话工作流直接相关的体验优化事项。
 
+## OPT-005 范围迁移说明
+
+- `1.3.1-SNAPSHOT` 继续保留并认可 Max / Ultra alias、显式授权，以及 Java / Session / PC 原生子任务投影的历史实现与验收证据。
+- OPT-005 曾实现的旧 Codex Worker 混合 SDK / app-server lane、`CODEX_APP_SERVER_ULTRA_ENABLED` flag、精确 CLI 门控和 pre-turn SDK fallback 已由 `1.4.0-SNAPSHOT` 的 `OPT-001` supersede，不再代表当前执行架构，也不能作为当前 Worker 发布或生产启用证据。
+- 原质量门、覆盖审计与签收结论仅对上述仍保留范围有效；旧混合 lane 的 smoke 和防重放测试仅作为架构演进的历史输入保留。
+- 独立 `codex-app-server-worker`、任务受理、Runtime Registry、路由/affinity、生产 canary 和 SDK Worker 迁移重新在 [1.4.0-SNAPSHOT](../1.4.0-SNAPSHOT/README.md) 验收。
+
 ## 文档清单
 
-- [workitems/OPT-005-codex-sol-max-ultra-support.md](./workitems/OPT-005-codex-sol-max-ultra-support.md) - GPT-5.6-Sol Max / Ultra 的 Worker、UI、诊断和验证记录（实现完成，待 `1.0.11` 发版）
+- [workitems/OPT-005-codex-sol-max-ultra-support.md](./workitems/OPT-005-codex-sol-max-ultra-support.md) - GPT-5.6-Sol Max / Ultra 与原生子任务投影历史记录；旧 Worker 混合 app-server lane 已迁移至 1.4.0 OPT-001
+- [quality/OPT-005-implementation-quality.md](./quality/OPT-005-implementation-quality.md) - OPT-005 实现质量门记录（签收仅对保留范围有效）
+- [coverage/OPT-005-coverage-audit.md](./coverage/OPT-005-coverage-audit.md) - OPT-005 历史测试证据与保留范围覆盖审计；当前 rollout gate 见 1.4.0
+- [acceptance/OPT-005-codex-sol-max-ultra-support-acceptance.md](./acceptance/OPT-005-codex-sol-max-ultra-support-acceptance.md) - OPT-005 保留范围签收及旧执行架构 superseded 声明
 - [workitems/OPT-004-codex-worker-sdk-startup-preflight.md](./workitems/OPT-004-codex-worker-sdk-startup-preflight.md) - Codex Worker SDK 最低版本检查、固定版本自修复与启动阻断
 - [workitems/BUG-145-bizworker-sidecar-permission-recovery.md](./workitems/BUG-145-bizworker-sidecar-permission-recovery.md) - BUG-145 BizWorker sidecar 写文件权限错误恢复
 - [quality/BUG-145-implementation-quality.md](./quality/BUG-145-implementation-quality.md) - BUG-145 实现质量门记录
