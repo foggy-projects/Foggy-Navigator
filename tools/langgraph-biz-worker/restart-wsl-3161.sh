@@ -96,51 +96,23 @@ if [ -n "$DISTRO" ] && [ "$LOCAL_ONLY" -eq 0 ]; then
   }
 
   LOCAL_SCRIPT="$(readlink -f "$0")"
-  if [ "$SYNC_SOURCE" -eq 1 ] && { [ "$ACTION" = "start" ] || [ "$ACTION" = "restart" ]; }; then
-    echo "Syncing LangGraph Biz Worker source to $DISTRO:$WSL_WORKER_DIR"
-    {
-      cat <<'REMOTE_SYNC_SCRIPT'
-set -euo pipefail
-worker_dir="$1"
-worker_user="$2"
-test -d "$worker_dir"
-tmp_archive="$(mktemp /tmp/langgraph-biz-worker-src.XXXXXX.tar)"
-cleanup() {
-  rm -f "$tmp_archive"
-}
-trap cleanup EXIT
-base64 -d > "$tmp_archive" <<'REMOTE_SYNC_ARCHIVE'
-REMOTE_SYNC_SCRIPT
-      tar -C "$SCRIPT_DIR" -cf - src pyproject.toml | base64
-      cat <<'REMOTE_SYNC_SCRIPT'
-REMOTE_SYNC_ARCHIVE
-tar -C "$worker_dir" -xf "$tmp_archive"
-if [ "$(id -u)" -eq 0 ] && [ -n "$worker_user" ]; then
-  chown -R "$worker_user":"$worker_user" "$worker_dir/src" "$worker_dir/pyproject.toml" 2>/dev/null || true
-fi
-REMOTE_SYNC_SCRIPT
-    } | "$WSL_EXE" -d "$DISTRO" --cd / -- bash -s -- "$WSL_WORKER_DIR" "$WSL_USER"
+  if [[ "$LOCAL_SCRIPT" != /mnt/* ]]; then
+    if command -v wslpath >/dev/null 2>&1; then
+      WIN_SCRIPT="$(wslpath -w "$LOCAL_SCRIPT")"
+      REMOTE_SCRIPT="$("$WSL_EXE" -d "$DISTRO" -- wslpath -u "$WIN_SCRIPT" | tr -d '\r')"
+    else
+      echo "Cannot map script path into distro '$DISTRO': $LOCAL_SCRIPT" >&2
+      exit 1
+    fi
+  else
+    REMOTE_SCRIPT="$LOCAL_SCRIPT"
   fi
 
   REMOTE_ARGS=("$ACTION" "--port" "$PORT" "--worker-dir" "$WSL_WORKER_DIR" "--user" "$WSL_USER" "--env-file" "$ENV_FILE" "--local-only")
-  {
-    cat <<'REMOTE_RUN_SCRIPT'
-set -euo pipefail
-tmp_script="$(mktemp /tmp/restart-wsl-3161.XXXXXX.sh)"
-cleanup() {
-  rm -f "$tmp_script"
-}
-trap cleanup EXIT
-base64 -d > "$tmp_script" <<'REMOTE_RUN_LOCAL_SCRIPT_B64'
-REMOTE_RUN_SCRIPT
-    base64 "$LOCAL_SCRIPT"
-    cat <<'REMOTE_RUN_SCRIPT'
-REMOTE_RUN_LOCAL_SCRIPT_B64
-chmod +x "$tmp_script"
-"$tmp_script" "$@"
-REMOTE_RUN_SCRIPT
-  } | "$WSL_EXE" -d "$DISTRO" --cd / -- bash -s -- "${REMOTE_ARGS[@]}"
-  exit $?
+  if [ "$SYNC_SOURCE" -eq 1 ]; then
+    REMOTE_ARGS+=("--sync-source")
+  fi
+  exec "$WSL_EXE" -d "$DISTRO" -- bash "$REMOTE_SCRIPT" "${REMOTE_ARGS[@]}"
 fi
 
 run_as_worker_user() {
@@ -229,7 +201,8 @@ fi
 mkdir -p logs
 export PYTHONPATH="$worker_dir/src"
 export BIZ_WORKER_ENV_FILE="$worker_dir/$env_file"
-setsid -f sh -c '\''echo $$ > "logs/worker-$2.pid"; exec "$1" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port "$2"'\'' sh "$python_bin" "$port" > "logs/worker-$port.log" 2> "logs/worker-$port-error.log" < /dev/null
+nohup "$python_bin" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port "$port" > "logs/worker-$port.log" 2> "logs/worker-$port-error.log" < /dev/null &
+echo $! > "logs/worker-$port.pid"
 ' bash "$WSL_WORKER_DIR" "$ENV_FILE" "$PORT"
 
   for _ in $(seq 1 30); do

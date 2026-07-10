@@ -12,6 +12,7 @@ SKIP_BUILD=0
 NO_BACKEND=0
 NO_CLAUDE=0
 NO_CODEX=0
+NO_GEMINI=0
 NO_LOCAL_BIZ=0
 NO_WSL_BIZ=0
 SYNC_WSL_BIZ_SOURCE=0
@@ -31,7 +32,7 @@ Options:
   --no-backend              Skip Java backend
   --no-claude               Skip Claude worker
   --no-codex                Skip Codex worker
-  --no-gemini               Deprecated no-op; Gemini worker is no longer part of the local stack
+  --no-gemini               Skip Gemini worker
   --no-local-biz            Skip local LangGraph Biz worker on 3061
   --no-wsl-biz              Skip WSL LangGraph Biz worker on 3161
   --sync-wsl-biz-source     Sync repo source to WSL biz worker before start
@@ -64,7 +65,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     --no-gemini|-NoGemini)
-      echo "Warning: --no-gemini is deprecated; Gemini worker is no longer managed by this stack." >&2
+      NO_GEMINI=1
       shift
       ;;
     --no-local-biz|--no-win-biz|-NoWinBiz)
@@ -203,6 +204,37 @@ invoke_script() {
   bash "$script" "$@"
 }
 
+start_node_worker() {
+  local label="$1"
+  local dir="$2"
+  local port="$3"
+
+  echo
+  echo "==> Start $label"
+  (
+    cd "$dir"
+    stop_port "$label" "$port"
+    if [ ! -d node_modules ]; then
+      npm install
+    fi
+    mkdir -p logs
+    rm -f logs/worker.pid
+    setsid -f sh -c 'echo $$ > logs/worker.pid; exec npx tsx src/index.ts' > logs/worker.log 2> logs/worker-error.log < /dev/null
+  )
+
+  for _ in $(seq 1 40); do
+    if test_health "http://127.0.0.1:$port/health"; then
+      echo "$label is ready on http://localhost:$port"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "$label failed to become healthy on port $port" >&2
+  tail -n 40 "$dir/logs/worker-error.log" >&2 || true
+  exit 1
+}
+
 start_local_biz_worker() {
   local dir="$REPO_ROOT/tools/langgraph-biz-worker"
   local default_port env_file port python_bin
@@ -234,7 +266,8 @@ start_local_biz_worker() {
     rm -f logs/worker.pid
     export PYTHONPATH="$dir/src"
     export BIZ_WORKER_ENV_FILE="$dir/$env_file"
-    setsid -f sh -c 'echo $$ > logs/worker.pid; exec "$1" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port "$2"' sh "$python_bin" "$port" > logs/worker.log 2> logs/worker-error.log < /dev/null
+    nohup "$python_bin" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port "$port" > logs/worker.log 2> logs/worker-error.log < /dev/null &
+    echo $! > logs/worker.pid
   )
 
   for _ in $(seq 1 40); do
@@ -264,6 +297,7 @@ invoke_wsl_biz() {
 
 CLAUDE_PORT="$(dotenv_value "$REPO_ROOT/tools/claude-agent-worker/.env" AGENT_WORKER_PORT "3031")"
 CODEX_PORT="$(dotenv_value "$REPO_ROOT/tools/codex-agent-worker/.env" CODEX_WORKER_PORT "3051")"
+GEMINI_PORT="$(dotenv_value "$REPO_ROOT/tools/gemini-agent-worker/.env" GEMINI_WORKER_PORT "3071")"
 LOCAL_BIZ_DEFAULT_PORT="$(dotenv_value "$REPO_ROOT/tools/langgraph-biz-worker/.env" BIZ_WORKER_PORT "3061")"
 LOCAL_BIZ_PORT="$(dotenv_value "$REPO_ROOT/tools/langgraph-biz-worker/.env.local" BIZ_WORKER_PORT "$LOCAL_BIZ_DEFAULT_PORT")"
 
@@ -273,12 +307,14 @@ if [ "$ACTION" = "status" ]; then
   [ "$NO_BACKEND" -eq 1 ] || write_status "backend" "$BACKEND_PORT" "http://127.0.0.1:$BACKEND_PORT/actuator/health"
   [ "$NO_CLAUDE" -eq 1 ] || write_status "claude-worker" "$CLAUDE_PORT" "http://127.0.0.1:$CLAUDE_PORT/health"
   [ "$NO_CODEX" -eq 1 ] || write_status "codex-worker" "$CODEX_PORT" "http://127.0.0.1:$CODEX_PORT/health"
+  [ "$NO_GEMINI" -eq 1 ] || write_status "gemini-worker" "$GEMINI_PORT" "http://127.0.0.1:$GEMINI_PORT/health"
   [ "$NO_LOCAL_BIZ" -eq 1 ] || write_status "local-biz-worker" "$LOCAL_BIZ_PORT" "http://127.0.0.1:$LOCAL_BIZ_PORT/health"
   [ "$NO_WSL_BIZ" -eq 1 ] || invoke_wsl_biz status || true
   exit 0
 fi
 
 if [ "$ACTION" = "stop" ] || [ "$ACTION" = "restart" ]; then
+  [ "$NO_GEMINI" -eq 1 ] || stop_port "gemini-worker" "$GEMINI_PORT"
   [ "$NO_CODEX" -eq 1 ] || invoke_script "Stop Codex Worker" "tools/codex-agent-worker/stop.sh"
   [ "$NO_CLAUDE" -eq 1 ] || invoke_script "Stop Claude Worker" "tools/claude-agent-worker/stop.sh"
   [ "$NO_LOCAL_BIZ" -eq 1 ] || stop_port "local-biz-worker" "$LOCAL_BIZ_PORT"
@@ -297,6 +333,7 @@ if [ "$ACTION" = "start" ] || [ "$ACTION" = "restart" ]; then
   [ "$NO_LOCAL_BIZ" -eq 1 ] || start_local_biz_worker
   [ "$NO_CLAUDE" -eq 1 ] || invoke_script "Start Claude Worker" "tools/claude-agent-worker/start.sh"
   [ "$NO_CODEX" -eq 1 ] || invoke_script "Start Codex Worker" "tools/codex-agent-worker/start.sh"
+  [ "$NO_GEMINI" -eq 1 ] || start_node_worker "gemini-worker" "$REPO_ROOT/tools/gemini-agent-worker" "$GEMINI_PORT"
 
   if [ "$NO_BACKEND" -eq 0 ]; then
     backend_args=()
@@ -312,5 +349,6 @@ echo "Local stack status:"
 [ "$NO_BACKEND" -eq 1 ] || write_status "backend" "$BACKEND_PORT" "http://127.0.0.1:$BACKEND_PORT/actuator/health"
 [ "$NO_CLAUDE" -eq 1 ] || write_status "claude-worker" "$CLAUDE_PORT" "http://127.0.0.1:$CLAUDE_PORT/health"
 [ "$NO_CODEX" -eq 1 ] || write_status "codex-worker" "$CODEX_PORT" "http://127.0.0.1:$CODEX_PORT/health"
+[ "$NO_GEMINI" -eq 1 ] || write_status "gemini-worker" "$GEMINI_PORT" "http://127.0.0.1:$GEMINI_PORT/health"
 [ "$NO_LOCAL_BIZ" -eq 1 ] || write_status "local-biz-worker" "$LOCAL_BIZ_PORT" "http://127.0.0.1:$LOCAL_BIZ_PORT/health"
 [ "$NO_WSL_BIZ" -eq 1 ] || invoke_wsl_biz status || true
