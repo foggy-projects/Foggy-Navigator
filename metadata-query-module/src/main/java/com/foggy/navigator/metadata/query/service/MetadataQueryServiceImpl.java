@@ -2,6 +2,7 @@ package com.foggy.navigator.metadata.query.service;
 
 import com.foggy.navigator.metadata.query.model.*;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -45,7 +46,7 @@ public class MetadataQueryServiceImpl implements MetadataQueryService {
     }
 
     public MetadataQueryServiceImpl(
-            RestTemplate restTemplate,
+            @Qualifier("metadataQueryRestTemplate") RestTemplate restTemplate,
             @Value("${foggy.api.base-url:http://localhost:8082}") String foggyApiBaseUrl) {
         this.restTemplate = restTemplate;
         this.foggyApiBaseUrl = foggyApiBaseUrl;

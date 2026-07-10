@@ -27,8 +27,7 @@ import java.util.concurrent.Executor;
         "com.foggy.navigator.common.entity"
 })
 @EnableJpaRepositories(basePackages = {
-        "com.foggy.navigator.claude.worker.repository",
-        "com.foggy.navigator.common.repository"
+        "com.foggy.navigator.claude.worker.repository"
 })
 @EnableScheduling
 public class ClaudeWorkerAutoConfiguration {

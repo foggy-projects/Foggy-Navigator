@@ -14,6 +14,7 @@ import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.env.Environment;
 import org.springframework.web.client.RestTemplate;
 
@@ -29,20 +30,19 @@ import java.util.Arrays;
         "com.foggy.navigator.common.entity"
 })
 @EnableJpaRepositories(basePackages = {
-        "com.foggy.navigator.business.agent.repository",
-        "com.foggy.navigator.common.repository"
+        "com.foggy.navigator.business.agent.repository"
 })
 public class BusinessAgentAutoConfiguration {
 
-    @Bean
-    public RestTemplate restTemplate() {
+    @Bean("businessAgentRestTemplate")
+    public RestTemplate businessAgentRestTemplate() {
         return new RestTemplate();
     }
 
     @Bean
     @Primary
     public BusinessFunctionAdapterInvoker businessFunctionAdapterInvoker(ObjectMapper objectMapper,
-                                                                         RestTemplate restTemplate,
+                                                                         @Qualifier("businessAgentRestTemplate") RestTemplate restTemplate,
                                                                          Environment environment,
                                                                          ClientAppUserGrantService userGrantService,
                                                                          ClientAppUpstreamRouteService upstreamRouteService) {

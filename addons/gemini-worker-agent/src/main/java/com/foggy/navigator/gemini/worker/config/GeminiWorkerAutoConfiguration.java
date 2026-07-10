@@ -21,8 +21,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
         "com.foggy.navigator.common.entity"
 })
 @EnableJpaRepositories(basePackages = {
-        "com.foggy.navigator.gemini.worker.repository",
-        "com.foggy.navigator.common.repository"
+        "com.foggy.navigator.gemini.worker.repository"
 })
 public class GeminiWorkerAutoConfiguration {
 }

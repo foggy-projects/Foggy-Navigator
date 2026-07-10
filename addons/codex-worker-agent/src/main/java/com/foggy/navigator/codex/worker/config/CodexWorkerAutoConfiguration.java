@@ -23,8 +23,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "com.foggy.navigator.common.entity"
 })
 @EnableJpaRepositories(basePackages = {
-        "com.foggy.navigator.codex.worker.repository",
-        "com.foggy.navigator.common.repository"
+        "com.foggy.navigator.codex.worker.repository"
 })
 public class CodexWorkerAutoConfiguration {
 }

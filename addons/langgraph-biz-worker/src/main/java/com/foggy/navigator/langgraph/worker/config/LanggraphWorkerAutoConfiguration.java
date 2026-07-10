@@ -21,8 +21,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
         "com.foggy.navigator.common.entity"
 })
 @EnableJpaRepositories(basePackages = {
-        "com.foggy.navigator.langgraph.worker.repository",
-        "com.foggy.navigator.common.repository"
+        "com.foggy.navigator.langgraph.worker.repository"
 })
 public class LanggraphWorkerAutoConfiguration {
 
