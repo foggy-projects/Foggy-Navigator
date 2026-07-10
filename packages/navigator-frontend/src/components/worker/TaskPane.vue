@@ -58,6 +58,12 @@
         </el-button>
       </div>
     </div>
+    <NativeSubtaskBar
+      v-if="paneState.nativeSubtasks.value.length > 0"
+      :subtasks="paneState.nativeSubtasks.value"
+      :loading="paneState.nativeSubtasksLoading.value"
+      :last-event-seq="paneState.nativeSubtaskLastEventSeq.value"
+    />
     <div class="pane-body">
       <ChatPanel
         :messages="paneState.chatState.sortedMessages.value"
@@ -257,6 +263,7 @@ import type { SkillInfo } from '@/types'
 import type { SessionFileHintFile, SessionFileHintsResponse } from '@/types/sessionFileHints'
 import { inferTaskWorkerBackend } from '@/utils/workerBackend'
 import { loadTaskFileHints } from './taskPaneFileHints'
+import NativeSubtaskBar from './NativeSubtaskBar.vue'
 import SlashCommandInput from './SlashCommandInput.vue'
 import type { AgentItem } from './SlashCommandInput.vue'
 import { canEnableRewind, canShowContinuationInput } from './taskPaneResume'
@@ -601,6 +608,7 @@ function truncate(text: string, maxLen: number) {
 
 <style scoped>
 .task-pane {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   border: 1px solid #e4e7ed;

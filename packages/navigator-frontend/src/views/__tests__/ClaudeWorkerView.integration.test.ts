@@ -8,6 +8,7 @@ import * as unifiedTaskApi from '@/api/unifiedTask'
 import * as sessionApi from '@/api/session'
 import * as platformApi from '@/api/platform'
 import * as codingAgentApi from '@/api/codingAgent'
+import * as codexRuntimeApi from '@/api/codexRuntime'
 import { DEFAULT_TASK_PAGE_SIZE } from '@/composables/useClaudeWorker'
 import type { ClaudeTask, ClaudeWorker, LlmModelConfig, WorkingDirectory } from '@/types'
 
@@ -45,6 +46,9 @@ vi.mock('@/api/codingAgent', () => ({
 vi.mock('@/api/platform', () => ({
   listModelConfigs: vi.fn().mockResolvedValue([]),
   listAgentModelOverrides: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/api/codexRuntime', () => ({
+  listCodexRuntimes: vi.fn().mockResolvedValue([]),
 }))
 vi.mock('@/api/unifiedTask', () => ({
   createTaskUnified: vi.fn(),
@@ -337,6 +341,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     vi.mocked(platformApi.listModelConfigs).mockResolvedValue([])
     vi.mocked(platformApi.listAgentModelOverrides).mockResolvedValue([])
     vi.mocked(codingAgentApi.listAgents).mockResolvedValue([])
+    vi.mocked(codexRuntimeApi.listCodexRuntimes).mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -600,6 +605,112 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
 
       expect(vm.directoryTasks[0].status).toBe('COMPLETED')
       expect(vm.conversationInteractionState(vm.activeConversations[0])).toBe('AWAITING_REPLY')
+    })
+  })
+
+  describe('Codex Ultra runtime readiness for new tasks', () => {
+    const readyUltraRuntime = {
+      runtimeId: 'runtime-ultra',
+      revision: 1,
+      workerId: 'worker-1',
+      runtimeType: 'APP_SERVER',
+      endpointConfigured: true,
+      enabled: true,
+      routingPolicy: 'ULTRA_DEFAULT',
+      rolloutPercentage: 100,
+      priority: 0,
+      routingEpoch: 2,
+      readinessStatus: 'READY',
+      capabilityFresh: true,
+      supportsUltra: true,
+      createdAt: '2026-07-10T00:00:00Z',
+      updatedAt: '2026-07-10T00:00:00Z',
+    } as const
+
+    it('blocks a new Ultra task while the selected worker has no ready runtime', async () => {
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
+        ...mockCodexModelConfig,
+        availableModels: ['codex-ultra'],
+      }])
+      vi.mocked(codexRuntimeApi.listCodexRuntimes).mockResolvedValue([])
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      vm.taskForm.model = 'codex-ultra'
+      await flushPromises()
+      vm.taskForm.prompt = 'new ultra task'
+
+      expect(codexRuntimeApi.listCodexRuntimes).toHaveBeenCalledWith('worker-1', {
+        suppressErrorMessage: true,
+      })
+      expect(vm.taskForm.model).toBe('codex-ultra')
+      expect(vm.ultraRuntimeCreateBlockReason).toBe('当前 Worker 没有可用的 Codex Ultra Runtime')
+      expect(vm.createTaskDisabled).toBe(true)
+      await vm.handleCreateTask()
+      expect(unifiedTaskApi.createTaskUnified).not.toHaveBeenCalled()
+      expect(ElMessage.warning).toHaveBeenCalledWith('当前 Worker 没有可用的 Codex Ultra Runtime')
+      wrapper.unmount()
+    })
+
+    it('enables only new Ultra creation after the selected worker reports a ready runtime', async () => {
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
+        ...mockCodexModelConfig,
+        availableModels: ['codex-ultra'],
+      }])
+      vi.mocked(codexRuntimeApi.listCodexRuntimes).mockResolvedValue([readyUltraRuntime as any])
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      vm.taskForm.model = 'codex-ultra'
+      await flushPromises()
+      vm.taskForm.prompt = 'ready ultra task'
+      await wrapper.vm.$nextTick()
+
+      expect(vm.taskForm.model).toBe('codex-ultra')
+      expect(vm.ultraRuntimeReadiness).toBe('READY')
+      expect(vm.selectedWorkerEntity?.status).toBe('ONLINE')
+      expect(vm.createTaskDisabled).toBe(false)
+      expect(vm.ultraRuntimeCreateBlockReason).toBe('')
+      wrapper.unmount()
+    })
+
+    it('ignores a late ready response from the previously selected worker', async () => {
+      let resolveWorkerOne!: (value: unknown[]) => void
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
+        ...mockCodexModelConfig,
+        availableModels: ['codex-ultra'],
+      }])
+      vi.mocked(claudeWorkerApi.listWorkers).mockResolvedValue([
+        mockWorker,
+        { ...mockWorker, workerId: 'worker-2', name: 'Second Worker' },
+      ])
+      vi.mocked(codexRuntimeApi.listCodexRuntimes).mockImplementation((workerId: string) => {
+        if (workerId === 'worker-1') {
+          return new Promise((resolve) => { resolveWorkerOne = resolve }) as any
+        }
+        return Promise.resolve([])
+      })
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.taskForm.model = 'codex-ultra'
+      vm.taskForm.prompt = 'worker switch'
+      vm.selectedWorkerId = 'worker-1'
+      await flushPromises()
+      vm.selectedWorkerId = 'worker-2'
+      await flushPromises()
+      resolveWorkerOne([{ ...readyUltraRuntime, workerId: 'worker-1' }])
+      await flushPromises()
+
+      expect(vm.ultraRuntimeCheckedWorkerId).toBe('worker-2')
+      expect(vm.ultraRuntimeReadiness).toBe('UNAVAILABLE')
+      expect(vm.createTaskDisabled).toBe(true)
+      wrapper.unmount()
     })
   })
 

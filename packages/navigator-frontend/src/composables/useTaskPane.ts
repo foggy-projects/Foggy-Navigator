@@ -1,16 +1,29 @@
-import { ref, type Ref } from 'vue'
+import { computed, ref, shallowRef, watch, type ComputedRef, type Ref } from 'vue'
+import { isAxiosError } from 'axios'
 import { createChatState, AipMessageType } from '@foggy/chat'
 import type { ChatState, ChatMessage } from '@foggy/chat'
 import { agentMessageAdapter } from '@/adapters/AgentMessageAdapter'
 import * as sessionApi from '@/api/session'
 import * as workerApi from '@/api/claudeWorker'
+import { getNativeSubtasks } from '@/api/nativeSubtasks'
 import { getTaskUnified } from '@/api/unifiedTask'
 import { useUnifiedSse } from '@/composables/useUnifiedSse'
-import { isClaudeCodeTask } from '@/utils/workerBackend'
+import {
+  createNativeSubtaskState,
+  parseNativeSubtaskUpdate,
+  reduceNativeSubtasks,
+  selectNativeSubtasks,
+} from '@/composables/nativeSubtaskState'
+import { inferTaskWorkerBackend, isClaudeCodeTask } from '@/utils/workerBackend'
 import type { AgentMessage, ClaudeTask, Message } from '@/types'
+import { NATIVE_SUBTASK_UPDATE_TYPE } from '@/types/nativeSubtasks'
+import type { NativeSubtask } from '@/types/nativeSubtasks'
 
 /** Number of messages to load per page */
 const PAGE_SIZE = 800
+const NATIVE_SUBTASK_SNAPSHOT_RETRY_BASE_DELAY = 1000
+const NATIVE_SUBTASK_SNAPSHOT_RETRY_MAX_DELAY = 30000
+const NATIVE_SUBTASK_UNSUPPORTED_STATUSES = new Set([404, 405, 501])
 
 export interface TaskPaneState {
   paneId: string
@@ -24,6 +37,10 @@ export interface TaskPaneState {
   hasMoreHistory: Ref<boolean>
   /** Total number of messages in the DB for the current session */
   totalMessages: Ref<number>
+  /** Native Codex subtask state, kept outside @foggy/chat. */
+  nativeSubtasks: ComputedRef<NativeSubtask[]>
+  nativeSubtasksLoading: Ref<boolean>
+  nativeSubtaskLastEventSeq: ComputedRef<number>
   connect(sessionId: string, pendingImages?: Array<{ name: string; url: string }>): Promise<void>
   /** Load older messages (prepend to chat). Called when user scrolls to top. */
   loadMoreHistory(): Promise<void>
@@ -64,7 +81,34 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   const totalMessages = ref(0)
   let currentSessionId = ''
 
+  const nativeSubtaskState = shallowRef(createNativeSubtaskState())
+  const nativeSubtasks = computed(() => selectNativeSubtasks(nativeSubtaskState.value))
+  const nativeSubtaskLastEventSeq = computed(() => nativeSubtaskState.value.lastEventSeq)
+  const nativeSubtasksLoading = ref(false)
+  let nativeSnapshotRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let nativeSnapshotRetryAttempt = 0
+  let nativeSnapshotRetryKey = ''
+  let nativeSnapshotInFlightKey = ''
+  let nativeSnapshotBlockedKey = ''
+  let disposed = false
+
   const { subscribeSession, connected } = useUnifiedSse()
+
+  const stopTaskWatcher = watch(() => task.value?.taskId, (taskId) => {
+    if (!taskId) {
+      resetNativeSnapshotRecovery()
+      nativeSubtaskState.value = createNativeSubtaskState()
+      nativeSubtasksLoading.value = false
+      return
+    }
+    if (nativeSubtaskState.value.taskId === taskId) return
+    resetNativeSnapshotRecovery()
+    nativeSubtaskState.value = createNativeSubtaskState(taskId)
+    nativeSubtasksLoading.value = false
+    if (currentSessionId && unsubscribeSse) {
+      void loadNativeSubtaskSnapshot(taskId, connectVersion)
+    }
+  })
 
   // User-level SSE fallback: listen for task_status_change, with task_completion as a terminal-state fallback.
   let taskUpdateHandler: ((event: Event) => void) | null = null
@@ -175,6 +219,20 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
   /** SSE event handler — shared by connect and resumeInPlace */
   function handleSseEvent(raw: AgentMessage) {
+    if (raw.type === NATIVE_SUBTASK_UPDATE_TYPE) {
+      const update = parseNativeSubtaskUpdate(raw.payload)
+      if (update && update.taskId === task.value?.taskId) {
+        if (nativeSubtaskState.value.taskId !== update.taskId) {
+          nativeSubtaskState.value = createNativeSubtaskState(update.taskId)
+        }
+        nativeSubtaskState.value = reduceNativeSubtasks(nativeSubtaskState.value, {
+          type: 'UPDATE',
+          update,
+        })
+      }
+      return
+    }
+
     // 1. Pass through adapter for chat messages
     const msgs = agentMessageAdapter.convert(raw, raw.sessionId)
     for (const msg of msgs) {
@@ -226,15 +284,134 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
   /** Subscribe to session events via unified SSE */
   function createSseSubscription(sessionId: string) {
-    unsubscribeSse = subscribeSession(sessionId, handleSseEvent)
+    unsubscribeSse = subscribeSession(sessionId, handleSseEvent, {
+      onSubscribed: () => {
+        const currentTask = task.value
+        if (currentTask?.sessionId === sessionId) {
+          void loadNativeSubtaskSnapshot(currentTask.taskId, connectVersion)
+        }
+      },
+    })
     chatState.setConnectionStatus(connected.value ? 'connected' : 'connecting')
+  }
+
+  function nativeSnapshotKey(taskId: string, version: number): string {
+    return `${version}:${taskId}`
+  }
+
+  function clearNativeSnapshotRetry(): void {
+    if (nativeSnapshotRetryTimer != null) clearTimeout(nativeSnapshotRetryTimer)
+    nativeSnapshotRetryTimer = null
+  }
+
+  function resetNativeSnapshotRecovery(): void {
+    clearNativeSnapshotRetry()
+    nativeSnapshotRetryAttempt = 0
+    nativeSnapshotRetryKey = ''
+    nativeSnapshotInFlightKey = ''
+    nativeSnapshotBlockedKey = ''
+  }
+
+  function isCurrentNativeSnapshotRequest(taskId: string, version: number): boolean {
+    return !disposed
+      && connectVersion === version
+      && task.value?.taskId === taskId
+      && inferTaskWorkerBackend(task.value) === 'OPENAI_CODEX'
+  }
+
+  function nativeSnapshotHttpStatus(error: unknown): number | null {
+    if (!error || typeof error !== 'object' || !('response' in error)) return null
+    const response = (error as { response?: unknown }).response
+    if (!response || typeof response !== 'object' || !('status' in response)) return null
+    const status = (response as { status?: unknown }).status
+    return typeof status === 'number' ? status : null
+  }
+
+  function isRetryableNativeSnapshotError(error: unknown): boolean {
+    const status = nativeSnapshotHttpStatus(error)
+    if (status != null) {
+      return status === 408 || status === 429 || (status >= 500 && status <= 599)
+    }
+    return isAxiosError(error) && error.response == null && error.request != null
+  }
+
+  function scheduleNativeSnapshotRetry(taskId: string, version: number): void {
+    if (!isCurrentNativeSnapshotRequest(taskId, version)) return
+    const key = nativeSnapshotKey(taskId, version)
+    if (nativeSnapshotRetryKey !== key) {
+      clearNativeSnapshotRetry()
+      nativeSnapshotRetryKey = key
+      nativeSnapshotRetryAttempt = 0
+    }
+    if (nativeSnapshotRetryTimer != null) return
+
+    const delay = Math.min(
+      NATIVE_SUBTASK_SNAPSHOT_RETRY_BASE_DELAY * Math.pow(2, nativeSnapshotRetryAttempt),
+      NATIVE_SUBTASK_SNAPSHOT_RETRY_MAX_DELAY,
+    )
+    nativeSnapshotRetryAttempt++
+    nativeSnapshotRetryTimer = setTimeout(() => {
+      nativeSnapshotRetryTimer = null
+      if (!isCurrentNativeSnapshotRequest(taskId, version)) return
+      void loadNativeSubtaskSnapshot(taskId, version)
+    }, delay)
+  }
+
+  async function loadNativeSubtaskSnapshot(taskId: string, version: number) {
+    if (!isCurrentNativeSnapshotRequest(taskId, version)) return
+    const key = nativeSnapshotKey(taskId, version)
+    if (nativeSnapshotBlockedKey === key) return
+    if (nativeSnapshotInFlightKey === key) return
+    if (nativeSnapshotRetryKey !== key) {
+      resetNativeSnapshotRecovery()
+      nativeSnapshotRetryKey = key
+    } else {
+      clearNativeSnapshotRetry()
+    }
+    nativeSnapshotInFlightKey = key
+    if (nativeSubtaskState.value.taskId !== taskId) {
+      nativeSubtaskState.value = createNativeSubtaskState(taskId)
+    }
+    nativeSubtasksLoading.value = true
+    try {
+      const snapshot = await getNativeSubtasks(taskId)
+      if (connectVersion !== version || task.value?.taskId !== taskId || !snapshot) return
+      nativeSubtaskState.value = reduceNativeSubtasks(nativeSubtaskState.value, {
+        type: 'SNAPSHOT',
+        snapshot,
+      })
+      nativeSnapshotRetryAttempt = 0
+    } catch (error) {
+      if (!isCurrentNativeSnapshotRequest(taskId, version)) return
+      const status = nativeSnapshotHttpStatus(error)
+      if (status != null && NATIVE_SUBTASK_UNSUPPORTED_STATUSES.has(status)) {
+        nativeSnapshotBlockedKey = key
+        clearNativeSnapshotRetry()
+        nativeSnapshotRetryAttempt = 0
+      } else if (isRetryableNativeSnapshotError(error)) {
+        scheduleNativeSnapshotRetry(taskId, version)
+      } else {
+        nativeSnapshotBlockedKey = key
+        clearNativeSnapshotRetry()
+        nativeSnapshotRetryAttempt = 0
+      }
+    } finally {
+      if (nativeSnapshotInFlightKey === key) nativeSnapshotInFlightKey = ''
+      if (connectVersion === version && task.value?.taskId === taskId) {
+        nativeSubtasksLoading.value = false
+      }
+    }
   }
 
   async function connect(sessionId: string, pendingImages?: Array<{ name: string; url: string }>) {
     disconnect()
     const myVersion = ++connectVersion
+    disposed = false
+    resetNativeSnapshotRecovery()
     chatState.clearMessages()
     chatState.setConnectionStatus('connecting')
+    nativeSubtaskState.value = createNativeSubtaskState(task.value?.taskId ?? null)
+    nativeSubtasksLoading.value = false
 
     // Reset pagination state
     currentSessionId = sessionId
@@ -461,7 +638,11 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
   /** Resume in the same pane without clearing messages */
   function resumeInPlace(newTask: ClaudeTask, images?: Array<{ name: string; url: string }>) {
+    ++connectVersion
+    resetNativeSnapshotRecovery()
     task.value = newTask
+    nativeSubtaskState.value = createNativeSubtaskState(newTask.taskId)
+    nativeSubtasksLoading.value = false
     chatState.addUserMessage(newTask.prompt, undefined, images)
 
     // Unsubscribe old SSE (without clearing messages)
@@ -478,7 +659,11 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
   /** Resume in the same pane — user message already added by caller */
   function resumeInPlaceNoMessage(newTask: ClaudeTask) {
+    ++connectVersion
+    resetNativeSnapshotRecovery()
     task.value = newTask
+    nativeSubtaskState.value = createNativeSubtaskState(newTask.taskId)
+    nativeSubtasksLoading.value = false
 
     // Unsubscribe old SSE (without clearing messages)
     if (unsubscribeSse) {
@@ -505,6 +690,8 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
   function disconnect() {
     connectVersion++
+    resetNativeSnapshotRecovery()
+    nativeSubtasksLoading.value = false
     if (unsubscribeSse) {
       unsubscribeSse()
       unsubscribeSse = null
@@ -514,8 +701,12 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   }
 
   function dispose() {
+    disposed = true
+    stopTaskWatcher()
     disconnect()
     chatState.clearMessages()
+    nativeSubtaskState.value = createNativeSubtaskState()
+    nativeSubtasksLoading.value = false
   }
 
   return {
@@ -526,6 +717,9 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     loadingMore,
     hasMoreHistory,
     totalMessages,
+    nativeSubtasks,
+    nativeSubtasksLoading,
+    nativeSubtaskLastEventSeq,
     connect,
     loadMoreHistory,
     loadAllHistory,

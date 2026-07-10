@@ -317,7 +317,8 @@
           <div class="form-action-bar">
             <el-button
               type="primary"
-              :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE'"
+              :disabled="createTaskDisabled"
+              :title="ultraRuntimeCreateBlockReason || undefined"
               :loading="creatingTask"
               @click="handleCreateTask"
             >
@@ -390,7 +391,8 @@
             <el-button
               class="mini-run-btn"
               size="small"
-              :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE'"
+              :disabled="createTaskDisabled"
+              :title="ultraRuntimeCreateBlockReason || undefined"
               :loading="creatingTask"
               @click="handleCreateTask"
             >
@@ -715,7 +717,8 @@
           <div class="form-action-bar">
             <el-button
               type="primary"
-              :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE'"
+              :disabled="createTaskDisabled"
+              :title="ultraRuntimeCreateBlockReason || undefined"
               :loading="creatingTask"
               @click="handleCreateTask"
             >
@@ -775,7 +778,8 @@
             <el-button
               class="mini-run-btn"
               size="small"
-              :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE'"
+              :disabled="createTaskDisabled"
+              :title="ultraRuntimeCreateBlockReason || undefined"
               :loading="creatingTask"
               @click="handleCreateTask"
             >
@@ -1801,7 +1805,7 @@
     </el-dialog>
 
     <!-- Edit Worker Dialog -->
-    <el-dialog v-model="showEditDialog" title="编辑物理 Worker" width="480px">
+    <el-dialog v-model="showEditDialog" title="编辑物理 Worker" width="min(760px, 94vw)">
       <el-form :model="editForm" label-position="top">
         <el-form-item label="执行环境类型">
           <el-tag v-if="selectedWorkerIsLangGraph" effect="plain">LangGraph Biz capability</el-tag>
@@ -1877,6 +1881,10 @@
           <el-form-item label="Codex 默认模型">
             <el-input v-model="editForm.codexModel" placeholder="如：codex-mini-latest" />
           </el-form-item>
+          <CodexRuntimeManager
+            v-if="showEditDialog && selectedWorkerId"
+            :worker-id="selectedWorkerId"
+          />
           <el-divider content-position="left">Gemini backend capability（可选）</el-divider>
           <el-form-item label="Gemini 地址">
             <el-input v-model="editForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
@@ -2999,6 +3007,7 @@ import SshTerminalPanel from '@/components/worker/SshTerminalPanel.vue'
 import SshTerminal from '@/components/worker/SshTerminal.vue'
 import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import SessionSearchDialog from '@/components/worker/SessionSearchDialog.vue'
+import CodexRuntimeManager from '@/components/worker/CodexRuntimeManager.vue'
 import PencilCanvas from '@/components/ipad/PencilCanvas.vue'
 import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
 import { useForwardSession } from '@/composables/useForwardSession'
@@ -3019,11 +3028,13 @@ import type { SessionRelationInfo } from '@/api/unifiedTask'
 import * as sshApi from '@/api/ssh'
 import { searchFiles } from '@/api/fileBrowser'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
+import { listCodexRuntimes } from '@/api/codexRuntime'
 import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
 import { ALL_MODEL_OPTIONS, isModelConfigCompatibleWithWorker, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
 import { inferTaskWorkerBackend, isClaudeCodeTask, providerTypeFromWorkerBackend, taskSessionRefLabel } from '@/utils/workerBackend'
+import { isUltraRuntimeAvailable } from '@/utils/codexRuntime'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone, WorkerBackend } from '@/types'
 import type { AipMessageType, ChatMessage, NavigatorUiAction, NavigatorUiArtifact } from '@foggy/chat'
 
@@ -4241,6 +4252,103 @@ const selectedDirectory = computed(() =>
 
 const viewActive = ref(true)
 
+type UltraRuntimeReadiness = 'NOT_REQUIRED' | 'CHECKING' | 'READY' | 'UNAVAILABLE' | 'FAILED'
+const ULTRA_RUNTIME_POLL_INTERVAL_MS = 30000
+const ultraRuntimeReadiness = ref<UltraRuntimeReadiness>('NOT_REQUIRED')
+const ultraRuntimeCheckedWorkerId = ref<string | null>(null)
+let ultraRuntimeRequestSequence = 0
+let ultraRuntimePollTimer: ReturnType<typeof setTimeout> | null = null
+
+function isUltraTaskModel(model?: string | null): boolean {
+  const normalized = (model || '').trim().toLowerCase().replace(/\s+/g, '')
+  return normalized === 'codex-ultra' || normalized.endsWith(':ultra')
+}
+
+function stopUltraRuntimeReadinessPolling(resetState = true): void {
+  ultraRuntimeRequestSequence++
+  if (ultraRuntimePollTimer != null) clearTimeout(ultraRuntimePollTimer)
+  ultraRuntimePollTimer = null
+  if (resetState) {
+    ultraRuntimeCheckedWorkerId.value = null
+    ultraRuntimeReadiness.value = isUltraTaskModel(taskForm.value.model)
+      ? 'CHECKING'
+      : 'NOT_REQUIRED'
+  }
+}
+
+function scheduleUltraRuntimeReadinessPoll(requestSequence: number): void {
+  if (!viewActive.value
+    || requestSequence !== ultraRuntimeRequestSequence
+    || !selectedWorkerId.value
+    || !isUltraTaskModel(taskForm.value.model)) return
+  ultraRuntimePollTimer = setTimeout(() => {
+    ultraRuntimePollTimer = null
+    if (requestSequence !== ultraRuntimeRequestSequence) return
+    void refreshUltraRuntimeReadiness(false)
+  }, ULTRA_RUNTIME_POLL_INTERVAL_MS)
+}
+
+async function refreshUltraRuntimeReadiness(initial = true): Promise<void> {
+  const workerId = selectedWorkerId.value
+  if (!viewActive.value || !workerId || !isUltraTaskModel(taskForm.value.model)) return
+  const requestSequence = ++ultraRuntimeRequestSequence
+  if (initial || ultraRuntimeCheckedWorkerId.value !== workerId) {
+    ultraRuntimeReadiness.value = 'CHECKING'
+  }
+  ultraRuntimeCheckedWorkerId.value = workerId
+
+  try {
+    const runtimes = await listCodexRuntimes(workerId, { suppressErrorMessage: true })
+    if (requestSequence !== ultraRuntimeRequestSequence
+      || workerId !== selectedWorkerId.value
+      || !isUltraTaskModel(taskForm.value.model)
+      || !viewActive.value) return
+    ultraRuntimeReadiness.value = runtimes.some(isUltraRuntimeAvailable)
+      ? 'READY'
+      : 'UNAVAILABLE'
+  } catch {
+    if (requestSequence !== ultraRuntimeRequestSequence
+      || workerId !== selectedWorkerId.value
+      || !isUltraTaskModel(taskForm.value.model)
+      || !viewActive.value) return
+    ultraRuntimeReadiness.value = 'FAILED'
+  } finally {
+    scheduleUltraRuntimeReadinessPoll(requestSequence)
+  }
+}
+
+function restartUltraRuntimeReadinessPolling(): void {
+  stopUltraRuntimeReadinessPolling()
+  if (!viewActive.value || !selectedWorkerId.value || !isUltraTaskModel(taskForm.value.model)) return
+  void refreshUltraRuntimeReadiness(true)
+}
+
+const ultraRuntimeCreateBlockReason = computed(() => {
+  if (!isUltraTaskModel(taskForm.value.model)) return ''
+  if (!selectedWorkerId.value) return '请选择用于 Codex Ultra 的 Worker'
+  if (ultraRuntimeCheckedWorkerId.value !== selectedWorkerId.value
+    || ultraRuntimeReadiness.value === 'CHECKING') {
+    return '正在检查 Codex Ultra Runtime，请稍后重试'
+  }
+  if (ultraRuntimeReadiness.value === 'FAILED') {
+    return 'Codex Ultra Runtime 状态检查失败，已阻止新建任务'
+  }
+  if (ultraRuntimeReadiness.value !== 'READY') {
+    return '当前 Worker 没有可用的 Codex Ultra Runtime'
+  }
+  return ''
+})
+
+const createTaskDisabled = computed(() =>
+  !taskForm.value.prompt
+  || selectedWorkerEntity.value?.status !== 'ONLINE'
+  || Boolean(ultraRuntimeCreateBlockReason.value),
+)
+
+watch([selectedWorkerId, () => taskForm.value.model], restartUltraRuntimeReadinessPolling, {
+  immediate: true,
+})
+
 function updateDocumentTitle() {
   const directoryName = selectedDirectory.value?.projectName?.trim()
   document.title = directoryName ? `${directoryName} - ${BASE_DOCUMENT_TITLE}` : BASE_DOCUMENT_TITLE
@@ -4723,6 +4831,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  stopUltraRuntimeReadinessPolling()
   if (activeTasksInterval) {
     clearInterval(activeTasksInterval)
     activeTasksInterval = null
@@ -4738,6 +4847,7 @@ onUnmounted(() => {
 // keep-alive: suspend all SSE when navigating away to free browser connections
 onDeactivated(() => {
   viewActive.value = false
+  stopUltraRuntimeReadinessPolling()
   document.title = BASE_DOCUMENT_TITLE
   suspendOtherWorkspaces(null) // null = suspend ALL workspaces
   if (activeTasksInterval) {
@@ -4749,6 +4859,7 @@ onDeactivated(() => {
 // keep-alive: re-sync all pane task statuses + resume SSE when view is activated
 onActivated(() => {
   viewActive.value = true
+  restartUltraRuntimeReadinessPolling()
   updateDocumentTitle()
   // Resume SSE for the currently active workspace
   const key = activeWorkspaceKey.value
@@ -6416,7 +6527,12 @@ async function handleDeleteAgentTeamsConfig(configId: string) {
 }
 
 async function handleCreateTask() {
-  if (!selectedWorkerId.value || !taskForm.value.prompt) return
+  if (!taskForm.value.prompt) return
+  if (ultraRuntimeCreateBlockReason.value) {
+    ElMessage.warning(ultraRuntimeCreateBlockReason.value)
+    return
+  }
+  if (!selectedWorkerId.value) return
   // Strip leading "/" to prevent Claude Code CLI from interpreting it as a slash command
   let prompt = taskForm.value.prompt
   if (prompt.startsWith('/')) {
