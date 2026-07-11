@@ -8,7 +8,7 @@
 
 ## 版本状态
 
-- status: p0-p2-and-opt003-opt004-isolated-accepted-production-rollout-not-started
+- status: p0-p2-and-opt003-opt004-isolated-accepted-opt005-design-confirmed
 - primary_workitem: `OPT-001`
 - implementation_started: yes
 - production_routing_changed: no
@@ -16,16 +16,17 @@
 
 ## 版本目标
 
-新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持固定 CLI `0.144.1` 已验证的全部模型与 reasoning 档位。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径和非 Ultra 行为、最高支持 Max，并拒绝所有 Ultra 请求；它不承载 app-server。平台先完成幂等任务接受、受控 runtime registry、不可变任务/会话 affinity 和能力握手，再将 Ultra 会话灰度到新 Worker。P7 SDK retirement 已延后，不属于 `1.4.0-SNAPSHOT` 的交付范围。
+新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持固定 CLI `0.144.1` 已验证的全部模型与 reasoning 档位。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径和非 Ultra 行为、最高支持 Max，并拒绝所有 Ultra 请求；它不承载 app-server。P0-P2 已按同 Provider 双 Runtime 方案完成隔离验收；2026-07-12 新增 OPT-005 决策，后续目标架构改为独立 Worker Backend、独立 Provider 和独立物理 Worker 配置。P7 SDK retirement 已延后，不属于 `1.4.0-SNAPSHOT` 的交付范围。
 
 ## 已确认决策
 
 1. 新 Worker 是独立进程、发布物、端口、日志、运行目录和状态域。
 2. 新 Worker 技术上支持全部已声明模型/reasoning；Ultra 是首批计划生产路由，不代表已经批准生产切流。
-3. 外部仍使用 `workerBackend=OPENAI_CODEX` 和 `providerType=codex-worker|codex-biz-worker`，不新增 Provider、Task、Session 或 PC 页面。
+3. OPT-005 取代后续同 Provider 双 Runtime 路线：SDK 使用 `workerBackend=OPENAI_CODEX` / `providerType=codex-worker`，App Server 使用 `workerBackend=OPENAI_CODEX_APP_SERVER` / `providerType=codex-app-server-worker`。
 4. Task/Session/runtime instance affinity 在接受后不可变；回滚只停止新分配，禁止跨 runtime 重放 prompt。
 5. PC 继续使用统一 SSE/snapshot 展示 app-server 原生子任务；不暴露 endpoint、token、Codex Home 或原始子线程内容。
 6. SDK retirement 已按产品决定延后，不属于本版本目标；未来改变该决定必须另建 workitem。
+7. 物理 Worker 的 `Codex` 与 `Codex App Server` endpoint/token/readiness 独立配置；本次重构不考虑旧数据、兼容读取或自动迁移。
 
 ## 阶段状态
 
@@ -39,6 +40,9 @@
 | P5 非 Ultra/功能 cohort | partial-isolated-rollout-not-started | `request_user_input` 与账号额度可观测已由 OPT-003/004 隔离签收；动态 catalog、approval/additional dirs/Biz/MCP 等 parity 仍需逐 cohort 证明 |
 | P6 App-server Default | not-started | 是否扩大为默认由后续产品与生产门禁决定 |
 | P7 SDK Retirement | N/A-deferred-by-product-decision | 旧 SDK Worker 保持现状，不删除、不迁移、不弱化发布与回滚能力 |
+| OPT-005 独立 Provider | design-confirmed-implementation-not-started | 独立 Backend、Provider、Session 和物理 Worker 配置；不考虑旧数据兼容 |
+
+P3-P6 是 OPT-001 同 Provider 双 Runtime 方案的历史 gate，不再作为 OPT-005 的实施顺序。后续开发与验收以 OPT-005 requirement/plan 的 Step 1-7 为准；任何生产启用仍需独立签收。
 
 ## 发布与回归摘要
 
@@ -70,6 +74,9 @@
 - [OPT-002 实施进度](./workitems/OPT-002-codex-model-catalog-progress.md)
 - [Codex App Server 原生交互输入](./workitems/OPT-003-codex-app-server-interactive-input.md)
 - [Codex 额度感知与 Mini 下线](./workitems/OPT-004-codex-rate-limit-awareness-no-fallback.md)
+- [Codex App Server 独立 Provider 与 Worker 配置拆分](./workitems/OPT-005-codex-app-server-independent-provider.md)
+- [OPT-005 实施计划](./workitems/OPT-005-codex-app-server-independent-provider-plan.md)
+- [OPT-005 Ultra 执行提示词](./workitems/OPT-005-codex-app-server-independent-provider-execution-prompt.md)
 - [OPT-004 实现质量检查](./quality/OPT-004-rate-limit-awareness-implementation-quality.md)
 - [OPT-004 测试证据覆盖审计](./coverage/OPT-004-rate-limit-awareness-coverage-audit.md)
 - [OPT-004 隔离验收记录](./acceptance/OPT-004-rate-limit-awareness-acceptance.md)
