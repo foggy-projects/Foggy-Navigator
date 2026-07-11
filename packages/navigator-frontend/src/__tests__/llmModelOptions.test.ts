@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   ALL_MODEL_OPTIONS,
   getModelOptionsByBackend,
+  groupModelOptions,
   isModelConfigCompatibleWithWorker,
   isSelectablePlatformModel,
+  normalizeAvailableModelGrants,
+  normalizeCodexModelValue,
   resolveModelOptions,
 } from '@/utils/llmModelOptions'
 import type { ClaudeWorker, LlmModelConfig, LlmModelCategory, ModelAccessScope, WorkerBackend } from '@/types'
@@ -87,18 +90,21 @@ describe('llmModelOptions', () => {
     expect(resolveModelOptions(config).map((item) => item.value)).toEqual(['opus'])
   })
 
-  it('exposes Codex aliases for OPENAI_CODEX backend', () => {
+  it('exposes grouped canonical Codex model and reasoning values', () => {
     const codex = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
     const values = codex.map((opt) => opt.value)
-    expect(values).toEqual([
-      'codex-latest',
-      'codex-terra',
-      'codex-luna',
-      'codex-fast',
-      'codex-deep',
-      'codex-xhigh',
-      'codex-max',
-      'codex-ultra',
+    expect(values).toHaveLength(17)
+    expect(values).toContain('codex-latest:low')
+    expect(values).toContain('codex-latest:ultra')
+    expect(values).toContain('codex-terra:max')
+    expect(values).toContain('codex-terra:ultra')
+    expect(values).toContain('codex-luna:xhigh')
+    expect(values).not.toContain('codex-luna:ultra')
+
+    expect(groupModelOptions(codex).map((group) => group.label)).toEqual([
+      'Codex Sol',
+      'Codex Terra',
+      'Codex Luna',
     ])
   })
 
@@ -117,12 +123,28 @@ describe('llmModelOptions', () => {
     }
   })
 
-  it('resolveModelOptions filters by availableModels when alias is hit', () => {
+  it('normalizes legacy aliases to one exact canonical grant', () => {
+    expect(normalizeCodexModelValue('codex-latest')).toBe('codex-latest:medium')
+    expect(normalizeCodexModelValue('codex-fast')).toBe('codex-latest:low')
+    expect(normalizeCodexModelValue('codex-deep')).toBe('codex-latest:high')
+    expect(normalizeCodexModelValue('codex-max')).toBe('codex-latest:max')
+    expect(normalizeCodexModelValue('codex-terra')).toBe('codex-terra:medium')
+    expect(normalizeCodexModelValue('codex-terra:extra-high')).toBe('codex-terra:xhigh')
+    expect(normalizeCodexModelValue('codex-fast:high')).toBe('codex-latest:low')
+    expect(normalizeCodexModelValue('gpt-5.6-luna:xhigh')).toBe('codex-luna:xhigh')
+    expect(normalizeCodexModelValue('gpt-5.7-sol:max')).toBeNull()
+  })
+
+  it('resolveModelOptions filters by canonical and legacy grants without opening the whole family', () => {
     const config = createModelConfig({
       workerBackend: 'OPENAI_CODEX' as WorkerBackend,
-      availableModels: ['codex-latest', 'codex-fast'],
+      availableModels: ['codex-terra', 'codex-luna:max', 'codex-deep'],
     })
-    expect(resolveModelOptions(config).map((m) => m.value)).toEqual(['codex-latest', 'codex-fast'])
+    expect(resolveModelOptions(config).map((m) => m.value)).toEqual([
+      'codex-latest:high',
+      'codex-terra:medium',
+      'codex-luna:max',
+    ])
   })
 
   it('requires explicit whitelist grants for Codex Max and Ultra when availableModels is restricted', () => {
@@ -130,7 +152,7 @@ describe('llmModelOptions', () => {
       workerBackend: 'OPENAI_CODEX' as WorkerBackend,
       availableModels: ['codex-max', 'codex-ultra'],
     })
-    expect(resolveModelOptions(config).map((m) => m.value)).toEqual(['codex-max', 'codex-ultra'])
+    expect(resolveModelOptions(config).map((m) => m.value)).toEqual(['codex-latest:max', 'codex-latest:ultra'])
   })
 
   it('maps exact GPT-5.6-Sol Max and Ultra grants to their stable aliases', () => {
@@ -138,7 +160,7 @@ describe('llmModelOptions', () => {
       workerBackend: 'OPENAI_CODEX' as WorkerBackend,
       availableModels: ['gpt-5.6-sol:max', 'gpt-5.6-sol:ultra'],
     })
-    expect(resolveModelOptions(config).map((m) => m.value)).toEqual(['codex-max', 'codex-ultra'])
+    expect(resolveModelOptions(config).map((m) => m.value)).toEqual(['codex-latest:max', 'codex-latest:ultra'])
   })
 
   it('keeps Max and Ultra gated when legacy availableModels has no alias hit', () => {
@@ -149,14 +171,19 @@ describe('llmModelOptions', () => {
       availableModels: ['gpt-5.4', 'gpt-5.5', 'gpt-5.3-codex-spark'],
     })
     const result = resolveModelOptions(config).map((m) => m.value)
-    expect(result).toEqual([
-      'codex-latest',
-      'codex-terra',
-      'codex-luna',
-      'codex-fast',
-      'codex-deep',
-      'codex-xhigh',
-    ])
+    expect(result).toHaveLength(12)
+    expect(result).toContain('codex-latest:medium')
+    expect(result).toContain('codex-terra:xhigh')
+    expect(result).toContain('codex-luna:high')
+    expect(result.some((value) => value.endsWith(':max'))).toBe(false)
+    expect(result.some((value) => value.endsWith(':ultra'))).toBe(false)
+  })
+
+  it('normalizes stored Codex grants when editing a config', () => {
+    expect(normalizeAvailableModelGrants(
+      ['codex-latest', 'codex-terra:high', 'gpt-5.6-luna:max'],
+      'OPENAI_CODEX' as WorkerBackend,
+    )).toEqual(['codex-latest:medium', 'codex-terra:high', 'codex-luna:max'])
   })
 
   it('rejects Codex configs for workers without a Codex endpoint', () => {

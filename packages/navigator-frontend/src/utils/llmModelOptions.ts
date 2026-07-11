@@ -4,11 +4,15 @@ export type SelectableModelOption = {
   value: string
   label: string
   backend: WorkerBackend
-  /**
-   * 可选详细描述，用于下拉选项的辅助文本（如 "Codex Latest (Alias) — Worker 解析为当前默认 Codex 模型"）。
-   * 历史上 SettingsView 通过内联 el-option label 维护细节文案，现在统一收口到此处。
-   */
   description?: string
+  group?: string
+  optionLabel?: string
+  reasoningEffort?: string
+}
+
+export type SelectableModelOptionGroup = {
+  label?: string
+  options: SelectableModelOption[]
 }
 
 const CLAUDE_MODEL_OPTIONS: SelectableModelOption[] = [
@@ -19,39 +23,61 @@ const CLAUDE_MODEL_OPTIONS: SelectableModelOption[] = [
   { value: 'haiku', label: 'Haiku', backend: 'CLAUDE_CODE', description: 'Haiku' },
 ]
 
+const CODEX_REASONING_LEVELS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium', description: '默认' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra High' },
+  { value: 'max', label: 'Max' },
+] as const
+
+function createCodexFamilyOptions(
+  alias: 'codex-latest' | 'codex-terra' | 'codex-luna',
+  familyLabel: string,
+  supportsUltra: boolean,
+): SelectableModelOption[] {
+  const levels = supportsUltra
+    ? [...CODEX_REASONING_LEVELS, { value: 'ultra', label: 'Ultra' } as const]
+    : CODEX_REASONING_LEVELS
+  return levels.map((level) => ({
+    value: `${alias}:${level.value}`,
+    label: `${familyLabel} · ${level.label}`,
+    optionLabel: level.label,
+    group: familyLabel,
+    backend: 'OPENAI_CODEX',
+    reasoningEffort: level.value,
+    description: level.description
+      ? `${familyLabel} · ${level.label}（${level.description}）`
+      : `${familyLabel} · ${level.label}`,
+  }))
+}
+
 /**
- * Codex 稳定 alias 候选。
- *
- * 1.0.4 起：前端 / Java 后端只感知 alias，Worker 在执行任务前把 alias 解析为真实模型。
- * 模型版本升级（如 gpt-5.5 → gpt-5.6）只需修改 Worker 的 CODEX_MODEL_ALIASES 配置，前端无需任何改动。
- *
- * Worker 默认映射（见 tools/codex-agent-worker/src/config.ts → DEFAULT_CODEX_MODEL_ALIASES）：
- *   codex-latest → gpt-5.6-sol
- *   codex-terra  → gpt-5.6-terra
- *   codex-luna   → gpt-5.6-luna
- *   codex-fast   → gpt-5.6-sol:low
- *   codex-deep   → gpt-5.6-sol:high
- *   codex-xhigh  → gpt-5.6-sol:xhigh
- *   codex-max    → gpt-5.6-sol:max
- *   codex-ultra  → gpt-5.6-sol:ultra（仅 codex-app-server-worker）
- *
- * 与 Claude（opus/sonnet/haiku）和 Gemini（gemini-pro/gemini-flash）的命名风格保持一致。
+ * Codex 使用“稳定模型族 alias + reasoning 后缀”作为产品层规范值。
+ * Runtime 仍负责把 alias 解析为真实 GPT 模型，并依据 capability manifest 做最终选路。
  */
-const CODEX_ALIAS_OPTIONS: SelectableModelOption[] = [
-  { value: 'codex-latest', label: 'Codex Latest', backend: 'OPENAI_CODEX', description: 'Codex Latest (Alias) — 当前默认 Codex 模型' },
-  { value: 'codex-terra', label: 'Codex Terra', backend: 'OPENAI_CODEX', description: 'Codex Terra (Alias) — 平衡速度、成本与能力，默认 Medium' },
-  { value: 'codex-luna', label: 'Codex Luna', backend: 'OPENAI_CODEX', description: 'Codex Luna (Alias) — 高吞吐低成本，默认 Medium' },
-  { value: 'codex-fast', label: 'Codex Fast', backend: 'OPENAI_CODEX', description: 'Codex Fast (Alias) — 快速轻量推理' },
-  { value: 'codex-deep', label: 'Codex Deep', backend: 'OPENAI_CODEX', description: 'Codex Deep (Alias) — 深度推理' },
-  { value: 'codex-xhigh', label: 'Codex Extra High', backend: 'OPENAI_CODEX', description: 'Codex Extra High (Alias) — 超高推理' },
-  { value: 'codex-max', label: 'Codex Max', backend: 'OPENAI_CODEX', description: 'Codex Max (Alias) — Sol 最大推理深度' },
-  { value: 'codex-ultra', label: 'Codex Ultra', backend: 'OPENAI_CODEX', description: 'Codex Ultra (Alias) — 仅由 App Server Worker 执行自动任务委派' },
+const CODEX_MODEL_OPTIONS: SelectableModelOption[] = [
+  ...createCodexFamilyOptions('codex-latest', 'Codex Sol', true),
+  ...createCodexFamilyOptions('codex-terra', 'Codex Terra', true),
+  ...createCodexFamilyOptions('codex-luna', 'Codex Luna', false),
 ]
 
-const CODEX_EXPLICIT_GRANT_ALIASES = new Set(['codex-max', 'codex-ultra'])
-const CODEX_REAL_MODEL_GRANT_ALIASES = new Map([
-  ['gpt-5.6-sol:max', 'codex-max'],
-  ['gpt-5.6-sol:ultra', 'codex-ultra'],
+const CODEX_CANONICAL_VALUES = new Set(CODEX_MODEL_OPTIONS.map((option) => option.value))
+const CODEX_LEGACY_ALIASES = new Map<string, string>([
+  ['codex-latest', 'codex-latest:medium'],
+  ['codex-fast', 'codex-latest:low'],
+  ['codex-deep', 'codex-latest:high'],
+  ['codex-xhigh', 'codex-latest:xhigh'],
+  ['codex-max', 'codex-latest:max'],
+  ['codex-ultra', 'codex-latest:ultra'],
+  ['codex-terra', 'codex-terra:medium'],
+  ['codex-luna', 'codex-luna:medium'],
+])
+
+const CODEX_REAL_MODEL_FAMILIES = new Map<string, string>([
+  ['gpt-5.6-sol', 'codex-latest'],
+  ['gpt-5.6-terra', 'codex-terra'],
+  ['gpt-5.6-luna', 'codex-luna'],
 ])
 
 const GEMINI_MODEL_OPTIONS: SelectableModelOption[] = [
@@ -66,10 +92,67 @@ const LANGGRAPH_BIZ_MODEL_OPTIONS: SelectableModelOption[] = [
 
 export const ALL_MODEL_OPTIONS: SelectableModelOption[] = [
   ...CLAUDE_MODEL_OPTIONS,
-  ...CODEX_ALIAS_OPTIONS,
+  ...CODEX_MODEL_OPTIONS,
   ...GEMINI_MODEL_OPTIONS,
   ...LANGGRAPH_BIZ_MODEL_OPTIONS,
 ]
+
+export function normalizeCodexModelValue(value: string | null | undefined): string | null {
+  if (!value?.trim()) return null
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, '')
+  const legacy = CODEX_LEGACY_ALIASES.get(normalized)
+  if (legacy) return legacy
+  if (CODEX_CANONICAL_VALUES.has(normalized)) return normalized
+
+  const separator = normalized.lastIndexOf(':')
+  const base = separator > 0 ? normalized.slice(0, separator) : normalized
+  const fixedLegacyAlias = CODEX_LEGACY_ALIASES.get(base)
+  if (fixedLegacyAlias && !['codex-latest', 'codex-terra', 'codex-luna'].includes(base)) {
+    return fixedLegacyAlias
+  }
+  const rawEffort = separator > 0 ? normalized.slice(separator + 1) : 'medium'
+  const effort = rawEffort === 'extra-high' ? 'xhigh' : rawEffort
+  const familyAlias = ['codex-latest', 'codex-terra', 'codex-luna'].includes(base)
+    ? base
+    : CODEX_REAL_MODEL_FAMILIES.get(base)
+  if (!familyAlias) return null
+  const canonical = `${familyAlias}:${effort}`
+  return CODEX_CANONICAL_VALUES.has(canonical) ? canonical : null
+}
+
+export function normalizeModelValueForBackend(
+  value: string | null | undefined,
+  backend: WorkerBackend | undefined,
+): string {
+  if (!value) return ''
+  if (backend === 'OPENAI_CODEX') return normalizeCodexModelValue(value) ?? value
+  return value
+}
+
+export function normalizeAvailableModelGrants(
+  values: readonly string[] | null | undefined,
+  backend: WorkerBackend | undefined,
+): string[] {
+  if (!values) return []
+  if (backend !== 'OPENAI_CODEX') return [...values]
+  return [...new Set(values.map((value) => normalizeCodexModelValue(value) ?? value))]
+}
+
+export function groupModelOptions(options: readonly SelectableModelOption[]): SelectableModelOptionGroup[] {
+  const groups: SelectableModelOptionGroup[] = []
+  const indexes = new Map<string, number>()
+  for (const option of options) {
+    const key = option.group ?? ''
+    let index = indexes.get(key)
+    if (index === undefined) {
+      index = groups.length
+      indexes.set(key, index)
+      groups.push({ label: option.group, options: [] })
+    }
+    groups[index]!.options.push(option)
+  }
+  return groups
+}
 
 function supportsSubscriptionSelection(backend: WorkerBackend | undefined): boolean {
   return backend === 'CLAUDE_CODE' || backend === 'OPENAI_CODEX' || backend === 'GEMINI_CLI' || backend === 'LANGGRAPH_BIZ'
@@ -87,57 +170,37 @@ export function isModelConfigCompatibleWithWorker(
   const backend = model.workerBackend ?? 'CLAUDE_CODE'
   const workerBackend = worker.workerBackend ?? 'CLAUDE_CODE'
 
-  if (backend === 'CLAUDE_CODE') {
-    return workerBackend === 'CLAUDE_CODE'
-  }
-  if (backend === 'OPENAI_CODEX') {
-    return workerBackend === 'OPENAI_CODEX' || Boolean(worker.codexBaseUrl?.trim())
-  }
-  if (backend === 'GEMINI_CLI') {
-    return workerBackend === 'GEMINI_CLI' || Boolean(worker.geminiBaseUrl?.trim())
-  }
-  if (backend === 'LANGGRAPH_BIZ') {
-    return workerBackend === 'LANGGRAPH_BIZ'
-  }
+  if (backend === 'CLAUDE_CODE') return workerBackend === 'CLAUDE_CODE'
+  if (backend === 'OPENAI_CODEX') return workerBackend === 'OPENAI_CODEX' || Boolean(worker.codexBaseUrl?.trim())
+  if (backend === 'GEMINI_CLI') return workerBackend === 'GEMINI_CLI' || Boolean(worker.geminiBaseUrl?.trim())
+  if (backend === 'LANGGRAPH_BIZ') return workerBackend === 'LANGGRAPH_BIZ'
   return false
 }
 
 /**
- * 根据 model 配置计算下拉候选项。
- *
- * 1.0.4 起的兼容兜底：
- * - 标准路径：当 `availableModels` 命中新 alias 或已知 GPT-5.6-Sol grant 时，按 whitelist 过滤
- * - 兼容路径：当 `availableModels` 全部是历史真实模型名（如 `gpt-5.4`、`gpt-5.5`）时，
- *   说明该配置是从旧版本继承下来的存量数据，新前端无法用这些值做有意义的过滤。
- *   此时开放普通 alias 帮助用户迁移，但 Max/Ultra 仍需在 whitelist 中显式授权。
+ * 空 availableModels 表示不限制；非空时对已知 Codex 模型按规范值精确过滤。
+ * 旧配置若全是未知真实模型名，保留迁移兜底，但不自动开放 Max/Ultra。
  */
 export function resolveModelOptions(modelConfig: LlmModelConfig | null | undefined): SelectableModelOption[] {
   const backend = modelConfig?.workerBackend ?? 'CLAUDE_CODE'
   const backendModels = ALL_MODEL_OPTIONS.filter((model) => model.backend === backend)
   const allowed = modelConfig?.availableModels
-  if (!allowed || allowed.length === 0) {
-    return backendModels
+  if (!allowed || allowed.length === 0) return backendModels
+
+  if (backend !== 'OPENAI_CODEX') {
+    const allowedSet = new Set(allowed)
+    return backendModels.filter((model) => allowedSet.has(model.value))
   }
-  const effectiveAllowed = new Set(allowed)
-  if (backend === 'OPENAI_CODEX') {
-    for (const allowedModel of allowed) {
-      if (!allowedModel) continue
-      const alias = CODEX_REAL_MODEL_GRANT_ALIASES.get(allowedModel.trim().toLowerCase())
-      if (alias) effectiveAllowed.add(alias)
-    }
+
+  const normalizedAllowed = new Set(
+    allowed.map((value) => normalizeCodexModelValue(value)).filter((value): value is string => Boolean(value)),
+  )
+  if (normalizedAllowed.size === 0) {
+    return backendModels.filter((model) => model.reasoningEffort !== 'max' && model.reasoningEffort !== 'ultra')
   }
-  const filtered = backendModels.filter((model) => effectiveAllowed.has(model.value))
-  // OPENAI_CODEX 旧 availableModels（gpt-5.4 等）兼容兜底：高权限 alias 不随迁移兜底开放。
-  if (backend === 'OPENAI_CODEX' && filtered.length === 0) {
-    return backendModels.filter((model) => !CODEX_EXPLICIT_GRANT_ALIASES.has(model.value))
-  }
-  return filtered
+  return backendModels.filter((model) => normalizedAllowed.has(model.value))
 }
 
-/**
- * 获取指定 backend 的所有候选模型（忽略 availableModels 过滤）。
- * 用于设置页的"可用模型"复选框与模型名称下拉框初始渲染。
- */
 export function getModelOptionsByBackend(backend: WorkerBackend): SelectableModelOption[] {
   return ALL_MODEL_OPTIONS.filter((model) => model.backend === backend)
 }

@@ -680,22 +680,16 @@ codex-worker status</pre>
                   :label="opt.description || opt.label"
                 />
               </el-select>
-              <el-select
+              <ModelSelect
                 v-else-if="llmForm.workerBackend === 'OPENAI_CODEX'"
                 v-model="llmForm.modelName"
+                :options="codexBackendOptions"
                 filterable
                 allow-create
                 reserve-keyword
                 default-first-option
                 placeholder="选择或输入 Codex 模型别名"
-              >
-                <el-option
-                  v-for="opt in codexBackendOptions"
-                  :key="opt.value"
-                  :value="opt.value"
-                  :label="opt.description || opt.label"
-                />
-              </el-select>
+              />
               <el-select
                 v-else-if="llmForm.workerBackend === 'GEMINI_CLI'"
                 v-model="llmForm.modelName"
@@ -772,15 +766,20 @@ codex-worker status</pre>
         </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'OPENAI_CODEX'" label="可用模型">
           <el-checkbox-group v-model="llmForm.availableModels">
-            <el-checkbox
-              v-for="opt in codexBackendOptions"
-              :key="opt.value"
-              :value="opt.value"
-              :label="opt.label"
-            />
+            <div v-for="group in codexBackendOptionGroups" :key="group.label" class="codex-model-group">
+              <div class="codex-model-group__title">{{ group.label }}</div>
+              <div class="codex-model-group__options">
+                <el-checkbox
+                  v-for="opt in group.options"
+                  :key="opt.value"
+                  :value="opt.value"
+                  :label="opt.optionLabel || opt.label"
+                />
+              </div>
+            </div>
           </el-checkbox-group>
           <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
-            勾选可用的 Codex 模型，Workers 页面仅显示已勾选项；不勾选则不限制
+            按模型族勾选可用推理档位；某组至少勾选一项即开放该组，不勾选任何项则不限制
           </div>
         </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'GEMINI_CLI'" label="可用模型">
@@ -1168,13 +1167,18 @@ import {
 } from '@/api/businessAgent'
 import type { TaskAssistantConfig } from '@/api/notification'
 import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, ModelAccessScope, UserMemory, UserMemoryCategory, ApiCredential, AuthType, WorkerBackend, BizWorkerPool, ClientAppModelConfigGrant } from '@/types'
-import { getModelOptionsByBackend } from '@/utils/llmModelOptions'
-
+import ModelSelect from '@/components/worker/ModelSelect.vue'
+import {
+  getModelOptionsByBackend,
+  groupModelOptions,
+  normalizeAvailableModelGrants,
+  normalizeModelValueForBackend,
+} from '@/utils/llmModelOptions'
 // 统一 Claude / Codex / Gemini / LangGraph Biz 模型候选（见 utils/llmModelOptions.ts）。
-// 1.0.4 起：Codex 切到 alias-only 模式，Worker backend 都使用扁平 alias 列表，
-// 与 Claude / Gemini 命名风格保持一致；模型版本升级时仅改 Worker 配置，前端零变动。
+// Codex 使用稳定模型族 alias + reasoning 后缀，并在 UI 中按模型族分组。
 const claudeBackendOptions = getModelOptionsByBackend('CLAUDE_CODE' as WorkerBackend)
 const codexBackendOptions = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
+const codexBackendOptionGroups = groupModelOptions(codexBackendOptions)
 const geminiBackendOptions = getModelOptionsByBackend('GEMINI_CLI' as WorkerBackend)
 const langgraphBizBackendOptions = getModelOptionsByBackend('LANGGRAPH_BIZ' as WorkerBackend)
 
@@ -1471,14 +1475,14 @@ function editLlmModel(row: LlmModelConfig) {
     name: row.name,
     category: row.category,
     baseUrl: row.baseUrl,
-    modelName: row.modelName,
+    modelName: normalizeModelValueForBackend(row.modelName, row.workerBackend),
     apiKey: '',
     isDefault: row.isDefault,
     scope: row.scope || 'GLOBAL',
     allowedWorkerIds: row.allowedWorkerIds ? [...row.allowedWorkerIds] : [],
     envVars: row.envVars ? Object.entries(row.envVars).map(([key, value]) => ({ key, value })) : [],
     workerBackend: row.workerBackend,
-    availableModels: row.availableModels ? [...row.availableModels] : [],
+    availableModels: normalizeAvailableModelGrants(row.availableModels, row.workerBackend),
   }
   showLlmDialog_.value = true
 }
@@ -2281,6 +2285,23 @@ onMounted(() => {
 
 .help-list li + li {
   margin-top: 6px;
+}
+
+.codex-model-group + .codex-model-group {
+  margin-top: 12px;
+}
+
+.codex-model-group__title {
+  margin-bottom: 6px;
+  color: #606266;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.codex-model-group__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
 }
 
 @media (max-width: 640px) {

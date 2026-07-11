@@ -5,7 +5,12 @@ import type { ClaudeTask, LlmModelConfig, DirectoryMilestone, ConversationConfig
 import type { useClaudeWorker } from './useClaudeWorker'
 import { useAttachments, toImagesJson } from './useAttachments'
 import { sortMilestones } from '@/utils/milestone'
-import { isSelectablePlatformModel, resolveModelOptions, type SelectableModelOption } from '@/utils/llmModelOptions'
+import {
+  isSelectablePlatformModel,
+  normalizeModelValueForBackend,
+  resolveModelOptions,
+  type SelectableModelOption,
+} from '@/utils/llmModelOptions'
 import { providerTypeLabel } from '@/utils/workerBackend'
 
 // ── Types ──
@@ -436,7 +441,13 @@ export function useForwardSession(deps: ForwardSessionDeps) {
       forwardForm.value.model = ''
       return
     }
-    if (!options.some((option) => option.value === forwardForm.value.model)) {
+    const normalizedModel = normalizeModelValueForBackend(
+      forwardForm.value.model,
+      forwardSelectedModelConfig.value?.workerBackend,
+    )
+    if (options.some((option) => option.value === normalizedModel)) {
+      forwardForm.value.model = normalizedModel
+    } else {
       forwardForm.value.model = options[0]!.value
     }
   })

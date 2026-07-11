@@ -70,17 +70,24 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     public static final String CODEX_PROVIDER_TYPE = "codex-worker";
     public static final String CODEX_BIZ_PROVIDER_TYPE = "codex-biz-worker";
     private static final String AGENT_ID = CODEX_PROVIDER_TYPE;
-    private static final String CODEX_MAX_ALIAS = "codex-max";
-    private static final String CODEX_ULTRA_ALIAS = "codex-ultra";
-    private static final String CODEX_LATEST_MAX = "codex-latest:max";
-    private static final String CODEX_LATEST_ULTRA = "codex-latest:ultra";
     private static final String USER_INPUT_STATE_KEY = "codexPendingInteraction";
     private static final String USER_INPUT_METHOD = "item/tool/requestUserInput";
     private static final int MAX_USER_INPUT_QUESTIONS = 3;
-    private static final Set<String> GPT_5_6_SOL_MAX_GRANTS = Set.of(
-            CODEX_MAX_ALIAS, "gpt-5.6-sol:max");
-    private static final Set<String> GPT_5_6_SOL_ULTRA_GRANTS = Set.of(
-            CODEX_ULTRA_ALIAS, "gpt-5.6-sol:ultra");
+    private static final Set<String> CODEX_CATALOG_EFFORTS = Set.of(
+            "low", "medium", "high", "xhigh", "max", "ultra");
+    private static final Map<String, String> CODEX_LEGACY_MODEL_VALUES = Map.ofEntries(
+            Map.entry("codex-latest", "codex-latest:medium"),
+            Map.entry("codex-fast", "codex-latest:low"),
+            Map.entry("codex-deep", "codex-latest:high"),
+            Map.entry("codex-xhigh", "codex-latest:xhigh"),
+            Map.entry("codex-max", "codex-latest:max"),
+            Map.entry("codex-ultra", "codex-latest:ultra"),
+            Map.entry("codex-terra", "codex-terra:medium"),
+            Map.entry("codex-luna", "codex-luna:medium"));
+    private static final Map<String, String> CODEX_REAL_MODEL_FAMILIES = Map.of(
+            "gpt-5.6-sol", "codex-latest",
+            "gpt-5.6-terra", "codex-terra",
+            "gpt-5.6-luna", "codex-luna");
     private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
             TaskQueryCapability.CREATE_TASK_DIRECT,
             TaskQueryCapability.RESUME_TASK,
@@ -1685,7 +1692,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private boolean isUltraModel(String model) {
         if (model == null) return false;
         String normalized = model.trim().toLowerCase(Locale.ROOT);
-        return CODEX_ULTRA_ALIAS.equals(normalized) || normalized.endsWith(":ultra");
+        return "codex-ultra".equals(normalized) || normalized.endsWith(":ultra");
     }
 
     private String stringValue(Object value) {
@@ -2611,12 +2618,21 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     private void validateEffectiveModelGrant(@Nullable String model, @Nullable String modelConfigId,
                                              @Nullable LlmModelConfigDTO modelConfig) {
-        if (model == null || model.isBlank() || modelConfigId == null || modelConfigId.isBlank()) {
+        if (model == null || model.isBlank()) {
             return;
         }
         String requestedModel = model.trim();
+        if (isUnsupportedKnownCodexCatalogModel(requestedModel)) {
+            throw new IllegalArgumentException("Codex model '" + requestedModel
+                    + "' is not supported by the current model catalog");
+        }
+        if (modelConfigId == null || modelConfigId.isBlank()) {
+            return;
+        }
         String normalizedModel = requestedModel.toLowerCase(Locale.ROOT);
-        if (!isGatedCodexModel(normalizedModel)) {
+        Optional<String> catalogModel = normalizeKnownCodexCatalogModel(requestedModel);
+        boolean futureGatedModel = catalogModel.isEmpty() && isGatedCodexModel(normalizedModel);
+        if (catalogModel.isEmpty() && !futureGatedModel) {
             return;
         }
 
@@ -2627,7 +2643,11 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         boolean granted = availableModels.stream()
                 .filter(allowedModel -> allowedModel != null && !allowedModel.isBlank())
                 .map(String::trim)
-                .anyMatch(allowedModel -> isGatedModelGrant(requestedModel, normalizedModel, allowedModel));
+                .anyMatch(allowedModel -> catalogModel
+                        .map(value -> normalizeKnownCodexCatalogModel(allowedModel)
+                                .map(value::equals)
+                                .orElse(false))
+                        .orElseGet(() -> requestedModel.equals(allowedModel)));
         if (!granted) {
             throw new IllegalArgumentException("Codex model '" + requestedModel
                     + "' requires an explicit availableModels grant in model config '"
@@ -2636,31 +2656,55 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     private boolean isGatedCodexModel(String normalizedModel) {
-        return CODEX_MAX_ALIAS.equals(normalizedModel)
-                || CODEX_ULTRA_ALIAS.equals(normalizedModel)
-                || normalizedModel.endsWith(":max")
+        return normalizedModel.endsWith(":max")
                 || normalizedModel.endsWith(":ultra");
     }
 
-    private boolean isGatedModelGrant(String requestedModel, String normalizedModel, String allowedModel) {
-        if (requestedModel.equals(allowedModel)) {
-            return true;
+    private boolean isUnsupportedKnownCodexCatalogModel(String model) {
+        String normalized = model.trim().toLowerCase(Locale.ROOT).replace(" ", "");
+        int separator = normalized.lastIndexOf(':');
+        if (separator <= 0 || !"ultra".equals(normalized.substring(separator + 1))) {
+            return false;
+        }
+        String base = normalized.substring(0, separator);
+        return "codex-luna".equals(base) || "gpt-5.6-luna".equals(base);
+    }
+
+    private Optional<String> normalizeKnownCodexCatalogModel(String model) {
+        if (model == null || model.isBlank()) {
+            return Optional.empty();
+        }
+        String normalized = model.trim().toLowerCase(Locale.ROOT).replace(" ", "");
+        String legacy = CODEX_LEGACY_MODEL_VALUES.get(normalized);
+        if (legacy != null) {
+            return Optional.of(legacy);
         }
 
-        String normalizedAllowedModel = allowedModel.toLowerCase(Locale.ROOT);
-        if (GPT_5_6_SOL_MAX_GRANTS.contains(normalizedModel)) {
-            return GPT_5_6_SOL_MAX_GRANTS.contains(normalizedAllowedModel);
+        int separator = normalized.lastIndexOf(':');
+        String base = separator > 0 ? normalized.substring(0, separator) : normalized;
+        String effort = separator > 0 ? normalized.substring(separator + 1) : "medium";
+        String fixedLegacyAlias = CODEX_LEGACY_MODEL_VALUES.get(base);
+        if (fixedLegacyAlias != null && !"codex-latest".equals(base)
+                && !"codex-terra".equals(base) && !"codex-luna".equals(base)) {
+            return Optional.of(fixedLegacyAlias);
         }
-        if (GPT_5_6_SOL_ULTRA_GRANTS.contains(normalizedModel)) {
-            return GPT_5_6_SOL_ULTRA_GRANTS.contains(normalizedAllowedModel);
+        if ("extra-high".equals(effort)) {
+            effort = "xhigh";
         }
-        if (CODEX_LATEST_MAX.equals(normalizedModel)) {
-            return CODEX_MAX_ALIAS.equals(normalizedAllowedModel);
+        if (!CODEX_CATALOG_EFFORTS.contains(effort)) {
+            return Optional.empty();
         }
-        if (CODEX_LATEST_ULTRA.equals(normalizedModel)) {
-            return CODEX_ULTRA_ALIAS.equals(normalizedAllowedModel);
+
+        String family;
+        if ("codex-latest".equals(base) || "codex-terra".equals(base) || "codex-luna".equals(base)) {
+            family = base;
+        } else {
+            family = CODEX_REAL_MODEL_FAMILIES.get(base);
         }
-        return false;
+        if (family == null || ("codex-luna".equals(family) && "ultra".equals(effort))) {
+            return Optional.empty();
+        }
+        return Optional.of(family + ":" + effort);
     }
 
     private record ModelResolution(@Nullable String model, String source) {

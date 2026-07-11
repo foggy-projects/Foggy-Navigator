@@ -145,6 +145,13 @@
         :description="stateFilter === 'ALL' ? '输入任务描述并点击运行' : '当前筛选条件下暂无会话'"
       />
     </view>
+    <CodexModelPicker
+      :visible="codexModelPickerVisible"
+      :model-value="selectedModel"
+      :options="modelOptions"
+      @close="codexModelPickerVisible = false"
+      @select="selectCodexModel"
+    />
   </view>
 </template>
 
@@ -162,6 +169,13 @@ import { useInputMemory } from '@/composables/useInputMemory'
 import { useAttachments, toImagesJson, fileIcon } from '@/composables/useAttachments'
 import SessionCard from '@/components/SessionCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import CodexModelPicker from '@/components/CodexModelPicker.vue'
+import {
+  MOBILE_MODEL_OPTIONS,
+  isMobileSelectablePlatformModel,
+  normalizeMobileCodexModel,
+  resolveMobileModelOptions,
+} from '@/utils/llmModelOptions'
 
 const workerId = ref('')
 const directoryId = ref('')
@@ -190,60 +204,9 @@ const selectedModelName = computed(() => {
   return m ? m.name : ''
 })
 
-// All known model options (value = what backend accepts, label = UI display)
-//
-// 源头真相（SSOT）：packages/navigator-frontend/src/utils/llmModelOptions.ts 中的
-// ALL_MODEL_OPTIONS。由于 foggy-mobile 是独立的 uni-app 工程，未直接引用 navigator-frontend
-// 的源码目录，所以在本文件保留一份"薄壁镜像"，但字段结构、value 集合必须与 PC SSOT 对齐。
-//
-// 1.0.4 alias-only 重构（见 docs/version-tracker/1.0.4-SNAPSHOT/04-codex-worker-gpt55-upgrade-and-model-alias-plan.md）：
-// - Codex 切到 alias-only：前端只展示稳定 alias
-// - Worker 在执行前把 alias 解析为真实模型（如 codex-latest → gpt-5.6-sol）
-// - 模型版本升级时仅改 Worker 配置（CODEX_MODEL_ALIASES），前端 / Java 后端无需任何改动
-// - Claude / Gemini 命名风格相同：opus/sonnet/haiku、gemini-pro/flash/flash-lite
-const ALL_MODELS: { value: string; label: string; backend: string }[] = [
-  // Claude models
-  { value: 'opus[1m]', label: 'Opus (1M)', backend: 'CLAUDE_CODE' },
-  { value: 'opus', label: 'Opus', backend: 'CLAUDE_CODE' },
-  { value: 'sonnet[1m]', label: 'Sonnet (1M)', backend: 'CLAUDE_CODE' },
-  { value: 'sonnet', label: 'Sonnet', backend: 'CLAUDE_CODE' },
-  { value: 'haiku', label: 'Haiku', backend: 'CLAUDE_CODE' },
-  // Codex aliases (Worker 解析为真实模型；详见 Worker DEFAULT_CODEX_MODEL_ALIASES)
-  { value: 'codex-latest', label: 'Codex Latest', backend: 'OPENAI_CODEX' },
-  { value: 'codex-terra', label: 'Codex Terra', backend: 'OPENAI_CODEX' },
-  { value: 'codex-luna', label: 'Codex Luna', backend: 'OPENAI_CODEX' },
-  { value: 'codex-fast', label: 'Codex Fast', backend: 'OPENAI_CODEX' },
-  { value: 'codex-deep', label: 'Codex Deep', backend: 'OPENAI_CODEX' },
-  { value: 'codex-xhigh', label: 'Codex Extra High', backend: 'OPENAI_CODEX' },
-  { value: 'codex-max', label: 'Codex Max', backend: 'OPENAI_CODEX' },
-  { value: 'codex-ultra', label: 'Codex Ultra', backend: 'OPENAI_CODEX' },
-  // Gemini aliases（保持与 PC SSOT 对齐）
-  { value: 'gemini-pro', label: 'Gemini Pro (Alias)', backend: 'GEMINI_CLI' },
-  { value: 'gemini-flash', label: 'Gemini Flash (Alias)', backend: 'GEMINI_CLI' },
-  { value: 'gemini-flash-lite', label: 'Gemini Flash Lite (Alias)', backend: 'GEMINI_CLI' },
-]
-
-// Dynamic model options based on selected platform model config
-//
-// 1.0.4 alias-only 兼容兜底（与 navigator-frontend resolveModelOptions 保持一致）：
-// - OPENAI_CODEX backend 旧 availableModels 含真实模型（gpt-5.4 等）但无 alias 命中时，
-//   退化为"不限制"，让用户在新 UI 里看到全部 alias，重新勾选保存即可完成迁移
 const modelOptions = computed(() => {
   const cfg = platformModels.value.find(m => m.id === selectedModelConfigId.value)
-  const backend = cfg?.workerBackend ?? 'CLAUDE_CODE'
-  const backendModels = ALL_MODELS.filter(m => m.backend === backend)
-  const allowed = cfg?.availableModels
-  if (!allowed || allowed.length === 0) return backendModels
-  const effectiveAllowed = new Set(allowed)
-  if (backend === 'OPENAI_CODEX') {
-    if (effectiveAllowed.has('gpt-5.6-sol:max')) effectiveAllowed.add('codex-max')
-    if (effectiveAllowed.has('gpt-5.6-sol:ultra')) effectiveAllowed.add('codex-ultra')
-  }
-  const filtered = backendModels.filter(opt => effectiveAllowed.has(opt.value))
-  if (backend === 'OPENAI_CODEX' && filtered.length === 0) {
-    return backendModels.filter(opt => opt.value !== 'codex-max' && opt.value !== 'codex-ultra')
-  }
-  return filtered
+  return resolveMobileModelOptions(cfg)
 })
 
 const TURNS_OPTIONS = [10, 25, 50, 200, 999]
@@ -254,9 +217,10 @@ const PERMISSION_LABELS: Record<string, string> = {
   default: '全部审批',
 }
 const selectedModel = ref('')  // stores model value (e.g. 'opus[1m]'), NOT label
+const codexModelPickerVisible = ref(false)
 const selectedModelLabel = computed(() => {
   if (!selectedModel.value) return ''
-  const opt = ALL_MODELS.find(m => m.value === selectedModel.value)
+  const opt = MOBILE_MODEL_OPTIONS.find(m => m.value === selectedModel.value)
   return opt ? opt.label : selectedModel.value
 })
 const selectedTurns = ref(0)
@@ -334,6 +298,22 @@ watch(promptInput, (val) => {
   saveDraft(val)
 })
 
+watch(modelOptions, (options) => {
+  if (options.length === 0) {
+    selectedModel.value = ''
+    return
+  }
+  const config = platformModels.value.find(model => model.id === selectedModelConfigId.value)
+  const normalizedModel = config?.workerBackend === 'OPENAI_CODEX'
+    ? normalizeMobileCodexModel(selectedModel.value)
+    : selectedModel.value
+  if (normalizedModel && options.some(option => option.value === normalizedModel)) {
+    selectedModel.value = normalizedModel
+  } else {
+    selectedModel.value = options[0]!.value
+  }
+})
+
 onLoad((options) => {
   workerId.value = options?.workerId || ''
   directoryId.value = options?.directoryId || ''
@@ -375,7 +355,7 @@ async function loadPlatformModels() {
       listModelConfigs(workerId.value || undefined),
       listAgentModelOverrides(),
     ])
-    platformModels.value = models.filter(m => m.hasApiKey)
+    platformModels.value = models.filter(isMobileSelectablePlatformModel)
     // Auto-select claude-worker's agent-model override if exists
     const override = overrides.find(o => o.agentId === 'claude-worker')
     if (override && platformModels.value.some(m => m.id === override.modelConfigId)) {
@@ -742,6 +722,11 @@ function showModelPicker() {
     uni.showToast({ title: '暂无可用模型', icon: 'none' })
     return
   }
+  const config = platformModels.value.find(model => model.id === selectedModelConfigId.value)
+  if (config?.workerBackend === 'OPENAI_CODEX') {
+    codexModelPickerVisible.value = true
+    return
+  }
   const labels = options.map(m => m.label)
   uni.showActionSheet({
     itemList: labels,
@@ -749,6 +734,11 @@ function showModelPicker() {
       selectedModel.value = options[res.tapIndex].value
     },
   })
+}
+
+function selectCodexModel(value: string) {
+  selectedModel.value = value
+  codexModelPickerVisible.value = false
 }
 
 function showTurnsPicker() {

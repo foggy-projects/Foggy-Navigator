@@ -495,7 +495,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       await flushPromises()
 
       expect(vm.platformModelConfigId).toBe('config-codex')
-      expect(vm.taskForm.model).toBe('codex-latest')
+      expect(vm.taskForm.model).toBe('codex-latest:low')
     })
   })
 

@@ -367,9 +367,7 @@
               <el-option value="plan" label="只读(Plan)" />
               <el-option value="default" label="交互式审批" />
             </el-select>
-            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 120px">
-              <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
-            </el-select>
+            <ModelSelect v-model="taskForm.model" :options="claudeModelOptions" size="small" class="toolbar-select" style="width: 150px" />
             <el-select
               v-if="platformModels.length > 0"
               v-model="platformModelConfigId"
@@ -460,9 +458,7 @@
             >
               <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
             </el-select>
-            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 120px">
-              <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
-            </el-select>
+            <ModelSelect v-model="taskForm.model" :options="claudeModelOptions" size="small" class="toolbar-select" style="width: 150px" />
             <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">轮次: {{ taskForm.maxTurns }}</el-tag>
           </div>
           <div v-if="attachments.length > 0" class="image-preview-strip compact">
@@ -764,9 +760,7 @@
               <el-option value="plan" label="只读(Plan)" />
               <el-option value="default" label="交互式审批" />
             </el-select>
-            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 120px">
-              <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
-            </el-select>
+            <ModelSelect v-model="taskForm.model" :options="claudeModelOptions" size="small" class="toolbar-select" style="width: 150px" />
             <el-select
               v-if="platformModels.length > 0"
               v-model="platformModelConfigId"
@@ -832,9 +826,7 @@
             >
               <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
             </el-select>
-            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 120px">
-              <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
-            </el-select>
+            <ModelSelect v-model="taskForm.model" :options="claudeModelOptions" size="small" class="toolbar-select" style="width: 150px" />
             <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">轮次: {{ taskForm.maxTurns }}</el-tag>
           </div>
           <div v-if="attachments.length > 0" class="image-preview-strip compact">
@@ -2355,14 +2347,7 @@
             </el-col>
             <el-col :span="12">
               <el-form-item label="模型">
-                <el-select v-model="forwardForm.model" style="width: 100%" placeholder="选择模型">
-                  <el-option
-                    v-for="modelOption in forwardModelOptions"
-                    :key="modelOption.value"
-                    :label="modelOption.label"
-                    :value="modelOption.value"
-                  />
-                </el-select>
+                <ModelSelect v-model="forwardForm.model" :options="forwardModelOptions" style="width: 100%" placeholder="选择模型" />
               </el-form-item>
             </el-col>
           </el-row>
@@ -2861,14 +2846,13 @@
           </div>
         </el-form-item>
         <el-form-item label="默认模型">
-          <el-select
+          <ModelSelect
             v-model="agentForm.defaultModel"
+            :options="agentModelOptions"
             style="width: 100%"
             :disabled="agentModelOptions.length === 0"
             :placeholder="agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置'"
-          >
-            <el-option v-for="opt in agentModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
-          </el-select>
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -2908,14 +2892,13 @@
           </div>
         </el-form-item>
         <el-form-item label="默认模型">
-          <el-select
+          <ModelSelect
             v-model="agentForm.defaultModel"
+            :options="agentModelOptions"
             style="width: 100%"
             :disabled="agentModelOptions.length === 0"
             :placeholder="agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置'"
-          >
-            <el-option v-for="opt in agentModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
-          </el-select>
+          />
         </el-form-item>
         <el-form-item>
           <template #label>
@@ -3052,6 +3035,7 @@ import { canShowContinuationInput } from '@/components/worker/taskPaneResume'
 import SshTerminalPanel from '@/components/worker/SshTerminalPanel.vue'
 import SshTerminal from '@/components/worker/SshTerminal.vue'
 import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
+import ModelSelect from '@/components/worker/ModelSelect.vue'
 import SessionSearchDialog from '@/components/worker/SessionSearchDialog.vue'
 import CodexRuntimeManager from '@/components/worker/CodexRuntimeManager.vue'
 import PencilCanvas from '@/components/ipad/PencilCanvas.vue'
@@ -3078,7 +3062,13 @@ import { getCodexRuntimeAvailability } from '@/api/codexRuntime'
 import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
-import { ALL_MODEL_OPTIONS, isModelConfigCompatibleWithWorker, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
+import {
+  ALL_MODEL_OPTIONS,
+  isModelConfigCompatibleWithWorker,
+  isSelectablePlatformModel,
+  normalizeModelValueForBackend,
+  resolveModelOptions,
+} from '@/utils/llmModelOptions'
 import { inferTaskWorkerBackend, isClaudeCodeTask, providerTypeFromWorkerBackend, taskSessionRefLabel } from '@/utils/workerBackend'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone, WorkerBackend } from '@/types'
 import type { AipMessageType, ChatMessage, NavigatorUiAction, NavigatorUiArtifact, UserQuestionAnswers } from '@foggy/chat'
@@ -3893,8 +3883,9 @@ function restoreWorkerLlmSelection(workerId: string | null): boolean {
     platformModelConfigId.value = cached.apiConfigId
     // Vue 3 computed 同步更新，claudeModelOptions 此时已是最新值，可直接恢复模型
     const opts = claudeModelOptions.value
-    if (opts.some((o) => o.value === cached.model)) {
-      taskForm.value.model = cached.model
+    const normalizedModel = normalizeModelValueForBackend(cached.model, platformModelConfig.value?.workerBackend)
+    if (opts.some((o) => o.value === normalizedModel)) {
+      taskForm.value.model = normalizedModel
     }
     suppressModelAutoSelect = false
     return true
@@ -3918,7 +3909,13 @@ function syncAgentDefaultModel() {
     agentForm.value.defaultModel = ''
     return
   }
-  if (!opts.some((opt) => opt.value === agentForm.value.defaultModel)) {
+  const normalizedModel = normalizeModelValueForBackend(
+    agentForm.value.defaultModel,
+    agentPlatformModelConfig.value?.workerBackend,
+  )
+  if (opts.some((opt) => opt.value === normalizedModel)) {
+    agentForm.value.defaultModel = normalizedModel
+  } else {
     agentForm.value.defaultModel = opts[0]!.value
   }
 }
@@ -3926,7 +3923,10 @@ function syncAgentDefaultModel() {
 // 当可用模型列表变化时，若当前选中的模型不在列表中则自动回退到第一个
 watch(claudeModelOptions, (opts) => {
   if (suppressModelAutoSelect) return
-  if (opts.length > 0 && !opts.some(o => o.value === taskForm.value.model)) {
+  const normalizedModel = normalizeModelValueForBackend(taskForm.value.model, platformModelConfig.value?.workerBackend)
+  if (opts.some((option) => option.value === normalizedModel)) {
+    taskForm.value.model = normalizedModel
+  } else if (opts.length > 0) {
     taskForm.value.model = opts[0]!.value
   }
 })
@@ -3935,7 +3935,10 @@ watch(claudeModelOptions, (opts) => {
 watch(platformModelConfigId, () => {
   if (suppressModelAutoSelect) return
   const opts = claudeModelOptions.value
-  if (opts.length > 0 && !opts.some(o => o.value === taskForm.value.model)) {
+  const normalizedModel = normalizeModelValueForBackend(taskForm.value.model, platformModelConfig.value?.workerBackend)
+  if (opts.some((option) => option.value === normalizedModel)) {
+    taskForm.value.model = normalizedModel
+  } else if (opts.length > 0) {
     taskForm.value.model = opts[0]!.value
   }
   // 用户手动切换配置时立即持久化（suppress 时是恢复缓存，不需要重复保存）
@@ -3982,6 +3985,8 @@ function findSessionModelConfig(task: ClaudeTask): LlmModelConfig | null {
 function sessionModelMatchesOption(taskModel: string, optionValue: string): boolean {
   const option = optionValue.toLowerCase()
   if (taskModel === option) return true
+  const normalizedCodexModel = normalizeModelValueForBackend(taskModel, 'OPENAI_CODEX')
+  if (normalizedCodexModel === option) return true
   if (option === 'gemini-flash-lite') return taskModel.includes('gemini') && taskModel.includes('flash') && taskModel.includes('lite')
   if (option === 'gemini-flash') return taskModel.includes('gemini') && taskModel.includes('flash') && !taskModel.includes('lite')
   if (option === 'gemini-pro') return taskModel.includes('gemini') && taskModel.includes('pro')
@@ -3995,15 +4000,17 @@ function restoreSessionTaskModel(task: ClaudeTask) {
   if (opts.length === 0) return
 
   const sessionId = task.sessionId || ''
-  const cachedModel = sessionModelCache.get(sessionId)
+  const backend = platformModelConfig.value?.workerBackend
+  const cachedModel = normalizeModelValueForBackend(sessionModelCache.get(sessionId), backend)
   if (cachedModel && opts.some((o) => o.value === cachedModel)) {
     taskForm.value.model = cachedModel
     return
   }
 
   const taskModel = (task.model || '').toLowerCase()
-  if (taskModel && opts.some((o) => o.value === task.model)) {
-    taskForm.value.model = task.model!
+  const normalizedTaskModel = normalizeModelValueForBackend(task.model, backend)
+  if (normalizedTaskModel && opts.some((o) => o.value === normalizedTaskModel)) {
+    taskForm.value.model = normalizedTaskModel
     return
   }
 

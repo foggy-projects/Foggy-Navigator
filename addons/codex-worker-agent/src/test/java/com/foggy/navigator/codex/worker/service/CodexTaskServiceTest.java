@@ -1269,19 +1269,79 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void createTaskDirect_keepsNonGatedModelCompatibilityWithRestrictedWhitelist() {
-        CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-non-gated");
+    void createTaskDirect_rejectsKnownNonGatedModelOutsideRestrictedWhitelist() {
         LlmModelConfigDTO config = codexModelConfig(List.of("gpt-5.4"));
         when(llmModelManager.getModelConfig("cfg-non-gated")).thenReturn(Optional.of(config));
 
-        service.createTaskDirect(Map.of(
+        assertThrows(IllegalArgumentException.class, () -> service.createTaskDirect(Map.of(
                 "workerId", "worker-1",
                 "prompt", "hello",
                 "model", "gpt-5.6-sol:xhigh",
                 "modelConfigId", "cfg-non-gated"
+        ), "user-1", "tenant-1"));
+
+        verify(sessionManager, never()).createSession(any());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void createTaskDirect_allowsLegacyTerraGrantOnlyForMedium() {
+        CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-terra-medium");
+        LlmModelConfigDTO config = codexModelConfig(List.of("codex-terra"));
+        when(llmModelManager.getModelConfig("cfg-terra-medium")).thenReturn(Optional.of(config));
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "gpt-5.6-terra:medium",
+                "modelConfigId", "cfg-terra-medium"
         ), "user-1", "tenant-1");
 
-        assertEquals("gpt-5.6-sol:xhigh", savedTask[0].getModel());
+        assertEquals("gpt-5.6-terra:medium", savedTask[0].getModel());
+    }
+
+    @Test
+    void createTaskDirect_rejectsTerraHighWhenOnlyLegacyTerraMediumIsGranted() {
+        LlmModelConfigDTO config = codexModelConfig(List.of("codex-terra"));
+        when(llmModelManager.getModelConfig("cfg-terra-medium")).thenReturn(Optional.of(config));
+
+        assertThrows(IllegalArgumentException.class, () -> service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "codex-terra:high",
+                "modelConfigId", "cfg-terra-medium"
+        ), "user-1", "tenant-1"));
+
+        verify(sessionManager, never()).createSession(any());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void createTaskDirect_rejectsKnownLunaUltraEvenWithoutRestrictedWhitelist() {
+        assertThrows(IllegalArgumentException.class, () -> service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "gpt-5.6-luna:ultra"
+        ), "user-1", "tenant-1"));
+
+        verify(sessionManager, never()).createSession(any());
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void createTaskDirect_allowsExactCanonicalTerraHighGrant() {
+        CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-terra-high");
+        LlmModelConfigDTO config = codexModelConfig(List.of("codex-terra:high"));
+        when(llmModelManager.getModelConfig("cfg-terra-high")).thenReturn(Optional.of(config));
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "model", "gpt-5.6-terra:high",
+                "modelConfigId", "cfg-terra-high"
+        ), "user-1", "tenant-1");
+
+        assertEquals("gpt-5.6-terra:high", savedTask[0].getModel());
     }
 
     @Test
