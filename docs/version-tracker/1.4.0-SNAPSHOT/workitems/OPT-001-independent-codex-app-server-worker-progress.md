@@ -46,7 +46,8 @@
 | Release `0.3.3` OBS latest | pass-published | `efede2065ef0154d2604dee447787b34cbd0003d4e8458c432c32e40fed2a25b` / `1,802,355` bytes / `197` entries；OBS archive/checksum/bootstrap/latest 上传 200，发布器重新 GET 并校验 archive 与 bootstrap 字节；Windows `240 passed + 7 skipped`、WSL2/Linux `246 passed + 1 skipped` exact public repair 均 stopped、repeat no-op，缺失版本身份与失败事务证据均 fail-closed；`0.3.1/0.3.2` 的残缺安装判定缺陷在最终交付前已由 `0.3.3` 取代 |
 | Release `0.3.4` Linux test launcher | pass-published | 修复旧 Node/Linux 将递归 glob 当作字面路径的安装阻断；`616a0ce7cf8c017bd16e215022c3dcb24f27c37051297eff9c9623f9d6e4b440` / `1,804,723` bytes / `198` entries，source `bbea6584`、`gitDirty=false`；发布流水线 `242 passed + 7 skipped`，WSL2 exact public install `248 passed + 1 skipped`，Linux Node 18 launcher `10/10`，schema/typecheck/build 与公网 archive/bootstrap 回读通过 |
 | Release `0.3.5` Node 18 validation | pass-published | 修复 schema/clean build 使用 Node 18 不支持的 `import.meta.dirname`；`9b30dcffec603f55c5faa7ea322ac1f42e9e5fb094467f051e337ff9e2c90c73` / `1,805,254` bytes，source `cfc5f521`、`gitDirty=false`；发布流水线 `243 passed + 7 skipped`，Linux Node 18 公网精确归档 SHA-256/schema/clean build 与 release-tooling `11/11` 通过 |
-| Release `0.3.6` zero-config endpoint runtime | pass-candidate | 首装自动生成并持久化 32-byte base64 state key，创建安装目录内独立 `CODEX_HOME`，Worker token 与 `OPENAI_API_KEY` 保持为空；Windows installer、Linux mode/stability smoke、Worker `243 passed + 7 skipped`、Java `301/301`、PC `214/214`、Playwright `3/3`、typecheck/build/schema 通过；OBS 发布待源码 commit 后执行 |
+| Release `0.3.6` zero-config endpoint runtime | superseded-before-final | OBS 真包与 Windows/Linux 公网首装均通过，但 bootstrap 末行仍误写“until .env is configured”；配置本身已完整且不影响运行，最终 latest 由修正文案的 `0.3.7` 取代 |
+| Release `0.3.7` zero-config endpoint runtime | pass-candidate | 首装自动生成并持久化 32-byte base64 state key，创建安装目录内独立 `CODEX_HOME`，Worker token 与 `OPENAI_API_KEY` 保持为空；Windows/WSL 公网 `0.3.6` 真包已验证配置、权限、stopped/no-op，`0.3.7` 修正 ready/start 文案后待发布 |
 | Legacy SDK Worker | pass | `116/116`；typecheck/build；现有 SDK 设计保持，Ultra fail-closed；仅测试断言适配 Windows 上的 POSIX server-script 路径 |
 | Codex Java reactor | pass-scoped | 当前 Codex reactor `301/301`；runtime lifecycle/auth 定向 `103/103`；历史 raw full reactor 的 Windows Surefire fork/path 基础设施限制不影响本次已执行结果 |
 | Runtime revision/archive | pass-isolated | Java 定向 `103/103`，覆盖 owner 校验、CAS 归档/恢复、新路由排除归档 revision、历史 affinity 保留和可选 token；PC 定向 `37/37`、Playwright 桌面/窄屏 `2/2`、type-check 通过 |
@@ -123,7 +124,7 @@
 
 ## Execution Check-in
 
-- completed_work: 独立 Worker、双 runtime 控制面、runtime 新建修订与可逆归档、可选 HTTP token、首装自动 state key/CODEX_HOME、生命周期/release、真实 Ultra/SSE/native、PC 刷新与 responsive 隔离验收完成；`0.3.6` 源码候选已验证，待提交后发布 OBS latest
+- completed_work: 独立 Worker、双 runtime 控制面、runtime 新建修订与可逆归档、可选 HTTP token、首装自动 state key/CODEX_HOME、生命周期/release、真实 Ultra/SSE/native、PC 刷新与 responsive 隔离验收完成；`0.3.6` 真包配置已验证但因 bootstrap 末行误导文案被取代，`0.3.7` 待发布 OBS latest
 - touched_areas: `tools/codex-app-server-worker`、Codex Java addon、Session、Navigator PC、安装指南、migration 与版本文档
 - self_check: formal quality gate、coverage audit 与 isolated acceptance 已回写；未扩张到生产 rollout 或 SDK retirement
 - test_status: isolated-pass-release-candidate；Worker `250 total / 243 passed / 7 skipped`、Java `301/301`、PC `214/214`、Playwright `3/3`、Worker/PC build 与 schema 通过；Windows fresh installer 和 Linux 32-byte key/0600 env/0700 home/rerun-stable smoke 通过；MySQL 8.0/8.4 本批此前通过，本次复跑被本机 Docker Linux Engine `500` 阻断

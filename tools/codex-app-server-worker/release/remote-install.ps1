@@ -184,4 +184,4 @@ finally {
     Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Output 'Install/update complete. A fresh installation remains stopped until .env is configured and start.ps1 is run.'
+Write-Output 'Install/update complete. A fresh installation is ready and remains stopped until start.ps1 is run.'

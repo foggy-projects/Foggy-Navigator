@@ -165,4 +165,4 @@ else
   bash "$candidate_dir/install.sh" --install-dir "$INSTALL_DIR"
 fi
 
-echo 'Install/update complete. A fresh installation remains stopped until .env is configured and start.sh is run.'
+echo 'Install/update complete. A fresh installation is ready and remains stopped until start.sh is run.'
