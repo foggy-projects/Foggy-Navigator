@@ -46,6 +46,7 @@
 - App-server Worker `0.2.0` 新增原生交互输入：`215 total / 208 passed / 7 platform-skipped / 0 failed`；release SHA-256/bytes/entries=`03949845DE8C405E1CC679D5DE5FB7F2AE86734C13C16E63102BC150A003343E` / `1,634,838` / `176`，schema/typecheck/build/package 通过。
 - App-server Worker `0.3.0` 新增 advisory-only 账号额度可观测并全面退役 Mini，thread 固定隐藏 rate-limit model nudge：`232 total / 225 passed / 7 platform-skipped / 0 failed`；release SHA-256/bytes/entries=`8C8CB446C861F5AD0AF04DDAAA37EA98670B515B435A6BA881AFC675CF3FA5C5` / `1,724,854` / `190`，schema/typecheck/build/package 通过。SDK Worker `121/121`，Navigator PC `208/208`，Java Codex reactor `283/283`，相关构建通过。
 - App-server Worker `0.3.3` 补齐 OBS `latest.json`、Windows/Linux 稳定 bootstrap、SHA-256/bytes 强校验，以及完整同版本 no-op、可证明残缺安装 repair、失败事务证据 fail-closed 和降级拒绝：公网制品 SHA-256/bytes/entries=`efede2065ef0154d2604dee447787b34cbd0003d4e8458c432c32e40fed2a25b` / `1,802,355` / `197`；Windows exact public repair `247 total / 240 passed / 7 skipped`，WSL2/Linux exact public repair `247 total / 246 passed / 1 skipped`，均保持 stopped，重复执行 no-op，缺失 `VERSION` 或存在 lifecycle/update 失败证据时拒绝。`0.3.1` 因同版本残缺目录可误报 no-op、`0.3.2` 因 Linux repair 比较分支误拒绝而在最终交付前被 `0.3.3` 取代。Navigator PC `210/210`、相关 Playwright `2/2`、`build:check` 通过。OBS manifest 如实记录发布时 `gitDirty=true`，待后续提交闭合源码追溯，不改变生产路由门禁。
+- App-server Worker `0.3.4` 已发布并修复 Linux/旧 Node 将 `tests/**/*.test.ts` 当作字面路径导致安装前校验中止的问题：改由 Node 脚本显式递归枚举测试入口；归档 SHA-256/bytes/entries=`616a0ce7cf8c017bd16e215022c3dcb24f27c37051297eff9c9623f9d6e4b440` / `1,804,723` / `198`，manifest source commit=`bbea65843d16a367e73b9d6d68fcca6768b9edc3`、`gitDirty=false`。发布流水线 `249 total / 242 passed / 7 skipped / 0 failed`，WSL2 exact public install `249 total / 248 passed / 1 skipped / 0 failed`，schema/typecheck/build 与公网 archive/bootstrap 回读校验通过。
 - v5 release SHA-256/bytes/entries: `b6271e5a3220b0253d97b6d05c9fe5f5561331655e27faccd8ad254fbf6c31d9` / `1,500,249` / `168`；双构建字节一致、路径扫描通过，Windows/WSL exact-package install/start/real Ultra/running update/stop 与 zero-residue 均通过；旧 `642121...`、`4ebb...` 与 Windows update 被阻断的 v4 `71a0...` 均已淘汰。
 - Codex Java addon: `259/259`；Session focused: `7/7`；reconciliation: `10/10`；Metadata Query: `13/13`；Launcher ownership context: `1/1`；Code Review client context: `1/1`。raw full reactor 在 Windows 被 Surefire fork/path 基础设施问题阻断，已执行的受影响定向测试无断言失败。
 - Legacy SDK Worker 保持现有 SDK 设计并拒绝 Ultra，`116/116`、typecheck/build 通过；本次仅修正 Windows 上 POSIX server-script 路径的测试断言。Navigator PC: `179/179`，`build:check` 通过。
@@ -87,6 +88,7 @@
 - [Navigator Ultra task evidence](./evidence/OPT-001-navigator-ultra-task-v5.json)
 - [PC final acceptance evidence](./evidence/OPT-001-pc-final-acceptance-v5.json)
 - [OBS latest / public bootstrap 0.3.3 evidence](./evidence/OPT-001-obs-release-0.3.3.json)
+- [OBS latest / public bootstrap 0.3.4 evidence](./evidence/OPT-001-obs-release-0.3.4.json)
 - [BUG-001 App-server delta 消息碎片](./workitems/BUG-001-app-server-delta-message-fragmentation.md)
 - [BUG-002 `.env` 外部状态目录](./workitems/BUG-002-app-worker-dotenv-state-dir.md)
 - [BUG-003 Worker View 移动布局](./workitems/BUG-003-worker-view-mobile-layout.md)
@@ -100,6 +102,7 @@
 - [BUG-011 terminal broadcast 与 TaskStore 上界](./workitems/BUG-011-terminal-broadcast-and-task-store-bounds.md)
 - [BUG-012 Pool 跨 lane LRU 退役](./workitems/BUG-012-pool-cross-lane-lru-retirement.md)
 - [BUG-013 Windows 进程树终止等待竞态](./workitems/BUG-013-windows-process-tree-termination-settle-race.md)
+- [BUG-014 Linux 安装测试 glob 阻断](./workitems/BUG-014-app-worker-linux-test-glob-install-blocker.md)
 
 ## 当前边界
 

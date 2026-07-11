@@ -44,6 +44,7 @@
 | Release `0.1.1` | pass-artifact | v5 SHA-256 `b6271e5a3220b0253d97b6d05c9fe5f5561331655e27faccd8ad254fbf6c31d9`；`1,500,249` bytes；`168` entries；双构建字节一致，路径扫描通过 |
 | Release operations | pass-isolated | Windows/WSL v5 install/start/真实 Ultra/running update/stop、外部 state/CODEX_HOME 保留和 process-tree residue 0 均通过 |
 | Release `0.3.3` OBS latest | pass-published | `efede2065ef0154d2604dee447787b34cbd0003d4e8458c432c32e40fed2a25b` / `1,802,355` bytes / `197` entries；OBS archive/checksum/bootstrap/latest 上传 200，发布器重新 GET 并校验 archive 与 bootstrap 字节；Windows `240 passed + 7 skipped`、WSL2/Linux `246 passed + 1 skipped` exact public repair 均 stopped、repeat no-op，缺失版本身份与失败事务证据均 fail-closed；`0.3.1/0.3.2` 的残缺安装判定缺陷在最终交付前已由 `0.3.3` 取代 |
+| Release `0.3.4` Linux test launcher | pass-published | 修复旧 Node/Linux 将递归 glob 当作字面路径的安装阻断；`616a0ce7cf8c017bd16e215022c3dcb24f27c37051297eff9c9623f9d6e4b440` / `1,804,723` bytes / `198` entries，source `bbea6584`、`gitDirty=false`；发布流水线 `242 passed + 7 skipped`，WSL2 exact public install `248 passed + 1 skipped`，Linux Node 18 launcher `10/10`，schema/typecheck/build 与公网 archive/bootstrap 回读通过 |
 | Legacy SDK Worker | pass | `116/116`；typecheck/build；现有 SDK 设计保持，Ultra fail-closed；仅测试断言适配 Windows 上的 POSIX server-script 路径 |
 | Codex Java reactor | pass-scoped | Codex addon `259/259`；Session focused `7/7`；raw full reactor 被 Windows Surefire fork/path 基础设施问题阻断，受影响定向测试通过 |
 | HTTP client ownership | pass | Metadata `13/13`；Launcher context `1/1`；Code Review context `1/1`，专用/默认 RestTemplate 无歧义 |
@@ -54,6 +55,8 @@
 | Multi-replica affinity | pass-isolated | A/B 同 physical Worker，DARK/default 路由、非目标实例 404、expected-instance mismatch fail-closed、恢复与 delete affinity 均通过 |
 
 ## Acceptance Defect Closure
+
+- [BUG-014 Linux install test glob blocker](./BUG-014-app-worker-linux-test-glob-install-blocker.md): closed in published `0.3.4`; exact WSL2 public install passed.
 
 | Defect | 状态 | 静态/自动化证据 | Final live |
 |---|---|---|---|
@@ -115,7 +118,7 @@
 - completed_work: 独立 Worker、双 runtime 控制面、生命周期/release、真实 Ultra/SSE/native、PC 刷新与 responsive 隔离验收完成；`0.3.3` OBS latest 与 Windows/Linux 无版本一键安装已发布并完成公网 exact-package repair/no-op/fail-closed smoke
 - touched_areas: `tools/codex-app-server-worker`、Codex Java addon、Session、Navigator PC、安装指南、migration 与版本文档
 - self_check: formal quality gate、coverage audit 与 isolated acceptance 已回写；未扩张到生产 rollout 或 SDK retirement
-- test_status: isolated-pass；历史 Worker/SDK/Java/P0-P2 证据保持；当前 `0.3.3` Windows exact public package `240 passed + 7 skipped`、WSL2/Linux `246 passed + 1 skipped`，release tooling `8/8`，PC `210/210`、相关 Playwright `2/2`、`build:check` 通过
+- test_status: isolated-pass-public-fixed；历史 Worker/SDK/Java/P0-P2 证据保持；OBS `0.3.4` 发布流水线 `242 passed + 7 skipped`、WSL2 exact public install `248 passed + 1 skipped`、Linux Node 18 launcher `10/10`、release tooling `10/10`、schema/typecheck/build 与公网回读通过
 - raw_reactor_caveat: Windows Surefire fork/path 基础设施阻断 raw full reactor；受影响定向测试无断言失败，不声明 `1342/1342`
 - implementation_decision: p0-p2-isolated-accepted
 - production_enablement: not-approved
