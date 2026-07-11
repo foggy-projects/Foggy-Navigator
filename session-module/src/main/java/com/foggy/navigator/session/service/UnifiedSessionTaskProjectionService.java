@@ -9,6 +9,7 @@ import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.TaskPageResult;
@@ -18,6 +19,7 @@ import org.springframework.lang.Nullable;
 
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.*;
@@ -553,6 +555,12 @@ final class UnifiedSessionTaskProjectionService {
         DispatchTaskDTO.DispatchTaskDTOBuilder builder = DispatchTaskDTO.builder()
                 .taskId(entity.getTaskId())
                 .workerTaskId(entity.getProviderTaskId())
+                .runtimeId(asString(state.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_ID)))
+                .runtimeRevision(asInteger(state.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_REVISION)))
+                .runtimeType(asString(state.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_TYPE)))
+                .runtimeInstanceId(asString(state.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_INSTANCE_ID)))
+                .routingEpoch(asLong(state.get(ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH)))
+                .runtimeAcceptanceState(asString(state.get(ProviderStateCodec.FIELD_RUNTIME_ACCEPTANCE_STATE)))
                 .sessionId(entity.getSessionId())
                 .parentSessionId(session != null ? session.getParentSessionId() : null)
                 .workerId(entity.getWorkerId())
@@ -773,6 +781,49 @@ final class UnifiedSessionTaskProjectionService {
             return Boolean.parseBoolean(text);
         }
         return null;
+    }
+
+    private Integer asInteger(Object value) {
+        BigInteger integer = asExactInteger(value);
+        if (integer == null) return null;
+        try {
+            return integer.intValueExact();
+        } catch (ArithmeticException ignored) {
+            return null;
+        }
+    }
+
+    private Long asLong(Object value) {
+        BigInteger integer = asExactInteger(value);
+        if (integer == null) return null;
+        try {
+            return integer.longValueExact();
+        } catch (ArithmeticException ignored) {
+            return null;
+        }
+    }
+
+    private BigInteger asExactInteger(Object value) {
+        if (value instanceof BigInteger integer) return integer;
+        if (value instanceof BigDecimal decimal) {
+            try {
+                return decimal.toBigIntegerExact();
+            } catch (ArithmeticException ignored) {
+                return null;
+            }
+        }
+        if (value instanceof Byte || value instanceof Short
+                || value instanceof Integer || value instanceof Long) {
+            return BigInteger.valueOf(((Number) value).longValue());
+        }
+        String text = value instanceof Number number ? number.toString()
+                : value instanceof String string ? string.trim() : null;
+        if (text == null || text.isBlank()) return null;
+        try {
+            return new BigDecimal(text).toBigIntegerExact();
+        } catch (NumberFormatException | ArithmeticException ignored) {
+            return null;
+        }
     }
 
     private String firstNonBlank(String... values) {

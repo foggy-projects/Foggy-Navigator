@@ -11,9 +11,11 @@ import { EventBroadcast } from '../src/persistence/event-store.js'
 import {
   AppServerRuntimeError,
   AppServerRuntimeInstance,
+  buildBundledAppServerArgs,
   isAppServerProcessTreeSafetyError,
   runAppServerTurn,
   type AppServerProcess,
+  type SpawnAppServerProcess,
 } from '../src/app-server/runtime.js'
 import { createStubbornProcessTreeFixture, isProcessAlive } from './stubborn-app-server-fixture.js'
 
@@ -34,6 +36,7 @@ class FakeProcess extends EventEmitter {
     private readonly childMetadataError?: string,
     private readonly interruptBehavior?: 'error' | 'timeout' | 'turn-start-hang' | 'stale-terminal' | 'same-batch-events'
       | 'running-after-start' | 'interactive-request' | 'unknown-server-request' | 'server-resolved-request',
+    private readonly apiKeyLoginBehavior?: 'error' | 'invalid',
   ) {
     super()
     this.stdin.on('data', chunk => {
@@ -66,6 +69,13 @@ class FakeProcess extends EventEmitter {
 
   private handle(message: JsonMessage): void {
     if (message.method === 'initialize') this.send({ id: message.id, result: {} })
+    if (message.method === 'account/login/start') {
+      if (this.apiKeyLoginBehavior === 'error') {
+        this.send({ id: message.id, error: { code: -32000, message: 'login rejected' } })
+      } else {
+        this.send({ id: message.id, result: { type: this.apiKeyLoginBehavior === 'invalid' ? 'chatgpt' : 'apiKey' } })
+      }
+    }
     if (message.method === 'thread/start') this.send({ id: message.id, result: { thread: { id: 'thread-1' } } })
     if (message.method === 'turn/start') {
       assert.equal(this.committed(), true, 'turn/start must be written only after durable commit callback')
@@ -201,6 +211,60 @@ test('strict runtime persists committed before turn/start and has no SDK fallbac
   assert.equal(result.turn.status, 'completed')
   assert.deepEqual(received.map(message => message.method).filter(Boolean), [
     'initialize', 'initialized', 'thread/start', 'turn/start',
+  ])
+})
+
+test('API-key runtime enables ephemeral storage and completes login before becoming available', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true)
+  let spawnOptions: Parameters<SpawnAppServerProcess>[0] | undefined
+  const instance = await AppServerRuntimeInstance.start({
+    env: { PATH: 'C:\\bin' },
+    apiKey: 'dummy-runtime-key',
+    spawnProcess: options => {
+      spawnOptions = options
+      return process as unknown as AppServerProcess
+    },
+    requestTimeoutMs: 1_000,
+  })
+
+  assert.equal(spawnOptions?.ephemeralApiKeyAuth, true)
+  assert.equal(JSON.stringify(spawnOptions), '{"env":{"PATH":"C:\\\\bin"},"ephemeralApiKeyAuth":true}')
+  assert.deepEqual(received.map(message => message.method).filter(Boolean), [
+    'initialize', 'initialized', 'account/login/start',
+  ])
+  const login = received.find(message => message.method === 'account/login/start')
+  assert.deepEqual(login?.params, { type: 'apiKey', apiKey: 'dummy-runtime-key' })
+  await instance.close()
+})
+
+test('runtime rejects and closes an instance when ephemeral API-key login fails', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, undefined, 'error')
+
+  await assert.rejects(AppServerRuntimeInstance.start({
+    env: {},
+    apiKey: 'dummy-rejected-key',
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  }), error => {
+    assert.ok(error instanceof AppServerRuntimeError)
+    assert.equal(error.message, 'Codex app-server ephemeral API-key login failed')
+    assert.doesNotMatch(String(error.stack), /dummy-rejected-key/)
+    const loginFailure = error.cause as Error
+    assert.equal(loginFailure.message, 'Codex app-server ephemeral API-key login failed')
+    const rpcFailure = loginFailure.cause as Error & { code?: number }
+    assert.equal(rpcFailure.message, 'Codex app-server API-key login RPC failed')
+    assert.equal(rpcFailure.code, -32000)
+    return true
+  })
+  assert.equal(process.killed, true)
+})
+
+test('bundled launcher config contains only the ephemeral-store switch for API-key auth', () => {
+  assert.deepEqual(buildBundledAppServerArgs(false).slice(1), ['app-server', '--stdio'])
+  assert.deepEqual(buildBundledAppServerArgs(true).slice(1), [
+    'app-server', '--stdio', '--config', 'cli_auth_credentials_store="ephemeral"',
   ])
 })
 

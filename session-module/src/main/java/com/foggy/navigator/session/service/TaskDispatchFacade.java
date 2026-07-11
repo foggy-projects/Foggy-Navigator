@@ -35,6 +35,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -85,6 +87,10 @@ public class TaskDispatchFacade {
     @Autowired(required = false)
     @Nullable
     private AgentConversationContextRepository agentConversationContextRepository;
+
+    @Autowired(required = false)
+    @Nullable
+    private PlatformTransactionManager transactionManager;
 
     public TaskDispatchFacade(UnifiedAgentResolver agentResolver,
                               SessionBindingService bindingService,
@@ -886,7 +892,7 @@ public class TaskDispatchFacade {
         boolean hasDiagnostics = hasDiagnosticMetadata(request.getMetadata());
         if (!hasModel && !hasModelConfigId && !hasContextId && !hasDiagnostics) return;
 
-        sessionTaskRepository.findByTaskId(taskId).ifPresent(st -> {
+        Runnable update = () -> sessionTaskRepository.findByTaskIdForUpdate(taskId).ifPresent(st -> {
             if (hasModel) st.setModel(model);
             if (hasModelConfigId) st.setModelConfigId(modelConfigId);
             if (hasContextId || hasDiagnostics) {
@@ -900,6 +906,11 @@ public class TaskDispatchFacade {
             }
             sessionTaskRepository.save(st);
         });
+        if (transactionManager == null) {
+            update.run();
+            return;
+        }
+        new TransactionTemplate(transactionManager).executeWithoutResult(ignored -> update.run());
     }
 
     private boolean hasDiagnosticMetadata(Map<String, Object> metadata) {

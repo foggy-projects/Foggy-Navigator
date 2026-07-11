@@ -437,12 +437,12 @@
       </el-tab-pane>
     </el-tabs>
 
-    <el-drawer v-model="showHelpDrawer" size="760px" destroy-on-close>
+    <el-drawer v-model="showHelpDrawer" size="min(760px, 100vw)" destroy-on-close>
       <template #header>
         <div class="help-drawer-header">
           <div>
             <div class="help-drawer-eyebrow">Foggy Navigator Help</div>
-            <div class="help-drawer-title">Claude / Codex Worker 安装与配置</div>
+            <div class="help-drawer-title">Claude / Codex / App Server Worker 安装与配置</div>
           </div>
         </div>
       </template>
@@ -452,7 +452,7 @@
           type="info"
           :closable="false"
           show-icon
-          title="这里说明的是远端 Worker 的安装、升级和平台接入方式。平台侧的 addons/claude-worker-agent 与 addons/codex-worker-agent 随 Navigator 服务部署后即可生效。"
+          title="这里说明远端 Worker 的安装、升级和平台接入方式。平台侧的 addons/claude-worker-agent 与 addons/codex-worker-agent 随 Navigator 服务部署后即可生效。"
         />
 
         <el-tabs v-model="helpTab" class="help-tabs">
@@ -580,6 +580,66 @@ codex-worker status</pre>
                 <li>在 Workers 页面维护机器时，补齐 Codex Base URL、Codex Token、Codex 默认模型。</li>
                 <li>常见地址是 <code>http://&lt;host&gt;:3051</code>，令牌对应 <code>CODEX_WORKER_TOKEN</code>。</li>
               </ul>
+            </section>
+          </el-tab-pane>
+
+          <el-tab-pane label="Codex App Server" name="codex-app-server">
+            <section class="help-section">
+              <div class="help-section-title">对应模块</div>
+              <div class="help-section-text">
+                平台侧 addon：<code>addons/codex-worker-agent</code><br>
+                独立远端执行器：<code>tools/codex-app-server-worker</code><br>
+                App Server Runtime 复用已有物理 Worker 的 Runtime 注册表，不需要新增第三类物理 Worker。
+              </div>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">安装与启动</div>
+              <div class="help-section-text">稳定安装入口会读取 OBS 上的 <code>latest.json</code>，自动下载并校验最新版，无需填写版本号。支持 Windows 和 Linux，macOS 不支持。</div>
+              <pre class="help-code"># Windows PowerShell
+irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.ps1 | iex
+
+# Linux
+curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh | bash</pre>
+              <ul class="help-list">
+                <li>首次执行只完成安装并生成 <code>.env</code>，不会在密钥和隔离目录未配置时强行启动。</li>
+                <li>配置完成后在安装目录执行 <code>.\start.ps1</code> 或 <code>./start.sh</code>。</li>
+                <li>以后重复执行同一条一键安装命令即可安全升级最新版，仍然不需要指定版本号。</li>
+              </ul>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">核心配置</div>
+              <div class="help-section-text">安装目录中的 <code>.env</code> 只在首次安装时创建；升级不会覆盖已有配置。</div>
+              <pre class="help-code">CODEX_APP_SERVER_WORKER_PORT=3062
+CODEX_APP_SERVER_WORKER_HOST=127.0.0.1
+CODEX_APP_SERVER_WORKER_TOKEN=your-worker-token
+CODEX_APP_SERVER_STATE_KEY=&lt;32-byte base64 key&gt;
+CODEX_APP_SERVER_STATE_DIR=/absolute/state/path
+CODEX_HOME=/absolute/isolated/codex-home
+CODEX_APP_SERVER_RUNTIME_ID=codex-app-server-primary
+CODEX_APP_SERVER_RUNTIME_REVISION=1
+
+# Linux 首装会自动写入：
+# CODEX_APP_SERVER_ALLOWED_CWDS=/
+# Windows 首装会快照所有就绪的非 C: 盘根，例如：
+# CODEX_APP_SERVER_ALLOWED_CWDS=D:\,E:\
+# 保留安装生成的当前主机值；需要收窄范围时再替换为逗号分隔的绝对路径。</pre>
+              <ul class="help-list">
+                <li>订阅认证在配置的 <code>CODEX_HOME</code> 下完成 <code>codex login</code>；API Key 模式配置 <code>OPENAI_API_KEY</code>。</li>
+                <li>cwd 白名单是任务入口校验，不是 <code>danger-full-access</code> 的文件系统沙箱。</li>
+                <li>Windows 新增磁盘不会在后续升级时自动加入；需要时手动更新 <code>CODEX_APP_SERVER_ALLOWED_CWDS</code>。</li>
+              </ul>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">平台接入与 Ultra</div>
+              <ol class="help-list">
+                <li>在 Workers 页面选中物理 Worker，打开「编辑」，切到「Codex」Tab。</li>
+                <li>保留上方 SDK Codex endpoint 的原有配置；它与 App Server Runtime 独立。</li>
+                <li>在「App Server Runtime」注册 Runtime ID、<code>http://&lt;host&gt;:3062</code> 与 <code>CODEX_APP_SERVER_WORKER_TOKEN</code>。</li>
+                <li>Runtime 初始为 Dark。刷新 capability，确认 Ready 后再按路由策略启用 Ultra。</li>
+              </ol>
             </section>
           </el-tab-pane>
 
@@ -2229,6 +2289,8 @@ onMounted(() => {
   font-size: 20px;
   font-weight: 600;
   color: #303133;
+  line-height: 1.3;
+  word-break: break-word;
 }
 
 .help-drawer-body {
@@ -2243,7 +2305,7 @@ onMounted(() => {
 
 .help-section {
   border: 1px solid #ebeef5;
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 16px;
   margin-bottom: 16px;
   background: #fff;
@@ -2285,6 +2347,25 @@ onMounted(() => {
 
 .help-list li + li {
   margin-top: 6px;
+}
+
+@media (max-width: 640px) {
+  .help-drawer-body {
+    gap: 12px;
+  }
+
+  .help-drawer-title {
+    font-size: 18px;
+  }
+
+  .help-section {
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+
+  .help-code {
+    padding: 10px;
+  }
 }
 
 .codex-model-group + .codex-model-group {

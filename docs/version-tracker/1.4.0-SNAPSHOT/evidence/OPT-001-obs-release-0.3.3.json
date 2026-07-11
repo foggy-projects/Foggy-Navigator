@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "opt-001-obs-release-0.3.3",
+  "generatedAtUtc": "2026-07-11T12:10:00Z",
+  "scope": "public-release-bootstrap",
+  "status": "PASSED_WITH_TRACEABILITY_FOLLOW_UP",
+  "release": {
+    "product": "codex-app-server-worker",
+    "version": "0.3.3",
+    "archive": "codex-app-server-worker-0.3.3.zip",
+    "sha256": "efede2065ef0154d2604dee447787b34cbd0003d4e8458c432c32e40fed2a25b",
+    "bytes": 1802355,
+    "entries": 197,
+    "forbiddenEntries": 0,
+    "sourceCommit": "61204f83748a7def103f7624b4ccc3d2d6c4517d",
+    "gitDirty": true,
+    "buildTimeUtc": "2026-07-11T11:59:34Z"
+  },
+  "obs": {
+    "bucket": "obs://obs-fe55/codex-app-server-worker",
+    "baseUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker",
+    "latestUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/latest.json",
+    "windowsInstallerUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.ps1",
+    "linuxInstallerUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh",
+    "latestHttpStatus": 200,
+    "windowsInstallerHttpStatus": 200,
+    "linuxInstallerHttpStatus": 200,
+    "archiveHttpStatus": 200,
+    "publisherRemoteArchiveByteAndSha256Verification": true,
+    "publisherRemoteBootstrapByteVerification": true,
+    "latestUploadedLast": true
+  },
+  "bootstrap": {
+    "windows": {
+      "command": "irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.ps1 | iex",
+      "environment": "Windows 10 / PowerShell 7 isolated temp directory",
+      "tests": { "total": 247, "passed": 240, "skipped": 7, "failed": 0 },
+      "incompleteSameVersionRepair": true,
+      "completeSameVersionNoOp": true,
+      "missingVersionIdentityRejected": true,
+      "failureEvidenceRejected": true,
+      "installStopped": true
+    },
+    "linux": {
+      "command": "curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh | bash",
+      "environment": "WSL2 Linux 6.18 / isolated /tmp directory",
+      "tests": { "total": 247, "passed": 246, "skipped": 1, "failed": 0 },
+      "incompleteSameVersionRepair": true,
+      "completeSameVersionNoOp": true,
+      "missingVersionIdentityRejected": true,
+      "failureEvidenceRejected": true,
+      "installStopped": true
+    },
+    "versionPolicy": {
+      "completeSameVersionNoOp": true,
+      "incompleteSameVersionRepairRequiresDualIdentity": true,
+      "unresolvedTransactionEvidenceFailsClosed": true,
+      "newerInstalledVersionDowngradeRejected": true,
+      "existingUpgradeUsesInstalledUpdater": true
+    }
+  },
+  "supersededCandidates": [
+    {
+      "version": "0.3.1",
+      "reason": "same-version no-op did not prove installation completeness or reject unresolved lifecycle evidence"
+    },
+    {
+      "version": "0.3.2",
+      "reason": "Linux same-version repair continued into the newer-version rejection branch"
+    }
+  ],
+  "tests": {
+    "workerSourceWindows": { "total": 247, "passed": 240, "skipped": 7, "failed": 0 },
+    "releaseCommandWindows": { "total": 247, "passed": 240, "skipped": 7, "failed": 0 },
+    "releaseTooling": { "passed": 8, "failed": 0 },
+    "schemaDigest": "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f",
+    "workerTypecheck": "passed",
+    "workerBuild": "passed",
+    "navigatorPc": { "passed": 210, "failed": 0 },
+    "navigatorPcTypecheck": "passed",
+    "navigatorPcBuildCheck": "passed",
+    "playwright": { "passed": 2, "failed": 0 }
+  },
+  "validationObservations": [
+    "One pre-evidence Windows repair attempt reported a package test exit code without retained TAP diagnostics after back-to-back release test runs.",
+    "The same public archive then passed an isolated exact-package run and the complete public bootstrap repair run recorded above."
+  ],
+  "ui": {
+    "settingsHelpIncludesAppServerTab": true,
+    "stableWindowsCommandVisible": true,
+    "stableLinuxCommandVisible": true,
+    "explicitVersionRequired": false,
+    "physicalWorkerEditUsesTabs": true
+  },
+  "independentReview": {
+    "status": "PASSED",
+    "blockingFindings": 0,
+    "verified": [
+      "Windows public dual-identity incomplete repair, required files, complete no-op, and update.in-progress rejection",
+      "Linux missing VERSION, update.in-progress, and installed 0.3.4 downgrade rejection",
+      "Public archive, manifest, local deterministic rebuild, and both bootstrap byte identities",
+      "Release tooling 8/8, PowerShell and Bash syntax, and diff check"
+    ]
+  },
+  "knownGaps": [
+    "The OBS manifest truthfully records gitDirty=true; the next source commit and reproducibility check must close provenance traceability.",
+    "The pre-commit remote latest recheck narrows but does not provide an OBS-native compare-and-swap lock across concurrent publishers.",
+    "This release publication does not approve P3 production routing or contribute task, duration, or rotation samples."
+  ]
+}

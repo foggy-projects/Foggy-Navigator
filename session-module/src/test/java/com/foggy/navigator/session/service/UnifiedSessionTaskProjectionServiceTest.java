@@ -1,5 +1,7 @@
 package com.foggy.navigator.session.service;
 
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
@@ -11,6 +13,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
 
 class UnifiedSessionTaskProjectionServiceTest {
@@ -94,6 +97,21 @@ class UnifiedSessionTaskProjectionServiceTest {
 
         assertEquals(4L, envelope.total());
         assertEquals("session-legacy", assertInstanceOf(Map.class, envelope.results().get(0)).get("sessionId"));
+    }
+
+    @Test
+    void runtimeProjectionRejectsFractionalAndOutOfRangeNumbers() {
+        SessionTaskEntity entity = new SessionTaskEntity();
+        entity.setTaskId("task-invalid-runtime-numbers");
+        entity.setSessionId("session-invalid-runtime-numbers");
+        entity.setTaskStateJson("{\"" + ProviderStateCodec.FIELD_CODEX_RUNTIME_REVISION
+                + "\":1.5,\"" + ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH
+                + "\":9223372036854775808}");
+
+        var projected = service.toDispatchTaskDTO(entity);
+
+        assertNull(projected.getRuntimeRevision());
+        assertNull(projected.getRoutingEpoch());
     }
 
     public static class LegacySearchPage {

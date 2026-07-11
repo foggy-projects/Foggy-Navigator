@@ -61,6 +61,7 @@ export type AppServerProcess = Pick<
 export type SpawnAppServerProcess = (options: {
   cwd?: string
   env: Record<string, string>
+  ephemeralApiKeyAuth: boolean
 }) => AppServerProcess
 
 export type AppServerTurnOptions = {
@@ -76,6 +77,7 @@ export type AppServerTurnOptions = {
   outputSchema?: Record<string, unknown>
   input: CodexInput
   env: Record<string, string>
+  apiKey?: string
   signal: AbortSignal
   onNotification: (notification: AppServerNotification) => void
   onUserInputRequest?: (request: UserInputServerRequest) => Promise<UserInputWireResponse>
@@ -91,7 +93,7 @@ export type AppServerTurnOptions = {
 
 export type PersistentTurnOptions = Omit<
   AppServerTurnOptions,
-  'env' | 'spawnProcess' | 'requestTimeoutMs' | 'onProcessStarted'
+  'env' | 'apiKey' | 'spawnProcess' | 'requestTimeoutMs' | 'onProcessStarted'
 >
 
 export type AppServerTurnResult = {
@@ -187,13 +189,22 @@ export function isValidatedAppServerVersion(version: string | undefined): boolea
 export function spawnBundledAppServer(options: {
   cwd?: string
   env: Record<string, string>
+  ephemeralApiKeyAuth: boolean
 }): AppServerProcess {
-  return spawn(process.execPath, [resolveBundledCodexLauncher(), 'app-server', '--stdio'], {
+  return spawn(process.execPath, buildBundledAppServerArgs(options.ephemeralApiKeyAuth), {
     cwd: options.cwd,
     env: options.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   })
+}
+
+export function buildBundledAppServerArgs(ephemeralApiKeyAuth: boolean): string[] {
+  const args = [resolveBundledCodexLauncher(), 'app-server', '--stdio']
+  if (ephemeralApiKeyAuth) {
+    args.push('--config', 'cli_auth_credentials_store="ephemeral"')
+  }
+  return args
 }
 
 export class AppServerRuntimeInstance {
@@ -213,6 +224,7 @@ export class AppServerRuntimeInstance {
 
   static async start(options: {
     env: Record<string, string>
+    apiKey?: string
     cwd?: string
     spawnProcess?: SpawnAppServerProcess
     requestTimeoutMs?: number
@@ -222,7 +234,11 @@ export class AppServerRuntimeInstance {
   }): Promise<AppServerRuntimeInstance> {
     let client: AppServerJsonRpcClient
     try {
-      const child = (options.spawnProcess || spawnBundledAppServer)({ cwd: options.cwd, env: options.env })
+      const child = (options.spawnProcess || spawnBundledAppServer)({
+        cwd: options.cwd,
+        env: options.env,
+        ephemeralApiKeyAuth: Boolean(options.apiKey),
+      })
       const processTree = options.processTreeStateDir
         ? await AppServerProcessTree.capture({
           child,
@@ -258,6 +274,7 @@ export class AppServerRuntimeInstance {
         },
       })
       client.notify('initialized')
+      if (options.apiKey) await loginWithEphemeralApiKey(client, options.apiKey)
       return instance
     } catch (error) {
       instance.healthy = false
@@ -539,6 +556,7 @@ export class AppServerRuntimeInstance {
 export async function runAppServerTurn(options: AppServerTurnOptions): Promise<AppServerTurnResult> {
   const instance = await AppServerRuntimeInstance.start({
     env: options.env,
+    apiKey: options.apiKey,
     cwd: options.cwd,
     spawnProcess: options.spawnProcess,
     requestTimeoutMs: options.requestTimeoutMs,
@@ -548,6 +566,18 @@ export async function runAppServerTurn(options: AppServerTurnOptions): Promise<A
     return await instance.runTurn(options)
   } finally {
     await instance.close()
+  }
+}
+
+async function loginWithEphemeralApiKey(client: AppServerJsonRpcClient, apiKey: string): Promise<void> {
+  try {
+    const response = await client.request('account/login/start', { type: 'apiKey', apiKey })
+    if (response.type !== 'apiKey') throw new Error('Unexpected API-key login response')
+  } catch (error) {
+    const cause = error instanceof AppServerRpcError
+      ? new AppServerRpcError(error.code, 'Codex app-server API-key login RPC failed')
+      : new Error('Codex app-server API-key login protocol failed')
+    throw new Error('Codex app-server ephemeral API-key login failed', { cause })
   }
 }
 

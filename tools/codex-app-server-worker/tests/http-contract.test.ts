@@ -432,7 +432,9 @@ test('empty cwd allowlist is not ready and omitted cwd cannot bypass a different
   await new Promise<void>(resolve => noRootsServer.close(() => resolve()))
 
   const otherState = `${stateDir}-other`
-  const differentRoot = testConfig(otherState, { allowedCwds: [path.join(stateDir, 'not-current')] })
+  const allowedOtherRoot = path.join(stateDir, 'not-current')
+  await fs.mkdir(allowedOtherRoot)
+  const differentRoot = testConfig(otherState, { allowedCwds: [allowedOtherRoot] })
   const differentStore = new TaskStore({ stateDir: otherState, encryptionKey: differentRoot.stateEncryptionKey! })
   const differentManager = new TaskManager(differentRoot, differentStore, new FakeExecutor())
   await differentManager.initialize()
@@ -443,6 +445,43 @@ test('empty cwd allowlist is not ready and omitted cwd cannot bypass a different
   await new Promise<void>(resolve => differentServer.close(() => resolve()))
   await fs.rm(otherState, { recursive: true, force: true })
   t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
+})
+
+test('filesystem-root allowlists reject Worker private paths and their ancestors', async t => {
+  const root = await tempDirectory('codex-app-http-private-cwd-')
+  const stateDir = path.join(root, 'state')
+  const codexHome = path.join(root, 'codex-home')
+  const codexBizHomeRoot = path.join(root, 'biz-homes')
+  const workspace = path.join(root, 'workspace')
+  await Promise.all([
+    fs.mkdir(stateDir),
+    fs.mkdir(codexHome),
+    fs.mkdir(codexBizHomeRoot),
+    fs.mkdir(workspace),
+  ])
+  const config = testConfig(stateDir, {
+    codexHome,
+    codexBizHomeRoot,
+    allowedCwds: [path.parse(root).root],
+  })
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const manager = new TaskManager(config, store, new FakeExecutor())
+  await manager.initialize()
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  assert.equal((await postTask(baseUrl, 'ordinary-workspace', { prompt: 'x', cwd: workspace })).response.status, 202)
+  await waitFor(() => manager.get('ordinary-workspace')?.status === 'terminal')
+  for (const [index, blocked] of [root, stateDir, codexHome, codexBizHomeRoot].entries()) {
+    const response = await postTask(baseUrl, `private-cwd-${index}`, { prompt: 'x', cwd: blocked })
+    assert.equal(response.response.status, 403)
+    assert.equal(response.body.error, 'WORKING_DIRECTORY_NOT_ALLOWED')
+  }
 })
 
 test('abort endpoint interrupts an active task without creating another execution', async t => {

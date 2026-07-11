@@ -23,7 +23,13 @@ const CLAUDE_MODEL_OPTIONS: SelectableModelOption[] = [
   { value: 'haiku', label: 'Haiku', backend: 'CLAUDE_CODE', description: 'Haiku' },
 ]
 
-const CODEX_REASONING_LEVELS = [
+type CodexReasoningLevel = {
+  readonly value: string
+  readonly label: string
+  readonly description?: string
+}
+
+const CODEX_REASONING_LEVELS: readonly CodexReasoningLevel[] = [
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium', description: '默认' },
   { value: 'high', label: 'High' },

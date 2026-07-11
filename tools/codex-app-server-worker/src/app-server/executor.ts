@@ -11,6 +11,7 @@ import {
   assertCodexHomeIsolation,
   resolveAllowedWorkingPath,
   resolveContainedHomePath,
+  workerPrivatePaths,
 } from '../path-guards.js'
 import { AppServerEventBridge, stableAppServerTurnErrorCode } from './event-bridge.js'
 import { KeyedExecutionLocks } from './execution-locks.js'
@@ -259,7 +260,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
     lane: Awaited<ReturnType<typeof buildAppServerLane>>
   }> {
     const effectiveCwd = request.cwd || process.cwd()
-    const cwd = resolveAllowedWorkingPath(effectiveCwd, this.config.allowedCwds)
+    const cwd = resolveAllowedWorkingPath(effectiveCwd, this.config.allowedCwds, workerPrivatePaths(this.config))
     if (!cwd) throw workingDirectoryNotAllowed()
     const resolved = resolveSupportedModelAlias(request.model || this.config.defaultModel, this.config.modelAliases)
     const parsed = parseModelString(resolved)
@@ -292,7 +293,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
   }
 
   private assertCanonicalCwdUnchanged(cwd: string): void {
-    const resolved = resolveAllowedWorkingPath(cwd, this.config.allowedCwds)
+    const resolved = resolveAllowedWorkingPath(cwd, this.config.allowedCwds, workerPrivatePaths(this.config))
     if (!resolved || normalizeCwd(resolved) !== normalizeCwd(cwd)) throw workingDirectoryNotAllowed()
   }
 

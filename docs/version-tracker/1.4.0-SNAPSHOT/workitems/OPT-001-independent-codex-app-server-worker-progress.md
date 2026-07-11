@@ -43,6 +43,7 @@
 | App-server Worker | pass | `200 total / 193 passed / 7 platform-skipped / 0 failed`；typecheck/build/schema verify 通过；schema digest `6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f` |
 | Release `0.1.1` | pass-artifact | v5 SHA-256 `b6271e5a3220b0253d97b6d05c9fe5f5561331655e27faccd8ad254fbf6c31d9`；`1,500,249` bytes；`168` entries；双构建字节一致，路径扫描通过 |
 | Release operations | pass-isolated | Windows/WSL v5 install/start/真实 Ultra/running update/stop、外部 state/CODEX_HOME 保留和 process-tree residue 0 均通过 |
+| Release `0.3.3` OBS latest | pass-published | `efede2065ef0154d2604dee447787b34cbd0003d4e8458c432c32e40fed2a25b` / `1,802,355` bytes / `197` entries；OBS archive/checksum/bootstrap/latest 上传 200，发布器重新 GET 并校验 archive 与 bootstrap 字节；Windows `240 passed + 7 skipped`、WSL2/Linux `246 passed + 1 skipped` exact public repair 均 stopped、repeat no-op，缺失版本身份与失败事务证据均 fail-closed；`0.3.1/0.3.2` 的残缺安装判定缺陷在最终交付前已由 `0.3.3` 取代 |
 | Legacy SDK Worker | pass | `116/116`；typecheck/build；现有 SDK 设计保持，Ultra fail-closed；仅测试断言适配 Windows 上的 POSIX server-script 路径 |
 | Codex Java reactor | pass-scoped | Codex addon `259/259`；Session focused `7/7`；raw full reactor 被 Windows Surefire fork/path 基础设施问题阻断，受影响定向测试通过 |
 | HTTP client ownership | pass | Metadata `13/13`；Launcher context `1/1`；Code Review context `1/1`，专用/默认 RestTemplate 无歧义 |
@@ -80,6 +81,7 @@
 | App-server process boundary | pass-isolated | managed Worker 跳过 legacy probes，真实 pool-managed PC 视图通过 |
 | 原生子任务 | pass-isolated | 新任务 native SSE `5`、snapshot `1`、PC `1/1`，刷新后保持闭合 |
 | Responsive | pass-isolated | desktop/320px 控件可达、无水平溢出、失败请求或控制台错误 |
+| Settings 安装帮助 | pass | 新增 Codex App Server Tab 与无版本 OBS 命令；Worker 编辑弹窗使用基本信息/连接工具/Codex/Gemini Tabs；相关 Playwright `2/2`、PC Vitest `210/210`、`build:check` 通过 |
 | Production account/permissions | not-run | 真实生产账号、网络和 cohort 未签收 |
 
 ## Canary Thresholds
@@ -106,13 +108,14 @@
 - 已执行旧版 `2026-07-10-codex-runtime-affinity.sql` 的环境须执行 `2026-07-10-codex-task-created-at-epoch-ms.sql`，不能重跑整份一次性脚本。
 - Raw full reactor 在 Windows Surefire fork/path 基础设施阶段被阻断；没有已执行测试的断言失败，本次相关模块和上下文测试均通过。
 - P0-P2 隔离验收证据不得计入 P3 的生产 task、观察窗口或实例轮换；v4 Windows update BLOCKED 证据只保留在 BUG-013 作为历史复现。
+- OBS `0.3.3` manifest 记录 source commit `61204f83748a7def103f7624b4ccc3d2d6c4517d` 且 `gitDirty=true`；当前公网制品已按字节验收，但下一次代码提交必须包含对应发布源码并复核可复现哈希，不能把 dirty manifest 当作生产 provenance 已闭环。
 
 ## Execution Check-in
 
-- completed_work: 独立 Worker、双 runtime 控制面、生命周期/release、真实 Ultra/SSE/native、PC 刷新与 responsive 隔离验收完成
-- touched_areas: `tools/codex-app-server-worker`、Codex Java addon、Session、Navigator PC、migration 与版本文档
+- completed_work: 独立 Worker、双 runtime 控制面、生命周期/release、真实 Ultra/SSE/native、PC 刷新与 responsive 隔离验收完成；`0.3.3` OBS latest 与 Windows/Linux 无版本一键安装已发布并完成公网 exact-package repair/no-op/fail-closed smoke
+- touched_areas: `tools/codex-app-server-worker`、Codex Java addon、Session、Navigator PC、安装指南、migration 与版本文档
 - self_check: formal quality gate、coverage audit 与 isolated acceptance 已回写；未扩张到生产 rollout 或 SDK retirement
-- test_status: isolated-pass；Worker `200`、SDK `116/116`、Java `259/259`、PC `179/179`，v5 Windows/WSL exact-package 和 Playwright 通过
+- test_status: isolated-pass；历史 Worker/SDK/Java/P0-P2 证据保持；当前 `0.3.3` Windows exact public package `240 passed + 7 skipped`、WSL2/Linux `246 passed + 1 skipped`，release tooling `8/8`，PC `210/210`、相关 Playwright `2/2`、`build:check` 通过
 - raw_reactor_caveat: Windows Surefire fork/path 基础设施阻断 raw full reactor；受影响定向测试无断言失败，不声明 `1342/1342`
 - implementation_decision: p0-p2-isolated-accepted
 - production_enablement: not-approved
@@ -120,5 +123,5 @@
 - old_sdk_worker: retained-unchanged-design
 - isolated_experience: accepted
 - acceptance_readiness: isolated-accepted-production-blocked
-- remaining_risks: P3 生产账号、网络、监控、release owner、50 task、72h、2 rotations 和 P5 parity 均无生产证据
+- remaining_risks: P3 生产账号、网络、监控、release owner、50 task、72h、2 rotations 和 P5 parity 均无生产证据；OBS manifest 的 dirty-source provenance 待后续 commit/reproducibility 复核
 - next_action: release owner 完成目标环境与回滚窗口签收后，另行批准并启动 P3；P4-P6 在 P3 独立签收前不得开始

@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express'
 import type { AppConfig } from '../config.js'
-import { isAllowedWorkingPath, resolveAllowedWorkingPath } from '../path-guards.js'
+import { isAllowedWorkingPath, resolveAllowedWorkingPath, workerPrivatePaths } from '../path-guards.js'
 import { IdempotencyConflictError } from '../persistence/task-store.js'
 import { resolveRuntimeReadiness } from '../runtime-capabilities.js'
 import {
@@ -49,7 +49,8 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
         throw error
       }
       const effectiveCwd = validation.value.cwd || process.cwd()
-      const canonicalCwd = resolveAllowedWorkingPath(effectiveCwd, config.allowedCwds)
+      const privatePaths = workerPrivatePaths(config)
+      const canonicalCwd = resolveAllowedWorkingPath(effectiveCwd, config.allowedCwds, privatePaths)
       validation.value.cwd = canonicalCwd || effectiveCwd
       if (manager.get(taskId)) {
         const accepted = await manager.accept(taskId, validation.value)
@@ -71,7 +72,7 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
         return
       }
       for (const directory of validation.value.additional_directories || []) {
-        if (!isAllowedWorkingPath(directory, config.allowedCwds)) {
+        if (!isAllowedWorkingPath(directory, config.allowedCwds, privatePaths)) {
           res.status(403).json({ error: 'ADDITIONAL_DIRECTORY_NOT_ALLOWED' })
           return
         }

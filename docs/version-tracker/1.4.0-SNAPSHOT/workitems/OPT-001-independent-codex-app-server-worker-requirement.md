@@ -48,6 +48,7 @@
 10. PC 只通过最小权限 availability 接口判断共享 Worker 的 app-server/Ultra 可用性，不读取 owner-only runtime 详情，也不探测 app-server pool 内部进程。
 11. Terminal broadcast、TaskStore resident state 和大 payload journal 写入必须有明确上界；已终态历史不得随 Worker 存活时间无限驻留。
 12. Pool 全局容量被其他 lane 的 idle instance 占满时，允许 LRU idle 跨 lane 退役，但不得退役 busy instance 或突破全局上限。
+13. App Server Worker 必须提供不含版本号的 OBS 稳定安装入口；`latest.json` 只在版本化制品、校验文件和 bootstrap 可用后提交，客户端执行任何包内代码前必须校验 product/schema/path/bytes/SHA-256。
 
 ## 能力与放量必须分离
 
@@ -159,6 +160,7 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 - 子任务失败只允许稳定码 `NATIVE_SUBTASK_FAILED`；Java 和 PC 继续二次收窄。
 - cwd/additional directory 使用现有 allowlist 语义；新 Worker 不得放宽路径边界。
 - CLI 与协议 schema 随 Worker release 精确固定，禁止独立自动升级越过协议 gate。
+- OBS bootstrap 首次安装必须保持 stopped，等待 token、state key 与隔离 `CODEX_HOME` 配置；仅身份一致且文件完整、无 lifecycle/update 失败证据的同版本重跑允许 no-op，可证明身份一致的残缺安装进入 repair，身份不完整或存在失败证据必须 fail-closed，本地版本高于 latest 时必须拒绝降级。
 
 ## 非目标
 
@@ -167,6 +169,7 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 - 不用一个全局 app-server 进程承载所有用户、账户和 Biz token。
 - 不承诺已有 SDK Thread 自动迁移到 app-server。
 - 不在 Ultra canary 之前默认切换任何生产流量。
+- 不因一键安装而自动生成 secrets、自动启动未配置 Worker，或把 OBS 发布成功等同于 Ultra 生产切流批准。
 - 不删除 SDK、SDK 最低版本检查、旧 Worker 发布链路或回滚包；该决定已从本版本退役 gate 中移出。
 - 本规划不修改 LangGraph、Gemini、Claude Worker 执行语义。
 
@@ -186,6 +189,7 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 - Shutdown success 必须匹配当前 stop nonce，Worker/runtime process tree 清理及二次 verify 完成后才能释放 state/cwd ownership。
 - Terminal broadcast 按需重放后退役，terminal TaskStore 仅保留 resident summary；请求 ciphertext 只在 durable journal 首次持久化一次。
 - Availability 对共享用户只返回 `appServerManaged`、`ultraAvailable`、`blockReason`；详细 runtime API 继续 owner-only，`ALL_CANARY@0` 对 Ultra 仍为 available。
+- Windows `irm .../install.ps1 | iex` 与 Linux `curl .../install.sh | bash` 必须从同一 `latest.json` 安装最新版且不要求版本参数；公网 fresh/残缺 repair、完整重复 no-op、身份或失败证据拒绝、降级拒绝和完整性失败关闭均有自动化或 exact-package 证据。
 
 ### Ultra 生产启用验收
 

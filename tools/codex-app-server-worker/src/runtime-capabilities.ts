@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import type { AppConfig } from './config.js'
 import type { TaskManager } from './task-manager.js'
-import { assertCodexHomeIsolation } from './path-guards.js'
+import {
+  assertCodexHomeIsolation,
+  hasUsableAllowedWorkingRoot,
+  workerPrivatePaths,
+} from './path-guards.js'
 import {
   resolveBundledCodexLauncher,
   resolveBundledCodexVersion,
@@ -57,6 +61,9 @@ export function evaluateRuntimeReadiness(
   if (!config.stateEncryptionKey) reasons.push('STATE_ENCRYPTION_KEY_MISSING')
   if (!config.workerToken) reasons.push('WORKER_TOKEN_MISSING')
   if (config.allowedCwds.length === 0) reasons.push('ALLOWED_CWDS_MISSING')
+  else if (!hasUsableAllowedWorkingRoot(config.allowedCwds, workerPrivatePaths(config))) {
+    reasons.push('ALLOWED_CWDS_UNAVAILABLE')
+  }
   if (!config.codexHome) reasons.push('CODEX_HOME_MISSING')
   if (config.codexHome) {
     try {

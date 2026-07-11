@@ -4,9 +4,14 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Propagation;
@@ -27,6 +32,10 @@ public class CodexTaskRuntimeStateService {
     private final CredentialEncryptor credentialEncryptor;
     private final ObjectMapper objectMapper;
 
+    @Autowired(required = false)
+    @Nullable
+    private SessionTaskRepository sessionTaskRepository;
+
     @Transactional
     public void prepareAcceptance(String taskId, Map<String, Object> requestBody) {
         CodexTaskEntity task = requireForUpdate(taskId);
@@ -45,6 +54,7 @@ public class CodexTaskRuntimeStateService {
             task.setRuntimeAcceptanceState("ACCEPTING");
         }
         taskRepository.saveAndFlush(task);
+        syncRuntimeAcceptanceState(task);
     }
 
     @Transactional(readOnly = true)
@@ -85,6 +95,7 @@ public class CodexTaskRuntimeStateService {
             task.setRuntimeAcceptanceState("ACCEPTED");
         }
         taskRepository.saveAndFlush(task);
+        syncRuntimeAcceptanceState(task);
         log.info("Persisted Codex app-server acceptance: taskId={}, workerTaskId={}, runtime={}@{}",
                 taskId, workerTaskId, task.getRuntimeId(), task.getRuntimeRevision());
     }
@@ -105,6 +116,7 @@ public class CodexTaskRuntimeStateService {
                 && !"TERMINAL".equals(task.getRuntimeAcceptanceState())) {
             task.setRuntimeAcceptanceState("SUBSCRIBED");
             taskRepository.save(task);
+            syncRuntimeAcceptanceState(task);
         }
         return true;
     }
@@ -119,6 +131,7 @@ public class CodexTaskRuntimeStateService {
                 && (task.getWorkerTaskId() == null || task.getWorkerTaskId().isBlank())) {
             task.setRuntimeAcceptanceState("UNKNOWN");
             taskRepository.save(task);
+            syncRuntimeAcceptanceState(task);
         }
     }
 
@@ -138,10 +151,12 @@ public class CodexTaskRuntimeStateService {
                 || "ABORTED_BEFORE_ACCEPT".equals(task.getRuntimeAcceptanceState())) {
             task.setRuntimeAcceptanceState("ABORTED_BEFORE_ACCEPT");
             taskRepository.saveAndFlush(task);
+            syncRuntimeAcceptanceState(task);
             return AbortClaim.LOCAL_UNACCEPTED;
         }
         task.setRuntimeAcceptanceState("ABORT_REQUESTED");
         taskRepository.saveAndFlush(task);
+        syncRuntimeAcceptanceState(task);
         return AbortClaim.REMOTE_REQUIRED;
     }
 
@@ -162,6 +177,7 @@ public class CodexTaskRuntimeStateService {
                 && "ABORT_REQUESTED".equals(task.getRuntimeAcceptanceState())) {
             task.setRuntimeAcceptanceState("SUBSCRIBED");
             taskRepository.save(task);
+            syncRuntimeAcceptanceState(task);
         }
     }
 
@@ -176,7 +192,23 @@ public class CodexTaskRuntimeStateService {
                     "Cannot delete a non-terminal app-server task. Please abort it first.");
         }
         task.setRuntimeAcceptanceState("DELETE_REQUESTED");
-        return taskRepository.saveAndFlush(task);
+        CodexTaskEntity saved = taskRepository.saveAndFlush(task);
+        syncRuntimeAcceptanceState(saved);
+        return saved;
+    }
+
+    private void syncRuntimeAcceptanceState(CodexTaskEntity task) {
+        if (sessionTaskRepository == null || task.getTaskId() == null || task.getTaskId().isBlank()) {
+            return;
+        }
+        sessionTaskRepository.findByTaskIdForUpdate(task.getTaskId()).ifPresent(projection -> {
+            projection.setTaskStateJson(ProviderStateCodec.mergeTaskValue(
+                    projection.getTaskStateJson(),
+                    task.getProviderType(),
+                    ProviderStateCodec.FIELD_RUNTIME_ACCEPTANCE_STATE,
+                    task.getRuntimeAcceptanceState()));
+            sessionTaskRepository.save(projection);
+        });
     }
 
     private CodexTaskEntity requireForUpdate(String taskId) {

@@ -228,6 +228,12 @@ test('promotes a dark runtime to an Ultra canary without exposing its token', as
 
   const dialog = page.getByRole('dialog', { name: '编辑物理 Worker' })
   await expect(dialog).toBeVisible()
+  await expect(dialog.getByText('Codex capability', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: '基本信息', exact: true })).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: '连接工具', exact: true })).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: 'Codex', exact: true })).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: 'Gemini', exact: true })).toBeVisible()
+  await dialog.getByRole('tab', { name: 'Codex', exact: true }).click()
   await expect(dialog.getByText('Codex Ultra 当前不可用')).toBeVisible()
 
   const incompatibleRow = dialog.getByTestId('runtime-runtime-legacy@1')

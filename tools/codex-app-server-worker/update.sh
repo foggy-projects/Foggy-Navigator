@@ -340,7 +340,8 @@ fi
 for required in \
   dist src tests contracts scripts package-lock.json tsconfig.json VERSION \
   start.ps1 start.sh stop.ps1 stop.sh update.ps1 update.sh install.ps1 install.sh \
-  scripts/lifecycle-marker.mjs scripts/process-tree.mjs scripts/read-dotenv-value.mjs; do
+  scripts/configure-install-env.mjs scripts/lifecycle-marker.mjs \
+  scripts/process-tree.mjs scripts/read-dotenv-value.mjs; do
   [[ -e "$CANDIDATE/$required" ]] || { echo "Release is missing $required" >&2; exit 1; }
 done
 for forbidden in .env logs node_modules CODEX_HOME auth.json; do

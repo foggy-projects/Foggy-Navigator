@@ -18,10 +18,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -200,6 +204,40 @@ class CodexWorkerFacadeImplTest {
         verify(taskRuntimeStateService).markSubscribed("local-task-1");
         verify(client).subscribeToTask("worker-task-9", 0);
         verify(client, never()).streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void syncQueryPreservesSafeAppServerRejectionCode() {
+        CodexTaskEntity task = appServerTask();
+        when(workerManagementFacade.getCodexConfig("worker-1")).thenReturn(null);
+        stubTrackedTask("session-1", null, "codex-ultra", task);
+        stubAppServerRuntime();
+        Map<String, Object> request = Map.of("prompt", "check repo", "model", "codex-ultra");
+        when(client.buildTaskRequest(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(request);
+        WebClientResponseException forbidden = WebClientResponseException.create(
+                403, "Forbidden", HttpHeaders.EMPTY,
+                "{\"error\":\"WORKING_DIRECTORY_NOT_ALLOWED\"}".getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8);
+        when(client.createTask("local-task-1", request)).thenReturn(Mono.error(forbidden));
+        facade = new CodexWorkerFacadeImpl(
+                workerManagementFacade,
+                clientFactory,
+                taskService,
+                streamRelay,
+                runtimeRegistryService,
+                taskRuntimeStateService,
+                new CodexAppServerAcceptanceService(taskRuntimeStateService),
+                new ObjectMapper());
+
+        Map<String, Object> result = facade.syncQueryTracked(
+                "user-1", "worker-1", "check repo", "D:/repo", null, 1,
+                "codex-ultra", "session-1");
+
+        assertEquals("WORKING_DIRECTORY_NOT_ALLOWED", result.get("error"));
+        verify(taskService).failTask(
+                "local-task-1", null, null, "WORKING_DIRECTORY_NOT_ALLOWED");
     }
 
     @Test

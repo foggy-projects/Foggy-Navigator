@@ -16,6 +16,9 @@ export const RELEASE_FILES = [
   'tsconfig.json',
   'update.ps1',
   'update.sh',
+  'release/package.ps1',
+  'release/remote-install.ps1',
+  'release/remote-install.sh',
 ]
 
 const FORBIDDEN_SEGMENTS = new Set(['.codex', '.env', 'codex_home', 'logs', 'node_modules', 'state'])

@@ -111,9 +111,10 @@ test('non-retrying provider error forces failed result even if the turn reports 
 
 test('executor fails the pool closed before releasing cwd and thread locks after process-tree safety failure', async t => {
   const stateDir = await tempDirectory('codex-app-process-tree-safety-')
-  const cwd = path.join(stateDir, 'repo')
-  await fs.mkdir(cwd)
-  const config = testConfig(stateDir, { allowedCwds: [stateDir] })
+  const workspaceRoot = `${stateDir}-workspace`
+  const cwd = path.join(workspaceRoot, 'repo')
+  await fs.mkdir(cwd, { recursive: true })
+  const config = testConfig(stateDir, { allowedCwds: [workspaceRoot] })
   const locks = new KeyedExecutionLocks()
   let locksAtFailClosed: ReturnType<KeyedExecutionLocks['metrics']> | undefined
   const pool = new class extends AppServerPool {
@@ -126,6 +127,7 @@ test('executor fails the pool closed before releasing cwd and thread locks after
   t.after(async () => {
     await pool.drain(100).catch(() => undefined)
     await fs.rm(stateDir, { recursive: true, force: true })
+    await fs.rm(workspaceRoot, { recursive: true, force: true })
   })
 
   await assert.rejects(executor.execute({
@@ -193,14 +195,15 @@ test('invalid image input removes files materialized before validation failed', 
 
 async function createFixture(t: test.TestContext) {
   const stateDir = await tempDirectory('codex-app-executor-')
-  const cwd = path.join(stateDir, 'repo')
-  const cwdA = path.join(stateDir, 'repo-a')
-  const cwdB = path.join(stateDir, 'repo-b')
-  await Promise.all([cwd, cwdA, cwdB].map(directory => fs.mkdir(directory)))
+  const workspaceRoot = `${stateDir}-workspace`
+  const cwd = path.join(workspaceRoot, 'repo')
+  const cwdA = path.join(workspaceRoot, 'repo-a')
+  const cwdB = path.join(workspaceRoot, 'repo-b')
+  await Promise.all([cwd, cwdA, cwdB].map(directory => fs.mkdir(directory, { recursive: true })))
   const config = testConfig(stateDir, {
     poolMaxInstances: 2,
     poolMaxInstancesPerLane: 2,
-    allowedCwds: [stateDir],
+    allowedCwds: [workspaceRoot],
   })
   const controller = new TurnController()
   const pool = new AppServerPool(config, async () => new ControlledRuntime(controller))
@@ -208,6 +211,7 @@ async function createFixture(t: test.TestContext) {
   t.after(async () => {
     await pool.drain(100)
     await fs.rm(stateDir, { recursive: true, force: true })
+    await fs.rm(workspaceRoot, { recursive: true, force: true })
   })
   return {
     controller,

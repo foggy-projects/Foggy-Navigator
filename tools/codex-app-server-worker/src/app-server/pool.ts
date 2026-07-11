@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import type { AppConfig } from '../config.js'
+import { readAppServerLaneApiKey } from './lane.js'
 import {
   AppServerRpcError,
   AppServerRuntimeInstance,
@@ -176,6 +177,7 @@ export class AppServerPool {
       | 'stateDir'>,
     factory: PoolInstanceFactory = async (lane, signal) => AppServerRuntimeInstance.start({
       env: lane.env,
+      apiKey: readAppServerLaneApiKey(lane),
       signal,
       processTreeStateDir: config.stateDir,
     }),

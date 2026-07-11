@@ -1844,100 +1844,114 @@
     <!-- Edit Worker Dialog -->
     <el-dialog v-model="showEditDialog" title="编辑物理 Worker" width="min(760px, 94vw)">
       <el-form :model="editForm" label-position="top">
-        <el-form-item label="执行环境类型">
-          <el-tag v-if="selectedWorkerIsLangGraph" effect="plain">LangGraph Biz capability</el-tag>
-          <el-tag v-else effect="plain">Claude Code capability</el-tag>
-        </el-form-item>
-        <el-form-item label="名称">
-          <el-input v-model="editForm.name" />
-        </el-form-item>
-        <el-form-item label="地址">
-          <el-input v-model="editForm.baseUrl" />
-        </el-form-item>
-        <el-form-item label="认证令牌">
-          <el-input
-            v-model="editForm.authToken"
-            type="password"
-            show-password
-            placeholder="留空保持不变"
-          />
-        </el-form-item>
-        <template v-if="!selectedWorkerIsLangGraph">
-          <el-form-item label="认证模式">
-            <el-select v-model="editForm.authMode" style="width: 100%">
-              <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
-              <el-option label="API Key 模式" value="API_KEY" />
-              <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
-            </el-select>
-          </el-form-item>
-          <el-divider content-position="left">SSH 终端（可选）</el-divider>
-          <el-form-item label="SSH 用户名">
-            <el-input v-model="editForm.sshUsername" placeholder="如 root" />
-          </el-form-item>
-          <el-form-item label="SSH 端口">
-            <el-input-number v-model="editForm.sshPort" :min="1" :max="65535" style="width: 100%" />
-          </el-form-item>
-          <el-form-item label="SSH 密码">
-            <el-input
-              v-model="editForm.sshPassword"
-              type="password"
-              show-password
-              :placeholder="selectedWorkerEntity?.sshPasswordConfigured ? '已保存，留空不改' : 'SSH 登录密码'"
+        <el-tabs v-model="editWorkerActiveTab" class="worker-edit-tabs">
+          <el-tab-pane label="基本信息" name="basic">
+            <el-form-item label="执行环境类型">
+              <el-tag effect="plain">{{ selectedWorkerBackendLabel }}</el-tag>
+            </el-form-item>
+            <el-form-item label="名称">
+              <el-input v-model="editForm.name" />
+            </el-form-item>
+            <el-form-item label="地址">
+              <el-input v-model="editForm.baseUrl" />
+            </el-form-item>
+            <el-form-item label="认证令牌">
+              <el-input
+                v-model="editForm.authToken"
+                type="password"
+                show-password
+                placeholder="留空保持不变"
+              />
+            </el-form-item>
+            <el-form-item v-if="!selectedWorkerIsLangGraph" label="认证模式">
+              <el-select v-model="editForm.authMode" style="width: 100%">
+                <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
+                <el-option label="API Key 模式" value="API_KEY" />
+                <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
+              </el-select>
+            </el-form-item>
+          </el-tab-pane>
+
+          <el-tab-pane v-if="!selectedWorkerIsLangGraph" label="连接工具" name="remote-access" lazy>
+            <el-form-item label="SSH 用户名">
+              <el-input v-model="editForm.sshUsername" placeholder="如 root" />
+            </el-form-item>
+            <el-form-item label="SSH 端口">
+              <el-input-number v-model="editForm.sshPort" :min="1" :max="65535" style="width: 100%" />
+            </el-form-item>
+            <el-form-item label="SSH 密码">
+              <el-input
+                v-model="editForm.sshPassword"
+                type="password"
+                show-password
+                :placeholder="selectedWorkerEntity?.sshPasswordConfigured ? '已保存，留空不改' : 'SSH 登录密码'"
+              />
+            </el-form-item>
+            <el-divider content-position="left">Code Server（可选）</el-divider>
+            <el-form-item label="公网地址">
+              <el-input v-model="editForm.codeServerPublicUrl" placeholder="如 https://code.example.com" />
+            </el-form-item>
+            <el-form-item label="内网地址">
+              <el-input v-model="editForm.codeServerInternalUrl" placeholder="如 http://192.168.1.100:18443" />
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input
+                v-model="editForm.codeServerPassword"
+                type="password"
+                show-password
+                :placeholder="selectedWorkerEntity?.codeServerPasswordConfigured ? '已保存，留空不改' : 'code-server 登录密码'"
+              />
+            </el-form-item>
+            <el-form-item label="Folder 前缀">
+              <el-input v-model="editForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
+            </el-form-item>
+          </el-tab-pane>
+
+          <el-tab-pane v-if="!selectedWorkerIsLangGraph" label="Codex" name="codex" lazy>
+            <el-form-item label="SDK Codex 地址">
+              <el-input v-model="editForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
+            </el-form-item>
+            <el-form-item label="SDK Codex 认证令牌">
+              <el-input
+                v-model="editForm.codexAuthToken"
+                type="password"
+                show-password
+                :placeholder="selectedWorkerEntity?.codexAuthTokenConfigured ? '已保存，留空不改' : 'Codex Worker 令牌'"
+              />
+            </el-form-item>
+            <el-form-item label="SDK Codex 默认模型">
+              <el-input v-model="editForm.codexModel" placeholder="如：codex-latest" />
+            </el-form-item>
+            <el-alert
+              title="App Server Runtime 与上方 SDK Codex endpoint 独立配置"
+              description="Ultra 使用下方 Runtime 注册信息，不需要覆盖 SDK Codex 地址。"
+              type="info"
+              :closable="false"
+              show-icon
             />
-          </el-form-item>
-          <el-divider content-position="left">Code Server（可选）</el-divider>
-          <el-form-item label="公网地址">
-            <el-input v-model="editForm.codeServerPublicUrl" placeholder="如 https://code.example.com" />
-          </el-form-item>
-          <el-form-item label="内网地址">
-            <el-input v-model="editForm.codeServerInternalUrl" placeholder="如 http://192.168.1.100:18443" />
-          </el-form-item>
-          <el-form-item label="密码">
-            <el-input
-              v-model="editForm.codeServerPassword"
-              type="password"
-              show-password
-              :placeholder="selectedWorkerEntity?.codeServerPasswordConfigured ? '已保存，留空不改' : 'code-server 登录密码'"
+            <CodexRuntimeManager
+              v-if="showEditDialog && selectedWorkerId && editWorkerActiveTab === 'codex'"
+              :worker-id="selectedWorkerId"
             />
-          </el-form-item>
-          <el-form-item label="Folder 前缀">
-            <el-input v-model="editForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
-          </el-form-item>
-          <el-divider content-position="left">Codex backend capability（可选）</el-divider>
-          <el-form-item label="Codex 地址">
-            <el-input v-model="editForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
-          </el-form-item>
-          <el-form-item label="Codex 认证令牌">
-            <el-input
-              v-model="editForm.codexAuthToken"
-              type="password"
-              show-password
-              :placeholder="selectedWorkerEntity?.codexAuthTokenConfigured ? '已保存，留空不改' : 'Codex Worker 令牌'"
-            />
-          </el-form-item>
-          <el-form-item label="Codex 默认模型">
-            <el-input v-model="editForm.codexModel" placeholder="如：codex-latest" />
-          </el-form-item>
-          <CodexRuntimeManager
-            v-if="showEditDialog && selectedWorkerId"
-            :worker-id="selectedWorkerId"
-          />
-          <el-divider content-position="left">Gemini backend capability（可选）</el-divider>
-          <el-form-item label="Gemini 地址">
-            <el-input v-model="editForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
-          </el-form-item>
-          <el-form-item label="Gemini 认证令牌">
-            <el-input
-              v-model="editForm.geminiAuthToken"
-              type="password"
-              show-password
-              :placeholder="selectedWorkerEntity?.geminiAuthTokenConfigured ? '已保存，留空不改' : 'Gemini Worker 令牌'"
-            />
-          </el-form-item>
-          <el-form-item label="Gemini 默认模型">
-            <el-input v-model="editForm.geminiModel" placeholder="如：gemini-flash" />
-          </el-form-item>
-        </template>
+          </el-tab-pane>
+
+          <el-tab-pane v-if="!selectedWorkerIsLangGraph" label="Gemini" name="gemini" lazy>
+            <el-form-item label="Gemini 地址">
+              <el-input v-model="editForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
+            </el-form-item>
+            <el-form-item label="Gemini 认证令牌">
+              <el-input
+                v-model="editForm.geminiAuthToken"
+                type="password"
+                show-password
+                :placeholder="selectedWorkerEntity?.geminiAuthTokenConfigured ? '已保存，留空不改' : 'Gemini Worker 令牌'"
+              />
+            </el-form-item>
+            <el-form-item label="Gemini 默认模型">
+              <el-input v-model="editForm.geminiModel" placeholder="如：gemini-flash" />
+            </el-form-item>
+          </el-tab-pane>
+        </el-tabs>
       </el-form>
       <template #footer>
         <el-button @click="showEditDialog = false">取消</el-button>
@@ -3350,6 +3364,7 @@ let narrowViewportMediaQuery: MediaQueryList | null = null
 
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
+const editWorkerActiveTab = ref<'basic' | 'remote-access' | 'codex' | 'gemini'>('basic')
 const showAddDirectoryDialog = ref(false)
 const showEditDirectoryDialog = ref(false)
 const saving = ref(false)
@@ -4331,6 +4346,15 @@ const selectedWorkerEntity = computed(() => {
 })
 
 const selectedWorkerIsLangGraph = computed(() => selectedWorkerEntity.value?.workerBackend === 'LANGGRAPH_BIZ')
+
+const selectedWorkerBackendLabel = computed(() => {
+  switch (selectedWorkerEntity.value?.workerBackend) {
+    case 'OPENAI_CODEX': return 'Codex capability'
+    case 'GEMINI_CLI': return 'Gemini CLI capability'
+    case 'LANGGRAPH_BIZ': return 'LangGraph Biz capability'
+    default: return 'Claude Code capability'
+  }
+})
 
 const selectedDirectory = computed(() =>
   workerState.directories.value.find((d) => d.directoryId === selectedDirectoryId.value),
@@ -7881,6 +7905,7 @@ defineExpose({
 
 watch(showEditDialog, (val) => {
   if (val && selectedWorkerEntity.value) {
+    editWorkerActiveTab.value = 'basic'
     editForm.value = {
       workerBackend: selectedWorkerEntity.value.workerBackend || 'CLAUDE_CODE',
       name: selectedWorkerEntity.value.name,

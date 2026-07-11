@@ -1,9 +1,12 @@
 package com.foggy.navigator.common.repository;
 
 import com.foggy.navigator.common.entity.SessionTaskEntity;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
@@ -13,6 +16,10 @@ import java.util.Optional;
 public interface SessionTaskRepository extends JpaRepository<SessionTaskEntity, Long> {
 
     Optional<SessionTaskEntity> findByTaskId(String taskId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT task FROM SessionTaskEntity task WHERE task.taskId = :taskId")
+    Optional<SessionTaskEntity> findByTaskIdForUpdate(@Param("taskId") String taskId);
 
     Optional<SessionTaskEntity> findByTaskIdAndUserId(String taskId, String userId);
 

@@ -14,7 +14,7 @@ import {
   type AppServerLane,
   type PoolRuntimeInstance,
 } from '../src/app-server/pool.js'
-import { buildAppServerLane } from '../src/app-server/lane.js'
+import { buildAppServerLane, readAppServerLaneApiKey } from '../src/app-server/lane.js'
 import { testConfig, waitFor } from './helpers.js'
 import { createStubbornProcessTreeFixture, isProcessAlive } from './stubborn-app-server-fixture.js'
 
@@ -378,6 +378,13 @@ test('lane key changes for auth/home/base URL/environment and excludes Worker se
   assert.notEqual(first.key, differentAuth.key)
   assert.notEqual(first.key, differentHome.key)
   assert.notEqual(first.key, differentUrl.key)
+  assert.equal(readAppServerLaneApiKey(first), 'sk-one')
+  assert.equal(readAppServerLaneApiKey(differentAuth), 'sk-two')
+  assert.equal(Object.prototype.hasOwnProperty.call(first, 'apiKey'), false)
+  assert.doesNotMatch(JSON.stringify(first), /sk-one/)
+  assert.equal(first.env.OPENAI_API_KEY, undefined)
+  assert.equal(first.env.CODEX_API_KEY, undefined)
+  assert.equal(first.env.OPENAI_BASE_URL, undefined)
   assert.equal(first.env.CODEX_APP_SERVER_STATE_KEY, undefined)
   assert.equal(first.env.CODEX_APP_SERVER_WORKER_TOKEN, undefined)
   assert.equal(first.env.FOGGY_CODEX_TASK_ID, undefined)
@@ -387,6 +394,31 @@ test('lane key changes for auth/home/base URL/environment and excludes Worker se
   assert.equal(first.env.SystemRoot, 'C:\\WINDOWS')
   assert.equal(first.env.TEMP, 'C:\\Temp')
   assert.doesNotMatch(first.key, /sk-one|codex|api\.one/)
+})
+
+test('default pool factory forwards the opaque lane API key only to runtime startup', async t => {
+  const requestedLane = await buildAppServerLane({
+    cliVersion: '0.144.1',
+    baseEnv: { PATH: 'C:\\bin' },
+    apiKey: 'dummy-pool-key',
+    baseUrl: 'https://api.example.test/v1',
+    codexHome: 'C:\\codex\\pool',
+  })
+  const runtime = new FakeRuntime()
+  let captured: Parameters<typeof AppServerRuntimeInstance.start>[0] | undefined
+  t.mock.method(AppServerRuntimeInstance, 'start', async options => {
+    captured = options
+    return runtime as unknown as AppServerRuntimeInstance
+  })
+  const pool = new AppServerPool(testConfig('C:\\state'))
+  t.after(() => pool.drain(100))
+
+  const lease = await pool.acquire(requestedLane)
+  assert.equal(captured?.apiKey, 'dummy-pool-key')
+  assert.equal(captured?.env.OPENAI_API_KEY, undefined)
+  assert.equal(captured?.env.CODEX_API_KEY, undefined)
+  assert.equal(captured?.env.OPENAI_BASE_URL, undefined)
+  lease.release()
 })
 
 class FakeRuntime implements PoolRuntimeInstance {

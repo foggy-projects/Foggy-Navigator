@@ -1,7 +1,7 @@
 # Worker 安装、重装与升级指南
 
 > 适用对象：在个人电脑、远程开发机或服务器上安装和维护 Foggy Navigator Worker 的用户。  
-> 最后更新：2026-04-27
+> 最后更新：2026-07-11
 
 这份文档只解决三个问题：
 
@@ -27,6 +27,7 @@ Foggy Navigator 通过 Worker 调用你机器上的 AI 编程工具。
 |--------|------|----------|--------------|
 | Claude Worker | 调用 Claude Code 执行任务 | `3031` | `~/.claude-worker` |
 | Codex Worker | 调用 OpenAI Codex 执行任务 | `3051` | `~/.codex-worker` |
+| Codex App Server Worker | 通过 Codex app-server 执行 Ultra 等 Runtime 任务 | `3062` | `~/.codex-app-server-worker` |
 | Gemini Worker | 调用 Gemini CLI 执行任务 | `3071` | `~/.gemini-worker` |
 
 在 Windows 上，`~` 通常是 `%USERPROFILE%`，例如 `C:\Users\your-name`。
@@ -77,6 +78,22 @@ Windows PowerShell：
 irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/gemini-worker/install.ps1 | iex
 ```
 
+### Codex App Server Worker
+
+Linux：
+
+```bash
+curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh | bash
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.ps1 | iex
+```
+
+App Server Worker 当前不支持 macOS。安装器会从 `latest.json` 自动选择最新版，并在执行前校验文件大小和 SHA-256。首次安装保持停止状态；配置安装目录中的 `.env` 后，再执行 `start.ps1` 或 `start.sh`。同版本目录只有在版本身份一致、程序完整且没有 lifecycle/update 失败证据时才会 no-op；可证明身份一致的残缺安装会自动补全，身份不完整或存在失败证据时会拒绝并要求先人工恢复。
+
 安装脚本会自动下载最新版安装包。安装完成后，会在 `.env` 中写入升级地址，后续可以直接运行 `xxx-worker upgrade`。
 
 ## 安装后检查
@@ -98,6 +115,7 @@ gemini-worker status
 ```powershell
 Invoke-RestMethod http://127.0.0.1:3031/health
 Invoke-RestMethod http://127.0.0.1:3051/health
+Invoke-RestMethod http://127.0.0.1:3062/health
 Invoke-RestMethod http://127.0.0.1:3071/health
 ```
 
@@ -105,6 +123,7 @@ Invoke-RestMethod http://127.0.0.1:3071/health
 |--------|--------------|
 | Claude Worker | `claude_cli_available=true` |
 | Codex Worker | Codex CLI 可用，或已经配置有效 API Key |
+| Codex App Server Worker | `ready=true`，且 Runtime、CLI、密钥、cwd 白名单均没有降级原因 |
 | Gemini Worker | `gemini_cli_available=true`，`gemini_auth_configured=true` |
 
 ## 升级已安装的 Worker
@@ -119,11 +138,14 @@ gemini-worker upgrade
 
 只升级你实际安装的 Worker。
 
+Codex App Server Worker 没有额外的全局 CLI 包装命令。重复执行上方对应的一键安装命令即可读取 `latest.json` 并升级；已有旧版本会调用当前安装目录自带的 updater，保留 `.env`、状态目录和运行前后的启停状态。当前完整版本会直接 no-op；同版本残缺目录仅在 `package.json` 与 `VERSION` 身份一致且没有失败事务证据时自动补全。
+
 升级会保留原来的 `.env` 配置。建议升级前手动备份一份：
 
 ```powershell
 Copy-Item ~/.claude-worker/.env ~/.claude-worker/.env.backup -ErrorAction SilentlyContinue
 Copy-Item ~/.codex-worker/.env ~/.codex-worker/.env.backup -ErrorAction SilentlyContinue
+Copy-Item ~/.codex-app-server-worker/.env ~/.codex-app-server-worker/.env.backup -ErrorAction SilentlyContinue
 Copy-Item ~/.gemini-worker/.env ~/.gemini-worker/.env.backup -ErrorAction SilentlyContinue
 ```
 
@@ -135,17 +157,25 @@ codex-worker upgrade C:\path\to\codex-worker-x.y.z-windows.zip
 gemini-worker upgrade C:\path\to\gemini-worker-x.y.z-windows.zip
 ```
 
+App Server Worker 的离线升级必须调用当前安装目录自带的 updater：
+
+```powershell
+~/.codex-app-server-worker/update.ps1 -Package C:\path\to\codex-app-server-worker-x.y.z.zip
+```
+
 如果只是想升级 Codex SDK（`@openai/codex-sdk`）而不动 Worker 主程序，可以用 `codex-worker upgrade-sdk`，详见[升级底层本体](#升级底层本体) → Codex 环境。
 
 ## 重新安装
 
 通常不需要删除目录再重装。直接再次执行一键安装命令即可，脚本会识别已有安装并覆盖程序文件，同时保留 `.env`。
 
-如果你手上是解压后的安装包，在安装包目录执行：
+Claude、Codex SDK 和 Gemini Worker 如果使用解压后的安装包，在安装包目录执行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Upgrade
 ```
+
+Codex App Server Worker 不支持 `-Upgrade` 参数。在线重装直接重复执行一键安装命令；离线重装或升级使用当前安装目录的 `update.ps1 -Package <zip>`。如果安装器报告缺失 `VERSION`、身份冲突或存在 `update.in-progress`、`lifecycle.lock`、`stop.failed`、`lifecycle.failed`，不要删除证据后强行重装，应先按日志和 README 的恢复步骤确认原事务状态。这样才能保留生命周期锁、失败证据和回滚语义。
 
 重装后再运行一次状态检查：
 
@@ -153,20 +183,21 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Upgrade
 claude-worker status
 codex-worker status
 gemini-worker status
+Invoke-RestMethod http://127.0.0.1:3062/health
 ```
 
 ## 启动与停止
 
 日常操作只需要这些命令：
 
-| 操作 | Claude | Codex | Gemini |
-|------|--------|-------|--------|
-| 启动 | `claude-worker start` | `codex-worker start` | `gemini-worker start` |
-| 停止 | `claude-worker stop` | `codex-worker stop` | `gemini-worker stop` |
-| 状态 | `claude-worker status` | `codex-worker status` | `gemini-worker status` |
-| 日志 | `claude-worker logs` | `codex-worker logs` | `gemini-worker logs` |
-| 升级 Worker | `claude-worker upgrade` | `codex-worker upgrade` | `gemini-worker upgrade` |
-| 升级底层 SDK | — | `codex-worker upgrade-sdk` | — |
+| 操作 | Claude | Codex SDK | Codex App Server | Gemini |
+|------|--------|-----------|------------------|--------|
+| 启动 | `claude-worker start` | `codex-worker start` | `~/.codex-app-server-worker/start.ps1` | `gemini-worker start` |
+| 停止 | `claude-worker stop` | `codex-worker stop` | `~/.codex-app-server-worker/stop.ps1` | `gemini-worker stop` |
+| 状态 | `claude-worker status` | `codex-worker status` | 请求 `http://127.0.0.1:3062/health` | `gemini-worker status` |
+| 日志 | `claude-worker logs` | `codex-worker logs` | 查看 `~/.codex-app-server-worker/logs` | `gemini-worker logs` |
+| 升级 Worker | `claude-worker upgrade` | `codex-worker upgrade` | 重跑 OBS 一键安装命令 | `gemini-worker upgrade` |
+| 升级底层 SDK/CLI | — | `codex-worker upgrade-sdk` | 随 Worker 锁定版本发布 | — |
 
 ## 升级底层本体
 
@@ -330,6 +361,7 @@ Worker 装好后，还需要在 Navigator 后台确认配置没有指错。
 |--------|---------------|---------|
 | Claude | `http://<worker-host>:3031` | `CLAUDE_CODE` |
 | Codex | `http://<worker-host>:3051` | `OPENAI_CODEX` |
+| Codex App Server Runtime | `http://<worker-host>:3062` | 复用 `OPENAI_CODEX` 物理 Worker 的 Runtime 注册表 |
 | Gemini | `http://<worker-host>:3071` | `GEMINI_CLI` |
 
 重点检查：
@@ -353,6 +385,7 @@ Worker 装好后，还需要在 Navigator 后台确认配置没有指错。
 |--------|----------|
 | Claude | `~/.claude-worker/bin` |
 | Codex | `~/.codex-worker/bin` |
+| Codex App Server | 无全局 `bin` 包装命令，直接使用安装目录脚本 |
 | Gemini | `~/.gemini-worker/bin` |
 
 ### Worker 显示离线
@@ -363,6 +396,7 @@ Worker 装好后，还需要在 Navigator 后台确认配置没有指错。
 claude-worker status
 codex-worker status
 gemini-worker status
+Invoke-RestMethod http://127.0.0.1:3062/health
 ```
 
 再从 Navigator 服务器确认是否能访问对应端口。跨机器部署时，注意防火墙、VPN、内网 IP 和端口暴露。
@@ -386,6 +420,7 @@ Gemini 如果使用本地登录，确认 `gemini -p "ping" --output-format strea
 ```powershell
 Copy-Item ~/.claude-worker/.env ~/.claude-worker/.env.backup -ErrorAction SilentlyContinue
 Copy-Item ~/.codex-worker/.env ~/.codex-worker/.env.backup -ErrorAction SilentlyContinue
+Copy-Item ~/.codex-app-server-worker/.env ~/.codex-app-server-worker/.env.backup -ErrorAction SilentlyContinue
 Copy-Item ~/.gemini-worker/.env ~/.gemini-worker/.env.backup -ErrorAction SilentlyContinue
 ```
 
@@ -397,6 +432,7 @@ Copy-Item ~/.gemini-worker/.env ~/.gemini-worker/.env.backup -ErrorAction Silent
 |--------|----------|--------------|----------------|
 | Claude | `tools/claude-agent-worker` | `update.ps1` / `update.sh` | 暂未透出独立 SDK 升级命令，需重装 |
 | Codex | `tools/codex-agent-worker` | `update.ps1` / `update.sh` | `codex-worker upgrade-sdk`（同时打包了 `release/update.ps1` / `release/update.sh`） |
+| Codex App Server | `tools/codex-app-server-worker` | `update.ps1` / `update.sh` | 重跑稳定安装 URL，或调用安装目录 updater |
 | Gemini | `tools/gemini-agent-worker` | 无单独脚本，升级全局 `gemini` CLI | 同左 |
 
 源码目录启动：
@@ -404,6 +440,7 @@ Copy-Item ~/.gemini-worker/.env ~/.gemini-worker/.env.backup -ErrorAction Silent
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\claude-agent-worker\start.ps1
 powershell -ExecutionPolicy Bypass -File tools\codex-agent-worker\start.ps1
+powershell -ExecutionPolicy Bypass -File tools\codex-app-server-worker\start.ps1
 powershell -ExecutionPolicy Bypass -File tools\gemini-agent-worker\start.ps1
 ```
 
@@ -412,6 +449,7 @@ powershell -ExecutionPolicy Bypass -File tools\gemini-agent-worker\start.ps1
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\claude-agent-worker\stop.ps1
 powershell -ExecutionPolicy Bypass -File tools\codex-agent-worker\stop.ps1
+powershell -ExecutionPolicy Bypass -File tools\codex-app-server-worker\stop.ps1
 powershell -ExecutionPolicy Bypass -File tools\gemini-agent-worker\stop.ps1
 ```
 

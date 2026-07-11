@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import {
@@ -43,4 +45,38 @@ test('readiness fails closed on missing encryption key, isolated CODEX_HOME, or 
   }, '0.144.1', true).reasons, [
     'CODEX_HOME_NOT_ISOLATED',
   ])
+})
+
+test('readiness accepts a filesystem-root allowlist with isolated private paths', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-root-readiness-'))
+  const stateDir = path.join(root, 'state')
+  const codexHome = path.join(root, 'codex-home')
+  fs.mkdirSync(stateDir)
+  fs.mkdirSync(codexHome)
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  const config = testConfig(stateDir, {
+    codexHome,
+    allowedCwds: [path.parse(root).root],
+  })
+  assert.deepEqual(evaluateRuntimeReadiness(config, '0.144.1', true).reasons, [])
+})
+
+test('readiness rejects unavailable or wholly private workspace roots', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-root-unavailable-'))
+  const stateDir = path.join(root, 'state')
+  const codexHome = path.join(root, 'codex-home')
+  fs.mkdirSync(stateDir)
+  fs.mkdirSync(codexHome)
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  const config = testConfig(stateDir, { codexHome })
+  assert.deepEqual(evaluateRuntimeReadiness({
+    ...config,
+    allowedCwds: [path.join(root, 'missing-drive')],
+  }, '0.144.1', true).reasons, ['ALLOWED_CWDS_UNAVAILABLE'])
+  assert.deepEqual(evaluateRuntimeReadiness({
+    ...config,
+    allowedCwds: [stateDir],
+  }, '0.144.1', true).reasons, ['ALLOWED_CWDS_UNAVAILABLE'])
 })

@@ -3,9 +3,15 @@ package com.foggy.navigator.codex.worker.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.common.util.ProviderStateCodec;
+import jakarta.persistence.LockModeType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Map;
 import java.util.Optional;
@@ -22,6 +28,8 @@ class CodexTaskRuntimeStateServiceTest {
 
     private CodexTaskRepository repository;
     private CredentialEncryptor encryptor;
+    private SessionTaskRepository sessionTaskRepository;
+    private SessionTaskEntity sessionTask;
     private CodexTaskEntity task;
     private CodexTaskRuntimeStateService service;
 
@@ -29,17 +37,25 @@ class CodexTaskRuntimeStateServiceTest {
     void setUp() {
         repository = mock(CodexTaskRepository.class);
         encryptor = mock(CredentialEncryptor.class);
+        sessionTaskRepository = mock(SessionTaskRepository.class);
         service = new CodexTaskRuntimeStateService(repository, encryptor, new ObjectMapper());
+        ReflectionTestUtils.setField(service, "sessionTaskRepository", sessionTaskRepository);
         task = new CodexTaskEntity();
         task.setTaskId("task-1");
         task.setRuntimeType("APP_SERVER");
         task.setRuntimeId("app-main");
         task.setRuntimeRevision(1);
+        task.setProviderType("codex-worker");
+        sessionTask = new SessionTaskEntity();
+        sessionTask.setTaskId("task-1");
         when(repository.findByTaskIdForUpdate("task-1")).thenReturn(Optional.of(task));
         when(repository.findByTaskId("task-1")).thenReturn(Optional.of(task));
         when(repository.findByTaskIdAndUserIdForUpdate("task-1", "user-1"))
                 .thenReturn(Optional.of(task));
         when(repository.saveAndFlush(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionTaskRepository.findByTaskIdForUpdate("task-1")).thenReturn(Optional.of(sessionTask));
+        when(sessionTaskRepository.save(any(SessionTaskEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(encryptor.encrypt(any())).thenAnswer(invocation -> "enc:" + invocation.getArgument(0));
         when(encryptor.decrypt(any())).thenAnswer(invocation -> {
@@ -53,9 +69,21 @@ class CodexTaskRuntimeStateServiceTest {
         service.prepareAcceptance("task-1", Map.of("prompt", "change file", "model", "codex-ultra"));
 
         assertEquals("ACCEPTING", task.getRuntimeAcceptanceState());
+        assertEquals("ACCEPTING", projectedAcceptanceState());
         assertNotNull(task.getRuntimeRequestHash());
         assertNotNull(task.getRuntimeRequestCiphertext());
         verify(repository).saveAndFlush(task);
+        verify(sessionTaskRepository).findByTaskIdForUpdate("task-1");
+    }
+
+    @Test
+    void unifiedTaskStateWriterUsesPessimisticWriteLock() throws NoSuchMethodException {
+        Lock lock = SessionTaskRepository.class
+                .getMethod("findByTaskIdForUpdate", String.class)
+                .getAnnotation(Lock.class);
+
+        assertNotNull(lock);
+        assertEquals(LockModeType.PESSIMISTIC_WRITE, lock.value());
     }
 
     @Test
@@ -94,10 +122,12 @@ class CodexTaskRuntimeStateServiceTest {
 
         assertEquals("task-1", task.getWorkerTaskId());
         assertEquals("ACCEPTED", task.getRuntimeAcceptanceState());
+        assertEquals("ACCEPTED", projectedAcceptanceState());
         verify(repository).saveAndFlush(task);
 
         service.markSubscribed("task-1");
         assertEquals("SUBSCRIBED", task.getRuntimeAcceptanceState());
+        assertEquals("SUBSCRIBED", projectedAcceptanceState());
     }
 
     @Test
@@ -135,6 +165,7 @@ class CodexTaskRuntimeStateServiceTest {
 
         assertEquals(task, claimed);
         assertEquals("DELETE_REQUESTED", task.getRuntimeAcceptanceState());
+        assertEquals("DELETE_REQUESTED", projectedAcceptanceState());
         verify(repository).saveAndFlush(task);
     }
 
@@ -145,5 +176,10 @@ class CodexTaskRuntimeStateServiceTest {
 
         assertThrows(IllegalStateException.class,
                 () -> service.claimTerminalDeletion("task-1", "user-1"));
+    }
+
+    private Object projectedAcceptanceState() {
+        return ProviderStateCodec.parseObject(sessionTask.getTaskStateJson())
+                .get(ProviderStateCodec.FIELD_RUNTIME_ACCEPTANCE_STATE);
     }
 }

@@ -40,6 +40,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -59,6 +60,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -66,6 +68,14 @@ import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
 class CodexTaskServiceTest {
+
+    @Test
+    void createTaskDirectDeclaresTransactionBoundaryForSessionTaskLocking() throws Exception {
+        var method = CodexTaskService.class.getMethod(
+                "createTaskDirect", Map.class, String.class, String.class);
+
+        assertNotNull(method.getAnnotation(Transactional.class));
+    }
 
     @Mock
     private CodexTaskRepository taskRepository;
@@ -113,6 +123,8 @@ class CodexTaskServiceTest {
         ReflectionTestUtils.setField(service, "runtimeRegistryService", runtimeRegistryService);
 
         lenient().when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
+        lenient().when(sessionTaskRepository.findByTaskIdForUpdate(anyString()))
+                .thenAnswer(invocation -> sessionTaskRepository.findByTaskId(invocation.getArgument(0)));
         lenient().when(taskRepository.findByTaskIdForUpdate(anyString()))
                 .thenAnswer(invocation -> taskRepository.findByTaskId(invocation.getArgument(0)));
         lenient().when(sessionTaskRepository.save(any(SessionTaskEntity.class)))
@@ -1793,6 +1805,43 @@ class CodexTaskServiceTest {
 
         assertEquals("SUBSCRIBED", entity.getRuntimeAcceptanceState());
         assertEquals(3, entity.getLastAckedSeq());
+    }
+
+    @Test
+    void appServerAcceptanceLifecycleSyncsToUnifiedTaskState() {
+        CodexTaskEntity entity = createTask(
+                "task-runtime-state", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 11, 16, 0));
+        entity.setRuntimeId("app-main");
+        entity.setRuntimeRevision(7);
+        entity.setRuntimeType("APP_SERVER");
+        entity.setRuntimeInstanceId("instance-a");
+        entity.setRoutingEpoch(11L);
+        entity.setRuntimeAcceptanceState("SUBSCRIBED");
+        SessionTaskEntity projection = new SessionTaskEntity();
+        when(taskRepository.findByTaskId("task-runtime-state")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionTaskRepository.findByTaskId("task-runtime-state"))
+                .thenReturn(Optional.of(projection));
+
+        service.recordWorkerProgress(
+                "task-runtime-state", "task-runtime-state", "thread-1", null, 4, false, true);
+
+        Map<String, Object> committed = ProviderStateCodec.parseObject(projection.getTaskStateJson());
+        assertEquals("app-main", committed.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_ID));
+        assertEquals(7, committed.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_REVISION));
+        assertEquals("APP_SERVER", committed.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_TYPE));
+        assertEquals("instance-a", committed.get(ProviderStateCodec.FIELD_CODEX_RUNTIME_INSTANCE_ID));
+        assertEquals(11, committed.get(ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH));
+        assertEquals("COMMITTED", committed.get(ProviderStateCodec.FIELD_RUNTIME_ACCEPTANCE_STATE));
+
+        service.completeTask("task-runtime-state", "task-runtime-state", "thread-1", "done",
+                null, null, null, null, null, null);
+
+        Map<String, Object> terminal = ProviderStateCodec.parseObject(projection.getTaskStateJson());
+        assertEquals("TERMINAL", terminal.get(ProviderStateCodec.FIELD_RUNTIME_ACCEPTANCE_STATE));
+        verify(sessionTaskRepository, times(2)).findByTaskIdForUpdate("task-runtime-state");
     }
 
     @Test

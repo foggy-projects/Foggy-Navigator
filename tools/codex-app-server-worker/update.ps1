@@ -251,7 +251,8 @@ try {
     foreach ($Required in @(
         'dist', 'src', 'tests', 'contracts', 'scripts', 'package-lock.json', 'tsconfig.json', 'VERSION',
         'start.ps1', 'start.sh', 'stop.ps1', 'stop.sh', 'update.ps1', 'update.sh', 'install.ps1', 'install.sh',
-        'scripts\lifecycle-marker.mjs', 'scripts\process-tree.mjs', 'scripts\read-dotenv-value.mjs'
+        'scripts\configure-install-env.mjs', 'scripts\lifecycle-marker.mjs',
+        'scripts\process-tree.mjs', 'scripts\read-dotenv-value.mjs'
     )) {
         if (-not (Test-Path (Join-Path $Candidate $Required))) { throw "Release is missing $Required" }
     }

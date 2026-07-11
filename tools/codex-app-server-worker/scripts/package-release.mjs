@@ -9,8 +9,8 @@ import { resolveReleaseVersion } from './release-version.mjs'
 const workerDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const version = resolveReleaseVersion(workerDir)
 
-function run(command, args) {
-  const result = spawnSync(command, args, { cwd: workerDir, stdio: 'inherit', shell: process.platform === 'win32' })
+function run(command, args, shell = process.platform === 'win32') {
+  const result = spawnSync(command, args, { cwd: workerDir, stdio: 'inherit', shell })
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}`)
 }
 
@@ -35,3 +35,9 @@ fs.writeFileSync(archivePath, archive)
 const checksum = crypto.createHash('sha256').update(archive).digest('hex')
 fs.writeFileSync(`${archivePath}.sha256`, `${checksum}  ${archiveName}\n`, 'utf8')
 process.stdout.write(`${archivePath}\nsha256 ${checksum}\n`)
+
+if (process.argv.includes('--upload')) {
+  const publishArguments = [path.join(workerDir, 'scripts', 'publish-obs.mjs'), '--output-dir', outputDir]
+  if (process.argv.includes('--allow-same-version')) publishArguments.push('--allow-same-version')
+  run(process.execPath, publishArguments, false)
+}

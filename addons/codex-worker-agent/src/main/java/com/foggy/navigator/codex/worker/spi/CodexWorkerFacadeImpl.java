@@ -375,6 +375,14 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
     private String stableFailureCode(Throwable error, String fallback) {
         Throwable current = error;
         while (current != null) {
+            if (current instanceof CodexAppServerAcceptanceService.RejectedException rejected
+                    && rejected.getWorkerErrorCode() != null) {
+                return rejected.getWorkerErrorCode();
+            }
+            current = current.getCause();
+        }
+        current = error;
+        while (current != null) {
             String message = current.getMessage();
             if (message != null) {
                 String candidate = message.split(":", 2)[0].trim();

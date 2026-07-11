@@ -33,8 +33,12 @@ import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -252,6 +256,10 @@ class TaskDispatchFacadeTest {
     @Test
     void submitTask_persistsRecoveryCorrelationMetadataToTaskState() {
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        TransactionStatus transactionStatus = mock(TransactionStatus.class);
+        ReflectionTestUtils.setField(facade, "transactionManager", transactionManager);
+        when(transactionManager.getTransaction(any(TransactionDefinition.class))).thenReturn(transactionStatus);
         A2aMessage message = A2aMessage.builder()
                 .role("user")
                 .parts(List.of(com.foggy.navigator.common.dto.a2a.A2aPart.text("recover task")))
@@ -285,11 +293,15 @@ class TaskDispatchFacadeTest {
                 .contextId("ctx-1")
                 .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
                 .build());
-        when(sessionTaskRepository.findByTaskId("task-recovery-1")).thenReturn(Optional.of(entity));
+        when(sessionTaskRepository.findByTaskIdForUpdate("task-recovery-1")).thenReturn(Optional.of(entity));
 
         facade.submitTask(request);
 
-        verify(sessionTaskRepository).save(entity);
+        InOrder updateOrder = inOrder(transactionManager, sessionTaskRepository);
+        updateOrder.verify(transactionManager).getTransaction(any(TransactionDefinition.class));
+        updateOrder.verify(sessionTaskRepository).findByTaskIdForUpdate("task-recovery-1");
+        updateOrder.verify(sessionTaskRepository).save(entity);
+        updateOrder.verify(transactionManager).commit(transactionStatus);
         String taskStateJson = entity.getTaskStateJson();
         assertTrue(taskStateJson.contains("\"contextId\":\"ctx-1\""));
         assertTrue(taskStateJson.contains("\"originalTaskId\":\"task-original\""));
@@ -2383,6 +2395,12 @@ class TaskDispatchFacadeTest {
         Map<String, Object> providerState = new LinkedHashMap<>();
         providerState.put(ProviderStateCodec.FIELD_CODEX_THREAD_ID, "thread-v1");
         providerState.put(ProviderStateCodec.FIELD_CONTEXT_ID, "ctx-v1");
+        providerState.put(ProviderStateCodec.FIELD_CODEX_RUNTIME_ID, "app-server-main");
+        providerState.put(ProviderStateCodec.FIELD_CODEX_RUNTIME_REVISION, "7");
+        providerState.put(ProviderStateCodec.FIELD_CODEX_RUNTIME_TYPE, "APP_SERVER");
+        providerState.put(ProviderStateCodec.FIELD_CODEX_RUNTIME_INSTANCE_ID, "instance-v1");
+        providerState.put(ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH, 11);
+        providerState.put(ProviderStateCodec.FIELD_RUNTIME_ACCEPTANCE_STATE, "TERMINAL");
         providerState.put(ProviderStateCodec.FIELD_CHECKPOINTS, List.of(Map.of("id", "ckpt-v1")));
         providerState.put("fileCheckpointingEnabled", true);
         String taskStateJson = ProviderStateCodec.mergeTaskValues(null, "codex-worker", providerState);
@@ -2404,6 +2422,12 @@ class TaskDispatchFacadeTest {
         assertEquals("codex-worker", dto.getProviderType());
         assertEquals("thread-v1", dto.getCodexThreadId());
         assertEquals("ctx-v1", dto.getContextId());
+        assertEquals("app-server-main", dto.getRuntimeId());
+        assertEquals(7, dto.getRuntimeRevision());
+        assertEquals("APP_SERVER", dto.getRuntimeType());
+        assertEquals("instance-v1", dto.getRuntimeInstanceId());
+        assertEquals(11L, dto.getRoutingEpoch());
+        assertEquals("TERMINAL", dto.getRuntimeAcceptanceState());
         assertEquals(Boolean.TRUE, dto.getFileCheckpointingEnabled());
         assertNotNull(dto.getCheckpoints());
         assertTrue(dto.getCheckpoints().contains("ckpt-v1"));

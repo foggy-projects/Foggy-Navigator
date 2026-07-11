@@ -16,14 +16,23 @@ export function isPathWithinAllowedCwd(candidate: string, allowedCwd: string): b
     return caseInsensitive ? withoutTrailing.toLowerCase() : withoutTrailing
   }
   const relative = pathApi.relative(normalize(allowedCwd), normalize(candidate))
-  return relative === '' || (!relative.startsWith('..') && !pathApi.isAbsolute(relative))
+  const escapesParent = relative === '..' || relative.startsWith(`..${pathApi.sep}`)
+  return relative === '' || (!escapesParent && !pathApi.isAbsolute(relative))
 }
 
-export function isAllowedWorkingPath(candidate: string, allowedCwds: string[]): boolean {
-  return resolveAllowedWorkingPath(candidate, allowedCwds) !== undefined
+export function isAllowedWorkingPath(
+  candidate: string,
+  allowedCwds: string[],
+  privatePaths: string[] = [],
+): boolean {
+  return resolveAllowedWorkingPath(candidate, allowedCwds, privatePaths) !== undefined
 }
 
-export function resolveAllowedWorkingPath(candidate: string, allowedCwds: string[]): string | undefined {
+export function resolveAllowedWorkingPath(
+  candidate: string,
+  allowedCwds: string[],
+  privatePaths: string[] = [],
+): string | undefined {
   if (allowedCwds.length === 0) return undefined
   let realCandidate: string
   try {
@@ -38,7 +47,33 @@ export function resolveAllowedWorkingPath(candidate: string, allowedCwds: string
       return false
     }
   })
-  return allowed ? realCandidate : undefined
+  if (!allowed) return undefined
+  const overlapsPrivatePath = privatePaths.some(privatePath => (
+    pathsOverlap(realCandidate, canonicalIfPresent(privatePath))
+  ))
+  return overlapsPrivatePath ? undefined : realCandidate
+}
+
+export function workerPrivatePaths(options: {
+  codexHome: string
+  codexBizHomeRoot?: string
+  stateDir: string
+}): string[] {
+  return [options.stateDir, options.codexHome, options.codexBizHomeRoot].filter(Boolean) as string[]
+}
+
+export function hasUsableAllowedWorkingRoot(allowedCwds: string[], privatePaths: string[] = []): boolean {
+  return allowedCwds.some(root => {
+    try {
+      const realRoot = fs.realpathSync.native(root)
+      if (!fs.statSync(realRoot).isDirectory()) return false
+      return !privatePaths.some(privatePath => (
+        isPathWithinAllowedCwd(realRoot, canonicalIfPresent(privatePath))
+      ))
+    } catch {
+      return false
+    }
+  })
 }
 
 export function assertCodexHomeIsolation(options: {
@@ -48,10 +83,17 @@ export function assertCodexHomeIsolation(options: {
   allowedCwds: string[]
 }): void {
   const homes = [options.codexHome, options.codexBizHomeRoot].filter(Boolean)
-  const protectedPaths = [options.stateDir, ...options.allowedCwds].filter(Boolean)
+  const protectedPaths = [options.stateDir].filter(Boolean)
   for (const home of homes) {
     for (const protectedPath of protectedPaths) {
       if (pathsOverlap(canonicalIfPresent(home!), canonicalIfPresent(protectedPath))) {
+        throw isolationError()
+      }
+    }
+    for (const allowedCwd of options.allowedCwds) {
+      const canonicalAllowedCwd = canonicalIfPresent(allowedCwd)
+      if (!isFilesystemRoot(canonicalAllowedCwd)
+          && pathsOverlap(canonicalIfPresent(home!), canonicalAllowedCwd)) {
         throw isolationError()
       }
     }
@@ -74,6 +116,12 @@ export function resolveContainedHomePath(root: string, candidate: string): strin
 
 function pathsOverlap(left: string, right: string): boolean {
   return isPathWithinAllowedCwd(left, right) || isPathWithinAllowedCwd(right, left)
+}
+
+function isFilesystemRoot(value: string): boolean {
+  const pathApi = pathApiFor(value)
+  const normalized = pathApi.normalize(value)
+  return normalized === pathApi.parse(normalized).root
 }
 
 function canonicalIfPresent(value: string): string {

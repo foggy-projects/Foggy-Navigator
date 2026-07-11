@@ -4,6 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import type { AppServerLane } from './pool.js'
 
+const laneApiKeys = new WeakMap<AppServerLane, string>()
+
 const INHERITED_ENV_ALLOWLIST = new Set([
   'PATH', 'PATHEXT', 'SYSTEMROOT', 'COMSPEC', 'WINDIR',
   'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'HOME',
@@ -35,7 +37,7 @@ export async function buildAppServerLane(options: {
     baseUrlFingerprint,
     processEnvFingerprint,
   }))
-  return {
+  const lane: AppServerLane = {
     key,
     cliVersion: options.cliVersion,
     authFingerprint,
@@ -44,20 +46,23 @@ export async function buildAppServerLane(options: {
     processEnvFingerprint,
     env,
   }
+  if (options.apiKey) laneApiKeys.set(lane, options.apiKey)
+  return lane
+}
+
+export function readAppServerLaneApiKey(lane: AppServerLane): string | undefined {
+  return laneApiKeys.get(lane)
 }
 
 export function buildProcessEnv(
   base: NodeJS.ProcessEnv,
-  options: { apiKey?: string; baseUrl?: string; codexHome: string },
+  options: { codexHome: string },
 ): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(base)) {
     if (value === undefined || !INHERITED_ENV_ALLOWLIST.has(key.toUpperCase())) continue
     env[key] = value
   }
-  setEnv(env, 'OPENAI_API_KEY', options.apiKey)
-  setEnv(env, 'CODEX_API_KEY', options.apiKey)
-  setEnv(env, 'OPENAI_BASE_URL', options.baseUrl)
   setEnv(env, 'CODEX_HOME', options.codexHome)
   env.CODEX_MANAGED_BY_NPM = '1'
   if (process.platform === 'win32') {

@@ -8,6 +8,12 @@ if [[ "${1:-}" == --install-dir ]]; then INSTALL_DIR="${2:?missing --install-dir
 bash "$SOURCE_DIR/update.sh" --package "$SOURCE_DIR" --install-dir "$INSTALL_DIR" --no-restart
 if [[ ! -f "$INSTALL_DIR/.env" ]]; then
   cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
-  echo "Created $INSTALL_DIR/.env; configure required secrets and isolation paths before start."
+  if ! node "$INSTALL_DIR/scripts/configure-install-env.mjs" "$INSTALL_DIR/.env" '/'; then
+    rm -f -- "$INSTALL_DIR/.env"
+    exit 1
+  fi
+  echo "Created $INSTALL_DIR/.env with workspace root /."
+  echo 'WARNING: The cwd allowlist is an admission check, not a filesystem sandbox. Use this default only for trusted tasks on a dedicated host.' >&2
+  echo 'Configure required secrets and an isolated CODEX_HOME before start.'
 fi
 echo "codex-app-server-worker installed at $INSTALL_DIR"

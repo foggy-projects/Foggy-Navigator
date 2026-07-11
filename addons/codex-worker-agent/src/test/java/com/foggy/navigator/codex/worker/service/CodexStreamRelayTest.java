@@ -351,7 +351,9 @@ class CodexStreamRelayTest {
         Map<String, Object> request = Map.of("prompt", "hello");
         stubBuiltRequest(request);
         WebClientResponseException conflict = WebClientResponseException.create(
-                409, "Conflict", null, new byte[0], null);
+                409, "Conflict", null,
+                "{\"error\":\"IDEMPOTENCY_KEY_CONFLICT\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.UTF_8);
         when(client.createTask("local-task-1", request)).thenReturn(Mono.error(conflict));
 
         relay.onTaskStart(startEvent("codex-ultra"));
@@ -359,6 +361,26 @@ class CodexStreamRelayTest {
         verify(client).createTask("local-task-1", request);
         verify(taskService).failTask(eq("local-task-1"), isNull(), isNull(),
                 contains("CODEX_RUNTIME_IDEMPOTENCY_CONFLICT"));
+        verify(taskRuntimeStateService, never()).markAcceptanceUnknown(any());
+    }
+
+    @Test
+    void appServerWorkingDirectoryRejectionSurfacesContractCodeOnAsyncStart() {
+        stubAppServerTask("PREPARED");
+        Map<String, Object> request = Map.of("prompt", "hello");
+        stubBuiltRequest(request);
+        WebClientResponseException forbidden = WebClientResponseException.create(
+                403, "Forbidden", null,
+                "{\"error\":\"WORKING_DIRECTORY_NOT_ALLOWED\"}"
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.UTF_8);
+        when(client.createTask("local-task-1", request)).thenReturn(Mono.error(forbidden));
+
+        relay.onTaskStart(startEvent("codex-ultra"));
+
+        verify(client).createTask("local-task-1", request);
+        verify(taskService).failTask("local-task-1", null, null,
+                "WORKING_DIRECTORY_NOT_ALLOWED");
         verify(taskRuntimeStateService, never()).markAcceptanceUnknown(any());
     }
 

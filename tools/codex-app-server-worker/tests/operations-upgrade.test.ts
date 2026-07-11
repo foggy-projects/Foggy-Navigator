@@ -408,6 +408,11 @@ test('candidate manifest requires every lifecycle script and an exact VERSION ma
       pattern: /missing install\.sh/i,
     },
     {
+      name: 'missing-install-env-helper',
+      mutate: (candidate: string) => fs.rmSync(path.join(candidate, 'scripts', 'configure-install-env.mjs')),
+      pattern: /missing scripts[\\/]configure-install-env\.mjs/i,
+    },
+    {
       name: 'version-mismatch',
       mutate: (candidate: string) => fs.writeFileSync(path.join(candidate, 'VERSION'), '0.1.1-mismatch\n'),
       pattern: /VERSION must exactly match/i,
@@ -961,6 +966,7 @@ function prepareCandidate(candidateDir: string): void {
     fs.copyFileSync(script, path.join(candidateDir, script))
   }
   fs.copyFileSync('scripts/read-dotenv-value.mjs', path.join(candidateDir, 'scripts', 'read-dotenv-value.mjs'))
+  fs.copyFileSync('scripts/configure-install-env.mjs', path.join(candidateDir, 'scripts', 'configure-install-env.mjs'))
   fs.copyFileSync('scripts/process-tree.mjs', path.join(candidateDir, 'scripts', 'process-tree.mjs'))
   fs.copyFileSync('scripts/lifecycle-marker.mjs', path.join(candidateDir, 'scripts', 'lifecycle-marker.mjs'))
   fs.writeFileSync(path.join(candidateDir, 'package.json'), JSON.stringify({

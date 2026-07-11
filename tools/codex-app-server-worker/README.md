@@ -29,7 +29,13 @@ Independent Foggy Navigator runtime backed only by `codex app-server`. It does n
 - `GET /api/v1/capabilities` exposes the runtime/instance/revision, complete reasoning matrix,
   exact CLI/protocol version, feature flags, capacity, readiness, and schema digest.
 - Working directories are checked against configured roots after filesystem `realpath`
-  resolution, so a junction or symlink inside an allowed root cannot escape it.
+  resolution, so a junction or symlink inside an allowed root cannot escape it. Worker state,
+  `CODEX_HOME`, `CODEX_BIZ_HOME_ROOT`, and their ancestors remain invalid task directories even
+  when a filesystem root is allowed.
+- The cwd allowlist is an admission check, not a filesystem sandbox. In particular,
+  `danger-full-access` tasks can access absolute paths outside their cwd, including Worker-private
+  paths and, on Windows, `C:\` even when it is absent from the allowlist. Run broad defaults only
+  for trusted tasks on a dedicated OS account/host, or enforce a separate container/OS boundary.
 
 P2 uses a long-lived exclusive-lease pool. A process serves only one root turn at a time; parallel
 turns scale to separate instances in the same lane. Lanes are keyed by exact CLI, CODEX_HOME,
@@ -62,15 +68,17 @@ credentials, tokens, or other secrets are discarded at the Worker boundary.
 1. Copy values from `.env.example` into `.env`.
 2. Set a 32-byte base64 `CODEX_APP_SERVER_STATE_KEY`.
 3. Set a strong `CODEX_APP_SERVER_WORKER_TOKEN`; all endpoints except `/health` require it.
-4. Configure at least one controlled absolute root in `CODEX_APP_SERVER_ALLOWED_CWDS`.
+4. Configure at least one absolute root in `CODEX_APP_SERVER_ALLOWED_CWDS`. Release installers
+   populate this only for a fresh `.env`; source-based setup remains explicit.
 5. Set `CODEX_HOME` to an isolated service directory that is not shared with the SDK Worker.
 6. Run `npm install`, `npm test`, `npm run typecheck`, and `npm run build`.
 7. Run `npm run verify:schema` whenever the pinned CLI or app-server protocol changes.
 
 Default port: `3062`. The service reports degraded readiness and rejects task creation when the
-encryption key, Worker token, cwd allowlist or isolated `CODEX_HOME` is absent, the CLI is unavailable, or its version differs from
-`0.144.1`. The default bind address is loopback; remote exposure requires an explicit host and a
-network boundary in addition to the Worker token.
+encryption key, Worker token, usable cwd allowlist, or isolated `CODEX_HOME` is absent, the CLI is
+unavailable, or its version differs from `0.144.1`. An allowlist whose roots are missing, offline,
+or wholly inside a Worker-private directory is not usable. The default bind address is loopback;
+remote exposure requires an explicit host and a network boundary in addition to the Worker token.
 
 ## Operations
 
@@ -130,18 +138,59 @@ release/output/codex-app-server-worker-<version>.zip
 release/output/codex-app-server-worker-<version>.zip.sha256
 ```
 
-After extracting the ZIP, install it with `./install.ps1 -InstallDir <path>` on Windows or
-`./install.sh --install-dir <path>` on Linux. Installation intentionally does not start an
-unconfigured service; it creates `.env` from `.env.example` when no existing configuration exists.
-
-To update an existing 0.1.1-or-newer install, run its current update script and pass the downloaded archive:
+Publish the package, checksum, bootstrap installers, and `latest.json` to the canonical OBS prefix
+without passing a version explicitly:
 
 ```powershell
-./update.ps1 -Package ./codex-app-server-worker-0.3.0.zip
+powershell -ExecutionPolicy Bypass -File release/package.ps1 -Upload
 ```
 
 ```bash
-./update.sh --package ./codex-app-server-worker-0.3.0.zip
+npm run package:release -- --upload
+```
+
+The version is resolved from `package.json`, `package-lock.json`, and `src/version.ts`, which must
+match. Publishing rejects downgrades and same-version replacement. `-AllowSameVersion` /
+`--allow-same-version` is limited to repairing metadata for byte-identical archives. Override the
+canonical destination only with `CODEX_APP_SERVER_RELEASE_OBS_BUCKET`,
+`CODEX_APP_SERVER_RELEASE_BASE_URL`, or the equivalent publisher arguments.
+
+End users install the latest published release without knowing its version:
+
+```powershell
+irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.ps1 | iex
+```
+
+```bash
+curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh | bash
+```
+
+The bootstrap validates product/schema, relative artifact path, byte length, and SHA-256 before it
+runs any package code. A fresh installation remains stopped so required secrets and isolated
+`CODEX_HOME` can be configured. Re-running the same command upgrades an existing installation by
+calling its already-installed updater, preserving lifecycle and rollback protections. The shell
+bootstrap supports Linux only; macOS remains unsupported.
+
+After extracting the ZIP, install it with `./install.ps1 -InstallDir <path>` on Windows or
+`./install.sh --install-dir <path>` on Linux. Installation intentionally does not start an
+unconfigured service. When no `.env` exists, it creates one from `.env.example`; Linux defaults
+`CODEX_APP_SERVER_ALLOWED_CWDS` to `/`, while Windows snapshots every ready drive-letter root
+except `C:\` (for example `D:\,E:\`). A Windows machine with no ready non-C drive keeps the value
+empty and emits a warning. These broad defaults are intended for a dedicated local Worker; narrow
+them when the host requires tighter workspace scope.
+
+Install and update never rewrite an existing `.env`. Drives attached after installation are not
+added automatically, and `C:\` is available as a task cwd only through explicit configuration.
+
+For an offline update of an existing 0.1.1-or-newer install, run its current update script and pass
+the downloaded archive:
+
+```powershell
+./update.ps1 -Package ./codex-app-server-worker-<version>.zip
+```
+
+```bash
+./update.sh --package ./codex-app-server-worker-<version>.zip
 ```
 
 In-place update of a `0.1.0` installation is explicitly unsupported, whether it is running or

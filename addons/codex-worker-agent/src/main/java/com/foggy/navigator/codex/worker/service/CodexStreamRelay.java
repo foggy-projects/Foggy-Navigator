@@ -240,10 +240,11 @@ public class CodexStreamRelay {
         } catch (CodexTaskRuntimeStateService.AcceptanceCancelledException e) {
             log.info("Codex app-server acceptance cancelled before subscription: taskId={}", taskId);
         } catch (CodexAppServerAcceptanceService.RejectedException e) {
-            log.error("Codex app-server rejected task acceptance: taskId={}, error={}", taskId, e.getMessage());
-            taskService.failTask(taskId, null, null, e.getMessage());
+            String failureCode = stableAcceptanceRejection(e);
+            log.error("Codex app-server rejected task acceptance: taskId={}, error={}", taskId, failureCode);
+            taskService.failTask(taskId, null, null, failureCode);
             publishMessage(sessionId, providerType, MessageType.ERROR,
-                    Map.of("content", e.getMessage(), "taskId", taskId));
+                    Map.of("content", failureCode, "taskId", taskId));
         } catch (CodexAppServerAcceptanceService.UnknownException e) {
             log.error("Codex app-server acceptance is unknown: taskId={}", taskId);
             taskRuntimeStateService.markAcceptanceUnknown(taskId);
@@ -370,8 +371,9 @@ public class CodexStreamRelay {
         } catch (CodexTaskRuntimeStateService.AcceptanceCancelledException e) {
             log.info("Recovered acceptance was cancelled before subscription: taskId={}", taskId);
         } catch (CodexAppServerAcceptanceService.RejectedException e) {
-            taskService.failTask(taskId, null, null, e.getMessage());
-            log.warn("App-server rejected recovered acceptance for task {}: {}", taskId, e.getMessage());
+            String failureCode = stableAcceptanceRejection(e);
+            taskService.failTask(taskId, null, null, failureCode);
+            log.warn("App-server rejected recovered acceptance for task {}: {}", taskId, failureCode);
         } catch (CodexAppServerAcceptanceService.UnknownException e) {
             taskRuntimeStateService.markAcceptanceUnknown(taskId);
             log.warn("App-server acceptance remains unknown for task {}", taskId);
@@ -1404,6 +1406,10 @@ public class CodexStreamRelay {
     private String stableFailureCode(Throwable error, String fallback) {
         Throwable current = error;
         while (current != null) {
+            if (current instanceof CodexAppServerAcceptanceService.RejectedException rejected
+                    && rejected.getWorkerErrorCode() != null) {
+                return rejected.getWorkerErrorCode();
+            }
             if (current instanceof WebClientResponseException response) {
                 return fallback + "_HTTP_" + response.getStatusCode().value();
             }
@@ -1421,6 +1427,10 @@ public class CodexStreamRelay {
             current = current.getCause();
         }
         return fallback;
+    }
+
+    private String stableAcceptanceRejection(CodexAppServerAcceptanceService.RejectedException error) {
+        return error.getWorkerErrorCode() != null ? error.getWorkerErrorCode() : error.getMessage();
     }
 
     private String exceptionType(Throwable error) {

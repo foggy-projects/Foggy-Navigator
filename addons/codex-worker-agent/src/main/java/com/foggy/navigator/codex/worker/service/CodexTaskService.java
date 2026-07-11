@@ -666,7 +666,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (entity == null) {
             return UserInputResolution.ignored();
         }
-        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(taskId).orElse(null);
+        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskIdForUpdate(taskId).orElse(null);
         if (sessionTask == null) {
             return UserInputResolution.ignored();
         }
@@ -703,7 +703,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     public UserInputResolution resolvePendingUserInputForTerminal(String taskId) {
         requireUserInputPersistence();
         CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
-        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(taskId).orElse(null);
+        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskIdForUpdate(taskId).orElse(null);
         if (entity == null || sessionTask == null) {
             return UserInputResolution.ignored();
         }
@@ -945,7 +945,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      */
     @Transactional
     public void updateCodexThreadId(String taskId, String codexThreadId) {
-        CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
         if (entity != null && codexThreadId != null) {
             entity.setCodexThreadId(codexThreadId);
             persistTask(entity);
@@ -965,6 +965,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     @Override
+    @Transactional
     public DispatchTaskDTO createTaskDirect(java.util.Map<String, Object> params,
                                              String userId, String tenantId) {
         CreateCodexTaskForm form = new CreateCodexTaskForm();
@@ -1208,8 +1209,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     @Override
+    @Transactional
     public Object resyncTask(String taskId, String userId) {
-        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserIdForUpdate(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         if (!"FAILED".equals(entity.getStatus())) {
             throw new IllegalStateException("Only FAILED tasks can be resynced, current: " + entity.getStatus());
@@ -1385,10 +1387,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (sessionTaskRepository == null) {
             return;
         }
-        String agentId = resolveLogicalAgentId(entity);
-
-        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(entity.getTaskId())
+        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskIdForUpdate(entity.getTaskId())
                 .orElseGet(SessionTaskEntity::new);
+        String agentId = firstNonBlank(
+                entity.getResolvedAgentId(),
+                sessionTask.getAgentId(),
+                resolveSessionAgentId(entity.getSessionId()));
         String providerType = firstNonBlank(
                 entity.getProviderType(),
                 sessionTask.getProviderType(),
@@ -1492,6 +1496,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         putIfNotBlank(state, ProviderStateCodec.FIELD_CODEX_RUNTIME_TYPE, entity.getRuntimeType());
         putIfNotBlank(state, ProviderStateCodec.FIELD_CODEX_RUNTIME_INSTANCE_ID, entity.getRuntimeInstanceId());
         putIfNotNull(state, ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH, entity.getRoutingEpoch());
+        putIfNotBlank(state, ProviderStateCodec.FIELD_RUNTIME_ACCEPTANCE_STATE,
+                entity.getRuntimeAcceptanceState());
         return ProviderStateCodec.mergeTaskValues(existingJson, AGENT_ID, state);
     }
 
@@ -1711,7 +1717,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     private SessionTaskEntity requireSessionTask(CodexTaskEntity entity) {
-        return sessionTaskRepository.findByTaskId(entity.getTaskId())
+        return sessionTaskRepository.findByTaskIdForUpdate(entity.getTaskId())
                 .orElseThrow(() -> interactionError("CODEX_USER_INPUT_STATE_MISSING"));
     }
 
