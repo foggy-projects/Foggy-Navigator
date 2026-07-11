@@ -36,6 +36,8 @@ export interface CodexRuntime {
   capabilityFresh?: boolean
   supportsUltra?: boolean
   lastCapabilityAt?: string
+  archived?: boolean
+  archivedAt?: string
   createdAt: string
   updatedAt: string
 }
@@ -89,7 +91,7 @@ export interface RegisterCodexRuntimeRequest {
   workerId: string
   runtimeType?: 'APP_SERVER'
   endpointUrl: string
-  authToken: string
+  authToken?: string
   instanceId?: string
   enabled?: boolean
   routingPolicy?: CodexRuntimeRoutingPolicy
@@ -103,5 +105,9 @@ export interface UpdateCodexRuntimeRoutingRequest {
   routingPolicy?: CodexRuntimeRoutingPolicy
   rolloutPercentage?: number
   priority?: number
+  expectedRoutingEpoch: number
+}
+
+export interface UpdateCodexRuntimeLifecycleRequest {
   expectedRoutingEpoch: number
 }

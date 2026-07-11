@@ -4,6 +4,7 @@ import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeAvailabilityDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeRateLimitsDTO;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
+import com.foggy.navigator.codex.worker.model.form.CodexRuntimeLifecycleForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRateLimitsService;
@@ -42,10 +43,12 @@ public class CodexRuntimeController {
     }
 
     @GetMapping
-    public RX<List<CodexRuntimeDTO>> list(@RequestParam String workerId) {
+    public RX<List<CodexRuntimeDTO>> list(
+            @RequestParam String workerId,
+            @RequestParam(defaultValue = "false") boolean includeArchived) {
         String userId = UserContext.getCurrentUserId();
         workerManagementFacade.validatePhysicalWorkerOwnership(userId, workerId);
-        return RX.ok(runtimeRegistryService.listByWorker(workerId));
+        return RX.ok(runtimeRegistryService.listByWorker(workerId, includeArchived));
     }
 
     @GetMapping("/availability")
@@ -88,6 +91,22 @@ public class CodexRuntimeController {
                                              @RequestBody CodexRuntimeRoutingForm form) {
         validateRuntimeOwner(runtimeId, revision);
         return RX.ok(runtimeRegistryService.updateRouting(runtimeId, revision, form));
+    }
+
+    @PostMapping("/{runtimeId}/revisions/{revision}/archive")
+    public RX<CodexRuntimeDTO> archive(@PathVariable String runtimeId,
+                                       @PathVariable int revision,
+                                       @RequestBody CodexRuntimeLifecycleForm form) {
+        validateRuntimeOwner(runtimeId, revision);
+        return RX.ok(runtimeRegistryService.archiveRevision(runtimeId, revision, form));
+    }
+
+    @PostMapping("/{runtimeId}/revisions/{revision}/unarchive")
+    public RX<CodexRuntimeDTO> unarchive(@PathVariable String runtimeId,
+                                         @PathVariable int revision,
+                                         @RequestBody CodexRuntimeLifecycleForm form) {
+        validateRuntimeOwner(runtimeId, revision);
+        return RX.ok(runtimeRegistryService.unarchiveRevision(runtimeId, revision, form));
     }
 
     private void validateRuntimeOwner(String runtimeId, int revision) {

@@ -5,28 +5,39 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import dotenv from 'dotenv'
-import { configureInstallAllowedCwds } from '../scripts/configure-install-env.mjs'
+import { configureFreshInstallEnv } from '../scripts/configure-install-env.mjs'
 
-test('fresh-install env writer preserves the template and writes platform roots literally', t => {
+test('fresh-install env writer generates stable state and home defaults without enabling credentials', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex install env #'))
   const envFile = path.join(root, '.env')
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   fs.writeFileSync(envFile, [
     '# worker configuration',
     'CODEX_APP_SERVER_WORKER_TOKEN=',
+    'CODEX_APP_SERVER_STATE_KEY=',
     'CODEX_APP_SERVER_ALLOWED_CWDS=',
     'CODEX_HOME=',
+    'OPENAI_API_KEY=',
     '',
   ].join('\r\n'))
 
   const allowedCwds = 'D:\\,E:\\'
-  configureInstallAllowedCwds(envFile, allowedCwds)
+  configureFreshInstallEnv(envFile, allowedCwds)
 
   const configured = fs.readFileSync(envFile, 'utf8')
+  const parsed = dotenv.parse(configured)
   assert.match(configured, /# worker configuration\r\n/)
-  assert.equal(dotenv.parse(configured).CODEX_APP_SERVER_ALLOWED_CWDS, allowedCwds)
-  assert.equal(dotenv.parse(configured).CODEX_APP_SERVER_WORKER_TOKEN, '')
-  assert.equal(dotenv.parse(configured).CODEX_HOME, '')
+  assert.equal(parsed.CODEX_APP_SERVER_ALLOWED_CWDS, allowedCwds)
+  assert.equal(parsed.CODEX_APP_SERVER_WORKER_TOKEN, '')
+  assert.equal(Buffer.from(parsed.CODEX_APP_SERVER_STATE_KEY!, 'base64').length, 32)
+  assert.equal(parsed.CODEX_HOME, path.join(root, 'codex-home'))
+  assert.equal(parsed.OPENAI_API_KEY, '')
+  assert.equal(fs.statSync(parsed.CODEX_HOME!).isDirectory(), true)
+
+  configureFreshInstallEnv(envFile, allowedCwds)
+  const repeated = dotenv.parse(fs.readFileSync(envFile, 'utf8'))
+  assert.equal(repeated.CODEX_APP_SERVER_STATE_KEY, parsed.CODEX_APP_SERVER_STATE_KEY)
+  assert.equal(repeated.CODEX_HOME, parsed.CODEX_HOME)
 })
 
 test('fresh-install env writer fails closed on a malformed template or value', t => {
@@ -35,13 +46,13 @@ test('fresh-install env writer fails closed on a malformed template or value', t
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
 
   fs.writeFileSync(envFile, 'CODEX_HOME=\n')
-  assert.throws(() => configureInstallAllowedCwds(envFile, '/'), /is missing/)
+  assert.throws(() => configureFreshInstallEnv(envFile, '/'), /is missing/)
   fs.writeFileSync(envFile, 'CODEX_APP_SERVER_ALLOWED_CWDS=\nCODEX_APP_SERVER_ALLOWED_CWDS=/srv\n')
-  assert.throws(() => configureInstallAllowedCwds(envFile, '/'), /exactly one assignment/)
-  assert.throws(() => configureInstallAllowedCwds(envFile, '/\nINJECTED=true'), /invalid/)
+  assert.throws(() => configureFreshInstallEnv(envFile, '/'), /exactly one assignment/)
+  assert.throws(() => configureFreshInstallEnv(envFile, '/\nINJECTED=true'), /invalid/)
 })
 
-test('installer applies the platform cwd default only when creating .env', {
+test('installer applies all platform defaults only when creating .env', {
   skip: !['win32', 'linux'].includes(process.platform),
 }, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex installer defaults #'))
@@ -56,6 +67,11 @@ test('installer applies the platform cwd default only when creating .env', {
   assert.equal(freshResult.status, 0, `${freshResult.stdout}\n${freshResult.stderr}`)
   const freshEnv = dotenv.parse(fs.readFileSync(path.join(freshInstall, '.env'), 'utf8'))
   assert.equal(freshEnv.CODEX_APP_SERVER_ALLOWED_CWDS, expectedPlatformDefault())
+  assert.equal(freshEnv.CODEX_APP_SERVER_WORKER_TOKEN, '')
+  assert.equal(Buffer.from(freshEnv.CODEX_APP_SERVER_STATE_KEY!, 'base64').length, 32)
+  assert.equal(freshEnv.CODEX_HOME, path.join(freshInstall, 'codex-home'))
+  assert.equal(freshEnv.OPENAI_API_KEY, '')
+  assert.equal(fs.statSync(freshEnv.CODEX_HOME!).isDirectory(), true)
 
   fs.mkdirSync(existingInstall, { recursive: true })
   const existingBytes = Buffer.from('# operator-owned\r\nCODEX_APP_SERVER_ALLOWED_CWDS=X:\\\r\n', 'utf8')
@@ -79,7 +95,14 @@ function prepareInstallerSource(sourceDir: string): void {
 function prepareFreshInstall(installDir: string): void {
   fs.mkdirSync(path.join(installDir, 'scripts'), { recursive: true })
   fs.mkdirSync(path.join(installDir, 'node_modules'), { recursive: true })
-  fs.writeFileSync(path.join(installDir, '.env.example'), 'CODEX_APP_SERVER_ALLOWED_CWDS=\nCODEX_HOME=\n')
+  fs.writeFileSync(path.join(installDir, '.env.example'), [
+    'CODEX_APP_SERVER_WORKER_TOKEN=',
+    'CODEX_APP_SERVER_STATE_KEY=',
+    'CODEX_APP_SERVER_ALLOWED_CWDS=',
+    'CODEX_HOME=',
+    'OPENAI_API_KEY=',
+    '',
+  ].join('\n'))
   fs.copyFileSync('scripts/configure-install-env.mjs', path.join(installDir, 'scripts', 'configure-install-env.mjs'))
   fs.cpSync(path.resolve('node_modules', 'dotenv'), path.join(installDir, 'node_modules', 'dotenv'), { recursive: true })
 }

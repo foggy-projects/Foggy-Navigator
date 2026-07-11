@@ -3,8 +3,6 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 const now = new Date().toISOString()
 const expectedCliVersion = '0.144.1'
 const expectedSchemaDigest = '6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f'
-const runtimeToken = 'e2e-runtime-one-time-secret'
-
 const worker = {
   workerId: 'worker-runtime-e2e',
   name: 'Runtime E2E Worker',
@@ -39,6 +37,8 @@ type RuntimeState = {
   schemaDigest?: string
   capabilityFresh?: boolean
   supportsUltra?: boolean
+  archived?: boolean
+  archivedAt?: string
   expectedCliVersion: string
   expectedSchemaDigest: string
   lastCapabilityAt?: string
@@ -85,6 +85,7 @@ async function mockApi(page: Page) {
   const runtimes: RuntimeState[] = [{ ...incompatibleRuntime }]
   const registrations: Array<Record<string, unknown>> = []
   const routingUpdates: Array<Record<string, unknown>> = []
+  const lifecycleUpdates: Array<Record<string, unknown>> = []
 
   await page.addInitScript(() => {
     localStorage.setItem('navigator_token', 'e2e-token')
@@ -141,15 +142,22 @@ async function mockApi(page: Page) {
 
     if (path === '/codex-runtimes' && request.method() === 'GET') {
       expect(url.searchParams.get('workerId')).toBe(worker.workerId)
+      expect(url.searchParams.get('includeArchived')).toBe('true')
       await fulfill(route, runtimes)
       return
     }
     if (path === '/codex-runtimes' && request.method() === 'POST') {
       const body = request.postDataJSON() as Record<string, unknown>
       registrations.push(body)
+      const runtimeId = String(body.runtimeId)
+      const revision = Math.max(
+        0,
+        ...runtimes.filter(runtime => runtime.runtimeId === runtimeId)
+          .map(runtime => runtime.revision),
+      ) + 1
       const created: RuntimeState = {
-        runtimeId: String(body.runtimeId),
-        revision: 1,
+        runtimeId,
+        revision,
         workerId: String(body.workerId),
         runtimeType: 'APP_SERVER',
         endpointConfigured: true,
@@ -169,7 +177,7 @@ async function mockApi(page: Page) {
       return
     }
 
-    const runtimeMatch = path.match(/^\/codex-runtimes\/([^/]+)\/revisions\/(\d+)\/(refresh|routing)$/)
+    const runtimeMatch = path.match(/^\/codex-runtimes\/([^/]+)\/revisions\/(\d+)\/(refresh|routing|archive|unarchive)$/)
     if (runtimeMatch) {
       const runtimeId = decodeURIComponent(runtimeMatch[1]!)
       const revision = Number(runtimeMatch[2])
@@ -209,12 +217,37 @@ async function mockApi(page: Page) {
         await fulfill(route, runtime)
         return
       }
+
+      if ((action === 'archive' || action === 'unarchive') && request.method() === 'POST') {
+        const body = request.postDataJSON() as Record<string, unknown>
+        lifecycleUpdates.push({ runtimeId, revision, action, ...body })
+        expect(body.expectedRoutingEpoch).toBe(runtime!.routingEpoch)
+        Object.assign(runtime!, action === 'archive' ? {
+          archived: true,
+          archivedAt: now,
+          enabled: false,
+          routingPolicy: 'DARK',
+          rolloutPercentage: 0,
+          routingEpoch: runtime!.routingEpoch + 1,
+          updatedAt: now,
+        } : {
+          archived: false,
+          archivedAt: undefined,
+          enabled: false,
+          routingPolicy: 'DARK',
+          rolloutPercentage: 0,
+          routingEpoch: runtime!.routingEpoch + 1,
+          updatedAt: now,
+        })
+        await fulfill(route, runtime)
+        return
+      }
     }
 
     await fulfill(route, null)
   })
 
-  return { registrations, routingUpdates }
+  return { registrations, routingUpdates, lifecycleUpdates }
 }
 
 test('promotes a dark runtime to an Ultra canary without exposing its token', async ({ page }) => {
@@ -246,11 +279,6 @@ test('promotes a dark runtime to an Ultra canary without exposing its token', as
   await dialog.getByTestId('runtime-id-input').fill('runtime-canary')
   await dialog.getByTestId('runtime-endpoint-input').fill('http://app-server.local:3062')
   await dialog.getByTestId('register-codex-runtime').click()
-  expect(requests.registrations).toHaveLength(0)
-  await expect(dialog.getByTestId('runtime-registration')).toBeVisible()
-  await expect(page.getByText('请填写 Runtime ID、Endpoint 和认证令牌')).toBeVisible()
-  await dialog.getByTestId('runtime-token-input').fill(runtimeToken)
-  await dialog.getByTestId('register-codex-runtime').click()
 
   await expect(dialog.getByTestId('runtime-registration')).toBeHidden()
   expect(requests.registrations).toEqual([expect.objectContaining({
@@ -258,14 +286,12 @@ test('promotes a dark runtime to an Ultra canary without exposing its token', as
     workerId: worker.workerId,
     runtimeType: 'APP_SERVER',
     endpointUrl: 'http://app-server.local:3062',
-    authToken: runtimeToken,
+    authToken: '',
     enabled: false,
     routingPolicy: 'DARK',
     rolloutPercentage: 0,
     routingEpoch: 1,
   })])
-  await expect(dialog.locator(`input[value="${runtimeToken}"]`)).toHaveCount(0)
-  await expect(dialog).not.toContainText(runtimeToken)
 
   const canaryRow = dialog.getByTestId('runtime-runtime-canary@1')
   await expect(canaryRow.getByText('Ready', { exact: true })).toBeVisible()
@@ -295,5 +321,74 @@ test('promotes a dark runtime to an Ultra canary without exposing its token', as
   }])
   await expect(dialog.getByText('Codex Ultra 可用', { exact: true })).toBeVisible()
   await expect(dialog.getByText('Codex Ultra 当前不可用')).toBeHidden()
-  await expect(dialog).not.toContainText(runtimeToken)
+
+  await canaryRow.getByRole('button', { name: '为 runtime-canary@1 新建修订' }).click()
+  await expect(dialog.getByTestId('runtime-id-input')).toBeDisabled()
+  await expect(dialog.getByTestId('runtime-id-input')).toHaveValue('runtime-canary')
+  await dialog.getByTestId('runtime-endpoint-input').fill('http://app-server-v2.local:3062')
+  await dialog.getByTestId('runtime-token-input').fill('replacement-runtime-secret')
+  await dialog.getByTestId('register-codex-runtime').click()
+
+  const revisionTwo = dialog.getByTestId('runtime-runtime-canary@2')
+  await expect(revisionTwo.getByText('Ready', { exact: true })).toBeVisible()
+  expect(requests.registrations).toHaveLength(2)
+  expect(requests.registrations[1]).toEqual(expect.objectContaining({
+    runtimeId: 'runtime-canary',
+    endpointUrl: 'http://app-server-v2.local:3062',
+    authToken: 'replacement-runtime-secret',
+    enabled: false,
+    routingPolicy: 'DARK',
+  }))
+  await expect(dialog).not.toContainText('replacement-runtime-secret')
+
+  await canaryRow.getByRole('button', { name: '归档 runtime-canary@1' }).click()
+  await page.getByRole('button', { name: '归档', exact: true }).click()
+  await expect(canaryRow).toBeHidden()
+  await dialog.locator('.runtime-header-actions .el-checkbox').click()
+  const archivedRow = dialog.getByTestId('runtime-runtime-canary@1')
+  await expect(archivedRow.getByText('已归档', { exact: true })).toBeVisible()
+  await expect(archivedRow.locator('.runtime-routing-grid')).toHaveCount(0)
+  await archivedRow.getByRole('button', { name: '恢复 runtime-canary@1' }).click()
+  await expect(archivedRow.getByText('已归档', { exact: true })).toHaveCount(0)
+  expect(requests.lifecycleUpdates).toEqual([
+    {
+      runtimeId: 'runtime-canary',
+      revision: 1,
+      action: 'archive',
+      expectedRoutingEpoch: 2,
+    },
+    {
+      runtimeId: 'runtime-canary',
+      revision: 1,
+      action: 'unarchive',
+      expectedRoutingEpoch: 3,
+    },
+  ])
+})
+
+test('keeps runtime lifecycle controls usable on a narrow viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockApi(page)
+  await page.goto('/')
+
+  await page.getByRole('button', { name: '展开 Worker 导航' }).click()
+  await page.getByText(worker.name, { exact: true }).click()
+  const workerHeader = page.locator('.worker-header')
+  await workerHeader.getByRole('button', { name: '编辑', exact: true }).click()
+
+  const dialog = page.getByRole('dialog', { name: '编辑物理 Worker' })
+  await dialog.getByRole('tab', { name: 'Codex', exact: true }).click()
+  await expect(dialog.getByTestId('add-codex-runtime')).toBeVisible()
+  await expect(dialog.locator('.runtime-header-actions .el-checkbox')).toBeVisible()
+
+  const dialogBox = await dialog.boundingBox()
+  expect(dialogBox).not.toBeNull()
+  expect(dialogBox!.x).toBeGreaterThanOrEqual(0)
+  expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(390)
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+
+  await dialog.getByTestId('add-codex-runtime').click()
+  await expect(dialog.getByTestId('runtime-id-input')).toBeVisible()
+  await expect(dialog.getByTestId('runtime-endpoint-input')).toBeVisible()
+  await expect(dialog.getByTestId('runtime-token-input')).toBeVisible()
 })

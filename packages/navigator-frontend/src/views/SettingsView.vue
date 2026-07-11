@@ -602,8 +602,8 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/in
 # Linux
 curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh | bash</pre>
               <ul class="help-list">
-                <li>首次执行只完成安装并生成 <code>.env</code>，不会在密钥和隔离目录未配置时强行启动。</li>
-                <li>配置完成后在安装目录执行 <code>.\start.ps1</code> 或 <code>./start.sh</code>。</li>
+                <li>首次执行会自动生成固定状态密钥和安装目录内的隔离 <code>CODEX_HOME</code>，但仍保持停止便于检查配置。</li>
+                <li>确认后在安装目录执行 <code>.\start.ps1</code> 或 <code>./start.sh</code>。</li>
                 <li>以后重复执行同一条一键安装命令即可安全升级最新版，仍然不需要指定版本号。</li>
               </ul>
             </section>
@@ -613,10 +613,12 @@ curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-wo
               <div class="help-section-text">安装目录中的 <code>.env</code> 只在首次安装时创建；升级不会覆盖已有配置。</div>
               <pre class="help-code">CODEX_APP_SERVER_WORKER_PORT=3062
 CODEX_APP_SERVER_WORKER_HOST=127.0.0.1
-CODEX_APP_SERVER_WORKER_TOKEN=your-worker-token
-CODEX_APP_SERVER_STATE_KEY=&lt;32-byte base64 key&gt;
+# 留空表示关闭 Worker HTTP 认证；非空时 Runtime 填写相同值
+CODEX_APP_SERVER_WORKER_TOKEN=
+CODEX_APP_SERVER_STATE_KEY=&lt;首装自动生成的32字节base64密钥&gt;
 CODEX_APP_SERVER_STATE_DIR=/absolute/state/path
-CODEX_HOME=/absolute/isolated/codex-home
+CODEX_HOME=&lt;install-dir&gt;/codex-home
+OPENAI_API_KEY=
 CODEX_APP_SERVER_RUNTIME_ID=codex-app-server-primary
 CODEX_APP_SERVER_RUNTIME_REVISION=1
 
@@ -626,7 +628,8 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
 # CODEX_APP_SERVER_ALLOWED_CWDS=D:\,E:\
 # 保留安装生成的当前主机值；需要收窄范围时再替换为逗号分隔的绝对路径。</pre>
               <ul class="help-list">
-                <li>订阅认证在配置的 <code>CODEX_HOME</code> 下完成 <code>codex login</code>；API Key 模式配置 <code>OPENAI_API_KEY</code>。</li>
+                <li>模型 API Key 由 Navigator ModelConfig 按任务下发；Worker 中的 <code>OPENAI_API_KEY</code> 默认保持为空。只有订阅模式才需要在该 <code>CODEX_HOME</code> 下完成 <code>codex login</code>。</li>
+                <li><code>CODEX_APP_SERVER_WORKER_TOKEN</code> 为空时所有 HTTP 调用均放行，仅适用于本机或可信网络；对外暴露时应配置强令牌。</li>
                 <li>cwd 白名单是任务入口校验，不是 <code>danger-full-access</code> 的文件系统沙箱。</li>
                 <li>Windows 新增磁盘不会在后续升级时自动加入；需要时手动更新 <code>CODEX_APP_SERVER_ALLOWED_CWDS</code>。</li>
               </ul>
@@ -637,7 +640,7 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
               <ol class="help-list">
                 <li>在 Workers 页面选中物理 Worker，打开「编辑」，切到「Codex」Tab。</li>
                 <li>保留上方 SDK Codex endpoint 的原有配置；它与 App Server Runtime 独立。</li>
-                <li>在「App Server Runtime」注册 Runtime ID、<code>http://&lt;host&gt;:3062</code> 与 <code>CODEX_APP_SERVER_WORKER_TOKEN</code>。</li>
+                <li>在「App Server Runtime」注册 Runtime ID 和 <code>http://&lt;host&gt;:3062</code>；Worker Token 非空时再填写相同值。</li>
                 <li>Runtime 初始为 Dark。刷新 capability，确认 Ready 后再按路由策略启用 Ultra。</li>
               </ol>
             </section>

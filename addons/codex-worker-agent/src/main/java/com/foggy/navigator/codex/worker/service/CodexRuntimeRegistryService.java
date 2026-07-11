@@ -11,6 +11,7 @@ import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeAvailabilityDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexRuntimeEntity;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
+import com.foggy.navigator.codex.worker.model.form.CodexRuntimeLifecycleForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
 import com.foggy.navigator.codex.worker.repository.CodexRuntimeRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
@@ -81,7 +82,6 @@ public class CodexRuntimeRegistryService {
 
     private static final Set<String> SAFE_READINESS_REASONS = Set.of(
             "STATE_ENCRYPTION_KEY_MISSING",
-            "WORKER_TOKEN_MISSING",
             "CODEX_HOME_MISSING",
             "APP_SERVER_CLI_UNAVAILABLE",
             "APP_SERVER_CLI_VERSION_MISMATCH",
@@ -131,7 +131,7 @@ public class CodexRuntimeRegistryService {
         entity.setWorkerId(form.getWorkerId().trim());
         entity.setRuntimeType(runtimeType.name());
         entity.setEndpointUrl(trimTrailingSlash(form.getEndpointUrl()));
-        entity.setAuthTokenCiphertext(credentialEncryptor.encrypt(blankToNull(form.getAuthToken())));
+        entity.setAuthTokenCiphertext(credentialEncryptor.encrypt(optionalToken(form.getAuthToken())));
         entity.setInstanceId(blankToNull(form.getInstanceId()));
         entity.setEnabled(Boolean.TRUE.equals(form.getEnabled()));
         entity.setRoutingPolicy(routingPolicy.name());
@@ -151,7 +151,13 @@ public class CodexRuntimeRegistryService {
 
     @Transactional(readOnly = true)
     public List<CodexRuntimeDTO> listByWorker(String workerId) {
+        return listByWorker(workerId, false);
+    }
+
+    @Transactional(readOnly = true)
+    public List<CodexRuntimeDTO> listByWorker(String workerId, boolean includeArchived) {
         return runtimeRepository.findByWorkerIdOrderByPriorityDescRevisionDesc(workerId).stream()
+                .filter(entity -> includeArchived || entity.getArchivedAt() == null)
                 .sorted(RUNTIME_ORDER)
                 .map(this::toDTO)
                 .toList();
@@ -168,6 +174,7 @@ public class CodexRuntimeRegistryService {
                 .findByWorkerIdOrderByPriorityDescRevisionDesc(workerId);
         List<CodexRuntimeEntity> registeredCandidates = runtimes.stream()
                 .filter(entity -> CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType()))
+                .filter(entity -> entity.getArchivedAt() == null)
                 .toList();
         boolean appServerManaged = !registeredCandidates.isEmpty();
         List<CodexRuntimeEntity> enabledCandidates = registeredCandidates.stream()
@@ -198,11 +205,10 @@ public class CodexRuntimeRegistryService {
     @Transactional
     public CodexRuntimeDTO updateRouting(String runtimeId, int revision, CodexRuntimeRoutingForm form) {
         CodexRuntimeEntity entity = requireRevisionForUpdate(runtimeId, revision);
-        if (form == null || form.getExpectedRoutingEpoch() == null
-                || !form.getExpectedRoutingEpoch().equals(entity.getRoutingEpoch())) {
-            throw new IllegalStateException("CODEX_RUNTIME_ROUTING_EPOCH_CONFLICT: expected "
-                    + entity.getRoutingEpoch());
+        if (entity.getArchivedAt() != null) {
+            throw new IllegalStateException("CODEX_RUNTIME_ARCHIVED");
         }
+        requireRoutingEpoch(entity, form != null ? form.getExpectedRoutingEpoch() : null);
         CodexRuntimeRoutingPolicy current = parseRoutingPolicy(entity.getRoutingPolicy());
         CodexRuntimeRoutingPolicy requested = form.getRoutingPolicy() != null
                 ? parseRoutingPolicy(form.getRoutingPolicy())
@@ -221,6 +227,38 @@ public class CodexRuntimeRegistryService {
             entity.setRolloutPercentage(form.getRolloutPercentage());
         }
         if (form.getPriority() != null) entity.setPriority(form.getPriority());
+        entity.setRoutingEpoch(entity.getRoutingEpoch() + 1);
+        return toDTO(runtimeRepository.save(entity));
+    }
+
+    @Transactional
+    public CodexRuntimeDTO archiveRevision(
+            String runtimeId, int revision, CodexRuntimeLifecycleForm form) {
+        CodexRuntimeEntity entity = requireRevisionForUpdate(runtimeId, revision);
+        requireRoutingEpoch(entity, form != null ? form.getExpectedRoutingEpoch() : null);
+        if (entity.getArchivedAt() != null) {
+            throw new IllegalStateException("CODEX_RUNTIME_ALREADY_ARCHIVED");
+        }
+        entity.setEnabled(false);
+        entity.setRoutingPolicy(CodexRuntimeRoutingPolicy.DARK.name());
+        entity.setRolloutPercentage(0);
+        entity.setArchivedAt(LocalDateTime.now());
+        entity.setRoutingEpoch(entity.getRoutingEpoch() + 1);
+        return toDTO(runtimeRepository.save(entity));
+    }
+
+    @Transactional
+    public CodexRuntimeDTO unarchiveRevision(
+            String runtimeId, int revision, CodexRuntimeLifecycleForm form) {
+        CodexRuntimeEntity entity = requireRevisionForUpdate(runtimeId, revision);
+        requireRoutingEpoch(entity, form != null ? form.getExpectedRoutingEpoch() : null);
+        if (entity.getArchivedAt() == null) {
+            throw new IllegalStateException("CODEX_RUNTIME_NOT_ARCHIVED");
+        }
+        entity.setEnabled(false);
+        entity.setRoutingPolicy(CodexRuntimeRoutingPolicy.DARK.name());
+        entity.setRolloutPercentage(0);
+        entity.setArchivedAt(null);
         entity.setRoutingEpoch(entity.getRoutingEpoch() + 1);
         return toDTO(runtimeRepository.save(entity));
     }
@@ -324,7 +362,8 @@ public class CodexRuntimeRegistryService {
     public void refreshEnabledCapabilities() {
         List<CodexRuntimeEntity> enabled = runtimeRepository.findByEnabledTrueOrderByUpdatedAtAsc();
         for (CodexRuntimeEntity runtime : enabled) {
-            if (!CodexRuntimeType.APP_SERVER.name().equals(runtime.getRuntimeType())) continue;
+            if (!CodexRuntimeType.APP_SERVER.name().equals(runtime.getRuntimeType())
+                    || runtime.getArchivedAt() != null) continue;
             try {
                 refreshCapabilities(runtime.getRuntimeId(), runtime.getRevision());
             } catch (Exception e) {
@@ -347,11 +386,13 @@ public class CodexRuntimeRegistryService {
         List<CodexRuntimeEntity> registeredCandidates = runtimeRepository
                 .findByWorkerIdOrderByPriorityDescRevisionDesc(workerId).stream()
                 .filter(entity -> CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType()))
+                .filter(entity -> entity.getArchivedAt() == null)
                 .sorted(RUNTIME_ORDER)
                 .toList();
         List<CodexRuntimeEntity> candidates = runtimeRepository
                 .findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
                         workerId, CodexRuntimeType.APP_SERVER.name()).stream()
+                .filter(entity -> entity.getArchivedAt() == null)
                 .sorted(RUNTIME_ORDER)
                 .toList();
         ModelResolution defaultResolution = resolveModel(model, DEFAULT_MODEL_ALIASES);
@@ -867,6 +908,8 @@ public class CodexRuntimeRegistryService {
                 .lastCapabilityAt(entity.getLastCapabilityAt())
                 .capabilityFresh(isCapabilityFresh(entity))
                 .supportsUltra(supportsUltra(entity))
+                .archived(entity.getArchivedAt() != null)
+                .archivedAt(entity.getArchivedAt())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
@@ -889,6 +932,7 @@ public class CodexRuntimeRegistryService {
     private boolean isUltraAvailable(CodexRuntimeEntity entity, String requestedModel) {
         Map<String, Object> manifest = parseManifest(entity.getCapabilityManifestJson());
         if (!CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())
+                || entity.getArchivedAt() != null
                 || !Boolean.TRUE.equals(entity.getEnabled())
                 || !"READY".equals(entity.getReadinessStatus())
                 || !isCapabilityFresh(entity)
@@ -936,6 +980,13 @@ public class CodexRuntimeRegistryService {
                         "Runtime revision not found: " + runtimeId + "@" + revision));
     }
 
+    private void requireRoutingEpoch(CodexRuntimeEntity entity, Long expectedRoutingEpoch) {
+        if (expectedRoutingEpoch == null || !expectedRoutingEpoch.equals(entity.getRoutingEpoch())) {
+            throw new IllegalStateException("CODEX_RUNTIME_ROUTING_EPOCH_CONFLICT: expected "
+                    + entity.getRoutingEpoch());
+        }
+    }
+
     private void validateRegistration(CodexRuntimeRegistrationForm form) {
         if (form == null) throw new IllegalArgumentException("runtime registration is required");
         requireIdentifier(form.getRuntimeId(), "runtimeId", 64);
@@ -945,7 +996,6 @@ public class CodexRuntimeRegistryService {
         }
         requireText(form.getEndpointUrl(), "endpointUrl");
         validateEndpoint(form.getEndpointUrl());
-        requireText(form.getAuthToken(), "authToken");
         validateOptionalText(form.getAuthToken(), "authToken", 4096);
         validateOptionalIdentifier(form.getInstanceId(), "instanceId", 128);
         if (form.getRevision() != null && form.getRevision() < 1) {
@@ -1144,6 +1194,10 @@ public class CodexRuntimeRegistryService {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private String optionalToken(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private String firstNonBlank(String first, String fallback) {

@@ -366,7 +366,7 @@ test('HTTP contract rejects every declared unsupported field instead of ignoring
   }
 })
 
-test('health remains public but control APIs fail closed when Worker token is missing', async t => {
+test('an empty Worker token disables HTTP authentication for every control API', async t => {
   const stateDir = await tempDirectory('codex-app-no-token-')
   const config = testConfig(stateDir, { workerToken: '' })
   const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
@@ -382,14 +382,18 @@ test('health remains public but control APIs fail closed when Worker token is mi
   const health = await fetch(`${baseUrl}/health`)
   const body = await health.json() as Record<string, any>
   assert.equal(health.status, 200)
-  assert.equal(body.ready, false)
-  assert.ok(body.reasons.includes('WORKER_TOKEN_MISSING'))
-  assert.equal((await fetch(`${baseUrl}/api/v1/capabilities`)).status, 503)
-  assert.equal((await fetch(`${baseUrl}/api/v1/tasks`, {
+  assert.equal(body.reasons.includes('WORKER_TOKEN_MISSING'), false)
+  assert.equal((await fetch(`${baseUrl}/api/v1/capabilities`)).status, 200)
+  const accepted = await fetch(`${baseUrl}/api/v1/tasks`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: 'must not start' }),
-  })).status, 503)
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'no-auth-task',
+    },
+    body: JSON.stringify({ prompt: 'allowed without bearer token' }),
+  })
+  assert.equal(accepted.status, 202)
+  await waitFor(() => manager.get('no-auth-task')?.status === 'terminal')
 })
 
 test('malformed JSON returns a stable 400 without echoing parser details or body', async t => {

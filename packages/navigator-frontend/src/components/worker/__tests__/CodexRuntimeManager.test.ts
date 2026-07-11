@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import ElementPlus, { ElMessage } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import CodexRuntimeManager from '../CodexRuntimeManager.vue'
 import codexRuntimeManagerSource from '../CodexRuntimeManager.vue?raw'
 import * as runtimeApi from '@/api/codexRuntime'
@@ -15,6 +15,9 @@ vi.mock('element-plus', async () => {
       success: vi.fn(),
       warning: vi.fn(),
       error: vi.fn(),
+    },
+    ElMessageBox: {
+      confirm: vi.fn(),
     },
   }
 })
@@ -76,6 +79,7 @@ describe('CodexRuntimeManager', () => {
     vi.clearAllMocks()
     vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([])
     vi.mocked(runtimeApi.getCodexRuntimeRateLimits).mockResolvedValue(makeRateLimits())
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm')
   })
 
   afterEach(() => {
@@ -153,7 +157,10 @@ describe('CodexRuntimeManager', () => {
     expect(ElMessage.success).toHaveBeenCalledWith('Dark Runtime 已注册')
   })
 
-  it('blocks runtime registration when the one-time token is blank', async () => {
+  it('registers a runtime with open HTTP access when the Worker token is blank', async () => {
+    const pending = makeRuntime({ runtimeId: 'runtime-no-token' })
+    vi.mocked(runtimeApi.registerCodexRuntime).mockResolvedValue(pending)
+    vi.mocked(runtimeApi.refreshCodexRuntime).mockResolvedValue(makeRuntime({ readinessStatus: 'READY' }))
     wrapper = mount(CodexRuntimeManager, {
       props: { workerId: 'worker-1' },
       global: { plugins: [ElementPlus] },
@@ -164,10 +171,16 @@ describe('CodexRuntimeManager', () => {
     await wrapper.get('[data-testid="runtime-id-input"]').setValue('runtime-no-token')
     await wrapper.get('[data-testid="runtime-endpoint-input"]').setValue('http://localhost:3062')
     await wrapper.get('[data-testid="register-codex-runtime"]').trigger('click')
+    await flushPromises()
 
-    expect(runtimeApi.registerCodexRuntime).not.toHaveBeenCalled()
-    expect(ElMessage.warning).toHaveBeenCalledWith('请填写 Runtime ID、Endpoint 和认证令牌')
-    expect(wrapper.find('[data-testid="runtime-registration"]').exists()).toBe(true)
+    expect(runtimeApi.registerCodexRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeId: 'runtime-no-token',
+      endpointUrl: 'http://localhost:3062',
+      authToken: '',
+    }))
+    expect(runtimeApi.refreshCodexRuntime).toHaveBeenCalledWith('runtime-no-token', 1)
+    expect(ElMessage.warning).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="runtime-registration"]').exists()).toBe(false)
   })
 
   it('reports Ultra available only for an enabled ready routing revision', async () => {
@@ -431,6 +444,7 @@ describe('CodexRuntimeManager', () => {
     await flushPromises()
 
     expect(runtimeApi.listCodexRuntimes).toHaveBeenNthCalledWith(2, 'worker-1', {
+      includeArchived: true,
       suppressErrorMessage: true,
     })
     expect(runtimeApi.getCodexRuntimeRateLimits).toHaveBeenCalledTimes(2)
@@ -651,5 +665,103 @@ describe('CodexRuntimeManager', () => {
       .toBe('runtime-worker-2')
     expect(runtimeApi.refreshCodexRuntime).not.toHaveBeenCalled()
     expect(ElMessage.success).not.toHaveBeenCalledWith('Dark Runtime 已注册')
+  })
+
+  it('creates the next immutable revision with a locked runtime id and a new secret', async () => {
+    const current = makeRuntime({ revision: 3 })
+    const created = makeRuntime({ revision: 4, routingEpoch: 1 })
+    vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([current])
+    vi.mocked(runtimeApi.registerCodexRuntime).mockResolvedValue(created)
+    vi.mocked(runtimeApi.refreshCodexRuntime).mockResolvedValue({
+      ...created,
+      readinessStatus: 'READY',
+    })
+
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.get('[aria-label="为 runtime-1@3 新建修订"]').trigger('click')
+    const runtimeIdInput = wrapper.get('[data-testid="runtime-id-input"]')
+    expect((runtimeIdInput.element as HTMLInputElement).value).toBe('runtime-1')
+    expect(runtimeIdInput.attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="runtime-endpoint-input"]').setValue('http://replacement:3062')
+    await wrapper.get('[data-testid="runtime-token-input"]').setValue('replacement-secret')
+    await wrapper.get('[data-testid="register-codex-runtime"]').trigger('click')
+    await flushPromises()
+
+    expect(runtimeApi.registerCodexRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeId: 'runtime-1',
+      workerId: 'worker-1',
+      endpointUrl: 'http://replacement:3062',
+      authToken: 'replacement-secret',
+      enabled: false,
+      routingPolicy: 'DARK',
+      rolloutPercentage: 0,
+    }))
+    expect(runtimeApi.refreshCodexRuntime).toHaveBeenCalledWith('runtime-1', 4)
+    expect(wrapper.text()).not.toContain('replacement-secret')
+    expect(ElMessage.success).toHaveBeenCalledWith('Runtime rev 4 已创建并保持 Dark')
+  })
+
+  it('archives an active revision, hides it by default, and restores it as disabled dark', async () => {
+    const active = makeRuntime({
+      enabled: true,
+      routingPolicy: 'ULTRA_DEFAULT',
+      rolloutPercentage: 100,
+      routingEpoch: 7,
+      readinessStatus: 'READY',
+    })
+    const archived = makeRuntime({
+      enabled: false,
+      routingPolicy: 'DARK',
+      rolloutPercentage: 0,
+      routingEpoch: 8,
+      archived: true,
+      archivedAt: '2026-07-11T12:00:00',
+    })
+    const restored = makeRuntime({
+      enabled: false,
+      routingPolicy: 'DARK',
+      rolloutPercentage: 0,
+      routingEpoch: 9,
+      archived: false,
+    })
+    vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([active])
+    vi.mocked(runtimeApi.archiveCodexRuntime).mockResolvedValue(archived)
+    vi.mocked(runtimeApi.unarchiveCodexRuntime).mockResolvedValue(restored)
+
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.get('[aria-label="归档 runtime-1@1"]').trigger('click')
+    await flushPromises()
+    expect(ElMessageBox.confirm).toHaveBeenCalled()
+    expect(runtimeApi.archiveCodexRuntime).toHaveBeenCalledWith(
+      'runtime-1', 1, { expectedRoutingEpoch: 7 },
+    )
+    expect(wrapper.find('[data-testid="runtime-runtime-1@1"]').exists()).toBe(false)
+
+    await wrapper.findComponent({ name: 'ElCheckbox' }).setValue(true)
+    const archivedRow = wrapper.get('[data-testid="runtime-runtime-1@1"]')
+    expect(archivedRow.text()).toContain('已归档')
+    expect(archivedRow.find('.runtime-routing-grid').exists()).toBe(false)
+    expect(archivedRow.find('[data-testid="rate-limits-runtime-1@1"]').exists()).toBe(false)
+    await archivedRow.get('[aria-label="恢复 runtime-1@1"]').trigger('click')
+    await flushPromises()
+
+    expect(runtimeApi.unarchiveCodexRuntime).toHaveBeenCalledWith(
+      'runtime-1', 1, { expectedRoutingEpoch: 8 },
+    )
+    expect(runtimeApi.getCodexRuntimeRateLimits).toHaveBeenLastCalledWith(
+      'runtime-1', 1, { refresh: false, suppressErrorMessage: true },
+    )
+    expect(wrapper.get('[data-testid="runtime-runtime-1@1"]').text()).not.toContain('已归档')
+    expect(ElMessage.success).toHaveBeenCalledWith('Runtime 已恢复为 Disabled + Dark')
   })
 })

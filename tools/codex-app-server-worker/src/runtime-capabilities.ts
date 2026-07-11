@@ -59,7 +59,6 @@ export function evaluateRuntimeReadiness(
 ): RuntimeReadiness {
   const reasons: string[] = []
   if (!config.stateEncryptionKey) reasons.push('STATE_ENCRYPTION_KEY_MISSING')
-  if (!config.workerToken) reasons.push('WORKER_TOKEN_MISSING')
   if (config.allowedCwds.length === 0) reasons.push('ALLOWED_CWDS_MISSING')
   else if (!hasUsableAllowedWorkingRoot(config.allowedCwds, workerPrivatePaths(config))) {
     reasons.push('ALLOWED_CWDS_UNAVAILABLE')

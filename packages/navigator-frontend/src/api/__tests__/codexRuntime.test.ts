@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import client from '../client'
 import {
+  archiveCodexRuntime,
   getCodexRuntimeAvailability,
   getCodexRuntimeRateLimits,
   listCodexRuntimes,
   refreshCodexRuntime,
   registerCodexRuntime,
+  unarchiveCodexRuntime,
   updateCodexRuntimeRouting,
 } from '../codexRuntime'
 import type { CodexRuntime, CodexRuntimeRateLimits } from '@/types/codexRuntime'
@@ -70,6 +72,20 @@ describe('codexRuntime API', () => {
     })).resolves.toEqual(availability)
     expect(client.get).toHaveBeenCalledWith('/codex-runtimes/availability', {
       params: { workerId: 'shared-worker' },
+      suppressErrorMessage: true,
+    })
+  })
+
+  it('can include archived runtime revisions for owner lifecycle management', async () => {
+    vi.mocked(client.get).mockResolvedValue({ data: [runtime] })
+
+    await listCodexRuntimes('worker-1', {
+      includeArchived: true,
+      suppressErrorMessage: true,
+    })
+
+    expect(client.get).toHaveBeenCalledWith('/codex-runtimes', {
+      params: { workerId: 'worker-1', includeArchived: true },
       suppressErrorMessage: true,
     })
   })
@@ -160,5 +176,17 @@ describe('codexRuntime API', () => {
       rolloutPercentage: 10,
       expectedRoutingEpoch: 1,
     })
+  })
+
+  it('archives and restores an encoded runtime revision with a CAS token', async () => {
+    vi.mocked(client.post).mockResolvedValue({ data: runtime })
+    const request = { expectedRoutingEpoch: 7 }
+
+    await archiveCodexRuntime(runtime.runtimeId, runtime.revision, request)
+    await unarchiveCodexRuntime(runtime.runtimeId, runtime.revision, request)
+
+    const base = '/codex-runtimes/app%2Fserver%20local/revisions/2'
+    expect(client.post).toHaveBeenNthCalledWith(1, `${base}/archive`, request)
+    expect(client.post).toHaveBeenNthCalledWith(2, `${base}/unarchive`, request)
   })
 })

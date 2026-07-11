@@ -125,6 +125,15 @@ CALL assert_true(
     'codex_runtime_revisions table must exist'
 );
 
+CALL assert_true(
+    (SELECT DATA_TYPE = 'datetime' AND IS_NULLABLE = 'YES'
+       FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'codex_runtime_revisions'
+        AND column_name = 'archived_at'),
+    'codex_runtime_revisions.archived_at must be a nullable DATETIME'
+);
+
 SELECT VERSION() AS mysql_version,
        (SELECT COUNT(*) FROM codex_tasks) AS migrated_tasks,
        (SELECT COUNT(*)

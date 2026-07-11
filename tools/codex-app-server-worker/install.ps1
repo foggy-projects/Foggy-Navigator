@@ -26,15 +26,17 @@ if (-not (Test-Path $EnvFile)) {
             } | Sort-Object -Unique
         )
         $DefaultAllowedCwds = $DefaultRoots -join ','
+        & node (Join-Path $InstallDir 'scripts\configure-install-env.mjs') $EnvFile $DefaultAllowedCwds
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to configure fresh-install environment' }
+        $CodexHome = [IO.Path]::GetFullPath((Join-Path $InstallDir 'codex-home'))
         if ($DefaultAllowedCwds) {
-            & node (Join-Path $InstallDir 'scripts\configure-install-env.mjs') $EnvFile $DefaultAllowedCwds
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to configure default workspace roots' }
             Write-Output "Created $EnvFile with non-C workspace roots: $DefaultAllowedCwds"
             Write-Warning 'The cwd allowlist is an admission check, not a filesystem sandbox. danger-full-access tasks can access paths outside these roots, including C:\.'
         } else {
             Write-Warning "Created $EnvFile without workspace roots because no ready non-C drives were found. Configure CODEX_APP_SERVER_ALLOWED_CWDS before start."
         }
-        Write-Output 'Configure required secrets and an isolated CODEX_HOME before start.'
+        Write-Output "Generated a persistent state key and isolated CODEX_HOME at $CodexHome"
+        Write-Output 'Worker token and OPENAI_API_KEY remain empty; Navigator ModelConfig may supply model credentials.'
     } catch {
         Remove-Item -LiteralPath $EnvFile -Force -ErrorAction SilentlyContinue
         throw

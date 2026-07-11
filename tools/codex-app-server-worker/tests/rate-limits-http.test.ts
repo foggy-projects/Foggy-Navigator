@@ -46,6 +46,9 @@ test('runtime rate-limit endpoint is bearer and instance guarded with a no-store
   })
 
   assert.equal((await fetch(`${baseUrl}/api/v1/runtime/rate-limits`)).status, 401)
+  assert.equal((await fetch(`${baseUrl}/api/v1/runtime/rate-limits`, {
+    headers: { Authorization: 'Bearer wrong-worker-token' },
+  })).status, 403)
   const missingInstance = await fetch(`${baseUrl}/api/v1/runtime/rate-limits`, {
     headers: authHeaders(),
   })

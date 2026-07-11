@@ -5,6 +5,7 @@ import type {
   CodexRuntimeAvailability,
   CodexRuntimeRateLimits,
   RegisterCodexRuntimeRequest,
+  UpdateCodexRuntimeLifecycleRequest,
   UpdateCodexRuntimeRoutingRequest,
 } from '@/types/codexRuntime'
 
@@ -39,12 +40,39 @@ export async function getCodexRuntimeAvailability(
 
 export async function listCodexRuntimes(
   workerId: string,
-  options?: { suppressErrorMessage?: boolean },
+  options?: { includeArchived?: boolean; suppressErrorMessage?: boolean },
 ): Promise<CodexRuntime[]> {
   const rx = (await client.get('/codex-runtimes', {
-    params: { workerId },
+    params: {
+      workerId,
+      ...(options?.includeArchived ? { includeArchived: true } : {}),
+    },
     ...(options?.suppressErrorMessage ? { suppressErrorMessage: true } : {}),
   } as any)) as unknown as RX<CodexRuntime[]>
+  return rx.data
+}
+
+export async function archiveCodexRuntime(
+  runtimeId: string,
+  revision: number,
+  request: UpdateCodexRuntimeLifecycleRequest,
+): Promise<CodexRuntime> {
+  const rx = (await client.post(
+    `/codex-runtimes/${encodeURIComponent(runtimeId)}/revisions/${revision}/archive`,
+    request,
+  )) as unknown as RX<CodexRuntime>
+  return rx.data
+}
+
+export async function unarchiveCodexRuntime(
+  runtimeId: string,
+  revision: number,
+  request: UpdateCodexRuntimeLifecycleRequest,
+): Promise<CodexRuntime> {
+  const rx = (await client.post(
+    `/codex-runtimes/${encodeURIComponent(runtimeId)}/revisions/${revision}/unarchive`,
+    request,
+  )) as unknown as RX<CodexRuntime>
   return rx.data
 }
 

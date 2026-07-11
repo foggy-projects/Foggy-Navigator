@@ -31,7 +31,7 @@
 | CLI/schema | `@openai/codex 0.144.1`；schema digest `6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f` |
 | task accept | `Idempotency-Key=Navigator taskId`；同 key 同请求复用，异请求 409 |
 | durable state | AES-256-GCM 请求密文、append-only task/event journal、连续 ESN、committed 后不重放 |
-| runtime control | revision registry、owner 校验、加密 token、readiness/capability、CAS rollout/routing epoch |
+| runtime control | revision registry、owner 校验、可选加密 token（空值=no-auth）、readiness/capability、CAS rollout/routing epoch |
 | affinity | Task/Session 固定 runtime/revision/type/instance/workerTaskId；resume/status/subscribe/abort/delete 不重选 |
 | old SDK boundary | 非 Ultra 保持原行为；新 Ultra 返回 `CODEX_ULTRA_APP_SERVER_REQUIRED`；已有 SDK Ultra 仅原地 drain |
 | SDK lifecycle | 长期保留；退役决定延后，未来另立 workitem |
@@ -46,10 +46,13 @@
 | Release `0.3.3` OBS latest | pass-published | `efede2065ef0154d2604dee447787b34cbd0003d4e8458c432c32e40fed2a25b` / `1,802,355` bytes / `197` entries；OBS archive/checksum/bootstrap/latest 上传 200，发布器重新 GET 并校验 archive 与 bootstrap 字节；Windows `240 passed + 7 skipped`、WSL2/Linux `246 passed + 1 skipped` exact public repair 均 stopped、repeat no-op，缺失版本身份与失败事务证据均 fail-closed；`0.3.1/0.3.2` 的残缺安装判定缺陷在最终交付前已由 `0.3.3` 取代 |
 | Release `0.3.4` Linux test launcher | pass-published | 修复旧 Node/Linux 将递归 glob 当作字面路径的安装阻断；`616a0ce7cf8c017bd16e215022c3dcb24f27c37051297eff9c9623f9d6e4b440` / `1,804,723` bytes / `198` entries，source `bbea6584`、`gitDirty=false`；发布流水线 `242 passed + 7 skipped`，WSL2 exact public install `248 passed + 1 skipped`，Linux Node 18 launcher `10/10`，schema/typecheck/build 与公网 archive/bootstrap 回读通过 |
 | Release `0.3.5` Node 18 validation | pass-published | 修复 schema/clean build 使用 Node 18 不支持的 `import.meta.dirname`；`9b30dcffec603f55c5faa7ea322ac1f42e9e5fb094467f051e337ff9e2c90c73` / `1,805,254` bytes，source `cfc5f521`、`gitDirty=false`；发布流水线 `243 passed + 7 skipped`，Linux Node 18 公网精确归档 SHA-256/schema/clean build 与 release-tooling `11/11` 通过 |
+| Release `0.3.6` zero-config endpoint runtime | pass-candidate | 首装自动生成并持久化 32-byte base64 state key，创建安装目录内独立 `CODEX_HOME`，Worker token 与 `OPENAI_API_KEY` 保持为空；Windows installer、Linux mode/stability smoke、Worker `243 passed + 7 skipped`、Java `301/301`、PC `214/214`、Playwright `3/3`、typecheck/build/schema 通过；OBS 发布待源码 commit 后执行 |
 | Legacy SDK Worker | pass | `116/116`；typecheck/build；现有 SDK 设计保持，Ultra fail-closed；仅测试断言适配 Windows 上的 POSIX server-script 路径 |
-| Codex Java reactor | pass-scoped | Codex addon `259/259`；Session focused `7/7`；raw full reactor 被 Windows Surefire fork/path 基础设施问题阻断，受影响定向测试通过 |
+| Codex Java reactor | pass-scoped | 当前 Codex reactor `301/301`；runtime lifecycle/auth 定向 `103/103`；历史 raw full reactor 的 Windows Surefire fork/path 基础设施限制不影响本次已执行结果 |
+| Runtime revision/archive | pass-isolated | Java 定向 `103/103`，覆盖 owner 校验、CAS 归档/恢复、新路由排除归档 revision、历史 affinity 保留和可选 token；PC 定向 `37/37`、Playwright 桌面/窄屏 `2/2`、type-check 通过 |
+| Worker optional HTTP auth | pass-isolated | 空 token 放行 capability/task/control 且 readiness 不降级，非空 token 保持 Bearer `401/403`；Worker full `250 total / 243 passed / 7 skipped`，typecheck/build/schema 通过；Java Runtime `103/103`、PC 定向 `37/37` |
 | HTTP client ownership | pass | Metadata `13/13`；Launcher context `1/1`；Code Review context `1/1`，专用/默认 RestTemplate 无歧义 |
-| Navigator PC | pass-isolated | Vitest `179/179`、`build:check`、availability/process boundary 通过；Playwright 刷新前后 final message 均为 `1`，native `1/1`，desktop/320px 无溢出、失败请求或控制台错误 |
+| Navigator PC | pass-isolated | Vitest `214/214`、Windows native `build:check`、availability/process/runtime lifecycle boundary 通过；Playwright runtime desktop/390px `2/2`，历史刷新与 native 证据保持 |
 | Real Worker chain | pass-isolated | Task `20260711-8023` / Session `b2bc4a9c-3134-4d24-af50-5709ab9b91e6` COMPLETED；result=`FINAL_RESULT_OK`、文件=`FINAL_NATIVE_RESULT_OK`、native SSE=`5`、snapshot=`1`，prompt/Bearer/Worker token 暴露检查均为 false |
 | MySQL migration | pass-isolated | MySQL 8.0.44/8.4.8；current `ddl-auto=validate`；N-1 legacy GET、迁移后 validate/CRUD/软删除 |
 | Epoch compatibility | pass-isolated | 模拟旧 affinity schema 缺列，幂等补丁连续执行两次后 current prod validate 通过 |
@@ -81,12 +84,14 @@
 | 检查项 | 状态 | 说明 |
 |---|---|---|
 | Runtime 配置/健康 | pass-isolated | PC 展示每个 runtime 的 readiness、routing policy、Ultra Default；token 不回显 |
+| Runtime 修订/归档 | pass-isolated | 同 Runtime ID 可新建下一 revision；默认隐藏已归档项，可显式查看并恢复为 Disabled + Dark；归档确认明示历史 affinity 保留 |
+| Runtime Worker token | pass-isolated | PC 字段改为“Worker 服务令牌（可选）”；空值可注册并刷新 Ready，非空值仍只提交不回显 |
 | Ultra 可用性 | pass-isolated | 只有 Ready app-server runtime 时可新建 Ultra；不静默降级 Max/xhigh/SDK |
 | Shared Worker availability | pass-isolated | minimum-disclosure API、ALL_CANARY@0、shared-user/owner availability 与 PC live 通过 |
 | App-server process boundary | pass-isolated | managed Worker 跳过 legacy probes，真实 pool-managed PC 视图通过 |
 | 原生子任务 | pass-isolated | 新任务 native SSE `5`、snapshot `1`、PC `1/1`，刷新后保持闭合 |
 | Responsive | pass-isolated | desktop/320px 控件可达、无水平溢出、失败请求或控制台错误 |
-| Settings 安装帮助 | pass | 新增 Codex App Server Tab 与无版本 OBS 命令；Worker 编辑弹窗使用基本信息/连接工具/Codex/Gemini Tabs；相关 Playwright `2/2`、PC Vitest `210/210`、`build:check` 通过 |
+| Settings 安装帮助 | pass | 新增 Codex App Server Tab 与无版本 OBS 命令；首装说明固定 state key、独立 CODEX_HOME、空 Worker token/API Key 和 ModelConfig 凭据边界；Worker 编辑弹窗使用基本信息/连接工具/Codex/Gemini Tabs；相关 Playwright `3/3`、PC Vitest `214/214`、`build:check` 通过 |
 | Production account/permissions | not-run | 真实生产账号、网络和 cohort 未签收 |
 
 ## Canary Thresholds
@@ -111,16 +116,17 @@
 - 固定 CLI 静态 catalog 不等于账号动态 catalog；未知未来模型不得自动路由。
 - P5 功能 parity 仍有 approval、additional directories、interactive server request、Biz/MCP 等开放项。
 - 已执行旧版 `2026-07-10-codex-runtime-affinity.sql` 的环境须执行 `2026-07-10-codex-task-created-at-epoch-ms.sql`，不能重跑整份一次性脚本。
+- 已部署 runtime-affinity schema 的环境在启动本版 `ddl-auto=validate` 前，须额外执行 `docs/migration/2026-07-11-codex-runtime-archive.sql`。
 - Raw full reactor 在 Windows Surefire fork/path 基础设施阶段被阻断；没有已执行测试的断言失败，本次相关模块和上下文测试均通过。
 - P0-P2 隔离验收证据不得计入 P3 的生产 task、观察窗口或实例轮换；v4 Windows update BLOCKED 证据只保留在 BUG-013 作为历史复现。
 - OBS `0.3.3` manifest 记录 source commit `61204f83748a7def103f7624b4ccc3d2d6c4517d` 且 `gitDirty=true`；当前公网制品已按字节验收，但下一次代码提交必须包含对应发布源码并复核可复现哈希，不能把 dirty manifest 当作生产 provenance 已闭环。
 
 ## Execution Check-in
 
-- completed_work: 独立 Worker、双 runtime 控制面、生命周期/release、真实 Ultra/SSE/native、PC 刷新与 responsive 隔离验收完成；`0.3.3` OBS latest 与 Windows/Linux 无版本一键安装已发布并完成公网 exact-package repair/no-op/fail-closed smoke
+- completed_work: 独立 Worker、双 runtime 控制面、runtime 新建修订与可逆归档、可选 HTTP token、首装自动 state key/CODEX_HOME、生命周期/release、真实 Ultra/SSE/native、PC 刷新与 responsive 隔离验收完成；`0.3.6` 源码候选已验证，待提交后发布 OBS latest
 - touched_areas: `tools/codex-app-server-worker`、Codex Java addon、Session、Navigator PC、安装指南、migration 与版本文档
 - self_check: formal quality gate、coverage audit 与 isolated acceptance 已回写；未扩张到生产 rollout 或 SDK retirement
-- test_status: isolated-pass-public-fixed；历史 Worker/SDK/Java/P0-P2 证据保持；OBS `0.3.5` 发布流水线 `243 passed + 7 skipped`、Linux Node 18 公网精确归档 SHA-256/schema/clean build、release tooling `11/11` 与公网回读通过
+- test_status: isolated-pass-release-candidate；Worker `250 total / 243 passed / 7 skipped`、Java `301/301`、PC `214/214`、Playwright `3/3`、Worker/PC build 与 schema 通过；Windows fresh installer 和 Linux 32-byte key/0600 env/0700 home/rerun-stable smoke 通过；MySQL 8.0/8.4 本批此前通过，本次复跑被本机 Docker Linux Engine `500` 阻断
 - raw_reactor_caveat: Windows Surefire fork/path 基础设施阻断 raw full reactor；受影响定向测试无断言失败，不声明 `1342/1342`
 - implementation_decision: p0-p2-isolated-accepted
 - production_enablement: not-approved

@@ -30,6 +30,8 @@ public class CodexRuntimeDTO {
     private LocalDateTime lastCapabilityAt;
     private Boolean capabilityFresh;
     private Boolean supportsUltra;
+    private Boolean archived;
+    private LocalDateTime archivedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

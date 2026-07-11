@@ -49,6 +49,9 @@
 11. Terminal broadcast、TaskStore resident state 和大 payload journal 写入必须有明确上界；已终态历史不得随 Worker 存活时间无限驻留。
 12. Pool 全局容量被其他 lane 的 idle instance 占满时，允许 LRU idle 跨 lane 退役，但不得退役 busy instance 或突破全局上限。
 13. App Server Worker 必须提供不含版本号的 OBS 稳定安装入口；`latest.json` 只在版本化制品、校验文件和 bootstrap 可用后提交，客户端执行任何包内代码前必须校验 product/schema/path/bytes/SHA-256。
+14. Runtime revision 必须支持新建修订和可逆的退役/归档；不物理删除已被 Task/Session affinity 引用的 revision。
+15. Worker HTTP token 为可选：非空时对除 `/health` 外的端点强制 Bearer 校验；空值表示显式关闭 HTTP 认证，所有调用者拥有 Worker API 访问权限。
+16. Fresh installer 必须一次性生成并持久化 32-byte base64 `CODEX_APP_SERVER_STATE_KEY`，创建 `<install-dir>/codex-home` 并写入 `CODEX_HOME`，保持 Worker token 和 `OPENAI_API_KEY` 为空；后续升级不得改写已有 `.env`。
 
 ## 能力与放量必须分离
 
@@ -118,6 +121,15 @@ App Server Worker manifest 至少包含：
 
 Capability 过期只阻止新任务分配。已接受任务必须继续按持久化 binding 访问原 runtime，或返回明确的 runtime unavailable，不得换 runtime 重放。
 
+### Runtime 修订与归档
+
+- `runtimeId + revision` 为不可变身份；endpoint 和认证令牌的变更通过同一 `runtimeId` 新建下一 revision 完成，不就地覆盖旧修订。
+- 新 revision 必须重新提供 endpoint，并显式选择空 token 开放模式或提供与 Worker 一致的 token；新修订固定从 `enabled=false + DARK + rollout=0` 开始，经 capability refresh 后才能显式放量。
+- 归档使用 `routingEpoch` CAS，原子设置 `enabled=false + DARK + rollout=0 + archivedAt`，并递增 epoch。
+- 已归档 revision 不得参与新任务路由、availability、Ultra 判断或 alias 候选集；历史 Task/Session 仍可按已持久化 binding 解析原 revision。
+- 恢复同样使用 CAS，清除 `archivedAt`，但只恢复为 Disabled + Dark，不自动恢复归档前的流量。
+- Runtime 详细列表继续 owner-only；默认隐藏已归档 revision，管理者显式选择后才展示，且 token 永不回显。
+
 ## Task 与 Session Affinity
 
 - Task 持久化 `runtimeId + runtimeRevision + routingEpoch + workerTaskId`；运行中的 endpoint 由 registry 解析，不持久化明文 token。
@@ -156,11 +168,12 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 
 - 新旧 Worker 使用独立安装目录、日志、event store 和服务级 `CODEX_HOME`；共享认证必须通过受控播种或独立登录，不能共写临时运行态。
 - API Key、auth token、task-scoped token、Codex Home 真实路径和请求正文不得进入 runtime key、health、日志或 capability manifest。
+- Worker token 空值是显式的 no-auth 模式，不得导致 readiness 降级；它只应用于 loopback 或可信网络。对外暴露时必须使用非空强 token 与网络边界。
 - app-server 原始事件、子 prompt、输出、reasoning 和工具参数/输出不得跨出新 Worker。
 - 子任务失败只允许稳定码 `NATIVE_SUBTASK_FAILED`；Java 和 PC 继续二次收窄。
 - cwd/additional directory 使用现有 allowlist 语义；新 Worker 不得放宽路径边界。
 - CLI 与协议 schema 随 Worker release 精确固定，禁止独立自动升级越过协议 gate。
-- OBS bootstrap 首次安装必须保持 stopped，等待 token、state key 与隔离 `CODEX_HOME` 配置；仅身份一致且文件完整、无 lifecycle/update 失败证据的同版本重跑允许 no-op，可证明身份一致的残缺安装进入 repair，身份不完整或存在失败证据必须 fail-closed，本地版本高于 latest 时必须拒绝降级。
+- OBS bootstrap 首次安装必须自动生成固定 state key 和隔离 `CODEX_HOME`，但仍保持 stopped 以便操作者检查 `.env`；Worker token 和 `OPENAI_API_KEY` 默认为空，模型凭据由 Navigator ModelConfig 按任务下发。仅身份一致且文件完整、无 lifecycle/update 失败证据的同版本重跑允许 no-op，可证明身份一致的残缺安装进入 repair，身份不完整或存在失败证据必须 fail-closed，本地版本高于 latest 时必须拒绝降级。
 
 ## 非目标
 
@@ -189,6 +202,10 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 - Shutdown success 必须匹配当前 stop nonce，Worker/runtime process tree 清理及二次 verify 完成后才能释放 state/cwd ownership。
 - Terminal broadcast 按需重放后退役，terminal TaskStore 仅保留 resident summary；请求 ciphertext 只在 durable journal 首次持久化一次。
 - Availability 对共享用户只返回 `appServerManaged`、`ultraAvailable`、`blockReason`；详细 runtime API 继续 owner-only，`ALL_CANARY@0` 对 Ultra 仍为 available。
+- 新建 revision、归档和恢复必须经 owner 校验与 `routingEpoch` CAS；归档后新路由 fail closed，历史 affinity 可解析，恢复后不自动放量。
+- Worker token 空值时 capability 和 task/control API 无 Bearer 可用，readiness 不含 `WORKER_TOKEN_MISSING`；非空时缺失或错误 Bearer 仍返回 `401/403`。
+- Windows/Linux fresh install 后 `.env` 必须含可解码为 32 bytes 的稳定 state key、安装目录内的绝对 `CODEX_HOME`、空 Worker token 与空 `OPENAI_API_KEY`；重复安装/升级字节保留已有 `.env`。
+- PC 必须支持新建修订、退役归档、显示已归档和恢复，并覆盖桌面与窄屏 Playwright 验收。
 - Windows `irm .../install.ps1 | iex` 与 Linux `curl .../install.sh | bash` 必须从同一 `latest.json` 安装最新版且不要求版本参数；公网 fresh/残缺 repair、完整重复 no-op、身份或失败证据拒绝、降级拒绝和完整性失败关闭均有自动化或 exact-package 证据。
 
 ### Ultra 生产启用验收
@@ -212,7 +229,8 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 | 决策 | 当前结论 | 状态/最晚完成时间 |
 |---|---|---|
 | 首个精确 CLI 版本与生成 schema digest | `@openai/codex 0.144.1`；`6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f` | confirmed，P0 accepted |
-| Runtime registry 的存储、credential 加密和管理 API 形态 | 持久化 revision registry、加密 runtime token、owner-only detail/management 与 access-validated minimum availability API | confirmed，P0-P2 accepted |
+| Runtime registry 的存储、credential 加密和管理 API 形态 | 持久化 revision registry、可选加密 runtime token（空值=no-auth）、owner-only detail/management 与 access-validated minimum availability API | confirmed，P0-P2 accepted |
+| Runtime revision 生命周期 | 同 ID 新建不可变 revision；CAS 归档/恢复；不硬删除历史 affinity | confirmed，P2 accepted |
 | Durable acceptance/task store 技术选型 | 稳定 idempotency key、AES-256-GCM request、append-only task/event journal、连续 ESN、writer/recovery lease | confirmed，P0-P1 accepted |
 | 新 Worker 本地端口、安装目录和首版版本号 | `0.1.1`；host/port/install/run/state 独立且可配置，外部 state/CODEX_HOME 跨 update/rollback 保留 | confirmed，P1 accepted |
 | 单实例并发、池容量、TTL、轮换和资源阈值 | 有界 Pool、跨 lane LRU、busy exclusion、TTL/drain、close failure fail-closed；部署值由受控配置提供 | confirmed，P1-P2 accepted |

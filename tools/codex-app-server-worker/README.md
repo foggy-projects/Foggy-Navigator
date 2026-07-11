@@ -66,8 +66,10 @@ credentials, tokens, or other secrets are discarded at the Worker boundary.
 ## Local setup
 
 1. Copy values from `.env.example` into `.env`.
-2. Set a 32-byte base64 `CODEX_APP_SERVER_STATE_KEY`.
-3. Set a strong `CODEX_APP_SERVER_WORKER_TOKEN`; all endpoints except `/health` require it.
+2. Set a stable 32-byte base64 `CODEX_APP_SERVER_STATE_KEY`.
+3. Optionally set `CODEX_APP_SERVER_WORKER_TOKEN`. When non-empty, all endpoints except `/health`
+   require the same Bearer token. When empty, HTTP authentication is disabled and every caller has
+   full Worker API access.
 4. Configure at least one absolute root in `CODEX_APP_SERVER_ALLOWED_CWDS`. Release installers
    populate this only for a fresh `.env`; source-based setup remains explicit.
 5. Set `CODEX_HOME` to an isolated service directory that is not shared with the SDK Worker.
@@ -75,10 +77,15 @@ credentials, tokens, or other secrets are discarded at the Worker boundary.
 7. Run `npm run verify:schema` whenever the pinned CLI or app-server protocol changes.
 
 Default port: `3062`. The service reports degraded readiness and rejects task creation when the
-encryption key, Worker token, usable cwd allowlist, or isolated `CODEX_HOME` is absent, the CLI is
+encryption key, usable cwd allowlist, or isolated `CODEX_HOME` is absent, the CLI is
 unavailable, or its version differs from `0.144.1`. An allowlist whose roots are missing, offline,
 or wholly inside a Worker-private directory is not usable. The default bind address is loopback;
-remote exposure requires an explicit host and a network boundary in addition to the Worker token.
+remote exposure requires an explicit host and a network boundary. An empty Worker token must only
+be used on loopback or a trusted network because it grants unauthenticated full API access.
+
+The release installer performs steps 1, 2, 4 and 5 for a fresh installation: it generates the
+state key once, creates `<install-dir>/codex-home`, writes the platform cwd defaults, and leaves
+the Worker token plus `OPENAI_API_KEY` empty. Existing `.env` bytes are preserved on update.
 
 ## Operations
 
@@ -166,8 +173,8 @@ curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-wo
 ```
 
 The bootstrap validates product/schema, relative artifact path, byte length, and SHA-256 before it
-runs any package code. A fresh installation remains stopped so required secrets and isolated
-`CODEX_HOME` can be configured. Re-running the same command upgrades an existing installation by
+runs any package code. A fresh installation remains stopped, but its state key and isolated
+`CODEX_HOME` are already initialized; start it after reviewing the generated `.env`. Re-running the same command upgrades an existing installation by
 calling its already-installed updater, preserving lifecycle and rollback protections. The shell
 bootstrap supports Linux only; macOS remains unsupported.
 

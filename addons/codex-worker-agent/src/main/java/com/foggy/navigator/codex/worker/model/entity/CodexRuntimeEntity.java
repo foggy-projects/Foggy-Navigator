@@ -91,6 +91,8 @@ public class CodexRuntimeEntity {
 
     private LocalDateTime lastCapabilityAt;
 
+    private LocalDateTime archivedAt;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

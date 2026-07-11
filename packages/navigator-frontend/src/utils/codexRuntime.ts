@@ -110,7 +110,8 @@ export function supportsUltraCapability(runtime: CodexRuntime): boolean {
 }
 
 export function isUltraRuntimeAvailable(runtime: CodexRuntime): boolean {
-  return runtime.readinessStatus === 'READY'
+  return runtime.archived !== true
+    && runtime.readinessStatus === 'READY'
     && isUltraRoutingConfigured(runtime)
     && isRuntimeCapabilityFresh(runtime)
     && supportsUltraCapability(runtime)

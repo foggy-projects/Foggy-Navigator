@@ -9,7 +9,7 @@ export function createAuthMiddleware(config: AppConfig) {
       return
     }
     if (!config.workerToken) {
-      res.status(503).json({ error: 'WORKER_AUTH_NOT_CONFIGURED' })
+      next()
       return
     }
     const authorization = req.headers.authorization

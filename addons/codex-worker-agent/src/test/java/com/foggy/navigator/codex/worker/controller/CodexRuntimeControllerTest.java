@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeAvailabilityDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeRateLimitsDTO;
+import com.foggy.navigator.codex.worker.model.form.CodexRuntimeLifecycleForm;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRateLimitsService;
 import com.foggy.navigator.common.context.UserContext;
@@ -25,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -107,7 +109,7 @@ class CodexRuntimeControllerTest {
         verify(workerManagementFacade, never())
                 .validatePhysicalWorkerOwnership("user-1", "worker-1");
         verify(runtimeRegistryService).availability("worker-1", null);
-        verify(runtimeRegistryService, never()).listByWorker("worker-1");
+        verify(runtimeRegistryService, never()).listByWorker("worker-1", false);
     }
 
     @Test
@@ -130,7 +132,7 @@ class CodexRuntimeControllerTest {
         verify(workerManagementFacade).validateWorkerAccess(
                 "granted-user", "shared-tenant", "shared-worker");
         verify(runtimeRegistryService).availability("shared-worker", "codex-terra:ultra");
-        verify(runtimeRegistryService, never()).listByWorker("shared-worker");
+        verify(runtimeRegistryService, never()).listByWorker("shared-worker", false);
     }
 
     @Test
@@ -143,19 +145,46 @@ class CodexRuntimeControllerTest {
                 () -> controller.availability("worker-1", "codex-ultra"));
 
         verify(runtimeRegistryService, never()).availability("worker-1", "codex-ultra");
-        verify(runtimeRegistryService, never()).listByWorker("worker-1");
+        verify(runtimeRegistryService, never()).listByWorker("worker-1", false);
     }
 
     @Test
     void runtimeListRemainsOwnerOnlyAndReturnsDetailedDtoOnlyToOwner() {
-        when(runtimeRegistryService.listByWorker("worker-1")).thenReturn(List.of());
+        when(runtimeRegistryService.listByWorker("worker-1", true)).thenReturn(List.of());
 
-        controller.list("worker-1");
+        controller.list("worker-1", true);
 
         verify(workerManagementFacade).validatePhysicalWorkerOwnership("user-1", "worker-1");
         verify(workerManagementFacade, never())
                 .validateWorkerAccess("user-1", "tenant-1", "worker-1");
-        verify(runtimeRegistryService).listByWorker("worker-1");
+        verify(runtimeRegistryService).listByWorker("worker-1", true);
+    }
+
+    @Test
+    void ownerCanArchiveAndRestoreRuntimeRevision() {
+        CodexRuntimeLifecycleForm form = new CodexRuntimeLifecycleForm();
+        form.setExpectedRoutingEpoch(7L);
+        CodexRuntimeDTO archived = CodexRuntimeDTO.builder()
+                .runtimeId("app-main")
+                .revision(1)
+                .archived(true)
+                .build();
+        CodexRuntimeDTO restored = CodexRuntimeDTO.builder()
+                .runtimeId("app-main")
+                .revision(1)
+                .archived(false)
+                .build();
+        when(runtimeRegistryService.ownerWorkerId("app-main", 1)).thenReturn("worker-1");
+        when(runtimeRegistryService.archiveRevision("app-main", 1, form)).thenReturn(archived);
+        when(runtimeRegistryService.unarchiveRevision("app-main", 1, form)).thenReturn(restored);
+
+        assertEquals(true, controller.archive("app-main", 1, form).getData().getArchived());
+        assertEquals(false, controller.unarchive("app-main", 1, form).getData().getArchived());
+
+        verify(workerManagementFacade, times(2))
+                .validatePhysicalWorkerOwnership("user-1", "worker-1");
+        verify(runtimeRegistryService).archiveRevision("app-main", 1, form);
+        verify(runtimeRegistryService).unarchiveRevision("app-main", 1, form);
     }
 
     @Test

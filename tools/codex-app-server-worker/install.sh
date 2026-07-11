@@ -14,6 +14,7 @@ if [[ ! -f "$INSTALL_DIR/.env" ]]; then
   fi
   echo "Created $INSTALL_DIR/.env with workspace root /."
   echo 'WARNING: The cwd allowlist is an admission check, not a filesystem sandbox. Use this default only for trusted tasks on a dedicated host.' >&2
-  echo 'Configure required secrets and an isolated CODEX_HOME before start.'
+  echo "Generated a persistent state key and isolated CODEX_HOME at $INSTALL_DIR/codex-home"
+  echo 'Worker token and OPENAI_API_KEY remain empty; Navigator ModelConfig may supply model credentials.'
 fi
 echo "codex-app-server-worker installed at $INSTALL_DIR"

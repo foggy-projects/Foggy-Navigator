@@ -6,6 +6,7 @@ import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.entity.CodexRuntimeEntity;
+import com.foggy.navigator.codex.worker.model.form.CodexRuntimeLifecycleForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
 import com.foggy.navigator.codex.worker.repository.CodexRuntimeRepository;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Mono;
@@ -107,10 +109,22 @@ class CodexRuntimeRegistryServiceTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"", "   ", "token\nwith-control"})
-    void registrationRejectsMissingOrUnsafeAuthToken(String token) {
+    @NullSource
+    @ValueSource(strings = {"", "   "})
+    void registrationAllowsMissingAuthToken(String token) {
+        when(repository.findMaxRevision("app-main")).thenReturn(0);
         CodexRuntimeRegistrationForm form = registration();
         form.setAuthToken(token);
+
+        service.registerRevision(form);
+
+        verify(encryptor).encrypt("");
+    }
+
+    @Test
+    void registrationRejectsUnsafeAuthToken() {
+        CodexRuntimeRegistrationForm form = registration();
+        form.setAuthToken("token\nwith-control");
 
         assertThrows(IllegalArgumentException.class, () -> service.registerRevision(form));
         verify(encryptor, never()).encrypt(anyString());
@@ -464,6 +478,92 @@ class CodexRuntimeRegistryServiceTest {
         assertEquals(List.of("a-runtime", "z-runtime"),
                 listed.stream().map(runtime -> runtime.getRuntimeId()).toList());
         assertEquals("a-runtime", selected.getRuntimeId());
+    }
+
+    @Test
+    void archiveRevisionStopsNewRoutingButPreservesBoundRuntimeAffinity() throws Exception {
+        CodexRuntimeEntity entity = readyRuntime("ALL_DEFAULT", 100, "gpt-5.6-sol");
+        entity.setRoutingEpoch(7L);
+        when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1))
+                .thenReturn(Optional.of(entity));
+        when(repository.findByRuntimeIdAndRevision("app-main", 1))
+                .thenReturn(Optional.of(entity));
+        CodexRuntimeLifecycleForm form = lifecycle(7L);
+
+        var archived = service.archiveRevision("app-main", 1, form);
+
+        assertTrue(archived.getArchived());
+        assertFalse(archived.getEnabled());
+        assertEquals("DARK", archived.getRoutingPolicy());
+        assertEquals(0, archived.getRolloutPercentage());
+        assertEquals(8L, archived.getRoutingEpoch());
+        assertTrue(archived.getArchivedAt() != null);
+        CodexRuntimeBinding bound = service.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a");
+        assertEquals(CodexRuntimeType.APP_SERVER, bound.getRuntimeType());
+
+        CodexRuntimeRoutingForm routing = new CodexRuntimeRoutingForm();
+        routing.setExpectedRoutingEpoch(8L);
+        routing.setEnabled(true);
+        assertThrows(IllegalStateException.class,
+                () -> service.updateRouting("app-main", 1, routing));
+    }
+
+    @Test
+    void unarchiveRevisionRestoresOnlyDisabledDarkStateAndRequiresCurrentEpoch() {
+        CodexRuntimeEntity entity = runtime("DARK", 0);
+        entity.setEnabled(false);
+        entity.setRoutingEpoch(8L);
+        entity.setArchivedAt(LocalDateTime.now());
+        when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1))
+                .thenReturn(Optional.of(entity));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.unarchiveRevision("app-main", 1, lifecycle(7L)));
+        var restored = service.unarchiveRevision("app-main", 1, lifecycle(8L));
+
+        assertFalse(restored.getArchived());
+        assertEquals(null, restored.getArchivedAt());
+        assertFalse(restored.getEnabled());
+        assertEquals("DARK", restored.getRoutingPolicy());
+        assertEquals(0, restored.getRolloutPercentage());
+        assertEquals(9L, restored.getRoutingEpoch());
+    }
+
+    @Test
+    void activeListAndAvailabilityExcludeArchivedRevisions() {
+        CodexRuntimeEntity active = runtime("DARK", 0);
+        active.setRuntimeId("active");
+        CodexRuntimeEntity archived = runtime("ALL_DEFAULT", 100);
+        archived.setRuntimeId("archived");
+        archived.setArchivedAt(LocalDateTime.now());
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(archived, active));
+
+        var activeOnly = service.listByWorker("worker-1");
+        var withArchived = service.listByWorker("worker-1", true);
+        var availability = service.availability("worker-1");
+
+        assertEquals(List.of("active"),
+                activeOnly.stream().map(runtime -> runtime.getRuntimeId()).toList());
+        assertEquals(2, withArchived.size());
+        assertTrue(availability.getAppServerManaged());
+        assertFalse(availability.getUltraAvailable());
+    }
+
+    @Test
+    void archivedRevisionCannotBeSelectedForANewTaskEvenIfStoredAsEnabled() throws Exception {
+        CodexRuntimeEntity archived = readyRuntime("ALL_DEFAULT", 100, "gpt-5.6-sol");
+        archived.setArchivedAt(LocalDateTime.now());
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(archived));
+        when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
+                "worker-1", "APP_SERVER")).thenReturn(List.of(archived));
+
+        CodexRuntimeBinding selected = service.selectForNewTask(
+                "worker-1", "codex-latest", "codex-worker", "task-1");
+
+        assertEquals(CodexRuntimeType.SDK_EXEC, selected.getRuntimeType());
     }
 
     @ParameterizedTest
@@ -1117,6 +1217,12 @@ class CodexRuntimeRegistryServiceTest {
         manifest.put("readiness", Map.of("ready", true, "reasons", List.of()));
         manifest.put("features", appServerFeatures());
         return manifest;
+    }
+
+    private CodexRuntimeLifecycleForm lifecycle(long expectedRoutingEpoch) {
+        CodexRuntimeLifecycleForm form = new CodexRuntimeLifecycleForm();
+        form.setExpectedRoutingEpoch(expectedRoutingEpoch);
+        return form;
     }
 
     private void setModelCapabilities(

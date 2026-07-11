@@ -31,6 +31,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $fixturePath = Join-Path $PSScriptRoot 'codex-runtime-affinity-fixture.sql'
 $migrationPath = Join-Path $repoRoot 'docs/migration/2026-07-10-codex-runtime-affinity.sql'
 $epochCompatibilityMigrationPath = Join-Path $repoRoot 'docs/migration/2026-07-10-codex-task-created-at-epoch-ms.sql'
+$runtimeArchiveMigrationPath = Join-Path $repoRoot 'docs/migration/2026-07-11-codex-runtime-archive.sql'
 $assertionsPath = Join-Path $PSScriptRoot 'codex-runtime-affinity-assertions.sql'
 $expectedVersions = @{
     'mysql:8.0.44' = '8.0.44'
@@ -348,6 +349,7 @@ if ($NMinusOneLauncherJar) {
 $fixtureSql = Get-Content -Raw $fixturePath
 $migrationSql = Get-Content -Raw $migrationPath
 $epochCompatibilityMigrationSql = Get-Content -Raw $epochCompatibilityMigrationPath
+$runtimeArchiveMigrationSql = Get-Content -Raw $runtimeArchiveMigrationPath
 $assertionsSql = Get-Content -Raw $assertionsPath
 
 foreach ($image in $Images) {
@@ -380,6 +382,8 @@ foreach ($image in $Images) {
             -Sql $fixtureSql | Out-Null
         Invoke-MySql -Container $container -Password $password -Database $fixtureDatabase `
             -Sql $migrationSql | Out-Null
+        Invoke-MySql -Container $container -Password $password -Database $fixtureDatabase `
+            -Sql $runtimeArchiveMigrationSql | Out-Null
         $evidence = Invoke-MySql -Container $container -Password $password -Database $fixtureDatabase `
             -Sql $assertionsSql
         Write-Host "[PASS] migration fixtures on $actualVersion"
@@ -416,6 +420,8 @@ ALTER TABLE codex_tasks
                     -Sql $downgradeSql | Out-Null
                 Invoke-MySql -Container $container -Password $password -Database $launcherDatabase `
                     -Sql $migrationSql | Out-Null
+                Invoke-MySql -Container $container -Password $password -Database $launcherDatabase `
+                    -Sql $runtimeArchiveMigrationSql | Out-Null
                 Invoke-MySql -Container $container -Password $password -Database $launcherDatabase `
                     -Sql 'ALTER TABLE codex_tasks DROP COLUMN created_at_epoch_ms;' | Out-Null
                 Invoke-MySql -Container $container -Password $password -Database $launcherDatabase `
@@ -479,6 +485,8 @@ SELECT 'n1-array-task', 'n1-array-worker-task', 'n1-array-state',
                     -Smoke ${function:Invoke-NMinusOneLegacyReadSmoke}
                 Invoke-MySql -Container $container -Password $password -Database $nMinusOneDatabase `
                     -Sql $migrationSql | Out-Null
+                Invoke-MySql -Container $container -Password $password -Database $nMinusOneDatabase `
+                    -Sql $runtimeArchiveMigrationSql | Out-Null
                 $providerStateCheck = @'
 SELECT COUNT(*) AS object_state_count
   FROM sessions

@@ -58,6 +58,7 @@ test('readiness accepts a filesystem-root allowlist with isolated private paths'
   const config = testConfig(stateDir, {
     codexHome,
     allowedCwds: [path.parse(root).root],
+    workerToken: '',
   })
   assert.deepEqual(evaluateRuntimeReadiness(config, '0.144.1', true).reasons, [])
 })

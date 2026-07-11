@@ -3,9 +3,10 @@
     <div class="runtime-section-header">
       <div class="runtime-title-group">
         <span class="runtime-title">App Server Runtime</span>
-        <el-tag size="small" effect="plain" type="info">{{ runtimes.length }}</el-tag>
+        <el-tag size="small" effect="plain" type="info">{{ activeRuntimes.length }}</el-tag>
       </div>
       <div class="runtime-header-actions">
+        <el-checkbox v-model="showArchived" size="small">已归档</el-checkbox>
         <el-tooltip content="重新加载 Runtime" placement="top">
           <el-button
             text
@@ -21,7 +22,7 @@
           type="primary"
           :icon="Plus"
           data-testid="add-codex-runtime"
-          @click="showRegistration = !showRegistration"
+          @click="toggleRegistration"
         >
           注册
         </el-button>
@@ -50,11 +51,15 @@
     </div>
 
     <div v-if="showRegistration" class="runtime-registration" data-testid="runtime-registration">
+      <div v-if="revisionSource" class="registration-context">
+        为 {{ revisionSource.runtimeId }}@{{ revisionSource.revision }} 新建修订；新修订固定从 Disabled + Dark 开始。
+      </div>
       <div class="registration-grid">
         <label class="runtime-field">
           <span>Runtime ID</span>
           <el-input
             v-model="registration.runtimeId"
+            :disabled="!!revisionSource"
             placeholder="如 codex-app-server-local"
             data-testid="runtime-id-input"
           />
@@ -68,12 +73,12 @@
           />
         </label>
         <label class="runtime-field runtime-token-field">
-          <span>认证令牌（必填）</span>
+          <span>Worker 服务令牌（可选）</span>
           <el-input
             v-model="registration.authToken"
             type="password"
             autocomplete="new-password"
-            placeholder="Runtime 预共享令牌"
+            placeholder="留空表示 Worker 未启用 HTTP 认证"
             data-testid="runtime-token-input"
           />
         </label>
@@ -91,7 +96,7 @@
             data-testid="register-codex-runtime"
             @click="handleRegister"
           >
-            注册并检查
+            {{ revisionSource ? '创建修订并检查' : '注册并检查' }}
           </el-button>
         </div>
       </div>
@@ -99,15 +104,15 @@
 
     <div v-loading="loading" class="runtime-list">
       <el-empty
-        v-if="!loading && !loadFailed && runtimes.length === 0"
-        description="暂无 App Server Runtime"
+        v-if="!loading && !loadFailed && visibleRuntimes.length === 0"
+        :description="showArchived ? '暂无 App Server Runtime' : '暂无活动 App Server Runtime'"
         :image-size="52"
       />
 
       <article
-        v-for="runtime in runtimes"
+        v-for="runtime in visibleRuntimes"
         :key="runtimeKey(runtime)"
-        class="runtime-row"
+        :class="['runtime-row', { 'runtime-row-archived': runtime.archived }]"
         :data-testid="`runtime-${runtimeKey(runtime)}`"
       >
         <div class="runtime-summary">
@@ -115,7 +120,9 @@
             <div class="runtime-name-line">
               <strong :title="runtime.runtimeId">{{ runtime.runtimeId }}</strong>
               <span class="runtime-revision">rev {{ runtime.revision }}</span>
+              <el-tag v-if="runtime.archived" size="small" effect="plain" type="info">已归档</el-tag>
               <el-tag
+                v-else
                 size="small"
                 :type="effectiveReadinessTagType(runtime)"
                 effect="light"
@@ -128,9 +135,32 @@
                 ? 'Endpoint 已配置'
                 : runtime.endpointConfigured === false ? 'Endpoint 未配置' : 'Endpoint 配置受保护' }}
             </span>
+            <span v-if="runtime.archivedAt" class="runtime-archived-time">
+              归档于 {{ formatTime(runtime.archivedAt) }}
+            </span>
           </div>
           <div class="runtime-actions">
-            <el-tooltip content="刷新 capability" placement="top">
+            <el-tooltip content="新建修订" placement="top">
+              <el-button
+                text
+                circle
+                :icon="DocumentAdd"
+                :aria-label="`为 ${runtime.runtimeId}@${runtime.revision} 新建修订`"
+                @click="startNewRevision(runtime)"
+              />
+            </el-tooltip>
+            <el-tooltip v-if="runtime.archived" content="恢复为 Disabled + Dark" placement="top">
+              <el-button
+                text
+                circle
+                type="primary"
+                :icon="RefreshLeft"
+                :loading="archivingKeys.has(runtimeKey(runtime))"
+                :aria-label="`恢复 ${runtime.runtimeId}@${runtime.revision}`"
+                @click="handleUnarchive(runtime)"
+              />
+            </el-tooltip>
+            <el-tooltip v-if="!runtime.archived" content="刷新 capability" placement="top">
               <el-button
                 text
                 circle
@@ -140,7 +170,7 @@
                 @click="handleRefresh(runtime)"
               />
             </el-tooltip>
-            <el-tooltip content="保存路由配置" placement="top">
+            <el-tooltip v-if="!runtime.archived" content="保存路由配置" placement="top">
               <el-button
                 text
                 circle
@@ -149,6 +179,17 @@
                 :loading="savingKeys.has(runtimeKey(runtime))"
                 :aria-label="`保存 ${runtime.runtimeId} 路由配置`"
                 @click="handleSaveRouting(runtime)"
+              />
+            </el-tooltip>
+            <el-tooltip v-if="!runtime.archived" content="退役并归档" placement="top">
+              <el-button
+                text
+                circle
+                type="warning"
+                :icon="Box"
+                :loading="archivingKeys.has(runtimeKey(runtime))"
+                :aria-label="`归档 ${runtime.runtimeId}@${runtime.revision}`"
+                @click="handleArchive(runtime)"
               />
             </el-tooltip>
           </div>
@@ -182,6 +223,7 @@
         </div>
 
         <div
+          v-if="!runtime.archived"
           class="runtime-rate-limits"
           :data-testid="`rate-limits-${runtimeKey(runtime)}`"
         >
@@ -271,7 +313,7 @@
           </template>
         </div>
 
-        <div v-if="drafts[runtimeKey(runtime)]" class="runtime-routing-grid">
+        <div v-if="!runtime.archived && drafts[runtimeKey(runtime)]" class="runtime-routing-grid">
           <label class="runtime-control runtime-enabled-control">
             <span>启用</span>
             <el-switch v-model="drafts[runtimeKey(runtime)]!.enabled" />
@@ -307,13 +349,15 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Check, Plus, Refresh, WarningFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Box, Check, DocumentAdd, Plus, Refresh, RefreshLeft, WarningFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  archiveCodexRuntime,
   getCodexRuntimeRateLimits,
   listCodexRuntimes,
   refreshCodexRuntime,
   registerCodexRuntime,
+  unarchiveCodexRuntime,
   updateCodexRuntimeRouting,
 } from '@/api/codexRuntime'
 import type {
@@ -358,9 +402,12 @@ const drafts = reactive<Record<string, RoutingDraft>>({})
 const loading = ref(false)
 const loadFailed = ref(false)
 const showRegistration = ref(false)
+const showArchived = ref(false)
 const registering = ref(false)
+const revisionSource = ref<Pick<CodexRuntime, 'runtimeId' | 'revision'> | null>(null)
 const refreshingKeys = reactive(new Set<string>())
 const savingKeys = reactive(new Set<string>())
+const archivingKeys = reactive(new Set<string>())
 const rateLimitsByRuntime = reactive<Record<string, CodexRuntimeRateLimits | undefined>>({})
 const rateLimitLoadingKeys = reactive(new Set<string>())
 const rateLimitErrorKeys = reactive(new Set<string>())
@@ -381,12 +428,12 @@ let rateLimitRequestSequence = 0
 const latestRateLimitRequestByKey = new Map<string, number>()
 const rateLimitRequestsInFlight = new Map<string, number>()
 
-const readyUltraRuntimeCount = computed(() =>
-  runtimes.value.filter(isUltraRuntimeAvailable).length,
-)
+const activeRuntimes = computed(() => runtimes.value.filter(runtime => !runtime.archived))
+const visibleRuntimes = computed(() => showArchived.value ? runtimes.value : activeRuntimes.value)
+const readyUltraRuntimeCount = computed(() => activeRuntimes.value.filter(isUltraRuntimeAvailable).length)
 const hasReadyUltraRuntime = computed(() => readyUltraRuntimeCount.value > 0)
 const ultraUnavailableDescription = computed(() => {
-  const configured = runtimes.value.filter(isUltraRoutingConfigured)
+  const configured = activeRuntimes.value.filter(isUltraRoutingConfigured)
   if (configured.some((runtime) => runtime.readinessStatus === 'READY'
     && !isRuntimeCapabilityFresh(runtime))) {
     return 'Ultra 路由已配置，但 capability 已过期，请刷新。'
@@ -435,7 +482,9 @@ function replaceRuntime(updated: CodexRuntime, preserveDirty = false): void {
     runtimes.value.unshift(updated)
   }
   syncDraft(updated, preserveDirty)
-  if (previous && runtimeInstanceKey(previous) !== runtimeInstanceKey(updated)) {
+  if (updated.archived) {
+    invalidateRateLimitState(key)
+  } else if (previous && runtimeInstanceKey(previous) !== runtimeInstanceKey(updated)) {
     invalidateRateLimitState(key)
     void loadRuntimeRateLimits(updated)
   }
@@ -547,10 +596,10 @@ async function loadRuntimes(silent = false, preserveDirty = true, force = false)
   listRequestsInFlight.set(workerId, (listRequestsInFlight.get(workerId) ?? 0) + 1)
   if (!silent) loading.value = true
   try {
-    const loaded = await listCodexRuntimes(
-      workerId,
-      silent ? { suppressErrorMessage: true } : undefined,
-    )
+    const loaded = await listCodexRuntimes(workerId, {
+      includeArchived: true,
+      ...(silent ? { suppressErrorMessage: true } : {}),
+    })
     if (unmounted
       || workerId !== props.workerId
       || requestSequence !== latestListRequestSequence
@@ -574,7 +623,9 @@ async function loadRuntimes(silent = false, preserveDirty = true, force = false)
     })
     cleanupRateLimitState(loadedKeys)
     loaded.forEach((runtime) => {
-      void loadRuntimeRateLimits(runtime, false, false, workerId, workerGeneration)
+      if (!runtime.archived) {
+        void loadRuntimeRateLimits(runtime, false, false, workerId, workerGeneration)
+      }
     })
     loadFailed.value = false
   } catch {
@@ -597,6 +648,23 @@ function resetRegistration(): void {
   registration.runtimeId = ''
   registration.endpointUrl = ''
   registration.authToken = ''
+  revisionSource.value = null
+}
+
+function toggleRegistration(): void {
+  if (showRegistration.value && !revisionSource.value) {
+    cancelRegistration()
+    return
+  }
+  resetRegistration()
+  showRegistration.value = true
+}
+
+function startNewRevision(runtime: CodexRuntime): void {
+  resetRegistration()
+  registration.runtimeId = runtime.runtimeId
+  revisionSource.value = { runtimeId: runtime.runtimeId, revision: runtime.revision }
+  showRegistration.value = true
 }
 
 function cancelRegistration(): void {
@@ -608,13 +676,14 @@ async function handleRegister(): Promise<void> {
   const runtimeId = registration.runtimeId.trim()
   const endpointUrl = registration.endpointUrl.trim()
   const authToken = registration.authToken.trim()
-  if (!runtimeId || !endpointUrl || !authToken) {
-    ElMessage.warning('请填写 Runtime ID、Endpoint 和认证令牌')
+  if (!runtimeId || !endpointUrl) {
+    ElMessage.warning('请填写 Runtime ID 和 Endpoint')
     return
   }
 
   const workerId = props.workerId
   const operationGeneration = workerGeneration
+  const creatingRevision = revisionSource.value !== null
   registering.value = true
   try {
     const created = await registerCodexRuntime({
@@ -634,7 +703,9 @@ async function handleRegister(): Promise<void> {
     showRegistration.value = false
     replaceRuntime(created)
     void loadRuntimeRateLimits(created)
-    ElMessage.success('Dark Runtime 已注册')
+    ElMessage.success(creatingRevision
+      ? `Runtime rev ${created.revision} 已创建并保持 Dark`
+      : 'Dark Runtime 已注册')
 
     await handleRefresh(created, false, workerId, operationGeneration)
   } catch {
@@ -643,6 +714,53 @@ async function handleRegister(): Promise<void> {
     }
   } finally {
     if (isCurrentWorkerOperation(workerId, operationGeneration)) registering.value = false
+  }
+}
+
+async function handleArchive(runtime: CodexRuntime): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `归档 ${runtime.runtimeId}@${runtime.revision}？新任务将不再路由到该修订，历史任务 affinity 仍会保留。`,
+      '退役并归档 Runtime',
+      { type: 'warning', confirmButtonText: '归档', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  await mutateArchiveState(runtime, true)
+}
+
+async function handleUnarchive(runtime: CodexRuntime): Promise<void> {
+  await mutateArchiveState(runtime, false)
+}
+
+async function mutateArchiveState(runtime: CodexRuntime, archive: boolean): Promise<void> {
+  const key = runtimeKey(runtime)
+  const workerId = props.workerId
+  const operationGeneration = workerGeneration
+  archivingKeys.add(key)
+  try {
+    const updated = await (archive ? archiveCodexRuntime : unarchiveCodexRuntime)(
+      runtime.runtimeId,
+      runtime.revision,
+      { expectedRoutingEpoch: runtime.routingEpoch },
+    )
+    if (!isCurrentWorkerOperation(workerId, operationGeneration)) return
+    replaceRuntime(updated)
+    if (!archive) {
+      void loadRuntimeRateLimits(updated)
+    }
+    ElMessage.success(archive ? 'Runtime 已归档' : 'Runtime 已恢复为 Disabled + Dark')
+  } catch (error) {
+    if (!isCurrentWorkerOperation(workerId, operationGeneration)) return
+    if (runtimeErrorMessage(error).includes('CODEX_RUNTIME_ROUTING_EPOCH_CONFLICT')) {
+      ElMessage.warning('Runtime 状态已变化，正在重新加载')
+      await loadRuntimes(false, false, true)
+    } else {
+      ElMessage.error(archive ? 'Runtime 归档失败' : 'Runtime 恢复失败')
+    }
+  } finally {
+    if (isCurrentWorkerOperation(workerId, operationGeneration)) archivingKeys.delete(key)
   }
 }
 
@@ -873,6 +991,7 @@ watch(() => props.workerId, () => {
   for (const key of Object.keys(drafts)) delete drafts[key]
   refreshingKeys.clear()
   savingKeys.clear()
+  archivingKeys.clear()
   rateLimitLoadingKeys.clear()
   rateLimitErrorKeys.clear()
   rateLimitRequestsInFlight.clear()
@@ -964,6 +1083,13 @@ onBeforeUnmount(() => {
   background: #fafafa;
 }
 
+.registration-context {
+  margin-bottom: 10px;
+  color: #606266;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .registration-grid {
   display: grid;
   grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.2fr);
@@ -1008,6 +1134,11 @@ onBeforeUnmount(() => {
   margin-top: 10px;
 }
 
+.runtime-row-archived {
+  border-color: #dcdfe6;
+  background: #f7f8fa;
+}
+
 .runtime-summary {
   align-items: flex-start;
 }
@@ -1044,6 +1175,11 @@ onBeforeUnmount(() => {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.runtime-archived-time {
+  color: #909399;
+  font-size: 11px;
 }
 
 .runtime-version-grid {
