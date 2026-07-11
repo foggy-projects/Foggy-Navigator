@@ -92,12 +92,13 @@ describe('llmModelOptions', () => {
     const values = codex.map((opt) => opt.value)
     expect(values).toEqual([
       'codex-latest',
+      'codex-terra',
+      'codex-luna',
       'codex-fast',
       'codex-deep',
       'codex-xhigh',
       'codex-max',
       'codex-ultra',
-      'codex-mini',
     ])
   })
 
@@ -150,10 +151,11 @@ describe('llmModelOptions', () => {
     const result = resolveModelOptions(config).map((m) => m.value)
     expect(result).toEqual([
       'codex-latest',
+      'codex-terra',
+      'codex-luna',
       'codex-fast',
       'codex-deep',
       'codex-xhigh',
-      'codex-mini',
     ])
   })
 

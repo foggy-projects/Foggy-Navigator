@@ -10,12 +10,13 @@ dotenv.config({ path: path.join(packageRoot, '.env') })
 
 const DEFAULT_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   'codex-latest': 'gpt-5.6-sol',
+  'codex-terra': 'gpt-5.6-terra',
+  'codex-luna': 'gpt-5.6-luna',
   'codex-fast': 'gpt-5.6-sol:low',
   'codex-deep': 'gpt-5.6-sol:high',
   'codex-xhigh': 'gpt-5.6-sol:xhigh',
   'codex-max': 'gpt-5.6-sol:max',
   'codex-ultra': 'gpt-5.6-sol:ultra',
-  'codex-mini': 'gpt-5.4-mini',
 })
 
 export interface AppConfig {

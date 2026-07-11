@@ -73,12 +73,14 @@ test('createConfig rejects CODEX_DEFAULT_MODEL containing whitespace', () => {
 test('createConfig provides default Codex modelAliases when CODEX_MODEL_ALIASES is unset', () => {
   const config = createConfig({})
   assert.equal(config.modelAliases['codex-latest'], 'gpt-5.6-sol')
+  assert.equal(config.modelAliases['codex-terra'], 'gpt-5.6-terra')
+  assert.equal(config.modelAliases['codex-luna'], 'gpt-5.6-luna')
   assert.equal(config.modelAliases['codex-fast'], 'gpt-5.6-sol:low')
   assert.equal(config.modelAliases['codex-deep'], 'gpt-5.6-sol:high')
   assert.equal(config.modelAliases['codex-xhigh'], 'gpt-5.6-sol:xhigh')
   assert.equal(config.modelAliases['codex-max'], 'gpt-5.6-sol:max')
-  assert.equal(config.modelAliases['codex-ultra'], 'gpt-5.6-sol:ultra')
-  assert.equal(config.modelAliases['codex-mini'], 'gpt-5.4-mini')
+  assert.equal(config.modelAliases['codex-ultra'], undefined)
+  assert.equal(config.modelAliases['codex-mini'], undefined)
 })
 
 test('createConfig parses absolute CODEX_BIZ_HOME_ROOT and rejects relative values', () => {
@@ -120,7 +122,7 @@ test('createConfig CODEX_MODEL_ALIASES JSON override merges into defaults', () =
   assert.equal(config.modelAliases['codex-experimental'], 'gpt-5.6-luna')
   // 未覆盖的 alias 保持默认
   assert.equal(config.modelAliases['codex-fast'], 'gpt-5.6-sol:low')
-  assert.equal(config.modelAliases['codex-ultra'], 'gpt-5.6-sol:ultra')
+  assert.equal(config.modelAliases['codex-terra'], 'gpt-5.6-terra')
 })
 
 test('createConfig CODEX_MODEL_ALIASES rejects non-JSON values', () => {

@@ -1784,7 +1784,7 @@
             <el-input v-model="addForm.codexAuthToken" type="password" show-password placeholder="Codex Worker 令牌" />
           </el-form-item>
           <el-form-item label="Codex 默认模型">
-            <el-input v-model="addForm.codexModel" placeholder="如：codex-mini-latest" />
+            <el-input v-model="addForm.codexModel" placeholder="如：codex-latest" />
           </el-form-item>
           <el-divider content-position="left">Gemini backend capability（可选）</el-divider>
           <el-form-item label="Gemini 地址">
@@ -1879,7 +1879,7 @@
             />
           </el-form-item>
           <el-form-item label="Codex 默认模型">
-            <el-input v-model="editForm.codexModel" placeholder="如：codex-mini-latest" />
+            <el-input v-model="editForm.codexModel" placeholder="如：codex-latest" />
           </el-form-item>
           <CodexRuntimeManager
             v-if="showEditDialog && selectedWorkerId"

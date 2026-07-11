@@ -1,6 +1,6 @@
 import type { ModelReasoningEffort } from '@openai/codex-sdk'
 
-export type CodexReasoningEffort = ModelReasoningEffort | 'max' | 'ultra'
+export type CodexReasoningEffort = ModelReasoningEffort | 'max'
 
 export const CODEX_REASONING_EFFORTS = [
   'minimal',
@@ -9,7 +9,6 @@ export const CODEX_REASONING_EFFORTS = [
   'high',
   'xhigh',
   'max',
-  'ultra',
 ] as const satisfies readonly CodexReasoningEffort[]
 
 const VALID_REASONING_EFFORTS = new Set<string>(CODEX_REASONING_EFFORTS)

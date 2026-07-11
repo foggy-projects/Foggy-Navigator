@@ -3,7 +3,6 @@ import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
 import {
   CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR,
-  parseModelString,
   resolveModelAlias,
   runQuery,
   taskBroadcasts,
@@ -18,16 +17,20 @@ export { isPathWithinAllowedCwd }
 
 export const CODEX_ULTRA_APP_SERVER_REQUIRED = 'CODEX_ULTRA_APP_SERVER_REQUIRED'
 
-export function requiresAppServerForNewUltra(
-  model: string | undefined,
-  sessionId: string | undefined,
+export function requiresAppServerForUltra(
+  model: unknown,
   defaultModel: string = config.defaultModel,
   aliases: Record<string, string> = config.modelAliases
 ): boolean {
-  if (sessionId?.trim()) return false
+  // Keep malformed non-string values on the normal 400 validation path.
+  if (model !== undefined && typeof model !== 'string') return false
+
   const requestedModel = model?.trim() || defaultModel
+  if (requestedModel.toLowerCase() === 'codex-ultra') return true
   const resolvedModel = resolveModelAlias(requestedModel, aliases).resolved
-  return parseModelString(resolvedModel).reasoningLevel === 'ultra'
+  const colonIndex = resolvedModel.indexOf(':')
+  return colonIndex > 0
+    && resolvedModel.substring(colonIndex + 1).trim().toLowerCase() === 'ultra'
 }
 
 const router = Router()
@@ -36,19 +39,19 @@ const router = Router()
  * POST /api/v1/query — Start a Codex query and stream results as SSE
  */
 router.post('/api/v1/query', async (req: Request, res: Response) => {
-  const validation = validateQueryRequest(req.body)
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error })
-    return
-  }
-  const body = validation.value
-  if (requiresAppServerForNewUltra(body.model, body.session_id)) {
+  if (requiresAppServerForUltra(req.body?.model)) {
     res.status(409).json({
       code: CODEX_ULTRA_APP_SERVER_REQUIRED,
       error: CODEX_ULTRA_APP_SERVER_REQUIRED,
     })
     return
   }
+  const validation = validateQueryRequest(req.body)
+  if (!validation.ok) {
+    res.status(400).json({ error: validation.error })
+    return
+  }
+  const body = validation.value
   console.log(
     `[query] received request: cwd=${body.cwd ?? ''} session_id=${body.session_id ?? ''} model=${body.model ?? ''} has_api_key=${Boolean(body.api_key)} has_base_url=${Boolean(body.base_url)} env_var_keys=${body.env_vars ? Object.keys(body.env_vars).join(',') : ''} images=${body.images?.length ?? 0}`
   )

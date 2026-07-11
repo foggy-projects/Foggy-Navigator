@@ -27,23 +27,25 @@ const CLAUDE_MODEL_OPTIONS: SelectableModelOption[] = [
  *
  * Worker 默认映射（见 tools/codex-agent-worker/src/config.ts → DEFAULT_CODEX_MODEL_ALIASES）：
  *   codex-latest → gpt-5.6-sol
+ *   codex-terra  → gpt-5.6-terra
+ *   codex-luna   → gpt-5.6-luna
  *   codex-fast   → gpt-5.6-sol:low
  *   codex-deep   → gpt-5.6-sol:high
  *   codex-xhigh  → gpt-5.6-sol:xhigh
  *   codex-max    → gpt-5.6-sol:max
- *   codex-ultra  → gpt-5.6-sol:ultra
- *   codex-mini   → gpt-5.4-mini
+ *   codex-ultra  → gpt-5.6-sol:ultra（仅 codex-app-server-worker）
  *
  * 与 Claude（opus/sonnet/haiku）和 Gemini（gemini-pro/gemini-flash）的命名风格保持一致。
  */
 const CODEX_ALIAS_OPTIONS: SelectableModelOption[] = [
   { value: 'codex-latest', label: 'Codex Latest', backend: 'OPENAI_CODEX', description: 'Codex Latest (Alias) — 当前默认 Codex 模型' },
+  { value: 'codex-terra', label: 'Codex Terra', backend: 'OPENAI_CODEX', description: 'Codex Terra (Alias) — 平衡速度、成本与能力，默认 Medium' },
+  { value: 'codex-luna', label: 'Codex Luna', backend: 'OPENAI_CODEX', description: 'Codex Luna (Alias) — 高吞吐低成本，默认 Medium' },
   { value: 'codex-fast', label: 'Codex Fast', backend: 'OPENAI_CODEX', description: 'Codex Fast (Alias) — 快速轻量推理' },
   { value: 'codex-deep', label: 'Codex Deep', backend: 'OPENAI_CODEX', description: 'Codex Deep (Alias) — 深度推理' },
   { value: 'codex-xhigh', label: 'Codex Extra High', backend: 'OPENAI_CODEX', description: 'Codex Extra High (Alias) — 超高推理' },
   { value: 'codex-max', label: 'Codex Max', backend: 'OPENAI_CODEX', description: 'Codex Max (Alias) — Sol 最大推理深度' },
-  { value: 'codex-ultra', label: 'Codex Ultra', backend: 'OPENAI_CODEX', description: 'Codex Ultra (Alias) — Sol 最大推理与自动任务委派' },
-  { value: 'codex-mini', label: 'Codex Mini', backend: 'OPENAI_CODEX', description: 'Codex Mini (Alias) — 快速 Mini' },
+  { value: 'codex-ultra', label: 'Codex Ultra', backend: 'OPENAI_CODEX', description: 'Codex Ultra (Alias) — 仅由 App Server Worker 执行自动任务委派' },
 ]
 
 const CODEX_EXPLICIT_GRANT_ALIASES = new Set(['codex-max', 'codex-ultra'])

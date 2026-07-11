@@ -15,7 +15,7 @@
 
 ## 版本目标
 
-新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为唯一执行引擎并支持全部模型与 reasoning 档位。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径并停止承接新的 Ultra 会话。平台先完成幂等任务接受、受控 runtime registry、不可变任务/会话 affinity 和能力握手，再仅将新 Ultra 会话灰度到新 Worker；待全模型、全功能、长稳和回滚证据齐备后，使新 Worker 成为默认，最后退役 SDK Worker。
+新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持全部模型与 reasoning 档位。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径、最高支持 Max，并拒绝所有 Ultra 请求。平台先完成幂等任务接受、受控 runtime registry、不可变任务/会话 affinity 和能力握手，再将 Ultra 会话灰度到新 Worker；待全模型、全功能、长稳和回滚证据齐备后，使新 Worker 成为默认，最后退役 SDK Worker。
 
 ## 已确认决策
 
@@ -44,7 +44,10 @@
 - [需求](./workitems/OPT-001-independent-codex-app-server-worker-requirement.md)
 - [实施计划与代码清单](./workitems/OPT-001-independent-codex-app-server-worker-plan.md)
 - [实施与门禁进度](./workitems/OPT-001-independent-codex-app-server-worker-progress.md)
+- [Codex GPT-5.6 模型目录与 Runtime 边界](./workitems/OPT-002-codex-model-catalog-boundary.md)
+- [BUG-001 Codex Resume 后 Shell 工具丢失](./workitems/BUG-001-codex-resume-shell-tool-loss.md)
 - [P0-P2 实现质量检查](./quality/OPT-001-p0-p2-implementation-quality.md)
+- [BUG-001 修复实现质量检查](./quality/BUG-001-codex-resume-shell-fix-quality-review.md)
 - [P0-P2 测试证据覆盖审计](./coverage/OPT-001-p0-p2-coverage-audit.md)
 - [P0-P7 阶段验收记录](./acceptance/OPT-001-p0-p7-acceptance.md)
 

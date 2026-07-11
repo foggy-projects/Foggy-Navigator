@@ -55,12 +55,13 @@ public class CodexRuntimeRegistryService {
 
     private static final Map<String, String> DEFAULT_MODEL_ALIASES = Map.ofEntries(
             Map.entry("codex-latest", "gpt-5.6-sol"),
+            Map.entry("codex-terra", "gpt-5.6-terra"),
+            Map.entry("codex-luna", "gpt-5.6-luna"),
             Map.entry("codex-fast", "gpt-5.6-sol:low"),
             Map.entry("codex-deep", "gpt-5.6-sol:high"),
             Map.entry("codex-xhigh", "gpt-5.6-sol:xhigh"),
             Map.entry("codex-max", "gpt-5.6-sol:max"),
-            Map.entry("codex-ultra", "gpt-5.6-sol:ultra"),
-            Map.entry("codex-mini", "gpt-5.4-mini"));
+            Map.entry("codex-ultra", "gpt-5.6-sol:ultra"));
 
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 

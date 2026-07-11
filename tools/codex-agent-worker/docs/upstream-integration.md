@@ -305,19 +305,21 @@ data: {"type":"result","task_id":"...","session_id":"019d...","content":"PONG","
 }
 ```
 
-GPT-5.6-Sol 的稳定 alias：
+GPT-5.6 的稳定 alias：
 
 | Alias | 实际模型 |
 |---|---|
 | `codex-latest` | `gpt-5.6-sol` |
+| `codex-terra` | `gpt-5.6-terra` |
+| `codex-luna` | `gpt-5.6-luna` |
 | `codex-fast` | `gpt-5.6-sol:low` |
 | `codex-deep` | `gpt-5.6-sol:high` |
 | `codex-xhigh` | `gpt-5.6-sol:xhigh` |
 | `codex-max` | `gpt-5.6-sol:max` |
-| `codex-ultra` | `gpt-5.6-sol:ultra` |
-| `codex-mini` | `gpt-5.4-mini` |
 
-`ultra` 会允许 Codex 自动委派子任务。Worker 会继续返回父任务的正常文本和最终结果，并对协作工具事件写入脱敏诊断日志；当前 SSE 协议不承诺完整的子 Agent 拓扑或逐 Agent 进度。
+`codex-terra` / `codex-luna` 默认使用 Medium；调用方可用 `codex-terra:high`、`codex-luna:max` 这类后缀选择具体推理档位。
+
+SDK Worker 不执行 Ultra。`codex-ultra` 由独立 `codex-app-server-worker` 提供；直接向本 Worker 提交 Ultra（包括带 `session_id` 的续接请求）会返回 `409 CODEX_ULTRA_APP_SERVER_REQUIRED`。
 
 ### 4.3 默认值
 

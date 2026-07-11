@@ -50,6 +50,9 @@ test('built-in Ultra and Max aliases cannot be silently downgraded', () => {
     }),
   })
   assert.equal(accepted.modelAliases['codex-ultra'], 'gpt-5.6-sol:ultra')
+  assert.equal(accepted.modelAliases['codex-terra'], 'gpt-5.6-terra')
+  assert.equal(accepted.modelAliases['codex-luna'], 'gpt-5.6-luna')
+  assert.equal(accepted.modelAliases['codex-mini'], undefined)
   assert.equal(accepted.modelAliases['custom-review'], 'gpt-5.6-sol:medium')
 })
 

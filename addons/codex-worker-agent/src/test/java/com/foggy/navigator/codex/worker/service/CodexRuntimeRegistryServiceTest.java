@@ -568,8 +568,9 @@ class CodexRuntimeRegistryServiceTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "codex-latest", "codex-fast", "codex-deep", "codex-xhigh", "codex-max", "codex-ultra",
-            "codex-mini", "codex-latest:minimal", "codex-latest:medium", "gpt-5.6-sol",
+            "codex-latest", "codex-terra", "codex-luna", "codex-fast", "codex-deep", "codex-xhigh",
+            "codex-max", "codex-ultra", "codex-latest:minimal", "codex-latest:medium", "gpt-5.6-sol",
+            "gpt-5.6-terra", "gpt-5.6-luna",
             "gpt-5.6-sol:low", "gpt-5.6-sol:high", "gpt-5.6-sol:xhigh", "gpt-5.6-sol:max",
             "gpt-5.6-sol:ultra", "gpt-5.4-mini"
     })
@@ -607,6 +608,10 @@ class CodexRuntimeRegistryServiceTest {
                 "worker-1", "gpt-5.4-mini", "codex-worker", "task-mini").getRuntimeType());
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
                 "worker-1", "gpt-5.6-terra:ultra", "codex-worker", "task-terra").getRuntimeType());
+        assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
+                "worker-1", "codex-terra:max", "codex-worker", "task-terra-max").getRuntimeType());
+        assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
+                "worker-1", "codex-luna:max", "codex-worker", "task-luna-max").getRuntimeType());
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
                 "worker-1", "gpt-5.4-mini:max", "codex-worker", "task-mini-max"));
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
@@ -887,7 +892,7 @@ class CodexRuntimeRegistryServiceTest {
                 List.of("minimal", "low", "medium", "high", "xhigh", "max", "ultra"));
         manifest.put("model_aliases", Map.of(
                 "codex-latest", "gpt-5.6-sol",
-                "codex-mini", "gpt-5.4-mini"));
+                "codex-terra", "gpt-5.6-terra"));
         manifest.put("readiness", Map.of("ready", true, "reasons", List.of()));
         manifest.put("features", appServerFeatures());
         return manifest;
