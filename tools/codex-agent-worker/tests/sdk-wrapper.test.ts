@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { ThreadItem } from '@openai/codex-sdk'
@@ -16,13 +17,16 @@ import {
   mapThreadItemToEvents,
   mergeCodexConfig,
   parseModelString,
+  prepareResumeToolsModelCatalog,
   renderNavigatorBusinessMcpConfigBlock,
+  runQuery,
   resolveDefaultCodexHome,
   resolveCodexHome,
   resolveNavigatorBusinessMcpServerPath,
   resolveModelAlias,
   seedCodexHomeAuthIfAvailable,
   saveAttachments,
+  taskBroadcasts,
   taskRegistry,
   shouldAbortBeforeTurnStart,
 } from '../src/codex/sdk-wrapper.ts'
@@ -51,18 +55,13 @@ test('parseModelString accepts xhigh reasoning directly', () => {
   })
 })
 
-test('parseModelString accepts Sol max and ultra reasoning', () => {
+test('parseModelString accepts Sol max but does not pass Ultra to the SDK', () => {
   assert.deepEqual(parseModelString('gpt-5.6-sol:max'), {
     model: 'gpt-5.6-sol',
     reasoningLevel: 'max',
   })
   assert.deepEqual(parseModelString('gpt-5.6-sol:ultra'), {
     model: 'gpt-5.6-sol',
-    reasoningLevel: 'ultra',
-  })
-  assert.deepEqual(parseModelString(' gpt-5.6-sol : ultra '), {
-    model: 'gpt-5.6-sol',
-    reasoningLevel: 'ultra',
   })
 })
 
@@ -72,10 +71,10 @@ test('applyResolvedReasoningEffort lets explicit model suffix override generic c
     tool_output_token_limit: 10000,
   }
 
-  applyResolvedReasoningEffort(codexConfig, 'ultra')
+  applyResolvedReasoningEffort(codexConfig, 'max')
 
   assert.deepEqual(codexConfig, {
-    model_reasoning_effort: 'ultra',
+    model_reasoning_effort: 'max',
     tool_output_token_limit: 10000,
   })
 })
@@ -100,12 +99,12 @@ test('collab tool diagnostics expose counts without prompt or thread identifiers
 
 const TEST_ALIASES: Record<string, string> = {
   'codex-latest': 'gpt-5.6-sol',
+  'codex-terra': 'gpt-5.6-terra',
+  'codex-luna': 'gpt-5.6-luna',
   'codex-fast': 'gpt-5.6-sol:low',
   'codex-deep': 'gpt-5.6-sol:high',
   'codex-xhigh': 'gpt-5.6-sol:xhigh',
   'codex-max': 'gpt-5.6-sol:max',
-  'codex-ultra': 'gpt-5.6-sol:ultra',
-  'codex-mini': 'gpt-5.4-mini',
 }
 
 test('resolveModelAlias returns the mapped real model when whole string hits an alias', () => {
@@ -113,8 +112,8 @@ test('resolveModelAlias returns the mapped real model when whole string hits an 
     resolved: 'gpt-5.6-sol',
     wasAlias: true,
   })
-  assert.deepEqual(resolveModelAlias('codex-mini', TEST_ALIASES), {
-    resolved: 'gpt-5.4-mini',
+  assert.deepEqual(resolveModelAlias('codex-terra', TEST_ALIASES), {
+    resolved: 'gpt-5.6-terra',
     wasAlias: true,
   })
   assert.deepEqual(resolveModelAlias('codex-xhigh', TEST_ALIASES), {
@@ -125,8 +124,8 @@ test('resolveModelAlias returns the mapped real model when whole string hits an 
     resolved: 'gpt-5.6-sol:max',
     wasAlias: true,
   })
-  assert.deepEqual(resolveModelAlias('codex-ultra', TEST_ALIASES), {
-    resolved: 'gpt-5.6-sol:ultra',
+  assert.deepEqual(resolveModelAlias('codex-luna', TEST_ALIASES), {
+    resolved: 'gpt-5.6-luna',
     wasAlias: true,
   })
 })
@@ -545,4 +544,160 @@ test('seedCodexHomeAuthIfAvailable skips when source auth is unavailable or targ
 
   assert.equal(await seedCodexHomeAuthIfAvailable(path.join(root, 'target'), sourceHome), false)
   assert.equal(await seedCodexHomeAuthIfAvailable(sourceHome, sourceHome), false)
+})
+
+test('start and resume both preserve Shell execution after a Responses Lite session is resumed', async () => {
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-resume-shell-'))
+  await fs.writeFile(path.join(codexHome, 'models_cache.json'), JSON.stringify({
+    fetched_at: new Date().toISOString(),
+    models: [
+      {
+        slug: 'gpt-5.6-sol',
+        display_name: 'GPT-5.6 Sol',
+        description: null,
+        supported_reasoning_levels: [],
+        shell_type: 'shell_command',
+        visibility: 'list',
+        supported_in_api: true,
+        priority: 0,
+        availability_nux: null,
+        upgrade: null,
+        base_instructions: 'test instructions',
+        supports_reasoning_summaries: true,
+        support_verbosity: true,
+        default_verbosity: null,
+        apply_patch_tool_type: null,
+        truncation_policy: { mode: 'tokens', limit: 10000 },
+        supports_parallel_tool_calls: true,
+        experimental_supported_tools: [],
+        use_responses_lite: true,
+        marker: 'preserve-model-metadata',
+      },
+    ],
+  }))
+
+  const previousCodexHome = process.env.CODEX_HOME
+  process.env.CODEX_HOME = codexHome
+  const createdOptions: Array<Record<string, any>> = []
+  const startedThreadOptions: Array<Record<string, any>> = []
+  const resumedThreadOptions: Array<Record<string, any>> = []
+  const compatibilityCatalogs: Array<Record<string, any>> = []
+
+  function streamedShellThread(threadId: string) {
+    return {
+      async runStreamed() {
+        async function* events() {
+          yield { type: 'thread.started', thread_id: threadId }
+          yield { type: 'turn.started' }
+          yield {
+            type: 'item.started',
+            item: {
+              id: `cmd-${threadId}`,
+              type: 'command_execution',
+              command: 'pwd',
+              aggregated_output: '',
+              status: 'in_progress',
+            },
+          }
+          yield {
+            type: 'item.completed',
+            item: {
+              id: `cmd-${threadId}`,
+              type: 'command_execution',
+              command: 'pwd',
+              aggregated_output: '/workspace\n',
+              status: 'completed',
+            },
+          }
+          yield {
+            type: 'turn.completed',
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }
+        }
+        return { events: events() }
+      },
+    }
+  }
+
+  const codexFactory = (options: Record<string, any>) => {
+    createdOptions.push(options)
+    const catalogPath = options.config?.model_catalog_json
+    if (typeof catalogPath === 'string') {
+      compatibilityCatalogs.push(JSON.parse(readFileSync(catalogPath, 'utf8')))
+    }
+    return {
+      startThread(threadOptions: Record<string, any>) {
+        startedThreadOptions.push(threadOptions)
+        return streamedShellThread('thread-shell')
+      },
+      resumeThread(threadId: string, threadOptions: Record<string, any>) {
+        resumedThreadOptions.push(threadOptions)
+        return streamedShellThread(threadId)
+      },
+    }
+  }
+
+  const dependencies = {
+    codexFactory,
+    prepareResumeToolsModelCatalog,
+    snapshotCodexCliPids: async () => new Set<number>(),
+    detectSpawnedCodexPid: async () => undefined,
+  }
+  const runOptions = {
+    developerInstructions: 'keep the current developer instructions',
+    sandboxMode: 'danger-full-access' as const,
+    approvalPolicy: 'never' as const,
+    networkAccessEnabled: false,
+  }
+
+  try {
+    await runQuery(
+      'task-shell-first',
+      'run pwd',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      runOptions,
+      dependencies
+    )
+    await runQuery(
+      'task-shell-resume',
+      'run pwd again',
+      '/workspace',
+      'thread-shell',
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      runOptions,
+      dependencies
+    )
+
+    const firstEvents = taskBroadcasts.get('task-shell-first')?.getEventsAfter(0) ?? []
+    const resumeEvents = taskBroadcasts.get('task-shell-resume')?.getEventsAfter(0) ?? []
+    assert.equal(firstEvents.some(event => event.type === 'tool_use' && event.tool === 'command_execution'), true)
+    assert.equal(resumeEvents.some(event => event.type === 'tool_use' && event.tool === 'command_execution'), true)
+    assert.deepEqual(resumedThreadOptions, startedThreadOptions)
+    assert.equal(createdOptions[0]?.config?.model_catalog_json, undefined)
+    assert.equal(typeof createdOptions[1]?.config?.model_catalog_json, 'string')
+    assert.equal(compatibilityCatalogs[0]?.models[0]?.use_responses_lite, false)
+    assert.equal(compatibilityCatalogs[0]?.models[0]?.marker, 'preserve-model-metadata')
+    assert.equal(createdOptions[0]?.config?.developer_instructions, 'keep the current developer instructions')
+    assert.equal(createdOptions[1]?.config?.developer_instructions, 'keep the current developer instructions')
+    await assert.rejects(fs.access(createdOptions[1]?.config?.model_catalog_json), { code: 'ENOENT' })
+  } finally {
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = previousCodexHome
+    taskBroadcasts.delete('task-shell-first')
+    taskBroadcasts.delete('task-shell-resume')
+    taskRegistry.delete('task-shell-first')
+    taskRegistry.delete('task-shell-resume')
+  }
 })

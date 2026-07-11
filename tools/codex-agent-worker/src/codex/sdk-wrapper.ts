@@ -35,6 +35,15 @@ export type CodexRunOptions = {
   additionalDirectories?: string[]
 }
 
+export type CodexFactory = (options: CodexOptions) => Pick<Codex, 'startThread' | 'resumeThread'>
+
+export type RunQueryDependencies = {
+  codexFactory?: CodexFactory
+  snapshotCodexCliPids?: typeof snapshotCodexCliPids
+  detectSpawnedCodexPid?: typeof detectSpawnedCodexPid
+  prepareResumeToolsModelCatalog?: typeof prepareResumeToolsModelCatalog
+}
+
 /**
  * Global task registry — tracks all active and recently completed tasks
  */
@@ -52,7 +61,8 @@ export const CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR = 'CODEX_BIZ_HOME_ROOT is requir
  * 如 "gpt-5.4:high" → { model: "gpt-5.4", reasoningLevel: "high" }
  * 如 "gpt-5.4-mini" → { model: "gpt-5.4-mini", reasoningLevel: undefined }
  *
- * Worker reasoning effort: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+ * Worker reasoning effort: "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+ * Ultra 由独立 codex-app-server-worker 执行，不会传给 Codex SDK。
  * 前端传 "extra-high" → 映射为 "xhigh"
  */
 export function parseModelString(rawModel: string): { model: string; reasoningLevel?: CodexReasoningEffort } {
@@ -288,6 +298,106 @@ export function resolveCodexHome(codexHomeKey: string | undefined, codexBizHomeR
 export function resolveDefaultCodexHome(env: NodeJS.ProcessEnv = process.env, homeDir = os.homedir()): string {
   const configured = env.CODEX_HOME?.trim()
   return path.resolve(configured || path.join(homeDir, '.codex'))
+}
+
+type CodexCachedModel = {
+  slug?: unknown
+  use_responses_lite?: unknown
+  [key: string]: unknown
+}
+
+type CodexCachedModelCatalog = {
+  models?: unknown
+}
+
+/**
+ * Codex 0.144.1 sends custom tools as a leading `additional_tools` history item for
+ * Responses Lite models. On a resumed thread, a later persisted compaction item can
+ * supersede that declaration, so the model no longer sees `exec` even though the CLI
+ * registered it. Reusing the CLI's own cached model metadata and changing only
+ * `use_responses_lite` keeps the same model, instructions, sandbox and approvals while
+ * moving tools to the standard Responses API's top-level `tools` field.
+ */
+export async function prepareResumeToolsModelCatalog(options: {
+  taskId: string
+  model: string
+  codexHome?: string
+  defaultCodexHome?: string
+}): Promise<string | undefined> {
+  const candidateHomes = Array.from(new Set([
+    options.codexHome,
+    options.defaultCodexHome ?? resolveDefaultCodexHome(),
+  ].filter((value): value is string => Boolean(value))))
+
+  for (const home of candidateHomes) {
+    const cachePath = path.join(home, 'models_cache.json')
+    let parsed: CodexCachedModelCatalog
+    try {
+      parsed = JSON.parse(await fs.readFile(cachePath, 'utf8')) as CodexCachedModelCatalog
+    } catch {
+      continue
+    }
+    if (!Array.isArray(parsed.models)) {
+      continue
+    }
+
+    const models = parsed.models.filter(isCodexCachedModel)
+    const modelIndex = findCachedModelIndex(options.model, models)
+    if (modelIndex < 0 || models[modelIndex]?.use_responses_lite !== true) {
+      continue
+    }
+
+    const compatibleModels = models.map((model, index) => (
+      index === modelIndex ? { ...model, use_responses_lite: false } : model
+    ))
+    const contents = `${JSON.stringify({ models: compatibleModels }, null, 2)}\n`
+    const digest = createHash('sha256').update(contents).digest('hex').slice(0, 16)
+    const safeTaskId = options.taskId.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80) || 'task'
+    const catalogDir = path.join(os.tmpdir(), 'foggy-codex-agent-worker', 'resume-model-catalogs')
+    const catalogPath = path.join(catalogDir, `${safeTaskId}-${digest}.json`)
+    await fs.mkdir(catalogDir, { recursive: true })
+    await fs.writeFile(catalogPath, contents, { encoding: 'utf8', mode: 0o600 })
+    return catalogPath
+  }
+
+  return undefined
+}
+
+function isCodexCachedModel(value: unknown): value is CodexCachedModel {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const model = value as Record<string, unknown>
+  return typeof model.slug === 'string'
+    && typeof model.display_name === 'string'
+    && Array.isArray(model.supported_reasoning_levels)
+    && typeof model.shell_type === 'string'
+    && typeof model.visibility === 'string'
+    && typeof model.supported_in_api === 'boolean'
+    && typeof model.priority === 'number'
+    && typeof model.base_instructions === 'string'
+    && typeof model.supports_reasoning_summaries === 'boolean'
+    && typeof model.support_verbosity === 'boolean'
+    && Boolean(model.truncation_policy)
+    && typeof model.truncation_policy === 'object'
+    && typeof model.supports_parallel_tool_calls === 'boolean'
+    && Array.isArray(model.experimental_supported_tools)
+}
+
+function findCachedModelIndex(model: string, candidates: CodexCachedModel[]): number {
+  const exactIndex = candidates.findIndex(candidate => candidate.slug === model)
+  if (exactIndex >= 0) {
+    return exactIndex
+  }
+
+  let bestIndex = -1
+  let bestLength = -1
+  for (const [index, candidate] of candidates.entries()) {
+    if (typeof candidate.slug !== 'string') continue
+    if (model.startsWith(candidate.slug) && candidate.slug.length > bestLength) {
+      bestIndex = index
+      bestLength = candidate.slug.length
+    }
+  }
+  return bestIndex
 }
 
 export function resolveNavigatorBusinessMcpServerPath(currentModulePath = fileURLToPath(import.meta.url)): string {
@@ -803,7 +913,8 @@ export async function runQuery(
   apiKey: string | undefined,
   baseUrl: string | undefined,
   envVars: Record<string, string> | undefined,
-  runOptions: CodexRunOptions = {}
+  runOptions: CodexRunOptions = {},
+  dependencies: RunQueryDependencies = {}
 ): Promise<void> {
   const broadcast = new EventBroadcast(taskId)
   taskBroadcasts.set(taskId, broadcast)
@@ -846,6 +957,7 @@ export async function runQuery(
   let resolvedThreadId = threadId
   let terminalEventSent = false
   let terminalFailureMessage: string | undefined
+  let generatedResumeModelCatalogPath: string | undefined
   let abortReason = 'Task aborted'
   const startedToolUses = new Set<string>()
   const maxTurnLimit = maxTurns !== undefined && Number.isInteger(maxTurns) && maxTurns > 0
@@ -857,7 +969,7 @@ export async function runQuery(
   let resolvedModel = effectiveModel
 
   try {
-    const existingPids = await snapshotCodexCliPids()
+    const existingPids = await (dependencies.snapshotCodexCliPids ?? snapshotCodexCliPids)()
 
     // 创建 Codex 实例
     // 支持两种认证模式：
@@ -916,6 +1028,22 @@ export async function runQuery(
     if (runOptions.developerInstructions) {
       codexConfig.developer_instructions = runOptions.developerInstructions
     }
+    const hasCallerModelCatalog = Object.prototype.hasOwnProperty.call(codexConfig, 'model_catalog_json')
+    if (threadId && !hasCallerModelCatalog) {
+      generatedResumeModelCatalogPath = await (
+        dependencies.prepareResumeToolsModelCatalog ?? prepareResumeToolsModelCatalog
+      )({
+        taskId,
+        model: effectiveModel,
+        codexHome,
+      })
+      if (generatedResumeModelCatalogPath) {
+        codexConfig.model_catalog_json = generatedResumeModelCatalogPath
+        console.log(
+          `[codex] resume_tools_compat task=${taskId} model=${effectiveModel} mode=standard_responses`
+        )
+      }
+    }
     const navigatorBusinessMcpConfig = buildNavigatorBusinessMcpConfig(
       runOptions.businessRuntimeContext,
       config.navigatorWorkerGatewayBaseUrl,
@@ -947,7 +1075,9 @@ export async function runQuery(
       sdkNavigatorBusinessMcpConfig
     ) as CodexOptions['config']
 
-    const codex = new Codex(codexOptions)
+    const codex = dependencies.codexFactory
+      ? dependencies.codexFactory(codexOptions)
+      : new Codex(codexOptions)
 
     // 创建或恢复 Thread
     const threadOptions: ThreadOptions = {
@@ -980,7 +1110,7 @@ export async function runQuery(
       turnOptions.outputSchema = runOptions.outputSchema
     }
     const { events } = await thread.runStreamed(input, turnOptions)
-    entry.pid = await detectSpawnedCodexPid(existingPids)
+    entry.pid = await (dependencies.detectSpawnedCodexPid ?? detectSpawnedCodexPid)(existingPids)
 
     for await (const event of events) {
       if (abortController.signal.aborted) break
@@ -1141,6 +1271,9 @@ export async function runQuery(
     entry.completedAt = Date.now()
   } finally {
     broadcast.close()
+    if (generatedResumeModelCatalogPath) {
+      await fs.unlink(generatedResumeModelCatalogPath).catch(() => undefined)
+    }
   }
 }
 
