@@ -111,6 +111,7 @@
 - [BUG-013 Windows 进程树终止等待竞态](./workitems/BUG-013-windows-process-tree-termination-settle-race.md)
 - [BUG-014 Linux 安装测试 glob 阻断](./workitems/BUG-014-app-worker-linux-test-glob-install-blocker.md)
 - [BUG-015 Node 18 `import.meta.dirname` 阻断](./workitems/BUG-015-app-worker-node18-import-meta-dirname.md)
+- [BUG-016 Codex Runtime list Java 签名兼容](./workitems/BUG-016-codex-runtime-list-source-compatibility.md)
 
 ## 当前边界
 

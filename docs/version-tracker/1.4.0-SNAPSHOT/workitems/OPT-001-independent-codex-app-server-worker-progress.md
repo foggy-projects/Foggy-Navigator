@@ -63,6 +63,7 @@
 
 - [BUG-014 Linux install test glob blocker](./BUG-014-app-worker-linux-test-glob-install-blocker.md): closed in published `0.3.4`; exact WSL2 public install passed.
 - [BUG-015 Node 18 import.meta.dirname blocker](./BUG-015-app-worker-node18-import-meta-dirname.md): closed in published `0.3.5`; exact public archive schema/build passed on Linux Node 18.
+- [BUG-016 Codex Runtime list source compatibility](./BUG-016-codex-runtime-list-source-compatibility.md): closed; restored the one-argument Java controller entry point, launcher ownership regression `1/1` and full launcher reactor `1984/1984` passed.
 
 | Defect | 状态 | 静态/自动化证据 | Final live |
 |---|---|---|---|
@@ -127,7 +128,7 @@
 - completed_work: 独立 Worker、双 runtime 控制面、runtime 新建修订与可逆归档、可选 HTTP token、首装自动 state key/CODEX_HOME、生命周期/release、真实 Ultra/SSE/native、PC 刷新与 responsive 隔离验收完成；`0.3.7` 已发布 OBS latest 并完成公网 provenance/bootstrap/Linux exact-package 验证
 - touched_areas: `tools/codex-app-server-worker`、Codex Java addon、Session、Navigator PC、安装指南、migration 与版本文档
 - self_check: formal quality gate、coverage audit 与 isolated acceptance 已回写；未扩张到生产 rollout 或 SDK retirement
-- test_status: isolated-pass-public-published；Worker release `250 total / 243 passed / 7 skipped`、Linux public exact-package `250 total / 249 passed / 1 skipped`、Java `301/301`、PC `214/214`、Playwright `3/3`、Worker/PC build 与 schema 通过；Windows public `0.3.6` fresh/no-op 与 Linux final `0.3.7` 32-byte key/0600 env/0700 home/stopped smoke 通过；MySQL 8.0/8.4 本批此前通过，本次复跑被本机 Docker Linux Engine `500` 阻断
+- test_status: isolated-pass-public-published；Worker release `250 total / 243 passed / 7 skipped`、Linux public exact-package `250 total / 249 passed / 1 skipped`、Java launcher reactor `1984/1984`（Codex `301/301`、launcher `6/6`）、PC `214/214`、Playwright `3/3`、Worker/PC build 与 schema 通过；Windows public `0.3.6` fresh/no-op 与 Linux final `0.3.7` 32-byte key/0600 env/0700 home/stopped smoke 通过；MySQL 8.0/8.4 本批此前通过，本次复跑被本机 Docker Linux Engine `500` 阻断
 - raw_reactor_caveat: Windows Surefire fork/path 基础设施阻断 raw full reactor；受影响定向测试无断言失败，不声明 `1342/1342`
 - implementation_decision: p0-p2-isolated-accepted
 - production_enablement: not-approved

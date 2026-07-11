@@ -51,6 +51,13 @@ public class CodexRuntimeController {
         return RX.ok(runtimeRegistryService.listByWorker(workerId, includeArchived));
     }
 
+    // Preserve the pre-archive Java API used by cross-module integration tests and callers.
+    public RX<List<CodexRuntimeDTO>> list(String workerId) {
+        String userId = UserContext.getCurrentUserId();
+        workerManagementFacade.validatePhysicalWorkerOwnership(userId, workerId);
+        return RX.ok(runtimeRegistryService.listByWorker(workerId));
+    }
+
     @GetMapping("/availability")
     public RX<CodexRuntimeAvailabilityDTO> availability(
             @RequestParam String workerId,
