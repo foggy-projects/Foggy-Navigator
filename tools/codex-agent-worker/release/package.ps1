@@ -122,6 +122,9 @@ function Build-ForOS {
     foreach ($f in @("start.ps1", "stop.ps1", "start.sh", "stop.sh", "install.ps1", "install.sh", "update.ps1", "update.sh")) {
         Copy-Item (Join-Path $ScriptDir $f) $StageDir
     }
+    foreach ($f in @("update-worker.ps1", "update-worker.sh")) {
+        Copy-Item (Join-Path $WorkerDir $f) $StageDir
+    }
 
     $BinDir = Join-Path $StageDir "bin"
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null

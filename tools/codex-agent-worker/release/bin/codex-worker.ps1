@@ -105,104 +105,19 @@ function Invoke-Logs {
 }
 
 function Invoke-Upgrade {
-    param([string]$ArchivePath)
+    param([string[]]$Args)
 
-    Write-Host "Codex Agent Worker Upgrade" -ForegroundColor Cyan
-
-    if ($ArchivePath -and (Test-Path $ArchivePath)) {
-        Write-Host "Upgrading from local archive: $ArchivePath" -ForegroundColor Cyan
-        Invoke-UpgradeFromArchive $ArchivePath
-        return
+    $updateScript = Join-Path $InstallDir "update-worker.ps1"
+    if (-not (Test-Path $updateScript)) {
+        Write-Host "update-worker.ps1 not found at $InstallDir" -ForegroundColor Red
+        Write-Host "Install a release that includes the worker self-update script first." -ForegroundColor Yellow
+        exit 1
     }
 
-    $workerUrl = $env:CODEX_WORKER_URL
-    if (-not $workerUrl -and (Test-Path $EnvFile)) {
-        $urlLine = Get-Content $EnvFile | Where-Object { $_ -match "^CODEX_WORKER_URL=(.+)" }
-        if ($urlLine -and $urlLine -match "=(.+)") { $workerUrl = $Matches[1].Trim() }
-    }
-
-    if ($workerUrl) {
-        Invoke-UpgradeFromObs $workerUrl
-        return
-    }
-
-    Write-Host "Usage:" -ForegroundColor Yellow
-    Write-Host "  codex-worker upgrade C:\path\to\codex-worker-X.Y.Z-windows.zip"
-    Write-Host ""
-    Write-Host "To enable auto-upgrade, set:" -ForegroundColor Yellow
-    Write-Host "  CODEX_WORKER_URL   OBS/HTTP base URL (in .env or environment)"
-}
-
-function Invoke-UpgradeFromObs {
-    param([string]$BaseUrl)
-
-    Write-Host "Checking latest version from $BaseUrl ..." -ForegroundColor Cyan
-
-    try {
-        $latestJson = Invoke-RestMethod -Uri "$BaseUrl/latest.json" -TimeoutSec 15 -ErrorAction Stop
-    }
-    catch {
-        Write-Host "Could not fetch $BaseUrl/latest.json" -ForegroundColor Red
-        Write-Host $_.Exception.Message -ForegroundColor Red
-        return
-    }
-
-    $latestVersion = $latestJson.version
-    if (-not $latestVersion) {
-        Write-Host "Could not parse version from latest.json" -ForegroundColor Red
-        return
-    }
-
-    if ($latestVersion -eq $Version) {
-        Write-Host "Already up to date (v$Version)." -ForegroundColor Green
-        return
-    }
-
-    Write-Host "New version available: $Version -> $latestVersion" -ForegroundColor Cyan
-
-    $filePath = $latestJson.files.windows
-    if (-not $filePath) {
-        Write-Host "No Windows release found in latest.json" -ForegroundColor Red
-        return
-    }
-
-    $downloadUrl = "$BaseUrl/$filePath"
-    Write-Host "Downloading: $downloadUrl" -ForegroundColor Cyan
-
-    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "codex-worker-upgrade"
-    if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
-    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
-    $archiveFile = Join-Path $tmpDir (Split-Path $filePath -Leaf)
-
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $archiveFile
-    $env:CODEX_WORKER_URL = $BaseUrl
-    Invoke-UpgradeFromArchive $archiveFile
-    Remove-Item $tmpDir -Recurse -Force
-}
-
-function Invoke-UpgradeFromArchive {
-    param([string]$Archive)
-
-    Write-Host "Extracting..." -ForegroundColor Cyan
-
-    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "codex-worker-extract"
-    if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
-    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
-
-    Expand-Archive -Path $Archive -DestinationPath $tmpDir -Force
-
-    $installScript = Get-ChildItem -Path $tmpDir -Recurse -Filter "install.ps1" | Select-Object -First 1
-    if (-not $installScript) {
-        Write-Host "No install.ps1 found in archive" -ForegroundColor Red
-        Remove-Item $tmpDir -Recurse -Force
-        return
-    }
-
-    & powershell -ExecutionPolicy Bypass -File $installScript.FullName -Upgrade
-    Remove-Item $tmpDir -Recurse -Force
-
-    $newVersion = if (Test-Path $VersionFile) { (Get-Content $VersionFile -Raw).Trim() } else { "unknown" }
-    Write-Host "Upgraded to v$newVersion!" -ForegroundColor Green
+    $passThrough = @("-ExecutionPolicy", "Bypass", "-File", $updateScript)
+    if ($Args) { $passThrough += $Args }
+    & powershell @passThrough
+    exit $LASTEXITCODE
 }
 
 function Invoke-UpgradeSdk {
@@ -234,7 +149,8 @@ function Invoke-Help {
     Write-Host "  status               Show worker status and health"
     Write-Host "  version              Show installed version"
     Write-Host "  logs                 Tail worker log output"
-    Write-Host "  upgrade [archive]    Upgrade the worker itself from OBS or local .zip"
+    Write-Host "  upgrade [opts]       Upgrade the worker itself from OBS or a local .zip"
+    Write-Host "                         opts: [-Archive] <path>, -Url <base-url>, -Force, -NoRestart"
     Write-Host "  upgrade-sdk [opts]   Upgrade only @openai/codex-sdk in-place"
     Write-Host "                         opts: -SdkVersion <ver>, -NoRestart, -Registry <url>, -Force"
     Write-Host "  help                 Show this help message"
@@ -253,7 +169,7 @@ switch ($Command) {
     "status" { Invoke-Status }
     { $_ -in "version", "-v", "--version" } { Invoke-Version }
     "logs" { Invoke-Logs }
-    "upgrade" { Invoke-Upgrade -ArchivePath ($ExtraArgs | Select-Object -First 1) }
+    "upgrade" { Invoke-Upgrade -Args $ExtraArgs }
     "upgrade-sdk" { Invoke-UpgradeSdk -Args $ExtraArgs }
     { $_ -in "help", "--help", "-h" } { Invoke-Help }
     default {
