@@ -8,10 +8,32 @@ import { collectReleaseEntries, createZip, listZipEntries, RELEASE_DIRECTORIES, 
 import { createLatestManifest, injectReleaseBaseUrl, parseChecksumSidecar, prepareReleaseAssets } from '../scripts/release-assets.mjs'
 import { assertPublishAllowed, compareSemver, verifyPublishedRelease } from '../scripts/publish-obs.mjs'
 import { resolveReleaseVersion } from '../scripts/release-version.mjs'
+import { discoverTestFiles } from '../scripts/run-tests.mjs'
 
 test('release version matches package metadata, lockfile, and source APP_VERSION', () => {
   const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8')) as { version: string }
   assert.equal(resolveReleaseVersion(path.resolve('.')), packageJson.version)
+})
+
+test('npm test uses the cross-platform test launcher instead of a shell glob', () => {
+  const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8')) as { scripts: { test: string } }
+  assert.equal(packageJson.scripts.test, 'node scripts/run-tests.mjs')
+})
+
+test('cross-platform test launcher recursively discovers only test entrypoints', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-test-launcher-'))
+  try {
+    fs.mkdirSync(path.join(root, 'nested'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'root.test.ts'), '')
+    fs.writeFileSync(path.join(root, 'nested', 'nested.test.ts'), '')
+    fs.writeFileSync(path.join(root, 'nested', 'fixture.ts'), '')
+    assert.deepEqual(
+      discoverTestFiles(root).map((file) => path.relative(root, file).replaceAll('\\', '/')),
+      ['nested/nested.test.ts', 'root.test.ts'],
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('release version validation rejects source and lockfile drift', () => {

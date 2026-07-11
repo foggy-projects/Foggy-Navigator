@@ -1,6 +1,6 @@
 {
   "name": "codex-app-server-worker",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Foggy Navigator Codex app-server runtime worker",
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "clean": "node scripts/clean.mjs",
     "build": "npm run clean && tsc",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/**/*.test.ts",
+    "test": "node scripts/run-tests.mjs",
     "package:release": "node scripts/package-release.mjs",
     "publish:obs": "node scripts/publish-obs.mjs",
     "generate:schema": "node node_modules/@openai/codex/bin/codex.js app-server generate-json-schema --out schemas/app-server",
