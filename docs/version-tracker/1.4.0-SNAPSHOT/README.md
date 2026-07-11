@@ -49,6 +49,7 @@
 - App-server Worker `0.3.4` 已发布并修复 Linux/旧 Node 将 `tests/**/*.test.ts` 当作字面路径导致安装前校验中止的问题：改由 Node 脚本显式递归枚举测试入口；归档 SHA-256/bytes/entries=`616a0ce7cf8c017bd16e215022c3dcb24f27c37051297eff9c9623f9d6e4b440` / `1,804,723` / `198`，manifest source commit=`bbea65843d16a367e73b9d6d68fcca6768b9edc3`、`gitDirty=false`。发布流水线 `249 total / 242 passed / 7 skipped / 0 failed`，WSL2 exact public install `249 total / 248 passed / 1 skipped / 0 failed`，schema/typecheck/build 与公网 archive/bootstrap 回读校验通过。
 - App-server Worker `0.3.5` 已发布并修复 Node 18 不支持 `import.meta.dirname` 导致 schema/clean build 阻断的问题；归档 SHA-256/bytes=`9b30dcffec603f55c5faa7ea322ac1f42e9e5fb094467f051e337ff9e2c90c73` / `1,805,254`，manifest source commit=`cfc5f5217c2adc72701fc44a65c908aed4329a46`、`gitDirty=false`。发布流水线 `250 total / 243 passed / 7 skipped / 0 failed`；Linux Node 18 对公网精确归档的 SHA-256、schema 与 clean build 验证通过。
 - App-server Worker `0.3.6` 将 Runtime 配置收敛为 endpoint-only，OBS 真包及 Windows/Linux 公网首装、权限与 no-op 均通过；因 bootstrap 末行仍误写需要配置 `.env`，最终交付由仅修正文案的 `0.3.7` 取代。首装实际会自动生成并保留 32-byte base64 state key，创建安装目录内独立 `CODEX_HOME`，Worker token 与 `OPENAI_API_KEY` 默认留空，模型凭据继续由 Navigator ModelConfig 按任务下发。
+- App-server Worker `0.3.7` 已发布为 OBS latest：归档 SHA-256/bytes/entries=`da8cb526fd619769b8f4389fca03ed047d22590c2d63f5bd670f890a9ef98ec5` / `1,808,569` / `198`，manifest source commit=`4e9c1bdd26dc1a1dcbd8d562a5686cb608624c6e`、`gitDirty=false`。发布流水线 `243 passed + 7 skipped`，Linux 公网精确真包 `249 passed + 1 skipped`，自动 state key/CODEX_HOME、空 token/API Key、0600/0700、默认停止和 ready/start 文案均通过；两端 bootstrap 和归档已由发布器回读校验。
 - Runtime 控制面已加入同 ID 新建不可变 revision 和可逆的退役/归档：归档使用 routing epoch CAS，原子转为 Disabled + Dark 并排除新路由，历史 affinity 仍保留；Java reactor `301/301`、PC `214/214`、Playwright 桌面/窄屏 `2/2`、Windows native `build:check`、MySQL 8.0/8.4 迁移通过。
 - App Server Worker HTTP token 改为可选：空值表示关闭 Worker HTTP 认证并放行 capability/task/control API，不再影响 readiness；非空时仍强制 Bearer `401/403`。Runtime 注册和 PC 字段同步改为可选，空值模式仅适用于 loopback 或可信网络。
 - v5 release SHA-256/bytes/entries: `b6271e5a3220b0253d97b6d05c9fe5f5561331655e27faccd8ad254fbf6c31d9` / `1,500,249` / `168`；双构建字节一致、路径扫描通过，Windows/WSL exact-package install/start/real Ultra/running update/stop 与 zero-residue 均通过；旧 `642121...`、`4ebb...` 与 Windows update 被阻断的 v4 `71a0...` 均已淘汰。
@@ -94,6 +95,7 @@
 - [OBS latest / public bootstrap 0.3.3 evidence](./evidence/OPT-001-obs-release-0.3.3.json)
 - [OBS latest / public bootstrap 0.3.4 evidence](./evidence/OPT-001-obs-release-0.3.4.json)
 - [OBS latest / public bootstrap 0.3.5 evidence](./evidence/OPT-001-obs-release-0.3.5.json)
+- [OBS latest / zero-config endpoint runtime 0.3.7 evidence](./evidence/OPT-001-obs-release-0.3.7.json)
 - [BUG-001 App-server delta 消息碎片](./workitems/BUG-001-app-server-delta-message-fragmentation.md)
 - [BUG-002 `.env` 外部状态目录](./workitems/BUG-002-app-worker-dotenv-state-dir.md)
 - [BUG-003 Worker View 移动布局](./workitems/BUG-003-worker-view-mobile-layout.md)

@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "opt-001-obs-release-0.3.7",
+  "generatedAtUtc": "2026-07-11T14:45:34Z",
+  "scope": "public-zero-config-endpoint-runtime-release",
+  "status": "PASSED",
+  "release": {
+    "product": "codex-app-server-worker",
+    "version": "0.3.7",
+    "archive": "codex-app-server-worker-0.3.7.zip",
+    "sha256": "da8cb526fd619769b8f4389fca03ed047d22590c2d63f5bd670f890a9ef98ec5",
+    "bytes": 1808569,
+    "entries": 198,
+    "sourceCommit": "4e9c1bdd26dc1a1dcbd8d562a5686cb608624c6e",
+    "gitDirty": false,
+    "buildTimeUtc": "2026-07-11T14:42:46Z"
+  },
+  "obs": {
+    "bucket": "obs://obs-fe55/codex-app-server-worker",
+    "baseUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker",
+    "latestUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/latest.json",
+    "linuxInstallerUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh",
+    "windowsInstallerUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.ps1",
+    "publisherRemoteArchiveByteAndSha256Verification": true,
+    "publisherRemoteBootstrapByteVerification": true,
+    "publicLatestProvenanceVerification": true,
+    "latestUploadedLast": true
+  },
+  "tests": {
+    "releaseCommandWindows": { "total": 250, "passed": 243, "skipped": 7, "failed": 0 },
+    "linuxPublicExactPackage": { "total": 250, "passed": 249, "skipped": 1, "failed": 0 },
+    "releaseToolingAndInstallDefaultsFocused": { "passed": 14, "failed": 0 },
+    "javaCodexReactor": { "passed": 301, "failed": 0 },
+    "navigatorPcVitest": { "passed": 214, "failed": 0 },
+    "navigatorPcPlaywright": { "passed": 3, "failed": 0 },
+    "schemaDigest": "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f",
+    "workerTypecheck": "passed",
+    "workerBuild": "passed",
+    "navigatorPcBuildCheck": "passed"
+  },
+  "freshInstall": {
+    "workerToken": "empty",
+    "openAiApiKey": "empty",
+    "stateKey": "generated-base64-32-bytes-and-not-logged",
+    "codexHome": "install-dir/codex-home",
+    "linuxAllowedCwds": "/",
+    "linuxEnvMode": "0600",
+    "linuxCodexHomeMode": "0700",
+    "initialState": "stopped-ready-for-start",
+    "existingEnvPreserved": true,
+    "navigatorRuntimeConfiguration": "endpoint-required-worker-token-optional"
+  },
+  "observations": [
+    "Release 0.3.6 verified the same configuration behavior on Windows and Linux but was superseded before final delivery because its bootstrap completion text still implied that .env needed configuration.",
+    "Release 0.3.7 changes that completion text to state that a fresh installation is ready and remains stopped until the platform start script is run.",
+    "Model credentials remain task-scoped Navigator ModelConfig data; subscription authentication may instead be established in the isolated CODEX_HOME.",
+    "This release publication does not approve P3 production routing or contribute task, duration, or rotation samples."
+  ]
+}
