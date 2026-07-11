@@ -418,7 +418,7 @@ const htmlPreviewSrcdoc = computed(() => {
 
 function setHtmlViewMode(mode: HtmlViewMode) {
   const tab = currentOpenTab.value
-  if (!isHtmlDocument(tab)) return
+  if (!tab || !isHtmlDocument(tab)) return
   htmlViewMode.value = mode
   tab.htmlViewMode = mode
   nextTick(() => editorInstance?.layout())

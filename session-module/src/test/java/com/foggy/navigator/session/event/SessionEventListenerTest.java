@@ -67,6 +67,23 @@ class SessionEventListenerTest {
     }
 
     @Test
+    void sessionEndResultIsPushedButNotPersistedAsDuplicateHistory() {
+        SessionEventListener listener = new SessionEventListener(sessionManager, sseEmitter);
+        AgentMessage agentMessage = AgentMessage.builder()
+                .messageId("sse-message-result")
+                .sessionId("session-1")
+                .agentId("codex-worker")
+                .type(MessageType.SESSION_END)
+                .payload(Map.of("content", "FINAL_STREAM_OK", "isResult", true))
+                .build();
+
+        listener.handleMessage(agentMessage);
+
+        verify(sessionManager, never()).addMessage(eq("session-1"), org.mockito.ArgumentMatchers.any());
+        verify(sseEmitter).sendSessionEvent("session-1", agentMessage);
+    }
+
+    @Test
     void internalSystemStateSyncIsPushedButNotPersisted() {
         SessionEventListener listener = new SessionEventListener(sessionManager, sseEmitter);
         AgentMessage agentMessage = AgentMessage.builder()

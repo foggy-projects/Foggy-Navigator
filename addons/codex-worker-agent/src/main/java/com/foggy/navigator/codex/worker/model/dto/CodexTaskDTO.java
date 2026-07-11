@@ -28,6 +28,7 @@ public class CodexTaskDTO {
     private String sessionId;
     private String directoryId;
     private String workerId;
+    private String providerType;
     private String prompt;
     private String cwd;
     private String status;
@@ -47,5 +48,6 @@ public class CodexTaskDTO {
     private Long responseTimeoutThresholdSeconds;
     private String source;
     private LocalDateTime createdAt;
+    private Long createdAtEpochMs;
     private LocalDateTime updatedAt;
 }

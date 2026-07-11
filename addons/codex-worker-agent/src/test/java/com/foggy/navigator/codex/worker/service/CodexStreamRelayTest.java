@@ -625,6 +625,45 @@ class CodexStreamRelayTest {
     }
 
     @Test
+    void appServerTextDeltaPublishesTransientChunkWhileCompletedItemPersistsOnce() {
+        ArgumentCaptor<AgentMessage> messages = ArgumentCaptor.forClass(AgentMessage.class);
+        String deltaJson = """
+                {
+                  "type":"assistant_text",
+                  "subtype":"text_delta",
+                  "task_id":"worker-task-1",
+                  "session_id":"thread-1",
+                  "seq":1,
+                  "content":"B_FULL"
+                }
+                """;
+        String completeJson = """
+                {
+                  "type":"assistant_text",
+                  "task_id":"worker-task-1",
+                  "session_id":"thread-1",
+                  "seq":2,
+                  "content":"B_FULL_CHAIN_OK"
+                }
+                """;
+
+        var detectedThread = new java.util.concurrent.atomic.AtomicReference<String>();
+        var detectedModel = new java.util.concurrent.atomic.AtomicReference<String>();
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(deltaJson).build(),
+                "local-task-1", "session-1", "codex-worker", detectedThread, detectedModel);
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(completeJson).build(),
+                "local-task-1", "session-1", "codex-worker", detectedThread, detectedModel);
+
+        verify(sessionEventListener, times(2)).handleMessageDurably(messages.capture());
+        assertEquals(List.of(MessageType.TEXT_CHUNK, MessageType.TEXT_COMPLETE),
+                messages.getAllValues().stream().map(AgentMessage::getType).toList());
+        verify(taskService).recordWorkerProgress(
+                "local-task-1", "worker-task-1", "thread-1", null, 2, false, true);
+    }
+
+    @Test
     void durableMessageFailureTerminatesStreamBeforeHigherSequenceCanAck() {
         CodexTaskEntity entity = stubAppServerTask("SUBSCRIBED");
         entity.setWorkerTaskId("worker-task-1");

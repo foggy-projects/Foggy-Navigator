@@ -16,7 +16,10 @@ import { AppServerEventBridge } from './event-bridge.js'
 import { KeyedExecutionLocks } from './execution-locks.js'
 import { buildAppServerLane } from './lane.js'
 import { AppServerPool, type PoolMetrics } from './pool.js'
-import { VALIDATED_APP_SERVER_CLI_VERSION } from './runtime.js'
+import {
+  isAppServerProcessTreeSafetyError,
+  VALIDATED_APP_SERVER_CLI_VERSION,
+} from './runtime.js'
 
 export type ExecutionCallbacks = {
   onInstanceResolved: (instanceId: string, laneKey: string) => void | Promise<void>
@@ -137,6 +140,11 @@ export class StrictAppServerExecutor implements TaskExecutor {
         model: context.model,
         durationMs: Date.now() - startedAt,
       }
+    } catch (error) {
+      if (isAppServerProcessTreeSafetyError(error)) {
+        this.pool.failClosed(error instanceof Error ? error : new Error(String(error)))
+      }
+      throw error
     } finally {
       lease?.release(lease.runtime.isHealthy())
       await inputFiles?.cleanup()
@@ -393,11 +401,13 @@ function reconcileTurnStatus(value: unknown): ReconciliationResult['status'] {
 
 function extractAssistantText(turn: Record<string, unknown>): string | undefined {
   const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : []
-  const messages = items
-    .filter(item => item.type === 'agentMessage')
-    .map(item => typeof item.text === 'string' ? item.text : '')
-    .filter(Boolean)
-  return messages.length > 0 ? messages.join('') : undefined
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index]
+    if (item?.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim()) {
+      return item.text
+    }
+  }
+  return undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

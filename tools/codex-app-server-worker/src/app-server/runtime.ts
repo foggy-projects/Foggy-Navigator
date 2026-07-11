@@ -1,11 +1,29 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
+import fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import path from 'node:path'
 import readline from 'node:readline'
+import { fileURLToPath } from 'node:url'
 import type { CodexApprovalPolicy, CodexInput, CodexSandboxMode } from '../models.js'
 import type { AppServerNotification } from './native-subtask-tracker.js'
 
 const moduleRequire = createRequire(import.meta.url)
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+const MAX_PENDING_TURN_NOTIFICATIONS = 10_000
+const PROCESS_TREE_HELPER_TIMEOUT_MS = 15_000
+const PROCESS_TREE_POLL_INTERVAL_MS = 25
+const PROCESS_TREE_EXIT_CLEAN = 0
+const PROCESS_TREE_EXIT_ALIVE = 10
+const PROCESS_TREE_ROOT_EXIT_TIMEOUT_MS = 500
+const PROCESS_TREE_GRACEFUL_EXIT_MAX_MS = 2_000
+const processTreeHelper = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'scripts',
+  'process-tree.mjs',
+)
 export const VALIDATED_APP_SERVER_CLI_VERSION = '0.144.1'
 
 type JsonRpcId = number
@@ -88,6 +106,29 @@ export class AppServerRuntimeError extends Error {
   }
 }
 
+export class AppServerProcessTreeSafetyError extends Error {
+  readonly code = 'APP_SERVER_PROCESS_TREE_UNSAFE'
+
+  constructor(message = 'Codex app-server process-tree cleanup could not be proven', options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'AppServerProcessTreeSafetyError'
+  }
+}
+
+export function isAppServerProcessTreeSafetyError(error: unknown): boolean {
+  const visited = new Set<unknown>()
+  const pending: unknown[] = [error]
+  while (pending.length > 0) {
+    const current = pending.pop()
+    if (current === undefined || current === null || visited.has(current)) continue
+    visited.add(current)
+    if (current instanceof AppServerProcessTreeSafetyError) return true
+    if (current instanceof AggregateError) pending.push(...current.errors)
+    if (current instanceof Error && current.cause !== undefined) pending.push(current.cause)
+  }
+  return false
+}
+
 export function isPreTurnAppServerFailure(error: unknown): error is AppServerRuntimeError {
   return error instanceof AppServerRuntimeError
     && !error.executionCommitted
@@ -129,16 +170,7 @@ export class AppServerRuntimeInstance {
   private readonly fatalHandlers = new Set<(error: Error) => void>()
 
   private constructor(private readonly client: AppServerJsonRpcClient) {
-    client.onFatal(error => {
-      this.healthy = false
-      for (const handler of this.fatalHandlers) {
-        try {
-          handler(error)
-        } catch {
-          // Fatal observers must not turn a child-process failure into a Worker crash.
-        }
-      }
-    })
+    client.onFatal(error => this.markFatal(error))
   }
 
   static async start(options: {
@@ -147,11 +179,24 @@ export class AppServerRuntimeInstance {
     spawnProcess?: SpawnAppServerProcess
     requestTimeoutMs?: number
     signal?: AbortSignal
+    processTreeStateDir?: string
+    processTreeEntry?: string
   }): Promise<AppServerRuntimeInstance> {
     let client: AppServerJsonRpcClient
     try {
       const child = (options.spawnProcess || spawnBundledAppServer)({ cwd: options.cwd, env: options.env })
-      client = new AppServerJsonRpcClient(child, options.requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT_MS)
+      const processTree = options.processTreeStateDir
+        ? await AppServerProcessTree.capture({
+          child,
+          entry: options.processTreeEntry || resolveBundledCodexLauncher(),
+          stateDir: options.processTreeStateDir,
+        })
+        : undefined
+      client = new AppServerJsonRpcClient(
+        child,
+        options.requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT_MS,
+        processTree,
+      )
     } catch (error) {
       throw new AppServerRuntimeError(readErrorMessage(error), {
         executionCommitted: false,
@@ -159,7 +204,7 @@ export class AppServerRuntimeInstance {
       })
     }
     const instance = new AppServerRuntimeInstance(client)
-    const abortStartup = (): void => { void instance.close(0) }
+    const abortStartup = (): void => { void instance.close(0).catch(() => undefined) }
     if (options.signal?.aborted) abortStartup()
     else options.signal?.addEventListener('abort', abortStartup, { once: true })
     try {
@@ -204,6 +249,17 @@ export class AppServerRuntimeInstance {
   onFatal(handler: (error: Error) => void): () => void {
     this.fatalHandlers.add(handler)
     return () => this.fatalHandlers.delete(handler)
+  }
+
+  private markFatal(error: Error): void {
+    this.healthy = false
+    for (const handler of this.fatalHandlers) {
+      try {
+        handler(error)
+      } catch {
+        // Fatal observers must not turn a child-process failure into a Worker crash.
+      }
+    }
   }
 
   async readThread(threadId: string, includeTurns = true): Promise<Record<string, unknown>> {
@@ -257,10 +313,11 @@ export class AppServerRuntimeInstance {
     let commitInProgress = false
     let interruptSent = false
     let turnRequestIssued = false
+    let turnNotificationsReady = false
     const terminal = deferred<Record<string, unknown>>()
-    const pendingTerminalTurns = new Map<string, Record<string, unknown>>()
+    const pendingTurnNotifications: AppServerNotification[] = []
     void terminal.promise.catch(() => undefined)
-    const unsubscribeNotification = this.client.onNotification(notification => {
+    const dispatchNotification = (notification: AppServerNotification): void => {
       options.onNotification(notification)
       const params = notification.params || {}
       if (notification.method === 'turn/completed' && params.threadId === resolvedThreadId) {
@@ -268,10 +325,18 @@ export class AppServerRuntimeInstance {
         const notificationTurnId = readString(turn.id)
         if (notificationTurnId && notificationTurnId === resolvedTurnId) {
           terminal.resolve(turn)
-        } else if (notificationTurnId && turnRequestIssued && !resolvedTurnId) {
-          pendingTerminalTurns.set(notificationTurnId, turn)
         }
       }
+    }
+    const unsubscribeNotification = this.client.onNotification(notification => {
+      if (turnRequestIssued && !turnNotificationsReady) {
+        if (pendingTurnNotifications.length >= MAX_PENDING_TURN_NOTIFICATIONS) {
+          throw new Error('Codex app-server emitted too many notifications before turn correlation')
+        }
+        pendingTurnNotifications.push(notification)
+        return
+      }
+      dispatchNotification(notification)
     })
     const unsubscribeFatal = this.client.onFatal(error => terminal.reject(error))
 
@@ -300,7 +365,7 @@ export class AppServerRuntimeInstance {
         abortTimer = setTimeout(() => {
           this.healthy = false
           terminal.reject(new Error('Codex app-server did not stop after turn/interrupt'))
-          void this.client.close()
+          void this.client.close().catch(() => undefined)
         }, options.interruptTimeoutMs ?? 5_000)
       }
     }
@@ -342,30 +407,41 @@ export class AppServerRuntimeInstance {
       })
       resolvedTurnId = readString(asRecord(turnResponse.turn)?.id) || resolvedTurnId
       if (!resolvedTurnId) throw new Error('Codex app-server did not return a turn id')
-      const pendingTerminal = pendingTerminalTurns.get(resolvedTurnId)
-      if (pendingTerminal) terminal.resolve(pendingTerminal)
       await options.onTurnStarted?.(resolvedThreadId, resolvedTurnId)
+      turnNotificationsReady = true
+      try {
+        for (const notification of pendingTurnNotifications.splice(0)) {
+          dispatchNotification(notification)
+        }
+      } catch (cause) {
+        const error = new Error('Codex app-server notification handler failed', { cause })
+        this.markFatal(error)
+        terminal.reject(error)
+      }
       if (abortRequested || options.signal.aborted) abort()
 
       const turn = await terminalPromise
       options.signal.removeEventListener('abort', abort)
       return { threadId: resolvedThreadId, turn }
     } catch (error) {
-      if (error instanceof AppServerRuntimeError) throw error
-      throw new AppServerRuntimeError(readErrorMessage(error), {
-        executionCommitted,
-        turnMayHaveStarted: turnRequestIssued,
-        threadId: resolvedThreadId,
-        turnId: resolvedTurnId,
-        reason: options.signal.aborted ? 'aborted' : 'runtime',
-        cause: error,
-      })
+      const runtimeError = error instanceof AppServerRuntimeError
+        ? error
+        : new AppServerRuntimeError(readErrorMessage(error), {
+          executionCommitted,
+          turnMayHaveStarted: turnRequestIssued,
+          threadId: resolvedThreadId,
+          turnId: resolvedTurnId,
+          reason: options.signal.aborted ? 'aborted' : 'runtime',
+          cause: error,
+        })
+      if (turnRequestIssued && this.healthy) this.markFatal(runtimeError)
+      throw runtimeError
     } finally {
       if (abortTimer) clearTimeout(abortTimer)
       options.signal.removeEventListener('abort', abort)
       unsubscribeNotification()
       unsubscribeFatal()
-      if (!this.healthy) void this.client.close()
+      if (!this.healthy) await this.client.close()
     }
   }
 }
@@ -406,6 +482,212 @@ export function toAppServerInput(input: CodexInput): Array<Record<string, unknow
     : { type: 'localImage', path: item.path })
 }
 
+type ProcessTreeAction = 'snapshot' | 'extend' | 'poll' | 'verify' | 'kill'
+
+class AppServerProcessTree {
+  private cleaned = false
+  private operationTail: Promise<void> = Promise.resolve()
+
+  private constructor(
+    private readonly directory: string,
+    private readonly snapshot: string,
+  ) {}
+
+  static async capture(options: {
+    child: AppServerProcess
+    entry: string
+    stateDir: string
+  }): Promise<AppServerProcessTree> {
+    let tracker: AppServerProcessTree | undefined
+    let rootExit: Promise<void> | undefined
+    try {
+      if (!options.child.pid) throw new Error('Codex app-server process identity is unavailable')
+      rootExit = new Promise(resolve => options.child.once('exit', () => resolve()))
+      const root = path.join(path.resolve(options.stateDir), 'runtime-process-trees')
+      await fs.mkdir(root, { recursive: true, mode: 0o700 })
+      const rootStat = await fs.lstat(root)
+      if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+        throw new Error('Codex app-server process-tree state directory is unsafe')
+      }
+      await fs.chmod(root, 0o700)
+      const directory = await fs.mkdtemp(path.join(root, 'instance-'))
+      await fs.chmod(directory, 0o700)
+      tracker = new AppServerProcessTree(directory, path.join(directory, 'tree.json'))
+      await tracker.run('snapshot', [
+        '--pid', String(options.child.pid),
+        '--entry', path.resolve(options.entry),
+      ], [PROCESS_TREE_EXIT_CLEAN])
+      return tracker
+    } catch (error) {
+      let cleanupProven = false
+      let snapshotAvailable = false
+      if (tracker) {
+        try {
+          snapshotAvailable = await tracker.hasSnapshot()
+        } catch {
+          snapshotAvailable = false
+        }
+      }
+      if (tracker && snapshotAvailable) {
+        try {
+          await tracker.killAndVerify()
+          cleanupProven = true
+        } catch {
+          // The original capture error is retained as the public cause below.
+        }
+      }
+      if (cleanupProven) {
+        await tracker?.cleanup().catch(() => undefined)
+        throw error
+      }
+      try {
+        if (!options.child.killed) options.child.kill('SIGKILL')
+      } catch {
+        // Without a valid tree snapshot, root termination is only best effort.
+      }
+      if (rootExit) await settlesBefore(rootExit, PROCESS_TREE_ROOT_EXIT_TIMEOUT_MS)
+      await tracker?.writeCaptureFailure(options.child.pid, options.entry).catch(() => undefined)
+      throw new AppServerProcessTreeSafetyError(undefined, { cause: error })
+    }
+  }
+
+  private async hasSnapshot(): Promise<boolean> {
+    try {
+      const stat = await fs.lstat(this.snapshot)
+      return stat.isFile() && !stat.isSymbolicLink()
+    } catch (error) {
+      if (isFilesystemError(error, 'ENOENT')) return false
+      throw error
+    }
+  }
+
+  private async writeCaptureFailure(pid: number | undefined, entry: string): Promise<void> {
+    const evidence = {
+      schema_version: 1,
+      captured_at: new Date().toISOString(),
+      root_pid: pid,
+      entry_sha256: createHash('sha256').update(normalizeEntryForHash(entry)).digest('hex'),
+      reason: 'INITIAL_CAPTURE_FAILED',
+      cleanup_proven: false,
+    }
+    await this.writeFailureEvidence('capture.failure', evidence)
+  }
+
+  async writeCleanupFailure(): Promise<void> {
+    await this.writeFailureEvidence('cleanup.failure', {
+      schema_version: 1,
+      captured_at: new Date().toISOString(),
+      reason: 'CLOSE_CLEANUP_UNPROVEN',
+      cleanup_proven: false,
+    })
+  }
+
+  private async writeFailureEvidence(
+    fileName: 'capture.failure' | 'cleanup.failure',
+    evidence: Record<string, unknown>,
+  ): Promise<void> {
+    const failureFile = path.join(this.directory, fileName)
+    const temporaryFile = path.join(this.directory, `.${fileName}.${process.pid}.${randomUUID()}.tmp`)
+    let handle: fs.FileHandle | undefined
+    try {
+      handle = await fs.open(temporaryFile, 'wx', 0o600)
+      await handle.writeFile(`${JSON.stringify(evidence)}\n`, 'utf8')
+      await handle.sync()
+      await handle.close()
+      handle = undefined
+      await fs.rename(temporaryFile, failureFile)
+    } finally {
+      await handle?.close().catch(() => undefined)
+      await fs.rm(temporaryFile, { force: true }).catch(() => undefined)
+    }
+  }
+
+  async extend(): Promise<void> {
+    await this.enqueue(() => this.run('extend', [], [PROCESS_TREE_EXIT_CLEAN]))
+  }
+
+  async waitForClean(timeoutMs: number): Promise<boolean> {
+    return this.enqueue(async () => {
+      const deadline = Date.now() + Math.max(0, timeoutMs)
+      do {
+        const code = await this.run('poll', [], [PROCESS_TREE_EXIT_CLEAN, PROCESS_TREE_EXIT_ALIVE])
+        if (code === PROCESS_TREE_EXIT_CLEAN) return true
+        if (Date.now() >= deadline) return false
+        await delay(Math.min(PROCESS_TREE_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())))
+      } while (true)
+    })
+  }
+
+  async verify(): Promise<void> {
+    await this.enqueue(() => this.run('verify', [], [PROCESS_TREE_EXIT_CLEAN]))
+  }
+
+  async killAndVerify(): Promise<void> {
+    await this.enqueue(async () => {
+      await this.run('kill', [], [PROCESS_TREE_EXIT_CLEAN])
+      await this.run('verify', [], [PROCESS_TREE_EXIT_CLEAN])
+    })
+  }
+
+  async cleanup(): Promise<void> {
+    await this.enqueue(async () => {
+      if (this.cleaned) return
+      this.cleaned = true
+      await fs.rm(this.directory, { recursive: true, force: true })
+      try {
+        await fs.rmdir(path.dirname(this.directory))
+      } catch (error) {
+        if (!isFilesystemError(error, 'ENOENT') && !isFilesystemError(error, 'ENOTEMPTY')) throw error
+      }
+    })
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationTail.then(operation, operation)
+    this.operationTail = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  private run(
+    action: ProcessTreeAction,
+    args: string[],
+    allowedExitCodes: number[],
+  ): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const helper = spawn(process.execPath, [
+        processTreeHelper,
+        action,
+        ...args,
+        '--output',
+        this.snapshot,
+      ], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      let settled = false
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        helper.kill('SIGKILL')
+        reject(new Error(`Codex app-server process-tree ${action} timed out`))
+      }, PROCESS_TREE_HELPER_TIMEOUT_MS)
+      helper.once('error', error => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(new Error(`Codex app-server process-tree ${action} failed`, { cause: error }))
+      })
+      helper.once('exit', code => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (code !== null && allowedExitCodes.includes(code)) resolve(code)
+        else reject(new Error(`Codex app-server process-tree ${action} failed`))
+      })
+    })
+  }
+}
+
 class AppServerJsonRpcClient {
   private readonly pending = new Map<JsonRpcId, PendingRequest>()
   private readonly notificationHandlers = new Set<(notification: AppServerNotification) => void>()
@@ -422,6 +704,7 @@ class AppServerJsonRpcClient {
   constructor(
     private readonly child: AppServerProcess,
     private readonly requestTimeoutMs: number,
+    private readonly processTree?: AppServerProcessTree,
   ) {
     this.exitPromise = new Promise(resolve => {
       child.once('exit', () => {
@@ -452,8 +735,17 @@ class AppServerJsonRpcClient {
     return this.failed || this.closed
   }
 
-  request(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async request(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (this.closed || this.failed) return Promise.reject(new Error('Codex app-server connection is closed'))
+    if (this.processTree && (method === 'turn/start' || method === 'turn/interrupt')) {
+      try {
+        await this.processTree.extend()
+      } catch (error) {
+        this.fail(new Error('Codex app-server process-tree extension failed', { cause: error }))
+        throw error
+      }
+      if (this.closed || this.failed) throw new Error('Codex app-server connection is closed')
+    }
     const id = this.nextRequestId++
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -490,14 +782,84 @@ class AppServerJsonRpcClient {
       pending.reject(new Error('Codex app-server connection closed'))
     }
     this.pending.clear()
-    this.child.stdin.end()
-    if (!this.child.killed && !this.exited) this.child.kill('SIGTERM')
     this.closePromise = (async () => {
-      const graceMs = Math.max(0, timeoutMs)
-      if (this.exited || await settlesBefore(this.exitPromise, graceMs)) return
-      console.warn('[codex-app-server] child_force_kill reason=SHUTDOWN_TIMEOUT')
-      this.child.kill('SIGKILL')
-      await settlesBefore(this.exitPromise, Math.min(500, graceMs))
+      const timeoutBudgetMs = Math.max(0, timeoutMs)
+      if (!this.processTree) {
+        this.child.stdin.end()
+        if (!this.child.killed && !this.exited) this.child.kill('SIGTERM')
+        if (this.exited || await settlesBefore(this.exitPromise, timeoutBudgetMs)) return
+        console.warn('[codex-app-server] child_force_kill reason=SHUTDOWN_TIMEOUT')
+        this.child.kill('SIGKILL')
+        await settlesBefore(this.exitPromise, Math.min(500, timeoutBudgetMs))
+        return
+      }
+
+      // Pool drain passes its remaining total deadline here. Reserve most of that
+      // budget for exact descendant kill/verify instead of spending it all on a
+      // root process that may ignore SIGTERM.
+      const gracefulExitMs = Math.min(PROCESS_TREE_GRACEFUL_EXIT_MAX_MS, timeoutBudgetMs)
+      const failures: Error[] = []
+      let finalExtensionSucceeded = false
+      let treeCleanupProven = false
+      try {
+        try {
+          await this.processTree.extend()
+          finalExtensionSucceeded = true
+        } catch (error) {
+          failures.push(asError(error))
+        }
+        this.child.stdin.end()
+        if (!this.child.killed && !this.exited) this.child.kill('SIGTERM')
+
+        let clean = false
+        try {
+          if (!this.exited) await settlesBefore(this.exitPromise, gracefulExitMs)
+          clean = await this.processTree.waitForClean(0)
+          if (clean) {
+            await this.processTree.verify()
+            if (finalExtensionSucceeded) {
+              treeCleanupProven = true
+              failures.length = 0
+            }
+          }
+        } catch (error) {
+          failures.push(asError(error))
+        }
+        if (!clean) {
+          console.warn('[codex-app-server] child_tree_force_kill reason=SHUTDOWN_TIMEOUT')
+          try {
+            await this.processTree.killAndVerify()
+            if (finalExtensionSucceeded) {
+              treeCleanupProven = true
+              failures.length = 0
+            }
+          } catch (error) {
+            failures.push(asError(error))
+          }
+        }
+      } catch (error) {
+        failures.push(asError(error))
+      } finally {
+        if (treeCleanupProven) {
+          try {
+            await this.processTree.cleanup()
+          } catch (error) {
+            failures.push(asError(error))
+          }
+        }
+      }
+      if (failures.length > 0) {
+        this.failed = true
+        await this.processTree.writeCleanupFailure().catch(() => undefined)
+        throw new AppServerProcessTreeSafetyError(undefined, {
+          cause: new AggregateError(failures, 'Codex app-server process-tree cleanup failed'),
+        })
+      }
+      if (!treeCleanupProven) {
+        this.failed = true
+        await this.processTree.writeCleanupFailure().catch(() => undefined)
+        throw new AppServerProcessTreeSafetyError()
+      }
     })()
     return this.closePromise
   }
@@ -575,6 +937,23 @@ async function settlesBefore(promise: Promise<void>, timeoutMs: number): Promise
   } finally {
     if (timer) clearTimeout(timer)
   }
+}
+
+function delay(timeoutMs: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, timeoutMs))
+}
+
+function normalizeEntryForHash(entry: string): string {
+  const resolved = path.resolve(entry)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+function isFilesystemError(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === code
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
 }
 
 function throwIfAborted(signal: AbortSignal, threadId: string | undefined): void {

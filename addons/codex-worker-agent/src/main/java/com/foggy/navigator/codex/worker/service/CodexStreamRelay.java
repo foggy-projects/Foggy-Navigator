@@ -1017,7 +1017,10 @@ public class CodexStreamRelay {
 
             switch (type) {
                 case "assistant_text" -> {
-                    publishBuilt(mb.textComplete(event.getContent() != null ? event.getContent() : ""),
+                    String content = event.getContent() != null ? event.getContent() : "";
+                    publishBuilt("text_delta".equals(event.getSubtype())
+                                    ? mb.textChunk(content)
+                                    : mb.textComplete(content),
                             workerMessageId(taskId, event));
                 }
                 case "tool_use" -> {

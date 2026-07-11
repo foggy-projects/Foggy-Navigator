@@ -4,13 +4,13 @@
 
 - doc_type: requirement
 - intended_for: root-controller | execution-agent | reviewer | release-owner
-- purpose: 固化独立 app-server Worker、双 runtime 控制面、Ultra 首批切流和 SDK 退役的需求与验收边界。
+- purpose: 固化独立 app-server Worker、双 runtime 控制面、Ultra 首批切流和旧 SDK Worker 长期保留的需求与验收边界。
 
 ## 基本信息
 
 - version: `1.4.0-SNAPSHOT`
 - priority: P0
-- status: implementation-in-progress
+- status: p0-p2-isolated-accepted-production-rollout-not-started
 - source_type: architecture-optimization
 - owner: Codex Worker runtime | Codex Java addon | Session | Navigator PC
 
@@ -18,9 +18,9 @@
 
 现有 `tools/codex-agent-worker` 通过 TypeScript SDK 启动一次性 `codex exec`。1.3.1 已验证 app-server 能暴露 Ultra 原生子任务状态，但把 SDK 与 app-server 放入同一 Worker 会同时承担两套执行生命周期、事件映射、版本门控和回退逻辑。
 
-本版本采用独立运行时迁移：稳定 Worker 冻结为 SDK lane，新建 app-server Worker 作为目标主线。新 Worker 技术上支持全部模型和 reasoning，平台初期只把新 Ultra 会话路由过去，其他流量在完成对应功能 parity 和 canary 证据后逐步迁移。
+本版本采用独立运行时演进：稳定 Worker 保持现有 SDK lane，新建 app-server Worker 作为 Ultra 和后续可选 cohort 的独立主线。新 Worker 技术上支持全部模型和 reasoning，平台初期只把新 Ultra 会话路由过去；旧 Worker 的 SDK 实现、非 Ultra 行为、版本 preflight 和既有 affinity drain 不因新 Worker 上线而退役。
 
-当前还有一个切流前 P0 缺口：`POST /api/v1/query` 在 Worker 内生成 taskId 并直接打开 SSE。若 Worker 已接受或开始执行但首个 SSE 尚未到达时连接中断，Java 无法判断是否应重试，跨 Worker 重放可能产生重复文件修改、API 调用或 Git 操作。因此生产路由前必须先建立幂等接受协议和可恢复状态查询。
+规划时识别出的 P0 核心问题是：旧 `POST /api/v1/query` 在 Worker 内生成 taskId 并直接打开 SSE，接受响应丢失后 Java 无法安全判断是否重试。该问题现已通过 `POST /api/v1/tasks`、稳定 `Idempotency-Key`、durable acceptance/status 和 immutable runtime binding 关闭；兼容 `/query` 不作为新 Worker 的生产切流主协议。
 
 ## 术语
 
@@ -42,7 +42,12 @@
 4. 新 Worker 内部可按认证和运行环境动态启动多套常驻 app-server，并在不同 Thread 间并发复用。
 5. 平台建立 runtime registry、capability handshake、幂等任务接受和不可变 affinity。
 6. 新 Ultra 会话先 canary，再默认走新 Worker；既有 SDK Task/Session 留在原 runtime drain。
-7. 非 Ultra 逐模型、逐认证、逐功能 cohort 迁移；达到替换门槛后，新 Worker 成为默认并最终退役 SDK lane。
+7. 非 Ultra 可按模型、认证和功能 cohort 独立评估迁移；本版本不要求 app-server 成为全量默认，也不退役 SDK lane。
+8. P3 evidence 必须保持 requested model、有效 terminal denominator 和零容忍 affinity violation 的独立语义，并以独占 lease/reclaim claim 串行写 checkpoint。
+9. Worker/start-stop-update/runtime pool 必须以精确进程树和 nonce-bound outcome 证明全部 descendants 已清理后才能释放 ownership 或 swap。
+10. PC 只通过最小权限 availability 接口判断共享 Worker 的 app-server/Ultra 可用性，不读取 owner-only runtime 详情，也不探测 app-server pool 内部进程。
+11. Terminal broadcast、TaskStore resident state 和大 payload journal 写入必须有明确上界；已终态历史不得随 Worker 存活时间无限驻留。
+12. Pool 全局容量被其他 lane 的 idle instance 占满时，允许 LRU idle 跨 lane 退役，但不得退役 busy instance 或突破全局上限。
 
 ## 能力与放量必须分离
 
@@ -141,8 +146,8 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 2. 仅新建 Ultra Session 进入 allowlist/小比例 canary。
 3. 新 Ultra 100% app-server；旧 SDK Task/Session 原地 drain。
 4. 非 Ultra 按模型、认证和功能 cohort canary。
-5. app-server 成为所有新 Codex 任务默认；SDK 仅处理已有 affinity 或明确例外。
-6. 满足退役 gate 后删除 SDK runtime。
+5. 是否让 app-server 承接更多新 Codex 任务，由后续 cohort 独立签收。
+6. SDK runtime 保持可部署、可回滚和可处理现有非 Ultra/既有 affinity；本版本不执行删除。
 
 回滚只执行以下动作：停止新分配、保持已有 binding、允许原 runtime 完成/恢复/终止。禁止把已接受或 committed 的任务切到另一个 runtime，禁止 Ultra 静默改为 Max/xhigh。
 
@@ -162,7 +167,7 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 - 不用一个全局 app-server 进程承载所有用户、账户和 Biz token。
 - 不承诺已有 SDK Thread 自动迁移到 app-server。
 - 不在 Ultra canary 之前默认切换任何生产流量。
-- 不在 P7 退役签收之前删除 SDK、SDK 最低版本检查或旧 Worker 回滚包。
+- 不删除 SDK、SDK 最低版本检查、旧 Worker 发布链路或回滚包；该决定已从本版本退役 gate 中移出。
 - 本规划不修改 LangGraph、Gemini、Claude Worker 执行语义。
 
 ## 验收标准
@@ -174,6 +179,13 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 - Runtime registry、manifest、Task/Session affinity、legacy dual-read/backfill 和 N-1 组合测试通过。
 - 新 Worker 不依赖 SDK，不存在跨 runtime 自动 fallback。
 - Worker/Java/PC 事件、结果、错误、原生子任务和隐私契约通过 golden/contract tests。
+- Delta 只作为 `TEXT_CHUNK` 实时传输，不持久化为历史消息；completed item 形成 canonical `TEXT_COMPLETE`，任务结果只取最后一条 canonical assistant message，恢复态 `assistant_text` 不得重复累加。
+- `SESSION_END isResult` 只用于终态/SSE，不得重复持久化为 assistant 历史消息。
+- APP_SERVER progress/completion 不得覆盖 requested model；无有效 runtime instance 的记录进入独立 sanitized affinity violation 集合，不计 terminal denominator。
+- Canary checkpoint reclaim 必须先获得与 observed lease 绑定的独占 claim；live local、cross-host 或已有 claim 均 fail closed。
+- Shutdown success 必须匹配当前 stop nonce，Worker/runtime process tree 清理及二次 verify 完成后才能释放 state/cwd ownership。
+- Terminal broadcast 按需重放后退役，terminal TaskStore 仅保留 resident summary；请求 ciphertext 只在 durable journal 首次持久化一次。
+- Availability 对共享用户只返回 `appServerManaged`、`ultraAvailable`、`blockReason`；详细 runtime API 继续 owner-only，`ALL_CANARY@0` 对 Ultra 仍为 available。
 
 ### Ultra 生产启用验收
 
@@ -183,27 +195,28 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 - 重复副作用、affinity mismatch、跨账户/凭据泄漏和原始子线程内容泄漏均为 0。
 - Worker/Java/PC 重启、endpoint revision 变化和 rollback 演练通过。
 
-### 默认切换与 SDK 退役验收
+### 后续 Cohort 与 SDK 保留验收
 
-- 每个模型、reasoning、认证和功能 cohort 都有真实链路证据，P6/P7 不接受只有分层 mock 的证明。
-- app-server 覆盖或正式退役旧 Worker 的 attachments、output schema、MCP/Biz、Codex Home、sandbox、approval、network、web、additional directories、maxTurns、file hints、process/session API 等契约。
-- 所有新任务默认 app-server 后，SDK 只服务已有 affinity 或登记的例外。
-- 零 active SDK task、零保留期内可续接 SDK Session、零 capability exception 后，方可独立签收 SDK 删除。
+- 每个模型、reasoning、认证和功能 cohort 都有真实链路证据；P6 及未来另立的 SDK retirement workitem 不接受只有分层 mock 的证明。
+- 任何迁入 app-server 的 cohort 都必须覆盖该 cohort 实际依赖的 attachments、output schema、MCP/Biz、Codex Home、sandbox、approval、network、web、additional directories、maxTurns、file hints、process/session API 等契约；未迁入能力继续由 SDK lane 保持。
+- 后续若扩大非 Ultra cohort，仍须逐模型、认证和功能给出真实链路证据。
+- 旧 SDK Worker 保持 `1.0.11` 现有设计：新 Ultra fail closed，非 Ultra 行为不变，已有 SDK Ultra thread 只按原 affinity drain。
+- SDK 删除不属于 `1.4.0-SNAPSHOT` 验收范围；未来如改变产品决定，必须另建 workitem 和独立迁移/回滚门禁。
 
-## 待定决策与决策门
+## 已决策项与后续决策门
 
-以下内容允许在规划期保持显式待定，但必须在对应阶段 entry gate 前填实：
+| 决策 | 当前结论 | 状态/最晚完成时间 |
+|---|---|---|
+| 首个精确 CLI 版本与生成 schema digest | `@openai/codex 0.144.1`；`6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f` | confirmed，P0 accepted |
+| Runtime registry 的存储、credential 加密和管理 API 形态 | 持久化 revision registry、加密 runtime token、owner-only detail/management 与 access-validated minimum availability API | confirmed，P0-P2 accepted |
+| Durable acceptance/task store 技术选型 | 稳定 idempotency key、AES-256-GCM request、append-only task/event journal、连续 ESN、writer/recovery lease | confirmed，P0-P1 accepted |
+| 新 Worker 本地端口、安装目录和首版版本号 | `0.1.1`；host/port/install/run/state 独立且可配置，外部 state/CODEX_HOME 跨 update/rollback 保留 | confirmed，P1 accepted |
+| 单实例并发、池容量、TTL、轮换和资源阈值 | 有界 Pool、跨 lane LRU、busy exclusion、TTL/drain、close failure fail-closed；部署值由受控配置提供 | confirmed，P1-P2 accepted |
+| Ultra canary cohort、比例、最小任务数、观察时间与 SLO | 稳定 hash 10%；至少 50 terminal task、连续 72h、至少 2 rotations，并执行既定 SLO/零容忍指标 | contract confirmed；P3 entry not-approved，当前 0/50、0/72h、0/2 |
+| Codex Biz 和交互式 server request 纳入哪个迁移 cohort | 继续由旧 SDK lane 保持，迁移前须逐 cohort 证明 parity | pending，P5 entry 前决定 |
+| SDK 长期保留策略 | 本版本不退役，未来变更另立 workitem | confirmed |
 
-| 决策 | 最晚完成时间 |
-|---|---|
-| 首个精确 CLI 版本与生成 schema digest | P0 exit |
-| Runtime registry 的存储、credential 加密和管理 API 形态 | P0 exit |
-| Durable acceptance/task store 技术选型 | P0 exit |
-| 新 Worker 本地端口、安装目录和首版版本号 | P1 entry |
-| 单实例并发、池容量、TTL、轮换和资源阈值 | P2 entry |
-| Ultra canary cohort、比例、最小任务数、观察时间与 SLO | P3 entry |
-| Codex Biz 和交互式 server request 纳入哪个迁移 cohort | P5 entry |
-| SDK Session 保留期和最终退役窗口 | P6 exit |
+P0-P2 的 release、控制面、真实 Ultra/SSE/native 和 PC 体验已完成 isolated acceptance。该结论不改变生产路由；`production_enablement` 仍为 `not-approved`，P4-P6 在 P3 独立生产签收前不得开始。
 
 ## 参考
 
@@ -211,3 +224,9 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 - [实施计划](./OPT-001-independent-codex-app-server-worker-plan.md)
 - [进度模板](./OPT-001-independent-codex-app-server-worker-progress.md)
 - [1.3.1 OPT-005](../../1.3.1-SNAPSHOT/workitems/OPT-005-codex-sol-max-ultra-support.md)
+- [验收缺陷闭环](./OPT-001-independent-codex-app-server-worker-progress.md#acceptance-defect-closure)
+- [BUG-008 Canary evidence correctness](./BUG-008-canary-evidence-correctness.md)
+- [BUG-009 lifecycle process tree/outcome](./BUG-009-lifecycle-process-tree-and-stop-outcome.md)
+- [BUG-010 PC/shared availability boundary](./BUG-010-pc-app-server-boundary-and-shared-availability.md)
+- [BUG-011 terminal state bounds](./BUG-011-terminal-broadcast-and-task-store-bounds.md)
+- [BUG-012 cross-lane Pool LRU](./BUG-012-pool-cross-lane-lru-retirement.md)

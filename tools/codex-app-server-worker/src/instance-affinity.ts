@@ -16,6 +16,11 @@ export function guardExpectedInstance(config: AppConfig) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const expected = req.header(EXPECTED_INSTANCE_HEADER)?.trim()
     if (expected && expected !== config.instanceId) {
+      res.shouldKeepAlive = false
+      res.setHeader('Connection', 'close')
+      res.once('finish', () => {
+        if (!req.complete && !req.socket.destroyed) req.socket.destroySoon()
+      })
       res.status(409).json({ error: RUNTIME_INSTANCE_MISMATCH })
       return
     }

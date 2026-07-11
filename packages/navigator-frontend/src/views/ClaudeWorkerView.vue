@@ -1,7 +1,7 @@
 <template>
   <div :class="['worker-layout', { 'fullscreen-active': isSessionFullscreen }]">
     <!-- Left Panel: Two-level Tree Sidebar -->
-    <aside :class="['worker-sidebar', { collapsed: prefs.leftPanelCollapsed }]">
+    <aside :class="['worker-sidebar', { collapsed: prefs.leftPanelCollapsed, 'mobile-open': mobileLeftPanelOpen }]">
       <div class="sidebar-header">
         <h3>Workers</h3>
         <div class="sidebar-header-actions">
@@ -19,7 +19,13 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <span class="panel-collapse-btn" title="收起侧栏" @click="prefs.leftPanelCollapsed = true">&laquo;</span>
+          <button
+            type="button"
+            class="panel-collapse-btn"
+            title="收起侧栏"
+            aria-label="收起 Worker 导航"
+            @click="closePanel('left')"
+          >&laquo;</button>
         </div>
       </div>
       <div class="worker-list">
@@ -163,11 +169,33 @@
       </div>
     </aside>
 
+    <button
+      v-if="narrowViewport && (mobileLeftPanelOpen || mobileRightPanelOpen)"
+      type="button"
+      class="mobile-panel-backdrop"
+      aria-label="关闭导航面板"
+      @click="closeMobilePanels"
+    />
+
     <!-- Middle Panel: Main Content Area -->
     <main :class="['worker-main', { 'has-panes': panes.length > 0 }]" @paste="handlePaste" @drop="handleDrop" @dragover="handleDragOver">
       <!-- Expand buttons for collapsed panels -->
-      <span v-if="prefs.leftPanelCollapsed" class="panel-expand-btn left-expand" title="展开侧栏" @click="prefs.leftPanelCollapsed = false">&raquo;</span>
-      <span v-if="prefs.rightPanelCollapsed" class="panel-expand-btn right-expand" title="展开历史" @click="prefs.rightPanelCollapsed = false">&laquo;</span>
+      <button
+        v-if="prefs.leftPanelCollapsed || (narrowViewport && !mobileLeftPanelOpen)"
+        type="button"
+        class="panel-expand-btn left-expand"
+        title="展开侧栏"
+        aria-label="展开 Worker 导航"
+        @click="openMobilePanel('left')"
+      >&raquo;</button>
+      <button
+        v-if="(prefs.rightPanelCollapsed || (narrowViewport && !mobileRightPanelOpen)) && (selectedWorkerId || workerState.activeTasks.value.length > 0)"
+        type="button"
+        class="panel-expand-btn right-expand"
+        title="展开历史"
+        aria-label="展开历史会话"
+        @click="openMobilePanel('right')"
+      >&laquo;</button>
       <!-- Hidden file input for attachment picker (images + files) -->
       <input ref="fileInputRef" type="file" multiple class="sr-only" @change="handleFileSelect">
       <!-- Fullscreen exit bar (only visible in fullscreen mode) -->
@@ -561,7 +589,7 @@
               :data="cliProcesses"
               size="small"
               stripe
-              empty-text="未检测到 CLI 进程"
+              :empty-text="cliProcessEmptyText"
               style="width: 100%"
             >
               <el-table-column label="类型" width="90">
@@ -971,9 +999,18 @@
     </el-dialog>
 
     <!-- Right Panel: Task History -->
-    <aside v-if="selectedWorkerId || workerState.activeTasks.value.length > 0" :class="['worker-history', { collapsed: prefs.rightPanelCollapsed }]">
+    <aside
+      v-if="selectedWorkerId || workerState.activeTasks.value.length > 0"
+      :class="['worker-history', { collapsed: prefs.rightPanelCollapsed, 'mobile-open': mobileRightPanelOpen }]"
+    >
       <div :class="['history-header', { 'batch-selecting': batchSelectMode }]">
-        <span class="panel-collapse-btn" title="收起历史" @click="prefs.rightPanelCollapsed = true">&raquo;</span>
+        <button
+          type="button"
+          class="panel-collapse-btn"
+          title="收起历史"
+          aria-label="收起历史会话"
+          @click="closePanel('right')"
+        >&raquo;</button>
         <h3>历史会话</h3>
         <div class="history-header-actions">
           <template v-if="batchSelectMode">
@@ -1096,6 +1133,8 @@
             <div
               v-for="conv in group.conversations"
               :key="conv.sessionId"
+              :data-session-id="conv.sessionId"
+              :data-task-id="conv.latestTask.taskId"
               :class="['conv-item', { 'conv-pinned': conv.config?.pinned, 'conv-selected': batchSelectMode && selectedConvIds.has(conv.sessionId), 'conv-pane-focused': conv.sessionId === focusedSessionId }]"
               @click="batchSelectMode ? toggleConvSelection(conv.sessionId) : viewTask(conv.latestTask)"
             >
@@ -1265,6 +1304,8 @@
                 <div
                   v-for="child in childConversations(conv)"
                   :key="child.sessionId"
+                  :data-session-id="child.sessionId"
+                  :data-task-id="child.latestTask.taskId"
                   :class="['branch-session-item', { 'branch-session-focused': child.sessionId === focusedSessionId }]"
                   @click="viewRelatedTask(child.latestTask)"
                 >
@@ -1404,6 +1445,8 @@
           <div
             v-for="conv in activeConversations"
             :key="conv.sessionId"
+            :data-session-id="conv.sessionId"
+            :data-task-id="conv.latestTask.taskId"
             :class="['conv-item', { 'conv-pinned': conv.config?.pinned, 'conv-selected': batchSelectMode && selectedConvIds.has(conv.sessionId), 'conv-pane-focused': conv.sessionId === focusedSessionId }]"
             @click="batchSelectMode ? toggleConvSelection(conv.sessionId) : viewTask(conv.latestTask)"
           >
@@ -1574,6 +1617,8 @@
               <div
                 v-for="child in childConversations(conv)"
                 :key="child.sessionId"
+                :data-session-id="child.sessionId"
+                :data-task-id="child.latestTask.taskId"
                 :class="['branch-session-item', { 'branch-session-focused': child.sessionId === focusedSessionId }]"
                 @click="viewRelatedTask(child.latestTask)"
               >
@@ -3028,13 +3073,12 @@ import type { SessionRelationInfo } from '@/api/unifiedTask'
 import * as sshApi from '@/api/ssh'
 import { searchFiles } from '@/api/fileBrowser'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
-import { listCodexRuntimes } from '@/api/codexRuntime'
+import { getCodexRuntimeAvailability } from '@/api/codexRuntime'
 import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
 import { ALL_MODEL_OPTIONS, isModelConfigCompatibleWithWorker, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
 import { inferTaskWorkerBackend, isClaudeCodeTask, providerTypeFromWorkerBackend, taskSessionRefLabel } from '@/utils/workerBackend'
-import { isUltraRuntimeAvailable } from '@/utils/codexRuntime'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone, WorkerBackend } from '@/types'
 import type { AipMessageType, ChatMessage, NavigatorUiAction, NavigatorUiArtifact } from '@foggy/chat'
 
@@ -3088,7 +3132,9 @@ const paneAgentContextIds = ref<Map<string, Map<string, string>>>(new Map())
 // --- Worker tabs state (Agents / CLI Processes) ---
 const workerActiveTab = ref('processes')
 function handleWorkerTabChange(tab: string) {
-  if (tab === 'processes' && cliProcesses.value.length === 0) {
+  if (tab === 'processes'
+    && cliProcesses.value.length === 0
+    && appServerManagedProcessWorkerId.value !== selectedWorkerId.value) {
     loadCliProcesses()
   }
 }
@@ -3098,13 +3144,37 @@ import type { CliProcessInfo } from '@/types'
 const cliProcesses = ref<CliProcessInfo[]>([])
 const cliProcessActiveTaskCount = ref(0)
 const loadingProcesses = ref(false)
+const appServerManagedProcessWorkerId = ref<string | null>(null)
+const cliProcessEmptyText = computed(() => (
+  appServerManagedProcessWorkerId.value === selectedWorkerId.value
+    ? 'App Server 进程由 Runtime 池管理'
+    : '未检测到 CLI 进程'
+))
+let cliProcessRequestSequence = 0
 
 async function loadCliProcesses() {
-  if (!selectedWorkerId.value) return
+  const workerId = selectedWorkerId.value
+  if (!workerId) return
+  const requestSequence = ++cliProcessRequestSequence
+  const worker = workerState.workers.value.find(candidate => candidate.workerId === workerId)
   loadingProcesses.value = true
+  appServerManagedProcessWorkerId.value = null
   try {
-    const workerId = selectedWorkerId.value
-    const worker = selectedWorkerEntity.value
+    let availability: Awaited<ReturnType<typeof getCodexRuntimeAvailability>> | null = null
+    try {
+      availability = await getCodexRuntimeAvailability(workerId, { suppressErrorMessage: true })
+    } catch {
+      // Runtime discovery is additive. Preserve the legacy probes when it is unavailable.
+    }
+    if (requestSequence !== cliProcessRequestSequence || workerId !== selectedWorkerId.value) return
+
+    if (availability?.appServerManaged) {
+      appServerManagedProcessWorkerId.value = workerId
+      cliProcesses.value = []
+      cliProcessActiveTaskCount.value = 0
+      return
+    }
+
     const requests: Array<{
       type: 'claude' | 'codex' | 'gemini'
       promise: Promise<CliProcessListResponse>
@@ -3130,6 +3200,7 @@ async function loadCliProcesses() {
     }
 
     const results = await Promise.allSettled(requests.map(request => request.promise))
+    if (requestSequence !== cliProcessRequestSequence || workerId !== selectedWorkerId.value) return
 
     const merged: CliProcessInfo[] = []
     let activeTaskCount = 0
@@ -3159,10 +3230,13 @@ async function loadCliProcesses() {
       ElMessage.error(`获取 ${labels} CLI 进程失败`)
     }
   } catch {
+    if (requestSequence !== cliProcessRequestSequence || workerId !== selectedWorkerId.value) return
     cliProcesses.value = []
     cliProcessActiveTaskCount.value = 0
   } finally {
-    loadingProcesses.value = false
+    if (requestSequence === cliProcessRequestSequence && workerId === selectedWorkerId.value) {
+      loadingProcesses.value = false
+    }
   }
 }
 
@@ -3278,6 +3352,10 @@ const selectedAgentId = ref<string | null>(null)
 const expandedWorkerIds = reactive(new Set<string>())
 const expandedProjectIds = reactive(new Set<string>())
 const { prefs } = useUserPreferences()
+const narrowViewport = ref(false)
+const mobileLeftPanelOpen = ref(false)
+const mobileRightPanelOpen = ref(false)
+let narrowViewportMediaQuery: MediaQueryList | null = null
 
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
@@ -4290,7 +4368,8 @@ function scheduleUltraRuntimeReadinessPoll(requestSequence: number): void {
 
 async function refreshUltraRuntimeReadiness(initial = true): Promise<void> {
   const workerId = selectedWorkerId.value
-  if (!viewActive.value || !workerId || !isUltraTaskModel(taskForm.value.model)) return
+  const requestedModel = taskForm.value.model
+  if (!viewActive.value || !workerId || !isUltraTaskModel(requestedModel)) return
   const requestSequence = ++ultraRuntimeRequestSequence
   if (initial || ultraRuntimeCheckedWorkerId.value !== workerId) {
     ultraRuntimeReadiness.value = 'CHECKING'
@@ -4298,18 +4377,23 @@ async function refreshUltraRuntimeReadiness(initial = true): Promise<void> {
   ultraRuntimeCheckedWorkerId.value = workerId
 
   try {
-    const runtimes = await listCodexRuntimes(workerId, { suppressErrorMessage: true })
+    const availability = await getCodexRuntimeAvailability(workerId, {
+      model: requestedModel,
+      suppressErrorMessage: true,
+    })
     if (requestSequence !== ultraRuntimeRequestSequence
       || workerId !== selectedWorkerId.value
-      || !isUltraTaskModel(taskForm.value.model)
+      || taskForm.value.model !== requestedModel
+      || !isUltraTaskModel(requestedModel)
       || !viewActive.value) return
-    ultraRuntimeReadiness.value = runtimes.some(isUltraRuntimeAvailable)
+    ultraRuntimeReadiness.value = availability.ultraAvailable
       ? 'READY'
       : 'UNAVAILABLE'
   } catch {
     if (requestSequence !== ultraRuntimeRequestSequence
       || workerId !== selectedWorkerId.value
-      || !isUltraTaskModel(taskForm.value.model)
+      || taskForm.value.model !== requestedModel
+      || !isUltraTaskModel(requestedModel)
       || !viewActive.value) return
     ultraRuntimeReadiness.value = 'FAILED'
   } finally {
@@ -4794,6 +4878,7 @@ function handleNotificationReconnected() {
 }
 
 onMounted(async () => {
+  setupNarrowViewport()
   window.addEventListener('message', handleFileBrowserMessage)
   document.addEventListener('click', closeFavScriptCtx)
   // Listen for SSE-driven task updates (from useNotifications)
@@ -4831,6 +4916,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  cliProcessRequestSequence++
+  narrowViewportMediaQuery?.removeEventListener('change', handleNarrowViewportChange)
+  narrowViewportMediaQuery = null
   stopUltraRuntimeReadinessPolling()
   if (activeTasksInterval) {
     clearInterval(activeTasksInterval)
@@ -5054,6 +5142,7 @@ function selectWorker(workerId: string) {
   }
   // 切换 Worker 时刷新可用模型列表
   loadPlatformModelConfig()
+  closeMobilePanels()
 }
 
 function selectDirectory(workerId: string, directoryId: string) {
@@ -5095,6 +5184,48 @@ function selectDirectory(workerId: string, directoryId: string) {
       restoreWorkerLlmSelection(workerId)
     }
   })
+  closeMobilePanels()
+}
+
+function setupNarrowViewport() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+  narrowViewportMediaQuery = window.matchMedia('(max-width: 720px)')
+  narrowViewport.value = narrowViewportMediaQuery.matches
+  narrowViewportMediaQuery.addEventListener('change', handleNarrowViewportChange)
+}
+
+function handleNarrowViewportChange(event: MediaQueryListEvent) {
+  narrowViewport.value = event.matches
+  if (!event.matches) {
+    mobileLeftPanelOpen.value = false
+    mobileRightPanelOpen.value = false
+  }
+}
+
+function closeMobilePanels() {
+  if (!narrowViewport.value) return
+  mobileLeftPanelOpen.value = false
+  mobileRightPanelOpen.value = false
+}
+
+function closePanel(panel: 'left' | 'right') {
+  if (narrowViewport.value) {
+    if (panel === 'left') mobileLeftPanelOpen.value = false
+    else mobileRightPanelOpen.value = false
+    return
+  }
+  if (panel === 'left') prefs.leftPanelCollapsed = true
+  else prefs.rightPanelCollapsed = true
+}
+
+function openMobilePanel(panel: 'left' | 'right') {
+  if (narrowViewport.value) {
+    mobileLeftPanelOpen.value = panel === 'left'
+    mobileRightPanelOpen.value = panel === 'right'
+    return
+  }
+  if (panel === 'left') prefs.leftPanelCollapsed = false
+  else prefs.rightPanelCollapsed = false
 }
 
 async function loadDirectoryTasks() {
@@ -7089,6 +7220,7 @@ async function viewRelatedTask(task: ClaudeTask) {
 }
 
 async function viewTask(task: ClaudeTask) {
+  closeMobilePanels()
   // 恢复会话的模型选择（API 配置 + 模型）
   const conv = allConversations.value.find(c => c.sessionId === task.sessionId)
   restoreSessionModelSelection(conv?.latestTask ?? task)
@@ -8191,6 +8323,10 @@ function handlePopOutTerminal() {
   user-select: none;
   flex-shrink: 0;
   transition: color 0.2s, background-color 0.2s;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
 }
 
 .panel-collapse-btn:hover {
@@ -8216,6 +8352,8 @@ function handlePopOutTerminal() {
   font-size: 14px;
   user-select: none;
   transition: color 0.2s, background-color 0.2s;
+  padding: 0;
+  font-family: inherit;
 }
 
 .panel-expand-btn:hover {
@@ -8234,6 +8372,10 @@ function handlePopOutTerminal() {
   right: 0;
   border-right: none;
   border-radius: 4px 0 0 4px;
+}
+
+.mobile-panel-backdrop {
+  display: none;
 }
 
 .worker-list {
@@ -8442,6 +8584,160 @@ function handlePopOutTerminal() {
 .worker-history.collapsed {
   width: 0;
   border-left: none;
+}
+
+@media (max-width: 720px) {
+  .worker-layout {
+    position: relative;
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    isolation: isolate;
+  }
+
+  .worker-main {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 10px 8px;
+  }
+
+  .worker-main > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .worker-main :deep(.task-pane-grid) {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .worker-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .header-info {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .header-info h2 {
+    min-width: 0;
+    font-size: 18px;
+    overflow-wrap: break-word;
+  }
+
+  .header-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    justify-content: stretch;
+  }
+
+  .header-actions :deep(.el-button) {
+    width: 100%;
+    min-height: 44px;
+    margin-left: 0;
+  }
+
+  .worker-main :deep(.pane-header) {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .worker-main :deep(.pane-label),
+  .worker-main :deep(.pane-actions) {
+    width: 100%;
+  }
+
+  .worker-main :deep(.pane-actions) {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .worker-main :deep(.pane-actions .el-button) {
+    min-height: 44px;
+    margin-left: 0;
+  }
+
+  .worker-sidebar,
+  .worker-history {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 30;
+    width: min(88vw, 320px);
+    max-width: calc(100% - 44px);
+    height: 100%;
+    box-sizing: border-box;
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 0.2s ease, visibility 0.2s ease;
+    box-shadow: 0 8px 24px rgba(31, 45, 61, 0.18);
+  }
+
+  .worker-sidebar {
+    left: 0;
+    transform: translateX(-105%);
+  }
+
+  .worker-history {
+    right: 0;
+    transform: translateX(105%);
+  }
+
+  .worker-sidebar.collapsed,
+  .worker-history.collapsed {
+    width: min(88vw, 320px);
+  }
+
+  .worker-sidebar.collapsed {
+    border-right: 1px solid #e4e7ed;
+  }
+
+  .worker-history.collapsed {
+    border-left: 1px solid #e4e7ed;
+  }
+
+  .worker-sidebar.mobile-open,
+  .worker-sidebar.collapsed.mobile-open,
+  .worker-history.mobile-open,
+  .worker-history.collapsed.mobile-open {
+    width: min(88vw, 320px);
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .mobile-panel-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: rgba(31, 45, 61, 0.28);
+  }
+
+  .panel-collapse-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .panel-expand-btn {
+    z-index: 15;
+    width: 44px;
+    height: 44px;
+  }
 }
 
 .history-header {

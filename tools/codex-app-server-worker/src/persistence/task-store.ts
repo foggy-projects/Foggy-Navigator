@@ -38,6 +38,10 @@ type TaskStoreOptions = {
   now?: () => Date
 }
 
+type TaskJournalRecord = StoredTaskRecord & {
+  request_payload_persisted?: true
+}
+
 export class TaskStore {
   private readonly stateDir: string
   private readonly encryptionKey: Buffer
@@ -58,7 +62,7 @@ export class TaskStore {
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
       const record = await this.readLastRecord(path.join(this.stateDir, entry.name))
-      if (record) this.records.set(record.task_id, record)
+      if (record) this.remember(record)
     }
   }
 
@@ -97,11 +101,11 @@ export class TaskStore {
         if (!isNodeError(error, 'EEXIST')) throw error
         const raced = await this.readLastRecord(file)
         if (!raced) throw new Error(`Task acceptance journal is empty: ${taskId}`)
-        this.records.set(taskId, raced)
+        this.remember(raced)
         if (raced.request_hash !== requestHash) throw new IdempotencyConflictError(taskId)
-        return { record: clone(raced), created: false }
+        return { record: clone(this.required(taskId)), created: false }
       }
-      this.records.set(taskId, record)
+      this.remember(record)
       return { record: clone(record), created: true }
     })
   }
@@ -148,7 +152,7 @@ export class TaskStore {
         tombstoned_at: timestamp,
       }) as StoredTaskRecord
       await this.replaceJournal(tombstone)
-      this.records.set(taskId, tombstone)
+      this.remember(tombstone)
       return clone(tombstone)
     })
   }
@@ -159,7 +163,7 @@ export class TaskStore {
       const current = this.required(taskId)
       const next = compact({ ...current, ...patch, updated_at: this.now().toISOString() }) as StoredTaskRecord
       await this.append(next)
-      return clone(next)
+      return clone(this.required(taskId))
     })
   }
 
@@ -209,7 +213,7 @@ export class TaskStore {
         throw new Error('Task outcome is only valid for terminal tasks')
       }
       await this.append(next)
-      return clone(next)
+      return clone(this.required(taskId))
     })
   }
 
@@ -220,26 +224,34 @@ export class TaskStore {
   }
 
   private async append(record: StoredTaskRecord): Promise<void> {
+    const persisted = toJournalSnapshot(record)
     const handle = await fs.open(this.filePath(record.task_id), 'a', 0o600)
     try {
-      await handle.writeFile(`${JSON.stringify(record)}\n`, 'utf8')
+      await handle.writeFile(`${JSON.stringify(persisted)}\n`, 'utf8')
       await handle.sync()
     } finally {
       await handle.close()
     }
-    this.records.set(record.task_id, record)
+    this.remember(record)
   }
 
   private async loadByTaskId(taskId: string): Promise<StoredTaskRecord | undefined> {
     const record = await this.readLastRecord(this.filePath(taskId))
-    if (record) this.records.set(taskId, record)
-    return record
+    if (!record) return undefined
+    this.remember(record)
+    return this.required(taskId)
   }
 
   private async readLastRecord(file: string): Promise<StoredTaskRecord | undefined> {
     try {
-      const records = readJsonlAndRepair(file, isStoredTaskRecord)
-      return records.at(-1)
+      const records = readJsonlAndRepair(file, isTaskJournalRecord)
+      const latest = records.at(-1)
+      if (!latest) return undefined
+      const normalized = withoutJournalMarker(latest)
+      if (normalized.request_payload || normalized.tombstoned_at) return normalized
+      const requestPayload = records.find(record => record.request_payload)?.request_payload
+      if (!requestPayload) throw new Error(`Task request payload is missing from journal: ${normalized.task_id}`)
+      return { ...normalized, request_payload: requestPayload }
     } catch (error) {
       if (isNodeError(error, 'ENOENT')) return undefined
       throw error
@@ -267,6 +279,10 @@ export class TaskStore {
       await fs.rm(temporary, { force: true })
       throw error
     }
+  }
+
+  private remember(record: StoredTaskRecord): void {
+    this.records.set(record.task_id, compactResidentRecord(record))
   }
 
   private async withLock<T>(taskId: string, action: () => Promise<T>): Promise<T> {
@@ -324,6 +340,23 @@ function clone<T>(value: T): T {
   return structuredClone(value)
 }
 
+function compactResidentRecord(record: StoredTaskRecord): StoredTaskRecord {
+  if (record.status !== 'terminal' || !record.request_payload) return record
+  const { request_payload: _requestPayload, ...summary } = record
+  return summary
+}
+
+function toJournalSnapshot(record: StoredTaskRecord): TaskJournalRecord {
+  if (record.tombstoned_at) return record
+  const { request_payload: _requestPayload, ...snapshot } = record
+  return { ...snapshot, request_payload_persisted: true }
+}
+
+function withoutJournalMarker(record: TaskJournalRecord): StoredTaskRecord {
+  const { request_payload_persisted: _persisted, ...snapshot } = record
+  return snapshot
+}
+
 function compact<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T
 }
@@ -354,13 +387,13 @@ function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoExcepti
   return error instanceof Error && (error as NodeJS.ErrnoException).code === code
 }
 
-function isStoredTaskRecord(value: unknown): value is StoredTaskRecord {
+function isTaskJournalRecord(value: unknown): value is TaskJournalRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const record = value as Partial<StoredTaskRecord>
+  const record = value as Partial<TaskJournalRecord>
   return record.schema_version === 1
     && typeof record.task_id === 'string'
     && Boolean(record.task_id)
     && typeof record.request_hash === 'string'
     && Boolean(record.request_hash)
-    && Boolean(record.request_payload || record.tombstoned_at)
+    && Boolean(record.request_payload || record.tombstoned_at || record.request_payload_persisted === true)
 }

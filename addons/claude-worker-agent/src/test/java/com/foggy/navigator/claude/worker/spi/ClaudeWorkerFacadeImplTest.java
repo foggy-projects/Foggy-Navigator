@@ -26,6 +26,7 @@ import java.util.concurrent.Executor;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
@@ -166,6 +167,20 @@ class ClaudeWorkerFacadeImplTest {
         when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
 
         assertDoesNotThrow(() -> facade.validateWorkerAccess("agent-owner-1", "tenant-1", "worker-1"));
+    }
+
+    @Test
+    void validatePhysicalWorkerOwnershipRejectsSameTenantNonOwner() {
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker-1");
+        worker.setUserId("owner-1");
+        worker.setTenantId("tenant-1");
+        when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
+
+        assertDoesNotThrow(() -> facade.validateWorkerAccess("member-1", "tenant-1", "worker-1"));
+        assertThrows(IllegalArgumentException.class,
+                () -> facade.validatePhysicalWorkerOwnership("member-1", "worker-1"));
+        assertDoesNotThrow(() -> facade.validatePhysicalWorkerOwnership("owner-1", "worker-1"));
     }
 
     @Test

@@ -509,6 +509,14 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     }
 
     @Override
+    public void validatePhysicalWorkerOwnership(String userId, String workerId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!Objects.equals(worker.getUserId(), userId)) {
+            throw new IllegalArgumentException("Worker not found: " + workerId);
+        }
+    }
+
+    @Override
     public void validateWorkerAccess(String userId, String tenantId, String workerId) {
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
         if (worker.getUserId().equals(userId)) {

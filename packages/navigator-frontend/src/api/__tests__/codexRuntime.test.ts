@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import client from '../client'
 import {
+  getCodexRuntimeAvailability,
   listCodexRuntimes,
   refreshCodexRuntime,
   registerCodexRuntime,
@@ -51,6 +52,44 @@ describe('codexRuntime API', () => {
 
     expect(client.get).toHaveBeenCalledWith('/codex-runtimes', {
       params: { workerId: 'worker-1' },
+      suppressErrorMessage: true,
+    })
+  })
+
+  it('reads only aggregate runtime availability for an accessible worker', async () => {
+    const availability = {
+      appServerManaged: true,
+      ultraAvailable: false,
+      blockReason: 'CODEX_ULTRA_RUNTIME_UNAVAILABLE' as const,
+    }
+    vi.mocked(client.get).mockResolvedValue({ data: availability })
+
+    await expect(getCodexRuntimeAvailability('shared-worker', {
+      suppressErrorMessage: true,
+    })).resolves.toEqual(availability)
+    expect(client.get).toHaveBeenCalledWith('/codex-runtimes/availability', {
+      params: { workerId: 'shared-worker' },
+      suppressErrorMessage: true,
+    })
+  })
+
+  it('passes the requested model for model-aware Ultra availability', async () => {
+    const availability = {
+      appServerManaged: true,
+      ultraAvailable: true,
+      blockReason: null,
+    }
+    vi.mocked(client.get).mockResolvedValue({ data: availability })
+
+    await expect(getCodexRuntimeAvailability('shared-worker', {
+      model: 'codex-terra:ultra',
+      suppressErrorMessage: true,
+    })).resolves.toEqual(availability)
+    expect(client.get).toHaveBeenCalledWith('/codex-runtimes/availability', {
+      params: {
+        workerId: 'shared-worker',
+        model: 'codex-terra:ultra',
+      },
       suppressErrorMessage: true,
     })
   })

@@ -17,8 +17,14 @@ export class EventBroadcast {
 
   constructor(readonly taskId: string, eventsDir: string) {
     fs.mkdirSync(eventsDir, { recursive: true })
-    const file = crypto.createHash('sha256').update(taskId).digest('hex')
-    this.jsonlPath = path.join(eventsDir, `${file}.jsonl`)
+    this.jsonlPath = eventJournalPath(taskId, eventsDir)
+  }
+
+  static async purgePersisted(taskId: string, eventsDir: string): Promise<void> {
+    const journal = eventJournalPath(taskId, eventsDir)
+    const existed = fs.existsSync(journal)
+    await fs.promises.rm(journal, { force: true })
+    if (existed) await syncParentDirectory(journal)
   }
 
   nextSeq(): number {
@@ -141,6 +147,11 @@ export class EventBroadcast {
       }
     }
   }
+}
+
+function eventJournalPath(taskId: string, eventsDir: string): string {
+  const file = crypto.createHash('sha256').update(taskId).digest('hex')
+  return path.join(eventsDir, `${file}.jsonl`)
 }
 
 async function appendDurable(file: string, content: string): Promise<void> {

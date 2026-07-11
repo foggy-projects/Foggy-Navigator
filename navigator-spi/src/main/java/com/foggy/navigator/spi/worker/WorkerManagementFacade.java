@@ -34,6 +34,16 @@ public interface WorkerManagementFacade {
     }
 
     /**
+     * 验证指定用户是物理 Worker 的直接所有者。
+     * <p>
+     * 与 {@link #validateWorkerAccess(String, String, String)} 不同，同租户或共享授权
+     * 不能通过此校验。涉及 Worker 运行时配置和运维的管理接口必须使用该方法。
+     *
+     * @throws IllegalArgumentException 若 Worker 不存在或 userId 不是其直接所有者
+     */
+    void validatePhysicalWorkerOwnership(String userId, String workerId);
+
+    /**
      * 验证用户可访问指定 Worker。
      * <p>
      * OpenAPI/A2A 等 owner-aware 场景会先解析出 tenant-scoped 的物理 Worker，

@@ -3,12 +3,18 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import test from 'node:test'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import { AppServerEventBridge } from '../src/app-server/event-bridge.js'
+import { EventBroadcast } from '../src/persistence/event-store.js'
 import {
+  AppServerRuntimeError,
   AppServerRuntimeInstance,
+  isAppServerProcessTreeSafetyError,
   runAppServerTurn,
   type AppServerProcess,
 } from '../src/app-server/runtime.js'
+import { createStubbornProcessTreeFixture, isProcessAlive } from './stubborn-app-server-fixture.js'
 
 type JsonMessage = Record<string, any>
 
@@ -25,7 +31,8 @@ class FakeProcess extends EventEmitter {
     readonly committed: () => boolean,
     private readonly emitTestNotification = false,
     private readonly childMetadataError?: string,
-    private readonly interruptBehavior?: 'error' | 'timeout' | 'turn-start-hang' | 'stale-terminal',
+    private readonly interruptBehavior?: 'error' | 'timeout' | 'turn-start-hang' | 'stale-terminal' | 'same-batch-events'
+      | 'running-after-start',
   ) {
     super()
     this.stdin.on('data', chunk => {
@@ -62,6 +69,36 @@ class FakeProcess extends EventEmitter {
     if (message.method === 'turn/start') {
       assert.equal(this.committed(), true, 'turn/start must be written only after durable commit callback')
       if (this.interruptBehavior === 'turn-start-hang') return
+      if (this.interruptBehavior === 'same-batch-events') {
+        this.stdout.write([
+          { id: message.id, result: { turn: { id: 'turn-1', status: 'inProgress' } } },
+          {
+            method: 'item/agentMessage/delta',
+            params: {
+              threadId: 'thread-1', turnId: 'turn-1', itemId: 'message-1', delta: 'EARLY_',
+            },
+          },
+          {
+            method: 'item/agentMessage/delta',
+            params: {
+              threadId: 'thread-1', turnId: 'turn-1', itemId: 'message-1', delta: 'COMPLETE',
+            },
+          },
+          {
+            method: 'item/completed',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              item: { id: 'message-1', type: 'agentMessage', text: 'EARLY_COMPLETE' },
+            },
+          },
+          {
+            method: 'turn/completed',
+            params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } },
+          },
+        ].map(event => JSON.stringify(event)).join('\n') + '\n')
+        return
+      }
       if (this.interruptBehavior === 'stale-terminal') {
         this.send({
           method: 'turn/completed',
@@ -154,6 +191,52 @@ test('persistent runtime initializes once and serves sequential exclusive turns'
   assert.equal(process.killed, true)
 })
 
+test('turn-started callback failure retires and closes a still-running instance before rejection', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, 'running-after-start')
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+  let fatalCount = 0
+  instance.onFatal(() => { fatalCount++ })
+
+  await assert.rejects(instance.runTurn({
+    taskId: 'turn-started-persistence-failure',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'inspect',
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+    onTurnStarted: () => { throw new Error('turn journal failed') },
+  }), error => {
+    assert.ok(error instanceof AppServerRuntimeError)
+    assert.equal(error.executionCommitted, true)
+    assert.equal(error.turnMayHaveStarted, true)
+    assert.equal(error.threadId, 'thread-1')
+    assert.equal(error.turnId, 'turn-1')
+    assert.match(error.message, /turn journal failed/)
+    return true
+  })
+
+  assert.equal(instance.isHealthy(), false)
+  assert.equal(instance.isActive(), false)
+  assert.equal(process.killed, true, 'runTurn must await child close before rejecting')
+  assert.equal(fatalCount, 1)
+  assert.equal(received.filter(message => message.method === 'turn/start').length, 1)
+  await assert.rejects(instance.runTurn({
+    taskId: 'must-not-reuse',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'inspect',
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+  }), /unavailable/)
+})
+
 test('persistent runtime interrupts the exact thread and turn requested by recovery', async () => {
   const received: JsonMessage[] = []
   const process = new FakeProcess(received, () => true)
@@ -240,6 +323,151 @@ test('runtime close escalates to SIGKILL when the child ignores graceful shutdow
   })
   await instance.close(20)
   assert.deepEqual(process.signals, ['SIGTERM', 'SIGKILL'])
+})
+
+test('runtime close removes a stubborn app-server descendant before resolving', async t => {
+  const fixture = await createStubbornProcessTreeFixture(t, 'close')
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: fixture.spawnProcess,
+    requestTimeoutMs: 1_000,
+    processTreeStateDir: fixture.stateDir,
+    processTreeEntry: fixture.entry,
+  })
+  const descendantPid = await fixture.readDescendantPid()
+  const processTreeRoot = path.join(fixture.stateDir, 'runtime-process-trees')
+  const snapshotDirectory = fs.readdirSync(processTreeRoot, { withFileTypes: true })
+    .find(entry => entry.isDirectory())
+  assert.ok(snapshotDirectory)
+  const snapshotText = fs.readFileSync(path.join(processTreeRoot, snapshotDirectory.name, 'tree.json'), 'utf8')
+  const snapshot = JSON.parse(snapshotText) as { processes: Array<Record<string, unknown>> }
+  assert.equal(snapshot.processes.some(processIdentity => 'command' in processIdentity), false)
+  assert.doesNotMatch(snapshotText, /stubborn-app-server|setInterval/)
+
+  await instance.close(50)
+
+  assert.equal(isProcessAlive(descendantPid), false)
+  assert.equal(fs.existsSync(path.join(fixture.stateDir, 'runtime-process-trees')), false)
+})
+
+test('initial process-tree capture failure preserves safe evidence and reports an unsafe runtime', async t => {
+  const fixture = await createStubbornProcessTreeFixture(t, 'close')
+  const wrongEntry = path.join(fixture.stateDir, 'wrong-entry.mjs')
+  fs.writeFileSync(wrongEntry, 'export {}\n')
+
+  await assert.rejects(
+    AppServerRuntimeInstance.start({
+      env: {},
+      spawnProcess: fixture.spawnProcess,
+      requestTimeoutMs: 1_000,
+      processTreeStateDir: fixture.stateDir,
+      processTreeEntry: wrongEntry,
+    }),
+    error => isAppServerProcessTreeSafetyError(error),
+  )
+
+  const descendantPid = await fixture.readDescendantPid()
+  assert.equal(isProcessAlive(descendantPid), true, 'detached residue cannot be declared clean')
+  const processTreeRoot = path.join(fixture.stateDir, 'runtime-process-trees')
+  const snapshotDirectory = fs.readdirSync(processTreeRoot, { withFileTypes: true })
+    .find(entry => entry.isDirectory())
+  assert.ok(snapshotDirectory)
+  const evidenceText = fs.readFileSync(path.join(processTreeRoot, snapshotDirectory.name, 'capture.failure'), 'utf8')
+  const evidence = JSON.parse(evidenceText) as Record<string, unknown>
+  assert.deepEqual(Object.keys(evidence).sort(), [
+    'captured_at',
+    'cleanup_proven',
+    'entry_sha256',
+    'reason',
+    'root_pid',
+    'schema_version',
+  ])
+  assert.equal(evidence.reason, 'INITIAL_CAPTURE_FAILED')
+  assert.equal(evidence.cleanup_proven, false)
+  assert.match(String(evidence.entry_sha256), /^[a-f0-9]{64}$/)
+  assert.doesNotMatch(evidenceText, /wrong-entry|stubborn-app-server|setInterval|Bearer|token/i)
+})
+
+test('unproven close retains process-tree evidence and rejects instead of releasing ownership', async t => {
+  const fixture = await createStubbornProcessTreeFixture(t, 'close')
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: fixture.spawnProcess,
+    requestTimeoutMs: 1_000,
+    processTreeStateDir: fixture.stateDir,
+    processTreeEntry: fixture.entry,
+  })
+  const descendantPid = await fixture.readDescendantPid()
+  const processTreeRoot = path.join(fixture.stateDir, 'runtime-process-trees')
+  const snapshotDirectory = fs.readdirSync(processTreeRoot, { withFileTypes: true })
+    .find(entry => entry.isDirectory())
+  assert.ok(snapshotDirectory)
+  fs.rmSync(path.join(processTreeRoot, snapshotDirectory.name, 'tree.json'))
+
+  await assert.rejects(instance.close(25), error => isAppServerProcessTreeSafetyError(error))
+
+  assert.equal(isProcessAlive(descendantPid), true)
+  const evidenceText = fs.readFileSync(path.join(processTreeRoot, snapshotDirectory.name, 'cleanup.failure'), 'utf8')
+  assert.equal((JSON.parse(evidenceText) as Record<string, unknown>).reason, 'CLOSE_CLEANUP_UNPROVEN')
+  assert.doesNotMatch(evidenceText, /stubborn-app-server|setInterval|Bearer|token/i)
+})
+
+test('final process-tree extension failure remains fatal after stale-snapshot cleanup succeeds', async t => {
+  const fixture = await createStubbornProcessTreeFixture(t, 'repair-tree-on-term')
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: fixture.spawnProcess,
+    requestTimeoutMs: 1_000,
+    processTreeStateDir: fixture.stateDir,
+    processTreeEntry: fixture.entry,
+  })
+  const descendantPid = await fixture.readDescendantPid()
+  const processTreeRoot = path.join(fixture.stateDir, 'runtime-process-trees')
+  const snapshotDirectory = fs.readdirSync(processTreeRoot, { withFileTypes: true })
+    .find(entry => entry.isDirectory())
+  assert.ok(snapshotDirectory)
+  const trackerDirectory = path.join(processTreeRoot, snapshotDirectory.name)
+  const snapshotPath = path.join(trackerDirectory, 'tree.json')
+  fs.copyFileSync(snapshotPath, path.join(trackerDirectory, 'tree.backup'))
+  fs.writeFileSync(snapshotPath, '{invalid snapshot')
+
+  await assert.rejects(instance.close(50), error => isAppServerProcessTreeSafetyError(error))
+
+  assert.equal(isProcessAlive(descendantPid), false, 'stale snapshot cleanup remains best-effort')
+  assert.equal(fs.existsSync(trackerDirectory), true, 'unsafe cleanup evidence must be retained')
+  const evidenceText = fs.readFileSync(path.join(trackerDirectory, 'cleanup.failure'), 'utf8')
+  assert.equal((JSON.parse(evidenceText) as Record<string, unknown>).reason, 'CLOSE_CLEANUP_UNPROVEN')
+  assert.doesNotMatch(evidenceText, /stubborn-app-server|setInterval|Bearer|token/i)
+})
+
+test('aborted turn does not return to its lease owner before descendant cleanup', async t => {
+  const fixture = await createStubbornProcessTreeFixture(t, 'turn')
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: fixture.spawnProcess,
+    requestTimeoutMs: 1_000,
+    processTreeStateDir: fixture.stateDir,
+    processTreeEntry: fixture.entry,
+  })
+  const descendantPid = await fixture.readDescendantPid()
+  const controller = new AbortController()
+  const running = instance.runTurn({
+    taskId: 'process-tree-abort',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'inspect',
+    signal: controller.signal,
+    interruptTimeoutMs: 25,
+    onNotification: () => undefined,
+  })
+  await fixture.waitForTurnStart()
+  controller.abort()
+
+  await assert.rejects(running)
+
+  assert.equal(isProcessAlive(descendantPid), false, 'runtime rejection is the lease/lock release boundary')
+  assert.equal(instance.isHealthy(), false)
 })
 
 for (const behavior of ['error', 'timeout'] as const) {
@@ -359,6 +587,49 @@ test('a late completion from an older turn cannot terminate the current root tur
   })
   assert.equal(result.turn.id, 'turn-1')
   assert.equal(result.turn.status, 'completed')
+})
+
+test('turn/start response and same-batch notifications replay only after turn correlation', async t => {
+  const eventsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-turn-correlation-'))
+  t.after(() => fs.rmSync(eventsDir, { recursive: true, force: true }))
+  const broadcast = new EventBroadcast('same-batch-task', eventsDir)
+  const bridge = new AppServerEventBridge({
+    taskId: 'same-batch-task',
+    broadcast,
+    rootThreadId: 'thread-1',
+  })
+  const process = new FakeProcess([], () => true, false, undefined, 'same-batch-events')
+
+  const result = await runAppServerTurn({
+    taskId: 'same-batch-task',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'inspect',
+    env: {},
+    signal: new AbortController().signal,
+    onNotification: notification => bridge.handle(notification),
+    onTurnStarted: (_threadId, turnId) => {
+      assert.equal(turnId, 'turn-1')
+      bridge.setRootTurnId(turnId)
+    },
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+
+  await broadcast.flush()
+  const assistantEvents = broadcast.getEventsAfter(0)
+    .filter(event => event.type === 'assistant_text')
+  assert.equal(result.turn.status, 'completed')
+  assert.equal(bridge.getResult().assistantText, 'EARLY_COMPLETE')
+  assert.deepEqual(assistantEvents.map(event => ({
+    subtype: event.subtype,
+    content: event.content,
+  })), [
+    { subtype: 'text_delta', content: 'EARLY_' },
+    { subtype: 'text_delta', content: 'COMPLETE' },
+    { subtype: undefined, content: 'EARLY_COMPLETE' },
+  ])
 })
 
 test('independent package pins the CLI and has no Codex SDK dependency', () => {

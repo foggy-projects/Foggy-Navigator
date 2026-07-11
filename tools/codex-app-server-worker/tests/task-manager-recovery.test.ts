@@ -186,3 +186,49 @@ test('terminal cleanup removes materialized input together with the event journa
   await assert.rejects(fs.access(inputRoot), /ENOENT/)
   assert.deepEqual(await fs.readdir(path.join(stateDir, 'events')), [])
 })
+
+test('TaskManager bounds 105 large terminal histories across restart and concurrent replay cleanup', async t => {
+  const stateDir = await tempDirectory('codex-app-manager-bounded-terminal-')
+  t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
+  const config = testConfig(stateDir)
+  const seed = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  await seed.initialize()
+  const eventsDir = path.join(stateDir, 'events')
+  const taskCount = 105
+  const largeEvent = 'event-content-'.repeat(2_048)
+
+  for (let index = 0; index < taskCount; index++) {
+    const taskId = `terminal-history-${index}`
+    await seed.accept(taskId, { prompt: `${index}:${'request-'.repeat(1_024)}` })
+    await seed.transition(taskId, 'terminal', { outcome: 'completed' })
+    const broadcast = new EventBroadcast(taskId, eventsDir)
+    broadcast.emit({ type: 'assistant_text', task_id: taskId, content: `${index}:${largeEvent}` })
+    broadcast.emit({ type: 'result', task_id: taskId, result: `done-${index}` })
+    await broadcast.close()
+  }
+
+  const recoveredStore = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const manager = new TaskManager(config, recoveredStore, new FakeExecutor())
+  await manager.initialize()
+
+  assert.equal(manager.runtimeMetrics().resident_broadcasts, 0)
+  assert.equal(recoveredStore.list().every(record => record.request_payload === undefined), true)
+
+  const replayTaskId = 'terminal-history-0'
+  const cleanup = manager.cleanupTerminal(replayTaskId)
+  const replay = manager.getBroadcast(replayTaskId)
+  const first: string[] = []
+  const second: string[] = []
+  const firstUnsubscribe = replay.subscribeAfter(0, event => first.push(event.type))
+  const secondUnsubscribe = replay.subscribeAfter(0, event => second.push(event.type))
+  firstUnsubscribe()
+  secondUnsubscribe()
+
+  assert.deepEqual(first, ['assistant_text', 'result'])
+  assert.deepEqual(second, ['assistant_text', 'result'])
+  await cleanup
+  await waitFor(() => manager.runtimeMetrics().resident_broadcasts === 0)
+  const removedJournal = `${crypto.createHash('sha256').update(replayTaskId).digest('hex')}.jsonl`
+  assert.equal((await fs.readdir(eventsDir)).includes(removedJournal), false)
+  assert.equal(manager.get(replayTaskId)?.tombstoned_at !== undefined, true)
+})

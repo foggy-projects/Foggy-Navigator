@@ -13,6 +13,7 @@ import com.foggy.navigator.common.security.CredentialEncryptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Mono;
@@ -465,6 +466,122 @@ class CodexRuntimeRegistryServiceTest {
         assertEquals("a-runtime", selected.getRuntimeId());
     }
 
+    @ParameterizedTest
+    @CsvSource({
+            "DARK,0,false",
+            "DRAINING,100,false",
+            "ULTRA_CANARY,0,false",
+            "ULTRA_CANARY,1,true",
+            "ULTRA_DEFAULT,0,true",
+            "ALL_CANARY,0,true",
+            "ALL_DEFAULT,0,true"
+    })
+    void availabilityUsesUltraRoutingSemantics(String policy, int rollout, boolean expected)
+            throws Exception {
+        CodexRuntimeEntity entity = readyRuntime(policy, rollout, "gpt-5.6-sol");
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+
+        var result = service.availability("worker-1");
+
+        assertTrue(result.getAppServerManaged());
+        assertEquals(expected, result.getUltraAvailable());
+        assertEquals(expected ? null : "CODEX_ULTRA_RUNTIME_UNAVAILABLE",
+                result.getBlockReason());
+    }
+
+    @Test
+    void availabilityRequiresEnabledReadyFreshAndUltraCapability() throws Exception {
+        CodexRuntimeEntity disabled = readyRuntime("ULTRA_DEFAULT", 100, "gpt-5.6-sol");
+        disabled.setEnabled(false);
+        CodexRuntimeEntity notReady = readyRuntime("ULTRA_DEFAULT", 100, "gpt-5.6-sol");
+        notReady.setReadinessStatus("INCOMPATIBLE");
+        CodexRuntimeEntity stale = readyRuntime("ULTRA_DEFAULT", 100, "gpt-5.6-sol");
+        stale.setLastCapabilityAt(LocalDateTime.now().minusMinutes(5));
+        CodexRuntimeEntity noUltra = readyRuntime("ULTRA_DEFAULT", 100, "gpt-5.4-mini");
+
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(disabled, notReady, stale, noUltra));
+
+        var result = service.availability("worker-1");
+
+        assertTrue(result.getAppServerManaged());
+        assertFalse(result.getUltraAvailable());
+        assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", result.getBlockReason());
+    }
+
+    @Test
+    void availabilityDistinguishesRegisteredAppServerFromAbsentRuntimeWithoutDetails() {
+        CodexRuntimeEntity dark = runtime("DARK", 0);
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(dark));
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-2"))
+                .thenReturn(List.of());
+
+        var managed = service.availability("worker-1");
+        var absent = service.availability("worker-2");
+
+        assertTrue(managed.getAppServerManaged());
+        assertFalse(managed.getUltraAvailable());
+        assertFalse(absent.getAppServerManaged());
+        assertFalse(absent.getUltraAvailable());
+        assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", absent.getBlockReason());
+    }
+
+    @Test
+    void availabilityUsesRequestedModelAndPerModelReasoningMatrix() throws Exception {
+        CodexRuntimeEntity entity = readyRuntime("ULTRA_DEFAULT", 100, "*");
+        setModelCapabilities(entity, Map.of(
+                "codex-ultra", "gpt-5.6-sol:ultra",
+                "codex-terra", "gpt-5.6-terra",
+                "codex-luna", "gpt-5.6-luna"), Map.of(
+                "gpt-5.6-sol", List.of("ultra"),
+                "gpt-5.6-terra", List.of("ultra"),
+                "gpt-5.6-luna", List.of("max")));
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+
+        assertTrue(service.availability("worker-1").getUltraAvailable());
+        assertTrue(service.availability("worker-1", "codex-terra:ultra").getUltraAvailable());
+        assertFalse(service.availability("worker-1", "codex-luna:ultra").getUltraAvailable());
+    }
+
+    @Test
+    void availabilityFailsClosedForConflictingCandidateAliases() throws Exception {
+        CodexRuntimeEntity first = readyRuntime("ULTRA_DEFAULT", 100, "*");
+        CodexRuntimeEntity second = readyRuntime("ULTRA_DEFAULT", 100, "*");
+        second.setRuntimeId("app-second");
+        setModelCapabilities(first, Map.of("custom-tier", "gpt-5.6-sol:ultra"),
+                Map.of("gpt-5.6-sol", List.of("ultra")));
+        setModelCapabilities(second, Map.of("custom-tier", "gpt-5.6-terra:ultra"),
+                Map.of("gpt-5.6-terra", List.of("ultra")));
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(first, second));
+
+        var result = service.availability("worker-1", "custom-tier");
+
+        assertTrue(result.getAppServerManaged());
+        assertFalse(result.getUltraAvailable());
+        assertEquals(CodexRuntimeRegistryService.MODEL_ALIAS_CONFLICT_CODE,
+                result.getBlockReason());
+    }
+
+    @Test
+    void availabilityUsesDisabledManifestAliasSemanticsButReportsUnavailable() throws Exception {
+        CodexRuntimeEntity disabled = readyRuntime("ULTRA_DEFAULT", 100, "*");
+        disabled.setEnabled(false);
+        setModelCapabilities(disabled, Map.of("custom-ultra", "gpt-5.6-sol:ultra"),
+                Map.of("gpt-5.6-sol", List.of("ultra")));
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(disabled));
+
+        var result = service.availability("worker-1", "custom-ultra");
+
+        assertTrue(result.getAppServerManaged());
+        assertFalse(result.getUltraAvailable());
+        assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", result.getBlockReason());
+    }
+
     @Test
     void ultraRoutingRequiresNativeSubtaskContractV1() throws Exception {
         CodexRuntimeEntity entity = runtime("ULTRA_DEFAULT", 100);
@@ -473,18 +590,28 @@ class CodexRuntimeRegistryServiceTest {
         Map<String, Object> features = new java.util.LinkedHashMap<>(appServerFeatures());
         features.put("native_subtask_contract_versions", List.of(2));
         manifest.put("features", features);
+        manifest.put("model_aliases", Map.of(
+                "codex-latest", "gpt-5.6-sol",
+                "codex-terra", "gpt-5.6-terra",
+                "custom-ultra", "gpt-5.6-sol:ultra"));
         stubRefresh(entity, manifest);
 
         var result = service.refreshCapabilities("app-main", 1);
         assertEquals("READY", result.getReadinessStatus());
         assertFalse(result.getSupportsUltra());
 
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
         when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask("worker-1", "codex-ultra",
                         "codex-worker", "task-1"));
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", error.getCode());
+        CodexRuntimeUnavailableException customError = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.selectForNewTask("worker-1", "custom-ultra",
+                        "codex-worker", "task-2"));
+        assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", customError.getCode());
     }
 
     @Test
@@ -554,16 +681,110 @@ class CodexRuntimeRegistryServiceTest {
         assertTrue(firstPass.contains(false));
     }
 
-    @Test
-    void bareNonUltraModelUsesLegacyWhenRuntimeIsDark() {
+    @ParameterizedTest
+    @ValueSource(strings = {"codex-latest", "gpt-5.6-sol:high"})
+    void defaultAliasAndRealNonUltraModelUseLegacyWhenRuntimeIsDark(String model) {
         CodexRuntimeEntity entity = runtime("DARK", 0);
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
         when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
 
         CodexRuntimeBinding binding = service.selectForNewTask(
-                "worker-1", "codex-latest", "codex-worker", "task-1");
+                "worker-1", model, "codex-worker", "task-1");
 
         assertEquals(CodexRuntimeType.SDK_EXEC, binding.getRuntimeType());
+    }
+
+    @Test
+    void manifestAliasCanRouteAnUltraRequestToAppServer() throws Exception {
+        CodexRuntimeEntity entity = readyRuntime("ULTRA_DEFAULT", 100, "*");
+        setModelCapabilities(entity, Map.of("custom-ultra", "gpt-5.6-sol:ultra"),
+                Map.of("gpt-5.6-sol", List.of("ultra")));
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+        when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
+                "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
+
+        CodexRuntimeBinding binding = service.selectForNewTask(
+                "worker-1", "custom-ultra", "codex-worker", "task-1");
+
+        assertEquals(CodexRuntimeType.APP_SERVER, binding.getRuntimeType());
+    }
+
+    @Test
+    void manifestUltraAliasNeverFallsBackToSdkOutsideTheActiveCohort() throws Exception {
+        CodexRuntimeEntity entity = readyRuntime("DARK", 0, "*");
+        setModelCapabilities(entity, Map.of("custom-ultra", "gpt-5.6-sol:ultra"),
+                Map.of("gpt-5.6-sol", List.of("ultra")));
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+        when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
+                "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
+
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.selectForNewTask(
+                        "worker-1", "custom-ultra", "codex-worker", "task-1"));
+
+        assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", error.getCode());
+    }
+
+    @Test
+    void manifestNonUltraAliasNeverFallsBackToSdkWhenRuntimeIsDark() throws Exception {
+        CodexRuntimeEntity entity = readyRuntime("DARK", 0, "*");
+        setModelCapabilities(entity, Map.of("custom-high", "gpt-5.6-sol:high"),
+                Map.of("gpt-5.6-sol", List.of("high")));
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+        when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
+                "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
+
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.selectForNewTask(
+                        "worker-1", "custom-high", "codex-worker", "task-1"));
+
+        assertEquals("CODEX_RUNTIME_UNAVAILABLE", error.getCode());
+    }
+
+    @Test
+    void disabledManifestUltraAliasNeverFallsBackToSdk() throws Exception {
+        CodexRuntimeEntity disabled = readyRuntime("ULTRA_DEFAULT", 100, "*");
+        disabled.setEnabled(false);
+        setModelCapabilities(disabled, Map.of("custom-ultra", "gpt-5.6-sol:ultra"),
+                Map.of("gpt-5.6-sol", List.of("ultra")));
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(disabled));
+        when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
+                "worker-1", "APP_SERVER")).thenReturn(List.of());
+
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.selectForNewTask(
+                        "worker-1", "custom-ultra", "codex-worker", "task-1"));
+
+        assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", error.getCode());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"gpt-5.6-sol:high", "gpt-5.6-terra:ultra"})
+    void conflictingCandidateAliasResolutionFailsClosed(String secondTarget) throws Exception {
+        CodexRuntimeEntity first = readyRuntime("ULTRA_DEFAULT", 100, "*");
+        CodexRuntimeEntity second = readyRuntime("ULTRA_DEFAULT", 100, "*");
+        second.setRuntimeId("app-second");
+        setModelCapabilities(first, Map.of("custom-tier", "gpt-5.6-sol:ultra"),
+                Map.of("gpt-5.6-sol", List.of("high", "ultra")));
+        setModelCapabilities(second, Map.of("custom-tier", secondTarget), Map.of(
+                "gpt-5.6-sol", List.of("high", "ultra"),
+                "gpt-5.6-terra", List.of("ultra")));
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(first, second));
+        when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
+                "worker-1", "APP_SERVER")).thenReturn(List.of(first, second));
+
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.selectForNewTask(
+                        "worker-1", "custom-tier", "codex-worker", "task-1"));
+
+        assertEquals(CodexRuntimeRegistryService.MODEL_ALIAS_CONFLICT_CODE, error.getCode());
     }
 
     @ParameterizedTest
@@ -896,6 +1117,19 @@ class CodexRuntimeRegistryServiceTest {
         manifest.put("readiness", Map.of("ready", true, "reasons", List.of()));
         manifest.put("features", appServerFeatures());
         return manifest;
+    }
+
+    private void setModelCapabilities(
+            CodexRuntimeEntity entity,
+            Map<String, String> aliases,
+            Map<String, List<String>> reasoningMatrix) throws Exception {
+        Map<String, Object> manifest = topLevelManifest(
+                entity.getRuntimeId(), entity.getRevision(),
+                CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
+        manifest.put("models", reasoningMatrix.keySet().stream().toList());
+        manifest.put("model_aliases", aliases);
+        manifest.put("model_reasoning_matrix", reasoningMatrix);
+        entity.setCapabilityManifestJson(objectMapper.writeValueAsString(manifest));
     }
 
     private Map<String, Object> appServerFeatures() {

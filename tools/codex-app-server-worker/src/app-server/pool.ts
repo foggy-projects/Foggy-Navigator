@@ -1,6 +1,10 @@
 import crypto from 'node:crypto'
 import type { AppConfig } from '../config.js'
-import { AppServerRuntimeInstance, type PersistentTurnOptions } from './runtime.js'
+import {
+  AppServerRuntimeInstance,
+  isAppServerProcessTreeSafetyError,
+  type PersistentTurnOptions,
+} from './runtime.js'
 
 export type AppServerLane = {
   key: string
@@ -65,6 +69,14 @@ export class AppServerPoolAcquireTimeoutError extends Error {
   }
 }
 
+export class AppServerPoolDrainTimeoutError extends Error {
+  readonly code = 'APP_SERVER_POOL_DRAIN_TIMEOUT'
+  constructor() {
+    super('Timed out retiring Codex app-server instances')
+    this.name = 'AppServerPoolDrainTimeoutError'
+  }
+}
+
 type InstanceRecord = {
   id: string
   laneKey: string
@@ -109,6 +121,8 @@ export class AppServerPool {
   private readonly creatingByLane = new Map<string, number>()
   private readonly creationControllers = new Set<AbortController>()
   private readonly retirements = new Set<Promise<void>>()
+  private readonly retirementOwners = new Set<PoolRuntimeInstance>()
+  private readonly retirementFailures: Error[] = []
   private readonly factory: PoolInstanceFactory
   private readonly sweepTimer: NodeJS.Timeout
   private creating = 0
@@ -133,8 +147,13 @@ export class AppServerPool {
       | 'poolAcquireTimeoutMs'
       | 'poolIdleTtlMs'
       | 'poolMaxLifetimeMs'
-      | 'poolMaxTasksPerInstance'>,
-    factory: PoolInstanceFactory = async (lane, signal) => AppServerRuntimeInstance.start({ env: lane.env, signal }),
+      | 'poolMaxTasksPerInstance'
+      | 'stateDir'>,
+    factory: PoolInstanceFactory = async (lane, signal) => AppServerRuntimeInstance.start({
+      env: lane.env,
+      signal,
+      processTreeStateDir: config.stateDir,
+    }),
     private readonly now: () => number = () => Date.now(),
   ) {
     this.factory = factory
@@ -183,6 +202,10 @@ export class AppServerPool {
     return this.draining
   }
 
+  failClosed(error: Error): void {
+    this.markRetirementFailure(error)
+  }
+
   metrics(): PoolMetrics {
     const records = [...this.instances.values()]
     return {
@@ -221,7 +244,7 @@ export class AppServerPool {
 
   async drain(timeoutMs: number): Promise<void> {
     if (this.drainPromise) return this.drainPromise
-    this.drainPromise = (async () => {
+    const draining = (async () => {
       this.draining = true
       clearInterval(this.sweepTimer)
       const deadline = Date.now() + timeoutMs
@@ -236,8 +259,21 @@ export class AppServerPool {
       while ((this.retirements.size > 0 || this.creating > 0) && Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 25))
       }
+      if (this.retirementFailures.length > 0) {
+        throw new AggregateError(
+          [...this.retirementFailures],
+          'One or more Codex app-server instances could not be retired cleanly',
+        )
+      }
+      if (this.retirements.size > 0 || this.creating > 0 || this.instances.size > 0) {
+        throw new AppServerPoolDrainTimeoutError()
+      }
     })()
-    return this.drainPromise
+    this.drainPromise = draining
+    void draining.catch(() => {
+      if (this.drainPromise === draining) this.drainPromise = undefined
+    })
+    return draining
   }
 
   private schedulePump(): void {
@@ -299,21 +335,59 @@ export class AppServerPool {
           this.schedulePump()
         }).catch(error => {
           finishCreation()
-          waiter.reject(this.draining
+          const failure = error instanceof Error ? error : new Error(String(error))
+          const processTreeUnsafe = isAppServerProcessTreeSafetyError(failure)
+          if (processTreeUnsafe) {
+            this.failClosed(failure)
+          }
+          waiter.reject(processTreeUnsafe
+            ? failure
+            : this.draining
             ? new AppServerPoolDrainingError()
-            : error instanceof Error ? error : new Error(String(error)))
+            : failure)
           this.schedulePump()
         })
+      } else if (this.retireIdleForReplacement(waiter.lane.key)) {
+        this.schedulePump()
       }
     }
   }
 
   private canCreate(laneKey: string): boolean {
-    const total = this.instances.size + this.creating
+    // A retiring child still owns its global slot until close() settles.
+    const total = this.instances.size + this.creating + this.retirements.size
     if (total >= this.config.poolMaxInstances) return false
+    return this.hasLaneCreationCapacity(laneKey)
+  }
+
+  private hasLaneCreationCapacity(laneKey: string): boolean {
     const laneInstances = [...this.instances.values()].filter(record => record.laneKey === laneKey).length
       + (this.creatingByLane.get(laneKey) || 0)
     return laneInstances < this.config.poolMaxInstancesPerLane
+  }
+
+  private retireIdleForReplacement(laneKey: string): boolean {
+    // Serialize replacements so concurrent waiters cannot over-evict idle lanes.
+    if (
+      this.retirements.size > 0
+      || this.instances.size + this.creating < this.config.poolMaxInstances
+      || !this.hasLaneCreationCapacity(laneKey)
+    ) {
+      return false
+    }
+    const candidate = [...this.instances.values()]
+      .filter(record => !record.busy && !record.runtime.isActive())
+      .sort((left, right) => {
+        const leftSameLane = left.laneKey === laneKey ? 1 : 0
+        const rightSameLane = right.laneKey === laneKey ? 1 : 0
+        return leftSameLane - rightSameLane
+          || left.lastUsedAt - right.lastUsedAt
+          || left.createdAt - right.createdAt
+          || left.id.localeCompare(right.id)
+      })[0]
+    if (!candidate) return false
+    this.retire(candidate, candidate.crashed || !candidate.runtime.isHealthy())
+    return true
   }
 
   private findReusable(laneKey: string): InstanceRecord | undefined {
@@ -387,18 +461,37 @@ export class AppServerPool {
   }
 
   private trackRuntimeClose(runtime: PoolRuntimeInstance, timeoutMs?: number): void {
+    this.retirementOwners.add(runtime)
     let result: void | Promise<void>
     try {
       result = runtime.close(timeoutMs)
-    } catch {
+    } catch (error) {
       console.warn('[codex-app-server] child_close_failed reason=CLOSE_THROWN')
+      this.markRetirementFailure(error)
       return
     }
-    const closing = Promise.resolve(result).catch(() => {
-      console.warn('[codex-app-server] child_close_failed reason=CLOSE_REJECTED')
-    })
+    const closing = Promise.resolve(result).then(
+      () => { this.retirementOwners.delete(runtime) },
+      error => {
+        console.warn('[codex-app-server] child_close_failed reason=CLOSE_REJECTED')
+        this.markRetirementFailure(error)
+      },
+    )
     this.retirements.add(closing)
-    void closing.finally(() => this.retirements.delete(closing))
+    void closing.finally(() => {
+      this.retirements.delete(closing)
+      this.schedulePump()
+    })
+  }
+
+  private markRetirementFailure(error: unknown): void {
+    const failure = error instanceof Error ? error : new Error(String(error))
+    if (!this.retirementFailures.includes(failure)) this.retirementFailures.push(failure)
+    if (this.draining) return
+    this.draining = true
+    clearInterval(this.sweepTimer)
+    for (const waiter of [...this.waiters]) this.rejectWaiter(waiter, new AppServerPoolDrainingError())
+    for (const controller of this.creationControllers) controller.abort('Pool retirement failed')
   }
 
   private remainingDrainMs(): number | undefined {

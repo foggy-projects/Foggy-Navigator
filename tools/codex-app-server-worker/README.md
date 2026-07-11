@@ -28,9 +28,20 @@ turns scale to separate instances in the same lane. Lanes are keyed by exact CLI
 authentication fingerprint, base URL, and process-environment fingerprint. Metrics expose only
 digests and counts, never credentials or home paths.
 
-The default `instance_id` is a stable digest of hostname plus normalized state directory, not a
-process ID. Multiple replicas must use distinct state directories and instance IDs unless they
-use a separately validated shared store with instance-aware routing.
+The public `instance_id` is a random state-store generation identity persisted atomically inside
+the state directory. Identity schema v2 is backed by matching generation sentinels in both the
+`tasks` and `events` directories, so clearing either journal directory rotates the identity instead
+of silently serving old affinity bindings from an empty store. Existing schema v1 markers receive
+one compatibility migration without changing their identity. A pre-marker store with journals
+adopts its legacy configured/calculated identity once: header-safe legacy values are retained
+exactly; older values that were legal but unsafe in an HTTP header are recorded losslessly only in
+the private marker and exposed as a deterministic `codex-legacy-<sha256>` identity.
+
+The state root is resolved to its physical path before identity, lease, and journal access. A
+single-writer owner lease prevents concurrent local JSONL writers; its same-host dead-PID recovery
+lock also carries owner metadata, while cross-host ownership fails closed. Multiple replicas must
+use distinct state directories unless they use a separately validated shared store with
+instance-aware routing.
 Runtime IDs are limited to 64 characters and instance IDs to 128 characters to match the
 Navigator registry persistence contract.
 
@@ -56,13 +67,47 @@ network boundary in addition to the Worker token.
 ## Operations
 
 - Windows background start/stop: `./start.ps1` and `./stop.ps1`.
-- Linux/macOS background start/stop: `./start.sh` and `./stop.sh`.
-- Stop writes a local run-directory request so the Worker drains itself. The script waits the
-  configured shutdown timeout plus five seconds before a final forced kill.
+- Linux background start/stop: `./start.sh` and `./stop.sh`. macOS lifecycle operations are not
+  enabled: the runtime cannot obtain the exact argv and boot-scoped process creation identity
+  required for destructive process-tree verification, so process identity commands fail closed.
+- Stop writes a nonce-bound request in the local run directory so the Worker drains itself. A
+  graceful stop is accepted only when the matching `shutdown.success` marker is present and the
+  exact snapshotted Worker process tree has no verified descendants. Otherwise the tree is killed,
+  the operation fails, and `stop.failed` latches both start and update.
+- The writer lease is removed only after active tasks, accepts, recovery, and task operations are
+  quiescent. A shutdown deadline miss retains the lease until process exit for dead-PID recovery.
 - Pass `-NoBuild` or `--no-build` only when `dist` was already built from current source.
 - PID, stdout, stderr and durable state live under this package's `logs/` tree by default.
+- `CODEX_APP_SERVER_RUN_DIR`, `CODEX_APP_SERVER_LOG_DIR` and `CODEX_APP_SERVER_STATE_DIR`
+  use process environment > `.env` > package default precedence in every lifecycle script. External
+  values must be absolute paths; quote values containing spaces or `#` in `.env`.
 - An update installs the exact lockfile (`npm ci`), runs tests/schema verification/build, drains the
   service, replaces the package and starts it with the same state key/runtime identity.
+- `lifecycle.lock` is the installation-wide, nonce-owned lock shared by start, stop and update. The
+  external operation creates it atomically and holds it through its complete success or handled
+  failure path. Updater-owned nested stop/start calls verify the same nonce without acquiring or
+  releasing the lock. There is no PID-, age- or TTL-based lock reclamation; an abrupt process crash
+  intentionally leaves the lock fail-closed for operator recovery. Linux `HUP`, `INT` and `TERM`
+  interruptions preserve the owned lock under the same recovery rule.
+- `update.in-progress` is an exclusive, nonce-owned, fsync-backed transaction record. Start and stop
+  fail closed while it exists unless invoked by that updater with the matching internal nonce. A
+  crash or mixed swap preserves the marker, staging path and per-file progress for operator recovery.
+- After a failed stop or candidate startup, verify that no Worker descendants remain before
+  explicitly removing `stop.failed`. Lifecycle scripts never clear this operator-review latch.
+- `lifecycle.failed` and non-empty `runtime-process-trees/` are state-directory fallback evidence
+  for failures that could not be recorded in the run directory. Start and update refuse this
+  evidence and never remove it. Prove zero residue against the retained snapshots before explicitly
+  clearing either evidence path.
+- Never delete `update.in-progress` merely to retry. Compare its nonce, phase, staging path,
+  `backed_up` and `installed` progress with the target and sibling staging backup, complete an
+  external recovery to one coherent version, and prove zero process residue first. The updater
+  does not automatically resume a crash transaction.
+- Recover a crash-held lifecycle lock in this order: stop or isolate the crashed lifecycle command;
+  prove that no updater, Worker or captured descendant remains; reconcile `update.in-progress`, its
+  staging backup and retained process-tree snapshots to one coherent installation; review and clear
+  `stop.failed` or state fallback evidence only after zero residue is proven; then remove
+  `lifecycle.lock` last. Verify that the lock is a regular non-linked file before manual removal and
+  never remove it merely because its timestamp is old.
 - Release packaging includes `dist`, `package*.json`, `contracts`, scripts, README and
   `.env.example`; it excludes `.env`, logs, state journals, auth files and CODEX_HOME.
 
@@ -78,26 +123,33 @@ release/output/codex-app-server-worker-<version>.zip.sha256
 ```
 
 After extracting the ZIP, install it with `./install.ps1 -InstallDir <path>` on Windows or
-`./install.sh --install-dir <path>` on Linux/macOS. Installation intentionally does not start an
+`./install.sh --install-dir <path>` on Linux. Installation intentionally does not start an
 unconfigured service; it creates `.env` from `.env.example` when no existing configuration exists.
 
-To update an existing install, run its current update script and pass the downloaded archive:
+To update an existing 0.1.1-or-newer install, run its current update script and pass the downloaded archive:
 
 ```powershell
-./update.ps1 -Package ./codex-app-server-worker-0.1.0.zip
+./update.ps1 -Package ./codex-app-server-worker-0.1.1.zip
 ```
 
 ```bash
-./update.sh --package ./codex-app-server-worker-0.1.0.zip
+./update.sh --package ./codex-app-server-worker-0.1.1.zip
 ```
+
+In-place update of a `0.1.0` installation is explicitly unsupported, whether it is running or
+stopped. Install `0.1.1` or newer into a new empty directory, or use an external OS-level migration
+that independently proves zero process residue before moving configuration and state. The updater
+never captures a fresh identity for a legacy PID and never drains or modifies a `0.1.0` target.
 
 Both update paths expand into a sibling staging directory and run exact-lockfile `npm ci`, tests,
 schema verification, type checking and build before requesting a drain. Only managed application
 files and the validated `node_modules` tree are swapped. `.env`, `logs/`, durable state and any
-external CODEX_HOME remain in place. A swap or readiness failure restores the prior application
-and restarts it when it was running. Use `-DryRun` or `--dry-run` to validate an archive without
-draining or changing the current install; use `-NoRestart` or `--no-restart` only for controlled
-maintenance.
+external CODEX_HOME remain in place. A swap failure before candidate startup restores the prior
+application and restarts it when it was running. Once candidate startup has been attempted, any
+failure preserves the candidate files, `update.in-progress`, and the sibling staging backup; it
+leaves `stop.failed` latched when possible and does not auto-restart either version. Inspect the
+transaction phase and progress before explicit operator recovery. Use `-DryRun` or `--dry-run` to validate an archive without draining or changing the
+current install; use `-NoRestart` or `--no-restart` only for controlled maintenance.
 Each validation command has a five-minute watchdog by default. Set
 `CODEX_APP_SERVER_UPDATE_STEP_TIMEOUT_SEC` to a positive integer for slower controlled hosts.
 
@@ -108,6 +160,17 @@ set the environment variables named by `navigator.tokenEnv` and `privacyMarkerEn
 values are accepted only from environment variables. They are never written to the checkpoint or
 included in CLI output.
 
+The production profile also requires an exact `runtimeRevision`, `routingEpoch`, physical
+`workerId`, Ultra `model`, `providerType=codex-worker`, and `cohortMarkerEnv`. A terminal task is
+counted only when all of those fields match, its prompt contains the current cohort marker, its
+runtime type is `APP_SERVER`, and its runtime instance was observed in the same complete health
+cycle. Production time filtering requires the numeric `createdAtEpochMs` persisted by Navigator
+from the task-creation instant; legacy rows remain null and are not inferred from `LocalDateTime`.
+The legacy `createdAt` text is never interpreted for production evidence. Production HTTP is
+permitted only for loopback endpoints; remote endpoints must use HTTPS.
+Missing or unrecognized app-server instance IDs are excluded from the terminal denominator and
+recorded as deduplicated, digest-keyed affinity violations, which fail the zero-tolerance gate.
+
 Use `--once` from cron, Task Scheduler, or another supervisor. Each due run polls the Navigator
 `/api/v1/codex-tasks` API, samples every configured Worker `/health` endpoint, atomically replaces
 the checkpoint, and exits. Invocations before `next_due_at` perform no network requests. `--report`
@@ -117,7 +180,15 @@ reads the checkpoint without requiring credentials or making requests:
 npm run build
 node scripts/canary-soak.mjs --config <config.json> --once
 node scripts/canary-soak.mjs --config <config.json> --report
+node scripts/canary-soak.mjs --config <config.json> --report --require-pass
 ```
+
+`--require-pass` returns a non-zero exit code while any gate is pending. If a previous checkpoint
+uses an incompatible schema or belongs to a different configuration, the CLI fails with
+`CANARY_STATE_RESET_REQUIRED`; reset it explicitly and atomically with `--reset`. A per-state-file
+lease rejects overlapping samplers. A dead PID from the same host may be reclaimed, while an active
+local owner, a cross-host owner, malformed lease metadata, or an existing reclamation claim fails
+closed. A leftover reclamation claim requires operator verification before the lease is removed.
 
 Without `--once` or `--report`, the command remains active and samples on the configured interval.
 Task IDs, Worker instance IDs, and health endpoints are stored only as SHA-256 digests. Raw task
@@ -129,6 +200,13 @@ tasks, 72 continuous hours, two pool retirements/rotations, 98% success, at most
 zero affinity mismatches, and zero privacy-marker leakage. A `local-smoke` profile may lower the
 sample/time/rotation thresholds, but both its checkpoint and every report are permanently and
 prominently marked as ineligible for production evidence.
+
+This command is only the automated collection foundation for the 50-task / 72-hour / two-rotation
+window. Production reports deliberately include the hard check
+`external_production_evidence=false`, so they remain `PENDING` and can never authorize rollout by
+themselves. Baseline comparison, p95 latency, RSS/CPU, pool-acquire behavior, duplicate execution,
+and raw child-output/privacy evidence must be supplied and reviewed externally before production
+sign-off. No external-evidence schema is inferred or synthesized by this tool.
 
 ## Schema lock
 

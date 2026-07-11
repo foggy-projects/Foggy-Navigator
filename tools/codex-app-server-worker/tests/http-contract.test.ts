@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { AddressInfo } from 'node:net'
-import http from 'node:http'
+import net, { type AddressInfo } from 'node:net'
 import test from 'node:test'
 import { createApp } from '../src/app.js'
 import type { ExecutionResult, TaskExecutor } from '../src/app-server/executor.js'
@@ -63,6 +62,7 @@ test('instance affinity guard rejects every task route before manager access', a
   const oversized = await requestWithDeclaredLength(baseUrl, headers, 26 * 1024 * 1024)
   assert.equal(oversized.status, 409)
   assert.equal(oversized.actualInstanceId, config.instanceId)
+  assert.equal(oversized.serverClosed, true)
   assert.equal(managerAccesses, 0)
 })
 
@@ -134,6 +134,39 @@ test('task accept v1 is idempotent, conflicts on changed payload, and replays te
   const stream = await subscribe.text()
   assert.match(stream, /sync_checkpoint/)
   assert.match(stream, /"type":"result"/)
+})
+
+test('concurrent terminal SSE replays are complete and release the on-demand broadcast', async t => {
+  const stateDir = await tempDirectory('codex-app-http-terminal-replay-')
+  const config = testConfig(stateDir)
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const manager = new TaskManager(config, store, new FakeExecutor())
+  await manager.initialize()
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  await postTask(baseUrl, 'terminal-replay-task', { prompt: 'complete once' })
+  await waitFor(() => manager.get('terminal-replay-task')?.status === 'terminal')
+  await waitFor(() => manager.runtimeMetrics().resident_broadcasts === 0)
+
+  const responses = await Promise.all(Array.from({ length: 12 }, () => fetch(
+    `${baseUrl}/api/v1/tasks/terminal-replay-task/subscribe?ack_seq=0`,
+    { headers: authHeaders() },
+  )))
+  const streams = await Promise.all(responses.map(async response => {
+    assert.equal(response.status, 200)
+    return response.text()
+  }))
+  for (const stream of streams) {
+    assert.match(stream, /sync_checkpoint/)
+    assert.equal([...stream.matchAll(/"type":"result"/g)].length, 1)
+  }
+  await waitFor(() => manager.runtimeMetrics().resident_broadcasts === 0)
 })
 
 test('existing idempotency keys remain queryable during drain and readiness degradation', async t => {
@@ -541,26 +574,44 @@ async function requestWithDeclaredLength(
   baseUrl: string,
   headers: Record<string, string>,
   contentLength: number,
-): Promise<{ status: number; actualInstanceId?: string }> {
+): Promise<{ status: number; actualInstanceId?: string; serverClosed: boolean }> {
   const url = new URL('/api/v1/tasks', baseUrl)
   return new Promise((resolve, reject) => {
-    const request = http.request({
-      hostname: url.hostname,
-      port: url.port,
-      path: url.pathname,
-      method: 'POST',
-      headers: { ...headers, 'Content-Length': String(contentLength) },
-    }, response => {
-      const result = {
-        status: response.statusCode || 0,
-        actualInstanceId: response.headers[ACTUAL_INSTANCE_HEADER.toLowerCase()] as string | undefined,
+    const socket = net.createConnection({ host: url.hostname, port: Number(url.port) })
+    let response = ''
+    let socketError: Error | undefined
+    const timeout = setTimeout(() => {
+      socket.destroy()
+      reject(new Error('server did not close the mismatched oversized request'))
+    }, 2_000)
+    socket.setEncoding('utf8')
+    socket.on('data', chunk => { response += chunk })
+    socket.on('error', error => { socketError = error })
+    socket.once('connect', () => {
+      const requestHeaders = {
+        Host: `${url.hostname}:${url.port}`,
+        Connection: 'keep-alive',
+        ...headers,
+        'Content-Length': String(contentLength),
       }
-      response.destroy()
-      request.destroy()
-      resolve(result)
+      const serialized = Object.entries(requestHeaders)
+        .map(([name, value]) => `${name}: ${value}`)
+        .join('\r\n')
+      socket.write(`POST ${url.pathname} HTTP/1.1\r\n${serialized}\r\n\r\n{`)
     })
-    request.once('error', reject)
-    request.end('{')
+    socket.once('close', () => {
+      clearTimeout(timeout)
+      const lines = response.slice(0, response.indexOf('\r\n\r\n')).split('\r\n')
+      const status = Number(lines[0]?.split(' ')[1] || 0)
+      const actualInstanceId = lines
+        .map(line => line.split(/:\s*/, 2))
+        .find(([name]) => name?.toLowerCase() === ACTUAL_INSTANCE_HEADER.toLowerCase())?.[1]
+      if (!status) {
+        reject(socketError || new Error('server closed without an HTTP response'))
+        return
+      }
+      resolve({ status, actualInstanceId, serverClosed: true })
+    })
   })
 }
 

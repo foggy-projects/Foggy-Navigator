@@ -38,8 +38,37 @@ test('restart reconciliation restores a proven completed turn without executing 
   assert.equal(executor.executeCalls, 0)
   assert.equal(executor.reconcileCalls, 1)
   const events = manager.getBroadcast('reconcile-completed').getEventsAfter(0)
+  assert.deepEqual(events.map(event => event.type), ['assistant_text', 'result'])
+  assert.equal(events[0]?.subtype, 'recovered')
+  assert.equal(events[0]?.content, 'recovered result')
   assert.equal(events.at(-1)?.type, 'result')
   assert.equal(events.at(-1)?.result, 'recovered result')
+})
+
+test('restart reconciliation does not duplicate an already durable canonical assistant message', async t => {
+  const fixture = await seedCommitted(t, 'reconcile-canonical-durable')
+  const existing = new EventBroadcast('reconcile-canonical-durable', path.join(fixture.stateDir, 'events'))
+  existing.emit({
+    type: 'assistant_text',
+    task_id: 'reconcile-canonical-durable',
+    session_id: 'thread-existing',
+    content: 'recovered result',
+  })
+  await existing.close()
+  const executor = new ReconcileExecutor({
+    status: 'completed',
+    threadId: 'thread-existing',
+    turnId: 'turn-existing',
+    assistantText: 'recovered result',
+  })
+  const recoveredStore = new TaskStore({ stateDir: fixture.stateDir, encryptionKey: fixture.config.stateEncryptionKey! })
+  const manager = new TaskManager(fixture.config, recoveredStore, executor)
+
+  await manager.initialize()
+
+  const events = manager.getBroadcast('reconcile-canonical-durable').getEventsAfter(0)
+  assert.equal(events.filter(event => event.type === 'assistant_text' && event.content === 'recovered result').length, 1)
+  assert.deepEqual(events.map(event => event.type), ['assistant_text', 'result'])
 })
 
 test('ambiguous, active, or missing turns become explicit recovery-unknown terminal failures', async t => {
@@ -66,8 +95,8 @@ test('strict executor proves terminal state from thread/read and extracts assist
       id: 'turn-existing',
       status: 'completed',
       items: [
-        { type: 'agentMessage', text: 'first' },
-        { type: 'agentMessage', text: ' second' },
+        { type: 'agentMessage', text: 'progress update' },
+        { type: 'agentMessage', text: 'FINAL_STREAM_OK' },
       ],
     }],
   })
@@ -95,7 +124,7 @@ test('strict executor proves terminal state from thread/read and extracts assist
     signal: new AbortController().signal,
   })
   assert.equal(result.status, 'completed')
-  assert.equal(result.assistantText, 'first second')
+  assert.equal(result.assistantText, 'FINAL_STREAM_OK')
   assert.equal(runtime.runCalls, 0)
   assert.equal(runtime.readCalls, 1)
   const mismatched = await executor.reconcile({

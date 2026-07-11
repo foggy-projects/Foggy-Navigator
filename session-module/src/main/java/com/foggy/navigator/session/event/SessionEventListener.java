@@ -107,13 +107,15 @@ public class SessionEventListener {
     }
 
     /**
-     * result 事件（isResult=true）只携带指标（cost/tokens/duration），
-     * 其文本内容与前面的 assistant_text 完全一致。
+     * result 事件（isResult=true）只携带终态和指标（cost/tokens/duration），
+     * 其文本内容与前面的 assistant_text 完全一致。Codex 使用 SESSION_END，
+     * 其他 relay 可能使用 TEXT_COMPLETE，两者都不得重复持久化。
      * 如果也持久化，就会在 DB 中产生重复消息。
      */
     @SuppressWarnings("unchecked")
     private boolean isResultEvent(AgentMessage message) {
-        if (message.getType() != MessageType.TEXT_COMPLETE) return false;
+        if (message.getType() != MessageType.TEXT_COMPLETE
+                && message.getType() != MessageType.SESSION_END) return false;
         if (message.getPayload() instanceof Map) {
             Map<String, Object> payload = (Map<String, Object>) message.getPayload();
             return Boolean.TRUE.equals(payload.get("isResult"));

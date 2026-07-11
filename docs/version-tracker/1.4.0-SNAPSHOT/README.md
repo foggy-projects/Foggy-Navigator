@@ -4,40 +4,51 @@
 
 - doc_type: version-index
 - intended_for: root-controller | execution-agent | reviewer | release-owner
-- purpose: 管理独立 Codex App Server Worker 的建设、Ultra 首批切流、全档位迁移和旧 SDK Worker 退役。
+- purpose: 管理独立 Codex App Server Worker 的实现、隔离验收和 Ultra 生产门禁。
 
 ## 版本状态
 
-- status: implementation
+- status: p0-p2-isolated-accepted-production-rollout-not-started
 - primary_workitem: `OPT-001`
 - implementation_started: yes
 - production_routing_changed: no
+- production_enablement: not-approved
 
 ## 版本目标
 
-新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持全部模型与 reasoning 档位。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径、最高支持 Max，并拒绝所有 Ultra 请求。平台先完成幂等任务接受、受控 runtime registry、不可变任务/会话 affinity 和能力握手，再将 Ultra 会话灰度到新 Worker；待全模型、全功能、长稳和回滚证据齐备后，使新 Worker 成为默认，最后退役 SDK Worker。
+新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持固定 CLI `0.144.1` 已验证的全部模型与 reasoning 档位。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径和非 Ultra 行为、最高支持 Max，并拒绝所有 Ultra 请求；它不承载 app-server。平台先完成幂等任务接受、受控 runtime registry、不可变任务/会话 affinity 和能力握手，再将 Ultra 会话灰度到新 Worker。P7 SDK retirement 已延后，不属于 `1.4.0-SNAPSHOT` 的交付范围。
 
 ## 已确认决策
 
-1. `codex-app-server-worker` 是独立进程、独立发布物、独立端口、独立日志和独立运行目录。
-2. 新 Worker 从第一版起以“全部模型和 reasoning 档位可运行”为能力目标；Ultra 只是首批生产路由范围。
-3. 外部逻辑仍使用 `workerBackend=OPENAI_CODEX` 和 `providerType=codex-worker|codex-biz-worker`，不新增第二套 Provider、Task、Session 或 PC 页面。
-4. 现有 Worker 不再承担 app-server；没有新 runtime 能力时，Ultra 必须 fail closed，禁止静默降级到 Max/xhigh。
-5. 已接受任务和已有会话的 runtime affinity 不可被路由配置重写；回滚只停止新分配。
-6. `turn/start` 提交后禁止跨 runtime 重放同一 prompt。
+1. 新 Worker 是独立进程、发布物、端口、日志、运行目录和状态域。
+2. 新 Worker 技术上支持全部已声明模型/reasoning；Ultra 是首批计划生产路由，不代表已经批准生产切流。
+3. 外部仍使用 `workerBackend=OPENAI_CODEX` 和 `providerType=codex-worker|codex-biz-worker`，不新增 Provider、Task、Session 或 PC 页面。
+4. Task/Session/runtime instance affinity 在接受后不可变；回滚只停止新分配，禁止跨 runtime 重放 prompt。
+5. PC 继续使用统一 SSE/snapshot 展示 app-server 原生子任务；不暴露 endpoint、token、Codex Home 或原始子线程内容。
+6. SDK retirement 已按产品决定延后，不属于本版本目标；未来改变该决定必须另建 workitem。
 
-## 成功标准
+## 阶段状态
 
-| Gate | 成功标准 | 当前状态 |
+| Gate | 当前状态 | 证据边界 |
 |---|---|---|
-| P0 契约 | 幂等 create/accept、capability manifest、runtime affinity 和 rollback 语义评审通过 | completed |
-| Dark Worker | 新 Worker 零生产流量运行，全档位核心契约和真实 smoke 通过 | in-progress: 0.1.0 本地确定性发布物/Windows 安装更新通过；最终 provider/crash 复验被账户额度阻塞，POSIX 与运行中 drain/rollback 待验 |
-| 双 Runtime 控制面 | runtime registry、能力缓存、任务/会话 affinity、N-1 兼容通过 | in-progress: 分层实现与回归通过，真实全链/N-1/多副本门禁未关闭 |
-| Ultra Canary | 新 Ultra 会话小流量运行，零重复执行、零 affinity mismatch，回滚演练通过 | blocked: 等待目标环境、release owner 和 P1/P2 exit |
-| Ultra Default | 新 Ultra 100% 路由新 Worker，旧任务/会话在原 runtime drain | blocked: 依赖 P3 生产签收 |
-| 全模型迁移 | 非 Ultra 各模型、认证与功能 cohort 均有真实链路证据 | blocked: 依赖 P4 长稳与功能 parity |
-| 默认切换 | 所有新 Codex 任务默认使用 app-server Worker | blocked: 依赖 P5 独立签收 |
-| SDK 退役 | 无活动或保留期内可续接 SDK 会话、无能力例外，完成独立签收 | blocked: 依赖 P6 drain 数据和退役窗口 |
+| P0 契约 | completed | 幂等接受、durable state/ESN、capability、registry、immutable affinity、rollback 语义已冻结并回归 |
+| P1 Dark Worker | isolated-accepted | Worker `200` 项回归、Canary、持久化、Pool、生命周期、可复现 v5 制品和 Windows/WSL exact-package 运维矩阵均通过 |
+| P2 双 Runtime 控制面 | isolated-accepted | 双实例 affinity、Java/Session/PC、MySQL 8.0.44/8.4.8、N-1、`ddl-auto=validate`、共享 availability、真实 Ultra/SSE/刷新和 desktop/320px 体验均通过隔离验收 |
+| P3 Ultra Canary | implementation-ready-rollout-not-started | 外部生产证据仍为 0/50 terminal task、0/72h、0/2 rotation；release owner 未签收 |
+| P4 Ultra Default | not-started | 依赖 P3 独立生产签收 |
+| P5 非 Ultra/功能 cohort | not-started | 动态 catalog 与 approval/additional dirs/server requests/Biz 等 parity 仍需逐 cohort 证明 |
+| P6 App-server Default | not-started | 是否扩大为默认由后续产品与生产门禁决定 |
+| P7 SDK Retirement | N/A-deferred-by-product-decision | 旧 SDK Worker 保持现状，不删除、不迁移、不弱化发布与回滚能力 |
+
+## 发布与回归摘要
+
+- App-server Worker `0.1.1`: `200 total / 193 passed / 7 platform-skipped / 0 failed`；typecheck/build/schema verify 通过，schema digest 为 `6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f`。
+- v5 release SHA-256/bytes/entries: `b6271e5a3220b0253d97b6d05c9fe5f5561331655e27faccd8ad254fbf6c31d9` / `1,500,249` / `168`；双构建字节一致、路径扫描通过，Windows/WSL exact-package install/start/real Ultra/running update/stop 与 zero-residue 均通过；旧 `642121...`、`4ebb...` 与 Windows update 被阻断的 v4 `71a0...` 均已淘汰。
+- Codex Java addon: `259/259`；Session focused: `7/7`；reconciliation: `10/10`；Metadata Query: `13/13`；Launcher ownership context: `1/1`；Code Review client context: `1/1`。raw full reactor 在 Windows 被 Surefire fork/path 基础设施问题阻断，已执行的受影响定向测试无断言失败。
+- Legacy SDK Worker 保持现有 SDK 设计并拒绝 Ultra，`116/116`、typecheck/build 通过；本次仅修正 Windows 上 POSIX server-script 路径的测试断言。Navigator PC: `179/179`，`build:check` 通过。
+- MySQL migration: 8.0.44/8.4.8 通过；N-1 严格 legacy GET、迁移后 validate/CRUD/软删除通过。
+- 已执行旧版 affinity SQL 的环境必须再执行幂等补丁 `docs/migration/2026-07-10-codex-task-created-at-epoch-ms.sql`。
+- 隔离真实链路任务 `20260711-8023` / Session `b2bc4a9c-3134-4d24-af50-5709ab9b91e6` 完成：result 精确为 `FINAL_RESULT_OK`、文件精确为 `FINAL_NATIVE_RESULT_OK`、native SSE `5`、snapshot `1`，敏感信息暴露检查均为 false；PC 刷新前后最终消息均为 `1`，native 进度 `1/1`，desktop/320px 无溢出、请求或控制台错误。
 
 ## 文档清单
 
@@ -49,18 +60,30 @@
 - [P0-P2 实现质量检查](./quality/OPT-001-p0-p2-implementation-quality.md)
 - [BUG-001 修复实现质量检查](./quality/BUG-001-codex-resume-shell-fix-quality-review.md)
 - [P0-P2 测试证据覆盖审计](./coverage/OPT-001-p0-p2-coverage-audit.md)
-- [P0-P7 阶段验收记录](./acceptance/OPT-001-p0-p7-acceptance.md)
-
-## 上游基线
-
-- [1.3.1 OPT-005 Max / Ultra 与原生子任务投影](../1.3.1-SNAPSHOT/workitems/OPT-005-codex-sol-max-ultra-support.md)
-- [Codex App Server 官方协议](https://developers.openai.com/codex/app-server)
-- [Codex SDK 官方说明](https://developers.openai.com/codex/sdk)
-- [Codex app-server 协议与 schema 生成](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
+- [P0-P2 隔离验收与 P3-P7 边界记录](./acceptance/OPT-001-p0-p7-acceptance.md)
+- [Windows v5 exact-package evidence](./evidence/OPT-001-exact-package-windows-v5.json)
+- [WSL v5 exact-package evidence](./evidence/OPT-001-exact-package-wsl-v5.json)
+- [Navigator Ultra task evidence](./evidence/OPT-001-navigator-ultra-task-v5.json)
+- [PC final acceptance evidence](./evidence/OPT-001-pc-final-acceptance-v5.json)
+- [BUG-001 App-server delta 消息碎片](./workitems/BUG-001-app-server-delta-message-fragmentation.md)
+- [BUG-002 `.env` 外部状态目录](./workitems/BUG-002-app-worker-dotenv-state-dir.md)
+- [BUG-003 Worker View 移动布局](./workitems/BUG-003-worker-view-mobile-layout.md)
+- [BUG-004 stop/update 外部运行目录](./workitems/BUG-004-app-worker-operations-dotenv-run-dir.md)
+- [BUG-005 Windows 安装路径空格](./workitems/BUG-005-app-worker-windows-install-path-spaces.md)
+- [BUG-006 macOS Bash 更新候选发现](./workitems/BUG-006-app-worker-macos-update-candidate-discovery.md)
+- [BUG-007 最终结果聚合](./workitems/BUG-007-app-server-final-result-aggregation.md)
+- [BUG-008 Canary 证据正确性](./workitems/BUG-008-canary-evidence-correctness.md)
+- [BUG-009 生命周期进程树与 stop outcome](./workitems/BUG-009-lifecycle-process-tree-and-stop-outcome.md)
+- [BUG-010 PC app-server 边界与共享 availability](./workitems/BUG-010-pc-app-server-boundary-and-shared-availability.md)
+- [BUG-011 terminal broadcast 与 TaskStore 上界](./workitems/BUG-011-terminal-broadcast-and-task-store-bounds.md)
+- [BUG-012 Pool 跨 lane LRU 退役](./workitems/BUG-012-pool-cross-lane-lru-retirement.md)
+- [BUG-013 Windows 进程树终止等待竞态](./workitems/BUG-013-windows-process-tree-termination-settle-race.md)
 
 ## 当前边界
 
-- P0 已完成；P1/P2 已达到本地实现检查点，但发布物、真实全链、N-1、多副本和生产迁移证据仍未关闭，因此阶段保持 `in-progress`。
-- P3-P7 依赖真实生产放量、至少 50 个 terminal Ultra task、连续 72 小时和至少 2 次实例轮换；当前没有目标环境证据，状态为门禁阻塞而不是实现完成。
-- 当前工作区中的 1.3.1 未提交实现不得直接提交为最终双 Worker 架构；其迁移分类和重验要求以本版本计划为准。
-- Ultra 切流前必须填实 canary 观察窗口、成功率、延迟、资源和错误预算阈值；只有“重复副作用数=0、凭据/原始子线程内容泄漏数=0”可在规划阶段直接固定为零容忍。
+- P0-P2 已完成隔离验收；该结论只覆盖本地/隔离 release、控制面、真实 Ultra 链路和 PC 体验，不批准外部生产路由，也不得计入 P3 样本。
+- P3 必须在目标环境采集至少 50 个 terminal Ultra task、连续 72 小时和至少 2 次实例轮换；本地重复 smoke 不计入。
+- 生产 duplicate side effect、affinity mismatch、credential/raw child leak 当前是 0 个生产样本，不能表述为已证明为零。
+- 旧 SDK Worker 保持既有设计；本版本后续工作仅围绕 app-server Worker 的生产 canary 与可选 cohort。
+- BUG-001、BUG-003、BUG-007、BUG-009、BUG-010 和 BUG-013 已完成隔离闭环；先前失败任务与 v4 制品只保留为复现证据。
+- BUG-008/011/012 的隔离自动化和 final Worker full/package 已通过，其 production canary、memory soak 和 fairness soak 证据仍属于未开始的 P3。

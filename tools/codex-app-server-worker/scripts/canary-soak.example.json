@@ -5,7 +5,12 @@
     "tasksPath": "/api/v1/codex-tasks",
     "tokenEnv": "NAVIGATOR_CANARY_TOKEN",
     "runtimeId": "codex-app-server-canary",
-    "workerId": "replace-with-physical-worker-id"
+    "runtimeRevision": 1,
+    "routingEpoch": 1,
+    "workerId": "replace-with-physical-worker-id",
+    "model": "codex-ultra",
+    "providerType": "codex-worker",
+    "cohortMarkerEnv": "CODEX_CANARY_COHORT_MARKER"
   },
   "workers": [
     {

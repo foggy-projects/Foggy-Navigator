@@ -4,13 +4,18 @@ import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.Bean;
 import org.springframework.web.client.RestTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(
-        classes = FogyNavigatorApplication.class,
+        classes = {
+                FogyNavigatorApplication.class,
+                CommonRepositoryOwnershipContextTest.CodeReviewClientFixture.class
+        },
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
                 "spring.main.allow-bean-definition-overriding=false",
@@ -34,9 +39,30 @@ class CommonRepositoryOwnershipContextTest {
     void commonRepositoryHasSingleOwnerWhenBeanOverridingIsDisabled() {
         assertThat(applicationContext.getBeanNamesForType(NativeSubtaskStateRepository.class))
                 .containsExactly("nativeSubtaskStateRepository");
+
+        NativeSubtaskStateRepository repository = applicationContext.getBean(NativeSubtaskStateRepository.class);
+        assertThat(repository.count()).isZero();
+
+        RestTemplate defaultClient = applicationContext.getBean("navigatorDefaultRestTemplate", RestTemplate.class);
         RestTemplate metadataClient = applicationContext.getBean("metadataQueryRestTemplate", RestTemplate.class);
-        assertThat(applicationContext.getBean("businessAgentRestTemplate", RestTemplate.class))
-                .isNotSameAs(metadataClient);
-        assertThat(applicationContext.getBean(RestTemplate.class)).isSameAs(metadataClient);
+        RestTemplate businessClient = applicationContext.getBean("businessAgentRestTemplate", RestTemplate.class);
+        RestTemplate codeReviewClient = applicationContext.getBean("codeReviewRestTemplate", RestTemplate.class);
+
+        assertThat(applicationContext.getBean(RestTemplate.class)).isSameAs(defaultClient);
+        assertThat(defaultClient).isNotSameAs(metadataClient)
+                .isNotSameAs(businessClient)
+                .isNotSameAs(codeReviewClient);
+        assertThat(metadataClient).isNotSameAs(businessClient)
+                .isNotSameAs(codeReviewClient);
+        assertThat(businessClient).isNotSameAs(codeReviewClient);
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class CodeReviewClientFixture {
+
+        @Bean("codeReviewRestTemplate")
+        RestTemplate codeReviewRestTemplate() {
+            return new RestTemplate();
+        }
     }
 }

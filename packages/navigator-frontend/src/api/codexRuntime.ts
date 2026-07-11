@@ -2,9 +2,24 @@ import client from './client'
 import type { RX } from '@/types'
 import type {
   CodexRuntime,
+  CodexRuntimeAvailability,
   RegisterCodexRuntimeRequest,
   UpdateCodexRuntimeRoutingRequest,
 } from '@/types/codexRuntime'
+
+export async function getCodexRuntimeAvailability(
+  workerId: string,
+  options?: { model?: string; suppressErrorMessage?: boolean },
+): Promise<CodexRuntimeAvailability> {
+  const rx = (await client.get('/codex-runtimes/availability', {
+    params: {
+      workerId,
+      ...(options?.model ? { model: options.model } : {}),
+    },
+    ...(options?.suppressErrorMessage ? { suppressErrorMessage: true } : {}),
+  } as any)) as unknown as RX<CodexRuntimeAvailability>
+  return rx.data
+}
 
 export async function listCodexRuntimes(
   workerId: string,

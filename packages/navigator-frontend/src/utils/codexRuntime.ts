@@ -90,7 +90,7 @@ export function isUltraRoutingPolicy(policy: CodexRuntimeRoutingPolicy): boolean
 export function isUltraRoutingConfigured(runtime: CodexRuntime): boolean {
   if (!runtime.enabled) return false
   if (!isUltraRoutingPolicy(runtime.routingPolicy)) return false
-  return !isCanaryPolicy(runtime.routingPolicy) || runtime.rolloutPercentage > 0
+  return runtime.routingPolicy !== 'ULTRA_CANARY' || runtime.rolloutPercentage > 0
 }
 
 export function isRuntimeCapabilityFresh(

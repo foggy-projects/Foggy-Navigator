@@ -7,6 +7,7 @@ import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
+import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
@@ -44,6 +45,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TimeZone;
 
 import reactor.core.publisher.Mono;
 
@@ -180,6 +182,74 @@ class CodexTaskServiceTest {
         service.reconnectTask("task-complete", "user-1");
 
         verifyNoInteractions(streamRelay);
+    }
+
+    @Test
+    void getTaskExposesProviderTypeAndAuthoritativeCreatedAtEpoch() {
+        LocalDateTime createdAt = LocalDateTime.of(2026, 7, 10, 18, 30, 15);
+        long createdAtEpochMs = 1_783_685_415_123L;
+        CodexTaskEntity task = createTask(
+                "task-biz", "session-1", "worker-1", null, "RUNNING", createdAt);
+        task.setCreatedAtEpochMs(createdAtEpochMs);
+        when(taskRepository.findByTaskIdAndUserId("task-biz", "user-1"))
+                .thenReturn(Optional.of(task));
+
+        SessionTaskEntity sessionTask = new SessionTaskEntity();
+        sessionTask.setTaskId("task-biz");
+        sessionTask.setProviderType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);
+        when(sessionTaskRepository.findByTaskId("task-biz")).thenReturn(Optional.of(sessionTask));
+
+        TimeZone originalTimeZone = TimeZone.getDefault();
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+            CodexTaskDTO utcResult = service.getTask("user-1", "task-biz");
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
+            CodexTaskDTO shanghaiResult = service.getTask("user-1", "task-biz");
+
+            assertEquals(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE, utcResult.getProviderType());
+            assertEquals(createdAtEpochMs, utcResult.getCreatedAtEpochMs());
+            assertEquals(createdAtEpochMs, shanghaiResult.getCreatedAtEpochMs());
+
+            task.setCreatedAtEpochMs(null);
+            assertNull(service.getTask("user-1", "task-biz").getCreatedAtEpochMs());
+        } finally {
+            TimeZone.setDefault(originalTimeZone);
+        }
+    }
+
+    @Test
+    void listTasksBatchLoadsProviderTypesWithoutPerTaskQueries() {
+        LocalDateTime createdAt = LocalDateTime.of(2026, 7, 10, 18, 30);
+        CodexTaskEntity taskProjection = createTask(
+                "task-projection", "session-1", "worker-1", null, "COMPLETED", createdAt);
+        CodexTaskEntity sessionFallback = createTask(
+                "task-session", "session-2", "worker-1", null, "COMPLETED", createdAt.minusMinutes(1));
+        CodexTaskEntity defaultFallback = createTask(
+                "task-default", null, "worker-1", null, "COMPLETED", createdAt.minusMinutes(2));
+        when(taskRepository.findByUserIdOrderByCreatedAtDesc("user-1"))
+                .thenReturn(List.of(taskProjection, sessionFallback, defaultFallback));
+
+        SessionTaskEntity projection = new SessionTaskEntity();
+        projection.setTaskId("task-projection");
+        projection.setProviderType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);
+        when(sessionTaskRepository.findByTaskIdIn(any())).thenReturn(List.of(projection));
+
+        SessionEntity session = new SessionEntity();
+        session.setId("session-2");
+        session.setProviderType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);
+        when(sessionEntityRepository.findAllById(any())).thenReturn(List.of(session));
+
+        List<CodexTaskDTO> result = service.listTasks("user-1");
+
+        assertEquals(List.of(
+                        CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
+                        CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
+                        CodexTaskService.CODEX_PROVIDER_TYPE),
+                result.stream().map(CodexTaskDTO::getProviderType).toList());
+        verify(sessionTaskRepository).findByTaskIdIn(any());
+        verify(sessionEntityRepository).findAllById(any());
+        verify(sessionTaskRepository, never()).findByTaskId(anyString());
+        verify(sessionEntityRepository, never()).findById(anyString());
     }
 
     @Test
@@ -1372,6 +1442,46 @@ class CodexTaskServiceTest {
 
         assertEquals("SUBSCRIBED", entity.getRuntimeAcceptanceState());
         assertEquals(3, entity.getLastAckedSeq());
+    }
+
+    @Test
+    void appServerProgressAndCompletionPreserveRequestedModel() {
+        CodexTaskEntity entity = createTask(
+                "task-ultra", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 10, 12, 0));
+        entity.setRuntimeType("APP_SERVER");
+        entity.setRuntimeAcceptanceState("SUBSCRIBED");
+        entity.setModel("codex-ultra");
+        when(taskRepository.findByTaskId("task-ultra")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.recordWorkerProgress(
+                "task-ultra", "worker-task-1", "thread-1", "gpt-5.6-sol", 3, false, true);
+        service.completeTask("task-ultra", "worker-task-1", "thread-1", "done",
+                null, null, null, null, null, "gpt-5.6-sol");
+
+        assertEquals("codex-ultra", entity.getModel());
+        assertEquals("COMPLETED", entity.getStatus());
+    }
+
+    @Test
+    void sdkProgressAndCompletionContinueToUseWorkerReportedModel() {
+        CodexTaskEntity entity = createTask(
+                "task-sdk", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 10, 12, 0));
+        entity.setRuntimeType("SDK_EXEC");
+        entity.setModel("codex-max");
+        when(taskRepository.findByTaskId("task-sdk")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.recordWorkerProgress(
+                "task-sdk", "worker-task-1", "thread-1", "gpt-5.6-sol", 3, false, false);
+        assertEquals("gpt-5.6-sol", entity.getModel());
+
+        service.completeTask("task-sdk", "worker-task-1", "thread-1", "done",
+                null, null, null, null, null, "gpt-5.6-sol-updated");
+
+        assertEquals("gpt-5.6-sol-updated", entity.getModel());
     }
 
     @Test

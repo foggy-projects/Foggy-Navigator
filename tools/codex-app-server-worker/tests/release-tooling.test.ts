@@ -5,6 +5,36 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { collectReleaseEntries, createZip, listZipEntries, RELEASE_DIRECTORIES, RELEASE_FILES } from '../scripts/release-archive.mjs'
+import { resolveReleaseVersion } from '../scripts/release-version.mjs'
+
+test('release version matches package metadata, lockfile, and source APP_VERSION', () => {
+  const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8')) as { version: string }
+  assert.equal(resolveReleaseVersion(path.resolve('.')), packageJson.version)
+})
+
+test('release version validation rejects source and lockfile drift', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-release-version-test-'))
+  try {
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '0.1.1' }))
+    fs.writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify({
+      version: '0.1.1',
+      packages: { '': { version: '0.1.1' } },
+    }))
+    fs.writeFileSync(path.join(root, 'src', 'version.ts'), "export const APP_VERSION = '0.1.0'\n")
+
+    assert.throws(() => resolveReleaseVersion(root), /Source APP_VERSION 0\.1\.0 does not match package version 0\.1\.1/)
+
+    fs.writeFileSync(path.join(root, 'src', 'version.ts'), "export const APP_VERSION = '0.1.1'\n")
+    fs.writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify({
+      version: '0.1.0',
+      packages: { '': { version: '0.1.0' } },
+    }))
+    assert.throws(() => resolveReleaseVersion(root), /package-lock\.json version does not match package version 0\.1\.1/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('release archive is deterministic and excludes runtime identity, state, auth and dependencies', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-release-test-'))
@@ -19,6 +49,7 @@ test('release archive is deterministic and excludes runtime identity, state, aut
     fs.mkdirSync(path.join(root, 'tests', 'node_modules'), { recursive: true })
     fs.writeFileSync(path.join(root, 'tests', 'node_modules', 'dependency.js'), 'secret')
     fs.writeFileSync(path.join(root, 'src', 'auth.json'), 'secret')
+    fs.writeFileSync(path.join(root, 'lifecycle.lock'), 'runtime lock')
 
     const first = createZip(collectReleaseEntries(root, '0.1.0'))
     const second = createZip(collectReleaseEntries(root, '0.1.0'))
@@ -27,6 +58,7 @@ test('release archive is deterministic and excludes runtime identity, state, aut
     assert.ok(names.includes('codex-app-server-worker/VERSION'))
     assert.ok(names.includes('codex-app-server-worker/dist/content.txt'))
     assert.equal(names.some((name) => /(?:^|\/)(?:logs|node_modules)(?:\/|$)|auth\.json$/i.test(name)), false)
+    assert.equal(names.some(name => name.endsWith('/lifecycle.lock')), false)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

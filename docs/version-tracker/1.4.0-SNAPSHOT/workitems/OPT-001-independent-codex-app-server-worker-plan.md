@@ -9,7 +9,7 @@
 ## 基本信息
 
 - version: `1.4.0-SNAPSHOT`
-- status: in-progress
+- status: p0-p2-isolated-accepted-production-rollout-not-started
 - requirement: [OPT-001 requirement](./OPT-001-independent-codex-app-server-worker-requirement.md)
 - progress: [OPT-001 progress](./OPT-001-independent-codex-app-server-worker-progress.md)
 - execution_mode: staged-multi-module
@@ -21,15 +21,15 @@
 3. 独立部署但不新增 Provider，Java/Session/PC 继续消费统一 Codex 契约。
 4. Runtime binding 一经接受不可变；回滚只改变新任务分配。
 5. 新 Worker 内没有 SDK fallback；同一 prompt 不得被两个 runtime 执行。
-6. 先保留清晰的双 Worker 边界，再在新 Worker 稳定后收敛和退役旧实现。
+6. 长期保留清晰的双 Worker 边界；新 Worker 稳定不自动触发旧 SDK 实现退役。
 
 ## 模块职责
 
 | Owner | 职责 | 依赖边界 |
 |---|---|---|
-| `tools/codex-app-server-worker` | app-server JSON-RPC、任务接受状态机、进程池、事件转换、durable task/ESN、HTTP/SSE、health/capability、打包运维 | 独立 TypeScript 服务；不得 import 旧 Worker 私有源码 |
-| `tools/codex-agent-worker` | 旧 SDK / `codex exec` 稳定 lane、SDK 版本 preflight、已有 affinity drain | 不再承载 app-server；维护期不新增功能 |
-| `addons/codex-worker-agent` | Runtime registry、路由、幂等创建客户端、Task/Session affinity、Worker SSE 转统一事件、恢复/取消/删除 | 可依赖 common/session；session 不反向依赖本 addon |
+| `tools/codex-app-server-worker` | app-server JSON-RPC、任务接受状态机、进程树、进程池、事件转换、bounded durable task/ESN、Canary evidence、HTTP/SSE、health/capability、打包运维 | 独立 TypeScript 服务；不得 import 旧 Worker 私有源码 |
+| `tools/codex-agent-worker` | 旧 SDK / `codex exec` 稳定 lane、SDK 版本 preflight、非 Ultra 现有行为、已有 affinity drain | 不承载 app-server；保持现有设计和独立发布能力 |
+| `addons/codex-worker-agent` | Runtime registry、路由、最小 availability、幂等创建客户端、Task/Session affinity、requested model、Worker SSE 转统一事件、恢复/取消/删除 | 可依赖 common/session；session 不反向依赖本 addon |
 | `navigator-common` | 只有确需跨模块共享的 DTO/枚举/持久化契约 | 不放 app-server 原始协议和执行器逻辑 |
 | `addons/claude-worker-agent` | 既有物理 workspace Worker 管理与兼容配置读取；配合 readiness 展示 runtime 状态 | 不成为 Codex runtime 路由 owner |
 | `session-module` | 保持统一 Task/Session/SSE/用户归属；持久化必要 provider state | 不新增 app-server Provider，不直接调用 Worker endpoint |
@@ -52,7 +52,7 @@
 | root | `tools/codex-app-server-worker/src/app-server/` | JSON-RPC host、通知路由、pool | create | 使用 CLI 生成的版本化 schema/types |
 | root | `tools/codex-app-server-worker/src/routes/` | task accept/subscribe/status/abort、health/capability | create | 生产使用两阶段接受协议 |
 | root | `tools/codex-app-server-worker/src/persistence/` | durable idempotency/task/event state | create | 必须支持崩溃恢复和请求摘要冲突检测 |
-| root | `tools/codex-agent-worker/` | 旧 SDK Worker | update | 撤出未提交 app-server lane，Ultra fail closed；保留 Max 及以下和 SDK preflight |
+| root | `tools/codex-agent-worker/` | 旧 SDK Worker | retain | Ultra fail closed；保留 Max 及以下、SDK preflight、发布与回滚能力 |
 | root | `addons/codex-worker-agent/` | Java runtime 控制面 | update | registry、router、capability、幂等 client、affinity、事件/recovery |
 | root | `addons/codex-worker-agent/.../CodexTaskEntity` 及 repository | Task binding | update | 显式 runtime/revision/routing binding；需 expand/backfill migration |
 | root | `navigator-common/` | 共享 contract | update-if-needed | 保留 native DTO/entity；只增加跨模块必需类型 |
@@ -243,40 +243,30 @@
 
 - 新任务路由退回已签收 cohort；不迁移已有 app-server affinity。
 
-### P7 SDK Retirement
+### P7 SDK Retirement（产品决定延后）
 
-**Entry**
+**状态**
 
-- active SDK task=0。
-- 保留期内可续接 SDK Session=0。
-- capability exception=0。
-- SDK rollback artifact、N-1 和数据保留策略已验收。
-
-**执行**
-
-1. 删除旧 SDK 执行路径、SDK 自动升级和双 runtime 例外代码。
-2. 下线旧 Worker部署，保留规定期限的只读诊断/回滚产物。
-3. 收敛文档、配置、UI 和运维入口。
-
-**Exit gate**
-
-- SDK retirement 独立签收；全栈只剩 app-server Worker 主线。
+- `N/A-deferred-by-product-decision`。
+- `1.4.0-SNAPSHOT` 不进入该阶段，不删除旧 SDK 执行路径、版本 preflight、发布物、配置或运维入口。
+- 旧 Worker 继续服务非 Ultra 现有路径和已有 SDK affinity；新 Ultra 仍 fail closed 并由 app-server runtime 承接。
+- 未来若决定退役，必须新建 workitem，重新定义 active/resumable/exception、保留期、N-1 和回滚 gate，不能沿用本版本的隔离环境证据直接签收。
 
 ## 测试矩阵
 
 | 维度 | 必测内容 |
 |---|---|
 | Model | 全 alias、显式模型、全部 reasoning、无效组合、动态 model catalog |
-| Contract | SDK/app-server 请求解析、Worker event、最终结果和错误 golden parity |
+| Contract | SDK/app-server 请求解析、delta/completed 事件、最后 canonical 最终结果、恢复去重、`SESSION_END` 非持久化和错误 golden parity |
 | Idempotency | 接受前、接受响应丢失、接受后、committed 后断网；同 key 同任务、异 payload 409 |
 | Affinity | create/resume/reconnect/abort/delete、Java/Worker 重启、runtime revision/route policy 变化 |
-| Pool | 同 thread 串行、跨 thread 并发、容量/背压、TTL、drain、崩溃隔离、长稳/内存 |
+| Pool | 同 thread 串行、跨 thread 并发、容量/背压、跨 lane LRU idle 退役、busy exclusion、TTL、drain、进程树清理、崩溃隔离、长稳/内存 |
 | Security | 跨用户、账户、API key、baseUrl、CODEX_HOME、task token、cwd 和 env 隔离 |
 | Feature | images/attachments/output schema/MCP/Biz/developer instructions/config/sandbox/approval/network/web/additional dirs/maxTurns/file hints/process/session API |
-| State | ESN 重复/乱序/缺口、durable recovery、native snapshot、late event、terminal reconciliation |
+| State | ESN 重复/乱序/缺口、terminal broadcast residency、resident TaskStore summary、大 payload 单次 ciphertext、durable recovery、native snapshot、late event、terminal reconciliation |
 | Compatibility | legacy Worker无 manifest、CLI/schema mismatch、Java/PC/Worker N-1、migration expand/backfill/rollback |
-| E2E | 真实 Worker -> Java -> unified SSE -> PC，Ultra 与至少一个非 Ultra cohort |
-| Operations | dark launch、canary、stop-new-routing、drain、进程/服务重启、发布/升级/回滚包 |
+| E2E | 真实 Worker -> Java -> unified SSE -> PC，共享 Worker minimum availability、app-server process boundary、Ultra 与至少一个非 Ultra cohort |
+| Operations | dark launch、canary denominator/lease claim、nonce outcome、stop-new-routing、drain、完整进程树、legacy first-hop、发布/升级/回滚包 |
 
 ## 验证命令基线
 
@@ -303,6 +293,19 @@
 - 认证/路径/隐私拒绝与泄漏审计；
 - 费用/token 相对 SDK 基线。
 
+## Review Defect Tracking
+
+| Defect | Plan impact | Current gate |
+|---|---|---|
+| [BUG-008](./BUG-008-canary-evidence-correctness.md) | P3 model/denominator/lease evidence contract | fixed-isolated；P3 生产验证待开始 |
+| [BUG-009](./BUG-009-lifecycle-process-tree-and-stop-outcome.md) | P1 start/stop/update/runtime child ownership | closed-isolated；v5 Windows/WSL exact-package 与 zero-residue 通过 |
+| [BUG-010](./BUG-010-pc-app-server-boundary-and-shared-availability.md) | P2 shared Worker minimum availability 与 PC process boundary | closed-isolated；shared/owner availability 与 PC live 通过 |
+| [BUG-011](./BUG-011-terminal-broadcast-and-task-store-bounds.md) | P1 resident memory 与 journal write bound | fixed-isolated；final full/package 通过，P3 memory soak 待开始 |
+| [BUG-012](./BUG-012-pool-cross-lane-lru-retirement.md) | P1 global capacity fairness | fixed-isolated；final full/package 通过，P3 fairness soak 待开始 |
+| [BUG-013](./BUG-013-windows-process-tree-termination-settle-race.md) | P1 Windows forced termination settle 与 running update | closed-isolated；bounded polling 回归和 v5 Windows/WSL exact-package 通过 |
+
+P0-P2 已按本计划完成 isolated acceptance。P3 仍为 0/50 terminal task、0/72h、0/2 rotations 且 `production_enablement=not-approved`；P4-P6 在 P3 独立生产签收前不得开始。
+
 ## 后置质量流程
 
 每个生产 gate 都必须依次执行：
@@ -312,4 +315,4 @@
 3. `foggy-test-coverage-audit`；
 4. `foggy-acceptance-signoff`。
 
-代码验收、Ultra canary enablement、Ultra default、全模型 default 和 SDK retirement 必须分别签收，不能用一次总验收覆盖后续生产门禁。
+代码验收、Ultra canary enablement、Ultra default 和任何后续全模型 default 必须分别签收，不能用一次总验收覆盖后续生产门禁；SDK retirement 已延后，不属于本版本签收项。

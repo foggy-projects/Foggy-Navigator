@@ -33,13 +33,14 @@ function makeRuntime(overrides: Partial<CodexRuntime> = {}): CodexRuntime {
 }
 
 describe('codexRuntime UI state', () => {
-  it('requires readiness, enabled routing, and a non-zero canary cohort for Ultra', () => {
+  it('requires readiness, enabled routing, and a non-zero Ultra-only canary cohort for Ultra', () => {
     expect(isUltraRuntimeAvailable(makeRuntime())).toBe(true)
     expect(isUltraRuntimeAvailable(makeRuntime({ enabled: false }))).toBe(false)
     expect(isUltraRuntimeAvailable(makeRuntime({ readinessStatus: 'INCOMPATIBLE' }))).toBe(false)
     expect(isUltraRuntimeAvailable(makeRuntime({ routingPolicy: 'DARK' }))).toBe(false)
     expect(isUltraRuntimeAvailable(makeRuntime({ routingPolicy: 'ULTRA_CANARY', rolloutPercentage: 0 }))).toBe(false)
     expect(isUltraRuntimeAvailable(makeRuntime({ routingPolicy: 'ULTRA_CANARY', rolloutPercentage: 5 }))).toBe(true)
+    expect(isUltraRuntimeAvailable(makeRuntime({ routingPolicy: 'ALL_CANARY', rolloutPercentage: 0 }))).toBe(true)
     expect(isUltraRuntimeAvailable(makeRuntime({ routingPolicy: 'ALL_DEFAULT' }))).toBe(true)
     expect(isUltraRuntimeAvailable(makeRuntime({ capabilityFresh: false }))).toBe(false)
     expect(isUltraRuntimeAvailable(makeRuntime({ capabilityFresh: undefined }))).toBe(false)

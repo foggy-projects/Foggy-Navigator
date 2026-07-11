@@ -79,6 +79,80 @@ test('turn-scoped output is rejected until the current root turn id is correlate
   assert.doesNotMatch(serialized, /STALE_OUTPUT/)
 })
 
+test('root message deltas remain transient and item completion emits one durable full message', async t => {
+  const eventsDir = await tempDirectory('codex-app-message-stream-')
+  t.after(() => fs.rm(eventsDir, { recursive: true, force: true }))
+  const broadcast = new EventBroadcast('message-stream-task', eventsDir)
+  const bridge = new AppServerEventBridge({
+    taskId: 'message-stream-task',
+    broadcast,
+    rootThreadId: 'root',
+  })
+  bridge.setRootTurnId('root-turn')
+
+  bridge.handle({
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'root', turnId: 'root-turn', itemId: 'message-1', delta: '_CHAIN_OK' },
+  })
+  const completed = {
+    method: 'item/completed',
+    params: {
+      threadId: 'root',
+      turnId: 'root-turn',
+      item: { id: 'message-1', type: 'agentMessage', text: 'B_FULL_CHAIN_OK' },
+    },
+  } as const
+  bridge.handle(completed)
+  bridge.handle(completed)
+
+  await broadcast.flush()
+  const messages = broadcast.getEventsAfter(0).filter(event => event.type === 'assistant_text')
+  assert.deepEqual(messages.map(event => ({ subtype: event.subtype, content: event.content })), [
+    { subtype: 'text_delta', content: '_CHAIN_OK' },
+    { subtype: undefined, content: 'B_FULL_CHAIN_OK' },
+  ])
+  assert.equal(bridge.getResult().assistantText, 'B_FULL_CHAIN_OK')
+})
+
+test('turn result uses the latest canonical agent message instead of concatenating progress text', async t => {
+  const eventsDir = await tempDirectory('codex-app-final-message-')
+  t.after(() => fs.rm(eventsDir, { recursive: true, force: true }))
+  const broadcast = new EventBroadcast('final-message-task', eventsDir)
+  const bridge = new AppServerEventBridge({
+    taskId: 'final-message-task',
+    broadcast,
+    rootThreadId: 'root',
+  })
+  bridge.setRootTurnId('root-turn')
+
+  for (const [itemId, text] of [
+    ['progress-message', 'Delegating the bounded check now.'],
+    ['final-message', 'FINAL_STREAM_OK'],
+  ] as const) {
+    bridge.handle({
+      method: 'item/agentMessage/delta',
+      params: { threadId: 'root', turnId: 'root-turn', itemId, delta: text },
+    })
+    bridge.handle({
+      method: 'item/completed',
+      params: {
+        threadId: 'root',
+        turnId: 'root-turn',
+        item: { id: itemId, type: 'agentMessage', text },
+      },
+    })
+  }
+
+  await broadcast.flush()
+  assert.equal(bridge.getResult().assistantText, 'FINAL_STREAM_OK')
+  assert.deepEqual(
+    broadcast.getEventsAfter(0)
+      .filter(event => event.type === 'assistant_text' && event.subtype !== 'text_delta')
+      .map(event => event.content),
+    ['Delegating the bounded check now.', 'FINAL_STREAM_OK'],
+  )
+})
+
 test('reused instances ignore stale roots and never persist reasoning summaries', async t => {
   const eventsDir = await tempDirectory('codex-app-native-stale-')
   t.after(() => fs.rm(eventsDir, { recursive: true, force: true }))

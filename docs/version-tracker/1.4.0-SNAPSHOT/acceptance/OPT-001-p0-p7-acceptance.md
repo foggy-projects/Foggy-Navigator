@@ -1,90 +1,123 @@
 ---
-acceptance_scope: feature-and-rollout
+acceptance_scope: feature
 version: 1.4.0-SNAPSHOT
-target: OPT-001 P0-P7
+target: OPT-001 P0-P2 isolated implementation
 doc_role: acceptance-record
-status: blocked
-decision: blocked
+status: signed-off
+decision: accepted-with-risks
 production_enablement: not-approved
-signed_off_by: null
-signed_off_at: null
-reviewed_by: Codex local code reviewer
-reviewed_at: 2026-07-10
-blocking_items:
-  - P1 post-fix provider/crash live refresh plus POSIX and running-service update rollback
-  - P2 real Worker-Java-SSE-PC chain and browser reconnect
-  - P2 N-1 multi-replica and production migration validation
-  - P3 release-owner cohort and 50-task 72-hour canary evidence
-  - P4-P7 production default drain parity and retirement evidence
+signed_off_by: Codex
+signed_off_at: 2026-07-11
+production_signed_off_by: null
+production_signed_off_at: null
+reviewed_by: Codex
+reviewed_at: 2026-07-11
+blocking_items: []
 follow_up_required: yes
-evidence_count: 8
+evidence_count: 4
 ---
 
-# Feature And Rollout Acceptance
+# Feature Acceptance
 
 ## Background
 
-- Version: `1.4.0-SNAPSHOT`
-- Target: `OPT-001` 独立 Codex App Server Worker
-- Goal: 以独立 app-server Worker 承载全部已声明模型/reasoning，Ultra 首批灰度，之后逐 cohort 成为默认并退役 SDK lane。
-- Review boundary: 当前只完成 P0 和 P1/P2 本地实现检查点审查；未改变生产路由。
+本记录签收 OPT-001 P0-P2 隔离实现与体验。P3-P6 是未开始的独立生产 rollout，不属于本次 accepted scope；`production_enablement` 因此继续为 `not-approved`。
 
 ## Acceptance Basis
 
-- requirement: `docs/version-tracker/1.4.0-SNAPSHOT/workitems/OPT-001-independent-codex-app-server-worker-requirement.md`
-- implementation plan/progress: 同目录 `plan` 与 `progress`
-- quality gate: `docs/version-tracker/1.4.0-SNAPSHOT/quality/OPT-001-p0-p2-implementation-quality.md`
-- coverage audit: `docs/version-tracker/1.4.0-SNAPSHOT/coverage/OPT-001-p0-p2-coverage-audit.md`
+- [Requirement](../workitems/OPT-001-independent-codex-app-server-worker-requirement.md)
+- [Implementation plan](../workitems/OPT-001-independent-codex-app-server-worker-plan.md)
+- [Progress](../workitems/OPT-001-independent-codex-app-server-worker-progress.md)
+- [Implementation quality gate](../quality/OPT-001-p0-p2-implementation-quality.md)
+- [Coverage audit](../coverage/OPT-001-p0-p2-coverage-audit.md)
+- Durable evidence under [`../evidence`](../evidence/).
+
+### Decision Boundary
+
+- P0 代码/契约静态验收通过。
+- P1/P2 的 final Worker full/archive、Windows/WSL exact-package、Java/Session/PC、双实例 affinity、真实 Ultra/SSE/native、刷新和 desktop/320px 证据均通过，isolated experience 已签收。
+- 本记录不批准外部生产 Ultra canary，不把本地/隔离证据计入 P3 数值门槛。
+- P7 SDK retirement 已按产品决定延后；旧 SDK Worker 继续保持现有设计，不是本记录的 blocker。
 
 ## Checklist
 
-- [x] P0 契约、固定 CLI/schema、幂等接受、capability、affinity 和 rollback 语义完成。
-- [ ] P1 完整退出：自动化、此前隔离 smoke、最终 health/matrix/HTTP 幂等和 0.1.0 本地 Windows package/install/update 通过；最终 provider/crash live 被账户额度阻塞，POSIX/运行中 drain/restart/rollback 未验。
-- [ ] P2 完整退出：分层实现与回归通过；真实全链、N-1、多副本和生产 migration/validate 未验收。
-- [ ] P3 Ultra canary：release owner 未签收 cohort；当前 0/50 task、0/72h、0/2 rotation。
-- [ ] P4 Ultra default 与 legacy drain：依赖 P3 独立签收。
-- [ ] P5 非 Ultra/功能 cohort：动态 catalog 与完整功能 parity 未关闭。
-- [ ] P6 app-server default：未切换，SDK 仍是生产默认 lane。
-- [ ] P7 SDK retirement：active/resumable/exception、保留期和回滚 artifact 均未满足。
+- [x] P0：固定 CLI/schema、幂等接受、durable state/ESN、capability、registry、immutable affinity 和 rollback 语义完成。
+- [x] P1 final isolated signoff：核心/Canary/store/pool/lifecycle、Worker `200` 项回归、v5 可复现制品和 Windows/WSL exact-package lifecycle/update/零残留通过。
+- [x] P2 final isolated signoff：Java/Session/PC、A/B affinity、MySQL 8.0/8.4、N-1、migration/validate、shared-user availability、process boundary、exact result、历史/刷新与 desktop/320px 通过。
+- [ ] P3：release owner 未签收；外部生产 0/50 task、0/72h、0/2 rotation。
+- [ ] P4：Ultra default 未开始，依赖 P3 独立签收。
+- [ ] P5：非 Ultra/功能 cohort 未开始，动态 catalog 与功能 parity 未关闭。
+- [ ] P6：app-server default 未开始，是否推进由后续产品与生产 gate 决定。
+- N/A P7：`deferred-by-product-decision`，本版本不执行、不签收 SDK retirement。
 
 ## Evidence
 
-- 新 Worker 87/87，typecheck/build/schema verify 通过。
-- 0.1.0 deterministic ZIP 三次 SHA-256 一致：`59cf633a5781ee8adde28c3363342920f71131def1bfdde288d63233300ef5ea`；Windows temp install/in-place update 与状态保留通过。
-- 旧 SDK Worker 115/115，typecheck/build 通过，Ultra 新任务 fail closed。
-- Java reactor BUILD SUCCESS；Codex addon 214/214、Session 302/302。
-- PC Vitest 159/159、type-check/build、mocked contract Playwright 2/2。
-- MySQL 8.4.8 干净 schema migration/backfill rehearsal 通过。
-- 固定 CLI `0.144.1` 的七模型静态 manifest 和 reasoning 边界已验证；此前逐档真实 Worker smoke 通过，最终硬化后 provider refresh 被账户 usage limit 阻塞。
-- 最终 post-fix HTTP 幂等 first/same/changed 为 `202/202/409`；恢复/持久化 focused tests 46/46。主动中止、pool reuse、native 投影保留此前 live evidence，hard crash/restart 未在本轮重验。
-- `git diff --check` 和依赖/端口/reasoning 静态检查通过，生产 3052/3061 lane 未被改动或停止。
+- App-server Worker `200 total / 193 passed / 7 platform-skipped / 0 failed`；typecheck/build/schema verify 通过。
+- `0.1.1` v5 SHA-256/bytes/entries=`b6271e5a3220b0253d97b6d05c9fe5f5561331655e27faccd8ad254fbf6c31d9` / `1,500,249` / `168`；双构建字节一致、路径扫描通过；Windows/WSL exact-package install/start/real Ultra/running update/stop/zero-residue 通过。
+- Legacy SDK Worker `116/116`，typecheck/build；现有 SDK 设计、非 Ultra 路径和已有 affinity 保持，Ultra fail-closed；仅测试断言适配 Windows 上的 POSIX server-script 路径。
+- Codex addon `259/259`；Session focused `7/7`；reconciliation `10/10`；Metadata `13/13`；Launcher ownership context `1/1`；Code Review context `1/1`。raw full reactor 被 Windows Surefire fork/path 基础设施问题阻断，受影响定向测试通过。
+- PC Vitest `179/179`、`build:check`；shared-user/fixed-task Worker-Java-SSE-PC 刷新前后 final message 均为 `1`，native `1/1`，desktop/320px 无溢出、失败请求或控制台错误。
+- MySQL 8.0.44/8.4.8；N-1 strict legacy GET、migration 后 validate/CRUD/soft-delete；旧 migration 缺 epoch 列的幂等升级路径通过。
+- Worker 状态/租约/幂等、超大 affinity probe、bootstrap failure、永久 drain/release 有限重试和 EADDRINUSE 清理均有回归。
+- Navigator task `20260711-8023` / Session `b2bc4a9c-3134-4d24-af50-5709ab9b91e6` COMPLETED；result=`FINAL_RESULT_OK`、文件=`FINAL_NATIVE_RESULT_OK`、native SSE=`5`、snapshot=`1`，prompt/Bearer/Worker token 暴露检查均为 false。
 
-## Risks / Open Items
+- Durable records:
+  [Windows exact-package](../evidence/OPT-001-exact-package-windows-v5.json),
+  [WSL exact-package](../evidence/OPT-001-exact-package-wsl-v5.json),
+  [Navigator Ultra task](../evidence/OPT-001-navigator-ultra-task-v5.json),
+  [PC final acceptance](../evidence/OPT-001-pc-final-acceptance-v5.json).
 
-- 当前证据证明的是本地代码与隔离 Worker，不证明目标生产网络、数据库、Java/PC 部署和多副本拓扑。
-- 固定 manifest 不等于账号动态 catalog；未知未来模型不得自动成为平台可路由项。
-- P3 的 duplicate side effect、affinity mismatch、credential/raw child leak 当前没有生产样本，不能把“0 条样本”写成“生产为 0”。
-- 旧 SDK task/session 必须持续按原 affinity drain，任何 rollback 都只能停止新分配。
+### Defect Signoff
+
+| Defect | Status |
+|---|---|
+| [BUG-001](../workitems/BUG-001-app-server-delta-message-fragmentation.md) | closed-isolated |
+| [BUG-002](../workitems/BUG-002-app-worker-dotenv-state-dir.md) | closed |
+| [BUG-003](../workitems/BUG-003-worker-view-mobile-layout.md) | closed-isolated |
+| [BUG-004](../workitems/BUG-004-app-worker-operations-dotenv-run-dir.md) | closed |
+| [BUG-005](../workitems/BUG-005-app-worker-windows-install-path-spaces.md) | closed |
+| [BUG-006](../workitems/BUG-006-app-worker-macos-update-candidate-discovery.md) | closed |
+| [BUG-007](../workitems/BUG-007-app-server-final-result-aggregation.md) | closed-isolated |
+| [BUG-008](../workitems/BUG-008-canary-evidence-correctness.md) | fixed-isolated; P3 validation pending |
+| [BUG-009](../workitems/BUG-009-lifecycle-process-tree-and-stop-outcome.md) | closed-isolated |
+| [BUG-010](../workitems/BUG-010-pc-app-server-boundary-and-shared-availability.md) | closed-isolated |
+| [BUG-011](../workitems/BUG-011-terminal-broadcast-and-task-store-bounds.md) | fixed-isolated; P3 soak pending |
+| [BUG-012](../workitems/BUG-012-pool-cross-lane-lru-retirement.md) | fixed-isolated; P3 soak pending |
+| [BUG-013](../workitems/BUG-013-windows-process-tree-termination-settle-race.md) | closed-isolated |
 
 ## Failed Items
 
-- P1 final provider/crash live refresh: blocked by external account usage limit before `tool_use`。
-- P1 target operations gate: POSIX actual install and running-service drain/restart/failure rollback not-run。
-- P2 full-chain/N-1/multi-replica/production migration gate: not-run。
-- P3-P7 production rollout gates: not-run and entry conditions unsatisfied。
+- P0-P2 isolated scope: none.
+- P3-P6 are unstarted and excluded from this signoff; they are not converted into passed items or counted as isolated failures.
+
+## Risks / Open Items
+
+- 生产 duplicate side effect、affinity mismatch、credential/raw child leak 都没有生产样本；不能表述为生产值 0。
+- 固定 CLI manifest 不等于动态账号 catalog，未知未来模型不得自动开放。
+- P5 的 approval、additional directories、interactive server request、Biz/MCP 等功能仍须逐 cohort 验证。
+- 已执行旧版 affinity SQL 的环境必须执行 `docs/migration/2026-07-10-codex-task-created-at-epoch-ms.sql`。
+- Raw full reactor 在 Windows Surefire fork/path 基础设施阶段被阻断；相关变更模块和上下文测试均通过。
+- 旧 exact-final 失败任务和 v4 update BLOCKED 只作为复现证据；isolated signoff 使用 v5 final package、任务 `20260711-8023` 和最终 PC Playwright 证据。
 
 ## Final Decision
 
-P0 验收通过；P1/P2 的本地实现检查点通过质量 review，但尚未满足各自完整 exit gate。OPT-001 整体结论为 `blocked`：先完成 P1 发布物和 P2 目标环境证据，再由 release owner 签收 P3 cohort。P3 未达到 50 task、72 小时和 2 次轮换之前，禁止进入 P4；P4-P6 未签收之前，禁止退役 SDK lane。
+OPT-001 的 P0-P2、BUG-001~013 相关隔离实现及体验证据已签收；BUG-008/011/012 的生产验证仍属于 P3。该结论不批准生产：目标环境尚未由 release owner 签收，P3 仍为 0/50 terminal Ultra task、0/72h 和 0/2 rotations，`production_enablement` 保持 `not-approved`。P4-P6 在 P3 独立生产签收前不得开始；旧 SDK Worker 保持现状，不等待也不执行退役。
 
 ## Signoff Marker
 
-- acceptance_status: blocked
-- acceptance_decision: blocked
-- local_code_checkpoint: reviewed-ready-with-risks
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-07-11
+- acceptance_record: docs/version-tracker/1.4.0-SNAPSHOT/acceptance/OPT-001-p0-p7-acceptance.md
+- blocking_items: none
+- isolated_experience: accepted
 - production_enablement: not-approved
 - P3_entry: not-approved
-- signed_off_by: null
-- signed_off_at: null
-- blocking_items: see front matter and Failed Items
+- P4-P6: not-started
+- P7: N/A-deferred-by-product-decision
+- isolated_signed_off_by: Codex
+- isolated_signed_off_at: 2026-07-11
+- production_signed_off_by: null
+- production_signed_off_at: null
 - follow_up_required: yes

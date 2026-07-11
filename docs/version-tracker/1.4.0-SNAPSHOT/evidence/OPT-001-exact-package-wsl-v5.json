@@ -1,0 +1,70 @@
+{
+  "platform": "WSL Ubuntu-24.04",
+  "packageSha256": "b6271e5a3220b0253d97b6d05c9fe5f5561331655e27faccd8ad254fbf6c31d9",
+  "packageBytes": 1500249,
+  "sidecarHashVerified": true,
+  "entries": 168,
+  "pathAndSecretScanPassed": true,
+  "version": "0.1.1",
+  "bundledCodexVersion": "codex-cli 0.144.1",
+  "status": "PASSED",
+  "commands": {
+    "installExit": 0,
+    "starterFaultInjectionExit": 0,
+    "startExit": 0,
+    "taskRunnerExit": 0,
+    "runningUpdateExit": 0,
+    "stopExit": 0
+  },
+  "candidateValidation": {
+    "installTests": 200,
+    "updateTests": 200,
+    "schemaTypecheckBuildPassed": true
+  },
+  "starterFaultInjection": {
+    "blockedAndLatched": true,
+    "pidAbsent": true,
+    "dedicatedRootCleaned": true
+  },
+  "task": {
+    "terminal": true,
+    "outcome": "completed",
+    "errorCode": null,
+    "model": "gpt-5.6-sol",
+    "reasoningEffort": "ultra",
+    "resultExact": true,
+    "outputFileExact": true,
+    "nativeEventCount": 5,
+    "nativeCompleted": true,
+    "privacy": {
+      "promptAbsent": true,
+      "tokenAbsent": true,
+      "authAbsent": true,
+      "authFieldsAbsent": true
+    },
+    "streamError": null
+  },
+  "runtime": {
+    "idleAfterTerminal": 1,
+    "runtimeTreesAfterTerminal": 1,
+    "oldTreeIncludedChild": true
+  },
+  "update": {
+    "oldTreeExited": true,
+    "newPidReady": true,
+    "envAndStateIdentityStable": true
+  },
+  "shutdown": {
+    "newTreeExited": true,
+    "runtimeEvidenceZero": true,
+    "lifecycleEvidenceZero": true,
+    "portClosed": true,
+    "zeroResidue": true,
+    "tempRootRemoved": true
+  },
+  "security": {
+    "credentialsRemovedWithTempRoot": true,
+    "evidenceSecretMatches": 0,
+    "promptSentinelAbsent": true
+  }
+}

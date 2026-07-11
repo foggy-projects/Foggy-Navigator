@@ -1,6 +1,6 @@
 import path from 'node:path'
 import type { AppConfig } from './config.js'
-import type { StoredTaskRecord, TaskRequest } from './models.js'
+import type { StoredTaskRecord, TaskRequest, WorkerEvent } from './models.js'
 import { parseModelString, resolveModelAlias } from './model-resolution.js'
 import { EventBroadcast } from './persistence/event-store.js'
 import { TaskStore } from './persistence/task-store.js'
@@ -51,16 +51,14 @@ export class TaskManager {
     for (const snapshot of this.store.list()) {
       await cleanupMaterializedInput(snapshot.task_id, this.config.stateDir)
       const record = this.store.get(snapshot.task_id) || snapshot
-      const broadcast = this.getBroadcast(record.task_id)
-      const events = broadcast.loadFromDisk()
       if (record.status === 'terminal') {
-        try {
-          if (record.tombstoned_at) await broadcast.purge()
-        } finally {
-          await broadcast.close()
+        if (record.tombstoned_at) {
+          await EventBroadcast.purgePersisted(record.task_id, path.join(this.config.stateDir, 'events'))
         }
         continue
       }
+      const broadcast = this.getBroadcast(record.task_id)
+      const events = broadcast.getEventsAfter(0)
       if (await this.finalizeDurableTerminalEvent(record, broadcast, events)) {
         continue
       }
@@ -124,54 +122,51 @@ export class TaskManager {
       broadcast.loadFromDisk()
       this.broadcasts.set(taskId, broadcast)
     }
+    if (this.store.get(taskId)?.status === 'terminal') {
+      void this.retireBroadcast(taskId, broadcast).catch(() => {
+        console.error(`[codex-app-server] terminal_broadcast_retire_failed task=${sanitize(taskId)}`)
+      })
+    }
     return broadcast
   }
 
   async abort(taskId: string): Promise<AbortTaskResult | undefined> {
-    let record = this.store.get(taskId)
-    if (!record) return undefined
-    if (record.status === 'terminal') {
-      return {
-        record,
-        abort_status: record.outcome === 'aborted' ? 'aborted' : 'already_terminal',
-      }
-    }
-    record = await this.store.requestAbort(taskId)
-    this.queued.delete(taskId)
-    const controller = this.abortControllers.get(taskId)
-    if (controller) {
-      controller.abort('Task aborted')
-      const deadline = Date.now() + this.config.abortWaitTimeoutMs
-      let current = this.store.get(taskId)!
-      while (current.status !== 'terminal' && Date.now() < deadline) {
-        await new Promise(resolve => setTimeout(resolve, 20))
-        current = this.store.get(taskId) || current
-      }
-      return {
-        record: current,
-        abort_status: current.status !== 'terminal'
-          ? 'abort_pending'
-          : current.outcome === 'aborted'
-            ? 'aborted'
-            : 'already_terminal',
-      }
-    }
     return this.withTaskOperation(taskId, async () => {
-      const current = this.store.get(taskId)
-      if (!current) return undefined
-      if (current.status === 'terminal') {
+      let record = this.store.get(taskId)
+      if (!record) return undefined
+      if (record.status === 'terminal') {
+        return {
+          record,
+          abort_status: record.outcome === 'aborted' ? 'aborted' : 'already_terminal',
+        }
+      }
+      record = await this.store.requestAbort(taskId)
+      this.queued.delete(taskId)
+      const controller = this.abortControllers.get(taskId)
+      if (controller) {
+        controller.abort('Task aborted')
+        const deadline = Date.now() + this.config.abortWaitTimeoutMs
+        let current = this.store.get(taskId)!
+        while (current.status !== 'terminal' && Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 20))
+          current = this.store.get(taskId) || current
+        }
         return {
           record: current,
-          abort_status: current.outcome === 'aborted' ? 'aborted' : 'already_terminal',
+          abort_status: current.status !== 'terminal'
+            ? 'abort_pending'
+            : current.outcome === 'aborted'
+              ? 'aborted'
+              : 'already_terminal',
         }
       }
       const broadcast = this.getBroadcast(taskId)
-      if (current.status === 'accepted' || current.status === 'starting' || !this.executor.reconcile) {
-        const terminal = await this.finalizeLocalAbort(current, broadcast)
+      if (record.status === 'accepted' || record.status === 'starting' || !this.executor.reconcile) {
+        const terminal = await this.finalizeLocalAbort(record, broadcast)
         return { record: terminal, abort_status: 'aborted' }
       }
-      await this.reconcileCommitted(current, broadcast)
-      const terminal = this.store.get(taskId) || current
+      await this.reconcileCommitted(record, broadcast)
+      const terminal = this.store.get(taskId) || record
       return {
         record: terminal,
         abort_status: terminal.status !== 'terminal'
@@ -189,14 +184,19 @@ export class TaskManager {
       if (!current || current.status !== 'terminal') return undefined
       const tombstone = await this.store.tombstoneTerminal(taskId)
       if (!tombstone) return undefined
-      const broadcast = this.getBroadcast(taskId)
+      const broadcast = this.broadcasts.get(taskId)
       try {
-        try {
-          await broadcast.close()
-        } finally {
-          await broadcast.purge()
+        if (broadcast) {
+          try {
+            await broadcast.close()
+          } finally {
+            await broadcast.purge()
+          }
+        } else {
+          await EventBroadcast.purgePersisted(taskId, path.join(this.config.stateDir, 'events'))
         }
       } finally {
+        if (broadcast && this.broadcasts.get(taskId) === broadcast) this.broadcasts.delete(taskId)
         await cleanupMaterializedInput(taskId, this.config.stateDir)
       }
       return tombstone
@@ -220,6 +220,7 @@ export class TaskManager {
       active_tasks: this.active.size,
       queued_tasks: this.queued.size,
       pending_accepts: this.pendingAccepts,
+      resident_broadcasts: this.broadcasts.size,
       max_queued_tasks: this.config.maxQueuedTasks,
       accepting: this.isAccepting(),
       ...(this.executor.metrics?.() || {}),
@@ -266,14 +267,28 @@ export class TaskManager {
     }
   }
 
-  async shutdown(timeoutMs: number): Promise<void> {
+  async shutdown(timeoutMs: number): Promise<boolean> {
     this.accepting = false
     const deadline = Date.now() + timeoutMs
     const settleReserveMs = Math.min(1_000, Math.floor(timeoutMs / 10))
-    await this.executor.drain?.(Math.max(0, deadline - Date.now() - settleReserveMs))
-    while (this.active.size > 0 && Date.now() < deadline) {
+    let drainCompleted = true
+    try {
+      await this.executor.drain?.(Math.max(0, deadline - Date.now() - settleReserveMs))
+    } catch {
+      drainCompleted = false
+    }
+    while (!this.isQuiesced() && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 25))
     }
+    return drainCompleted && this.isQuiesced()
+  }
+
+  private isQuiesced(): boolean {
+    return this.active.size === 0
+      && this.pendingAccepts === 0
+      && this.inFlightAccepts.size === 0
+      && this.taskOperations.size === 0
+      && this.recoveryRun === undefined
   }
 
   private enqueue(taskId: string): void {
@@ -418,7 +433,7 @@ export class TaskManager {
       console.warn(`[codex-app-server] task_failed task=${sanitize(taskId)} code=${code}`)
     } finally {
       await this.markRecoveryRequired(taskId)
-      await broadcast.close()
+      await this.retireBroadcast(taskId, broadcast)
     }
   }
 
@@ -458,6 +473,18 @@ export class TaskManager {
       recovery_required: false,
     }
     if (result.status === 'completed') {
+      const latestCanonicalText = [...broadcast.getEventsAfter(0)]
+        .reverse()
+        .find(isCanonicalAssistantEvent)?.content
+      if (result.assistantText && latestCanonicalText !== result.assistantText) {
+        broadcast.emit({
+          type: 'assistant_text',
+          task_id: record.task_id,
+          session_id: common.thread_id,
+          content: result.assistantText,
+          subtype: 'recovered',
+        })
+      }
       broadcast.emit({
         type: 'result',
         task_id: record.task_id,
@@ -470,7 +497,7 @@ export class TaskManager {
       await this.store.transition(record.task_id, 'terminal', { ...common, outcome: 'completed' })
     } else if (result.status === 'unknown' && record.abort_requested_at) {
       await this.store.patch(record.task_id, { ...common, recovery_required: true })
-      await broadcast.close()
+      await this.retireBroadcast(record.task_id, broadcast)
       return
     } else {
       const code = result.status === 'interrupted'
@@ -486,7 +513,7 @@ export class TaskManager {
         error_code: code,
       })
     }
-    await broadcast.close()
+    await this.retireBroadcast(record.task_id, broadcast)
   }
 
   private async finalizeDurableTerminalEvent(
@@ -503,7 +530,7 @@ export class TaskManager {
           error_code: terminal.subtype,
         }
     await this.store.transition(record.task_id, 'terminal', patch)
-    await broadcast.close()
+    await this.retireBroadcast(record.task_id, broadcast)
     return true
   }
 
@@ -517,7 +544,7 @@ export class TaskManager {
       outcome: 'aborted',
       error_code: 'TASK_ABORTED',
     })
-    await broadcast.close()
+    await this.retireBroadcast(record.task_id, broadcast)
     return terminal
   }
 
@@ -532,8 +559,8 @@ export class TaskManager {
     }
   }
 
-  private async retireBroadcast(taskId: string): Promise<void> {
-    const broadcast = this.broadcasts.get(taskId)
+  private async retireBroadcast(taskId: string, expected?: EventBroadcast): Promise<void> {
+    const broadcast = expected || this.broadcasts.get(taskId)
     if (!broadcast) return
     try {
       await broadcast.close()
@@ -588,6 +615,14 @@ function compact<T extends Record<string, unknown>>(value: T): T {
 
 function sanitize(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128)
+}
+
+function isCanonicalAssistantEvent(event: WorkerEvent): boolean {
+  return event.type === 'assistant_text'
+    && Boolean(event.content?.trim())
+    && event.subtype !== 'text_delta'
+    && event.subtype !== 'sync_checkpoint'
+    && event.subtype !== 'execution_committed'
 }
 
 function stableExecutionErrorCode(error: unknown): string {

@@ -1,9 +1,11 @@
 import {
   CanarySoakError,
   createInitialState,
+  evaluateCanarySoakGate,
   loadCanarySoakConfig,
   readCanarySoakState,
   renderCanarySoakReport,
+  resetCanarySoakState,
   sampleCanarySoak,
 } from './canary-soak.js'
 
@@ -11,12 +13,22 @@ type CliArguments = {
   configPath: string
   once: boolean
   report: boolean
+  reset: boolean
+  requirePass: boolean
 }
 
 export async function runCanarySoakCli(argv: string[]): Promise<number> {
   try {
     const args = parseArguments(argv)
     const config = await loadCanarySoakConfig(args.configPath)
+    if (args.reset) {
+      const state = await resetCanarySoakState(config)
+      process.stdout.write(`${renderCanarySoakReport(state, config.thresholds, {
+        now: new Date(),
+        maxSampleGapMs: config.maxSampleGapMs,
+      })}\n`)
+      return args.requirePass ? 1 : 0
+    }
     let state = await readCanarySoakState(config)
     if (args.report) {
       state ||= createInitialState(config, new Date())
@@ -24,7 +36,7 @@ export async function runCanarySoakCli(argv: string[]): Promise<number> {
         now: new Date(),
         maxSampleGapMs: config.maxSampleGapMs,
       })}\n`)
-      return 0
+      return gateExitCode(state, config.thresholds, config.maxSampleGapMs, args.requirePass)
     }
 
     if (args.once) {
@@ -36,7 +48,8 @@ export async function runCanarySoakCli(argv: string[]): Promise<number> {
       if (sampled.errorCodes.length > 0) {
         process.stdout.write(`sample_errors: ${sampled.errorCodes.join(',')}\n`)
       }
-      return sampled.cycleComplete || !sampled.due ? 0 : 1
+      if (!sampled.cycleComplete && sampled.due) return 1
+      return gateExitCode(sampled.state, config.thresholds, config.maxSampleGapMs, args.requirePass)
     }
 
     state ||= createInitialState(config, new Date())
@@ -64,7 +77,7 @@ export async function runCanarySoakCli(argv: string[]): Promise<number> {
       now: new Date(),
       maxSampleGapMs: config.maxSampleGapMs,
     })}\n`)
-    return 0
+    return gateExitCode(state, config.thresholds, config.maxSampleGapMs, args.requirePass)
   } catch (error) {
     const code = error instanceof CanarySoakError ? error.code : 'CANARY_SOAK_UNEXPECTED_FAILURE'
     process.stderr.write(`canary_soak_failed=${code}\n`)
@@ -76,6 +89,8 @@ function parseArguments(argv: string[]): CliArguments {
   let configPath = ''
   let once = false
   let report = false
+  let reset = false
+  let requirePass = false
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index]
     if (argument === '--config') {
@@ -84,13 +99,29 @@ function parseArguments(argv: string[]): CliArguments {
       once = true
     } else if (argument === '--report') {
       report = true
+    } else if (argument === '--reset') {
+      reset = true
+    } else if (argument === '--require-pass') {
+      requirePass = true
     } else {
       throw new CanarySoakError('CANARY_CLI_ARGUMENT_INVALID')
     }
   }
   if (!configPath) throw new CanarySoakError('CANARY_CLI_CONFIG_REQUIRED')
-  if (once && report) throw new CanarySoakError('CANARY_CLI_MODE_CONFLICT')
-  return { configPath, once, report }
+  if ([once, report, reset].filter(Boolean).length > 1) {
+    throw new CanarySoakError('CANARY_CLI_MODE_CONFLICT')
+  }
+  return { configPath, once, report, reset, requirePass }
+}
+
+function gateExitCode(
+  state: Parameters<typeof evaluateCanarySoakGate>[0],
+  thresholds: Parameters<typeof evaluateCanarySoakGate>[1],
+  maxSampleGapMs: number,
+  requirePass: boolean,
+): number {
+  if (!requirePass) return 0
+  return evaluateCanarySoakGate(state, thresholds, { now: new Date(), maxSampleGapMs }).passed ? 0 : 1
 }
 
 function delay(milliseconds: number): Promise<void> {

@@ -28,7 +28,10 @@ export interface ConversationGroup {
   codexThreadId: string
   latestTask: ClaudeTask
   tasks: ClaudeTask[]
+  taskCount: number
   totalCost: number
+  totalInputTokens: number
+  totalOutputTokens: number
   firstPrompt: string
   config?: ConversationConfig
 }

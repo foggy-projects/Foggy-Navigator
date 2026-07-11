@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "pc-final-acceptance-v5",
+  "generatedAtUtc": "2026-07-11T03:08:55Z",
+  "status": "PASSED",
+  "task": {
+    "taskId": "20260711-8023",
+    "sessionId": "b2bc4a9c-3134-4d24-af50-5709ab9b91e6",
+    "status": "COMPLETED",
+    "resultExact": true,
+    "finalMessageCount": 1,
+    "afterRefreshMessageCount": 1,
+    "nativeSubtaskProgress": "1/1"
+  },
+  "runtimePanel": {
+    "ultraAvailable": true,
+    "revisions": [
+      {
+        "revision": 1,
+        "enabled": false,
+        "routingPolicy": "DARK",
+        "readiness": "READY"
+      },
+      {
+        "revision": 2,
+        "enabled": true,
+        "routingPolicy": "ULTRA_DEFAULT",
+        "readiness": "READY"
+      }
+    ]
+  },
+  "desktop": {
+    "historyLocatedBySessionIdentity": true,
+    "finalResultVisible": true,
+    "nativeSubtaskVisible": true,
+    "screenshot": "pc-final-result-desktop.png"
+  },
+  "mobile320x900": {
+    "viewportWidth": 320,
+    "documentClientWidth": 320,
+    "documentScrollWidth": 320,
+    "bodyClientWidth": 320,
+    "bodyScrollWidth": 320,
+    "mainWidth": 320,
+    "leftPanelWidth": 276,
+    "rightPanelWidth": 276,
+    "minimumMeasuredControlWidth": 44,
+    "minimumMeasuredControlHeight": 44,
+    "horizontalOverflow": false,
+    "screenshots": [
+      "pc-responsive-320-overlay.png",
+      "pc-responsive-320-closed.png"
+    ]
+  },
+  "diagnostics": {
+    "consoleErrors": 0,
+    "pageErrors": 0,
+    "requestFailures": 0,
+    "failedResponses": 0,
+    "applicationErrors": 0,
+    "uiErrors": 0,
+    "expectedNavigationSseCancellations": 2
+  }
+}

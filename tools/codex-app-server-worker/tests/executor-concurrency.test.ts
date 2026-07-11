@@ -6,7 +6,11 @@ import test from 'node:test'
 import { StrictAppServerExecutor } from '../src/app-server/executor.js'
 import { KeyedExecutionLocks } from '../src/app-server/execution-locks.js'
 import { AppServerPool, type PoolRuntimeInstance } from '../src/app-server/pool.js'
-import type { AppServerTurnResult, PersistentTurnOptions } from '../src/app-server/runtime.js'
+import {
+  AppServerProcessTreeSafetyError,
+  type AppServerTurnResult,
+  type PersistentTurnOptions,
+} from '../src/app-server/runtime.js'
 import { EventBroadcast } from '../src/persistence/event-store.js'
 import { tempDirectory, testConfig, waitFor } from './helpers.js'
 
@@ -103,6 +107,43 @@ test('non-retrying provider error forces failed result even if the turn reports 
   })
   assert.equal(result.status, 'failed')
   assert.doesNotMatch(JSON.stringify(broadcast.getEventsAfter(0)), /PROVIDER_SECRET_SENTINEL/)
+})
+
+test('executor fails the pool closed before releasing cwd and thread locks after process-tree safety failure', async t => {
+  const stateDir = await tempDirectory('codex-app-process-tree-safety-')
+  const cwd = path.join(stateDir, 'repo')
+  await fs.mkdir(cwd)
+  const config = testConfig(stateDir, { allowedCwds: [stateDir] })
+  const locks = new KeyedExecutionLocks()
+  let locksAtFailClosed: ReturnType<KeyedExecutionLocks['metrics']> | undefined
+  const pool = new class extends AppServerPool {
+    override failClosed(error: Error): void {
+      locksAtFailClosed = locks.metrics()
+      super.failClosed(error)
+    }
+  }(config, async () => new ProcessTreeUnsafeRuntime())
+  const executor = new StrictAppServerExecutor(config, pool, locks)
+  t.after(async () => {
+    await pool.drain(100).catch(() => undefined)
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  await assert.rejects(executor.execute({
+    taskId: 'process-tree-safety',
+    request: { prompt: 'inspect', cwd, session_id: 'unsafe-thread' },
+    signal: new AbortController().signal,
+    broadcast: new EventBroadcast('process-tree-safety', path.join(stateDir, 'events')),
+    callbacks: {
+      onInstanceResolved: () => undefined,
+      onThreadResolved: () => undefined,
+      onExecutionCommitted: () => undefined,
+      onTurnStarted: () => undefined,
+    },
+  }), AppServerProcessTreeSafetyError)
+
+  assert.deepEqual(locksAtFailClosed, { active_keys: 2, waiting: 0 })
+  assert.deepEqual(locks.metrics(), { active_keys: 0, waiting: 0 })
+  assert.equal(pool.isDraining(), true)
 })
 
 test('invalid image input removes files materialized before validation failed', async t => {
@@ -251,4 +292,10 @@ class ProviderErrorRuntime implements PoolRuntimeInstance {
   }
   async readThread(): Promise<Record<string, unknown>> { return { turns: [] } }
   close(): void { this.healthy = false }
+}
+
+class ProcessTreeUnsafeRuntime extends ProviderErrorRuntime {
+  override async runTurn(): Promise<AppServerTurnResult> {
+    throw new AppServerProcessTreeSafetyError()
+  }
 }

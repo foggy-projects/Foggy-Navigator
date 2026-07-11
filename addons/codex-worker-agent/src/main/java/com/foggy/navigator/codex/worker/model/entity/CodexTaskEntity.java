@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 /**
@@ -136,12 +137,17 @@ public class CodexTaskEntity {
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    /** UTC epoch captured at insert time. Legacy rows remain null and must not be inferred from LocalDateTime. */
+    @Column(name = "created_at_epoch_ms", updatable = false)
+    private Long createdAtEpochMs;
+
     @Column(nullable = false)
     private LocalDateTime updatedAt;
 
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
+        createdAtEpochMs = Instant.now().toEpochMilli();
         updatedAt = LocalDateTime.now();
         if (lastOutputAt == null) {
             lastOutputAt = createdAt;

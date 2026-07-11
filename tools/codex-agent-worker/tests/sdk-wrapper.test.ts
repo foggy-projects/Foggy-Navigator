@@ -411,7 +411,7 @@ test('buildNavigatorBusinessMcpConfig inherits token through named env vars only
   const server = config.mcp_servers.navigator_business
   assert.equal(server.command, process.execPath)
   assert.deepEqual(server.args, ['--import', 'tsx', '/worker/src/business-mcp/navigator-business-mcp-server.ts'])
-  assert.equal(server.cwd, path.resolve('/worker/src/business-mcp', '..', '..'))
+  assert.equal(server.cwd, path.posix.resolve('/worker/src/business-mcp', '..', '..'))
   assert.deepEqual(server.env_vars, [
     'NAVIGATOR_WORKER_GATEWAY_BASE_URL',
     'NAVIGATOR_TASK_SCOPED_TOKEN',
@@ -453,7 +453,7 @@ test('buildNavigatorBusinessMcpConfig runs compiled server without tsx', () => {
   assert.deepEqual(config.mcp_servers.navigator_business.args, [
     '/worker/dist/business-mcp/navigator-business-mcp-server.js',
   ])
-  assert.equal(config.mcp_servers.navigator_business.cwd, path.resolve('/worker/dist/business-mcp', '..', '..'))
+  assert.equal(config.mcp_servers.navigator_business.cwd, path.posix.resolve('/worker/dist/business-mcp', '..', '..'))
 })
 
 test('buildNavigatorBusinessMcpConfig stays disabled without token or business tool grant', () => {
@@ -517,7 +517,7 @@ test('ensureNavigatorBusinessMcpHomeConfig upserts managed block without token',
   const file = await fs.readFile(path.join(root, 'config.toml'), 'utf8')
 
   assert.match(file, /\[mcp_servers\.navigator_business]/)
-  assert.match(file, new RegExp(`cwd = ${JSON.stringify(path.resolve('/worker/dist/business-mcp', '..', '..')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+  assert.match(file, new RegExp(`cwd = ${JSON.stringify(path.posix.resolve('/worker/dist/business-mcp', '..', '..')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
   assert.match(file, /env_vars = \["NAVIGATOR_WORKER_GATEWAY_BASE_URL", "NAVIGATOR_TASK_SCOPED_TOKEN", "NAVIGATOR_BUSINESS_ALLOWED_TOOLS", "NAVIGATOR_BUSINESS_MCP_DEBUG_LOG", "NAVIGATOR_BUSINESS_MCP_TASK_ID"]/)
   assert.match(file, /default_tools_approval_mode = "approve"/)
   assert.match(file, /enabled_tools = \["list_business_functions", "get_business_function_schema", "invoke_business_function"]/)

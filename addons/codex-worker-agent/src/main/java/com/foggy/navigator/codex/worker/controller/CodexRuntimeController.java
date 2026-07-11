@@ -1,6 +1,7 @@
 package com.foggy.navigator.codex.worker.controller;
 
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeDTO;
+import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeAvailabilityDTO;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
@@ -32,15 +33,25 @@ public class CodexRuntimeController {
     @PostMapping
     public RX<CodexRuntimeDTO> register(@RequestBody CodexRuntimeRegistrationForm form) {
         String userId = UserContext.getCurrentUserId();
-        workerManagementFacade.validateWorkerOwnership(userId, form.getWorkerId());
+        workerManagementFacade.validatePhysicalWorkerOwnership(userId, form.getWorkerId());
         return RX.ok(runtimeRegistryService.registerRevision(form));
     }
 
     @GetMapping
     public RX<List<CodexRuntimeDTO>> list(@RequestParam String workerId) {
         String userId = UserContext.getCurrentUserId();
-        workerManagementFacade.validateWorkerOwnership(userId, workerId);
+        workerManagementFacade.validatePhysicalWorkerOwnership(userId, workerId);
         return RX.ok(runtimeRegistryService.listByWorker(workerId));
+    }
+
+    @GetMapping("/availability")
+    public RX<CodexRuntimeAvailabilityDTO> availability(
+            @RequestParam String workerId,
+            @RequestParam(required = false) String model) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, workerId);
+        return RX.ok(runtimeRegistryService.availability(workerId, model));
     }
 
     @PostMapping("/{runtimeId}/revisions/{revision}/refresh")
@@ -67,6 +78,6 @@ public class CodexRuntimeController {
     private void validateRuntimeOwner(String runtimeId, int revision) {
         String userId = UserContext.getCurrentUserId();
         String workerId = runtimeRegistryService.ownerWorkerId(runtimeId, revision);
-        workerManagementFacade.validateWorkerOwnership(userId, workerId);
+        workerManagementFacade.validatePhysicalWorkerOwnership(userId, workerId);
     }
 }

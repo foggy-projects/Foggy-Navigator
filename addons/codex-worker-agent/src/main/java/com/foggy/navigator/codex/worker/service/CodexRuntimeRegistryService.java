@@ -7,6 +7,7 @@ import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeRoutingPolicy;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
+import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeAvailabilityDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexRuntimeEntity;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
@@ -52,6 +53,10 @@ public class CodexRuntimeRegistryService {
     public static final String PINNED_APP_SERVER_CLI_VERSION = "0.144.1";
     public static final String PINNED_SCHEMA_DIGEST =
             "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f";
+    public static final String ULTRA_AVAILABILITY_BLOCK_REASON =
+            "CODEX_ULTRA_RUNTIME_UNAVAILABLE";
+    public static final String MODEL_ALIAS_CONFLICT_CODE =
+            "CODEX_RUNTIME_MODEL_ALIAS_CONFLICT";
 
     private static final Map<String, String> DEFAULT_MODEL_ALIASES = Map.ofEntries(
             Map.entry("codex-latest", "gpt-5.6-sol"),
@@ -150,6 +155,44 @@ public class CodexRuntimeRegistryService {
                 .sorted(RUNTIME_ORDER)
                 .map(this::toDTO)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public CodexRuntimeAvailabilityDTO availability(String workerId) {
+        return availability(workerId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public CodexRuntimeAvailabilityDTO availability(String workerId, String model) {
+        List<CodexRuntimeEntity> runtimes = runtimeRepository
+                .findByWorkerIdOrderByPriorityDescRevisionDesc(workerId);
+        List<CodexRuntimeEntity> registeredCandidates = runtimes.stream()
+                .filter(entity -> CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType()))
+                .toList();
+        boolean appServerManaged = !registeredCandidates.isEmpty();
+        List<CodexRuntimeEntity> enabledCandidates = registeredCandidates.stream()
+                .filter(entity -> Boolean.TRUE.equals(entity.getEnabled()))
+                .toList();
+        String requestedModel = model == null || model.isBlank() ? "codex-ultra" : model;
+        ModelResolution resolution;
+        try {
+            resolution = resolveCandidateModel(requestedModel, registeredCandidates);
+        } catch (CodexRuntimeUnavailableException error) {
+            if (!MODEL_ALIAS_CONFLICT_CODE.equals(error.getCode())) throw error;
+            return CodexRuntimeAvailabilityDTO.builder()
+                    .appServerManaged(appServerManaged)
+                    .ultraAvailable(false)
+                    .blockReason(MODEL_ALIAS_CONFLICT_CODE)
+                    .build();
+        }
+        boolean ultraAvailable = resolution.isUltra()
+                && enabledCandidates.stream()
+                .anyMatch(entity -> isUltraAvailable(entity, requestedModel));
+        return CodexRuntimeAvailabilityDTO.builder()
+                .appServerManaged(appServerManaged)
+                .ultraAvailable(ultraAvailable)
+                .blockReason(ultraAvailable ? null : ULTRA_AVAILABILITY_BLOCK_REASON)
+                .build();
     }
 
     @Transactional
@@ -301,12 +344,20 @@ public class CodexRuntimeRegistryService {
     @Transactional(readOnly = true)
     public CodexRuntimeBinding selectForNewTask(String workerId, String model, String providerType,
                                                  String routingKey, Set<String> requiredFeatures) {
+        List<CodexRuntimeEntity> registeredCandidates = runtimeRepository
+                .findByWorkerIdOrderByPriorityDescRevisionDesc(workerId).stream()
+                .filter(entity -> CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType()))
+                .sorted(RUNTIME_ORDER)
+                .toList();
         List<CodexRuntimeEntity> candidates = runtimeRepository
                 .findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
                         workerId, CodexRuntimeType.APP_SERVER.name()).stream()
                 .sorted(RUNTIME_ORDER)
                 .toList();
-        boolean ultra = "ultra".equals(reasoningEffort(model));
+        ModelResolution defaultResolution = resolveModel(model, DEFAULT_MODEL_ALIASES);
+        ModelResolution registeredResolution = resolveCandidateModel(model, registeredCandidates);
+        boolean manifestSpecificAlias = !registeredResolution.equals(defaultResolution);
+        boolean ultra = registeredResolution.isUltra();
         boolean targeted = false;
 
         for (CodexRuntimeEntity candidate : candidates) {
@@ -321,7 +372,7 @@ public class CodexRuntimeRegistryService {
             }
         }
 
-        if (targeted || ultra) {
+        if (targeted || ultra || manifestSpecificAlias) {
             String code = ultra ? "CODEX_ULTRA_RUNTIME_UNAVAILABLE" : "CODEX_RUNTIME_UNAVAILABLE";
             throw new CodexRuntimeUnavailableException(code,
                     "No compatible READY app-server runtime is available for the selected rollout cohort");
@@ -495,7 +546,8 @@ public class CodexRuntimeRegistryService {
         if (!supportsModel(manifest, model)) {
             return false;
         }
-        if ("ultra".equals(reasoningEffort(model)) && !supportsNativeSubtaskContractV1(manifest)) {
+        if (resolveModel(model, modelAliases(manifest)).isUltra()
+                && !supportsNativeSubtaskContractV1(manifest)) {
             return false;
         }
         if (CodexTaskService.CODEX_BIZ_PROVIDER_TYPE.equals(providerType) && !supportsBiz(manifest)) {
@@ -712,11 +764,28 @@ public class CodexRuntimeRegistryService {
         return target + ":" + requestedEffort;
     }
 
-    private String reasoningEffort(String model) {
-        if (model == null) return null;
-        String normalized = model.trim().toLowerCase(Locale.ROOT);
-        String resolved = resolveAlias(normalized, DEFAULT_MODEL_ALIASES);
-        return resolvedReasoningEffort(resolved);
+    private ModelResolution resolveCandidateModel(
+            String model, List<CodexRuntimeEntity> candidates) {
+        if (candidates.isEmpty()) {
+            return resolveModel(model, DEFAULT_MODEL_ALIASES);
+        }
+        ModelResolution consensus = null;
+        for (CodexRuntimeEntity candidate : candidates) {
+            Map<String, Object> manifest = parseManifest(candidate.getCapabilityManifestJson());
+            ModelResolution current = resolveModel(model, modelAliases(manifest));
+            if (consensus != null && !consensus.equals(current)) {
+                throw new CodexRuntimeUnavailableException(MODEL_ALIAS_CONFLICT_CODE,
+                        "App-server runtime manifests resolve the requested model inconsistently");
+            }
+            consensus = current;
+        }
+        return consensus;
+    }
+
+    private ModelResolution resolveModel(String model, Map<String, String> aliases) {
+        String resolved = resolveAlias(model, aliases);
+        return new ModelResolution(
+                resolvedBaseModel(resolved), resolvedReasoningEffort(resolved));
     }
 
     private String resolvedReasoningEffort(String resolved) {
@@ -815,6 +884,33 @@ public class CodexRuntimeRegistryService {
                 && supportsNativeSubtaskContractV1(manifest)
                 && supportsModelReasoning(manifest, "gpt-5.6-sol:ultra")
                 && supportsModel(manifest, "gpt-5.6-sol:ultra");
+    }
+
+    private boolean isUltraAvailable(CodexRuntimeEntity entity, String requestedModel) {
+        Map<String, Object> manifest = parseManifest(entity.getCapabilityManifestJson());
+        if (!CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())
+                || !Boolean.TRUE.equals(entity.getEnabled())
+                || !"READY".equals(entity.getReadinessStatus())
+                || !isCapabilityFresh(entity)
+                || !resolveModel(requestedModel, modelAliases(manifest)).isUltra()
+                || !supportsCoreAppServerContract(manifest)
+                || !supportsNativeSubtaskContractV1(manifest)
+                || !supportsModelReasoning(manifest, requestedModel)
+                || !supportsModel(manifest, requestedModel)) {
+            return false;
+        }
+        CodexRuntimeRoutingPolicy policy = parseRoutingPolicy(entity.getRoutingPolicy());
+        return switch (policy) {
+            case ULTRA_CANARY -> defaultValue(entity.getRolloutPercentage(), 0) > 0;
+            case ULTRA_DEFAULT, ALL_CANARY, ALL_DEFAULT -> true;
+            case DARK, DRAINING -> false;
+        };
+    }
+
+    private record ModelResolution(String baseModel, String reasoningEffort) {
+        private boolean isUltra() {
+            return "ultra".equals(reasoningEffort);
+        }
     }
 
     private String maskedEndpoint(String endpointUrl) {

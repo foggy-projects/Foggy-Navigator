@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS codex_runtime_revisions (
     KEY idx_crr_routing (enabled, readiness_status, routing_policy)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- created_at_epoch_ms is intentionally nullable and is not backfilled: legacy
+-- DATETIME values have no offset, so deriving an instant would be ambiguous.
 ALTER TABLE codex_tasks
     ADD COLUMN runtime_id VARCHAR(128) NULL AFTER worker_task_id,
     ADD COLUMN runtime_revision INT NULL AFTER runtime_id,
@@ -45,6 +47,7 @@ ALTER TABLE codex_tasks
     ADD COLUMN runtime_acceptance_state VARCHAR(32) NULL AFTER routing_epoch,
     ADD COLUMN runtime_request_hash VARCHAR(64) NULL AFTER runtime_acceptance_state,
     ADD COLUMN runtime_request_ciphertext LONGTEXT NULL AFTER runtime_request_hash,
+    ADD COLUMN created_at_epoch_ms BIGINT NULL AFTER runtime_request_ciphertext,
     ADD KEY idx_cxt_runtime_affinity (runtime_id, runtime_revision);
 
 -- Existing tasks/sessions must never be silently moved by a later rollout.

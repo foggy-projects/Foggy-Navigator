@@ -40,6 +40,15 @@ export interface CodexRuntime {
   updatedAt: string
 }
 
+export interface CodexRuntimeAvailability {
+  appServerManaged: boolean
+  ultraAvailable: boolean
+  blockReason:
+    | 'CODEX_ULTRA_RUNTIME_UNAVAILABLE'
+    | 'CODEX_RUNTIME_MODEL_ALIAS_CONFLICT'
+    | null
+}
+
 export interface RegisterCodexRuntimeRequest {
   runtimeId: string
   workerId: string

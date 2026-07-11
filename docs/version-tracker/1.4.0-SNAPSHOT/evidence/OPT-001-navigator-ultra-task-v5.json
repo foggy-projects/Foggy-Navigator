@@ -1,0 +1,60 @@
+{
+  "taskId": "20260711-8023",
+  "sessionId": "b2bc4a9c-3134-4d24-af50-5709ab9b91e6",
+  "status": "COMPLETED",
+  "workerTaskId": "20260711-8023",
+  "codexThreadId": "019f4f1c-1037-74d1-8dea-205831cae83d",
+  "model": "codex-ultra",
+  "runtimeId": "app-fullchain-31c687e1e69c",
+  "runtimeRevision": 2,
+  "runtimeType": "APP_SERVER",
+  "runtimeInstanceId": "codex-store-3bb7c281-d1ef-4618-8ec5-e858169ffb0b",
+  "routingEpoch": 3,
+  "runtimeAcceptanceState": "TERMINAL",
+  "lastAckedSeq": 34,
+  "inputTokens": 17162,
+  "outputTokens": 566,
+  "durationMs": 48604,
+  "resultExact": true,
+  "errorCode": null,
+  "sseConnected": true,
+  "sseEventCount": 33,
+  "sseTypes": [
+    "TEXT_CHUNK",
+    "TEXT_COMPLETE",
+    "NATIVE_SUBTASK_UPDATE",
+    "TOOL_CALL_START",
+    "TOOL_CALL_RESULT",
+    "SESSION_END",
+    "task_status_change"
+  ],
+  "nativeSseEventCount": 5,
+  "nativeSnapshotContractVersion": 1,
+  "nativeLatestEventSeq": 26,
+  "nativeSubtasks": [
+    {
+      "subtaskId": "019f4f1c-35c1-7933-a2b1-3d39d31ebb23",
+      "parentSubtaskId": null,
+      "depth": 1,
+      "label": "inspect_fixture",
+      "role": null,
+      "status": "completed",
+      "activity": "started",
+      "message": null,
+      "durationMs": 12000,
+      "lastEventSeq": 26
+    }
+  ],
+  "nativeSnapshotVersions": 3,
+  "outcomeFileExists": true,
+  "outcomeFileExact": true,
+  "privacy": {
+    "snapshotContainsRawPrompt": false,
+    "snapshotContainsBearer": false,
+    "snapshotContainsWorkerToken": false,
+    "sseContainsRawPrompt": false,
+    "sseContainsBearer": false,
+    "sseContainsWorkerToken": false
+  },
+  "sseStreamError": null
+}

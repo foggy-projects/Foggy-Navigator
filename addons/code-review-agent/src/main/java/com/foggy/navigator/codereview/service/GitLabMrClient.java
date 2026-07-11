@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codereview.model.dto.DiffRefs;
 import com.foggy.navigator.spi.config.GitProviderManager;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -21,12 +21,19 @@ import java.util.Map;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class GitLabMrClient {
 
     private final GitProviderManager gitProviderManager;
     private final ObjectMapper objectMapper;
     private final RestTemplate codeReviewRestTemplate;
+
+    public GitLabMrClient(GitProviderManager gitProviderManager,
+                          ObjectMapper objectMapper,
+                          @Qualifier("codeReviewRestTemplate") RestTemplate codeReviewRestTemplate) {
+        this.gitProviderManager = gitProviderManager;
+        this.objectMapper = objectMapper;
+        this.codeReviewRestTemplate = codeReviewRestTemplate;
+    }
 
     /**
      * 解析凭证并缓存，避免每次 API 调用重复解密

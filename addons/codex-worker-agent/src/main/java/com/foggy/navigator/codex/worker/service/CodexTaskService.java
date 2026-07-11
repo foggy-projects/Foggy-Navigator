@@ -430,9 +430,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (codexThreadId != null && !codexThreadId.isBlank()) {
             entity.setCodexThreadId(codexThreadId);
         }
-        if (model != null && !model.isBlank()) {
-            entity.setModel(model);
-        }
+        applyWorkerReportedModel(entity, model);
         if (ackSeq != null) {
             Integer current = entity.getLastAckedSeq();
             entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
@@ -472,18 +470,14 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      * 列出用户的所有任务
      */
     public List<CodexTaskDTO> listTasks(String userId) {
-        return taskRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-                .map(this::toDTO)
-                .toList();
+        return toDTOs(taskRepository.findByUserIdOrderByCreatedAtDesc(userId));
     }
 
     /**
      * 列出 Worker 下的任务
      */
     public List<CodexTaskDTO> listTasksByWorker(String userId, String workerId) {
-        return taskRepository.findByWorkerIdAndUserId(workerId, userId).stream()
-                .map(this::toDTO)
-                .toList();
+        return toDTOs(taskRepository.findByWorkerIdAndUserId(workerId, userId));
     }
 
     @Override
@@ -585,7 +579,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (outputTokens != null) entity.setOutputTokens(outputTokens);
         if (durationMs != null) entity.setDurationMs(durationMs);
         if (numTurns != null) entity.setNumTurns(numTurns);
-        if (model != null) entity.setModel(model);
+        applyWorkerReportedModel(entity, model);
         entity.setErrorMessage(null);
         LocalDateTime now = LocalDateTime.now();
         entity.setLastAliveAt(now);
@@ -596,6 +590,18 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (!"COMPLETED".equals(previousStatus)) {
             publishStatusChange(entity, previousStatus);
         }
+    }
+
+    private void applyWorkerReportedModel(CodexTaskEntity entity, String model) {
+        if (model == null || model.isBlank()) {
+            return;
+        }
+        if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())
+                && entity.getModel() != null
+                && !entity.getModel().isBlank()) {
+            return;
+        }
+        entity.setModel(model);
     }
 
     /**
@@ -1538,6 +1544,51 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return providerType;
     }
 
+    private Map<String, String> resolveProviderTypes(List<CodexTaskEntity> entities) {
+        Map<String, String> taskProviders = new LinkedHashMap<>();
+        Set<String> unresolvedTaskIds = entities.stream()
+                .filter(entity -> firstNonBlank(entity.getProviderType()) == null)
+                .map(CodexTaskEntity::getTaskId)
+                .filter(taskId -> taskId != null && !taskId.isBlank())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (sessionTaskRepository != null && !unresolvedTaskIds.isEmpty()) {
+            sessionTaskRepository.findByTaskIdIn(unresolvedTaskIds).forEach(sessionTask -> {
+                String providerType = firstNonBlank(sessionTask.getProviderType());
+                if (providerType != null) {
+                    taskProviders.put(sessionTask.getTaskId(), providerType);
+                }
+            });
+        }
+
+        Set<String> unresolvedSessionIds = entities.stream()
+                .filter(entity -> firstNonBlank(
+                        entity.getProviderType(), taskProviders.get(entity.getTaskId())) == null)
+                .map(CodexTaskEntity::getSessionId)
+                .filter(sessionId -> sessionId != null && !sessionId.isBlank())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<String, String> sessionProviders = new LinkedHashMap<>();
+        if (sessionEntityRepository != null && !unresolvedSessionIds.isEmpty()) {
+            sessionEntityRepository.findAllById(unresolvedSessionIds).forEach(session -> {
+                String providerType = firstNonBlank(session.getProviderType());
+                if (providerType != null) {
+                    sessionProviders.put(session.getId(), providerType);
+                }
+            });
+        }
+
+        Map<String, String> resolved = new LinkedHashMap<>();
+        entities.forEach(entity -> {
+            String providerType = normalizeProviderType(firstNonBlank(
+                    entity.getProviderType(),
+                    taskProviders.get(entity.getTaskId()),
+                    sessionProviders.get(entity.getSessionId()),
+                    AGENT_ID));
+            entity.setProviderType(providerType);
+            resolved.put(entity.getTaskId(), providerType);
+        });
+        return resolved;
+    }
+
     private String resolveSessionTaskProviderType(String taskId) {
         if (sessionTaskRepository == null || taskId == null || taskId.isBlank()) {
             return null;
@@ -2031,6 +2082,20 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     private CodexTaskDTO toDTO(CodexTaskEntity entity) {
+        return toDTO(entity, resolveProviderType(entity));
+    }
+
+    private List<CodexTaskDTO> toDTOs(List<CodexTaskEntity> entities) {
+        if (entities.isEmpty()) {
+            return List.of();
+        }
+        Map<String, String> providerTypes = resolveProviderTypes(entities);
+        return entities.stream()
+                .map(entity -> toDTO(entity, providerTypes.get(entity.getTaskId())))
+                .toList();
+    }
+
+    private CodexTaskDTO toDTO(CodexTaskEntity entity, String providerType) {
         return CodexTaskDTO.builder()
                 .taskId(entity.getTaskId())
                 .workerTaskId(entity.getWorkerTaskId())
@@ -2043,6 +2108,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .sessionId(entity.getSessionId())
                 .directoryId(entity.getDirectoryId())
                 .workerId(entity.getWorkerId())
+                .providerType(providerType)
                 .prompt(entity.getPrompt())
                 .cwd(entity.getCwd())
                 .status(entity.getStatus())
@@ -2064,6 +2130,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
+                .createdAtEpochMs(entity.getCreatedAtEpochMs())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
     }

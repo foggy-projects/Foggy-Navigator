@@ -4,8 +4,10 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { collectReleaseEntries, createZip } from './release-archive.mjs'
+import { resolveReleaseVersion } from './release-version.mjs'
 
 const workerDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const version = resolveReleaseVersion(workerDir)
 
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: workerDir, stdio: 'inherit', shell: process.platform === 'win32' })
@@ -23,10 +25,6 @@ if (!process.argv.includes('--skip-verify')) {
   run('npm', ['run', 'typecheck'])
   run('npm', ['run', 'build'])
 }
-
-const packageJson = JSON.parse(fs.readFileSync(path.join(workerDir, 'package.json'), 'utf8'))
-const version = packageJson.version
-if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) throw new Error(`Invalid package version: ${version}`)
 
 const outputDir = path.resolve(workerDir, readArgument('--output-dir', 'release/output'))
 fs.mkdirSync(outputDir, { recursive: true })

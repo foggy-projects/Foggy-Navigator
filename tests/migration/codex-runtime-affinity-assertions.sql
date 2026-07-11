@@ -91,6 +91,22 @@ CALL assert_true(
 );
 
 CALL assert_true(
+    (SELECT DATA_TYPE = 'bigint' AND IS_NULLABLE = 'YES'
+       FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'codex_tasks'
+        AND column_name = 'created_at_epoch_ms'),
+    'codex_tasks.created_at_epoch_ms must be a nullable BIGINT'
+);
+
+CALL assert_true(
+    (SELECT COUNT(*) = 24
+       FROM codex_tasks
+      WHERE created_at_epoch_ms IS NULL),
+    'legacy LocalDateTime rows must not receive an inferred epoch'
+);
+
+CALL assert_true(
     (SELECT COUNT(*) = 1
        FROM information_schema.statistics
       WHERE table_schema = DATABASE()
@@ -120,4 +136,3 @@ SELECT VERSION() AS mysql_version,
          WHERE id = 'max-worker-id') AS max_runtime_id_length;
 
 DROP PROCEDURE assert_true;
-

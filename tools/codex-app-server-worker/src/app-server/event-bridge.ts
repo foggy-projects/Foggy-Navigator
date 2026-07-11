@@ -18,7 +18,8 @@ export class AppServerEventBridge {
   private readonly broadcast: EventBroadcast
   private readonly recordFileHint?: (event: WorkerEvent) => void
   private readonly subtaskTracker: NativeSubtaskTracker
-  private readonly streamedAgentMessageIds = new Set<string>()
+  private readonly streamedAgentMessageText = new Map<string, string>()
+  private readonly completedAgentMessageIds = new Set<string>()
   private readonly startedToolIds = new Set<string>()
   private rootThreadId?: string
   private rootTurnId?: string
@@ -113,10 +114,16 @@ export class AppServerEventBridge {
     const delta = readStringPreserveWhitespace(params.delta)
     const itemId = readString(params.itemId)
     if (!delta) return
-    if (itemId) this.streamedAgentMessageIds.add(itemId)
-    this.assistantText += delta
+    if (itemId) {
+      if (this.completedAgentMessageIds.has(itemId)) return
+      this.streamedAgentMessageText.set(
+        itemId,
+        `${this.streamedAgentMessageText.get(itemId) || ''}${delta}`,
+      )
+    }
     this.emit({
       type: 'assistant_text',
+      subtype: 'text_delta',
       task_id: this.taskId,
       session_id: this.rootThreadId,
       content: delta,
@@ -147,10 +154,13 @@ export class AppServerEventBridge {
 
     switch (item.type) {
       case 'agentMessage': {
-        if (this.streamedAgentMessageIds.has(itemId)) break
-        const text = readStringPreserveWhitespace(item.text)
+        if (this.completedAgentMessageIds.has(itemId)) break
+        const streamedText = this.streamedAgentMessageText.get(itemId)
+        const text = readStringPreserveWhitespace(item.text) || streamedText
         if (!text) break
-        this.assistantText += text
+        this.completedAgentMessageIds.add(itemId)
+        this.streamedAgentMessageText.delete(itemId)
+        this.assistantText = text
         this.emit({
           type: 'assistant_text',
           task_id: this.taskId,

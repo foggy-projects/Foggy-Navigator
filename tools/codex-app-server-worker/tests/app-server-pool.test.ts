@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { PersistentTurnOptions, AppServerTurnResult } from '../src/app-server/runtime.js'
+import {
+  AppServerProcessTreeSafetyError,
+  AppServerRuntimeInstance,
+  type AppServerTurnResult,
+  type PersistentTurnOptions,
+} from '../src/app-server/runtime.js'
 import {
   AppServerPool,
+  AppServerPoolDrainTimeoutError,
   AppServerPoolDrainingError,
   AppServerPoolOverloadedError,
   type AppServerLane,
@@ -10,6 +16,7 @@ import {
 } from '../src/app-server/pool.js'
 import { buildAppServerLane } from '../src/app-server/lane.js'
 import { testConfig, waitFor } from './helpers.js'
+import { createStubbornProcessTreeFixture, isProcessAlive } from './stubborn-app-server-fixture.js'
 
 const lane = (key: string): AppServerLane => ({
   key,
@@ -47,6 +54,154 @@ test('exclusive leases reuse idle instances and scale parallel turns to separate
   assert.equal(runtimes.length, 2)
 })
 
+test('full pool replaces the least-recently-used idle instance for a new lane', async t => {
+  let now = 100
+  const runtimes: Array<{ laneKey: string, runtime: FakeRuntime }> = []
+  const config = testConfig('C:\\state', {
+    poolMaxInstances: 2,
+    poolMaxInstancesPerLane: 2,
+    poolAcquireTimeoutMs: 500,
+    poolIdleTtlMs: 10_000,
+  })
+  const pool = new AppServerPool(config, async requestedLane => {
+    const runtime = new FakeRuntime()
+    runtimes.push({ laneKey: requestedLane.key, runtime })
+    return runtime
+  }, () => now)
+  t.after(() => pool.drain(100))
+
+  const firstA = await pool.acquire(lane('a'))
+  firstA.release()
+  now = 200
+  const firstB = await pool.acquire(lane('b'))
+  firstB.release()
+  now = 300
+  const recentA = await pool.acquire(lane('a'))
+  recentA.release()
+
+  const leaseC = await pool.acquire(lane('c'))
+  assert.equal(runtimes.find(item => item.laneKey === 'b')?.runtime.closed, true)
+  assert.equal(runtimes.find(item => item.laneKey === 'a')?.runtime.closed, false)
+  assert.equal(runtimes.find(item => item.laneKey === 'c')?.runtime, leaseC.runtime)
+  assert.equal(pool.metrics().instances, 2)
+  assert.equal(pool.metrics().created_total, 3)
+  assert.equal(pool.metrics().reused_total, 1)
+  assert.equal(pool.metrics().retired_total, 1)
+  leaseC.release()
+})
+
+test('cross-lane replacement never retires a busy instance', async t => {
+  const runtimes: Array<{ laneKey: string, runtime: FakeRuntime }> = []
+  const config = testConfig('C:\\state', {
+    poolMaxInstances: 2,
+    poolMaxInstancesPerLane: 2,
+    poolAcquireTimeoutMs: 500,
+    poolIdleTtlMs: 10_000,
+  })
+  const pool = new AppServerPool(config, async requestedLane => {
+    const runtime = new FakeRuntime()
+    runtimes.push({ laneKey: requestedLane.key, runtime })
+    return runtime
+  })
+  t.after(() => pool.drain(100))
+
+  const busyA = await pool.acquire(lane('a'))
+  const idleB = await pool.acquire(lane('b'))
+  idleB.release()
+  const leaseC = await pool.acquire(lane('c'))
+
+  assert.equal(runtimes.find(item => item.laneKey === 'a')?.runtime.closed, false)
+  assert.equal(runtimes.find(item => item.laneKey === 'b')?.runtime.closed, true)
+  assert.equal(pool.metrics().busy, 2)
+  busyA.release()
+  leaseC.release()
+})
+
+test('concurrent cross-lane replacements wait for slow closes and never exceed global capacity', async t => {
+  let openChildren = 0
+  let maxOpenChildren = 0
+  let maxReservedCapacity = 0
+  let pool!: AppServerPool
+  const config = testConfig('C:\\state', {
+    poolMaxInstances: 2,
+    poolMaxInstancesPerLane: 2,
+    poolAcquireTimeoutMs: 1_000,
+    poolIdleTtlMs: 10_000,
+  })
+  pool = new AppServerPool(config, async () => {
+    openChildren++
+    maxOpenChildren = Math.max(maxOpenChildren, openChildren)
+    const metrics = pool.metrics()
+    maxReservedCapacity = Math.max(maxReservedCapacity, metrics.instances + metrics.creating)
+    return new SlowCloseRuntime(25, () => { openChildren-- })
+  })
+  t.after(() => pool.drain(500))
+
+  const idleA = await pool.acquire(lane('a'))
+  idleA.release()
+  const idleB = await pool.acquire(lane('b'))
+  idleB.release()
+
+  const [leaseC, leaseD] = await Promise.all([
+    pool.acquire(lane('c')),
+    pool.acquire(lane('d')),
+  ])
+  assert.equal(maxOpenChildren, 2)
+  assert.ok(maxReservedCapacity <= config.poolMaxInstances)
+  assert.equal(pool.metrics().instances + pool.metrics().creating, 2)
+  assert.equal(pool.metrics().created_total, 4)
+  assert.equal(pool.metrics().retired_total, 2)
+  leaseC.release()
+  leaseD.release()
+})
+
+test('a rejected idle close fails closed and makes drain report retirement failure', async () => {
+  let now = 100
+  const runtimes: PoolRuntimeInstance[] = []
+  const config = testConfig('C:\\state', {
+    poolMaxInstances: 2,
+    poolMaxInstancesPerLane: 2,
+    poolAcquireTimeoutMs: 500,
+    poolIdleTtlMs: 10_000,
+  })
+  const pool = new AppServerPool(config, async () => {
+    const runtime = runtimes.length === 0 ? new RejectingCloseRuntime() : new FakeRuntime()
+    runtimes.push(runtime)
+    return runtime
+  }, () => now)
+
+  const idleA = await pool.acquire(lane('a'))
+  idleA.release()
+  now = 200
+  const idleB = await pool.acquire(lane('b'))
+  idleB.release()
+  await assert.rejects(pool.acquire(lane('c')), AppServerPoolDrainingError)
+
+  assert.equal(pool.isDraining(), true)
+  assert.equal(pool.metrics().instances, 1)
+  assert.equal(pool.metrics().created_total, 2)
+  assert.equal(pool.metrics().retired_total, 1)
+  await assert.rejects(pool.drain(500), AggregateError)
+  assert.equal(pool.metrics().instances, 0)
+})
+
+test('process-tree safety failure rejects the current acquire and permanently fails the pool closed', async () => {
+  let factoryCalls = 0
+  const safetyFailure = new AppServerProcessTreeSafetyError()
+  const pool = new AppServerPool(testConfig('C:\\state'), async () => {
+    factoryCalls++
+    throw safetyFailure
+  })
+
+  await assert.rejects(pool.acquire(lane('unsafe-tree')), error => error === safetyFailure)
+  assert.equal(pool.isDraining(), true)
+  await assert.rejects(pool.acquire(lane('no-retry')), AppServerPoolDrainingError)
+  assert.equal(factoryCalls, 1)
+  await assert.rejects(pool.drain(100), error => (
+    error instanceof AggregateError && error.errors.includes(safetyFailure)
+  ))
+})
+
 test('pool enforces global bounded queue and rejects new leases while draining', async t => {
   const config = testConfig('C:\\state', {
     poolMaxInstances: 1,
@@ -82,6 +237,67 @@ test('pool drain waits for in-flight instance creation and retires the created c
   await draining
   assert.equal(runtime.closed, true)
   assert.equal(pool.metrics().creating, 0)
+  assert.equal(pool.metrics().instances, 0)
+})
+
+test('pool drain rejects instead of releasing shutdown ownership while close is still pending', async () => {
+  const config = testConfig('C:\state', { poolMaxTasksPerInstance: 1 })
+  const pool = new AppServerPool(config, async () => new SlowCloseRuntime(75, () => undefined))
+  const lease = await pool.acquire(lane('slow-drain'))
+  lease.release()
+
+  await assert.rejects(pool.drain(5), AppServerPoolDrainTimeoutError)
+  await new Promise(resolve => setTimeout(resolve, 100))
+  await pool.drain(100)
+
+  assert.equal(pool.metrics().instances, 0)
+})
+
+test('idle TTL retirement cleans the tracked app-server descendant before drain settles', async t => {
+  let now = 1_000
+  const fixture = await createStubbornProcessTreeFixture(t)
+  const config = testConfig(fixture.stateDir, {
+    poolIdleTtlMs: 100,
+    poolMaxLifetimeMs: 10_000,
+  })
+  const pool = new AppServerPool(config, (requestedLane, signal) => AppServerRuntimeInstance.start({
+    env: requestedLane.env,
+    signal,
+    spawnProcess: fixture.spawnProcess,
+    processTreeStateDir: fixture.stateDir,
+    processTreeEntry: fixture.entry,
+    requestTimeoutMs: 1_000,
+  }), () => now)
+  const lease = await pool.acquire(lane('ttl-tree'))
+  const descendantPid = await fixture.readDescendantPid()
+  lease.release()
+
+  now += 101
+  pool.sweep()
+  await pool.drain(10_000)
+
+  assert.equal(isProcessAlive(descendantPid), false)
+  assert.equal(pool.metrics().instances, 0)
+})
+
+test('pool drain does not resolve until a tracked app-server descendant is gone', async t => {
+  const fixture = await createStubbornProcessTreeFixture(t)
+  const config = testConfig(fixture.stateDir)
+  const pool = new AppServerPool(config, (requestedLane, signal) => AppServerRuntimeInstance.start({
+    env: requestedLane.env,
+    signal,
+    spawnProcess: fixture.spawnProcess,
+    processTreeStateDir: fixture.stateDir,
+    processTreeEntry: fixture.entry,
+    requestTimeoutMs: 1_000,
+  }))
+  const lease = await pool.acquire(lane('drain-tree'))
+  const descendantPid = await fixture.readDescendantPid()
+  lease.release()
+
+  await pool.drain(10_000)
+
+  assert.equal(isProcessAlive(descendantPid), false, 'drain is the Worker state/cwd lock release boundary')
   assert.equal(pool.metrics().instances, 0)
 })
 
@@ -196,5 +412,27 @@ class FakeRuntime implements PoolRuntimeInstance {
   crash(): void {
     this.healthy = false
     for (const handler of this.fatalHandlers) handler(new Error('child exited'))
+  }
+}
+
+class SlowCloseRuntime extends FakeRuntime {
+  constructor(
+    private readonly closeDelayMs: number,
+    private readonly onClosed: () => void,
+  ) {
+    super()
+  }
+
+  override async close(): Promise<void> {
+    await new Promise(resolve => setTimeout(resolve, this.closeDelayMs))
+    super.close()
+    this.onClosed()
+  }
+}
+
+class RejectingCloseRuntime extends FakeRuntime {
+  override close(): Promise<void> {
+    super.close()
+    return Promise.reject(new Error('expected close failure'))
   }
 }
