@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-await fs.rm(path.resolve(import.meta.dirname, '..', 'dist'), { recursive: true, force: true })
+const scriptDir = path.dirname(fileURLToPath(import.meta.url))
+await fs.rm(path.resolve(scriptDir, '..', 'dist'), { recursive: true, force: true })

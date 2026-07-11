@@ -36,6 +36,14 @@ test('cross-platform test launcher recursively discovers only test entrypoints',
   }
 })
 
+test('candidate verification scripts resolve their location on supported Node 18', () => {
+  for (const script of ['scripts/clean.mjs', 'scripts/verify-app-server-schema.mjs']) {
+    const source = fs.readFileSync(script, 'utf8')
+    assert.doesNotMatch(source, /import\.meta\.(?:dirname|filename)/)
+    assert.match(source, /fileURLToPath\(import\.meta\.url\)/)
+  }
+})
+
 test('release version validation rejects source and lockfile drift', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-release-version-test-'))
   try {

@@ -3,8 +3,9 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
-const root = path.resolve(import.meta.dirname, '..')
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const lock = JSON.parse(await fs.readFile(path.join(root, 'contracts', 'app-server-schema-lock.json'), 'utf8'))
 const output = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-app-server-schema-'))
 try {
