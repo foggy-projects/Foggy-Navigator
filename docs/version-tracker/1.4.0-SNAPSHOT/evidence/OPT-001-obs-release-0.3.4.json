@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "opt-001-obs-release-0.3.4",
+  "generatedAtUtc": "2026-07-11T13:25:00Z",
+  "scope": "public-linux-install-glob-regression",
+  "status": "PASSED",
+  "release": {
+    "product": "codex-app-server-worker",
+    "version": "0.3.4",
+    "archive": "codex-app-server-worker-0.3.4.zip",
+    "sha256": "616a0ce7cf8c017bd16e215022c3dcb24f27c37051297eff9c9623f9d6e4b440",
+    "bytes": 1804723,
+    "entries": 198,
+    "sourceCommit": "bbea65843d16a367e73b9d6d68fcca6768b9edc3",
+    "gitDirty": false,
+    "buildTimeUtc": "2026-07-11T13:19:40Z"
+  },
+  "obs": {
+    "bucket": "obs://obs-fe55/codex-app-server-worker",
+    "baseUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker",
+    "latestUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/latest.json",
+    "linuxInstallerUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh",
+    "windowsInstallerUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.ps1",
+    "publisherRemoteArchiveByteAndSha256Verification": true,
+    "publisherRemoteBootstrapByteVerification": true,
+    "latestUploadedLast": true
+  },
+  "tests": {
+    "releaseCommandWindows": { "total": 249, "passed": 242, "skipped": 7, "failed": 0 },
+    "releaseTooling": { "passed": 10, "failed": 0 },
+    "linuxNode18LauncherReleaseTooling": { "passed": 10, "failed": 0 },
+    "exactPublicWsl2Install": { "total": 249, "passed": 248, "skipped": 1, "failed": 0 },
+    "schemaDigest": "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f",
+    "workerTypecheck": "passed",
+    "workerBuild": "passed"
+  },
+  "bootstrap": {
+    "command": "curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh | bash",
+    "environment": "WSL2 Ubuntu 24.04 / Linux 6.18 / Node 22.22.2 / isolated temporary install directory",
+    "installedVersion": "0.3.4",
+    "installStopped": true,
+    "temporaryResidue": 0
+  },
+  "observations": [
+    "A Docker Node 18 exact-public run passed test discovery but one process-tree fixture timed out waiting for a child to exit under the container PID namespace; the other 248 tests passed or skipped.",
+    "A clean Linux Node 18 release-tooling run through scripts/run-tests.mjs passed 10/10 and directly covers the original literal-glob compatibility failure.",
+    "This release publication does not approve P3 production routing or contribute task, duration, or rotation samples."
+  ]
+}
