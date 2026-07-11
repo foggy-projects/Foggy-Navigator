@@ -10,11 +10,22 @@
 
 - version: `1.4.0-SNAPSHOT`
 - priority: P0
-- status: design-confirmed-implementation-not-started
+- status: design-deferred-endpoint-config-superseded-by-opt006
 - source_type: architecture-refactor
 - decision_date: `2026-07-12`
 - owner: Agent Provider | Session | Codex Worker addon | Physical Worker management | Navigator PC
 - supersedes_forward_design: OPT-001 中“`SDK_EXEC` 与 `APP_SERVER` 共用 `OPENAI_CODEX` / `codex-worker` Provider”的后续演进路线
+
+## 2026-07-12 配置源决策修订
+
+本文件中的独立 Worker Backend、Provider 与 Session 设计尚未实施，继续作为后续专题保留。用户随后确认并已实施的 Endpoint 控制面方案见 [OPT-006](./OPT-006-codex-app-server-endpoint-runtime-sync.md)：
+
+- App Server Endpoint Profile 作为独立于 Runtime 的 owner-bound 配置资源，保存 endpoint 与加密服务令牌，支持增删改；
+- 点击“同步”从 endpoint 读取 capability manifest，以配置/能力指纹决定保留 Runtime 或创建新 revision；
+- Runtime 只保存同步后不可变连接快照和能力状态，不能反向编辑 Endpoint；
+- 新 revision 固定 Disabled + Dark，旧同步 revision 停止新任务路由。
+
+因此，本文中“Physical Worker 是 Endpoint/token 唯一人工写源”“删除独立 Endpoint CRUD”的约束不再适用于当前基线。它们在未来恢复 OPT-005 时必须先重新评审，不能覆盖 OPT-006 已交付能力。
 
 ## 背景与问题
 
@@ -81,7 +92,7 @@
 - 用户切换到另一 Worker Backend 时必须创建新 Session。
 - 允许未来提供显式“复制上下文到新会话”，但它不是 resume，也不得携带原生 Thread ID。
 
-### 4. 物理 Worker 配置拆分
+### 4. 物理 Worker 配置拆分（已被 OPT-006 配置源规则替代）
 
 “添加/编辑物理 Worker”中的能力配置拆成独立页签：
 
@@ -97,9 +108,9 @@
 - `codexAppServerConfig` 只能服务 `OPENAI_CODEX_APP_SERVER` / `codex-app-server-worker`。
 - 两个 endpoint、token、health、capability 和 readiness 独立保存、独立测试、独立展示。
 - 不允许用一个 `codexConfig` 字段根据模型或 runtime 类型解释成两种 endpoint。
-- `physicalWorker.codexAppServerConfig` 是 App Server endpoint/token 的唯一管理配置源。
-- Runtime registry 可以保留 App Server Provider 内部的 capability、revision、instance affinity 和运行状态，但不得再提供另一套可独立编辑的 endpoint/token 配置真相。
-- 现有独立 App Server endpoint CRUD 若与 Physical Worker 配置重复，实施时必须删除或收敛为由 Physical Worker 配置派生的内部只读状态。
+- 当前基线使用 `CodexAppServerEndpoint` 作为按 physical worker 归属的独立 Endpoint Profile；它是 App Server endpoint/token 的人工管理配置源。
+- Runtime registry 保留同步后 capability、revision、instance affinity、连接快照和运行状态；Runtime 页面不提供 Endpoint/token 编辑入口。
+- Endpoint Profile 与 Physical Worker 生命周期/权限关联，但不把 endpoint/token 嵌入 Physical Worker 的单一配置对象。
 - App Server 的模型与 reasoning 能力以 capability manifest 为准；物理 Worker 表单不维护第二份静态默认模型真相。
 - App Server runtime revision/instance 管理只管理 App Server Provider 内部实例，不再承担 SDK 与 App Server 之间的路由选择。
 
@@ -140,13 +151,11 @@ ModelConfig.workerBackend
 - `OPENAI_CODEX` 与 `OPENAI_CODEX_APP_SERVER` 分别校验各自允许模型集合。
 - 相同 API Base URL/API Key 可以由用户分别配置，但平台不自动复制或合并两个 ModelConfig。
 
-### Physical Worker
+### Physical Worker（恢复 OPT-005 时待重新设计）
 
-- 新增独立 `CodexAppServerConfig` 数据结构。
-- Worker DTO 分别返回 SDK/App Server endpoint 是否配置、认证是否配置及最小健康状态。
-- Register/Update Form 分别接受 `codexConfig` 与 `codexAppServerConfig`。
-- 两套配置分别加密 token，不共享“留空保持不变”状态判断。
-- App Server endpoint/token 的写入口只存在于 Physical Worker Register/Update；内部 registry 通过 workerId 引用或派生，不重复接受人工配置。
+- 当前实现不新增 `CodexAppServerConfig`；Physical Worker 通过 `workerId` 归属 Endpoint Profile。
+- Endpoint DTO 只返回 token 是否已配置，不回显明文；更新时留空保持 token，显式清除才删除 token。
+- 若未来 Provider 拆分需要在 Physical Worker Form 内展示摘要，必须派生或链接 Endpoint Profile，不能重新引入第二个可写 endpoint/token 真相。
 
 ### Session Provider State
 
@@ -182,14 +191,14 @@ ModelConfig.workerBackend
 | `navigator-common` | 增加 `OPENAI_CODEX_APP_SERVER` 后端常量及 `CodexAppServerConfig` 公共配置模型 |
 | `navigator-spi` / `session-module` | 注册并解析 `codex-app-server-worker`；按 Provider 绑定和分派 Session/Task |
 | `addons/codex-worker-agent` | 拆分 SDK Provider 与 App Server Provider；提取公共 Codex 投影能力；移除跨协议 runtime 选择 |
-| `addons/claude-worker-agent` | Physical Worker Entity/Form/DTO/Service 增加独立 App Server 配置、加密、readiness 与诊断 |
+| `addons/claude-worker-agent` | 若恢复 OPT-005，再评估 Physical Worker 对 Endpoint Profile 的摘要/授权展示；当前不改为第二套写源 |
 | `tools/codex-agent-worker` | 只承担 SDK Provider；拒绝 App Server/Ultra 请求 |
 | `tools/codex-app-server-worker` | 只承担 App Server Provider；保留自身 task store、pool 和 instance affinity |
 | `packages/navigator-frontend` | 模型后端增加 App Server；物理 Worker 增加独立页签；任务与会话显示独立 Provider 标签 |
 | `packages/foggy-chat-core` / `foggy-chat` / Mobile | 如展示 Provider/模型后端，补充 App Server 标签和新会话提示 |
 | docs/tests | 更新架构说明、契约测试、Provider 分派测试和 UI E2E |
 
-当前工作区已有未提交的 App Server endpoint entity/controller/service 与 runtime 字段改动。执行者必须先审阅并按“Physical Worker 配置是唯一 endpoint/token 配置源”的决策进行合并、改造或删除；禁止通过新增第二套配置页面同时保留两套可写配置源。
+OPT-006 已将 App Server endpoint entity/controller/service、Runtime 同步字段和 PC 管理界面提交为 `37dff8b9`。后续恢复本事项时必须保留“Endpoint Profile 与 Runtime 分离”的现行约束，先明确是否迁移配置归属，再改动 API 或 UI。
 
 ## UI 交互要求
 

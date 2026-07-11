@@ -8,7 +8,7 @@
 
 ## 版本状态
 
-- status: p0-p2-and-opt003-opt004-isolated-accepted-opt005-design-confirmed
+- status: p0-p2-and-opt003-opt004-isolated-accepted-opt005-design-deferred-opt006-implemented
 - primary_workitem: `OPT-001`
 - implementation_started: yes
 - production_routing_changed: no
@@ -16,17 +16,18 @@
 
 ## 版本目标
 
-新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持固定 CLI `0.144.1` 已验证的全部模型与 reasoning 档位。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径和非 Ultra 行为、最高支持 Max，并拒绝所有 Ultra 请求；它不承载 app-server。P0-P2 已按同 Provider 双 Runtime 方案完成隔离验收；2026-07-12 新增 OPT-005 决策，后续目标架构改为独立 Worker Backend、独立 Provider 和独立物理 Worker 配置。P7 SDK retirement 已延后，不属于 `1.4.0-SNAPSHOT` 的交付范围。
+新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持固定 CLI `0.144.1` 已验证的全部模型与 reasoning 档位。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径和非 Ultra 行为、最高支持 Max，并拒绝所有 Ultra 请求；它不承载 app-server。P0-P2 已按同 Provider 双 Runtime 方案完成隔离验收。2026-07-12 已落地 OPT-006：App Server Endpoint 配置与 Runtime 控制面分离，Endpoint 同步能力后按实际 manifest 创建或复用 Runtime。OPT-005 的独立 Backend/Provider 长线设计尚未实施，且其“Physical Worker 唯一 Endpoint 写源”约束已由 OPT-006 替代。P7 SDK retirement 已延后，不属于 `1.4.0-SNAPSHOT` 的交付范围。
 
 ## 已确认决策
 
 1. 新 Worker 是独立进程、发布物、端口、日志、运行目录和状态域。
 2. 新 Worker 技术上支持全部已声明模型/reasoning；Ultra 是首批计划生产路由，不代表已经批准生产切流。
-3. OPT-005 取代后续同 Provider 双 Runtime 路线：SDK 使用 `workerBackend=OPENAI_CODEX` / `providerType=codex-worker`，App Server 使用 `workerBackend=OPENAI_CODEX_APP_SERVER` / `providerType=codex-app-server-worker`。
+3. OPT-005 的独立 Backend/Provider 设计保留为后续专题，尚未实施；不能将其描述成当前路由行为。
 4. Task/Session/runtime instance affinity 在接受后不可变；回滚只停止新分配，禁止跨 runtime 重放 prompt。
 5. PC 继续使用统一 SSE/snapshot 展示 app-server 原生子任务；不暴露 endpoint、token、Codex Home 或原始子线程内容。
 6. SDK retirement 已按产品决定延后，不属于本版本目标；未来改变该决定必须另建 workitem。
-7. 物理 Worker 的 `Codex` 与 `Codex App Server` endpoint/token/readiness 独立配置；本次重构不考虑旧数据、兼容读取或自动迁移。
+7. App Server Endpoint 配置与 Runtime 分离：Endpoint Profile 按物理 Worker 归属保存 URL 与加密服务令牌（可为空），支持增删改；Runtime 只保存某次同步后的不可变连接快照和能力结果。
+8. 点击 Endpoint “同步”后读取 `/api/v1/capabilities`：配置和能力指纹未变则保留当前 Runtime；变更则新建受控 Runtime revision，旧 revision 停止新任务路由。新 revision 初始为 Disabled + Dark，必须由 Owner 显式启用。
 
 ## 阶段状态
 
@@ -40,9 +41,10 @@
 | P5 非 Ultra/功能 cohort | partial-isolated-rollout-not-started | `request_user_input` 与账号额度可观测已由 OPT-003/004 隔离签收；动态 catalog、approval/additional dirs/Biz/MCP 等 parity 仍需逐 cohort 证明 |
 | P6 App-server Default | not-started | 是否扩大为默认由后续产品与生产门禁决定 |
 | P7 SDK Retirement | N/A-deferred-by-product-decision | 旧 SDK Worker 保持现状，不删除、不迁移、不弱化发布与回滚能力 |
-| OPT-005 独立 Provider | design-confirmed-implementation-not-started | 独立 Backend、Provider、Session 和物理 Worker 配置；不考虑旧数据兼容 |
+| OPT-005 独立 Provider | design-deferred | 独立 Backend、Provider、Session 的长线设计未实现；Endpoint 配置源规则由 OPT-006 覆盖 |
+| OPT-006 Endpoint/Runtime 同步 | implementation-complete-owner-smoke-pending | 独立 Endpoint CRUD、能力同步、指纹驱动 revision、旧 revision drain、owner-only 管理界面已实现；待 Owner 在目标 Worker 中实际保存并同步配置 |
 
-P3-P6 是 OPT-001 同 Provider 双 Runtime 方案的历史 gate，不再作为 OPT-005 的实施顺序。后续开发与验收以 OPT-005 requirement/plan 的 Step 1-7 为准；任何生产启用仍需独立签收。
+P3-P6 是 OPT-001 同 Provider 双 Runtime 方案的历史 gate，不再作为 OPT-005 的实施顺序。Endpoint/Runtime 控制面以 OPT-006 为当前基线；OPT-005 若恢复实施，必须先与 OPT-006 的 Endpoint Profile 配置源对齐。任何生产启用仍需独立签收。
 
 ## 发布与回归摘要
 
@@ -56,6 +58,7 @@ P3-P6 是 OPT-001 同 Provider 双 Runtime 方案的历史 gate，不再作为 O
 - App-server Worker `0.3.7` 已发布为 OBS latest：归档 SHA-256/bytes/entries=`da8cb526fd619769b8f4389fca03ed047d22590c2d63f5bd670f890a9ef98ec5` / `1,808,569` / `198`，manifest source commit=`4e9c1bdd26dc1a1dcbd8d562a5686cb608624c6e`、`gitDirty=false`。发布流水线 `243 passed + 7 skipped`，Linux 公网精确真包 `249 passed + 1 skipped`，自动 state key/CODEX_HOME、空 token/API Key、0600/0700、默认停止和 ready/start 文案均通过；两端 bootstrap 和归档已由发布器回读校验。
 - Runtime 控制面已加入同 ID 新建不可变 revision 和可逆的退役/归档：归档使用 routing epoch CAS，原子转为 Disabled + Dark 并排除新路由，历史 affinity 仍保留；Java reactor `301/301`、PC `214/214`、Playwright 桌面/窄屏 `2/2`、Windows native `build:check`、MySQL 8.0/8.4 迁移通过。
 - App Server Worker HTTP token 改为可选：空值表示关闭 Worker HTTP 认证并放行 capability/task/control API，不再影响 readiness；非空时仍强制 Bearer `401/403`。Runtime 注册和 PC 字段同步改为可选，空值模式仅适用于 loopback 或可信网络。
+- OPT-006 Endpoint/Runtime 同步：新增 owner-bound Endpoint CRUD 与同步接口；Endpoint URL、加密 token 和 configuration version 与 Runtime 状态分离。同步使用 capability manifest 与配置版本生成指纹，未变化不新建 Runtime，变化才创建新的 Disabled + Dark revision，并将旧同步 revision 转为 Draining。Codex addon 定向测试 `97/97`、前端 API 测试 `10/10`、前端 type-check 均通过；本机 `192.168.31.119:3071` 返回 `ready=true`、`codex-app-server-primary@2`、CLI `0.144.1`。Owner 实际保存 Endpoint、同步并启用 Runtime 的 UI smoke 尚未执行。
 - v5 release SHA-256/bytes/entries: `b6271e5a3220b0253d97b6d05c9fe5f5561331655e27faccd8ad254fbf6c31d9` / `1,500,249` / `168`；双构建字节一致、路径扫描通过，Windows/WSL exact-package install/start/real Ultra/running update/stop 与 zero-residue 均通过；旧 `642121...`、`4ebb...` 与 Windows update 被阻断的 v4 `71a0...` 均已淘汰。
 - Codex Java addon: `259/259`；Session focused: `7/7`；reconciliation: `10/10`；Metadata Query: `13/13`；Launcher ownership context: `1/1`；Code Review client context: `1/1`。raw full reactor 在 Windows 被 Surefire fork/path 基础设施问题阻断，已执行的受影响定向测试无断言失败。
 - Legacy SDK Worker 保持现有 SDK 设计并拒绝 Ultra，`116/116`、typecheck/build 通过；本次仅修正 Windows 上 POSIX server-script 路径的测试断言。Navigator PC: `179/179`，`build:check` 通过。
@@ -77,6 +80,7 @@ P3-P6 是 OPT-001 同 Provider 双 Runtime 方案的历史 gate，不再作为 O
 - [Codex App Server 独立 Provider 与 Worker 配置拆分](./workitems/OPT-005-codex-app-server-independent-provider.md)
 - [OPT-005 实施计划](./workitems/OPT-005-codex-app-server-independent-provider-plan.md)
 - [OPT-005 Ultra 执行提示词](./workitems/OPT-005-codex-app-server-independent-provider-execution-prompt.md)
+- [OPT-006 App Server Endpoint 与 Runtime 同步](./workitems/OPT-006-codex-app-server-endpoint-runtime-sync.md)
 - [OPT-004 实现质量检查](./quality/OPT-004-rate-limit-awareness-implementation-quality.md)
 - [OPT-004 测试证据覆盖审计](./coverage/OPT-004-rate-limit-awareness-coverage-audit.md)
 - [OPT-004 隔离验收记录](./acceptance/OPT-004-rate-limit-awareness-acceptance.md)
