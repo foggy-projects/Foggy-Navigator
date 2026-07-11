@@ -18,6 +18,10 @@ export interface CodexRuntime {
   revision: number
   workerId: string
   runtimeType: string
+  runtimeSource?: 'MANUAL' | 'ENDPOINT_SYNC' | string
+  endpointId?: string
+  reportedRuntimeId?: string
+  reportedRuntimeRevision?: number
   endpointConfigured?: boolean
   endpointDisplay?: string
   instanceId?: string
@@ -40,6 +44,35 @@ export interface CodexRuntime {
   archivedAt?: string
   createdAt: string
   updatedAt: string
+}
+
+export interface CodexAppServerEndpoint {
+  endpointId: string
+  workerId: string
+  endpointUrl: string
+  endpointDisplay: string
+  tokenConfigured: boolean
+  configurationVersion: number
+  lastSyncStatus: string
+  lastSyncMessage?: string
+  lastSyncedAt?: string
+  lastRuntimeId?: string
+  lastRuntimeRevision?: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface SaveCodexAppServerEndpointRequest {
+  workerId?: string
+  endpointUrl?: string
+  authToken?: string
+  clearAuthToken?: boolean
+}
+
+export interface CodexAppServerEndpointSync {
+  endpoint: CodexAppServerEndpoint
+  runtime?: CodexRuntime
+  runtimeCreated: boolean
 }
 
 export interface CodexRuntimeAvailability {

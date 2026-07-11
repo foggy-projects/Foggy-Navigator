@@ -77,6 +77,7 @@ let wrapper: VueWrapper | undefined
 describe('CodexRuntimeManager', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(runtimeApi.listCodexAppServerEndpoints).mockResolvedValue([])
     vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([])
     vi.mocked(runtimeApi.getCodexRuntimeRateLimits).mockResolvedValue(makeRateLimits())
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm')
@@ -108,6 +109,7 @@ describe('CodexRuntimeManager', () => {
 
     expect(wrapper.text()).toContain('Codex Ultra 当前不可用')
     expect(wrapper.text()).toContain('不兼容')
+    expect(wrapper.text()).toContain('http://localhost:3062')
     expect(wrapper.text()).toContain('0.143.0 / 0.144.1')
     expect(wrapper.text()).toContain('Bearer [redacted]')
     expect(wrapper.text()).not.toContain('endpoint-password')
@@ -157,6 +159,49 @@ describe('CodexRuntimeManager', () => {
     expect(ElMessage.success).toHaveBeenCalledWith('Dark Runtime 已注册')
   })
 
+  it('saves an endpoint separately and syncs it into a dark runtime only when needed', async () => {
+    const endpoint = {
+      endpointId: 'endpoint-1',
+      workerId: 'worker-1',
+      endpointUrl: 'http://192.168.31.119:3071',
+      endpointDisplay: 'http://192.168.31.119:3071',
+      tokenConfigured: true,
+      configurationVersion: 1,
+      lastSyncStatus: 'PENDING',
+      createdAt: '2026-07-10T10:00:00',
+      updatedAt: '2026-07-10T10:00:00',
+    }
+    vi.mocked(runtimeApi.createCodexAppServerEndpoint).mockResolvedValue(endpoint)
+    vi.mocked(runtimeApi.syncCodexAppServerEndpoint).mockResolvedValue({
+      endpoint: { ...endpoint, lastSyncStatus: 'READY', lastRuntimeId: 'appserver-1', lastRuntimeRevision: 1 },
+      runtime: makeRuntime({ runtimeId: 'appserver-1', readinessStatus: 'READY' }),
+      runtimeCreated: true,
+    })
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="add-codex-app-server-endpoint"]').trigger('click')
+    await wrapper.get('[data-testid="endpoint-url-input"]').setValue('http://192.168.31.119:3071')
+    await wrapper.get('[data-testid="endpoint-token-input"]').setValue('endpoint-secret')
+    await wrapper.get('[data-testid="save-codex-app-server-endpoint"]').trigger('click')
+    await flushPromises()
+
+    expect(runtimeApi.createCodexAppServerEndpoint).toHaveBeenCalledWith({
+      workerId: 'worker-1',
+      endpointUrl: 'http://192.168.31.119:3071',
+      authToken: 'endpoint-secret',
+    })
+    expect(wrapper.text()).not.toContain('endpoint-secret')
+    await wrapper.get('[aria-label="同步 http://192.168.31.119:3071"]').trigger('click')
+    await flushPromises()
+    expect(runtimeApi.syncCodexAppServerEndpoint).toHaveBeenCalledWith('endpoint-1')
+    expect(wrapper.text()).toContain('appserver-1')
+    expect(ElMessage.success).toHaveBeenCalledWith('Endpoint 已同步，已创建新的 Dark Runtime')
+  })
+
   it('registers a runtime with open HTTP access when the Worker token is blank', async () => {
     const pending = makeRuntime({ runtimeId: 'runtime-no-token' })
     vi.mocked(runtimeApi.registerCodexRuntime).mockResolvedValue(pending)
@@ -185,6 +230,7 @@ describe('CodexRuntimeManager', () => {
 
   it('reports Ultra available only for an enabled ready routing revision', async () => {
     vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([makeRuntime({
+      endpointDisplay: 'http://localhost:3062',
       enabled: true,
       routingPolicy: 'ULTRA_DEFAULT',
       readinessStatus: 'READY',
@@ -198,8 +244,7 @@ describe('CodexRuntimeManager', () => {
 
     expect(wrapper.text()).toContain('Codex Ultra 可用')
     expect(wrapper.text()).not.toContain('Codex Ultra 当前不可用')
-    expect(wrapper.text()).toContain('Endpoint 已配置')
-    expect(wrapper.text()).not.toContain('localhost:3062')
+    expect(wrapper.text()).toContain('http://localhost:3062')
   })
 
   it('keeps a long runtime identity readable in the narrow responsive header', async () => {

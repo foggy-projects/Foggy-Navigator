@@ -48,9 +48,13 @@ public class CodexRuntimeRateLimitsService {
             }
             return unsupportedSnapshot(runtime);
         }
+        String reportedRuntimeId = "ENDPOINT_SYNC".equals(runtime.getRuntimeSource())
+                ? runtime.getReportedRuntimeId() : runtime.getRuntimeId();
+        Integer reportedRuntimeRevision = "ENDPOINT_SYNC".equals(runtime.getRuntimeSource())
+                ? runtime.getReportedRuntimeRevision() : runtime.getRevision();
         if (snapshot == null
-                || !Objects.equals(runtime.getRuntimeId(), snapshot.getRuntimeId())
-                || !Objects.equals(runtime.getRevision(), snapshot.getRuntimeRevision())
+                || !Objects.equals(reportedRuntimeId, snapshot.getRuntimeId())
+                || !Objects.equals(reportedRuntimeRevision, snapshot.getRuntimeRevision())
                 || !Objects.equals(runtime.getInstanceId(), snapshot.getInstanceId())) {
             throw new IllegalStateException("CODEX_RUNTIME_RATE_LIMITS_IDENTITY_MISMATCH");
         }
@@ -61,6 +65,10 @@ public class CodexRuntimeRateLimitsService {
                 || snapshot.getLimits() == null) {
             throw new IllegalStateException("CODEX_RUNTIME_RATE_LIMITS_CONTRACT_MISMATCH");
         }
+        // The browser and Navigator task records use the platform runtime revision,
+        // while the App Server exposes its own immutable reported identity.
+        snapshot.setRuntimeId(runtime.getRuntimeId());
+        snapshot.setRuntimeRevision(runtime.getRevision());
         return snapshot;
     }
 

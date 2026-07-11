@@ -5,10 +5,12 @@ import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
+import com.foggy.navigator.codex.worker.model.entity.CodexAppServerEndpointEntity;
 import com.foggy.navigator.codex.worker.model.entity.CodexRuntimeEntity;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeLifecycleForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
+import com.foggy.navigator.codex.worker.repository.CodexAppServerEndpointRepository;
 import com.foggy.navigator.codex.worker.repository.CodexRuntimeRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +42,7 @@ import static org.mockito.Mockito.when;
 class CodexRuntimeRegistryServiceTest {
 
     private CodexRuntimeRepository repository;
+    private CodexAppServerEndpointRepository endpointRepository;
     private CredentialEncryptor encryptor;
     private CodexWorkerClientFactory clientFactory;
     private CodexWorkerClient client;
@@ -50,13 +53,14 @@ class CodexRuntimeRegistryServiceTest {
     @BeforeEach
     void setUp() {
         repository = mock(CodexRuntimeRepository.class);
+        endpointRepository = mock(CodexAppServerEndpointRepository.class);
         encryptor = mock(CredentialEncryptor.class);
         clientFactory = mock(CodexWorkerClientFactory.class);
         client = mock(CodexWorkerClient.class);
         objectMapper = new ObjectMapper().findAndRegisterModules();
         capabilityStateService = new CodexRuntimeCapabilityStateService(repository);
         service = new CodexRuntimeRegistryService(
-                repository, encryptor, clientFactory, objectMapper, capabilityStateService);
+                repository, endpointRepository, encryptor, clientFactory, objectMapper, capabilityStateService);
         ReflectionTestUtils.setField(service, "capabilityMaxAgeSeconds", 120L);
         when(repository.save(any(CodexRuntimeEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(encryptor.encrypt(anyString())).thenAnswer(invocation -> "encrypted:" + invocation.getArgument(0));
@@ -155,6 +159,61 @@ class CodexRuntimeRegistryServiceTest {
     }
 
     @Test
+    void endpointSyncCreatesManagedRuntimeFromEndpointAndWorkerCapability() {
+        CodexAppServerEndpointEntity endpoint = endpoint("endpoint-0123456789abcdef");
+        Map<String, Object> manifest = topLevelManifest("codex-app-server-primary", 2,
+                CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
+        when(endpointRepository.findByEndpointIdForUpdate(endpoint.getEndpointId()))
+                .thenReturn(Optional.of(endpoint));
+        when(repository.findByEndpointIdOrderByRevisionDesc(endpoint.getEndpointId()))
+                .thenReturn(List.of());
+        when(repository.findMaxRevision("appserver-0123456789abcdef")).thenReturn(0);
+        when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
+        when(client.probeCapabilities()).thenReturn(Mono.just(probe(manifest)));
+
+        var result = service.synchronizeEndpoint(endpoint.getEndpointId());
+
+        assertEquals(true, result.getRuntimeCreated());
+        assertEquals("appserver-0123456789abcdef", result.getRuntime().getRuntimeId());
+        assertEquals(1, result.getRuntime().getRevision());
+        assertEquals("ENDPOINT_SYNC", result.getRuntime().getRuntimeSource());
+        assertEquals("codex-app-server-primary", result.getRuntime().getReportedRuntimeId());
+        assertEquals(2, result.getRuntime().getReportedRuntimeRevision());
+        assertEquals("READY", result.getRuntime().getReadinessStatus());
+        assertEquals("READY", endpoint.getLastSyncStatus());
+        verify(repository).save(any(CodexRuntimeEntity.class));
+        verify(endpointRepository).save(endpoint);
+    }
+
+    @Test
+    void endpointSyncKeepsCurrentRuntimeWhenCapabilityFingerprintIsUnchanged() throws Exception {
+        CodexAppServerEndpointEntity endpoint = endpoint("endpoint-0123456789abcdef");
+        Map<String, Object> manifest = topLevelManifest("codex-app-server-primary", 2,
+                CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
+        CodexRuntimeEntity current = runtime("DARK", 0);
+        current.setRuntimeId("appserver-0123456789abcdef");
+        current.setRuntimeSource("ENDPOINT_SYNC");
+        current.setEndpointId(endpoint.getEndpointId());
+        current.setReportedRuntimeId("codex-app-server-primary");
+        current.setReportedRuntimeRevision(2);
+        current.setCapabilityFingerprint(ReflectionTestUtils.invokeMethod(
+                service, "capabilityFingerprint", endpoint, manifest, "instance-a"));
+        when(endpointRepository.findByEndpointIdForUpdate(endpoint.getEndpointId()))
+                .thenReturn(Optional.of(endpoint));
+        when(repository.findByEndpointIdOrderByRevisionDesc(endpoint.getEndpointId()))
+                .thenReturn(List.of(current));
+        when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
+        when(client.probeCapabilities()).thenReturn(Mono.just(probe(manifest)));
+
+        var result = service.synchronizeEndpoint(endpoint.getEndpointId());
+
+        assertEquals(false, result.getRuntimeCreated());
+        assertEquals(1, result.getRuntime().getRevision());
+        assertEquals("READY", result.getRuntime().getReadinessStatus());
+        verify(repository, never()).findMaxRevision(anyString());
+    }
+
+    @Test
     void routingCannotJumpDirectlyFromDarkToAllDefault() {
         CodexRuntimeEntity entity = runtime("DARK", 0);
         when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1)).thenReturn(Optional.of(entity));
@@ -201,9 +260,21 @@ class CodexRuntimeRegistryServiceTest {
         assertEquals("READY", result.getReadinessStatus());
         assertEquals("instance-a", result.getInstanceId());
         assertEquals(true, result.getEndpointConfigured());
-        assertEquals("http://***:3062", result.getEndpointDisplay());
+        assertEquals("http://127.0.0.1:3062", result.getEndpointDisplay());
         assertEquals(true, result.getCapabilityFresh());
         assertEquals(true, result.getSupportsUltra());
+    }
+
+    @Test
+    void endpointDisplayPreservesOriginWithoutLegacyUrlSecrets() {
+        CodexRuntimeEntity entity = runtime("DARK", 0);
+        entity.setEndpointUrl("https://user:password@192.168.31.119:3071/internal?token=secret#fragment");
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+
+        var result = service.listByWorker("worker-1");
+
+        assertEquals("https://192.168.31.119:3071", result.get(0).getEndpointDisplay());
     }
 
     @Test
@@ -715,7 +786,7 @@ class CodexRuntimeRegistryServiceTest {
     }
 
     @Test
-    void refreshFailureDoesNotExposeEndpointOrTokenInReadinessPayload() throws Exception {
+    void refreshFailureExposesSafeEndpointDisplayButNotTokenInReadinessPayload() throws Exception {
         String sentinelEndpoint = "http://sentinel-internal.example:3062";
         String sentinelToken = "sentinel-secret-token";
         CodexRuntimeEntity entity = runtime("DARK", 0);
@@ -732,7 +803,7 @@ class CodexRuntimeRegistryServiceTest {
 
         assertEquals("CAPABILITY_REFRESH_FAILED", entity.getReadinessMessage());
         assertEquals("CAPABILITY_REFRESH_FAILED", result.getReadinessMessage());
-        assertFalse(payload.contains(sentinelEndpoint));
+        assertTrue(payload.contains(sentinelEndpoint));
         assertFalse(payload.contains(sentinelToken));
     }
 
@@ -1136,6 +1207,17 @@ class CodexRuntimeRegistryServiceTest {
         form.setEndpointUrl("http://127.0.0.1:3062/");
         form.setAuthToken("runtime-token");
         return form;
+    }
+
+    private CodexAppServerEndpointEntity endpoint(String endpointId) {
+        CodexAppServerEndpointEntity endpoint = new CodexAppServerEndpointEntity();
+        endpoint.setEndpointId(endpointId);
+        endpoint.setWorkerId("worker-1");
+        endpoint.setEndpointUrl("http://127.0.0.1:3071");
+        endpoint.setAuthTokenCiphertext("encrypted:runtime-token");
+        endpoint.setConfigurationVersion(1L);
+        endpoint.setLastSyncStatus("PENDING");
+        return endpoint;
     }
 
     private CodexRuntimeEntity runtime(String policy, int rollout) {

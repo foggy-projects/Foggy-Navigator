@@ -7,12 +7,16 @@ import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeRoutingPolicy;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
+import com.foggy.navigator.codex.worker.model.dto.CodexAppServerEndpointDTO;
+import com.foggy.navigator.codex.worker.model.dto.CodexAppServerEndpointSyncDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeAvailabilityDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeDTO;
+import com.foggy.navigator.codex.worker.model.entity.CodexAppServerEndpointEntity;
 import com.foggy.navigator.codex.worker.model.entity.CodexRuntimeEntity;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeLifecycleForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
+import com.foggy.navigator.codex.worker.repository.CodexAppServerEndpointRepository;
 import com.foggy.navigator.codex.worker.repository.CodexRuntimeRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +31,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.net.URI;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -36,6 +41,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 
 @Slf4j
 @Service
@@ -89,6 +95,7 @@ public class CodexRuntimeRegistryService {
             "APP_SERVER_WORKER_DRAINING");
 
     private final CodexRuntimeRepository runtimeRepository;
+    private final CodexAppServerEndpointRepository endpointRepository;
     private final CredentialEncryptor credentialEncryptor;
     private final CodexWorkerClientFactory clientFactory;
     private final ObjectMapper objectMapper;
@@ -147,6 +154,90 @@ public class CodexRuntimeRegistryService {
                 saved.getRuntimeId(), saved.getRevision(), saved.getWorkerId(),
                 saved.getRuntimeType(), saved.getRoutingPolicy());
         return toDTO(saved);
+    }
+
+    /**
+     * Probes an endpoint profile and creates a new platform runtime revision only
+     * when its execution fingerprint changes. Endpoint profiles themselves stay
+     * editable; a runtime stores a credential snapshot for historical task affinity.
+     */
+    @Transactional
+    public CodexAppServerEndpointSyncDTO synchronizeEndpoint(String endpointId) {
+        CodexAppServerEndpointEntity endpoint = endpointRepository.findByEndpointIdForUpdate(endpointId)
+                .orElseThrow(() -> new IllegalArgumentException("Endpoint not found: " + endpointId));
+        Map<String, Object> manifest = null;
+        String actualInstanceId = null;
+        String failureCode = null;
+        try {
+            CodexWorkerClient.CapabilityProbe probe = clientFactory.getOrCreate(
+                    "endpoint-sync:" + endpointId,
+                    endpoint.getEndpointUrl(),
+                    credentialEncryptor.decrypt(endpoint.getAuthTokenCiphertext()),
+                    null)
+                    .probeCapabilities()
+                    .block(Duration.ofSeconds(10));
+            if (probe == null || probe.manifest() == null) {
+                throw new IllegalStateException("empty capability manifest");
+            }
+            manifest = probe.manifest();
+            actualInstanceId = probe.actualInstanceId();
+        } catch (Exception e) {
+            failureCode = capabilityFailureCode(e);
+            log.warn("Codex app-server endpoint sync failed: endpointId={}, code={}, type={}",
+                    endpointId, failureCode, exceptionType(e));
+        }
+
+        endpoint.setLastSyncedAt(LocalDateTime.now());
+        if (manifest == null) {
+            endpoint.setLastSyncStatus("UNREACHABLE");
+            endpoint.setLastSyncMessage(failureCode != null ? failureCode : "CAPABILITY_REFRESH_FAILED");
+            endpointRepository.save(endpoint);
+            return CodexAppServerEndpointSyncDTO.builder()
+                    .endpoint(toEndpointDTO(endpoint))
+                    .runtimeCreated(false)
+                    .build();
+        }
+
+        String fingerprint = capabilityFingerprint(endpoint, manifest, actualInstanceId);
+        List<CodexRuntimeEntity> revisions = runtimeRepository
+                .findByEndpointIdOrderByRevisionDesc(endpointId);
+        CodexRuntimeEntity current = revisions.stream()
+                .filter(entity -> "ENDPOINT_SYNC".equals(entity.getRuntimeSource()))
+                .findFirst()
+                .orElse(null);
+        boolean created = current == null || !fingerprint.equals(current.getCapabilityFingerprint());
+        CodexRuntimeEntity runtime;
+        if (created) {
+            runtime = createSyncedRuntime(endpoint, manifest, fingerprint);
+            if (current != null && current.getArchivedAt() == null) {
+                current.setEnabled(false);
+                current.setRoutingPolicy(CodexRuntimeRoutingPolicy.DRAINING.name());
+                current.setRolloutPercentage(0);
+                current.setRoutingEpoch(current.getRoutingEpoch() + 1);
+                runtimeRepository.save(current);
+            }
+        } else {
+            runtime = current;
+        }
+
+        try {
+            applyManifest(runtime, manifest, actualInstanceId, !created);
+        } catch (Exception e) {
+            applyCapabilityFailure(runtime, capabilityFailureCode(e));
+            log.warn("Codex app-server endpoint manifest apply failed: endpointId={}, code={}, type={}",
+                    endpointId, capabilityFailureCode(e), exceptionType(e));
+        }
+        runtime = runtimeRepository.save(runtime);
+        endpoint.setLastSyncStatus(runtime.getReadinessStatus());
+        endpoint.setLastSyncMessage(runtime.getReadinessMessage());
+        endpoint.setLastRuntimeId(runtime.getRuntimeId());
+        endpoint.setLastRuntimeRevision(runtime.getRevision());
+        endpointRepository.save(endpoint);
+        return CodexAppServerEndpointSyncDTO.builder()
+                .endpoint(toEndpointDTO(endpoint))
+                .runtime(toDTO(runtime))
+                .runtimeCreated(created)
+                .build();
     }
 
     @Transactional(readOnly = true)
@@ -513,10 +604,10 @@ public class CodexRuntimeRegistryService {
         if (!CAPABILITY_CONTRACT_VERSION.equals(contractVersion)) {
             incompatibilities.add("CAPABILITY_CONTRACT_VERSION_MISMATCH");
         }
-        if (!entity.getRuntimeId().equals(runtimeId)) {
+        if (!Objects.equals(expectedReportedRuntimeId(entity), runtimeId)) {
             incompatibilities.add("CAPABILITY_RUNTIME_ID_MISMATCH");
         }
-        if (!entity.getRevision().toString().equals(runtimeRevision)) {
+        if (!Objects.equals(expectedReportedRuntimeRevision(entity), runtimeRevision)) {
             incompatibilities.add("CAPABILITY_RUNTIME_REVISION_MISMATCH");
         }
         if (instanceIdentityQuarantined
@@ -867,6 +958,56 @@ public class CodexRuntimeRegistryService {
                 credentialEncryptor.decrypt(entity.getAuthTokenCiphertext()), entity.getInstanceId());
     }
 
+    private CodexRuntimeEntity createSyncedRuntime(CodexAppServerEndpointEntity endpoint,
+                                                   Map<String, Object> manifest,
+                                                   String fingerprint) {
+        String runtimeId = managedRuntimeId(endpoint.getEndpointId());
+        Integer storedMaxRevision = runtimeRepository.findMaxRevision(runtimeId);
+        int maxRevision = storedMaxRevision != null ? storedMaxRevision : 0;
+        if (maxRevision == Integer.MAX_VALUE) {
+            throw new IllegalStateException("Runtime revision sequence is exhausted");
+        }
+        CodexRuntimeEntity entity = new CodexRuntimeEntity();
+        entity.setRuntimeId(runtimeId);
+        entity.setRevision(maxRevision + 1);
+        entity.setWorkerId(endpoint.getWorkerId());
+        entity.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        entity.setEndpointUrl(endpoint.getEndpointUrl());
+        entity.setAuthTokenCiphertext(endpoint.getAuthTokenCiphertext());
+        entity.setEndpointId(endpoint.getEndpointId());
+        entity.setRuntimeSource("ENDPOINT_SYNC");
+        entity.setReportedRuntimeId(blankToNull(stringValue(manifest, "runtime_id", "runtimeId")));
+        entity.setReportedRuntimeRevision(integerValue(stringValue(
+                manifest, "runtime_revision", "runtimeRevision", "revision")));
+        entity.setCapabilityFingerprint(fingerprint);
+        entity.setEnabled(false);
+        entity.setRoutingPolicy(CodexRuntimeRoutingPolicy.DARK.name());
+        entity.setRolloutPercentage(0);
+        entity.setPriority(0);
+        entity.setRoutingEpoch(1L);
+        entity.setReadinessStatus("PENDING");
+        entity.setExpectedCliVersion(PINNED_APP_SERVER_CLI_VERSION);
+        entity.setExpectedSchemaDigest(PINNED_SCHEMA_DIGEST);
+        return entity;
+    }
+
+    private String managedRuntimeId(String endpointId) {
+        return "appserver-" + endpointId.replace("endpoint-", "");
+    }
+
+    private String expectedReportedRuntimeId(CodexRuntimeEntity entity) {
+        return "ENDPOINT_SYNC".equals(entity.getRuntimeSource())
+                ? entity.getReportedRuntimeId() : entity.getRuntimeId();
+    }
+
+    private String expectedReportedRuntimeRevision(CodexRuntimeEntity entity) {
+        if (!"ENDPOINT_SYNC".equals(entity.getRuntimeSource())) {
+            return entity.getRevision().toString();
+        }
+        return entity.getReportedRuntimeRevision() != null
+                ? entity.getReportedRuntimeRevision().toString() : null;
+    }
+
     private String clientKey(CodexRuntimeEntity entity) {
         return "runtime:" + entity.getRuntimeId() + ":" + entity.getRevision();
     }
@@ -890,6 +1031,10 @@ public class CodexRuntimeRegistryService {
                 .revision(entity.getRevision())
                 .workerId(entity.getWorkerId())
                 .runtimeType(entity.getRuntimeType())
+                .runtimeSource(entity.getRuntimeSource())
+                .endpointId(entity.getEndpointId())
+                .reportedRuntimeId(entity.getReportedRuntimeId())
+                .reportedRuntimeRevision(entity.getReportedRuntimeRevision())
                 .endpointConfigured(entity.getEndpointUrl() != null && !entity.getEndpointUrl().isBlank())
                 .endpointDisplay(maskedEndpoint(entity.getEndpointUrl()))
                 .instanceId(entity.getInstanceId())
@@ -915,10 +1060,74 @@ public class CodexRuntimeRegistryService {
                 .build();
     }
 
+    private CodexAppServerEndpointDTO toEndpointDTO(CodexAppServerEndpointEntity endpoint) {
+        return CodexAppServerEndpointDTO.builder()
+                .endpointId(endpoint.getEndpointId())
+                .workerId(endpoint.getWorkerId())
+                .endpointUrl(endpoint.getEndpointUrl())
+                .endpointDisplay(maskedEndpoint(endpoint.getEndpointUrl()))
+                .tokenConfigured(endpoint.getAuthTokenCiphertext() != null
+                        && !credentialEncryptor.decrypt(endpoint.getAuthTokenCiphertext()).isBlank())
+                .configurationVersion(endpoint.getConfigurationVersion())
+                .lastSyncStatus(endpoint.getLastSyncStatus())
+                .lastSyncMessage(endpoint.getLastSyncMessage())
+                .lastSyncedAt(endpoint.getLastSyncedAt())
+                .lastRuntimeId(endpoint.getLastRuntimeId())
+                .lastRuntimeRevision(endpoint.getLastRuntimeRevision())
+                .createdAt(endpoint.getCreatedAt())
+                .updatedAt(endpoint.getUpdatedAt())
+                .build();
+    }
+
     private boolean isCapabilityFresh(CodexRuntimeEntity entity) {
         return entity.getLastCapabilityAt() != null
                 && !entity.getLastCapabilityAt().isBefore(
                         LocalDateTime.now().minusSeconds(capabilityMaxAgeSeconds));
+    }
+
+    private String capabilityFingerprint(CodexAppServerEndpointEntity endpoint,
+                                         Map<String, Object> manifest,
+                                         String actualInstanceId) {
+        Map<String, Object> identity = new TreeMap<>();
+        identity.put("endpointConfigurationVersion", endpoint.getConfigurationVersion());
+        identity.put("runtimeId", stringValue(manifest, "runtime_id", "runtimeId"));
+        identity.put("runtimeRevision", stringValue(manifest,
+                "runtime_revision", "runtimeRevision", "revision"));
+        identity.put("runtimeType", normalizeRuntimeType(stringValue(manifest, "runtime_type", "runtimeType")));
+        identity.put("instanceId", stringValue(manifest, "instance_id", "instanceId"));
+        identity.put("actualInstanceId", actualInstanceId);
+        identity.put("contractVersion", stringValue(manifest, "contract_version", "contractVersion"));
+        identity.put("cliVersion", stringValue(manifest, "cli_version", "cliVersion"));
+        identity.put("schemaDigest", stringValue(manifest, "schema_digest", "schemaDigest"));
+        identity.put("models", canonicalValue(capabilityValue(manifest, "models")));
+        identity.put("reasoningEfforts", canonicalValue(capabilityValue(
+                manifest, "reasoning_efforts", "reasoningEfforts")));
+        identity.put("modelAliases", canonicalValue(capabilityValue(
+                manifest, "model_aliases", "modelAliases", "aliases")));
+        identity.put("modelReasoningMatrix", canonicalValue(firstValue(manifest,
+                "model_reasoning_matrix", "modelReasoningMatrix")));
+        identity.put("features", canonicalValue(features(manifest)));
+        try {
+            byte[] serialized = objectMapper.writeValueAsBytes(identity);
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(serialized);
+            StringBuilder result = new StringBuilder(digest.length * 2);
+            for (byte value : digest) result.append(String.format("%02x", value));
+            return result.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("CAPABILITY_FINGERPRINT_FAILED", e);
+        }
+    }
+
+    private Object canonicalValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> sorted = new TreeMap<>();
+            map.forEach((key, nested) -> sorted.put(String.valueOf(key), canonicalValue(nested)));
+            return sorted;
+        }
+        if (value instanceof Collection<?> values) {
+            return values.stream().map(this::canonicalValue).toList();
+        }
+        return value;
     }
 
     private boolean supportsUltra(CodexRuntimeEntity entity) {
@@ -961,8 +1170,11 @@ public class CodexRuntimeRegistryService {
         if (endpointUrl == null || endpointUrl.isBlank()) return null;
         try {
             URI uri = URI.create(endpointUrl);
+            String host = uri.getHost();
+            if (host == null || host.isBlank() || uri.getScheme() == null) return "configured";
+            if (host.contains(":")) host = "[" + host + "]";
             String port = uri.getPort() >= 0 ? ":" + uri.getPort() : "";
-            return uri.getScheme() + "://***" + port;
+            return uri.getScheme().toLowerCase(Locale.ROOT) + "://" + host + port;
         } catch (Exception e) {
             return "configured";
         }
@@ -1117,6 +1329,15 @@ public class CodexRuntimeRegistryService {
             value = firstValue(typed, keys);
         }
         return value != null ? value.toString() : null;
+    }
+
+    private Integer integerValue(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Integer.valueOf(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private boolean containsKey(String[] values, String expected) {

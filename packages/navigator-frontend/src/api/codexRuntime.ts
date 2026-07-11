@@ -1,13 +1,57 @@
 import client from './client'
 import type { RX } from '@/types'
 import type {
+  CodexAppServerEndpoint,
+  CodexAppServerEndpointSync,
   CodexRuntime,
   CodexRuntimeAvailability,
   CodexRuntimeRateLimits,
   RegisterCodexRuntimeRequest,
+  SaveCodexAppServerEndpointRequest,
   UpdateCodexRuntimeLifecycleRequest,
   UpdateCodexRuntimeRoutingRequest,
 } from '@/types/codexRuntime'
+
+export async function listCodexAppServerEndpoints(
+  workerId: string,
+): Promise<CodexAppServerEndpoint[]> {
+  const rx = (await client.get('/codex-app-server-endpoints', {
+    params: { workerId },
+  })) as unknown as RX<CodexAppServerEndpoint[]>
+  return rx.data
+}
+
+export async function createCodexAppServerEndpoint(
+  request: Required<Pick<SaveCodexAppServerEndpointRequest, 'workerId' | 'endpointUrl'>>
+    & Pick<SaveCodexAppServerEndpointRequest, 'authToken'>,
+): Promise<CodexAppServerEndpoint> {
+  const rx = (await client.post('/codex-app-server-endpoints', request)) as unknown as RX<CodexAppServerEndpoint>
+  return rx.data
+}
+
+export async function updateCodexAppServerEndpoint(
+  endpointId: string,
+  request: SaveCodexAppServerEndpointRequest,
+): Promise<CodexAppServerEndpoint> {
+  const rx = (await client.put(
+    `/codex-app-server-endpoints/${encodeURIComponent(endpointId)}`,
+    request,
+  )) as unknown as RX<CodexAppServerEndpoint>
+  return rx.data
+}
+
+export async function deleteCodexAppServerEndpoint(endpointId: string): Promise<void> {
+  await client.delete(`/codex-app-server-endpoints/${encodeURIComponent(endpointId)}`)
+}
+
+export async function syncCodexAppServerEndpoint(
+  endpointId: string,
+): Promise<CodexAppServerEndpointSync> {
+  const rx = (await client.post(
+    `/codex-app-server-endpoints/${encodeURIComponent(endpointId)}/sync`,
+  )) as unknown as RX<CodexAppServerEndpointSync>
+  return rx.data
+}
 
 export async function getCodexRuntimeRateLimits(
   runtimeId: string,

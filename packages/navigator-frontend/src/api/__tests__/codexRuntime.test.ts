@@ -2,12 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import client from '../client'
 import {
   archiveCodexRuntime,
+  createCodexAppServerEndpoint,
+  deleteCodexAppServerEndpoint,
   getCodexRuntimeAvailability,
   getCodexRuntimeRateLimits,
   listCodexRuntimes,
+  listCodexAppServerEndpoints,
   refreshCodexRuntime,
   registerCodexRuntime,
+  syncCodexAppServerEndpoint,
   unarchiveCodexRuntime,
+  updateCodexAppServerEndpoint,
   updateCodexRuntimeRouting,
 } from '../codexRuntime'
 import type { CodexRuntime, CodexRuntimeRateLimits } from '@/types/codexRuntime'
@@ -17,6 +22,7 @@ vi.mock('../client', () => ({
     get: vi.fn(),
     post: vi.fn(),
     put: vi.fn(),
+    delete: vi.fn(),
   },
 }))
 
@@ -46,6 +52,43 @@ describe('codexRuntime API', () => {
     expect(client.get).toHaveBeenCalledWith('/codex-runtimes', {
       params: { workerId: 'worker-1' },
     })
+  })
+
+  it('manages endpoint profiles separately from runtime revisions', async () => {
+    const endpoint = {
+      endpointId: 'endpoint/a b',
+      workerId: 'worker-1',
+      endpointUrl: 'http://127.0.0.1:3071',
+      endpointDisplay: 'http://127.0.0.1:3071',
+      tokenConfigured: true,
+      configurationVersion: 1,
+      lastSyncStatus: 'PENDING',
+      createdAt: '2026-07-10T10:00:00',
+      updatedAt: '2026-07-10T10:00:00',
+    }
+    vi.mocked(client.get).mockResolvedValue({ data: [endpoint] })
+    vi.mocked(client.post).mockResolvedValue({ data: endpoint })
+    vi.mocked(client.put).mockResolvedValue({ data: endpoint })
+
+    await expect(listCodexAppServerEndpoints('worker-1')).resolves.toEqual([endpoint])
+    await expect(createCodexAppServerEndpoint({
+      workerId: 'worker-1', endpointUrl: endpoint.endpointUrl, authToken: 'secret',
+    })).resolves.toEqual(endpoint)
+    await expect(updateCodexAppServerEndpoint(endpoint.endpointId, {
+      endpointUrl: endpoint.endpointUrl, clearAuthToken: true,
+    })).resolves.toEqual(endpoint)
+    await syncCodexAppServerEndpoint(endpoint.endpointId)
+    await deleteCodexAppServerEndpoint(endpoint.endpointId)
+
+    expect(client.get).toHaveBeenCalledWith('/codex-app-server-endpoints', {
+      params: { workerId: 'worker-1' },
+    })
+    const base = '/codex-app-server-endpoints/endpoint%2Fa%20b'
+    expect(client.put).toHaveBeenCalledWith(`${base}`, {
+      endpointUrl: endpoint.endpointUrl, clearAuthToken: true,
+    })
+    expect(client.post).toHaveBeenCalledWith(`${base}/sync`)
+    expect(client.delete).toHaveBeenCalledWith(base)
   })
 
   it('can suppress client error toasts for background refreshes', async () => {

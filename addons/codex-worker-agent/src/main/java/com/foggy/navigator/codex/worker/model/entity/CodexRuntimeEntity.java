@@ -21,7 +21,8 @@ import java.time.LocalDateTime;
                 name = "uk_crr_runtime_revision", columnNames = {"runtimeId", "revision"}),
         indexes = {
                 @Index(name = "idx_crr_worker_type", columnList = "workerId,runtimeType"),
-                @Index(name = "idx_crr_routing", columnList = "enabled,readinessStatus,routingPolicy")
+                @Index(name = "idx_crr_routing", columnList = "enabled,readinessStatus,routingPolicy"),
+                @Index(name = "idx_crr_endpoint", columnList = "endpointId")
         })
 public class CodexRuntimeEntity {
 
@@ -46,6 +47,23 @@ public class CodexRuntimeEntity {
 
     @Column(columnDefinition = "TEXT", nullable = false)
     private String authTokenCiphertext;
+
+    /** Null for legacy hand-registered runtime revisions. */
+    @Column(length = 48)
+    private String endpointId;
+
+    /** MANUAL | ENDPOINT_SYNC */
+    @Column(length = 32, nullable = false)
+    private String runtimeSource;
+
+    /** Runtime identity advertised by the remote App Server. */
+    @Column(length = 64)
+    private String reportedRuntimeId;
+
+    private Integer reportedRuntimeRevision;
+
+    @Column(length = 64)
+    private String capabilityFingerprint;
 
     @Column(length = 128)
     private String instanceId;
@@ -110,6 +128,7 @@ public class CodexRuntimeEntity {
         if (priority == null) priority = 0;
         if (routingEpoch == null) routingEpoch = 1L;
         if (readinessStatus == null) readinessStatus = "PENDING";
+        if (runtimeSource == null) runtimeSource = "MANUAL";
         if (expectedCliVersion == null) expectedCliVersion = "0.144.1";
         if (expectedSchemaDigest == null) {
             expectedSchemaDigest = "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f";

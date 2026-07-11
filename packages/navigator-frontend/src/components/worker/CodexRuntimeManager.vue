@@ -1,5 +1,146 @@
 <template>
   <section class="runtime-manager" aria-label="Codex App Server Runtime">
+    <div class="runtime-section-header endpoint-section-header">
+      <div class="runtime-title-group">
+        <span class="runtime-title">App Server Endpoint</span>
+        <el-tag size="small" effect="plain" type="info">{{ endpoints.length }}</el-tag>
+      </div>
+      <div class="runtime-header-actions">
+        <el-tooltip content="重新加载 Endpoint" placement="top">
+          <el-button
+            text
+            circle
+            :icon="Refresh"
+            :loading="endpointLoading"
+            aria-label="重新加载 Endpoint"
+            @click="loadEndpoints()"
+          />
+        </el-tooltip>
+        <el-button
+          text
+          type="primary"
+          :icon="Plus"
+          data-testid="add-codex-app-server-endpoint"
+          @click="toggleEndpointEditor"
+        >
+          添加 Endpoint
+        </el-button>
+      </div>
+    </div>
+
+    <div v-if="showEndpointEditor" class="runtime-registration endpoint-editor">
+      <div class="registration-context">
+        Endpoint 只保存连接信息；点击“同步”后系统会读取 Worker 能力，并仅在执行身份或能力变化时创建新的 Runtime。
+      </div>
+      <div class="registration-grid">
+        <label class="runtime-field">
+          <span>Endpoint</span>
+          <el-input
+            v-model="endpointForm.endpointUrl"
+            placeholder="如 http://192.168.31.119:3071"
+            data-testid="endpoint-url-input"
+          />
+        </label>
+        <label class="runtime-field runtime-token-field">
+          <span>Worker 服务令牌（可选）</span>
+          <el-input
+            v-model="endpointForm.authToken"
+            type="password"
+            autocomplete="new-password"
+            :placeholder="editingEndpointId ? '留空表示保留已保存的令牌' : '留空表示 Worker 未启用 HTTP 认证'"
+            data-testid="endpoint-token-input"
+          />
+        </label>
+      </div>
+      <el-checkbox v-if="editingEndpointId" v-model="endpointForm.clearAuthToken" size="small">
+        清除已保存的服务令牌
+      </el-checkbox>
+      <div class="registration-footer">
+        <span class="dark-registration-state">保存后需要点击同步才会生成或更新 Runtime。</span>
+        <div class="registration-actions">
+          <el-button @click="cancelEndpointEditor">取消</el-button>
+          <el-button
+            type="primary"
+            :loading="endpointSaving"
+            data-testid="save-codex-app-server-endpoint"
+            @click="handleSaveEndpoint"
+          >
+            {{ editingEndpointId ? '保存 Endpoint' : '添加 Endpoint' }}
+          </el-button>
+        </div>
+      </div>
+    </div>
+
+    <div v-loading="endpointLoading" class="endpoint-list">
+      <el-empty
+        v-if="!endpointLoading && endpoints.length === 0"
+        description="暂无 App Server Endpoint，请先添加 Endpoint 后同步"
+        :image-size="44"
+      />
+      <article
+        v-for="endpoint in endpoints"
+        :key="endpoint.endpointId"
+        class="endpoint-row"
+        :data-testid="`endpoint-${endpoint.endpointId}`"
+      >
+        <div class="runtime-summary">
+          <div class="runtime-identity">
+            <div class="runtime-name-line">
+              <strong :title="endpoint.endpointDisplay">{{ endpoint.endpointDisplay }}</strong>
+              <el-tag size="small" effect="plain" :type="endpoint.tokenConfigured ? 'success' : 'info'">
+                {{ endpoint.tokenConfigured ? '令牌已配置' : '无令牌' }}
+              </el-tag>
+              <el-tag size="small" effect="light" :type="endpointSyncTagType(endpoint.lastSyncStatus)">
+                {{ endpointSyncLabel(endpoint.lastSyncStatus) }}
+              </el-tag>
+            </div>
+            <span v-if="endpoint.lastSyncMessage" class="runtime-readiness-message endpoint-message">
+              {{ safeRuntimeMessage(endpoint.lastSyncMessage) }}
+            </span>
+            <span class="runtime-archived-time">
+              最近同步 {{ formatTime(endpoint.lastSyncedAt) }}
+              <template v-if="endpoint.lastRuntimeId">
+                · {{ endpoint.lastRuntimeId }}@{{ endpoint.lastRuntimeRevision }}
+              </template>
+            </span>
+          </div>
+          <div class="runtime-actions">
+            <el-tooltip content="同步 Endpoint 并检查是否需要新建 Runtime" placement="top">
+              <el-button
+                text
+                circle
+                type="primary"
+                :icon="Refresh"
+                :loading="syncingEndpointIds.has(endpoint.endpointId)"
+                :aria-label="`同步 ${endpoint.endpointDisplay}`"
+                @click="handleSyncEndpoint(endpoint)"
+              />
+            </el-tooltip>
+            <el-tooltip content="编辑 Endpoint" placement="top">
+              <el-button
+                text
+                circle
+                :icon="Edit"
+                :aria-label="`编辑 ${endpoint.endpointDisplay}`"
+                @click="startEndpointEdit(endpoint)"
+              />
+            </el-tooltip>
+            <el-tooltip content="删除 Endpoint，并停止它的新任务路由" placement="top">
+              <el-button
+                text
+                circle
+                type="danger"
+                :icon="Delete"
+                :loading="deletingEndpointIds.has(endpoint.endpointId)"
+                :aria-label="`删除 ${endpoint.endpointDisplay}`"
+                @click="handleDeleteEndpoint(endpoint)"
+              />
+            </el-tooltip>
+          </div>
+        </div>
+      </article>
+    </div>
+
     <div class="runtime-section-header">
       <div class="runtime-title-group">
         <span class="runtime-title">App Server Runtime</span>
@@ -24,7 +165,7 @@
           data-testid="add-codex-runtime"
           @click="toggleRegistration"
         >
-          注册
+          手动注册
         </el-button>
       </div>
     </div>
@@ -120,6 +261,9 @@
             <div class="runtime-name-line">
               <strong :title="runtime.runtimeId">{{ runtime.runtimeId }}</strong>
               <span class="runtime-revision">rev {{ runtime.revision }}</span>
+              <el-tag v-if="runtime.runtimeSource === 'ENDPOINT_SYNC'" size="small" effect="plain" type="info">
+                Endpoint 同步
+              </el-tag>
               <el-tag v-if="runtime.archived" size="small" effect="plain" type="info">已归档</el-tag>
               <el-tag
                 v-else
@@ -130,10 +274,8 @@
                 {{ effectiveReadinessLabel(runtime) }}
               </el-tag>
             </div>
-            <span class="runtime-endpoint">
-              {{ runtime.endpointConfigured === true
-                ? 'Endpoint 已配置'
-                : runtime.endpointConfigured === false ? 'Endpoint 未配置' : 'Endpoint 配置受保护' }}
+            <span class="runtime-endpoint" :title="runtimeEndpointDisplay(runtime)">
+              {{ runtimeEndpointDisplay(runtime) }}
             </span>
             <span v-if="runtime.archivedAt" class="runtime-archived-time">
               归档于 {{ formatTime(runtime.archivedAt) }}
@@ -349,18 +491,34 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Box, Check, DocumentAdd, Plus, Refresh, RefreshLeft, WarningFilled } from '@element-plus/icons-vue'
+import {
+  Box,
+  Check,
+  Delete,
+  DocumentAdd,
+  Edit,
+  Plus,
+  Refresh,
+  RefreshLeft,
+  WarningFilled,
+} from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   archiveCodexRuntime,
+  createCodexAppServerEndpoint,
+  deleteCodexAppServerEndpoint,
   getCodexRuntimeRateLimits,
+  listCodexAppServerEndpoints,
   listCodexRuntimes,
   refreshCodexRuntime,
   registerCodexRuntime,
+  syncCodexAppServerEndpoint,
   unarchiveCodexRuntime,
+  updateCodexAppServerEndpoint,
   updateCodexRuntimeRouting,
 } from '@/api/codexRuntime'
 import type {
+  CodexAppServerEndpoint,
   CodexRuntime,
   CodexRuntimeRateLimit,
   CodexRuntimeRateLimits,
@@ -398,9 +556,14 @@ interface RoutingDraft {
 }
 
 const runtimes = ref<CodexRuntime[]>([])
+const endpoints = ref<CodexAppServerEndpoint[]>([])
 const drafts = reactive<Record<string, RoutingDraft>>({})
 const loading = ref(false)
+const endpointLoading = ref(false)
 const loadFailed = ref(false)
+const showEndpointEditor = ref(false)
+const editingEndpointId = ref<string | null>(null)
+const endpointSaving = ref(false)
 const showRegistration = ref(false)
 const showArchived = ref(false)
 const registering = ref(false)
@@ -427,6 +590,13 @@ const listRequestsInFlight = new Map<string, number>()
 let rateLimitRequestSequence = 0
 const latestRateLimitRequestByKey = new Map<string, number>()
 const rateLimitRequestsInFlight = new Map<string, number>()
+const syncingEndpointIds = reactive(new Set<string>())
+const deletingEndpointIds = reactive(new Set<string>())
+const endpointForm = reactive({
+  endpointUrl: '',
+  authToken: '',
+  clearAuthToken: false,
+})
 
 const activeRuntimes = computed(() => runtimes.value.filter(runtime => !runtime.archived))
 const visibleRuntimes = computed(() => showArchived.value ? runtimes.value : activeRuntimes.value)
@@ -641,6 +811,145 @@ async function loadRuntimes(silent = false, preserveDirty = true, force = false)
     else listRequestsInFlight.delete(workerId)
     if (!silent && !unmounted && workerId === props.workerId
       && requestSequence === latestListRequestSequence) loading.value = false
+  }
+}
+
+async function loadEndpoints(silent = false): Promise<void> {
+  const workerId = props.workerId
+  if (!workerId) return
+  if (!silent) endpointLoading.value = true
+  try {
+    const loaded = await listCodexAppServerEndpoints(workerId)
+    if (unmounted || workerId !== props.workerId) return
+    endpoints.value = loaded
+  } catch {
+    if (!silent && !unmounted && workerId === props.workerId) {
+      ElMessage.error('Endpoint 列表加载失败')
+    }
+  } finally {
+    if (!silent && !unmounted && workerId === props.workerId) endpointLoading.value = false
+  }
+}
+
+function resetEndpointEditor(): void {
+  endpointForm.endpointUrl = ''
+  endpointForm.authToken = ''
+  endpointForm.clearAuthToken = false
+  editingEndpointId.value = null
+}
+
+function toggleEndpointEditor(): void {
+  if (showEndpointEditor.value && !editingEndpointId.value) {
+    cancelEndpointEditor()
+    return
+  }
+  resetEndpointEditor()
+  showEndpointEditor.value = true
+}
+
+function startEndpointEdit(endpoint: CodexAppServerEndpoint): void {
+  endpointForm.endpointUrl = endpoint.endpointUrl
+  endpointForm.authToken = ''
+  endpointForm.clearAuthToken = false
+  editingEndpointId.value = endpoint.endpointId
+  showEndpointEditor.value = true
+}
+
+function cancelEndpointEditor(): void {
+  resetEndpointEditor()
+  showEndpointEditor.value = false
+}
+
+async function handleSaveEndpoint(): Promise<void> {
+  const endpointUrl = endpointForm.endpointUrl.trim()
+  if (!endpointUrl) {
+    ElMessage.warning('请填写 Endpoint')
+    return
+  }
+  const workerId = props.workerId
+  const operationGeneration = workerGeneration
+  const endpointId = editingEndpointId.value
+  endpointSaving.value = true
+  try {
+    const saved = endpointId
+      ? await updateCodexAppServerEndpoint(endpointId, {
+        endpointUrl,
+        authToken: endpointForm.authToken,
+        clearAuthToken: endpointForm.clearAuthToken,
+      })
+      : await createCodexAppServerEndpoint({
+        workerId,
+        endpointUrl,
+        authToken: endpointForm.authToken,
+      })
+    if (!isCurrentWorkerOperation(workerId, operationGeneration)) return
+    const index = endpoints.value.findIndex(item => item.endpointId === saved.endpointId)
+    if (index >= 0) endpoints.value[index] = saved
+    else endpoints.value.unshift(saved)
+    const wasEditing = endpointId !== null
+    cancelEndpointEditor()
+    ElMessage.success(wasEditing ? 'Endpoint 已保存，请同步后生效' : 'Endpoint 已添加，请同步')
+  } catch {
+    if (isCurrentWorkerOperation(workerId, operationGeneration)) {
+      ElMessage.error(endpointId ? 'Endpoint 保存失败' : 'Endpoint 添加失败')
+    }
+  } finally {
+    if (isCurrentWorkerOperation(workerId, operationGeneration)) endpointSaving.value = false
+  }
+}
+
+async function handleSyncEndpoint(endpoint: CodexAppServerEndpoint): Promise<void> {
+  const workerId = props.workerId
+  const operationGeneration = workerGeneration
+  syncingEndpointIds.add(endpoint.endpointId)
+  try {
+    const result = await syncCodexAppServerEndpoint(endpoint.endpointId)
+    if (!isCurrentWorkerOperation(workerId, operationGeneration)) return
+    const index = endpoints.value.findIndex(item => item.endpointId === endpoint.endpointId)
+    if (index >= 0) endpoints.value[index] = result.endpoint
+    if (result.runtime) {
+      replaceRuntime(result.runtime)
+      void loadRuntimeRateLimits(result.runtime)
+    }
+    ElMessage.success(result.runtimeCreated ? 'Endpoint 已同步，已创建新的 Dark Runtime' : 'Endpoint 已同步，Runtime 保持不变')
+  } catch {
+    if (isCurrentWorkerOperation(workerId, operationGeneration)) {
+      ElMessage.error('Endpoint 同步失败')
+    }
+  } finally {
+    if (isCurrentWorkerOperation(workerId, operationGeneration)) {
+      syncingEndpointIds.delete(endpoint.endpointId)
+    }
+  }
+}
+
+async function handleDeleteEndpoint(endpoint: CodexAppServerEndpoint): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `删除 ${endpoint.endpointDisplay}？它关联的 Runtime 将停止接收新任务，历史任务仍按原快照保持 affinity。`,
+      '删除 App Server Endpoint',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  const workerId = props.workerId
+  const operationGeneration = workerGeneration
+  deletingEndpointIds.add(endpoint.endpointId)
+  try {
+    await deleteCodexAppServerEndpoint(endpoint.endpointId)
+    if (!isCurrentWorkerOperation(workerId, operationGeneration)) return
+    endpoints.value = endpoints.value.filter(item => item.endpointId !== endpoint.endpointId)
+    await loadRuntimes(false, false, true)
+    ElMessage.success('Endpoint 已删除，关联 Runtime 已停止新任务路由')
+  } catch {
+    if (isCurrentWorkerOperation(workerId, operationGeneration)) {
+      ElMessage.error('Endpoint 删除失败')
+    }
+  } finally {
+    if (isCurrentWorkerOperation(workerId, operationGeneration)) {
+      deletingEndpointIds.delete(endpoint.endpointId)
+    }
   }
 }
 
@@ -860,6 +1169,22 @@ function effectiveReadinessTagType(runtime: CodexRuntime) {
   return readinessTagType(runtime.readinessStatus)
 }
 
+function endpointSyncLabel(status?: string): string {
+  return {
+    PENDING: '待同步',
+    READY: '已同步',
+    INCOMPATIBLE: '不兼容',
+    UNREACHABLE: '不可达',
+  }[status || ''] ?? '未知'
+}
+
+function endpointSyncTagType(status?: string) {
+  if (status === 'READY') return 'success' as const
+  if (status === 'PENDING') return 'info' as const
+  if (status === 'UNREACHABLE' || status === 'INCOMPATIBLE') return 'danger' as const
+  return 'warning' as const
+}
+
 function runtimeStatusMessage(runtime: CodexRuntime): string | undefined {
   if (runtime.readinessMessage) return safeRuntimeMessage(runtime.readinessMessage)
   if (runtime.readinessStatus === 'READY' && !isRuntimeCapabilityFresh(runtime)) {
@@ -881,6 +1206,22 @@ function safeRuntimeMessage(value: string): string {
     .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[redacted]')
     .replace(/([?&][^=]*(?:token|auth|key|secret|password|credential|authorization)[^=]*=)[^&\s]*/gi, '$1[redacted]')
     .replace(/(\b[\w-]*(?:token|auth|key|secret|password|credential|authorization)[\w-]*\s*[=:]\s*)[^\s;&]+/gi, '$1[redacted]')
+}
+
+function safeRuntimeEndpointDisplay(value: string): string {
+  try {
+    const endpoint = new URL(value)
+    return endpoint.origin
+  } catch {
+    return safeRuntimeMessage(value)
+  }
+}
+
+function runtimeEndpointDisplay(runtime: CodexRuntime): string {
+  const endpointDisplay = runtime.endpointDisplay?.trim()
+  if (endpointDisplay) return safeRuntimeEndpointDisplay(endpointDisplay)
+  if (runtime.endpointConfigured === true) return 'Endpoint 已配置'
+  return runtime.endpointConfigured === false ? 'Endpoint 未配置' : 'Endpoint 配置受保护'
 }
 
 function rateLimitStateLabel(snapshot: CodexRuntimeRateLimits): string {
@@ -988,6 +1329,7 @@ watch(() => props.workerId, () => {
   latestListRequestSequence = ++listRequestSequence
   localMutationSequence++
   runtimes.value = []
+  endpoints.value = []
   for (const key of Object.keys(drafts)) delete drafts[key]
   refreshingKeys.clear()
   savingKeys.clear()
@@ -995,19 +1337,25 @@ watch(() => props.workerId, () => {
   rateLimitLoadingKeys.clear()
   rateLimitErrorKeys.clear()
   rateLimitRequestsInFlight.clear()
+  syncingEndpointIds.clear()
+  deletingEndpointIds.clear()
   latestRateLimitRequestByKey.clear()
   for (const key of Object.keys(rateLimitsByRuntime)) delete rateLimitsByRuntime[key]
   resetRegistration()
+  resetEndpointEditor()
+  showEndpointEditor.value = false
   showRegistration.value = false
   registering.value = false
   loadFailed.value = false
   loading.value = false
   void loadRuntimes(false, true, true)
+  void loadEndpoints()
 }, { immediate: true })
 
 onMounted(() => {
   autoRefreshTimer = setInterval(() => {
     void loadRuntimes(true)
+    void loadEndpoints(true)
   }, 30_000)
 })
 
@@ -1026,6 +1374,32 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 12px;
   margin: 4px 0 18px;
+}
+
+.endpoint-section-header {
+  margin-top: 2px;
+}
+
+.endpoint-editor {
+  margin-top: -4px;
+}
+
+.endpoint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.endpoint-row {
+  padding: 10px 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.endpoint-message {
+  display: inline-flex;
+  margin-top: 6px;
 }
 
 .runtime-section-header,

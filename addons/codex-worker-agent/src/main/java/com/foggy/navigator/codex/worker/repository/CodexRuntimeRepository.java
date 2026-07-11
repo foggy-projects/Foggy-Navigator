@@ -30,6 +30,8 @@ public interface CodexRuntimeRepository extends JpaRepository<CodexRuntimeEntity
     List<CodexRuntimeEntity> findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
             String workerId, String runtimeType);
 
+    List<CodexRuntimeEntity> findByEndpointIdOrderByRevisionDesc(String endpointId);
+
     @Query("select coalesce(max(runtime.revision), 0) from CodexRuntimeEntity runtime "
             + "where runtime.runtimeId = :runtimeId")
     Integer findMaxRevision(@Param("runtimeId") String runtimeId);

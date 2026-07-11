@@ -12,6 +12,10 @@ public class CodexRuntimeDTO {
     private Integer revision;
     private String workerId;
     private String runtimeType;
+    private String runtimeSource;
+    private String endpointId;
+    private String reportedRuntimeId;
+    private Integer reportedRuntimeRevision;
     private Boolean endpointConfigured;
     private String endpointDisplay;
     private String instanceId;
