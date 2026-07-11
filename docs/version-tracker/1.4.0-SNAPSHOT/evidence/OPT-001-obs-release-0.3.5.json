@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "opt-001-obs-release-0.3.5",
+  "generatedAtUtc": "2026-07-11T13:51:00Z",
+  "scope": "public-node18-candidate-validation-regression",
+  "status": "PASSED",
+  "release": {
+    "product": "codex-app-server-worker",
+    "version": "0.3.5",
+    "archive": "codex-app-server-worker-0.3.5.zip",
+    "sha256": "9b30dcffec603f55c5faa7ea322ac1f42e9e5fb094467f051e337ff9e2c90c73",
+    "bytes": 1805254,
+    "sourceCommit": "cfc5f5217c2adc72701fc44a65c908aed4329a46",
+    "gitDirty": false,
+    "buildTimeUtc": "2026-07-11T13:48:45Z"
+  },
+  "obs": {
+    "bucket": "obs://obs-fe55/codex-app-server-worker",
+    "baseUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker",
+    "latestUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/latest.json",
+    "linuxInstallerUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh",
+    "publisherRemoteArchiveByteAndSha256Verification": true,
+    "publisherRemoteBootstrapByteVerification": true,
+    "latestUploadedLast": true
+  },
+  "tests": {
+    "releaseCommandWindows": { "total": 250, "passed": 243, "skipped": 7, "failed": 0 },
+    "releaseTooling": { "passed": 11, "failed": 0 },
+    "linuxNode18SourceSchema": "passed",
+    "linuxNode18SourceBuild": "passed",
+    "linuxNode18PublicArchiveSha256": "passed",
+    "linuxNode18PublicArchiveSchema": "passed",
+    "linuxNode18PublicArchiveBuild": "passed",
+    "schemaDigest": "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f",
+    "workerTypecheck": "passed",
+    "workerBuild": "passed"
+  },
+  "observations": [
+    "The reporting host completed all tests on 0.3.4 before failing at verify:schema under Node 18.19.1.",
+    "Both verify-app-server-schema.mjs and clean.mjs now use fileURLToPath(import.meta.url), which is supported by Node 18.",
+    "This release publication does not approve P3 production routing or contribute task, duration, or rotation samples."
+  ]
+}
