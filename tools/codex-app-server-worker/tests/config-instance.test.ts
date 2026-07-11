@@ -56,6 +56,24 @@ test('built-in Ultra and Max aliases cannot be silently downgraded', () => {
   assert.equal(accepted.modelAliases['custom-review'], 'gpt-5.6-sol:medium')
 })
 
+test('custom aliases cannot target the retired Mini model', () => {
+  for (const target of ['gpt-5.4-mini', 'GPT-5.4-MINI:high']) {
+    assert.throws(() => createConfig({
+      ...process.env,
+      CODEX_MODEL_ALIASES: JSON.stringify({ 'retired-mini': target }),
+    }), /cannot target retired model gpt-5\.4-mini: retired-mini/)
+  }
+})
+
+test('default model cannot target the retired Mini model', () => {
+  for (const target of ['gpt-5.4-mini', 'GPT-5.4-MINI:high']) {
+    assert.throws(() => createConfig({
+      ...process.env,
+      CODEX_DEFAULT_MODEL: target,
+    }), /CODEX_DEFAULT_MODEL cannot target retired model gpt-5\.4-mini/)
+  }
+})
+
 test('concurrency cannot exceed the worst-case single-lane pool capacity', () => {
   assert.throws(() => createConfig({
     ...process.env,

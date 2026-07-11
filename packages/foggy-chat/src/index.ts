@@ -11,6 +11,8 @@ export type {
   ErrorPayload,
   TaskCompletedPayload,
   ConfirmationRequestPayload,
+  UserQuestionAnswer,
+  UserQuestionAnswers,
 } from './types/aip'
 export type { EventAdapter } from './types/adapter'
 export type {

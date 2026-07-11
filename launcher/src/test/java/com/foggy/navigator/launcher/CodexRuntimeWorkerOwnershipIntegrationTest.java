@@ -8,6 +8,7 @@ import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
 import com.foggy.navigator.claude.worker.spi.ClaudeWorkerFacadeImpl;
 import com.foggy.navigator.codex.worker.controller.CodexRuntimeController;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeAvailabilityDTO;
+import com.foggy.navigator.codex.worker.service.CodexRuntimeRateLimitsService;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
@@ -46,6 +47,8 @@ class CodexRuntimeWorkerOwnershipIntegrationTest {
     private UserAuthService userAuthService;
     @Mock
     private CodexRuntimeRegistryService runtimeRegistryService;
+    @Mock
+    private CodexRuntimeRateLimitsService runtimeRateLimitsService;
 
     private CodexRuntimeController controller;
 
@@ -61,7 +64,7 @@ class CodexRuntimeWorkerOwnershipIntegrationTest {
                 new ObjectMapper(),
                 Runnable::run
         );
-        controller = new CodexRuntimeController(runtimeRegistryService, workerFacade);
+        controller = new CodexRuntimeController(runtimeRegistryService, runtimeRateLimitsService, workerFacade);
 
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
         worker.setWorkerId("worker-1");

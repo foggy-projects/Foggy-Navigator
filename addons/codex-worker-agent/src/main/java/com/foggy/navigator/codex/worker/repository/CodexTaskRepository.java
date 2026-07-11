@@ -33,6 +33,9 @@ public interface CodexTaskRepository extends JpaRepository<CodexTaskEntity, Long
     boolean existsByCodexThreadIdAndWorkerIdAndUserIdAndStatus(
             String codexThreadId, String workerId, String userId, String status);
 
+    boolean existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
+            String codexThreadId, String workerId, String userId, List<String> statuses);
+
     Optional<CodexTaskEntity> findFirstByCodexThreadIdAndWorkerIdAndUserIdOrderByCreatedAtDesc(
             String codexThreadId, String workerId, String userId);
 

@@ -252,7 +252,7 @@ public class TaskDispatchFacade {
         if (sessionTaskRepository != null) {
             List<DispatchTaskDTO> tasks = toDispatchTaskDTOs(
                     sessionTaskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
-                            userId, List.of("RUNNING", "AWAITING_PERMISSION"))).stream()
+                            userId, List.of("RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT"))).stream()
                     .sorted((left, right) -> compareNullableTime(right.getCreatedAt(), left.getCreatedAt()))
                     .toList();
             if (!tasks.isEmpty()) {

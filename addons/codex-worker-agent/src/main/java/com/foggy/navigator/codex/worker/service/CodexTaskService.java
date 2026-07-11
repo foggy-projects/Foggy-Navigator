@@ -74,6 +74,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private static final String CODEX_ULTRA_ALIAS = "codex-ultra";
     private static final String CODEX_LATEST_MAX = "codex-latest:max";
     private static final String CODEX_LATEST_ULTRA = "codex-latest:ultra";
+    private static final String USER_INPUT_STATE_KEY = "codexPendingInteraction";
+    private static final String USER_INPUT_METHOD = "item/tool/requestUserInput";
+    private static final int MAX_USER_INPUT_QUESTIONS = 3;
     private static final Set<String> GPT_5_6_SOL_MAX_GRANTS = Set.of(
             CODEX_MAX_ALIAS, "gpt-5.6-sol:max");
     private static final Set<String> GPT_5_6_SOL_ULTRA_GRANTS = Set.of(
@@ -81,6 +84,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
             TaskQueryCapability.CREATE_TASK_DIRECT,
             TaskQueryCapability.RESUME_TASK,
+            TaskQueryCapability.RESPOND_TO_TASK,
             TaskQueryCapability.CANCEL_TASK,
             TaskQueryCapability.DELETE_TASK,
             TaskQueryCapability.RESYNC_TASK,
@@ -201,8 +205,9 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 form.getCodexThreadId(), form.getWorkerId(), userId)) {
             throw new IllegalArgumentException("Codex 会话不存在或不属于该 Worker: " + form.getCodexThreadId());
         }
-        if (taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatus(
-                form.getCodexThreadId(), form.getWorkerId(), userId, "RUNNING")) {
+        if (taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
+                form.getCodexThreadId(), form.getWorkerId(), userId,
+                List.of("RUNNING", "AWAITING_INPUT"))) {
             throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
         }
 
@@ -484,7 +489,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     public void cancelTaskDirect(String taskId, String userId) {
         CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-        if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())) {
+        if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())
+                || "AWAITING_INPUT".equals(entity.getStatus())) {
             abortTask(taskId);
         }
     }
@@ -499,7 +505,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     public void reconnectTask(String taskId, String userId) {
         CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-        if (!"RUNNING".equals(entity.getStatus())) {
+        if (!"RUNNING".equals(entity.getStatus()) && !"AWAITING_INPUT".equals(entity.getStatus())) {
             return;
         }
         streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
@@ -509,8 +515,220 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      * 检查指定 Codex 会话是否有正在运行的任务（并发保护）
      */
     public boolean hasRunningTask(String codexThreadId, String workerId, String userId) {
-        return taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatus(
-                codexThreadId, workerId, userId, "RUNNING");
+        return taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
+                codexThreadId, workerId, userId, List.of("RUNNING", "AWAITING_INPUT"));
+    }
+
+    /** Registers the sanitized app-server requestUserInput projection before it is acknowledged. */
+    @Transactional
+    public UserInputRegistration registerPendingUserInput(String taskId, Map<String, Object> projection) {
+        requireUserInputPersistence();
+        CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+            throw interactionError("CODEX_USER_INPUT_RUNTIME_UNSUPPORTED");
+        }
+        if (isTerminalStatus(entity.getStatus())) {
+            return UserInputRegistration.ignored();
+        }
+
+        Map<String, Object> pending = sanitizePendingUserInput(entity, projection);
+        String requestId = externalRequestToken(taskId, pending.get("request_id"));
+        SessionTaskEntity sessionTask = requireSessionTask(entity);
+        Map<String, Object> existing = pendingUserInput(sessionTask);
+        if (!existing.isEmpty()) {
+            String existingState = stringValue(existing.get("state"));
+            if (sameWireRequestId(pending.get("request_id"), existing.get("request_id"))) {
+                if ("RESOLVED".equals(existingState)) {
+                    return UserInputRegistration.ignored();
+                }
+                if (!"PENDING".equals(existingState)) {
+                    throw interactionError("CODEX_USER_INPUT_STATE_INVALID");
+                }
+                if (!samePendingUserInput(existing, pending)) {
+                    throw interactionError("CODEX_USER_INPUT_REPLAY_MISMATCH");
+                }
+            } else if ("PENDING".equals(existingState)) {
+                throw interactionError("CODEX_USER_INPUT_OVERLAP");
+            }
+        }
+
+        pending.put("state", "PENDING");
+        savePendingUserInput(sessionTask, entity, pending);
+        String previousStatus = entity.getStatus();
+        if (entity.getCodexThreadId() == null || entity.getCodexThreadId().isBlank()) {
+            entity.setCodexThreadId(stringValue(pending.get("thread_id")));
+        }
+        entity.setStatus("AWAITING_INPUT");
+        entity.setErrorMessage(null);
+        entity.setLastAliveAt(LocalDateTime.now());
+        persistTask(entity);
+        if (!"AWAITING_INPUT".equals(previousStatus)) {
+            publishStatusChange(entity, previousStatus);
+        }
+        return new UserInputRegistration(true, requestId, confirmationPayload(taskId, pending));
+    }
+
+    /**
+     * Sends one response to the exact bound runtime. The task row lock serializes concurrent replies;
+     * answers are never written to task state.
+     */
+    @Override
+    @Transactional
+    public void respondToTask(String taskId, String userId, Map<String, Object> response) {
+        requireUserInputPersistence();
+        if (response == null) {
+            throw new IllegalArgumentException("response is required");
+        }
+        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserIdForUpdate(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!"AWAITING_INPUT".equals(entity.getStatus())) {
+            throw interactionError("CODEX_USER_INPUT_NOT_PENDING");
+        }
+        if (!CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
+            throw interactionError("CODEX_USER_INPUT_RUNTIME_UNSUPPORTED");
+        }
+
+        SessionTaskEntity sessionTask = requireSessionTask(entity);
+        Map<String, Object> pending = pendingUserInput(sessionTask);
+        if (!"PENDING".equals(stringValue(pending.get("state")))) {
+            throw interactionError("CODEX_USER_INPUT_NOT_PENDING");
+        }
+        String requestId = externalRequestToken(taskId, pending.get("request_id"));
+        Object suppliedRequestId = firstNonNull(
+                response.get("requestId"), response.get("request_id"), response.get("permissionId"));
+        if (!(suppliedRequestId instanceof String suppliedToken) || !requestId.equals(suppliedToken)) {
+            throw interactionError("CODEX_USER_INPUT_REQUEST_MISMATCH");
+        }
+
+        NormalizedUserInputAnswers normalized = normalizeUserInputAnswers(pending, response.get("answers"));
+        CodexRuntimeBinding binding = bindingFromTask(entity, entity.getWorkerId());
+        if (binding == null || binding.getRuntimeType() != CodexRuntimeType.APP_SERVER
+                || binding.getInstanceId() == null || binding.getInstanceId().isBlank()) {
+            throw interactionError("CODEX_USER_INPUT_RUNTIME_AFFINITY_LOST");
+        }
+        String workerTaskId = stringValue(entity.getWorkerTaskId());
+        if (workerTaskId == null) {
+            throw interactionError("CODEX_USER_INPUT_REMOTE_TASK_MISSING");
+        }
+
+        CodexWorkerClient client = clientFactory.getOrCreate(
+                "runtime:" + binding.getRuntimeId() + ":" + binding.getRuntimeRevision(),
+                binding.getEndpointUrl(), binding.getAuthToken(), binding.getInstanceId());
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("request_id", pending.get("request_id"));
+        requestBody.put("answers", normalized.workerAnswers());
+
+        Map<String, Object> remoteResult = null;
+        boolean alreadyResponded = false;
+        try {
+            remoteResult = client.respondToTask(workerTaskId, requestBody).block(Duration.ofSeconds(15));
+        } catch (RuntimeException error) {
+            CodexWorkerClient.UserInputResponseException responseError = findUserInputResponseError(error);
+            if (responseError != null && "USER_INPUT_ALREADY_RESPONDED".equals(responseError.getCode())) {
+                alreadyResponded = true;
+            } else if (responseError != null) {
+                throw interactionError(responseError.getCode(), error);
+            } else if (findRuntimeProofError(error) != null) {
+                throw interactionError("CODEX_USER_INPUT_RUNTIME_AFFINITY_LOST", error);
+            } else {
+                throw interactionError("CODEX_USER_INPUT_RESPONSE_UNKNOWN", error);
+            }
+        }
+        if (!alreadyResponded) {
+            validateUserInputResponse(remoteResult, workerTaskId, pending.get("request_id"));
+        }
+
+        markPendingResolved(sessionTask, entity, pending, "answered");
+        String previousStatus = entity.getStatus();
+        entity.setStatus("RUNNING");
+        entity.setErrorMessage(null);
+        entity.setLastAliveAt(LocalDateTime.now());
+        persistTask(entity);
+        publishStatusChange(entity, previousStatus);
+        streamRelay.publishUserInputResponse(
+                entity.getSessionId(), resolveProviderType(entity), entity.getTaskId(), requestId,
+                "allow", normalized.containsSecret() ? null : normalized.historyAnswers());
+    }
+
+    /** Applies Worker-side clearing/auto-resolution without reopening a completed request. */
+    @Transactional
+    public UserInputResolution resolvePendingUserInput(String taskId, Map<String, Object> resolution) {
+        requireUserInputPersistence();
+        CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
+        if (entity == null) {
+            return UserInputResolution.ignored();
+        }
+        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(taskId).orElse(null);
+        if (sessionTask == null) {
+            return UserInputResolution.ignored();
+        }
+        Map<String, Object> pending = pendingUserInput(sessionTask);
+        if (pending.isEmpty() || "RESOLVED".equals(stringValue(pending.get("state")))) {
+            return UserInputResolution.ignored();
+        }
+        String requestId = externalRequestToken(taskId, pending.get("request_id"));
+        Object resolvedRequestId = resolution != null
+                ? firstNonNull(resolution.get("request_id"), resolution.get("requestId")) : null;
+        if (resolvedRequestId != null
+                && !sameWireRequestId(pending.get("request_id"), resolvedRequestId)) {
+            log.warn("Ignoring stale Codex user input resolution: taskId={}, requestId={}", taskId, requestId);
+            return UserInputResolution.ignored();
+        }
+        String reason = resolution != null ? stringValue(resolution.get("reason")) : null;
+        if (reason == null || !Set.of("answered", "cleared", "auto_resolved").contains(reason)) {
+            reason = "cleared";
+        }
+        markPendingResolved(sessionTask, entity, pending, reason);
+        String previousStatus = entity.getStatus();
+        if ("AWAITING_INPUT".equals(previousStatus)) {
+            entity.setStatus("RUNNING");
+            entity.setErrorMessage(null);
+            entity.setLastAliveAt(LocalDateTime.now());
+            persistTask(entity);
+            publishStatusChange(entity, previousStatus);
+        }
+        return new UserInputResolution(true, requestId, reason);
+    }
+
+    /** Closes an orphaned card before a terminal Worker event is projected. */
+    @Transactional
+    public UserInputResolution resolvePendingUserInputForTerminal(String taskId) {
+        requireUserInputPersistence();
+        CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
+        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(taskId).orElse(null);
+        if (entity == null || sessionTask == null) {
+            return UserInputResolution.ignored();
+        }
+        Map<String, Object> pending = pendingUserInput(sessionTask);
+        if (!"PENDING".equals(stringValue(pending.get("state")))) {
+            return UserInputResolution.ignored();
+        }
+        String requestId = externalRequestToken(taskId, pending.get("request_id"));
+        markPendingResolved(sessionTask, entity, pending, "cleared");
+        return new UserInputResolution(true, requestId, "cleared");
+    }
+
+    public record UserInputRegistration(boolean shouldPublish, String requestId,
+                                        Map<String, Object> confirmationPayload) {
+        private static UserInputRegistration ignored() {
+            return new UserInputRegistration(false, null, Map.of());
+        }
+    }
+
+    public record UserInputResolution(boolean shouldPublish, String requestId, String reason) {
+        private static UserInputResolution ignored() {
+            return new UserInputResolution(false, null, null);
+        }
+
+        public String decision() {
+            return "answered".equals(reason) ? "allow" : "deny";
+        }
+    }
+
+    private record NormalizedUserInputAnswers(Map<String, List<String>> workerAnswers,
+                                              Map<String, String> historyAnswers,
+                                              boolean containsSecret) {
     }
 
     /**
@@ -808,7 +1026,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     public List<DispatchTaskDTO> listActiveDispatchTasksForProvider(String userId, String providerType) {
-        return taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, List.of("RUNNING", "AWAITING_PERMISSION")).stream()
+        return taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
+                        userId, List.of("RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT")).stream()
                 .filter(entity -> matchesProvider(entity, providerType))
                 .map(this::toDispatchDTO)
                 .toList();
@@ -1104,7 +1323,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             return "PROCESSING";
         }
         if ("COMPLETED".equals(taskStatus) || "FAILED".equals(taskStatus)
-                || "ABORTED".equals(taskStatus) || "AWAITING_PERMISSION".equals(taskStatus)) {
+                || "ABORTED".equals(taskStatus) || "AWAITING_PERMISSION".equals(taskStatus)
+                || "AWAITING_INPUT".equals(taskStatus)) {
             return "AWAITING_REPLY";
         }
         return null;
@@ -1474,6 +1694,370 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return text.isBlank() ? null : text;
     }
 
+    private void requireUserInputPersistence() {
+        if (sessionTaskRepository == null) {
+            throw interactionError("CODEX_USER_INPUT_STATE_UNAVAILABLE");
+        }
+        if (runtimeRegistryService == null) {
+            throw interactionError("CODEX_USER_INPUT_RUNTIME_AFFINITY_LOST");
+        }
+    }
+
+    private SessionTaskEntity requireSessionTask(CodexTaskEntity entity) {
+        return sessionTaskRepository.findByTaskId(entity.getTaskId())
+                .orElseThrow(() -> interactionError("CODEX_USER_INPUT_STATE_MISSING"));
+    }
+
+    private Map<String, Object> pendingUserInput(SessionTaskEntity sessionTask) {
+        Object value = ProviderStateCodec.parseObject(sessionTask.getTaskStateJson()).get(USER_INPUT_STATE_KEY);
+        return objectMap(value);
+    }
+
+    private void savePendingUserInput(SessionTaskEntity sessionTask, CodexTaskEntity entity,
+                                      Map<String, Object> pending) {
+        sessionTask.setTaskStateJson(ProviderStateCodec.mergeTaskValue(
+                sessionTask.getTaskStateJson(), resolveProviderType(entity), USER_INPUT_STATE_KEY, pending));
+        sessionTaskRepository.save(sessionTask);
+    }
+
+    private void markPendingResolved(SessionTaskEntity sessionTask, CodexTaskEntity entity,
+                                     Map<String, Object> pending, String reason) {
+        Map<String, Object> resolved = new LinkedHashMap<>(pending);
+        resolved.put("state", "RESOLVED");
+        resolved.put("resolved_reason", reason);
+        resolved.put("resolved_at", LocalDateTime.now().toString());
+        savePendingUserInput(sessionTask, entity, resolved);
+    }
+
+    private Map<String, Object> sanitizePendingUserInput(CodexTaskEntity entity,
+                                                         Map<String, Object> projection) {
+        Map<String, Object> source = objectMap(projection != null
+                ? projection.get("pending_interaction") : null);
+        if (source.isEmpty()) {
+            source = projection != null ? new LinkedHashMap<>(projection) : Map.of();
+        }
+        if (!Integer.valueOf(1).equals(integerValue(source.get("contract_version")))) {
+            throw interactionError("CODEX_USER_INPUT_CONTRACT_UNSUPPORTED");
+        }
+        String method = boundedRequiredString(source.get("method"), "method", 128);
+        if (!USER_INPUT_METHOD.equals(method)) {
+            throw interactionError("CODEX_USER_INPUT_METHOD_UNSUPPORTED");
+        }
+        Object requestId = sanitizeRequestId(source.get("request_id"));
+        String threadId = boundedRequiredString(source.get("thread_id"), "thread_id", 256);
+        String turnId = boundedRequiredString(source.get("turn_id"), "turn_id", 256);
+        String itemId = boundedRequiredString(source.get("item_id"), "item_id", 256);
+        String runtimeInstanceId = boundedRequiredString(
+                source.get("runtime_instance_id"), "runtime_instance_id", 128);
+        if (entity.getCodexThreadId() != null && !entity.getCodexThreadId().isBlank()
+                && !entity.getCodexThreadId().equals(threadId)) {
+            throw interactionError("CODEX_USER_INPUT_THREAD_MISMATCH");
+        }
+
+        Object rawQuestions = source.get("questions");
+        if (!(rawQuestions instanceof List<?> questions)
+                || questions.isEmpty() || questions.size() > MAX_USER_INPUT_QUESTIONS) {
+            throw interactionError("CODEX_USER_INPUT_QUESTIONS_INVALID");
+        }
+        List<Map<String, Object>> sanitizedQuestions = new ArrayList<>();
+        Set<String> questionIds = new LinkedHashSet<>();
+        for (Object rawQuestion : questions) {
+            Map<String, Object> question = objectMap(rawQuestion);
+            String id = boundedRequiredString(question.get("id"), "question.id", 256);
+            if (!questionIds.add(id)) {
+                throw interactionError("CODEX_USER_INPUT_QUESTION_ID_DUPLICATE");
+            }
+            Map<String, Object> sanitized = new LinkedHashMap<>();
+            sanitized.put("id", id);
+            sanitized.put("header", boundedRequiredString(question.get("header"), "question.header", 64));
+            sanitized.put("question", boundedRequiredDisplayString(
+                    question.get("question"), "question.question", 4_096));
+            List<Map<String, Object>> options = sanitizeUserInputOptions(question.get("options"));
+            if (!options.isEmpty()) {
+                sanitized.put("options", options);
+            }
+            sanitized.put("is_other", booleanValue(question.get("is_other")));
+            sanitized.put("is_secret", booleanValue(question.get("is_secret")));
+            sanitizedQuestions.add(sanitized);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("contract_version", 1);
+        result.put("request_id", requestId);
+        result.put("method", method);
+        result.put("thread_id", threadId);
+        result.put("turn_id", turnId);
+        result.put("item_id", itemId);
+        result.put("questions", sanitizedQuestions);
+        Integer autoResolutionMs = boundedAutoResolutionMs(source.get("auto_resolution_ms"));
+        if (autoResolutionMs != null) {
+            result.put("auto_resolution_ms", autoResolutionMs);
+        }
+        result.put("runtime_instance_id", runtimeInstanceId);
+        String createdAt = boundedOptionalString(source.get("created_at"), "created_at", 64);
+        if (createdAt != null) {
+            result.put("created_at", createdAt);
+        }
+        return result;
+    }
+
+    private List<Map<String, Object>> sanitizeUserInputOptions(Object value) {
+        if (value == null) {
+            return List.of();
+        }
+        if (!(value instanceof List<?> options) || options.size() > 20) {
+            throw interactionError("CODEX_USER_INPUT_OPTIONS_INVALID");
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object rawOption : options) {
+            Map<String, Object> option = objectMap(rawOption);
+            if (option.isEmpty() && rawOption instanceof String label) {
+                option = Map.of("label", label);
+            }
+            Map<String, Object> sanitized = new LinkedHashMap<>();
+            sanitized.put("label", boundedRequiredString(option.get("label"), "option.label", 256));
+            sanitized.put("description", boundedAllowEmptyString(
+                    option.get("description"), "option.description", 2_048));
+            result.add(sanitized);
+        }
+        return result;
+    }
+
+    private Map<String, Object> confirmationPayload(String taskId, Map<String, Object> pending) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("requestId", externalRequestToken(taskId, pending.get("request_id")));
+        payload.put("interactionType", "user_input");
+        payload.put("method", pending.get("method"));
+        List<Map<String, Object>> projectedQuestions = new ArrayList<>();
+        Object rawQuestions = pending.get("questions");
+        if (rawQuestions instanceof List<?> questions) {
+            for (Object rawQuestion : questions) {
+                Map<String, Object> question = objectMap(rawQuestion);
+                Map<String, Object> projected = new LinkedHashMap<>();
+                projected.put("id", question.get("id"));
+                projected.put("header", question.get("header"));
+                projected.put("question", question.get("question"));
+                if (question.containsKey("options")) {
+                    projected.put("options", question.get("options"));
+                }
+                projected.put("isOther", booleanValue(question.get("is_other")));
+                projected.put("isSecret", booleanValue(question.get("is_secret")));
+                projected.put("multiSelect", false);
+                projectedQuestions.add(projected);
+            }
+        }
+        payload.put("questions", projectedQuestions);
+        if (pending.containsKey("auto_resolution_ms")) {
+            payload.put("autoResolutionMs", pending.get("auto_resolution_ms"));
+        }
+        return payload;
+    }
+
+    private NormalizedUserInputAnswers normalizeUserInputAnswers(Map<String, Object> pending,
+                                                                  Object rawAnswers) {
+        if (!(rawAnswers instanceof Map<?, ?> answerMap)) {
+            throw interactionError("CODEX_USER_INPUT_ANSWERS_INVALID");
+        }
+        Map<String, Boolean> expected = new LinkedHashMap<>();
+        Object rawQuestions = pending.get("questions");
+        if (rawQuestions instanceof List<?> questions) {
+            for (Object rawQuestion : questions) {
+                Map<String, Object> question = objectMap(rawQuestion);
+                expected.put(stringValue(question.get("id")), booleanValue(question.get("is_secret")));
+            }
+        }
+        Map<String, Object> supplied = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : answerMap.entrySet()) {
+            if (!(entry.getKey() instanceof String key) || supplied.put(key, entry.getValue()) != null) {
+                throw interactionError("CODEX_USER_INPUT_ANSWERS_INVALID");
+            }
+        }
+        if (!supplied.keySet().equals(expected.keySet())) {
+            throw interactionError("CODEX_USER_INPUT_QUESTION_MISMATCH");
+        }
+
+        Map<String, List<String>> workerAnswers = new LinkedHashMap<>();
+        Map<String, String> historyAnswers = new LinkedHashMap<>();
+        boolean containsSecret = false;
+        for (Map.Entry<String, Boolean> question : expected.entrySet()) {
+            String answer = singleUserInputAnswer(supplied.get(question.getKey()));
+            workerAnswers.put(question.getKey(), List.of(answer));
+            historyAnswers.put(question.getKey(), answer);
+            containsSecret |= question.getValue();
+        }
+        return new NormalizedUserInputAnswers(workerAnswers, historyAnswers, containsSecret);
+    }
+
+    private String singleUserInputAnswer(Object value) {
+        String answer;
+        if (value instanceof String text) {
+            answer = text;
+        } else if (value instanceof Collection<?> values && values.size() == 1
+                && values.iterator().next() instanceof String text) {
+            answer = text;
+        } else {
+            throw interactionError("CODEX_USER_INPUT_ANSWER_CARDINALITY_INVALID");
+        }
+        if (answer.isEmpty() || answer.length() > 16_384) {
+            throw interactionError("CODEX_USER_INPUT_ANSWER_INVALID");
+        }
+        return answer;
+    }
+
+    private void validateUserInputResponse(Map<String, Object> result, String workerTaskId,
+                                           Object wireRequestId) {
+        if (result == null
+                || !workerTaskId.equals(stringValue(result.get("task_id")))
+                || !"running".equalsIgnoreCase(stringValue(result.get("status")))
+                || !sameWireRequestId(wireRequestId, result.get("request_id"))) {
+            throw interactionError("CODEX_USER_INPUT_RESPONSE_INVALID");
+        }
+    }
+
+    private CodexWorkerClient.UserInputResponseException findUserInputResponseError(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof CodexWorkerClient.UserInputResponseException responseError) {
+                return responseError;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
+    private CodexWorkerClient.RuntimeInstanceProofException findRuntimeProofError(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof CodexWorkerClient.RuntimeInstanceProofException proofError) {
+                return proofError;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
+    private Object sanitizeRequestId(Object value) {
+        if (value instanceof String text && !text.isBlank() && text.length() <= 256
+                && text.chars().noneMatch(Character::isISOControl)) {
+            return text;
+        }
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            long number = ((Number) value).longValue();
+            if (number >= -9_007_199_254_740_991L && number <= 9_007_199_254_740_991L) {
+                return number;
+            }
+        }
+        throw interactionError("CODEX_USER_INPUT_REQUEST_ID_INVALID");
+    }
+
+    private Integer boundedAutoResolutionMs(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof Byte || value instanceof Short
+                || value instanceof Integer || value instanceof Long)) {
+            throw interactionError("CODEX_USER_INPUT_AUTO_RESOLUTION_INVALID");
+        }
+        long milliseconds = ((Number) value).longValue();
+        if (milliseconds < 60_000L || milliseconds > 240_000L) {
+            throw interactionError("CODEX_USER_INPUT_AUTO_RESOLUTION_INVALID");
+        }
+        return (int) milliseconds;
+    }
+
+    private String externalRequestToken(String taskId, Object value) {
+        Object sanitized = sanitizeRequestId(value);
+        String typed = sanitized instanceof String text ? "string:" + text : "number:" + sanitized;
+        return "task:" + taskId + ":" + typed;
+    }
+
+    private boolean sameWireRequestId(Object left, Object right) {
+        try {
+            Object normalizedLeft = sanitizeRequestId(left);
+            Object normalizedRight = sanitizeRequestId(right);
+            return normalizedLeft.getClass().equals(normalizedRight.getClass())
+                    && normalizedLeft.equals(normalizedRight);
+        } catch (IllegalStateException ignored) {
+            return false;
+        }
+    }
+
+    private String boundedRequiredString(Object value, String field, int maxLength) {
+        String text = boundedOptionalString(value, field, maxLength);
+        if (text == null) {
+            throw interactionError("CODEX_USER_INPUT_FIELD_INVALID: " + field);
+        }
+        return text;
+    }
+
+    private String boundedOptionalString(Object value, String field, int maxLength) {
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof String text) || text.isBlank() || text.length() > maxLength
+                || text.chars().anyMatch(Character::isISOControl)) {
+            throw interactionError("CODEX_USER_INPUT_FIELD_INVALID: " + field);
+        }
+        return text;
+    }
+
+    private String boundedRequiredDisplayString(Object value, String field, int maxLength) {
+        if (!(value instanceof String text) || text.isBlank() || text.length() > maxLength
+                || text.chars().anyMatch(this::isUnsafeDisplayControl)) {
+            throw interactionError("CODEX_USER_INPUT_FIELD_INVALID: " + field);
+        }
+        return text;
+    }
+
+    private String boundedAllowEmptyString(Object value, String field, int maxLength) {
+        if (!(value instanceof String text) || text.length() > maxLength
+                || text.chars().anyMatch(this::isUnsafeDisplayControl)) {
+            throw interactionError("CODEX_USER_INPUT_FIELD_INVALID: " + field);
+        }
+        return text;
+    }
+
+    private boolean isUnsafeDisplayControl(int character) {
+        return Character.isISOControl(character)
+                && character != '\n' && character != '\r' && character != '\t';
+    }
+
+    private boolean samePendingUserInput(Map<String, Object> existing, Map<String, Object> incoming) {
+        Map<String, Object> existingContract = new LinkedHashMap<>(existing);
+        Map<String, Object> incomingContract = new LinkedHashMap<>(incoming);
+        for (String transientKey : List.of(
+                "state", "resolved_reason", "resolved_at", "request_id")) {
+            existingContract.remove(transientKey);
+            incomingContract.remove(transientKey);
+        }
+        return existingContract.equals(incomingContract);
+    }
+
+    private boolean booleanValue(Object value) {
+        return value instanceof Boolean bool && bool;
+    }
+
+    private Map<String, Object> objectMap(Object value) {
+        if (!(value instanceof Map<?, ?> raw)) {
+            return new LinkedHashMap<>();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        raw.forEach((key, entryValue) -> {
+            if (key != null) {
+                result.put(key.toString(), entryValue);
+            }
+        });
+        return result;
+    }
+
+    private IllegalStateException interactionError(String code) {
+        return new IllegalStateException(code);
+    }
+
+    private IllegalStateException interactionError(String code, Throwable cause) {
+        return new IllegalStateException(code, cause);
+    }
+
     private Integer integerValue(Object value) {
         if (value instanceof Number number) return number.intValue();
         if (value == null) return null;
@@ -1752,7 +2336,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (!userId.equals(task.getUserId())) {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
-        if ("RUNNING".equals(task.getStatus()) || "AWAITING_PERMISSION".equals(task.getStatus())) {
+        if ("RUNNING".equals(task.getStatus()) || "AWAITING_PERMISSION".equals(task.getStatus())
+                || "AWAITING_INPUT".equals(task.getStatus())) {
             throw new IllegalStateException("Cannot rewind a running task");
         }
 

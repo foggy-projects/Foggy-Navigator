@@ -43,7 +43,7 @@ test('validateQueryRequest rejects non-object bodies', () => {
 })
 
 test('validateModelString accepts bare model names and known reasoning levels', () => {
-  assert.equal(validateModelString('gpt-5.4-mini'), true)
+  assert.equal(validateModelString('gpt-5.3-codex-spark'), true)
   assert.equal(validateModelString('gpt-5.5:xhigh'), true)
   assert.equal(validateModelString('gpt-5.4:extra-high'), true)
   assert.equal(validateModelString('gpt-5.6-sol:max'), true)

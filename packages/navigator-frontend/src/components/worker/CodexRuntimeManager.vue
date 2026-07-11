@@ -113,7 +113,7 @@
         <div class="runtime-summary">
           <div class="runtime-identity">
             <div class="runtime-name-line">
-              <strong>{{ runtime.runtimeId }}</strong>
+              <strong :title="runtime.runtimeId">{{ runtime.runtimeId }}</strong>
               <span class="runtime-revision">rev {{ runtime.revision }}</span>
               <el-tag
                 size="small"
@@ -181,6 +181,96 @@
           <span>{{ runtimeStatusMessage(runtime) }}</span>
         </div>
 
+        <div
+          class="runtime-rate-limits"
+          :data-testid="`rate-limits-${runtimeKey(runtime)}`"
+        >
+          <div class="rate-limits-header">
+            <div class="rate-limits-title">
+              <span>ChatGPT 额度</span>
+              <el-tag
+                v-if="rateLimitSnapshot(runtime)"
+                size="small"
+                effect="plain"
+                :type="rateLimitStateTagType(rateLimitSnapshot(runtime)!)"
+              >
+                {{ rateLimitStateLabel(rateLimitSnapshot(runtime)!) }}
+              </el-tag>
+            </div>
+            <el-tooltip content="刷新额度" placement="top">
+              <el-button
+                text
+                circle
+                :icon="Refresh"
+                :loading="rateLimitLoadingKeys.has(runtimeKey(runtime))"
+                :aria-label="`刷新 ${runtime.runtimeId} 额度`"
+                @click="handleRateLimitRefresh(runtime)"
+              />
+            </el-tooltip>
+          </div>
+
+          <div
+            v-if="rateLimitLoadingKeys.has(runtimeKey(runtime)) && !rateLimitSnapshot(runtime)"
+            class="rate-limits-placeholder"
+            aria-live="polite"
+          >
+            正在同步额度…
+          </div>
+          <div
+            v-else-if="rateLimitErrorKeys.has(runtimeKey(runtime)) && !rateLimitSnapshot(runtime)"
+            class="rate-limits-placeholder rate-limits-error"
+            aria-live="polite"
+          >
+            额度暂不可用
+          </div>
+          <template v-else-if="rateLimitSnapshot(runtime)">
+            <div
+              v-if="rateLimitSnapshot(runtime)!.limits.length > 0"
+              class="rate-limit-buckets"
+            >
+              <div
+                v-for="(limit, limitIndex) in rateLimitSnapshot(runtime)!.limits"
+                :key="limit.limitId || limitIndex"
+                class="rate-limit-bucket"
+              >
+                <div class="rate-limit-bucket-name">
+                  {{ rateLimitName(limit, limitIndex) }}
+                </div>
+                <div class="rate-limit-windows">
+                  <div
+                    v-for="window in rateLimitWindows(limit)"
+                    :key="window.key"
+                    class="rate-limit-window"
+                  >
+                    <div class="rate-limit-window-meta">
+                      <span>{{ window.label }}</span>
+                      <strong>{{ window.value.usedPercent }}%</strong>
+                    </div>
+                    <el-progress
+                      :percentage="window.value.usedPercent"
+                      :stroke-width="6"
+                      :show-text="false"
+                      :color="rateLimitProgressColor(window.value.usedPercent)"
+                    />
+                    <span class="rate-limit-reset">
+                      {{ formatRateLimitReset(window.value.resetsAt) }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="rate-limits-placeholder">
+              {{ rateLimitEmptyMessage(rateLimitSnapshot(runtime)!) }}
+            </div>
+            <div
+              v-if="rateLimitSnapshot(runtime)!.observedAtEpochMs"
+              class="rate-limits-observed"
+            >
+              更新于 {{ formatEpochTime(rateLimitSnapshot(runtime)!.observedAtEpochMs) }}
+            </div>
+          </template>
+        </div>
+
         <div v-if="drafts[runtimeKey(runtime)]" class="runtime-routing-grid">
           <label class="runtime-control runtime-enabled-control">
             <span>启用</span>
@@ -220,12 +310,19 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Check, Plus, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
+  getCodexRuntimeRateLimits,
   listCodexRuntimes,
   refreshCodexRuntime,
   registerCodexRuntime,
   updateCodexRuntimeRouting,
 } from '@/api/codexRuntime'
-import type { CodexRuntime, CodexRuntimeRoutingPolicy } from '@/types/codexRuntime'
+import type {
+  CodexRuntime,
+  CodexRuntimeRateLimit,
+  CodexRuntimeRateLimits,
+  CodexRuntimeRateLimitWindow,
+  CodexRuntimeRoutingPolicy,
+} from '@/types/codexRuntime'
 import {
   CODEX_RUNTIME_POLICIES,
   isRoutingPolicyTransitionAllowed,
@@ -236,6 +333,7 @@ import {
   readinessTagType,
   routingPolicyOptionLabel,
   routingTransitionBlockReason,
+  runtimeInstanceKey,
   runtimeKey,
   shortDigest,
   supportsUltraCapability,
@@ -263,6 +361,9 @@ const showRegistration = ref(false)
 const registering = ref(false)
 const refreshingKeys = reactive(new Set<string>())
 const savingKeys = reactive(new Set<string>())
+const rateLimitsByRuntime = reactive<Record<string, CodexRuntimeRateLimits | undefined>>({})
+const rateLimitLoadingKeys = reactive(new Set<string>())
+const rateLimitErrorKeys = reactive(new Set<string>())
 const registration = reactive({
   runtimeId: '',
   endpointUrl: '',
@@ -276,6 +377,9 @@ let localMutationSequence = 0
 let workerGeneration = 0
 let unmounted = false
 const listRequestsInFlight = new Map<string, number>()
+let rateLimitRequestSequence = 0
+const latestRateLimitRequestByKey = new Map<string, number>()
+const rateLimitRequestsInFlight = new Map<string, number>()
 
 const readyUltraRuntimeCount = computed(() =>
   runtimes.value.filter(isUltraRuntimeAvailable).length,
@@ -324,12 +428,114 @@ function replaceRuntime(updated: CodexRuntime, preserveDirty = false): void {
   localMutationSequence++
   const key = runtimeKey(updated)
   const index = runtimes.value.findIndex((runtime) => runtimeKey(runtime) === key)
+  const previous = index >= 0 ? runtimes.value[index] : undefined
   if (index >= 0) {
     runtimes.value[index] = updated
   } else {
     runtimes.value.unshift(updated)
   }
   syncDraft(updated, preserveDirty)
+  if (previous && runtimeInstanceKey(previous) !== runtimeInstanceKey(updated)) {
+    invalidateRateLimitState(key)
+    void loadRuntimeRateLimits(updated)
+  }
+}
+
+function rateLimitSnapshot(runtime: CodexRuntime): CodexRuntimeRateLimits | undefined {
+  const snapshot = rateLimitsByRuntime[runtimeKey(runtime)]
+  if (snapshot && runtime.instanceId && snapshot.instanceId !== runtime.instanceId) return undefined
+  return snapshot
+}
+
+function invalidateRateLimitState(key: string): void {
+  delete rateLimitsByRuntime[key]
+  rateLimitErrorKeys.delete(key)
+  rateLimitLoadingKeys.delete(key)
+  latestRateLimitRequestByKey.delete(key)
+}
+
+function isCurrentRateLimitRequest(
+  runtime: CodexRuntime,
+  requestSequence: number,
+  workerId: string,
+  operationGeneration: number,
+): boolean {
+  const key = runtimeKey(runtime)
+  const instanceKey = runtimeInstanceKey(runtime)
+  return isCurrentWorkerOperation(workerId, operationGeneration)
+    && latestRateLimitRequestByKey.get(key) === requestSequence
+    && runtimes.value.some(candidate => runtimeInstanceKey(candidate) === instanceKey)
+}
+
+async function loadRuntimeRateLimits(
+  runtime: CodexRuntime,
+  refresh = false,
+  notify = false,
+  workerId = props.workerId,
+  operationGeneration = workerGeneration,
+): Promise<void> {
+  const key = runtimeKey(runtime)
+  const instanceKey = runtimeInstanceKey(runtime)
+  if (!refresh && (rateLimitRequestsInFlight.get(instanceKey) ?? 0) > 0) return
+
+  const requestSequence = ++rateLimitRequestSequence
+  latestRateLimitRequestByKey.set(key, requestSequence)
+  rateLimitRequestsInFlight.set(
+    instanceKey,
+    (rateLimitRequestsInFlight.get(instanceKey) ?? 0) + 1,
+  )
+  rateLimitLoadingKeys.add(key)
+  try {
+    const snapshot = await getCodexRuntimeRateLimits(runtime.runtimeId, runtime.revision, {
+      refresh,
+      suppressErrorMessage: true,
+    })
+    if (!isCurrentRateLimitRequest(
+      runtime, requestSequence, workerId, operationGeneration,
+    )) return
+    if (snapshot.runtimeId !== runtime.runtimeId
+      || snapshot.runtimeRevision !== runtime.revision
+      || (runtime.instanceId && snapshot.instanceId !== runtime.instanceId)) {
+      throw new Error('CODEX_RUNTIME_RATE_LIMITS_IDENTITY_MISMATCH')
+    }
+    rateLimitsByRuntime[key] = snapshot
+    rateLimitErrorKeys.delete(key)
+  } catch {
+    if (!isCurrentRateLimitRequest(
+      runtime, requestSequence, workerId, operationGeneration,
+    )) return
+    rateLimitErrorKeys.add(key)
+    const previous = rateLimitsByRuntime[key]
+    if (previous) {
+      rateLimitsByRuntime[key] = { ...previous, state: 'STALE', stale: true }
+    }
+    if (notify) ElMessage.error('额度刷新失败')
+  } finally {
+    const remaining = (rateLimitRequestsInFlight.get(instanceKey) ?? 1) - 1
+    if (remaining > 0) rateLimitRequestsInFlight.set(instanceKey, remaining)
+    else rateLimitRequestsInFlight.delete(instanceKey)
+    if (latestRateLimitRequestByKey.get(key) === requestSequence) {
+      rateLimitLoadingKeys.delete(key)
+    }
+  }
+}
+
+function handleRateLimitRefresh(runtime: CodexRuntime): void {
+  void loadRuntimeRateLimits(runtime, true, true)
+}
+
+function cleanupRateLimitState(loadedKeys: Set<string>): void {
+  for (const key of Object.keys(rateLimitsByRuntime)) {
+    if (!loadedKeys.has(key)) delete rateLimitsByRuntime[key]
+  }
+  for (const key of rateLimitErrorKeys) {
+    if (!loadedKeys.has(key)) rateLimitErrorKeys.delete(key)
+  }
+  for (const key of latestRateLimitRequestByKey.keys()) {
+    if (loadedKeys.has(key)) continue
+    latestRateLimitRequestByKey.delete(key)
+    rateLimitLoadingKeys.delete(key)
+  }
 }
 
 async function loadRuntimes(silent = false, preserveDirty = true, force = false): Promise<void> {
@@ -351,11 +557,25 @@ async function loadRuntimes(silent = false, preserveDirty = true, force = false)
       || mutationSequence !== localMutationSequence) return
 
     const loadedKeys = new Set(loaded.map(runtimeKey))
+    const previousRuntimeByKey = new Map(
+      runtimes.value.map(runtime => [runtimeKey(runtime), runtime] as const),
+    )
     for (const key of Object.keys(drafts)) {
       if (!loadedKeys.has(key)) delete drafts[key]
     }
     runtimes.value = loaded
     loaded.forEach((runtime) => syncDraft(runtime, preserveDirty))
+    loaded.forEach((runtime) => {
+      const key = runtimeKey(runtime)
+      const previous = previousRuntimeByKey.get(key)
+      if (previous && runtimeInstanceKey(previous) !== runtimeInstanceKey(runtime)) {
+        invalidateRateLimitState(key)
+      }
+    })
+    cleanupRateLimitState(loadedKeys)
+    loaded.forEach((runtime) => {
+      void loadRuntimeRateLimits(runtime, false, false, workerId, workerGeneration)
+    })
     loadFailed.value = false
   } catch {
     if (!unmounted
@@ -413,6 +633,7 @@ async function handleRegister(): Promise<void> {
     resetRegistration()
     showRegistration.value = false
     replaceRuntime(created)
+    void loadRuntimeRateLimits(created)
     ElMessage.success('Dark Runtime 已注册')
 
     await handleRefresh(created, false, workerId, operationGeneration)
@@ -544,10 +765,97 @@ function safeRuntimeMessage(value: string): string {
     .replace(/(\b[\w-]*(?:token|auth|key|secret|password|credential|authorization)[\w-]*\s*[=:]\s*)[^\s;&]+/gi, '$1[redacted]')
 }
 
+function rateLimitStateLabel(snapshot: CodexRuntimeRateLimits): string {
+  if (snapshot.stale || snapshot.state === 'STALE') return '已过期'
+  return {
+    AVAILABLE: '可用',
+    LIMIT_REACHED: '已达上限',
+    UNSUPPORTED: '不支持',
+    UNKNOWN: '未知',
+  }[snapshot.state] ?? '未知'
+}
+
+function rateLimitStateTagType(snapshot: CodexRuntimeRateLimits) {
+  if (snapshot.stale || snapshot.state === 'STALE') return 'warning' as const
+  if (snapshot.state === 'AVAILABLE') return 'success' as const
+  if (snapshot.state === 'LIMIT_REACHED') return 'danger' as const
+  return 'info' as const
+}
+
+function rateLimitEmptyMessage(snapshot: CodexRuntimeRateLimits): string {
+  if (snapshot.stale || snapshot.state === 'STALE') return '最近一次额度快照已过期'
+  return {
+    AVAILABLE: '当前额度可用',
+    LIMIT_REACHED: '额度已用尽，等待窗口重置',
+    UNSUPPORTED: '当前 Runtime 不支持额度查询',
+    UNKNOWN: '额度状态暂不可用',
+  }[snapshot.state] ?? '额度状态暂不可用'
+}
+
+function rateLimitName(limit: CodexRuntimeRateLimit, index: number): string {
+  return limit.limitName?.trim() || limit.limitId?.trim() || `额度 ${index + 1}`
+}
+
+function rateLimitWindows(limit: CodexRuntimeRateLimit): Array<{
+  key: 'primary' | 'secondary'
+  label: string
+  value: CodexRuntimeRateLimitWindow
+}> {
+  const windows: Array<{
+    key: 'primary' | 'secondary'
+    label: string
+    value: CodexRuntimeRateLimitWindow
+  }> = []
+  if (limit.primary) {
+    windows.push({
+      key: 'primary',
+      label: formatRateLimitDuration(limit.primary.windowDurationMins, '主窗口'),
+      value: limit.primary,
+    })
+  }
+  if (limit.secondary) {
+    windows.push({
+      key: 'secondary',
+      label: formatRateLimitDuration(limit.secondary.windowDurationMins, '次窗口'),
+      value: limit.secondary,
+    })
+  }
+  return windows
+}
+
+function formatRateLimitDuration(minutes: number | null, fallback: string): string {
+  if (!minutes || minutes <= 0) return fallback
+  if (minutes % (24 * 60) === 0) return `${minutes / (24 * 60)} 天窗口`
+  if (minutes % 60 === 0) return `${minutes / 60} 小时窗口`
+  return `${minutes} 分钟窗口`
+}
+
+function rateLimitProgressColor(usedPercent: number): string {
+  if (usedPercent >= 100) return '#c45656'
+  if (usedPercent >= 80) return '#b88230'
+  return '#529b2e'
+}
+
+function formatRateLimitReset(epochSeconds: number | null): string {
+  if (!epochSeconds) return '重置时间未知'
+  return `重置 ${formatEpochTime(epochSeconds * 1000)}`
+}
+
+function formatEpochTime(epochMs: number | null): string {
+  if (epochMs === null || !Number.isFinite(epochMs) || epochMs <= 0) return '-'
+  const date = new Date(epochMs)
+  if (Number.isNaN(date.getTime())) return '-'
+  return formatDate(date)
+}
+
 function formatTime(value?: string): string {
   if (!value) return '-'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
+  return formatDate(date)
+}
+
+function formatDate(date: Date): string {
   return new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit',
     day: '2-digit',
@@ -565,6 +873,11 @@ watch(() => props.workerId, () => {
   for (const key of Object.keys(drafts)) delete drafts[key]
   refreshingKeys.clear()
   savingKeys.clear()
+  rateLimitLoadingKeys.clear()
+  rateLimitErrorKeys.clear()
+  rateLimitRequestsInFlight.clear()
+  latestRateLimitRequestByKey.clear()
+  for (const key of Object.keys(rateLimitsByRuntime)) delete rateLimitsByRuntime[key]
   resetRegistration()
   showRegistration.value = false
   registering.value = false
@@ -581,7 +894,9 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   unmounted = true
+  workerGeneration++
   latestListRequestSequence = ++listRequestSequence
+  latestRateLimitRequestByKey.clear()
   if (autoRefreshTimer) clearInterval(autoRefreshTimer)
 })
 </script>
@@ -774,6 +1089,120 @@ onBeforeUnmount(() => {
   margin-top: 2px;
 }
 
+.runtime-rate-limits {
+  min-width: 0;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #ebeef5;
+}
+
+.rate-limits-header,
+.rate-limits-title,
+.rate-limit-window-meta {
+  display: flex;
+  align-items: center;
+}
+
+.rate-limits-header {
+  min-height: 32px;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rate-limits-title {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #303133;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rate-limits-placeholder {
+  min-height: 24px;
+  color: #73767a;
+  font-size: 12px;
+  line-height: 24px;
+}
+
+.rate-limits-error {
+  color: #b25252;
+}
+
+.rate-limit-buckets {
+  min-width: 0;
+}
+
+.rate-limit-bucket {
+  min-width: 0;
+  padding: 8px 0;
+}
+
+.rate-limit-bucket + .rate-limit-bucket {
+  border-top: 1px solid #f0f2f5;
+}
+
+.rate-limit-bucket-name {
+  min-width: 0;
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+  color: #606266;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.rate-limit-windows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  min-width: 0;
+}
+
+.rate-limit-window {
+  display: grid;
+  grid-template-rows: 18px 6px 18px;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rate-limit-window-meta {
+  min-width: 0;
+  justify-content: space-between;
+  gap: 8px;
+  color: #73767a;
+  font-size: 11px;
+}
+
+.rate-limit-window-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rate-limit-window-meta strong {
+  flex: 0 0 auto;
+  color: #303133;
+  font-size: 11px;
+}
+
+.rate-limit-reset,
+.rate-limits-observed {
+  color: #909399;
+  font-size: 10px;
+  line-height: 18px;
+}
+
+.rate-limit-reset {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rate-limits-observed {
+  text-align: right;
+}
+
 .runtime-routing-grid {
   display: grid;
   grid-template-columns: 76px minmax(160px, 1fr) 128px;
@@ -801,8 +1230,58 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
+  .runtime-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .runtime-name-line {
+    display: grid;
+    width: 100%;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 4px 6px;
+  }
+
+  .runtime-name-line strong {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    grid-column: 1 / -1;
+    overflow: hidden;
+    overflow-wrap: normal;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .runtime-name-line :deep(.el-tag) {
+    max-width: 100%;
+    min-width: 0;
+    justify-self: start;
+    overflow: hidden;
+  }
+
+  .runtime-name-line :deep(.el-tag__content) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .runtime-actions {
+    flex: 0 0 auto;
+    gap: 2px;
+  }
+
+  .runtime-actions :deep(.el-button + .el-button) {
+    margin-left: 0;
+  }
+
   .runtime-token-field {
     grid-column: auto;
+  }
+
+  .rate-limit-windows {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .registration-footer {

@@ -81,6 +81,7 @@ export class TaskStore {
         task_id: taskId,
         request_hash: requestHash,
         request_payload: encryptRequest(request, this.encryptionKey),
+        requested_thread_id: request.session_id,
         status: 'accepted',
         model: request.model,
         created_at: timestamp,
@@ -158,7 +159,8 @@ export class TaskStore {
   }
 
   async patch(taskId: string, patch: Partial<Pick<StoredTaskRecord,
-    'thread_id' | 'turn_id' | 'app_server_instance_id' | 'app_server_lane_key' | 'model' | 'reasoning_effort' | 'recovery_required' | 'abort_requested_at'>>): Promise<StoredTaskRecord> {
+    'thread_id' | 'turn_id' | 'app_server_instance_id' | 'app_server_lane_key' | 'model' | 'reasoning_effort'
+    | 'recovery_required' | 'abort_requested_at' | 'pending_interaction' | 'last_interaction'>>): Promise<StoredTaskRecord> {
     return this.withLock(taskId, async () => {
       const current = this.required(taskId)
       const next = compact({ ...current, ...patch, updated_at: this.now().toISOString() }) as StoredTaskRecord
@@ -186,7 +188,8 @@ export class TaskStore {
     taskId: string,
     status: TaskPhase,
     patch: Partial<Pick<StoredTaskRecord,
-      'thread_id' | 'turn_id' | 'app_server_instance_id' | 'app_server_lane_key' | 'model' | 'reasoning_effort' | 'error_code' | 'recovery_required'>> & {
+      'thread_id' | 'turn_id' | 'app_server_instance_id' | 'app_server_lane_key' | 'model' | 'reasoning_effort'
+      | 'error_code' | 'recovery_required' | 'pending_interaction' | 'last_interaction'>> & {
         outcome?: TaskOutcome
       } = {}
   ): Promise<StoredTaskRecord> {
@@ -376,6 +379,8 @@ function terminalPatchConflicts(
     'reasoning_effort',
     'recovery_required',
     'abort_requested_at',
+    'pending_interaction',
+    'last_interaction',
   ]
   return immutableFields.some(field => (
     Object.prototype.hasOwnProperty.call(patch, field)

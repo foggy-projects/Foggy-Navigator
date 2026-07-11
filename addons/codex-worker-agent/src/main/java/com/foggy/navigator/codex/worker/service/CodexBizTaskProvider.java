@@ -32,6 +32,7 @@ public class CodexBizTaskProvider implements TaskLookupProvider, TaskCommandProv
     private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
             TaskQueryCapability.CREATE_TASK_DIRECT,
             TaskQueryCapability.RESUME_TASK,
+            TaskQueryCapability.RESPOND_TO_TASK,
             TaskQueryCapability.CANCEL_TASK,
             TaskQueryCapability.DELETE_TASK,
             TaskQueryCapability.RESYNC_TASK,
@@ -60,6 +61,11 @@ public class CodexBizTaskProvider implements TaskLookupProvider, TaskCommandProv
     @Override
     public DispatchTaskDTO resumeTask(String userId, String tenantId, Map<String, Object> params) {
         return codexTaskService.resumeTask(userId, tenantId, normalizeParams(params));
+    }
+
+    @Override
+    public void respondToTask(String taskId, String userId, Map<String, Object> response) {
+        codexTaskService.respondToTask(taskId, userId, response);
     }
 
     @Override

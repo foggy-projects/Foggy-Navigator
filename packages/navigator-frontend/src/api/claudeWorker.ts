@@ -23,6 +23,7 @@ import {
 } from './unifiedTask'
 import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig, SessionSearchPage, DirectoryMilestone, MilestonePageResult } from '@/types'
 import type { SessionFileHintsResponse } from '@/types/sessionFileHints'
+import type { UserQuestionAnswers } from '@foggy/chat'
 
 // ===== Worker API =====
 
@@ -438,7 +439,7 @@ export async function listTasksByDirectoryPaged(
 
 export async function respondToPermission(
   taskId: string,
-  form: { permissionId: string; decision: string; denyMessage?: string; scope?: string; answers?: Record<string, string>; planAction?: string },
+  form: { permissionId: string; decision: string; denyMessage?: string; scope?: string; answers?: UserQuestionAnswers; planAction?: string },
 ): Promise<{ taskId: string; permissionId: string; decision: string }> {
   await respondToTaskUnified(taskId, form)
   return {

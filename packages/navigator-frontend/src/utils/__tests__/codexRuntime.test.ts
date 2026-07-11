@@ -7,6 +7,7 @@ import {
   readinessTagType,
   routingPolicyOptionLabel,
   routingTransitionBlockReason,
+  runtimeInstanceKey,
   shortDigest,
 } from '../codexRuntime'
 
@@ -53,6 +54,13 @@ describe('codexRuntime UI state', () => {
     expect(readinessLabel('INCOMPATIBLE')).toBe('不兼容')
     expect(readinessTagType('UNREACHABLE')).toBe('danger')
     expect(shortDigest('6f2550bb528581f17c4c3a3857dca92c')).toBe('6f2550bb5285...')
+  })
+
+  it('distinguishes restarted instances of the same runtime revision', () => {
+    expect(runtimeInstanceKey(makeRuntime({ instanceId: 'instance-a' })))
+      .toBe('runtime-1@1#instance-a')
+    expect(runtimeInstanceKey(makeRuntime({ instanceId: 'instance-b' })))
+      .toBe('runtime-1@1#instance-b')
   })
 
   it('allows only adjacent routing stages and explains disabled jumps', () => {

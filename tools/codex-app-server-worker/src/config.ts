@@ -78,7 +78,7 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     abortWaitTimeoutMs: integer(env.CODEX_APP_SERVER_ABORT_WAIT_TIMEOUT_MS, 7_000, 100, 60_000, 'CODEX_APP_SERVER_ABORT_WAIT_TIMEOUT_MS'),
     stateDir,
     stateEncryptionKey: parseEncryptionKey(env.CODEX_APP_SERVER_STATE_KEY),
-    defaultModel: model(env.CODEX_DEFAULT_MODEL || 'codex-latest'),
+    defaultModel: supportedDefaultModel(env.CODEX_DEFAULT_MODEL || 'codex-latest'),
     modelAliases: aliases(env.CODEX_MODEL_ALIASES),
   }
   if (result.poolMaxInstancesPerLane > result.poolMaxInstances) {
@@ -166,12 +166,27 @@ function aliases(raw: string | undefined): Record<string, string> {
     }
     const aliasKey = key.trim().toLowerCase()
     const aliasValue = model(value)
+    if (baseModel(aliasValue) === 'gpt-5.4-mini') {
+      throw new Error(`CODEX_MODEL_ALIASES cannot target retired model gpt-5.4-mini: ${aliasKey}`)
+    }
     if (Object.prototype.hasOwnProperty.call(DEFAULT_ALIASES, aliasKey) && DEFAULT_ALIASES[aliasKey] !== aliasValue) {
       throw new Error(`CODEX_MODEL_ALIASES cannot override built-in alias: ${aliasKey}`)
     }
     result[aliasKey] = aliasValue
   }
   return result
+}
+
+function baseModel(value: string): string {
+  return value.split(':', 1)[0]!.trim().toLowerCase()
+}
+
+function supportedDefaultModel(value: string): string {
+  const normalized = model(value)
+  if (baseModel(normalized) === 'gpt-5.4-mini') {
+    throw new Error('CODEX_DEFAULT_MODEL cannot target retired model gpt-5.4-mini')
+  }
+  return normalized
 }
 
 export function createTestEncryptionKey(): Buffer {

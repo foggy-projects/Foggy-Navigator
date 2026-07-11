@@ -9,6 +9,7 @@
  */
 import client from './client'
 import type { RX, ClaudeTask, SessionSearchResult } from '@/types'
+import type { UserQuestionAnswers } from '@foggy/chat'
 
 // Re-use ClaudeTask type since DispatchTaskDTO is a superset with the same field names.
 // Additional fields (agentId, providerType, codexThreadId) are optional.
@@ -186,7 +187,7 @@ export async function respondToTaskUnified(
     decision: string
     denyMessage?: string
     scope?: string
-    answers?: Record<string, string>
+    answers?: UserQuestionAnswers
     planAction?: string
   },
 ): Promise<void> {

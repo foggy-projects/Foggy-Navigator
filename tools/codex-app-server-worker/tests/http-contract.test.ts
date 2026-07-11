@@ -42,6 +42,7 @@ test('instance affinity guard rejects every task route before manager access', a
     ['/api/v1/tasks/task-1/status', { headers }],
     ['/api/v1/tasks/task-1/subscribe?ack_seq=0', { headers }],
     ['/api/v1/tasks/task-1/abort', { method: 'POST', headers }],
+    ['/api/v1/tasks/task-1/respond', { method: 'POST', headers, body: JSON.stringify({ request_id: 'r', answers: {} }) }],
     ['/api/v1/tasks/task-1', { method: 'DELETE', headers }],
   ]
   for (const [path, init] of requests) {
@@ -237,6 +238,7 @@ test('concurrent HTTP accepts coalesce by idempotency key before capacity checks
 test('capability manifest exposes the Java registry contract and exact schema lock', async t => {
   const stateDir = await tempDirectory('codex-app-capability-')
   const config = testConfig(stateDir, { runtimeRevision: 7 })
+  config.modelAliases['retired-mini'] = 'gpt-5.4-mini:high'
   const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
   const manager = new TaskManager(config, store, new FakeExecutor())
   await manager.initialize()
@@ -260,7 +262,7 @@ test('capability manifest exposes the Java registry contract and exact schema lo
   assert.equal(manifest.schema_digest, '6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f')
   assert.deepEqual(manifest.models, [
     'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5',
-    'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark',
+    'gpt-5.4', 'gpt-5.3-codex-spark',
   ])
   assert.deepEqual(manifest.model_reasoning_matrix['gpt-5.6-sol'], [
     'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
@@ -269,14 +271,46 @@ test('capability manifest exposes the Java registry contract and exact schema lo
     'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
   ])
   assert.deepEqual(manifest.model_reasoning_matrix['gpt-5.6-luna'], ['low', 'medium', 'high', 'xhigh', 'max'])
-  assert.deepEqual(manifest.model_reasoning_matrix['gpt-5.4-mini'], ['low', 'medium', 'high', 'xhigh'])
-  assert.equal(manifest.model_reasoning_matrix['gpt-5.4-mini'].includes('max'), false)
-  assert.equal(manifest.model_reasoning_matrix['gpt-5.4-mini'].includes('ultra'), false)
+  assert.equal(manifest.model_reasoning_matrix['gpt-5.4-mini'], undefined)
+  assert.equal(manifest.model_aliases['retired-mini'], undefined)
+  assert.equal(manifest.model_capabilities.aliases['retired-mini'], undefined)
   assert.equal(manifest.model_capabilities.dynamic_passthrough.route_selectable, false)
   assert.equal(manifest.reasoning_efforts, undefined)
   assert.deepEqual(manifest.features.approval_modes, ['never'])
+  assert.equal(manifest.features.interactive_user_input, true)
+  assert.equal(manifest.features.interactive_user_input_experimental, true)
   assert.equal(manifest.features.additional_directories, false)
   assert.equal(manifest.features.committed_reconciliation, true)
+})
+
+test('task acceptance rejects retired Mini after direct or alias resolution', async t => {
+  const stateDir = await tempDirectory('codex-app-retired-mini-')
+  const config = testConfig(stateDir)
+  config.modelAliases['retired-mini'] = 'gpt-5.4-mini'
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const executor = new FakeExecutor()
+  const manager = new TaskManager(config, store, executor)
+  await manager.initialize()
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  for (const [index, model] of [
+    'gpt-5.4-mini',
+    'gpt-5.4-mini:high',
+    'retired-mini',
+    'retired-mini:xhigh',
+  ].entries()) {
+    const rejected = await postTask(baseUrl, `retired-mini-${index}`, { prompt: 'must not start', model })
+    assert.equal(rejected.response.status, 400)
+    assert.deepEqual(rejected.body, { error: 'UNSUPPORTED_CODEX_MODEL' })
+    assert.equal(manager.get(`retired-mini-${index}`), undefined)
+  }
+  assert.equal(executor.calls, 0)
 })
 
 test('health and task acceptance fail closed without the state encryption key', async t => {

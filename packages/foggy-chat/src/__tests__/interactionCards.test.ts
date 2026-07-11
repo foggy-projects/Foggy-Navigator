@@ -52,6 +52,7 @@ vi.stubGlobal('IntersectionObserver', class {
 
 import PermissionRequestCard from '../components/PermissionRequestCard.vue'
 import UserQuestionCard from '../components/UserQuestionCard.vue'
+import userQuestionCardSource from '../components/UserQuestionCard.vue?raw'
 import PlanReviewCard from '../components/PlanReviewCard.vue'
 import ToolCallBlock from '../components/ToolCallBlock.vue'
 import SkillApprovalCard from '../components/SkillApprovalCard.vue'
@@ -407,6 +408,8 @@ describe('UserQuestionCard', () => {
     expect(wrapper.text()).toContain('Framework')
     expect(wrapper.text()).toContain('Which framework?')
     expect(wrapper.text()).toContain('Awaiting input')
+    expect(wrapper.text()).toContain('需要你的输入')
+    expect(wrapper.text()).not.toContain('Claude 需要你的输入')
   })
 
   it('renders options as radio buttons for single select', () => {
@@ -419,6 +422,15 @@ describe('UserQuestionCard', () => {
     expect(radios.length).toBeGreaterThanOrEqual(2)
     expect(wrapper.text()).toContain('React')
     expect(wrapper.text()).toContain('Vue')
+  })
+
+  it('stacks narrow option copy without splitting ordinary words', () => {
+    expect(userQuestionCardSource).toMatch(
+      /@media \(max-width: 480px\) \{[\s\S]*?\.option-item:not\(\.other-option\) \{[\s\S]*?display: grid;[\s\S]*?grid-template-columns: auto auto minmax\(0, 1fr\);/,
+    )
+    expect(userQuestionCardSource).toMatch(
+      /\.option-item:not\(\.other-option\) \.option-label,[\s\S]*?\.option-item:not\(\.other-option\) \.option-desc \{[\s\S]*?grid-column: 3;[\s\S]*?overflow-wrap: break-word;[\s\S]*?word-break: normal;/,
+    )
   })
 
   it('submit button is disabled when no selection', () => {
@@ -489,6 +501,160 @@ describe('UserQuestionCard', () => {
     })
 
     expect(wrapper.text()).toContain('Other')
+  })
+
+  it('uses the Codex question id and honors isOther=false', async () => {
+    const wrapper = mount(UserQuestionCard, {
+      props: {
+        message: makeQuestionMessage({
+          questions: [{
+            id: 'deployment-target',
+            question: 'Where should this run?',
+            header: 'Target',
+            options: [
+              { label: 'Staging', description: 'Deploy to staging' },
+              { label: 'Production', description: 'Deploy to production' },
+            ],
+            multiSelect: false,
+            isOther: false,
+          }],
+        }),
+      },
+    })
+
+    expect(wrapper.find('.other-option').exists()).toBe(false)
+    expect(wrapper.findAll('.option-index').map((item) => item.text())).toEqual(['1', '2'])
+    await wrapper.findAll('.option-item')[1]!.trigger('click')
+    await wrapper.find('.btn-submit').trigger('click')
+
+    expect(wrapper.emitted('respond')?.[0]).toEqual([
+      'perm-q',
+      { 'deployment-target': 'Production' },
+    ])
+  })
+
+  it('keeps a provider question id that matches an object prototype key', async () => {
+    const wrapper = mount(UserQuestionCard, {
+      props: {
+        message: makeQuestionMessage({
+          questions: [{
+            id: '__proto__',
+            question: 'Choose safely?',
+            header: 'Safety',
+            options: [{ label: 'Safe', description: '' }],
+            multiSelect: false,
+            isOther: false,
+          }],
+        }),
+      },
+    })
+
+    await wrapper.find('.option-item').trigger('click')
+    await wrapper.find('.btn-submit').trigger('click')
+    const answers = wrapper.emitted('respond')?.[0]?.[1] as Record<string, string>
+    expect(Object.prototype.hasOwnProperty.call(answers, '__proto__')).toBe(true)
+    expect(answers.__proto__).toBe('Safe')
+  })
+
+  it('submits multi-select values as an array without comma joining', async () => {
+    const wrapper = mount(UserQuestionCard, {
+      props: {
+        message: makeQuestionMessage({
+          questions: [{
+            question: 'Which targets?',
+            header: 'Targets',
+            options: [
+              { label: 'US, East', description: 'Primary region' },
+              { label: 'EU West', description: 'Secondary region' },
+            ],
+            multiSelect: true,
+            isOther: false,
+          }],
+        }),
+      },
+    })
+
+    const checkboxes = wrapper.findAll('input[type="checkbox"]')
+    await checkboxes[0]!.setValue(true)
+    await checkboxes[1]!.setValue(true)
+    await wrapper.find('.btn-submit').trigger('click')
+
+    expect(wrapper.emitted('respond')?.[0]).toEqual([
+      'perm-q',
+      { 'Which targets?': ['US, East', 'EU West'] },
+    ])
+  })
+
+  it('uses a password input and never displays a secret answer', async () => {
+    const secret = 'not-for-display'
+    const wrapper = mount(UserQuestionCard, {
+      props: {
+        message: makeQuestionMessage({
+          questions: [{
+            id: 'api-key',
+            question: 'API key?',
+            header: 'Credential',
+            options: null,
+            multiSelect: false,
+            isOther: false,
+            isSecret: true,
+          }],
+        }),
+      },
+    })
+
+    const input = wrapper.find('.direct-input')
+    expect(input.attributes('type')).toBe('password')
+    await input.setValue(secret)
+    await wrapper.find('.btn-submit').trigger('click')
+    expect(wrapper.emitted('respond')?.[0]).toEqual(['perm-q', { 'api-key': secret }])
+
+    await wrapper.setProps({
+      message: makeQuestionMessage({
+        permissionStatus: 'approved',
+        answeredValues: { 0: secret },
+        questions: [{
+          id: 'api-key',
+          question: 'API key?',
+          header: 'Credential',
+          options: null,
+          multiSelect: false,
+          isSecret: true,
+        }],
+      }),
+    })
+    expect(wrapper.text()).toContain('已提交')
+    expect(wrapper.text()).not.toContain(secret)
+  })
+
+  it('refreshes externally restored answers and labels cleared secret input as skipped', async () => {
+    const wrapper = mount(UserQuestionCard, {
+      props: { message: makeQuestionMessage({ permissionStatus: 'approved' }) },
+    })
+
+    await wrapper.setProps({
+      message: makeQuestionMessage({
+        permissionStatus: 'approved',
+        answeredValues: { 0: 'Vue' },
+      }),
+    })
+    expect(wrapper.text()).toContain('Vue')
+
+    await wrapper.setProps({
+      message: makeQuestionMessage({
+        permissionStatus: 'denied',
+        questions: [{
+          id: 'api-key',
+          question: 'API key?',
+          header: 'Credential',
+          options: null,
+          multiSelect: false,
+          isSecret: true,
+        }],
+      }),
+    })
+    expect(wrapper.text()).toContain('已跳过')
+    expect(wrapper.text()).not.toContain('已提交')
   })
 
   it('activates Other and focuses input on a single click', async () => {

@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import ElementPlus, { ElMessage } from 'element-plus'
 import CodexRuntimeManager from '../CodexRuntimeManager.vue'
+import codexRuntimeManagerSource from '../CodexRuntimeManager.vue?raw'
 import * as runtimeApi from '@/api/codexRuntime'
-import type { CodexRuntime } from '@/types/codexRuntime'
+import type { CodexRuntime, CodexRuntimeRateLimits } from '@/types/codexRuntime'
 
 vi.mock('@/api/codexRuntime')
 vi.mock('element-plus', async () => {
@@ -40,12 +41,41 @@ function makeRuntime(overrides: Partial<CodexRuntime> = {}): CodexRuntime {
   }
 }
 
+function makeRateLimits(
+  overrides: Partial<CodexRuntimeRateLimits> = {},
+): CodexRuntimeRateLimits {
+  return {
+    contractVersion: 1,
+    runtimeId: 'runtime-1',
+    runtimeRevision: 1,
+    instanceId: 'instance-a',
+    scope: 'DEFAULT_CODEX_HOME',
+    state: 'AVAILABLE',
+    observedAtEpochMs: 1_783_728_000_000,
+    stale: false,
+    limits: [{
+      limitId: 'codex',
+      limitName: 'Codex',
+      primary: {
+        usedPercent: 42,
+        windowDurationMins: 300,
+        resetsAt: 1_783_746_000,
+      },
+      secondary: null,
+      rateLimitReachedType: null,
+    }],
+    errorCode: null,
+    ...overrides,
+  }
+}
+
 let wrapper: VueWrapper | undefined
 
 describe('CodexRuntimeManager', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([])
+    vi.mocked(runtimeApi.getCodexRuntimeRateLimits).mockResolvedValue(makeRateLimits())
   })
 
   afterEach(() => {
@@ -159,6 +189,193 @@ describe('CodexRuntimeManager', () => {
     expect(wrapper.text()).not.toContain('localhost:3062')
   })
 
+  it('keeps a long runtime identity readable in the narrow responsive header', async () => {
+    const runtimeId = 'codex-app-server-runtime-with-a-very-long-instance-name'
+    vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([makeRuntime({ runtimeId })])
+
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('.runtime-name-line strong').attributes('title')).toBe(runtimeId)
+    expect(codexRuntimeManagerSource).toMatch(
+      /\.runtime-summary \{\s*display: grid;\s*grid-template-columns: minmax\(0, 1fr\) auto;/,
+    )
+    expect(codexRuntimeManagerSource).toMatch(
+      /\.runtime-name-line strong \{[\s\S]*?grid-column: 1 \/ -1;[\s\S]*?overflow-wrap: normal;[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;/,
+    )
+  })
+
+  it('renders multiple quota buckets, reset times, and no model fallback action', async () => {
+    vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([makeRuntime({
+      instanceId: 'instance-a',
+      readinessStatus: 'READY',
+    })])
+    vi.mocked(runtimeApi.getCodexRuntimeRateLimits).mockResolvedValue(makeRateLimits({
+      limits: [{
+        limitId: 'codex',
+        limitName: 'Codex',
+        primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_783_746_000 },
+        secondary: { usedPercent: 67, windowDurationMins: 10_080, resetsAt: 1_784_332_800 },
+        rateLimitReachedType: null,
+      }, {
+        limitId: 'review',
+        limitName: 'Code Review',
+        primary: { usedPercent: 81, windowDurationMins: 60, resetsAt: 1_783_732_000 },
+        secondary: null,
+        rateLimitReachedType: null,
+      }],
+    }))
+
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const quota = wrapper.get('[data-testid="rate-limits-runtime-1@1"]')
+    expect(quota.text()).toContain('ChatGPT 额度')
+    expect(quota.text()).toContain('Codex')
+    expect(quota.text()).toContain('Code Review')
+    expect(quota.text()).toContain('42%')
+    expect(quota.text()).toContain('7 天窗口')
+    expect(quota.text()).toContain('重置')
+    expect(quota.text()).not.toContain('Mini')
+    expect(quota.find('[aria-label*="切换"]').exists()).toBe(false)
+  })
+
+  it.each([
+    ['LIMIT_REACHED', false, '已达上限', '额度已用尽，等待窗口重置'],
+    ['STALE', true, '已过期', '最近一次额度快照已过期'],
+    ['UNSUPPORTED', false, '不支持', '当前 Runtime 不支持额度查询'],
+    ['UNKNOWN', false, '未知', '额度状态暂不可用'],
+  ] as const)('renders quota state %s without changing routing', async (
+    state, stale, stateLabel, message,
+  ) => {
+    vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([makeRuntime()])
+    vi.mocked(runtimeApi.getCodexRuntimeRateLimits).mockResolvedValue(makeRateLimits({
+      state,
+      stale,
+      limits: [],
+    }))
+
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const quota = wrapper.get('[data-testid="rate-limits-runtime-1@1"]')
+    expect(quota.text()).toContain(stateLabel)
+    expect(quota.text()).toContain(message)
+    expect(runtimeApi.updateCodexRuntimeRouting).not.toHaveBeenCalled()
+  })
+
+  it('manually refreshes quota without changing the selected model or routing', async () => {
+    vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([makeRuntime()])
+    vi.mocked(runtimeApi.getCodexRuntimeRateLimits)
+      .mockResolvedValueOnce(makeRateLimits())
+      .mockResolvedValueOnce(makeRateLimits({ state: 'LIMIT_REACHED', limits: [] }))
+
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.get('[aria-label="刷新 runtime-1 额度"]').trigger('click')
+    await flushPromises()
+
+    expect(runtimeApi.getCodexRuntimeRateLimits).toHaveBeenLastCalledWith('runtime-1', 1, {
+      refresh: true,
+      suppressErrorMessage: true,
+    })
+    expect(wrapper.get('[data-testid="rate-limits-runtime-1@1"]').text()).toContain('已达上限')
+    expect(runtimeApi.updateCodexRuntimeRouting).not.toHaveBeenCalled()
+  })
+
+  it('keeps the last snapshot but marks it stale when quota synchronization fails', async () => {
+    vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([makeRuntime()])
+    vi.mocked(runtimeApi.getCodexRuntimeRateLimits)
+      .mockResolvedValueOnce(makeRateLimits())
+      .mockRejectedValueOnce(new Error('network unavailable'))
+
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.get('[aria-label="刷新 runtime-1 额度"]').trigger('click')
+    await flushPromises()
+
+    const quota = wrapper.get('[data-testid="rate-limits-runtime-1@1"]')
+    expect(quota.text()).toContain('已过期')
+    expect(quota.text()).toContain('42%')
+    expect(quota.text()).not.toContain('network unavailable')
+    expect(ElMessage.error).toHaveBeenCalledWith('额度刷新失败')
+  })
+
+  it('loads a rotated instance immediately and ignores the previous instance late quota', async () => {
+    vi.useFakeTimers()
+    const instanceA = makeRuntime({ instanceId: 'instance-a' })
+    const instanceB = makeRuntime({ instanceId: 'instance-b' })
+    vi.mocked(runtimeApi.listCodexRuntimes)
+      .mockResolvedValueOnce([instanceA])
+      .mockResolvedValueOnce([instanceB])
+
+    let resolveInstanceA!: (value: CodexRuntimeRateLimits) => void
+    let resolveInstanceB!: (value: CodexRuntimeRateLimits) => void
+    vi.mocked(runtimeApi.getCodexRuntimeRateLimits)
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveInstanceA = resolve
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveInstanceB = resolve
+      }))
+
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    expect(runtimeApi.getCodexRuntimeRateLimits).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    await flushPromises()
+    expect(runtimeApi.getCodexRuntimeRateLimits).toHaveBeenCalledTimes(2)
+
+    resolveInstanceB(makeRateLimits({
+      instanceId: 'instance-b',
+      limits: [{
+        limitId: 'new-instance',
+        limitName: 'New Instance Quota',
+        primary: null,
+        secondary: null,
+        rateLimitReachedType: null,
+      }],
+    }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('New Instance Quota')
+
+    resolveInstanceA(makeRateLimits({
+      instanceId: 'instance-a',
+      limits: [{
+        limitId: 'old-instance',
+        limitName: 'Old Instance Quota',
+        primary: null,
+        secondary: null,
+        rateLimitReachedType: null,
+      }],
+    }))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('New Instance Quota')
+    expect(wrapper.text()).not.toContain('Old Instance Quota')
+  })
+
   it('fails Ultra closed when the runtime registry cannot be loaded', async () => {
     vi.mocked(runtimeApi.listCodexRuntimes).mockRejectedValue(new Error('registry unavailable'))
 
@@ -216,6 +433,7 @@ describe('CodexRuntimeManager', () => {
     expect(runtimeApi.listCodexRuntimes).toHaveBeenNthCalledWith(2, 'worker-1', {
       suppressErrorMessage: true,
     })
+    expect(runtimeApi.getCodexRuntimeRateLimits).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('Ultra 路由已配置，但 capability 已过期，请刷新。')
     expect(wrapper.text()).not.toContain('Codex Ultra 可用')
   })
@@ -351,6 +569,54 @@ describe('CodexRuntimeManager', () => {
 
     expect(wrapper.text()).not.toContain('runtime-1')
     expect(ElMessage.success).not.toHaveBeenCalledWith('Capability 已刷新')
+  })
+
+  it('ignores a late quota response after the selected worker changes', async () => {
+    vi.mocked(runtimeApi.listCodexRuntimes).mockImplementation((workerId: string) => (
+      Promise.resolve([makeRuntime({
+        runtimeId: workerId === 'worker-1' ? 'runtime-old' : 'runtime-new',
+        workerId,
+      })])
+    ))
+    let resolveOldQuota!: (value: CodexRuntimeRateLimits) => void
+    vi.mocked(runtimeApi.getCodexRuntimeRateLimits).mockImplementation((runtimeId: string) => {
+      if (runtimeId === 'runtime-old') {
+        return new Promise(resolve => { resolveOldQuota = resolve })
+      }
+      return Promise.resolve(makeRateLimits({
+        runtimeId: 'runtime-new',
+        limits: [{
+          limitId: 'new',
+          limitName: 'New Worker Quota',
+          primary: null,
+          secondary: null,
+          rateLimitReachedType: null,
+        }],
+      }))
+    })
+
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    await wrapper.setProps({ workerId: 'worker-2' })
+    await flushPromises()
+
+    resolveOldQuota(makeRateLimits({
+      runtimeId: 'runtime-old',
+      limits: [{
+        limitId: 'old',
+        limitName: 'Old Worker Quota',
+        primary: null,
+        secondary: null,
+        rateLimitReachedType: null,
+      }],
+    }))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('New Worker Quota')
+    expect(wrapper.text()).not.toContain('Old Worker Quota')
   })
 
   it('does not let a late registration response clear the next worker form', async () => {

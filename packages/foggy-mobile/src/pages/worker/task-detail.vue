@@ -390,7 +390,9 @@ async function handlePlanRespond(permissionId: string, decision: string, denyMes
       denyMessage: denyMessage || (decision === 'deny' ? 'Plan rejected by user' : undefined),
       planAction,
     })
-    taskStream.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
+    taskStream.chatState.resolvePermission(
+      permissionId, decision === 'allow' ? 'approved' : 'denied', taskId.value,
+    )
     if (decision === 'allow' && taskStream.task.value) {
       taskStream.task.value.status = 'RUNNING'
     }
@@ -408,7 +410,7 @@ async function handleQuestionRespond(permissionId: string, answers: Record<strin
       decision: 'allow',
       answers,
     })
-    taskStream.chatState.resolvePermission(permissionId, 'approved')
+    taskStream.chatState.resolvePermission(permissionId, 'approved', taskId.value)
     if (taskStream.task.value) {
       taskStream.task.value.status = 'RUNNING'
     }
@@ -426,7 +428,9 @@ async function handlePermissionRespond(permissionId: string, decision: string, s
       decision,
       scope,
     })
-    taskStream.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
+    taskStream.chatState.resolvePermission(
+      permissionId, decision === 'allow' ? 'approved' : 'denied', taskId.value,
+    )
     if (decision === 'allow' && taskStream.task.value) {
       taskStream.task.value.status = 'RUNNING'
     }

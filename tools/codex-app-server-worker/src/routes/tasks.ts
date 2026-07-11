@@ -7,8 +7,15 @@ import {
   TaskManager,
   TaskManagerDrainingError,
   TaskQueueFullError,
+  TaskThreadActiveError,
+  UserInputResponseError,
   toPublicTask,
 } from '../task-manager.js'
+import { UserInputResponseValidationError } from '../app-server/user-input.js'
+import {
+  resolveSupportedModelAlias,
+  UnsupportedCodexModelError,
+} from '../model-resolution.js'
 import { validateTaskRequest } from '../validation/task-request.js'
 import type { WorkerEvent } from '../models.js'
 
@@ -29,13 +36,25 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
         res.status(400).json({ error: validation.error })
         return
       }
+      try {
+        resolveSupportedModelAlias(
+          validation.value.model || config.defaultModel,
+          config.modelAliases,
+        )
+      } catch (error) {
+        if (error instanceof UnsupportedCodexModelError) {
+          res.status(400).json({ error: error.code })
+          return
+        }
+        throw error
+      }
       const effectiveCwd = validation.value.cwd || process.cwd()
       const canonicalCwd = resolveAllowedWorkingPath(effectiveCwd, config.allowedCwds)
       validation.value.cwd = canonicalCwd || effectiveCwd
       if (manager.get(taskId)) {
         const accepted = await manager.accept(taskId, validation.value)
         const current = manager.get(taskId) || accepted.record
-        res.status(202).json({ task_id: current.task_id, status: current.status })
+        res.status(202).json({ task_id: current.task_id, status: toPublicTask(current).status })
         return
       }
       const readiness = resolveRuntimeReadiness(config)
@@ -72,6 +91,10 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
         res.status(429).json({ error: error.code })
         return
       }
+      if (error instanceof TaskThreadActiveError) {
+        res.status(409).json({ error: error.code })
+        return
+      }
       if (error instanceof TaskManagerDrainingError) {
         res.status(503).json({ error: error.code })
         return
@@ -91,6 +114,37 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
 
   router.get('/api/v1/tasks/:taskId/subscribe', (req, res) => {
     subscribe(manager, req, res)
+  })
+
+  router.post('/api/v1/tasks/:taskId/respond', async (req, res, next) => {
+    try {
+      const taskId = single(req.params.taskId)
+      if (!manager.get(taskId)) {
+        res.status(404).json({ error: 'TASK_NOT_FOUND' })
+        return
+      }
+      const body = validateUserInputResponseBody(req.body)
+      if (!body) {
+        res.status(400).json({ error: 'INVALID_USER_INPUT_RESPONSE' })
+        return
+      }
+      const record = await manager.respondToUserInput(taskId, body)
+      res.status(200).json({
+        task_id: taskId,
+        status: toPublicTask(record).status,
+        request_id: body.request_id,
+      })
+    } catch (error) {
+      if (error instanceof UserInputResponseValidationError) {
+        res.status(400).json({ error: error.code })
+        return
+      }
+      if (error instanceof UserInputResponseError) {
+        res.status(409).json({ error: error.code })
+        return
+      }
+      next(error)
+    }
   })
 
   router.post('/api/v1/tasks/:taskId/abort', async (req, res, next) => {
@@ -213,4 +267,15 @@ function single(value: string | string[] | undefined): string {
 function singleQuery(value: unknown): string | undefined {
   if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : undefined
   return typeof value === 'string' ? value : undefined
+}
+
+function validateUserInputResponseBody(value: unknown): { request_id: string | number; answers: unknown } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const body = value as Record<string, unknown>
+  if (Object.keys(body).some(key => key !== 'request_id' && key !== 'answers')) return undefined
+  const requestId = body.request_id
+  if (!((typeof requestId === 'string' && requestId.length > 0 && requestId.length <= 256)
+      || (typeof requestId === 'number' && Number.isSafeInteger(requestId)))) return undefined
+  if (!body.answers || typeof body.answers !== 'object' || Array.isArray(body.answers)) return undefined
+  return { request_id: requestId, answers: body.answers }
 }

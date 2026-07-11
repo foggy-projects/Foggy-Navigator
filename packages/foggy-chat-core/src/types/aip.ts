@@ -129,8 +129,11 @@ export interface ConfirmationResponsePayload {
   permissionId: string
   decision: string
   taskId: string
-  answers?: Record<string, string>
+  answers?: UserQuestionAnswers
 }
+
+export type UserQuestionAnswer = string | string[]
+export type UserQuestionAnswers = Record<string, UserQuestionAnswer>
 
 export interface AllowedPrompt {
   tool: string
@@ -138,10 +141,17 @@ export interface AllowedPrompt {
 }
 
 export interface UserQuestionItem {
+  /** Stable provider question id. Legacy Claude events may omit it. */
+  id?: string
   question: string
   header: string
-  options: UserQuestionOption[]
+  /** Null/empty means a free-form answer. */
+  options: UserQuestionOption[] | null
   multiSelect: boolean
+  /** Legacy Claude questions omit this and still expose an Other choice. */
+  isOther?: boolean
+  /** Sensitive answers must not be echoed after submission or history restore. */
+  isSecret?: boolean
 }
 
 export interface UserQuestionOption {

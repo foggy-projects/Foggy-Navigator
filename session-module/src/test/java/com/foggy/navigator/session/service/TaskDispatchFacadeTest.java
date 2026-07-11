@@ -1286,7 +1286,7 @@ class TaskDispatchFacadeTest {
         );
 
         when(sessionTaskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
-                "user-1", List.of("RUNNING", "AWAITING_PERMISSION")))
+                "user-1", List.of("RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT")))
                 .thenReturn(List.of(task));
         when(sessionRepository.findAllById(List.of("session-claude-1")))
                 .thenReturn(List.of(

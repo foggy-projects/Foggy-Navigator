@@ -31,17 +31,18 @@ Terra/Luna 的非默认档位不扩展成大量固定 alias；协议层使用 `c
 4. SDK Worker 在通用请求校验前识别所有 Ultra 请求并返回 `409 CODEX_ULTRA_APP_SERVER_REQUIRED`，包括带 SDK `session_id` 的历史续接请求。
 5. App Server Worker 保留 Ultra alias，删除 Mini alias，并发布 Terra/Luna alias。
 6. Java runtime registry 保留 Ultra alias 用于 App Server 选路，但不再发布 Mini alias。
+7. Mini 完全下线：SDK Worker 与 App Server Worker 都在 alias 解析后拒绝 `gpt-5.4-mini[:effort]`，统一返回 `UNSUPPORTED_CODEX_MODEL`；App Server capability manifest 不再声明该模型。
 
 ## 兼容性与风险
 
 - 已绑定到 SDK runtime 的历史 Ultra thread 无法原 runtime 续接；请求会明确失败，不能静默降级为 Max/xhigh，也不能跨 runtime 重放原 prompt。
 - 当前运行中的旧版 Worker/前端不会因源码修改自动更新，需要重新构建、发布和重启后才生效。
-- `gpt-5.4-mini` 的直接真实模型串仍属于底层动态透传兼容能力；本需求移除的是产品 alias 与可选目录，不将其作为新任务推荐项。
+- `gpt-5.4-mini` 不再提供 alias、目录、动态透传或续接兼容；历史请求和自定义 alias 都会被稳定拒绝，禁止静默切换到其他模型。
 
 ## 验证
 
-- SDK Worker：`npm test`（114 passed / 1 skipped）、`npm run typecheck`、`npm run build` 通过；覆盖 alias、reasoning 与新建/续接 Ultra 409。
-- App Server Worker：101 项 Node 测试、`npm run typecheck`、`npm run build` 通过。
+- SDK Worker：`npm test`、`npm run typecheck`、`npm run build` 通过；覆盖 alias 后 Mini 拒绝、reasoning 与新建/续接 Ultra 409。
+- App Server Worker：Node 测试、`npm run typecheck`、`npm run build` 通过；覆盖 capability 移除及直接/alias Mini 拒绝。
 - Java：`CodexRuntimeRegistryServiceTest` 连同模块依赖共 71 项测试通过。
 - PC：模型目录定向单测 14 项通过，`scripts/build-frontend.sh` 全量构建通过。
 - Mobile：H5 构建通过，薄壁镜像与 PC 的 alias 集合一致。

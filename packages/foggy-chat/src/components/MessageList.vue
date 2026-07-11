@@ -170,6 +170,7 @@ import { ref, watch, nextTick, computed, onMounted, onBeforeUnmount } from 'vue'
 import { DynamicScroller, DynamicScrollerItem } from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import { AipMessageType } from '../types/aip'
+import type { UserQuestionAnswers } from '../types/aip'
 import type { ChatMessage } from '../types/chat'
 import MessageBubble from './MessageBubble.vue'
 import ToolCallBlock from './ToolCallBlock.vue'
@@ -220,7 +221,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
-  (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
+  (e: 'questionRespond', permissionId: string, answers: UserQuestionAnswers): void
   (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', turnIndex: number): void
   (e: 'reconnect', taskId: string): void

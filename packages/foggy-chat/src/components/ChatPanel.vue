@@ -49,6 +49,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ChatMessage, ConnectionStatus, NavigatorUiAction } from '../types/chat'
+import type { UserQuestionAnswers } from '../types/aip'
 import MessageList from './MessageList.vue'
 import MessageInput from './MessageInput.vue'
 import StatusBadge from './StatusBadge.vue'
@@ -78,7 +79,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   (e: 'send', content: string): void
   (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
-  (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
+  (e: 'questionRespond', permissionId: string, answers: UserQuestionAnswers): void
   (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'skillApprovalRespond', taskId: string, decision: string, comment: string): void
   (e: 'rewind', turnIndex: number): void

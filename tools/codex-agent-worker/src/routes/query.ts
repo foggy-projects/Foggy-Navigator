@@ -4,10 +4,13 @@ import { config } from '../config.js'
 import {
   CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR,
   resolveModelAlias,
+  resolveSupportedModelAlias,
   runQuery,
   taskBroadcasts,
   cleanupOldTasks,
   getRunningTaskCount,
+  UnsupportedCodexModelError,
+  UNSUPPORTED_CODEX_MODEL,
 } from '../codex/sdk-wrapper.js'
 import type { WorkerEvent } from '../models.js'
 import { validateQueryRequest } from '../validation/query.js'
@@ -16,6 +19,22 @@ import { isPathWithinAllowedCwd } from '../path-guards.js'
 export { isPathWithinAllowedCwd }
 
 export const CODEX_ULTRA_APP_SERVER_REQUIRED = 'CODEX_ULTRA_APP_SERVER_REQUIRED'
+
+export function isUnsupportedCodexModelRequest(
+  model: unknown,
+  defaultModel: string = config.defaultModel,
+  aliases: Record<string, string> = config.modelAliases
+): boolean {
+  if (model !== undefined && typeof model !== 'string') return false
+  const requestedModel = model?.trim() || defaultModel
+  try {
+    resolveSupportedModelAlias(requestedModel, aliases)
+    return false
+  } catch (error) {
+    if (error instanceof UnsupportedCodexModelError) return true
+    throw error
+  }
+}
 
 export function requiresAppServerForUltra(
   model: unknown,
@@ -39,6 +58,10 @@ const router = Router()
  * POST /api/v1/query — Start a Codex query and stream results as SSE
  */
 router.post('/api/v1/query', async (req: Request, res: Response) => {
+  if (isUnsupportedCodexModelRequest(req.body?.model)) {
+    res.status(400).json({ error: UNSUPPORTED_CODEX_MODEL })
+    return
+  }
   if (requiresAppServerForUltra(req.body?.model)) {
     res.status(409).json({
       code: CODEX_ULTRA_APP_SERVER_REQUIRED,

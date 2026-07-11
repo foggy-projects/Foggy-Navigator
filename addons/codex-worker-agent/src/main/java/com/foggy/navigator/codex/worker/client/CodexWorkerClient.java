@@ -1,5 +1,6 @@
 package com.foggy.navigator.codex.worker.client;
 
+import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeRateLimitsDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskAcceptanceDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -14,6 +15,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Codex Worker HTTP 客户端
@@ -24,6 +26,13 @@ public class CodexWorkerClient {
 
     public static final String EXPECTED_INSTANCE_HEADER = "X-Codex-Expected-Instance-Id";
     public static final String ACTUAL_INSTANCE_HEADER = "X-Codex-Instance-Id";
+    private static final Set<String> USER_INPUT_ERROR_CODES = Set.of(
+            "INVALID_USER_INPUT_RESPONSE",
+            "TASK_NOT_FOUND",
+            "USER_INPUT_NOT_PENDING",
+            "USER_INPUT_REQUEST_MISMATCH",
+            "USER_INPUT_ALREADY_RESPONDED",
+            "USER_INPUT_RUNTIME_AFFINITY_LOST");
 
     private final WebClient webClient;
 
@@ -70,6 +79,25 @@ public class CodexWorkerClient {
             super(code + ": expected=" + expected + ", actual="
                     + (actual == null || actual.isBlank() ? "<missing>" : actual));
             this.code = code;
+        }
+
+        public String getCode() {
+            return code;
+        }
+    }
+
+    public static final class UserInputResponseException extends IllegalStateException {
+        private final int statusCode;
+        private final String code;
+
+        private UserInputResponseException(int statusCode, String code) {
+            super(code);
+            this.statusCode = statusCode;
+            this.code = code;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
         }
 
         public String getCode() {
@@ -152,6 +180,20 @@ public class CodexWorkerClient {
     }
 
     public record CapabilityProbe(Map<String, Object> manifest, String actualInstanceId) {}
+
+    /**
+     * Reads the sanitized default CODEX_HOME account quota snapshot.
+     */
+    public Mono<CodexRuntimeRateLimitsDTO> getRuntimeRateLimits(boolean refresh) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/runtime/rate-limits")
+                        .queryParam("refresh", refresh)
+                        .build())
+                .retrieve()
+                .bodyToMono(CodexRuntimeRateLimitsDTO.class)
+                .timeout(Duration.ofSeconds(10));
+    }
 
     /**
      * Idempotently accepts an app-server task. Execution subscription is a separate
@@ -301,6 +343,52 @@ public class CodexWorkerClient {
                     return response.createException().flatMap(Mono::error);
                 })
                 .timeout(Duration.ofSeconds(10));
+    }
+
+    /**
+     * Responds to one pending app-server requestUserInput interaction.
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> respondToTask(String taskId, Map<String, Object> body) {
+        if (taskId == null || taskId.isBlank()) {
+            return Mono.error(new IllegalArgumentException("taskId is required"));
+        }
+        if (body == null || body.isEmpty()) {
+            return Mono.error(new IllegalArgumentException("response body is required"));
+        }
+        return webClient.post()
+                .uri("/api/v1/tasks/{taskId}/respond", taskId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(Map.class)
+                                .map(value -> (Map<String, Object>) value)
+                                .defaultIfEmpty(new LinkedHashMap<>());
+                    }
+                    int statusCode = response.statusCode().value();
+                    return response.bodyToMono(Map.class)
+                            .map(value -> (Map<String, Object>) value)
+                            .defaultIfEmpty(Map.of())
+                            .flatMap(errorBody -> Mono.error(new UserInputResponseException(
+                                    statusCode, userInputErrorCode(statusCode, errorBody))));
+                })
+                .timeout(Duration.ofSeconds(10));
+    }
+
+    private String userInputErrorCode(int statusCode, Map<String, Object> body) {
+        for (String key : List.of("error_code", "error", "code")) {
+            Object value = body.get(key);
+            if (value != null && USER_INPUT_ERROR_CODES.contains(value.toString())) {
+                return value.toString();
+            }
+        }
+        return switch (statusCode) {
+            case 400 -> "INVALID_USER_INPUT_RESPONSE";
+            case 404 -> "TASK_NOT_FOUND";
+            case 409 -> "USER_INPUT_NOT_PENDING";
+            default -> "CODEX_USER_INPUT_RESPONSE_REJECTED";
+        };
     }
 
     /**

@@ -2,12 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import client from '../client'
 import {
   getCodexRuntimeAvailability,
+  getCodexRuntimeRateLimits,
   listCodexRuntimes,
   refreshCodexRuntime,
   registerCodexRuntime,
   updateCodexRuntimeRouting,
 } from '../codexRuntime'
-import type { CodexRuntime } from '@/types/codexRuntime'
+import type { CodexRuntime, CodexRuntimeRateLimits } from '@/types/codexRuntime'
 
 vi.mock('../client', () => ({
   default: {
@@ -92,6 +93,35 @@ describe('codexRuntime API', () => {
       },
       suppressErrorMessage: true,
     })
+  })
+
+  it('reads owner-only rate limits with an explicit refresh flag', async () => {
+    const snapshot = {
+      contractVersion: 1,
+      runtimeId: runtime.runtimeId,
+      runtimeRevision: runtime.revision,
+      instanceId: 'instance-a',
+      scope: 'DEFAULT_CODEX_HOME',
+      state: 'AVAILABLE',
+      observedAtEpochMs: 1_783_728_000_000,
+      stale: false,
+      limits: [],
+      errorCode: null,
+    } satisfies CodexRuntimeRateLimits
+    vi.mocked(client.get).mockResolvedValue({ data: snapshot })
+
+    await expect(getCodexRuntimeRateLimits(runtime.runtimeId, runtime.revision, {
+      refresh: true,
+      suppressErrorMessage: true,
+    })).resolves.toEqual(snapshot)
+
+    expect(client.get).toHaveBeenCalledWith(
+      '/codex-runtimes/app%2Fserver%20local/revisions/2/rate-limits',
+      {
+        params: { refresh: true },
+        suppressErrorMessage: true,
+      },
+    )
   })
 
   it('registers a dark runtime without changing the request payload', async () => {

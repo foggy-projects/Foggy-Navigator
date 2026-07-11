@@ -521,7 +521,7 @@ class OpenApiControllerMessageMappingTest {
                         "model-default",
                         null,
                         LlmModelCategory.GENERAL,
-                        "codex-mini",
+                        "codex-latest",
                         "MODEL_CONFIG_DEFAULT",
                         "OPENAI_CODEX",
                         "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT"));
@@ -1011,7 +1011,7 @@ class OpenApiControllerMessageMappingTest {
                         "model-default",
                         null,
                         LlmModelCategory.GENERAL,
-                        "codex-mini",
+                        "codex-latest",
                         "MODEL_CONFIG_DEFAULT",
                         "OPENAI_CODEX",
                         "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT"));

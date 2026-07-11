@@ -16,6 +16,14 @@ Independent Foggy Navigator runtime backed only by `codex app-server`. It does n
   active, or ambiguous turn becomes terminal `APP_SERVER_RECOVERY_UNKNOWN` without replay.
 - `GET /api/v1/tasks/:taskId/status`, `GET .../subscribe?ack_seq=N`, and
   `POST .../abort` preserve the stable task binding.
+- Experimental Codex `item/tool/requestUserInput` requests are projected as sanitized
+  `user_input_request` events and public `awaiting_input` status. The durable task phase remains
+  `running` so `0.1.1` readers can still recover the journal safely.
+- `POST /api/v1/tasks/:taskId/respond` accepts the exact pending `request_id` and one answer per
+  question. Replies are once-only and bound to the same app-server instance, thread and turn;
+  answer values are never persisted or emitted by the Worker.
+- An SSE observer disconnect never starts or resumes a turn. Clients reconnect and read status;
+  a second task for a nonterminal native thread is rejected with `APP_SERVER_THREAD_ACTIVE`.
 - `DELETE /api/v1/tasks/:taskId` accepts only terminal tasks, purges encrypted request/event
   bodies and retains a permanent idempotency tombstone (`taskId + requestHash + outcome`).
 - `GET /api/v1/capabilities` exposes the runtime/instance/revision, complete reasoning matrix,
@@ -129,11 +137,11 @@ unconfigured service; it creates `.env` from `.env.example` when no existing con
 To update an existing 0.1.1-or-newer install, run its current update script and pass the downloaded archive:
 
 ```powershell
-./update.ps1 -Package ./codex-app-server-worker-0.1.1.zip
+./update.ps1 -Package ./codex-app-server-worker-0.3.0.zip
 ```
 
 ```bash
-./update.sh --package ./codex-app-server-worker-0.1.1.zip
+./update.sh --package ./codex-app-server-worker-0.3.0.zip
 ```
 
 In-place update of a `0.1.0` installation is explicitly unsupported, whether it is running or
@@ -220,7 +228,8 @@ bundle can emit equivalent maps in a different key order across runs.
 
 The first dark-launch contract can directly pass through arbitrary model strings, but platform
 routing is limited to the explicit per-model reasoning matrix in the capability manifest.
-`gpt-5.6-sol` is declared through Ultra; `gpt-5.4-mini` is declared only for low through xhigh.
+`gpt-5.6-sol` is declared through Ultra. Retired `gpt-5.4-mini` requests are rejected after alias
+resolution with stable code `UNSUPPORTED_CODEX_MODEL` and are absent from the capability manifest.
 Dynamic passthrough is not evidence that an unlisted model/reasoning combination is production-ready.
 The initial matrix is a pinned CLI `model/list` dark-launch snapshot. Account-specific dynamic catalog
 refresh remains a P5 routing gate and is not inferred from direct passthrough.

@@ -23,6 +23,6 @@ public class CodexConfig {
     /** Bearer token（数据库中加密存储） */
     private String authToken;
 
-    /** 默认模型，例如 codex-mini-latest */
+    /** 默认模型，例如 codex-latest */
     private String model;
 }

@@ -178,6 +178,26 @@ class CodexWorkerClientTest {
     }
 
     @Test
+    void getRuntimeRateLimitsUsesRuntimeTokenInstanceProofAndRefreshQuery() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(
+                    server.baseUrl(), "runtime-token", "instance-a");
+
+            var snapshot = client.getRuntimeRateLimits(true).block(Duration.ofSeconds(5));
+
+            assertEquals("GET", server.method());
+            assertEquals("/api/v1/runtime/rate-limits", server.path());
+            assertEquals("refresh=true", server.query());
+            assertEquals("Bearer runtime-token", server.authorization());
+            assertEquals("instance-a", server.expectedInstanceId());
+            assertEquals("app-main", snapshot.getRuntimeId());
+            assertEquals(42, snapshot.getLimits().get(0).getPrimary().getUsedPercent());
+            assertEquals(1_783_746_000L,
+                    snapshot.getLimits().get(0).getPrimary().getResetsAt());
+        }
+    }
+
+    @Test
     void abortTaskParsesAcceptedResponseForTerminalReconciliation() throws Exception {
         try (CaptureServer server = CaptureServer.start()) {
             CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
@@ -189,6 +209,42 @@ class CodexWorkerClientTest {
             assertEquals("/api/v1/tasks/worker-task-9/abort", server.path());
             assertEquals("worker-task-9", response.get("task_id"));
             assertEquals("accepted", response.get("status"));
+        }
+    }
+
+    @Test
+    void respondToTaskUsesWorkerTaskPathAndPreservesSingleAnswerArray() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token", "instance-a");
+
+            Map<String, Object> response = client.respondToTask("worker-task-9", Map.of(
+                    "request_id", "request-1",
+                    "answers", Map.of("choice", List.of("one"))))
+                    .block(Duration.ofSeconds(5));
+
+            assertEquals("POST", server.method());
+            assertEquals("/api/v1/tasks/worker-task-9/respond", server.path());
+            Map<String, Object> body = objectMapper.readValue(server.body(), new TypeReference<>() {});
+            assertEquals(Map.of("choice", List.of("one")), body.get("answers"));
+            assertEquals("running", response.get("status"));
+            assertEquals("instance-a", server.expectedInstanceId());
+        }
+    }
+
+    @Test
+    void respondToTaskPropagatesStableWorkerConflictCode() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            server.respondReturns(409, "USER_INPUT_REQUEST_MISMATCH");
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            CodexWorkerClient.UserInputResponseException error = assertThrows(
+                    CodexWorkerClient.UserInputResponseException.class,
+                    () -> client.respondToTask("worker-task-9", Map.of(
+                                    "request_id", "request-1", "answers", Map.of("choice", "one")))
+                            .block(Duration.ofSeconds(5)));
+
+            assertEquals(409, error.getStatusCode());
+            assertEquals("USER_INPUT_REQUEST_MISMATCH", error.getCode());
         }
     }
 
@@ -267,7 +323,10 @@ class CodexWorkerClientTest {
         private final AtomicReference<String> method = new AtomicReference<>();
         private final AtomicReference<String> path = new AtomicReference<>();
         private final AtomicReference<String> expectedInstanceId = new AtomicReference<>();
+        private final AtomicReference<String> authorization = new AtomicReference<>();
         private volatile boolean abortPendingConflict;
+        private volatile int respondStatus = 200;
+        private volatile String respondErrorCode;
         private volatile int deleteStatus = 200;
         private volatile String actualInstanceId = "instance-a";
 
@@ -315,6 +374,18 @@ class CodexWorkerClientTest {
                     exchange.close();
                     return;
                 }
+                if (exchange.getRequestURI().getPath().endsWith("/respond")) {
+                    String responseJson = capture.respondErrorCode != null
+                            ? "{\"error\":\"" + capture.respondErrorCode + "\"}"
+                            : "{\"task_id\":\"worker-task-9\",\"status\":\"running\","
+                                    + "\"request_id\":\"request-1\"}";
+                    byte[] response = responseJson.getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(capture.respondStatus, response.length);
+                    exchange.getResponseBody().write(response);
+                    exchange.close();
+                    return;
+                }
                 boolean abort = exchange.getRequestURI().getPath().endsWith("/abort");
                 String responseJson = abort && capture.abortPendingConflict
                         ? "{\"task_id\":\"worker-task-9\",\"status\":\"abort_pending\"}"
@@ -330,6 +401,28 @@ class CodexWorkerClientTest {
                 capture.expectedInstanceId.set(exchange.getRequestHeaders().getFirst(
                         CodexWorkerClient.EXPECTED_INSTANCE_HEADER));
                 byte[] response = "{\"runtime_type\":\"APP_SERVER\",\"cli_version\":\"0.144.1\"}"
+                        .getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                capture.addInstanceProof(exchange);
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+            });
+            server.createContext("/api/v1/runtime/rate-limits", exchange -> {
+                capture.method.set(exchange.getRequestMethod());
+                capture.path.set(exchange.getRequestURI().getPath());
+                capture.query.set(exchange.getRequestURI().getRawQuery());
+                capture.authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+                capture.expectedInstanceId.set(exchange.getRequestHeaders().getFirst(
+                        CodexWorkerClient.EXPECTED_INSTANCE_HEADER));
+                byte[] response = ("{\"contract_version\":1,\"runtime_id\":\"app-main\","
+                        + "\"runtime_revision\":1,\"instance_id\":\"instance-a\","
+                        + "\"scope\":\"DEFAULT_CODEX_HOME\",\"state\":\"AVAILABLE\","
+                        + "\"observed_at_epoch_ms\":1783728000000,\"stale\":false,"
+                        + "\"limits\":[{\"limit_id\":\"codex\",\"limit_name\":\"Codex\","
+                        + "\"primary\":{\"used_percent\":42,\"window_duration_mins\":300,"
+                        + "\"resets_at\":1783746000},\"secondary\":null,"
+                        + "\"rate_limit_reached_type\":null}],\"error_code\":null}")
                         .getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
                 capture.addInstanceProof(exchange);
@@ -377,6 +470,10 @@ class CodexWorkerClientTest {
             return expectedInstanceId.get();
         }
 
+        String authorization() {
+            return authorization.get();
+        }
+
         void actualInstanceId(String value) {
             actualInstanceId = value;
         }
@@ -393,6 +490,11 @@ class CodexWorkerClientTest {
 
         void abortReturnsPendingConflict() {
             abortPendingConflict = true;
+        }
+
+        void respondReturns(int status, String errorCode) {
+            respondStatus = status;
+            respondErrorCode = errorCode;
         }
 
         void deleteReturns(int status) {

@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "opt-003-pc-interactive-input-v1",
+  "generatedAtUtc": "2026-07-11T05:32:27Z",
+  "scope": "isolated",
+  "status": "PASSED",
+  "runtime": {
+    "runtimeId": "app-fullchain-31c687e1e69c",
+    "runtimeRevision": 3,
+    "runtimeInstanceId": "codex-store-4e159945-cb59-496a-acb8-a48a9ca44fcf",
+    "model": "codex-ultra"
+  },
+  "singleQuestion": {
+    "taskId": "20260711-0847",
+    "sessionId": "9c35c8ab-464a-4dbc-8d29-774482550446",
+    "threadId": "019f4f8e-a7d8-7f02-8dfc-68f0c1355c39",
+    "ordinalReply": "1",
+    "status": "COMPLETED",
+    "resultExact": "PC_INPUT_ACCEPTED:Alpha",
+    "answeredStateVisible": true
+  },
+  "multiQuestionReconnect": {
+    "taskId": "20260711-b814",
+    "sessionId": "9c5a3a10-29a0-491f-9396-8040045216e7",
+    "threadId": "019f4f90-ae58-73e3-9ea9-189c4f135982",
+    "statusWhileBrowserClosed": "AWAITING_INPUT",
+    "pendingCardRestoredAfterReopen": true,
+    "activeResumeRejected": true,
+    "tasksBeforeResumeAttempt": 1,
+    "tasksAfterResumeAttempt": 1,
+    "answers": {
+      "Target": "Staging (Recommended)",
+      "Pace": "Quick"
+    },
+    "status": "COMPLETED",
+    "resultExact": "PC_MULTI_ACCEPTED:Staging:Quick",
+    "answeredSummaryVisible": true
+  },
+  "desktop": {
+    "viewport": "1440x900",
+    "questionCardVisible": true,
+    "normalComposerOrdinalReplyWorked": true,
+    "answeredCardVisible": true
+  },
+  "mobile": {
+    "viewport": "320x800",
+    "documentClientWidth": 320,
+    "documentScrollWidth": 320,
+    "bodyClientWidth": 320,
+    "bodyScrollWidth": 320,
+    "horizontalOverflow": false,
+    "drawerHandleQuestionCardOverlap": false,
+    "optionTextFits": true
+  },
+  "diagnostics": {
+    "consoleErrors": 0,
+    "pageErrors": 0,
+    "requestFailures": 0
+  }
+}

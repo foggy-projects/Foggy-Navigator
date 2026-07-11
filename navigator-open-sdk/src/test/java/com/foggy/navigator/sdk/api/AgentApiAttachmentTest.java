@@ -105,7 +105,7 @@ class AgentApiAttachmentTest {
                 1,
                 null,
                 "model-1",
-                "codex-mini",
+                "codex-latest",
                 null,
                 Map.of(
                         "providerType", "codex-biz-worker",

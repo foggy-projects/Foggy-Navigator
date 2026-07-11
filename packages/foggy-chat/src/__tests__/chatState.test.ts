@@ -592,6 +592,44 @@ describe('createChatState', () => {
       const msg = state.messages.value[0]
       expect(msg.questions).toEqual([])
     })
+
+    it('restores answers by question id without retaining secret values', () => {
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, {
+        permissionId: 'perm-codex',
+        taskId: 'task-codex',
+        questions: [
+          {
+            id: 'target',
+            question: 'Target?',
+            header: 'Target',
+            options: [{ label: 'Staging', description: '' }],
+            multiSelect: false,
+          },
+          {
+            id: 'credential',
+            question: 'Credential?',
+            header: 'Credential',
+            options: null,
+            multiSelect: false,
+            isSecret: true,
+          },
+        ],
+      }, { messageId: 'request-codex' }))
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_RESPONSE, {
+        permissionId: 'perm-codex',
+        taskId: 'task-codex',
+        decision: 'allow',
+        answers: {
+          target: 'Staging',
+          credential: 'must-not-be-retained',
+        },
+      }, { messageId: 'response-codex' }))
+
+      const message = state.messages.value[0]
+      expect(message.permissionStatus).toBe('approved')
+      expect(message.answeredValues).toEqual({ 0: 'Staging' })
+      expect(JSON.stringify(message)).not.toContain('must-not-be-retained')
+    })
   })
 
   // ========== resolvePermission ==========
@@ -654,6 +692,51 @@ describe('createChatState', () => {
       state.resolvePermission('perm-plan', 'denied')
 
       expect(state.messages.value[0].permissionStatus).toBe('denied')
+    })
+
+    it('deduplicates a replayed request and resolves the matching task when ids are reused', () => {
+      const reused = {
+        permissionId: 'reused-request',
+        toolName: 'AskUserQuestion',
+      }
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, {
+        ...reused,
+        taskId: 'task-old',
+      }, { messageId: 'request-old' }))
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, {
+        ...reused,
+        taskId: 'task-current',
+      }, { messageId: 'request-current' }))
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, {
+        ...reused,
+        taskId: 'task-current',
+      }, { messageId: 'request-current' }))
+
+      expect(state.messages.value).toHaveLength(2)
+      state.resolvePermission('reused-request', 'approved', 'task-current')
+      expect(state.messages.value[0].permissionStatus).toBe('pending')
+      expect(state.messages.value[1].permissionStatus).toBe('approved')
+    })
+
+    it('applies a persisted response to the request from the same task', () => {
+      for (const taskId of ['task-old', 'task-current']) {
+        state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, {
+          permissionId: 'reused-request',
+          taskId,
+          questions: [{ id: 'choice', question: 'Choose?', header: 'Choice', options: [], multiSelect: false }],
+        }, { messageId: `request-${taskId}` }))
+      }
+
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_RESPONSE, {
+        permissionId: 'reused-request',
+        taskId: 'task-current',
+        decision: 'allow',
+        answers: { choice: 'current answer' },
+      }, { messageId: 'response-current' }))
+
+      expect(state.messages.value[0].permissionStatus).toBe('pending')
+      expect(state.messages.value[1].permissionStatus).toBe('approved')
+      expect(state.messages.value[1].answeredValues).toEqual({ 0: 'current answer' })
     })
   })
 

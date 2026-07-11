@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { AppServerEventBridge } from '../src/app-server/event-bridge.js'
+import { buildCodexConfig } from '../src/app-server/executor.js'
 import { EventBroadcast } from '../src/persistence/event-store.js'
 import {
   AppServerRuntimeError,
@@ -32,7 +33,7 @@ class FakeProcess extends EventEmitter {
     private readonly emitTestNotification = false,
     private readonly childMetadataError?: string,
     private readonly interruptBehavior?: 'error' | 'timeout' | 'turn-start-hang' | 'stale-terminal' | 'same-batch-events'
-      | 'running-after-start',
+      | 'running-after-start' | 'interactive-request' | 'unknown-server-request' | 'server-resolved-request',
   ) {
     super()
     this.stdin.on('data', chunk => {
@@ -106,6 +107,37 @@ class FakeProcess extends EventEmitter {
         })
       }
       this.send({ id: message.id, result: { turn: { id: 'turn-1', status: 'inProgress' } } })
+      if (this.interruptBehavior === 'interactive-request' || this.interruptBehavior === 'server-resolved-request') {
+        this.send({
+          id: 'server-input-1',
+          method: 'item/tool/requestUserInput',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            itemId: 'item-input-1',
+            questions: [{
+              id: 'mode', header: 'Mode', question: 'Choose mode',
+              options: [{ label: 'Safe', description: 'Use safe mode' }],
+            }],
+          },
+        })
+        if (this.interruptBehavior === 'server-resolved-request') {
+          queueMicrotask(() => {
+            this.send({
+              method: 'serverRequest/resolved',
+              params: { threadId: 'thread-1', requestId: 'server-input-1' },
+            })
+            this.send({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })
+          })
+        }
+      }
+      if (this.interruptBehavior === 'unknown-server-request') {
+        this.send({
+          id: 'approval-1',
+          method: 'item/commandExecution/requestApproval',
+          params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'command-1' },
+        })
+      }
       if (this.emitTestNotification) {
         this.send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', delta: 'test' } })
       }
@@ -122,6 +154,16 @@ class FakeProcess extends EventEmitter {
       if (!this.interruptBehavior || this.interruptBehavior === 'stale-terminal') {
         this.send({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })
       }
+    }
+    if (message.id === 'server-input-1' && (message.result || message.error)) {
+      this.send({
+        method: 'serverRequest/resolved',
+        params: { threadId: 'thread-1', requestId: 'server-input-1' },
+      })
+      this.send({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })
+    }
+    if (message.id === 'approval-1' && message.error) {
+      this.send({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })
     }
     if (message.method === 'thread/read' && this.childMetadataError) {
       this.send({ id: message.id, error: { code: -32000, message: this.childMetadataError } })
@@ -189,6 +231,93 @@ test('persistent runtime initializes once and serves sequential exclusive turns'
   assert.equal(process.killed, false)
   instance.close()
   assert.equal(process.killed, true)
+})
+
+test('runtime enables and answers only the pinned request_user_input server request', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, 'interactive-request')
+  let resolved = 0
+  const result = await runAppServerTurn({
+    taskId: 'interactive-runtime',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: buildCodexConfig({ prompt: 'choose', codex_config: { tool_output_token_limit: 4_096 } }, undefined),
+    input: 'choose',
+    env: {},
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+    onUserInputRequest: async request => {
+      assert.equal(request.requestId, 'server-input-1')
+      assert.equal(request.questions[0]?.id, 'mode')
+      return { answers: { mode: { answers: ['Safe'] } } }
+    },
+    onUserInputResolved: resolution => {
+      assert.equal(resolution.requestId, 'server-input-1')
+      resolved++
+    },
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+  assert.equal(result.turn.status, 'completed')
+  assert.equal(resolved, 1)
+  const initialize = received.find(message => message.method === 'initialize')
+  assert.equal(initialize?.params?.capabilities?.experimentalApi, true)
+  const threadStart = received.find(message => message.method === 'thread/start')
+  assert.equal(threadStart?.params?.config?.['features.default_mode_request_user_input'], true)
+  assert.equal(threadStart?.params?.config?.['notice.hide_rate_limit_model_nudge'], true)
+  assert.equal(threadStart?.params?.config?.approval_policy, 'never')
+  const response = received.find(message => message.id === 'server-input-1' && message.result)
+  assert.deepEqual(response?.result, { answers: { mode: { answers: ['Safe'] } } })
+})
+
+test('command approvals and unknown server requests remain rejected while approval policy stays never', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, 'unknown-server-request')
+  let userInputCalls = 0
+  const result = await runAppServerTurn({
+    taskId: 'unknown-server-request',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: { approval_policy: 'never', 'features.default_mode_request_user_input': true },
+    input: 'inspect',
+    env: {},
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+    onUserInputRequest: async () => {
+      userInputCalls++
+      return { answers: {} }
+    },
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+  assert.equal(result.turn.status, 'completed')
+  assert.equal(userInputCalls, 0)
+  const rejected = received.find(message => message.id === 'approval-1' && message.error)
+  assert.equal(rejected?.error?.code, -32601)
+  assert.equal(rejected?.error?.message, 'Unsupported server request')
+})
+
+test('serverRequest/resolved clears an in-flight request without sending a stale response', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, 'server-resolved-request')
+  let observedResolution = 0
+  const result = await runAppServerTurn({
+    taskId: 'server-resolved',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: { approval_policy: 'never', 'features.default_mode_request_user_input': true },
+    input: 'inspect',
+    env: {},
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+    onUserInputRequest: () => new Promise(() => undefined),
+    onUserInputResolved: () => { observedResolution++ },
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+  assert.equal(result.turn.status, 'completed')
+  assert.equal(observedResolution, 1)
+  assert.equal(received.some(message => message.id === 'server-input-1' && (message.result || message.error)), false)
 })
 
 test('turn-started callback failure retires and closes a still-running instance before rejection', async () => {

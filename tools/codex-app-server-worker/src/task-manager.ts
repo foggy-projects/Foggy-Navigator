@@ -1,11 +1,26 @@
 import path from 'node:path'
 import type { AppConfig } from './config.js'
-import type { StoredTaskRecord, TaskRequest, WorkerEvent } from './models.js'
-import { parseModelString, resolveModelAlias } from './model-resolution.js'
+import type {
+  AppServerRequestId,
+  PendingUserInputInteraction,
+  ResolvedUserInputInteraction,
+  StoredTaskRecord,
+  TaskRequest,
+  WorkerEvent,
+} from './models.js'
+import type { PoolRateLimitsView } from './app-server/rate-limits.js'
+import { parseModelString, resolveSupportedModelAlias } from './model-resolution.js'
 import { EventBroadcast } from './persistence/event-store.js'
 import { TaskStore } from './persistence/task-store.js'
 import { cleanupMaterializedInput, type TaskExecutor } from './app-server/executor.js'
 import { AppServerRuntimeError } from './app-server/runtime.js'
+import {
+  normalizeUserInputAnswers,
+  sameRequestId,
+  toPendingInteraction,
+  type UserInputServerRequest,
+  type UserInputWireResponse,
+} from './app-server/user-input.js'
 
 export class TaskQueueFullError extends Error {
   readonly code = 'APP_SERVER_TASK_QUEUE_FULL'
@@ -23,6 +38,49 @@ export class TaskManagerDrainingError extends Error {
   }
 }
 
+export class TaskThreadActiveError extends Error {
+  readonly code = 'APP_SERVER_THREAD_ACTIVE'
+  constructor() {
+    super('Codex app-server thread already has a nonterminal task')
+    this.name = 'TaskThreadActiveError'
+  }
+}
+
+export type UserInputResponseErrorCode =
+  | 'USER_INPUT_NOT_PENDING'
+  | 'USER_INPUT_REQUEST_MISMATCH'
+  | 'USER_INPUT_ALREADY_RESPONDED'
+  | 'USER_INPUT_RUNTIME_AFFINITY_LOST'
+
+export class UserInputResponseError extends Error {
+  constructor(readonly code: UserInputResponseErrorCode) {
+    super(code)
+    this.name = 'UserInputResponseError'
+  }
+}
+
+export type UserInputResponseBody = {
+  request_id: AppServerRequestId
+  answers: unknown
+}
+
+type LiveUserInputInteraction = {
+  taskId: string
+  requestId: AppServerRequestId
+  runtimeInstanceId: string
+  resolve: (response: UserInputWireResponse) => void
+  reject: (error: Error) => void
+  timer?: NodeJS.Timeout
+  settled: boolean
+}
+
+type AbortPreparation =
+  | { kind: 'missing' }
+  | { kind: 'terminal'; result: AbortTaskResult }
+  | { kind: 'active'; record: StoredTaskRecord; controller: AbortController }
+  | { kind: 'local'; record: StoredTaskRecord; broadcast: EventBroadcast }
+  | { kind: 'reconcile'; record: StoredTaskRecord; broadcast: EventBroadcast }
+
 export type AbortTaskResult = {
   record: StoredTaskRecord
   abort_status: 'aborted' | 'abort_pending' | 'already_terminal'
@@ -37,6 +95,9 @@ export class TaskManager {
   private pendingAccepts = 0
   private readonly inFlightAccepts = new Map<string, Promise<{ record: StoredTaskRecord; created: boolean }>>()
   private readonly taskOperations = new Map<string, Promise<void>>()
+  private readonly threadReservations = new Map<string, string>()
+  private readonly taskThreadReservations = new Map<string, Set<string>>()
+  private readonly liveUserInput = new Map<string, LiveUserInputInteraction>()
   private recoveryRun?: Promise<void>
 
   constructor(
@@ -48,18 +109,30 @@ export class TaskManager {
   async initialize(options: { resume?: boolean } = {}): Promise<void> {
     await this.store.initialize()
     if (options.resume !== false) this.store.verifyEncryptionKey()
+    const reservationConflicts = this.rebuildThreadReservations()
     for (const snapshot of this.store.list()) {
       await cleanupMaterializedInput(snapshot.task_id, this.config.stateDir)
       const record = this.store.get(snapshot.task_id) || snapshot
       if (record.status === 'terminal') {
+        this.releaseThreadReservations(record.task_id)
         if (record.tombstoned_at) {
           await EventBroadcast.purgePersisted(record.task_id, path.join(this.config.stateDir, 'events'))
         }
         continue
       }
+      if (reservationConflicts.has(record.task_id)) {
+        await this.finalizeThreadReservationConflict(record, this.getBroadcast(record.task_id))
+        continue
+      }
+      if (record.pending_interaction) {
+        await this.finalizeLostUserInput(record, this.getBroadcast(record.task_id))
+        this.releaseThreadReservations(record.task_id)
+        continue
+      }
       const broadcast = this.getBroadcast(record.task_id)
       const events = broadcast.getEventsAfter(0)
       if (await this.finalizeDurableTerminalEvent(record, broadcast, events)) {
+        this.releaseThreadReservations(record.task_id)
         continue
       }
       if (record.abort_requested_at && (record.status === 'accepted' || record.status === 'starting')) {
@@ -76,6 +149,9 @@ export class TaskManager {
       } else {
         await this.store.patch(record.task_id, { recovery_required: true })
       }
+      if (this.store.get(record.task_id)?.status === 'terminal') {
+        this.releaseThreadReservations(record.task_id)
+      }
     }
     this.pump()
   }
@@ -89,7 +165,13 @@ export class TaskManager {
       return this.store.accept(taskId, request)
     }
     if (!this.isAccepting()) throw new TaskManagerDrainingError()
+    let requestedThreadReserved = false
+    if (request.session_id) {
+      this.reserveThread(taskId, request.session_id)
+      requestedThreadReserved = true
+    }
     if (this.active.size + this.queued.size + this.pendingAccepts >= this.config.maxConcurrentTasks + this.config.maxQueuedTasks) {
+      if (requestedThreadReserved) this.releaseThreadReservations(taskId)
       throw new TaskQueueFullError()
     }
     this.pendingAccepts++
@@ -99,12 +181,17 @@ export class TaskManager {
       if (accepted.created) {
         this.enqueue(taskId)
         queueMicrotask(() => this.pump())
+      } else if (accepted.record.status === 'terminal') {
+        this.releaseThreadReservations(taskId)
       }
       return accepted
     })()
     this.inFlightAccepts.set(taskId, accepting)
     try {
       return await accepting
+    } catch (error) {
+      if (!this.store.get(taskId)) this.releaseThreadReservations(taskId)
+      throw error
     } finally {
       this.pendingAccepts--
       if (this.inFlightAccepts.get(taskId) === accepting) this.inFlightAccepts.delete(taskId)
@@ -113,6 +200,45 @@ export class TaskManager {
 
   get(taskId: string): StoredTaskRecord | undefined {
     return this.store.get(taskId)
+  }
+
+  async respondToUserInput(taskId: string, body: UserInputResponseBody): Promise<StoredTaskRecord> {
+    return this.withTaskOperation(taskId, async () => {
+      const record = this.store.get(taskId)
+      if (!record) throw new UserInputResponseError('USER_INPUT_NOT_PENDING')
+      const pending = record.pending_interaction
+      if (!pending) {
+        if (record.last_interaction?.state === 'answered'
+            && sameRequestId(record.last_interaction.request_id, body.request_id)) {
+          throw new UserInputResponseError('USER_INPUT_ALREADY_RESPONDED')
+        }
+        throw new UserInputResponseError('USER_INPUT_NOT_PENDING')
+      }
+      if (!sameRequestId(pending.request_id, body.request_id)) {
+        throw new UserInputResponseError('USER_INPUT_REQUEST_MISMATCH')
+      }
+      const live = this.liveUserInput.get(taskId)
+      if (!live
+          || !sameRequestId(live.requestId, pending.request_id)
+          || live.runtimeInstanceId !== pending.runtime_instance_id
+          || record.app_server_instance_id !== pending.runtime_instance_id
+          || record.thread_id !== pending.thread_id
+          || record.turn_id !== pending.turn_id) {
+        await this.failUserInputAffinity(record, pending, this.getBroadcast(taskId))
+        throw new UserInputResponseError('USER_INPUT_RUNTIME_AFFINITY_LOST')
+      }
+      const response = normalizeUserInputAnswers(body.answers, pending)
+      const resolved = this.resolvedInteraction(pending, 'answered')
+      const updated = await this.store.patch(taskId, {
+        pending_interaction: undefined,
+        last_interaction: resolved,
+      })
+      const broadcast = this.getBroadcast(taskId)
+      this.emitUserInputResolved(broadcast, taskId, pending, 'answered')
+      await broadcast.flush()
+      this.settleLiveUserInput(live, { response })
+      return updated
+    })
   }
 
   getBroadcast(taskId: string): EventBroadcast {
@@ -131,51 +257,65 @@ export class TaskManager {
   }
 
   async abort(taskId: string): Promise<AbortTaskResult | undefined> {
-    return this.withTaskOperation(taskId, async () => {
+    const preparation = await this.withTaskOperation<AbortPreparation>(taskId, async () => {
       let record = this.store.get(taskId)
-      if (!record) return undefined
+      if (!record) return { kind: 'missing' }
       if (record.status === 'terminal') {
-        return {
+        return { kind: 'terminal', result: {
           record,
           abort_status: record.outcome === 'aborted' ? 'aborted' : 'already_terminal',
-        }
+        } }
       }
       record = await this.store.requestAbort(taskId)
       this.queued.delete(taskId)
+      const broadcast = this.getBroadcast(taskId)
+      if (record.pending_interaction) {
+        await this.clearLiveUserInputLocked(taskId, 'cleared', broadcast)
+        record = this.store.get(taskId) || record
+      }
       const controller = this.abortControllers.get(taskId)
       if (controller) {
         controller.abort('Task aborted')
-        const deadline = Date.now() + this.config.abortWaitTimeoutMs
-        let current = this.store.get(taskId)!
-        while (current.status !== 'terminal' && Date.now() < deadline) {
-          await new Promise(resolve => setTimeout(resolve, 20))
-          current = this.store.get(taskId) || current
-        }
-        return {
-          record: current,
-          abort_status: current.status !== 'terminal'
-            ? 'abort_pending'
-            : current.outcome === 'aborted'
-              ? 'aborted'
-              : 'already_terminal',
-        }
+        return { kind: 'active', record, controller }
       }
-      const broadcast = this.getBroadcast(taskId)
       if (record.status === 'accepted' || record.status === 'starting' || !this.executor.reconcile) {
-        const terminal = await this.finalizeLocalAbort(record, broadcast)
-        return { record: terminal, abort_status: 'aborted' }
+        return { kind: 'local', record, broadcast }
       }
-      await this.reconcileCommitted(record, broadcast)
-      const terminal = this.store.get(taskId) || record
+      return { kind: 'reconcile', record, broadcast }
+    })
+
+    if (preparation.kind === 'missing') return undefined
+    if (preparation.kind === 'terminal') return preparation.result
+    if (preparation.kind === 'active') {
+      const deadline = Date.now() + this.config.abortWaitTimeoutMs
+      let current = this.store.get(taskId) || preparation.record
+      while (current.status !== 'terminal' && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 20))
+        current = this.store.get(taskId) || current
+      }
       return {
-        record: terminal,
-        abort_status: terminal.status !== 'terminal'
+        record: current,
+        abort_status: current.status !== 'terminal'
           ? 'abort_pending'
-          : terminal.outcome === 'aborted'
+          : current.outcome === 'aborted'
             ? 'aborted'
             : 'already_terminal',
       }
-    })
+    }
+    if (preparation.kind === 'local') {
+      const terminal = await this.finalizeLocalAbort(preparation.record, preparation.broadcast)
+      return { record: terminal, abort_status: 'aborted' }
+    }
+    await this.reconcileCommitted(preparation.record, preparation.broadcast)
+    const terminal = this.store.get(taskId) || preparation.record
+    return {
+      record: terminal,
+      abort_status: terminal.status !== 'terminal'
+        ? 'abort_pending'
+        : terminal.outcome === 'aborted'
+          ? 'aborted'
+          : 'already_terminal',
+    }
   }
 
   async cleanupTerminal(taskId: string): Promise<StoredTaskRecord | undefined> {
@@ -220,6 +360,8 @@ export class TaskManager {
       active_tasks: this.active.size,
       queued_tasks: this.queued.size,
       pending_accepts: this.pendingAccepts,
+      pending_user_inputs: this.liveUserInput.size,
+      reserved_threads: this.threadReservations.size,
       resident_broadcasts: this.broadcasts.size,
       max_queued_tasks: this.config.maxQueuedTasks,
       accepting: this.isAccepting(),
@@ -295,6 +437,300 @@ export class TaskManager {
     if (!this.active.has(taskId)) this.queued.add(taskId)
   }
 
+  async readDefaultRateLimits(refresh = false): Promise<PoolRateLimitsView> {
+    if (!this.executor.readDefaultRateLimits) {
+      return {
+        state: 'UNSUPPORTED',
+        observed_at_epoch_ms: null,
+        stale: false,
+        limits: [],
+        error_code: 'RATE_LIMITS_UNSUPPORTED',
+      }
+    }
+    return this.executor.readDefaultRateLimits(refresh)
+  }
+
+  private async awaitUserInput(
+    taskId: string,
+    request: UserInputServerRequest,
+    runtimeInstanceId: string,
+    signal: AbortSignal,
+    broadcast: EventBroadcast,
+  ): Promise<UserInputWireResponse> {
+    const pending = toPendingInteraction(request, runtimeInstanceId, new Date().toISOString())
+    let live!: LiveUserInputInteraction
+    const response = new Promise<UserInputWireResponse>((resolve, reject) => {
+      live = {
+        taskId,
+        requestId: request.requestId,
+        runtimeInstanceId,
+        resolve,
+        reject,
+        settled: false,
+      }
+    })
+    await this.withTaskOperation(taskId, async () => {
+      const record = this.store.get(taskId)
+      if (!record || record.status !== 'running'
+          || record.pending_interaction
+          || this.liveUserInput.has(taskId)
+          || record.thread_id !== request.threadId
+          || record.turn_id !== request.turnId
+          || record.app_server_instance_id !== runtimeInstanceId) {
+        throw new UserInputResponseError('USER_INPUT_RUNTIME_AFFINITY_LOST')
+      }
+      await this.store.patch(taskId, { pending_interaction: pending })
+      this.liveUserInput.set(taskId, live)
+      broadcast.emit({
+        type: 'user_input_request',
+        subtype: 'request_user_input',
+        task_id: taskId,
+        session_id: pending.thread_id,
+        data: pending,
+      })
+      await broadcast.flush()
+    })
+
+    const abort = (): void => {
+      void this.clearLiveUserInput(taskId, 'cleared', broadcast)
+    }
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+    if (request.autoResolutionMs !== undefined) {
+      live.timer = setTimeout(() => {
+        void this.autoResolveUserInput(taskId, request.requestId, broadcast)
+      }, request.autoResolutionMs)
+      live.timer.unref?.()
+    }
+    try {
+      return await response
+    } finally {
+      signal.removeEventListener('abort', abort)
+      if (live.timer) clearTimeout(live.timer)
+    }
+  }
+
+  private async autoResolveUserInput(
+    taskId: string,
+    requestId: AppServerRequestId,
+    broadcast: EventBroadcast,
+  ): Promise<void> {
+    await this.withTaskOperation(taskId, async () => {
+      const record = this.store.get(taskId)
+      const pending = record?.pending_interaction
+      const live = this.liveUserInput.get(taskId)
+      if (!record || !pending || !live || !sameRequestId(requestId, pending.request_id)
+          || !sameRequestId(requestId, live.requestId)) return
+      await this.store.patch(taskId, {
+        pending_interaction: undefined,
+        last_interaction: this.resolvedInteraction(pending, 'auto_resolved'),
+      })
+      this.emitUserInputResolved(broadcast, taskId, pending, 'auto_resolved')
+      await broadcast.flush()
+      this.settleLiveUserInput(live, { response: { answers: {} } })
+    })
+  }
+
+  private async resolveUserInputFromServer(
+    taskId: string,
+    requestId: AppServerRequestId,
+    threadId: string,
+    runtimeInstanceId: string,
+    broadcast: EventBroadcast,
+  ): Promise<void> {
+    await this.withTaskOperation(taskId, async () => {
+      const record = this.store.get(taskId)
+      const pending = record?.pending_interaction
+      if (!record) return
+      if (!pending) return
+      if (!sameRequestId(pending.request_id, requestId)
+          || pending.thread_id !== threadId
+          || pending.runtime_instance_id !== runtimeInstanceId) {
+        return
+      }
+      const reason = 'cleared' as const
+      await this.store.patch(taskId, {
+        pending_interaction: undefined,
+        last_interaction: this.resolvedInteraction(pending, reason),
+      })
+      this.emitUserInputResolved(broadcast, taskId, pending, reason)
+      await broadcast.flush()
+      const live = this.liveUserInput.get(taskId)
+      if (live) this.settleLiveUserInput(live, { error: new Error('SERVER_REQUEST_RESOLVED') })
+    })
+  }
+
+  private async clearLiveUserInput(
+    taskId: string,
+    reason: 'cleared',
+    broadcast: EventBroadcast,
+  ): Promise<void> {
+    if (!this.store.get(taskId)?.pending_interaction) return
+    await this.withTaskOperation(taskId, async () => {
+      await this.clearLiveUserInputLocked(taskId, reason, broadcast)
+    })
+  }
+
+  private async clearLiveUserInputLocked(
+    taskId: string,
+    reason: 'cleared',
+    broadcast: EventBroadcast,
+  ): Promise<void> {
+    const record = this.store.get(taskId)
+    const pending = record?.pending_interaction
+    if (!record || !pending) return
+    await this.store.patch(taskId, {
+      pending_interaction: undefined,
+      last_interaction: this.resolvedInteraction(pending, reason),
+    })
+    this.emitUserInputResolved(broadcast, taskId, pending, reason)
+    await broadcast.flush()
+    const live = this.liveUserInput.get(taskId)
+    if (live) this.settleLiveUserInput(live, { error: new Error('USER_INPUT_CHANNEL_CLEARED') })
+  }
+
+  private settleLiveUserInput(
+    live: LiveUserInputInteraction,
+    outcome: { response: UserInputWireResponse } | { error: Error },
+  ): void {
+    if (live.settled) return
+    live.settled = true
+    if (live.timer) clearTimeout(live.timer)
+    if (this.liveUserInput.get(live.taskId) === live) this.liveUserInput.delete(live.taskId)
+    if ('response' in outcome) live.resolve(outcome.response)
+    else live.reject(outcome.error)
+  }
+
+  private async failUserInputAffinity(
+    record: StoredTaskRecord,
+    pending: PendingUserInputInteraction,
+    broadcast: EventBroadcast,
+  ): Promise<void> {
+    this.emitUserInputResolved(broadcast, record.task_id, pending, 'cleared')
+    this.emitError(broadcast, record.task_id, pending.thread_id, 'USER_INPUT_CHANNEL_LOST')
+    await broadcast.flush()
+    await this.store.transition(record.task_id, 'terminal', {
+      outcome: 'failed',
+      error_code: 'USER_INPUT_CHANNEL_LOST',
+      pending_interaction: undefined,
+      last_interaction: this.resolvedInteraction(pending, 'failed'),
+    })
+    const live = this.liveUserInput.get(record.task_id)
+    if (live) this.settleLiveUserInput(live, { error: new Error('USER_INPUT_CHANNEL_LOST') })
+    this.releaseThreadReservations(record.task_id)
+    await this.retireBroadcast(record.task_id, broadcast)
+  }
+
+  private async finalizeLostUserInput(record: StoredTaskRecord, broadcast: EventBroadcast): Promise<void> {
+    const pending = record.pending_interaction
+    if (!pending) return
+    this.emitUserInputResolved(broadcast, record.task_id, pending, 'cleared')
+    this.emitError(broadcast, record.task_id, pending.thread_id, 'USER_INPUT_CHANNEL_LOST')
+    await broadcast.flush()
+    await this.store.transition(record.task_id, 'terminal', {
+      outcome: 'failed',
+      error_code: 'USER_INPUT_CHANNEL_LOST',
+      pending_interaction: undefined,
+      last_interaction: this.resolvedInteraction(pending, 'failed'),
+    })
+    await this.retireBroadcast(record.task_id, broadcast)
+  }
+
+  private resolvedInteraction(
+    pending: PendingUserInputInteraction,
+    state: ResolvedUserInputInteraction['state'],
+  ): ResolvedUserInputInteraction {
+    return {
+      contract_version: 1,
+      request_id: pending.request_id,
+      thread_id: pending.thread_id,
+      turn_id: pending.turn_id,
+      runtime_instance_id: pending.runtime_instance_id,
+      state,
+      resolved_at: new Date().toISOString(),
+    }
+  }
+
+  private emitUserInputResolved(
+    broadcast: EventBroadcast,
+    taskId: string,
+    pending: PendingUserInputInteraction,
+    reason: 'answered' | 'auto_resolved' | 'cleared',
+  ): void {
+    broadcast.emit({
+      type: 'user_input_resolved',
+      subtype: 'request_user_input_resolved',
+      task_id: taskId,
+      session_id: pending.thread_id,
+      data: { contract_version: 1, request_id: pending.request_id, reason },
+    })
+  }
+
+  private rebuildThreadReservations(): Set<string> {
+    this.threadReservations.clear()
+    this.taskThreadReservations.clear()
+    const conflicts = new Set<string>()
+    const records = this.store.list().sort((left, right) => (
+      left.created_at.localeCompare(right.created_at) || left.task_id.localeCompare(right.task_id)
+    ))
+    for (const record of records) {
+      if (record.status === 'terminal') continue
+      const candidates = new Set<string>()
+      if (record.requested_thread_id) candidates.add(record.requested_thread_id)
+      if (record.thread_id) candidates.add(record.thread_id)
+      if (candidates.size === 0) {
+        try {
+          const requested = this.store.getRequest(record.task_id).session_id
+          if (requested) candidates.add(requested)
+        } catch {
+          // Legacy records without a readable payload remain conservatively unreserved until recovery.
+        }
+      }
+      try {
+        for (const threadId of candidates) this.reserveThread(record.task_id, threadId)
+      } catch (error) {
+        if (!(error instanceof TaskThreadActiveError)) throw error
+        this.releaseThreadReservations(record.task_id)
+        conflicts.add(record.task_id)
+      }
+    }
+    return conflicts
+  }
+
+  private reserveThread(taskId: string, threadId: string): void {
+    const key = threadId.trim()
+    if (!key) return
+    const owner = this.threadReservations.get(key)
+    if (owner && owner !== taskId) throw new TaskThreadActiveError()
+    this.threadReservations.set(key, taskId)
+    const reservations = this.taskThreadReservations.get(taskId) || new Set<string>()
+    reservations.add(key)
+    this.taskThreadReservations.set(taskId, reservations)
+  }
+
+  private releaseThreadReservations(taskId: string): void {
+    const reservations = this.taskThreadReservations.get(taskId)
+    if (!reservations) return
+    for (const threadId of reservations) {
+      if (this.threadReservations.get(threadId) === taskId) this.threadReservations.delete(threadId)
+    }
+    this.taskThreadReservations.delete(taskId)
+  }
+
+  private async finalizeThreadReservationConflict(
+    record: StoredTaskRecord,
+    broadcast: EventBroadcast,
+  ): Promise<void> {
+    this.emitError(broadcast, record.task_id, record.thread_id, 'APP_SERVER_THREAD_ACTIVE_RECOVERY')
+    await broadcast.flush()
+    await this.store.transition(record.task_id, 'terminal', {
+      outcome: 'failed',
+      error_code: 'APP_SERVER_THREAD_ACTIVE_RECOVERY',
+    })
+    this.releaseThreadReservations(record.task_id)
+    await this.retireBroadcast(record.task_id, broadcast)
+  }
+
   private pump(): void {
     if (!this.accepting) return
     while (this.active.size < this.config.maxConcurrentTasks) {
@@ -321,7 +757,7 @@ export class TaskManager {
       if (!initial || initial.status === 'terminal') return
       const request = this.store.getRequest(taskId)
       if (initial.status === 'accepted') await this.store.transition(taskId, 'starting')
-      const resolved = resolveModelAlias(request.model || this.config.defaultModel, this.config.modelAliases)
+      const resolved = resolveSupportedModelAlias(request.model || this.config.defaultModel, this.config.modelAliases)
       const parsed = parseModelString(resolved)
       await this.store.patch(taskId, { model: parsed.model, reasoning_effort: parsed.reasoningEffort })
       if (broadcast.getEventCount() === 0) {
@@ -346,6 +782,7 @@ export class TaskManager {
             })
           },
           onThreadResolved: async threadId => {
+            this.reserveThread(taskId, threadId)
             await this.store.patch(taskId, { thread_id: threadId })
           },
           onExecutionCommitted: async threadId => {
@@ -365,6 +802,20 @@ export class TaskManager {
               turn_id: turnId,
             })
           },
+          onUserInputRequest: (request, runtimeInstanceId) => this.awaitUserInput(
+            taskId,
+            request,
+            runtimeInstanceId,
+            controller.signal,
+            broadcast,
+          ),
+          onUserInputResolved: (resolution, runtimeInstanceId) => this.resolveUserInputFromServer(
+            taskId,
+            resolution.requestId,
+            resolution.threadId,
+            runtimeInstanceId,
+            broadcast,
+          ),
         },
       })
       if (result.status === 'interrupted') {
@@ -372,9 +823,10 @@ export class TaskManager {
         await broadcast.flush()
         await this.store.transition(taskId, 'terminal', { outcome: 'aborted', error_code: 'TASK_ABORTED' })
       } else if (result.status === 'failed') {
-        this.emitError(broadcast, taskId, result.threadId, 'APP_SERVER_TURN_FAILED')
+        const code = result.errorCode || 'APP_SERVER_TURN_FAILED'
+        this.emitError(broadcast, taskId, result.threadId, code)
         await broadcast.flush()
-        await this.store.transition(taskId, 'terminal', { outcome: 'failed', error_code: 'APP_SERVER_TURN_FAILED' })
+        await this.store.transition(taskId, 'terminal', { outcome: 'failed', error_code: code })
       } else {
         broadcast.emit({
           type: 'result',
@@ -396,6 +848,7 @@ export class TaskManager {
       }
     } catch (error) {
       const aborted = controller.signal.aborted
+      await this.clearLiveUserInput(taskId, 'cleared', broadcast)
       let latest = this.store.get(taskId)
       const runtimeError = error instanceof AppServerRuntimeError ? error : undefined
       if (runtimeError?.turnId && latest && !latest.turn_id) {
@@ -432,8 +885,10 @@ export class TaskManager {
       }
       console.warn(`[codex-app-server] task_failed task=${sanitize(taskId)} code=${code}`)
     } finally {
+      await this.clearLiveUserInput(taskId, 'cleared', broadcast)
       await this.markRecoveryRequired(taskId)
       await this.retireBroadcast(taskId, broadcast)
+      if (this.store.get(taskId)?.status === 'terminal') this.releaseThreadReservations(taskId)
     }
   }
 
@@ -503,7 +958,7 @@ export class TaskManager {
       const code = result.status === 'interrupted'
         ? 'TASK_ABORTED'
         : result.status === 'failed'
-          ? 'APP_SERVER_TURN_FAILED'
+          ? result.errorCode || 'APP_SERVER_TURN_FAILED'
           : 'APP_SERVER_RECOVERY_UNKNOWN'
       this.emitError(broadcast, record.task_id, common.thread_id, code)
       await broadcast.flush()
@@ -512,6 +967,9 @@ export class TaskManager {
         outcome: result.status === 'interrupted' ? 'aborted' : 'failed',
         error_code: code,
       })
+    }
+    if (this.store.get(record.task_id)?.status === 'terminal') {
+      this.releaseThreadReservations(record.task_id)
     }
     await this.retireBroadcast(record.task_id, broadcast)
   }
@@ -530,6 +988,7 @@ export class TaskManager {
           error_code: terminal.subtype,
         }
     await this.store.transition(record.task_id, 'terminal', patch)
+    this.releaseThreadReservations(record.task_id)
     await this.retireBroadcast(record.task_id, broadcast)
     return true
   }
@@ -544,6 +1003,7 @@ export class TaskManager {
       outcome: 'aborted',
       error_code: 'TASK_ABORTED',
     })
+    this.releaseThreadReservations(record.task_id)
     await this.retireBroadcast(record.task_id, broadcast)
     return terminal
   }
@@ -590,7 +1050,7 @@ export class TaskManager {
 export function toPublicTask(record: StoredTaskRecord): Record<string, unknown> {
   return compact({
     task_id: record.task_id,
-    status: record.status,
+    status: record.pending_interaction && record.status !== 'terminal' ? 'awaiting_input' : record.status,
     outcome: record.outcome,
     error_code: record.error_code,
     thread_id: record.thread_id,
@@ -606,6 +1066,7 @@ export function toPublicTask(record: StoredTaskRecord): Record<string, unknown> 
     abort_requested_at: record.abort_requested_at,
     tombstoned: Boolean(record.tombstoned_at),
     tombstoned_at: record.tombstoned_at,
+    pending_interaction: record.pending_interaction,
   })
 }
 
@@ -636,6 +1097,7 @@ function stableExecutionErrorCode(error: unknown): string {
     'WORKING_DIRECTORY_NOT_ALLOWED',
     'CODEX_HOME_MISSING',
     'CODEX_HOME_NOT_ISOLATED',
+    'UNSUPPORTED_CODEX_MODEL',
     'UNSUPPORTED_CODEX_CONFIG_KEY',
     'INVALID_CODEX_CONFIG_VALUE',
   ].includes(code)

@@ -70,6 +70,14 @@ test('createConfig rejects CODEX_DEFAULT_MODEL containing whitespace', () => {
   }), /CODEX_DEFAULT_MODEL must not contain whitespace/)
 })
 
+test('createConfig rejects CODEX_DEFAULT_MODEL targeting retired Mini', () => {
+  for (const target of ['gpt-5.4-mini', 'GPT-5.4-MINI:xhigh']) {
+    assert.throws(() => createConfig({
+      CODEX_DEFAULT_MODEL: target,
+    }), /CODEX_DEFAULT_MODEL cannot target retired model gpt-5\.4-mini/)
+  }
+})
+
 test('createConfig provides default Codex modelAliases when CODEX_MODEL_ALIASES is unset', () => {
   const config = createConfig({})
   assert.equal(config.modelAliases['codex-latest'], 'gpt-5.6-sol')
@@ -153,4 +161,12 @@ test('createConfig CODEX_MODEL_ALIASES rejects whitespace in alias value', () =>
   assert.throws(() => createConfig({
     CODEX_MODEL_ALIASES: JSON.stringify({ 'codex-latest': 'gpt 5.6' }),
   }), /alias value must not contain whitespace/)
+})
+
+test('createConfig CODEX_MODEL_ALIASES rejects aliases targeting retired Mini', () => {
+  for (const target of ['gpt-5.4-mini', 'GPT-5.4-MINI:xhigh']) {
+    assert.throws(() => createConfig({
+      CODEX_MODEL_ALIASES: JSON.stringify({ 'retired-mini': target }),
+    }), /alias value targets retired model gpt-5\.4-mini: retired-mini/)
+  }
 })

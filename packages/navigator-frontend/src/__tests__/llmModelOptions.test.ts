@@ -146,7 +146,7 @@ describe('llmModelOptions', () => {
     // 迁移兜底仅开放普通 alias，Max/Ultra 必须由 alias whitelist 显式授权。
     const config = createModelConfig({
       workerBackend: 'OPENAI_CODEX' as WorkerBackend,
-      availableModels: ['gpt-5.4', 'gpt-5.5', 'gpt-5.4-mini'],
+      availableModels: ['gpt-5.4', 'gpt-5.5', 'gpt-5.3-codex-spark'],
     })
     const result = resolveModelOptions(config).map((m) => m.value)
     expect(result).toEqual([

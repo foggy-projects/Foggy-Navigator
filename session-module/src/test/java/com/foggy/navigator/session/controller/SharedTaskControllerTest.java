@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -101,6 +102,29 @@ class SharedTaskControllerTest {
 
         assertEquals("Task cancelled", result.getData());
         verify(taskDispatchFacade).cancelTask(eq("task-1"), eq("agent-1"), any());
+    }
+
+    @Test
+    void respondToTask_staleInteractionReturnsBusinessFailure() {
+        SharedTaskController controller = new SharedTaskController(
+                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
+        SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
+        DispatchTaskDTO dispatchTask = DispatchTaskDTO.builder()
+                .taskId("task-1")
+                .agentId("agent-1")
+                .build();
+        Map<String, Object> body = Map.of(
+                "permissionId", "stale", "answers", Map.of("choice", "one"));
+
+        when(sharingKeyService.validateForKeyOnly("shk-1")).thenReturn(keyEntity);
+        when(taskDispatchFacade.getTask(eq("task-1"), any())).thenReturn(Optional.of(dispatchTask));
+        doThrow(new IllegalStateException("CODEX_USER_INPUT_REQUEST_MISMATCH"))
+                .when(taskDispatchFacade).respondToTask("task-1", "owner-1", body);
+
+        RX<String> result = controller.respondToTask("shk-1", "task-1", body);
+
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("CODEX_USER_INPUT_REQUEST_MISMATCH"));
     }
 
     @Test

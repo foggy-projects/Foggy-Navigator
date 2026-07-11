@@ -8,14 +8,26 @@ import {
   CODEX_ULTRA_APP_SERVER_REQUIRED,
   default as queryRouter,
   isPathWithinAllowedCwd,
+  isUnsupportedCodexModelRequest,
   requiresAppServerForUltra,
 } from '../src/routes/query.ts'
+import { UNSUPPORTED_CODEX_MODEL } from '../src/codex/sdk-wrapper.ts'
 
 const TEST_ALIASES = {
   'codex-latest': 'gpt-5.6-sol',
   'codex-max': 'gpt-5.6-sol:max',
   'codex-ultra': 'gpt-5.6-sol:ultra',
+  'retired-mini': 'gpt-5.4-mini',
 }
+
+test('Mini requests are rejected after direct or alias resolution', () => {
+  assert.equal(UNSUPPORTED_CODEX_MODEL, 'UNSUPPORTED_CODEX_MODEL')
+  assert.equal(isUnsupportedCodexModelRequest('gpt-5.4-mini', 'codex-latest', TEST_ALIASES), true)
+  assert.equal(isUnsupportedCodexModelRequest('gpt-5.4-mini:high', 'codex-latest', TEST_ALIASES), true)
+  assert.equal(isUnsupportedCodexModelRequest('retired-mini', 'codex-latest', TEST_ALIASES), true)
+  assert.equal(isUnsupportedCodexModelRequest('retired-mini:xhigh', 'codex-latest', TEST_ALIASES), true)
+  assert.equal(isUnsupportedCodexModelRequest('codex-latest', 'codex-latest', TEST_ALIASES), false)
+})
 
 test('all Ultra queries fail closed for the independent app-server runtime', () => {
   assert.equal(CODEX_ULTRA_APP_SERVER_REQUIRED, 'CODEX_ULTRA_APP_SERVER_REQUIRED')
@@ -49,6 +61,33 @@ test('query route rejects new and resumed Ultra sessions before creating Worker 
         code: CODEX_ULTRA_APP_SERVER_REQUIRED,
         error: CODEX_ULTRA_APP_SERVER_REQUIRED,
       })
+    }
+    assert.equal(taskBroadcasts.size, taskCountBefore)
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve())
+    })
+  }
+})
+
+test('query route rejects direct Mini requests before creating Worker task state', async () => {
+  const app = express()
+  app.use(express.json())
+  app.use(queryRouter)
+  const server = app.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address() as AddressInfo
+  const taskCountBefore = taskBroadcasts.size
+
+  try {
+    for (const model of ['gpt-5.4-mini', 'gpt-5.4-mini:high']) {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: 'retired Mini task', model }),
+      })
+      assert.equal(response.status, 400)
+      assert.deepEqual(await response.json(), { error: UNSUPPORTED_CODEX_MODEL })
     }
     assert.equal(taskBroadcasts.size, taskCountBefore)
   } finally {

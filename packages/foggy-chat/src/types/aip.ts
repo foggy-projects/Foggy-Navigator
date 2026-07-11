@@ -10,6 +10,8 @@ export {
   type ErrorPayload,
   type TaskCompletedPayload,
   type ConfirmationRequestPayload,
+  type UserQuestionAnswer,
+  type UserQuestionAnswers,
   type UserQuestionItem,
   type UserQuestionOption,
   type AllowedPrompt,

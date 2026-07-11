@@ -24,11 +24,14 @@ import {
   resolveCodexHome,
   resolveNavigatorBusinessMcpServerPath,
   resolveModelAlias,
+  resolveSupportedModelAlias,
   seedCodexHomeAuthIfAvailable,
   saveAttachments,
   taskBroadcasts,
   taskRegistry,
   shouldAbortBeforeTurnStart,
+  UNSUPPORTED_CODEX_MODEL,
+  UnsupportedCodexModelError,
 } from '../src/codex/sdk-wrapper.ts'
 import {
   buildNavigatorBusinessMcpConfig,
@@ -172,10 +175,17 @@ test('resolveModelAlias passes through real model names unchanged (backward comp
     resolved: 'gpt-5.5:high',
     wasAlias: false,
   })
-  assert.deepEqual(resolveModelAlias('gpt-5.4-mini', TEST_ALIASES), {
-    resolved: 'gpt-5.4-mini',
-    wasAlias: false,
-  })
+})
+
+test('resolveSupportedModelAlias rejects retired Mini after direct or alias resolution', () => {
+  const aliases = { ...TEST_ALIASES, 'retired-mini': 'gpt-5.4-mini' }
+  for (const model of ['gpt-5.4-mini', 'gpt-5.4-mini:high', 'retired-mini', 'retired-mini:xhigh']) {
+    assert.throws(
+      () => resolveSupportedModelAlias(model, aliases),
+      (error: unknown) => error instanceof UnsupportedCodexModelError
+        && error.code === UNSUPPORTED_CODEX_MODEL,
+    )
+  }
 })
 
 test('resolveModelAlias passes through unknown alias-like strings unchanged', () => {

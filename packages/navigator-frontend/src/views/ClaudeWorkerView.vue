@@ -3048,6 +3048,7 @@ import {
 } from '@/composables/useWorkspaceContext'
 import type { WorkspaceContext, SshTerminalTab } from '@/composables/useWorkspaceContext'
 import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
+import { canShowContinuationInput } from '@/components/worker/taskPaneResume'
 import SshTerminalPanel from '@/components/worker/SshTerminalPanel.vue'
 import SshTerminal from '@/components/worker/SshTerminal.vue'
 import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
@@ -3080,7 +3081,7 @@ import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type Mi
 import { ALL_MODEL_OPTIONS, isModelConfigCompatibleWithWorker, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
 import { inferTaskWorkerBackend, isClaudeCodeTask, providerTypeFromWorkerBackend, taskSessionRefLabel } from '@/utils/workerBackend'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone, WorkerBackend } from '@/types'
-import type { AipMessageType, ChatMessage, NavigatorUiAction, NavigatorUiArtifact } from '@foggy/chat'
+import type { AipMessageType, ChatMessage, NavigatorUiAction, NavigatorUiArtifact, UserQuestionAnswers } from '@foggy/chat'
 
 const MAX_PANES = 1
 const BASE_DOCUMENT_TITLE = '道同'
@@ -3483,7 +3484,7 @@ function deriveInteractionStateFromTaskStatus(
   status?: ClaudeTask['status'],
 ): ConversationConfig['interactionState'] | undefined {
   if (status === 'PENDING' || status === 'RUNNING') return 'PROCESSING'
-  if (status === 'AWAITING_PERMISSION') return 'AWAITING_REPLY'
+  if (status === 'AWAITING_PERMISSION' || status === 'AWAITING_INPUT') return 'AWAITING_REPLY'
   if (status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED') return 'AWAITING_REPLY'
   return undefined
 }
@@ -3528,7 +3529,7 @@ function syncTaskAcrossVisibleLists(task: ClaudeTask) {
     workerState.updateInteractionStateFromSSE(task.sessionId, interactionState)
   }
 
-  if (['PENDING', 'RUNNING', 'AWAITING_PERMISSION'].includes(task.status)) {
+  if (['PENDING', 'RUNNING', 'AWAITING_PERMISSION', 'AWAITING_INPUT'].includes(task.status)) {
     workerState.activeTasks.value = upsertTaskAtTop(workerState.activeTasks.value, task)
   }
 
@@ -4833,7 +4834,7 @@ function handleTaskUpdateEvent(event: Event) {
     if (detail.sessionId && interactionState) {
       workerState.updateInteractionStateFromSSE(detail.sessionId, interactionState)
     }
-    if (['RUNNING', 'AWAITING_PERMISSION'].includes(newStatus)) {
+    if (['RUNNING', 'AWAITING_PERMISSION', 'AWAITING_INPUT'].includes(newStatus)) {
       // Active state — update in-place or refresh list
       const existing = workerState.activeTasks.value.find(t => t.taskId === detail.taskId)
       if (existing) {
@@ -6351,7 +6352,9 @@ async function handlePermissionRespond(paneId: string, permissionId: string, dec
       denyMessage: decision === 'deny' ? 'Denied by user' : undefined,
       scope,
     })
-    pane.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
+    pane.chatState.resolvePermission(
+      permissionId, decision === 'allow' ? 'approved' : 'denied', pane.task.value.taskId,
+    )
     syncSidebarAfterRespond(pane, decision)
   } catch {
     ElMessage.error('Permission response failed')
@@ -6372,7 +6375,7 @@ async function handleSkillApprovalRespond(paneId: string, taskId: string, decisi
   }
 }
 
-async function handleQuestionRespond(paneId: string, permissionId: string, answers: Record<string, string>) {
+async function handleQuestionRespond(paneId: string, permissionId: string, answers: UserQuestionAnswers) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   if (!pane?.task.value) return
 
@@ -6382,7 +6385,7 @@ async function handleQuestionRespond(paneId: string, permissionId: string, answe
       decision: 'allow',
       answers,
     })
-    pane.chatState.resolvePermission(permissionId, 'approved')
+    pane.chatState.resolvePermission(permissionId, 'approved', pane.task.value.taskId)
     syncSidebarAfterRespond(pane, 'allow')
   } catch {
     ElMessage.error('Question response failed')
@@ -6400,7 +6403,9 @@ async function handlePlanRespond(paneId: string, permissionId: string, decision:
       denyMessage: denyMessage || (decision === 'deny' ? 'Plan rejected by user' : undefined),
       planAction,
     })
-    pane.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
+    pane.chatState.resolvePermission(
+      permissionId, decision === 'allow' ? 'approved' : 'denied', pane.task.value.taskId,
+    )
     syncSidebarAfterRespond(pane, decision)
   } catch {
     ElMessage.error('Plan response failed')
@@ -6866,9 +6871,8 @@ async function handlePaneReconnect(paneId: string, taskId: string) {
   if (!pane) return
   try {
     await reconnectTaskUnified(taskId)
-    if (pane.task.value) {
-      pane.task.value.status = 'RUNNING'
-    }
+    pane.reconnectSse()
+    await pane.syncTaskStatus({ force: true })
     // Clear the reconnectable flag on the error message
     const errorMsg = pane.chatState.messages.value.find(
       (m) => m.reconnectable && (m.raw as Record<string, unknown>)?.taskId === taskId,
@@ -6880,7 +6884,7 @@ async function handlePaneReconnect(paneId: string, taskId: string) {
       id: `reconnect-${Date.now()}`,
       type: 'STATE_SYNC' as AipMessageType,
       sender: 'system',
-      content: '正在重连任务...',
+      content: '正在重连并同步任务...',
       raw: { subtype: 'reconnected' },
       timestamp: Date.now(),
     })
@@ -6908,7 +6912,6 @@ async function doResync(taskId: string, pane?: TaskPaneState) {
       case 'RECONNECTED': {
         // 策略 A：CLI 活着，已重连 SSE
         if (pane) {
-          if (pane.task.value) pane.task.value.status = 'RUNNING'
           // 清除可重连的错误消息标记
           const errorMsg = pane.chatState.messages.value.find(
             (m) => m.reconnectable && (m.raw as Record<string, unknown>)?.taskId === taskId,
@@ -6923,6 +6926,7 @@ async function doResync(taskId: string, pane?: TaskPaneState) {
             timestamp: Date.now(),
           })
           pane.reconnectSse()
+          await pane.syncTaskStatus({ force: true })
           if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
         }
         workerState.loadActiveTasks()
@@ -7079,6 +7083,17 @@ async function handleAskAgent(paneId: string, agent: { agentId: string; name: st
 
 /** Handle inline send from pane input (replaces dialog-based resume) */
 async function handlePaneSend(paneId: string, content: string) {
+  const pane = panes.value.find((p) => p.paneId === paneId)
+  const oldTask = pane?.task.value
+  const workerId = oldTask?.workerId || selectedWorkerId.value
+  if (!pane || !oldTask || !workerId || !oldTask.sessionId) return
+  if (!canShowContinuationInput(oldTask)) {
+    ElMessage.warning(oldTask.status === 'AWAITING_INPUT'
+      ? '当前任务正在等待结构化回答，请使用问题卡片或选项快捷回复'
+      : '当前任务仍在执行，不能重复发起继续任务')
+    return
+  }
+
   // Intercept @agent mentions — supports both:
   //   @agentName(agentId:xxx) question  (new format with embedded agentId)
   //   @agentName question               (legacy format, name-based lookup)
@@ -7100,12 +7115,6 @@ async function handlePaneSend(paneId: string, content: string) {
       return
     }
   }
-
-  const pane = panes.value.find((p) => p.paneId === paneId)
-  const oldTask = pane?.task.value
-  const workerId = oldTask?.workerId || selectedWorkerId.value
-  if (!pane || !oldTask || !workerId) return
-  if (!oldTask.sessionId) return
 
   // Inject @agent context into prompt if available
   let finalPrompt = content
@@ -7389,8 +7398,7 @@ async function handleScanCheckpoints(task: ClaudeTask) {
 function canRepairContext(conv: ConversationGroup): boolean {
   return isClaudeCodeTask(conv.latestTask)
     && !!conv.latestTask.claudeSessionId
-    && conv.latestTask.status !== 'RUNNING'
-    && conv.latestTask.status !== 'AWAITING_PERMISSION'
+    && canShowContinuationInput(conv.latestTask)
 }
 
 function truncateText(text: string, maxLen: number): string {
@@ -7484,6 +7492,10 @@ async function handleRepairContext(conv: ConversationGroup) {
 async function executeContextRepair() {
   const conv = contextRepairConv.value
   if (!conv || !selectedWorkerId.value) return
+  if (!canRepairContext(conv)) {
+    ElMessage.warning('当前任务仍在执行或等待输入，不能压缩并继续')
+    return
+  }
 
   contextRepairLoading.value = true
   try {
@@ -7756,7 +7768,7 @@ function getInteractionState(sessionId?: string): string | undefined {
 function paneInteractionState(paneState: TaskPaneState): string | undefined {
   const status = paneState.task.value?.status
   if (status === 'RUNNING') return 'PROCESSING'
-  if (status === 'AWAITING_PERMISSION') return 'AWAITING_REPLY'
+  if (status === 'AWAITING_PERMISSION' || status === 'AWAITING_INPUT') return 'AWAITING_REPLY'
   // Terminal task statuses always mean AWAITING_REPLY, regardless of DB interactionState
   // (defends against backend race where reconnect overwrites interactionState after completion)
   if (status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED') return 'AWAITING_REPLY'
@@ -7783,6 +7795,12 @@ async function handleResumeFromHistory(task: ClaudeTask) {
   const workerId = task.workerId || selectedWorkerId.value
   if (!workerId) return
   if (!task.sessionId) return
+  if (!canShowContinuationInput(task)) {
+    ElMessage.warning(task.status === 'AWAITING_INPUT'
+      ? '当前任务正在等待结构化回答，不能发起继续任务'
+      : '当前任务仍在执行，不能重复发起继续任务')
+    return
+  }
 
   try {
     const { value: prompt } = (await ElMessageBox.prompt('输入后续指令', '继续对话', {
@@ -8610,10 +8628,34 @@ function handlePopOutTerminal() {
     max-width: 100%;
   }
 
+  .worker-main.has-panes > .worker-header,
+  .worker-main.has-panes > .worker-tabs,
+  .worker-main.has-panes > .dir-compact-header,
+  .worker-main.has-panes > .fav-scripts-bar,
+  .worker-main.has-panes > .new-task-mini {
+    display: none;
+  }
+
   .worker-main :deep(.task-pane-grid) {
     grid-template-columns: minmax(0, 1fr) !important;
     min-width: 0;
     max-width: 100%;
+  }
+
+  .worker-main.has-panes :deep(.task-pane-grid) {
+    flex: 1 1 0;
+    height: 100%;
+    grid-auto-rows: minmax(0, 1fr);
+  }
+
+  .worker-main.has-panes .panel-expand-btn {
+    top: 10px;
+    transform: none;
+  }
+
+  .worker-main.has-panes :deep(.pane-header) {
+    padding-left: 54px;
+    padding-right: 54px;
   }
 
   .worker-header {

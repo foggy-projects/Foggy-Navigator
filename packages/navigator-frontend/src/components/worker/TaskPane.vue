@@ -41,7 +41,7 @@
           {{ (paneState.task.value.durationMs / 1000).toFixed(1) }}s
         </span>
         <el-button
-          v-if="['RUNNING', 'AWAITING_PERMISSION'].includes(paneState.task.value?.status ?? '')"
+          v-if="['RUNNING', 'AWAITING_PERMISSION', 'AWAITING_INPUT'].includes(paneState.task.value?.status ?? '')"
           size="small"
           type="danger"
           text
@@ -76,7 +76,7 @@
         :has-more-history="paneState.hasMoreHistory.value"
         :loading-more="paneState.loadingMore.value"
         :total-messages="paneState.totalMessages.value"
-        placeholder="输入后续指令... (Ctrl+Enter 发送)"
+        :placeholder="inputPlaceholder"
         @send="handleSend"
         @permission-respond="handlePermissionRespond"
         @question-respond="handleQuestionRespond"
@@ -115,7 +115,7 @@
                 auto-grow
                 :max-rows="4"
                 :disabled="false"
-                placeholder="输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)"
+                :placeholder="inputPlaceholder"
                 :skills="skills || []"
                 :agents="agents || []"
                 :directory-id="paneState.task.value?.directoryId"
@@ -253,7 +253,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
-import type { ChatMessage, NavigatorUiAction } from '@foggy/chat'
+import type { ChatMessage, NavigatorUiAction, UserQuestionAnswers } from '@foggy/chat'
 import { ElMessage } from 'element-plus'
 import { getCodexTaskFileHints } from '@/api/claudeWorker'
 import type { TaskPaneState } from '@/composables/useTaskPane'
@@ -266,7 +266,12 @@ import { loadTaskFileHints } from './taskPaneFileHints'
 import NativeSubtaskBar from './NativeSubtaskBar.vue'
 import SlashCommandInput from './SlashCommandInput.vue'
 import type { AgentItem } from './SlashCommandInput.vue'
-import { canEnableRewind, canShowContinuationInput } from './taskPaneResume'
+import {
+  canEnableRewind,
+  canShowContinuationInput,
+  getPendingSingleSelectQuestion,
+  parseQuestionShortcut,
+} from './taskPaneResume'
 
 const props = defineProps<{
   paneState: TaskPaneState
@@ -282,7 +287,7 @@ const emit = defineEmits<{
   (e: 'send', paneId: string, content: string): void
   (e: 'command', payload: { command: string; value: string | number }): void
   (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
-  (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
+  (e: 'questionRespond', paneId: string, permissionId: string, answers: UserQuestionAnswers): void
   (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'skillApprovalRespond', paneId: string, taskId: string, decision: string, comment: string): void
   (e: 'rewind', paneId: string, turnIndex: number): void
@@ -357,19 +362,59 @@ const modelShort = computed(() => {
   return match ? match[0] : m.split('-').slice(1, 3).join('-')
 })
 
+const pendingQuestionShortcut = computed(() => (
+  getPendingSingleSelectQuestion(
+    props.paneState.chatState.sortedMessages.value,
+    props.paneState.task.value?.taskId,
+    props.paneState.task.value?.status === 'AWAITING_INPUT',
+  )
+))
+
 const canInput = computed(() => {
-  return canShowContinuationInput(props.paneState.task.value)
+  const task = props.paneState.task.value
+  if (task?.status === 'AWAITING_INPUT') return pendingQuestionShortcut.value != null
+  return canShowContinuationInput(task)
 })
+
+const inputPlaceholder = computed(() => (
+  props.paneState.task.value?.status === 'AWAITING_INPUT'
+    ? '输入选项序号或完整选项文本... (Ctrl+Enter 发送)'
+    : '输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)'
+))
 
 const sendDisabled = computed(() => {
   const t = props.paneState.task.value
-  return !!t && t.status === 'RUNNING'
+  return !!t && (
+    t.status === 'RUNNING'
+      || (t.status === 'AWAITING_INPUT' && pendingQuestionShortcut.value == null)
+  )
 })
 
 function handleSend(content?: string) {
   if (sendDisabled.value) return
   const text = content || paneInput.value.trim()
   if (!text) return
+
+  const taskStatus = props.paneState.task.value?.status
+  if (taskStatus === 'AWAITING_INPUT') {
+    const response = parseQuestionShortcut(
+      props.paneState.chatState.sortedMessages.value,
+      text,
+      props.paneState.task.value?.taskId,
+      true,
+    )
+    if (!response) {
+      ElMessage.warning('请输入有效的选项序号或完整选项文本')
+      return
+    }
+    emit('questionRespond', props.paneState.paneId, response.permissionId, response.answers)
+    paneMemory.addToHistory(text)
+    paneMemory.clearDraft()
+    paneInput.value = ''
+    return
+  }
+  if (!canShowContinuationInput(props.paneState.task.value)) return
+
   // Strip leading "/" to prevent CLI from interpreting as slash command
   const safeText = text.startsWith('/') ? text.slice(1) : text
   if (!safeText.trim()) return
@@ -387,7 +432,7 @@ function handleSkillApprovalRespond(taskId: string, decision: string, comment: s
   emit('skillApprovalRespond', props.paneState.paneId, taskId, decision, comment)
 }
 
-function handleQuestionRespond(permissionId: string, answers: Record<string, string>) {
+function handleQuestionRespond(permissionId: string, answers: UserQuestionAnswers) {
   emit('questionRespond', props.paneState.paneId, permissionId, answers)
 }
 
@@ -647,6 +692,7 @@ function truncate(text: string, maxLen: number) {
 .pane-status-dot.failed { background: #f56c6c; }
 .pane-status-dot.aborted { background: #e6a23c; }
 .pane-status-dot.awaiting_permission { background: #e6a23c; animation: pulse 1.5s infinite; }
+.pane-status-dot.awaiting_input { background: #e6a23c; animation: pulse 1.5s infinite; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

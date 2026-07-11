@@ -8,7 +8,7 @@
 
 ## 版本状态
 
-- status: p0-p2-isolated-accepted-production-rollout-not-started
+- status: p0-p2-and-opt003-opt004-isolated-accepted-production-rollout-not-started
 - primary_workitem: `OPT-001`
 - implementation_started: yes
 - production_routing_changed: no
@@ -36,19 +36,23 @@
 | P2 双 Runtime 控制面 | isolated-accepted | 双实例 affinity、Java/Session/PC、MySQL 8.0.44/8.4.8、N-1、`ddl-auto=validate`、共享 availability、真实 Ultra/SSE/刷新和 desktop/320px 体验均通过隔离验收 |
 | P3 Ultra Canary | implementation-ready-rollout-not-started | 外部生产证据仍为 0/50 terminal task、0/72h、0/2 rotation；release owner 未签收 |
 | P4 Ultra Default | not-started | 依赖 P3 独立生产签收 |
-| P5 非 Ultra/功能 cohort | not-started | 动态 catalog 与 approval/additional dirs/server requests/Biz 等 parity 仍需逐 cohort 证明 |
+| P5 非 Ultra/功能 cohort | partial-isolated-rollout-not-started | `request_user_input` 与账号额度可观测已由 OPT-003/004 隔离签收；动态 catalog、approval/additional dirs/Biz/MCP 等 parity 仍需逐 cohort 证明 |
 | P6 App-server Default | not-started | 是否扩大为默认由后续产品与生产门禁决定 |
 | P7 SDK Retirement | N/A-deferred-by-product-decision | 旧 SDK Worker 保持现状，不删除、不迁移、不弱化发布与回滚能力 |
 
 ## 发布与回归摘要
 
 - App-server Worker `0.1.1`: `200 total / 193 passed / 7 platform-skipped / 0 failed`；typecheck/build/schema verify 通过，schema digest 为 `6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f`。
+- App-server Worker `0.2.0` 新增原生交互输入：`215 total / 208 passed / 7 platform-skipped / 0 failed`；release SHA-256/bytes/entries=`03949845DE8C405E1CC679D5DE5FB7F2AE86734C13C16E63102BC150A003343E` / `1,634,838` / `176`，schema/typecheck/build/package 通过。
+- App-server Worker `0.3.0` 新增 advisory-only 账号额度可观测并全面退役 Mini，thread 固定隐藏 rate-limit model nudge：`232 total / 225 passed / 7 platform-skipped / 0 failed`；release SHA-256/bytes/entries=`8C8CB446C861F5AD0AF04DDAAA37EA98670B515B435A6BA881AFC675CF3FA5C5` / `1,724,854` / `190`，schema/typecheck/build/package 通过。SDK Worker `121/121`，Navigator PC `208/208`，Java Codex reactor `283/283`，相关构建通过。
 - v5 release SHA-256/bytes/entries: `b6271e5a3220b0253d97b6d05c9fe5f5561331655e27faccd8ad254fbf6c31d9` / `1,500,249` / `168`；双构建字节一致、路径扫描通过，Windows/WSL exact-package install/start/real Ultra/running update/stop 与 zero-residue 均通过；旧 `642121...`、`4ebb...` 与 Windows update 被阻断的 v4 `71a0...` 均已淘汰。
 - Codex Java addon: `259/259`；Session focused: `7/7`；reconciliation: `10/10`；Metadata Query: `13/13`；Launcher ownership context: `1/1`；Code Review client context: `1/1`。raw full reactor 在 Windows 被 Surefire fork/path 基础设施问题阻断，已执行的受影响定向测试无断言失败。
 - Legacy SDK Worker 保持现有 SDK 设计并拒绝 Ultra，`116/116`、typecheck/build 通过；本次仅修正 Windows 上 POSIX server-script 路径的测试断言。Navigator PC: `179/179`，`build:check` 通过。
 - MySQL migration: 8.0.44/8.4.8 通过；N-1 严格 legacy GET、迁移后 validate/CRUD/软删除通过。
 - 已执行旧版 affinity SQL 的环境必须再执行幂等补丁 `docs/migration/2026-07-10-codex-task-created-at-epoch-ms.sql`。
 - 隔离真实链路任务 `20260711-8023` / Session `b2bc4a9c-3134-4d24-af50-5709ab9b91e6` 完成：result 精确为 `FINAL_RESULT_OK`、文件精确为 `FINAL_NATIVE_RESULT_OK`、native SSE `5`、snapshot `1`，敏感信息暴露检查均为 false；PC 刷新前后最终消息均为 `1`，native 进度 `1/1`，desktop/320px 无溢出、请求或控制台错误。
+- OPT-003 隔离全链路：单选任务 `20260711-0847`、多问题/重连任务 `20260711-b814` 均在原 turn 完成；活动态误发 `continue` 被拒绝且任务数保持 `1`，SSE/浏览器断流只恢复 pending interaction；desktop/320px 无溢出或错误。
+- OPT-004 隔离全链路：revision 4 真实读取两个 ChatGPT quota bucket，Worker/Java owner endpoint 均为 200，rev1-3 规范化为 `UNSUPPORTED`，未认证 Java 请求为 401；PC desktop/320px 显示 5 小时/7 天窗口且无 Mini/切模入口。revision 4 保持 `DARK`，未改变生产路由。
 
 ## 文档清单
 
@@ -56,6 +60,19 @@
 - [实施计划与代码清单](./workitems/OPT-001-independent-codex-app-server-worker-plan.md)
 - [实施与门禁进度](./workitems/OPT-001-independent-codex-app-server-worker-progress.md)
 - [Codex GPT-5.6 模型目录与 Runtime 边界](./workitems/OPT-002-codex-model-catalog-boundary.md)
+- [Codex App Server 原生交互输入](./workitems/OPT-003-codex-app-server-interactive-input.md)
+- [Codex 额度感知与 Mini 下线](./workitems/OPT-004-codex-rate-limit-awareness-no-fallback.md)
+- [OPT-004 实现质量检查](./quality/OPT-004-rate-limit-awareness-implementation-quality.md)
+- [OPT-004 测试证据覆盖审计](./coverage/OPT-004-rate-limit-awareness-coverage-audit.md)
+- [OPT-004 隔离验收记录](./acceptance/OPT-004-rate-limit-awareness-acceptance.md)
+- [OPT-004 额度与 PC 证据](./evidence/OPT-004-rate-limit-awareness-v1.json)
+- [OPT-004 PC desktop 证据](./evidence/OPT-004-pc-desktop-1280.png)
+- [OPT-004 PC 320px 证据](./evidence/OPT-004-pc-mobile-320.png)
+- [OPT-003 实现质量检查](./quality/OPT-003-interactive-input-implementation-quality.md)
+- [OPT-003 测试证据覆盖审计](./coverage/OPT-003-interactive-input-coverage-audit.md)
+- [OPT-003 隔离验收记录](./acceptance/OPT-003-interactive-input-acceptance.md)
+- [OPT-003 Worker/原生输入证据](./evidence/OPT-003-ultra-native-input-v1.json)
+- [OPT-003 PC 交互证据](./evidence/OPT-003-pc-interactive-input-v1.json)
 - [BUG-001 Codex Resume 后 Shell 工具丢失](./workitems/BUG-001-codex-resume-shell-tool-loss.md)
 - [P0-P2 实现质量检查](./quality/OPT-001-p0-p2-implementation-quality.md)
 - [BUG-001 修复实现质量检查](./quality/BUG-001-codex-resume-shell-fix-quality-review.md)
@@ -85,5 +102,7 @@
 - P3 必须在目标环境采集至少 50 个 terminal Ultra task、连续 72 小时和至少 2 次实例轮换；本地重复 smoke 不计入。
 - 生产 duplicate side effect、affinity mismatch、credential/raw child leak 当前是 0 个生产样本，不能表述为已证明为零。
 - 旧 SDK Worker 保持既有设计；本版本后续工作仅围绕 app-server Worker 的生产 canary 与可选 cohort。
+- OPT-003 的 `request_user_input` 子集已隔离签收；SSE 断流只允许重连/status/snapshot 同步，活动 turn 的 resume/`continue` 必须被 Java 和 Worker 拒绝。该结论不批准生产路由。
+- OPT-004 的额度状态仅用于 owner 控制面展示，不进入 task SSE、路由、队列或自动切模；Mini 已从活动支持面移除。该结论不批准生产路由，也不覆盖 per-task/Biz Codex Home。
 - BUG-001、BUG-003、BUG-007、BUG-009、BUG-010 和 BUG-013 已完成隔离闭环；先前失败任务与 v4 制品只保留为复现证据。
 - BUG-008/011/012 的隔离自动化和 final Worker full/package 已通过，其 production canary、memory soak 和 fairness soak 证据仍属于未开始的 P3。

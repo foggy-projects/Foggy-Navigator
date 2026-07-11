@@ -2,13 +2,16 @@ package com.foggy.navigator.codex.worker.controller;
 
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeAvailabilityDTO;
+import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeRateLimitsDTO;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
+import com.foggy.navigator.codex.worker.service.CodexRuntimeRateLimitsService;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggyframework.core.ex.RX;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,6 +31,7 @@ import java.util.List;
 public class CodexRuntimeController {
 
     private final CodexRuntimeRegistryService runtimeRegistryService;
+    private final CodexRuntimeRateLimitsService runtimeRateLimitsService;
     private final WorkerManagementFacade workerManagementFacade;
 
     @PostMapping
@@ -58,6 +62,17 @@ public class CodexRuntimeController {
     public RX<CodexRuntimeDTO> refresh(@PathVariable String runtimeId, @PathVariable int revision) {
         validateRuntimeOwner(runtimeId, revision);
         return RX.ok(runtimeRegistryService.refreshCapabilities(runtimeId, revision));
+    }
+
+    @GetMapping("/{runtimeId}/revisions/{revision}/rate-limits")
+    public RX<CodexRuntimeRateLimitsDTO> rateLimits(
+            @PathVariable String runtimeId,
+            @PathVariable int revision,
+            @RequestParam(defaultValue = "false") boolean refresh,
+            HttpServletResponse response) {
+        validateRuntimeOwner(runtimeId, revision);
+        response.setHeader("Cache-Control", "no-store");
+        return RX.ok(runtimeRateLimitsService.read(runtimeId, revision, refresh));
     }
 
     @PostMapping("/{runtimeId}/revisions/{revision}/recover-instance")

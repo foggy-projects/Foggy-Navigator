@@ -87,7 +87,7 @@ public class CodingAgentEntity {
     @Column(length = 64)
     private String defaultModelConfigId;
 
-    /** 默认模型名（如 "opus[1m]", "sonnet", "codex-mini"），优先于 modelConfig 中的 modelName */
+    /** 默认模型名（如 "opus[1m]", "sonnet", "codex-latest"），优先于 modelConfig 中的 modelName */
     @Column(length = 64)
     private String defaultModel;
 

@@ -283,20 +283,25 @@ GEMINI_API_KEY=your-key
 
 | 前端显示 | 配置值 | 当前实际指向 |
 |----------|--------|--------------|
-| Codex Latest | `codex-latest` | `gpt-5.5` |
-| Codex Fast | `codex-fast` | `gpt-5.5:low` |
-| Codex Deep | `codex-deep` | `gpt-5.5:high` |
-| Codex Extra High | `codex-xhigh` | `gpt-5.5:xhigh` |
-| Codex Mini | `codex-mini` | `gpt-5.4-mini` |
+| Codex Latest | `codex-latest` | `gpt-5.6-sol` |
+| Codex Terra | `codex-terra` | `gpt-5.6-terra` |
+| Codex Luna | `codex-luna` | `gpt-5.6-luna` |
+| Codex Fast | `codex-fast` | `gpt-5.6-sol:low` |
+| Codex Deep | `codex-deep` | `gpt-5.6-sol:high` |
+| Codex Extra High | `codex-xhigh` | `gpt-5.6-sol:xhigh` |
+| Codex Max | `codex-max` | `gpt-5.6-sol:max` |
+| Codex Ultra | `codex-ultra` | `gpt-5.6-sol:ultra`（仅 App Server Worker） |
 
-所以，`Codex Deep` 不是一个单独真实模型名。它表示：使用 `gpt-5.5`，并启用 `high` reasoning effort。`Codex Extra High` 则启用更高一层的 `xhigh` reasoning effort。
+所以，`Codex Deep` 不是一个单独真实模型名。它表示：使用 `gpt-5.6-sol`，并启用 `high` reasoning effort。`Codex Extra High` 则启用更高一层的 `xhigh` reasoning effort。
 
 管理员可以在 Codex Worker 的 `.env` 中覆盖映射：
 
 ```properties
 CODEX_DEFAULT_MODEL=codex-latest
-CODEX_MODEL_ALIASES={"codex-latest":"gpt-5.5","codex-fast":"gpt-5.5:low","codex-deep":"gpt-5.5:high","codex-xhigh":"gpt-5.5:xhigh","codex-mini":"gpt-5.4-mini"}
+CODEX_MODEL_ALIASES={"codex-latest":"gpt-5.6-sol","codex-terra":"gpt-5.6-terra","codex-luna":"gpt-5.6-luna","codex-fast":"gpt-5.6-sol:low","codex-deep":"gpt-5.6-sol:high","codex-xhigh":"gpt-5.6-sol:xhigh","codex-max":"gpt-5.6-sol:max"}
 ```
+
+Mini 已彻底下线。两个 Codex Worker 都会在 alias 解析后拒绝 `gpt-5.4-mini` 及其 reasoning 后缀，并返回稳定错误码 `UNSUPPORTED_CODEX_MODEL`；自定义 alias 也不能绕过该限制。
 
 ### Gemini
 

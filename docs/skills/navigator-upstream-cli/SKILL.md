@@ -115,7 +115,7 @@ Do not share one global profile across multiple upstream projects. Normal comman
 
 `NAVI_MODEL_CONFIG_ID` may be empty. When empty, Navigator resolves the Agent/default model config grant for the current ClientApp. A command-line `--model-config-id` overrides the profile/env value for a new task.
 
-`NAVI_MODEL_VARIANT` is optional and only selects the concrete model name inside the same model config, such as `sonnet`, `opus`, or `codex-mini`. A command-line `--model-variant` overrides the profile/env value for a new task. It must be allowed by the model config `availableModels` and cannot change the backend. Do not use it to switch models while continuing an existing task/context; Navigator freezes the task's effective model name.
+`NAVI_MODEL_VARIANT` is optional and only selects the concrete model name inside the same model config, such as `sonnet`, `opus`, or `codex-latest`. A command-line `--model-variant` overrides the profile/env value for a new task. It must be allowed by the model config `availableModels` and cannot change the backend. Do not use it to switch models while continuing an existing task/context; Navigator freezes the task's effective model name.
 
 ## Reference Routing
 

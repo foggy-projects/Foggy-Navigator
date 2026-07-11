@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox, ElMessage } from 'element-plus'
 import ClaudeWorkerView from '../ClaudeWorkerView.vue'
+import claudeWorkerViewSource from '../ClaudeWorkerView.vue?raw'
 import * as claudeWorkerApi from '@/api/claudeWorker'
 import * as langgraphWorkerApi from '@/api/langgraphWorker'
 import * as unifiedTaskApi from '@/api/unifiedTask'
@@ -415,6 +416,26 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
         sessionId: 'session-gemini-1',
       }))
     })
+
+    it.each(['RUNNING', 'AWAITING_INPUT'] as const)(
+      'does not open or execute resume while a task is %s',
+      async (status) => {
+        const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+        await flushPromises()
+
+        const vm = wrapper.vm as any
+        await vm.handleResumeFromHistory({
+          ...mockCompletedTask,
+          status,
+        })
+        await flushPromises()
+
+        expect(ElMessageBox.prompt).not.toHaveBeenCalled()
+        expect(unifiedTaskApi.resumeTaskUnified).not.toHaveBeenCalled()
+        expect(ElMessage.warning).toHaveBeenCalled()
+        wrapper.unmount()
+      },
+    )
 
     it('should restore Gemini model config when opening a Gemini history task without modelConfigId', async () => {
       vi.mocked(platformApi.listModelConfigs).mockResolvedValue([
@@ -1027,6 +1048,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       await vm.viewTask(mockCompletedTask)
       await flushPromises()
       expect(vm.mobileRightPanelOpen).toBe(false)
+      expect(wrapper.find('.worker-main').classes()).toContain('has-panes')
 
       vm.openMobilePanel('left')
       await flushPromises()
@@ -1036,6 +1058,21 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       expect(vm.prefs.leftPanelCollapsed).toBe(false)
       expect(vm.prefs.rightPanelCollapsed).toBe(false)
       wrapper.unmount()
+    })
+
+    it('reserves the narrow viewport for an open task pane instead of Worker overview chrome', () => {
+      expect(claudeWorkerViewSource).toMatch(
+        /@media \(max-width: 720px\) \{[\s\S]*?\.worker-main\.has-panes > \.worker-header,[\s\S]*?\.worker-main\.has-panes > \.worker-tabs,[\s\S]*?\.worker-main\.has-panes > \.dir-compact-header,[\s\S]*?\.worker-main\.has-panes > \.fav-scripts-bar,[\s\S]*?\.worker-main\.has-panes > \.new-task-mini \{\s*display: none;/,
+      )
+      expect(claudeWorkerViewSource).toMatch(
+        /\.worker-main\.has-panes :deep\(\.task-pane-grid\) \{\s*flex: 1 1 0;\s*height: 100%;\s*grid-auto-rows: minmax\(0, 1fr\);/,
+      )
+      expect(claudeWorkerViewSource).toMatch(
+        /\.worker-main\.has-panes \.panel-expand-btn \{\s*top: 10px;\s*transform: none;/,
+      )
+      expect(claudeWorkerViewSource).toMatch(
+        /\.worker-main\.has-panes :deep\(\.pane-header\) \{\s*padding-left: 54px;\s*padding-right: 54px;/,
+      )
     })
 
     it('preserves the desktop panel state when selecting a Worker', async () => {

@@ -28,7 +28,7 @@ public class OpenApiQueryForm {
     /** 本次 ask 使用的模型配置 ID（可选；优先于 metadata.modelConfigId） */
     private String modelConfigId;
 
-    /** 同一模型配置下的具体模型变体（如 sonnet / opus / codex-mini）；优先于 metadata 中同名字段。 */
+    /** 同一模型配置下的具体模型变体（如 sonnet / opus / codex-latest）；优先于 metadata 中同名字段。 */
     @JsonAlias({"model", "modelName", "model_name", "model_variant"})
     private String modelVariant;
 

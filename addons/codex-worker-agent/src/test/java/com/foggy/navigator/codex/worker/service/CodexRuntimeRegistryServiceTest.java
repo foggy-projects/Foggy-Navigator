@@ -498,7 +498,7 @@ class CodexRuntimeRegistryServiceTest {
         notReady.setReadinessStatus("INCOMPATIBLE");
         CodexRuntimeEntity stale = readyRuntime("ULTRA_DEFAULT", 100, "gpt-5.6-sol");
         stale.setLastCapabilityAt(LocalDateTime.now().minusMinutes(5));
-        CodexRuntimeEntity noUltra = readyRuntime("ULTRA_DEFAULT", 100, "gpt-5.4-mini");
+        CodexRuntimeEntity noUltra = readyRuntime("ULTRA_DEFAULT", 100, "gpt-5.5");
 
         when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
                 .thenReturn(List.of(disabled, notReady, stale, noUltra));
@@ -793,7 +793,7 @@ class CodexRuntimeRegistryServiceTest {
             "codex-max", "codex-ultra", "codex-latest:minimal", "codex-latest:medium", "gpt-5.6-sol",
             "gpt-5.6-terra", "gpt-5.6-luna",
             "gpt-5.6-sol:low", "gpt-5.6-sol:high", "gpt-5.6-sol:xhigh", "gpt-5.6-sol:max",
-            "gpt-5.6-sol:ultra", "gpt-5.4-mini"
+            "gpt-5.6-sol:ultra"
     })
     void allSupportedAliasesAndExplicitModelsRouteToAppServer(String model) throws Exception {
         CodexRuntimeEntity entity = readyRuntime("ALL_DEFAULT", 100, "*");
@@ -808,17 +808,17 @@ class CodexRuntimeRegistryServiceTest {
     }
 
     @Test
-    void perModelReasoningMatrixRejectsUnsupportedMiniTiers() throws Exception {
+    void perModelReasoningMatrixRejectsUnsupportedNonSolTiers() throws Exception {
         CodexRuntimeEntity entity = readyRuntime("ALL_DEFAULT", 100, "*");
         Map<String, Object> manifest = topLevelManifest(
                 "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
         manifest.put("models", List.of(
-                "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"));
+                "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"));
         manifest.put("model_reasoning_matrix", Map.of(
                 "gpt-5.6-sol", List.of("low", "medium", "high", "xhigh", "max", "ultra"),
                 "gpt-5.6-terra", List.of("low", "medium", "high", "xhigh", "max", "ultra"),
                 "gpt-5.6-luna", List.of("low", "medium", "high", "xhigh", "max"),
-                "gpt-5.4-mini", List.of("none", "low", "medium", "high", "xhigh")));
+                "gpt-5.5", List.of("low", "medium", "high", "xhigh")));
         entity.setCapabilityManifestJson(objectMapper.writeValueAsString(manifest));
         when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
@@ -826,7 +826,7 @@ class CodexRuntimeRegistryServiceTest {
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
                 "worker-1", "gpt-5.6-sol:ultra", "codex-worker", "task-sol").getRuntimeType());
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
-                "worker-1", "gpt-5.4-mini", "codex-worker", "task-mini").getRuntimeType());
+                "worker-1", "gpt-5.5", "codex-worker", "task-gpt55").getRuntimeType());
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
                 "worker-1", "gpt-5.6-terra:ultra", "codex-worker", "task-terra").getRuntimeType());
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
@@ -834,9 +834,9 @@ class CodexRuntimeRegistryServiceTest {
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
                 "worker-1", "codex-luna:max", "codex-worker", "task-luna-max").getRuntimeType());
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
-                "worker-1", "gpt-5.4-mini:max", "codex-worker", "task-mini-max"));
+                "worker-1", "gpt-5.5:max", "codex-worker", "task-gpt55-max"));
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
-                "worker-1", "gpt-5.4-mini:ultra", "codex-worker", "task-mini-ultra"));
+                "worker-1", "gpt-5.5:ultra", "codex-worker", "task-gpt55-ultra"));
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
                 "worker-1", "gpt-5.6-luna:ultra", "codex-worker", "task-luna-ultra"));
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
@@ -848,7 +848,7 @@ class CodexRuntimeRegistryServiceTest {
         CodexRuntimeEntity entity = readyRuntime("ALL_DEFAULT", 100, "*");
         Map<String, Object> manifest = topLevelManifest(
                 "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
-        manifest.put("models", List.of("gpt-5.6-sol", "gpt-5.4-mini"));
+        manifest.put("models", List.of("gpt-5.6-sol", "gpt-5.5"));
         entity.setCapabilityManifestJson(objectMapper.writeValueAsString(manifest));
         when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
@@ -856,11 +856,11 @@ class CodexRuntimeRegistryServiceTest {
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
                 "worker-1", "gpt-5.6-sol:ultra", "codex-worker", "task-sol").getRuntimeType());
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
-                "worker-1", "gpt-5.4-mini", "codex-worker", "task-mini").getRuntimeType());
+                "worker-1", "gpt-5.5", "codex-worker", "task-gpt55").getRuntimeType());
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
-                "worker-1", "gpt-5.4-mini:max", "codex-worker", "task-mini-max"));
+                "worker-1", "gpt-5.5:max", "codex-worker", "task-gpt55-max"));
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
-                "worker-1", "gpt-5.4-mini:ultra", "codex-worker", "task-mini-ultra"));
+                "worker-1", "gpt-5.5:ultra", "codex-worker", "task-gpt55-ultra"));
     }
 
     @Test

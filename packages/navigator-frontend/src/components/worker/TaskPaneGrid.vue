@@ -33,7 +33,7 @@
 
 <script setup lang="ts">
 import TaskPane from './TaskPane.vue'
-import type { NavigatorUiAction } from '@foggy/chat'
+import type { NavigatorUiAction, UserQuestionAnswers } from '@foggy/chat'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import type { SkillInfo } from '@/types'
 import type { AgentItem } from './SlashCommandInput.vue'
@@ -52,7 +52,7 @@ const emit = defineEmits<{
   (e: 'send', paneId: string, content: string): void
   (e: 'command', payload: { command: string; value: string | number }): void
   (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
-  (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
+  (e: 'questionRespond', paneId: string, permissionId: string, answers: UserQuestionAnswers): void
   (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'skillApprovalRespond', paneId: string, taskId: string, decision: string, comment: string): void
   (e: 'rewind', paneId: string, turnIndex: number): void

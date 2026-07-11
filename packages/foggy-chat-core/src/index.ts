@@ -13,6 +13,8 @@ export type {
   CheckpointPayload,
   ConfirmationRequestPayload,
   ConfirmationResponsePayload,
+  UserQuestionAnswer,
+  UserQuestionAnswers,
   UserQuestionItem,
   UserQuestionOption,
   AllowedPrompt,

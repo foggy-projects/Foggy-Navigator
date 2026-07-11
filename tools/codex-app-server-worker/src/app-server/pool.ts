@@ -1,10 +1,21 @@
 import crypto from 'node:crypto'
 import type { AppConfig } from '../config.js'
 import {
+  AppServerRpcError,
   AppServerRuntimeInstance,
   isAppServerProcessTreeSafetyError,
   type PersistentTurnOptions,
 } from './runtime.js'
+import {
+  isRateLimitReached,
+  RateLimitsProtocolError,
+  type PoolRateLimitsView,
+  type SafeAccountRateLimits,
+} from './rate-limits.js'
+
+const DEFAULT_RATE_LIMITS_TTL_MS = 60_000
+const RATE_LIMITS_CACHE_RETENTION_MS = 15 * 60_000
+const MAX_RATE_LIMITS_INVALIDATION_RETRIES = 3
 
 export type AppServerLane = {
   key: string
@@ -25,6 +36,8 @@ export interface PoolRuntimeInstance {
   interruptTurn?(threadId: string, turnId: string): Promise<void>
   close(timeoutMs?: number): void | Promise<void>
   onFatal?(handler: (error: Error) => void): () => void
+  readAccountRateLimits?(): Promise<SafeAccountRateLimits>
+  onRateLimitsUpdated?(handler: () => void): () => void
 }
 
 export type PoolInstanceFactory = (lane: AppServerLane, signal?: AbortSignal) => Promise<PoolRuntimeInstance>
@@ -87,6 +100,15 @@ type InstanceRecord = {
   lastUsedAt: number
   taskCount: number
   unsubscribeFatal?: () => void
+  unsubscribeRateLimits?: () => void
+}
+
+type RateLimitsCacheEntry = {
+  limits: SafeAccountRateLimits
+  observedAtEpochMs: number
+  lastAttemptAtEpochMs: number
+  invalidated: boolean
+  errorCode?: string
 }
 
 type Waiter = {
@@ -123,6 +145,9 @@ export class AppServerPool {
   private readonly retirements = new Set<Promise<void>>()
   private readonly retirementOwners = new Set<PoolRuntimeInstance>()
   private readonly retirementFailures: Error[] = []
+  private readonly rateLimitsCache = new Map<string, RateLimitsCacheEntry>()
+  private readonly rateLimitsRefreshes = new Map<string, Promise<PoolRateLimitsView>>()
+  private readonly rateLimitsInvalidationVersions = new Map<string, number>()
   private readonly factory: PoolInstanceFactory
   private readonly sweepTimer: NodeJS.Timeout
   private creating = 0
@@ -155,6 +180,7 @@ export class AppServerPool {
       processTreeStateDir: config.stateDir,
     }),
     private readonly now: () => number = () => Date.now(),
+    private readonly rateLimitsTtlMs = DEFAULT_RATE_LIMITS_TTL_MS,
   ) {
     this.factory = factory
     this.sweepTimer = setInterval(() => this.sweep(), Math.min(config.poolIdleTtlMs, 1_000))
@@ -225,6 +251,21 @@ export class AppServerPool {
     }
   }
 
+  readRateLimits(lane: AppServerLane, refresh = false): Promise<PoolRateLimitsView> {
+    const cached = this.rateLimitsCache.get(lane.key)
+    const stale = !cached
+      || cached.invalidated
+      || this.now() - cached.observedAtEpochMs >= this.rateLimitsTtlMs
+    if (!refresh && cached && !stale) return Promise.resolve(this.rateLimitsView(cached, false))
+    const active = this.rateLimitsRefreshes.get(lane.key)
+    if (active) return active
+    const reading = this.refreshRateLimits(lane).finally(() => {
+      if (this.rateLimitsRefreshes.get(lane.key) === reading) this.rateLimitsRefreshes.delete(lane.key)
+    })
+    this.rateLimitsRefreshes.set(lane.key, reading)
+    return reading
+  }
+
   sweep(): void {
     const now = this.now()
     for (const record of [...this.instances.values()]) {
@@ -237,6 +278,13 @@ export class AppServerPool {
         || record.taskCount >= this.config.poolMaxTasksPerInstance
       ) {
         this.retire(record, false)
+      }
+    }
+    for (const [laneKey, cached] of this.rateLimitsCache) {
+      const laneIsResident = [...this.instances.values()].some(record => record.laneKey === laneKey)
+      if (!laneIsResident && now - cached.lastAttemptAtEpochMs >= RATE_LIMITS_CACHE_RETENTION_MS) {
+        this.rateLimitsCache.delete(laneKey)
+        this.rateLimitsInvalidationVersions.delete(laneKey)
       }
     }
     this.schedulePump()
@@ -274,6 +322,153 @@ export class AppServerPool {
       if (this.drainPromise === draining) this.drainPromise = undefined
     })
     return draining
+  }
+
+  private async refreshRateLimits(lane: AppServerLane): Promise<PoolRateLimitsView> {
+    const attemptedAt = this.now()
+    try {
+      const source = await this.ensureRateLimitsSource(lane)
+      if (!source || !source.runtime.readAccountRateLimits) {
+        return this.rateLimitsFailure(lane.key, 'RATE_LIMITS_SOURCE_UNAVAILABLE', attemptedAt)
+      }
+      return await this.readRateLimitsSnapshot(lane.key, source.runtime)
+    } catch (error) {
+      return this.rateLimitsFailure(lane.key, stableRateLimitsError(error), attemptedAt)
+    }
+  }
+
+  private refreshResidentRateLimits(laneKey: string): void {
+    if (this.rateLimitsRefreshes.has(laneKey)) return
+    const source = this.findRateLimitsSource(laneKey)
+    if (!source?.runtime.readAccountRateLimits) return
+    const attemptedAt = this.now()
+    const reading = this.readRateLimitsSnapshot(laneKey, source.runtime)
+      .catch(error => this.rateLimitsFailure(laneKey, stableRateLimitsError(error), attemptedAt))
+      .finally(() => {
+        if (this.rateLimitsRefreshes.get(laneKey) === reading) this.rateLimitsRefreshes.delete(laneKey)
+      })
+    this.rateLimitsRefreshes.set(laneKey, reading)
+    void reading
+  }
+
+  private async readRateLimitsSnapshot(
+    laneKey: string,
+    runtime: PoolRuntimeInstance,
+  ): Promise<PoolRateLimitsView> {
+    let latestLimits: SafeAccountRateLimits | undefined
+    for (let attempt = 0; attempt < MAX_RATE_LIMITS_INVALIDATION_RETRIES; attempt++) {
+      const versionAtReadStart = this.rateLimitsInvalidationVersions.get(laneKey) || 0
+      latestLimits = await runtime.readAccountRateLimits!()
+      if ((this.rateLimitsInvalidationVersions.get(laneKey) || 0) === versionAtReadStart) {
+        const entry = this.storeRateLimitsSnapshot(laneKey, latestLimits, false)
+        return this.rateLimitsView(entry, false)
+      }
+    }
+
+    const entry = this.storeRateLimitsSnapshot(laneKey, latestLimits!, true)
+    entry.errorCode = 'RATE_LIMITS_REFRESH_INVALIDATED'
+    return this.rateLimitsView(entry, true)
+  }
+
+  private storeRateLimitsSnapshot(
+    laneKey: string,
+    limits: SafeAccountRateLimits,
+    invalidated: boolean,
+  ): RateLimitsCacheEntry {
+    const observedAtEpochMs = this.now()
+    const entry: RateLimitsCacheEntry = {
+      limits,
+      observedAtEpochMs,
+      lastAttemptAtEpochMs: observedAtEpochMs,
+      invalidated,
+    }
+    this.rateLimitsCache.set(laneKey, entry)
+    return entry
+  }
+
+  private async ensureRateLimitsSource(lane: AppServerLane): Promise<InstanceRecord | undefined> {
+    const existing = this.findRateLimitsSource(lane.key)
+    if (existing) return existing
+    if (this.draining || !this.canCreate(lane.key)) return undefined
+    const controller = new AbortController()
+    this.reserveCreation(lane.key, controller)
+    try {
+      const runtime = await this.factory(lane, controller.signal)
+      if (this.draining) {
+        this.trackRuntimeClose(runtime, this.remainingDrainMs())
+        return undefined
+      }
+      const record = this.registerRuntime(lane.key, runtime)
+      this.schedulePump()
+      return record
+    } finally {
+      this.finishCreation(lane.key, controller)
+      this.schedulePump()
+    }
+  }
+
+  private findRateLimitsSource(laneKey: string): InstanceRecord | undefined {
+    return [...this.instances.values()].find(record => (
+      record.laneKey === laneKey
+      && !record.crashed
+      && record.runtime.isHealthy()
+      && Boolean(record.runtime.readAccountRateLimits)
+    ))
+  }
+
+  private rateLimitsFailure(laneKey: string, errorCode: string, attemptedAt: number): PoolRateLimitsView {
+    const cached = this.rateLimitsCache.get(laneKey)
+    if (!cached) {
+      this.rateLimitsInvalidationVersions.delete(laneKey)
+      return {
+        state: errorCode === 'RATE_LIMITS_UNSUPPORTED' ? 'UNSUPPORTED' : 'UNKNOWN',
+        observed_at_epoch_ms: null,
+        stale: false,
+        limits: [],
+        error_code: errorCode,
+      }
+    }
+    cached.invalidated = true
+    cached.lastAttemptAtEpochMs = attemptedAt
+    cached.errorCode = errorCode
+    return this.rateLimitsView(cached, true)
+  }
+
+  private rateLimitsView(entry: RateLimitsCacheEntry, stale: boolean): PoolRateLimitsView {
+    return {
+      state: stale ? 'STALE' : isRateLimitReached(entry.limits) ? 'LIMIT_REACHED' : 'AVAILABLE',
+      observed_at_epoch_ms: entry.observedAtEpochMs,
+      stale,
+      limits: structuredClone(entry.limits.limits),
+      error_code: stale ? entry.errorCode || 'RATE_LIMITS_STALE' : null,
+    }
+  }
+
+  private registerRuntime(laneKey: string, runtime: PoolRuntimeInstance): InstanceRecord {
+    const now = this.now()
+    const record: InstanceRecord = {
+      id: crypto.randomUUID(),
+      laneKey,
+      runtime,
+      busy: false,
+      crashed: false,
+      createdAt: now,
+      lastUsedAt: now,
+      taskCount: 0,
+    }
+    record.unsubscribeFatal = runtime.onFatal?.(() => this.handleFatal(record))
+    record.unsubscribeRateLimits = runtime.onRateLimitsUpdated?.(() => {
+      this.rateLimitsInvalidationVersions.set(
+        laneKey,
+        (this.rateLimitsInvalidationVersions.get(laneKey) || 0) + 1,
+      )
+      const cached = this.rateLimitsCache.get(laneKey)
+      if (cached) cached.invalidated = true
+      this.refreshResidentRateLimits(laneKey)
+    })
+    this.instances.set(record.id, record)
+    this.counters.created++
+    return record
   }
 
   private schedulePump(): void {
@@ -317,20 +512,7 @@ export class AppServerPool {
             this.schedulePump()
             return
           }
-          const now = this.now()
-          const record: InstanceRecord = {
-            id: crypto.randomUUID(),
-            laneKey: waiter.lane.key,
-            runtime,
-            busy: false,
-            crashed: false,
-            createdAt: now,
-            lastUsedAt: now,
-            taskCount: 0,
-          }
-          record.unsubscribeFatal = runtime.onFatal?.(() => this.handleFatal(record))
-          this.instances.set(record.id, record)
-          this.counters.created++
+          const record = this.registerRuntime(waiter.lane.key, runtime)
           waiter.resolve(this.lease(record))
           this.schedulePump()
         }).catch(error => {
@@ -455,6 +637,14 @@ export class AppServerPool {
   private retire(record: InstanceRecord, crashed: boolean): void {
     if (!this.instances.delete(record.id)) return
     record.unsubscribeFatal?.()
+    record.unsubscribeRateLimits?.()
+    if (
+      !this.rateLimitsCache.has(record.laneKey)
+      && !this.rateLimitsRefreshes.has(record.laneKey)
+      && ![...this.instances.values()].some(candidate => candidate.laneKey === record.laneKey)
+    ) {
+      this.rateLimitsInvalidationVersions.delete(record.laneKey)
+    }
     this.trackRuntimeClose(record.runtime, this.remainingDrainMs())
     this.counters.retired++
     if (crashed) this.counters.crashes++
@@ -528,4 +718,20 @@ function abortError(): Error {
   const error = new Error('Codex app-server pool acquire aborted')
   error.name = 'AbortError'
   return error
+}
+
+function stableRateLimitsError(error: unknown): string {
+  if (error instanceof RateLimitsProtocolError) return error.code
+  if (error instanceof AppServerRpcError) {
+    const message = error.message.toLowerCase()
+    if (error.code === -32601 || message.includes('authentication required')) {
+      return 'RATE_LIMITS_UNSUPPORTED'
+    }
+    if (error.code === -32001) return 'RATE_LIMITS_TEMPORARILY_UNAVAILABLE'
+    return 'RATE_LIMITS_UPSTREAM_FAILED'
+  }
+  if (error instanceof Error && error.message.includes('request timed out')) {
+    return 'RATE_LIMITS_READ_TIMEOUT'
+  }
+  return 'RATE_LIMITS_SOURCE_UNAVAILABLE'
 }

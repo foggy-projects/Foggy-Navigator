@@ -82,10 +82,10 @@ class CodexWorkerFacadeImplTest {
 
     @Test
     void syncQueryAggregatesUpstreamTaskAndMetrics() {
-        mockWorker("worker-1", "gpt-5.4-mini");
-        stubTrackedTask(null, "thread-0", "gpt-5.4-mini", legacyTask());
+        mockWorker("worker-1", "gpt-5.6-sol");
+        stubTrackedTask(null, "thread-0", "gpt-5.6-sol", legacyTask());
         when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("thread-0"),
-                eq("gpt-5.4-mini"), eq(2), eq(null), eq(null), eq(null), eq(null), eq(null)))
+                eq("gpt-5.6-sol"), eq(2), eq(null), eq(null), eq(null), eq(null), eq(null)))
                 .thenReturn(Flux.just(
                         sse("""
                                 {"type":"assistant_text","task_id":"worker-task-9","session_id":"thread-1","content":"Hello "}
@@ -94,7 +94,7 @@ class CodexWorkerFacadeImplTest {
                                 {"type":"assistant_text","task_id":"worker-task-9","session_id":"thread-1","content":"World"}
                                 """),
                         sse("""
-                                {"type":"result","task_id":"worker-task-9","session_id":"thread-1","result":"Final answer","duration_ms":9159,"input_tokens":101,"output_tokens":22,"num_turns":2,"model":"gpt-5.4-mini","cost_usd":0.12}
+                                {"type":"result","task_id":"worker-task-9","session_id":"thread-1","result":"Final answer","duration_ms":9159,"input_tokens":101,"output_tokens":22,"num_turns":2,"model":"gpt-5.6-sol","cost_usd":0.12}
                                 """)
                 ));
 
@@ -104,7 +104,7 @@ class CodexWorkerFacadeImplTest {
         assertEquals("worker-task-9", result.get("workerTaskId"));
         assertEquals("thread-1", result.get("codexThreadId"));
         assertEquals("Final answer", result.get("resultText"));
-        assertEquals("gpt-5.4-mini", result.get("model"));
+        assertEquals("gpt-5.6-sol", result.get("model"));
         assertEquals(9159L, result.get("durationMs"));
         assertEquals(101L, result.get("inputTokens"));
         assertEquals(22L, result.get("outputTokens"));
@@ -112,14 +112,14 @@ class CodexWorkerFacadeImplTest {
         assertEquals(new BigDecimal("0.12"), result.get("costUsd"));
         assertNull(result.get("error"));
         verify(client).streamQuery(eq("check repo"), eq("D:/repo"), eq("thread-0"),
-                eq("gpt-5.4-mini"), eq(2), isNull(), isNull(), isNull(), isNull(), isNull());
+                eq("gpt-5.6-sol"), eq(2), isNull(), isNull(), isNull(), isNull(), isNull());
     }
 
     @Test
     void syncQueryTrackedPersistsWorkerTaskIdAndResult() {
-        mockWorker("worker-1", "gpt-5.4-mini");
+        mockWorker("worker-1", "gpt-5.6-sol");
         when(taskService.createTrackedSyncTask("user-1", "worker-1", "session-1",
-                "check repo", "D:/repo", null, "thread-0", "gpt-5.4-mini"))
+                "check repo", "D:/repo", null, "thread-0", "gpt-5.6-sol"))
                 .thenReturn("local-task-1");
         CodexTaskEntity legacyTask = legacyTask();
         when(taskService.getTaskEntity("local-task-1")).thenReturn(legacyTask);
@@ -127,10 +127,10 @@ class CodexWorkerFacadeImplTest {
                 "legacy-sdk:worker-1", 1, "worker-1", null))
                 .thenReturn(CodexRuntimeBinding.legacySdk("worker-1"));
         when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("thread-0"),
-                eq("gpt-5.4-mini"), eq(2), eq(null), eq(null), eq(null), eq(null), eq(null)))
+                eq("gpt-5.6-sol"), eq(2), eq(null), eq(null), eq(null), eq(null), eq(null)))
                 .thenReturn(Flux.just(
                         sse("""
-                                {"type":"result","task_id":"worker-task-9","session_id":"thread-1","result":"Final answer","duration_ms":9159,"input_tokens":101,"output_tokens":22,"num_turns":2,"model":"gpt-5.4-mini","cost_usd":0.12}
+                                {"type":"result","task_id":"worker-task-9","session_id":"thread-1","result":"Final answer","duration_ms":9159,"input_tokens":101,"output_tokens":22,"num_turns":2,"model":"gpt-5.6-sol","cost_usd":0.12}
                                 """)
                 ));
 
@@ -151,7 +151,7 @@ class CodexWorkerFacadeImplTest {
                 eq(22L),
                 eq(9159L),
                 eq(2),
-                eq("gpt-5.4-mini")
+                eq("gpt-5.6-sol")
         );
         assertEquals(new BigDecimal("0.12"), costCaptor.getValue());
     }
@@ -314,13 +314,13 @@ class CodexWorkerFacadeImplTest {
     @Test
     void syncFailureDoesNotExposeTransportDetails() {
         String sentinel = "http://internal-runtime:3062 bearer-secret";
-        mockWorker("worker-1", "gpt-5.4-mini");
-        stubTrackedTask(null, null, "gpt-5.4-mini", legacyTask());
+        mockWorker("worker-1", "gpt-5.6-sol");
+        stubTrackedTask(null, null, "gpt-5.6-sol", legacyTask());
         when(client.streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Flux.error(new IllegalStateException(sentinel)));
 
         Map<String, Object> result = facade.syncQuery(
-                "user-1", "worker-1", "check repo", "D:/repo", null, 1, "gpt-5.4-mini");
+                "user-1", "worker-1", "check repo", "D:/repo", null, 1, "gpt-5.6-sol");
 
         assertEquals("CODEX_SYNC_QUERY_FAILED", result.get("error"));
         assertTrue(result.values().stream().noneMatch(value -> String.valueOf(value).contains(sentinel)));

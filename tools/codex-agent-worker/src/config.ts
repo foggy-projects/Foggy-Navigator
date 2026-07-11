@@ -174,7 +174,7 @@ function parseMaxConcurrentTasks(rawValue: string | undefined): number {
 
 /**
  * 解析 CODEX_DEFAULT_MODEL，保持 runtime 行为稳定：
- * - 空值：回落到 alias `codex-latest`（1.0.4 新默认；旧版本曾用 'gpt-5.4-mini' 真实模型）
+ * - 空值：回落到 alias `codex-latest`
  * - 非空值：做基本合法性校验，不做白名单限制（保持与请求层一致的"自由模型串"语义）
  *
  * 默认 alias 在 Worker 内部经 resolveModelAlias 解析为真实模型；不会原封不动透传给 Codex SDK。
@@ -188,6 +188,9 @@ function parseDefaultModel(rawValue: string | undefined): string {
   }
   if (value.length > 128) {
     throw new Error('CODEX_DEFAULT_MODEL is too long')
+  }
+  if (value.split(':', 1)[0]!.toLowerCase() === 'gpt-5.4-mini') {
+    throw new Error('CODEX_DEFAULT_MODEL cannot target retired model gpt-5.4-mini')
   }
   return value
 }
@@ -253,6 +256,9 @@ function parseModelAliases(rawValue: string | undefined): Record<string, string>
     }
     if (aliasVal.length > 128) {
       throw new Error(`CODEX_MODEL_ALIASES alias value is too long: ${aliasKey}`)
+    }
+    if (aliasVal.split(':', 1)[0]!.toLowerCase() === 'gpt-5.4-mini') {
+      throw new Error(`CODEX_MODEL_ALIASES alias value targets retired model gpt-5.4-mini: ${aliasKey}`)
     }
     merged[aliasKey] = aliasVal
   }

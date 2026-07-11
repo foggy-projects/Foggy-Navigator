@@ -312,6 +312,66 @@ describe('useTaskPane native subtasks', () => {
     expect(pane.nativeSubtasks.value[0]?.subtaskId).toBe('sub-new')
     pane.dispose()
   })
+
+  it('projects a Codex question event to AWAITING_INPUT and keeps reconnectable stream errors non-terminal', async () => {
+    mocks.getLatestMessages.mockResolvedValue({ messages: [], total: 0, hasMore: false })
+    mocks.getNativeSubtasks.mockResolvedValue({ taskId: 'task-input', subtasks: [] })
+
+    const pane = useTaskPane('pane-input')
+    pane.task.value = {
+      taskId: 'task-input',
+      sessionId: 'session-input',
+      workerId: 'worker-1',
+      providerType: 'codex-worker',
+      prompt: 'interactive task',
+      status: 'RUNNING',
+      createdAt: '',
+      updatedAt: '',
+    }
+    await pane.connect('session-input')
+
+    mocks.sessionCallbacks.get('session-input')?.({
+      messageId: 'message-input',
+      type: 'CONFIRMATION_REQUEST',
+      sessionId: 'session-input',
+      timestamp: 1,
+      payload: {
+        taskId: 'task-input',
+        permissionId: 'permission-input',
+        questions: [{
+          id: 'target',
+          header: 'Target',
+          question: 'Choose target',
+          options: [{ label: 'Staging', description: '' }],
+          multiSelect: false,
+          isOther: false,
+          isSecret: false,
+        }],
+      },
+    })
+
+    expect(pane.task.value?.status).toBe('AWAITING_INPUT')
+    expect(pane.chatState.messages.value.at(-1)).toMatchObject({
+      permissionId: 'permission-input',
+      permissionStatus: 'pending',
+    })
+
+    mocks.sessionCallbacks.get('session-input')?.({
+      messageId: 'message-disconnect',
+      type: 'ERROR',
+      sessionId: 'session-input',
+      timestamp: 2,
+      payload: {
+        taskId: 'task-input',
+        error: 'worker stream disconnected',
+        reconnectable: true,
+      },
+    })
+
+    expect(pane.task.value?.status).toBe('AWAITING_INPUT')
+    expect(pane.chatState.messages.value.at(-1)?.reconnectable).toBe(true)
+    pane.dispose()
+  })
 })
 
 async function flushAsyncWork(): Promise<void> {

@@ -139,6 +139,82 @@ class CodexStreamRelayTest {
     }
 
     @Test
+    void userInputRequestPublishesDurableConfirmationRequest() throws Exception {
+        CodexTaskEntity entity = new CodexTaskEntity();
+        entity.setTaskId("local-task-1");
+        entity.setStatus("RUNNING");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        Map<String, Object> confirmation = Map.of(
+                "requestId", "request-1",
+                "interactionType", "user_input",
+                "questions", List.of(Map.of(
+                        "id", "choice", "question", "Select one", "multiSelect", false)));
+        when(taskService.registerPendingUserInput(eq("local-task-1"), any()))
+                .thenReturn(new CodexTaskService.UserInputRegistration(
+                        true, "request-1", confirmation));
+        String eventJson = new ObjectMapper().writeValueAsString(Map.of(
+                "type", "user_input_request",
+                "subtype", "request_user_input",
+                "task_id", "worker-task-1",
+                "seq", 1,
+                "data", Map.of("request_id", "request-1")));
+
+        ReflectionTestUtils.invokeMethod(
+                relay, "handleSseEvent", ServerSentEvent.builder(eventJson).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>());
+
+        ArgumentCaptor<AgentMessage> message = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener).handleMessageDurably(message.capture());
+        assertEquals(MessageType.CONFIRMATION_REQUEST, message.getValue().getType());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getValue().getPayload();
+        assertEquals("request-1", payload.get("permissionId"));
+        assertEquals("user_input", payload.get("interactionType"));
+        assertEquals(CodexStreamRelay.userInputMessageId(
+                "cx-ui-req-", "local-task-1", "request-1"), message.getValue().getMessageId());
+        assertTrue(message.getValue().getMessageId().length() <= 64);
+        verify(taskService).recordWorkerProgress(
+                "local-task-1", "worker-task-1", null, null, 1, false, true);
+    }
+
+    @Test
+    void answeredResolutionPublishesAllowWhenHttpResponseDidNotCommit() throws Exception {
+        CodexTaskEntity entity = new CodexTaskEntity();
+        entity.setTaskId("local-task-1");
+        entity.setStatus("AWAITING_INPUT");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        when(taskService.resolvePendingUserInput(eq("local-task-1"), any()))
+                .thenReturn(new CodexTaskService.UserInputResolution(
+                        true, "task:local-task-1:string:request-1", "answered"));
+        String eventJson = new ObjectMapper().writeValueAsString(Map.of(
+                "type", "user_input_resolved",
+                "subtype", "request_user_input_resolved",
+                "task_id", "worker-task-1",
+                "seq", 1,
+                "data", Map.of("request_id", "request-1", "reason", "answered")));
+
+        ReflectionTestUtils.invokeMethod(
+                relay, "handleSseEvent", ServerSentEvent.builder(eventJson).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>());
+
+        ArgumentCaptor<AgentMessage> message = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener).handleMessageDurably(message.capture());
+        assertEquals(MessageType.CONFIRMATION_RESPONSE, message.getValue().getType());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getValue().getPayload();
+        assertEquals("task:local-task-1:string:request-1", payload.get("permissionId"));
+        assertEquals("allow", payload.get("decision"));
+        assertFalse(payload.containsKey("answers"));
+        assertEquals(CodexStreamRelay.userInputMessageId(
+                "cx-ui-res-", "local-task-1", "task:local-task-1:string:request-1"),
+                message.getValue().getMessageId());
+    }
+
+    @Test
     void streamQueryErrorBeforeWorkerTaskIdFailsLocalTaskWithoutReconnect() {
         CodexTaskEntity entity = new CodexTaskEntity();
         entity.setTaskId("local-task-1");
@@ -306,7 +382,7 @@ class CodexStreamRelayTest {
     @ValueSource(strings = {"ACCEPTING", "ACCEPTED"})
     void applicationReadyRecoveryRecreatesMissingWorkerTaskIdWithEncryptedEnvelope(String state) {
         CodexTaskEntity entity = stubAppServerTask(state);
-        when(taskRepository.findByStatusIn(List.of("RUNNING"))).thenReturn(List.of(entity));
+        when(taskRepository.findByStatusIn(List.of("RUNNING", "AWAITING_INPUT"))).thenReturn(List.of(entity));
         Map<String, Object> request = Map.of("prompt", "hello");
         when(taskRuntimeStateService.loadPreparedRequest("local-task-1")).thenReturn(request);
         when(client.createTask("local-task-1", request)).thenReturn(Mono.just(acceptance("local-task-1")));
@@ -327,7 +403,7 @@ class CodexStreamRelayTest {
     @Test
     void applicationReadyFailsPreparedTaskThatNeverStartedRemoteAcceptance() {
         CodexTaskEntity entity = stubAppServerTask("PREPARED");
-        when(taskRepository.findByStatusIn(List.of("RUNNING"))).thenReturn(List.of(entity));
+        when(taskRepository.findByStatusIn(List.of("RUNNING", "AWAITING_INPUT"))).thenReturn(List.of(entity));
         when(taskService.failTaskIfAcceptanceNotStarted(
                 "local-task-1", "CODEX_RUNTIME_NOT_ACCEPTED")).thenReturn(true);
 
@@ -462,9 +538,30 @@ class CodexStreamRelayTest {
         ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
         verify(eventPublisher).publishEvent(eventCaptor.capture());
         AgentMessage message = assertInstanceOf(AgentMessage.class, eventCaptor.getValue());
+        assertEquals(MessageType.STATE_SYNC, message.getType());
         @SuppressWarnings("unchecked")
         Map<String, Object> payload = (Map<String, Object>) message.getPayload();
         assertEquals("CODEX_RUNTIME_RESULT_UNKNOWN", payload.get("content"));
+        assertEquals("reconnect_pending", payload.get("subtype"));
+        assertEquals(true, payload.get("reconnectable"));
+    }
+
+    @Test
+    void userInputMessageIdsAreBoundedDeterministicAndTypeDistinct() {
+        String longId = "x".repeat(256);
+        String numeric = CodexStreamRelay.userInputMessageId(
+                "cx-ui-req-", "task-" + "t".repeat(60), "task:task-1:number:1");
+        String numericAgain = CodexStreamRelay.userInputMessageId(
+                "cx-ui-req-", "task-" + "t".repeat(60), "task:task-1:number:1");
+        String string = CodexStreamRelay.userInputMessageId(
+                "cx-ui-req-", "task-" + "t".repeat(60), "task:task-1:string:1");
+        String maximum = CodexStreamRelay.userInputMessageId(
+                "cx-ui-res-", "task-1", "task:task-1:string:" + longId);
+
+        assertEquals(numeric, numericAgain);
+        assertFalse(numeric.equals(string));
+        assertTrue(numeric.length() <= 64);
+        assertTrue(maximum.length() <= 64);
     }
 
     @Test

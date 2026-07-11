@@ -38,7 +38,6 @@ const MODEL_REASONING_MATRIX: Readonly<Record<string, readonly string[]>> = Obje
   'gpt-5.6-luna': Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']),
   'gpt-5.5': Object.freeze(['low', 'medium', 'high', 'xhigh']),
   'gpt-5.4': Object.freeze(['low', 'medium', 'high', 'xhigh']),
-  'gpt-5.4-mini': Object.freeze(['low', 'medium', 'high', 'xhigh']),
   'gpt-5.3-codex-spark': Object.freeze(['low', 'medium', 'high', 'xhigh']),
 })
 let cachedCliProbe: { expiresAt: number; available: boolean } | undefined
@@ -77,6 +76,7 @@ export function resetRuntimeProbeCacheForTests(): void {
 
 export function buildCapabilityManifest(config: AppConfig, manager: TaskManager): Record<string, unknown> {
   const readiness = resolveRuntimeReadiness(config)
+  const modelAliases = supportedModelAliases(config.modelAliases)
   if (!manager.isAccepting()) {
     readiness.ready = false
     readiness.reasons.push('APP_SERVER_WORKER_DRAINING')
@@ -94,7 +94,7 @@ export function buildCapabilityManifest(config: AppConfig, manager: TaskManager)
     instance_id: config.instanceId,
     models: Object.keys(MODEL_REASONING_MATRIX),
     model_reasoning_matrix: MODEL_REASONING_MATRIX,
-    model_aliases: config.modelAliases,
+    model_aliases: modelAliases,
     worker: {
       name: config.workerName,
       version: APP_VERSION,
@@ -115,7 +115,7 @@ export function buildCapabilityManifest(config: AppConfig, manager: TaskManager)
       dynamic_catalog_refresh: false,
       validated_models: Object.keys(MODEL_REASONING_MATRIX),
       reasoning_by_model: MODEL_REASONING_MATRIX,
-      aliases: config.modelAliases,
+      aliases: modelAliases,
     },
     features: {
       task_accept: true,
@@ -138,6 +138,11 @@ export function buildCapabilityManifest(config: AppConfig, manager: TaskManager)
       developer_instructions: true,
       sandbox: true,
       approval_modes: ['never'],
+      interactive_user_input: true,
+      interactive_user_input_experimental: true,
+      account_rate_limits_read: true,
+      account_rate_limits_advisory_only: true,
+      account_rate_limits_model_routing: false,
       network: true,
       web: true,
       attachments: false,
@@ -167,6 +172,12 @@ export function buildCapabilityManifest(config: AppConfig, manager: TaskManager)
       cli_available: readiness.cliAvailable,
     },
   }
+}
+
+function supportedModelAliases(aliases: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(aliases).filter(([, value]) => (
+    value.split(':', 1)[0]?.trim().toLowerCase() !== 'gpt-5.4-mini'
+  )))
 }
 
 function probeAppServer(): boolean {

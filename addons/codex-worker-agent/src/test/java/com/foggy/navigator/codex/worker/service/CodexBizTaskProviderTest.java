@@ -6,6 +6,7 @@ import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +20,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -95,6 +97,18 @@ class CodexBizTaskProviderTest {
         assertInstanceOf(TaskListingProvider.class, provider);
         assertFalse(provider instanceof TaskQueryProvider);
         assertFalse(provider instanceof WorkerSessionQueryProvider);
+        assertTrue(provider.getCapabilities().contains(TaskQueryCapability.RESPOND_TO_TASK));
+    }
+
+    @Test
+    void respondToTaskDelegatesToSharedCodexStateMachine() {
+        Map<String, Object> response = Map.of(
+                "permissionId", "task:task-biz-1:string:request-1",
+                "answers", Map.of("choice", "one"));
+
+        provider.respondToTask("task-biz-1", "user-1", response);
+
+        verify(codexTaskService).respondToTask("task-biz-1", "user-1", response);
     }
 
     @Test

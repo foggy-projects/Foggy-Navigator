@@ -157,6 +157,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         A2aTaskState state = switch (dto.getStatus()) {
             case "PENDING" -> A2aTaskState.SUBMITTED;
             case "RUNNING" -> A2aTaskState.WORKING;
+            case "AWAITING_INPUT", "AWAITING_PERMISSION" -> A2aTaskState.INPUT_REQUIRED;
             case "COMPLETED" -> A2aTaskState.COMPLETED;
             case "FAILED" -> A2aTaskState.FAILED;
             case "ABORTED" -> A2aTaskState.CANCELED;

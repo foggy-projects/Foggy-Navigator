@@ -289,6 +289,30 @@ class TaskControllerTest {
     }
 
     @Test
+    void respondToTask_invalidResponse_returnsFailA() {
+        Map<String, Object> body = Map.of("permissionId", "request-1", "answers", Map.of());
+        doThrow(new IllegalArgumentException("invalid response"))
+                .when(taskDispatchFacade).respondToTask("task-1", USER_ID, body);
+
+        RX<String> result = controller.respondToTask("task-1", body);
+
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("invalid response"));
+    }
+
+    @Test
+    void respondToTask_staleRequest_returnsFailB() {
+        Map<String, Object> body = Map.of("permissionId", "stale", "answers", Map.of());
+        doThrow(new IllegalStateException("CODEX_USER_INPUT_REQUEST_MISMATCH"))
+                .when(taskDispatchFacade).respondToTask("task-1", USER_ID, body);
+
+        RX<String> result = controller.respondToTask("task-1", body);
+
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("CODEX_USER_INPUT_REQUEST_MISMATCH"));
+    }
+
+    @Test
     void listWorkerSessions_delegatesWithCurrentUser() {
         List<Map<String, Object>> sessions = List.of(
                 Map.of("sessionId", "worker-session-1", "source", "session-store")

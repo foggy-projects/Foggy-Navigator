@@ -13,6 +13,7 @@ import {
   type ForwardTargetMode,
 } from '@/api/unifiedTask'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
+import type { UserQuestionAnswers } from '@foggy/chat'
 
 const workers = ref<ClaudeWorker[]>([])
 const tasks = ref<ClaudeTask[]>([])
@@ -221,7 +222,7 @@ export function useClaudeWorker() {
     return result
   }
 
-  async function respondToPermission(taskId: string, form: { permissionId: string; decision: string; denyMessage?: string; scope?: string; answers?: Record<string, string>; planAction?: string }) {
+  async function respondToPermission(taskId: string, form: { permissionId: string; decision: string; denyMessage?: string; scope?: string; answers?: UserQuestionAnswers; planAction?: string }) {
     // 使用统一任务 API（/api/v1/tasks/{taskId}/respond）
     return respondToTaskUnified(taskId, form)
   }

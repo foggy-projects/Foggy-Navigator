@@ -4,7 +4,7 @@ import path from 'node:path'
 import type { AppConfig } from '../config.js'
 import { requireCodexConfigOverride } from '../codex-config.js'
 import type { CodexInput, StoredTaskRecord, TaskRequest } from '../models.js'
-import { parseModelString, resolveModelAlias } from '../model-resolution.js'
+import { parseModelString, resolveSupportedModelAlias } from '../model-resolution.js'
 import { EventBroadcast } from '../persistence/event-store.js'
 import { syncParentDirectory } from '../persistence/jsonl-durability.js'
 import {
@@ -12,10 +12,12 @@ import {
   resolveAllowedWorkingPath,
   resolveContainedHomePath,
 } from '../path-guards.js'
-import { AppServerEventBridge } from './event-bridge.js'
+import { AppServerEventBridge, stableAppServerTurnErrorCode } from './event-bridge.js'
 import { KeyedExecutionLocks } from './execution-locks.js'
 import { buildAppServerLane } from './lane.js'
-import { AppServerPool, type PoolMetrics } from './pool.js'
+import { AppServerPool } from './pool.js'
+import type { PoolRateLimitsView } from './rate-limits.js'
+import type { UserInputServerRequest, UserInputWireResponse } from './user-input.js'
 import {
   isAppServerProcessTreeSafetyError,
   VALIDATED_APP_SERVER_CLI_VERSION,
@@ -26,6 +28,11 @@ export type ExecutionCallbacks = {
   onThreadResolved: (threadId: string) => void | Promise<void>
   onExecutionCommitted: (threadId: string) => void | Promise<void>
   onTurnStarted: (threadId: string, turnId: string | undefined) => void | Promise<void>
+  onUserInputRequest: (request: UserInputServerRequest, runtimeInstanceId: string) => Promise<UserInputWireResponse>
+  onUserInputResolved: (
+    resolution: { requestId: string | number; threadId: string },
+    runtimeInstanceId: string,
+  ) => void | Promise<void>
 }
 
 export type ExecutionResult = {
@@ -37,6 +44,7 @@ export type ExecutionResult = {
   outputTokens: number
   model: string
   durationMs: number
+  errorCode?: string
 }
 
 export type ReconciliationResult = {
@@ -47,6 +55,7 @@ export type ReconciliationResult = {
   model?: string
   instanceId?: string
   laneKey?: string
+  errorCode?: string
 }
 
 export interface TaskExecutor {
@@ -66,6 +75,7 @@ export interface TaskExecutor {
   metrics?(): Record<string, unknown>
   isDraining?(): boolean
   drain?(timeoutMs: number): Promise<void>
+  readDefaultRateLimits?(refresh?: boolean): Promise<PoolRateLimitsView>
 }
 
 export class StrictAppServerExecutor implements TaskExecutor {
@@ -97,7 +107,8 @@ export class StrictAppServerExecutor implements TaskExecutor {
       inputFiles = await materializeInput(options.taskId, options.request, this.config.stateDir)
       this.assertCanonicalCwdUnchanged(context.cwd)
       lease = await this.pool.acquire(context.lane, options.signal)
-      await options.callbacks.onInstanceResolved(lease.instanceId, context.lane.key)
+      const runtimeInstanceId = lease.instanceId
+      await options.callbacks.onInstanceResolved(runtimeInstanceId, context.lane.key)
       const bridge = new AppServerEventBridge({
         taskId: options.taskId,
         broadcast: options.broadcast,
@@ -126,6 +137,8 @@ export class StrictAppServerExecutor implements TaskExecutor {
           await options.callbacks.onTurnStarted(threadId, turnId)
         },
         onNotification: notification => bridge.handle(notification),
+        onUserInputRequest: request => options.callbacks.onUserInputRequest(request, runtimeInstanceId),
+        onUserInputResolved: resolution => options.callbacks.onUserInputResolved(resolution, runtimeInstanceId),
       })
       const turnId = readString(result.turn.id)
       const bridged = bridge.getResult()
@@ -139,6 +152,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
         outputTokens: bridged.outputTokens,
         model: context.model,
         durationMs: Date.now() - startedAt,
+        errorCode: bridged.terminalFailure,
       }
     } catch (error) {
       if (isAppServerProcessTreeSafetyError(error)) {
@@ -203,6 +217,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
         model: context.model,
         instanceId: lease.instanceId,
         laneKey: context.lane.key,
+        errorCode: status === 'failed' ? stableAppServerTurnErrorCode(reconciledTurn.error) : undefined,
       }
     } catch {
       return { status: 'unknown', threadId }
@@ -227,6 +242,15 @@ export class StrictAppServerExecutor implements TaskExecutor {
     await this.pool.drain(timeoutMs)
   }
 
+  async readDefaultRateLimits(refresh = false): Promise<PoolRateLimitsView> {
+    const codexHome = await this.resolveCodexHome(undefined)
+    const lane = await buildAppServerLane({
+      cliVersion: VALIDATED_APP_SERVER_CLI_VERSION,
+      codexHome,
+    })
+    return this.pool.readRateLimits(lane, refresh)
+  }
+
   private async buildContext(request: TaskRequest): Promise<{
     model: string
     reasoningEffort?: string
@@ -237,7 +261,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
     const effectiveCwd = request.cwd || process.cwd()
     const cwd = resolveAllowedWorkingPath(effectiveCwd, this.config.allowedCwds)
     if (!cwd) throw workingDirectoryNotAllowed()
-    const resolved = resolveModelAlias(request.model || this.config.defaultModel, this.config.modelAliases)
+    const resolved = resolveSupportedModelAlias(request.model || this.config.defaultModel, this.config.modelAliases)
     const parsed = parseModelString(resolved)
     const codexHome = await this.resolveCodexHome(request.codex_home_key)
     const apiKey = request.api_key || this.config.openaiApiKey || undefined
@@ -305,12 +329,14 @@ export class StrictAppServerExecutor implements TaskExecutor {
   }
 }
 
-function buildCodexConfig(request: TaskRequest, effort: string | undefined): Record<string, unknown> {
+export function buildCodexConfig(request: TaskRequest, effort: string | undefined): Record<string, unknown> {
   const result: Record<string, unknown> = {
     tool_output_token_limit: 10_000,
     model_auto_compact_token_limit: 140_000,
     ...requireCodexConfigOverride(request.codex_config),
     approval_policy: 'never',
+    'features.default_mode_request_user_input': true,
+    'notice.hide_rate_limit_model_nudge': true,
   }
   for (const key of ['model_context_window', 'model_auto_compact_token_limit', 'tool_output_token_limit']) {
     const value = request.env_vars?.[key]

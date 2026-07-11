@@ -40,6 +40,53 @@ export interface TaskRequest {
 export type TaskPhase = 'accepted' | 'starting' | 'committed' | 'running' | 'terminal'
 export type TaskOutcome = 'completed' | 'failed' | 'aborted'
 
+export type AppServerRequestId = string | number
+
+export interface UserInputOption {
+  label: string
+  description: string
+}
+
+export interface UserInputQuestion {
+  id: string
+  header: string
+  question: string
+  options?: UserInputOption[]
+  is_other: boolean
+  is_secret: boolean
+}
+
+export interface PendingUserInputInteraction {
+  contract_version: 1
+  request_id: AppServerRequestId
+  method: 'item/tool/requestUserInput'
+  thread_id: string
+  turn_id: string
+  item_id: string
+  questions: UserInputQuestion[]
+  auto_resolution_ms?: number
+  runtime_instance_id: string
+  created_at: string
+}
+
+export interface ResolvedUserInputInteraction {
+  contract_version: 1
+  request_id: AppServerRequestId
+  thread_id: string
+  turn_id: string
+  runtime_instance_id: string
+  state: 'answered' | 'auto_resolved' | 'cleared' | 'failed'
+  resolved_at: string
+}
+
+export interface UserInputRequestData extends PendingUserInputInteraction {}
+
+export interface UserInputResolvedData {
+  contract_version: 1
+  request_id: AppServerRequestId
+  reason: 'answered' | 'auto_resolved' | 'cleared'
+}
+
 export interface EncryptedPayload {
   algorithm: 'aes-256-gcm'
   iv: string
@@ -52,6 +99,7 @@ export interface StoredTaskRecord {
   task_id: string
   request_hash: string
   request_payload?: EncryptedPayload
+  requested_thread_id?: string
   status: TaskPhase
   outcome?: TaskOutcome
   error_code?: string
@@ -67,6 +115,8 @@ export interface StoredTaskRecord {
   recovery_required?: boolean
   abort_requested_at?: string
   tombstoned_at?: string
+  pending_interaction?: PendingUserInputInteraction
+  last_interaction?: ResolvedUserInputInteraction
 }
 
 export type NativeSubtaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'interrupted'
@@ -89,6 +139,7 @@ export interface NativeSubtaskUpdateData {
 
 export interface WorkerEvent {
   type: 'assistant_text' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'native_subtask_update'
+    | 'user_input_request' | 'user_input_resolved'
   task_id: string
   session_id?: string
   content?: string
@@ -106,6 +157,6 @@ export interface WorkerEvent {
   tool_use_id?: string
   is_error?: boolean
   subtype?: string
-  data?: NativeSubtaskUpdateData
+  data?: NativeSubtaskUpdateData | UserInputRequestData | UserInputResolvedData
   seq?: number
 }

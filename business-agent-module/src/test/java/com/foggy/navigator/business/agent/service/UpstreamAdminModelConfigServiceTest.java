@@ -77,7 +77,7 @@ class UpstreamAdminModelConfigServiceTest {
         ClientAppModelConfigForm form = new ClientAppModelConfigForm();
         form.setName("Shared Codex");
         form.setBaseUrl("https://codex.example/v1");
-        form.setModelName("codex-mini");
+        form.setModelName("codex-latest");
         form.setApiKey("secret");
         form.setWorkerBackend("OPENAI_CODEX");
 

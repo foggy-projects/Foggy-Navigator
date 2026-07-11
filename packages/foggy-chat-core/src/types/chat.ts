@@ -1,4 +1,4 @@
-import type { AipMessageType, UserQuestionItem, AllowedPrompt } from './aip'
+import type { AipMessageType, UserQuestionAnswer, UserQuestionItem, AllowedPrompt } from './aip'
 
 export type NavigatorUiArtifactKind = 'route' | 'iframe' | 'link'
 export type NavigatorUiArtifactOpenMode = 'side_panel' | 'dialog' | 'new_tab' | 'current_page'
@@ -49,8 +49,8 @@ export interface ChatMessage {
   allowedPrompts?: AllowedPrompt[]
   /** Execution plan content (Markdown) from ExitPlanMode */
   plan?: string
-  /** Populated from CONFIRMATION_RESPONSE: maps question index → answered value string */
-  answeredValues?: Record<number, string>
+  /** Populated from CONFIRMATION_RESPONSE: maps question index to its answer value. */
+  answeredValues?: Record<number, UserQuestionAnswer>
   /** Whether this error supports manual reconnection */
   reconnectable?: boolean
   /** Image attachments (preview URLs) for user messages */

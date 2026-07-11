@@ -2,7 +2,7 @@
   <div :class="['user-question-card', statusClass]">
     <div class="card-header">
       <span class="card-icon">{{ statusIcon }}</span>
-      <span class="card-title">Claude 需要你的输入</span>
+      <span class="card-title">需要你的输入</span>
       <span :class="['status-badge', statusClass]">{{ statusLabel }}</span>
     </div>
     <div v-if="isPending" class="card-body">
@@ -12,62 +12,77 @@
           <span class="question-text">{{ q.question }}</span>
         </div>
         <div class="question-options">
-          <template v-if="q.multiSelect">
+          <template v-if="questionOptions(q).length > 0">
+            <template v-if="q.multiSelect">
+              <label
+                v-for="(opt, oi) in questionOptions(q)"
+                :key="oi"
+                :class="['option-item', { selected: isSelected(qi, opt.label) }]"
+              >
+                <input
+                  type="checkbox"
+                  :checked="isSelected(qi, opt.label)"
+                  @change="toggleMulti(qi, opt.label)"
+                />
+                <span class="option-index">{{ oi + 1 }}</span>
+                <span class="option-label">{{ opt.label }}</span>
+                <span class="option-desc">{{ opt.description }}</span>
+              </label>
+            </template>
+            <template v-else>
+              <label
+                v-for="(opt, oi) in questionOptions(q)"
+                :key="oi"
+                :class="['option-item', { selected: selections[qi] === opt.label }]"
+                @click="selectSingle(qi, opt.label)"
+              >
+                <input
+                  type="radio"
+                  :name="'q-' + qi"
+                  :checked="selections[qi] === opt.label"
+                  @change="selectSingle(qi, opt.label)"
+                  @click.stop
+                />
+                <span class="option-index">{{ oi + 1 }}</span>
+                <span class="option-label">{{ opt.label }}</span>
+                <span class="option-desc">{{ opt.description }}</span>
+              </label>
+            </template>
             <label
-              v-for="(opt, oi) in q.options"
-              :key="oi"
-              :class="['option-item', { selected: isSelected(qi, opt.label) }]"
+              v-if="shouldShowOther(q)"
+              :class="['option-item other-option', { selected: isOtherActive(qi) }]"
+              @click="handleOtherClick(qi, $event)"
             >
               <input
-                type="checkbox"
-                :checked="isSelected(qi, opt.label)"
-                @change="toggleMulti(qi, opt.label)"
-              />
-              <span class="option-label">{{ opt.label }}</span>
-              <span class="option-desc">{{ opt.description }}</span>
-            </label>
-          </template>
-          <template v-else>
-            <label
-              v-for="(opt, oi) in q.options"
-              :key="oi"
-              :class="['option-item', { selected: selections[qi] === opt.label }]"
-              @click="selectSingle(qi, opt.label)"
-            >
-              <input
-                type="radio"
+                :type="q.multiSelect ? 'checkbox' : 'radio'"
                 :name="'q-' + qi"
-                :checked="selections[qi] === opt.label"
-                @change="selectSingle(qi, opt.label)"
+                :checked="isOtherActive(qi)"
+                @change="activateOther(qi)"
                 @click.stop
               />
-              <span class="option-label">{{ opt.label }}</span>
-              <span class="option-desc">{{ opt.description }}</span>
+              <span class="option-label">Other</span>
+              <input
+                v-show="isOtherActive(qi)"
+                v-model="otherTexts[qi]"
+                :type="q.isSecret ? 'password' : 'text'"
+                class="other-input"
+                placeholder="输入自定义回答..."
+                autocomplete="off"
+                @focus="activateOther(qi)"
+                @click.stop
+              />
             </label>
           </template>
-          <!-- Other option -->
-          <label
-            :class="['option-item other-option', { selected: isOtherActive(qi) }]"
-            @click="handleOtherClick(qi, $event)"
-          >
+          <div v-else class="freeform-answer">
             <input
-              :type="q.multiSelect ? 'checkbox' : 'radio'"
-              :name="'q-' + qi"
-              :checked="isOtherActive(qi)"
-              @change="activateOther(qi)"
-              @click.stop
-            />
-            <span class="option-label">Other</span>
-            <input
-              v-show="isOtherActive(qi)"
               v-model="otherTexts[qi]"
-              type="text"
-              class="other-input"
-              placeholder="输入自定义回答..."
-              @focus="activateOther(qi)"
-              @click.stop
+              :type="q.isSecret ? 'password' : 'text'"
+              class="direct-input"
+              :placeholder="q.isSecret ? '输入敏感信息...' : '输入回答...'"
+              autocomplete="off"
+              @input="activateOther(qi)"
             />
-          </label>
+          </div>
         </div>
       </div>
       <div class="card-actions">
@@ -79,22 +94,28 @@
     <div v-else class="card-body answered">
       <div v-for="(q, qi) in questions" :key="qi" class="answered-item">
         <span class="answered-header">{{ q.header }}:</span>
-        <span class="answered-value">{{ answeredValues[qi] || '-' }}</span>
+        <span class="answered-value">{{ displayedAnswer(qi) }}</span>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { ChatMessage } from '../types/chat'
+import type {
+  UserQuestionAnswer,
+  UserQuestionAnswers,
+  UserQuestionItem,
+  UserQuestionOption,
+} from '../types/aip'
 
 const props = defineProps<{
   message: ChatMessage
 }>()
 
 const emit = defineEmits<{
-  (e: 'respond', permissionId: string, answers: Record<string, string>): void
+  (e: 'respond', permissionId: string, answers: UserQuestionAnswers): void
 }>()
 
 const questions = computed(() => props.message.questions || [])
@@ -107,7 +128,30 @@ const otherActive = reactive<Record<number, boolean>>({})
 
 // Previously submitted answers (for display after submission)
 // Initialize from persisted answeredValues if available (restored from CONFIRMATION_RESPONSE)
-const answeredValues = ref<Record<number, string>>(props.message.answeredValues || {})
+const answeredValues = ref<Record<number, UserQuestionAnswer>>(props.message.answeredValues || {})
+
+watch(() => props.message.answeredValues, (values) => {
+  answeredValues.value = values || {}
+})
+
+function questionOptions(question: UserQuestionItem): UserQuestionOption[] {
+  return Array.isArray(question.options) ? question.options : []
+}
+
+function shouldShowOther(question: UserQuestionItem): boolean {
+  return questionOptions(question).length > 0 && question.isOther !== false
+}
+
+function questionAnswerKey(question: UserQuestionItem): string {
+  return question.id?.trim() || question.question
+}
+
+function displayedAnswer(qi: number): string {
+  if (props.message.permissionStatus === 'denied') return '已跳过'
+  if (questions.value[qi]?.isSecret) return '已提交'
+  const value = answeredValues.value[qi]
+  return Array.isArray(value) ? value.join('、') : value || '-'
+}
 
 function selectSingle(qi: number, label: string) {
   selections[qi] = label
@@ -151,9 +195,13 @@ function handleOtherClick(qi: number, event: MouseEvent) {
   })
 }
 
-function getAnswer(qi: number): string {
+function getAnswer(qi: number): UserQuestionAnswer {
   const q = questions.value[qi]
   if (!q) return ''
+
+  if (questionOptions(q).length === 0) {
+    return otherTexts[qi]?.trim() || ''
+  }
 
   if (otherActive[qi] && otherTexts[qi]?.trim()) {
     if (q.multiSelect) {
@@ -162,14 +210,14 @@ function getAnswer(qi: number): string {
       const parts: string[] = []
       if (sel instanceof Set) sel.forEach((l) => { if (l !== '__other__') parts.push(l) })
       parts.push(otherTexts[qi].trim())
-      return parts.join(', ')
+      return parts
     }
     return otherTexts[qi].trim()
   }
 
   const sel = selections[qi]
   if (sel instanceof Set) {
-    return Array.from(sel).filter((l) => l !== '__other__').join(', ')
+    return Array.from(sel).filter((l) => l !== '__other__')
   }
   return typeof sel === 'string' && sel !== '__other__' ? sel : ''
 }
@@ -204,11 +252,18 @@ const statusIcon = computed(() => {
 
 function handleSubmit() {
   if (!props.message.permissionId) return
-  const answers: Record<string, string> = {}
+  const answers = Object.create(null) as UserQuestionAnswers
   questions.value.forEach((q, qi) => {
     const ans = getAnswer(qi)
-    answers[q.question] = ans
-    answeredValues.value[qi] = ans
+    answers[questionAnswerKey(q)] = ans
+    if (q.isSecret) {
+      delete answeredValues.value[qi]
+      otherTexts[qi] = ''
+      delete selections[qi]
+      otherActive[qi] = false
+    } else {
+      answeredValues.value[qi] = ans
+    }
   })
   emit('respond', props.message.permissionId, answers)
 }
@@ -216,6 +271,8 @@ function handleSubmit() {
 
 <style scoped>
 .user-question-card {
+  box-sizing: border-box;
+  width: 100%;
   margin: 8px 0;
   padding: 12px 16px;
   border-radius: 8px;
@@ -286,9 +343,11 @@ function handleSubmit() {
 }
 
 .question-text {
+  min-width: 0;
   font-size: 13px;
   color: #303133;
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 .question-options {
@@ -321,12 +380,28 @@ function handleSubmit() {
 .option-label {
   font-weight: 500;
   color: #303133;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.option-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  background: #f2f3f5;
+  color: #606266;
+  font-size: 11px;
   flex-shrink: 0;
 }
 
 .option-desc {
+  min-width: 0;
   color: #909399;
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .other-option { flex-wrap: wrap; }
@@ -342,6 +417,23 @@ function handleSubmit() {
 }
 
 .other-input:focus { border-color: #409eff; }
+
+.freeform-answer {
+  width: 100%;
+}
+
+.direct-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  color: #303133;
+  font-size: 13px;
+  outline: none;
+}
+
+.direct-input:focus { border-color: #409eff; }
 
 .card-actions {
   margin-top: 10px;
@@ -381,5 +473,20 @@ function handleSubmit() {
 .answered-value {
   color: #409eff;
   font-weight: 500;
+}
+
+@media (max-width: 480px) {
+  .option-item:not(.other-option) {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    row-gap: 2px;
+  }
+
+  .option-item:not(.other-option) .option-label,
+  .option-item:not(.other-option) .option-desc {
+    grid-column: 3;
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
 }
 </style>

@@ -54,8 +54,8 @@ export interface TaskPaneState {
   resumeInPlaceNoMessage(newTask: ClaudeTask): void
   /** Reconnect SSE only (no message clear/reload). Used by workspace suspend/resume. */
   reconnectSse(): void
-  /** Pull latest task status from backend (idempotent, skips terminal states) */
-  syncTaskStatus(): Promise<void>
+  /** Pull latest task status from backend. Force is used after stream recovery. */
+  syncTaskStatus(options?: { force?: boolean }): Promise<void>
   disconnect(): void
   dispose(): void
 }
@@ -93,6 +93,9 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   let disposed = false
 
   const { subscribeSession, connected } = useUnifiedSse()
+  const stopSseConnectionWatcher = watch(() => connected.value, (isConnected) => {
+    chatState.setConnectionStatus(isConnected ? 'connected' : 'connecting')
+  }, { immediate: true })
 
   const stopTaskWatcher = watch(() => task.value?.taskId, (taskId) => {
     if (!taskId) {
@@ -142,14 +145,16 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     }
   }
 
-  async function syncTaskStatus() {
-    if (!task.value) return
-    if (['COMPLETED', 'FAILED', 'ABORTED'].includes(task.value.status)) return
+  async function syncTaskStatus(syncOptions: { force?: boolean } = {}) {
+    const currentTask = task.value
+    if (!currentTask) return
+    if (!syncOptions.force && ['COMPLETED', 'FAILED', 'ABORTED'].includes(currentTask.status)) return
     try {
-      const fresh = (await getTaskUnified(task.value.taskId)) as unknown as ClaudeTask
+      const fresh = (await getTaskUnified(currentTask.taskId)) as unknown as ClaudeTask
       if (!fresh) return
-      const prevStatus = task.value.status
-      Object.assign(task.value, fresh)
+      if (task.value?.taskId !== currentTask.taskId) return
+      const prevStatus = currentTask.status
+      Object.assign(currentTask, fresh)
       if (prevStatus !== fresh.status && ['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
         options?.onTaskFinished?.(paneId)
       }
@@ -256,7 +261,10 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     }
 
     if (raw.type === 'CONFIRMATION_REQUEST') {
-      task.value.status = 'AWAITING_PERMISSION' as ClaudeTask['status']
+      const hasQuestions = Array.isArray(payload.questions) && payload.questions.length > 0
+      task.value.status = inferTaskWorkerBackend(task.value) === 'OPENAI_CODEX' && hasQuestions
+        ? 'AWAITING_INPUT'
+        : 'AWAITING_PERMISSION'
     } else if (raw.type === 'TEXT_COMPLETE' || raw.type === 'SESSION_END') {
       // Only treat as task completion when result-level metadata is present.
       // The "result" event from Python Worker always includes numTurns/costUsd/durationMs.
@@ -272,6 +280,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         options?.onTaskFinished?.(paneId)
       }
     } else if (raw.type === 'ERROR') {
+      if (payload.reconnectable === true) return
       task.value.status = 'FAILED'
       if (typeof payload.errorMessage === 'string') {
         task.value.errorMessage = payload.errorMessage
@@ -289,6 +298,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         const currentTask = task.value
         if (currentTask?.sessionId === sessionId) {
           void loadNativeSubtaskSnapshot(currentTask.taskId, connectVersion)
+          void syncTaskStatus({ force: true })
         }
       },
     })
@@ -703,6 +713,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   function dispose() {
     disposed = true
     stopTaskWatcher()
+    stopSseConnectionWatcher()
     disconnect()
     chatState.clearMessages()
     nativeSubtaskState.value = createNativeSubtaskState()

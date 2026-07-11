@@ -4,6 +4,17 @@ const REASONING = new Set<CodexReasoningEffort>([
   'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
 ])
 
+export const UNSUPPORTED_CODEX_MODEL = 'UNSUPPORTED_CODEX_MODEL'
+
+export class UnsupportedCodexModelError extends Error {
+  readonly code = UNSUPPORTED_CODEX_MODEL
+
+  constructor() {
+    super(UNSUPPORTED_CODEX_MODEL)
+    this.name = 'UnsupportedCodexModelError'
+  }
+}
+
 export function normalizeReasoningEffort(value: string | undefined): CodexReasoningEffort | undefined {
   if (!value) return undefined
   const normalized = value.trim().toLowerCase() === 'extra-high' ? 'xhigh' : value.trim().toLowerCase()
@@ -22,6 +33,13 @@ export function resolveModelAlias(rawModel: string, aliases: Record<string, stri
   const resolved = aliases[alias]
   if (!resolved) return rawModel
   return resolved.includes(':') ? resolved : `${resolved}:${effort}`
+}
+
+export function resolveSupportedModelAlias(rawModel: string, aliases: Record<string, string>): string {
+  const resolved = resolveModelAlias(rawModel, aliases)
+  const baseModel = resolved.split(':', 1)[0]?.trim().toLowerCase()
+  if (baseModel === 'gpt-5.4-mini') throw new UnsupportedCodexModelError()
+  return resolved
 }
 
 export function parseModelString(rawModel: string): {

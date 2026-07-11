@@ -34,6 +34,12 @@ export function runtimeKey(runtime: Pick<CodexRuntime, 'runtimeId' | 'revision'>
   return `${runtime.runtimeId}@${runtime.revision}`
 }
 
+export function runtimeInstanceKey(
+  runtime: Pick<CodexRuntime, 'runtimeId' | 'revision' | 'instanceId'>,
+): string {
+  return `${runtimeKey(runtime)}#${runtime.instanceId ?? ''}`
+}
+
 export function isCanaryPolicy(policy: CodexRuntimeRoutingPolicy): boolean {
   return policy === 'ULTRA_CANARY' || policy === 'ALL_CANARY'
 }

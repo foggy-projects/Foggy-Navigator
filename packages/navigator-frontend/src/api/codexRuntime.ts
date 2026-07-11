@@ -3,9 +3,25 @@ import type { RX } from '@/types'
 import type {
   CodexRuntime,
   CodexRuntimeAvailability,
+  CodexRuntimeRateLimits,
   RegisterCodexRuntimeRequest,
   UpdateCodexRuntimeRoutingRequest,
 } from '@/types/codexRuntime'
+
+export async function getCodexRuntimeRateLimits(
+  runtimeId: string,
+  revision: number,
+  options?: { refresh?: boolean; suppressErrorMessage?: boolean },
+): Promise<CodexRuntimeRateLimits> {
+  const rx = (await client.get(
+    `/codex-runtimes/${encodeURIComponent(runtimeId)}/revisions/${revision}/rate-limits`,
+    {
+      params: { refresh: options?.refresh === true },
+      ...(options?.suppressErrorMessage ? { suppressErrorMessage: true } : {}),
+    } as any,
+  )) as unknown as RX<CodexRuntimeRateLimits>
+  return rx.data
+}
 
 export async function getCodexRuntimeAvailability(
   workerId: string,

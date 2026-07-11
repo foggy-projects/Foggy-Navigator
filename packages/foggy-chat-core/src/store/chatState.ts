@@ -12,6 +12,7 @@ import type {
   TaskCompletedPayload,
   ConfirmationRequestPayload,
   ConfirmationResponsePayload,
+  UserQuestionAnswer,
 } from '../types/aip'
 import type {
   ChatMessage,
@@ -38,7 +39,7 @@ export interface ChatState {
   addUserMessage: (content: string, sessionId?: string, images?: Array<{ name: string; url: string }>) => void
   setConnectionStatus: (status: ConnectionStatus) => void
   clearMessages: () => void
-  resolvePermission: (permissionId: string, status: 'approved' | 'denied') => void
+  resolvePermission: (permissionId: string, status: 'approved' | 'denied', taskId?: string) => void
   resolveSkillApproval: (taskId: string, decision: 'approved' | 'rejected') => void
 }
 
@@ -695,6 +696,7 @@ export function createChatState(): ChatState {
       }
       case AipMessageType.CONFIRMATION_REQUEST: {
         const p = aip.payload as ConfirmationRequestPayload
+        if (messages.value.some((message) => message.id === aip.messageId)) break
         messages.value.push({
           id: aip.messageId,
           type: aip.type,
@@ -716,17 +718,21 @@ export function createChatState(): ChatState {
       case AipMessageType.CONFIRMATION_RESPONSE: {
         const p = aip.payload as ConfirmationResponsePayload
         // Find the matching CONFIRMATION_REQUEST and resolve it
-        const target = messages.value.find(
-          (m) => m.permissionId === p.permissionId && m.type === AipMessageType.CONFIRMATION_REQUEST,
+        const target = [...messages.value].reverse().find(
+          (m) => m.permissionId === p.permissionId
+            && m.type === AipMessageType.CONFIRMATION_REQUEST
+            && (!p.taskId || messageTaskId(m) === p.taskId),
         )
         if (target) {
           target.permissionStatus = p.decision === 'allow' ? 'approved' : 'denied'
           // Restore answered values from persisted answers
           if (p.answers && target.questions) {
-            const vals: Record<number, string> = {}
+            const vals: Record<number, UserQuestionAnswer> = {}
             target.questions.forEach((q, qi) => {
-              if (p.answers![q.question]) {
-                vals[qi] = p.answers![q.question]
+              if (q.isSecret) return
+              const answer = p.answers![q.id ?? q.question] ?? p.answers![q.question]
+              if ((typeof answer === 'string' && answer) || (Array.isArray(answer) && answer.length > 0)) {
+                vals[qi] = answer
               }
             })
             target.answeredValues = vals
@@ -770,13 +776,22 @@ export function createChatState(): ChatState {
     connectionStatus.value = status
   }
 
-  function resolvePermission(permissionId: string, status: 'approved' | 'denied') {
-    const msg = messages.value.find(
-      (m) => m.permissionId === permissionId && m.type === AipMessageType.CONFIRMATION_REQUEST,
+  function resolvePermission(permissionId: string, status: 'approved' | 'denied', taskId?: string) {
+    const msg = [...messages.value].reverse().find(
+      (m) => m.permissionId === permissionId
+        && m.type === AipMessageType.CONFIRMATION_REQUEST
+        && m.permissionStatus === 'pending'
+        && (!taskId || messageTaskId(m) === taskId),
     )
     if (msg) {
       msg.permissionStatus = status
     }
+  }
+
+  function messageTaskId(message: ChatMessage): string | undefined {
+    if (!message.raw || typeof message.raw !== 'object') return undefined
+    const taskId = (message.raw as Record<string, unknown>).taskId
+    return typeof taskId === 'string' ? taskId : undefined
   }
 
   function resolveSkillApproval(taskId: string, decision: 'approved' | 'rejected') {

@@ -193,6 +193,10 @@ public class TaskController {
             return RX.ok("Response sent");
         } catch (UnsupportedOperationException e) {
             return RX.failA(e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return RX.failA(e.getMessage());
+        } catch (IllegalStateException e) {
+            return RX.failB(e.getMessage());
         }
     }
 

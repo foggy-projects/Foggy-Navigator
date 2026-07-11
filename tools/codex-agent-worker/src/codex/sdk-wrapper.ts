@@ -55,11 +55,21 @@ export const taskRegistry = new Map<string, TaskEntry>()
 export const taskBroadcasts = new Map<string, EventBroadcast>()
 
 export const CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR = 'CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided'
+export const UNSUPPORTED_CODEX_MODEL = 'UNSUPPORTED_CODEX_MODEL'
+
+export class UnsupportedCodexModelError extends Error {
+  readonly code = UNSUPPORTED_CODEX_MODEL
+
+  constructor() {
+    super(UNSUPPORTED_CODEX_MODEL)
+    this.name = 'UnsupportedCodexModelError'
+  }
+}
 
 /**
  * 解析 model:reasoning_level 后缀
  * 如 "gpt-5.4:high" → { model: "gpt-5.4", reasoningLevel: "high" }
- * 如 "gpt-5.4-mini" → { model: "gpt-5.4-mini", reasoningLevel: undefined }
+ * 如 "gpt-5.3-codex-spark" → { model: "gpt-5.3-codex-spark", reasoningLevel: undefined }
  *
  * Worker reasoning effort: "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
  * Ultra 由独立 codex-app-server-worker 执行，不会传给 Codex SDK。
@@ -133,6 +143,16 @@ export function resolveModelAlias(
   }
   // Case 4: 直接透传（向后兼容真实模型名）
   return { resolved: rawModel, wasAlias: false }
+}
+
+export function resolveSupportedModelAlias(
+  rawModel: string,
+  aliases: Record<string, string>
+): { resolved: string; wasAlias: boolean } {
+  const result = resolveModelAlias(rawModel, aliases)
+  const baseModel = result.resolved.split(':', 1)[0]?.trim().toLowerCase()
+  if (baseModel === 'gpt-5.4-mini') throw new UnsupportedCodexModelError()
+  return result
 }
 
 export function shouldAbortBeforeTurnStart(completedTurns: number, maxTurns: number | undefined): boolean {
@@ -916,6 +936,10 @@ export async function runQuery(
   runOptions: CodexRunOptions = {},
   dependencies: RunQueryDependencies = {}
 ): Promise<void> {
+  // Resolve and enforce the retired-model policy before allocating task state.
+  const requestedModel = model || config.defaultModel
+  const aliasResult = resolveSupportedModelAlias(requestedModel, config.modelAliases)
+  const rawModel = aliasResult.resolved
   const broadcast = new EventBroadcast(taskId)
   taskBroadcasts.set(taskId, broadcast)
   const recordFileHints = (event: WorkerEvent): void => {
@@ -927,10 +951,6 @@ export async function runQuery(
   // - 默认值（config.defaultModel）默认是 alias `codex-latest`
   // - 不论请求方传 alias（codex-latest）还是真实模型（gpt-5.6-sol），都先经过 resolveModelAlias 转换
   // - 真实模型直接透传（保持向后兼容）
-  const requestedModel = model || config.defaultModel
-  const aliasResult = resolveModelAlias(requestedModel, config.modelAliases)
-  const rawModel = aliasResult.resolved
-
   // entry.model 保留请求方提供的原始字符串（alias 或真实模型），便于上游列表 / 监控展示稳定值
   const entry: TaskEntry = {
     taskId,

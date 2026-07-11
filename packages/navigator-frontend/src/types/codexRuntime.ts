@@ -49,6 +49,41 @@ export interface CodexRuntimeAvailability {
     | null
 }
 
+export type CodexRuntimeRateLimitState =
+  | 'AVAILABLE'
+  | 'LIMIT_REACHED'
+  | 'STALE'
+  | 'UNSUPPORTED'
+  | 'UNKNOWN'
+
+export interface CodexRuntimeRateLimitWindow {
+  usedPercent: number
+  windowDurationMins: number | null
+  /** Provider reset timestamp in epoch seconds. */
+  resetsAt: number | null
+}
+
+export interface CodexRuntimeRateLimit {
+  limitId: string | null
+  limitName: string | null
+  primary: CodexRuntimeRateLimitWindow | null
+  secondary: CodexRuntimeRateLimitWindow | null
+  rateLimitReachedType: string | null
+}
+
+export interface CodexRuntimeRateLimits {
+  contractVersion: number
+  runtimeId: string
+  runtimeRevision: number
+  instanceId: string
+  scope: string
+  state: CodexRuntimeRateLimitState
+  observedAtEpochMs: number | null
+  stale: boolean
+  limits: CodexRuntimeRateLimit[]
+  errorCode: string | null
+}
+
 export interface RegisterCodexRuntimeRequest {
   runtimeId: string
   workerId: string

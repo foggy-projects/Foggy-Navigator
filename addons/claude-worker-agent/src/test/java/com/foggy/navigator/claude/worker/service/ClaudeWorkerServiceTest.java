@@ -110,7 +110,7 @@ class ClaudeWorkerServiceTest {
         form.setCodexConfig(CodexConfig.builder()
                 .baseUrl("http://codex:3032///")
                 .authToken("codex-token")
-                .model("codex-mini")
+                .model("codex-latest")
                 .build());
 
         when(credentialEncryptor.encrypt("tk")).thenReturn("enc-tk");
@@ -125,7 +125,7 @@ class ClaudeWorkerServiceTest {
         assertNotNull(saved);
         assertEquals("http://codex:3032", saved.getBaseUrl()); // trailing slashes stripped
         assertEquals("enc-codex", saved.getAuthToken());
-        assertEquals("codex-mini", saved.getModel());
+        assertEquals("codex-latest", saved.getModel());
     }
 
     @Test
@@ -345,7 +345,7 @@ class ClaudeWorkerServiceTest {
         entity.setCodexConfig(CodexConfig.builder()
                 .baseUrl("http://codex:3032")
                 .authToken("enc-codex-tk")
-                .model("codex-mini")
+                .model("codex-latest")
                 .build());
         when(credentialEncryptor.decrypt("enc-codex-tk")).thenReturn("plain-codex-tk");
 
@@ -353,7 +353,7 @@ class ClaudeWorkerServiceTest {
         assertNotNull(result);
         assertEquals("http://codex:3032", result.getBaseUrl());
         assertEquals("plain-codex-tk", result.getAuthToken());
-        assertEquals("codex-mini", result.getModel());
+        assertEquals("codex-latest", result.getModel());
     }
 
     // ---- 状态更新 ----

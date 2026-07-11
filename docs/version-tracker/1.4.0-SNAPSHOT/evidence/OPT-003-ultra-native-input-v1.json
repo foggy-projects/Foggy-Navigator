@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "opt-003-ultra-native-input-v1",
+  "generatedAtUtc": "2026-07-11T05:32:27Z",
+  "scope": "isolated",
+  "status": "PASSED_WITH_DECLARED_GAPS",
+  "worker": {
+    "version": "0.2.0",
+    "codexCliVersion": "0.144.1",
+    "schemaDigest": "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f",
+    "tests": {
+      "total": 215,
+      "passed": 208,
+      "platformSkipped": 7,
+      "failed": 0
+    },
+    "release": {
+      "sha256": "03949845DE8C405E1CC679D5DE5FB7F2AE86734C13C16E63102BC150A003343E",
+      "bytes": 1634838,
+      "entries": 176,
+      "schemaVerified": true,
+      "typecheckPassed": true,
+      "buildPassed": true
+    }
+  },
+  "directFlows": {
+    "singleSelectSameTurnCompleted": true,
+    "ordinalReplyCompleted": true,
+    "duplicateReplyRejected": true,
+    "terminalSameThreadResumeCompletedNewTurn": true,
+    "multiQuestionCompleted": true,
+    "sseDisconnectPreservedAwaitingInput": true,
+    "activeThreadContinueRejected": true,
+    "activeThreadTaskPersisted": false,
+    "unknownAndApprovalRequestsRejected": true
+  },
+  "restartRecovery": {
+    "taskId": "interactive-v020-crash",
+    "threadId": "019f4f7f-a1b1-73e2-a378-260d26aa0d4c",
+    "turnId": "019f4f7f-b7a8-7231-87a3-d5d9dcad8dfc",
+    "terminalStatus": "FAILED",
+    "errorCode": "USER_INPUT_CHANNEL_LOST",
+    "staleAnswerCode": "USER_INPUT_NOT_PENDING",
+    "cachedAnswerReplayed": false,
+    "postTerminalResumeTaskId": "interactive-v020-channel-resume",
+    "postTerminalResumeCompleted": true
+  },
+  "privacy": {
+    "answerPersisted": false,
+    "answerEmittedInEvents": false,
+    "answerWrittenToLogs": false,
+    "rawServerRequestExposed": false
+  },
+  "declaredGaps": [
+    "The fixed CLI model-facing tool did not produce a pure secret or freeform-only request during live probing.",
+    "Production canary evidence is outside this isolated record."
+  ]
+}

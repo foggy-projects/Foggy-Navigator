@@ -65,6 +65,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -2816,7 +2817,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 (String) response.get("decision"),
                 (String) response.get("denyMessage"),
                 (String) response.get("scope"),
-                castToStringMap(response.get("answers")),
+                normalizeTaskResponseAnswers(response.get("answers")),
                 (String) response.get("planAction")
         ).block(java.time.Duration.ofSeconds(10));
 
@@ -3061,11 +3062,31 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         return listDirectoryTaskPage(userId, directoryId, page, size, state);
     }
 
-    @SuppressWarnings("unchecked")
-    private java.util.Map<String, String> castToStringMap(Object obj) {
-        if (obj == null) return null;
-        if (obj instanceof java.util.Map) return (java.util.Map<String, String>) obj;
-        return null;
+    static Map<String, String> normalizeTaskResponseAnswers(Object value) {
+        if (value == null) return null;
+        if (!(value instanceof Map<?, ?> answers)) {
+            throw new IllegalArgumentException("answers must be an object");
+        }
+        Map<String, String> normalized = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : answers.entrySet()) {
+            if (!(entry.getKey() instanceof String key) || key.isBlank()) {
+                throw new IllegalArgumentException("answer keys must be non-empty strings");
+            }
+            Object answer = entry.getValue();
+            if (answer instanceof String text) {
+                normalized.put(key, text);
+                continue;
+            }
+            if (answer instanceof Collection<?> selections
+                    && selections.stream().allMatch(String.class::isInstance)) {
+                normalized.put(key, selections.stream()
+                        .map(String.class::cast)
+                        .collect(Collectors.joining(", ")));
+                continue;
+            }
+            throw new IllegalArgumentException("answer values must be strings or string arrays");
+        }
+        return normalized;
     }
 
     private DispatchTaskDTO toDispatchDTO(ClaudeTaskEntity entity) {

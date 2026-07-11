@@ -7,9 +7,23 @@ import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import type { CodexApprovalPolicy, CodexInput, CodexSandboxMode } from '../models.js'
 import type { AppServerNotification } from './native-subtask-tracker.js'
+import {
+  isAccountRateLimitsUpdated,
+  parseAccountRateLimitsRead,
+  type SafeAccountRateLimits,
+} from './rate-limits.js'
+import {
+  parseUserInputServerRequest,
+  requestIdKey,
+  USER_INPUT_SERVER_METHOD,
+  type AppServerServerRequest,
+  type UserInputServerRequest,
+  type UserInputWireResponse,
+} from './user-input.js'
 
 const moduleRequire = createRequire(import.meta.url)
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+const RATE_LIMITS_REQUEST_TIMEOUT_MS = 5_000
 const MAX_PENDING_TURN_NOTIFICATIONS = 10_000
 const PROCESS_TREE_HELPER_TIMEOUT_MS = 15_000
 const PROCESS_TREE_POLL_INTERVAL_MS = 25
@@ -32,6 +46,11 @@ type PendingRequest = {
   resolve: (value: Record<string, unknown>) => void
   reject: (error: Error) => void
   timer: NodeJS.Timeout
+}
+
+type RequestOptions = {
+  timeoutMs?: number
+  fatalOnTimeout?: boolean
 }
 
 export type AppServerProcess = Pick<
@@ -59,6 +78,8 @@ export type AppServerTurnOptions = {
   env: Record<string, string>
   signal: AbortSignal
   onNotification: (notification: AppServerNotification) => void
+  onUserInputRequest?: (request: UserInputServerRequest) => Promise<UserInputWireResponse>
+  onUserInputResolved?: (resolution: { requestId: string | number; threadId: string }) => void | Promise<void>
   onThreadResolved?: (threadId: string) => void | Promise<void>
   onExecutionCommitted?: (threadId: string) => void | Promise<void>
   onTurnStarted?: (threadId: string, turnId: string | undefined) => void | Promise<void>
@@ -115,6 +136,17 @@ export class AppServerProcessTreeSafetyError extends Error {
   }
 }
 
+export class AppServerRpcError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+    readonly data?: unknown,
+  ) {
+    super(message)
+    this.name = 'AppServerRpcError'
+  }
+}
+
 export function isAppServerProcessTreeSafetyError(error: unknown): boolean {
   const visited = new Set<unknown>()
   const pending: unknown[] = [error]
@@ -168,9 +200,15 @@ export class AppServerRuntimeInstance {
   private active = false
   private healthy = true
   private readonly fatalHandlers = new Set<(error: Error) => void>()
+  private readonly rateLimitsUpdatedHandlers = new Set<() => void>()
 
   private constructor(private readonly client: AppServerJsonRpcClient) {
     client.onFatal(error => this.markFatal(error))
+    client.onNotification(notification => {
+      if (isAccountRateLimitsUpdated(notification.method, notification.params)) {
+        this.emitRateLimitsUpdated()
+      }
+    })
   }
 
   static async start(options: {
@@ -215,7 +253,7 @@ export class AppServerRuntimeInstance {
           version: '1',
         },
         capabilities: {
-          experimentalApi: false,
+          experimentalApi: true,
           requestAttestation: false,
         },
       })
@@ -251,6 +289,20 @@ export class AppServerRuntimeInstance {
     return () => this.fatalHandlers.delete(handler)
   }
 
+  onRateLimitsUpdated(handler: () => void): () => void {
+    this.rateLimitsUpdatedHandlers.add(handler)
+    return () => this.rateLimitsUpdatedHandlers.delete(handler)
+  }
+
+  async readAccountRateLimits(timeoutMs = RATE_LIMITS_REQUEST_TIMEOUT_MS): Promise<SafeAccountRateLimits> {
+    if (!this.isHealthy()) throw new Error('Codex app-server instance is unavailable')
+    const response = await this.client.request('account/rateLimits/read', undefined, {
+      timeoutMs,
+      fatalOnTimeout: false,
+    })
+    return parseAccountRateLimitsRead(response)
+  }
+
   private markFatal(error: Error): void {
     this.healthy = false
     for (const handler of this.fatalHandlers) {
@@ -258,6 +310,16 @@ export class AppServerRuntimeInstance {
         handler(error)
       } catch {
         // Fatal observers must not turn a child-process failure into a Worker crash.
+      }
+    }
+  }
+
+  private emitRateLimitsUpdated(): void {
+    for (const handler of this.rateLimitsUpdatedHandlers) {
+      try {
+        handler()
+      } catch {
+        // Account observability must never fail the runtime transport.
       }
     }
   }
@@ -315,16 +377,30 @@ export class AppServerRuntimeInstance {
     let turnRequestIssued = false
     let turnNotificationsReady = false
     const terminal = deferred<Record<string, unknown>>()
+    const turnCorrelation = deferred<void>()
+    void turnCorrelation.promise.catch(() => undefined)
+    let notificationSideEffects = Promise.resolve()
     const pendingTurnNotifications: AppServerNotification[] = []
     void terminal.promise.catch(() => undefined)
     const dispatchNotification = (notification: AppServerNotification): void => {
       options.onNotification(notification)
       const params = notification.params || {}
+      if (notification.method === 'serverRequest/resolved'
+          && params.threadId === resolvedThreadId
+          && (typeof params.requestId === 'string' || Number.isSafeInteger(params.requestId))) {
+        const requestId = params.requestId as string | number
+        notificationSideEffects = notificationSideEffects.then(async () => {
+          await options.onUserInputResolved?.({ requestId, threadId: resolvedThreadId! })
+        })
+      }
       if (notification.method === 'turn/completed' && params.threadId === resolvedThreadId) {
         const turn = asRecord(params.turn) || {}
         const notificationTurnId = readString(turn.id)
         if (notificationTurnId && notificationTurnId === resolvedTurnId) {
-          terminal.resolve(turn)
+          void notificationSideEffects.then(
+            () => terminal.resolve(turn),
+            error => terminal.reject(error instanceof Error ? error : new Error('Server request resolution failed')),
+          )
         }
       }
     }
@@ -337,6 +413,17 @@ export class AppServerRuntimeInstance {
         return
       }
       dispatchNotification(notification)
+    })
+    const unsubscribeServerRequest = this.client.onServerRequest(async request => {
+      if (request.method !== USER_INPUT_SERVER_METHOD || !options.onUserInputRequest) {
+        throw new Error('UNSUPPORTED_SERVER_REQUEST')
+      }
+      await turnCorrelation.promise
+      const parsed = parseUserInputServerRequest(request)
+      if (parsed.threadId !== resolvedThreadId || parsed.turnId !== resolvedTurnId) {
+        throw new Error('USER_INPUT_REQUEST_AFFINITY_MISMATCH')
+      }
+      return options.onUserInputRequest(parsed)
     })
     const unsubscribeFatal = this.client.onFatal(error => terminal.reject(error))
 
@@ -408,6 +495,7 @@ export class AppServerRuntimeInstance {
       resolvedTurnId = readString(asRecord(turnResponse.turn)?.id) || resolvedTurnId
       if (!resolvedTurnId) throw new Error('Codex app-server did not return a turn id')
       await options.onTurnStarted?.(resolvedThreadId, resolvedTurnId)
+      turnCorrelation.resolve()
       turnNotificationsReady = true
       try {
         for (const notification of pendingTurnNotifications.splice(0)) {
@@ -434,12 +522,14 @@ export class AppServerRuntimeInstance {
           reason: options.signal.aborted ? 'aborted' : 'runtime',
           cause: error,
         })
+      turnCorrelation.reject(runtimeError)
       if (turnRequestIssued && this.healthy) this.markFatal(runtimeError)
       throw runtimeError
     } finally {
       if (abortTimer) clearTimeout(abortTimer)
       options.signal.removeEventListener('abort', abort)
       unsubscribeNotification()
+      unsubscribeServerRequest()
       unsubscribeFatal()
       if (!this.healthy) await this.client.close()
     }
@@ -692,6 +782,8 @@ class AppServerJsonRpcClient {
   private readonly pending = new Map<JsonRpcId, PendingRequest>()
   private readonly notificationHandlers = new Set<(notification: AppServerNotification) => void>()
   private readonly fatalHandlers = new Set<(error: Error) => void>()
+  private serverRequestHandler?: (request: AppServerServerRequest) => Promise<Record<string, unknown>>
+  private readonly inboundServerRequests = new Map<string, { resolved: boolean }>()
   private readonly lines: readline.Interface
   private nextRequestId = 1
   private closed = false
@@ -735,7 +827,11 @@ class AppServerJsonRpcClient {
     return this.failed || this.closed
   }
 
-  async request(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async request(
+    method: string,
+    params?: Record<string, unknown>,
+    options: RequestOptions = {},
+  ): Promise<Record<string, unknown>> {
     if (this.closed || this.failed) return Promise.reject(new Error('Codex app-server connection is closed'))
     if (this.processTree && (method === 'turn/start' || method === 'turn/interrupt')) {
       try {
@@ -752,8 +848,8 @@ class AppServerJsonRpcClient {
         this.pending.delete(id)
         const error = new Error(`Codex app-server request timed out: ${method}`)
         reject(error)
-        this.fail(error)
-      }, this.requestTimeoutMs)
+        if (options.fatalOnTimeout !== false) this.fail(error)
+      }, options.timeoutMs ?? this.requestTimeoutMs)
       this.pending.set(id, { resolve, reject, timer })
       this.write(compactUndefined({ id, method, params }))
     })
@@ -766,6 +862,14 @@ class AppServerJsonRpcClient {
   onNotification(handler: (notification: AppServerNotification) => void): () => void {
     this.notificationHandlers.add(handler)
     return () => this.notificationHandlers.delete(handler)
+  }
+
+  onServerRequest(handler: (request: AppServerServerRequest) => Promise<Record<string, unknown>>): () => void {
+    if (this.serverRequestHandler) throw new Error('Codex app-server already has a server request handler')
+    this.serverRequestHandler = handler
+    return () => {
+      if (this.serverRequestHandler === handler) this.serverRequestHandler = undefined
+    }
   }
 
   onFatal(handler: (error: Error) => void): () => void {
@@ -880,16 +984,56 @@ class AppServerJsonRpcClient {
       this.pending.delete(wireId)
       clearTimeout(pending.timer)
       const rpcError = asRecord(message.error)
-      if (rpcError) pending.reject(new Error(readString(rpcError.message) || 'Codex app-server request failed'))
+      if (rpcError) {
+        const code = typeof rpcError.code === 'number' && Number.isSafeInteger(rpcError.code)
+          ? rpcError.code
+          : -32603
+        pending.reject(new AppServerRpcError(
+          code,
+          readString(rpcError.message) || 'Codex app-server request failed',
+          rpcError.data,
+        ))
+      }
       else pending.resolve(asRecord(message.result) || {})
       return
     }
     if (method && wireId !== undefined) {
-      this.write({ id: wireId, error: { code: -32601, message: `Unsupported server request: ${method}` } })
+      if (method !== USER_INPUT_SERVER_METHOD || !this.serverRequestHandler) {
+        this.write({ id: wireId, error: { code: -32601, message: 'Unsupported server request' } })
+        return
+      }
+      const requestId = wireId as string | number
+      const key = requestIdKey(requestId)
+      if (this.inboundServerRequests.has(key)) {
+        this.write({ id: wireId, error: { code: -32600, message: 'Duplicate server request id' } })
+        return
+      }
+      const state = { resolved: false }
+      this.inboundServerRequests.set(key, state)
+      const request: AppServerServerRequest = {
+        id: requestId,
+        method,
+        params: asRecord(message.params) || {},
+      }
+      void this.serverRequestHandler(request).then(result => {
+        if (!state.resolved) this.write({ id: requestId, result })
+      }, () => {
+        if (!state.resolved) {
+          this.write({ id: requestId, error: { code: -32001, message: 'User input request rejected' } })
+        }
+      }).catch(error => this.fail(error instanceof Error ? error : new Error('Server request response failed')))
+        .finally(() => this.inboundServerRequests.delete(key))
       return
     }
     if (method) {
       const notification = { method, params: asRecord(message.params) }
+      if (method === 'serverRequest/resolved') {
+        const requestId = notification.params?.requestId
+        if (typeof requestId === 'string' || Number.isSafeInteger(requestId)) {
+          const state = this.inboundServerRequests.get(requestIdKey(requestId as string | number))
+          if (state) state.resolved = true
+        }
+      }
       for (const handler of this.notificationHandlers) {
         try {
           handler(notification)

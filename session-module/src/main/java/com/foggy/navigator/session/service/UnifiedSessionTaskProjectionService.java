@@ -681,7 +681,8 @@ final class UnifiedSessionTaskProjectionService {
             return "PROCESSING";
         }
         if ("COMPLETED".equals(taskStatus) || "FAILED".equals(taskStatus)
-                || "ABORTED".equals(taskStatus) || "AWAITING_PERMISSION".equals(taskStatus)) {
+                || "ABORTED".equals(taskStatus) || "AWAITING_PERMISSION".equals(taskStatus)
+                || "AWAITING_INPUT".equals(taskStatus)) {
             return "AWAITING_REPLY";
         }
         return null;

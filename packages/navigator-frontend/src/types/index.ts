@@ -110,7 +110,7 @@ export interface ClaudeTask {
   prompt: string
   cwd?: string
   directoryId?: string
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED' | 'AWAITING_PERMISSION'
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED' | 'AWAITING_PERMISSION' | 'AWAITING_INPUT'
   claudeSessionId?: string
   codexThreadId?: string
   geminiSessionId?: string

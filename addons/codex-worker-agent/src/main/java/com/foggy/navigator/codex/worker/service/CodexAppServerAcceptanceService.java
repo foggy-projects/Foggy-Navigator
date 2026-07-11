@@ -2,6 +2,7 @@ package com.foggy.navigator.codex.worker.service;
 
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskAcceptanceDTO;
+import com.foggy.navigator.common.util.ProviderStateCodec;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -38,6 +39,10 @@ public class CodexAppServerAcceptanceService {
                 }
                 WebClientResponseException response = findResponseException(e);
                 if (response != null && response.getStatusCode().value() == 409) {
+                    if ("APP_SERVER_THREAD_ACTIVE".equals(responseErrorCode(response))) {
+                        throw new RejectedException(
+                                "CODEX_RUNTIME_THREAD_ACTIVE: Codex thread already has an active turn", e);
+                    }
                     throw new RejectedException(
                             "CODEX_RUNTIME_IDEMPOTENCY_CONFLICT: app-server rejected a changed payload", e);
                 }
@@ -67,6 +72,17 @@ public class CodexAppServerAcceptanceService {
         while (current != null) {
             if (current instanceof WebClientResponseException response) return response;
             current = current.getCause();
+        }
+        return null;
+    }
+
+    private String responseErrorCode(WebClientResponseException response) {
+        Map<String, Object> body = ProviderStateCodec.parseObject(response.getResponseBodyAsString());
+        for (String key : new String[]{"error_code", "error", "code"}) {
+            Object value = body.get(key);
+            if (value != null && value.toString().matches("[A-Z][A-Z0-9_]{0,127}")) {
+                return value.toString();
+            }
         }
         return null;
     }

@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "opt-004-rate-limit-awareness-v1",
+  "generatedAtUtc": "2026-07-11T07:56:18Z",
+  "scope": "isolated",
+  "status": "PASSED_WITH_KNOWN_GAPS",
+  "runtime": {
+    "runtimeId": "app-fullchain-31c687e1e69c",
+    "runtimeRevision": 4,
+    "runtimeInstanceId": "codex-store-f203dcb6-2d64-42d8-9d75-3bdc82c06d23",
+    "workerVersion": "0.3.0",
+    "cliVersion": "0.144.1",
+    "routingPolicy": "DARK",
+    "productionRoutingChanged": false
+  },
+  "release": {
+    "archive": "codex-app-server-worker-0.3.0.zip",
+    "sha256": "8C8CB446C861F5AD0AF04DDAAA37EA98670B515B435A6BA881AFC675CF3FA5C5",
+    "bytes": 1724854,
+    "entries": 190,
+    "artifactGeneratedAtUtc": "2026-07-11T07:48:40Z"
+  },
+  "liveQuota": {
+    "workerHttpStatus": 200,
+    "javaOwnerHttpStatus": 200,
+    "cacheControl": "no-store",
+    "scope": "DEFAULT_CODEX_HOME",
+    "state": "AVAILABLE",
+    "bucketCount": 2,
+    "bucketIds": ["codex", "codex_bengalfox"],
+    "codexPrimaryWindowMinutes": 300,
+    "codexSecondaryWindowMinutes": 10080,
+    "publicHealthContainsQuota": false,
+    "unauthenticatedJavaStatus": 401,
+    "missingWorkerInstanceProofStatus": 400,
+    "mismatchedWorkerInstanceProofStatus": 409
+  },
+  "legacyCompatibility": {
+    "revisions": [1, 2, 3],
+    "httpStatus": 200,
+    "state": "UNSUPPORTED",
+    "errorCode": "RATE_LIMITS_UNSUPPORTED",
+    "browserRateLimitRequestErrors": 0
+  },
+  "miniRetirement": {
+    "directRequestHttpStatus": 400,
+    "errorCode": "UNSUPPORTED_CODEX_MODEL",
+    "taskJournalCreated": false,
+    "capabilityContainsMini": false,
+    "aliasResolutionCoveredByAutomation": true,
+    "defaultConfigurationFailsFast": true,
+    "rateLimitModelNudgeHiddenPerThread": true
+  },
+  "tests": {
+    "appServerWorker": { "total": 232, "passed": 225, "skipped": 7, "failed": 0 },
+    "sdkWorker": { "passed": 121, "failed": 0 },
+    "javaCodexReactor": { "passed": 283, "failed": 0 },
+    "navigatorPc": { "passed": 208, "failed": 0 }
+  },
+  "pc": {
+    "url": "http://127.0.0.1:15199",
+    "desktopViewport": "1280x720",
+    "desktopHorizontalOverflow": false,
+    "mobileViewport": "320x900",
+    "documentClientWidth": 320,
+    "documentScrollWidth": 320,
+    "bodyScrollWidth": 320,
+    "multiBucketVisible": true,
+    "miniTextVisible": false,
+    "modelSwitchPromptVisible": false,
+    "mobileRuntimeIdEllipsized": true,
+    "screenshots": [
+      {
+        "file": "OPT-004-pc-desktop-1280.png",
+        "bytes": 73788,
+        "sha256": "F9939FB7185A64C40F70997E5A422AD7EE7B5F05C76B358236504120C1A518FB",
+        "generatedAtUtc": "2026-07-11T07:51:34Z"
+      },
+      {
+        "file": "OPT-004-pc-mobile-320.png",
+        "bytes": 34068,
+        "sha256": "BA432ED7E981F5C55B5B68081F3EE3DC4EC58E50B0D1256D73E7596EF333A776",
+        "generatedAtUtc": "2026-07-11T07:51:41Z"
+      }
+    ]
+  },
+  "diagnostics": {
+    "applicationConsoleErrors": 0,
+    "pageErrors": 0,
+    "rateLimitRequestFailures": 0,
+    "preExistingFavicon404ObservedEarlier": 1
+  },
+  "independentReview": {
+    "status": "PASSED_AFTER_FIXES",
+    "blockingFindings": 0,
+    "remainingImplementationFindings": 0,
+    "closedFindings": [
+      "strict Worker instance proof",
+      "default ChatGPT Home credential isolation",
+      "in-flight quota invalidation reread",
+      "Mini alias and default configuration fail-fast",
+      "failed-lane invalidation version cleanup",
+      "PC same-revision instance rotation",
+      "320px runtime identity layout"
+    ]
+  },
+  "knownGaps": [
+    "Real quota exhaustion was not forced by consuming account credits.",
+    "Authenticated non-owner live rejection was not forced with a second user fixture; Java unit coverage and unauthenticated live 401 remain the evidence.",
+    "Per-task API-key and Biz CODEX_HOME quota views are out of scope.",
+    "Production P3 routing and soak evidence remain not approved."
+  ]
+}

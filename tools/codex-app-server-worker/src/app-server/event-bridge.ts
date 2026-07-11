@@ -238,8 +238,8 @@ export class AppServerEventBridge {
   private handleError(params: Record<string, unknown>): void {
     if (params.willRetry === true) return
     // Raw provider failures may include credentials, paths, prompts, or tool output.
-    // The outer task manager emits only this stable code at the Worker boundary.
-    this.terminalFailure = 'APP_SERVER_TURN_FAILED'
+    // The outer task manager emits only stable codes at the Worker boundary.
+    this.terminalFailure = stableAppServerTurnErrorCode(params.error)
   }
 
   private emitToolUse(tool: string, input: Record<string, unknown> | undefined, toolUseId: string): void {
@@ -258,6 +258,21 @@ export class AppServerEventBridge {
     this.recordFileHint?.(eventWithSeq)
     this.broadcast.emit(eventWithSeq)
   }
+}
+
+export function stableAppServerTurnErrorCode(value: unknown): string {
+  const error = asRecord(value)
+  const info = error?.codexErrorInfo
+  if (info === 'usageLimitExceeded' || hasProviderStatus(info, 429)) {
+    return 'CODEX_ACCOUNT_RATE_LIMITED'
+  }
+  return 'APP_SERVER_TURN_FAILED'
+}
+
+function hasProviderStatus(value: unknown, status: number): boolean {
+  const info = asRecord(value)
+  if (!info) return false
+  return Object.values(info).some(detail => asRecord(detail)?.httpStatusCode === status)
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

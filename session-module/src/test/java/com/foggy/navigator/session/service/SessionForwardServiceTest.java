@@ -107,7 +107,7 @@ class SessionForwardServiceTest {
         latestTask.setWorkerId("worker-target");
         latestTask.setDirectoryId("dir-target");
         latestTask.setCwd("D:/repo");
-        latestTask.setModel("gpt-5.4-mini");
+        latestTask.setModel("gpt-5.6-sol");
         latestTask.setModelConfigId("cfg-target");
 
         DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
@@ -115,7 +115,7 @@ class SessionForwardServiceTest {
                 .sessionId("session-child")
                 .workerId("worker-target")
                 .directoryId("dir-target")
-                .model("gpt-5.4-mini")
+                .model("gpt-5.6-sol")
                 .modelConfigId("cfg-target")
                 .providerType("codex-worker")
                 .build();
@@ -155,7 +155,7 @@ class SessionForwardServiceTest {
         assertEquals("dir-target", dispatchRequest.getDirectoryId());
         assertEquals("D:/repo", dispatchRequest.getCwd());
         assertEquals("补充说明", dispatchRequest.getPrompt());
-        assertEquals("gpt-5.4-mini", dispatchRequest.getModel());
+        assertEquals("gpt-5.6-sol", dispatchRequest.getModel());
         assertEquals("cfg-target", dispatchRequest.getModelConfigId());
 
         AgentResolveContext context = contextCaptor.getValue();

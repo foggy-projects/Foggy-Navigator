@@ -28,6 +28,7 @@ import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -158,6 +159,294 @@ class CodexTaskServiceTest {
         assertInstanceOf(TaskListingProvider.class, service);
         assertFalse(service instanceof TaskQueryProvider);
         assertFalse(service instanceof WorkerSessionQueryProvider);
+        assertTrue(service.getCapabilities().contains(TaskQueryCapability.RESPOND_TO_TASK));
+    }
+
+    @Test
+    void pendingUserInputAcceptsOpaquePoolInstanceAndProjectsAwaitingInput() {
+        CodexTaskEntity task = appServerInputTask("RUNNING");
+        SessionTaskEntity sessionTask = inputSessionTask();
+        when(taskRepository.findByTaskIdForUpdate("task-input")).thenReturn(Optional.of(task));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionTaskRepository.findByTaskId("task-input")).thenReturn(Optional.of(sessionTask));
+
+        CodexTaskService.UserInputRegistration registration = service.registerPendingUserInput(
+                "task-input", pendingInputProjection(true));
+
+        assertTrue(registration.shouldPublish());
+        assertEquals("task:task-input:string:request-1", registration.requestId());
+        assertEquals("AWAITING_INPUT", task.getStatus());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> persisted = (Map<String, Object>) ProviderStateCodec
+                .parseObject(sessionTask.getTaskStateJson()).get("codexPendingInteraction");
+        assertEquals("pool-lease-7", persisted.get("runtime_instance_id"));
+        assertEquals("PENDING", persisted.get("state"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> questions =
+                (List<Map<String, Object>>) registration.confirmationPayload().get("questions");
+        assertEquals(false, questions.get(0).get("multiSelect"));
+        assertEquals(true, questions.get(0).get("isSecret"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> options =
+                (List<Map<String, Object>>) questions.get(0).get("options");
+        assertEquals("", options.get(0).get("description"));
+    }
+
+    @Test
+    void duplicateRequestIdCannotReplacePendingTurnMetadata() {
+        CodexTaskEntity task = appServerInputTask("RUNNING");
+        SessionTaskEntity sessionTask = inputSessionTask();
+        when(taskRepository.findByTaskIdForUpdate("task-input")).thenReturn(Optional.of(task));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionTaskRepository.findByTaskId("task-input")).thenReturn(Optional.of(sessionTask));
+        service.registerPendingUserInput("task-input", pendingInputProjection(false));
+        Map<String, Object> conflictingReplay = pendingInputProjection(false);
+        conflictingReplay.put("turn_id", "turn-2");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.registerPendingUserInput("task-input", conflictingReplay));
+
+        assertEquals("CODEX_USER_INPUT_REPLAY_MISMATCH", error.getMessage());
+        assertTrue(sessionTask.getTaskStateJson().contains("\"turn_id\":\"turn-1\""));
+        assertFalse(sessionTask.getTaskStateJson().contains("\"turn_id\":\"turn-2\""));
+    }
+
+    @Test
+    void respondToTaskUsesBoundPhysicalInstanceAndNeverPersistsSecretAnswer() {
+        CodexTaskEntity task = appServerInputTask("RUNNING");
+        SessionTaskEntity sessionTask = inputSessionTask();
+        when(taskRepository.findByTaskIdForUpdate("task-input")).thenReturn(Optional.of(task));
+        when(taskRepository.findByTaskIdAndUserIdForUpdate("task-input", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionTaskRepository.findByTaskId("task-input")).thenReturn(Optional.of(sessionTask));
+        service.registerPendingUserInput("task-input", pendingInputProjection(true));
+
+        CodexRuntimeBinding binding = CodexRuntimeBinding.builder()
+                .runtimeId("app-main")
+                .runtimeRevision(2)
+                .runtimeType(CodexRuntimeType.APP_SERVER)
+                .workerId("worker-1")
+                .endpointUrl("http://127.0.0.1:3062")
+                .instanceId("worker-instance-a")
+                .routingEpoch(1L)
+                .build();
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 2, "worker-1", "worker-instance-a")).thenReturn(binding);
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:2", "http://127.0.0.1:3062", null, "worker-instance-a"))
+                .thenReturn(workerClient);
+        when(workerClient.respondToTask(eq("worker-task-1"), any()))
+                .thenReturn(Mono.just(Map.of(
+                        "task_id", "worker-task-1",
+                        "status", "running",
+                        "request_id", "request-1")));
+
+        service.respondToTask("task-input", "user-1", Map.of(
+                "permissionId", "task:task-input:string:request-1",
+                "answers", Map.of("choice", List.of("private answer"))));
+
+        assertEquals("RUNNING", task.getStatus());
+        assertFalse(sessionTask.getTaskStateJson().contains("private answer"));
+        assertTrue(sessionTask.getTaskStateJson().contains("\"state\":\"RESOLVED\""));
+        verify(workerClient).respondToTask(eq("worker-task-1"), argThat(body ->
+                "request-1".equals(body.get("request_id"))
+                        && Map.of("choice", List.of("private answer")).equals(body.get("answers"))));
+        verify(streamRelay).publishUserInputResponse(
+                "session-1", "codex-worker", "task-input",
+                "task:task-input:string:request-1", "allow", null);
+
+        CodexTaskService.UserInputResolution replay = service.resolvePendingUserInput(
+                "task-input", Map.of("request_id", "request-1", "reason", "answered"));
+        assertFalse(replay.shouldPublish());
+
+        IllegalStateException duplicate = assertThrows(IllegalStateException.class,
+                () -> service.respondToTask("task-input", "user-1", Map.of(
+                        "permissionId", "task:task-input:string:request-1",
+                        "answers", Map.of("choice", "private answer"))));
+        assertEquals("CODEX_USER_INPUT_NOT_PENDING", duplicate.getMessage());
+    }
+
+    @Test
+    void answeredSseConvergesAfterWorkerAcceptedButHttpResponseWasLost() {
+        CodexTaskEntity task = appServerInputTask("RUNNING");
+        SessionTaskEntity sessionTask = inputSessionTask();
+        when(taskRepository.findByTaskIdForUpdate("task-input")).thenReturn(Optional.of(task));
+        when(taskRepository.findByTaskIdAndUserIdForUpdate("task-input", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionTaskRepository.findByTaskId("task-input")).thenReturn(Optional.of(sessionTask));
+        service.registerPendingUserInput("task-input", pendingInputProjection(false));
+
+        CodexRuntimeBinding binding = CodexRuntimeBinding.builder()
+                .runtimeId("app-main")
+                .runtimeRevision(2)
+                .runtimeType(CodexRuntimeType.APP_SERVER)
+                .workerId("worker-1")
+                .endpointUrl("http://127.0.0.1:3062")
+                .instanceId("worker-instance-a")
+                .routingEpoch(1L)
+                .build();
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 2, "worker-1", "worker-instance-a")).thenReturn(binding);
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:2", "http://127.0.0.1:3062", null, "worker-instance-a"))
+                .thenReturn(workerClient);
+        when(workerClient.respondToTask(eq("worker-task-1"), any()))
+                .thenReturn(Mono.error(new RuntimeException("response lost after acceptance")));
+
+        IllegalStateException responseError = assertThrows(IllegalStateException.class,
+                () -> service.respondToTask("task-input", "user-1", Map.of(
+                        "permissionId", "task:task-input:string:request-1",
+                        "answers", Map.of("choice", "one"))));
+        assertEquals("CODEX_USER_INPUT_RESPONSE_UNKNOWN", responseError.getMessage());
+        assertEquals("AWAITING_INPUT", task.getStatus());
+        assertTrue(sessionTask.getTaskStateJson().contains("\"state\":\"PENDING\""));
+
+        CodexTaskService.UserInputResolution resolution = service.resolvePendingUserInput(
+                "task-input", Map.of("request_id", "request-1", "reason", "answered"));
+
+        assertTrue(resolution.shouldPublish());
+        assertEquals("allow", resolution.decision());
+        assertEquals("task:task-input:string:request-1", resolution.requestId());
+        assertEquals("RUNNING", task.getStatus());
+        assertTrue(sessionTask.getTaskStateJson().contains("\"state\":\"RESOLVED\""));
+        assertTrue(sessionTask.getTaskStateJson().contains("\"resolved_reason\":\"answered\""));
+    }
+
+    @Test
+    void respondToTaskRejectsPhysicalRuntimeAffinityMismatchBeforeCallingWorker() {
+        CodexTaskEntity task = appServerInputTask("AWAITING_INPUT");
+        SessionTaskEntity sessionTask = inputSessionTask();
+        sessionTask.setTaskStateJson(ProviderStateCodec.mergeTaskValue(
+                null, "codex-worker", "codexPendingInteraction",
+                pendingState(pendingInputProjection(false), "PENDING")));
+        when(taskRepository.findByTaskIdAndUserIdForUpdate("task-input", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(sessionTaskRepository.findByTaskId("task-input")).thenReturn(Optional.of(sessionTask));
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 2, "worker-1", "worker-instance-a"))
+                .thenThrow(new CodexRuntimeUnavailableException(
+                        "CODEX_RUNTIME_INSTANCE_AFFINITY_MISMATCH", "physical instance changed"));
+
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.respondToTask("task-input", "user-1", Map.of(
+                        "permissionId", "task:task-input:string:request-1",
+                        "answers", Map.of("choice", "one"))));
+
+        assertEquals("CODEX_RUNTIME_INSTANCE_AFFINITY_MISMATCH", error.getCode());
+        verifyNoInteractions(workerClient);
+        assertEquals("AWAITING_INPUT", task.getStatus());
+    }
+
+    @Test
+    void respondToTaskRejectsMultipleAnswersForCodexQuestion() {
+        CodexTaskEntity task = appServerInputTask("AWAITING_INPUT");
+        SessionTaskEntity sessionTask = inputSessionTask();
+        sessionTask.setTaskStateJson(ProviderStateCodec.mergeTaskValue(
+                null, "codex-worker", "codexPendingInteraction",
+                pendingState(pendingInputProjection(false), "PENDING")));
+        when(taskRepository.findByTaskIdAndUserIdForUpdate("task-input", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(sessionTaskRepository.findByTaskId("task-input")).thenReturn(Optional.of(sessionTask));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.respondToTask("task-input", "user-1", Map.of(
+                        "permissionId", "task:task-input:string:request-1",
+                        "answers", Map.of("choice", List.of("one", "two")))));
+
+        assertEquals("CODEX_USER_INPUT_ANSWER_CARDINALITY_INVALID", error.getMessage());
+        verifyNoInteractions(workerClient);
+    }
+
+    @Test
+    void numericRequestIdUsesTypedUiTokenAndPreservesNumericWireId() {
+        CodexTaskEntity task = appServerInputTask("RUNNING");
+        SessionTaskEntity sessionTask = inputSessionTask();
+        when(taskRepository.findByTaskIdForUpdate("task-input")).thenReturn(Optional.of(task));
+        when(taskRepository.findByTaskIdAndUserIdForUpdate("task-input", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionTaskRepository.findByTaskId("task-input")).thenReturn(Optional.of(sessionTask));
+
+        CodexTaskService.UserInputRegistration registration = service.registerPendingUserInput(
+                "task-input", pendingInputProjection(false, 1));
+        assertEquals("task:task-input:number:1", registration.requestId());
+        IllegalStateException stringToken = assertThrows(IllegalStateException.class,
+                () -> service.respondToTask("task-input", "user-1", Map.of(
+                        "permissionId", "task:task-input:string:1",
+                        "answers", Map.of("choice", "one"))));
+        assertEquals("CODEX_USER_INPUT_REQUEST_MISMATCH", stringToken.getMessage());
+
+        CodexRuntimeBinding binding = CodexRuntimeBinding.builder()
+                .runtimeId("app-main").runtimeRevision(2).runtimeType(CodexRuntimeType.APP_SERVER)
+                .workerId("worker-1").endpointUrl("http://127.0.0.1:3062")
+                .instanceId("worker-instance-a").routingEpoch(1L).build();
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 2, "worker-1", "worker-instance-a")).thenReturn(binding);
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:2", "http://127.0.0.1:3062", null, "worker-instance-a"))
+                .thenReturn(workerClient);
+        when(workerClient.respondToTask(eq("worker-task-1"), any()))
+                .thenReturn(Mono.just(Map.of(
+                        "task_id", "worker-task-1", "status", "running", "request_id", 1)));
+
+        service.respondToTask("task-input", "user-1", Map.of(
+                "permissionId", "task:task-input:number:1",
+                "answers", Map.of("choice", "one")));
+
+        verify(workerClient).respondToTask(eq("worker-task-1"), argThat(body ->
+                body.get("request_id") instanceof Number number && number.longValue() == 1L));
+        assertEquals("RUNNING", task.getStatus());
+    }
+
+    @Test
+    void pendingUserInputAcceptsLockedProtocolFieldLimits() {
+        CodexTaskEntity task = appServerInputTask("RUNNING");
+        SessionTaskEntity sessionTask = inputSessionTask();
+        when(taskRepository.findByTaskIdForUpdate("task-input")).thenReturn(Optional.of(task));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionTaskRepository.findByTaskId("task-input")).thenReturn(Optional.of(sessionTask));
+        Map<String, Object> projection = pendingInputProjection(false);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> question = ((List<Map<String, Object>>) projection.get("questions")).get(0);
+        String questionText = "q".repeat(2_047) + "\n" + "q".repeat(2_048);
+        String descriptionText = "d".repeat(1_023) + "\n" + "d".repeat(1_024);
+        question.put("id", "i".repeat(256));
+        question.put("question", questionText);
+        question.put("options", List.of(Map.of(
+                "label", "l".repeat(256), "description", descriptionText)));
+        projection.put("auto_resolution_ms", 240_000L);
+
+        CodexTaskService.UserInputRegistration registration =
+                service.registerPendingUserInput("task-input", projection);
+
+        assertTrue(registration.shouldPublish());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> projectedQuestion = ((List<Map<String, Object>>)
+                registration.confirmationPayload().get("questions")).get(0);
+        assertEquals(questionText, projectedQuestion.get("question"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> projectedOptions =
+                (List<Map<String, Object>>) projectedQuestion.get("options");
+        assertEquals(descriptionText, projectedOptions.get(0).get("description"));
+        assertEquals(16_384, ((String) ReflectionTestUtils.invokeMethod(
+                service, "singleUserInputAnswer", "a".repeat(16_384))).length());
+        assertThrows(IllegalStateException.class, () -> ReflectionTestUtils.invokeMethod(
+                service, "singleUserInputAnswer", "a".repeat(16_385)));
+    }
+
+    @Test
+    void pendingUserInputRejectsOverflowingAutoResolutionInteger() {
+        CodexTaskEntity task = appServerInputTask("RUNNING");
+        when(taskRepository.findByTaskIdForUpdate("task-input")).thenReturn(Optional.of(task));
+        Map<String, Object> projection = pendingInputProjection(false);
+        projection.put("auto_resolution_ms", Long.MAX_VALUE);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.registerPendingUserInput("task-input", projection));
+
+        assertEquals("CODEX_USER_INPUT_AUTO_RESOLUTION_INVALID", error.getMessage());
     }
 
     @Test
@@ -409,7 +698,7 @@ class CodexTaskServiceTest {
         when(taskRepository.findByTaskId("task-biz")).thenReturn(Optional.of(biz));
         when(taskRepository.findBySessionId("session-mixed")).thenReturn(List.of(plain, biz));
         when(taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc("user-1",
-                List.of("RUNNING", "AWAITING_PERMISSION"))).thenReturn(List.of(biz, plain));
+                List.of("RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT"))).thenReturn(List.of(biz, plain));
         when(taskRepository.findByUserIdOrderByCreatedAtDesc("user-1")).thenReturn(List.of(biz, plain));
         when(taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc("dir-1", "user-1"))
                 .thenReturn(List.of(biz, plain));
@@ -455,7 +744,8 @@ class CodexTaskServiceTest {
         when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
         when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserId("thread-1", "worker-1", "user-1"))
                 .thenReturn(true);
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatus("thread-1", "worker-1", "user-1", "RUNNING"))
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
+                "thread-1", "worker-1", "user-1", List.of("RUNNING", "AWAITING_INPUT")))
                 .thenReturn(false);
         // providerStateJson 中存储 codexThreadId（resume 从此恢复）
         SessionEntity sessionWithState = new SessionEntity();
@@ -1101,7 +1391,8 @@ class CodexTaskServiceTest {
         when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
         when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserId("thread-1", "worker-1", "user-1"))
                 .thenReturn(true);
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatus("thread-1", "worker-1", "user-1", "RUNNING"))
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
+                "thread-1", "worker-1", "user-1", List.of("RUNNING", "AWAITING_INPUT")))
                 .thenReturn(false);
         SessionEntity existingSession = new SessionEntity();
         existingSession.setId("session-1");
@@ -1533,6 +1824,86 @@ class CodexTaskServiceTest {
         config.setWorkerBackend("OPENAI_CODEX");
         config.setAvailableModels(availableModels);
         return config;
+    }
+
+    private CodexTaskEntity appServerInputTask(String status) {
+        CodexTaskEntity task = createTask(
+                "task-input", "session-1", "worker-1", "dir-1", status, LocalDateTime.now());
+        task.setRuntimeId("app-main");
+        task.setRuntimeRevision(2);
+        task.setRuntimeType("APP_SERVER");
+        task.setRuntimeInstanceId("worker-instance-a");
+        task.setRuntimeAcceptanceState("SUBSCRIBED");
+        task.setWorkerTaskId("worker-task-1");
+        task.setCodexThreadId("thread-1");
+        task.setProviderType("codex-worker");
+        return task;
+    }
+
+    @Test
+    void resumeTaskRejectsThreadAwaitingUserInputAfterSessionLock() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId("user-1");
+        session.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserId(
+                "thread-1", "worker-1", "user-1")).thenReturn(true);
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
+                "thread-1", "worker-1", "user-1", List.of("RUNNING", "AWAITING_INPUT")))
+                .thenReturn(true);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.resumeTask("user-1", "tenant-1", Map.of(
+                        "workerId", "worker-1",
+                        "sessionId", "session-1",
+                        "prompt", "continue")));
+
+        assertTrue(error.getMessage().contains("正在运行"));
+        verify(sessionEntityRepository).findByIdAndUserIdForUpdate("session-1", "user-1");
+        verify(taskRepository, never()).save(any());
+    }
+
+    private SessionTaskEntity inputSessionTask() {
+        SessionTaskEntity task = new SessionTaskEntity();
+        task.setTaskId("task-input");
+        task.setSessionId("session-1");
+        task.setUserId("user-1");
+        task.setProviderType("codex-worker");
+        return task;
+    }
+
+    private Map<String, Object> pendingInputProjection(boolean secret) {
+        return pendingInputProjection(secret, "request-1");
+    }
+
+    private Map<String, Object> pendingInputProjection(boolean secret, Object requestId) {
+        Map<String, Object> question = new LinkedHashMap<>();
+        question.put("id", "choice");
+        question.put("header", "Choice");
+        question.put("question", "Select one option");
+        question.put("options", List.of(
+                Map.of("label", "one", "description", ""),
+                Map.of("label", "two", "description", "Second option")));
+        question.put("is_other", true);
+        question.put("is_secret", secret);
+        Map<String, Object> pending = new LinkedHashMap<>();
+        pending.put("contract_version", 1);
+        pending.put("request_id", requestId);
+        pending.put("method", "item/tool/requestUserInput");
+        pending.put("thread_id", "thread-1");
+        pending.put("turn_id", "turn-1");
+        pending.put("item_id", "item-1");
+        pending.put("questions", List.of(question));
+        pending.put("runtime_instance_id", "pool-lease-7");
+        pending.put("created_at", "2026-07-11T12:00:00Z");
+        return pending;
+    }
+
+    private Map<String, Object> pendingState(Map<String, Object> projection, String state) {
+        Map<String, Object> pending = new LinkedHashMap<>(projection);
+        pending.put("state", state);
+        return pending;
     }
 
     private CodexTaskEntity createTask(String taskId, String sessionId, String workerId,

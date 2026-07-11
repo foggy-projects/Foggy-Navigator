@@ -37,7 +37,11 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -397,7 +401,8 @@ public class CodexStreamRelay {
     }
 
     void reconnectActiveTasks() {
-        List<CodexTaskEntity> activeTasks = taskRepository.findByStatusIn(List.of("RUNNING"));
+        List<CodexTaskEntity> activeTasks = taskRepository.findByStatusIn(
+                List.of("RUNNING", "AWAITING_INPUT"));
         if (activeTasks.isEmpty()) {
             log.info("No active Codex tasks to reconnect on startup");
             return;
@@ -548,6 +553,8 @@ public class CodexStreamRelay {
             if (resolution == null) {
                 throw new IllegalStateException("CODEX_RUNTIME_ABORT_UNKNOWN: no authoritative abort outcome");
             }
+            closePendingUserInputBeforeTerminal(
+                    task.getTaskId(), task.getSessionId(), resolveTaskProviderType(task.getTaskId()));
             switch (resolution.outcome()) {
                 case "completed" -> {
                     CodexTaskEntity current = taskRepository.findByTaskId(task.getTaskId()).orElse(task);
@@ -714,7 +721,17 @@ public class CodexStreamRelay {
             CodexRuntimeBinding runtime = resolveRuntimeBinding(task);
             CodexWorkerClient client = getCodexClient(task, runtime);
             RemoteTaskStatus status = fetchAppServerTaskStatus(task, client, workerTaskId);
-            if (status == null || !status.isTerminal()) return false;
+            if (status == null) return false;
+
+            if (status.pendingInteraction() != null && !status.pendingInteraction().isEmpty()) {
+                CodexTaskService.UserInputRegistration registration =
+                        taskService.registerPendingUserInput(task.getTaskId(), status.pendingInteraction());
+                if (registration.shouldPublish()) {
+                    publishUserInputRequest(sessionId, providerType, task.getTaskId(), registration,
+                            userInputMessageId("cx-ui-req-", task.getTaskId(), registration.requestId()));
+                }
+            }
+            if (!status.isTerminal()) return false;
 
             if (status.threadId() != null) detectedCodexThreadId.set(status.threadId());
             if (status.model() != null) detectedModel.set(status.model());
@@ -727,6 +744,7 @@ public class CodexStreamRelay {
                 return false;
             }
             if ("failed".equals(outcome)) {
+                closePendingUserInputBeforeTerminal(task.getTaskId(), sessionId, providerType);
                 String failure = "CODEX_RUNTIME_REMOTE_FAILED: "
                         + stableRemoteErrorCode(status.errorCode());
                 taskService.failTask(task.getTaskId(), workerTaskId, detectedCodexThreadId.get(), failure);
@@ -736,6 +754,7 @@ public class CodexStreamRelay {
                 return true;
             }
             if ("aborted".equals(outcome)) {
+                closePendingUserInputBeforeTerminal(task.getTaskId(), sessionId, providerType);
                 taskService.reconcileAbortedTask(task.getTaskId(), workerTaskId, detectedCodexThreadId.get());
                 publishCompletion(task.getTaskId(), sessionId, providerType,
                         "CODEX_RUNTIME_REMOTE_ABORTED", "ABORTED");
@@ -766,13 +785,18 @@ public class CodexStreamRelay {
                 stringField(body, "outcome"),
                 stringField(body, "thread_id"),
                 stringField(body, "model"),
-                stringField(body, "error_code"));
+                stringField(body, "error_code"),
+                objectMap(body.get("pending_interaction")));
     }
 
     private void publishResultUnknown(String sessionId, String providerType, String taskId) {
         if (recoveryNotified.putIfAbsent(taskId, Boolean.TRUE) == null) {
-            publishMessageIfSession(sessionId, providerType, MessageType.ERROR,
-                    Map.of("content", "CODEX_RUNTIME_RESULT_UNKNOWN", "taskId", taskId));
+            publishMessageIfSession(sessionId, providerType, MessageType.STATE_SYNC,
+                    Map.of(
+                            "content", "CODEX_RUNTIME_RESULT_UNKNOWN",
+                            "subtype", "reconnect_pending",
+                            "reconnectable", true,
+                            "taskId", taskId));
         }
     }
 
@@ -868,6 +892,19 @@ public class CodexStreamRelay {
         return value != null ? value.toString() : null;
     }
 
+    private Map<String, Object> objectMap(Object value) {
+        if (!(value instanceof Map<?, ?> raw)) {
+            return Map.of();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        raw.forEach((key, entryValue) -> {
+            if (key != null) {
+                result.put(key.toString(), entryValue);
+            }
+        });
+        return result;
+    }
+
     private void sleepAbortPollDelay() {
         try {
             Thread.sleep(ABORT_STATUS_POLL_DELAY_MS);
@@ -892,7 +929,8 @@ public class CodexStreamRelay {
     }
 
     private record RemoteTaskStatus(String status, String outcome, String threadId,
-                                    String model, String errorCode) {
+                                    String model, String errorCode,
+                                    Map<String, Object> pendingInteraction) {
         private boolean isTerminal() {
             return "terminal".equals(status);
         }
@@ -1034,7 +1072,21 @@ public class CodexStreamRelay {
                     publishBuilt(mb.toolCallResult(event.getToolUseId(), event.getTool(),
                             event.getOutput(), success), workerMessageId(taskId, event));
                 }
+                case "user_input_request" -> {
+                    CodexTaskService.UserInputRegistration registration =
+                            taskService.registerPendingUserInput(taskId, event.getData());
+                    if (registration.shouldPublish()) {
+                        publishUserInputRequest(sessionId, providerType, taskId, registration,
+                                userInputMessageId("cx-ui-req-", taskId, registration.requestId()));
+                    }
+                }
+                case "user_input_resolved" -> {
+                    CodexTaskService.UserInputResolution resolution =
+                            taskService.resolvePendingUserInput(taskId, event.getData());
+                    publishUserInputResolution(sessionId, providerType, taskId, resolution);
+                }
                 case "result" -> {
+                    closePendingUserInputBeforeTerminal(taskId, sessionId, providerType);
                     String resultText = event.getContent() != null ? event.getContent() : event.getResult();
                     mb.result(resultText)
                             .metrics(event.getCostUsd(), event.getDurationMs(),
@@ -1061,6 +1113,7 @@ public class CodexStreamRelay {
                             .build());
                 }
                 case "error" -> {
+                    closePendingUserInputBeforeTerminal(taskId, sessionId, providerType);
                     String failure = stableWorkerEventError(event.getError());
                     publishBuilt(mb.error(failure), workerMessageId(taskId, event));
                     taskService.failTask(taskId, event.getTaskId(), detectedCodexThreadId.get(),
@@ -1164,7 +1217,8 @@ public class CodexStreamRelay {
         if ("execution_committed".equals(event.getSubtype())) return true;
         if ("sync_checkpoint".equals(event.getSubtype())) return false;
         return switch (event.getType() != null ? event.getType() : "") {
-            case "assistant_text", "tool_use", "tool_result", "result", "error", "native_subtask_update" -> true;
+            case "assistant_text", "tool_use", "tool_result", "result", "error", "native_subtask_update",
+                    "user_input_request", "user_input_resolved" -> true;
             default -> false;
         };
     }
@@ -1233,13 +1287,69 @@ public class CodexStreamRelay {
         eventPublisher.publishEvent(message);
     }
 
+    private void publishUserInputRequest(String sessionId, String providerType, String taskId,
+                                         CodexTaskService.UserInputRegistration registration,
+                                         String messageId) {
+        AgentMessageBuilder builder = AgentMessageBuilder.create(sessionId, providerType)
+                .taskId(taskId)
+                .confirmationRequest(registration.requestId());
+        registration.confirmationPayload().forEach(builder::put);
+        publishBuilt(builder, messageId);
+    }
+
+    public void publishUserInputResponse(String sessionId, String providerType, String taskId,
+                                         String requestId, String decision,
+                                         Map<String, String> answers) {
+        if (sessionId == null || sessionId.isBlank() || requestId == null || requestId.isBlank()) {
+            return;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("permissionId", requestId);
+        payload.put("requestId", requestId);
+        payload.put("decision", decision);
+        payload.put("taskId", taskId);
+        if (answers != null && !answers.isEmpty()) {
+            payload.put("answers", new LinkedHashMap<>(answers));
+        }
+        AgentMessage message = AgentMessage.of(
+                sessionId, providerType, MessageType.CONFIRMATION_RESPONSE, payload);
+        message.setTaskId(taskId);
+        message.setMessageId(userInputMessageId("cx-ui-res-", taskId, requestId));
+        publishDurableAgentMessage(message);
+    }
+
+    static String userInputMessageId(String prefix, String taskId, String requestToken) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest((taskId + "\u0000" + requestToken)
+                    .getBytes(StandardCharsets.UTF_8));
+            return prefix + HexFormat.of().formatHex(hash, 0, 24);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
+    private void closePendingUserInputBeforeTerminal(String taskId, String sessionId, String providerType) {
+        CodexTaskService.UserInputResolution resolution =
+                taskService.resolvePendingUserInputForTerminal(taskId);
+        publishUserInputResolution(sessionId, providerType, taskId, resolution);
+    }
+
+    private void publishUserInputResolution(String sessionId, String providerType, String taskId,
+                                            CodexTaskService.UserInputResolution resolution) {
+        if (resolution != null && resolution.shouldPublish()) {
+            publishUserInputResponse(sessionId, providerType, taskId,
+                    resolution.requestId(), resolution.decision(), null);
+        }
+    }
+
     private boolean isUserVisibleOutputEvent(WorkerEvent event) {
         if (event == null || event.getType() == null) {
             return false;
         }
         return switch (event.getType()) {
             case "assistant_text" -> !"sync_checkpoint".equals(event.getSubtype());
-            case "tool_use", "tool_result", "result", "error" -> true;
+            case "tool_use", "tool_result", "result", "error", "user_input_request" -> true;
             case "system", "progress" -> isVisibleStatusEvent(event);
             default -> false;
         };
