@@ -28,6 +28,7 @@ class FakeProcess extends EventEmitter {
   readonly pid = 100
   killed = false
   private buffer = ''
+  private threadId = 'thread-1'
 
   constructor(
     readonly received: JsonMessage[],
@@ -35,7 +36,8 @@ class FakeProcess extends EventEmitter {
     private readonly emitTestNotification = false,
     private readonly childMetadataError?: string,
     private readonly interruptBehavior?: 'error' | 'timeout' | 'turn-start-hang' | 'stale-terminal' | 'same-batch-events'
-      | 'running-after-start' | 'interactive-request' | 'unknown-server-request' | 'server-resolved-request',
+      | 'running-after-start' | 'progress-before-complete' | 'interactive-request' | 'unknown-server-request'
+      | 'server-resolved-request',
     private readonly apiKeyLoginBehavior?: 'error' | 'invalid',
   ) {
     super()
@@ -76,7 +78,16 @@ class FakeProcess extends EventEmitter {
         this.send({ id: message.id, result: { type: this.apiKeyLoginBehavior === 'invalid' ? 'chatgpt' : 'apiKey' } })
       }
     }
-    if (message.method === 'thread/start') this.send({ id: message.id, result: { thread: { id: 'thread-1' } } })
+    if (message.method === 'thread/start' || message.method === 'thread/resume') {
+      this.threadId = message.params?.threadId || 'thread-1'
+      this.send({ id: message.id, result: { thread: { id: this.threadId } } })
+    }
+    if (message.method === 'thread/unsubscribe') {
+      this.send({ id: message.id, result: { status: 'notLoaded' } })
+    }
+    if (message.method === 'thread/loaded/list') {
+      this.send({ id: message.id, result: { data: [this.threadId] } })
+    }
     if (message.method === 'turn/start') {
       assert.equal(this.committed(), true, 'turn/start must be written only after durable commit callback')
       if (this.interruptBehavior === 'turn-start-hang') return
@@ -86,26 +97,26 @@ class FakeProcess extends EventEmitter {
           {
             method: 'item/agentMessage/delta',
             params: {
-              threadId: 'thread-1', turnId: 'turn-1', itemId: 'message-1', delta: 'EARLY_',
+              threadId: this.threadId, turnId: 'turn-1', itemId: 'message-1', delta: 'EARLY_',
             },
           },
           {
             method: 'item/agentMessage/delta',
             params: {
-              threadId: 'thread-1', turnId: 'turn-1', itemId: 'message-1', delta: 'COMPLETE',
+              threadId: this.threadId, turnId: 'turn-1', itemId: 'message-1', delta: 'COMPLETE',
             },
           },
           {
             method: 'item/completed',
             params: {
-              threadId: 'thread-1',
+              threadId: this.threadId,
               turnId: 'turn-1',
               item: { id: 'message-1', type: 'agentMessage', text: 'EARLY_COMPLETE' },
             },
           },
           {
             method: 'turn/completed',
-            params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } },
+            params: { threadId: this.threadId, turn: { id: 'turn-1', status: 'completed' } },
           },
         ].map(event => JSON.stringify(event)).join('\n') + '\n')
         return
@@ -113,7 +124,7 @@ class FakeProcess extends EventEmitter {
       if (this.interruptBehavior === 'stale-terminal') {
         this.send({
           method: 'turn/completed',
-          params: { threadId: 'thread-1', turn: { id: 'stale-turn', status: 'failed' } },
+          params: { threadId: this.threadId, turn: { id: 'stale-turn', status: 'failed' } },
         })
       }
       this.send({ id: message.id, result: { turn: { id: 'turn-1', status: 'inProgress' } } })
@@ -122,7 +133,7 @@ class FakeProcess extends EventEmitter {
           id: 'server-input-1',
           method: 'item/tool/requestUserInput',
           params: {
-            threadId: 'thread-1',
+            threadId: this.threadId,
             turnId: 'turn-1',
             itemId: 'item-input-1',
             questions: [{
@@ -135,9 +146,9 @@ class FakeProcess extends EventEmitter {
           queueMicrotask(() => {
             this.send({
               method: 'serverRequest/resolved',
-              params: { threadId: 'thread-1', requestId: 'server-input-1' },
+              params: { threadId: this.threadId, requestId: 'server-input-1' },
             })
-            this.send({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })
+            this.send({ method: 'turn/completed', params: { threadId: this.threadId, turn: { id: 'turn-1', status: 'completed' } } })
           })
         }
       }
@@ -145,35 +156,47 @@ class FakeProcess extends EventEmitter {
         this.send({
           id: 'approval-1',
           method: 'item/commandExecution/requestApproval',
-          params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'command-1' },
+          params: { threadId: this.threadId, turnId: 'turn-1', itemId: 'command-1' },
         })
       }
       if (this.emitTestNotification) {
-        this.send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', delta: 'test' } })
+        this.send({ method: 'item/agentMessage/delta', params: { threadId: this.threadId, delta: 'test' } })
       }
       if (this.childMetadataError) {
         this.send({
           method: 'item/completed',
           params: {
-            threadId: 'thread-1',
+            threadId: this.threadId,
             turnId: 'turn-1',
             item: { type: 'subAgentActivity', kind: 'started', agentThreadId: 'child-thread' },
           },
         })
       }
+      if (this.interruptBehavior === 'progress-before-complete') {
+        for (const delayMs of [15, 35, 55]) {
+          setTimeout(() => this.send({
+            method: 'item/agentMessage/delta',
+            params: { threadId: this.threadId, turnId: 'turn-1', itemId: 'message-1', delta: '.' },
+          }), delayMs)
+        }
+        setTimeout(() => this.send({
+          method: 'turn/completed',
+          params: { threadId: this.threadId, turn: { id: 'turn-1', status: 'completed' } },
+        }), 65)
+      }
       if (!this.interruptBehavior || this.interruptBehavior === 'stale-terminal') {
-        this.send({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })
+        this.send({ method: 'turn/completed', params: { threadId: this.threadId, turn: { id: 'turn-1', status: 'completed' } } })
       }
     }
     if (message.id === 'server-input-1' && (message.result || message.error)) {
       this.send({
         method: 'serverRequest/resolved',
-        params: { threadId: 'thread-1', requestId: 'server-input-1' },
+        params: { threadId: this.threadId, requestId: 'server-input-1' },
       })
-      this.send({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })
+      this.send({ method: 'turn/completed', params: { threadId: this.threadId, turn: { id: 'turn-1', status: 'completed' } } })
     }
     if (message.id === 'approval-1' && message.error) {
-      this.send({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })
+      this.send({ method: 'turn/completed', params: { threadId: this.threadId, turn: { id: 'turn-1', status: 'completed' } } })
     }
     if (message.method === 'thread/read' && this.childMetadataError) {
       this.send({ id: message.id, error: { code: -32000, message: this.childMetadataError } })
@@ -210,8 +233,40 @@ test('strict runtime persists committed before turn/start and has no SDK fallbac
   assert.equal(result.threadId, 'thread-1')
   assert.equal(result.turn.status, 'completed')
   assert.deepEqual(received.map(message => message.method).filter(Boolean), [
-    'initialize', 'initialized', 'thread/start', 'turn/start',
+    'initialize', 'initialized', 'thread/start', 'turn/start', 'thread/unsubscribe',
   ])
+})
+
+test('runtime resumes a persisted thread on the selected process and unsubscribes after the turn', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true)
+  const cwd = '/workspace'
+  const result = await runAppServerTurn({
+    taskId: 'resume-task',
+    model: 'gpt-5.6-sol',
+    cwd,
+    threadId: 'thread-existing',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'continue',
+    env: {},
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+
+  assert.equal(result.threadId, 'thread-existing')
+  assert.deepEqual(received.find(message => message.method === 'thread/resume')?.params, {
+    model: 'gpt-5.6-sol',
+    cwd,
+    sandbox: 'read-only',
+    config: {},
+    threadId: 'thread-existing',
+  })
+  assert.deepEqual(received.find(message => message.method === 'thread/unsubscribe')?.params, {
+    threadId: 'thread-existing',
+  })
 })
 
 test('API-key runtime enables ephemeral storage and completes login before becoming available', async () => {
@@ -295,6 +350,67 @@ test('persistent runtime initializes once and serves sequential exclusive turns'
   assert.equal(process.killed, false)
   instance.close()
   assert.equal(process.killed, true)
+})
+
+test('persistent runtime reports thread IDs loaded in its own app-server memory', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true)
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+
+  assert.deepEqual(await instance.listLoadedThreads(), ['thread-1'])
+  assert.equal(received.some(message => message.method === 'thread/loaded/list'), true)
+  await instance.close()
+})
+
+test('turn progress watchdog interrupts and retires a live process that stops emitting events', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, 'running-after-start')
+
+  await assert.rejects(runAppServerTurn({
+    taskId: 'stalled-runtime',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'inspect',
+    env: {},
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+    turnStallTimeoutMs: 25,
+    interruptTimeoutMs: 25,
+  }), error => {
+    assert.ok(error instanceof AppServerRuntimeError)
+    assert.equal(error.code, 'APP_SERVER_TURN_STALLED')
+    assert.equal(error.reason, 'stalled')
+    return true
+  })
+  assert.equal(received.some(message => message.method === 'turn/interrupt'), true)
+  assert.equal(process.killed, true)
+})
+
+test('turn progress notifications reset the watchdog until completion', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, 'progress-before-complete')
+  const result = await runAppServerTurn({
+    taskId: 'progress-runtime',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'inspect',
+    env: {},
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+    turnStallTimeoutMs: 25,
+  })
+  assert.equal(result.turn.status, 'completed')
+  assert.equal(received.some(message => message.method === 'turn/interrupt'), false)
 })
 
 test('runtime enables and answers only the pinned request_user_input server request', async () => {

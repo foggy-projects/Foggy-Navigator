@@ -23,7 +23,10 @@ import {
 
 const moduleRequire = createRequire(import.meta.url)
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+const DEFAULT_TURN_STALL_TIMEOUT_MS = 15 * 60_000
 const RATE_LIMITS_REQUEST_TIMEOUT_MS = 5_000
+const LOADED_THREADS_REQUEST_TIMEOUT_MS = 2_000
+const THREAD_UNSUBSCRIBE_TIMEOUT_MS = 5_000
 const MAX_PENDING_TURN_NOTIFICATIONS = 10_000
 const PROCESS_TREE_HELPER_TIMEOUT_MS = 15_000
 const PROCESS_TREE_POLL_INTERVAL_MS = 25
@@ -89,6 +92,7 @@ export type AppServerTurnOptions = {
   spawnProcess?: SpawnAppServerProcess
   requestTimeoutMs?: number
   interruptTimeoutMs?: number
+  turnStallTimeoutMs?: number
 }
 
 export type PersistentTurnOptions = Omit<
@@ -102,11 +106,12 @@ export type AppServerTurnResult = {
 }
 
 export class AppServerRuntimeError extends Error {
+  readonly code: string
   readonly executionCommitted: boolean
   readonly turnMayHaveStarted: boolean
   readonly threadId?: string
   readonly turnId?: string
-  readonly reason: 'runtime' | 'aborted' | 'unsupported'
+  readonly reason: 'runtime' | 'aborted' | 'unsupported' | 'stalled'
 
   constructor(
     message: string,
@@ -116,11 +121,13 @@ export class AppServerRuntimeError extends Error {
       threadId?: string
       turnId?: string
       reason?: AppServerRuntimeError['reason']
+      code?: string
       cause?: unknown
     },
   ) {
     super(message, { cause: options.cause })
     this.name = 'AppServerRuntimeError'
+    this.code = options.code || 'APP_SERVER_RUNTIME_FAILED'
     this.executionCommitted = options.executionCommitted
     this.turnMayHaveStarted = options.turnMayHaveStarted === true
     this.threadId = options.threadId
@@ -347,6 +354,16 @@ export class AppServerRuntimeInstance {
     return asRecord(response.thread) || {}
   }
 
+  async listLoadedThreads(): Promise<string[]> {
+    if (!this.isHealthy()) throw new Error('Codex app-server instance is unavailable')
+    const response = await this.client.request('thread/loaded/list', undefined, {
+      timeoutMs: LOADED_THREADS_REQUEST_TIMEOUT_MS,
+      fatalOnTimeout: false,
+    })
+    if (!Array.isArray(response.data)) return []
+    return response.data.map(readString).filter((threadId): threadId is string => Boolean(threadId))
+  }
+
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
     if (!this.isHealthy()) throw new Error('Codex app-server instance is unavailable')
     try {
@@ -388,20 +405,63 @@ export class AppServerRuntimeInstance {
     let resolvedThreadId = options.threadId
     let resolvedTurnId: string | undefined
     let abortTimer: NodeJS.Timeout | undefined
+    let stallTimer: NodeJS.Timeout | undefined
     let abortRequested = false
     let commitInProgress = false
     let interruptSent = false
     let turnRequestIssued = false
     let turnNotificationsReady = false
+    let turnWatchdogStarted = false
+    let watchdogPauseCount = 0
     const terminal = deferred<Record<string, unknown>>()
     const turnCorrelation = deferred<void>()
     void turnCorrelation.promise.catch(() => undefined)
     let notificationSideEffects = Promise.resolve()
     const pendingTurnNotifications: AppServerNotification[] = []
     void terminal.promise.catch(() => undefined)
+    const clearStallTimer = (): void => {
+      if (!stallTimer) return
+      clearTimeout(stallTimer)
+      stallTimer = undefined
+    }
+    const armStallTimer = (): void => {
+      clearStallTimer()
+      if (!turnWatchdogStarted || watchdogPauseCount > 0) return
+      stallTimer = setTimeout(() => {
+        const error = new AppServerRuntimeError('Codex app-server turn made no observable progress', {
+          executionCommitted: true,
+          turnMayHaveStarted: true,
+          threadId: resolvedThreadId,
+          turnId: resolvedTurnId,
+          reason: 'stalled',
+          code: 'APP_SERVER_TURN_STALLED',
+        })
+        this.markFatal(error)
+        terminal.reject(error)
+        if (resolvedThreadId && resolvedTurnId && !interruptSent) {
+          interruptSent = true
+          void this.client.request('turn/interrupt', {
+            threadId: resolvedThreadId,
+            turnId: resolvedTurnId,
+          }, {
+            timeoutMs: options.interruptTimeoutMs ?? 5_000,
+            fatalOnTimeout: false,
+          }).catch(() => undefined)
+        }
+      }, options.turnStallTimeoutMs ?? DEFAULT_TURN_STALL_TIMEOUT_MS)
+    }
+    const pauseStallTimer = (): void => {
+      watchdogPauseCount++
+      clearStallTimer()
+    }
+    const resumeStallTimer = (): void => {
+      watchdogPauseCount = Math.max(0, watchdogPauseCount - 1)
+      armStallTimer()
+    }
     const dispatchNotification = (notification: AppServerNotification): void => {
-      options.onNotification(notification)
       const params = notification.params || {}
+      if (params.threadId === resolvedThreadId) armStallTimer()
+      options.onNotification(notification)
       if (notification.method === 'serverRequest/resolved'
           && params.threadId === resolvedThreadId
           && (typeof params.requestId === 'string' || Number.isSafeInteger(params.requestId))) {
@@ -440,7 +500,12 @@ export class AppServerRuntimeInstance {
       if (parsed.threadId !== resolvedThreadId || parsed.turnId !== resolvedTurnId) {
         throw new Error('USER_INPUT_REQUEST_AFFINITY_MISMATCH')
       }
-      return options.onUserInputRequest(parsed)
+      pauseStallTimer()
+      try {
+        return await options.onUserInputRequest(parsed)
+      } finally {
+        resumeStallTimer()
+      }
     })
     const unsubscribeFatal = this.client.onFatal(error => terminal.reject(error))
 
@@ -514,6 +579,8 @@ export class AppServerRuntimeInstance {
       await options.onTurnStarted?.(resolvedThreadId, resolvedTurnId)
       turnCorrelation.resolve()
       turnNotificationsReady = true
+      turnWatchdogStarted = true
+      armStallTimer()
       try {
         for (const notification of pendingTurnNotifications.splice(0)) {
           dispatchNotification(notification)
@@ -526,7 +593,17 @@ export class AppServerRuntimeInstance {
       if (abortRequested || options.signal.aborted) abort()
 
       const turn = await terminalPromise
+      turnWatchdogStarted = false
+      clearStallTimer()
       options.signal.removeEventListener('abort', abort)
+      // A completed root turn no longer needs this connection's live notification subscription.
+      // The thread remains persisted by app-server and can be resumed from any compatible process.
+      await this.client.request('thread/unsubscribe', {
+        threadId: resolvedThreadId,
+      }, {
+        timeoutMs: THREAD_UNSUBSCRIBE_TIMEOUT_MS,
+        fatalOnTimeout: false,
+      }).catch(() => undefined)
       return { threadId: resolvedThreadId, turn }
     } catch (error) {
       const runtimeError = error instanceof AppServerRuntimeError
@@ -544,6 +621,8 @@ export class AppServerRuntimeInstance {
       throw runtimeError
     } finally {
       if (abortTimer) clearTimeout(abortTimer)
+      turnWatchdogStarted = false
+      clearStallTimer()
       options.signal.removeEventListener('abort', abort)
       unsubscribeNotification()
       unsubscribeServerRequest()

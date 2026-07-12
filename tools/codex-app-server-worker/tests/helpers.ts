@@ -38,6 +38,7 @@ export function testConfig(stateDir: string, overrides: Partial<AppConfig> = {})
     poolMaxTasksPerInstance: 10,
     shutdownTimeoutMs: 1_000,
     abortWaitTimeoutMs: 500,
+    turnStallTimeoutMs: 15_000,
     stateDir,
     stateEncryptionKey: createTestEncryptionKey(),
     defaultModel: 'codex-latest',
@@ -54,10 +55,12 @@ export class FakeExecutor implements TaskExecutor {
   calls = 0
   sideEffects = 0
   stateAtSideEffect: string | undefined
+  readonly requests: Array<Parameters<TaskExecutor['execute']>[0]['request']> = []
   constructor(private readonly stateReader?: () => string | undefined) {}
 
   async execute(options: Parameters<TaskExecutor['execute']>[0]): Promise<ExecutionResult> {
     this.calls++
+    this.requests.push(options.request)
     await options.callbacks.onInstanceResolved('instance-test')
     await options.callbacks.onThreadResolved('thread-test')
     await options.callbacks.onExecutionCommitted('thread-test')

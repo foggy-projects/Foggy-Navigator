@@ -14,21 +14,19 @@ import {
 import { EventBroadcast } from '../src/persistence/event-store.js'
 import { tempDirectory, testConfig, waitFor } from './helpers.js'
 
-test('executor serializes write turns in the same cwd before acquiring a pool lease', async t => {
+test('different write threads in the same cwd run concurrently on separate exclusive instances', async t => {
   const fixture = await createFixture(t)
   const first = fixture.execute('write-one', { prompt: 'one', cwd: fixture.cwd, session_id: 'thread-one' })
-  await waitFor(() => fixture.controller.started.includes('write-one'))
   const second = fixture.execute('write-two', { prompt: 'two', cwd: fixture.cwd, session_id: 'thread-two' })
-  await new Promise(resolve => setTimeout(resolve, 20))
-  assert.deepEqual(fixture.controller.started, ['write-one'])
+  await waitFor(() => fixture.controller.started.length === 2)
+  assert.equal(fixture.pool.metrics().busy, 2)
   fixture.controller.complete('write-one')
-  await waitFor(() => fixture.controller.started.includes('write-two'))
   fixture.controller.complete('write-two')
   await Promise.all([first, second])
-  assert.equal(fixture.pool.metrics().created_total, 1)
+  assert.equal(fixture.pool.metrics().created_total, 2)
 })
 
-test('executor serializes symlink or junction aliases using the canonical cwd lock key', async t => {
+test('write threads through canonical cwd aliases are not serialized', async t => {
   const fixture = await createFixture(t)
   const alias = path.join(path.dirname(fixture.cwd), 'repo-alias')
   try {
@@ -41,12 +39,10 @@ test('executor serializes symlink or junction aliases using the canonical cwd lo
     throw error
   }
   const first = fixture.execute('canonical-one', { prompt: 'one', cwd: fixture.cwd, session_id: 'canonical-thread-one' })
-  await waitFor(() => fixture.controller.started.includes('canonical-one'))
   const second = fixture.execute('canonical-two', { prompt: 'two', cwd: alias, session_id: 'canonical-thread-two' })
-  await new Promise(resolve => setTimeout(resolve, 20))
-  assert.deepEqual(fixture.controller.started, ['canonical-one'])
+  await waitFor(() => fixture.controller.started.length === 2)
+  assert.equal(fixture.pool.metrics().busy, 2)
   fixture.controller.complete('canonical-one')
-  await waitFor(() => fixture.controller.started.includes('canonical-two'))
   fixture.controller.complete('canonical-two')
   await Promise.all([first, second])
 })
@@ -109,7 +105,55 @@ test('non-retrying provider error forces failed result even if the turn reports 
   assert.doesNotMatch(JSON.stringify(broadcast.getEventsAfter(0)), /PROVIDER_SECRET_SENTINEL/)
 })
 
-test('executor fails the pool closed before releasing cwd and thread locks after process-tree safety failure', async t => {
+test('failed turn retires its process and continuation resumes on a replacement instance', async t => {
+  const stateDir = await tempDirectory('codex-app-completed-error-')
+  const config = testConfig(stateDir)
+  const failedRuntime = new CompletedFailureRuntime()
+  const resumedRuntime = new CompletedSuccessRuntime()
+  let creations = 0
+  const pool = new AppServerPool(config, async () => {
+    creations++
+    return creations === 1 ? failedRuntime : resumedRuntime
+  })
+  const executor = new StrictAppServerExecutor(config, pool)
+  const callbacks = {
+    onInstanceResolved: () => undefined,
+    onThreadResolved: () => undefined,
+    onExecutionCommitted: () => undefined,
+    onTurnStarted: () => undefined,
+  }
+  t.after(async () => {
+    await pool.drain(100)
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const failed = await executor.execute({
+    taskId: 'completed-error',
+    request: { prompt: 'inspect', cwd: process.cwd(), sandbox_mode: 'read-only' },
+    signal: new AbortController().signal,
+    broadcast: new EventBroadcast('completed-error', path.join(stateDir, 'events')),
+    callbacks,
+  })
+  assert.equal(failed.status, 'failed')
+  assert.equal(failed.errorCode, 'CODEX_PROVIDER_INTERNAL_ERROR')
+  assert.equal(failedRuntime.closed, true)
+  assert.equal(pool.metrics().instances, 0)
+
+  const resumed = await executor.execute({
+    taskId: 'completed-error-retry',
+    request: {
+      prompt: 'continue', cwd: process.cwd(), session_id: failed.threadId, sandbox_mode: 'read-only',
+    },
+    signal: new AbortController().signal,
+    broadcast: new EventBroadcast('completed-error-retry', path.join(stateDir, 'events')),
+    callbacks,
+  })
+  assert.equal(resumed.status, 'completed')
+  assert.equal(resumedRuntime.resumedThreadId, failed.threadId)
+  assert.equal(creations, 2)
+})
+
+test('executor fails the pool closed before releasing the thread lock after process-tree safety failure', async t => {
   const stateDir = await tempDirectory('codex-app-process-tree-safety-')
   const workspaceRoot = `${stateDir}-workspace`
   const cwd = path.join(workspaceRoot, 'repo')
@@ -143,7 +187,7 @@ test('executor fails the pool closed before releasing cwd and thread locks after
     },
   }), AppServerProcessTreeSafetyError)
 
-  assert.deepEqual(locksAtFailClosed, { active_keys: 2, waiting: 0 })
+  assert.deepEqual(locksAtFailClosed, { active_keys: 1, waiting: 0 })
   assert.deepEqual(locks.metrics(), { active_keys: 0, waiting: 0 })
   assert.equal(pool.isDraining(), true)
 })
@@ -302,4 +346,45 @@ class ProcessTreeUnsafeRuntime extends ProviderErrorRuntime {
   override async runTurn(): Promise<AppServerTurnResult> {
     throw new AppServerProcessTreeSafetyError()
   }
+}
+
+class CompletedFailureRuntime implements PoolRuntimeInstance {
+  readonly pid = 3
+  closed = false
+  isHealthy(): boolean { return !this.closed }
+  isActive(): boolean { return false }
+  async runTurn(options: PersistentTurnOptions): Promise<AppServerTurnResult> {
+    const threadId = options.threadId || 'completed-error-thread'
+    await options.onThreadResolved?.(threadId)
+    await options.onExecutionCommitted?.(threadId)
+    await options.onTurnStarted?.(threadId, 'completed-error-turn')
+    return {
+      threadId,
+      turn: {
+        id: 'completed-error-turn',
+        status: 'failed',
+        error: { message: 'PROVIDER_SECRET_SENTINEL', codexErrorInfo: 'internalServerError' },
+      },
+    }
+  }
+  async readThread(): Promise<Record<string, unknown>> { return { turns: [] } }
+  close(): void { this.closed = true }
+}
+
+class CompletedSuccessRuntime implements PoolRuntimeInstance {
+  readonly pid = 4
+  closed = false
+  resumedThreadId?: string
+  isHealthy(): boolean { return !this.closed }
+  isActive(): boolean { return false }
+  async runTurn(options: PersistentTurnOptions): Promise<AppServerTurnResult> {
+    const threadId = options.threadId || 'unexpected-new-thread'
+    this.resumedThreadId = options.threadId
+    await options.onThreadResolved?.(threadId)
+    await options.onExecutionCommitted?.(threadId)
+    await options.onTurnStarted?.(threadId, 'resumed-turn')
+    return { threadId, turn: { id: 'resumed-turn', status: 'completed' } }
+  }
+  async readThread(): Promise<Record<string, unknown>> { return { turns: [] } }
+  close(): void { this.closed = true }
 }

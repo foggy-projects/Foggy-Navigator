@@ -84,6 +84,17 @@ test('concurrency cannot exceed the worst-case single-lane pool capacity', () =>
   }), /per-lane instances plus pool queue/)
 })
 
+test('turn stall watchdog has a bounded configurable timeout', () => {
+  assert.equal(createConfig({ ...process.env, CODEX_APP_SERVER_TURN_STALL_TIMEOUT_MS: undefined }).turnStallTimeoutMs,
+    900_000)
+  assert.equal(createConfig({ ...process.env, CODEX_APP_SERVER_TURN_STALL_TIMEOUT_MS: '120000' }).turnStallTimeoutMs,
+    120_000)
+  assert.throws(() => createConfig({
+    ...process.env,
+    CODEX_APP_SERVER_TURN_STALL_TIMEOUT_MS: '999',
+  }), /CODEX_APP_SERVER_TURN_STALL_TIMEOUT_MS/)
+})
+
 test('configuration rejects a CODEX_HOME nested in state or an allowed workspace', () => {
   const stateDir = path.resolve('.codex-app-server-config-test-state')
   assert.throws(() => createConfig({

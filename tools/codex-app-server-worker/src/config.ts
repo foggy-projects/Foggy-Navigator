@@ -43,6 +43,7 @@ export interface AppConfig {
   poolMaxTasksPerInstance: number
   shutdownTimeoutMs: number
   abortWaitTimeoutMs: number
+  turnStallTimeoutMs: number
   stateDir: string
   stateEncryptionKey?: Buffer
   defaultModel: string
@@ -76,6 +77,7 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     poolMaxTasksPerInstance: integer(env.CODEX_APP_SERVER_POOL_MAX_TASKS_PER_INSTANCE, 100, 1, 100_000, 'CODEX_APP_SERVER_POOL_MAX_TASKS_PER_INSTANCE'),
     shutdownTimeoutMs: integer(env.CODEX_APP_SERVER_SHUTDOWN_TIMEOUT_MS, 30_000, 100, 600_000, 'CODEX_APP_SERVER_SHUTDOWN_TIMEOUT_MS'),
     abortWaitTimeoutMs: integer(env.CODEX_APP_SERVER_ABORT_WAIT_TIMEOUT_MS, 7_000, 100, 60_000, 'CODEX_APP_SERVER_ABORT_WAIT_TIMEOUT_MS'),
+    turnStallTimeoutMs: integer(env.CODEX_APP_SERVER_TURN_STALL_TIMEOUT_MS, 900_000, 1_000, 86_400_000, 'CODEX_APP_SERVER_TURN_STALL_TIMEOUT_MS'),
     stateDir,
     stateEncryptionKey: parseEncryptionKey(env.CODEX_APP_SERVER_STATE_KEY),
     defaultModel: supportedDefaultModel(env.CODEX_DEFAULT_MODEL || 'codex-latest'),

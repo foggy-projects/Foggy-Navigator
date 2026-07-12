@@ -36,6 +36,27 @@ test('TaskManager persists committed before executor side effects and executes a
   assert.ok(durable.getEventsAfter(0).some(event => event.subtype === 'execution_committed'))
 })
 
+test('TaskManager passes only the persisted session id into a thread continuation', async t => {
+  const stateDir = await tempDirectory('codex-app-manager-continuation-')
+  t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
+  const config = testConfig(stateDir)
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const executor = new FakeExecutor()
+  const manager = new TaskManager(config, store, executor)
+  await manager.initialize()
+
+  await manager.accept('affinity-root', { prompt: 'start the thread' })
+  await waitFor(() => manager.get('affinity-root')?.status === 'terminal')
+  await manager.accept('affinity-continuation', {
+    prompt: 'continue the thread',
+    session_id: 'thread-test',
+  })
+  await waitFor(() => manager.get('affinity-continuation')?.status === 'terminal')
+
+  assert.equal(executor.requests[0]?.session_id, undefined)
+  assert.equal(executor.requests[1]?.session_id, 'thread-test')
+})
+
 test('TaskManager resumes accepted work but never replays committed work after restart', async t => {
   const stateDir = await tempDirectory('codex-app-manager-recovery-')
   t.after(() => fs.rm(stateDir, { recursive: true, force: true }))

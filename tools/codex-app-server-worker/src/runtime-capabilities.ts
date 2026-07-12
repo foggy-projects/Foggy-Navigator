@@ -137,7 +137,7 @@ export function buildCapabilityManifest(config: AppConfig, manager: TaskManager)
       tombstone_idempotency: true,
       exclusive_process_lease: true,
       same_thread_turn_lock: true,
-      same_cwd_write_lock: true,
+      same_cwd_write_lock: false,
       abort: true,
       images: true,
       output_schema: true,

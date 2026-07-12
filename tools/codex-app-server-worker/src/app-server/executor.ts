@@ -13,7 +13,11 @@ import {
   resolveContainedHomePath,
   workerPrivatePaths,
 } from '../path-guards.js'
-import { AppServerEventBridge, stableAppServerTurnErrorCode } from './event-bridge.js'
+import {
+  AppServerEventBridge,
+  shouldRetireAppServerAfterTurnFailure,
+  stableAppServerTurnErrorCode,
+} from './event-bridge.js'
 import { KeyedExecutionLocks } from './execution-locks.js'
 import { buildAppServerLane } from './lane.js'
 import { AppServerPool } from './pool.js'
@@ -101,13 +105,16 @@ export class StrictAppServerExecutor implements TaskExecutor {
   }): Promise<ExecutionResult> {
     const startedAt = Date.now()
     const context = await this.buildContext(options.request)
-    const releases = await this.acquireExecutionLocks(options.request, context.cwd, options.signal)
+    const releases = await this.acquireExecutionLocks(options.request, options.signal)
     let inputFiles: Awaited<ReturnType<typeof materializeInput>> | undefined
     let lease: Awaited<ReturnType<AppServerPool['acquire']>> | undefined
+    let retireLease = false
     try {
       inputFiles = await materializeInput(options.taskId, options.request, this.config.stateDir)
       this.assertCanonicalCwdUnchanged(context.cwd)
-      lease = await this.pool.acquire(context.lane, options.signal)
+      lease = options.request.session_id
+        ? await this.pool.acquireForThread(context.lane, options.request.session_id, options.signal)
+        : await this.pool.acquire(context.lane, options.signal)
       const runtimeInstanceId = lease.instanceId
       await options.callbacks.onInstanceResolved(runtimeInstanceId, context.lane.key)
       const bridge = new AppServerEventBridge({
@@ -128,6 +135,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
         outputSchema: options.request.output_schema,
         input: inputFiles.input,
         signal: options.signal,
+        turnStallTimeoutMs: this.config.turnStallTimeoutMs,
         onThreadResolved: async threadId => {
           bridge.setRootThreadId(threadId)
           await options.callbacks.onThreadResolved(threadId)
@@ -143,7 +151,13 @@ export class StrictAppServerExecutor implements TaskExecutor {
       })
       const turnId = readString(result.turn.id)
       const bridged = bridge.getResult()
-      const status = bridged.terminalFailure ? 'failed' : normalizeTurnStatus(result.turn.status)
+      const reportedStatus = normalizeTurnStatus(result.turn.status)
+      const completedFailure = reportedStatus === 'failed'
+        ? stableAppServerTurnErrorCode(result.turn.error)
+        : undefined
+      const errorCode = preferredTurnFailure(bridged.terminalFailure, completedFailure)
+      const status = errorCode ? 'failed' : reportedStatus
+      retireLease = Boolean(errorCode && shouldRetireAppServerAfterTurnFailure(errorCode))
       return {
         threadId: result.threadId,
         turnId,
@@ -153,7 +167,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
         outputTokens: bridged.outputTokens,
         model: context.model,
         durationMs: Date.now() - startedAt,
-        errorCode: bridged.terminalFailure,
+        errorCode,
       }
     } catch (error) {
       if (isAppServerProcessTreeSafetyError(error)) {
@@ -161,7 +175,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
       }
       throw error
     } finally {
-      lease?.release(lease.runtime.isHealthy())
+      lease?.release(lease.runtime.isHealthy() && !retireLease)
       await inputFiles?.cleanup()
       for (const release of releases.reverse()) release()
     }
@@ -182,48 +196,31 @@ export class StrictAppServerExecutor implements TaskExecutor {
     }
     const releaseThread = await this.locks.acquire(`thread:${threadId}`, options.signal)
     let lease: Awaited<ReturnType<AppServerPool['acquire']>> | undefined
-    let retireLease = false
     try {
-      lease = await this.pool.acquire(context.lane, options.signal)
+      // Persisted threads are app-server state, not process-local state. Any healthy instance in
+      // the same credential/config lane may inspect the thread after a Worker or child restart.
+      lease = await this.pool.acquireForThread(context.lane, threadId, options.signal)
       const thread = await lease.runtime.readThread(threadId, true)
       const turns = Array.isArray(thread.turns)
         ? thread.turns.filter(isRecord)
         : []
       const turn = turns.find(candidate => readString(candidate.id) === options.record.turn_id)
       if (!turn) return { status: 'unknown', threadId }
-      let status = reconcileTurnStatus(turn.status)
-      let reconciledTurn = turn
-      if (status === 'unknown' && options.record.abort_requested_at) {
-        if (!lease.runtime.interruptTurn) return { status: 'unknown', threadId, turnId: readString(turn.id) }
-        retireLease = true
-        await lease.runtime.interruptTurn(threadId, options.record.turn_id)
-        const deadline = Date.now() + this.config.abortWaitTimeoutMs
-        while (status === 'unknown' && Date.now() < deadline) {
-          await abortableDelay(100, options.signal)
-          const refreshed = await lease.runtime.readThread(threadId, true)
-          const refreshedTurns = Array.isArray(refreshed.turns) ? refreshed.turns.filter(isRecord) : []
-          const exact = refreshedTurns.find(candidate => readString(candidate.id) === options.record.turn_id)
-          if (!exact) break
-          reconciledTurn = exact
-          status = reconcileTurnStatus(exact.status)
-        }
-      }
+      const status = reconcileTurnStatus(turn.status)
       if (status === 'unknown') return { status, threadId, turnId: readString(turn.id) }
-      retireLease = false
       return {
         status,
         threadId,
-        turnId: readString(reconciledTurn.id),
-        assistantText: status === 'completed' ? extractAssistantText(reconciledTurn) : undefined,
+        turnId: readString(turn.id),
+        assistantText: status === 'completed' ? extractAssistantText(turn) : undefined,
         model: context.model,
-        instanceId: lease.instanceId,
         laneKey: context.lane.key,
-        errorCode: status === 'failed' ? stableAppServerTurnErrorCode(reconciledTurn.error) : undefined,
+        errorCode: status === 'failed' ? stableAppServerTurnErrorCode(turn.error) : undefined,
       }
     } catch {
       return { status: 'unknown', threadId }
     } finally {
-      lease?.release(lease.runtime.isHealthy() && !retireLease)
+      lease?.release(lease.runtime.isHealthy())
       releaseThread()
     }
   }
@@ -278,13 +275,10 @@ export class StrictAppServerExecutor implements TaskExecutor {
     return { model: parsed.model, reasoningEffort: parsed.reasoningEffort, codexConfig, cwd, lane }
   }
 
-  private async acquireExecutionLocks(request: TaskRequest, cwd: string, signal: AbortSignal): Promise<Array<() => void>> {
+  private async acquireExecutionLocks(request: TaskRequest, signal: AbortSignal): Promise<Array<() => void>> {
     const releases: Array<() => void> = []
     try {
       if (request.session_id) releases.push(await this.locks.acquire(`thread:${request.session_id}`, signal))
-      if ((request.sandbox_mode || 'danger-full-access') !== 'read-only') {
-        releases.push(await this.locks.acquire(`cwd:${normalizeCwd(cwd)}`, signal))
-      }
       return releases
     } catch (error) {
       for (const release of releases.reverse()) release()
@@ -421,6 +415,12 @@ function normalizeTurnStatus(value: unknown): ExecutionResult['status'] {
   return value === 'completed' || value === 'failed' || value === 'interrupted' ? value : 'failed'
 }
 
+function preferredTurnFailure(primary: string | undefined, secondary: string | undefined): string | undefined {
+  if (primary && primary !== 'APP_SERVER_TURN_FAILED') return primary
+  if (secondary && secondary !== 'APP_SERVER_TURN_FAILED') return secondary
+  return primary || secondary
+}
+
 function reconcileTurnStatus(value: unknown): ReconciliationResult['status'] {
   if (value === 'completed' || value === 'failed' || value === 'interrupted') return value
   return 'unknown'
@@ -447,25 +447,4 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
-}
-
-function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(abortError())
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', abort)
-      resolve()
-    }, delayMs)
-    const abort = (): void => {
-      clearTimeout(timer)
-      reject(abortError())
-    }
-    signal.addEventListener('abort', abort, { once: true })
-  })
-}
-
-function abortError(): Error {
-  const error = new Error('Reconciliation aborted')
-  error.name = 'AbortError'
-  return error
 }

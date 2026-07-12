@@ -24,6 +24,22 @@ Independent Foggy Navigator runtime backed only by `codex app-server`. It does n
   answer values are never persisted or emitted by the Worker.
 - An SSE observer disconnect never starts or resumes a turn. Clients reconnect and read status;
   a second task for a nonterminal native thread is rejected with `APP_SERVER_THREAD_ACTIVE`.
+- Native `turn/completed.error.codexErrorInfo` values are converted to stable, non-sensitive
+  Worker error codes. `APP_SERVER_TURN_FAILED` is retained only as the fallback for an unknown
+  structured failure; raw provider messages are never projected to clients.
+- A running turn must produce an observable notification within
+  `CODEX_APP_SERVER_TURN_STALL_TIMEOUT_MS` (15 minutes by default). The watchdog is paused while
+  the Worker is waiting for an accepted `requestUserInput` answer. A timeout returns
+  `APP_SERVER_TURN_STALLED`, best-effort interrupts the exact turn, and retires the process.
+- A request without `session_id` uses `thread/start`. A continuation uses `thread/resume` on a
+  healthy process in the same exact runtime lane; the Worker never persists a Thread-to-process
+  binding. Before routing a continuation, the pool queries `thread/loaded/list` on resident
+  same-lane processes and prefers an idle process that already has the Thread loaded. A busy,
+  expired, crashed, or unresponsive match is only a soft hint and never blocks a compatible
+  fallback process.
+- After a terminal turn, the Worker best-effort calls `thread/unsubscribe`. Codex app-server owns
+  persisted session state and its in-memory load/unload lifecycle; process idle-TTL, lifetime,
+  task-count, crash, and capacity rotation do not invalidate a resumable Thread.
 - `DELETE /api/v1/tasks/:taskId` accepts only terminal tasks, purges encrypted request/event
   bodies and retains a permanent idempotency tombstone (`taskId + requestHash + outcome`).
 - `GET /api/v1/capabilities` exposes the runtime/instance/revision, complete reasoning matrix,
@@ -39,13 +55,27 @@ Independent Foggy Navigator runtime backed only by `codex app-server`. It does n
 
 P2 uses a long-lived exclusive-lease pool. A process serves only one root turn at a time; parallel
 turns scale to separate instances in the same lane. Lanes are keyed by exact CLI, CODEX_HOME,
-authentication fingerprint, base URL, and process-environment fingerprint. Metrics expose only
+authentication fingerprint, base URL, and process-environment fingerprint. The pool is an execution
+and resource-management detail: upstream Java/Navigator code supplies the session and resolved
+model/runtime configuration, never a child-process identity or routing decision. Metrics expose only
 digests and counts, never credentials or home paths.
+
+Turns for different Threads may run concurrently even when they use the same working directory and
+have write access. The Worker serializes only turns belonging to the same Thread; it does not provide
+a repository, filesystem, Git, build-tool, or generated-file lock. Callers that require write
+isolation should assign separate worktrees/directories or provide their own higher-level locking.
+
+An active root turn remains bound to its exact lease until it reaches a terminal notification or
+the process is retired. Live abort and `requestUserInput` response handling therefore still verify
+the exact task, runtime instance, Thread and Turn. This active-Turn safety boundary is not persisted
+as session affinity. After a Worker restart or child crash, recovery may use any same-lane process
+for a read-only `thread/read` probe; it never blindly replays a committed turn or interrupts a
+replacement inspection process on behalf of an unproven old execution.
 
 The public `instance_id` is a random state-store generation identity persisted atomically inside
 the state directory. Identity schema v2 is backed by matching generation sentinels in both the
 `tasks` and `events` directories, so clearing either journal directory rotates the identity instead
-of silently serving old affinity bindings from an empty store. Existing schema v1 markers receive
+of silently serving stale task bindings from an empty store. Existing schema v1 markers receive
 one compatibility migration without changing their identity. A pre-marker store with journals
 adopts its legacy configured/calculated identity once: header-safe legacy values are retained
 exactly; older values that were legal but unsafe in an HTTP header are recorded losslessly only in

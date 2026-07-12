@@ -339,6 +339,91 @@ test('idle TTL, task-count retirement, and child crashes evict only the affected
   assert.equal((fourth.runtime as FakeRuntime).closed, true, 'max task count retires the instance')
 })
 
+test('idle processes rotate without retaining session ownership', async t => {
+  let now = 1_000
+  const config = testConfig('C:\\state', {
+    poolIdleTtlMs: 100,
+    poolMaxLifetimeMs: 10_000,
+    poolMaxTasksPerInstance: 10,
+  })
+  const pool = new AppServerPool(config, async () => new FakeRuntime(), () => now)
+  t.after(() => pool.drain(100))
+
+  const first = await pool.acquire(lane('resume-capable'))
+  const firstId = first.instanceId
+  first.release()
+  now += 101
+  pool.sweep()
+
+  assert.equal(pool.metrics().instances, 0)
+  const replacement = await pool.acquire(lane('resume-capable'))
+  assert.notEqual(replacement.instanceId, firstId)
+  replacement.release()
+})
+
+test('continuations prefer an idle app-server instance that already has the thread loaded', async t => {
+  const pool = new AppServerPool(testConfig('C:\\state'), async () => new FakeRuntime())
+  t.after(() => pool.drain(100))
+
+  const generic = await pool.acquire(lane('loaded-thread'))
+  const loaded = await pool.acquire(lane('loaded-thread'))
+  const loadedRuntime = loaded.runtime as FakeRuntime
+  loadedRuntime.loadThread('thread-loaded')
+  generic.release()
+  loaded.release()
+
+  const resumed = await pool.acquireForThread(lane('loaded-thread'), 'thread-loaded')
+  assert.equal(resumed.instanceId, loaded.instanceId)
+  resumed.release()
+})
+
+test('a busy loaded instance is a soft preference and never blocks a compatible idle fallback', async t => {
+  const pool = new AppServerPool(testConfig('C:\\state'), async () => new FakeRuntime())
+  t.after(() => pool.drain(100))
+
+  const busyLoaded = await pool.acquire(lane('soft-loaded-thread'))
+  const idleFallback = await pool.acquire(lane('soft-loaded-thread'))
+  const busyLoadedRuntime = busyLoaded.runtime as FakeRuntime
+  busyLoadedRuntime.loadThread('thread-busy')
+  idleFallback.release()
+
+  const resumed = await pool.acquireForThread(lane('soft-loaded-thread'), 'thread-busy')
+  assert.equal(resumed.instanceId, idleFallback.instanceId)
+  resumed.release()
+  busyLoaded.release()
+})
+
+test('loaded-thread preference cannot reuse an instance that expires before lease assignment', async t => {
+  let now = 1_000
+  let expireAfterNextRead = false
+  const config = testConfig('C:\\state', {
+    poolMaxInstances: 1,
+    poolMaxInstancesPerLane: 1,
+    poolIdleTtlMs: 100,
+  })
+  const pool = new AppServerPool(config, async () => new FakeRuntime(), () => {
+    const current = now
+    if (expireAfterNextRead) {
+      expireAfterNextRead = false
+      now += 101
+    }
+    return current
+  })
+  t.after(() => pool.drain(100))
+
+  const loaded = await pool.acquire(lane('expiring-loaded-thread'))
+  const loadedRuntime = loaded.runtime as FakeRuntime
+  const loadedInstanceId = loaded.instanceId
+  loadedRuntime.loadThread('thread-expiring')
+  loaded.release()
+
+  expireAfterNextRead = true
+  const resumed = await pool.acquireForThread(lane('expiring-loaded-thread'), 'thread-expiring')
+  assert.notEqual(resumed.instanceId, loadedInstanceId)
+  assert.equal(loadedRuntime.closed, true)
+  resumed.release()
+})
+
 test('lane key changes for auth/home/base URL/environment and excludes Worker secrets', async () => {
   const baseEnv = {
     PATH: 'C:\\bin',
@@ -426,6 +511,7 @@ class FakeRuntime implements PoolRuntimeInstance {
   closed = false
   private healthy = true
   private active = false
+  private readonly loadedThreadIds = new Set<string>()
   private readonly fatalHandlers = new Set<(error: Error) => void>()
 
   isHealthy(): boolean { return this.healthy && !this.closed }
@@ -436,6 +522,7 @@ class FakeRuntime implements PoolRuntimeInstance {
     return { threadId: 'thread', turn: { id: 'turn', status: 'completed' } }
   }
   async readThread(): Promise<Record<string, unknown>> { return { id: 'thread', turns: [] } }
+  async listLoadedThreads(): Promise<string[]> { return [...this.loadedThreadIds] }
   close(): void { this.closed = true; this.healthy = false }
   onFatal(handler: (error: Error) => void): () => void {
     this.fatalHandlers.add(handler)
@@ -445,6 +532,7 @@ class FakeRuntime implements PoolRuntimeInstance {
     this.healthy = false
     for (const handler of this.fatalHandlers) handler(new Error('child exited'))
   }
+  loadThread(threadId: string): void { this.loadedThreadIds.add(threadId) }
 }
 
 class SlowCloseRuntime extends FakeRuntime {

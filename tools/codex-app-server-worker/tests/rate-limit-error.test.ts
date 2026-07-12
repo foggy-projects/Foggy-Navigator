@@ -7,16 +7,35 @@ import { TaskStore } from '../src/persistence/task-store.js'
 import { TaskManager } from '../src/task-manager.js'
 import { tempDirectory, testConfig, waitFor } from './helpers.js'
 
-test('only structured usage limit and provider HTTP 429 errors get the stable account code', () => {
-  assert.equal(stableAppServerTurnErrorCode({ codexErrorInfo: 'usageLimitExceeded' }),
-    'CODEX_ACCOUNT_RATE_LIMITED')
-  assert.equal(stableAppServerTurnErrorCode({
-    message: 'private provider details',
-    codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 429 } },
-  }), 'CODEX_ACCOUNT_RATE_LIMITED')
-  assert.equal(stableAppServerTurnErrorCode({
-    codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 500 } },
-  }), 'APP_SERVER_TURN_FAILED')
+test('structured Codex failures map to safe stable codes without inspecting provider text', () => {
+  const cases: Array<[unknown, string]> = [
+    ['contextWindowExceeded', 'CODEX_CONTEXT_WINDOW_EXCEEDED'],
+    ['sessionBudgetExceeded', 'CODEX_SESSION_BUDGET_EXCEEDED'],
+    ['usageLimitExceeded', 'CODEX_ACCOUNT_RATE_LIMITED'],
+    ['serverOverloaded', 'CODEX_SERVER_OVERLOADED'],
+    ['cyberPolicy', 'CODEX_CYBER_POLICY_BLOCKED'],
+    ['internalServerError', 'CODEX_PROVIDER_INTERNAL_ERROR'],
+    ['unauthorized', 'CODEX_AUTH_FAILED'],
+    ['badRequest', 'CODEX_BAD_REQUEST'],
+    ['threadRollbackFailed', 'APP_SERVER_THREAD_ROLLBACK_FAILED'],
+    ['sandboxError', 'APP_SERVER_SANDBOX_ERROR'],
+    ['other', 'APP_SERVER_TURN_FAILED'],
+    [{ httpConnectionFailed: {} }, 'CODEX_HTTP_CONNECTION_FAILED'],
+    [{ responseStreamConnectionFailed: {} }, 'CODEX_RESPONSE_STREAM_CONNECTION_FAILED'],
+    [{ responseStreamDisconnected: {} }, 'CODEX_RESPONSE_STREAM_DISCONNECTED'],
+    [{ responseTooManyFailedAttempts: {} }, 'CODEX_RESPONSE_RETRY_EXHAUSTED'],
+    [{ activeTurnNotSteerable: { turnKind: 'review' } }, 'APP_SERVER_ACTIVE_TURN_NOT_STEERABLE'],
+    [{ httpConnectionFailed: { httpStatusCode: 401 } }, 'CODEX_AUTH_FAILED'],
+    [{ httpConnectionFailed: { httpStatusCode: 429 } }, 'CODEX_ACCOUNT_RATE_LIMITED'],
+    [{ responseStreamDisconnected: { httpStatusCode: 500 } }, 'CODEX_PROVIDER_UNAVAILABLE'],
+    [{ responseStreamConnectionFailed: { httpStatusCode: 504 } }, 'CODEX_PROVIDER_TIMEOUT'],
+  ]
+  for (const [codexErrorInfo, expected] of cases) {
+    assert.equal(stableAppServerTurnErrorCode({
+      message: 'private provider details',
+      codexErrorInfo,
+    }), expected)
+  }
   assert.equal(stableAppServerTurnErrorCode({ message: '429 in untrusted text' }), 'APP_SERVER_TURN_FAILED')
 })
 

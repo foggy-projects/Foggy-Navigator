@@ -860,7 +860,8 @@ export class TaskManager {
       const mayHaveExecuted = latest?.status === 'running'
         || runtimeError?.turnMayHaveStarted === true
         || (!runtimeError && latest?.status === 'committed')
-      if (latest && latest.status !== 'terminal' && mayHaveExecuted && this.executor.reconcile) {
+      const reconciliationUnsafe = runtimeError?.code === 'APP_SERVER_TURN_STALLED'
+      if (latest && latest.status !== 'terminal' && mayHaveExecuted && this.executor.reconcile && !reconciliationUnsafe) {
         try {
           await this.reconcileCommitted(latest, broadcast)
           const reconciled = this.store.get(taskId)
@@ -908,17 +909,22 @@ export class TaskManager {
     if (await this.finalizeDurableTerminalEvent(record, broadcast)) return
     record = this.store.get(record.task_id) || record
     let result: Awaited<ReturnType<NonNullable<TaskExecutor['reconcile']>>>
+    const reconcileController = new AbortController()
+    const reconcileTimeout = setTimeout(() => {
+      reconcileController.abort(new Error('APP_SERVER_RECONCILIATION_TIMEOUT'))
+    }, this.config.poolAcquireTimeoutMs + this.config.abortWaitTimeoutMs + 5_000)
+    reconcileTimeout.unref()
     try {
       result = await this.executor.reconcile!({
         taskId: record.task_id,
         request: this.store.getRequest(record.task_id),
         record,
-        signal: AbortSignal.timeout(
-          this.config.poolAcquireTimeoutMs + this.config.abortWaitTimeoutMs + 5_000,
-        ),
+        signal: reconcileController.signal,
       })
     } catch {
       result = { status: 'unknown', threadId: record.thread_id || '' }
+    } finally {
+      clearTimeout(reconcileTimeout)
     }
     const common = {
       thread_id: result.threadId || record.thread_id,
@@ -1094,6 +1100,8 @@ function stableExecutionErrorCode(error: unknown): string {
     'APP_SERVER_POOL_OVERLOADED',
     'APP_SERVER_POOL_DRAINING',
     'APP_SERVER_POOL_ACQUIRE_TIMEOUT',
+    'APP_SERVER_TURN_STALLED',
+    'APP_SERVER_PROCESS_TREE_UNSAFE',
     'WORKING_DIRECTORY_NOT_ALLOWED',
     'CODEX_HOME_MISSING',
     'CODEX_HOME_NOT_ISOLATED',

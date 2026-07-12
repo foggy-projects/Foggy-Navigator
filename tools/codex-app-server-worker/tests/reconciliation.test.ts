@@ -137,7 +137,7 @@ test('strict executor proves terminal state from thread/read and extracts assist
   assert.equal(runtime.readCalls, 1, 'lane mismatch must not query a thread with different credentials')
 })
 
-test('restart preserves abort intent and interrupts the exact committed turn before reconciling', async t => {
+test('restart preserves abort intent without interrupting a replacement app-server instance', async t => {
   const fixture = await seedCommitted(t, 'reconcile-abort-restart')
   await fixture.store.requestAbort('reconcile-abort-restart')
   const runtime = new InterruptibleReadThreadRuntime('thread-existing', 'turn-existing')
@@ -152,16 +152,19 @@ test('restart preserves abort intent and interrupts the exact committed turn bef
 
   await manager.initialize()
 
-  assert.deepEqual(runtime.interruptCalls, [{ threadId: 'thread-existing', turnId: 'turn-existing' }])
+  assert.deepEqual(runtime.interruptCalls, [])
   assert.equal(runtime.runCalls, 0)
-  assert.equal(manager.get('reconcile-abort-restart')?.status, 'terminal')
-  assert.equal(manager.get('reconcile-abort-restart')?.outcome, 'aborted')
-  assert.equal(manager.get('reconcile-abort-restart')?.error_code, 'TASK_ABORTED')
+  assert.equal(manager.get('reconcile-abort-restart')?.status, 'committed')
+  assert.equal(manager.get('reconcile-abort-restart')?.recovery_required, true)
+  assert.ok(manager.get('reconcile-abort-restart')?.abort_requested_at)
+  assert.equal(manager.get('reconcile-abort-restart')?.outcome, undefined)
+  assert.equal(manager.get('reconcile-abort-restart')?.error_code, undefined)
 })
 
-test('an unproven recovered interrupt stays pending and retires its app-server instance', async t => {
+test('an unproven recovered abort stays pending without interrupting an inspection instance', async t => {
   const stateDir = await tempDirectory('codex-app-reconcile-abort-pending-')
   const config = testConfig(stateDir, { abortWaitTimeoutMs: 100 })
+  await fs.mkdir(config.codexHome, { recursive: true, mode: 0o700 })
   const runtime = new InterruptibleReadThreadRuntime('thread-existing', 'turn-existing', false)
   const pool = new AppServerPool(config, async () => runtime)
   const executor = new StrictAppServerExecutor(config, pool)
@@ -182,9 +185,9 @@ test('an unproven recovered interrupt stays pending and retires its app-server i
   })
 
   assert.equal(result.status, 'unknown')
-  assert.deepEqual(runtime.interruptCalls, [{ threadId: 'thread-existing', turnId: 'turn-existing' }])
-  assert.equal(runtime.isHealthy(), false)
-  assert.equal(pool.metrics().retired_total, 1)
+  assert.deepEqual(runtime.interruptCalls, [])
+  assert.equal(runtime.isHealthy(), true)
+  assert.equal(pool.metrics().retired_total, 0)
 })
 
 test('post-commit child failure reconciles the exact turn instead of publishing a generic failure', async t => {

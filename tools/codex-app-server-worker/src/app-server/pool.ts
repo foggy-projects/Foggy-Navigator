@@ -34,6 +34,7 @@ export interface PoolRuntimeInstance {
   isActive(): boolean
   runTurn(options: PersistentTurnOptions): ReturnType<AppServerRuntimeInstance['runTurn']>
   readThread(threadId: string, includeTurns?: boolean): Promise<Record<string, unknown>>
+  listLoadedThreads?(): Promise<string[]>
   interruptTurn?(threadId: string, turnId: string): Promise<void>
   close(timeoutMs?: number): void | Promise<void>
   onFatal?(handler: (error: Error) => void): () => void
@@ -114,6 +115,7 @@ type RateLimitsCacheEntry = {
 
 type Waiter = {
   lane: AppServerLane
+  preferredInstanceId?: string
   resolve: (lease: AppServerLease) => void
   reject: (error: Error) => void
   timer: NodeJS.Timeout
@@ -190,6 +192,29 @@ export class AppServerPool {
   }
 
   acquire(lane: AppServerLane, signal?: AbortSignal): Promise<AppServerLease> {
+    return this.enqueueAcquire(lane, signal)
+  }
+
+  async acquireForThread(
+    lane: AppServerLane,
+    threadId: string,
+    signal?: AbortSignal,
+  ): Promise<AppServerLease> {
+    if (this.draining) throw new AppServerPoolDrainingError()
+    if (signal?.aborted) throw abortError()
+    if (this.waiters.length >= this.config.poolMaxQueue) {
+      this.counters.rejected++
+      throw new AppServerPoolOverloadedError()
+    }
+    const preferredInstanceId = await this.findIdleLoadedThreadInstance(lane.key, threadId, signal)
+    return this.enqueueAcquire(lane, signal, preferredInstanceId)
+  }
+
+  private enqueueAcquire(
+    lane: AppServerLane,
+    signal?: AbortSignal,
+    preferredInstanceId?: string,
+  ): Promise<AppServerLease> {
     if (this.draining) return Promise.reject(new AppServerPoolDrainingError())
     if (signal?.aborted) return Promise.reject(abortError())
     if (this.waiters.length >= this.config.poolMaxQueue) {
@@ -199,6 +224,7 @@ export class AppServerPool {
     return new Promise((resolve, reject) => {
       const waiter: Waiter = {
         lane,
+        preferredInstanceId,
         resolve,
         reject,
         settled: false,
@@ -486,6 +512,20 @@ export class AppServerPool {
     if (this.draining) return
     for (const waiter of [...this.waiters]) {
       if (waiter.settled) continue
+      if (waiter.preferredInstanceId) {
+        const preferred = this.instances.get(waiter.preferredInstanceId)
+        waiter.preferredInstanceId = undefined
+        if (
+          preferred
+          && preferred.laneKey === waiter.lane.key
+          && this.isIdleReusable(preferred, this.now())
+        ) {
+          this.removeWaiter(waiter)
+          this.counters.reused++
+          this.resolveWaiter(waiter, this.lease(preferred))
+          continue
+        }
+      }
       const idle = this.findReusable(waiter.lane.key)
       if (idle) {
         this.removeWaiter(waiter)
@@ -578,19 +618,54 @@ export class AppServerPool {
     const now = this.now()
     for (const record of [...this.instances.values()]) {
       if (record.laneKey !== laneKey || record.busy) continue
-      if (
-        record.crashed
-        || !record.runtime.isHealthy()
-        || now - record.lastUsedAt >= this.config.poolIdleTtlMs
-        || now - record.createdAt >= this.config.poolMaxLifetimeMs
-        || record.taskCount >= this.config.poolMaxTasksPerInstance
-      ) {
+      if (!this.isIdleReusable(record, now)) {
         this.retire(record, record.crashed || !record.runtime.isHealthy())
         continue
       }
       return record
     }
     return undefined
+  }
+
+  private async findIdleLoadedThreadInstance(
+    laneKey: string,
+    threadId: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const candidates = [...this.instances.values()].filter(record => (
+      record.laneKey === laneKey
+      && !record.crashed
+      && record.runtime.isHealthy()
+      && Boolean(record.runtime.listLoadedThreads)
+    ))
+    if (candidates.length === 0) return undefined
+    const loaded = await Promise.all(candidates.map(async record => {
+      try {
+        const threadIds = await record.runtime.listLoadedThreads!()
+        return threadIds.includes(threadId) ? record : undefined
+      } catch {
+        return undefined
+      }
+    }))
+    if (signal?.aborted) throw abortError()
+    const now = this.now()
+    return loaded
+      .filter((record): record is InstanceRecord => Boolean(record))
+      .filter(record => (
+        this.instances.get(record.id) === record
+        && this.isIdleReusable(record, now)
+      ))
+      .sort((left, right) => left.lastUsedAt - right.lastUsedAt || left.id.localeCompare(right.id))[0]
+      ?.id
+  }
+
+  private isIdleReusable(record: InstanceRecord, now: number): boolean {
+    return !record.busy
+      && !record.crashed
+      && record.runtime.isHealthy()
+      && now - record.lastUsedAt < this.config.poolIdleTtlMs
+      && now - record.createdAt < this.config.poolMaxLifetimeMs
+      && record.taskCount < this.config.poolMaxTasksPerInstance
   }
 
   private reserveCreation(laneKey: string, controller: AbortController): void {

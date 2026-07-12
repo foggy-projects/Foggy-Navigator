@@ -38,6 +38,7 @@ test('restart clears an unanswerable durable interaction with a stable failure a
 
   await manager.accept('after-lost-input', { prompt: 'continue', session_id: 'thread-lost' })
   await waitFor(() => manager.get('after-lost-input')?.status === 'terminal')
+  await waitFor(() => manager.activeCount() === 0)
 })
 
 test('legacy duplicate nonterminal thread journals fail only the later owner instead of blocking startup', async t => {
@@ -76,6 +77,7 @@ test('legacy duplicate nonterminal thread journals fail only the later owner ins
   assert.equal(aborted?.abort_status, 'aborted')
   await manager.accept('legacy-third', { prompt: 'third', session_id: 'legacy-thread' })
   await waitFor(() => manager.get('legacy-third')?.status === 'terminal')
+  await waitFor(() => manager.activeCount() === 0)
 })
 
 test('reconciliation terminal outcome releases a rebuilt thread reservation', async t => {
@@ -96,6 +98,7 @@ test('reconciliation terminal outcome releases a rebuilt thread reservation', as
 
   await manager.accept('recover-next', { prompt: 'next', session_id: 'recover-thread' })
   await waitFor(() => manager.get('recover-next')?.status === 'terminal')
+  await waitFor(() => manager.activeCount() === 0)
 })
 
 class CompletedRecoveryExecutor extends FakeExecutor {

@@ -260,19 +260,93 @@ export class AppServerEventBridge {
   }
 }
 
-export function stableAppServerTurnErrorCode(value: unknown): string {
-  const error = asRecord(value)
-  const info = error?.codexErrorInfo
-  if (info === 'usageLimitExceeded' || hasProviderStatus(info, 429)) {
-    return 'CODEX_ACCOUNT_RATE_LIMITED'
-  }
-  return 'APP_SERVER_TURN_FAILED'
+export type SafeAppServerTurnFailure = {
+  code: string
+  kind: string
+  providerStatus?: number
 }
 
-function hasProviderStatus(value: unknown, status: number): boolean {
+export function stableAppServerTurnErrorCode(value: unknown): string {
+  return classifyAppServerTurnFailure(value).code
+}
+
+export function classifyAppServerTurnFailure(value: unknown): SafeAppServerTurnFailure {
+  const error = asRecord(value)
+  const info = error?.codexErrorInfo
+  if (typeof info === 'string') {
+    const code = STRING_ERROR_CODES[info]
+    return code
+      ? { code, kind: info }
+      : { code: 'APP_SERVER_TURN_FAILED', kind: 'unknown' }
+  }
+  const variant = readCodexErrorVariant(info)
+  if (!variant) return { code: 'APP_SERVER_TURN_FAILED', kind: 'unknown' }
+  const providerStatus = readProviderStatus(variant.detail)
+  const statusCode = providerStatus === undefined ? undefined : providerStatusCode(providerStatus)
+  return {
+    code: statusCode || VARIANT_ERROR_CODES[variant.kind] || 'APP_SERVER_TURN_FAILED',
+    kind: variant.kind,
+    providerStatus,
+  }
+}
+
+export function shouldRetireAppServerAfterTurnFailure(code: string): boolean {
+  return !REUSABLE_TURN_FAILURE_CODES.has(code)
+}
+
+const STRING_ERROR_CODES: Readonly<Record<string, string>> = Object.freeze({
+  contextWindowExceeded: 'CODEX_CONTEXT_WINDOW_EXCEEDED',
+  sessionBudgetExceeded: 'CODEX_SESSION_BUDGET_EXCEEDED',
+  usageLimitExceeded: 'CODEX_ACCOUNT_RATE_LIMITED',
+  serverOverloaded: 'CODEX_SERVER_OVERLOADED',
+  cyberPolicy: 'CODEX_CYBER_POLICY_BLOCKED',
+  internalServerError: 'CODEX_PROVIDER_INTERNAL_ERROR',
+  unauthorized: 'CODEX_AUTH_FAILED',
+  badRequest: 'CODEX_BAD_REQUEST',
+  threadRollbackFailed: 'APP_SERVER_THREAD_ROLLBACK_FAILED',
+  sandboxError: 'APP_SERVER_SANDBOX_ERROR',
+  other: 'APP_SERVER_TURN_FAILED',
+})
+
+const VARIANT_ERROR_CODES: Readonly<Record<string, string>> = Object.freeze({
+  httpConnectionFailed: 'CODEX_HTTP_CONNECTION_FAILED',
+  responseStreamConnectionFailed: 'CODEX_RESPONSE_STREAM_CONNECTION_FAILED',
+  responseStreamDisconnected: 'CODEX_RESPONSE_STREAM_DISCONNECTED',
+  responseTooManyFailedAttempts: 'CODEX_RESPONSE_RETRY_EXHAUSTED',
+  activeTurnNotSteerable: 'APP_SERVER_ACTIVE_TURN_NOT_STEERABLE',
+})
+
+const REUSABLE_TURN_FAILURE_CODES = new Set([
+  'CODEX_CONTEXT_WINDOW_EXCEEDED',
+  'CODEX_SESSION_BUDGET_EXCEEDED',
+  'CODEX_ACCOUNT_RATE_LIMITED',
+  'CODEX_SERVER_OVERLOADED',
+  'CODEX_CYBER_POLICY_BLOCKED',
+  'CODEX_AUTH_FAILED',
+  'CODEX_BAD_REQUEST',
+  'APP_SERVER_ACTIVE_TURN_NOT_STEERABLE',
+])
+
+function readCodexErrorVariant(value: unknown): { kind: string; detail: unknown } | undefined {
   const info = asRecord(value)
-  if (!info) return false
-  return Object.values(info).some(detail => asRecord(detail)?.httpStatusCode === status)
+  if (!info) return undefined
+  for (const kind of Object.keys(VARIANT_ERROR_CODES)) {
+    if (Object.prototype.hasOwnProperty.call(info, kind)) return { kind, detail: info[kind] }
+  }
+  return undefined
+}
+
+function readProviderStatus(value: unknown): number | undefined {
+  const status = asRecord(value)?.httpStatusCode
+  return typeof status === 'number' && Number.isInteger(status) ? status : undefined
+}
+
+function providerStatusCode(status: number): string | undefined {
+  if (status === 401 || status === 403) return 'CODEX_AUTH_FAILED'
+  if (status === 408 || status === 504) return 'CODEX_PROVIDER_TIMEOUT'
+  if (status === 429) return 'CODEX_ACCOUNT_RATE_LIMITED'
+  if (status >= 500 && status <= 599) return 'CODEX_PROVIDER_UNAVAILABLE'
+  return undefined
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

@@ -281,6 +281,8 @@ test('capability manifest exposes the Java registry contract and exact schema lo
   assert.equal(manifest.features.interactive_user_input_experimental, true)
   assert.equal(manifest.features.additional_directories, false)
   assert.equal(manifest.features.committed_reconciliation, true)
+  assert.equal(manifest.features.same_thread_turn_lock, true)
+  assert.equal(manifest.features.same_cwd_write_lock, false)
 })
 
 test('task acceptance rejects retired Mini after direct or alias resolution', async t => {
