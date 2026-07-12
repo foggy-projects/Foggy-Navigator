@@ -255,7 +255,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
 import type { ChatMessage, NavigatorUiAction, UserQuestionAnswers } from '@foggy/chat'
 import { ElMessage } from 'element-plus'
@@ -317,30 +317,15 @@ const paneInputScope = computed(() => {
 })
 const paneMemory = useInputMemory(paneInputScope)
 
-// Flag to prevent saving draft during initial load
-let isInitialLoad = true
-
-// Load draft on mount or when scope changes
+// Load the session draft on mount or when the pane is reused for another session.
 watch(paneInputScope, () => {
-  const draft = paneMemory.loadDraft()
-  if (draft) {
-    paneInput.value = draft
-  }
-  // Mark initial load as complete after the draft is loaded
-  setTimeout(() => {
-    isInitialLoad = false
-  }, 0)
+  paneInput.value = paneMemory.loadDraft()
 }, { immediate: true })
 
-// Save draft with debounce (only after initial load is complete)
-let saveDraftTimer: ReturnType<typeof setTimeout> | null = null
+// Persist every edit so switching sessions or refreshing cannot lose the text
+// typed while the current task is still running.
 watch(paneInput, (val) => {
-  if (isInitialLoad) return // Don't save during initial load
-  if (saveDraftTimer) clearTimeout(saveDraftTimer)
-  saveDraftTimer = setTimeout(() => {
-    paneMemory.saveDraft(val)
-    saveDraftTimer = null
-  }, 300) // Save after 300ms of no changes
+  paneMemory.saveDraft(val)
 })
 
 function handlePaneHistoryPrev() {
@@ -377,20 +362,29 @@ const pendingQuestionShortcut = computed(() => (
 
 const canInput = computed(() => {
   const task = props.paneState.task.value
+  if (task?.status === 'RUNNING' || task?.status === 'AWAITING_PERMISSION') {
+    return !!task.sessionId
+  }
   if (task?.status === 'AWAITING_INPUT') return pendingQuestionShortcut.value != null
   return canShowContinuationInput(task)
 })
 
-const inputPlaceholder = computed(() => (
-  props.paneState.task.value?.status === 'AWAITING_INPUT'
-    ? '输入选项序号或完整选项文本... (Ctrl+Enter 发送)'
-    : '输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)'
-))
+const inputPlaceholder = computed(() => {
+  const status = props.paneState.task.value?.status
+  if (status === 'RUNNING' || status === 'AWAITING_PERMISSION') {
+    return '可提前输入下一条消息，当前任务结束后才能发送'
+  }
+  if (status === 'AWAITING_INPUT') {
+    return '输入选项序号或完整选项文本... (Ctrl+Enter 发送)'
+  }
+  return '输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)'
+})
 
 const sendDisabled = computed(() => {
   const t = props.paneState.task.value
   return !!t && (
     t.status === 'RUNNING'
+      || t.status === 'AWAITING_PERMISSION'
       || (t.status === 'AWAITING_INPUT' && pendingQuestionShortcut.value == null)
   )
 })
@@ -448,14 +442,6 @@ function handlePlanRespond(permissionId: string, decision: string, denyMessage?:
 function handleCommand(payload: { command: string; value: string | number }) {
   emit('command', payload)
 }
-
-// Cleanup timers on unmount
-onUnmounted(() => {
-  if (saveDraftTimer) {
-    clearTimeout(saveDraftTimer)
-    saveDraftTimer = null
-  }
-})
 
 function handleRewind(turnIndex: number) {
   emit('rewind', props.paneState.paneId, turnIndex)

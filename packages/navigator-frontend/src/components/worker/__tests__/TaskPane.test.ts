@@ -40,6 +40,7 @@ afterEach(() => {
   wrapper?.unmount()
   wrapper = undefined
   document.body.innerHTML = ''
+  localStorage.clear()
 })
 
 function createPaneState(options: {
@@ -171,10 +172,31 @@ describe('TaskPane continuation input', () => {
   })
 
   it.each(['RUNNING', 'AWAITING_PERMISSION'] as const)(
-    'hides continuation input while task is %s',
-    (status) => {
+    'allows drafting but disables sending while task is %s',
+    async (status) => {
       wrapper = mountTaskPane(createPaneState({ status }))
-      expect(wrapper.find('textarea').exists()).toBe(false)
+
+      const input = wrapper.get('textarea')
+      await input.setValue('next message')
+      wrapper.findComponent(SlashCommandInput).vm.$emit('submit')
+      await nextTick()
+
+      expect(input.element).toHaveProperty('value', 'next message')
+      expect(wrapper.get('.send-btn-inside').attributes('disabled')).toBeDefined()
+      expect(wrapper.emitted('send')).toBeUndefined()
     },
   )
+
+  it('restores a running-session draft after the pane is remounted', async () => {
+    wrapper = mountTaskPane(createPaneState({ status: 'RUNNING' }))
+    await wrapper.get('textarea').setValue('keep this draft')
+    await nextTick()
+    wrapper.unmount()
+    wrapper = undefined
+
+    wrapper = mountTaskPane(createPaneState({ status: 'RUNNING' }))
+    await nextTick()
+
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('keep this draft')
+  })
 })
