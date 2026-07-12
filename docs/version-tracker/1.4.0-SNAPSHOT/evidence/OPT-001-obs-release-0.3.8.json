@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "opt-001-obs-release-0.3.8",
+  "generatedAtUtc": "2026-07-12T02:31:34Z",
+  "scope": "provider-split-canary-release",
+  "status": "PASSED",
+  "release": {
+    "product": "codex-app-server-worker",
+    "version": "0.3.8",
+    "archive": "codex-app-server-worker-0.3.8.zip",
+    "sha256": "7ddf8e1302235df1a58e76a3ca259aecb533034bcf9931aa0cd34f1bc4087ac3",
+    "bytes": 1810031,
+    "entries": 198,
+    "sourceCommit": "0e1540d4479f953f07453a9fab4d691db7fc98da",
+    "gitDirty": false,
+    "buildTimeUtc": "2026-07-12T02:26:14Z",
+    "changes": [
+      "Production canary accepts only providerType=codex-app-server-worker.",
+      "Production Ultra cohort validation supports Codex, Sol, and Terra Ultra aliases and rejects Luna Ultra."
+    ]
+  },
+  "obs": {
+    "bucket": "obs://obs-fe55/codex-app-server-worker",
+    "baseUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker",
+    "latestUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/latest.json",
+    "linuxInstallerUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.sh",
+    "windowsInstallerUrl": "https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-worker/install.ps1",
+    "publisherRemoteArchiveByteAndSha256Verification": true,
+    "publisherRemoteBootstrapByteVerification": true,
+    "publicLatestProvenanceVerification": true,
+    "latestUploadedLast": true
+  },
+  "tests": {
+    "releaseCommandWindows": { "total": 251, "passed": 244, "skipped": 7, "failed": 0 },
+    "windowsPublicFreshInstall": {
+      "status": "passed",
+      "packageVersion": "0.3.8",
+      "versionFile": "0.3.8",
+      "workerTokenConfigured": false,
+      "openAiApiKeyConfigured": false,
+      "stateKeyGenerated": true,
+      "isolatedCodexHome": true,
+      "workerProcessRunning": false,
+      "temporaryInstallRemoved": true
+    },
+    "schemaDigest": "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f",
+    "workerTypecheck": "passed",
+    "workerBuild": "passed"
+  },
+  "observations": [
+    "The publisher uploaded the immutable archive and checksum, both generated bootstrap installers, then latest.json as the final commit point and verified the public bytes.",
+    "The current release was tested with the public Windows installer in a one-time temporary directory. It remained stopped after installation and the directory was removed after assertions.",
+    "This release updates P3 canary tooling only. It does not supply production task, duration, rotation, or release-owner approval evidence."
+  ]
+}
