@@ -15,6 +15,7 @@ import {
 } from '../path-guards.js'
 import {
   AppServerEventBridge,
+  detectToolCapabilityFailure,
   shouldRetireAppServerAfterTurnFailure,
   stableAppServerTurnErrorCode,
 } from './event-bridge.js'
@@ -155,7 +156,13 @@ export class StrictAppServerExecutor implements TaskExecutor {
       const completedFailure = reportedStatus === 'failed'
         ? stableAppServerTurnErrorCode(result.turn.error)
         : undefined
-      const errorCode = preferredTurnFailure(bridged.terminalFailure, completedFailure)
+      const capabilityFailure = reportedStatus === 'completed'
+        ? detectToolCapabilityFailure(bridged.assistantText)
+        : undefined
+      const errorCode = preferredTurnFailure(
+        capabilityFailure,
+        preferredTurnFailure(bridged.terminalFailure, completedFailure),
+      )
       const status = errorCode ? 'failed' : reportedStatus
       retireLease = Boolean(errorCode && shouldRetireAppServerAfterTurnFailure(errorCode))
       return {
@@ -208,14 +215,18 @@ export class StrictAppServerExecutor implements TaskExecutor {
       if (!turn) return { status: 'unknown', threadId }
       const status = reconcileTurnStatus(turn.status)
       if (status === 'unknown') return { status, threadId, turnId: readString(turn.id) }
+      const assistantText = status === 'completed' ? extractAssistantText(turn) : undefined
+      const capabilityFailure = status === 'completed'
+        ? detectToolCapabilityFailure(assistantText)
+        : undefined
       return {
-        status,
+        status: capabilityFailure ? 'failed' : status,
         threadId,
         turnId: readString(turn.id),
-        assistantText: status === 'completed' ? extractAssistantText(turn) : undefined,
+        assistantText: capabilityFailure ? undefined : assistantText,
         model: context.model,
         laneKey: context.lane.key,
-        errorCode: status === 'failed' ? stableAppServerTurnErrorCode(turn.error) : undefined,
+        errorCode: capabilityFailure || (status === 'failed' ? stableAppServerTurnErrorCode(turn.error) : undefined),
       }
     } catch {
       return { status: 'unknown', threadId }

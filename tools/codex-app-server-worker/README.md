@@ -27,10 +27,16 @@ Independent Foggy Navigator runtime backed only by `codex app-server`. It does n
 - Native `turn/completed.error.codexErrorInfo` values are converted to stable, non-sensitive
   Worker error codes. `APP_SERVER_TURN_FAILED` is retained only as the fallback for an unknown
   structured failure; raw provider messages are never projected to clients.
+- A turn that reports success while its final answer says required shell/file execution tools are
+  unavailable is failed closed as `APP_SERVER_TOOL_CAPABILITY_UNAVAILABLE`. This applies to live
+  execution and restart reconciliation, preventing a capability-loss refusal from becoming a
+  false successful result; the suspect app-server process is retired.
 - A running turn must produce an observable notification within
   `CODEX_APP_SERVER_TURN_STALL_TIMEOUT_MS` (15 minutes by default). The watchdog is paused while
   the Worker is waiting for an accepted `requestUserInput` answer. A timeout returns
   `APP_SERVER_TURN_STALLED`, best-effort interrupts the exact turn, and retires the process.
+  Token-usage, rate-limit, thread-status, and other process-liveness noise do not reset this
+  deadline; only root-turn item/error/completion activity or a resolved server request does.
 - A request without `session_id` uses `thread/start`. A continuation uses `thread/resume` on a
   healthy process in the same exact runtime lane; the Worker never persists a Thread-to-process
   binding. Before routing a continuation, the pool queries `thread/loaded/list` on resident

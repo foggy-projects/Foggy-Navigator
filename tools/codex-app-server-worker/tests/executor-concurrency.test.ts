@@ -153,6 +153,36 @@ test('failed turn retires its process and continuation resumes on a replacement 
   assert.equal(creations, 2)
 })
 
+test('tool capability-loss refusal fails closed and retires the process', async t => {
+  const stateDir = await tempDirectory('codex-app-tool-capability-')
+  const config = testConfig(stateDir)
+  const runtime = new CapabilityLossRuntime()
+  const pool = new AppServerPool(config, async () => runtime)
+  const executor = new StrictAppServerExecutor(config, pool)
+  t.after(async () => {
+    await pool.drain(100)
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const result = await executor.execute({
+    taskId: 'tool-capability-loss',
+    request: { prompt: '继续推进', cwd: process.cwd(), session_id: 'existing-thread' },
+    signal: new AbortController().signal,
+    broadcast: new EventBroadcast('tool-capability-loss', path.join(stateDir, 'events')),
+    callbacks: {
+      onInstanceResolved: () => undefined,
+      onThreadResolved: () => undefined,
+      onExecutionCommitted: () => undefined,
+      onTurnStarted: () => undefined,
+    },
+  })
+
+  assert.equal(result.status, 'failed')
+  assert.equal(result.errorCode, 'APP_SERVER_TOOL_CAPABILITY_UNAVAILABLE')
+  assert.equal(runtime.closed, true)
+  assert.equal(pool.metrics().instances, 0)
+})
+
 test('executor fails the pool closed before releasing the thread lock after process-tree safety failure', async t => {
   const stateDir = await tempDirectory('codex-app-process-tree-safety-')
   const workspaceRoot = `${stateDir}-workspace`
@@ -384,6 +414,35 @@ class CompletedSuccessRuntime implements PoolRuntimeInstance {
     await options.onExecutionCommitted?.(threadId)
     await options.onTurnStarted?.(threadId, 'resumed-turn')
     return { threadId, turn: { id: 'resumed-turn', status: 'completed' } }
+  }
+  async readThread(): Promise<Record<string, unknown>> { return { turns: [] } }
+  close(): void { this.closed = true }
+}
+
+class CapabilityLossRuntime implements PoolRuntimeInstance {
+  readonly pid = 5
+  closed = false
+  isHealthy(): boolean { return !this.closed }
+  isActive(): boolean { return false }
+  async runTurn(options: PersistentTurnOptions): Promise<AppServerTurnResult> {
+    const threadId = options.threadId || 'tool-capability-thread'
+    const turnId = 'tool-capability-turn'
+    await options.onThreadResolved?.(threadId)
+    await options.onExecutionCommitted?.(threadId)
+    await options.onTurnStarted?.(threadId, turnId)
+    options.onNotification({
+      method: 'item/completed',
+      params: {
+        threadId,
+        turnId,
+        item: {
+          id: 'message-capability-loss',
+          type: 'agentMessage',
+          text: 'Shell/文件操作工具 `functions.exec` 不再可用，因此无法继续修改文件。',
+        },
+      },
+    })
+    return { threadId, turn: { id: turnId, status: 'completed' } }
   }
   async readThread(): Promise<Record<string, unknown>> { return { turns: [] } }
   close(): void { this.closed = true }

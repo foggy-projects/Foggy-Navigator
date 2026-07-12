@@ -137,6 +137,39 @@ test('strict executor proves terminal state from thread/read and extracts assist
   assert.equal(runtime.readCalls, 1, 'lane mismatch must not query a thread with different credentials')
 })
 
+test('reconciliation rejects a persisted false success caused by tool capability loss', async t => {
+  const stateDir = await tempDirectory('codex-app-reconcile-tool-capability-')
+  const config = testConfig(stateDir)
+  const runtime = new ReadThreadRuntime({
+    id: 'thread-existing',
+    turns: [{
+      id: 'turn-existing',
+      status: 'completed',
+      items: [{
+        type: 'agentMessage',
+        text: 'Only the image generation tool remains available, so I cannot continue modifying files.',
+      }],
+    }],
+  })
+  const pool = new AppServerPool(config, async () => runtime)
+  const executor = new StrictAppServerExecutor(config, pool)
+  t.after(async () => {
+    await pool.drain(100)
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const result = await executor.reconcile({
+    taskId: 'task',
+    request: { prompt: 'continue', model: 'codex-latest' },
+    record: record('task'),
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(result.status, 'failed')
+  assert.equal(result.errorCode, 'APP_SERVER_TOOL_CAPABILITY_UNAVAILABLE')
+  assert.equal(result.assistantText, undefined)
+})
+
 test('restart preserves abort intent without interrupting a replacement app-server instance', async t => {
   const fixture = await seedCommitted(t, 'reconcile-abort-restart')
   await fixture.store.requestAbort('reconcile-abort-restart')

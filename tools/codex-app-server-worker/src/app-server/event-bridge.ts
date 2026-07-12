@@ -270,6 +270,19 @@ export function stableAppServerTurnErrorCode(value: unknown): string {
   return classifyAppServerTurnFailure(value).code
 }
 
+export function detectToolCapabilityFailure(assistantText: string | undefined): string | undefined {
+  if (!assistantText?.trim()) return undefined
+  const normalized = assistantText.toLowerCase().replace(/\s+/g, ' ')
+  const referencesExecutionTools = /functions?\.exec|shell\s*\/\s*文件操作工具|shell(?:\s+or\s+|\s*\/\s*)file operation tools?|shell tools?|file operation tools?/.test(normalized)
+  const reportsUnavailable = /不再可用|无法使用|不可用|未暴露|没有暴露|no longer available|unavailable|not available|not exposed|missing/.test(normalized)
+  const reportsBlockedContinuation = /无法继续|不能继续|无法运行|无法修改|cannot continue|can't continue|unable to continue|cannot run|can't run|cannot modify|can't modify/.test(normalized)
+  const onlyImageGenerationRemains = /仅(?:暴露|剩下|可用).{0,24}图片生成工具|only.{0,32}image generation tool.{0,16}(?:available|exposed|remain)/.test(normalized)
+  return reportsBlockedContinuation
+    && ((referencesExecutionTools && reportsUnavailable) || onlyImageGenerationRemains)
+    ? 'APP_SERVER_TOOL_CAPABILITY_UNAVAILABLE'
+    : undefined
+}
+
 export function classifyAppServerTurnFailure(value: unknown): SafeAppServerTurnFailure {
   const error = asRecord(value)
   const info = error?.codexErrorInfo

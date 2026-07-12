@@ -36,7 +36,7 @@ class FakeProcess extends EventEmitter {
     private readonly emitTestNotification = false,
     private readonly childMetadataError?: string,
     private readonly interruptBehavior?: 'error' | 'timeout' | 'turn-start-hang' | 'stale-terminal' | 'same-batch-events'
-      | 'running-after-start' | 'progress-before-complete' | 'interactive-request' | 'unknown-server-request'
+      | 'running-after-start' | 'progress-before-complete' | 'noise-before-stall' | 'interactive-request' | 'unknown-server-request'
       | 'server-resolved-request',
     private readonly apiKeyLoginBehavior?: 'error' | 'invalid',
   ) {
@@ -183,6 +183,18 @@ class FakeProcess extends EventEmitter {
           method: 'turn/completed',
           params: { threadId: this.threadId, turn: { id: 'turn-1', status: 'completed' } },
         }), 65)
+      }
+      if (this.interruptBehavior === 'noise-before-stall') {
+        for (const delayMs of [10, 20, 30, 40]) {
+          setTimeout(() => this.send({
+            method: 'thread/tokenUsage/updated',
+            params: {
+              threadId: this.threadId,
+              turnId: 'turn-1',
+              tokenUsage: { last: { inputTokens: delayMs, outputTokens: 0 } },
+            },
+          }), delayMs)
+        }
       }
       if (!this.interruptBehavior || this.interruptBehavior === 'stale-terminal') {
         this.send({ method: 'turn/completed', params: { threadId: this.threadId, turn: { id: 'turn-1', status: 'completed' } } })
@@ -411,6 +423,32 @@ test('turn progress notifications reset the watchdog until completion', async ()
   })
   assert.equal(result.turn.status, 'completed')
   assert.equal(received.some(message => message.method === 'turn/interrupt'), false)
+})
+
+test('token usage noise does not keep a stalled turn alive', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, 'noise-before-stall')
+
+  await assert.rejects(runAppServerTurn({
+    taskId: 'noisy-stalled-runtime',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: 'inspect',
+    env: {},
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+    turnStallTimeoutMs: 25,
+    interruptTimeoutMs: 25,
+  }), error => {
+    assert.ok(error instanceof AppServerRuntimeError)
+    assert.equal(error.code, 'APP_SERVER_TURN_STALLED')
+    return true
+  })
+  assert.equal(received.some(message => message.method === 'turn/interrupt'), true)
+  assert.equal(process.killed, true)
 })
 
 test('runtime enables and answers only the pinned request_user_input server request', async () => {

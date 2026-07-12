@@ -460,7 +460,7 @@ export class AppServerRuntimeInstance {
     }
     const dispatchNotification = (notification: AppServerNotification): void => {
       const params = notification.params || {}
-      if (params.threadId === resolvedThreadId) armStallTimer()
+      if (isMeaningfulTurnProgress(notification, resolvedThreadId, resolvedTurnId)) armStallTimer()
       options.onNotification(notification)
       if (notification.method === 'serverRequest/resolved'
           && params.threadId === resolvedThreadId
@@ -630,6 +630,25 @@ export class AppServerRuntimeInstance {
       if (!this.healthy) await this.client.close()
     }
   }
+}
+
+function isMeaningfulTurnProgress(
+  notification: AppServerNotification,
+  threadId: string | undefined,
+  turnId: string | undefined,
+): boolean {
+  if (!threadId || notification.params?.threadId !== threadId) return false
+  if (notification.method === 'turn/completed') {
+    return readString(asRecord(notification.params.turn)?.id) === turnId
+  }
+  if (notification.method === 'serverRequest/resolved') return true
+  if (notification.method === 'error') {
+    const notificationTurnId = readString(notification.params.turnId)
+    return !notificationTurnId || notificationTurnId === turnId
+  }
+  if (!notification.method.startsWith('item/')) return false
+  const notificationTurnId = readString(notification.params.turnId)
+  return !notificationTurnId || notificationTurnId === turnId
 }
 
 export async function runAppServerTurn(options: AppServerTurnOptions): Promise<AppServerTurnResult> {
