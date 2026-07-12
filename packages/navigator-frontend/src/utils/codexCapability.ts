@@ -2,6 +2,7 @@ import type { ClaudeWorker, WorkerBackend } from '@/types'
 import type { SelectableModelOption } from '@/utils/llmModelOptions'
 
 export type CodexModelAvailability = {
+  modelSupported?: boolean
   modelAvailable?: boolean
   ultraAvailable?: boolean
 }
@@ -59,6 +60,28 @@ export async function resolveAvailableModelValues(
         availability: CodexModelAvailability
       }> => result.status === 'fulfilled')
       .filter(({ value }) => isAvailable(value.option, value.availability))
+      .map(({ value }) => value.option.value),
+  )
+}
+
+export async function resolveSupportedModelValues(
+  options: readonly SelectableModelOption[],
+  probe: (model: string) => Promise<CodexModelAvailability>,
+): Promise<Set<string>> {
+  const results = await Promise.allSettled(
+    options.map(async (option) => ({
+      option,
+      availability: await probe(option.value),
+    })),
+  )
+  return new Set(
+    results
+      .filter((result): result is PromiseFulfilledResult<{
+        option: SelectableModelOption
+        availability: CodexModelAvailability
+      }> => result.status === 'fulfilled')
+      .filter(({ value }) => value.availability.modelSupported
+        ?? isAvailable(value.option, value.availability))
       .map(({ value }) => value.option.value),
   )
 }

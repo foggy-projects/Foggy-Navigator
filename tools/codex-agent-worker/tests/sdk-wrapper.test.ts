@@ -827,3 +827,83 @@ test('start and resume both preserve Shell execution after a Responses Lite sess
     taskRegistry.delete('task-shell-resume')
   }
 })
+
+test('runQuery keeps progress agent messages as commentary and uses only the final message as result', async () => {
+  const taskId = `task-final-message-${Date.now()}`
+  const streamedThread = {
+    async runStreamed() {
+      async function* events() {
+        yield { type: 'thread.started', thread_id: 'thread-final-message' }
+        yield { type: 'turn.started' }
+        yield {
+          type: 'item.completed',
+          item: { id: 'progress-1', type: 'agent_message', text: 'I will inspect the process now.' },
+        }
+        yield {
+          type: 'item.started',
+          item: {
+            id: 'command-1',
+            type: 'command_execution',
+            command: 'ps -ef',
+            aggregated_output: '',
+            status: 'in_progress',
+          },
+        }
+        yield {
+          type: 'item.completed',
+          item: {
+            id: 'command-1',
+            type: 'command_execution',
+            command: 'ps -ef',
+            aggregated_output: 'done\n',
+            status: 'completed',
+          },
+        }
+        yield {
+          type: 'item.completed',
+          item: { id: 'final-1', type: 'agent_message', text: 'FINAL_ONLY' },
+        }
+        yield { type: 'turn.completed', usage: { input_tokens: 2, output_tokens: 3 } }
+      }
+      return { events: events() }
+    },
+  }
+
+  try {
+    await runQuery(
+      taskId,
+      'inspect the process',
+      '/workspace',
+      undefined,
+      'gpt-5.6-sol',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {
+        codexFactory: () => ({
+          startThread: () => streamedThread,
+          resumeThread: () => streamedThread,
+        }),
+        snapshotCodexCliPids: async () => new Set<number>(),
+        detectSpawnedCodexPid: async () => undefined,
+      },
+    )
+
+    const workerEvents = taskBroadcasts.get(taskId)?.getEventsAfter(0) ?? []
+    assert.deepEqual(
+      workerEvents
+        .filter(event => event.type === 'assistant_text' && event.subtype !== 'sync_checkpoint')
+        .map(event => ({ content: event.content, subtype: event.subtype })),
+      [{ content: 'I will inspect the process now.', subtype: 'commentary' }],
+    )
+    const result = workerEvents.find(event => event.type === 'result')
+    assert.equal(result?.content, 'FINAL_ONLY')
+  } finally {
+    taskBroadcasts.get(taskId)?.cleanup()
+    taskBroadcasts.delete(taskId)
+    taskRegistry.delete(taskId)
+  }
+})

@@ -25,7 +25,7 @@ public interface CodexRuntimeRepository extends JpaRepository<CodexRuntimeEntity
 
     List<CodexRuntimeEntity> findByWorkerIdOrderByPriorityDescRevisionDesc(String workerId);
 
-    List<CodexRuntimeEntity> findByEnabledTrueOrderByUpdatedAtAsc();
+    List<CodexRuntimeEntity> findByArchivedAtIsNullOrderByUpdatedAtAsc();
 
     List<CodexRuntimeEntity> findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
             String workerId, String runtimeType);

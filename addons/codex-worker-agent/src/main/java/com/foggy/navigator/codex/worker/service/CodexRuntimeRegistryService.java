@@ -228,16 +228,20 @@ public class CodexRuntimeRegistryService {
             if (!MODEL_ALIAS_CONFLICT_CODE.equals(error.getCode())) throw error;
             return CodexRuntimeAvailabilityDTO.builder()
                     .appServerManaged(appServerManaged)
+                    .modelSupported(false)
                     .modelAvailable(false)
                     .ultraAvailable(false)
                     .blockReason(MODEL_ALIAS_CONFLICT_CODE)
                     .build();
         }
+        boolean modelSupported = registeredCandidates.stream()
+                .anyMatch(entity -> isModelSupported(entity, requestedModel));
         boolean modelAvailable = enabledCandidates.stream()
                 .anyMatch(entity -> isModelAvailable(entity, requestedModel));
         boolean ultraAvailable = resolution.isUltra() && modelAvailable;
         return CodexRuntimeAvailabilityDTO.builder()
                 .appServerManaged(appServerManaged)
+                .modelSupported(modelSupported)
                 .modelAvailable(modelAvailable)
                 .ultraAvailable(ultraAvailable)
                 .blockReason(modelAvailable ? null : resolution.isUltra()
@@ -444,10 +448,11 @@ public class CodexRuntimeRegistryService {
             fixedDelayString = "${navigator.codex.runtime.refresh-delay-ms:60000}",
             initialDelayString = "${navigator.codex.runtime.refresh-initial-delay-ms:30000}")
     public void refreshEnabledCapabilities() {
-        List<CodexRuntimeEntity> enabled = runtimeRepository.findByEnabledTrueOrderByUpdatedAtAsc();
-        for (CodexRuntimeEntity runtime : enabled) {
+        List<CodexRuntimeEntity> managed = runtimeRepository.findByArchivedAtIsNullOrderByUpdatedAtAsc();
+        for (CodexRuntimeEntity runtime : managed) {
             if (!CodexRuntimeType.APP_SERVER.name().equals(runtime.getRuntimeType())
-                    || runtime.getArchivedAt() != null) continue;
+                    || !"ENDPOINT_SYNC".equals(runtime.getRuntimeSource())
+                    || !hasLiveEndpointProfile(runtime)) continue;
             try {
                 refreshCapabilities(runtime.getRuntimeId(), runtime.getRevision());
             } catch (Exception e) {
@@ -1195,6 +1200,17 @@ public class CodexRuntimeRegistryService {
             case ALL_DEFAULT -> true;
             case DARK, DRAINING -> false;
         };
+    }
+
+    private boolean isModelSupported(CodexRuntimeEntity entity, String requestedModel) {
+        Map<String, Object> manifest = parseManifest(entity.getCapabilityManifestJson());
+        boolean ultra = resolveModel(requestedModel, modelAliases(manifest)).isUltra();
+        return CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())
+                && entity.getArchivedAt() == null
+                && supportsCoreAppServerContract(manifest)
+                && (!ultra || supportsNativeSubtaskContractV1(manifest))
+                && supportsModelReasoning(manifest, requestedModel)
+                && supportsModel(manifest, requestedModel);
     }
 
     private record ModelResolution(String baseModel, String reasoningEffort) {

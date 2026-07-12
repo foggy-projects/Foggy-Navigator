@@ -46,3 +46,27 @@ test('EventBroadcast cleanup removes persisted log after queued writes complete'
 
   assert.equal(fs.existsSync(filePath), false)
 })
+
+test('EventBroadcast close notifies active and late subscribers exactly once', async () => {
+  const taskId = `test-close-${Date.now()}`
+  const broadcast = new EventBroadcast(taskId)
+  let activeClosed = 0
+  let lateClosed = 0
+
+  broadcast.subscribe(() => undefined, () => {
+    activeClosed++
+  })
+
+  broadcast.close()
+  broadcast.close()
+
+  broadcast.subscribe(() => undefined, () => {
+    lateClosed++
+  })
+
+  await new Promise(resolve => queueMicrotask(resolve))
+
+  assert.equal(activeClosed, 1)
+  assert.equal(lateClosed, 1)
+  broadcast.cleanup()
+})

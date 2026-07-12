@@ -4,6 +4,7 @@ import {
   filterModelOptionsByAvailability,
   filterWorkersForCodexBackend,
   resolveAvailableModelValues,
+  resolveSupportedModelValues,
 } from '@/utils/codexCapability'
 import { getModelOptionsByBackend } from '@/utils/llmModelOptions'
 
@@ -73,5 +74,16 @@ describe('Codex capability filtering', () => {
       modelAvailable: false,
       ultraAvailable: true,
     }))).resolves.toEqual(new Set())
+  })
+
+  it('uses capability support for configuration even when routing is disabled', async () => {
+    const options = getModelOptionsByBackend('OPENAI_CODEX_APP_SERVER')
+      .filter((candidate) => candidate.value === 'codex-latest:high')
+
+    await expect(resolveSupportedModelValues(options, async () => ({
+      modelSupported: true,
+      modelAvailable: false,
+      ultraAvailable: false,
+    }))).resolves.toEqual(new Set(['codex-latest:high']))
   })
 })

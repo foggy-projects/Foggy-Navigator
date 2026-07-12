@@ -21,6 +21,7 @@ export class EventBroadcast {
   private seq: number = 0
   private closed: boolean = false
   private subscribers: Set<(event: WorkerEvent) => void> = new Set()
+  private closeSubscribers: Set<() => void> = new Set()
   private jsonlPath: string
   private pendingWrite: Promise<void> = Promise.resolve()
 
@@ -72,10 +73,16 @@ export class EventBroadcast {
   /**
    * Subscribe to events (returns unsubscribe function)
    */
-  subscribe(callback: (event: WorkerEvent) => void): () => void {
+  subscribe(callback: (event: WorkerEvent) => void, onClose?: () => void): () => void {
+    if (this.closed) {
+      if (onClose) queueMicrotask(onClose)
+      return () => undefined
+    }
     this.subscribers.add(callback)
+    if (onClose) this.closeSubscribers.add(onClose)
     return () => {
       this.subscribers.delete(callback)
+      if (onClose) this.closeSubscribers.delete(onClose)
     }
   }
 
@@ -109,8 +116,18 @@ export class EventBroadcast {
    * Close the broadcast (no more events)
    */
   close(): void {
+    if (this.closed) return
     this.closed = true
     this.subscribers.clear()
+    const closeSubscribers = Array.from(this.closeSubscribers)
+    this.closeSubscribers.clear()
+    for (const subscriber of closeSubscribers) {
+      try {
+        subscriber()
+      } catch (e) {
+        console.warn(`Close subscriber error for task ${this.taskId}:`, e)
+      }
+    }
   }
 
   /**

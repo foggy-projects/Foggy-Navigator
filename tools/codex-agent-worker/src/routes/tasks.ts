@@ -4,6 +4,17 @@ import { EventBroadcast } from '../persistence/event-store.js'
 import type { WorkerEvent } from '../models.js'
 
 const router = Router()
+const SSE_HEARTBEAT_INTERVAL_MS = 15_000
+
+function startSseHeartbeat(res: Response): () => void {
+  const timer = setInterval(() => {
+    if (!res.writableEnded && !res.destroyed) {
+      res.write(': keepalive\n\n')
+    }
+  }, SSE_HEARTBEAT_INTERVAL_MS)
+  timer.unref()
+  return () => clearInterval(timer)
+}
 
 function getSingleParam(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] || ''
@@ -77,16 +88,21 @@ router.get('/api/v1/tasks/:taskId/subscribe', (req: Request, res: Response) => {
   }
   res.write(`event: message\ndata: ${JSON.stringify(checkpointData)}\n\n`)
 
-  // Replay missed events
-  const missedEvents = broadcast.getEventsAfter(ackSeq)
-  for (const event of missedEvents) {
+  let lastSentSeq = ackSeq
+  const writeEvent = (event: WorkerEvent) => {
+    const seq = event.seq || 0
+    if (seq > 0 && seq <= lastSentSeq) return
     try {
       const data = JSON.stringify(event)
       res.write(`event: message\ndata: ${data}\n\n`)
+      if (seq > lastSentSeq) lastSentSeq = seq
     } catch {
-      break
+      // Client disconnected.
     }
   }
+
+  // Replay missed events
+  for (const event of broadcast.getEventsAfter(ackSeq)) writeEvent(event)
 
   // If already closed, end the stream
   if (broadcast.isClosed()) {
@@ -95,17 +111,19 @@ router.get('/api/v1/tasks/:taskId/subscribe', (req: Request, res: Response) => {
   }
 
   // Subscribe to future events
-  const unsubscribe = broadcast.subscribe((event: WorkerEvent) => {
-    try {
-      const data = JSON.stringify(event)
-      res.write(`event: message\ndata: ${data}\n\n`)
-    } catch {
-      unsubscribe()
-    }
-  })
+  const stopHeartbeat = startSseHeartbeat(res)
+  let unsubscribe: () => void = () => undefined
+  const closeStream = () => {
+    unsubscribe()
+    stopHeartbeat()
+    if (!res.writableEnded) res.end()
+  }
+  unsubscribe = broadcast.subscribe(writeEvent, closeStream)
+  for (const event of broadcast.getEventsAfter(lastSentSeq)) writeEvent(event)
 
   req.on('close', () => {
     unsubscribe()
+    stopHeartbeat()
   })
 })
 

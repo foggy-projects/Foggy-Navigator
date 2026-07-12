@@ -95,6 +95,7 @@ class CodexRuntimeControllerTest {
     void ownerCanReadAggregateAvailabilityWithoutUsingOwnerOnlyRuntimeList() {
         CodexRuntimeAvailabilityDTO availability = CodexRuntimeAvailabilityDTO.builder()
                 .appServerManaged(true)
+                .modelSupported(true)
                 .modelAvailable(true)
                 .ultraAvailable(true)
                 .build();
@@ -106,7 +107,7 @@ class CodexRuntimeControllerTest {
         assertEquals(true, result.getData().getModelAvailable());
         assertEquals(true, result.getData().getUltraAvailable());
         Map<?, ?> payload = new ObjectMapper().convertValue(result.getData(), Map.class);
-        assertEquals(Set.of("appServerManaged", "modelAvailable", "ultraAvailable", "blockReason"),
+        assertEquals(Set.of("appServerManaged", "modelSupported", "modelAvailable", "ultraAvailable", "blockReason"),
                 payload.keySet());
         verify(workerManagementFacade).validateWorkerAccess("user-1", "tenant-1", "worker-1");
         verify(workerManagementFacade, never())
@@ -123,6 +124,7 @@ class CodexRuntimeControllerTest {
                 .build());
         CodexRuntimeAvailabilityDTO availability = CodexRuntimeAvailabilityDTO.builder()
                 .appServerManaged(true)
+                .modelSupported(true)
                 .modelAvailable(false)
                 .ultraAvailable(false)
                 .blockReason("CODEX_ULTRA_RUNTIME_UNAVAILABLE")

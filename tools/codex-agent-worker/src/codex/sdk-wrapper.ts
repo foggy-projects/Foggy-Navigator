@@ -1029,7 +1029,7 @@ export async function runQuery(
 
   const startTime = Date.now()
   let numTurns = 0
-  let lastAssistantText = ''
+  let pendingAssistantText: string | undefined
   let totalUsage = { inputTokens: 0, outputTokens: 0 }
   let resolvedThreadId = threadId
   let terminalEventSent = false
@@ -1040,6 +1040,19 @@ export async function runQuery(
   const maxTurnLimit = maxTurns !== undefined && Number.isInteger(maxTurns) && maxTurns > 0
     ? maxTurns
     : undefined
+
+  const flushPendingAssistantAsCommentary = (): void => {
+    if (!pendingAssistantText) return
+    const commentaryEvent = emitWorkerEvent(broadcast, {
+      type: 'assistant_text',
+      task_id: taskId,
+      session_id: resolvedThreadId,
+      subtype: 'commentary',
+      content: pendingAssistantText,
+    })
+    recordFileHints(commentaryEvent)
+    pendingAssistantText = undefined
+  }
 
   // entry.model 仍保留请求方原始字符串；rawModel 是 alias 解析后的真实模型（含 reasoning 后缀）
   let resolvedModel = effectiveModel
@@ -1198,6 +1211,7 @@ export async function runQuery(
           break
 
         case 'turn.started':
+          if (numTurns > 0) flushPendingAssistantAsCommentary()
           if (shouldAbortBeforeTurnStart(numTurns, maxTurnLimit)) {
             abortReason = `Task aborted: max_turns limit reached (${maxTurnLimit})`
             abortController.abort(abortReason)
@@ -1212,6 +1226,15 @@ export async function runQuery(
           if (collabItem) {
             logCollabToolItem(taskId, 'completed', collabItem)
           }
+          if (event.item.type === 'agent_message') {
+            if (event.item.text) {
+              flushPendingAssistantAsCommentary()
+              pendingAssistantText = event.item.text
+            }
+            break
+          }
+
+          flushPendingAssistantAsCommentary()
           const workerEvents = mapThreadItemToEvents(
             taskId,
             event.item,
@@ -1221,9 +1244,6 @@ export async function runQuery(
           )
 
           for (const we of workerEvents) {
-            if (we.type === 'assistant_text' && we.content && we.subtype !== 'reasoning') {
-              lastAssistantText += we.content
-            }
             recordFileHints(we)
             broadcast.emit(we)
           }
@@ -1237,6 +1257,7 @@ export async function runQuery(
             logCollabToolItem(taskId, event.type === 'item.started' ? 'started' : 'updated', collabItem)
           }
           if (event.type === 'item.started') {
+            flushPendingAssistantAsCommentary()
             if (event.item.type === 'command_execution') {
               startedToolUses.add(event.item.id)
               const workerEvent = emitWorkerEvent(
@@ -1274,6 +1295,7 @@ export async function runQuery(
           break
 
         case 'turn.failed':
+          flushPendingAssistantAsCommentary()
           terminalFailureMessage = event.error.message
           broadcast.emit(createErrorEvent(
             taskId, resolvedThreadId, terminalFailureMessage, broadcast.nextSeq()
@@ -1282,6 +1304,7 @@ export async function runQuery(
           break
 
         case 'error':
+          flushPendingAssistantAsCommentary()
           terminalFailureMessage = event.message
           broadcast.emit(createErrorEvent(
             taskId, resolvedThreadId, terminalFailureMessage, broadcast.nextSeq()
@@ -1302,6 +1325,7 @@ export async function runQuery(
     }
 
     if (abortController.signal.aborted) {
+      flushPendingAssistantAsCommentary()
       entry.status = 'aborted'
       entry.completedAt = Date.now()
       if (!terminalEventSent) {
@@ -1318,7 +1342,7 @@ export async function runQuery(
     // 发送结果事件
     const durationMs = Date.now() - startTime
     const resultEvent = createResultEvent(
-      taskId, resolvedThreadId, lastAssistantText || undefined,
+      taskId, resolvedThreadId, pendingAssistantText,
       totalUsage, resolvedModel, durationMs, numTurns, broadcast.nextSeq()
     )
     broadcast.emit(resultEvent)
@@ -1327,6 +1351,7 @@ export async function runQuery(
     entry.completedAt = Date.now()
 
   } catch (error: any) {
+    flushPendingAssistantAsCommentary()
     if (abortController.signal.aborted) {
       entry.status = 'aborted'
       if (!terminalEventSent) {

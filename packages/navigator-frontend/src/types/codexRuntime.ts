@@ -77,6 +77,7 @@ export interface CodexAppServerEndpointSync {
 
 export interface CodexRuntimeAvailability {
   appServerManaged: boolean
+  modelSupported?: boolean
   modelAvailable?: boolean
   ultraAvailable: boolean
   blockReason:

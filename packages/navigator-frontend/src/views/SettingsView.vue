@@ -1313,7 +1313,7 @@ import {
 import {
   filterModelOptionsByAvailability,
   filterWorkersForCodexBackend,
-  resolveAvailableModelValues,
+  resolveSupportedModelValues,
 } from '@/utils/codexCapability'
 // 统一 Claude / Codex / Gemini / LangGraph Biz 模型候选（见 utils/llmModelOptions.ts）。
 // Codex 使用稳定模型族 alias + reasoning 后缀，并在 UI 中按模型族分组。
@@ -1633,7 +1633,7 @@ async function refreshAppServerModelAvailability(): Promise<void> {
 
   appServerModelAvailabilityLoading.value = true
   try {
-    const availableValues = await resolveAvailableModelValues(
+    const availableValues = await resolveSupportedModelValues(
       codexAppServerBackendOptions,
       (model) => getCodexRuntimeAvailability(workerId, {
         model,

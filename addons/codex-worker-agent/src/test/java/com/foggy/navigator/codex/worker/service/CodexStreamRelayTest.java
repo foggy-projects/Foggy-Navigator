@@ -887,6 +887,35 @@ class CodexStreamRelayTest {
     }
 
     @Test
+    void sdkCommentaryPublishesNonTerminalStateInsteadOfCompletedAssistantMessage() {
+        ArgumentCaptor<AgentMessage> messages = ArgumentCaptor.forClass(AgentMessage.class);
+        String commentaryJson = """
+                {
+                  "type":"assistant_text",
+                  "subtype":"commentary",
+                  "task_id":"worker-task-1",
+                  "session_id":"thread-1",
+                  "seq":1,
+                  "content":"I will inspect the process now."
+                }
+                """;
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(commentaryJson).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>());
+
+        verify(sessionEventListener).handleMessageDurably(messages.capture());
+        AgentMessage message = messages.getValue();
+        assertEquals(MessageType.STATE_SYNC, message.getType());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        assertEquals("commentary", payload.get("subtype"));
+        assertEquals("I will inspect the process now.", payload.get("content"));
+    }
+
+    @Test
     void durableMessageFailureTerminatesStreamBeforeHigherSequenceCanAck() {
         CodexTaskEntity entity = stubAppServerTask("SUBSCRIBED");
         entity.setWorkerTaskId("worker-task-1");

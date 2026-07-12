@@ -12,6 +12,7 @@ import lombok.NoArgsConstructor;
 public class CodexRuntimeAvailabilityDTO {
 
     private Boolean appServerManaged;
+    private Boolean modelSupported;
     private Boolean modelAvailable;
     private Boolean ultraAvailable;
     private String blockReason;

@@ -16,6 +16,18 @@ import {
   UNSUPPORTED_CODEX_MODEL,
 } from '../codex/sdk-wrapper.js'
 import type { WorkerEvent } from '../models.js'
+
+const SSE_HEARTBEAT_INTERVAL_MS = 15_000
+
+function startSseHeartbeat(res: Response): () => void {
+  const timer = setInterval(() => {
+    if (!res.writableEnded && !res.destroyed) {
+      res.write(': keepalive\n\n')
+    }
+  }, SSE_HEARTBEAT_INTERVAL_MS)
+  timer.unref()
+  return () => clearInterval(timer)
+}
 import { validateQueryRequest } from '../validation/query.js'
 import { isPathWithinAllowedCwd } from '../path-guards.js'
 import {
@@ -212,40 +224,46 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     return
   }
 
-  // Subscribe to events and forward as SSE
-  const unsubscribe = broadcast.subscribe((event: WorkerEvent) => {
+  // Replay first, then subscribe, then replay the small hand-off gap. This keeps
+  // fast tasks from closing the stream before their persisted final event is sent.
+  const stopHeartbeat = startSseHeartbeat(res)
+  let unsubscribe: () => void = () => undefined
+  let lastSentSeq = 0
+  const closeStream = () => {
+    unsubscribe()
+    stopHeartbeat()
+    if (!res.writableEnded) res.end()
+  }
+  const writeEvent = (event: WorkerEvent) => {
+    const seq = event.seq || 0
+    if (seq > 0 && seq <= lastSentSeq) return
     try {
       const data = JSON.stringify(event)
       res.write(`event: message\ndata: ${data}\n\n`)
+      if (seq > lastSentSeq) lastSentSeq = seq
     } catch (e) {
       // Client disconnected
     }
-  })
-
-  // Also replay any events that were emitted before our subscription
-  const missedEvents = broadcast.getEventsAfter(0)
-  for (const event of missedEvents) {
-    try {
-      const data = JSON.stringify(event)
-      res.write(`event: message\ndata: ${data}\n\n`)
-    } catch {
-      break
-    }
   }
+
+  for (const event of broadcast.getEventsAfter(0)) writeEvent(event)
+  if (broadcast.isClosed()) {
+    closeStream()
+    return
+  }
+
+  unsubscribe = broadcast.subscribe(writeEvent, closeStream)
+  for (const event of broadcast.getEventsAfter(lastSentSeq)) writeEvent(event)
 
   // Handle client disconnect
   req.on('close', () => {
     unsubscribe()
+    stopHeartbeat()
   })
 
   // Wait for query to complete, then close SSE
   queryPromise.finally(() => {
-    unsubscribe()
-    try {
-      res.end()
-    } catch {
-      // Already closed
-    }
+    closeStream()
   })
 })
 

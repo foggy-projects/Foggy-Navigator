@@ -634,6 +634,7 @@ class CodexRuntimeRegistryServiceTest {
         var result = service.availability("worker-1");
 
         assertTrue(result.getAppServerManaged());
+        assertTrue(result.getModelSupported());
         assertFalse(result.getUltraAvailable());
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", result.getBlockReason());
     }
@@ -738,6 +739,8 @@ class CodexRuntimeRegistryServiceTest {
         var result = service.availability("worker-1", "custom-ultra");
 
         assertTrue(result.getAppServerManaged());
+        assertTrue(result.getModelSupported());
+        assertFalse(result.getModelAvailable());
         assertFalse(result.getUltraAvailable());
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", result.getBlockReason());
     }
@@ -1228,7 +1231,7 @@ class CodexRuntimeRegistryServiceTest {
         CodexRuntimeEntity second = runtime("DARK", 0);
         second.setRuntimeId("app-second");
         second.setReportedRuntimeId("app-second");
-        when(repository.findByEnabledTrueOrderByUpdatedAtAsc()).thenReturn(List.of(first, second));
+        when(repository.findByArchivedAtIsNullOrderByUpdatedAtAsc()).thenReturn(List.of(first, second));
         when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(first));
         when(repository.findByRuntimeIdAndRevision("app-second", 1)).thenReturn(Optional.of(second));
         when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1)).thenReturn(Optional.of(first));
