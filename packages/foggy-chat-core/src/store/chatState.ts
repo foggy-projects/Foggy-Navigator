@@ -406,13 +406,37 @@ export function createChatState(): ChatState {
         }
         break
       }
+      case AipMessageType.SESSION_END:
       case AipMessageType.TEXT_COMPLETE: {
         const p = aip.payload as TextPayload
         isThinking.value = false
-        // Skip result events — their text content was already emitted by assistant_text.
-        // The result event still carries metadata (cost, tokens) handled by useTaskPane.
+        // Newer Codex SDKs emit progress as commentary and the only final answer
+        // in the terminal result. Render that result unless an identical final
+        // assistant message already exists in the current user turn.
         if (raw?.isResult === true) {
-          appendExecutionReportMessage(aip, report)
+          const content = p.content || ''
+          const previousConversationMessage = [...messages.value].reverse().find(
+            (message) => message.sender === 'assistant' || message.sender === 'user',
+          )
+          if (content && previousConversationMessage?.sender === 'assistant'
+            && previousConversationMessage.content === content) {
+            previousConversationMessage.type = AipMessageType.TEXT_COMPLETE
+            applyExecutionReport(previousConversationMessage, report)
+            mergeUiActions(previousConversationMessage, extractUiActions(raw, content))
+          } else if (content) {
+            messages.value.push({
+              id: aip.messageId,
+              type: AipMessageType.TEXT_COMPLETE,
+              sender: 'assistant',
+              content,
+              raw: aip.payload,
+              timestamp: aip.timestamp,
+              ...executionReportProps(report),
+              ...uiActionProps(extractUiActions(raw, content)),
+            })
+          } else {
+            appendExecutionReportMessage(aip, report)
+          }
           break
         }
         const lastChunk = [...messages.value].reverse().find(
@@ -538,6 +562,21 @@ export function createChatState(): ChatState {
         const p = aip.payload as StateSyncPayload
         const raw = aip.payload as unknown as Record<string, unknown>
         const subtype = raw.subtype as string | undefined
+        if (subtype === 'commentary') {
+          const content = raw.content as string | undefined
+          if (!content) break
+          messages.value.push({
+            id: aip.messageId,
+            type: aip.type,
+            sender: 'assistant',
+            content,
+            raw,
+            timestamp: aip.timestamp,
+            ...executionReportProps(report),
+            ...uiActionProps(uiActions),
+          })
+          break
+        }
         if (subtype === 'auto_compact' || subtype === 'context_compression') {
           // Context compression hint — render as lightweight divider
           messages.value.push({

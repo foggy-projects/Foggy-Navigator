@@ -160,6 +160,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       if (task.value?.taskId !== currentTask.taskId) return
       const prevStatus = currentTask.status
       Object.assign(currentTask, fresh)
+      appendMissingTaskResult()
       if (prevStatus !== fresh.status && ['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
         options?.onTaskFinished?.(paneId)
       }
@@ -225,6 +226,27 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       })
     }
     return counted
+  }
+
+  function appendMissingTaskResult() {
+    const currentTask = task.value
+    const resultText = currentTask?.resultText?.trim()
+    if (currentTask?.status !== 'COMPLETED' || !resultText) return
+
+    const previousConversationMessage = [...chatState.messages.value].reverse().find(
+      (message) => message.sender === 'assistant' || message.sender === 'user',
+    )
+    if (previousConversationMessage?.sender === 'assistant'
+      && previousConversationMessage.content?.trim() === resultText) return
+
+    chatState.messages.value.push({
+      id: `task-result-${currentTask.taskId}`,
+      type: AipMessageType.TEXT_COMPLETE,
+      sender: 'assistant',
+      content: resultText,
+      raw: { taskId: currentTask.taskId, isResult: true, recoveredFromTask: true },
+      timestamp: currentTask.updatedAt ? new Date(currentTask.updatedAt).getTime() : Date.now(),
+    })
   }
 
   /** SSE event handler — shared by connect and resumeInPlace */
@@ -467,6 +489,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
           firstUserMsg.images = pendingImages
         }
       }
+      appendMissingTaskResult()
     } catch (e) {
       if (connectVersion !== myVersion) return
       console.error(`[TaskPane ${paneId}] Failed to load history:`, e)

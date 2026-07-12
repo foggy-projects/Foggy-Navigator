@@ -13,7 +13,9 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -63,11 +65,15 @@ public class SessionEventListener {
         log.debug("Received AgentMessage: sessionId={}, type={}, agentId={}",
                 sessionId, message.getType(), message.getAgentId());
 
-        // 1. 持久化（只保存需要存储的消息类型，跳过 result 事件避免重复写入）
-        if (shouldPersist(message) && !isResultEvent(message)) {
+        // 1. Persist user-visible messages. A terminal result may be the only
+        // final assistant text produced by newer Codex SDKs, so keep it unless
+        // the same answer was already persisted immediately before it.
+        if (shouldPersist(message)) {
             try {
-                Message msg = toSessionMessage(message);
-                sessionManager.addMessage(sessionId, msg);
+                if (shouldPersistResultEvent(message)) {
+                    Message msg = toSessionMessage(message);
+                    sessionManager.addMessage(sessionId, msg);
+                }
             } catch (Exception e) {
                 log.error("Failed to persist message: sessionId={}, type={}", sessionId, message.getType(), e);
                 if (propagatePersistenceFailure) {
@@ -121,6 +127,26 @@ public class SessionEventListener {
             return Boolean.TRUE.equals(payload.get("isResult"));
         }
         return false;
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean shouldPersistResultEvent(AgentMessage message) {
+        if (!isResultEvent(message)) return true;
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        String content = payload.get("content") instanceof String value ? value : null;
+        if (content == null || content.isBlank()) return false;
+
+        List<Message> recent = sessionManager.getRecentMessages(message.getSessionId(), 50);
+        if (recent == null) return true;
+        for (int i = recent.size() - 1; i >= 0; i--) {
+            Message prior = recent.get(i);
+            if (prior.getRole() == MessageRole.USER) break;
+            if (prior.getRole() == MessageRole.ASSISTANT
+                    && Objects.equals(content, prior.getContent())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @SuppressWarnings("unchecked")

@@ -78,6 +78,9 @@ describe('createChatState', () => {
     it('keeps execution report metadata from result events without duplicating assistant text', () => {
       state.processAipMessage(makeAip(AipMessageType.TEXT_COMPLETE, {
         content: 'final result already streamed',
+      }))
+      state.processAipMessage(makeAip(AipMessageType.TEXT_COMPLETE, {
+        content: 'final result already streamed',
         isResult: true,
         execution_report_ref: 'frame-report://task-1/root-frame',
         execution_report_digest: {
@@ -91,9 +94,9 @@ describe('createChatState', () => {
 
       expect(state.messages.value).toHaveLength(1)
       expect(state.messages.value[0]).toMatchObject({
-        type: AipMessageType.STATE_SYNC,
-        sender: 'system',
-        content: '执行报告',
+        type: AipMessageType.TEXT_COMPLETE,
+        sender: 'assistant',
+        content: 'final result already streamed',
         executionReportRef: 'frame-report://task-1/root-frame',
         executionReportDigest: {
           status: 'COMPLETED',
@@ -104,6 +107,41 @@ describe('createChatState', () => {
           generatedAt: '2026-05-17T12:00:00Z',
         },
       })
+    })
+
+    it('renders a terminal result when no final assistant_text preceded it', () => {
+      state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, {
+        content: 'I will inspect the process now.',
+        subtype: 'commentary',
+      }))
+      state.processAipMessage(makeAip(AipMessageType.SESSION_END, {
+        content: 'FINAL_ONLY',
+        isResult: true,
+        taskId: 'task-1',
+      }))
+
+      expect(state.messages.value).toHaveLength(2)
+      expect(state.messages.value[0]).toMatchObject({
+        sender: 'assistant',
+        content: 'I will inspect the process now.',
+      })
+      expect(state.messages.value[1]).toMatchObject({
+        type: AipMessageType.TEXT_COMPLETE,
+        sender: 'assistant',
+        content: 'FINAL_ONLY',
+      })
+    })
+
+    it('does not duplicate a terminal result already emitted as assistant_text', () => {
+      state.processAipMessage(makeAip(AipMessageType.TEXT_COMPLETE, { content: 'FINAL_ONLY' }))
+      state.processAipMessage(makeAip(AipMessageType.SESSION_END, {
+        content: 'FINAL_ONLY',
+        isResult: true,
+        taskId: 'task-1',
+      }))
+
+      expect(state.messages.value).toHaveLength(1)
+      expect(state.messages.value[0].content).toBe('FINAL_ONLY')
     })
   })
 
@@ -376,6 +414,19 @@ describe('createChatState', () => {
   // ========== STATE_SYNC ==========
 
   describe('STATE_SYNC', () => {
+    it('renders Codex commentary as an assistant progress message', () => {
+      state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, {
+        content: 'Checking the worker process.',
+        subtype: 'commentary',
+      }))
+
+      expect(state.messages.value).toHaveLength(1)
+      expect(state.messages.value[0]).toMatchObject({
+        sender: 'assistant',
+        content: 'Checking the worker process.',
+      })
+    })
+
     it('updates conversationStatus and adds system message', () => {
       state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, { status: 'IDLE' }))
 

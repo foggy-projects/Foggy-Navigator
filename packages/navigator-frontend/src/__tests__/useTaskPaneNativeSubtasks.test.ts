@@ -3,6 +3,7 @@ import { nextTick } from 'vue'
 
 const mocks = vi.hoisted(() => ({
   getLatestMessages: vi.fn(),
+  getTaskUnified: vi.fn(),
   getNativeSubtasks: vi.fn(),
   subscribeSession: vi.fn(),
   unsubscribe: vi.fn(),
@@ -25,7 +26,7 @@ vi.mock('@/api/nativeSubtasks', () => ({
 }))
 
 vi.mock('@/api/unifiedTask', () => ({
-  getTaskUnified: vi.fn(),
+  getTaskUnified: mocks.getTaskUnified,
 }))
 
 vi.mock('@/composables/useUnifiedSse', () => ({
@@ -40,6 +41,7 @@ import { useTaskPane } from '@/composables/useTaskPane'
 describe('useTaskPane native subtasks', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.getTaskUnified.mockReset()
     mocks.sessionCallbacks.clear()
     mocks.subscribedCallbacks.clear()
     mocks.subscribeSession.mockImplementation((_sessionId, callback, options) => {
@@ -167,6 +169,73 @@ describe('useTaskPane native subtasks', () => {
 
     expect(mocks.getNativeSubtasks).not.toHaveBeenCalled()
     expect(pane.nativeSubtasks.value).toEqual([])
+    pane.dispose()
+  })
+
+  it('recovers the final result for a completed legacy task with no persisted final message', async () => {
+    mocks.getLatestMessages.mockResolvedValue({ messages: [], total: 0, hasMore: false })
+
+    const pane = useTaskPane('pane-result-recovery')
+    pane.task.value = {
+      taskId: 'task-result-recovery',
+      sessionId: 'session-result-recovery',
+      workerId: 'worker-1',
+      providerType: 'codex-worker',
+      prompt: 'finish the work',
+      status: 'COMPLETED',
+      resultText: 'FINAL_RECOVERED',
+      createdAt: '2026-07-12T06:00:00Z',
+      updatedAt: '2026-07-12T06:01:00Z',
+    }
+
+    await pane.connect('session-result-recovery')
+
+    expect(pane.chatState.messages.value).toHaveLength(1)
+    expect(pane.chatState.messages.value[0]).toMatchObject({
+      sender: 'assistant',
+      content: 'FINAL_RECOVERED',
+      raw: {
+        taskId: 'task-result-recovery',
+        isResult: true,
+        recoveredFromTask: true,
+      },
+    })
+    pane.dispose()
+  })
+
+  it('recovers the final result after the subscribed task status refresh completes', async () => {
+    mocks.getLatestMessages.mockResolvedValue({ messages: [], total: 0, hasMore: false })
+    mocks.getTaskUnified.mockResolvedValue({
+      taskId: 'task-result-refresh',
+      sessionId: 'session-result-refresh',
+      workerId: 'worker-1',
+      providerType: 'codex-worker',
+      prompt: 'finish the work',
+      status: 'COMPLETED',
+      resultText: 'FINAL_FROM_REFRESH',
+      createdAt: '2026-07-12T06:00:00Z',
+      updatedAt: '2026-07-12T06:01:00Z',
+    })
+
+    const pane = useTaskPane('pane-result-refresh')
+    pane.task.value = {
+      taskId: 'task-result-refresh',
+      sessionId: 'session-result-refresh',
+      workerId: 'worker-1',
+      providerType: 'codex-worker',
+      prompt: 'finish the work',
+      status: 'RUNNING',
+      createdAt: '2026-07-12T06:00:00Z',
+      updatedAt: '2026-07-12T06:00:00Z',
+    }
+
+    await pane.connect('session-result-refresh')
+    await flushAsyncWork()
+
+    expect(pane.chatState.messages.value.at(-1)).toMatchObject({
+      sender: 'assistant',
+      content: 'FINAL_FROM_REFRESH',
+    })
     pane.dispose()
   })
 

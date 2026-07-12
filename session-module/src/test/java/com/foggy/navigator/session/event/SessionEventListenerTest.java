@@ -12,6 +12,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Map;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -20,6 +21,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class SessionEventListenerTest {
@@ -67,8 +69,30 @@ class SessionEventListenerTest {
     }
 
     @Test
-    void sessionEndResultIsPushedButNotPersistedAsDuplicateHistory() {
+    void sessionEndResultIsPersistedWhenItIsTheOnlyFinalAssistantText() {
         SessionEventListener listener = new SessionEventListener(sessionManager, sseEmitter);
+        AgentMessage agentMessage = AgentMessage.builder()
+                .messageId("sse-message-result")
+                .sessionId("session-1")
+                .agentId("codex-worker")
+                .type(MessageType.SESSION_END)
+                .payload(Map.of("content", "FINAL_STREAM_OK", "isResult", true))
+                .build();
+
+        listener.handleMessage(agentMessage);
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager).addMessage(eq("session-1"), messageCaptor.capture());
+        assertEquals("FINAL_STREAM_OK", messageCaptor.getValue().getContent());
+        verify(sseEmitter).sendSessionEvent("session-1", agentMessage);
+    }
+
+    @Test
+    void sessionEndResultIsNotPersistedWhenSameFinalTextAlreadyExists() {
+        SessionEventListener listener = new SessionEventListener(sessionManager, sseEmitter);
+        when(sessionManager.getRecentMessages("session-1", 50)).thenReturn(List.of(
+                Message.user("session-1", "do it"),
+                Message.assistant("session-1", "FINAL_STREAM_OK")));
         AgentMessage agentMessage = AgentMessage.builder()
                 .messageId("sse-message-result")
                 .sessionId("session-1")
