@@ -564,6 +564,37 @@ class CodexStreamRelayTest {
     }
 
     @Test
+    void acceptedLegacyStreamExhaustionKeepsLocalTaskRunningAndSchedulesRecovery() {
+        CodexTaskEntity entity = legacyTask();
+        entity.setWorkerTaskId("worker-task-9");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+
+        ReflectionTestUtils.invokeMethod(
+                relay,
+                "subscribeSseFlux",
+                Flux.error(new RuntimeException("transport disconnected")),
+                "local-task-1",
+                "session-1",
+                "worker-1",
+                "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                3,
+                0);
+
+        verify(taskService, never()).failTask(eq("local-task-1"), any(), any(), any());
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        AgentMessage message = assertInstanceOf(AgentMessage.class, eventCaptor.getValue());
+        assertEquals(MessageType.STATE_SYNC, message.getType());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        assertEquals("CODEX_WORKER_STREAM_DISCONNECTED", payload.get("content"));
+        assertEquals("reconnect_pending", payload.get("subtype"));
+        assertEquals(true, payload.get("reconnectable"));
+    }
+
+    @Test
     void userInputMessageIdsAreBoundedDeterministicAndTypeDistinct() {
         String longId = "x".repeat(256);
         String numeric = CodexStreamRelay.userInputMessageId(
@@ -709,6 +740,49 @@ class CodexStreamRelayTest {
         verify(taskService).recordWorkerProgress(
                 "local-task-1", "worker-task-1", "thread-1", null, 7, false, false);
         verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void warningBeforeResultDoesNotFailTaskAndResultStillCompletes() {
+        var detectedThread = new java.util.concurrent.atomic.AtomicReference<String>();
+        var detectedModel = new java.util.concurrent.atomic.AtomicReference<String>();
+        String warningJson = """
+                {
+                  "type":"warning",
+                  "subtype":"sdk_diagnostic",
+                  "task_id":"worker-task-1",
+                  "session_id":"thread-1",
+                  "seq":1,
+                  "content":"This session was recorded with a different model."
+                }
+                """;
+        String resultJson = """
+                {
+                  "type":"result",
+                  "task_id":"worker-task-1",
+                  "session_id":"thread-1",
+                  "seq":2,
+                  "content":"received",
+                  "model":"gpt-5.6-sol"
+                }
+                """;
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(warningJson).build(),
+                "local-task-1", "session-1", "codex-worker",
+                detectedModel, detectedThread);
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(resultJson).build(),
+                "local-task-1", "session-1", "codex-worker",
+                detectedModel, detectedThread);
+
+        ArgumentCaptor<AgentMessage> messages = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener, times(2)).handleMessageDurably(messages.capture());
+        assertEquals(List.of(MessageType.STATE_SYNC, MessageType.SESSION_END),
+                messages.getAllValues().stream().map(AgentMessage::getType).toList());
+        verify(taskService, never()).failTask(any(), any(), any(), any());
+        verify(taskService).completeTask("local-task-1", "worker-task-1", "thread-1",
+                "received", null, null, null, null, null, "gpt-5.6-sol");
     }
 
     @Test

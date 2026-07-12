@@ -342,6 +342,25 @@ test('command_execution completion does not duplicate tool_use after item.starte
   assert.equal(events[0]?.seq, 1)
 })
 
+test('thread item error is emitted as a non-terminal warning', () => {
+  const item = {
+    id: 'warning-1',
+    type: 'error',
+    message: 'This session was recorded with a different model.',
+  } as ThreadItem
+
+  const events = mapThreadItemToEvents('task-warning', item, 'thread-warning', createSeq())
+
+  assert.deepEqual(events, [{
+    type: 'warning',
+    task_id: 'task-warning',
+    session_id: 'thread-warning',
+    content: 'This session was recorded with a different model.',
+    subtype: 'sdk_diagnostic',
+    seq: 1,
+  }])
+})
+
 test('buildCodexProcessEnv hardens Windows child process environment', () => {
   const env = buildCodexProcessEnv(
     {

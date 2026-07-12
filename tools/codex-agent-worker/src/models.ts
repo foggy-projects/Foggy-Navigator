@@ -40,7 +40,7 @@ export interface QueryRequest {
  * Worker SSE event — matches Claude Worker's WorkerEvent JSON format exactly
  */
 export interface WorkerEvent {
-  type: 'assistant_text' | 'tool_use' | 'tool_result' | 'result' | 'error'
+  type: 'assistant_text' | 'tool_use' | 'tool_result' | 'result' | 'warning' | 'error'
   task_id: string
   session_id?: string    // Codex thread ID
   content?: string

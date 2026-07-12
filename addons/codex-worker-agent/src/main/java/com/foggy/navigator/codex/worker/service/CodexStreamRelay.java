@@ -663,24 +663,22 @@ public class CodexStreamRelay {
             return;
         }
 
-        if (appServer) {
-            if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
-                log.warn("App-server stream retry round exhausted; continuing background recovery: taskId={}",
-                        taskId);
-                publishResultUnknown(sessionId, providerType, taskId);
-            }
-            scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
-            return;
-        }
-
         if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
             scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
             return;
         }
 
-        log.error("Max reconnection attempts reached for legacy Codex task {}", taskId);
-        failStreamTask(taskId, sessionId, providerType, detectedCodexThreadId,
-                "CODEX_WORKER_STREAM_DISCONNECTED: retry limit reached");
+        // Once the Worker has accepted the task, losing its SSE transport does
+        // not mean the remote Codex execution stopped. Keep the local task
+        // recoverable and replay the durable event stream in a later round.
+        log.warn("Codex stream retry round exhausted; continuing background recovery: taskId={}, runtime={}",
+                taskId, appServer ? CodexRuntimeType.APP_SERVER.name() : "LEGACY_SDK");
+        if (appServer) {
+            publishResultUnknown(sessionId, providerType, taskId);
+        } else {
+            publishStreamDisconnected(sessionId, providerType, taskId);
+        }
+        scheduleRecoveryRound(taskId, sessionId, workerId, reconnectAttempt);
     }
 
     private void handleSseCompletion(String taskId, String sessionId, String workerId, String providerType,
@@ -802,10 +800,18 @@ public class CodexStreamRelay {
     }
 
     private void publishResultUnknown(String sessionId, String providerType, String taskId) {
+        publishRecoveryPending(sessionId, providerType, taskId, "CODEX_RUNTIME_RESULT_UNKNOWN");
+    }
+
+    private void publishStreamDisconnected(String sessionId, String providerType, String taskId) {
+        publishRecoveryPending(sessionId, providerType, taskId, "CODEX_WORKER_STREAM_DISCONNECTED");
+    }
+
+    private void publishRecoveryPending(String sessionId, String providerType, String taskId, String content) {
         if (recoveryNotified.putIfAbsent(taskId, Boolean.TRUE) == null) {
             publishMessageIfSession(sessionId, providerType, MessageType.STATE_SYNC,
                     Map.of(
-                            "content", "CODEX_RUNTIME_RESULT_UNKNOWN",
+                            "content", content,
                             "subtype", "reconnect_pending",
                             "reconnectable", true,
                             "taskId", taskId));
@@ -1083,6 +1089,11 @@ public class CodexStreamRelay {
                     boolean success = event.getIsError() == null || !event.getIsError();
                     publishBuilt(mb.toolCallResult(event.getToolUseId(), event.getTool(),
                             event.getOutput(), success), workerMessageId(taskId, event));
+                }
+                case "warning" -> {
+                    String warning = event.getContent() != null ? event.getContent() : event.getError();
+                    publishBuilt(mb.stateSync(warning != null ? warning : "CODEX_WORKER_WARNING", "warning"),
+                            workerMessageId(taskId, event));
                 }
                 case "user_input_request" -> {
                     CodexTaskService.UserInputRegistration registration =
@@ -1369,7 +1380,7 @@ public class CodexStreamRelay {
         }
         return switch (event.getType()) {
             case "assistant_text" -> !"sync_checkpoint".equals(event.getSubtype());
-            case "tool_use", "tool_result", "result", "error", "user_input_request" -> true;
+            case "tool_use", "tool_result", "result", "warning", "error", "user_input_request" -> true;
             case "system", "progress" -> isVisibleStatusEvent(event);
             default -> false;
         };

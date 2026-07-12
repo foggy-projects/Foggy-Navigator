@@ -950,10 +950,14 @@ export function mapThreadItemToEvents(
 
     case 'error':
       events.push({
-        type: 'error',
+        // ThreadItem errors are SDK diagnostics and may be followed by a
+        // successful agent_message/result. Terminal failures are represented
+        // separately by top-level turn.failed/error events below.
+        type: 'warning',
         task_id: taskId,
         session_id: threadId,
-        error: item.message,
+        content: item.message,
+        subtype: 'sdk_diagnostic',
         seq: nextSeq(),
       })
       break
