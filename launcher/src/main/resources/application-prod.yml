@@ -43,6 +43,17 @@ navigator:
       enabled: ${NAVIGATOR_DATABASE_STARTUP_MIGRATIONS_ENABLED:true}
       dry-run: ${NAVIGATOR_DATABASE_STARTUP_MIGRATIONS_DRY_RUN:false}
 
+foggy:
+  session:
+    message-payload:
+      # Stage 5 owns production rollout after shared-store and capacity validation.
+      enabled: ${SESSION_MESSAGE_PAYLOAD_ENABLED:false}
+      inline-preview-bytes: ${SESSION_MESSAGE_PAYLOAD_INLINE_PREVIEW_BYTES:49152}
+      max-payload-bytes: ${SESSION_MESSAGE_PAYLOAD_MAX_BYTES:67108864}
+      retention: ${SESSION_MESSAGE_PAYLOAD_RETENTION:PT0S}
+      filesystem:
+        directory: ${SESSION_MESSAGE_PAYLOAD_STORE_DIRECTORY:}
+
 logging:
   level:
     root: INFO

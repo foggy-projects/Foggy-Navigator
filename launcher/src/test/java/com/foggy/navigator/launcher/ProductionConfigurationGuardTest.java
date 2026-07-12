@@ -72,6 +72,19 @@ class ProductionConfigurationGuardTest {
         assertTrue(ProductionConfigurationGuard.hasProductionProfile(environment));
     }
 
+    @Test
+    void validate_prodRejectsEnabledPayloadStoreWithoutPersistentDirectory() {
+        MockEnvironment environment = hardenedEnvironment()
+                .withProperty("foggy.session.message-payload.enabled", "true");
+        environment.setActiveProfiles("prod");
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> ProductionConfigurationGuard.validate(environment));
+
+        assertTrue(exception.getMessage().contains(
+                "foggy.session.message-payload.filesystem.directory"));
+    }
+
     private static MockEnvironment hardenedEnvironment() {
         return new MockEnvironment()
                 .withProperty("spring.jpa.hibernate.ddl-auto", "validate")

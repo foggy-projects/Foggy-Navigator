@@ -314,10 +314,37 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
         persistTask(entity);
     }
 
+    /**
+     * Stores the upstream identity needed to subscribe from the current
+     * durable ACK, without advancing that ACK. This is called before a
+     * replayable Worker event is written to session persistence.
+     */
+    @Transactional
+    public void rememberWorkerIdentity(String taskId, String workerTaskId, String geminiSessionId, String model) {
+        GeminiTaskEntity entity = getTaskEntity(taskId);
+        applyWorkerMetadata(entity, workerTaskId, geminiSessionId, model);
+        persistTask(entity);
+    }
+
     @Transactional
     public void completeTask(String taskId, String workerTaskId, String geminiSessionId,
                              String resultText, BigDecimal costUsd, Long inputTokens,
                              Long outputTokens, Long durationMs, Integer numTurns, String model) {
+        completeTask(taskId, workerTaskId, geminiSessionId, resultText, costUsd, inputTokens,
+                outputTokens, durationMs, numTurns, model, null);
+    }
+
+    /**
+     * Atomically persists a terminal Worker transition and its durable ESN.
+     * The relay calls this only after the corresponding session message has
+     * been durably persisted, so a MySQL failure cannot leave a terminal task
+     * without the cursor needed for replay.
+     */
+    @Transactional
+    public void completeTask(String taskId, String workerTaskId, String geminiSessionId,
+                             String resultText, BigDecimal costUsd, Long inputTokens,
+                             Long outputTokens, Long durationMs, Integer numTurns, String model,
+                             Integer ackSeq) {
         GeminiTaskEntity entity = getTaskEntity(taskId);
         String previousStatus = entity.getStatus();
         applyWorkerMetadata(entity, workerTaskId, geminiSessionId, model);
@@ -331,12 +358,23 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
         LocalDateTime now = LocalDateTime.now();
         entity.setLastAliveAt(now);
         entity.setLastOutputAt(now);
+        advanceAckSeq(entity, ackSeq);
         persistTask(entity);
         publishStatusChange(entity, previousStatus);
     }
 
     @Transactional
     public void failTask(String taskId, String workerTaskId, String geminiSessionId, String errorMessage) {
+        failTask(taskId, workerTaskId, geminiSessionId, errorMessage, null);
+    }
+
+    /**
+     * Atomically persists a terminal Worker failure and its durable ESN after
+     * the matching session event has been durably written.
+     */
+    @Transactional
+    public void failTask(String taskId, String workerTaskId, String geminiSessionId,
+                         String errorMessage, Integer ackSeq) {
         GeminiTaskEntity entity = getTaskEntity(taskId);
         String previousStatus = entity.getStatus();
         applyWorkerMetadata(entity, workerTaskId, geminiSessionId, null);
@@ -345,8 +383,17 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
         LocalDateTime now = LocalDateTime.now();
         entity.setLastAliveAt(now);
         entity.setLastOutputAt(now);
+        advanceAckSeq(entity, ackSeq);
         persistTask(entity);
         publishStatusChange(entity, previousStatus);
+    }
+
+    private void advanceAckSeq(GeminiTaskEntity entity, Integer ackSeq) {
+        if (ackSeq == null) {
+            return;
+        }
+        Integer current = entity.getLastAckedSeq();
+        entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
     }
 
     @Transactional

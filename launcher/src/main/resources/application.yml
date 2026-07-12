@@ -86,6 +86,16 @@ navigator:
 
 # Foggy Navigator 配置
 foggy:
+  session:
+    message-payload:
+      # Keep BUG-021's 48 KiB durable metadata envelope until Stage 5 capacity evidence exists.
+      enabled: ${SESSION_MESSAGE_PAYLOAD_ENABLED:true}
+      inline-preview-bytes: ${SESSION_MESSAGE_PAYLOAD_INLINE_PREVIEW_BYTES:49152}
+      max-payload-bytes: ${SESSION_MESSAGE_PAYLOAD_MAX_BYTES:67108864}
+      # Expiry and cleanup are Stage 4; do not silently enable an unvalidated retention period.
+      retention: ${SESSION_MESSAGE_PAYLOAD_RETENTION:PT0S}
+      filesystem:
+        directory: ${SESSION_MESSAGE_PAYLOAD_STORE_DIRECTORY:./data/session-message-payloads}
   navigator:
     business:
       agent:

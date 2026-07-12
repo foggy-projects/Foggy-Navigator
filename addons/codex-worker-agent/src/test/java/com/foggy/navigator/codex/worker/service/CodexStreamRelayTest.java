@@ -57,6 +57,7 @@ import static org.mockito.Mockito.when;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -669,14 +670,14 @@ class CodexStreamRelayTest {
             return null;
         }).when(taskService).completeTask(
                 eq("local-task-1"), eq("worker-task-9"), eq("thread-9"), eq("done"),
-                isNull(), isNull(), isNull(), isNull(), isNull(), eq("gpt-5.6-sol"));
+                isNull(), isNull(), isNull(), isNull(), isNull(), eq("gpt-5.6-sol"), eq(9));
 
         relay.reconnectTask("local-task-1", "session-1", "worker-1");
 
         verify(client).subscribeToTask("worker-task-9", 8);
         verify(taskService).completeTask(
                 "local-task-1", "worker-task-9", "thread-9", "done",
-                null, null, null, null, null, "gpt-5.6-sol");
+                null, null, null, null, null, "gpt-5.6-sol", 9);
         verify(client, never()).createTask(any(), any());
     }
 
@@ -818,7 +819,7 @@ class CodexStreamRelayTest {
                 messages.getAllValues().stream().map(AgentMessage::getType).toList());
         verify(taskService, never()).failTask(any(), any(), any(), any());
         verify(taskService).completeTask("local-task-1", "worker-task-1", "thread-1",
-                "received", null, null, null, null, null, "gpt-5.6-sol");
+                "received", null, null, null, null, null, "gpt-5.6-sol", 2);
     }
 
     @Test
@@ -918,7 +919,7 @@ class CodexStreamRelayTest {
     }
 
     @Test
-    void oversizedToolResultIsBoundedBeforeDurablePersistenceAndAcknowledged() throws Exception {
+    void oversizedToolResultReachesSessionDurableBoundaryWithFullBytesAndAcknowledged() throws Exception {
         CodexTaskEntity entity = legacyTask();
         entity.setStatus("RUNNING");
         when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
@@ -940,7 +941,25 @@ class CodexStreamRelayTest {
         doAnswer(invocation -> {
             AgentMessage message = invocation.getArgument(0);
             @SuppressWarnings("unchecked")
-            Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+            Map<String, Object> originalPayload = (Map<String, Object>) message.getPayload();
+            assertEquals(output, originalPayload.get("data"),
+                    "the relay must not truncate before the generic session payload router sees full bytes");
+
+            Map<String, Object> payload = new LinkedHashMap<>(originalPayload);
+            payload.put("data", "HEAD_OF_TOOL_OUTPUT\n[bounded by session payload router]\nTAIL_OF_TOOL_OUTPUT");
+            payload.put("dataTruncated", true);
+            payload.put("originalDataBytes", output.getBytes(StandardCharsets.UTF_8).length);
+            payload.put("truncationReason", "session_message_payload_store");
+            payload.put("payloadDescriptor", Map.of(
+                    "payloadId", "payload-public-id",
+                    "status", "READY",
+                    "contentType", "text/plain; charset=utf-8",
+                    "contentEncoding", "gzip",
+                    "originalBytes", output.getBytes(StandardCharsets.UTF_8).length,
+                    "storedBytes", 1024,
+                    "sha256", "a".repeat(64),
+                    "version", 1));
+            message.setPayload(payload);
             Map<String, Object> metadata = new LinkedHashMap<>(payload);
             metadata.put("type", message.getType().name());
             metadata.put("agentId", message.getAgentId());
@@ -966,13 +985,237 @@ class CodexStreamRelayTest {
         assertEquals(true, payload.get("dataTruncated"));
         assertEquals(output.getBytes(StandardCharsets.UTF_8).length,
                 ((Number) payload.get("originalDataBytes")).intValue());
-        assertEquals("session_message_metadata_limit", payload.get("truncationReason"));
+        assertEquals("session_message_payload_store", payload.get("truncationReason"));
+        assertEquals("READY", ((Map<?, ?>) payload.get("payloadDescriptor")).get("status"));
+        assertFalse(((Map<?, ?>) payload.get("payloadDescriptor")).containsKey("storageKey"));
         String persistedData = (String) payload.get("data");
         assertTrue(persistedData.startsWith("HEAD_OF_TOOL_OUTPUT"));
-        assertTrue(persistedData.contains("Codex tool output truncated"));
         assertTrue(persistedData.endsWith("TAIL_OF_TOOL_OUTPUT"));
         verify(taskService).recordWorkerProgress(
                 "local-task-1", "worker-task-1", "thread-1", null, 1, false, true);
+    }
+
+    @Test
+    void unavailablePayloadPreviewStillAcknowledgesAndAllowsLaterEvents() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("RUNNING");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        ObjectMapper mapper = new ObjectMapper();
+        String output = "store-unavailable-🔧".repeat(8_000);
+        String toolEvent = mapper.writeValueAsString(Map.of(
+                "type", "tool_result",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "seq", 1,
+                "tool_use_id", "tool-1",
+                "tool", "command_execution",
+                "output", output));
+        doAnswer(invocation -> {
+            AgentMessage message = invocation.getArgument(0);
+            if (message.getType() == MessageType.TOOL_CALL_RESULT) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> originalPayload = (Map<String, Object>) message.getPayload();
+                assertEquals(output, originalPayload.get("data"));
+                Map<String, Object> unavailable = new LinkedHashMap<>(originalPayload);
+                unavailable.put("data", "[bounded preview; full output unavailable]");
+                unavailable.put("dataTruncated", true);
+                unavailable.put("originalDataBytes", output.getBytes(StandardCharsets.UTF_8).length);
+                unavailable.put("truncationReason", "session_message_payload_unavailable");
+                unavailable.put("payloadDescriptor", Map.of(
+                        "payloadId", "payload-public-id",
+                        "status", "UNAVAILABLE",
+                        "contentType", "text/plain; charset=utf-8",
+                        "contentEncoding", "gzip",
+                        "originalBytes", output.getBytes(StandardCharsets.UTF_8).length,
+                        "sha256", "b".repeat(64),
+                        "version", 1));
+                message.setPayload(unavailable);
+            }
+            return null;
+        }).when(sessionEventListener).handleMessageDurably(any(AgentMessage.class));
+
+        var detectedThread = new java.util.concurrent.atomic.AtomicReference<String>();
+        var detectedModel = new java.util.concurrent.atomic.AtomicReference<String>();
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(toolEvent).build(),
+                "local-task-1", "session-1", "codex-worker", detectedThread, detectedModel);
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent", workerEvent("assistant_text", 2, "later"),
+                "local-task-1", "session-1", "codex-worker", detectedThread, detectedModel);
+
+        verify(taskService).recordWorkerProgress(
+                "local-task-1", "worker-task-1", "thread-1", null, 1, false, true);
+        verify(taskService).recordWorkerProgress(
+                "local-task-1", "worker-task-1", "thread-1", null, 2, false, true);
+        verify(sessionEventListener, times(2)).handleMessageDurably(any(AgentMessage.class));
+    }
+
+    @Test
+    void unsequencedLegacyToolResultsUseStableDistinctToolIdentities() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("RUNNING");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+
+        ObjectMapper mapper = new ObjectMapper();
+        String first = mapper.writeValueAsString(Map.of(
+                "type", "tool_result",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "tool_use_id", "tool-1",
+                "tool", "shell",
+                "output", "first legacy output"));
+        String second = mapper.writeValueAsString(Map.of(
+                "type", "tool_result",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "tool_use_id", "tool-2",
+                "tool", "shell",
+                "output", "second legacy output"));
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(first).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>());
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(second).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>());
+
+        ArgumentCaptor<AgentMessage> messages = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener, times(2)).handleMessageDurably(messages.capture());
+        List<AgentMessage> values = messages.getAllValues();
+        assertNotEquals(values.get(0).getMessageId(), values.get(1).getMessageId());
+        assertEquals("cx-lt:local-task-1:tool-1", values.get(0).getMessageId());
+        assertEquals("cx-lt:local-task-1:tool-2", values.get(1).getMessageId());
+    }
+
+    @Test
+    void replayedUnsequencedLegacyToolResultKeepsTheSamePayloadIdentity() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("RUNNING");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+
+        String replayed = new ObjectMapper().writeValueAsString(Map.of(
+                "type", "tool_result",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "tool_use_id", "tool-replayed",
+                "tool", "shell",
+                "output", "same legacy output"));
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(replayed).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>());
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(replayed).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>());
+
+        ArgumentCaptor<AgentMessage> messages = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener, times(2)).handleMessageDurably(messages.capture());
+        assertEquals(messages.getAllValues().get(0).getMessageId(), messages.getAllValues().get(1).getMessageId());
+    }
+
+    @Test
+    void largeFinalAssistantReplyIsNotRoutedThroughToolPreviewAndCompletesInFull() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("RUNNING");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        String fullReply = "final reply \"\\多字节🔧\n".repeat(10_000);
+        assertTrue(fullReply.getBytes(StandardCharsets.UTF_8).length > 64 * 1024);
+        String resultEvent = new ObjectMapper().writeValueAsString(Map.of(
+                "type", "result",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "seq", 1,
+                "content", fullReply));
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(resultEvent).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicInteger(0));
+
+        ArgumentCaptor<AgentMessage> messageCaptor = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener).handleMessageDurably(messageCaptor.capture());
+        AgentMessage resultMessage = messageCaptor.getValue();
+        assertEquals(MessageType.SESSION_END, resultMessage.getType());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resultPayload = (Map<String, Object>) resultMessage.getPayload();
+        assertEquals(fullReply, resultPayload.get("content"));
+        assertFalse(resultPayload.containsKey("dataTruncated"));
+
+        ArgumentCaptor<String> resultCaptor = ArgumentCaptor.forClass(String.class);
+        verify(taskService).completeTask(eq("local-task-1"), eq("worker-task-1"), eq("thread-1"),
+                resultCaptor.capture(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), eq(1));
+        assertEquals(fullReply, resultCaptor.getValue());
+    }
+
+    @Test
+    void sequencedResultDoesNotAdvanceReplayCursorWhenAtomicTerminalAckFails() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("RUNNING");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        String result = "final result";
+        String eventJson = new ObjectMapper().writeValueAsString(Map.of(
+                "type", "result",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "seq", 1,
+                "content", result));
+        doThrow(new IllegalStateException("mysql unavailable"))
+                .when(taskService).completeTask("local-task-1", "worker-task-1", "thread-1", result,
+                        null, null, null, null, null, null, 1);
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, () ->
+                ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                        ServerSentEvent.builder(eventJson).build(),
+                        "local-task-1", "session-1", "codex-worker",
+                        new java.util.concurrent.atomic.AtomicReference<String>(),
+                        new java.util.concurrent.atomic.AtomicReference<String>(),
+                        new java.util.concurrent.atomic.AtomicInteger(0)));
+
+        assertInstanceOf(IllegalStateException.class, thrown.getCause());
+        verify(taskService).completeTask("local-task-1", "worker-task-1", "thread-1", result,
+                null, null, null, null, null, null, 1);
+        verify(taskService, never()).recordWorkerProgress(
+                eq("local-task-1"), any(), any(), any(), eq(1), anyBoolean(), anyBoolean());
+        assertEquals(null, acknowledgedSequences().get("local-task-1"));
+    }
+
+    @Test
+    void sequencedErrorDoesNotAdvanceReplayCursorWhenAtomicTerminalAckFails() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("RUNNING");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        String failure = "CODEX_WORKER_REMOTE_ERROR";
+        String eventJson = new ObjectMapper().writeValueAsString(Map.of(
+                "type", "error",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "seq", 1,
+                "error", failure));
+        doThrow(new IllegalStateException("mysql unavailable"))
+                .when(taskService).failTask("local-task-1", "worker-task-1", "thread-1", failure, 1);
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, () ->
+                ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                        ServerSentEvent.builder(eventJson).build(),
+                        "local-task-1", "session-1", "codex-worker",
+                        new java.util.concurrent.atomic.AtomicReference<String>(),
+                        new java.util.concurrent.atomic.AtomicReference<String>(),
+                        new java.util.concurrent.atomic.AtomicInteger(0)));
+
+        assertInstanceOf(IllegalStateException.class, thrown.getCause());
+        verify(taskService).failTask("local-task-1", "worker-task-1", "thread-1", failure, 1);
+        verify(taskService, never()).recordWorkerProgress(
+                eq("local-task-1"), any(), any(), any(), eq(1), anyBoolean(), anyBoolean());
+        assertEquals(null, acknowledgedSequences().get("local-task-1"));
     }
 
     @Test
@@ -1169,5 +1412,11 @@ class CodexStreamRelayTest {
         entity.setRoutingEpoch(0L);
         entity.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
         return entity;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, java.util.concurrent.atomic.AtomicInteger> acknowledgedSequences() {
+        return (Map<String, java.util.concurrent.atomic.AtomicInteger>)
+                ReflectionTestUtils.getField(relay, "lastAckedSeq");
     }
 }

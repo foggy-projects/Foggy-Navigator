@@ -77,6 +77,18 @@ async def _event_generator(
     context_id: str | None = None
     context_lock = None
     context_lock_acquired = False
+    next_event_id = 1
+
+    def serialize_event(event: QueryEvent) -> dict:
+        """Assign one stable, task-scoped identity before the event leaves Python."""
+        nonlocal next_event_id
+        event.event_id = next_event_id
+        next_event_id += 1
+        return {
+            "event": "message",
+            "data": event.model_dump_json(),
+        }
+
     try:
         navigator_session_id = _resolve_session_id(request)
         context_id = _resolve_context_id(request)
@@ -94,10 +106,7 @@ async def _event_generator(
                 tenant_id=request.tenant_id,
             ):
                 event = _event_with_context_id(event, context_id)
-                yield {
-                    "event": "message",
-                    "data": event.model_dump_json(),
-                }
+                yield serialize_event(event)
             return
 
         context_lock = context_execution_lock(context_id)
@@ -110,10 +119,7 @@ async def _event_generator(
                 ),
                 context_id,
             )
-            yield {
-                "event": "message",
-                "data": busy_event.model_dump_json(),
-            }
+            yield serialize_event(busy_event)
             return
         context_lock_acquired = True
 
@@ -183,10 +189,7 @@ async def _event_generator(
             if event_key in emitted_keys:
                 continue
             emitted_keys.add(event_key)
-            yield {
-                "event": "message",
-                "data": item.model_dump_json(),
-            }
+            yield serialize_event(item)
         await graph_task
 
     except Exception as exc:
@@ -198,10 +201,7 @@ async def _event_generator(
         )
         if context_id is not None:
             error_event = _event_with_context_id(error_event, context_id)
-        yield {
-            "event": "message",
-            "data": error_event.model_dump_json(),
-        }
+        yield serialize_event(error_event)
     finally:
         if context_lock_acquired and context_lock is not None:
             context_lock.release()

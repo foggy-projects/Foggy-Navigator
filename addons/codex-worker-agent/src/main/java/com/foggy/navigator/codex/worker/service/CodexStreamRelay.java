@@ -1,6 +1,5 @@
 package com.foggy.navigator.codex.worker.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStartedEvent;
@@ -79,11 +78,10 @@ public class CodexStreamRelay {
     private static final int MAX_ABORT_STATUS_POLLS = 5;
     private static final long ABORT_STATUS_POLL_DELAY_MS = 200;
     /**
-     * session_messages.metadata is currently backed by MySQL TEXT (65,535 bytes).
-     * Keep a conservative envelope for the serialized payload plus SessionEventListener fields.
+     * BUG-021 compatibility contract. Enforcement moved to the generic session
+     * payload router so every provider is bounded after optional externalization.
      */
     static final int MAX_DURABLE_TOOL_RESULT_METADATA_BYTES = 48 * 1024;
-    private static final String TOOL_RESULT_TRUNCATION_REASON = "session_message_metadata_limit";
 
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
@@ -1142,14 +1140,29 @@ public class CodexStreamRelay {
                                     event.getNumTurns(), event.getModel());
                     // result 事件用 SESSION_END 类型（Codex 特有语义）
                     AgentMessage resultMessage = mb.build(MessageType.SESSION_END);
-                    resultMessage.setMessageId(workerMessageId(taskId, event));
+                    String resultMessageId = workerMessageId(taskId, event);
+                    if (resultMessageId != null) {
+                        resultMessage.setMessageId(resultMessageId);
+                    }
                     publishEvent(resultMessage);
 
                     // 完成任务记录
-                    taskService.completeTask(taskId, event.getTaskId(),
-                            detectedCodexThreadId.get(), resultText, event.getCostUsd(),
-                            event.getInputTokens(), event.getOutputTokens(), event.getDurationMs(),
-                            event.getNumTurns(), event.getModel());
+                    if (event.getSeq() != null) {
+                        taskService.completeTask(taskId, event.getTaskId(),
+                                detectedCodexThreadId.get(), resultText, event.getCostUsd(),
+                                event.getInputTokens(), event.getOutputTokens(), event.getDurationMs(),
+                                event.getNumTurns(), event.getModel(), event.getSeq());
+                    } else {
+                        taskService.completeTask(taskId, event.getTaskId(),
+                                detectedCodexThreadId.get(), resultText, event.getCostUsd(),
+                                event.getInputTokens(), event.getOutputTokens(), event.getDurationMs(),
+                                event.getNumTurns(), event.getModel());
+                    }
+                    // For sequenced terminal events the task service commits
+                    // result and ACK atomically. Clear the volatile cursor only
+                    // after that call succeeds; a failure leaves it untouched
+                    // for replay.
+                    lastAckedSeq.remove(taskId);
 
                     // 发布任务完成事件
                     eventPublisher.publishEvent(TaskCompletionEvent.builder()
@@ -1164,8 +1177,16 @@ public class CodexStreamRelay {
                     closePendingUserInputBeforeTerminal(taskId, sessionId, providerType);
                     String failure = stableWorkerEventError(event.getError());
                     publishBuilt(mb.error(failure), workerMessageId(taskId, event));
-                    taskService.failTask(taskId, event.getTaskId(), detectedCodexThreadId.get(),
-                            failure);
+                    if (event.getSeq() != null) {
+                        taskService.failTask(taskId, event.getTaskId(), detectedCodexThreadId.get(),
+                                failure, event.getSeq());
+                    } else {
+                        taskService.failTask(taskId, event.getTaskId(), detectedCodexThreadId.get(),
+                                failure);
+                    }
+                    // See the result branch: terminal ACK is durable with the
+                    // task transition, so cleanup follows a successful commit.
+                    lastAckedSeq.remove(taskId);
 
                     eventPublisher.publishEvent(TaskCompletionEvent.builder()
                             .externalTaskId(taskId)
@@ -1178,7 +1199,9 @@ public class CodexStreamRelay {
                 default -> log.debug("Unhandled Codex event type: {}", type);
             }
 
-            acknowledgeWorkerEvent(taskId, event, false);
+            if (!isTerminalWorkerEvent(event)) {
+                acknowledgeWorkerEvent(taskId, event, false);
+            }
 
         } catch (Exception e) {
             log.warn("Failed to process Codex SSE event: taskId={}, code={}, type={}",
@@ -1236,10 +1259,18 @@ public class CodexStreamRelay {
     private void acknowledgeWorkerEvent(String taskId, WorkerEvent event, boolean userVisibleOutput) {
         taskService.recordWorkerProgress(taskId, event.getTaskId(), event.getSessionId(),
                 event.getModel(), event.getSeq(), userVisibleOutput, isExecutionCommittedEvent(event));
+        rememberAcknowledgedWorkerEvent(taskId, event);
+    }
+
+    private void rememberAcknowledgedWorkerEvent(String taskId, WorkerEvent event) {
         if (event.getSeq() != null) {
             lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0))
                     .updateAndGet(current -> Math.max(current, event.getSeq()));
         }
+    }
+
+    private boolean isTerminalWorkerEvent(WorkerEvent event) {
+        return event != null && ("result".equals(event.getType()) || "error".equals(event.getType()));
     }
 
     private boolean isNextWorkerEvent(WorkerEvent event, String taskId, AtomicInteger seqTracker) {
@@ -1330,94 +1361,20 @@ public class CodexStreamRelay {
 
     private void publishBuilt(AgentMessageBuilder builder, String messageId) {
         AgentMessage message = builder.build();
-        message.setMessageId(messageId);
+        if (messageId != null) {
+            message.setMessageId(messageId);
+        }
         publishDurableAgentMessage(message);
     }
 
     private void publishToolResult(AgentMessageBuilder builder, WorkerEvent event,
-                                   boolean success, String messageId) throws JsonProcessingException {
+                                   boolean success, String messageId) {
         AgentMessage message = builder.toolCallResult(
                 event.getToolUseId(), event.getTool(), event.getOutput(), success).build();
-        message.setMessageId(messageId);
-        boundDurableToolResult(message);
+        if (messageId != null) {
+            message.setMessageId(messageId);
+        }
         publishDurableAgentMessage(message);
-    }
-
-    /**
-     * Preserve the full tool result in the Worker event log while keeping the durable/display copy
-     * below the database column limit. The explicit metadata lets clients distinguish truncation
-     * from genuine command output and prevents one oversized event from poisoning every replay.
-     */
-    private void boundDurableToolResult(AgentMessage message) throws JsonProcessingException {
-        if (!(message.getPayload() instanceof Map<?, ?> rawPayload)) {
-            return;
-        }
-        Object rawData = rawPayload.get("data");
-        if (!(rawData instanceof String output)) {
-            return;
-        }
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        rawPayload.forEach((key, value) -> payload.put(String.valueOf(key), value));
-        if (serializedSessionMetadataBytes(message, payload)
-                <= MAX_DURABLE_TOOL_RESULT_METADATA_BYTES) {
-            return;
-        }
-
-        int originalDataBytes = output.getBytes(StandardCharsets.UTF_8).length;
-        payload.put("dataTruncated", true);
-        payload.put("originalDataBytes", originalDataBytes);
-        payload.put("truncationReason", TOOL_RESULT_TRUNCATION_REASON);
-
-        String notice = "\n\n[Codex tool output truncated; full output remains in the Worker event log; "
-                + "original UTF-8 bytes: " + originalDataBytes + "]\n\n";
-        int codePointCount = output.codePointCount(0, output.length());
-        int low = 0;
-        int high = codePointCount;
-        String boundedData = notice;
-
-        while (low <= high) {
-            int retainedCodePoints = low + (high - low) / 2;
-            String candidate = retainToolOutputEdges(output, retainedCodePoints, notice);
-            payload.put("data", candidate);
-            if (serializedSessionMetadataBytes(message, payload)
-                    <= MAX_DURABLE_TOOL_RESULT_METADATA_BYTES) {
-                boundedData = candidate;
-                low = retainedCodePoints + 1;
-            } else {
-                high = retainedCodePoints - 1;
-            }
-        }
-
-        payload.put("data", boundedData);
-        int persistedMetadataBytes = serializedSessionMetadataBytes(message, payload);
-        if (persistedMetadataBytes > MAX_DURABLE_TOOL_RESULT_METADATA_BYTES) {
-            throw new IllegalStateException("CODEX_TOOL_RESULT_METADATA_OVERHEAD_EXCEEDS_LIMIT");
-        }
-        message.setPayload(payload);
-        log.warn("Truncated oversized Codex tool result before durable persistence: "
-                        + "taskId={}, messageId={}, originalBytes={}, metadataBytes={}",
-                message.getTaskId(), message.getMessageId(), originalDataBytes, persistedMetadataBytes);
-    }
-
-    private String retainToolOutputEdges(String output, int retainedCodePoints, String notice) {
-        int codePointCount = output.codePointCount(0, output.length());
-        if (retainedCodePoints >= codePointCount) {
-            return output;
-        }
-        int headCodePoints = (retainedCodePoints + 1) / 2;
-        int tailCodePoints = retainedCodePoints - headCodePoints;
-        int headEnd = output.offsetByCodePoints(0, headCodePoints);
-        int tailStart = output.offsetByCodePoints(output.length(), -tailCodePoints);
-        return output.substring(0, headEnd) + notice + output.substring(tailStart);
-    }
-
-    private int serializedSessionMetadataBytes(AgentMessage message,
-                                               Map<String, Object> payload) throws JsonProcessingException {
-        Map<String, Object> metadata = new LinkedHashMap<>(payload);
-        metadata.put("type", message.getType().name());
-        metadata.put("agentId", message.getAgentId());
-        return objectMapper.writeValueAsBytes(metadata).length;
     }
 
     private void publishEvent(AgentMessage message) {
@@ -1530,10 +1487,27 @@ public class CodexStreamRelay {
     }
 
     private String workerMessageId(String taskId, WorkerEvent event) {
-        String suffix = event.getSeq() != null
-                ? event.getSeq().toString()
-                : Integer.toUnsignedString(("" + event.getType() + event.getSubtype()).hashCode());
-        return "codex-event:" + taskId + ":" + suffix;
+        if (event.getSeq() != null) {
+            return "codex-event:" + taskId + ":" + event.getSeq();
+        }
+
+        // Older Workers do not supply an ESN. A tool-use id is nevertheless
+        // stable for the lifetime of one tool execution, so preserve it as an
+        // idempotency key for large payload externalization. Do not fabricate
+        // a type-only key: independent tool results must remain distinct.
+        if (!"tool_result".equals(event.getType())) {
+            return null;
+        }
+        if (event.getToolUseId() != null && !event.getToolUseId().isBlank()) {
+            return "cx-lt:" + taskId + ":" + event.getToolUseId();
+        }
+        // Some legacy tool adapters omit tool_use_id. Use the immutable tool
+        // result content as the narrow fallback identity so a replay does not
+        // create another descriptor/file, while different outputs remain
+        // visible as separate messages.
+        return userInputMessageId("cx-lt-", taskId,
+                String.valueOf(event.getTool()) + "\u0000" + String.valueOf(event.getOutput())
+                        + "\u0000" + String.valueOf(event.getIsError()));
     }
 
     private String stableWorkerEventError(String error) {

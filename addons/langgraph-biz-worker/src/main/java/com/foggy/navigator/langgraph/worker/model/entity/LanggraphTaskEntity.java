@@ -61,11 +61,11 @@ public class LanggraphTaskEntity {
     @Column(length = 64)
     private String contextId;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String resultText;
 
     /** Structured output from Skill Runtime (JSON) */
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String structuredOutput;
 
     @Column(columnDefinition = "TEXT")

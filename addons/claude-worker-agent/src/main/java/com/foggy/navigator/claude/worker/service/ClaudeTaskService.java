@@ -733,6 +733,20 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                               String resultText, BigDecimal costUsd, Long inputTokens,
                               Long outputTokens, Long durationMs, Integer numTurns,
                               String model) {
+        completeTask(taskId, workerTaskId, claudeSessionId, resultText, costUsd, inputTokens,
+                outputTokens, durationMs, numTurns, model, null);
+    }
+
+    /**
+     * Atomically persists a terminal Worker transition and its durable ESN.
+     * The stream relay only supplies {@code ackSeq} after the corresponding
+     * session message has been persisted successfully.
+     */
+    @Transactional
+    public void completeTask(String taskId, String workerTaskId, String claudeSessionId,
+                              String resultText, BigDecimal costUsd, Long inputTokens,
+                              Long outputTokens, Long durationMs, Integer numTurns,
+                              String model, Integer ackSeq) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String prev = entity.getStatus();
             entity.setStatus("COMPLETED");
@@ -769,6 +783,10 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             LocalDateTime now = LocalDateTime.now();
             entity.setLastAliveAt(now);
             entity.setLastOutputAt(now);
+            if (ackSeq != null) {
+                Integer current = entity.getLastAckedSeq();
+                entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
+            }
             persistTask(entity);
             log.info("Task completed: taskId={}, model={}, costUsd={}, durationMs={}", taskId, model, costUsd, durationMs);
             publishStatusChange(entity, prev);
@@ -887,6 +905,16 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      */
     @Transactional
     public void failTask(String taskId, String workerTaskId, String claudeSessionId, String errorMessage) {
+        failTask(taskId, workerTaskId, claudeSessionId, errorMessage, null);
+    }
+
+    /**
+     * Atomically persists a terminal failure and its durable ESN after the
+     * matching session event has been durably written.
+     */
+    @Transactional
+    public void failTask(String taskId, String workerTaskId, String claudeSessionId,
+                         String errorMessage, Integer ackSeq) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String prev = entity.getStatus();
             // abort 标记检查：cancel 线程已标记 abortRequested，由 cancel 线程统一落库 ABORTED
@@ -910,6 +938,10 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             LocalDateTime now = LocalDateTime.now();
             entity.setLastAliveAt(now);
             entity.setLastOutputAt(now);
+            if (ackSeq != null) {
+                Integer current = entity.getLastAckedSeq();
+                entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
+            }
             persistTask(entity);
             log.warn("Task failed: taskId={}, claudeSessionId={}, error={}", taskId, claudeSessionId, errorMessage);
             publishStatusChange(entity, prev);

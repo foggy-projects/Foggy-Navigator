@@ -32,14 +32,15 @@ public class SessionMessageEntity {
     @Column(length = 32, nullable = false)
     private String role;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String content;
 
     /**
      * JSON序列化的 Map<String, Object>
-     * 使用TEXT而非JSON列以兼容H2测试
+     * 使用 MEDIUMTEXT 而非 JSON 列以兼容 H2 测试，同时承载最终回复的
+     * 结构化 metadata，不对大于 TEXT 上限的 UTF-8 内容静默截断。
      */
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String metadata;
 
     @Column(nullable = false, updatable = false)

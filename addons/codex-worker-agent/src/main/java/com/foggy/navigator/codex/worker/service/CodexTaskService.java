@@ -838,6 +838,21 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                               String resultText, BigDecimal costUsd, Long inputTokens,
                               Long outputTokens, Long durationMs, Integer numTurns,
                               String model) {
+        completeTask(taskId, workerTaskId, codexThreadId, resultText, costUsd, inputTokens,
+                outputTokens, durationMs, numTurns, model, null);
+    }
+
+    /**
+     * Atomically persists a terminal Worker transition and its durable ESN.
+     * The relay supplies {@code ackSeq} only after the corresponding session
+     * message has been durably persisted, so a MySQL failure cannot leave a
+     * terminal task without the cursor required for replay.
+     */
+    @Transactional
+    public void completeTask(String taskId, String workerTaskId, String codexThreadId,
+                              String resultText, BigDecimal costUsd, Long inputTokens,
+                              Long outputTokens, Long durationMs, Integer numTurns,
+                              String model, Integer ackSeq) {
         CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
         if (entity == null) {
             log.warn("completeTask: task not found: {}", taskId);
@@ -868,6 +883,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         LocalDateTime now = LocalDateTime.now();
         entity.setLastAliveAt(now);
         entity.setLastOutputAt(now);
+        advanceAckSeq(entity, ackSeq);
 
         persistTask(entity);
         log.info("Completed Codex task: taskId={}, cost={}", taskId, costUsd);
@@ -893,6 +909,16 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
      */
     @Transactional
     public void failTask(String taskId, String workerTaskId, String codexThreadId, String errorMessage) {
+        failTask(taskId, workerTaskId, codexThreadId, errorMessage, null);
+    }
+
+    /**
+     * Atomically persists a terminal Worker failure and its durable ESN after
+     * the matching session event has been durably written.
+     */
+    @Transactional
+    public void failTask(String taskId, String workerTaskId, String codexThreadId,
+                         String errorMessage, Integer ackSeq) {
         CodexTaskEntity entity = taskRepository.findByTaskIdForUpdate(taskId).orElse(null);
         if (entity == null) {
             log.warn("failTask: task not found: {}", taskId);
@@ -917,12 +943,21 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         LocalDateTime now = LocalDateTime.now();
         entity.setLastAliveAt(now);
         entity.setLastOutputAt(now);
+        advanceAckSeq(entity, ackSeq);
 
         persistTask(entity);
         log.info("Failed Codex task: taskId={}, error={}", taskId, stableError);
         if (!"FAILED".equals(previousStatus)) {
             publishStatusChange(entity, previousStatus);
         }
+    }
+
+    private void advanceAckSeq(CodexTaskEntity entity, Integer ackSeq) {
+        if (ackSeq == null) {
+            return;
+        }
+        Integer current = entity.getLastAckedSeq();
+        entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
     }
 
     @Transactional

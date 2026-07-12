@@ -56,6 +56,7 @@ public class ProductionConfigurationGuard implements ApplicationContextInitializ
         validateExternalUrl(environment, violations);
         validateActuatorExposure(environment, violations);
         validateHealthDetails(environment, violations);
+        validateSessionMessagePayloadStore(environment, violations);
 
         if (!violations.isEmpty()) {
             throw new IllegalStateException("Unsafe production configuration:\n - "
@@ -139,6 +140,13 @@ public class ProductionConfigurationGuard implements ApplicationContextInitializ
         String value = property(environment, "management.endpoint.health.show-details").toLowerCase(Locale.ROOT);
         if ("always".equals(value)) {
             violations.add("management.endpoint.health.show-details must not be always in production");
+        }
+    }
+
+    private static void validateSessionMessagePayloadStore(Environment environment, List<String> violations) {
+        if (Boolean.parseBoolean(property(environment, "foggy.session.message-payload.enabled"))) {
+            validateRequiredProperty(environment,
+                    "foggy.session.message-payload.filesystem.directory", violations);
         }
     }
 

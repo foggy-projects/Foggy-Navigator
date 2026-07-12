@@ -94,6 +94,10 @@ class QueryEvent(BaseModel):
     """
 
     type: str
+    # Monotonic per-query event identity, assigned by the SSE route immediately
+    # before serialization. Consumers use task_id + event_id as the stable
+    # identity when a stream is replayed for the same task.
+    event_id: int | None = None
     content: str | None = None
     task_id: str = ""
     session_id: str | None = None

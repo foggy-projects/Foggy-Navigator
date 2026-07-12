@@ -34,6 +34,7 @@ async def test_query_returns_sse_events(client):
     assert event_types[0] == "system"
     assert event_types[1] == "assistant_text"
     assert event_types[-1] == "result"
+    assert [event["event_id"] for event in events] == list(range(1, len(events) + 1))
 
 
 @pytest.mark.asyncio

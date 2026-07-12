@@ -84,7 +84,7 @@ public class SessionTaskEntity {
 
     private Integer numTurns;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String resultText;
 
     @Column(columnDefinition = "TEXT")

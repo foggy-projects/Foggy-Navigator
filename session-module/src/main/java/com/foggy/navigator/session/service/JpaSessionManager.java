@@ -93,6 +93,11 @@ public class JpaSessionManager implements SessionManager {
     @Transactional
     public String addMessage(String sessionId, Message message) {
         String messageId = message.getId() != null ? message.getId() : UUID.randomUUID().toString();
+        // Worker SSE events use a stable message id. Treat a replay as an
+        // idempotent no-op so it cannot change ordering or duplicate a row.
+        if (message.getId() != null && messageRepository.existsById(messageId)) {
+            return messageId;
+        }
         LocalDateTime createdAt = resolveMessageCreatedAt(sessionId, message.getCreatedAt());
         SessionMessageEntity entity = new SessionMessageEntity();
         entity.setId(messageId);

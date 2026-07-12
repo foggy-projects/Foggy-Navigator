@@ -5,6 +5,8 @@ import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.session.service.SessionMessageDurablePersistenceCoordinator;
+import com.foggy.navigator.session.service.SessionMessagePublicPayloadSanitizer;
 import com.foggy.navigator.session.sse.UnifiedSseEmitter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -12,7 +14,9 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
-import java.util.HashMap;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -27,13 +31,19 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class SessionEventListener {
 
+    /** session_messages.id and the descriptor messageId are VARCHAR(64). */
+    private static final int MAX_DURABLE_MESSAGE_ID_LENGTH = 64;
+
     private final SessionManager sessionManager;
     private final UnifiedSseEmitter sseEmitter;
+    private final SessionMessageDurablePersistenceCoordinator messagePersistenceCoordinator;
     private final Set<String> synchronouslyHandledMessageIds = ConcurrentHashMap.newKeySet();
 
     @Async("sessionEventExecutor")
     @EventListener
     public void onAgentMessage(AgentMessage message) {
+        normalizeDurableMessageId(message);
+        sanitizePublicPayload(message);
         if (message != null && message.getMessageId() != null
                 && synchronouslyHandledMessageIds.remove(message.getMessageId())) {
             return;
@@ -46,6 +56,8 @@ public class SessionEventListener {
      * visible before they advance task status.
      */
     public void handleMessage(AgentMessage message) {
+        normalizeDurableMessageId(message);
+        sanitizePublicPayload(message);
         handleMessage(message, false);
     }
 
@@ -54,6 +66,8 @@ public class SessionEventListener {
      * propagated so durable stream consumers do not advance their cursor.
      */
     public void handleMessageDurably(AgentMessage message) {
+        normalizeDurableMessageId(message);
+        sanitizePublicPayload(message);
         handleMessage(message, true);
         if (message != null && message.getMessageId() != null) {
             synchronouslyHandledMessageIds.add(message.getMessageId());
@@ -71,8 +85,7 @@ public class SessionEventListener {
         if (shouldPersist(message)) {
             try {
                 if (shouldPersistResultEvent(message)) {
-                    Message msg = toSessionMessage(message);
-                    sessionManager.addMessage(sessionId, msg);
+                    messagePersistenceCoordinator.persist(message);
                 }
             } catch (Exception e) {
                 log.error("Failed to persist message: sessionId={}, type={}", sessionId, message.getType(), e);
@@ -85,6 +98,36 @@ public class SessionEventListener {
         // 2. SSE推送（通过 UnifiedSseEmitter 路由到订阅了该 session 的用户）
         log.debug("Sending SSE event: sessionId={}, type={}", sessionId, message.getType());
         sseEmitter.sendSessionEvent(sessionId, message);
+    }
+
+    private void sanitizePublicPayload(AgentMessage message) {
+        if (message != null) {
+            message.setPayload(SessionMessagePublicPayloadSanitizer.redactInternalStorageKeys(message.getPayload()));
+        }
+    }
+
+    /**
+     * Provider replay identifiers may contain a UUID-sized task id plus ESN
+     * and event part. Keep short IDs untouched; map longer values to a full
+     * SHA-256 hex key so the same replay event has one DB-safe identity.
+     */
+    private void normalizeDurableMessageId(AgentMessage message) {
+        if (message == null || message.getMessageId() == null
+                || message.getMessageId().length() <= MAX_DURABLE_MESSAGE_ID_LENGTH) {
+            return;
+        }
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(message.getMessageId().getBytes(StandardCharsets.UTF_8));
+            StringBuilder compact = new StringBuilder(MAX_DURABLE_MESSAGE_ID_LENGTH);
+            for (byte value : digest) {
+                compact.append(Character.forDigit((value >>> 4) & 0x0F, 16));
+                compact.append(Character.forDigit(value & 0x0F, 16));
+            }
+            message.setMessageId(compact.toString());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is required for durable message IDs", e);
+        }
     }
 
     public static final class MessagePersistenceException extends RuntimeException {
@@ -149,33 +192,4 @@ public class SessionEventListener {
         return true;
     }
 
-    @SuppressWarnings("unchecked")
-    private Message toSessionMessage(AgentMessage msg) {
-        String content = null;
-        Map<String, Object> metadata = new HashMap<>();
-
-        if (msg.getPayload() instanceof Map) {
-            Map<String, Object> payload = (Map<String, Object>) msg.getPayload();
-            content = (String) payload.getOrDefault("content", null);
-            metadata.putAll(payload);
-        }
-        metadata.put("type", msg.getType().name());
-        metadata.put("agentId", msg.getAgentId());
-
-        MessageRole role = (msg.getType() == MessageType.TOOL_CALL_RESULT
-                || msg.getType() == MessageType.TOOL_CALL_ERROR)
-                ? MessageRole.TOOL
-                : MessageRole.ASSISTANT;
-
-        Message.MessageBuilder builder = Message.builder()
-                .id(msg.getMessageId())
-                .sessionId(msg.getSessionId())
-                .role(role)
-                .content(content)
-                .metadata(metadata);
-        if (msg.getTaskId() != null) {
-            builder.taskId(msg.getTaskId());
-        }
-        return builder.build();
-    }
 }

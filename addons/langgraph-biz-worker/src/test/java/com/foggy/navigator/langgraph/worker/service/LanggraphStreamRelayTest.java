@@ -216,6 +216,30 @@ class LanggraphStreamRelayTest {
     }
 
     @Test
+    void replayedToolResultUsesTheSameStableWorkerMessageId() throws Exception {
+        String taskId = "lgt-task-stable";
+        String sessionId = "session-stable";
+        String toolResult = """
+                {
+                  "type": "tool_result",
+                  "event_id": 31,
+                  "tool_call_id": "call-stable",
+                  "content": "{\\"ok\\":true}"
+                }
+                """;
+
+        ServerSentEvent<String> event = ServerSentEvent.<String>builder().data(toolResult).build();
+        invokeHandleEvent(event, taskId, sessionId);
+        invokeHandleEvent(event, taskId, sessionId);
+
+        ArgumentCaptor<AgentMessage> captor = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener, times(2)).handleMessage(captor.capture());
+        List<AgentMessage> messages = captor.getAllValues();
+        assertEquals("langgraph-event:lgt-task-stable:31", messages.get(0).getMessageId());
+        assertEquals(messages.get(0).getMessageId(), messages.get(1).getMessageId());
+    }
+
+    @Test
     void skillFrameClosePublishesExecutionReportFields() throws Exception {
         String taskId = "lgt-task-close";
         String sessionId = "session-close";

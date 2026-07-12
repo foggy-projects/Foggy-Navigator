@@ -30,7 +30,10 @@ class JpaSessionManagerTest {
 
     @EnableAutoConfiguration
     @EntityScan(basePackages = "com.foggy.navigator.common.entity")
-    @EnableJpaRepositories(basePackages = "com.foggy.navigator.session.repository")
+    @EnableJpaRepositories(basePackages = {
+            "com.foggy.navigator.session.repository",
+            "com.foggy.navigator.common.repository"
+    })
     @ComponentScan(basePackages = "com.foggy.navigator.session")
     static class TestConfig {
         @Bean
@@ -192,6 +195,43 @@ class JpaSessionManagerTest {
         assertEquals(sessionId, messages.get(0).getSessionId());
         assertEquals("task-1", messages.get(0).getTaskId());
         assertEquals(MessageRole.USER, messages.get(0).getRole());
+    }
+
+    @Test
+    void addMessage_preservesLargeFinalAssistantBodyAndMetadata() {
+        String sessionId = sessionManager.createSession(createTestRequest());
+        String fullReply = "最终回复\"\\多字节🔧\n".repeat(10_000);
+        assertTrue(fullReply.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 64 * 1024);
+
+        sessionManager.addMessage(sessionId, Message.builder()
+                .id("large-final-message")
+                .role(MessageRole.ASSISTANT)
+                .content(fullReply)
+                .metadata(Map.of("content", fullReply, "isResult", true))
+                .build());
+
+        Message restored = sessionManager.getAllMessages(sessionId).get(0);
+        assertEquals(fullReply, restored.getContent());
+        assertEquals(fullReply, restored.getMetadata().get("content"));
+    }
+
+    @Test
+    void addMessage_treatsStableReplayMessageIdAsIdempotent() {
+        String sessionId = sessionManager.createSession(createTestRequest());
+        String first = sessionManager.addMessage(sessionId, Message.builder()
+                .id("codex-event:task-1:17")
+                .role(MessageRole.TOOL)
+                .content("original")
+                .build());
+        String replay = sessionManager.addMessage(sessionId, Message.builder()
+                .id("codex-event:task-1:17")
+                .role(MessageRole.TOOL)
+                .content("must-not-overwrite")
+                .build());
+
+        assertEquals(first, replay);
+        assertEquals(1, sessionManager.countMessages(sessionId));
+        assertEquals("original", sessionManager.getAllMessages(sessionId).get(0).getContent());
     }
 
     @Test

@@ -220,6 +220,7 @@ public class LanggraphStreamRelay {
 
             JsonNode node = objectMapper.readTree(data);
             String type = node.path("type").asText("");
+            String messageId = workerMessageId(taskId, node);
 
             // Map Python Worker event → AgentMessage (using existing MessageType enum)
             switch (type) {
@@ -227,21 +228,21 @@ public class LanggraphStreamRelay {
                         taskId, node.path("content").asText(""));
 
                 case "assistant_text" -> publishMessage(sessionId, MessageType.TEXT_COMPLETE,
-                        buildSkillScopedPayload(node, taskId, null));
+                        buildSkillScopedPayload(node, taskId, null), messageId);
 
                 case "skill_frame_open" -> publishMessage(sessionId, MessageType.STATE_SYNC,
-                        buildSkillScopedPayload(node, taskId, "skill_frame_open"));
+                        buildSkillScopedPayload(node, taskId, "skill_frame_open"), messageId);
 
                 case "skill_frame_close" -> publishMessage(sessionId, MessageType.STATE_SYNC,
-                        buildSkillScopedPayload(node, taskId, "skill_frame_close"));
+                        buildSkillScopedPayload(node, taskId, "skill_frame_close"), messageId);
 
                 case "task_progress" -> publishMessage(sessionId, MessageType.STATE_SYNC,
-                        buildTaskProgressPayload(node, taskId));
+                        buildTaskProgressPayload(node, taskId), messageId);
 
-                case "tool_use" -> publishToolUse(sessionId, taskId, node);
+                case "tool_use" -> publishToolUse(sessionId, taskId, node, messageId);
 
                 case "tool_result", "skill_result_submit", "skill_result_reject" ->
-                        publishToolResult(sessionId, taskId, node, type);
+                        publishToolResult(sessionId, taskId, node, type, messageId);
 
                 case "result" -> {
                     String content = node.path("content").asText("");
@@ -262,13 +263,13 @@ public class LanggraphStreamRelay {
                     }
                     copyExecutionReportFields(payload, node);
                     publishMessage(sessionId, MessageType.TASK_COMPLETED,
-                            payload);
+                            payload, messageId);
 
                     taskService.completeTask(taskId, content, structuredOutput, durationMs);
                 }
 
                 case "approval_required", "skill_approval_request" ->
-                        handleApprovalRequired(node, type, taskId, sessionId);
+                        handleApprovalRequired(node, type, taskId, sessionId, messageId);
 
                 case "error" -> {
                     String error = node.path("error").asText(node.path("content").asText("Unknown error"));
@@ -288,7 +289,7 @@ public class LanggraphStreamRelay {
                     putBooleanIfPresent(payload, "requiresUpstreamAction", node, "requires_upstream_action");
                     putTextIfPresent(payload, "suggestedAction", node, "suggested_action");
                     copyExecutionReportFields(payload, node);
-                    publishMessage(sessionId, MessageType.ERROR, payload);
+                    publishMessage(sessionId, MessageType.ERROR, payload, messageId);
                     taskService.failTask(taskId, error);
                 }
 
@@ -347,7 +348,7 @@ public class LanggraphStreamRelay {
         return payload;
     }
 
-    private void publishToolUse(String sessionId, String taskId, JsonNode node) {
+    private void publishToolUse(String sessionId, String taskId, JsonNode node, String messageId) {
         String toolName = node.path("tool_name").asText(node.path("content").asText(""));
         String toolCallId = node.path("tool_call_id").asText("");
         String functionId = node.path("function_id").asText("");
@@ -369,10 +370,11 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "skillId", node, "skill_id");
         copyExecutionReportFields(payload, node);
         payload.put("status", "RUNNING");
-        publishMessage(sessionId, MessageType.TOOL_CALL_START, payload);
+        publishMessage(sessionId, MessageType.TOOL_CALL_START, payload, messageId);
     }
 
-    private void publishToolResult(String sessionId, String taskId, JsonNode node, String eventType) {
+    private void publishToolResult(String sessionId, String taskId, JsonNode node, String eventType,
+                                   String messageId) {
         String content = node.path("content").asText("");
         String toolName = node.path("tool_name").asText("");
         String toolCallId = node.path("tool_call_id").asText("");
@@ -410,7 +412,7 @@ public class LanggraphStreamRelay {
 
         publishMessage(sessionId,
                 success ? MessageType.TOOL_CALL_RESULT : MessageType.TOOL_CALL_ERROR,
-                payload);
+                payload, messageId);
     }
 
     private Object toObject(JsonNode node) {
@@ -506,7 +508,8 @@ public class LanggraphStreamRelay {
         return false;
     }
 
-    private void handleApprovalRequired(JsonNode node, String eventType, String taskId, String sessionId) {
+    private void handleApprovalRequired(JsonNode node, String eventType, String taskId, String sessionId,
+                                        String messageId) {
         String approvalType = node.path("approval_type").asText("");
         if (approvalType.isBlank()) {
             approvalType = node.path("reason").asText("");
@@ -538,7 +541,7 @@ public class LanggraphStreamRelay {
         copyExecutionReportFields(payload, node);
         payload.put("status", statusFromExecutionReportDigest(node, "AWAITING_APPROVAL"));
 
-        publishMessage(sessionId, MessageType.STATE_SYNC, payload);
+        publishMessage(sessionId, MessageType.STATE_SYNC, payload, messageId);
     }
 
     private void putTextIfPresent(Map<String, Object> payload, String targetKey, JsonNode node, String sourceKey) {
@@ -587,13 +590,34 @@ public class LanggraphStreamRelay {
         return null;
     }
 
+    /**
+     * LangGraph SSE event_id is monotonic within a task query. Combining it
+     * with the task id gives replayed events one durable message identity;
+     * older workers without event_id retain their legacy UUID behavior.
+     */
+    private String workerMessageId(String taskId, JsonNode node) {
+        JsonNode eventId = firstPresent(node, "event_id", "eventId");
+        if (eventId == null || !StringUtils.hasText(eventId.asText())) {
+            return null;
+        }
+        return "langgraph-event:" + taskId + ":" + eventId.asText();
+    }
+
     private void handleStreamComplete(String taskId, String sessionId) {
         log.info("SSE stream completed for langgraph task {}", taskId);
         activeStreams.remove(taskId);
     }
 
     private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
+        publishMessage(sessionId, type, payload, null);
+    }
+
+    private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload,
+                                String messageId) {
         AgentMessage msg = AgentMessage.of(sessionId, LanggraphTaskService.PROVIDER_TYPE, type, payload);
+        if (StringUtils.hasText(messageId)) {
+            msg.setMessageId(messageId);
+        }
         Object taskId = payload.get("taskId");
         if (taskId instanceof String taskIdValue && !taskIdValue.isBlank()) {
             msg.setTaskId(taskIdValue);

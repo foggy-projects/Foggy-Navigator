@@ -6,6 +6,7 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.session.event.SessionEventListener;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
@@ -47,6 +48,7 @@ class WorkerStreamRelayCheckpointTest {
 
         var workingDirectoryRepository = mock(WorkingDirectoryRepository.class);
         var conversationConfigService = mock(ConversationConfigService.class);
+        var sessionEventListener = mock(SessionEventListener.class);
         var publisher = mock(ApplicationEventPublisher.class);
         var objectMapper = new ObjectMapper();
 
@@ -56,6 +58,7 @@ class WorkerStreamRelayCheckpointTest {
                 taskRepository,
                 workingDirectoryRepository,
                 conversationConfigService,
+                sessionEventListener,
                 publisher,
                 objectMapper
         );

@@ -14,6 +14,7 @@ import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.session.event.SessionEventListener;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -26,6 +27,10 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -64,6 +69,7 @@ public class WorkerStreamRelay {
     private final ClaudeTaskRepository taskRepository;
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final ConversationConfigService conversationConfigService;
+    private final SessionEventListener sessionEventListener;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
 
@@ -332,31 +338,51 @@ public class WorkerStreamRelay {
                         log.debug("Task {} received SSE data: {}", taskId, data.substring(0, Math.min(200, data.length())));
                         WorkerEvent workerEvent = objectMapper.readValue(data, WorkerEvent.class);
                         log.debug("Task {} parsed event type: {}", taskId, workerEvent.getType());
-                        // 更新 ACK 序列号：优先用 Worker 注入的 seq（ESN 模式），
-                        // 若 Worker 未返回 seq（旧版），降级为单调递增计数
-                        Integer ackSeq;
-                        if (workerEvent.getSeq() != null) {
-                            ackSeq = lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0))
-                                    .updateAndGet(cur -> Math.max(cur, workerEvent.getSeq()));
-                        } else {
-                            // 旧 Worker 兼容：无 seq 字段，按计数递增
-                            ackSeq = lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0)).incrementAndGet();
-                        }
+                        // An ESN identifies a replayable Worker event. Its ACK may only
+                        // advance after the corresponding message has been durably stored.
+                        // The old counter protocol follows the same local ordering: do
+                        // not move its persisted/local counter until the message write has
+                        // succeeded.
+                        boolean sequencedWorkerEvent = workerEvent.getSeq() != null;
+                        // Keep an explicit zero ACK while the first event is being
+                        // persisted. A persistence failure must enter the reconnect
+                        // path, not look like a completed task.
+                        AtomicInteger ackTracker = lastAckedSeq.computeIfAbsent(taskId,
+                                k -> new AtomicInteger(0));
+                        Integer ackSeq = sequencedWorkerEvent
+                                ? workerEvent.getSeq()
+                                : ackTracker.get() + 1;
                         if (workerEvent.getTaskId() != null && !workerEvent.getTaskId().isBlank()) {
                             workerTaskIdMap.put(taskId, workerEvent.getTaskId());
                             log.debug("Task {} mapped to worker task: {}", taskId, workerEvent.getTaskId());
                         }
-                        taskService.recordWorkerProgress(taskId, workerEvent.getTaskId(),
-                                workerEvent.getSessionId(), workerEvent.getModel(), ackSeq,
-                                isUserVisibleOutputEvent(workerEvent));
                         try {
                             relayEvent(sessionId, taskId, workerEvent, detectedModel, detectedClaudeSessionId);
                         } catch (Exception relayEx) {
-                            log.warn("Failed to relay event for task {}, type={}: {}",
-                                    taskId, workerEvent.getType(), relayEx.getMessage(), relayEx);
+                            throw new DurableWorkerEventPersistenceException(
+                                    workerMessageId(taskId, workerEvent), relayEx);
                         }
+                        if (!isTerminalWorkerEvent(workerEvent)) {
+                            try {
+                                taskService.recordWorkerProgress(taskId, workerEvent.getTaskId(),
+                                        workerEvent.getSessionId(), workerEvent.getModel(), ackSeq,
+                                        isUserVisibleOutputEvent(workerEvent));
+                            } catch (RuntimeException progressFailure) {
+                                throw new DurableWorkerEventPersistenceException(
+                                        workerMessageId(taskId, workerEvent), progressFailure);
+                            }
+                            ackTracker.updateAndGet(current -> Math.max(current, ackSeq));
+                        }
+                    } catch (DurableWorkerEventPersistenceException e) {
+                        // Do not advance a replayable Worker cursor after a MySQL or
+                        // descriptor persistence failure. Let the SSE subscription fail
+                        // so its existing reconnect path replays this ESN.
+                        throw e;
                     } catch (Exception e) {
-                        log.warn("Failed to parse worker event for task {}: {}", taskId, data, e);
+                        // A legacy Worker may only offer its counter replay
+                        // contract, but it must still reconnect rather than
+                        // advance local state after a failed durable write.
+                        throw new DurableWorkerEventPersistenceException(null, e);
                     }
                 })
                 .doOnComplete(() -> {
@@ -429,7 +455,7 @@ public class WorkerStreamRelay {
                     log.info("SSE reconnect attempt failed for task {} after error — Reconciler will manage lifecycle", taskId);
                     // Keep lastAckedSeq for future reconnect by Reconciler
                 })
-                .subscribe();
+                .subscribe(ignored -> { }, error -> { });
     }
 
     /**
@@ -525,6 +551,10 @@ public class WorkerStreamRelay {
         return "RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status);
     }
 
+    private boolean isTerminalWorkerEvent(WorkerEvent event) {
+        return event != null && ("result".equals(event.getType()) || "error".equals(event.getType()));
+    }
+
     private boolean isUserVisibleOutputEvent(WorkerEvent event) {
         if (event == null || event.getType() == null) {
             return false;
@@ -616,6 +646,7 @@ public class WorkerStreamRelay {
 
         // 使用 AgentMessageBuilder 标准化 payload 字段名
         AgentMessageBuilder mb = AgentMessageBuilder.create(sessionId, AGENT_ID).taskId(taskId);
+        String workerMessageId = workerMessageId(taskId, event);
 
         switch (event.getType()) {
             case "system" -> {
@@ -631,35 +662,35 @@ public class WorkerStreamRelay {
                 }
                 String subtype = event.getSubtype();
                 if ("auto_compact".equals(subtype) || "context_compression".equals(subtype)) {
-                    publishBuilt(mb.stateSync("Context compressed", subtype));
+                    publishBuilt(mb.stateSync("Context compressed", subtype), workerMessageId);
                 } else if ("waiting".equals(subtype)) {
                     Map<String, Object> data = event.getData() != null ? event.getData() : Map.of();
                     publishBuilt(mb.stateSync("Waiting for response...", "waiting")
                             .put("elapsedSeconds", data.getOrDefault("elapsed_seconds", 0))
-                            .put("timeoutSeconds", data.getOrDefault("timeout_seconds", 600)));
+                            .put("timeoutSeconds", data.getOrDefault("timeout_seconds", 600)), workerMessageId);
                 } else {
                     String normalizedSubtype = (subtype == null || subtype.isBlank()) ? "system" : subtype;
                     String content = (event.getContent() == null || event.getContent().isBlank())
                             ? "Worker status updated"
                             : event.getContent();
                     publishBuilt(mb.stateSync(content, normalizedSubtype)
-                            .put("claudeSessionId", nullSafe(event.getSessionId())));
+                            .put("claudeSessionId", nullSafe(event.getSessionId())), workerMessageId);
                 }
             }
             case "assistant_text" -> {
                 if (event.getModel() != null) {
                     detectedModel.set(event.getModel());
                 }
-                publishBuilt(mb.textComplete(event.getContent()));
+                publishBuilt(mb.textComplete(event.getContent()), workerMessageId);
             }
             case "tool_use" -> {
                 String toolCallId = event.getToolUseId() != null
                         ? event.getToolUseId() : "tc-" + System.nanoTime();
-                publishBuilt(mb.toolCallStart(toolCallId, event.getTool(), event.getInput()));
+                publishBuilt(mb.toolCallStart(toolCallId, event.getTool(), event.getInput()), workerMessageId);
             }
             case "tool_result" -> {
                 publishBuilt(mb.toolCallResult(event.getToolUseId(), event.getTool(),
-                        event.getOutput(), !Boolean.TRUE.equals(event.getIsError())));
+                        event.getOutput(), !Boolean.TRUE.equals(event.getIsError())), workerMessageId);
             }
             case "result" -> {
                 String resultContent = event.getContent() != null ? event.getContent() : event.getResult();
@@ -668,14 +699,14 @@ public class WorkerStreamRelay {
                         .metrics(event.getCostUsd(), event.getDurationMs(),
                                 event.getInputTokens(), event.getOutputTokens(),
                                 event.getNumTurns(), resolvedModel)
-                        .put("claudeSessionId", nullSafe(event.getSessionId())));
+                        .put("claudeSessionId", nullSafe(event.getSessionId())), workerMessageId);
 
                 // 更新任务状态
                 taskService.completeTask(taskId,
                         event.getTaskId() != null ? event.getTaskId() : getWorkerTaskId(taskId),
                         event.getSessionId(), resultContent, event.getCostUsd(),
                         event.getInputTokens(), event.getOutputTokens(), event.getDurationMs(),
-                        event.getNumTurns(), resolvedModel);
+                        event.getNumTurns(), resolvedModel, event.getSeq());
 
                 // 主动 dispose SSE 订阅
                 Disposable completedSub = activeStreams.remove(taskId);
@@ -701,26 +732,26 @@ public class WorkerStreamRelay {
             case "permission_request" -> {
                 publishBuilt(mb.confirmationRequest(event.getPermissionId())
                         .put("toolName", event.getTool())
-                        .put("toolInput", event.getInput()));
+                        .put("toolInput", event.getInput()), workerMessageId);
                 taskService.setAwaitingPermission(taskId);
             }
             case "user_question" -> {
                 publishBuilt(mb.confirmationRequest(event.getPermissionId())
-                        .put("questions", event.getQuestions()));
+                        .put("questions", event.getQuestions()), workerMessageId);
                 taskService.setAwaitingPermission(taskId);
             }
             case "plan_review" -> {
                 publishBuilt(mb.confirmationRequest(event.getPermissionId())
                         .put("planReview", true)
                         .put("allowedPrompts", event.getAllowedPrompts())
-                        .put("plan", event.getPlan()));
+                        .put("plan", event.getPlan()), workerMessageId);
                 taskService.setAwaitingPermission(taskId);
             }
             case "checkpoint" -> {
                 String checkpointId = event.getCheckpointId();
                 if (checkpointId != null && !checkpointId.isEmpty()) {
                     taskService.addCheckpoint(taskId, checkpointId);
-                    publishBuilt(mb.checkpoint(checkpointId));
+                    publishBuilt(mb.checkpoint(checkpointId), workerMessageId);
                 }
             }
             case "error" -> {
@@ -735,11 +766,11 @@ public class WorkerStreamRelay {
                 }
                 String errorClaudeSessionId = detectedClaudeSessionId.get();
                 publishBuilt(mb.error(event.getError())
-                        .put("claudeSessionId", nullSafe(errorClaudeSessionId)));
+                        .put("claudeSessionId", nullSafe(errorClaudeSessionId)), workerMessageId);
 
                 taskService.failTask(taskId,
                         event.getTaskId() != null ? event.getTaskId() : getWorkerTaskId(taskId),
-                        errorClaudeSessionId, event.getError());
+                        errorClaudeSessionId, event.getError(), event.getSeq());
 
                 Disposable failedSub = activeStreams.remove(taskId);
                 if (failedSub != null && !failedSub.isDisposed()) {
@@ -769,7 +800,7 @@ public class WorkerStreamRelay {
                         taskId, workerLatestSeq, workerEventCount, myAckedSeq);
 
                 publishBuilt(mb.stateSync("Event stream verified", "sync_checkpoint")
-                        .put("latestSeq", workerLatestSeq));
+                        .put("latestSeq", workerLatestSeq), workerMessageId);
             }
             default -> log.debug("Unknown worker event type: {}", event.getType());
         }
@@ -863,8 +894,54 @@ public class WorkerStreamRelay {
         eventPublisher.publishEvent(message);
     }
 
-    private void publishBuilt(AgentMessageBuilder builder) {
-        eventPublisher.publishEvent(builder.build());
+    private void publishBuilt(AgentMessageBuilder builder, String messageId) {
+        AgentMessage message = builder.build();
+        if (messageId != null) {
+            message.setMessageId(messageId);
+        }
+        try {
+            sessionEventListener.handleMessageDurably(message);
+        } catch (RuntimeException e) {
+            throw new DurableWorkerEventPersistenceException(message.getMessageId(), e);
+        }
+        eventPublisher.publishEvent(message);
+    }
+
+    /**
+     * ESN is replay-stable for all modern Worker events. Legacy tool results
+     * still expose tool_use_id in the normal protocol, which is safe to use as
+     * a payload idempotency key. Other legacy event kinds retain their UUID so
+     * unrelated repeated text/status events are never silently coalesced.
+     */
+    private String workerMessageId(String taskId, WorkerEvent event) {
+        if (event.getSeq() != null) {
+            return "claude-event:" + taskId + ":" + event.getSeq();
+        }
+        if (!"tool_result".equals(event.getType())) {
+            return null;
+        }
+        if (event.getToolUseId() != null && !event.getToolUseId().isBlank()) {
+            return "cl-lt:" + taskId + ":" + event.getToolUseId();
+        }
+        return legacyToolMessageId(taskId, event);
+    }
+
+    private String legacyToolMessageId(String taskId, WorkerEvent event) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest((taskId + "\u0000" + event.getTool() + "\u0000"
+                    + event.getOutput() + "\u0000" + event.getIsError())
+                    .getBytes(StandardCharsets.UTF_8));
+            return "cl-lt-" + HexFormat.of().formatHex(hash, 0, 24);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
+    private static final class DurableWorkerEventPersistenceException extends RuntimeException {
+        private DurableWorkerEventPersistenceException(String messageId, Throwable cause) {
+            super("Failed to durably persist Claude Worker event " + messageId, cause);
+        }
     }
 
     private String nullSafe(String value) {

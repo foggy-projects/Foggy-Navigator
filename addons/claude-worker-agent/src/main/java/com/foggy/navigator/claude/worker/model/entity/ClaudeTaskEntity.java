@@ -81,7 +81,7 @@ public class ClaudeTaskEntity {
     private String errorMessage;
 
     /** A2A 异步任务完成后保存的结果文本（轮询 getTask 时返回） */
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String resultText;
 
     /** A2A 多轮会话标识（Open API contextId） */

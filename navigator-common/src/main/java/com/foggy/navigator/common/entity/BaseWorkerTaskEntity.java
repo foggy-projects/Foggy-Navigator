@@ -76,7 +76,7 @@ public abstract class BaseWorkerTaskEntity {
     private Long durationMs;
     private Integer numTurns;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String resultText;
 
     @Column(columnDefinition = "TEXT")
