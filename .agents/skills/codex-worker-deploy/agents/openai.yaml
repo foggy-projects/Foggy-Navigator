@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Worker Deploy"
+  short_description: "Package and publish Codex workers with tiered smoke checks"
+  default_prompt: "Use $codex-worker-deploy to package and publish the changed Codex worker safely."

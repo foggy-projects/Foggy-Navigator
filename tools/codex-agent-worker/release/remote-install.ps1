@@ -25,15 +25,17 @@ catch {
 }
 
 $version = $latestJson.version
-if (-not $version) {
-    Write-Host "ERROR: Could not parse version from latest.json" -ForegroundColor Red
+if ($latestJson.schemaVersion -ne 1 -or $latestJson.product -ne 'codex-agent-worker' -or -not $version) {
+    Write-Host "ERROR: Could not validate version/product/schema from latest.json" -ForegroundColor Red
     exit 1
 }
 
 Write-Host "Latest version: $version" -ForegroundColor Green
 
 $filePath = $latestJson.files.windows
-if (-not $filePath) {
+$expectedSha256 = $latestJson.sha256.windows
+$expectedBytes = $latestJson.bytes.windows
+if (-not $filePath -or -not $expectedSha256 -or -not $expectedBytes) {
     Write-Host "ERROR: No Windows release found in latest.json" -ForegroundColor Red
     exit 1
 }
@@ -47,6 +49,20 @@ New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
 
 $archiveFile = Join-Path $tmpDir (Split-Path $filePath -Leaf)
 Invoke-WebRequest -Uri $downloadUrl -OutFile $archiveFile
+
+$actualBytes = (Get-Item $archiveFile).Length
+if ($actualBytes -ne [long]$expectedBytes) {
+    Write-Host "ERROR: Release archive size mismatch (expected $expectedBytes, got $actualBytes)." -ForegroundColor Red
+    Remove-Item $tmpDir -Recurse -Force
+    exit 1
+}
+$actualSha256 = (Get-FileHash -Path $archiveFile -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualSha256 -ne ([string]$expectedSha256).ToLowerInvariant()) {
+    Write-Host "ERROR: Release archive SHA-256 mismatch." -ForegroundColor Red
+    Remove-Item $tmpDir -Recurse -Force
+    exit 1
+}
+Write-Host "Release archive integrity verified." -ForegroundColor Green
 
 Write-Host "Extracting..." -ForegroundColor Cyan
 Expand-Archive -Path $archiveFile -DestinationPath $tmpDir -Force

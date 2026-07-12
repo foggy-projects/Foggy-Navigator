@@ -12,6 +12,11 @@ CYAN='\033[0;36m'; NC='\033[0m'
 echo -e "${CYAN}=== Codex Agent Worker - Remote Installer ===${NC}"
 echo ""
 
+if ! command -v node >/dev/null 2>&1; then
+    echo -e "${RED}ERROR: Node.js 20+ is required to validate release metadata.${NC}"
+    exit 1
+fi
+
 if [ "$RELEASE_BASE_URL" = "__RELEASE_BASE_URL__" ] || [ -z "$RELEASE_BASE_URL" ]; then
     echo -e "${RED}ERROR: This script has not been configured with a release URL.${NC}"
     echo -e "${YELLOW}The upload.ps1 script should inject RELEASE_BASE_URL before uploading.${NC}"
@@ -25,9 +30,14 @@ if [ -z "$LATEST_JSON" ]; then
     exit 1
 fi
 
-VERSION=$(echo "$LATEST_JSON" | grep '"version"' | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
+VERSION=$(printf '%s' "$LATEST_JSON" | node -e '
+let raw=""; process.stdin.on("data", chunk => raw += chunk); process.stdin.on("end", () => {
+  const manifest = JSON.parse(raw)
+  if (manifest.schemaVersion !== 1 || manifest.product !== "codex-agent-worker") process.exit(2)
+  process.stdout.write(String(manifest.version || ""))
+})')
 if [ -z "$VERSION" ]; then
-    echo -e "${RED}ERROR: Could not parse version from latest.json${NC}"
+    echo -e "${RED}ERROR: Could not validate version/product/schema from latest.json${NC}"
     exit 1
 fi
 
@@ -39,7 +49,21 @@ case "$(uname -s)" in
     *) OS_TAG="linux" ;;
 esac
 
-FILE_PATH=$(echo "$LATEST_JSON" | grep "\"$OS_TAG\"" | head -1 | sed 's/.*"\([^"]*codex-worker[^"]*\)".*/\1/')
+FILE_PATH=$(printf '%s' "$LATEST_JSON" | OS_TAG="$OS_TAG" node -e '
+let raw=""; process.stdin.on("data", chunk => raw += chunk); process.stdin.on("end", () => {
+  const manifest = JSON.parse(raw)
+  process.stdout.write(String(manifest.files?.[process.env.OS_TAG] || ""))
+})')
+EXPECTED_SHA256=$(printf '%s' "$LATEST_JSON" | OS_TAG="$OS_TAG" node -e '
+let raw=""; process.stdin.on("data", chunk => raw += chunk); process.stdin.on("end", () => {
+  const manifest = JSON.parse(raw)
+  process.stdout.write(String(manifest.sha256?.[process.env.OS_TAG] || ""))
+})')
+EXPECTED_BYTES=$(printf '%s' "$LATEST_JSON" | OS_TAG="$OS_TAG" node -e '
+let raw=""; process.stdin.on("data", chunk => raw += chunk); process.stdin.on("end", () => {
+  const manifest = JSON.parse(raw)
+  process.stdout.write(String(manifest.bytes?.[process.env.OS_TAG] || ""))
+})')
 if [ -z "$FILE_PATH" ]; then
     echo -e "${RED}ERROR: No release found for $OS_TAG in latest.json${NC}"
     exit 1
@@ -53,6 +77,25 @@ trap "rm -rf '$TMPDIR'" EXIT
 
 ARCHIVE_FILE="$TMPDIR/$(basename "$FILE_PATH")"
 curl -sSL --fail -o "$ARCHIVE_FILE" "$DOWNLOAD_URL"
+
+ACTUAL_BYTES=$(wc -c < "$ARCHIVE_FILE" | tr -d ' ')
+if [ -z "$EXPECTED_BYTES" ] || [ "$ACTUAL_BYTES" != "$EXPECTED_BYTES" ]; then
+    echo -e "${RED}ERROR: Release archive size mismatch (expected $EXPECTED_BYTES, got $ACTUAL_BYTES).${NC}"
+    exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL_SHA256=$(sha256sum "$ARCHIVE_FILE" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL_SHA256=$(shasum -a 256 "$ARCHIVE_FILE" | awk '{print $1}')
+else
+    echo -e "${RED}ERROR: sha256sum or shasum is required.${NC}"
+    exit 1
+fi
+if [ -z "$EXPECTED_SHA256" ] || [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+    echo -e "${RED}ERROR: Release archive SHA-256 mismatch.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}Release archive integrity verified.${NC}"
 
 echo -e "${CYAN}Extracting...${NC}"
 if [[ "$ARCHIVE_FILE" == *.zip ]]; then

@@ -10,7 +10,10 @@
     "build": "npm run clean && tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
-    "test:resume-shell": "node scripts/resume-shell-integration.mjs"
+    "test:resume-shell": "node scripts/resume-shell-integration.mjs",
+    "package:release": "node scripts/package-release.mjs",
+    "publish:obs": "node scripts/publish-obs.mjs",
+    "smoke:release": "node scripts/release-smoke.mjs"
   },
   "dependencies": {
     "@openai/codex-sdk": "^0.144.1",

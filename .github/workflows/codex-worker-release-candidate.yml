@@ -1,0 +1,78 @@
+name: Codex Worker Release Candidate
+
+on:
+  pull_request:
+    paths:
+      - 'tools/codex-agent-worker/**'
+      - '.github/workflows/codex-worker-release-candidate.yml'
+  workflow_dispatch:
+    inputs:
+      smoke_level:
+        description: Release smoke level; auto skips docs/tests-only changes and escalates high-risk paths
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - skip
+          - basic
+          - full
+
+concurrency:
+  group: codex-worker-release-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/codex-agent-worker
+    env:
+      RELEASE_SMOKE_LEVEL: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke_level || 'auto' }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tools/codex-agent-worker/package-lock.json
+
+      - name: Install development dependencies
+        run: npm ci
+
+      - name: Describe candidate changes
+        shell: bash
+        run: |
+          git diff --name-only HEAD^ HEAD -- . \
+            | sed 's#^tools/codex-agent-worker/##' \
+            | tee release-changed-files.txt
+          {
+            echo 'RELEASE_CHANGED_FILES<<EOF'
+            cat release-changed-files.txt
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+
+      - name: Build and smoke release candidate
+        run: npm run package:release -- --platform all --smoke "$RELEASE_SMOKE_LEVEL"
+
+      - name: Upload release candidate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-worker-release-candidate-${{ github.sha }}
+          path: |
+            tools/codex-agent-worker/release/output/*.zip
+            tools/codex-agent-worker/release/output/*.tar.gz
+            tools/codex-agent-worker/release/output/*.sha256
+            tools/codex-agent-worker/release/output/smoke-result.json
+            tools/codex-agent-worker/release-changed-files.txt
+          if-no-files-found: error
+          retention-days: 14
