@@ -1,6 +1,6 @@
 {
   "name": "codex-app-server-worker",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Foggy Navigator Codex app-server runtime worker",
   "type": "module",
   "scripts": {
