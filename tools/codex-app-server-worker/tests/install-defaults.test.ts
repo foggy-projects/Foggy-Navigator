@@ -122,7 +122,7 @@ function expectedPlatformDefault(): string {
   if (process.platform !== 'win32') return '/'
   const command = [
     '$roots = @([IO.DriveInfo]::GetDrives() | ForEach-Object {',
-    "try { if ($_.IsReady) { $root = $_.RootDirectory.FullName; if ($root -match '^[A-Za-z]:\\\\$' -and -not $root.Equals('C:\\', [StringComparison]::OrdinalIgnoreCase)) { $root } } } catch {}",
+    "try { if ($_.IsReady) { $root = $_.RootDirectory.FullName; if ($root -match '^[A-Za-z]:\\\\$') { $root } } } catch {}",
     '} | Sort-Object -Unique)',
     "[Console]::Write(($roots -join ','))",
   ].join('\n')

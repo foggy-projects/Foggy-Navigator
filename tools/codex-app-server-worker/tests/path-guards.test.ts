@@ -97,7 +97,7 @@ test('Codex homes must be disjoint from worker state, workspaces, and each other
   }), hasIsolationCode)
 })
 
-test('filesystem-root allowlists retain private Worker path exclusions', async t => {
+test('filesystem-root allowlists explicitly allow every directory on the volume', async t => {
   const root = await tempDirectory('codex-app-root-allowlist-')
   const filesystemRoot = path.parse(root).root
   const stateDir = path.join(root, 'state')
@@ -120,14 +120,14 @@ test('filesystem-root allowlists retain private Worker path exclusions', async t
     allowedCwds: [filesystemRoot],
   }))
   assert.equal(resolveAllowedWorkingPath(workspaceChild, [filesystemRoot], privatePaths), await fs.realpath(workspaceChild))
-  for (const blocked of [filesystemRoot, root, stateDir, codexHome, codexBizHomeRoot]) {
-    assert.equal(resolveAllowedWorkingPath(blocked, [filesystemRoot], privatePaths), undefined)
+  for (const allowed of [filesystemRoot, root, stateDir, codexHome, codexBizHomeRoot]) {
+    assert.equal(resolveAllowedWorkingPath(allowed, [filesystemRoot], privatePaths), await fs.realpath(allowed))
   }
 
   const linkedHome = path.join(workspace, 'linked-home')
   try {
     await fs.symlink(codexHome, linkedHome, process.platform === 'win32' ? 'junction' : 'dir')
-    assert.equal(resolveAllowedWorkingPath(linkedHome, [filesystemRoot], privatePaths), undefined)
+    assert.equal(resolveAllowedWorkingPath(linkedHome, [filesystemRoot], privatePaths), await fs.realpath(codexHome))
   } catch (error) {
     if (!(error instanceof Error && (error as NodeJS.ErrnoException).code === 'EPERM')) throw error
   }

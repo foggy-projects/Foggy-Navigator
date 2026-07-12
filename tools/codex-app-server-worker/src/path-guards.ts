@@ -48,6 +48,19 @@ export function resolveAllowedWorkingPath(
     }
   })
   if (!allowed) return undefined
+  // A filesystem-root allowlist is the explicit "allow every directory on this
+  // volume" mode. Do not silently narrow it again with Worker-private path
+  // exclusions; operators selecting this mode have already accepted that the
+  // cwd allowlist is only an admission check, not a filesystem sandbox.
+  const allowsWholeFilesystem = allowedCwds.some(root => {
+    try {
+      return isFilesystemRoot(fs.realpathSync.native(root))
+        && isPathWithinAllowedCwd(realCandidate, fs.realpathSync.native(root))
+    } catch {
+      return false
+    }
+  })
+  if (allowsWholeFilesystem) return realCandidate
   const overlapsPrivatePath = privatePaths.some(privatePath => (
     pathsOverlap(realCandidate, canonicalIfPresent(privatePath))
   ))

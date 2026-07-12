@@ -29,9 +29,9 @@ Independent Foggy Navigator runtime backed only by `codex app-server`. It does n
 - `GET /api/v1/capabilities` exposes the runtime/instance/revision, complete reasoning matrix,
   exact CLI/protocol version, feature flags, capacity, readiness, and schema digest.
 - Working directories are checked against configured roots after filesystem `realpath`
-  resolution, so a junction or symlink inside an allowed root cannot escape it. Worker state,
-  `CODEX_HOME`, `CODEX_BIZ_HOME_ROOT`, and their ancestors remain invalid task directories even
-  when a filesystem root is allowed.
+  resolution, so a junction or symlink inside a scoped allowed root cannot escape it. Configuring
+  a filesystem root (`/` on Linux or a drive root such as `C:\` on Windows) explicitly enables
+  every directory on that volume, including Worker-private paths and their ancestors.
 - The cwd allowlist is an admission check, not a filesystem sandbox. In particular,
   `danger-full-access` tasks can access absolute paths outside their cwd, including Worker-private
   paths and, on Windows, `C:\` even when it is absent from the allowlist. Run broad defaults only
@@ -182,12 +182,12 @@ After extracting the ZIP, install it with `./install.ps1 -InstallDir <path>` on 
 `./install.sh --install-dir <path>` on Linux. Installation intentionally does not start an
 unconfigured service. When no `.env` exists, it creates one from `.env.example`; Linux defaults
 `CODEX_APP_SERVER_ALLOWED_CWDS` to `/`, while Windows snapshots every ready drive-letter root
-except `C:\` (for example `D:\,E:\`). A Windows machine with no ready non-C drive keeps the value
-empty and emits a warning. These broad defaults are intended for a dedicated local Worker; narrow
-them when the host requires tighter workspace scope.
+(for example `C:\,D:\,E:\`). A Windows machine with no ready drive keeps the value empty and emits
+a warning. These broad defaults are intended for a dedicated local Worker; narrow them when the
+host requires tighter workspace scope.
 
 Install and update never rewrite an existing `.env`. Drives attached after installation are not
-added automatically, and `C:\` is available as a task cwd only through explicit configuration.
+added automatically.
 
 For an offline update of an existing 0.1.1-or-newer install, run its current update script and pass
 the downloaded archive:

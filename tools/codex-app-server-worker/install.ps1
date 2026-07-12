@@ -16,7 +16,7 @@ if (-not (Test-Path $EnvFile)) {
                 try {
                     if ($_.IsReady) {
                         $Root = $_.RootDirectory.FullName
-                        if ($Root -match '^[A-Za-z]:\\$' -and -not $Root.Equals('C:\', [StringComparison]::OrdinalIgnoreCase)) {
+                        if ($Root -match '^[A-Za-z]:\\$') {
                             $Root
                         }
                     }
@@ -30,10 +30,10 @@ if (-not (Test-Path $EnvFile)) {
         if ($LASTEXITCODE -ne 0) { throw 'Failed to configure fresh-install environment' }
         $CodexHome = [IO.Path]::GetFullPath((Join-Path $InstallDir 'codex-home'))
         if ($DefaultAllowedCwds) {
-            Write-Output "Created $EnvFile with non-C workspace roots: $DefaultAllowedCwds"
-            Write-Warning 'The cwd allowlist is an admission check, not a filesystem sandbox. danger-full-access tasks can access paths outside these roots, including C:\.'
+            Write-Output "Created $EnvFile with all ready drive roots: $DefaultAllowedCwds"
+            Write-Warning 'The cwd allowlist is an admission check, not a filesystem sandbox. Fresh installs allow every directory on every drive that was ready during installation.'
         } else {
-            Write-Warning "Created $EnvFile without workspace roots because no ready non-C drives were found. Configure CODEX_APP_SERVER_ALLOWED_CWDS before start."
+            Write-Warning "Created $EnvFile without workspace roots because no ready drive roots were found. Configure CODEX_APP_SERVER_ALLOWED_CWDS before start."
         }
         Write-Output "Generated a persistent state key and isolated CODEX_HOME at $CodexHome"
         Write-Output 'Worker token and OPENAI_API_KEY remain empty; Navigator ModelConfig may supply model credentials.'

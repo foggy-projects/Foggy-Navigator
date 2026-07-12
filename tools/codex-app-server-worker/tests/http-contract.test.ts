@@ -451,7 +451,7 @@ test('empty cwd allowlist is not ready and omitted cwd cannot bypass a different
   t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
 })
 
-test('filesystem-root allowlists reject Worker private paths and their ancestors', async t => {
+test('filesystem-root allowlists accept every directory on the volume', async t => {
   const root = await tempDirectory('codex-app-http-private-cwd-')
   const stateDir = path.join(root, 'state')
   const codexHome = path.join(root, 'codex-home')
@@ -481,10 +481,10 @@ test('filesystem-root allowlists reject Worker private paths and their ancestors
 
   assert.equal((await postTask(baseUrl, 'ordinary-workspace', { prompt: 'x', cwd: workspace })).response.status, 202)
   await waitFor(() => manager.get('ordinary-workspace')?.status === 'terminal')
-  for (const [index, blocked] of [root, stateDir, codexHome, codexBizHomeRoot].entries()) {
-    const response = await postTask(baseUrl, `private-cwd-${index}`, { prompt: 'x', cwd: blocked })
-    assert.equal(response.response.status, 403)
-    assert.equal(response.body.error, 'WORKING_DIRECTORY_NOT_ALLOWED')
+  for (const [index, allowed] of [root, stateDir, codexHome, codexBizHomeRoot].entries()) {
+    const response = await postTask(baseUrl, `root-cwd-${index}`, { prompt: 'x', cwd: allowed })
+    assert.equal(response.response.status, 202)
+    await waitFor(() => manager.get(`root-cwd-${index}`)?.status === 'terminal')
   }
 })
 
