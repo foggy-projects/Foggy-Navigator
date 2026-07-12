@@ -67,7 +67,12 @@ export interface RoutePayload {
 
 // ===== Worker åç«¯ç±»å‹ =====
 
-export type WorkerBackend = 'CLAUDE_CODE' | 'OPENAI_CODEX' | 'GEMINI_CLI' | 'LANGGRAPH_BIZ'
+export type WorkerBackend =
+  | 'CLAUDE_CODE'
+  | 'OPENAI_CODEX'
+  | 'OPENAI_CODEX_APP_SERVER'
+  | 'GEMINI_CLI'
+  | 'LANGGRAPH_BIZ'
 
 // ===== Claude Worker ç±»å‹ =====
 
@@ -653,9 +658,9 @@ export interface SessionSearchPage {
   size: number
 }
 
-// ===== ÒµÎñ Agent ¹ÜÀíÀàĞÍ =====
+// ===== ä¸šåŠ¡ Agent ç®¡ç†ç±»å‹ =====
 
-/** ÒµÎñ Worker ³Ø */
+/** ä¸šåŠ¡ Worker æ±  */
 export interface BizWorkerPool {
   poolId: string
   tenantId: string
@@ -666,7 +671,7 @@ export interface BizWorkerPool {
   healthStatus?: 'HEALTHY' | 'UNHEALTHY' | 'UNKNOWN'
 }
 
-/** ¿Í»§¶ËÓ¦ÓÃÄ£ĞÍÊÚÈ¨ */
+/** å®¢æˆ·ç«¯åº”ç”¨æ¨¡å‹æˆæƒ */
 export interface ClientAppModelConfigGrant {
   id: number
   clientAppId: string

@@ -6,6 +6,7 @@
           <text class="pin-text">&#x1F4CC;</text>
         </view>
         <InteractionBadge v-if="interactionState" :state="interactionState" />
+        <ProviderBadge :provider-type="latestTask.providerType" />
         <text v-if="latestTask.model" class="session-model">{{ latestTask.model }}</text>
       </view>
     </view>
@@ -27,6 +28,7 @@
 import { computed } from 'vue'
 import type { ConversationGroup, DirectoryMilestone, LlmModelConfig } from '@/api/types'
 import InteractionBadge from './InteractionBadge.vue'
+import ProviderBadge from './ProviderBadge.vue'
 import { shortDateTime } from '@/utils/time'
 import { getGroupTitle, getGroupInteractionState } from '@/composables/useConversationGroup'
 
@@ -89,6 +91,7 @@ function milestoneStatusLabel(status?: string): string {
   align-items: center;
   flex: 1;
   flex-wrap: wrap;
+  gap: 8rpx;
 }
 .pin-icon {
   margin-right: 8rpx;

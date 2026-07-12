@@ -115,10 +115,7 @@ class CodexStreamRelayTest {
 
     @Test
     void reconnectTaskUsesPersistedWorkerTaskIdAndAckSeq() {
-        CodexTaskEntity entity = new CodexTaskEntity();
-        entity.setTaskId("local-task-1");
-        entity.setWorkerId("worker-1");
-        entity.setSessionId("session-1");
+        CodexTaskEntity entity = legacyTask();
         entity.setWorkerTaskId("worker-task-9");
         entity.setCodexThreadId("thread-1");
         entity.setLastAckedSeq(7);
@@ -216,10 +213,7 @@ class CodexStreamRelayTest {
 
     @Test
     void streamQueryErrorBeforeWorkerTaskIdFailsLocalTaskWithoutReconnect() {
-        CodexTaskEntity entity = new CodexTaskEntity();
-        entity.setTaskId("local-task-1");
-        entity.setWorkerId("worker-1");
-        entity.setSessionId("session-1");
+        CodexTaskEntity entity = legacyTask();
 
         when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
         when(workerManagementFacade.getCodexConfig("worker-1"))
@@ -251,6 +245,7 @@ class CodexStreamRelayTest {
     @Test
     void onTaskStartForCodexBizWorkerForwardsCodexBizRuntimeOptions() {
         CodexTaskEntity entity = legacyTask();
+        entity.setProviderType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);
         when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
         when(workerManagementFacade.getCodexConfig("worker-1"))
                 .thenReturn(CodexConfig.builder()
@@ -632,7 +627,8 @@ class CodexStreamRelayTest {
                 .lastEventSeq(12)
                 .build();
         when(nativeSubtaskService.applyUpdate(
-                eq("local-task-1"), eq("session-1"), eq("codex-worker"), eq(12),
+                eq("local-task-1"), eq("session-1"),
+                eq(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE), eq(12),
                 any(NativeSubtaskUpdatePayload.class)))
                 .thenReturn(Optional.of(snapshot));
 
@@ -662,7 +658,7 @@ class CodexStreamRelayTest {
                 ServerSentEvent.builder(workerJson).build(),
                 "local-task-1",
                 "session-1",
-                "codex-worker",
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
                 new java.util.concurrent.atomic.AtomicReference<String>(),
                 new java.util.concurrent.atomic.AtomicReference<String>(),
                 new java.util.concurrent.atomic.AtomicInteger(11));
@@ -913,6 +909,7 @@ class CodexStreamRelayTest {
 
     private CodexTaskEntity stubAppServerTask(String acceptanceState) {
         CodexTaskEntity entity = legacyTask();
+        entity.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         entity.setRuntimeId("app-main");
         entity.setRuntimeRevision(1);
         entity.setRuntimeType("APP_SERVER");
@@ -953,7 +950,7 @@ class CodexStreamRelayTest {
                 .prompt("hello")
                 .cwd("D:/repo")
                 .model(model)
-                .providerType("codex-worker")
+                .providerType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE)
                 .build();
     }
 
@@ -973,6 +970,7 @@ class CodexStreamRelayTest {
         entity.setRuntimeRevision(1);
         entity.setRuntimeType("SDK_EXEC");
         entity.setRoutingEpoch(0L);
+        entity.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
         return entity;
     }
 }

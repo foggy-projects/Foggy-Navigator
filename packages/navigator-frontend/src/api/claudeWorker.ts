@@ -355,6 +355,7 @@ export async function createTask(form: {
   images?: string
   permissionMode?: string
   modelConfigId?: string
+  providerType?: string
 }): Promise<ClaudeTask> {
   return await createTaskUnified(form) as unknown as ClaudeTask
 }
@@ -374,6 +375,7 @@ export async function resumeTask(form: {
   images?: string
   permissionMode?: string
   modelConfigId?: string
+  providerType?: string
 }): Promise<ClaudeTask> {
   return await resumeTaskUnified(form) as unknown as ClaudeTask
 }

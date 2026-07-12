@@ -16,6 +16,8 @@
 
 ## 背景
 
+> 2026-07-12 演进说明：本文保留 OPT-001 当时的 Worker/Runtime 实施基线；其中“统一 `OPENAI_CODEX` / `codex-worker` Provider”的前向设计已被 [OPT-005](./OPT-005-codex-app-server-independent-provider.md) 取代。当前 SDK 固定使用 `OPENAI_CODEX` / `codex-worker`，App Server 固定使用 `OPENAI_CODEX_APP_SERVER` / `codex-app-server-worker`，不得互相 fallback。
+
 现有 `tools/codex-agent-worker` 通过 TypeScript SDK 启动一次性 `codex exec`。1.3.1 已验证 app-server 能暴露 Ultra 原生子任务状态，但把 SDK 与 app-server 放入同一 Worker 会同时承担两套执行生命周期、事件映射、版本门控和回退逻辑。
 
 本版本采用独立运行时演进：稳定 Worker 保持现有 SDK lane，新建 app-server Worker 作为 Ultra 和后续可选 cohort 的独立主线。新 Worker 技术上支持全部模型和 reasoning，平台初期只把新 Ultra 会话路由过去；旧 Worker 的 SDK 实现、非 Ultra 行为、版本 preflight 和既有 affinity drain 不因新 Worker 上线而退役。
@@ -176,6 +178,8 @@ Capability 过期只阻止新任务分配。已接受任务必须继续按持久
 - OBS bootstrap 首次安装必须自动生成固定 state key 和隔离 `CODEX_HOME`，但仍保持 stopped 以便操作者检查 `.env`；Worker token 和 `OPENAI_API_KEY` 默认为空，模型凭据由 Navigator ModelConfig 按任务下发。仅身份一致且文件完整、无 lifecycle/update 失败证据的同版本重跑允许 no-op，可证明身份一致的残缺安装进入 repair，身份不完整或存在失败证据必须 fail-closed，本地版本高于 latest 时必须拒绝降级。
 
 ## 非目标
+
+以下“非目标”是 OPT-001 实施阶段的历史边界；涉及 Backend/Provider 的条目由 OPT-005 覆盖，不再代表当前架构。
 
 - 不新增 `OPENAI_CODEX_APP_SERVER` workerBackend、第二套 providerType、Java addon 或 PC 会话页面。
 - 不在本阶段让浏览器或 Java 直接连接 app-server JSON-RPC/WebSocket。

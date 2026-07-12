@@ -27,7 +27,7 @@ Foggy Navigator 通过 Worker 调用你机器上的 AI 编程工具。
 |--------|------|----------|--------------|
 | Claude Worker | 调用 Claude Code 执行任务 | `3031` | `~/.claude-worker` |
 | Codex Worker | 调用 OpenAI Codex 执行任务 | `3051` | `~/.codex-worker` |
-| Codex App Server Worker | 通过 Codex app-server 执行 Ultra 等 Runtime 任务 | `3062` | `~/.codex-app-server-worker` |
+| Codex App Server Worker | 通过 Codex app-server 执行独立 App Server Provider 任务 | `3062` | `~/.codex-app-server-worker` |
 | Gemini Worker | 调用 Gemini CLI 执行任务 | `3071` | `~/.gemini-worker` |
 
 在 Windows 上，`~` 通常是 `%USERPROFILE%`，例如 `C:\Users\your-name`。
@@ -361,7 +361,7 @@ Worker 装好后，还需要在 Navigator 后台确认配置没有指错。
 |--------|---------------|---------|
 | Claude | `http://<worker-host>:3031` | `CLAUDE_CODE` |
 | Codex | `http://<worker-host>:3051` | `OPENAI_CODEX` |
-| Codex App Server Runtime | `http://<worker-host>:3062` | 复用 `OPENAI_CODEX` 物理 Worker 的 Runtime 注册表 |
+| Codex App Server | `http://<worker-host>:3062` | `OPENAI_CODEX_APP_SERVER`；在物理 Worker 的 App Server 页签创建 Endpoint Profile 并同步 Runtime |
 | Gemini | `http://<worker-host>:3071` | `GEMINI_CLI` |
 
 重点检查：
@@ -370,6 +370,7 @@ Worker 装好后，还需要在 Navigator 后台确认配置没有指错。
 2. Token 是否和 Worker `.env` 一致。
 3. 目录 Auth 或模型配置是否选了正确 backend。
 4. Gemini 不要误填到 Codex Worker 端口，Codex 也不要误填到 Gemini Worker 端口。
+5. SDK 的 `codexConfig` 与 App Server Endpoint Profile 分别保存、测试和授权；不要把 3062 地址填入 SDK 配置。
 
 如果填错，常见现象是健康检查字段不对，或者任务日志里出现另一个 Worker 的名称。
 

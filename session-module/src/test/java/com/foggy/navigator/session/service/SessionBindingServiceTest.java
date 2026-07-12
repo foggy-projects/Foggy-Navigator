@@ -2,6 +2,7 @@ package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.session.exception.SessionAgentBoundMismatchException;
+import com.foggy.navigator.session.exception.SessionProviderBoundMismatchException;
 import com.foggy.navigator.session.repository.SessionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -90,6 +91,38 @@ class SessionBindingServiceTest {
     }
 
     @Test
+    void getOrBind_sdkSessionCannotSwitchToAppServerProvider() {
+        SessionEntity session = boundSession("codex-worker");
+        when(sessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        SessionProviderBoundMismatchException ex = assertThrows(
+                SessionProviderBoundMismatchException.class,
+                () -> service.getOrBind(
+                        "session-1", "agent-1", "codex-app-server-worker", "EXPLICIT_AGENT"));
+
+        assertEquals("SESSION_PROVIDER_MISMATCH", SessionProviderBoundMismatchException.ERROR_CODE);
+        assertEquals("codex-worker", ex.getBoundProviderType());
+        assertEquals("codex-app-server-worker", ex.getRequestedProviderType());
+        assertTrue(ex.getMessage().startsWith("SESSION_PROVIDER_MISMATCH:"));
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void getOrBind_appServerSessionCannotSwitchToSdkProvider() {
+        SessionEntity session = boundSession("codex-app-server-worker");
+        when(sessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        SessionProviderBoundMismatchException ex = assertThrows(
+                SessionProviderBoundMismatchException.class,
+                () -> service.getOrBind(
+                        "session-1", "agent-1", "codex-worker", "EXPLICIT_AGENT"));
+
+        assertEquals("codex-app-server-worker", ex.getBoundProviderType());
+        assertEquals("codex-worker", ex.getRequestedProviderType());
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
     void getOrBind_legacySession_agentIdSetButProviderTypeNull_backfillsProviderType() {
         SessionEntity session = new SessionEntity();
         session.setId("session-1");
@@ -160,5 +193,31 @@ class SessionBindingServiceTest {
 
         assertEquals("agent-1", ex.getBoundAgentId());
         assertEquals("agent-2", ex.getRequestedAgentId());
+    }
+
+    @Test
+    void validateProviderBinding_rejectsCrossProviderContinuation() {
+        SessionEntity session = boundSession("codex-worker");
+        when(sessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        assertThrows(SessionProviderBoundMismatchException.class,
+                () -> service.validateProviderBinding("session-1", "codex-app-server-worker"));
+    }
+
+    @Test
+    void validateProviderBinding_sameProviderPasses() {
+        SessionEntity session = boundSession("codex-app-server-worker");
+        when(sessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        assertDoesNotThrow(() -> service.validateProviderBinding(
+                "session-1", "codex-app-server-worker"));
+    }
+
+    private SessionEntity boundSession(String providerType) {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setAgentId("agent-1");
+        session.setProviderType(providerType);
+        return session;
     }
 }

@@ -244,6 +244,18 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     updatedAt: '2026-02-16T00:00:00Z',
   }
 
+  const mockCodexAppServerModelConfig: LlmModelConfig = {
+    ...mockCodexModelConfig,
+    id: 'config-codex-app-server',
+    name: 'Codex App Server',
+    baseUrl: '',
+    modelName: 'gpt-5.6-sol:high',
+    hasApiKey: false,
+    availableModels: ['gpt-5.6-sol:high', 'gpt-5.6-sol:ultra'],
+    workerBackend: 'OPENAI_CODEX_APP_SERVER',
+    sortOrder: 4,
+  }
+
   const mockResumedTask: ClaudeTask = {
     taskId: 'task-2',
     sessionId: 'session-2',
@@ -415,6 +427,64 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
         prompt: 'continue gemini',
         sessionId: 'session-gemini-1',
       }))
+    })
+
+    it('creates a new session instead of resuming when the selected Codex provider changes', async () => {
+      const sourceTask: ClaudeTask = {
+        ...mockCompletedTask,
+        providerType: 'codex-worker',
+        model: 'gpt-5.6-sol:max',
+      }
+      const newTask: ClaudeTask = {
+        ...mockResumedTask,
+        taskId: 'task-app-server-1',
+        sessionId: 'session-app-server-1',
+        providerType: 'codex-app-server-worker',
+        model: 'gpt-5.6-sol:high',
+      }
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([
+        mockCodexModelConfig,
+        mockCodexAppServerModelConfig,
+      ])
+      vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability).mockResolvedValue({
+        appServerManaged: true,
+        modelAvailable: true,
+        ultraAvailable: false,
+        blockReason: null,
+      })
+      vi.mocked(unifiedTaskApi.createTaskUnified).mockResolvedValue(newTask as any)
+      vi.mocked(ElMessageBox.prompt).mockResolvedValue({ value: 'continue on app server' } as any)
+      vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as any)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+      const vm = wrapper.vm as any
+      vm.selectDirectory('worker-1', 'dir-1')
+      await flushPromises()
+      vm.platformModelConfigId = 'config-codex-app-server'
+      vm.taskForm.model = 'gpt-5.6-sol:high'
+      await flushPromises()
+
+      await vm.handleResumeFromHistory(sourceTask)
+      await flushPromises()
+
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+        expect.stringContaining('无法续接原生会话'),
+        '创建新会话',
+        expect.objectContaining({ confirmButtonText: '创建新会话' }),
+      )
+      expect(unifiedTaskApi.createTaskUnified).toHaveBeenCalledWith(expect.objectContaining({
+        workerId: 'worker-1',
+        directoryId: 'dir-1',
+        prompt: 'continue on app server',
+        modelConfigId: 'config-codex-app-server',
+        providerType: 'codex-app-server-worker',
+      }))
+      expect(unifiedTaskApi.createTaskUnified).toHaveBeenCalledWith(expect.not.objectContaining({
+        sessionId: 'session-1',
+      }))
+      expect(unifiedTaskApi.resumeTaskUnified).not.toHaveBeenCalled()
+      wrapper.unmount()
     })
 
     it.each(['RUNNING', 'AWAITING_INPUT'] as const)(
@@ -684,7 +754,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       active_task_count: 0,
     }
 
-    it('skips every legacy process probe and shows pool-managed empty state', async () => {
+    it('keeps SDK CLI probes independent from an App Server Runtime', async () => {
       vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability)
         .mockResolvedValue(appServerAvailability)
       vi.mocked(claudeWorkerApi.listCliProcesses).mockResolvedValue(emptyProcesses)
@@ -697,17 +767,17 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       vm.selectWorker('worker-1')
       await flushPromises()
 
-      expect(codexRuntimeApi.getCodexRuntimeAvailability).toHaveBeenCalledWith('worker-1', {
+      expect(codexRuntimeApi.getCodexRuntimeAvailability).not.toHaveBeenCalled()
+      expect(claudeWorkerApi.listCliProcesses).toHaveBeenCalledWith('worker-1')
+      expect(claudeWorkerApi.listCodexCliProcesses).toHaveBeenCalledWith('worker-1', {
         suppressErrorMessage: true,
       })
-      expect(claudeWorkerApi.listCliProcesses).not.toHaveBeenCalled()
-      expect(claudeWorkerApi.listCodexCliProcesses).not.toHaveBeenCalled()
-      expect(claudeWorkerApi.listGeminiCliProcesses).not.toHaveBeenCalled()
-      expect(vm.cliProcessEmptyText).toBe('App Server 进程由 Runtime 池管理')
-      expect(wrapper.text()).toContain('App Server 进程由 Runtime 池管理')
+      expect(claudeWorkerApi.listGeminiCliProcesses).toHaveBeenCalledWith('worker-1', {
+        suppressErrorMessage: true,
+      })
+      expect(vm.cliProcessEmptyText).toBe('未检测到 CLI 进程')
       vm.handleWorkerTabChange('processes')
       await flushPromises()
-      expect(codexRuntimeApi.getCodexRuntimeAvailability).toHaveBeenCalledTimes(1)
       expect(codexRuntimeApi.listCodexRuntimes).not.toHaveBeenCalled()
       expect(ElMessage.error).not.toHaveBeenCalled()
       wrapper.unmount()
@@ -764,26 +834,13 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       wrapper.unmount()
     })
 
-    it('ignores a late runtime response from the previously selected worker', async () => {
-      let resolveFirstAvailability!: (value: typeof appServerAvailability) => void
-      const firstAvailability = new Promise<typeof appServerAvailability>((resolve) => {
-        resolveFirstAvailability = resolve
-      })
+    it('ignores late SDK CLI process responses from the previously selected worker', async () => {
       const worker2 = {
         ...mockWorker,
         workerId: 'worker-2',
         name: 'Second Worker',
       }
       vi.mocked(claudeWorkerApi.listWorkers).mockResolvedValue([mockWorker, worker2])
-      vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability).mockImplementation((workerId) => (
-        workerId === 'worker-1'
-          ? firstAvailability
-          : Promise.resolve({
-              appServerManaged: false,
-              ultraAvailable: false,
-              blockReason: 'CODEX_ULTRA_RUNTIME_UNAVAILABLE',
-            })
-      ))
       const processResult = (workerId: string) => ({
         processes: [{
           pid: workerId === 'worker-2' ? 22 : 11,
@@ -794,9 +851,24 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
         }],
         active_task_count: 0,
       }) as any
-      vi.mocked(claudeWorkerApi.listCliProcesses).mockImplementation(async (workerId) => processResult(workerId))
-      vi.mocked(claudeWorkerApi.listCodexCliProcesses).mockImplementation(async (workerId) => processResult(workerId))
-      vi.mocked(claudeWorkerApi.listGeminiCliProcesses).mockImplementation(async (workerId) => processResult(workerId))
+      let resolveClaudeWorker1!: (value: ReturnType<typeof processResult>) => void
+      let resolveCodexWorker1!: (value: ReturnType<typeof processResult>) => void
+      let resolveGeminiWorker1!: (value: ReturnType<typeof processResult>) => void
+      vi.mocked(claudeWorkerApi.listCliProcesses).mockImplementation((workerId) => (
+        workerId === 'worker-1'
+          ? new Promise(resolve => { resolveClaudeWorker1 = resolve })
+          : Promise.resolve(processResult(workerId))
+      ))
+      vi.mocked(claudeWorkerApi.listCodexCliProcesses).mockImplementation((workerId) => (
+        workerId === 'worker-1'
+          ? new Promise(resolve => { resolveCodexWorker1 = resolve })
+          : Promise.resolve(processResult(workerId))
+      ))
+      vi.mocked(claudeWorkerApi.listGeminiCliProcesses).mockImplementation((workerId) => (
+        workerId === 'worker-1'
+          ? new Promise(resolve => { resolveGeminiWorker1 = resolve })
+          : Promise.resolve(processResult(workerId))
+      ))
       const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
       await flushPromises()
 
@@ -809,14 +881,17 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       expect(vm.cliProcesses).toHaveLength(3)
       expect(vm.cliProcesses.every((process: { pid: number }) => process.pid === 22)).toBe(true)
 
-      resolveFirstAvailability(appServerAvailability)
+      resolveClaudeWorker1(processResult('worker-1'))
+      resolveCodexWorker1(processResult('worker-1'))
+      resolveGeminiWorker1(processResult('worker-1'))
       await flushPromises()
 
       expect(vm.selectedWorkerId).toBe('worker-2')
       expect(vm.cliProcessEmptyText).toBe('未检测到 CLI 进程')
       expect(vm.cliProcesses).toHaveLength(3)
       expect(vm.cliProcesses.every((process: { pid: number }) => process.pid === 22)).toBe(true)
-      expect(claudeWorkerApi.listCliProcesses).toHaveBeenCalledTimes(1)
+      expect(claudeWorkerApi.listCliProcesses).toHaveBeenCalledTimes(2)
+      expect(claudeWorkerApi.listCliProcesses).toHaveBeenCalledWith('worker-1')
       expect(claudeWorkerApi.listCliProcesses).toHaveBeenCalledWith('worker-2')
       wrapper.unmount()
     })
@@ -825,17 +900,64 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
   describe('Codex Ultra runtime readiness for new tasks', () => {
     const readyUltraAvailability = {
       appServerManaged: true,
+      modelAvailable: true,
       ultraAvailable: true,
       blockReason: null,
     } as const
 
+    it('blocks SDK Ultra without probing the App Server Runtime', async () => {
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([mockCodexModelConfig])
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      vm.taskForm.model = 'gpt-5.6-sol:ultra'
+      vm.taskForm.prompt = 'invalid sdk ultra task'
+      await flushPromises()
+
+      expect(vm.ultraRuntimeCreateBlockReason).toBe('Ultra 仅支持 Codex App Server 后端')
+      expect(vm.createTaskDisabled).toBe(true)
+      expect(codexRuntimeApi.getCodexRuntimeAvailability).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('blocks a non-Ultra App Server model when no routed Runtime supports it', async () => {
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([mockCodexAppServerModelConfig])
+      vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability).mockResolvedValue({
+        appServerManaged: true,
+        modelAvailable: false,
+        ultraAvailable: false,
+        blockReason: 'CODEX_RUNTIME_UNAVAILABLE',
+      })
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      vm.taskForm.model = 'gpt-5.6-sol:high'
+      vm.taskForm.prompt = 'app server high task'
+      await flushPromises()
+
+      expect(codexRuntimeApi.getCodexRuntimeAvailability).toHaveBeenCalledWith('worker-1', {
+        model: 'gpt-5.6-sol:high',
+        suppressErrorMessage: true,
+      })
+      expect(vm.taskForm.model).toBe('')
+      expect(vm.claudeModelOptions).toEqual([])
+      expect(vm.ultraRuntimeCreateBlockReason).toBe('当前 Worker 没有可执行的 App Server 模型')
+      expect(vm.createTaskDisabled).toBe(true)
+      wrapper.unmount()
+    })
+
     it('blocks a new Ultra task while the selected worker has no ready runtime', async () => {
       vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
-        ...mockCodexModelConfig,
+        ...mockCodexAppServerModelConfig,
         availableModels: ['codex-ultra'],
       }])
       vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability).mockResolvedValue({
         appServerManaged: true,
+        modelAvailable: false,
         ultraAvailable: false,
         blockReason: 'CODEX_ULTRA_RUNTIME_UNAVAILABLE',
       })
@@ -853,18 +975,18 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
         suppressErrorMessage: true,
       })
       expect(codexRuntimeApi.listCodexRuntimes).not.toHaveBeenCalled()
-      expect(vm.taskForm.model).toBe('codex-ultra')
-      expect(vm.ultraRuntimeCreateBlockReason).toBe('当前 Worker 没有可用的 Codex Ultra Runtime')
+      expect(vm.taskForm.model).toBe('')
+      expect(vm.ultraRuntimeCreateBlockReason).toBe('当前 Worker 没有可执行的 App Server 模型')
       expect(vm.createTaskDisabled).toBe(true)
       await vm.handleCreateTask()
       expect(unifiedTaskApi.createTaskUnified).not.toHaveBeenCalled()
-      expect(ElMessage.warning).toHaveBeenCalledWith('当前 Worker 没有可用的 Codex Ultra Runtime')
+      expect(ElMessage.warning).toHaveBeenCalledWith('当前 Worker 没有可执行的 App Server 模型')
       wrapper.unmount()
     })
 
     it('enables only new Ultra creation after the selected worker reports a ready runtime', async () => {
       vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
-        ...mockCodexModelConfig,
+        ...mockCodexAppServerModelConfig,
         availableModels: ['codex-ultra'],
       }])
       vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability)
@@ -879,7 +1001,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       vm.taskForm.prompt = 'ready ultra task'
       await wrapper.vm.$nextTick()
 
-      expect(vm.taskForm.model).toBe('codex-ultra')
+      expect(vm.taskForm.model).toBe('codex-latest:ultra')
       expect(vm.ultraRuntimeReadiness).toBe('READY')
       expect(vm.selectedWorkerEntity?.status).toBe('ONLINE')
       expect(vm.createTaskDisabled).toBe(false)
@@ -887,9 +1009,151 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       wrapper.unmount()
     })
 
+    it('intersects App Server model grants with the selected Worker runtime capability', async () => {
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
+        ...mockCodexAppServerModelConfig,
+        availableModels: [
+          'codex-latest:high',
+          'codex-latest:ultra',
+          'codex-terra:ultra',
+        ],
+      }])
+      vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability).mockImplementation(async (_workerId, options) => ({
+        appServerManaged: true,
+        modelAvailable: options?.model === 'codex-latest:ultra',
+        ultraAvailable: options?.model === 'codex-latest:ultra',
+        blockReason: options?.model === 'codex-latest:ultra' ? null : 'CODEX_RUNTIME_UNAVAILABLE',
+      }))
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      await flushPromises()
+
+      expect(vm.claudeModelOptions.map((option: { value: string }) => option.value))
+        .toEqual(['codex-latest:ultra'])
+      expect(vm.taskForm.model).toBe('codex-latest:ultra')
+      expect(codexRuntimeApi.getCodexRuntimeAvailability).toHaveBeenCalledWith('worker-1', {
+        model: 'codex-terra:ultra',
+        suppressErrorMessage: true,
+      })
+      wrapper.unmount()
+    })
+
+    it('filters Agent default models through the selected Worker App Runtime capability', async () => {
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
+        ...mockCodexAppServerModelConfig,
+        availableModels: ['codex-latest:high', 'codex-latest:ultra'],
+      }])
+      vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability).mockImplementation(
+        async (_workerId, options) => ({
+          appServerManaged: true,
+          modelAvailable: options?.model === 'codex-latest:high',
+          ultraAvailable: false,
+          blockReason: options?.model === 'codex-latest:high'
+            ? null
+            : 'CODEX_RUNTIME_UNAVAILABLE',
+        }),
+      )
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      vm.agentForm.defaultModelConfigId = 'config-codex-app-server'
+      vm.agentForm.defaultModel = 'codex-latest:ultra'
+      vm.showAgentRegisterDialog = true
+      await flushPromises()
+
+      expect(vm.agentModelOptions.map((option: { value: string }) => option.value))
+        .toEqual(['codex-latest:high'])
+      expect(vm.agentForm.defaultModel).toBe('codex-latest:high')
+      expect(codexRuntimeApi.getCodexRuntimeAvailability).toHaveBeenCalledWith('worker-1', {
+        model: 'codex-latest:ultra',
+        suppressErrorMessage: true,
+      })
+      wrapper.unmount()
+    })
+
+    it('blocks Agent registration while App Runtime model capability is still loading', async () => {
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
+        ...mockCodexAppServerModelConfig,
+        availableModels: ['codex-latest:high', 'codex-latest:ultra'],
+      }])
+      vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability).mockImplementation(
+        () => new Promise(() => {}),
+      )
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      vm.agentForm = {
+        name: 'app-agent',
+        description: '',
+        defaultDirectoryId: 'dir-1',
+        defaultBranch: '',
+        projectSummary: '',
+        defaultModelConfigId: 'config-codex-app-server',
+        defaultModel: 'codex-latest:ultra',
+      }
+      vm.showAgentRegisterDialog = true
+      await wrapper.vm.$nextTick()
+
+      expect(vm.agentModelOptionsLoading).toBe(true)
+      expect(vm.agentModelSelectionBlocked).toBe(true)
+      await vm.handleRegisterAgent()
+
+      expect(codingAgentApi.registerAgent).not.toHaveBeenCalled()
+      expect(ElMessage.warning).toHaveBeenCalledWith('正在检查 Runtime 模型能力，请稍后重试')
+      wrapper.unmount()
+    })
+
+    it('ignores stale App model results after switching Workers', async () => {
+      const workerOneResolvers: Array<(value: typeof readyUltraAvailability) => void> = []
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
+        ...mockCodexAppServerModelConfig,
+        availableModels: ['codex-latest:high', 'codex-latest:ultra'],
+      }])
+      vi.mocked(claudeWorkerApi.listWorkers).mockResolvedValue([
+        mockWorker,
+        { ...mockWorker, workerId: 'worker-2', name: 'Second Worker' },
+      ])
+      vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability).mockImplementation((workerId, options) => {
+        if (workerId === 'worker-1') {
+          return new Promise((resolve) => workerOneResolvers.push(resolve))
+        }
+        const available = options?.model === 'codex-latest:high'
+        return Promise.resolve({
+          appServerManaged: true,
+          modelAvailable: available,
+          ultraAvailable: false,
+          blockReason: available ? null : 'CODEX_RUNTIME_UNAVAILABLE',
+        })
+      })
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      await wrapper.vm.$nextTick()
+      vm.selectedWorkerId = 'worker-2'
+      await flushPromises()
+
+      expect(vm.claudeModelOptions.map((option: { value: string }) => option.value))
+        .toEqual(['codex-latest:high'])
+      for (const resolve of workerOneResolvers) resolve(readyUltraAvailability)
+      await flushPromises()
+      expect(vm.selectedWorkerId).toBe('worker-2')
+      expect(vm.claudeModelOptions.map((option: { value: string }) => option.value))
+        .toEqual(['codex-latest:high'])
+      wrapper.unmount()
+    })
+
     it('accepts the aggregate availability produced for ALL_CANARY at zero rollout', async () => {
       vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
-        ...mockCodexModelConfig,
+        ...mockCodexAppServerModelConfig,
         availableModels: ['codex-ultra'],
       }])
       vi.mocked(codexRuntimeApi.getCodexRuntimeAvailability)
@@ -913,7 +1177,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     it('ignores a late ready response from the previously selected worker', async () => {
       let resolveWorkerOne!: (value: typeof readyUltraAvailability) => void
       vi.mocked(platformApi.listModelConfigs).mockResolvedValue([{
-        ...mockCodexModelConfig,
+        ...mockCodexAppServerModelConfig,
         availableModels: ['codex-ultra'],
       }])
       vi.mocked(claudeWorkerApi.listWorkers).mockResolvedValue([
@@ -926,6 +1190,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
         }
         return Promise.resolve({
           appServerManaged: true,
+          modelAvailable: false,
           ultraAvailable: false,
           blockReason: 'CODEX_ULTRA_RUNTIME_UNAVAILABLE',
         })

@@ -102,7 +102,7 @@ export function canEnableRewind(task?: ClaudeTask | null): boolean {
   if (backend === 'CLAUDE_CODE') {
     return !!task.claudeSessionId
   }
-  if (backend === 'OPENAI_CODEX') {
+  if (backend === 'OPENAI_CODEX' || backend === 'OPENAI_CODEX_APP_SERVER') {
     return !!task.sessionId
   }
   return false

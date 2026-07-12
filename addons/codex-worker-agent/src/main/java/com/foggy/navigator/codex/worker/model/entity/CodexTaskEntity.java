@@ -15,7 +15,8 @@ import java.time.LocalDateTime;
 @Table(name = "codex_tasks", indexes = {
     @Index(name = "idx_cxt_user_id", columnList = "userId"),
     @Index(name = "idx_cxt_worker_id", columnList = "workerId"),
-    @Index(name = "idx_cxt_status", columnList = "status")
+    @Index(name = "idx_cxt_status", columnList = "status"),
+    @Index(name = "idx_cxt_provider_status", columnList = "providerType,status")
 })
 public class CodexTaskEntity {
 
@@ -80,8 +81,8 @@ public class CodexTaskEntity {
     @Transient
     private String contextId;
 
-    /** TaskQueryProvider route（不持久化到 codex_tasks，由统一 Session/Task 投影持久化） */
-    @Transient
+    /** Immutable TaskQueryProvider route used for reconnect and command isolation. */
+    @Column(length = 32, nullable = false)
     private String providerType;
 
     /** CodexBiz scoped CODEX_HOME logical key（不持久化到 codex_tasks，写入 SessionEntity.providerStateJson）。 */

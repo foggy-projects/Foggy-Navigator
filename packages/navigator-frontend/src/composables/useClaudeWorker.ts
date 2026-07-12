@@ -171,6 +171,7 @@ export function useClaudeWorker() {
     permissionMode?: string
     modelConfigId?: string
     agentId?: string
+    providerType?: string
   }) {
     // 使用统一任务 API（/api/v1/tasks），由显式执行上下文决定 logical agent/provider
     const task = await createTaskUnified(form) as unknown as ClaudeTask
@@ -192,6 +193,7 @@ export function useClaudeWorker() {
     permissionMode?: string
     modelConfigId?: string
     agentId?: string
+    providerType?: string
   }) {
     // 使用统一任务 API（/api/v1/tasks/resume）
     const task = await resumeTaskUnified(form) as unknown as ClaudeTask

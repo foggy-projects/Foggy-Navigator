@@ -46,6 +46,14 @@ class SecurityConfigAdminRouteTest {
                 .andExpect(status().isOk());
     }
 
+    @Test
+    void codexAppServerEndpointRoute_isPassedThroughToControllerAuthGuard() throws Exception {
+        mockMvc.perform(post("/api/v1/codex-app-server-endpoints")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+    }
+
     @RestController
     static class AdminRouteController {
 
@@ -61,6 +69,11 @@ class SecurityConfigAdminRouteTest {
 
         @GetMapping("/api/v1/codex-runtimes")
         String listCodexRuntimes() {
+            return "ok";
+        }
+
+        @PostMapping("/api/v1/codex-app-server-endpoints")
+        String createCodexAppServerEndpoint() {
             return "ok";
         }
     }

@@ -171,11 +171,15 @@ import SessionCard from '@/components/SessionCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import CodexModelPicker from '@/components/CodexModelPicker.vue'
 import {
-  MOBILE_MODEL_OPTIONS,
   isMobileSelectablePlatformModel,
   normalizeMobileCodexModel,
   resolveMobileModelOptions,
 } from '@/utils/llmModelOptions'
+import {
+  isCodexBackend,
+  providerTypeFromWorkerBackend,
+  providerTypeShortLabel,
+} from '@/utils/workerBackend'
 
 const workerId = ref('')
 const directoryId = ref('')
@@ -201,7 +205,9 @@ const platformModels = ref<LlmModelConfig[]>([])
 const selectedModelConfigId = ref('')
 const selectedModelName = computed(() => {
   const m = platformModels.value.find(m => m.id === selectedModelConfigId.value)
-  return m ? m.name : ''
+  if (!m) return ''
+  const providerLabel = providerTypeShortLabel(providerTypeFromWorkerBackend(m.workerBackend))
+  return providerLabel ? `${providerLabel} · ${m.name}` : m.name
 })
 
 const modelOptions = computed(() => {
@@ -220,7 +226,7 @@ const selectedModel = ref('')  // stores model value (e.g. 'opus[1m]'), NOT labe
 const codexModelPickerVisible = ref(false)
 const selectedModelLabel = computed(() => {
   if (!selectedModel.value) return ''
-  const opt = MOBILE_MODEL_OPTIONS.find(m => m.value === selectedModel.value)
+  const opt = modelOptions.value.find(m => m.value === selectedModel.value)
   return opt ? opt.label : selectedModel.value
 })
 const selectedTurns = ref(0)
@@ -304,7 +310,7 @@ watch(modelOptions, (options) => {
     return
   }
   const config = platformModels.value.find(model => model.id === selectedModelConfigId.value)
-  const normalizedModel = config?.workerBackend === 'OPENAI_CODEX'
+  const normalizedModel = isCodexBackend(config?.workerBackend)
     ? normalizeMobileCodexModel(selectedModel.value)
     : selectedModel.value
   if (normalizedModel && options.some(option => option.value === normalizedModel)) {
@@ -467,6 +473,9 @@ async function handleCreateTask() {
     }
     if (selectedModelConfigId.value) form.modelConfigId = selectedModelConfigId.value
     if (selectedModel.value) form.model = selectedModel.value
+    const selectedConfig = platformModels.value.find(model => model.id === selectedModelConfigId.value)
+    const providerType = providerTypeFromWorkerBackend(selectedConfig?.workerBackend)
+    if (providerType) form.providerType = providerType
     if (selectedTurns.value) form.maxTurns = selectedTurns.value
     if (selectedPermission.value) form.permissionMode = selectedPermission.value
     if (imagesJson) form.images = imagesJson
@@ -707,7 +716,10 @@ function showHistory() {
 }
 
 function showApiModelPicker() {
-  const names = platformModels.value.map(m => m.name)
+  const names = platformModels.value.map((model) => {
+    const providerLabel = providerTypeShortLabel(providerTypeFromWorkerBackend(model.workerBackend))
+    return providerLabel ? `${providerLabel} · ${model.name}` : model.name
+  })
   uni.showActionSheet({
     itemList: names,
     success: (res) => {
@@ -723,7 +735,7 @@ function showModelPicker() {
     return
   }
   const config = platformModels.value.find(model => model.id === selectedModelConfigId.value)
-  if (config?.workerBackend === 'OPENAI_CODEX') {
+  if (isCodexBackend(config?.workerBackend)) {
     codexModelPickerVisible.value = true
     return
   }
@@ -919,6 +931,9 @@ function showPermissionPicker() {
   border-radius: 24rpx;
   margin-right: 16rpx;
   margin-bottom: 8rpx;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 .option-tag--api {
   background-color: #e8f5e9;
@@ -927,6 +942,11 @@ function showPermissionPicker() {
   color: #2e7d32;
 }
 .option-label {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 24rpx;
   color: #606266;
   margin-right: 8rpx;

@@ -27,6 +27,8 @@ import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.config.WorkerBackendConnectionTester;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
@@ -51,6 +53,8 @@ class OpenApiAgentReadinessServiceTest {
     private OpenApiAgentRouteService agentRouteService;
     private BizWorkerIdentityRepository workerIdentityRepository;
     private ClaudeWorkerRepository claudeWorkerRepository;
+    private LlmModelManager llmModelManager;
+    private WorkerBackendConnectionTester appServerConnectionTester;
     private Environment environment;
     private OpenApiAgentReadinessService service;
 
@@ -66,6 +70,10 @@ class OpenApiAgentReadinessServiceTest {
         agentRouteService = mock(OpenApiAgentRouteService.class);
         workerIdentityRepository = mock(BizWorkerIdentityRepository.class);
         claudeWorkerRepository = mock(ClaudeWorkerRepository.class);
+        llmModelManager = mock(LlmModelManager.class);
+        appServerConnectionTester = mock(WorkerBackendConnectionTester.class);
+        when(appServerConnectionTester.getWorkerBackend())
+                .thenReturn("OPENAI_CODEX_APP_SERVER");
         environment = mock(Environment.class);
         service = new OpenApiAgentReadinessService(
                 agentResolver,
@@ -78,6 +86,8 @@ class OpenApiAgentReadinessServiceTest {
                 agentRouteService,
                 workerIdentityRepository,
                 claudeWorkerRepository,
+                llmModelManager,
+                List.of(appServerConnectionTester),
                 environment,
                 new ObjectMapper());
 
@@ -618,6 +628,146 @@ class OpenApiAgentReadinessServiceTest {
     }
 
     @Test
+    void verify_reportsIndependentAppServerEndpointRuntimeReadiness() {
+        AgentReadinessPreflightForm form = stubCodexAppServerResources(true);
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("OK", result.getOverallStatus());
+        assertEquals("OPENAI_CODEX_APP_SERVER", result.getEffectiveWorkerBackend());
+        PhysicalWorkerDiagnosticDTO appServerRole = result.getPhysicalWorkerDiagnostics().stream()
+                .filter(diagnostic -> "codexAppServer".equals(diagnostic.getRole()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("worker_app_server", appServerRole.getPhysicalWorkerId());
+        assertEquals("OPENAI_CODEX_APP_SERVER", appServerRole.getWorkerBackend());
+        assertEquals("CODEX_APP_SERVER_ENDPOINT_RUNTIME", appServerRole.getSource());
+        assertEquals("ENABLED", appServerRole.getStatus());
+        assertEquals("READY", appServerRole.getHealthStatus());
+        assertNull(appServerRole.getBaseUrl());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "CODEX_APP_SERVER_ENDPOINT_RUNTIME".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "WORKER_HOST_ROLE_ROUTING".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+        assertTrue(result.getPhysicalWorkerDiagnostics().stream().noneMatch(diagnostic ->
+                "CLAUDE_WORKER_CODEX_CONFIG".equals(diagnostic.getSource())));
+        verify(appServerConnectionTester).supportsWorker("worker_app_server", "codex-terra:ultra");
+    }
+
+    @Test
+    void verify_checksWorkspaceWorkerForAppServerWhenAgentStillPointsElsewhere() {
+        AgentReadinessPreflightForm form = stubCodexAppServerResources(
+                true,
+                "stale_agent_worker",
+                "workspace_app_server_worker");
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("OK", result.getOverallStatus());
+        assertEquals("workspace_app_server_worker", result.getEffectivePhysicalWorkerId());
+        verify(appServerConnectionTester)
+                .supportsWorker("workspace_app_server_worker", "codex-terra:ultra");
+        verify(appServerConnectionTester, never())
+                .supportsWorker("stale_agent_worker", "codex-terra:ultra");
+    }
+
+    @Test
+    void verify_failsAppServerWhenOnlyStaleAgentWorkerHasCompatibleRuntime() {
+        AgentReadinessPreflightForm form = stubCodexAppServerResources(
+                false,
+                "stale_agent_worker",
+                "workspace_app_server_worker");
+        when(appServerConnectionTester.supportsWorker("stale_agent_worker", "codex-terra:ultra"))
+                .thenReturn(true);
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        assertEquals("workspace_app_server_worker", result.getEffectivePhysicalWorkerId());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "CODEX_APP_SERVER_ENDPOINT_RUNTIME".equals(check.getCode())
+                        && "FAIL".equals(check.getStatus())));
+        verify(appServerConnectionTester)
+                .supportsWorker("workspace_app_server_worker", "codex-terra:ultra");
+        verify(appServerConnectionTester, never())
+                .supportsWorker("stale_agent_worker", "codex-terra:ultra");
+    }
+
+    @Test
+    void verify_failsAppServerWhenWorkspaceWorkerLacksRestrictedModelGrant() {
+        AgentReadinessPreflightForm form = stubCodexAppServerResources(
+                true,
+                "stale_agent_worker",
+                "workspace_app_server_worker");
+        doThrow(new IllegalArgumentException("model is not granted to workspace Worker"))
+                .when(llmModelManager)
+                .validateModelAccessForWorker(
+                        "model_app_server",
+                        "workspace_app_server_worker",
+                        "codex-terra:ultra");
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "MODEL_WORKER_ACCESS".equals(check.getCode())
+                        && "FAIL".equals(check.getStatus())
+                        && check.getMessage().contains("not granted")));
+        verify(llmModelManager).validateModelAccessForWorker(
+                "model_app_server",
+                "workspace_app_server_worker",
+                "codex-terra:ultra");
+        verify(llmModelManager, never()).validateModelAccessForWorker(
+                "model_app_server",
+                "stale_agent_worker",
+                "codex-terra:ultra");
+    }
+
+    @Test
+    void verify_failsAppServerReadinessWithoutCompatibleEndpointSyncedRuntime() {
+        AgentReadinessPreflightForm form = stubCodexAppServerResources(false);
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "CODEX_APP_SERVER_ENDPOINT_RUNTIME".equals(check.getCode())
+                        && "FAIL".equals(check.getStatus())
+                        && check.getMessage().contains("no enabled Endpoint-synced")));
+        PhysicalWorkerDiagnosticDTO appServerRole = result.getPhysicalWorkerDiagnostics().stream()
+                .filter(diagnostic -> "codexAppServer".equals(diagnostic.getRole()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("UNAVAILABLE", appServerRole.getStatus());
+        assertEquals("NOT_READY", appServerRole.getHealthStatus());
+        assertTrue(result.getPhysicalWorkerDiagnostics().stream().noneMatch(diagnostic ->
+                "CLAUDE_WORKER_CODEX_CONFIG".equals(diagnostic.getSource())));
+        verify(appServerConnectionTester).supportsWorker("worker_app_server", "codex-terra:ultra");
+    }
+
+    @Test
     void verify_failsOwnerAwareCheckWhenWorkspacePhysicalWorkerIsMissing() {
         AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
         form.setUpstreamUserId("private_1");
@@ -955,6 +1105,83 @@ class OpenApiAgentReadinessServiceTest {
         assertTrue(result.getChecks().stream().anyMatch(check ->
                 "BUSINESS_FUNCTION_UPSTREAM_ROUTE:TMS-3".equals(check.getCode())
                         && "OK".equals(check.getStatus())));
+    }
+
+    private AgentReadinessPreflightForm stubCodexAppServerResources(boolean runtimeReady) {
+        return stubCodexAppServerResources(
+                runtimeReady,
+                "worker_app_server",
+                "worker_app_server");
+    }
+
+    private AgentReadinessPreflightForm stubCodexAppServerResources(
+            boolean runtimeReady,
+            String agentWorkerId,
+            String workspaceWorkerId) {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_app_server");
+        form.setDirectoryId("dir_app_server");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        when(resourceResolver.resolveRequiredAgent(eq("tenant_1"), eq("capp_1"), eq("private_1"), anyString()))
+                .thenAnswer(invocation -> new A2AgentResourceResolver.ResolvedAgentResource(
+                        invocation.getArgument(3),
+                        ResourceOwnerType.CLIENT_APP,
+                        "capp_1",
+                        "capp_1",
+                        "world-sim.bug-coordinator.decision.v1",
+                        null,
+                        null,
+                        null,
+                        null,
+                        "OPENAI_CODEX_APP_SERVER",
+                        agentWorkerId,
+                        ResourceOwnerType.PLATFORM,
+                        "tenant_1",
+                        "CLAUDE_WORKER:TENANT",
+                        "model_app_server",
+                        "codex-terra:ultra",
+                        "dir_app_server",
+                        "AGENT:CLIENT_APP"));
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_1"), eq("capp_1"), any(), nullable(String.class), nullable(String.class), any()))
+                .thenReturn(new A2AgentResourceResolver.ResolvedModelResource(
+                        "model_app_server",
+                        "model_app_server",
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "codex-terra:ultra",
+                        "MODEL_CONFIG_DEFAULT",
+                        "OPENAI_CODEX_APP_SERVER",
+                        "AGENT_DEFAULT_MODEL:REQUESTED_MODEL_GRANT"));
+        when(resourceResolver.resolveRequiredWorkspaceForAgent(
+                eq("tenant_1"), eq("capp_1"), eq("private_1"), any(), eq("dir_app_server")))
+                .thenReturn(new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir_app_server",
+                        workspaceWorkerId,
+                        WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED,
+                        "/home/sa/workspace/app-server",
+                        List.of("/home/sa/workspace/app-server"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        "WORKING_DIRECTORY:USER_PRIVATE"));
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId(workspaceWorkerId);
+        worker.setName("app-server-host");
+        worker.setBaseUrl("http://127.0.0.1:3131");
+        worker.setStatus("ONLINE");
+        worker.setCodexConfig(CodexConfig.builder()
+                .baseUrl("http://127.0.0.1:3151/sdk-only")
+                .model("gpt-5.5")
+                .build());
+        when(claudeWorkerRepository.findByWorkerId(workspaceWorkerId))
+                .thenReturn(Optional.of(worker));
+        when(appServerConnectionTester.supportsWorker(workspaceWorkerId, "codex-terra:ultra"))
+                .thenReturn(runtimeReady);
+        return form;
     }
 
     private ResolvedClientAppCredentialDTO credential() {

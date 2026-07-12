@@ -65,7 +65,7 @@ describe('useTaskPane native subtasks', () => {
       taskId: 'task-1',
       sessionId: 'session-1',
       workerId: 'worker-1',
-      providerType: 'codex-worker',
+      providerType: 'codex-app-server-worker',
       prompt: 'delegate',
       status: 'RUNNING',
       createdAt: '2026-07-10T00:00:00Z',
@@ -113,11 +113,11 @@ describe('useTaskPane native subtasks', () => {
     const first = useTaskPane('pane-1')
     const second = useTaskPane('pane-2')
     first.task.value = {
-      taskId: 'task-1', sessionId: 'session-1', workerId: 'worker-1', providerType: 'codex-worker',
+      taskId: 'task-1', sessionId: 'session-1', workerId: 'worker-1', providerType: 'codex-app-server-worker',
       prompt: 'first', status: 'RUNNING', createdAt: '', updatedAt: '',
     }
     second.task.value = {
-      taskId: 'task-2', sessionId: 'session-2', workerId: 'worker-1', providerType: 'codex-worker',
+      taskId: 'task-2', sessionId: 'session-2', workerId: 'worker-1', providerType: 'codex-app-server-worker',
       prompt: 'second', status: 'RUNNING', createdAt: '', updatedAt: '',
     }
 
@@ -130,6 +130,44 @@ describe('useTaskPane native subtasks', () => {
     expect(first.nativeSubtasks.value).toEqual([])
     expect(second.nativeSubtasks.value[0]?.subtaskId).toBe('sub-task-2')
     second.dispose()
+  })
+
+  it('does not query or project native subtasks for the SDK provider', async () => {
+    mocks.getLatestMessages.mockResolvedValue({ messages: [], total: 0, hasMore: false })
+    mocks.getNativeSubtasks.mockResolvedValue({
+      taskId: 'task-sdk',
+      subtasks: [{ subtaskId: 'unexpected', status: 'running', lastEventSeq: 1 }],
+    })
+
+    const pane = useTaskPane('pane-sdk')
+    pane.task.value = {
+      taskId: 'task-sdk',
+      sessionId: 'session-sdk',
+      workerId: 'worker-1',
+      providerType: 'codex-worker',
+      prompt: 'SDK task',
+      status: 'RUNNING',
+      createdAt: '',
+      updatedAt: '',
+    }
+    await pane.connect('session-sdk')
+    await flushAsyncWork()
+
+    mocks.sessionCallbacks.get('session-sdk')?.({
+      type: 'NATIVE_SUBTASK_UPDATE',
+      sessionId: 'session-sdk',
+      payload: {
+        data: {
+          taskId: 'task-sdk',
+          lastEventSeq: 2,
+          subtask: { subtaskId: 'unexpected', status: 'completed' },
+        },
+      },
+    })
+
+    expect(mocks.getNativeSubtasks).not.toHaveBeenCalled()
+    expect(pane.nativeSubtasks.value).toEqual([])
+    pane.dispose()
   })
 
   it('retries transient HTTP and network failures and stops retrying after dispose', async () => {
@@ -145,7 +183,7 @@ describe('useTaskPane native subtasks', () => {
 
     const pane = useTaskPane('pane-retry')
     pane.task.value = {
-      taskId: 'task-retry', sessionId: 'session-retry', workerId: 'worker-1', providerType: 'codex-worker',
+      taskId: 'task-retry', sessionId: 'session-retry', workerId: 'worker-1', providerType: 'codex-app-server-worker',
       prompt: 'retry snapshot', status: 'RUNNING', createdAt: '', updatedAt: '',
     }
     await pane.connect('session-retry')
@@ -183,7 +221,7 @@ describe('useTaskPane native subtasks', () => {
 
     const pane = useTaskPane(`pane-${status}`)
     pane.task.value = {
-      taskId: `task-${status}`, sessionId: `session-${status}`, workerId: 'worker-1', providerType: 'codex-worker',
+      taskId: `task-${status}`, sessionId: `session-${status}`, workerId: 'worker-1', providerType: 'codex-app-server-worker',
       prompt: 'retry snapshot', status: 'RUNNING', createdAt: '', updatedAt: '',
     }
     await pane.connect(`session-${status}`)
@@ -204,7 +242,7 @@ describe('useTaskPane native subtasks', () => {
     const pane = useTaskPane(`pane-unsupported-${status}`)
     pane.task.value = {
       taskId: `task-unsupported-${status}`, sessionId: `session-unsupported-${status}`,
-      workerId: 'worker-1', providerType: 'codex-worker', prompt: 'unsupported snapshot',
+      workerId: 'worker-1', providerType: 'codex-app-server-worker', prompt: 'unsupported snapshot',
       status: 'RUNNING', createdAt: '', updatedAt: '',
     }
     await pane.connect(`session-unsupported-${status}`)
@@ -233,7 +271,7 @@ describe('useTaskPane native subtasks', () => {
 
     const pane = useTaskPane('pane-next-epoch')
     pane.task.value = {
-      taskId: 'task-old', sessionId: 'session-next-epoch', workerId: 'worker-1', providerType: 'codex-worker',
+      taskId: 'task-old', sessionId: 'session-next-epoch', workerId: 'worker-1', providerType: 'codex-app-server-worker',
       prompt: 'old task', status: 'RUNNING', createdAt: '', updatedAt: '',
     }
     await pane.connect('session-next-epoch')
@@ -241,7 +279,7 @@ describe('useTaskPane native subtasks', () => {
     expect(mocks.getNativeSubtasks).toHaveBeenCalledTimes(1)
 
     pane.task.value = {
-      taskId: 'task-later', sessionId: 'session-next-epoch', workerId: 'worker-1', providerType: 'codex-worker',
+      taskId: 'task-later', sessionId: 'session-next-epoch', workerId: 'worker-1', providerType: 'codex-app-server-worker',
       prompt: 'later task', status: 'RUNNING', createdAt: '', updatedAt: '',
     }
     await nextTick()
@@ -264,7 +302,7 @@ describe('useTaskPane native subtasks', () => {
     const pane = useTaskPane('pane-application-error')
     pane.task.value = {
       taskId: 'task-application-error', sessionId: 'session-application-error', workerId: 'worker-1',
-      providerType: 'codex-worker', prompt: 'application error', status: 'RUNNING', createdAt: '', updatedAt: '',
+      providerType: 'codex-app-server-worker', prompt: 'application error', status: 'RUNNING', createdAt: '', updatedAt: '',
     }
     await pane.connect('session-application-error')
     await flushAsyncWork()
@@ -290,14 +328,14 @@ describe('useTaskPane native subtasks', () => {
 
     const pane = useTaskPane('pane-task-switch')
     pane.task.value = {
-      taskId: 'task-old', sessionId: 'session-switch', workerId: 'worker-1', providerType: 'codex-worker',
+      taskId: 'task-old', sessionId: 'session-switch', workerId: 'worker-1', providerType: 'codex-app-server-worker',
       prompt: 'old', status: 'RUNNING', createdAt: '', updatedAt: '',
     }
     await pane.connect('session-switch')
     await flushAsyncWork()
 
     pane.task.value = {
-      taskId: 'task-new', sessionId: 'session-switch', workerId: 'worker-1', providerType: 'codex-worker',
+      taskId: 'task-new', sessionId: 'session-switch', workerId: 'worker-1', providerType: 'codex-app-server-worker',
       prompt: 'new', status: 'RUNNING', createdAt: '', updatedAt: '',
     }
     await nextTick()
@@ -322,7 +360,7 @@ describe('useTaskPane native subtasks', () => {
       taskId: 'task-input',
       sessionId: 'session-input',
       workerId: 'worker-1',
-      providerType: 'codex-worker',
+      providerType: 'codex-app-server-worker',
       prompt: 'interactive task',
       status: 'RUNNING',
       createdAt: '',

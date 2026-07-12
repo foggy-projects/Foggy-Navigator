@@ -10,6 +10,7 @@ import com.foggy.navigator.business.agent.repository.BusinessCodingAgentReposito
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -233,6 +234,24 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         assertTrue(result.getBlockers().stream().anyMatch(item -> item.contains("modelConfigId is missing")));
         assertTrue(result.getBlockers().stream().anyMatch(item -> item.contains("defaultModelConfigId")));
         verify(modelConfigGrantService, never()).resolveEffectiveModelConfigId(anyString(), anyString(), any());
+    }
+
+    @Test
+    void ensureUsesCodexAppServerDefaultModelGrant() {
+        ClientAppModelConfigGrantDTO grant = defaultModelGrant();
+        grant.setModelConfigId("model-app-server");
+        grant.setWorkerBackend(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
+        when(modelConfigGrantService.listGrants(anyString(), anyString()))
+                .thenReturn(List.of(grant));
+
+        var result = service.ensure(form(false), principal("nav_tms_3"));
+
+        assertEquals("model-app-server", result.getModelConfigId());
+        assertEquals(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER, result.getWorkerBackend());
+        CodingAgentEntity rootAgent = agentsByKey.get(agentKey("tms-root-agent", "nav_tms_3"));
+        assertNotNull(rootAgent);
+        assertEquals("model-app-server", rootAgent.getDefaultModelConfigId());
+        assertFalse(result.getMissingFields().contains("modelConfigId"));
     }
 
     @Test

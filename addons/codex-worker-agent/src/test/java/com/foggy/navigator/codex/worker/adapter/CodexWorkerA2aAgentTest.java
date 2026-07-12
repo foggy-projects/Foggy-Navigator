@@ -3,6 +3,7 @@ package com.foggy.navigator.codex.worker.adapter;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
@@ -385,14 +386,15 @@ class CodexWorkerA2aAgentTest {
     class TaskLifecycle {
         @Test
         void getTask_found_mapsState() {
-            CodexTaskDTO dto = CodexTaskDTO.builder()
+            DispatchTaskDTO dto = DispatchTaskDTO.builder()
                     .taskId("task-6")
                     .sessionId("session-6")
                     .workerId("worker-1")
                     .status("COMPLETED")
                     .resultText("Done!")
                     .build();
-            when(taskService.getTask("user-1", "task-6")).thenReturn(dto);
+            when(taskService.getTaskByIdAndUser("task-6", "user-1"))
+                    .thenReturn(Optional.of(dto));
 
             A2aAgent agent = pipelineWithoutContextStore();
             Optional<A2aTask> result = agent.getTask("task-6");
@@ -406,8 +408,8 @@ class CodexWorkerA2aAgentTest {
 
         @Test
         void getTask_notFound_returnsEmpty() {
-            when(taskService.getTask("user-1", "nonexistent"))
-                    .thenThrow(new IllegalArgumentException("not found"));
+            when(taskService.getTaskByIdAndUser("nonexistent", "user-1"))
+                    .thenReturn(Optional.empty());
 
             A2aAgent agent = pipelineWithoutContextStore();
             Optional<A2aTask> result = agent.getTask("nonexistent");

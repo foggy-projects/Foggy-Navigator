@@ -8,7 +8,6 @@ import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.entity.CodexAppServerEndpointEntity;
 import com.foggy.navigator.codex.worker.model.entity.CodexRuntimeEntity;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeLifecycleForm;
-import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
 import com.foggy.navigator.codex.worker.repository.CodexAppServerEndpointRepository;
 import com.foggy.navigator.codex.worker.repository.CodexRuntimeRepository;
@@ -17,7 +16,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Mono;
@@ -26,6 +24,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -68,94 +67,8 @@ class CodexRuntimeRegistryServiceTest {
             String value = invocation.getArgument(0);
             return value.startsWith("encrypted:") ? value.substring("encrypted:".length()) : value;
         });
-    }
-
-    @Test
-    void registerRevisionPinsCliAndSchemaAndEncryptsToken() {
-        when(repository.findMaxRevision("app-main")).thenReturn(0);
-        CodexRuntimeRegistrationForm form = registration();
-
-        var result = service.registerRevision(form);
-
-        assertEquals(1, result.getRevision());
-        assertEquals(CodexRuntimeRegistryService.PINNED_APP_SERVER_CLI_VERSION,
-                result.getExpectedCliVersion());
-        assertEquals(CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST,
-                result.getExpectedSchemaDigest());
-        verify(encryptor).encrypt("runtime-token");
-    }
-
-    @Test
-    void registrationCannotOverridePinnedProtocol() {
-        CodexRuntimeRegistrationForm form = registration();
-        form.setExpectedCliVersion("0.145.0");
-        assertThrows(IllegalArgumentException.class, () -> service.registerRevision(form));
-
-        form.setExpectedCliVersion(CodexRuntimeRegistryService.PINNED_APP_SERVER_CLI_VERSION);
-        form.setExpectedSchemaDigest("unreviewed-schema");
-        assertThrows(IllegalArgumentException.class, () -> service.registerRevision(form));
-    }
-
-    @Test
-    void runtimeNamespaceCannotCrossWorkersOrSkipRevisionSequence() {
-        CodexRuntimeEntity existing = runtime("DARK", 0);
-        when(repository.findByRuntimeIdOrderByRevisionDesc("app-main")).thenReturn(List.of(existing));
-        when(repository.findMaxRevision("app-main")).thenReturn(1);
-
-        CodexRuntimeRegistrationForm otherWorker = registration();
-        otherWorker.setWorkerId("worker-2");
-        assertThrows(IllegalArgumentException.class, () -> service.registerRevision(otherWorker));
-
-        CodexRuntimeRegistrationForm skipped = registration();
-        skipped.setRevision(Integer.MAX_VALUE);
-        assertThrows(IllegalArgumentException.class, () -> service.registerRevision(skipped));
-        verify(encryptor, never()).encrypt("runtime-token");
-    }
-
-    @ParameterizedTest
-    @NullSource
-    @ValueSource(strings = {"", "   "})
-    void registrationAllowsMissingAuthToken(String token) {
-        when(repository.findMaxRevision("app-main")).thenReturn(0);
-        CodexRuntimeRegistrationForm form = registration();
-        form.setAuthToken(token);
-
-        service.registerRevision(form);
-
-        verify(encryptor).encrypt("");
-    }
-
-    @Test
-    void registrationRejectsUnsafeAuthToken() {
-        CodexRuntimeRegistrationForm form = registration();
-        form.setAuthToken("token\nwith-control");
-
-        assertThrows(IllegalArgumentException.class, () -> service.registerRevision(form));
-        verify(encryptor, never()).encrypt(anyString());
-    }
-
-    @Test
-    void registrationRejectsLegacySdkRuntimeType() {
-        CodexRuntimeRegistrationForm form = registration();
-        form.setRuntimeType("SDK_EXEC");
-
-        assertThrows(IllegalArgumentException.class, () -> service.registerRevision(form));
-        verify(encryptor, never()).encrypt(anyString());
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {
-            "http://user:token@127.0.0.1:3062",
-            "http://127.0.0.1:3062?token=secret",
-            "http://127.0.0.1:3062#fragment",
-            "file:///tmp/worker",
-            "http://127.0.0.1:3062/\nInjected"
-    })
-    void registrationRejectsUnsafeEndpoint(String endpoint) {
-        CodexRuntimeRegistrationForm form = registration();
-        form.setEndpointUrl(endpoint);
-
-        assertThrows(IllegalArgumentException.class, () -> service.registerRevision(form));
+        when(endpointRepository.findByEndpointId(anyString())).thenAnswer(invocation ->
+                Optional.of(endpoint(invocation.getArgument(0))));
     }
 
     @Test
@@ -247,6 +160,47 @@ class CodexRuntimeRegistryServiceTest {
 
         assertEquals("ULTRA_CANARY", updated.getRoutingPolicy());
         assertEquals(2L, updated.getRoutingEpoch());
+    }
+
+    @Test
+    void deletedEndpointRejectsNewRoutingAndUnarchiveButKeepsBoundAffinity() {
+        CodexRuntimeEntity entity = runtime("ALL_DEFAULT", 100);
+        entity.setReadinessStatus("READY");
+        entity.setArchivedAt(LocalDateTime.now());
+        when(endpointRepository.findByEndpointId("endpoint-main")).thenReturn(Optional.empty());
+        when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1)).thenReturn(Optional.of(entity));
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+
+        CodexRuntimeRoutingForm routing = new CodexRuntimeRoutingForm();
+        routing.setExpectedRoutingEpoch(1L);
+        assertThrows(IllegalStateException.class,
+                () -> service.updateRouting("app-main", 1, routing));
+
+        CodexRuntimeLifecycleForm lifecycle = new CodexRuntimeLifecycleForm();
+        lifecycle.setExpectedRoutingEpoch(1L);
+        assertThrows(IllegalStateException.class,
+                () -> service.unarchiveRevision("app-main", 1, lifecycle));
+
+        CodexRuntimeBinding bound = service.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a");
+        assertEquals("app-main", bound.getRuntimeId());
+    }
+
+    @Test
+    void deletedEndpointIsExcludedFromNewTaskSelection() throws Exception {
+        CodexRuntimeEntity entity = readyRuntime("ALL_DEFAULT", 100, "gpt-5.6-sol");
+        when(endpointRepository.findByEndpointId("endpoint-main")).thenReturn(Optional.empty());
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+        when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
+                "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
+
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.selectForNewTask(
+                        "worker-1", "gpt-5.6-sol:high",
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
+
+        assertEquals("CODEX_RUNTIME_UNAVAILABLE", error.getCode());
     }
 
     @Test
@@ -461,7 +415,7 @@ class CodexRuntimeRegistryServiceTest {
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask("worker-1", "codex-ultra",
-                        "codex-worker", "task-1"));
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", error.getCode());
     }
 
@@ -544,7 +498,7 @@ class CodexRuntimeRegistryServiceTest {
 
         var listed = service.listByWorker("worker-1");
         CodexRuntimeBinding selected = service.selectForNewTask(
-                "worker-1", "codex-latest", "codex-worker", "task-1");
+                "worker-1", "codex-latest", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1");
 
         assertEquals(List.of("a-runtime", "z-runtime"),
                 listed.stream().map(runtime -> runtime.getRuntimeId()).toList());
@@ -631,10 +585,12 @@ class CodexRuntimeRegistryServiceTest {
         when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
                 "worker-1", "APP_SERVER")).thenReturn(List.of(archived));
 
-        CodexRuntimeBinding selected = service.selectForNewTask(
-                "worker-1", "codex-latest", "codex-worker", "task-1");
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.selectForNewTask(
+                        "worker-1", "codex-latest",
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
 
-        assertEquals(CodexRuntimeType.SDK_EXEC, selected.getRuntimeType());
+        assertEquals("CODEX_RUNTIME_UNAVAILABLE", error.getCode());
     }
 
     @ParameterizedTest
@@ -656,6 +612,7 @@ class CodexRuntimeRegistryServiceTest {
         var result = service.availability("worker-1");
 
         assertTrue(result.getAppServerManaged());
+        assertEquals(expected, result.getModelAvailable());
         assertEquals(expected, result.getUltraAvailable());
         assertEquals(expected ? null : "CODEX_ULTRA_RUNTIME_UNAVAILABLE",
                 result.getBlockReason());
@@ -718,6 +675,37 @@ class CodexRuntimeRegistryServiceTest {
     }
 
     @Test
+    void nonUltraAvailabilityUsesReadyModelAndAllRoutingPolicy() throws Exception {
+        CodexRuntimeEntity entity = readyRuntime("ALL_DEFAULT", 100, "gpt-5.6-sol");
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+
+        var result = service.availability("worker-1", "gpt-5.6-sol:high");
+
+        assertTrue(result.getModelAvailable());
+        assertFalse(result.getUltraAvailable());
+        assertEquals(null, result.getBlockReason());
+    }
+
+    @Test
+    void nonUltraAvailabilityFailsClosedForDarkDisabledStaleAndUnsupportedRuntime() throws Exception {
+        CodexRuntimeEntity dark = readyRuntime("DARK", 100, "gpt-5.6-sol");
+        CodexRuntimeEntity disabled = readyRuntime("ALL_DEFAULT", 100, "gpt-5.6-sol");
+        disabled.setEnabled(false);
+        CodexRuntimeEntity stale = readyRuntime("ALL_DEFAULT", 100, "gpt-5.6-sol");
+        stale.setLastCapabilityAt(LocalDateTime.now().minusMinutes(5));
+        CodexRuntimeEntity unsupported = readyRuntime("ALL_DEFAULT", 100, "gpt-5.5");
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(dark), List.of(disabled), List.of(stale), List.of(unsupported));
+
+        for (int attempt = 0; attempt < 4; attempt++) {
+            var result = service.availability("worker-1", "gpt-5.6-sol:high");
+            assertFalse(result.getModelAvailable());
+            assertEquals("CODEX_RUNTIME_UNAVAILABLE", result.getBlockReason());
+        }
+    }
+
+    @Test
     void availabilityFailsClosedForConflictingCandidateAliases() throws Exception {
         CodexRuntimeEntity first = readyRuntime("ULTRA_DEFAULT", 100, "*");
         CodexRuntimeEntity second = readyRuntime("ULTRA_DEFAULT", 100, "*");
@@ -732,6 +720,7 @@ class CodexRuntimeRegistryServiceTest {
         var result = service.availability("worker-1", "custom-tier");
 
         assertTrue(result.getAppServerManaged());
+        assertFalse(result.getModelAvailable());
         assertFalse(result.getUltraAvailable());
         assertEquals(CodexRuntimeRegistryService.MODEL_ALIAS_CONFLICT_CODE,
                 result.getBlockReason());
@@ -777,11 +766,11 @@ class CodexRuntimeRegistryServiceTest {
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask("worker-1", "codex-ultra",
-                        "codex-worker", "task-1"));
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", error.getCode());
         CodexRuntimeUnavailableException customError = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask("worker-1", "custom-ultra",
-                        "codex-worker", "task-2"));
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-2"));
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", customError.getCode());
     }
 
@@ -813,7 +802,7 @@ class CodexRuntimeRegistryServiceTest {
                 "worker-1", "APP_SERVER")).thenReturn(List.of());
 
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
-                () -> service.selectForNewTask("worker-1", "codex-ultra", "codex-worker", "task-1"));
+                () -> service.selectForNewTask("worker-1", "codex-ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
 
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", error.getCode());
     }
@@ -827,7 +816,7 @@ class CodexRuntimeRegistryServiceTest {
 
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask("worker-1", "gpt-5.6-sol:ultra",
-                        "codex-worker", "task-1"));
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
 
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", error.getCode());
     }
@@ -854,17 +843,19 @@ class CodexRuntimeRegistryServiceTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"codex-latest", "gpt-5.6-sol:high"})
-    void defaultAliasAndRealNonUltraModelUseLegacyWhenRuntimeIsDark(String model) {
+    void defaultAliasAndRealNonUltraModelFailClosedWhenRuntimeIsDark(String model) {
         CodexRuntimeEntity entity = runtime("DARK", 0);
         when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
                 .thenReturn(List.of(entity));
         when(repository.findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
 
-        CodexRuntimeBinding binding = service.selectForNewTask(
-                "worker-1", model, "codex-worker", "task-1");
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.selectForNewTask(
+                        "worker-1", model,
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
 
-        assertEquals(CodexRuntimeType.SDK_EXEC, binding.getRuntimeType());
+        assertEquals("CODEX_RUNTIME_UNAVAILABLE", error.getCode());
     }
 
     @Test
@@ -878,7 +869,7 @@ class CodexRuntimeRegistryServiceTest {
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
 
         CodexRuntimeBinding binding = service.selectForNewTask(
-                "worker-1", "custom-ultra", "codex-worker", "task-1");
+                "worker-1", "custom-ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1");
 
         assertEquals(CodexRuntimeType.APP_SERVER, binding.getRuntimeType());
     }
@@ -895,7 +886,7 @@ class CodexRuntimeRegistryServiceTest {
 
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask(
-                        "worker-1", "custom-ultra", "codex-worker", "task-1"));
+                        "worker-1", "custom-ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
 
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", error.getCode());
     }
@@ -912,7 +903,7 @@ class CodexRuntimeRegistryServiceTest {
 
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask(
-                        "worker-1", "custom-high", "codex-worker", "task-1"));
+                        "worker-1", "custom-high", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
 
         assertEquals("CODEX_RUNTIME_UNAVAILABLE", error.getCode());
     }
@@ -930,7 +921,7 @@ class CodexRuntimeRegistryServiceTest {
 
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask(
-                        "worker-1", "custom-ultra", "codex-worker", "task-1"));
+                        "worker-1", "custom-ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
 
         assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", error.getCode());
     }
@@ -953,7 +944,7 @@ class CodexRuntimeRegistryServiceTest {
 
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask(
-                        "worker-1", "custom-tier", "codex-worker", "task-1"));
+                        "worker-1", "custom-tier", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
 
         assertEquals(CodexRuntimeRegistryService.MODEL_ALIAS_CONFLICT_CODE, error.getCode());
     }
@@ -972,7 +963,7 @@ class CodexRuntimeRegistryServiceTest {
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
 
         CodexRuntimeBinding binding = service.selectForNewTask(
-                "worker-1", model, "codex-worker", "task-1");
+                "worker-1", model, CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1");
 
         assertEquals(CodexRuntimeType.APP_SERVER, binding.getRuntimeType());
         assertEquals("http://127.0.0.1:3062", binding.getEndpointUrl());
@@ -995,23 +986,23 @@ class CodexRuntimeRegistryServiceTest {
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
 
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
-                "worker-1", "gpt-5.6-sol:ultra", "codex-worker", "task-sol").getRuntimeType());
+                "worker-1", "gpt-5.6-sol:ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-sol").getRuntimeType());
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
-                "worker-1", "gpt-5.5", "codex-worker", "task-gpt55").getRuntimeType());
+                "worker-1", "gpt-5.5", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-gpt55").getRuntimeType());
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
-                "worker-1", "gpt-5.6-terra:ultra", "codex-worker", "task-terra").getRuntimeType());
+                "worker-1", "gpt-5.6-terra:ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-terra").getRuntimeType());
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
-                "worker-1", "codex-terra:max", "codex-worker", "task-terra-max").getRuntimeType());
+                "worker-1", "codex-terra:max", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-terra-max").getRuntimeType());
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
-                "worker-1", "codex-luna:max", "codex-worker", "task-luna-max").getRuntimeType());
+                "worker-1", "codex-luna:max", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-luna-max").getRuntimeType());
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
-                "worker-1", "gpt-5.5:max", "codex-worker", "task-gpt55-max"));
+                "worker-1", "gpt-5.5:max", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-gpt55-max"));
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
-                "worker-1", "gpt-5.5:ultra", "codex-worker", "task-gpt55-ultra"));
+                "worker-1", "gpt-5.5:ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-gpt55-ultra"));
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
-                "worker-1", "gpt-5.6-luna:ultra", "codex-worker", "task-luna-ultra"));
+                "worker-1", "gpt-5.6-luna:ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-luna-ultra"));
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
-                "worker-1", "gpt-5.6-sol:minimal", "codex-worker", "task-sol-minimal"));
+                "worker-1", "gpt-5.6-sol:minimal", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-sol-minimal"));
     }
 
     @Test
@@ -1025,13 +1016,13 @@ class CodexRuntimeRegistryServiceTest {
                 "worker-1", "APP_SERVER")).thenReturn(List.of(entity));
 
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
-                "worker-1", "gpt-5.6-sol:ultra", "codex-worker", "task-sol").getRuntimeType());
+                "worker-1", "gpt-5.6-sol:ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-sol").getRuntimeType());
         assertEquals(CodexRuntimeType.APP_SERVER, service.selectForNewTask(
-                "worker-1", "gpt-5.5", "codex-worker", "task-gpt55").getRuntimeType());
+                "worker-1", "gpt-5.5", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-gpt55").getRuntimeType());
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
-                "worker-1", "gpt-5.5:max", "codex-worker", "task-gpt55-max"));
+                "worker-1", "gpt-5.5:max", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-gpt55-max"));
         assertThrows(CodexRuntimeUnavailableException.class, () -> service.selectForNewTask(
-                "worker-1", "gpt-5.5:ultra", "codex-worker", "task-gpt55-ultra"));
+                "worker-1", "gpt-5.5:ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-gpt55-ultra"));
     }
 
     @Test
@@ -1043,7 +1034,7 @@ class CodexRuntimeRegistryServiceTest {
 
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask("worker-1", "codex-latest",
-                        "codex-worker", "task-1"));
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
 
         assertEquals("CODEX_RUNTIME_UNAVAILABLE", error.getCode());
     }
@@ -1057,7 +1048,7 @@ class CodexRuntimeRegistryServiceTest {
 
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask(
-                        "worker-1", "codex-latest", "codex-worker", "task-1"));
+                        "worker-1", "codex-latest", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
 
         assertEquals("CODEX_RUNTIME_UNAVAILABLE", error.getCode());
     }
@@ -1070,11 +1061,11 @@ class CodexRuntimeRegistryServiceTest {
 
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask("worker-1", "codex-latest",
-                        "codex-worker", "task-1", java.util.Set.of("attachments")));
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1", java.util.Set.of("attachments")));
         assertEquals("CODEX_RUNTIME_UNAVAILABLE", error.getCode());
 
         CodexRuntimeBinding supported = service.selectForNewTask("worker-1", "codex-latest",
-                "codex-worker", "task-2", java.util.Set.of("images", "approval:never"));
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-2", java.util.Set.of("images", "approval:never"));
         assertEquals(CodexRuntimeType.APP_SERVER, supported.getRuntimeType());
     }
 
@@ -1086,23 +1077,24 @@ class CodexRuntimeRegistryServiceTest {
 
         assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.selectForNewTask("worker-1", "codex-latest:extra-high",
-                        "codex-worker", "task-1"));
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-1"));
     }
 
     @Test
-    void legacyAffinityResolvesWithoutRegistryLookup() {
-        CodexRuntimeBinding binding = service.resolveBoundRuntime("legacy-sdk:worker-1", 1, "worker-1");
+    void legacyAffinityIsRejectedByAppServerRegistry() {
+        CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
+                () -> service.resolveBoundRuntime("legacy-sdk:worker-1", 1, "worker-1"));
 
-        assertEquals(CodexRuntimeType.SDK_EXEC, binding.getRuntimeType());
+        assertEquals("CODEX_PROVIDER_RUNTIME_MISMATCH", error.getCode());
         verify(repository, never()).findByRuntimeIdAndRevision(anyString(), any());
     }
 
     @Test
-    void legacyAffinityCannotMoveToAnotherWorker() {
+    void legacyAffinityForAnotherWorkerIsStillRejectedByProviderBoundary() {
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
                 () -> service.resolveBoundRuntime("legacy-sdk:worker-1", 1, "worker-2"));
 
-        assertEquals("CODEX_RUNTIME_AFFINITY_MISMATCH", error.getCode());
+        assertEquals("CODEX_PROVIDER_RUNTIME_MISMATCH", error.getCode());
         verify(repository, never()).findByRuntimeIdAndRevision(anyString(), any());
     }
 
@@ -1178,10 +1170,64 @@ class CodexRuntimeRegistryServiceTest {
     }
 
     @Test
+    void boundRuntimeCapabilitiesRejectUnsupportedModelAndFeatures() throws Exception {
+        CodexRuntimeEntity entity = runtime("DRAINING", 0);
+        setModelCapabilities(entity, Map.of("codex-terra", "gpt-5.6-terra"),
+                Map.of("gpt-5.6-terra", List.of("high", "ultra")));
+        when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(entity));
+        CodexRuntimeBinding binding = service.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a");
+
+        service.validateBoundRuntimeCapabilities(binding, "codex-terra:ultra", Set.of());
+        CodexRuntimeUnavailableException modelError = assertThrows(
+                CodexRuntimeUnavailableException.class,
+                () -> service.validateBoundRuntimeCapabilities(
+                        binding, "codex-luna:ultra", Set.of()));
+        CodexRuntimeUnavailableException featureError = assertThrows(
+                CodexRuntimeUnavailableException.class,
+                () -> service.validateBoundRuntimeCapabilities(
+                        binding, "codex-terra:high", Set.of("attachments")));
+
+        assertEquals("CODEX_BOUND_RUNTIME_CAPABILITY_MISMATCH", modelError.getCode());
+        assertEquals("CODEX_BOUND_RUNTIME_CAPABILITY_MISMATCH", featureError.getCode());
+    }
+
+    @Test
+    void terraOnlyRuntimeStillDeclaresUltraSupport() throws Exception {
+        CodexRuntimeEntity entity = runtime("DARK", 0);
+        setModelCapabilities(entity, Map.of("codex-terra", "gpt-5.6-terra"),
+                Map.of("gpt-5.6-terra", List.of("high", "ultra")));
+        when(repository.findByWorkerIdOrderByPriorityDescRevisionDesc("worker-1"))
+                .thenReturn(List.of(entity));
+
+        assertTrue(service.listByWorker("worker-1").get(0).getSupportsUltra());
+    }
+
+    @Test
+    void endpointConnectionProbeChecksPerModelReasoningMatrix() throws Exception {
+        CodexAppServerEndpointEntity endpoint = endpoint("endpoint-model-probe");
+        Map<String, Object> manifest = topLevelManifest(
+                "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
+        manifest.put("models", List.of("gpt-5.6-luna"));
+        manifest.put("model_reasoning_matrix", Map.of(
+                "gpt-5.6-luna", List.of("high", "max")));
+        when(endpointRepository.findByWorkerIdOrderByUpdatedAtDesc("worker-1"))
+                .thenReturn(List.of(endpoint));
+        when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
+        when(client.probeCapabilities()).thenReturn(Mono.just(probe(manifest)));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.testEndpointConnection("worker-1", "gpt-5.6-luna:ultra"));
+
+        assertEquals("CODEX_APP_SERVER_MODEL_UNSUPPORTED", error.getMessage());
+    }
+
+    @Test
     void scheduledRefreshIsolatesFailedRevision() throws Exception {
         CodexRuntimeEntity first = runtime("DARK", 0);
         CodexRuntimeEntity second = runtime("DARK", 0);
         second.setRuntimeId("app-second");
+        second.setReportedRuntimeId("app-second");
         when(repository.findByEnabledTrueOrderByUpdatedAtAsc()).thenReturn(List.of(first, second));
         when(repository.findByRuntimeIdAndRevision("app-main", 1)).thenReturn(Optional.of(first));
         when(repository.findByRuntimeIdAndRevision("app-second", 1)).thenReturn(Optional.of(second));
@@ -1198,15 +1244,6 @@ class CodexRuntimeRegistryServiceTest {
         assertEquals("UNREACHABLE", first.getReadinessStatus());
         assertEquals("READY", second.getReadinessStatus());
         verify(client, times(2)).probeCapabilities();
-    }
-
-    private CodexRuntimeRegistrationForm registration() {
-        CodexRuntimeRegistrationForm form = new CodexRuntimeRegistrationForm();
-        form.setRuntimeId("app-main");
-        form.setWorkerId("worker-1");
-        form.setEndpointUrl("http://127.0.0.1:3062/");
-        form.setAuthToken("runtime-token");
-        return form;
     }
 
     private CodexAppServerEndpointEntity endpoint(String endpointId) {
@@ -1226,6 +1263,10 @@ class CodexRuntimeRegistryServiceTest {
         entity.setRevision(1);
         entity.setWorkerId("worker-1");
         entity.setRuntimeType("APP_SERVER");
+        entity.setRuntimeSource("ENDPOINT_SYNC");
+        entity.setEndpointId("endpoint-main");
+        entity.setReportedRuntimeId("app-main");
+        entity.setReportedRuntimeRevision(1);
         entity.setEndpointUrl("http://127.0.0.1:3062");
         entity.setAuthTokenCiphertext("encrypted:runtime-token");
         entity.setInstanceId("instance-a");
@@ -1273,7 +1314,7 @@ class CodexRuntimeRegistryServiceTest {
     private boolean isUltraCanarySelected(String routingKey) {
         try {
             return service.selectForNewTask(
-                    "worker-1", "codex-ultra", "codex-worker", routingKey).getRuntimeType()
+                    "worker-1", "codex-ultra", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, routingKey).getRuntimeType()
                     == CodexRuntimeType.APP_SERVER;
         } catch (CodexRuntimeUnavailableException e) {
             assertEquals("CODEX_ULTRA_RUNTIME_UNAVAILABLE", e.getCode());

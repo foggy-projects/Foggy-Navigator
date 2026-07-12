@@ -305,6 +305,27 @@ describe('useClaudeWorker', () => {
         directoryId: 'd-1',
       })
     })
+
+    it('passes an explicit App Server provider without rewriting it', async () => {
+      const task = makeTask({
+        taskId: 't-app-server',
+        providerType: 'codex-app-server-worker',
+      })
+      mockUnifiedTaskApi.createTaskUnified.mockResolvedValue(task as any)
+
+      const { createTask } = useClaudeWorker()
+      await createTask({
+        workerId: 'w-1',
+        prompt: 'Run with app server',
+        providerType: 'codex-app-server-worker',
+      })
+
+      expect(mockUnifiedTaskApi.createTaskUnified).toHaveBeenCalledWith({
+        workerId: 'w-1',
+        prompt: 'Run with app server',
+        providerType: 'codex-app-server-worker',
+      })
+    })
   })
 
   // ========== abortTask ==========

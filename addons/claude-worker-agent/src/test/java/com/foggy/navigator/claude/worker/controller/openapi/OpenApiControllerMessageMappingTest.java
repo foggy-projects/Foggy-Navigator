@@ -1952,8 +1952,56 @@ class OpenApiControllerMessageMappingTest {
         method.setAccessible(true);
 
         assertEquals("OPENAI_CODEX", method.invoke(controller, "codex-biz-worker"));
+        assertEquals("OPENAI_CODEX_APP_SERVER",
+                method.invoke(controller, "codex-app-server-worker"));
         assertEquals("GEMINI_CLI", method.invoke(controller, "gemini"));
         assertEquals("CUSTOM-PROVIDER", method.invoke(controller, "custom-provider"));
+    }
+
+    @Test
+    void appServerLaunchUsesWorkspaceWorkerAndClassifiesOpaqueFailureAsRuntime() throws Exception {
+        OpenApiController controller = newController();
+        A2AgentResourceResolver.ResolvedAgentResource agentResource =
+                new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent-app", ResourceOwnerType.CLIENT_APP, "app-1", "app-1",
+                        "agent-app", null, null, null, null,
+                        "OPENAI_CODEX_APP_SERVER", "agent-worker",
+                        ResourceOwnerType.CLIENT_APP, "app-1", "AGENT_WORKER_REF",
+                        "model-app", "codex-terra:ultra", "dir-app", "AGENT:CLIENT_APP");
+        A2AgentResourceResolver.ResolvedModelResource modelResource =
+                new A2AgentResourceResolver.ResolvedModelResource(
+                        "model-app", "model-app", "codex-terra:ultra",
+                        LlmModelCategory.GENERAL, "codex-terra:ultra",
+                        "REQUESTED_MODEL", "OPENAI_CODEX_APP_SERVER", "MODEL_CONFIG_GRANT");
+        A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource =
+                new A2AgentResourceResolver.ResolvedWorkspaceResource(
+                        "dir-app", "workspace-worker", WorkspaceScope.USER_PRIVATE,
+                        WorkingDirectoryResolverType.MANAGED, "/workspace/app",
+                        List.of("/workspace/app"), false, null, null, null,
+                        "WORKING_DIRECTORY:USER_PRIVATE");
+
+        Method launchMethod = OpenApiController.class.getDeclaredMethod(
+                "resolveOwnerAwareLaunchWorker",
+                String.class, String.class, A2AgentResourceResolver.class,
+                A2AgentResourceResolver.ResolvedAgentResource.class,
+                A2AgentResourceResolver.ResolvedModelResource.class,
+                A2AgentResourceResolver.ResolvedWorkspaceResource.class);
+        launchMethod.setAccessible(true);
+        Object launchWorker = launchMethod.invoke(
+                controller, "tenant-1", "app-1", mock(A2AgentResourceResolver.class),
+                agentResource, modelResource, workspaceResource);
+        Method workerIdAccessor = launchWorker.getClass().getDeclaredMethod("workerId");
+        workerIdAccessor.setAccessible(true);
+        assertEquals("workspace-worker", workerIdAccessor.invoke(launchWorker));
+
+        Method failureStageMethod = OpenApiController.class.getDeclaredMethod(
+                "inferFailureStageFromText",
+                String.class, String.class, String.class, String.class);
+        failureStageMethod.setAccessible(true);
+        assertEquals("RUNTIME", failureStageMethod.invoke(
+                controller, "FAILED", "codex-app-server-worker", null, "opaque failure"));
+        assertEquals("RUNTIME", failureStageMethod.invoke(
+                controller, "FAILED", null, "OPENAI_CODEX_APP_SERVER", "opaque failure"));
     }
 
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity)

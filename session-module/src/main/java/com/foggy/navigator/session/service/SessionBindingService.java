@@ -2,6 +2,7 @@ package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.session.exception.SessionAgentBoundMismatchException;
+import com.foggy.navigator.session.exception.SessionProviderBoundMismatchException;
 import com.foggy.navigator.session.repository.SessionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,7 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 核心规则：
  * <ul>
  *   <li>新会话首次发任务时绑定 Agent（agentId + providerType）</li>
- *   <li>已绑定会话不允许切换到不同 Agent（跨 Agent 漂移）</li>
+ *   <li>已绑定会话不允许切换到不同 Agent 或 Provider</li>
  *   <li>旧会话（agentId 已设但 providerType 为空）在首次访问时自动补填</li>
  * </ul>
  */
@@ -34,6 +35,7 @@ public class SessionBindingService {
      * @param bindingSource   绑定来源（"EXPLICIT_AGENT" / "LEGACY_MODEL_CONFIG" / "RESTORED"）
      * @return 实际绑定的 agentId
      * @throws SessionAgentBoundMismatchException 如果检测到跨 Agent 漂移
+     * @throws SessionProviderBoundMismatchException 如果检测到跨 Provider 漂移
      */
     @Transactional
     public String getOrBind(String sessionId, String agentId, String providerType, String bindingSource) {
@@ -44,6 +46,7 @@ public class SessionBindingService {
         }
 
         String existingAgentId = session.getAgentId();
+        validateProviderBinding(sessionId, session.getProviderType(), providerType);
 
         // Case 1: 已有完整绑定
         if (existingAgentId != null && !existingAgentId.isBlank()
@@ -88,6 +91,30 @@ public class SessionBindingService {
         if (existingAgentId != null && !existingAgentId.isBlank()
                 && !existingAgentId.equals(requestedAgentId)) {
             throw new SessionAgentBoundMismatchException(sessionId, existingAgentId, requestedAgentId);
+        }
+    }
+
+    /**
+     * 仅校验 Provider 绑定一致性，不做写入。
+     */
+    public void validateProviderBinding(String sessionId, String requestedProviderType) {
+        SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
+        if (session == null) {
+            return;
+        }
+        validateProviderBinding(sessionId, session.getProviderType(), requestedProviderType);
+    }
+
+    private void validateProviderBinding(String sessionId,
+                                         String boundProviderType,
+                                         String requestedProviderType) {
+        if (boundProviderType == null || boundProviderType.isBlank()
+                || requestedProviderType == null || requestedProviderType.isBlank()) {
+            return;
+        }
+        if (!boundProviderType.equals(requestedProviderType)) {
+            throw new SessionProviderBoundMismatchException(
+                    sessionId, boundProviderType, requestedProviderType);
         }
     }
 }

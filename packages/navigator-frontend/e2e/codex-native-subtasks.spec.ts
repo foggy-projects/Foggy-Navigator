@@ -32,7 +32,7 @@ const task = {
   prompt: 'Inspect the Ultra pipeline',
   cwd: directory.path,
   status: 'RUNNING',
-  providerType: 'codex-worker',
+  providerType: 'codex-app-server-worker',
   model: 'gpt-5.6-sol:ultra',
   codexThreadId: 'root-thread',
   source: 'PLATFORM',

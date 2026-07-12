@@ -25,14 +25,16 @@ describe('unifiedTask api', () => {
       workerId: 'worker-1',
       prompt: 'hello',
       directoryId: 'dir-1',
-      model: 'sonnet',
+      model: 'codex-terra:ultra',
+      providerType: 'codex-app-server-worker',
     })
 
     expect(mockClient.post).toHaveBeenCalledWith('/tasks', {
       workerId: 'worker-1',
       prompt: 'hello',
       directoryId: 'dir-1',
-      model: 'sonnet',
+      model: 'codex-terra:ultra',
+      providerType: 'codex-app-server-worker',
     })
     expect(result).toEqual(response.data)
   })
@@ -46,12 +48,14 @@ describe('unifiedTask api', () => {
       workerId: 'worker-1',
       sessionId: 'session-1',
       prompt: 'resume',
+      providerType: 'codex-worker',
     })
 
     expect(mockClient.post).toHaveBeenCalledWith('/tasks/resume', {
       workerId: 'worker-1',
       sessionId: 'session-1',
       prompt: 'resume',
+      providerType: 'codex-worker',
     })
     expect(result).toEqual(response.data)
   })

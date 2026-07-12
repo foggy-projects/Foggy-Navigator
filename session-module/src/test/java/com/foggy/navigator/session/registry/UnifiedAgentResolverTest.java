@@ -154,6 +154,79 @@ class UnifiedAgentResolverTest {
     }
 
     @Test
+    void resolveAgent_routesAppServerBackendOnlyToAppServerProvider() {
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .modelConfigId("cfg-app-server")
+                .build();
+        A2aAgent agent = mock(A2aAgent.class);
+        LlmModelConfigDTO config = new LlmModelConfigDTO();
+        config.setId("cfg-app-server");
+        config.setWorkerBackend("OPENAI_CODEX_APP_SERVER");
+
+        when(llmModelManager.getModelConfig("cfg-app-server")).thenReturn(Optional.of(config));
+        when(provider1.getProviderType()).thenReturn("codex-worker");
+        when(provider2.getProviderType()).thenReturn("codex-app-server-worker");
+        when(provider2.resolveAgent("codex-agent", context)).thenReturn(Optional.of(agent));
+
+        Optional<A2aAgent> result = resolver.resolveAgent("codex-agent", context);
+
+        assertSame(agent, result.orElseThrow());
+        verify(provider1, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
+    }
+
+    @Test
+    void resolveAgent_mappedSdkProviderMissing_doesNotScanAppServerProvider() {
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .modelConfigId("cfg-sdk")
+                .build();
+        LlmModelConfigDTO config = new LlmModelConfigDTO();
+        config.setId("cfg-sdk");
+        config.setWorkerBackend("OPENAI_CODEX");
+
+        when(llmModelManager.getModelConfig("cfg-sdk")).thenReturn(Optional.of(config));
+        when(provider1.getProviderType()).thenReturn("claude-worker");
+        when(provider2.getProviderType()).thenReturn("codex-app-server-worker");
+
+        assertTrue(resolver.resolveAgent("codex-agent", context).isEmpty());
+        verify(provider1, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
+        verify(provider2, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
+    }
+
+    @Test
+    void resolveAgent_mappedAppServerProviderMissing_doesNotScanSdkProvider() {
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .modelConfigId("cfg-app")
+                .build();
+        LlmModelConfigDTO config = new LlmModelConfigDTO();
+        config.setId("cfg-app");
+        config.setWorkerBackend("OPENAI_CODEX_APP_SERVER");
+
+        when(llmModelManager.getModelConfig("cfg-app")).thenReturn(Optional.of(config));
+        when(provider1.getProviderType()).thenReturn("claude-worker");
+        when(provider2.getProviderType()).thenReturn("codex-worker");
+
+        assertTrue(resolver.resolveAgent("codex-agent", context).isEmpty());
+        verify(provider1, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
+        verify(provider2, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
+    }
+
+    @Test
+    void resolveAgent_unmappedModelConfig_doesNotScanAnyProvider() {
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .modelConfigId("cfg-missing")
+                .build();
+        when(llmModelManager.getModelConfig("cfg-missing")).thenReturn(Optional.empty());
+
+        assertTrue(resolver.resolveAgent("codex-agent", context).isEmpty());
+        verify(provider1, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
+        verify(provider2, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
+    }
+
+    @Test
     void resolveAgent_prefersLangGraphProviderFromModelConfig() {
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")
@@ -199,6 +272,25 @@ class UnifiedAgentResolverTest {
         Optional<String> result = resolver.getProviderType("unknown", context);
 
         assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void getProviderType_mappedAppServerProviderMissing_doesNotScanSdkProvider() {
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .modelConfigId("cfg-app")
+                .build();
+        LlmModelConfigDTO config = new LlmModelConfigDTO();
+        config.setId("cfg-app");
+        config.setWorkerBackend("OPENAI_CODEX_APP_SERVER");
+
+        when(llmModelManager.getModelConfig("cfg-app")).thenReturn(Optional.of(config));
+        when(provider1.getProviderType()).thenReturn("codex-worker");
+        when(provider2.getProviderType()).thenReturn("claude-worker");
+
+        assertTrue(resolver.getProviderType("codex-agent", context).isEmpty());
+        verify(provider1, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
+        verify(provider2, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
     }
 
     // ---- helpers ----

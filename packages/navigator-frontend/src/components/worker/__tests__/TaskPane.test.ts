@@ -45,6 +45,7 @@ afterEach(() => {
 function createPaneState(options: {
   status?: ClaudeTask['status']
   messages?: ChatMessage[]
+  providerType?: string
 } = {}): TaskPaneState {
   return {
     paneId: 'pane-1',
@@ -54,6 +55,7 @@ function createPaneState(options: {
       workerId: 'worker-1',
       directoryId: 'directory-1',
       prompt: 'continue task',
+      providerType: options.providerType,
       status: options.status ?? 'COMPLETED',
       createdAt: '2026-07-10T00:00:00Z',
       updatedAt: '2026-07-10T00:00:00Z',
@@ -109,6 +111,14 @@ function mountTaskPane(paneState: TaskPaneState): VueWrapper {
 }
 
 describe('TaskPane continuation input', () => {
+  it('shows the task provider in the pane header', () => {
+    wrapper = mountTaskPane(createPaneState({ providerType: 'codex-app-server-worker' }))
+
+    const badge = wrapper.get('.task-provider-badge')
+    expect(badge.text()).toBe('Codex App Server')
+    expect(badge.attributes('title')).toContain('codex-app-server-worker')
+  })
+
   it('does not expose model switching from global new-task options', async () => {
     wrapper = mountTaskPane(createPaneState())
 

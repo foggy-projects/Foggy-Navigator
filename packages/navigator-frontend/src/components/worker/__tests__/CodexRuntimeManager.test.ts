@@ -123,40 +123,19 @@ describe('CodexRuntimeManager', () => {
     expect(wrapper.text()).not.toContain('header-secret')
   })
 
-  it('registers disabled dark runtime and clears its one-time token before rendering', async () => {
-    const pending = makeRuntime()
-    vi.mocked(runtimeApi.registerCodexRuntime).mockResolvedValue(pending)
-    vi.mocked(runtimeApi.refreshCodexRuntime).mockResolvedValue(makeRuntime({ readinessStatus: 'READY' }))
-
+  it('does not expose a second manual Runtime registration source', async () => {
+    vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([makeRuntime({
+      runtimeSource: 'ENDPOINT_SYNC',
+    })])
     wrapper = mount(CodexRuntimeManager, {
       props: { workerId: 'worker-1' },
       global: { plugins: [ElementPlus] },
     })
     await flushPromises()
 
-    await wrapper.get('[data-testid="add-codex-runtime"]').trigger('click')
-    await wrapper.get('[data-testid="runtime-id-input"]').setValue('runtime-1')
-    await wrapper.get('[data-testid="runtime-endpoint-input"]').setValue('http://localhost:3062')
-    await wrapper.get('[data-testid="runtime-token-input"]').setValue('one-time-secret')
-    await wrapper.get('[data-testid="register-codex-runtime"]').trigger('click')
-    await flushPromises()
-
-    expect(runtimeApi.registerCodexRuntime).toHaveBeenCalledWith({
-      runtimeId: 'runtime-1',
-      workerId: 'worker-1',
-      runtimeType: 'APP_SERVER',
-      endpointUrl: 'http://localhost:3062',
-      authToken: 'one-time-secret',
-      enabled: false,
-      routingPolicy: 'DARK',
-      rolloutPercentage: 0,
-      priority: 0,
-      routingEpoch: 1,
-    })
-    expect(runtimeApi.refreshCodexRuntime).toHaveBeenCalledWith('runtime-1', 1)
+    expect(wrapper.find('[data-testid="add-codex-runtime"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="runtime-registration"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('one-time-secret')
-    expect(ElMessage.success).toHaveBeenCalledWith('Dark Runtime 已注册')
+    expect(wrapper.text()).toContain('Endpoint 同步')
   })
 
   it('saves an endpoint separately and syncs it into a dark runtime only when needed', async () => {
@@ -202,30 +181,36 @@ describe('CodexRuntimeManager', () => {
     expect(ElMessage.success).toHaveBeenCalledWith('Endpoint 已同步，已创建新的 Dark Runtime')
   })
 
-  it('registers a runtime with open HTTP access when the Worker token is blank', async () => {
-    const pending = makeRuntime({ runtimeId: 'runtime-no-token' })
-    vi.mocked(runtimeApi.registerCodexRuntime).mockResolvedValue(pending)
-    vi.mocked(runtimeApi.refreshCodexRuntime).mockResolvedValue(makeRuntime({ readinessStatus: 'READY' }))
+  it('saves an open HTTP Endpoint when the Worker token is blank', async () => {
+    vi.mocked(runtimeApi.createCodexAppServerEndpoint).mockResolvedValue({
+      endpointId: 'endpoint-no-token',
+      workerId: 'worker-1',
+      endpointUrl: 'http://localhost:3062',
+      endpointDisplay: 'http://localhost:3062',
+      tokenConfigured: false,
+      configurationVersion: 1,
+      lastSyncStatus: 'PENDING',
+      createdAt: '2026-07-10T10:00:00',
+      updatedAt: '2026-07-10T10:00:00',
+    })
     wrapper = mount(CodexRuntimeManager, {
       props: { workerId: 'worker-1' },
       global: { plugins: [ElementPlus] },
     })
     await flushPromises()
 
-    await wrapper.get('[data-testid="add-codex-runtime"]').trigger('click')
-    await wrapper.get('[data-testid="runtime-id-input"]').setValue('runtime-no-token')
-    await wrapper.get('[data-testid="runtime-endpoint-input"]').setValue('http://localhost:3062')
-    await wrapper.get('[data-testid="register-codex-runtime"]').trigger('click')
+    await wrapper.get('[data-testid="add-codex-app-server-endpoint"]').trigger('click')
+    await wrapper.get('[data-testid="endpoint-url-input"]').setValue('http://localhost:3062')
+    await wrapper.get('[data-testid="save-codex-app-server-endpoint"]').trigger('click')
     await flushPromises()
 
-    expect(runtimeApi.registerCodexRuntime).toHaveBeenCalledWith(expect.objectContaining({
-      runtimeId: 'runtime-no-token',
+    expect(runtimeApi.createCodexAppServerEndpoint).toHaveBeenCalledWith({
+      workerId: 'worker-1',
       endpointUrl: 'http://localhost:3062',
       authToken: '',
-    }))
-    expect(runtimeApi.refreshCodexRuntime).toHaveBeenCalledWith('runtime-no-token', 1)
+    })
     expect(ElMessage.warning).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="runtime-registration"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="endpoint-endpoint-no-token"]').text()).toContain('无令牌')
   })
 
   it('reports Ultra available only for an enabled ready routing revision', async () => {
@@ -262,7 +247,10 @@ describe('CodexRuntimeManager', () => {
       /\.runtime-summary \{\s*display: grid;\s*grid-template-columns: minmax\(0, 1fr\) auto;/,
     )
     expect(codexRuntimeManagerSource).toMatch(
-      /\.runtime-name-line strong \{[\s\S]*?grid-column: 1 \/ -1;[\s\S]*?overflow-wrap: normal;[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;/,
+      /\.runtime-name-line strong \{[\s\S]*?display: block;[\s\S]*?flex: 1 1 100%;[\s\S]*?width: 100%;[\s\S]*?overflow-wrap: normal;[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;/,
+    )
+    expect(codexRuntimeManagerSource).toMatch(
+      /\.runtime-name-line :deep\(\.el-tag\) \{[\s\S]*?flex: 0 0 auto;[\s\S]*?min-width: max-content;/,
     )
   })
 
@@ -678,10 +666,10 @@ describe('CodexRuntimeManager', () => {
     expect(wrapper.text()).not.toContain('Old Worker Quota')
   })
 
-  it('does not let a late registration response clear the next worker form', async () => {
-    let resolveRegistration!: (value: CodexRuntime) => void
-    vi.mocked(runtimeApi.registerCodexRuntime).mockImplementation(() => new Promise((resolve) => {
-      resolveRegistration = resolve
+  it('does not let a late Endpoint save clear the next worker form', async () => {
+    let resolveEndpointSave!: (value: Awaited<ReturnType<typeof runtimeApi.createCodexAppServerEndpoint>>) => void
+    vi.mocked(runtimeApi.createCodexAppServerEndpoint).mockImplementation(() => new Promise((resolve) => {
+      resolveEndpointSave = resolve
     }))
 
     wrapper = mount(CodexRuntimeManager, {
@@ -689,38 +677,41 @@ describe('CodexRuntimeManager', () => {
       global: { plugins: [ElementPlus] },
     })
     await flushPromises()
-    await wrapper.get('[data-testid="add-codex-runtime"]').trigger('click')
-    await wrapper.get('[data-testid="runtime-id-input"]').setValue('runtime-worker-1')
-    await wrapper.get('[data-testid="runtime-endpoint-input"]').setValue('http://worker-1:3062')
-    await wrapper.get('[data-testid="runtime-token-input"]').setValue('worker-1-secret')
-    await wrapper.get('[data-testid="register-codex-runtime"]').trigger('click')
+    await wrapper.get('[data-testid="add-codex-app-server-endpoint"]').trigger('click')
+    await wrapper.get('[data-testid="endpoint-url-input"]').setValue('http://worker-1:3062')
+    await wrapper.get('[data-testid="endpoint-token-input"]').setValue('worker-1-secret')
+    await wrapper.get('[data-testid="save-codex-app-server-endpoint"]').trigger('click')
 
     await wrapper.setProps({ workerId: 'worker-2' })
     await flushPromises()
-    await wrapper.get('[data-testid="add-codex-runtime"]').trigger('click')
-    await wrapper.get('[data-testid="runtime-id-input"]').setValue('runtime-worker-2')
-    await wrapper.get('[data-testid="runtime-endpoint-input"]').setValue('http://worker-2:3062')
-    await wrapper.get('[data-testid="runtime-token-input"]').setValue('worker-2-secret')
+    await wrapper.get('[data-testid="add-codex-app-server-endpoint"]').trigger('click')
+    await wrapper.get('[data-testid="endpoint-url-input"]').setValue('http://worker-2:3062')
+    await wrapper.get('[data-testid="endpoint-token-input"]').setValue('worker-2-secret')
 
-    resolveRegistration(makeRuntime({ runtimeId: 'runtime-worker-1', workerId: 'worker-1' }))
+    resolveEndpointSave({
+      endpointId: 'endpoint-worker-1',
+      workerId: 'worker-1',
+      endpointUrl: 'http://worker-1:3062',
+      endpointDisplay: 'http://worker-1:3062',
+      tokenConfigured: true,
+      configurationVersion: 1,
+      lastSyncStatus: 'PENDING',
+      createdAt: '2026-07-10T10:00:00',
+      updatedAt: '2026-07-10T10:00:00',
+    })
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="runtime-registration"]').exists()).toBe(true)
-    expect((wrapper.get('[data-testid="runtime-id-input"]').element as HTMLInputElement).value)
-      .toBe('runtime-worker-2')
-    expect(runtimeApi.refreshCodexRuntime).not.toHaveBeenCalled()
-    expect(ElMessage.success).not.toHaveBeenCalledWith('Dark Runtime 已注册')
+    expect(wrapper.get('.endpoint-editor').exists()).toBe(true)
+    expect((wrapper.get('[data-testid="endpoint-url-input"]').element as HTMLInputElement).value)
+      .toBe('http://worker-2:3062')
+    expect((wrapper.get('[data-testid="endpoint-token-input"]').element as HTMLInputElement).value)
+      .toBe('worker-2-secret')
+    expect(ElMessage.success).not.toHaveBeenCalledWith('Endpoint 已添加，请同步')
   })
 
-  it('creates the next immutable revision with a locked runtime id and a new secret', async () => {
-    const current = makeRuntime({ revision: 3 })
-    const created = makeRuntime({ revision: 4, routingEpoch: 1 })
+  it('keeps Endpoint-synchronized Runtime revisions read-only', async () => {
+    const current = makeRuntime({ revision: 3, runtimeSource: 'ENDPOINT_SYNC' })
     vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([current])
-    vi.mocked(runtimeApi.registerCodexRuntime).mockResolvedValue(created)
-    vi.mocked(runtimeApi.refreshCodexRuntime).mockResolvedValue({
-      ...created,
-      readinessStatus: 'READY',
-    })
 
     wrapper = mount(CodexRuntimeManager, {
       props: { workerId: 'worker-1' },
@@ -728,27 +719,9 @@ describe('CodexRuntimeManager', () => {
     })
     await flushPromises()
 
-    await wrapper.get('[aria-label="为 runtime-1@3 新建修订"]').trigger('click')
-    const runtimeIdInput = wrapper.get('[data-testid="runtime-id-input"]')
-    expect((runtimeIdInput.element as HTMLInputElement).value).toBe('runtime-1')
-    expect(runtimeIdInput.attributes('disabled')).toBeDefined()
-    await wrapper.get('[data-testid="runtime-endpoint-input"]').setValue('http://replacement:3062')
-    await wrapper.get('[data-testid="runtime-token-input"]').setValue('replacement-secret')
-    await wrapper.get('[data-testid="register-codex-runtime"]').trigger('click')
-    await flushPromises()
-
-    expect(runtimeApi.registerCodexRuntime).toHaveBeenCalledWith(expect.objectContaining({
-      runtimeId: 'runtime-1',
-      workerId: 'worker-1',
-      endpointUrl: 'http://replacement:3062',
-      authToken: 'replacement-secret',
-      enabled: false,
-      routingPolicy: 'DARK',
-      rolloutPercentage: 0,
-    }))
-    expect(runtimeApi.refreshCodexRuntime).toHaveBeenCalledWith('runtime-1', 4)
-    expect(wrapper.text()).not.toContain('replacement-secret')
-    expect(ElMessage.success).toHaveBeenCalledWith('Runtime rev 4 已创建并保持 Dark')
+    expect(wrapper.find('[aria-label="为 runtime-1@3 新建修订"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="runtime-registration"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="runtime-runtime-1@3"]').text()).toContain('Endpoint 同步')
   })
 
   it('archives an active revision, hides it by default, and restores it as disabled dark', async () => {

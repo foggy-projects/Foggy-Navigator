@@ -73,6 +73,10 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
       task.value.codexThreadId = payload.codexThreadId
     }
 
+    if (typeof payload.providerType === 'string' && payload.providerType) {
+      task.value.providerType = payload.providerType
+    }
+
     if (raw.type === 'TEXT_COMPLETE') {
       // Only mark completed when result-level metadata is present
       if (typeof payload.numTurns === 'number' || typeof payload.costUsd === 'number') {

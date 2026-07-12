@@ -9,7 +9,6 @@ import {
   listCodexRuntimes,
   listCodexAppServerEndpoints,
   refreshCodexRuntime,
-  registerCodexRuntime,
   syncCodexAppServerEndpoint,
   unarchiveCodexRuntime,
   updateCodexAppServerEndpoint,
@@ -82,6 +81,11 @@ describe('codexRuntime API', () => {
 
     expect(client.get).toHaveBeenCalledWith('/codex-app-server-endpoints', {
       params: { workerId: 'worker-1' },
+    })
+    await listCodexAppServerEndpoints('worker-1', { suppressErrorMessage: true })
+    expect(client.get).toHaveBeenCalledWith('/codex-app-server-endpoints', {
+      params: { workerId: 'worker-1' },
+      suppressErrorMessage: true,
     })
     const base = '/codex-app-server-endpoints/endpoint%2Fa%20b'
     expect(client.put).toHaveBeenCalledWith(`${base}`, {
@@ -181,22 +185,6 @@ describe('codexRuntime API', () => {
         suppressErrorMessage: true,
       },
     )
-  })
-
-  it('registers a dark runtime without changing the request payload', async () => {
-    vi.mocked(client.post).mockResolvedValue({ data: runtime })
-    const request = {
-      runtimeId: 'app/server local',
-      workerId: 'worker-1',
-      endpointUrl: 'http://localhost:3062',
-      authToken: 'one-time-token',
-      enabled: false,
-      routingPolicy: 'DARK' as const,
-      rolloutPercentage: 0,
-    }
-
-    await expect(registerCodexRuntime(request)).resolves.toEqual(runtime)
-    expect(client.post).toHaveBeenCalledWith('/codex-runtimes', request)
   })
 
   it('encodes runtime ids in refresh and routing paths', async () => {

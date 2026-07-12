@@ -28,6 +28,8 @@ import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.config.WorkerBackendConnectionTester;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
@@ -51,11 +53,18 @@ public class OpenApiAgentReadinessService {
     private static final Pattern UPSTREAM_REF_PATTERN = Pattern.compile("[A-Za-z0-9._-]{1,128}");
     private static final String BACKEND_CLAUDE_CODE = ProviderRouteRegistry.BACKEND_CLAUDE_CODE;
     private static final String BACKEND_OPENAI_CODEX = ProviderRouteRegistry.BACKEND_OPENAI_CODEX;
+    private static final String BACKEND_OPENAI_CODEX_APP_SERVER =
+            ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER;
     private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
     private static final String ROLE_CLAUDE_CODE = "claudeCode";
     private static final String ROLE_CODEX = "codex";
+    private static final String ROLE_CODEX_APP_SERVER = "codexAppServer";
     private static final String ROLE_BIZ = "biz";
     private static final String SOURCE_CLAUDE_CODEX_CONFIG = "CLAUDE_WORKER_CODEX_CONFIG";
+    private static final String SOURCE_CODEX_APP_SERVER_ENDPOINT_RUNTIME =
+            "CODEX_APP_SERVER_ENDPOINT_RUNTIME";
+    private static final String CHECK_CODEX_APP_SERVER_ENDPOINT_RUNTIME =
+            "CODEX_APP_SERVER_ENDPOINT_RUNTIME";
     private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
 
     private final UnifiedAgentResolver agentResolver;
@@ -68,6 +77,8 @@ public class OpenApiAgentReadinessService {
     private final OpenApiAgentRouteService agentRouteService;
     private final BizWorkerIdentityRepository workerIdentityRepository;
     private final ClaudeWorkerRepository claudeWorkerRepository;
+    private final LlmModelManager llmModelManager;
+    private final List<WorkerBackendConnectionTester> workerBackendConnectionTesters;
     private final Environment environment;
     private final ObjectMapper objectMapper;
 
@@ -166,6 +177,8 @@ public class OpenApiAgentReadinessService {
         });
         addWorkspaceResourceCheckIfPossible(result, credential, safeForm, agentResourceRef[0], workspaceResourceRef);
         applyWorkerHostExecutionPreference(result, app, agentResourceRef[0], workspaceResourceRef[0]);
+        addModelWorkerAccessCheck(result);
+        addAppServerEndpointRuntimeReadinessCheck(result);
         applyPhysicalWorkerDiagnostic(result, agentResourceRef[0], workspaceResourceRef[0]);
         addWorkerHostRoleRoutingCheck(result);
         addRequiredUpstreamRouteChecks(result, credential, safeForm);
@@ -453,9 +466,10 @@ public class OpenApiAgentReadinessService {
         String workerBackend = firstNonBlank(
                 result.getEffectiveWorkerBackend(),
                 agentResource != null ? agentResource.workerBackend() : null);
-        if (isBackend(workerBackend, BACKEND_OPENAI_CODEX)) {
+        if (isBackend(workerBackend, BACKEND_OPENAI_CODEX)
+                || isBackend(workerBackend, BACKEND_OPENAI_CODEX_APP_SERVER)) {
             String directoryWorkerId = workspaceResource != null ? trimToNull(workspaceResource.physicalWorkerId()) : null;
-            if (hasClaudeCodexConfig(directoryWorkerId)) {
+            if (StringUtils.hasText(directoryWorkerId)) {
                 result.setEffectivePhysicalWorkerId(directoryWorkerId);
             }
             return;
@@ -584,6 +598,10 @@ public class OpenApiAgentReadinessService {
             String workerId) {
         String workerBackend = firstNonBlank(result.getEffectiveWorkerBackend(),
                 agentResource != null ? agentResource.workerBackend() : null);
+        if (isBackend(workerBackend, BACKEND_OPENAI_CODEX_APP_SERVER)) {
+            appendCodexAppServerRuntimeDiagnostic(diagnostics, result, workerId);
+            return;
+        }
         if (isBackend(workerBackend, BACKEND_OPENAI_CODEX)
                 && appendCodexConfigDiagnostic(diagnostics, workerId)) {
             return;
@@ -595,6 +613,24 @@ public class OpenApiAgentReadinessService {
                 true,
                 workspaceResource != null && workerId.equals(trimToNull(workspaceResource.physicalWorkerId())));
         diagnostic.setRole(resolveRole(diagnostic));
+        appendOrMergeDiagnostic(diagnostics, diagnostic);
+    }
+
+    private void appendCodexAppServerRuntimeDiagnostic(
+            List<PhysicalWorkerDiagnosticDTO> diagnostics,
+            AgentReadinessDTO result,
+            String workerId) {
+        boolean ready = isCheckOk(result, CHECK_CODEX_APP_SERVER_ENDPOINT_RUNTIME);
+        PhysicalWorkerDiagnosticDTO diagnostic = buildPhysicalWorkerDiagnostic(
+                workerId,
+                BACKEND_OPENAI_CODEX_APP_SERVER,
+                SOURCE_CODEX_APP_SERVER_ENDPOINT_RUNTIME,
+                true,
+                false);
+        diagnostic.setRole(ROLE_CODEX_APP_SERVER);
+        diagnostic.setBaseUrl(null);
+        diagnostic.setStatus(ready ? "ENABLED" : "UNAVAILABLE");
+        diagnostic.setHealthStatus(ready ? "READY" : "NOT_READY");
         appendOrMergeDiagnostic(diagnostics, diagnostic);
     }
 
@@ -647,6 +683,9 @@ public class OpenApiAgentReadinessService {
 
     private String resolveRole(PhysicalWorkerDiagnosticDTO diagnostic) {
         String backend = trimToNull(diagnostic.getWorkerBackend());
+        if (isBackend(backend, BACKEND_OPENAI_CODEX_APP_SERVER)) {
+            return ROLE_CODEX_APP_SERVER;
+        }
         if (isBackend(backend, BACKEND_OPENAI_CODEX)) {
             return ROLE_CODEX;
         }
@@ -761,6 +800,74 @@ public class OpenApiAgentReadinessService {
                 .findFirst();
     }
 
+    private void addAppServerEndpointRuntimeReadinessCheck(AgentReadinessDTO result) {
+        if (!isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX_APP_SERVER)) {
+            return;
+        }
+        String workerId = trimToNull(result.getEffectivePhysicalWorkerId());
+        String modelName = trimToNull(result.getEffectiveModelName());
+        if (workerId == null) {
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    CHECK_CODEX_APP_SERVER_ENDPOINT_RUNTIME,
+                    "Codex App Server physical Worker is not resolved"));
+            return;
+        }
+        if (modelName == null) {
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    CHECK_CODEX_APP_SERVER_ENDPOINT_RUNTIME,
+                    "Codex App Server effective model is not resolved"));
+            return;
+        }
+        Optional<WorkerBackendConnectionTester> tester = workerBackendConnectionTesters.stream()
+                .filter(candidate -> isBackend(candidate.getWorkerBackend(), BACKEND_OPENAI_CODEX_APP_SERVER))
+                .findFirst();
+        if (tester.isEmpty()) {
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    CHECK_CODEX_APP_SERVER_ENDPOINT_RUNTIME,
+                    "Codex App Server Endpoint/Runtime readiness provider is unavailable"));
+            return;
+        }
+        try {
+            if (tester.get().supportsWorker(workerId, modelName)) {
+                result.getChecks().add(AgentReadinessCheckDTO.ok(
+                        CHECK_CODEX_APP_SERVER_ENDPOINT_RUNTIME,
+                        "Codex App Server Endpoint-synced Runtime supports model " + modelName));
+                return;
+            }
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    CHECK_CODEX_APP_SERVER_ENDPOINT_RUNTIME,
+                    "no enabled Endpoint-synced Codex App Server Runtime supports model " + modelName
+                            + " on Worker " + workerId));
+        } catch (RuntimeException error) {
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    CHECK_CODEX_APP_SERVER_ENDPOINT_RUNTIME,
+                    "Codex App Server Endpoint/Runtime readiness failed: " + sanitize(error.getMessage())));
+        }
+    }
+
+    private void addModelWorkerAccessCheck(AgentReadinessDTO result) {
+        if (!isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX)
+                && !isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX_APP_SERVER)) {
+            return;
+        }
+        addCheck(result, "MODEL_WORKER_ACCESS", () -> {
+            String modelConfigId = trimToNull(result.getEffectiveModelConfigId());
+            String workerId = trimToNull(result.getEffectivePhysicalWorkerId());
+            String modelName = trimToNull(result.getEffectiveModelName());
+            if (modelConfigId == null) {
+                throw new IllegalStateException("effective model config is not resolved");
+            }
+            if (workerId == null) {
+                throw new IllegalStateException("effective physical Worker is not resolved");
+            }
+            if (modelName != null) {
+                llmModelManager.validateModelAccessForWorker(modelConfigId, workerId, modelName);
+            } else {
+                llmModelManager.validateModelAccessForWorker(modelConfigId, workerId);
+            }
+        });
+    }
+
     private boolean hasClaudeCodexConfig(String workerId) {
         String normalizedWorkerId = trimToNull(workerId);
         if (normalizedWorkerId == null) {
@@ -823,7 +930,8 @@ public class OpenApiAgentReadinessService {
         if (agentWorkerId != null) {
             return workerId.equals(agentWorkerId);
         }
-        return isBackend(workerBackend, BACKEND_OPENAI_CODEX)
+        return (isBackend(workerBackend, BACKEND_OPENAI_CODEX)
+                || isBackend(workerBackend, BACKEND_OPENAI_CODEX_APP_SERVER))
                 && workspaceResource != null
                 && workerId.equals(trimToNull(workspaceResource.physicalWorkerId()));
     }
@@ -835,7 +943,8 @@ public class OpenApiAgentReadinessService {
         if (workerId == null) {
             return false;
         }
-        if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX)) {
+        if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX)
+                || isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX_APP_SERVER)) {
             return true;
         }
         String directoryWorkerId = workspaceResource != null ? trimToNull(workspaceResource.physicalWorkerId()) : null;
@@ -915,6 +1024,9 @@ public class OpenApiAgentReadinessService {
         }
         if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX)) {
             addExpectedExecutionRoleCheck(result, ROLE_CODEX, SOURCE_CLAUDE_CODEX_CONFIG);
+        } else if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_OPENAI_CODEX_APP_SERVER)) {
+            addExpectedExecutionRoleCheck(
+                    result, ROLE_CODEX_APP_SERVER, SOURCE_CODEX_APP_SERVER_ENDPOINT_RUNTIME);
         } else if (isBackend(result.getEffectiveWorkerBackend(), BACKEND_LANGGRAPH_BIZ)) {
             addExpectedExecutionRoleCheck(result, ROLE_BIZ, SOURCE_BIZ_WORKER_IDENTITY);
         }

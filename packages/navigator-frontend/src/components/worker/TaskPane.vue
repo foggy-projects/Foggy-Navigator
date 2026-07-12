@@ -6,6 +6,10 @@
           {{ paneLabel }}
         </span>
         <span :class="['pane-status-dot', paneState.task.value?.status?.toLowerCase()]" />
+        <TaskProviderBadge
+          :provider-type="paneState.task.value?.providerType"
+          compact
+        />
         <span v-if="modelShort" class="pane-model">{{ modelShort }}</span>
         <span class="pane-prompt" :title="paneState.task.value?.prompt">
           {{ truncate(paneState.task.value?.prompt ?? '...', 40) }}
@@ -265,6 +269,7 @@ import { inferTaskWorkerBackend } from '@/utils/workerBackend'
 import { loadTaskFileHints } from './taskPaneFileHints'
 import NativeSubtaskBar from './NativeSubtaskBar.vue'
 import SlashCommandInput from './SlashCommandInput.vue'
+import TaskProviderBadge from './TaskProviderBadge.vue'
 import type { AgentItem } from './SlashCommandInput.vue'
 import {
   canEnableRewind,

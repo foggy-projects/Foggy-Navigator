@@ -12,11 +12,13 @@ import java.util.Set;
 public final class ProviderRouteRegistry {
 
     public static final String BACKEND_OPENAI_CODEX = "OPENAI_CODEX";
+    public static final String BACKEND_OPENAI_CODEX_APP_SERVER = "OPENAI_CODEX_APP_SERVER";
     public static final String BACKEND_CLAUDE_CODE = "CLAUDE_CODE";
     public static final String BACKEND_GEMINI_CLI = "GEMINI_CLI";
     public static final String BACKEND_LANGGRAPH_BIZ = "LANGGRAPH_BIZ";
 
     public static final String PROVIDER_CODEX_WORKER = "codex-worker";
+    public static final String PROVIDER_CODEX_APP_SERVER_WORKER = "codex-app-server-worker";
     public static final String PROVIDER_CODEX_BIZ_WORKER = "codex-biz-worker";
     public static final String PROVIDER_CLAUDE_WORKER = "claude-worker";
     public static final String PROVIDER_GEMINI_WORKER = "gemini-worker";
@@ -24,6 +26,7 @@ public final class ProviderRouteRegistry {
 
     private static final Map<String, String> WORKER_BACKEND_TO_PROVIDER_TYPE = Map.of(
             BACKEND_OPENAI_CODEX, PROVIDER_CODEX_WORKER,
+            BACKEND_OPENAI_CODEX_APP_SERVER, PROVIDER_CODEX_APP_SERVER_WORKER,
             BACKEND_CLAUDE_CODE, PROVIDER_CLAUDE_WORKER,
             BACKEND_GEMINI_CLI, PROVIDER_GEMINI_WORKER,
             BACKEND_LANGGRAPH_BIZ, PROVIDER_LANGGRAPH_BIZ_WORKER
@@ -31,6 +34,7 @@ public final class ProviderRouteRegistry {
 
     private static final Set<String> KNOWN_PROVIDER_TYPES = Set.of(
             PROVIDER_CODEX_WORKER,
+            PROVIDER_CODEX_APP_SERVER_WORKER,
             PROVIDER_CODEX_BIZ_WORKER,
             PROVIDER_CLAUDE_WORKER,
             PROVIDER_GEMINI_WORKER,
@@ -82,6 +86,8 @@ public final class ProviderRouteRegistry {
         return switch (normalizedRouteToken) {
             case BACKEND_OPENAI_CODEX, "CODEX", "CODEX_WORKER", "CODEX_BIZ_WORKER" ->
                     Optional.of(BACKEND_OPENAI_CODEX);
+            case BACKEND_OPENAI_CODEX_APP_SERVER, "CODEX_APP_SERVER", "CODEX_APP_SERVER_WORKER" ->
+                    Optional.of(BACKEND_OPENAI_CODEX_APP_SERVER);
             case BACKEND_CLAUDE_CODE, "CLAUDE", "CLAUDE_WORKER" -> Optional.of(BACKEND_CLAUDE_CODE);
             case BACKEND_GEMINI_CLI, "GEMINI", "GEMINI_WORKER" -> Optional.of(BACKEND_GEMINI_CLI);
             case BACKEND_LANGGRAPH_BIZ, "LANGGRAPH", "LANGGRAPH_BIZ_WORKER" -> Optional.of(BACKEND_LANGGRAPH_BIZ);

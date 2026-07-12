@@ -74,6 +74,21 @@ describe('taskPaneResume', () => {
     })).toBe(true)
   })
 
+  it('enables platform conversation rewind for completed Codex App Server tasks', () => {
+    expect(canEnableRewind({
+      taskId: 'task-codex-app-1',
+      sessionId: 'session-codex-app-1',
+      workerId: 'worker-1',
+      prompt: 'app-server task',
+      status: 'COMPLETED',
+      providerType: 'codex-app-server-worker',
+      model: 'gpt-5.6-sol:ultra',
+      codexThreadId: 'thread-app-1',
+      createdAt: '2026-05-01T00:00:00Z',
+      updatedAt: '2026-05-01T00:00:00Z',
+    })).toBe(true)
+  })
+
   it('does not enable rewind while a Codex task is awaiting permission', () => {
     expect(canEnableRewind({
       taskId: 'task-codex-2',

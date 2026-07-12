@@ -4,13 +4,13 @@
 
 - doc_type: architecture-workitem
 - intended_for: execution-agent | reviewer | acceptance-owner
-- purpose: 固化 Codex SDK Worker 与 Codex App Server Worker 的 Provider、模型后端、物理 Worker 配置和会话边界拆分方案。
+- purpose: 固化 Codex SDK Worker 与 Codex App Server Worker 的 Provider、模型后端、Endpoint/Runtime 控制面和会话边界拆分方案。
 
 ## 基本信息
 
 - version: `1.4.0-SNAPSHOT`
 - priority: P0
-- status: design-deferred-endpoint-config-superseded-by-opt006
+- status: isolated-signed-off-production-not-approved
 - source_type: architecture-refactor
 - decision_date: `2026-07-12`
 - owner: Agent Provider | Session | Codex Worker addon | Physical Worker management | Navigator PC
@@ -18,14 +18,14 @@
 
 ## 2026-07-12 配置源决策修订
 
-本文件中的独立 Worker Backend、Provider 与 Session 设计尚未实施，继续作为后续专题保留。用户随后确认并已实施的 Endpoint 控制面方案见 [OPT-006](./OPT-006-codex-app-server-endpoint-runtime-sync.md)：
+独立 Worker Backend、Provider 与 Session 拆分已完成隔离签收；Endpoint/Runtime 控制面沿用 [OPT-006](./OPT-006-codex-app-server-endpoint-runtime-sync.md) 已建立的基线，并已纳入本事项最终验收：
 
 - App Server Endpoint Profile 作为独立于 Runtime 的 owner-bound 配置资源，保存 endpoint 与加密服务令牌，支持增删改；
 - 点击“同步”从 endpoint 读取 capability manifest，以配置/能力指纹决定保留 Runtime 或创建新 revision；
-- Runtime 只保存同步后不可变连接快照和能力状态，不能反向编辑 Endpoint；
+- Runtime 只保存同步后不可变连接快照、能力状态和会话 affinity，不能反向编辑 Endpoint；
 - 新 revision 固定 Disabled + Dark，旧同步 revision 停止新任务路由。
 
-因此，本文中“Physical Worker 是 Endpoint/token 唯一人工写源”“删除独立 Endpoint CRUD”的约束不再适用于当前基线。它们在未来恢复 OPT-005 时必须先重新评审，不能覆盖 OPT-006 已交付能力。
+最终配置源规则为：`CodexAppServerEndpoint` 是 App Server endpoint/token 的唯一人工写源；Physical Worker 只提供 owner/capability 归属和 Endpoint 管理入口，不新增 `physicalWorker.codexAppServerConfig`；Runtime 不提供手工 endpoint/token 注册或编辑入口。OPT-005 与 OPT-006 不再作为互斥方案。
 
 ## 背景与问题
 
@@ -92,22 +92,22 @@
 - 用户切换到另一 Worker Backend 时必须创建新 Session。
 - 允许未来提供显式“复制上下文到新会话”，但它不是 resume，也不得携带原生 Thread ID。
 
-### 4. 物理 Worker 配置拆分（已被 OPT-006 配置源规则替代）
+### 4. 物理 Worker 与 Endpoint 配置拆分
 
 “添加/编辑物理 Worker”中的能力配置拆成独立页签：
 
 | 页签 | 配置对象 | 主要字段 |
 |---|---|---|
 | Codex | `codexConfig` | SDK Worker `baseUrl`、`authToken`、默认模型 |
-| Codex App Server | `codexAppServerConfig` | App Server Worker `baseUrl`、`authToken` |
+| Codex App Server | `CodexAppServerEndpoint` 管理入口 | owner-bound App Server `endpoint`、加密服务令牌、同步状态 |
 | Gemini | `geminiConfig` | Gemini Worker `baseUrl`、`authToken`、默认模型 |
 
 规则：
 
 - `codexConfig` 只能服务 `OPENAI_CODEX` / `codex-worker`。
-- `codexAppServerConfig` 只能服务 `OPENAI_CODEX_APP_SERVER` / `codex-app-server-worker`。
-- 两个 endpoint、token、health、capability 和 readiness 独立保存、独立测试、独立展示。
-- 不允许用一个 `codexConfig` 字段根据模型或 runtime 类型解释成两种 endpoint。
+- `CodexAppServerEndpoint` 只能服务 `OPENAI_CODEX_APP_SERVER` / `codex-app-server-worker`。
+- SDK Worker 配置与 App Server Endpoint Profile 的 endpoint、token、health、capability 和 readiness 独立保存、独立测试、独立展示。
+- 不允许用一个 `codexConfig` 字段根据模型或 runtime 类型解释成两种 endpoint，也不允许再新增与 Endpoint Profile 并列的 App Server 写源。
 - 当前基线使用 `CodexAppServerEndpoint` 作为按 physical worker 归属的独立 Endpoint Profile；它是 App Server endpoint/token 的人工管理配置源。
 - Runtime registry 保留同步后 capability、revision、instance affinity、连接快照和运行状态；Runtime 页面不提供 Endpoint/token 编辑入口。
 - Endpoint Profile 与 Physical Worker 生命周期/权限关联，但不把 endpoint/token 嵌入 Physical Worker 的单一配置对象。
@@ -136,7 +136,8 @@ ModelConfig.workerBackend
   │
   └─ OPENAI_CODEX_APP_SERVER
        -> providerType=codex-app-server-worker
-       -> physicalWorker.codexAppServerConfig
+       -> owner-bound CodexAppServerEndpoint
+       -> endpoint-synced APP_SERVER runtime revision
        -> Codex App Server Worker
        -> App Server Thread/Turn
 ```
@@ -151,11 +152,11 @@ ModelConfig.workerBackend
 - `OPENAI_CODEX` 与 `OPENAI_CODEX_APP_SERVER` 分别校验各自允许模型集合。
 - 相同 API Base URL/API Key 可以由用户分别配置，但平台不自动复制或合并两个 ModelConfig。
 
-### Physical Worker（恢复 OPT-005 时待重新设计）
+### Physical Worker 与 Endpoint Profile
 
 - 当前实现不新增 `CodexAppServerConfig`；Physical Worker 通过 `workerId` 归属 Endpoint Profile。
 - Endpoint DTO 只返回 token 是否已配置，不回显明文；更新时留空保持 token，显式清除才删除 token。
-- 若未来 Provider 拆分需要在 Physical Worker Form 内展示摘要，必须派生或链接 Endpoint Profile，不能重新引入第二个可写 endpoint/token 真相。
+- Physical Worker 编辑窗口中的 App Server 页签直接管理或链接 Endpoint Profile，不能重新引入第二个可写 endpoint/token 真相。
 
 ### Session Provider State
 
@@ -171,14 +172,14 @@ ModelConfig.workerBackend
 - App Server Task 必须写 App Server runtime/revision/instance/workerTaskId binding。
 - subscribe/status/abort/delete 按 `providerType` 进入对应 Provider，不允许运行时改派。
 
-## 不考虑兼容性与旧数据
+## 迁移边界与旧数据
 
 本事项按用户确认采用新基线设计，明确不把以下内容纳入范围：
 
-- 不兼容既有 Session、Task、Provider State 或 Thread 绑定。
+- 不保证既有 Session、Provider State 或 Thread 在跨 Provider 拆分后可继续恢复。
 - 不提供 `OPENAI_CODEX -> OPENAI_CODEX_APP_SERVER` 的 ModelConfig 自动迁移。
-- 不提供旧 `codexConfig` 到 `codexAppServerConfig` 的自动复制或推断。
-- 不做 legacy dual-read、backfill、N-1 数据兼容或旧 API 字段兼容。
+- 不提供旧 `codexConfig` 到 App Server Endpoint Profile 的自动复制或推断。
+- 不做 legacy dual-read、N-1 API 兼容或运行时推断；允许通过一次性迁移把既有 Task 按已持久化 runtime 类型分类回填 `provider_type`，该回填不是兼容路由或 fallback。
 - 不保留同 Provider 双 Runtime 的路由语义。
 - 不要求升级后继续打开或续接旧 Codex 会话。
 
@@ -188,17 +189,17 @@ ModelConfig.workerBackend
 
 | 模块 | 目标改动 |
 |---|---|
-| `navigator-common` | 增加 `OPENAI_CODEX_APP_SERVER` 后端常量及 `CodexAppServerConfig` 公共配置模型 |
+| `navigator-common` | 增加 `OPENAI_CODEX_APP_SERVER` 后端常量及 Backend/Provider 一一映射 |
 | `navigator-spi` / `session-module` | 注册并解析 `codex-app-server-worker`；按 Provider 绑定和分派 Session/Task |
 | `addons/codex-worker-agent` | 拆分 SDK Provider 与 App Server Provider；提取公共 Codex 投影能力；移除跨协议 runtime 选择 |
-| `addons/claude-worker-agent` | 若恢复 OPT-005，再评估 Physical Worker 对 Endpoint Profile 的摘要/授权展示；当前不改为第二套写源 |
+| `addons/claude-worker-agent` | 保持 SDK Worker 配置；Physical Worker 只承载 App Server Endpoint Profile 的 owner/capability 归属，不新增第二套写源 |
 | `tools/codex-agent-worker` | 只承担 SDK Provider；拒绝 App Server/Ultra 请求 |
 | `tools/codex-app-server-worker` | 只承担 App Server Provider；保留自身 task store、pool 和 instance affinity |
 | `packages/navigator-frontend` | 模型后端增加 App Server；物理 Worker 增加独立页签；任务与会话显示独立 Provider 标签 |
 | `packages/foggy-chat-core` / `foggy-chat` / Mobile | 如展示 Provider/模型后端，补充 App Server 标签和新会话提示 |
 | docs/tests | 更新架构说明、契约测试、Provider 分派测试和 UI E2E |
 
-OPT-006 已将 App Server endpoint entity/controller/service、Runtime 同步字段和 PC 管理界面提交为 `37dff8b9`。后续恢复本事项时必须保留“Endpoint Profile 与 Runtime 分离”的现行约束，先明确是否迁移配置归属，再改动 API 或 UI。
+OPT-006 已将 App Server endpoint entity/controller/service、Runtime 同步字段和 PC 管理界面提交为 `37dff8b9`。本事项在该基线上继续实施独立 Provider，并移除手工 Runtime endpoint/token 写入口；不得退回到同 Provider 双 Runtime 或 Physical Worker 内嵌第二份 App Server 配置。
 
 ## UI 交互要求
 
@@ -212,10 +213,10 @@ OPT-006 已将 App Server endpoint entity/controller/service、Runtime 同步字
 ### 物理 Worker 设置
 
 - `Codex` 和 `Codex App Server` 为两个并列页签。
-- 两个页签各自提供连接测试、状态与错误提示。
-- 一个物理 Worker可以只配置其中一种，也可以同时配置两种。
+- Codex 页签提供 SDK Worker 配置与状态；Codex App Server 页签提供 Endpoint Profile 管理、连接/同步状态与错误提示。
+- 一个物理 Worker 可以只具备其中一种能力，也可以同时具备两种能力。
 - 未配置 App Server 的 Worker 不能被 App Server ModelConfig 授权或选中。
-- 清空某一页签配置只删除该能力，不影响另一页签。
+- 删除 App Server Endpoint Profile 只停止对应 App Server 新路由，不影响 SDK Worker 配置；历史 Runtime affinity 仍按控制面规则保留。
 
 ### 会话与任务
 
@@ -235,11 +236,11 @@ OPT-006 已将 App Server endpoint entity/controller/service、Runtime 同步字
 
 ### Worker 配置
 
-- Physical Worker 可分别保存、读取、更新和清除两套 Codex 配置。
-- 两套认证令牌分别加密且不会在 DTO 中回显明文。
-- 两套连接测试和 readiness 独立，错误不会互相覆盖。
-- Worker 过滤严格按 ModelConfig 的 Worker Backend 匹配对应配置。
-- 系统中不存在与 `codexAppServerConfig` 并列的第二套人工可写 App Server endpoint/token 配置。
+- Physical Worker 可保存 SDK Worker 配置，并在独立页签管理其 owner-bound App Server Endpoint Profile。
+- SDK 认证与 App Server Endpoint 服务令牌独立；App Server 令牌加密保存且 DTO 不回显明文。
+- SDK 连接测试与 App Server Endpoint 探测/readiness 独立，错误不会互相覆盖。
+- Worker 过滤严格按 ModelConfig 的 Worker Backend 匹配 SDK 配置或 App Server Endpoint/capability。
+- 系统中不存在与 `CodexAppServerEndpoint` 并列的第二套人工可写 App Server endpoint/token 配置；Runtime endpoint/token 只能由同步派生。
 
 ### 模型配置
 
@@ -267,49 +268,66 @@ OPT-006 已将 App Server endpoint entity/controller/service、Runtime 同步字
 
 ### Development
 
-- status: not-started
-- [ ] 冻结 Backend、Provider、配置对象和标签命名。
-- [ ] 拆分 Provider 注册与 Task/Session 分派。
-- [ ] 拆分物理 Worker 配置和 readiness。
-- [ ] 拆分模型配置与能力目录。
-- [ ] 更新 PC、Chat/Mobile 展示与跨 Provider 新会话交互。
-- [ ] 删除同 Provider 双 Runtime 路由入口。
+- status: completed-reviewed
+- [x] 冻结 Backend/Provider 一一映射与 Endpoint Profile 单一写源规则。
+- [x] 拆分 SDK/App Server Provider 注册，并在 Task/Session 分派中增加 Provider 边界与 fail-closed 约束。
+- [x] 保留 OPT-006 Endpoint Profile，移除面向用户的手工 Runtime endpoint/token 注册入口。
+- [x] 拆分 SDK/App Server 模型配置与能力目录；Ultra 仅属于 App Server Backend。
+- [x] 完成并复核 PC/Mobile Provider 标签、跨 Provider 新会话、物理 Worker App Server 页签及异常状态。
+- [x] 完成全仓旧同 Provider 双 Runtime 活动路由与第二写源清理审计。
+- [x] ModelConfig、Agent defaultModel、OpenAPI readiness 均按实际 workspace Worker/具体模型执行 fail-closed capability 与授权校验。
+- [x] 最终独立审查关闭 workspace Worker 路由分叉、Agent 保存竞态、Mobile 续接测试和 SPI 源码兼容问题；无剩余 blocker。
 
 ### Testing
 
-- status: not-run
-- [ ] Provider resolver/registry 单元测试。
-- [ ] Session binding 与跨 Provider 拒绝测试。
-- [ ] Physical Worker 配置 CRUD、加密和独立清除测试。
-- [ ] SDK/App Server client 与失败不 fallback 测试。
-- [ ] 前端类型、模型目录、Worker 过滤和构建测试。
-- [ ] Worker/Java/SSE 真实链路测试。
+- status: passed
+- [x] Java 16-module reactor：`2095` tests，`0` failure/error；其中 Session `322`、Codex addon `337`、Claude addon `347`、Metadata Config `51`、Launcher `6`。
+- [x] SDK Worker `124/124`，typecheck/build 通过；App Server Worker `251 total / 244 passed / 7 skipped / 0 failed`，typecheck/build 通过。
+- [x] Navigator PC `237/237`、type-check、workspace production build 通过；Mobile `55/55`、type-check、H5 与微信小程序构建通过。
+- [x] Playwright `7/7`：Backend/模型目录、跨 Provider 新会话、Endpoint/Runtime、Ultra 子任务、安装帮助、desktop/320px 全通过。
+- [x] MySQL `8.0.44` 与 `8.4.8` Provider/runtime affinity migration harness 全通过，各迁移 `25` 个 Task。
+- [x] 当前源码真实双链：SDK 与 App Ultra 均 COMPLETED；统一 SSE 同时观测两 Provider；双向故障均无 fallback。
+- [x] Launcher `mvn package -pl launcher -am -DskipTests` 通过，制品 `90,191,742` bytes。
 
 ### Experience
 
-- status: not-run
-- 页面可达性：AI 模型设置和物理 Worker 编辑均能进入两种 App Server 配置入口。
-- 核心交互：两套配置独立保存、测试、清除；跨 Provider 选择创建新会话。
-- 表单验证：Backend 与 endpoint、模型能力、授权 Worker 一致。
-- 异常状态：SDK/App Server 离线分别展示，不互相代替。
-- 权限可见性：普通用户不看到 endpoint/token，Owner 可管理对应配置。
-- 数据一致性：页面标签、Session provider、Task provider、实际 endpoint 和 Thread 类型一致。
+- status: isolated-accepted
+- 页面可达性：模型设置与物理 Worker Tab 能清晰区分 SDK 和 App Server，Endpoint 是唯一 App Server 人工写源。
+- 核心交互：跨 Provider 续接会先提示并创建新 Session；取消不发送请求；同 Provider 仍原位续接。
+- 表单验证：PC capability 请求 pending 时禁止保存；后端对具体模型和 workspace Worker 再次 fail-closed。
+- 异常状态：App Runtime Dark 时创建被拒绝且未产生 SDK Session；SDK endpoint 故障时 Task 固定为 SDK Provider，App Worker 查询为 `404`。
+- 权限可见性：token 只显示配置状态；OpenAPI readiness 与实际 launch 使用相同 workspace Worker 和 ModelConfig grant。
+- 数据一致性：刷新后历史同时保留 `Codex SDK` 与 `Codex App Server` badge，原生 Thread/Runtime 类型与 Provider 一致。
 
 | Playwright 用例 | 覆盖维度 | 状态 |
 |---|---|---|
-| AI 模型后端拆分 | 后端选项、模型集合、保存回显 | not-run |
-| 物理 Worker 双 Codex 页签 | 独立保存、清除、连接状态 | not-run |
-| 跨 Provider 创建新会话 | 阻止错误续接、创建新 Session | not-run |
-| 桌面与 320px | 标签、表单和提示布局 | not-run |
+| AI 模型后端拆分 | 后端选项、模型集合、保存回显 | passed |
+| 物理 Worker SDK/Endpoint 页签 | 独立保存、清除、连接与同步状态 | passed |
+| 跨 Provider 创建新会话 | 阻止错误续接、创建新 Session | passed |
+| 桌面与 320px | 标签、表单和提示布局 | passed |
+
+体验截图见 `../evidence/OPT-005-*.png`、`../evidence/OPT-006-*.png`；真实链路与刷新证据见 `../evidence/opt-005-provider-fullchain-20260712-033210-be7f26ac/`。
+
+## Acceptance Status
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-07-12
+- acceptance_record: `docs/version-tracker/1.4.0-SNAPSHOT/acceptance/OPT-005-codex-app-server-independent-provider-acceptance.md`
+- blocking_items: none
+- follow_up_required: yes
+- production_enablement: not-approved
 
 ## 后置流程
 
 实现完成后依次执行：
 
 1. `execution-checkin` 更新本页 Progress Tracking。
-2. `foggy-implementation-quality-gate` 正式质量检查。
-3. `foggy-test-coverage-audit` 测试证据覆盖审计。
-4. `foggy-acceptance-signoff` 功能验收。
+2. `foggy-implementation-quality-gate` 正式质量检查，写入 `../quality/OPT-005-codex-app-server-independent-provider-implementation-quality.md`。
+3. `foggy-test-coverage-audit` 测试证据覆盖审计，写入 `../coverage/OPT-005-codex-app-server-independent-provider-coverage-audit.md`。
+4. `foggy-acceptance-signoff` 功能验收，写入 `../acceptance/OPT-005-codex-app-server-independent-provider-acceptance.md`；只有在前两项和体验证据完成后才可写签收结论。
+5. OPT-006 的 Endpoint/Runtime 专项证据可合并进入上述联合文档，但必须在矩阵中保留独立 requirement 行；如需单独结论，使用相同目录下 `OPT-006-codex-app-server-endpoint-runtime-sync-*` 文件名。
 
 ## 参考
 

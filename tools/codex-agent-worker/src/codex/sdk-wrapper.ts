@@ -56,6 +56,7 @@ export const taskBroadcasts = new Map<string, EventBroadcast>()
 
 export const CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR = 'CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided'
 export const UNSUPPORTED_CODEX_MODEL = 'UNSUPPORTED_CODEX_MODEL'
+export const CODEX_ULTRA_APP_SERVER_REQUIRED = 'CODEX_ULTRA_APP_SERVER_REQUIRED'
 
 export class UnsupportedCodexModelError extends Error {
   readonly code = UNSUPPORTED_CODEX_MODEL
@@ -63,6 +64,38 @@ export class UnsupportedCodexModelError extends Error {
   constructor() {
     super(UNSUPPORTED_CODEX_MODEL)
     this.name = 'UnsupportedCodexModelError'
+  }
+}
+
+export class CodexUltraAppServerRequiredError extends Error {
+  readonly code = CODEX_ULTRA_APP_SERVER_REQUIRED
+
+  constructor() {
+    super(CODEX_ULTRA_APP_SERVER_REQUIRED)
+    this.name = 'CodexUltraAppServerRequiredError'
+  }
+}
+
+function isUltraModelRequest(rawModel: string): boolean {
+  const trimmed = rawModel.trim()
+  const colonIdx = trimmed.indexOf(':')
+  const baseModel = (colonIdx >= 0 ? trimmed.substring(0, colonIdx) : trimmed).trim().toLowerCase()
+  if (baseModel === 'codex-ultra') return true
+  return colonIdx > 0
+    && trimmed.substring(colonIdx + 1).trim().toLowerCase() === 'ultra'
+}
+
+function assertSdkModelSupported(rawModel: string): void {
+  if (isUltraModelRequest(rawModel)) {
+    throw new CodexUltraAppServerRequiredError()
+  }
+}
+
+export function assertSdkCodexConfigSupported(codexConfig: unknown): void {
+  if (!codexConfig || typeof codexConfig !== 'object' || Array.isArray(codexConfig)) return
+  const configuredEffort = (codexConfig as Record<string, unknown>).model_reasoning_effort
+  if (typeof configuredEffort === 'string' && configuredEffort.trim().toLowerCase() === 'ultra') {
+    throw new CodexUltraAppServerRequiredError()
   }
 }
 
@@ -76,6 +109,7 @@ export class UnsupportedCodexModelError extends Error {
  * 前端传 "extra-high" → 映射为 "xhigh"
  */
 export function parseModelString(rawModel: string): { model: string; reasoningLevel?: CodexReasoningEffort } {
+  assertSdkModelSupported(rawModel)
   const colonIdx = rawModel.indexOf(':')
   if (colonIdx <= 0) return { model: rawModel.trim() }
 
@@ -91,6 +125,17 @@ export function applyResolvedReasoningEffort(
   if (reasoningLevel) {
     codexConfig.model_reasoning_effort = reasoningLevel
   }
+}
+
+export function resolveSdkReasoningEffort(
+  modelReasoningLevel: CodexReasoningEffort | undefined,
+  codexConfig: Record<string, unknown> | undefined
+): CodexReasoningEffort | undefined {
+  assertSdkCodexConfigSupported(codexConfig)
+  const configuredEffort = typeof codexConfig?.model_reasoning_effort === 'string'
+    ? normalizeCodexReasoningEffort(codexConfig.model_reasoning_effort)
+    : undefined
+  return modelReasoningLevel ?? configuredEffort
 }
 
 /**
@@ -150,6 +195,10 @@ export function resolveSupportedModelAlias(
   aliases: Record<string, string>
 ): { resolved: string; wasAlias: boolean } {
   const result = resolveModelAlias(rawModel, aliases)
+  // Check both sides so the SDK route cannot be reached through either the stable
+  // codex-ultra name or an arbitrary alias that resolves to an Ultra suffix.
+  assertSdkModelSupported(rawModel)
+  assertSdkModelSupported(result.resolved)
   const baseModel = result.resolved.split(':', 1)[0]?.trim().toLowerCase()
   if (baseModel === 'gpt-5.4-mini') throw new UnsupportedCodexModelError()
   return result
@@ -936,10 +985,14 @@ export async function runQuery(
   runOptions: CodexRunOptions = {},
   dependencies: RunQueryDependencies = {}
 ): Promise<void> {
-  // Resolve and enforce the retired-model policy before allocating task state.
+  // Resolve the complete model/reasoning request before allocating task state.
   const requestedModel = model || config.defaultModel
   const aliasResult = resolveSupportedModelAlias(requestedModel, config.modelAliases)
   const rawModel = aliasResult.resolved
+  const { model: effectiveModel, reasoningLevel } = parseModelString(rawModel)
+  // Validate request-level config while preserving the SDK Worker's existing
+  // behavior when neither the model nor the request specifies an effort.
+  const effectiveReasoningLevel = resolveSdkReasoningEffort(reasoningLevel, runOptions.codexConfig)
   const broadcast = new EventBroadcast(taskId)
   taskBroadcasts.set(taskId, broadcast)
   const recordFileHints = (event: WorkerEvent): void => {
@@ -985,7 +1038,6 @@ export async function runQuery(
     : undefined
 
   // entry.model 仍保留请求方原始字符串；rawModel 是 alias 解析后的真实模型（含 reasoning 后缀）
-  const { model: effectiveModel, reasoningLevel } = parseModelString(rawModel)
   let resolvedModel = effectiveModel
 
   try {
@@ -1020,7 +1072,7 @@ export async function runQuery(
       codexOptions.baseUrl = effectiveBaseUrl
     }
     console.log(
-      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${reasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} has_base_url=${Boolean(effectiveBaseUrl)} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''} scoped_codex_home=${Boolean(codexHome)} sandbox_mode=${runOptions.sandboxMode ?? ''} approval_policy=${runOptions.approvalPolicy ?? ''}`
+      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${effectiveReasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} has_base_url=${Boolean(effectiveBaseUrl)} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''} scoped_codex_home=${Boolean(codexHome)} sandbox_mode=${runOptions.sandboxMode ?? ''} approval_policy=${runOptions.approvalPolicy ?? ''}`
     )
 
     // Codex CLI 配置项默认值 + envVars 覆盖
@@ -1043,8 +1095,8 @@ export async function runQuery(
       Object.assign(codexConfig, runOptions.codexConfig)
     }
     // The model suffix is the most specific request-level choice and must win over generic config.
-    // Use the SDK's public config channel because SDK 0.144.1 types do not yet list max/ultra.
-    applyResolvedReasoningEffort(codexConfig, reasoningLevel)
+    // Use the SDK's public config channel because SDK 0.144.1 types do not yet list max.
+    applyResolvedReasoningEffort(codexConfig, effectiveReasoningLevel)
     if (runOptions.developerInstructions) {
       codexConfig.developer_instructions = runOptions.developerInstructions
     }

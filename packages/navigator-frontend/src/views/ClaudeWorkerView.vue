@@ -1182,6 +1182,7 @@
                 </el-tag>
                 <el-tag v-for="tag in (conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
                 <span v-if="conv.taskCount > 1" class="conv-rounds">{{ conv.taskCount }}轮</span>
+                <TaskProviderBadge :provider-type="conv.latestTask.providerType" compact />
                 <span v-if="conv.latestTask.model" class="conv-model">{{ shortModel(conv.latestTask.model) }}</span>
                 <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(2) }}</span>
                 <span v-if="conv.config?.authBound" class="conv-auth-badge" :title="'Auth: ' + (conv.config.authMode || 'bound')">&#128273;</span>
@@ -1318,6 +1319,7 @@
                   </div>
                   <div class="branch-session-meta">
                     <span v-if="child.taskCount > 1" class="conv-rounds">{{ child.taskCount }}轮</span>
+                    <TaskProviderBadge :provider-type="child.latestTask.providerType" compact />
                     <span v-if="child.latestTask.model" class="conv-model">{{ shortModel(child.latestTask.model) }}</span>
                     <span v-if="child.totalCost > 0" class="conv-cost">${{ child.totalCost.toFixed(2) }}</span>
                     <span class="conv-time">{{ formatTime(child.latestTask.createdAt) }}</span>
@@ -1494,6 +1496,7 @@
               </el-tag>
               <el-tag v-for="tag in (conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
               <span v-if="conv.taskCount > 1" class="conv-rounds">{{ conv.taskCount }}轮</span>
+              <TaskProviderBadge :provider-type="conv.latestTask.providerType" compact />
               <span v-if="conv.latestTask.model" class="conv-model">{{ shortModel(conv.latestTask.model) }}</span>
               <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(2) }}</span>
               <span v-if="conv.config?.authBound" class="conv-auth-badge" :title="'Auth: ' + (conv.config.authMode || 'bound')">&#128273;</span>
@@ -1631,6 +1634,7 @@
                 </div>
                 <div class="branch-session-meta">
                   <span v-if="child.taskCount > 1" class="conv-rounds">{{ child.taskCount }}轮</span>
+                  <TaskProviderBadge :provider-type="child.latestTask.providerType" compact />
                   <span v-if="child.latestTask.model" class="conv-model">{{ shortModel(child.latestTask.model) }}</span>
                   <span v-if="child.totalCost > 0" class="conv-cost">${{ child.totalCost.toFixed(2) }}</span>
                   <span class="conv-time">{{ formatTime(child.latestTask.createdAt) }}</span>
@@ -1922,16 +1926,18 @@
             <el-form-item label="SDK Codex 默认模型">
               <el-input v-model="editForm.codexModel" placeholder="如：codex-latest" />
             </el-form-item>
-            <el-alert
-              title="App Server Runtime 与上方 SDK Codex endpoint 独立配置"
-              description="Ultra 使用下方 Runtime 注册信息，不需要覆盖 SDK Codex 地址。"
-              type="info"
-              :closable="false"
-              show-icon
-            />
+          </el-tab-pane>
+
+          <el-tab-pane
+            v-if="!selectedWorkerIsLangGraph"
+            label="Codex App Server"
+            name="codex-app-server"
+            lazy
+          >
             <CodexRuntimeManager
-              v-if="showEditDialog && selectedWorkerId && editWorkerActiveTab === 'codex'"
+              v-if="showEditDialog && selectedWorkerId && editWorkerActiveTab === 'codex-app-server'"
               :worker-id="selectedWorkerId"
+              @capability-changed="handleCodexAppServerCapabilityChanged"
             />
           </el-tab-pane>
 
@@ -2638,6 +2644,9 @@
         </el-descriptions-item>
         <el-descriptions-item label="任务轮次">{{ detailConv.tasks.length }}</el-descriptions-item>
         <el-descriptions-item label="状态">{{ detailConv.latestTask.status }}</el-descriptions-item>
+        <el-descriptions-item label="Provider">
+          <TaskProviderBadge :provider-type="detailConv.latestTask.providerType" />
+        </el-descriptions-item>
         <el-descriptions-item label="模型">{{ detailConv.latestTask.model || '-' }}</el-descriptions-item>
         <el-descriptions-item label="工作目录">{{ detailConv.latestTask.cwd || '-' }}</el-descriptions-item>
         <el-descriptions-item label="总费用">${{ detailConv.totalCost.toFixed(4) }}</el-descriptions-item>
@@ -2865,13 +2874,18 @@
             :options="agentModelOptions"
             style="width: 100%"
             :disabled="agentModelOptions.length === 0"
-            :placeholder="agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置'"
+            :placeholder="agentModelOptionsLoading ? '正在检查 Runtime 模型能力' : (agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置')"
           />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAgentRegisterDialog = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="handleRegisterAgent">注册</el-button>
+        <el-button
+          type="primary"
+          :loading="saving"
+          :disabled="agentModelSelectionBlocked"
+          @click="handleRegisterAgent"
+        >注册</el-button>
       </template>
     </el-dialog>
 
@@ -2911,7 +2925,7 @@
             :options="agentModelOptions"
             style="width: 100%"
             :disabled="agentModelOptions.length === 0"
-            :placeholder="agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置'"
+            :placeholder="agentModelOptionsLoading ? '正在检查 Runtime 模型能力' : (agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置')"
           />
         </el-form-item>
         <el-form-item>
@@ -2933,7 +2947,12 @@
       </el-form>
       <template #footer>
         <el-button @click="showAgentEditDialog = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="handleUpdateAgent">保存</el-button>
+        <el-button
+          type="primary"
+          :loading="saving"
+          :disabled="agentModelSelectionBlocked"
+          @click="handleUpdateAgent"
+        >保存</el-button>
       </template>
     </el-dialog>
 
@@ -3052,6 +3071,7 @@ import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import ModelSelect from '@/components/worker/ModelSelect.vue'
 import SessionSearchDialog from '@/components/worker/SessionSearchDialog.vue'
 import CodexRuntimeManager from '@/components/worker/CodexRuntimeManager.vue'
+import TaskProviderBadge from '@/components/worker/TaskProviderBadge.vue'
 import PencilCanvas from '@/components/ipad/PencilCanvas.vue'
 import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
 import { useForwardSession } from '@/composables/useForwardSession'
@@ -3083,6 +3103,10 @@ import {
   normalizeModelValueForBackend,
   resolveModelOptions,
 } from '@/utils/llmModelOptions'
+import {
+  filterModelOptionsByAvailability,
+  resolveAvailableModelValues,
+} from '@/utils/codexCapability'
 import { inferTaskWorkerBackend, isClaudeCodeTask, providerTypeFromWorkerBackend, taskSessionRefLabel } from '@/utils/workerBackend'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone, WorkerBackend } from '@/types'
 import type { AipMessageType, ChatMessage, NavigatorUiAction, NavigatorUiArtifact, UserQuestionAnswers } from '@foggy/chat'
@@ -3137,9 +3161,7 @@ const paneAgentContextIds = ref<Map<string, Map<string, string>>>(new Map())
 // --- Worker tabs state (Agents / CLI Processes) ---
 const workerActiveTab = ref('processes')
 function handleWorkerTabChange(tab: string) {
-  if (tab === 'processes'
-    && cliProcesses.value.length === 0
-    && appServerManagedProcessWorkerId.value !== selectedWorkerId.value) {
+  if (tab === 'processes' && cliProcesses.value.length === 0) {
     loadCliProcesses()
   }
 }
@@ -3149,12 +3171,7 @@ import type { CliProcessInfo } from '@/types'
 const cliProcesses = ref<CliProcessInfo[]>([])
 const cliProcessActiveTaskCount = ref(0)
 const loadingProcesses = ref(false)
-const appServerManagedProcessWorkerId = ref<string | null>(null)
-const cliProcessEmptyText = computed(() => (
-  appServerManagedProcessWorkerId.value === selectedWorkerId.value
-    ? 'App Server 进程由 Runtime 池管理'
-    : '未检测到 CLI 进程'
-))
+const cliProcessEmptyText = computed(() => '未检测到 CLI 进程')
 let cliProcessRequestSequence = 0
 
 async function loadCliProcesses() {
@@ -3163,23 +3180,7 @@ async function loadCliProcesses() {
   const requestSequence = ++cliProcessRequestSequence
   const worker = workerState.workers.value.find(candidate => candidate.workerId === workerId)
   loadingProcesses.value = true
-  appServerManagedProcessWorkerId.value = null
   try {
-    let availability: Awaited<ReturnType<typeof getCodexRuntimeAvailability>> | null = null
-    try {
-      availability = await getCodexRuntimeAvailability(workerId, { suppressErrorMessage: true })
-    } catch {
-      // Runtime discovery is additive. Preserve the legacy probes when it is unavailable.
-    }
-    if (requestSequence !== cliProcessRequestSequence || workerId !== selectedWorkerId.value) return
-
-    if (availability?.appServerManaged) {
-      appServerManagedProcessWorkerId.value = workerId
-      cliProcesses.value = []
-      cliProcessActiveTaskCount.value = 0
-      return
-    }
-
     const requests: Array<{
       type: 'claude' | 'codex' | 'gemini'
       promise: Promise<CliProcessListResponse>
@@ -3855,6 +3856,14 @@ const workerLlmSelectionCache = loadLlmCacheFromStorage()
 let suppressModelAutoSelect = false
 let loadPlatformModelConfigSeq = 0 // 防止异步竞态：只有最新一次调用的结果才生效
 let sessionRestoreVersion = 0 // 会话级恢复版本号：防止 loadPlatformModelConfig 异步覆盖会话模型
+const pendingAppServerModel = ref<string | null>(null)
+const pendingAppServerModelConfigId = ref<string | null>(null)
+const appServerAvailableModelValues = ref<Set<string> | null>(null)
+const appServerModelOptionsLoading = ref(false)
+let appServerModelOptionsRequestSequence = 0
+const agentAppServerAvailableModelValues = ref<Set<string> | null>(null)
+const agentModelOptionsLoading = ref(false)
+let agentModelOptionsRequestSequence = 0
 
 // --- Per-session 模型缓存：task.model 会被 CLI 响应覆盖为完整模型名，无法映射回下拉选项 ---
 // 在发送任务时记录 sessionId → 用户实际选择的短模型名，恢复时优先使用
@@ -3880,7 +3889,7 @@ function saveSessionModel(sessionId: string | undefined | null, model: string) {
 }
 
 function saveWorkerLlmSelection(workerId: string | null) {
-  if (!workerId || !platformModelConfigId.value) return
+  if (!workerId || !platformModelConfigId.value || !taskForm.value.model) return
   workerLlmSelectionCache.set(workerId, {
     apiConfigId: platformModelConfigId.value,
     model: taskForm.value.model,
@@ -3901,6 +3910,9 @@ function restoreWorkerLlmSelection(workerId: string | null): boolean {
     const normalizedModel = normalizeModelValueForBackend(cached.model, platformModelConfig.value?.workerBackend)
     if (opts.some((o) => o.value === normalizedModel)) {
       taskForm.value.model = normalizedModel
+    } else if (platformModelConfig.value?.workerBackend === 'OPENAI_CODEX_APP_SERVER') {
+      pendingAppServerModel.value = normalizedModel
+      pendingAppServerModelConfigId.value = cached.apiConfigId
     }
     suppressModelAutoSelect = false
     return true
@@ -3909,16 +3921,120 @@ function restoreWorkerLlmSelection(workerId: string | null): boolean {
 }
 
 const claudeModelOptions = computed(() => {
-  return resolveModelOptions(platformModelConfig.value)
+  const options = resolveModelOptions(platformModelConfig.value)
+  if (platformModelConfig.value?.workerBackend !== 'OPENAI_CODEX_APP_SERVER') return options
+  return filterModelOptionsByAvailability(options, appServerAvailableModelValues.value)
 })
+
+async function refreshAppServerModelOptions(): Promise<void> {
+  const requestSequence = ++appServerModelOptionsRequestSequence
+  const workerId = selectedWorkerId.value
+  const modelConfigId = platformModelConfigId.value
+  const modelConfig = platformModelConfig.value
+  appServerAvailableModelValues.value = null
+  if (!workerId || !modelConfig || modelConfig.workerBackend !== 'OPENAI_CODEX_APP_SERVER') {
+    appServerModelOptionsLoading.value = false
+    return
+  }
+
+  appServerModelOptionsLoading.value = true
+  try {
+    const availableValues = await resolveAvailableModelValues(
+      resolveModelOptions(modelConfig),
+      (model) => getCodexRuntimeAvailability(workerId, {
+        model,
+        suppressErrorMessage: true,
+      }),
+    )
+    if (requestSequence !== appServerModelOptionsRequestSequence
+      || selectedWorkerId.value !== workerId
+      || platformModelConfigId.value !== modelConfigId
+      || platformModelConfig.value?.workerBackend !== 'OPENAI_CODEX_APP_SERVER') return
+    appServerAvailableModelValues.value = availableValues
+  } finally {
+    if (requestSequence === appServerModelOptionsRequestSequence) {
+      appServerModelOptionsLoading.value = false
+    }
+  }
+}
+
+watch([
+  selectedWorkerId,
+  platformModelConfigId,
+  () => platformModelConfig.value?.workerBackend,
+  () => platformModelConfig.value?.availableModels?.join('\u0000') ?? '',
+], () => {
+  void refreshAppServerModelOptions()
+}, { immediate: true, flush: 'sync' })
 
 const agentPlatformModelConfig = computed(() =>
   platformModels.value.find((m) => m.id === agentForm.value.defaultModelConfigId) || null,
 )
 
-const agentModelOptions = computed(() => resolveModelOptions(agentPlatformModelConfig.value))
+const agentModelOptions = computed(() => {
+  const options = resolveModelOptions(agentPlatformModelConfig.value)
+  if (agentPlatformModelConfig.value?.workerBackend !== 'OPENAI_CODEX_APP_SERVER') return options
+  return filterModelOptionsByAvailability(options, agentAppServerAvailableModelValues.value)
+})
+
+const agentModelSelectionBlocked = computed(() => {
+  if (agentPlatformModelConfig.value?.workerBackend !== 'OPENAI_CODEX_APP_SERVER') return false
+  if (agentModelOptionsLoading.value || agentAppServerAvailableModelValues.value == null) return true
+  const selectedModel = normalizeModelValueForBackend(
+    agentForm.value.defaultModel,
+    agentPlatformModelConfig.value.workerBackend,
+  )
+  return !selectedModel || !agentModelOptions.value.some(option => option.value === selectedModel)
+})
+
+async function refreshAgentModelOptions(): Promise<void> {
+  const requestSequence = ++agentModelOptionsRequestSequence
+  const workerId = selectedWorkerId.value
+  const modelConfigId = agentForm.value.defaultModelConfigId
+  const modelConfig = agentPlatformModelConfig.value
+  agentAppServerAvailableModelValues.value = null
+  if ((!showAgentRegisterDialog.value && !showAgentEditDialog.value)
+    || !workerId || !modelConfig || modelConfig.workerBackend !== 'OPENAI_CODEX_APP_SERVER') {
+    agentModelOptionsLoading.value = false
+    return
+  }
+
+  agentModelOptionsLoading.value = true
+  try {
+    const availableValues = await resolveAvailableModelValues(
+      resolveModelOptions(modelConfig),
+      (model) => getCodexRuntimeAvailability(workerId, {
+        model,
+        suppressErrorMessage: true,
+      }),
+    )
+    if (requestSequence !== agentModelOptionsRequestSequence
+      || selectedWorkerId.value !== workerId
+      || agentForm.value.defaultModelConfigId !== modelConfigId
+      || agentPlatformModelConfig.value?.workerBackend !== 'OPENAI_CODEX_APP_SERVER'
+      || (!showAgentRegisterDialog.value && !showAgentEditDialog.value)) return
+    agentAppServerAvailableModelValues.value = availableValues
+  } finally {
+    if (requestSequence === agentModelOptionsRequestSequence) {
+      agentModelOptionsLoading.value = false
+    }
+  }
+}
+
+watch([
+  selectedWorkerId,
+  () => agentForm.value.defaultModelConfigId,
+  () => agentPlatformModelConfig.value?.workerBackend,
+  () => agentPlatformModelConfig.value?.availableModels?.join('\u0000') ?? '',
+  showAgentRegisterDialog,
+  showAgentEditDialog,
+], () => {
+  void refreshAgentModelOptions()
+}, { immediate: true, flush: 'sync' })
 
 function syncAgentDefaultModel() {
+  if (agentPlatformModelConfig.value?.workerBackend === 'OPENAI_CODEX_APP_SERVER'
+    && agentAppServerAvailableModelValues.value == null) return
   const opts = agentModelOptions.value
   if (opts.length === 0) {
     agentForm.value.defaultModel = ''
@@ -3938,6 +4054,31 @@ function syncAgentDefaultModel() {
 // 当可用模型列表变化时，若当前选中的模型不在列表中则自动回退到第一个
 watch(claudeModelOptions, (opts) => {
   if (suppressModelAutoSelect) return
+  if (platformModelConfig.value?.workerBackend === 'OPENAI_CODEX_APP_SERVER') {
+    if (appServerAvailableModelValues.value == null) return
+    const pendingModel = normalizeModelValueForBackend(
+      pendingAppServerModelConfigId.value === platformModelConfigId.value
+        ? pendingAppServerModel.value
+        : null,
+      platformModelConfig.value.workerBackend,
+    )
+    const normalizedModel = normalizeModelValueForBackend(
+      taskForm.value.model,
+      platformModelConfig.value.workerBackend,
+    )
+    if (pendingModel && opts.some((option) => option.value === pendingModel)) {
+      taskForm.value.model = pendingModel
+    } else if (opts.some((option) => option.value === normalizedModel)) {
+      taskForm.value.model = normalizedModel
+    } else {
+      taskForm.value.model = opts[0]?.value ?? ''
+    }
+    pendingAppServerModel.value = null
+    pendingAppServerModelConfigId.value = null
+    return
+  }
+  pendingAppServerModel.value = null
+  pendingAppServerModelConfigId.value = null
   const normalizedModel = normalizeModelValueForBackend(taskForm.value.model, platformModelConfig.value?.workerBackend)
   if (opts.some((option) => option.value === normalizedModel)) {
     taskForm.value.model = normalizedModel
@@ -3949,6 +4090,10 @@ watch(claudeModelOptions, (opts) => {
 // 切换 LLM 配置时，仅当当前模型不在新配置可用列表中时才回退到默认模型，并持久化选择
 watch(platformModelConfigId, () => {
   if (suppressModelAutoSelect) return
+  if (pendingAppServerModelConfigId.value !== platformModelConfigId.value) {
+    pendingAppServerModel.value = null
+    pendingAppServerModelConfigId.value = null
+  }
   const opts = claudeModelOptions.value
   const normalizedModel = normalizeModelValueForBackend(taskForm.value.model, platformModelConfig.value?.workerBackend)
   if (opts.some((option) => option.value === normalizedModel)) {
@@ -4012,18 +4157,24 @@ function sessionModelMatchesOption(taskModel: string, optionValue: string): bool
 
 function restoreSessionTaskModel(task: ClaudeTask) {
   const opts = claudeModelOptions.value
-  if (opts.length === 0) return
-
   const sessionId = task.sessionId || ''
   const backend = platformModelConfig.value?.workerBackend
   const cachedModel = normalizeModelValueForBackend(sessionModelCache.get(sessionId), backend)
+  const normalizedTaskModel = normalizeModelValueForBackend(task.model, backend)
+  if (opts.length === 0) {
+    if (backend === 'OPENAI_CODEX_APP_SERVER') {
+      pendingAppServerModel.value = cachedModel || normalizedTaskModel || null
+      pendingAppServerModelConfigId.value = platformModelConfigId.value
+    }
+    return
+  }
+
   if (cachedModel && opts.some((o) => o.value === cachedModel)) {
     taskForm.value.model = cachedModel
     return
   }
 
   const taskModel = (task.model || '').toLowerCase()
-  const normalizedTaskModel = normalizeModelValueForBackend(task.model, backend)
   if (normalizedTaskModel && opts.some((o) => o.value === normalizedTaskModel)) {
     taskForm.value.model = normalizedTaskModel
     return
@@ -4090,6 +4241,17 @@ async function loadPlatformModelConfig() {
   }
 }
 
+watch(agentModelOptions, () => {
+  if (!showAgentRegisterDialog.value && !showAgentEditDialog.value) return
+  syncAgentDefaultModel()
+}, { flush: 'sync' })
+
+async function handleCodexAppServerCapabilityChanged(): Promise<void> {
+  await loadPlatformModelConfig()
+  await refreshAppServerModelOptions()
+  restartUltraRuntimeReadinessPolling()
+}
+
 // --- Agent management functions ---
 function dirNameById(dirId?: string): string {
   if (!dirId) return '-'
@@ -4125,6 +4287,12 @@ function openAgentEditDialog(agent: CodingAgent) {
 
 async function handleRegisterAgent() {
   if (!agentForm.value.name || !agentForm.value.defaultDirectoryId || !agentForm.value.defaultModelConfigId || !selectedWorkerId.value) return
+  if (agentModelSelectionBlocked.value) {
+    ElMessage.warning(agentModelOptionsLoading.value
+      ? '正在检查 Runtime 模型能力，请稍后重试'
+      : '当前 Worker 不支持所选默认模型')
+    return
+  }
   saving.value = true
   try {
     await agentState.registerAgent({
@@ -4147,6 +4315,12 @@ async function handleRegisterAgent() {
 
 async function handleUpdateAgent() {
   if (!editingAgent.value || !agentForm.value.defaultModelConfigId) return
+  if (agentModelSelectionBlocked.value) {
+    ElMessage.warning(agentModelOptionsLoading.value
+      ? '正在检查 Runtime 模型能力，请稍后重试'
+      : '当前 Worker 不支持所选默认模型')
+    return
+  }
   saving.value = true
   try {
     await agentState.updateAgent(editingAgent.value.agentId, {
@@ -4374,13 +4548,18 @@ function isUltraTaskModel(model?: string | null): boolean {
   return normalized === 'codex-ultra' || normalized.endsWith(':ultra')
 }
 
+function selectedModelUsesAppServer(): boolean {
+  return providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+    === 'codex-app-server-worker'
+}
+
 function stopUltraRuntimeReadinessPolling(resetState = true): void {
   ultraRuntimeRequestSequence++
   if (ultraRuntimePollTimer != null) clearTimeout(ultraRuntimePollTimer)
   ultraRuntimePollTimer = null
   if (resetState) {
     ultraRuntimeCheckedWorkerId.value = null
-    ultraRuntimeReadiness.value = isUltraTaskModel(taskForm.value.model)
+    ultraRuntimeReadiness.value = selectedModelUsesAppServer()
       ? 'CHECKING'
       : 'NOT_REQUIRED'
   }
@@ -4390,7 +4569,7 @@ function scheduleUltraRuntimeReadinessPoll(requestSequence: number): void {
   if (!viewActive.value
     || requestSequence !== ultraRuntimeRequestSequence
     || !selectedWorkerId.value
-    || !isUltraTaskModel(taskForm.value.model)) return
+    || !selectedModelUsesAppServer()) return
   ultraRuntimePollTimer = setTimeout(() => {
     ultraRuntimePollTimer = null
     if (requestSequence !== ultraRuntimeRequestSequence) return
@@ -4401,7 +4580,8 @@ function scheduleUltraRuntimeReadinessPoll(requestSequence: number): void {
 async function refreshUltraRuntimeReadiness(initial = true): Promise<void> {
   const workerId = selectedWorkerId.value
   const requestedModel = taskForm.value.model
-  if (!viewActive.value || !workerId || !isUltraTaskModel(requestedModel)) return
+  const requestedBackend = platformModelConfig.value?.workerBackend
+  if (!viewActive.value || !workerId || requestedBackend !== 'OPENAI_CODEX_APP_SERVER') return
   const requestSequence = ++ultraRuntimeRequestSequence
   if (initial || ultraRuntimeCheckedWorkerId.value !== workerId) {
     ultraRuntimeReadiness.value = 'CHECKING'
@@ -4416,16 +4596,17 @@ async function refreshUltraRuntimeReadiness(initial = true): Promise<void> {
     if (requestSequence !== ultraRuntimeRequestSequence
       || workerId !== selectedWorkerId.value
       || taskForm.value.model !== requestedModel
-      || !isUltraTaskModel(requestedModel)
+      || platformModelConfig.value?.workerBackend !== requestedBackend
       || !viewActive.value) return
-    ultraRuntimeReadiness.value = availability.ultraAvailable
+    ultraRuntimeReadiness.value = (availability.modelAvailable
+      ?? (isUltraTaskModel(requestedModel) && availability.ultraAvailable))
       ? 'READY'
       : 'UNAVAILABLE'
   } catch {
     if (requestSequence !== ultraRuntimeRequestSequence
       || workerId !== selectedWorkerId.value
       || taskForm.value.model !== requestedModel
-      || !isUltraTaskModel(requestedModel)
+      || platformModelConfig.value?.workerBackend !== requestedBackend
       || !viewActive.value) return
     ultraRuntimeReadiness.value = 'FAILED'
   } finally {
@@ -4435,33 +4616,50 @@ async function refreshUltraRuntimeReadiness(initial = true): Promise<void> {
 
 function restartUltraRuntimeReadinessPolling(): void {
   stopUltraRuntimeReadinessPolling()
-  if (!viewActive.value || !selectedWorkerId.value || !isUltraTaskModel(taskForm.value.model)) return
+  if (!viewActive.value || !selectedWorkerId.value || !selectedModelUsesAppServer()) return
   void refreshUltraRuntimeReadiness(true)
 }
 
 const ultraRuntimeCreateBlockReason = computed(() => {
-  if (!isUltraTaskModel(taskForm.value.model)) return ''
-  if (!selectedWorkerId.value) return '请选择用于 Codex Ultra 的 Worker'
+  if (isUltraTaskModel(taskForm.value.model) && !selectedModelUsesAppServer()) {
+    return 'Ultra 仅支持 Codex App Server 后端'
+  }
+  if (!selectedModelUsesAppServer()) return ''
+  if (!selectedWorkerId.value) return '请选择用于 Codex App Server 的 Worker'
+  if (appServerModelOptionsLoading.value || appServerAvailableModelValues.value == null) {
+    return '正在检查 Codex App Server Runtime 模型能力，请稍后重试'
+  }
+  if (claudeModelOptions.value.length === 0) {
+    return '当前 Worker 没有可执行的 App Server 模型'
+  }
+  const normalizedModel = normalizeModelValueForBackend(
+    taskForm.value.model,
+    platformModelConfig.value?.workerBackend,
+  )
+  if (!normalizedModel || !appServerAvailableModelValues.value.has(normalizedModel)) {
+    return '当前 Worker 无法执行所选 App Server 模型'
+  }
   if (ultraRuntimeCheckedWorkerId.value !== selectedWorkerId.value
     || ultraRuntimeReadiness.value === 'CHECKING') {
-    return '正在检查 Codex Ultra Runtime，请稍后重试'
+    return '正在检查 Codex App Server Runtime，请稍后重试'
   }
   if (ultraRuntimeReadiness.value === 'FAILED') {
-    return 'Codex Ultra Runtime 状态检查失败，已阻止新建任务'
+    return 'Codex App Server Runtime 状态检查失败，已阻止新建任务'
   }
   if (ultraRuntimeReadiness.value !== 'READY') {
-    return '当前 Worker 没有可用的 Codex Ultra Runtime'
+    return `当前 Worker 没有支持 ${taskForm.value.model || '所选模型'} 的 App Server Runtime`
   }
   return ''
 })
 
 const createTaskDisabled = computed(() =>
   !taskForm.value.prompt
+  || !taskForm.value.model
   || selectedWorkerEntity.value?.status !== 'ONLINE'
   || Boolean(ultraRuntimeCreateBlockReason.value),
 )
 
-watch([selectedWorkerId, () => taskForm.value.model], restartUltraRuntimeReadinessPolling, {
+watch([selectedWorkerId, () => taskForm.value.model, () => platformModelConfig.value?.workerBackend], restartUltraRuntimeReadinessPolling, {
   immediate: true,
 })
 
@@ -4534,7 +4732,9 @@ interface MilestoneConversationGroup {
 
 function taskSessionRefValue(task: ClaudeTask): string {
   const backend = inferTaskWorkerBackend(task)
-  if (backend === 'OPENAI_CODEX') return task.codexThreadId || ''
+  if (backend === 'OPENAI_CODEX' || backend === 'OPENAI_CODEX_APP_SERVER') {
+    return task.codexThreadId || ''
+  }
   if (backend === 'GEMINI_CLI') return task.geminiSessionId || ''
   return task.claudeSessionId || ''
 }
@@ -6716,12 +6916,16 @@ async function handleCreateTask() {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
       model?: string; maxTurns?: number; agentTeamsJson?: string; agentTeamsConfigId?: string
       images?: string; permissionMode?: string; modelConfigId?: string; agentId?: string
+      providerType?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt,
     }
-    // provider 不一致时不要带 agentId，避免本次任务显式模型配置把请求路由到另一执行后端。
     const modelProviderType = providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+    if (modelProviderType) {
+      form.providerType = modelProviderType
+    }
+    // A logical Agent cannot override the execution backend selected by ModelConfig.
     if (selectedAgentId.value && (!modelProviderType || modelProviderType === selectedAgentProviderType.value)) {
       form.agentId = selectedAgentId.value
     }
@@ -7113,6 +7317,72 @@ async function handleAskAgent(paneId: string, agent: { agentId: string; name: st
 }
 
 /** Handle inline send from pane input (replaces dialog-based resume) */
+async function divertCrossProviderResume(
+  sourceTask: ClaudeTask,
+  prompt: string,
+  includeAttachments = false,
+): Promise<boolean> {
+  const targetProviderType = providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+  if (!targetProviderType || !sourceTask.providerType || targetProviderType === sourceTask.providerType) {
+    return false
+  }
+  if (ultraRuntimeCreateBlockReason.value) {
+    ElMessage.warning(ultraRuntimeCreateBlockReason.value)
+    return true
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '当前模型使用不同的执行后端，无法续接原生会话。是否创建新会话？',
+      '创建新会话',
+      { type: 'warning', confirmButtonText: '创建新会话', cancelButtonText: '取消' },
+    )
+  } catch {
+    return true
+  }
+
+  try {
+    const form: Parameters<typeof workerState.createTask>[0] = {
+      workerId: sourceTask.workerId || selectedWorkerId.value || '',
+      prompt,
+      cwd: sourceTask.cwd,
+      directoryId: sourceTask.directoryId,
+      model: taskForm.value.model,
+      maxTurns: taskForm.value.maxTurns,
+      modelConfigId: platformModelConfigId.value || undefined,
+      providerType: targetProviderType,
+    }
+    if (selectedAgentId.value && selectedAgentProviderType.value === targetProviderType) {
+      form.agentId = selectedAgentId.value
+    }
+    if (taskForm.value.permissionMode) {
+      form.permissionMode = taskForm.value.permissionMode
+    }
+    if (includeAttachments) {
+      const imagesJson = toImagesJson(attachments.value)
+      if (imagesJson) form.images = imagesJson
+    }
+    const newTask = await workerState.createTask(form)
+    syncTaskAcrossVisibleLists(newTask)
+    saveSessionModel(newTask.sessionId, taskForm.value.model)
+    while (panes.value.length >= MAX_PANES) closePane(panes.value[0]!.paneId)
+    const chatImages = includeAttachments
+      ? attachments.value.filter(item => item.isImage && item.previewUrl)
+          .map(item => ({ name: item.name, url: item.previewUrl! }))
+      : []
+    if (includeAttachments) {
+      clearAttachments(new Set(chatImages.map(item => item.url)))
+    }
+    const newPane = createPane(newTask)
+    focusedPaneId.value = newPane.paneId
+    await newPane.connect(newTask.sessionId, chatImages.length ? chatImages : undefined)
+    ElMessage.success('已创建新会话')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '创建新会话失败')
+  }
+  return true
+}
+
 async function handlePaneSend(paneId: string, content: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   const oldTask = pane?.task.value
@@ -7158,6 +7428,8 @@ async function handlePaneSend(paneId: string, content: string) {
     paneAgentContext.value.delete(paneId)
   }
 
+  if (await divertCrossProviderResume(oldTask, finalPrompt, true)) return
+
   // Capture image URLs before API call (input is already cleared by the child component)
   const chatImages = attachments.value
     .filter(a => a.isImage && a.previewUrl)
@@ -7174,12 +7446,8 @@ async function handlePaneSend(paneId: string, content: string) {
       cwd: oldTask.cwd,
       directoryId: oldTask.directoryId,
       sessionId: oldTask.sessionId,
+      providerType: oldTask.providerType,
     }
-    // Pass logical agent when available, otherwise keep the existing provider context explicit.
-    if (selectedAgentId.value) {
-      resumeForm.agentId = selectedAgentId.value
-    }
-    // providerType / claudeSessionId / codexThreadId 由后端从 session 恢复，前端不再传递
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }
@@ -7530,6 +7798,10 @@ async function executeContextRepair() {
 
   contextRepairLoading.value = true
   try {
+    if (await divertCrossProviderResume(conv.latestTask, contextRepairPrompt.value)) {
+      contextRepairVisible.value = false
+      return
+    }
     // Step 1: Rewind to turn 1 — marks ALL messages as sidechain (full compaction)
     await rewindTaskUnified(contextRepairTaskId.value, {
       mode: 'conversation_fork',
@@ -7544,12 +7816,8 @@ async function executeContextRepair() {
       cwd: task.cwd,
       directoryId: task.directoryId,
       sessionId: task.sessionId,
+      providerType: task.providerType,
     }
-    // Pass logical agent when available, otherwise keep the provider context explicit.
-    if (selectedAgentId.value) {
-      resumeForm.agentId = selectedAgentId.value
-    }
-    // providerType 由后端从 modelConfigId 推导，前端不再传递
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }
@@ -7842,18 +8110,16 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     })) as { value: string }
     if (!prompt) return
 
+    if (await divertCrossProviderResume(task, prompt)) return
+
     const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
       workerId,
       prompt,
       cwd: task.cwd,
       directoryId: task.directoryId,
       sessionId: task.sessionId,  // per-conversation: reuse session
+      providerType: task.providerType,
     }
-    // Pass logical agent when available, otherwise keep the provider context explicit.
-    if (selectedAgentId.value) {
-      resumeForm.agentId = selectedAgentId.value
-    }
-    // providerType / claudeSessionId / codexThreadId 由后端从 session 恢复，前端不再传递
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }

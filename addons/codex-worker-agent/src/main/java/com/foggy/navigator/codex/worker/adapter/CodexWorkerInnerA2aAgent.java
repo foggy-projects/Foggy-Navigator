@@ -3,11 +3,13 @@ package com.foggy.navigator.codex.worker.adapter;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
 import com.foggy.navigator.spi.agent.RemoteTaskIdResolution;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,18 +33,33 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
     private final CodingAgentEntity entity;
     private final CodexTaskService taskService;
     private final String defaultCwd;
+    private final String providerType;
+    private final TaskLookupProvider taskLookupProvider;
 
     CodexWorkerInnerA2aAgent(CodingAgentEntity entity, CodexTaskService taskService, String defaultCwd) {
+        this(entity, taskService, defaultCwd, CodexTaskService.CODEX_PROVIDER_TYPE, taskService);
+    }
+
+    CodexWorkerInnerA2aAgent(CodingAgentEntity entity, CodexTaskService taskService,
+                            String defaultCwd, String providerType) {
+        this(entity, taskService, defaultCwd, providerType, taskService);
+    }
+
+    CodexWorkerInnerA2aAgent(CodingAgentEntity entity, CodexTaskService taskService,
+                            String defaultCwd, String providerType,
+                            TaskLookupProvider taskLookupProvider) {
         this.entity = entity;
         this.taskService = taskService;
         this.defaultCwd = defaultCwd;
+        this.providerType = providerType;
+        this.taskLookupProvider = taskLookupProvider;
     }
 
     @Override
     public A2aAgentCard getAgentCard() {
         return AgentCardBuilder.fromEntity(entity,
                 "coding", "Execute coding tasks via OpenAI Codex",
-                List.of("coding", "codex-worker"));
+                List.of("coding", providerType));
     }
 
     @Override
@@ -80,6 +97,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setImages(images);
         form.setAttachments(attachmentsMeta(meta.get("attachments")));
         form.setModelConfigId(modelConfigId);
+        form.setProviderType(providerType);
         form.setContextId(context.getContextId());
 
         // 多轮会话：从已解析上下文获取 codexThreadId（使 Worker 恢复 Codex session）
@@ -116,12 +134,8 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
 
     @Override
     public Optional<A2aTask> getTask(String taskId) {
-        try {
-            CodexTaskDTO dto = taskService.getTask(entity.getUserId(), taskId);
-            return Optional.of(toA2aTask(dto));
-        } catch (IllegalArgumentException e) {
-            return Optional.empty();
-        }
+        return taskLookupProvider.getTaskByIdAndUser(taskId, entity.getUserId())
+                .map(this::toA2aTask);
     }
 
     @Override
@@ -131,13 +145,9 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
 
     @Override
     public RemoteTaskIdResolution resolveRemoteTaskId(String taskId) {
-        try {
-            var task = taskService.getTaskEntity(taskId);
-            // Codex 严格依赖 workerTaskId，不允许 fallback
-            return RemoteTaskIdResolution.of(task.getWorkerTaskId(), false);
-        } catch (IllegalArgumentException e) {
-            return RemoteTaskIdResolution.of(null, false);
-        }
+        return taskLookupProvider.getTaskByIdAndUser(taskId, entity.getUserId())
+                .map(task -> RemoteTaskIdResolution.of(task.getWorkerTaskId(), false))
+                .orElseGet(() -> RemoteTaskIdResolution.of(null, false));
     }
 
     @Override
@@ -150,7 +160,22 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
     @Override
     public boolean isSessionBusy(String agentSessionRef) {
         if (agentSessionRef == null || agentSessionRef.isBlank()) return false;
-        return taskService.hasRunningTask(agentSessionRef, entity.getWorkerId(), entity.getUserId());
+        return taskService.hasRunningTaskForProvider(
+                agentSessionRef, entity.getWorkerId(), entity.getUserId(), providerType);
+    }
+
+    private A2aTask toA2aTask(DispatchTaskDTO dto) {
+        return toA2aTask(CodexTaskDTO.builder()
+                .taskId(dto.getTaskId())
+                .workerTaskId(dto.getWorkerTaskId())
+                .sessionId(dto.getSessionId())
+                .workerId(dto.getWorkerId())
+                .status(dto.getStatus())
+                .codexThreadId(dto.getCodexThreadId())
+                .lastAckedSeq(dto.getLastAckedSeq())
+                .resultText(dto.getResultText())
+                .errorMessage(dto.getErrorMessage())
+                .build());
     }
 
     private A2aTask toA2aTask(CodexTaskDTO dto) {

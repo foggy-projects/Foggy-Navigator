@@ -3,7 +3,6 @@ package com.foggy.navigator.codex.worker.controller;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeAvailabilityDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeRateLimitsDTO;
-import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeLifecycleForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
 import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
@@ -34,13 +33,6 @@ public class CodexRuntimeController {
     private final CodexRuntimeRegistryService runtimeRegistryService;
     private final CodexRuntimeRateLimitsService runtimeRateLimitsService;
     private final WorkerManagementFacade workerManagementFacade;
-
-    @PostMapping
-    public RX<CodexRuntimeDTO> register(@RequestBody CodexRuntimeRegistrationForm form) {
-        String userId = UserContext.getCurrentUserId();
-        workerManagementFacade.validatePhysicalWorkerOwnership(userId, form.getWorkerId());
-        return RX.ok(runtimeRegistryService.registerRevision(form));
-    }
 
     @GetMapping
     public RX<List<CodexRuntimeDTO>> list(

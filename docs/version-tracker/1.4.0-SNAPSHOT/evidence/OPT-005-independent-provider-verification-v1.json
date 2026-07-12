@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "workitems": ["OPT-005", "OPT-006"],
+  "verifiedAt": "2026-07-12T03:38:34+08:00",
+  "verdict": "PASS_ISOLATED",
+  "productionEnablement": "NOT_APPROVED",
+  "source": {
+    "branch": "main",
+    "baseCommit": "853a534b",
+    "dirtyWorktreeProtected": true,
+    "launcherArtifact": {
+      "path": "launcher/target/launcher-1.0.0-SNAPSHOT.jar",
+      "bytes": 90191742,
+      "builtAt": "2026-07-12T03:31:22+08:00"
+    }
+  },
+  "automatedGates": {
+    "javaReactor": {
+      "command": "mvn test -pl session-module,metadata-config-module,addons/codex-worker-agent,addons/claude-worker-agent,launcher -am -DfailIfNoTests=false",
+      "modules": 16,
+      "tests": 2095,
+      "failures": 0,
+      "errors": 0
+    },
+    "pc": {
+      "commands": [
+        "pnpm test",
+        "pnpm type-check",
+        "bash scripts/build-frontend.sh"
+      ],
+      "unitTests": 237,
+      "typecheck": "PASS",
+      "productionBuild": "PASS"
+    },
+    "mobile": {
+      "commands": [
+        "pnpm test",
+        "pnpm exec vue-tsc --noEmit -p tsconfig.json",
+        "pnpm build:h5",
+        "pnpm build:mp-weixin"
+      ],
+      "unitTests": 55,
+      "typecheck": "PASS",
+      "h5Build": "PASS",
+      "mpWeixinBuild": "PASS"
+    },
+    "sdkWorker": {
+      "commands": ["npm test", "npm run typecheck", "npm run build"],
+      "version": "1.0.12",
+      "tests": 124,
+      "typecheck": "PASS",
+      "build": "PASS"
+    },
+    "appServerWorker": {
+      "commands": ["npm test", "npm run typecheck", "npm run build"],
+      "version": "0.3.7",
+      "cliVersion": "0.144.1",
+      "testsTotal": 251,
+      "passed": 244,
+      "platformSkipped": 7,
+      "failed": 0,
+      "typecheck": "PASS",
+      "build": "PASS"
+    },
+    "playwright": {
+      "command": "pnpm exec playwright test e2e/codex-provider-split.spec.ts e2e/codex-runtime-management.spec.ts e2e/codex-native-subtasks.spec.ts e2e/settings-worker-help.spec.ts --project=chromium",
+      "tests": 7,
+      "failed": 0,
+      "viewports": ["desktop", "320px"]
+    },
+    "migration": {
+      "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File tests/migration/test-codex-runtime-affinity.ps1",
+      "mysqlVersions": ["8.0.44", "8.4.8"],
+      "tasksPerRun": 25,
+      "result": "PASS"
+    },
+    "launcherPackage": {
+      "command": "mvn package -pl launcher -am -DskipTests",
+      "result": "PASS"
+    }
+  },
+  "realChain": {
+    "evidenceDirectory": "opt-005-provider-fullchain-20260712-033210-be7f26ac",
+    "mysqlVersion": "8.4.8",
+    "sdk": {
+      "taskId": "20260712-e529",
+      "sessionId": "4764849e-3236-4658-8db9-3ff0be3cd24f",
+      "providerType": "codex-worker",
+      "status": "COMPLETED",
+      "model": "gpt-5.6-sol",
+      "runtimeId": "legacy-sdk:0d72d2a7",
+      "runtimeRevision": 1,
+      "runtimeType": "SDK_EXEC",
+      "exactResult": true
+    },
+    "appServer": {
+      "taskId": "20260712-2b64",
+      "sessionId": "799dbfb3-876d-4303-8b60-e382ce3a6b96",
+      "providerType": "codex-app-server-worker",
+      "status": "COMPLETED",
+      "model": "codex-terra:ultra",
+      "runtimeId": "appserver-8a5dac990f5e4e20b9b4b9f00aa6e646",
+      "runtimeRevision": 1,
+      "runtimeType": "APP_SERVER",
+      "runtimeInstanceId": "codex-store-4ae33edb-a4e0-436c-b673-7fa82800c31d",
+      "exactResult": true
+    },
+    "unifiedSse": {
+      "connections": 1,
+      "relevantEvents": 29,
+      "bothTasksObserved": true,
+      "consoleErrors": 0,
+      "pageErrors": 0,
+      "reloadCancelledSubscribeRequests": 3
+    },
+    "noFallback": {
+      "appDarkRejectedBeforePersistence": true,
+      "appFailureCreatedSdkSession": false,
+      "sdkFailureProviderRemainedSdk": true,
+      "sdkFailureHadAppRuntimeBinding": false,
+      "appWorkerSawSdkFailureTask": false
+    },
+    "cleanup": {
+      "result": "PASS",
+      "ownedListenersRemaining": 0,
+      "ownedProcessesRemaining": 0,
+      "mysqlContainerRemoved": true,
+      "isolatedStateRemoved": true,
+      "existing8112Untouched": true
+    },
+    "secretScan": "PASS"
+  },
+  "evidence": [
+    "OPT-005-model-provider-split-desktop.png",
+    "OPT-005-model-provider-split-320.png",
+    "OPT-005-cross-provider-new-session.png",
+    "OPT-006-endpoint-runtime-desktop.png",
+    "OPT-006-endpoint-runtime-320.png",
+    "opt-005-provider-fullchain-20260712-033210-be7f26ac/environment.json",
+    "opt-005-provider-fullchain-20260712-033210-be7f26ac/pc-sse-fullchain.json",
+    "opt-005-provider-fullchain-20260712-033210-be7f26ac/no-fallback.json",
+    "opt-005-provider-fullchain-20260712-033210-be7f26ac/cleanup.json",
+    "opt-005-provider-fullchain-20260712-033210-be7f26ac/pc-sdk-chain.png",
+    "opt-005-provider-fullchain-20260712-033210-be7f26ac/pc-app-chain.png",
+    "opt-005-provider-fullchain-20260712-033210-be7f26ac/pc-provider-history-reload.png"
+  ]
+}

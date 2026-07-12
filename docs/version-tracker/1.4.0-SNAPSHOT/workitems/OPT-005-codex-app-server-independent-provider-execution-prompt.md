@@ -10,7 +10,7 @@
 
 你正在 `/home/sa/workspace/Foggy-Navigator` 中执行 `1.4.0-SNAPSHOT / OPT-005`。
 
-目标：一次性完成 Codex SDK Worker 与 Codex App Server Worker 的独立 Worker Backend、独立 A2A Provider、独立 Session、独立物理 Worker 配置和完整 UI/测试闭环。
+目标：一次性完成 Codex SDK Worker 与 Codex App Server Worker 的独立 Worker Backend、独立 A2A Provider、独立 Session、Endpoint/Runtime 控制面收口和完整 UI/测试闭环。
 
 先完整阅读：
 
@@ -28,11 +28,11 @@
 - App Server：`workerBackend=OPENAI_CODEX_APP_SERVER`，`providerType=codex-app-server-worker`。
 - 两个 Provider 不得互相 fallback。
 - Session 创建时绑定真实 Provider；跨 Provider 必须新建 Session。
-- Physical Worker 的 `codexConfig` 与 `codexAppServerConfig` 完全独立。
-- `physicalWorker.codexAppServerConfig` 是 App Server endpoint/token 唯一人工配置源。
-- Runtime registry 只能管理 App Server Provider 内部 capability/revision/instance 状态，不能形成第二套可编辑 endpoint/token 配置。
+- SDK Worker 的 `codexConfig` 与 App Server 的 Endpoint Profile 完全独立。
+- `CodexAppServerEndpoint` 是 App Server endpoint/token 唯一人工配置源；Physical Worker 只提供 owner/capability 归属和管理页签，不新增 `codexAppServerConfig`。
+- Runtime registry 只能保存 Endpoint 同步派生的 App Server capability/revision/instance/连接快照与 affinity，不提供手工 endpoint/token 注册或编辑入口。
 - Ultra 只属于 App Server Backend。
-- 不考虑旧数据、旧 Session、旧 ModelConfig、双读、backfill、N-1 或兼容 API。
+- 不考虑旧 Session/Thread 恢复、双读、N-1 或兼容 API；允许一次性迁移按既有 runtime 类型回填 Task `provider_type`，但不得形成兼容路由或 fallback。
 - 不自动扩展 `codex-biz-worker`。
 
 ### 工作区保护
@@ -41,7 +41,7 @@
 
 - 不得执行 `git reset --hard`、`git checkout --` 或任何覆盖式清理。
 - 开工先运行 `git status --short` 和相关 diff，逐项判断保留、改造或删除。
-- 根据“Physical Worker 配置是唯一 endpoint/token 写源”收敛这些改动。
+- 根据“Endpoint Profile 是唯一 endpoint/token 人工写源”审查和复用这些改动；不得删除已交付的 Endpoint CRUD/sync，也不得复制为 Physical Worker 内嵌配置。
 - 如需删除不符合新设计的未提交文件，必须先确认其功能已被新实现覆盖，并在 progress 中记录。
 
 ### 执行步骤
@@ -49,11 +49,11 @@
 严格按 Implementation Plan 的 Step 1–7 执行，不停留在分析或只完成部分模块：
 
 1. 冻结契约并审阅现有 dirty 改动。
-2. 拆分 Physical Worker 的 SDK/App Server 配置、加密、readiness 和诊断。
+2. 收口 SDK 配置与 App Server Endpoint Profile，保留 token 加密/掩码和同步，移除公开手工 Runtime 写入口。
 3. 增加 App Server Worker Backend 与独立 A2A Provider，删除跨 Provider fallback。
 4. 收口 Session、Task、Thread/Turn 与 App Server 内部 instance affinity。
-5. 完成 AI 模型设置、物理 Worker 双页签、Provider 标签和跨 Provider 新会话交互。
-6. 删除旧同 Provider 双 Runtime 活动路由和重复 endpoint 配置源。
+5. 完成 AI 模型设置、物理 Worker SDK/Endpoint 双页签、Provider 标签和跨 Provider 新会话交互。
+6. 删除旧同 Provider 双 Runtime 活动路由和公开手工 Runtime endpoint/token 写源；保留 Endpoint CRUD/sync 单一写源。
 7. 完成全链路测试、体验验证、质量审计、验收和文档回写。
 
 允许在同一个 addon 内注册两个 Provider，并抽取公共 Codex 组件；不要为了“独立 Provider”复制整套 Task/SSE/投影代码，也不要无必要创建新的 Maven addon。
@@ -64,7 +64,7 @@
 - Java 相关模块全部测试通过。
 - 两个 Worker 的 test/typecheck/build 全部通过。
 - 前端单测和 `bash scripts/build-frontend.sh` 通过。
-- Playwright 覆盖：AI 模型后端拆分、物理 Worker 双 Codex 页签、跨 Provider 创建新会话、桌面和 320px。
+- Playwright 覆盖：AI 模型后端拆分、物理 Worker SDK/Endpoint 页签、跨 Provider 创建新会话、桌面和 320px。
 - 真实 SDK Worker 与 App Server Worker 各完成至少一条 Worker -> Java -> SSE -> PC 链路。
 - 验证任一 Provider 不可用时绝不 fallback 到另一 Provider。
 - 测试失败必须修复并重跑；外部环境确实不可用时只能标记 blocked/not-run，不得声称完成。

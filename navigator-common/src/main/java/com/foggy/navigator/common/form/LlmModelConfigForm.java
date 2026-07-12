@@ -63,6 +63,9 @@ public class LlmModelConfigForm {
      */
     private String workerBackend;
 
+    /** Physical Worker selected for a backend-specific connection test only. */
+    private String workerId;
+
     /**
      * 环境变量（K-V 对），使用该模型启动 Claude Code 时注入到 CLI 子进程
      */

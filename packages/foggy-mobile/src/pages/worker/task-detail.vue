@@ -23,6 +23,7 @@
     <view v-if="taskStream.task.value" class="task-status-bar">
       <StatusBadge :status="taskStream.task.value.status" :show-label="true" />
       <InteractionBadge v-if="interactionState" :state="interactionState" />
+      <ProviderBadge :provider-type="taskProviderType" />
       <text v-if="taskStream.task.value.model" class="status-model">{{ taskStream.task.value.model }}</text>
       <text v-if="modelConfigLabel" class="status-config">{{ modelConfigLabel }}</text>
       <text v-if="taskStream.task.value.costUsd != null" class="status-cost">
@@ -63,6 +64,15 @@
 
     <!-- 底部操作 -->
     <view class="task-bottom">
+      <view v-if="canResume && platformModels.length > 0" class="continuation-options">
+        <view class="continuation-option" @tap="showModelConfigPicker">
+          <text class="continuation-option-label">{{ selectedModelConfigLabel || '选择执行后端' }}</text>
+        </view>
+        <view class="continuation-option" @tap="showResumeModelPicker">
+          <text class="continuation-option-label">{{ selectedModelLabel || '默认模型' }}</text>
+        </view>
+      </view>
+
       <!-- 运行中: 中止按钮 -->
       <view v-if="isRunning" class="abort-bar">
         <button class="abort-btn" :loading="aborting" @tap="handleAbort">
@@ -91,7 +101,6 @@
             @add-file="chooseFiles"
             @remove-attachment="removeAttachment"
             @send="handleResume"
-            @sent="onSent"
           />
         </view>
       </view>
@@ -110,10 +119,16 @@
           @add-file="chooseFiles"
           @remove-attachment="removeAttachment"
           @send="handleResume"
-          @sent="onSent"
         />
       </view>
     </view>
+    <CodexModelPicker
+      :visible="codexModelPickerVisible"
+      :model-value="selectedModel"
+      :options="modelOptions"
+      @close="codexModelPickerVisible = false"
+      @select="selectResumeModel"
+    />
   </view>
 </template>
 
@@ -126,6 +141,7 @@ import { useSessionModelCache } from '@/composables/useSessionModelCache'
 import { listConversationConfigs, updateConversationTitle } from '@/api/conversationConfig'
 import { useAttachments, toImagesJson } from '@/composables/useAttachments'
 import {
+  createTaskUnified,
   getTaskUnified,
   cancelTaskUnified,
   resumeTaskUnified,
@@ -134,13 +150,28 @@ import {
   resyncTaskUnified,
 } from '@/api/unifiedTask'
 import { listModelConfigs } from '@/api/platform'
-import type { ConversationConfig, LlmModelConfig } from '@/api/types'
+import type { ConversationConfig, DispatchTask, LlmModelConfig } from '@/api/types'
 import StatusBadge from '@/components/StatusBadge.vue'
 import InteractionBadge from '@/components/InteractionBadge.vue'
+import ProviderBadge from '@/components/ProviderBadge.vue'
 import MessageList from '@/components/MessageList.vue'
 import ChatInput from '@/components/ChatInput.vue'
+import CodexModelPicker from '@/components/CodexModelPicker.vue'
 import { formatDuration } from '@/utils/time'
-import { canResumeTask } from '@/utils/taskContinuation'
+import { canResumeTask, executeTaskContinuation } from '@/utils/taskContinuation'
+import {
+  isMobileSelectablePlatformModel,
+  normalizeMobileCodexModel,
+  resolveMobileModelOptions,
+} from '@/utils/llmModelOptions'
+import {
+  inferTaskProviderType,
+  isCodexBackend,
+  providerTypeFromWorkerBackend,
+  providerTypeShortLabel,
+  requiresNewSessionForProvider,
+  workerBackendFromProviderType,
+} from '@/utils/workerBackend'
 
 const taskId = ref('')
 const sessionId = ref('')
@@ -148,12 +179,15 @@ const aborting = ref(false)
 const resumeInput = ref('')
 const conversationConfig = ref<ConversationConfig | null>(null)
 const platformModels = ref<LlmModelConfig[]>([])
+const selectedModelConfigId = ref('')
+const selectedModel = ref('')
+const codexModelPickerVisible = ref(false)
 const editingTitle = ref(false)
 const titleDraft = ref('')
 const savingTitle = ref(false)
 
 // Model cache
-const { initFromTask, getSessionModel } = useSessionModelCache()
+const { initFromTask, setSessionModel, getSessionModel } = useSessionModelCache()
 const { attachments, chooseAlbumImages, takePhoto, chooseFiles, removeAttachment, clearAttachments } = useAttachments()
 
 // Draft & history
@@ -201,6 +235,41 @@ const modelConfigLabel = computed(() => {
   return cfg ? cfg.name : ''
 })
 
+const taskModelConfig = computed(() => {
+  const configId = taskStream.task.value?.modelConfigId
+  return platformModels.value.find(model => model.id === configId)
+})
+
+const taskProviderType = computed(() => {
+  return inferTaskProviderType(taskStream.task.value, taskModelConfig.value?.workerBackend)
+})
+
+const selectedModelConfig = computed(() => {
+  return platformModels.value.find(model => model.id === selectedModelConfigId.value)
+})
+
+const selectedProviderType = computed(() => {
+  return providerTypeFromWorkerBackend(selectedModelConfig.value?.workerBackend)
+    || getSessionModel(sessionId.value)?.providerType
+    || taskProviderType.value
+})
+
+const selectedModelConfigLabel = computed(() => {
+  const config = selectedModelConfig.value
+  if (!config) return ''
+  const providerLabel = providerTypeShortLabel(providerTypeFromWorkerBackend(config.workerBackend))
+  return providerLabel ? `${providerLabel} · ${config.name}` : config.name
+})
+
+const modelOptions = computed(() => selectedModelConfig.value
+  ? resolveMobileModelOptions(selectedModelConfig.value)
+  : [])
+
+const selectedModelLabel = computed(() => {
+  if (!selectedModel.value) return ''
+  return modelOptions.value.find(option => option.value === selectedModel.value)?.label || selectedModel.value
+})
+
 const sessionTitle = computed(() => {
   return conversationConfig.value?.customTitle || taskStream.task.value?.prompt || 'Worker 会话'
 })
@@ -219,7 +288,7 @@ onLoad(async (options) => {
       if (!task) return
       taskStream.task.value = task
       sessionId.value = task.sessionId
-      await loadPlatformModelsQuiet(task.workerId)
+      await loadPlatformModelsQuiet(task)
 
       // Init model cache from this task
       initFromTask(task)
@@ -240,12 +309,106 @@ onUnload(() => {
   taskStream.disconnect()
 })
 
-async function loadPlatformModelsQuiet(workerId?: string) {
+async function loadPlatformModelsQuiet(task: DispatchTask) {
   try {
-    platformModels.value = await listModelConfigs(workerId)
+    platformModels.value = (await listModelConfigs(task.workerId)).filter(isMobileSelectablePlatformModel)
+    const sourceProviderType = inferTaskProviderType(task)
+    const sourceBackend = workerBackendFromProviderType(sourceProviderType)
+    const initialConfig = platformModels.value.find(model => model.id === task.modelConfigId)
+      || platformModels.value.find(model => model.workerBackend === sourceBackend)
+    if (initialConfig) {
+      applyModelConfig(initialConfig.id, task.model)
+    } else {
+      selectedModelConfigId.value = task.modelConfigId || ''
+      selectedModel.value = task.model || ''
+    }
   } catch {
     // best-effort
   }
+}
+
+function applyModelConfig(modelConfigId: string, preferredModel?: string) {
+  const config = platformModels.value.find(model => model.id === modelConfigId)
+  if (!config) return
+  const options = resolveMobileModelOptions(config)
+  const normalizedPreferred = isCodexBackend(config.workerBackend)
+    ? normalizeMobileCodexModel(preferredModel)
+    : preferredModel
+  selectedModelConfigId.value = config.id
+  selectedModel.value = normalizedPreferred && options.some(option => option.value === normalizedPreferred)
+    ? normalizedPreferred
+    : options[0]?.value || ''
+  if (sessionId.value) {
+    setSessionModel(
+      sessionId.value,
+      selectedModelConfigId.value,
+      selectedModel.value,
+      providerTypeFromWorkerBackend(config.workerBackend),
+    )
+  }
+}
+
+function showModelConfigPicker() {
+  if (platformModels.value.length === 0) {
+    uni.showToast({ title: '暂无可用模型配置', icon: 'none' })
+    return
+  }
+  const itemList = platformModels.value.map((model) => {
+    const providerLabel = providerTypeShortLabel(providerTypeFromWorkerBackend(model.workerBackend))
+    return providerLabel ? `${providerLabel} · ${model.name}` : model.name
+  })
+  uni.showActionSheet({
+    itemList,
+    success: (res) => {
+      const config = platformModels.value[res.tapIndex]
+      if (config) applyModelConfig(config.id, selectedModel.value)
+    },
+  })
+}
+
+function showResumeModelPicker() {
+  const options = modelOptions.value
+  if (options.length === 0) {
+    uni.showToast({ title: '暂无可用模型', icon: 'none' })
+    return
+  }
+  if (isCodexBackend(selectedModelConfig.value?.workerBackend)) {
+    codexModelPickerVisible.value = true
+    return
+  }
+  uni.showActionSheet({
+    itemList: options.map(option => option.label),
+    success: (res) => {
+      const option = options[res.tapIndex]
+      if (option) selectResumeModel(option.value)
+    },
+  })
+}
+
+function selectResumeModel(model: string) {
+  selectedModel.value = model
+  codexModelPickerVisible.value = false
+  if (sessionId.value) {
+    setSessionModel(
+      sessionId.value,
+      selectedModelConfigId.value,
+      selectedModel.value,
+      selectedProviderType.value,
+    )
+  }
+}
+
+function confirmCreateNewSession(): Promise<boolean> {
+  return new Promise((resolve) => {
+    uni.showModal({
+      title: '创建新会话',
+      content: '当前模型使用不同的执行后端，无法续接原生会话。是否创建新会话？',
+      confirmText: '创建新会话',
+      cancelText: '取消',
+      success: result => resolve(result.confirm),
+      fail: () => resolve(false),
+    })
+  })
 }
 
 async function loadConversationConfig(sid: string) {
@@ -313,27 +476,76 @@ async function handleResume(prompt: string) {
 
   // Get cached model selection for this session
   const cached = getSessionModel(task.sessionId)
+  const modelConfigId = selectedModelConfigId.value || cached?.modelConfigId || task.modelConfigId
+  const model = selectedModel.value || cached?.model || task.model
+  const targetConfig = platformModels.value.find(config => config.id === modelConfigId)
+  const targetProviderType = providerTypeFromWorkerBackend(targetConfig?.workerBackend)
+    || cached?.providerType
+    || taskProviderType.value
+  const shouldCreateNewSession = requiresNewSessionForProvider(
+    taskProviderType.value,
+    targetConfig?.workerBackend || workerBackendFromProviderType(targetProviderType),
+  )
   const imagesJson = toImagesJson(attachments.value)
   const chatImages = attachments.value
     .filter(att => att.isImage && att.previewUrl)
     .map(att => ({ name: att.name, url: att.previewUrl }))
 
   try {
-    const newTask = await resumeTaskUnified({
-      workerId: task.workerId,
-      prompt,
-      directoryId: task.directoryId,
-      sessionId: task.sessionId,
-      model: cached?.model || task.model,
-      modelConfigId: cached?.modelConfigId || task.modelConfigId,
-      images: imagesJson,
+    const continuation = await executeTaskContinuation({
+      requiresNewSession: shouldCreateNewSession,
+      confirmNewSession: confirmCreateNewSession,
+      createNewSession: () => createTaskUnified({
+        workerId: task.workerId,
+        prompt,
+        cwd: task.cwd,
+        directoryId: task.directoryId,
+        model,
+        modelConfigId,
+        providerType: targetProviderType,
+        images: imagesJson,
+      }),
+      resumeSession: () => resumeTaskUnified({
+        workerId: task.workerId,
+        prompt,
+        cwd: task.cwd,
+        directoryId: task.directoryId,
+        sessionId: task.sessionId,
+        model,
+        modelConfigId,
+        providerType: targetProviderType,
+        images: imagesJson,
+      }),
     })
+    if (continuation.mode === 'cancelled') {
+      resumeInput.value = prompt
+      return
+    }
+
+    const newTask = continuation.task
+    if (continuation.mode === 'created') {
+      clearAttachments()
+      onSent(prompt)
+      uni.showToast({ title: '已创建新会话', icon: 'success' })
+      uni.redirectTo({
+        url: `/pages/worker/task-detail?taskId=${newTask.taskId}&sessionId=${newTask.sessionId}`,
+      })
+      return
+    }
+
     taskStream.resumeInPlace(newTask, chatImages)
     taskId.value = newTask.taskId
     sessionId.value = newTask.sessionId
     clearAttachments()
     // Update model cache
     initFromTask(newTask)
+    setSessionModel(
+      newTask.sessionId,
+      newTask.modelConfigId || modelConfigId || '',
+      newTask.model || model || '',
+      newTask.providerType || targetProviderType,
+    )
+    onSent(prompt)
 
     // Sync URL to new taskId (H5 only, via history.replaceState)
     // uni-app H5 uses hash routing: #/pages/worker/task-detail?taskId=xxx&sessionId=xxx
@@ -350,6 +562,8 @@ async function handleResume(prompt: string) {
     // #endif
   } catch (e) {
     console.error('Failed to resume task:', e)
+    resumeInput.value = prompt
+    uni.showToast({ title: '继续任务失败', icon: 'error' })
   }
 }
 
@@ -391,7 +605,7 @@ async function handlePlanRespond(permissionId: string, decision: string, denyMes
       planAction,
     })
     taskStream.chatState.resolvePermission(
-      permissionId, decision === 'allow' ? 'approved' : 'denied', taskId.value,
+      permissionId, decision === 'allow' ? 'approved' : 'denied',
     )
     if (decision === 'allow' && taskStream.task.value) {
       taskStream.task.value.status = 'RUNNING'
@@ -410,7 +624,7 @@ async function handleQuestionRespond(permissionId: string, answers: Record<strin
       decision: 'allow',
       answers,
     })
-    taskStream.chatState.resolvePermission(permissionId, 'approved', taskId.value)
+    taskStream.chatState.resolvePermission(permissionId, 'approved')
     if (taskStream.task.value) {
       taskStream.task.value.status = 'RUNNING'
     }
@@ -429,7 +643,7 @@ async function handlePermissionRespond(permissionId: string, decision: string, s
       scope,
     })
     taskStream.chatState.resolvePermission(
-      permissionId, decision === 'allow' ? 'approved' : 'denied', taskId.value,
+      permissionId, decision === 'allow' ? 'approved' : 'denied',
     )
     if (decision === 'allow' && taskStream.task.value) {
       taskStream.task.value.status = 'RUNNING'
@@ -519,6 +733,7 @@ function onSent(content: string) {
   background-color: #ffffff;
   border-bottom: 2rpx solid #f0f0f0;
   flex-wrap: wrap;
+  gap: 8rpx;
 }
 .status-model {
   font-size: 24rpx;
@@ -552,6 +767,35 @@ function onSent(content: string) {
 }
 .task-bottom {
   flex-shrink: 0;
+}
+.continuation-options {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  padding: 14rpx 24rpx;
+  background: #ffffff;
+  border-top: 2rpx solid #f0f0f0;
+}
+.continuation-option {
+  flex: 1 1 260rpx;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 8rpx 16rpx;
+  background: #f5f7fa;
+  border: 1rpx solid #e4e7ed;
+  border-radius: 8rpx;
+}
+.continuation-option-label {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 22rpx;
+  color: #606266;
 }
 .abort-bar {
   padding: 20rpx 24rpx;

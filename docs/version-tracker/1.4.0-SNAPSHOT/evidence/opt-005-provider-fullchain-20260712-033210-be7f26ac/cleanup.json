@@ -1,0 +1,64 @@
+{
+  "ok": true,
+  "mysqlContainer": "opt005-chain-728aaf1136cd",
+  "ownedPorts": {
+    "java": 64769,
+    "vite": 64770,
+    "sdk": 64771,
+    "app": 64772,
+    "mysql": 64787
+  },
+  "ownedPids": {
+    "java": 28356,
+    "viteParent": 35212,
+    "viteListener": 10912,
+    "sdk": 54956,
+    "app": 24016
+  },
+  "before": {
+    "listeners": {
+      "java": [
+        28356
+      ],
+      "vite": [],
+      "sdk": [
+        54956
+      ],
+      "app": [
+        24016
+      ],
+      "mysql": [
+        42856
+      ]
+    },
+    "processes": {
+      "java": true,
+      "viteParent": false,
+      "viteListener": false,
+      "sdk": true,
+      "app": true
+    },
+    "containerPresent": true,
+    "runRootPresent": true,
+    "privateStatePresent": true
+  },
+  "after": {
+    "listeners": {
+      "java": [],
+      "vite": [],
+      "sdk": [],
+      "app": [],
+      "mysql": []
+    },
+    "processes": {
+      "java": false,
+      "viteParent": false,
+      "viteListener": false,
+      "sdk": false,
+      "app": false
+    },
+    "containerPresent": false,
+    "runRootPresent": false,
+    "privateStatePresent": false
+  }
+}

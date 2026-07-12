@@ -52,13 +52,18 @@ export async function getModelConfig(id: string): Promise<LlmModelConfig> {
   return rx.data
 }
 
-export async function testLlmConnection(form: Pick<LlmModelConfigForm, 'baseUrl' | 'apiKey' | 'modelName'>): Promise<string> {
+export async function testLlmConnection(
+  form: Pick<LlmModelConfigForm, 'baseUrl' | 'apiKey' | 'modelName' | 'workerBackend'>
+    & { workerId?: string },
+): Promise<string> {
   const rx = (await client.post(`${BASE}/llm/test-connection`, form)) as unknown as RX<string>
   return rx.data
 }
 
-export async function testSavedLlmConnection(id: string): Promise<string> {
-  const rx = (await client.post(`${BASE}/llm/${id}/test-connection`)) as unknown as RX<string>
+export async function testSavedLlmConnection(id: string, workerId?: string): Promise<string> {
+  const rx = (await client.post(`${BASE}/llm/${id}/test-connection`, undefined, {
+    params: workerId ? { workerId } : undefined,
+  })) as unknown as RX<string>
   return rx.data
 }
 

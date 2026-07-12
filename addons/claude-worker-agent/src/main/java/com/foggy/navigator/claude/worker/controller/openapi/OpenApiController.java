@@ -86,6 +86,8 @@ import java.util.Optional;
 public class OpenApiController {
 
     private static final String BACKEND_OPENAI_CODEX = ProviderRouteRegistry.BACKEND_OPENAI_CODEX;
+    private static final String BACKEND_OPENAI_CODEX_APP_SERVER =
+            ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER;
     private static final String BACKEND_LANGGRAPH_BIZ = ProviderRouteRegistry.BACKEND_LANGGRAPH_BIZ;
     private static final String SOURCE_BIZ_WORKER_IDENTITY = "BIZ_WORKER_IDENTITY";
     private static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
@@ -674,7 +676,9 @@ public class OpenApiController {
         String workspaceWorkerSource = workspaceResource != null ? stringValue(workspaceResource.source()) : null;
         String agentWorkerId = agentResource != null ? stringValue(agentResource.physicalWorkerId()) : null;
         String agentWorkerSource = agentResource != null ? stringValue(agentResource.physicalWorkerSource()) : null;
-        if (isBackend(workerBackend, BACKEND_OPENAI_CODEX) && StringUtils.hasText(workspaceWorkerId)) {
+        if ((isBackend(workerBackend, BACKEND_OPENAI_CODEX)
+                || isBackend(workerBackend, BACKEND_OPENAI_CODEX_APP_SERVER))
+                && StringUtils.hasText(workspaceWorkerId)) {
             return new OwnerAwareLaunchWorker(workspaceWorkerId, workspaceWorkerSource);
         }
         if (isBackend(workerBackend, BACKEND_LANGGRAPH_BIZ)) {
@@ -2545,7 +2549,9 @@ public class OpenApiController {
         String providerWorkerBackend = ProviderRouteRegistry.workerBackendForRouteTokenOrNull(providerType);
         String normalizedWorkerBackend = ProviderRouteRegistry.canonicalWorkerBackendOrNull(workerBackend);
         if (BACKEND_OPENAI_CODEX.equals(providerWorkerBackend)
-                || BACKEND_OPENAI_CODEX.equals(normalizedWorkerBackend)) {
+                || BACKEND_OPENAI_CODEX.equals(normalizedWorkerBackend)
+                || BACKEND_OPENAI_CODEX_APP_SERVER.equals(providerWorkerBackend)
+                || BACKEND_OPENAI_CODEX_APP_SERVER.equals(normalizedWorkerBackend)) {
             return "RUNTIME";
         }
         return "DISPATCH";

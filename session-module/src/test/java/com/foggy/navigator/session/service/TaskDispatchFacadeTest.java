@@ -15,6 +15,7 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
+import com.foggy.navigator.session.exception.SessionProviderBoundMismatchException;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
@@ -158,6 +159,63 @@ class TaskDispatchFacadeTest {
 
         assertTrue(error.getMessage().contains("SESSION_ACCESS_DENIED"));
         verifyNoInteractions(agentResolver, bindingService, taskQueryProvider);
+    }
+
+    @Test
+    void createTask_sdkSessionRejectsDirectAppServerRouteBeforeProviderInvocation() {
+        TaskQueryProvider sdkProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider appServerProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(sdkProvider, appServerProvider));
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-sdk-1")
+                .providerType("codex-app-server-worker")
+                .prompt("switch")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .build();
+        SessionEntity session = new SessionEntity();
+        session.setId("session-sdk-1");
+        session.setUserId("user-1");
+        session.setProviderType("codex-worker");
+
+        when(sessionRepository.findById("session-sdk-1")).thenReturn(Optional.of(session));
+        when(sdkProvider.getProviderType()).thenReturn("codex-worker");
+        when(appServerProvider.getProviderType()).thenReturn("codex-app-server-worker");
+
+        assertThrows(SessionProviderBoundMismatchException.class,
+                () -> facade.createTask(request, context));
+        verify(sdkProvider, never()).createTaskDirect(any(), any(), any());
+        verify(appServerProvider, never()).createTaskDirect(any(), any(), any());
+        verifyNoInteractions(agentResolver, bindingService);
+    }
+
+    @Test
+    void createTask_appServerSessionRejectsDirectSdkRouteBeforeProviderInvocation() {
+        TaskQueryProvider sdkProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider appServerProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(sdkProvider, appServerProvider));
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-app-1")
+                .providerType("codex-worker")
+                .prompt("switch")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .build();
+        SessionEntity session = new SessionEntity();
+        session.setId("session-app-1");
+        session.setUserId("user-1");
+        session.setProviderType("codex-app-server-worker");
+
+        when(sessionRepository.findById("session-app-1")).thenReturn(Optional.of(session));
+        when(sdkProvider.getProviderType()).thenReturn("codex-worker");
+
+        assertThrows(SessionProviderBoundMismatchException.class,
+                () -> facade.createTask(request, context));
+        verify(sdkProvider, never()).createTaskDirect(any(), any(), any());
+        verify(appServerProvider, never()).createTaskDirect(any(), any(), any());
+        verifyNoInteractions(agentResolver, bindingService);
     }
 
     @Test
@@ -1052,7 +1110,7 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
-    void resumeTask_prefersSessionBoundGeminiProviderTypeOverLegacyModelConfigLookup() {
+    void resumeTask_rejectsModelConfigThatConflictsWithSessionBoundProvider() {
         TaskQueryProvider geminiProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
         facade = createFacade(List.of(geminiProvider, codexProvider));
@@ -1080,34 +1138,24 @@ class TaskDispatchFacadeTest {
         codexConfig.setWorkerBackend("OPENAI_CODEX");
         when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(codexConfig));
 
-        DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
-                .taskId("task-gemini-bound")
-                .providerType("gemini-worker")
-                .sessionId("session-gemini-legacy")
-                .geminiSessionId("gemini-session-bound")
-                .build();
+        SessionProviderBoundMismatchException error = assertThrows(
+                SessionProviderBoundMismatchException.class,
+                () -> facade.resumeTask(request, context));
 
-        when(geminiProvider.getProviderType()).thenReturn("gemini-worker");
-        when(geminiProvider.resumeTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(resumedTask);
-
-        DispatchTaskDTO result = facade.resumeTask(request, context);
-
-        assertEquals("task-gemini-bound", result.getTaskId());
-        assertEquals("gemini-worker", result.getProviderType());
-        verify(geminiProvider).resumeTask(eq("user-1"), eq("tenant-1"),
-                argThat(params -> "session-gemini-legacy".equals(params.get("sessionId"))
-                        && !params.containsKey("modelConfigId")));
+        assertEquals("gemini-worker", error.getBoundProviderType());
+        assertEquals("codex-worker", error.getRequestedProviderType());
+        verify(geminiProvider, never()).resumeTask(anyString(), anyString(), any());
         verify(codexProvider, never()).resumeTask(anyString(), anyString(), any());
         verifyNoInteractions(agentResolver);
     }
 
     @Test
-    void resumeTask_silentlyClearsModelConfigThatConflictsWithSessionBoundProvider() {
+    void resumeTask_sdkSessionRejectsAppServerModelConfig() {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .workerId("worker-1")
                 .sessionId("session-codex-1")
                 .prompt("continue")
-                .modelConfigId("cfg-claude")
+                .modelConfigId("cfg-app-server")
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")
@@ -1122,20 +1170,48 @@ class TaskDispatchFacadeTest {
         session.setProviderType("codex-worker");
 
         LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
-        modelConfig.setWorkerBackend("CLAUDE_CODE");
+        modelConfig.setWorkerBackend("OPENAI_CODEX_APP_SERVER");
 
         when(sessionRepository.findById("session-codex-1")).thenReturn(Optional.of(session));
-        when(llmModelManager.getModelConfig("cfg-claude")).thenReturn(Optional.of(modelConfig));
+        when(llmModelManager.getModelConfig("cfg-app-server")).thenReturn(Optional.of(modelConfig));
+        SessionProviderBoundMismatchException error = assertThrows(
+                SessionProviderBoundMismatchException.class,
+                () -> facade.resumeTask(request, context));
 
-        DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
-                .taskId("task-codex-resumed").providerType("codex-worker").build();
-        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
-        when(taskQueryProvider.resumeTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(resumedTask);
+        assertEquals("codex-worker", error.getBoundProviderType());
+        assertEquals("codex-app-server-worker", error.getRequestedProviderType());
+        verify(taskQueryProvider, never()).resumeTask(anyString(), anyString(), any());
+    }
 
-        // normalizeResumeRequest 静默清除冲突的 modelConfigId，不再抛异常
-        DispatchTaskDTO result = facade.resumeTask(request, context);
-        assertEquals("task-codex-resumed", result.getTaskId());
-        verify(taskQueryProvider).resumeTask(eq("user-1"), eq("tenant-1"), any());
+    @Test
+    void resumeTask_appServerSessionRejectsSdkModelConfig() {
+        TaskQueryProvider appServerProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(appServerProvider));
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-app-server-1")
+                .prompt("continue")
+                .modelConfigId("cfg-sdk")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .sessionId("session-app-server-1")
+                .build();
+        SessionEntity session = new SessionEntity();
+        session.setId("session-app-server-1");
+        session.setProviderType("codex-app-server-worker");
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("OPENAI_CODEX");
+
+        when(sessionRepository.findById("session-app-server-1")).thenReturn(Optional.of(session));
+        when(llmModelManager.getModelConfig("cfg-sdk")).thenReturn(Optional.of(modelConfig));
+        SessionProviderBoundMismatchException error = assertThrows(
+                SessionProviderBoundMismatchException.class,
+                () -> facade.resumeTask(request, context));
+
+        assertEquals("codex-app-server-worker", error.getBoundProviderType());
+        assertEquals("codex-worker", error.getRequestedProviderType());
+        verify(appServerProvider, never()).resumeTask(anyString(), anyString(), any());
     }
 
     @Test
@@ -1162,9 +1238,59 @@ class TaskDispatchFacadeTest {
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
                 () -> facade.resumeTask(request, context));
-        assertTrue(error.getMessage().contains("CONTEXT_WORKER_MISMATCH"));
+        assertTrue(error.getMessage().contains("SESSION_PROVIDER_MISMATCH"));
         verify(taskQueryProvider, never()).resumeTask(anyString(), anyString(), any());
         verifyNoInteractions(agentResolver, llmModelManager);
+    }
+
+    @Test
+    void resumeTask_sdkSessionRejectsExplicitAppServerProvider() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-sdk-1")
+                .prompt("continue")
+                .providerType("codex-app-server-worker")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-sdk-1")
+                .build();
+        SessionEntity session = new SessionEntity();
+        session.setId("session-sdk-1");
+        session.setProviderType("codex-worker");
+        when(sessionRepository.findById("session-sdk-1")).thenReturn(Optional.of(session));
+
+        SessionProviderBoundMismatchException error = assertThrows(
+                SessionProviderBoundMismatchException.class,
+                () -> facade.resumeTask(request, context));
+
+        assertEquals("codex-worker", error.getBoundProviderType());
+        assertEquals("codex-app-server-worker", error.getRequestedProviderType());
+        verify(taskQueryProvider, never()).resumeTask(anyString(), anyString(), any());
+    }
+
+    @Test
+    void resumeTask_appServerSessionRejectsExplicitSdkProvider() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-app-1")
+                .prompt("continue")
+                .providerType("codex-worker")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .sessionId("session-app-1")
+                .build();
+        SessionEntity session = new SessionEntity();
+        session.setId("session-app-1");
+        session.setProviderType("codex-app-server-worker");
+        when(sessionRepository.findById("session-app-1")).thenReturn(Optional.of(session));
+
+        SessionProviderBoundMismatchException error = assertThrows(
+                SessionProviderBoundMismatchException.class,
+                () -> facade.resumeTask(request, context));
+
+        assertEquals("codex-app-server-worker", error.getBoundProviderType());
+        assertEquals("codex-worker", error.getRequestedProviderType());
+        verify(taskQueryProvider, never()).resumeTask(anyString(), anyString(), any());
     }
 
     @Test
@@ -1597,6 +1723,31 @@ class TaskDispatchFacadeTest {
         verify(taskQueryProvider).cancelTaskDirect("task-codex-logical-agent", "user-1");
         verify(agentResolver, never()).resolveAgent(eq("agent-codex-prod-1"), any());
         verify(agent, never()).cancelTask(anyString());
+    }
+
+    @Test
+    void cancelTask_mappedAppServerProviderMissing_doesNotFallbackToSdkProvider() {
+        TaskQueryProvider sdkProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(sdkProvider));
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        SessionTaskEntity task = sessionTask(
+                "task-app-server", "session-app-server", "codex-app-server-worker", "worker-1", "dir-1",
+                "RUNNING", LocalDateTime.of(2026, 7, 12, 10, 0), "{}");
+
+        when(sessionTaskRepository.findByTaskIdAndUserId("task-app-server", "user-1"))
+                .thenReturn(Optional.of(task));
+        when(sdkProvider.getProviderType()).thenReturn("codex-worker");
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .build();
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> facade.cancelTask("task-app-server", null, context));
+
+        assertEquals("Provider not found: codex-app-server-worker", error.getMessage());
+        verify(sdkProvider, never()).cancelTaskDirect(anyString(), anyString());
+        verifyNoInteractions(agentResolver);
     }
 
     @Test

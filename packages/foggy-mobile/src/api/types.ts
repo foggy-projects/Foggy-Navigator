@@ -21,6 +21,7 @@ export interface Session {
   id: string
   userId: string
   agentId: string
+  providerType?: string
   status: 'ACTIVE' | 'CLOSED'
   taskName?: string
   createdAt: string
@@ -46,7 +47,12 @@ export interface GuideCard {
 
 // ===== Worker 后端类型 =====
 
-export type WorkerBackend = 'CLAUDE_CODE' | 'OPENAI_CODEX'
+export type WorkerBackend =
+  | 'CLAUDE_CODE'
+  | 'OPENAI_CODEX'
+  | 'OPENAI_CODEX_APP_SERVER'
+  | 'GEMINI_CLI'
+  | 'LANGGRAPH_BIZ'
 
 // ===== Claude Worker 类型 =====
 
@@ -59,6 +65,7 @@ export interface ClaudeWorker {
   status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN'
   hostname?: string
   workerVersion?: string
+  workerBackend?: WorkerBackend
   lastHeartbeat?: string
   createdAt: string
 }
@@ -72,9 +79,10 @@ export interface DispatchTask {
   prompt: string
   cwd?: string
   directoryId?: string
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED' | 'AWAITING_PERMISSION'
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED' | 'AWAITING_PERMISSION' | 'AWAITING_INPUT'
   claudeSessionId?: string
   codexThreadId?: string
+  geminiSessionId?: string
   providerType?: string
   agentId?: string
   userId?: string
@@ -236,6 +244,7 @@ export interface SessionSearchResult {
   milestoneId?: string
   latestTaskId: string
   latestStatus: string
+  providerType?: string
   model?: string
   /** 平台 LLM 模型配置 ID */
   modelConfigId?: string

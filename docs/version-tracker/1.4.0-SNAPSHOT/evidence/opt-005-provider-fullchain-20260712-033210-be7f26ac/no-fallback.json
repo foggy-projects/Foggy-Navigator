@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "appUnavailable": {
+    "runtimePolicy": "DARK",
+    "runtimeEnabled": false,
+    "createHttpStatus": 400,
+    "createCode": 600,
+    "taskPersisted": false,
+    "taskId": null,
+    "providerType": null,
+    "terminalStatus": null,
+    "sdkSessionsBefore": 1,
+    "sdkSessionsAfter": 1
+  },
+  "sdkUnavailable": {
+    "taskId": "20260712-21c2",
+    "providerType": "codex-worker",
+    "terminalStatus": "FAILED",
+    "appRuntimeBindingAbsent": true,
+    "appWorkerStatusHttp": 404
+  },
+  "restored": {
+    "appRuntimePolicy": "ULTRA_DEFAULT",
+    "appRuntimeEnabled": true,
+    "sdkBaseUrl": "http://127.0.0.1:64771"
+  }
+}

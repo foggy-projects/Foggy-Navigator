@@ -25,6 +25,7 @@ import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
@@ -68,6 +69,7 @@ import java.util.stream.Collectors;
 public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider, TaskListingProvider {
 
     public static final String CODEX_PROVIDER_TYPE = "codex-worker";
+    public static final String CODEX_APP_SERVER_PROVIDER_TYPE = "codex-app-server-worker";
     public static final String CODEX_BIZ_PROVIDER_TYPE = "codex-biz-worker";
     private static final String AGENT_ID = CODEX_PROVIDER_TYPE;
     private static final String USER_INPUT_STATE_KEY = "codexPendingInteraction";
@@ -92,6 +94,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             TaskQueryCapability.CREATE_TASK_DIRECT,
             TaskQueryCapability.RESUME_TASK,
             TaskQueryCapability.RESPOND_TO_TASK,
+            TaskQueryCapability.RECONNECT_TASK,
             TaskQueryCapability.CANCEL_TASK,
             TaskQueryCapability.DELETE_TASK,
             TaskQueryCapability.RESYNC_TASK,
@@ -154,6 +157,15 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Override
     @Transactional
     public DispatchTaskDTO resumeTask(String userId, String tenantId, java.util.Map<String, Object> params) {
+        return resumeTaskForProvider(CODEX_PROVIDER_TYPE, userId, tenantId, params);
+    }
+
+    @Transactional
+    public DispatchTaskDTO resumeTaskForProvider(String expectedProviderType,
+                                                  String userId,
+                                                  String tenantId,
+                                                  java.util.Map<String, Object> params) {
+        String effectiveProviderType = requireProviderParams(expectedProviderType, params);
         CreateCodexTaskForm form = new CreateCodexTaskForm();
         form.setWorkerId((String) params.get("workerId"));
         form.setPrompt((String) params.get("prompt"));
@@ -164,9 +176,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         form.setContextId((String) params.get("contextId"));
         form.setImages((String) params.get("images"));
         form.setAttachments(attachmentsParam(params.get("attachments")));
-        form.setProviderType(firstNonBlank(
-                stringParam(params, "providerType"),
-                stringParam(params, "provider_type")));
+        form.setProviderType(effectiveProviderType);
         if (isCodexBizProvider(form.getProviderType())) {
             applyCodexBizParams(form, params);
         }
@@ -208,12 +218,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             return getTaskByIdForProvider(task.getTaskId(), form.getProviderType()).orElseThrow();
         }
 
-        if (!taskRepository.existsByCodexThreadIdAndWorkerIdAndUserId(
-                form.getCodexThreadId(), form.getWorkerId(), userId)) {
+        if (!taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
+                form.getCodexThreadId(), form.getWorkerId(), userId, effectiveProviderType)) {
             throw new IllegalArgumentException("Codex 会话不存在或不属于该 Worker: " + form.getCodexThreadId());
         }
-        if (taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
-                form.getCodexThreadId(), form.getWorkerId(), userId,
+        if (taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
+                form.getCodexThreadId(), form.getWorkerId(), userId, effectiveProviderType,
                 List.of("RUNNING", "AWAITING_INPUT"))) {
             throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
         }
@@ -230,11 +240,12 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         if (form.getPrompt() == null || form.getPrompt().isBlank()) {
             throw new IllegalArgumentException("prompt is required");
         }
-        if (existingSessionId != null && !existingSessionId.isBlank()) {
-            validateExistingSession(userId, existingSessionId);
-        }
         String effectiveProviderType = normalizeProviderType(form.getProviderType());
         form.setProviderType(effectiveProviderType);
+        if (existingSessionId != null && !existingSessionId.isBlank()) {
+            validateExistingSession(userId, existingSessionId);
+            validateExistingSessionProvider(existingSessionId, effectiveProviderType);
+        }
         normalizeAndValidateCodexBizHomeKey(form, effectiveProviderType);
 
         // 验证 Worker 存在且当前 user/tenant 可访问（通过 WorkerManagementFacade SPI）
@@ -256,8 +267,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         String effectiveModelConfigId = resolveEffectiveModelConfigId(form.getModelConfigId(), effectiveAgentId);
         LlmModelConfigDTO effectiveModelConfig = validateAndResolveModelConfig(
                 effectiveModelConfigId, form.getWorkerId());
+        validateModelConfigProvider(effectiveModelConfigId, effectiveModelConfig, effectiveProviderType);
         ModelResolution effectiveModelResolution = resolveEffectiveModel(
                 form.getModel(), effectiveAgentId, effectiveModelConfig);
+        validateProviderModel(effectiveProviderType, effectiveModelResolution.model());
         validateEffectiveModelGrant(
                 effectiveModelResolution.model(), effectiveModelConfigId, effectiveModelConfig);
         String modelConfigSource = resolveModelConfigSource(form.getModelConfigId(), effectiveAgentId);
@@ -370,8 +383,10 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     public String createTrackedSyncTask(String userId, String workerId, String sessionId,
                                          String prompt, String cwd, String directoryId,
                                          String codexThreadId, String model) {
+        validateProviderModel(CODEX_PROVIDER_TYPE, model);
         if (sessionId != null && !sessionId.isBlank()) {
             validateExistingSession(userId, sessionId);
+            validateExistingSessionProvider(sessionId, CODEX_PROVIDER_TYPE);
         }
         String taskId = IdGenerator.shortId();
         // Codex CLI (Rust) 不接受 Windows 反斜杠路径
@@ -383,6 +398,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         entity.setDirectoryId(directoryId);
         entity.setWorkerId(workerId);
         entity.setUserId(userId);
+        entity.setProviderType(CODEX_PROVIDER_TYPE);
         entity.setPrompt(prompt);
         entity.setCwd(normalizedCwd);
         entity.setStatus("RUNNING");
@@ -394,7 +410,8 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             binding = resolveRuntimeBinding(
                     workerId, model, CODEX_PROVIDER_TYPE, taskId, sessionId);
         } else if (codexThreadId != null && !codexThreadId.isBlank()) {
-            binding = resolveThreadRuntimeBinding(codexThreadId, workerId, userId);
+            binding = resolveThreadRuntimeBinding(
+                    codexThreadId, workerId, userId, CODEX_PROVIDER_TYPE);
         } else {
             binding = resolveRuntimeBinding(workerId, model, CODEX_PROVIDER_TYPE, taskId, null);
         }
@@ -470,6 +487,13 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return toDTO(entity);
     }
 
+    public CodexTaskDTO getTaskForProvider(String userId, String taskId, String providerType) {
+        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        requireTaskProvider(entity, providerType);
+        return toDTO(entity);
+    }
+
     /**
      * 获取任务 Entity（内部使用）
      */
@@ -485,6 +509,11 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return toDTOs(taskRepository.findByUserIdOrderByCreatedAtDesc(userId));
     }
 
+    public List<CodexTaskDTO> listTasksForProvider(String userId, String providerType) {
+        return toDTOs(filterTasksByProvider(
+                taskRepository.findByUserIdOrderByCreatedAtDesc(userId), providerType));
+    }
+
     /**
      * 列出 Worker 下的任务
      */
@@ -492,10 +521,21 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return toDTOs(taskRepository.findByWorkerIdAndUserId(workerId, userId));
     }
 
+    public List<CodexTaskDTO> listTasksByWorkerForProvider(
+            String userId, String workerId, String providerType) {
+        return toDTOs(filterTasksByProvider(
+                taskRepository.findByWorkerIdAndUserId(workerId, userId), providerType));
+    }
+
     @Override
     public void cancelTaskDirect(String taskId, String userId) {
+        cancelTaskDirectForProvider(CODEX_PROVIDER_TYPE, taskId, userId);
+    }
+
+    public void cancelTaskDirectForProvider(String providerType, String taskId, String userId) {
         CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        requireTaskProvider(entity, providerType);
         if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())
                 || "AWAITING_INPUT".equals(entity.getStatus())) {
             abortTask(taskId);
@@ -510,8 +550,13 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     @Override
     public void reconnectTask(String taskId, String userId) {
+        reconnectTaskForProvider(CODEX_PROVIDER_TYPE, taskId, userId);
+    }
+
+    public void reconnectTaskForProvider(String providerType, String taskId, String userId) {
         CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        requireTaskProvider(entity, providerType);
         if (!"RUNNING".equals(entity.getStatus()) && !"AWAITING_INPUT".equals(entity.getStatus())) {
             return;
         }
@@ -524,6 +569,13 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     public boolean hasRunningTask(String codexThreadId, String workerId, String userId) {
         return taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
                 codexThreadId, workerId, userId, List.of("RUNNING", "AWAITING_INPUT"));
+    }
+
+    public boolean hasRunningTaskForProvider(String codexThreadId, String workerId,
+                                             String userId, String providerType) {
+        return taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
+                codexThreadId, workerId, userId, normalizeProviderType(providerType),
+                List.of("RUNNING", "AWAITING_INPUT"));
     }
 
     /** Registers the sanitized app-server requestUserInput projection before it is acknowledged. */
@@ -583,12 +635,19 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Override
     @Transactional
     public void respondToTask(String taskId, String userId, Map<String, Object> response) {
+        respondToTaskForProvider(CODEX_PROVIDER_TYPE, taskId, userId, response);
+    }
+
+    @Transactional
+    public void respondToTaskForProvider(String providerType, String taskId, String userId,
+                                         Map<String, Object> response) {
         requireUserInputPersistence();
         if (response == null) {
             throw new IllegalArgumentException("response is required");
         }
         CodexTaskEntity entity = taskRepository.findByTaskIdAndUserIdForUpdate(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        requireTaskProvider(entity, providerType);
         if (!"AWAITING_INPUT".equals(entity.getStatus())) {
             throw interactionError("CODEX_USER_INPUT_NOT_PENDING");
         }
@@ -968,6 +1027,15 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Transactional
     public DispatchTaskDTO createTaskDirect(java.util.Map<String, Object> params,
                                              String userId, String tenantId) {
+        return createTaskDirectForProvider(CODEX_PROVIDER_TYPE, params, userId, tenantId);
+    }
+
+    @Transactional
+    public DispatchTaskDTO createTaskDirectForProvider(String expectedProviderType,
+                                                        java.util.Map<String, Object> params,
+                                                        String userId,
+                                                        String tenantId) {
+        String effectiveProviderType = requireProviderParams(expectedProviderType, params);
         CreateCodexTaskForm form = new CreateCodexTaskForm();
         form.setAgentId((String) params.get("agentId"));
         form.setWorkerId((String) params.get("workerId"));
@@ -981,9 +1049,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         form.setImages((String) params.get("images"));
         form.setAttachments(attachmentsParam(params.get("attachments")));
         form.setCodexThreadId((String) params.get("codexThreadId"));
-        form.setProviderType(firstNonBlank(
-                stringParam(params, "providerType"),
-                stringParam(params, "provider_type")));
+        form.setProviderType(effectiveProviderType);
         if (isCodexBizProvider(form.getProviderType())) {
             applyCodexBizParams(form, params);
         }
@@ -1161,9 +1227,16 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     @Override
+    @Transactional
     public void deleteTask(String userId, String taskId) {
+        deleteTaskForProvider(CODEX_PROVIDER_TYPE, userId, taskId);
+    }
+
+    @Transactional
+    public void deleteTaskForProvider(String providerType, String userId, String taskId) {
         CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        requireTaskProvider(entity, providerType);
 
         if (CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())) {
             entity = taskRuntimeStateService.claimTerminalDeletion(taskId, userId);
@@ -1211,8 +1284,14 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Override
     @Transactional
     public Object resyncTask(String taskId, String userId) {
+        return resyncTaskForProvider(CODEX_PROVIDER_TYPE, taskId, userId);
+    }
+
+    @Transactional
+    public Object resyncTaskForProvider(String providerType, String taskId, String userId) {
         CodexTaskEntity entity = taskRepository.findByTaskIdAndUserIdForUpdate(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        requireTaskProvider(entity, providerType);
         if (!"FAILED".equals(entity.getStatus())) {
             throw new IllegalStateException("Only FAILED tasks can be resynced, current: " + entity.getStatus());
         }
@@ -1441,6 +1520,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         session.setUserId(firstNonBlank(session.getUserId(), entity.getUserId()));
         session.setTenantId(firstNonBlank(session.getTenantId(), entity.getTenantId()));
         session.setAgentId(firstNonBlank(session.getAgentId(), agentId));
+        validateSessionProviderAffinity(session, providerType);
         session.setProviderType(providerType);
         session.setStatus(firstNonBlank(session.getStatus(), "ACTIVE"));
         session.setCurrentWorkerId(firstNonBlank(entity.getWorkerId(), session.getCurrentWorkerId()));
@@ -1498,7 +1578,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         putIfNotNull(state, ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH, entity.getRoutingEpoch());
         putIfNotBlank(state, ProviderStateCodec.FIELD_RUNTIME_ACCEPTANCE_STATE,
                 entity.getRuntimeAcceptanceState());
-        return ProviderStateCodec.mergeTaskValues(existingJson, AGENT_ID, state);
+        return ProviderStateCodec.mergeTaskValues(existingJson, resolveProviderType(entity), state);
     }
 
     private String resolveTaskContextId(CodexTaskEntity entity) {
@@ -1535,24 +1615,36 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     private CodexRuntimeBinding resolveRuntimeBinding(String workerId, String model, String providerType,
                                                        String routingKey, String existingSessionId,
                                                        Set<String> requiredFeatures) {
+        boolean appServerProvider = isCodexAppServerProvider(providerType);
         if (existingSessionId != null && !existingSessionId.isBlank()) {
             CodexRuntimeBinding sessionBinding = resolveExistingSessionBinding(existingSessionId, workerId);
             if (sessionBinding != null) {
+                validateProviderRuntimeBinding(providerType, sessionBinding);
+                if (appServerProvider) {
+                    runtimeRegistryService.validateBoundRuntimeCapabilities(
+                            sessionBinding, model, requiredFeatures);
+                }
                 return sessionBinding;
             }
-            // Legacy sessions predate explicit affinity. Backfill them to the SDK lane
-            // instead of moving a resumable thread when rollout policy changes.
+            if (appServerProvider) {
+                throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_MISSING",
+                        "App-server session has no immutable runtime affinity");
+            }
+            return CodexRuntimeBinding.legacySdk(workerId);
+        }
+        if (!appServerProvider) {
             return CodexRuntimeBinding.legacySdk(workerId);
         }
         if (runtimeRegistryService == null) {
-            if (isUltraModel(model)) {
-                throw new CodexRuntimeUnavailableException("CODEX_ULTRA_RUNTIME_UNAVAILABLE",
-                        "Runtime registry is unavailable for a new Ultra session");
-            }
-            return CodexRuntimeBinding.legacySdk(workerId);
+            String code = isUltraModel(model)
+                    ? "CODEX_ULTRA_RUNTIME_UNAVAILABLE" : "CODEX_RUNTIME_UNAVAILABLE";
+            throw new CodexRuntimeUnavailableException(code,
+                    "Runtime registry is unavailable for the app-server provider");
         }
-        return runtimeRegistryService.selectForNewTask(
+        CodexRuntimeBinding binding = runtimeRegistryService.selectForNewTask(
                 workerId, model, providerType, routingKey, requiredFeatures);
+        validateProviderRuntimeBinding(providerType, binding);
+        return binding;
     }
 
     private Set<String> runtimeRequirements(CreateCodexTaskForm form, String providerType) {
@@ -1602,10 +1694,11 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return null;
     }
 
-    private CodexRuntimeBinding resolveThreadRuntimeBinding(String codexThreadId, String workerId, String userId) {
+    private CodexRuntimeBinding resolveThreadRuntimeBinding(String codexThreadId, String workerId,
+                                                             String userId, String providerType) {
         CodexRuntimeBinding existing = taskRepository
-                .findFirstByCodexThreadIdAndWorkerIdAndUserIdOrderByCreatedAtDesc(
-                        codexThreadId, workerId, userId)
+                .findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeOrderByCreatedAtDesc(
+                        codexThreadId, workerId, userId, providerType)
                 .map(task -> bindingFromTask(task, workerId))
                 .orElse(null);
         // Threads created before affinity columns were introduced belong to the
@@ -1685,6 +1778,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
     private void applyRuntimeBinding(CodexTaskEntity entity, CodexRuntimeBinding binding) {
         validateBoundWorker(binding, entity.getWorkerId());
+        validateProviderRuntimeBinding(entity.getProviderType(), binding);
         entity.setRuntimeId(binding.getRuntimeId());
         entity.setRuntimeRevision(binding.getRuntimeRevision());
         entity.setRuntimeType(binding.getRuntimeType().name());
@@ -2099,11 +2193,104 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     private String normalizeProviderType(String providerType) {
-        return CODEX_BIZ_PROVIDER_TYPE.equals(providerType) ? CODEX_BIZ_PROVIDER_TYPE : CODEX_PROVIDER_TYPE;
+        String normalized = firstNonBlank(providerType, CODEX_PROVIDER_TYPE);
+        if (CODEX_PROVIDER_TYPE.equals(normalized)
+                || CODEX_APP_SERVER_PROVIDER_TYPE.equals(normalized)
+                || CODEX_BIZ_PROVIDER_TYPE.equals(normalized)) {
+            return normalized;
+        }
+        throw new IllegalArgumentException("Unsupported Codex providerType: " + normalized);
+    }
+
+    private String requireProviderParams(String expectedProviderType, Map<String, Object> params) {
+        if (params == null) {
+            throw new IllegalArgumentException("Codex task params are required");
+        }
+        String expected = normalizeProviderType(expectedProviderType);
+        for (String key : List.of("providerType", "provider_type")) {
+            String requested = stringParam(params, key);
+            if (requested != null && !expected.equals(normalizeProviderType(requested))) {
+                throw new IllegalArgumentException("CODEX_TASK_PROVIDER_MISMATCH: provider route "
+                        + expected + " cannot be overridden by " + requested);
+            }
+        }
+        return expected;
+    }
+
+    private void requireTaskProvider(CodexTaskEntity entity, String expectedProviderType) {
+        String expected = normalizeProviderType(expectedProviderType);
+        if (entity == null || !expected.equals(resolveProviderType(entity))) {
+            throw new IllegalArgumentException("Task not found: "
+                    + (entity != null ? entity.getTaskId() : null));
+        }
     }
 
     private boolean isCodexBizProvider(String providerType) {
         return CODEX_BIZ_PROVIDER_TYPE.equals(providerType);
+    }
+
+    private boolean isCodexAppServerProvider(String providerType) {
+        return CODEX_APP_SERVER_PROVIDER_TYPE.equals(providerType);
+    }
+
+    private void validateModelConfigProvider(@Nullable String modelConfigId,
+                                             @Nullable LlmModelConfigDTO modelConfig,
+                                             String executionProviderType) {
+        if (modelConfig == null) {
+            return;
+        }
+        String backend = firstNonBlank(modelConfig.getWorkerBackend());
+        if (backend == null) {
+            if (isCodexAppServerProvider(executionProviderType)) {
+                throw new IllegalArgumentException("MODEL_CONFIG_PROVIDER_MISMATCH: model config '"
+                        + modelConfigId + "' has no app-server workerBackend");
+            }
+            return;
+        }
+        String modelProviderType = ProviderRouteRegistry.providerTypeForWorkerBackend(backend)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Unsupported workerBackend for model config '" + modelConfigId + "': " + backend));
+        if (!ProviderRouteRegistry.isModelProviderCompatible(modelProviderType, executionProviderType)) {
+            throw new IllegalArgumentException("MODEL_CONFIG_PROVIDER_MISMATCH: model config '"
+                    + modelConfigId + "' routes to " + modelProviderType
+                    + " but task routes to " + executionProviderType);
+        }
+    }
+
+    private void validateProviderModel(String providerType, @Nullable String model) {
+        if (!isCodexAppServerProvider(providerType) && isUltraModel(model)) {
+            throw new IllegalArgumentException(
+                    "CODEX_ULTRA_APP_SERVER_REQUIRED: Ultra requires codex-app-server-worker");
+        }
+    }
+
+    private void validateProviderRuntimeBinding(String providerType, CodexRuntimeBinding binding) {
+        if (binding == null) {
+            throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_MISSING",
+                    "Codex runtime binding is missing");
+        }
+        boolean appBinding = binding.getRuntimeType() == CodexRuntimeType.APP_SERVER;
+        if (isCodexAppServerProvider(providerType) != appBinding) {
+            throw new CodexRuntimeUnavailableException("CODEX_PROVIDER_RUNTIME_MISMATCH",
+                    "Provider " + providerType + " cannot execute on runtime " + binding.getRuntimeType());
+        }
+    }
+
+    private void validateExistingSessionProvider(String sessionId, String requestedProviderType) {
+        if (sessionEntityRepository == null || sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        sessionEntityRepository.findById(sessionId).ifPresent(session ->
+                validateSessionProviderAffinity(session, requestedProviderType));
+    }
+
+    private void validateSessionProviderAffinity(SessionEntity session, String requestedProviderType) {
+        String existingProviderType = firstNonBlank(session.getProviderType());
+        if (existingProviderType != null && !existingProviderType.equals(requestedProviderType)) {
+            throw new IllegalArgumentException("SESSION_PROVIDER_MISMATCH: session " + session.getId()
+                    + " is bound to " + existingProviderType
+                    + " and cannot continue with " + requestedProviderType);
+        }
     }
 
     private void normalizeAndValidateCodexBizHomeKey(CreateCodexTaskForm form, String providerType) {
@@ -2344,11 +2531,18 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Override
     @Transactional
     public Object rewindTask(String taskId, String userId, Map<String, Object> params) {
+        return rewindTaskForProvider(CODEX_PROVIDER_TYPE, taskId, userId, params);
+    }
+
+    @Transactional
+    public Object rewindTaskForProvider(String providerType, String taskId, String userId,
+                                        Map<String, Object> params) {
         CodexTaskEntity task = taskRepository.findByTaskId(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
         if (!userId.equals(task.getUserId())) {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
+        requireTaskProvider(task, providerType);
         if ("RUNNING".equals(task.getStatus()) || "AWAITING_PERMISSION".equals(task.getStatus())
                 || "AWAITING_INPUT".equals(task.getStatus())) {
             throw new IllegalStateException("Cannot rewind a running task");

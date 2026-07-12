@@ -50,7 +50,7 @@ Frontend / OpenAPI / SDK
 | 术语 | 含义 |
 | --- | --- |
 | `logicalAgentId` / `agentId` | 平台侧可发现、可绑定的逻辑 Agent。 |
-| `providerType` | 执行后端类型，例如 `claude-worker`、`codex-worker`、`codex-biz-worker`、`gemini-worker`、`langgraph-biz-worker`、`echo-agent`。 |
+| `providerType` | 执行后端类型，例如 `claude-worker`、`codex-worker`、`codex-app-server-worker`、`codex-biz-worker`、`gemini-worker`、`langgraph-biz-worker`、`echo-agent`。 |
 | `modelConfigId` | 平台 LLM 模型配置，通常决定模型、凭证、baseUrl 和 worker backend 兼容性。 |
 | `workerBackend` | 模型配置中的物理执行后端标识，例如 `CLAUDE_CODE`、`OPENAI_CODEX`、`GEMINI_CLI`、`LANGGRAPH_BIZ`。 |
 | `A2aAgentProvider` | 某类 Agent 来源的 Spring Bean，负责列出和解析 Agent。 |
@@ -168,7 +168,8 @@ Stage 2.2~2.5 后：
 - 规范化 `workerBackend` 输入，兼容大小写、短横线和下划线形式
 - 将 `providerType`、短别名和诊断字段中的 route token 反向映射到 canonical `workerBackend`
 - 维护 modelConfig 目标 Provider 与实际执行 Provider 的兼容规则
-- 支持 `OPENAI_CODEX` 模型配置走 `codex-worker` 或 `codex-biz-worker`
+- `OPENAI_CODEX` 固定映射 `codex-worker`；`OPENAI_CODEX_APP_SERVER` 固定映射 `codex-app-server-worker`
+- `codex-biz-worker` 仍可复用 `OPENAI_CODEX` modelConfig，但不会隐式切入 App Server
 - 被 `TaskDispatchFacade`、`UnifiedAgentResolver`、`JpaSessionManager`、配置服务、业务接入、OpenAPI 诊断链路和 Claude / Codex / Gemini / LangGraph Provider adapter 复用
 
 该组件只负责静态路由语义，不判断当前运行期是否存在可用的 `TaskQueryProvider`。运行期可用性由 `TaskQueryProviderRegistry` 和 `TaskQueryCapability` 声明辅助判断，最终仍以 Provider Bean 是否存在及具体调用结果为准。
@@ -179,6 +180,7 @@ Stage 2.2~2.5 后：
 | --- | --- | --- | --- |
 | Claude Worker | `claude-worker` | `addons/claude-worker-agent` | Claude Worker、目录、文件、跨项目、OpenAPI 任务主通道。 |
 | Codex Worker | `codex-worker` | `addons/codex-worker-agent` | Codex CLI Worker 任务通道，复用工作目录治理。 |
+| Codex App Server Worker | `codex-app-server-worker` | `addons/codex-worker-agent` | Codex app-server 独立任务通道；Session/Task 只能续接 App Server Thread/Turn。 |
 | Codex Biz Route | `codex-biz-worker` | `addons/codex-worker-agent` | OpenAPI / 业务侧 Codex 直连路由，无独立可发现 Agent；可复用 `OPENAI_CODEX` modelConfig。 |
 | Gemini Worker | `gemini-worker` | `addons/gemini-worker-agent` | Gemini CLI Worker 任务通道。 |
 | LangGraph Biz Worker | `langgraph-biz-worker` | `addons/langgraph-biz-worker` | 业务 Agent / Skill / Function 执行通道。 |
@@ -227,6 +229,7 @@ TaskDispatchFacade
 ## 9. 与会话和事件的关系
 
 - `SessionEntity` 是统一会话投影，记录用户、租户、agentId、providerType、当前 worker / directory、latestTaskId 和 provider 私有状态。
+- Session 首个任务绑定真实 providerType；SDK 与 App Server 之间切换必须创建新 Session，不携带原生 Thread ID，也不存在 Provider fallback。
 - `SessionTaskEntity` 是统一任务流水，记录 taskId、providerType、providerTaskId、workerId、directoryId、status、modelConfigId 和 task 私有状态。
 - `SessionMessageEntity` 存储可回放消息历史。
 - `SessionEventListener` 监听 `AgentMessage`，负责消息落库和 SSE 推送。

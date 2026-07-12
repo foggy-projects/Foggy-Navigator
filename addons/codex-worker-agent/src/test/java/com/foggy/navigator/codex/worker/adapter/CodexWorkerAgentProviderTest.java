@@ -145,6 +145,17 @@ class CodexWorkerAgentProviderTest {
     }
 
     @Test
+    void configuredAgentFailsClosedWhenDefaultModelConfigCannotBeResolved() {
+        CodingAgentEntity stale = codexAgent("agent-stale", "user-1", "stale-codex");
+        stale.setDefaultModelConfigId("cfg-missing");
+        when(agentRepository.findByUserIdOrderByCreatedAtDesc("user-1"))
+                .thenReturn(List.of(stale));
+        when(llmModelManager.getModelConfig("cfg-missing")).thenReturn(Optional.empty());
+
+        assertTrue(provider.listAgentCards("user-1").isEmpty());
+    }
+
+    @Test
     void getProviderType_returnsCodexWorker() {
         assertEquals("codex-worker", provider.getProviderType());
     }

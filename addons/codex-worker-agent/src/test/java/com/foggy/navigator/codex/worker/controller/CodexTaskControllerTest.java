@@ -3,13 +3,9 @@ package com.foggy.navigator.codex.worker.controller;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
-import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
-import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
-import com.foggy.navigator.codex.worker.service.CodexStreamRelay;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
-import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.model.CodexConfig;
@@ -43,16 +39,10 @@ class CodexTaskControllerTest {
     private CodexTaskService taskService;
 
     @Mock
-    private CodexStreamRelay streamRelay;
-
-    @Mock
     private WorkerManagementFacade workerManagementFacade;
 
     @Mock
     private CodexWorkerClientFactory clientFactory;
-
-    @Mock
-    private CodexRuntimeRegistryService runtimeRegistryService;
 
     @Mock
     private CodexWorkerClient client;
@@ -66,7 +56,7 @@ class CodexTaskControllerTest {
                 .tenantId("tenant-1")
                 .build());
         controller = new CodexTaskController(
-                taskService, streamRelay, workerManagementFacade, clientFactory, runtimeRegistryService);
+                taskService, workerManagementFacade, clientFactory);
     }
 
     @AfterEach
@@ -75,22 +65,22 @@ class CodexTaskControllerTest {
     }
 
     @Test
-    void createTaskPreservesExplicitCodexBizProviderTypeOnLegacyEndpoint() {
+    void legacyEndpointForcesSdkProviderType() {
         CreateCodexTaskForm form = new CreateCodexTaskForm();
         form.setProviderType("codex-biz-worker");
         form.setWorkerId("worker-1");
         form.setPrompt("run actor task");
         form.setCodexHomeKey("tenant/world-sim/scenario-1/actor-1");
         when(taskService.createTask(eq("user-1"), eq("tenant-1"), argThat(request ->
-                "codex-biz-worker".equals(request.getProviderType())
+                "codex-worker".equals(request.getProviderType())
                         && "tenant/world-sim/scenario-1/actor-1".equals(request.getCodexHomeKey()))))
-                .thenReturn(CodexTaskDTO.builder().taskId("task-biz-1").build());
+                .thenReturn(CodexTaskDTO.builder().taskId("task-sdk-1").build());
 
         RX<CodexTaskDTO> result = controller.createTask(form);
 
-        assertEquals("task-biz-1", result.getData().getTaskId());
+        assertEquals("task-sdk-1", result.getData().getTaskId());
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), argThat(request ->
-                "codex-biz-worker".equals(request.getProviderType())
+                "codex-worker".equals(request.getProviderType())
                         && "tenant/world-sim/scenario-1/actor-1".equals(request.getCodexHomeKey())));
     }
 
@@ -103,9 +93,6 @@ class CodexTaskControllerTest {
         workerResult.put("total", 1);
 
         when(taskService.getTaskEntity("task-1")).thenReturn(task);
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "legacy-sdk:worker-1", 1, "worker-1", null))
-                .thenReturn(CodexRuntimeBinding.legacySdk("worker-1"));
         when(workerManagementFacade.getCodexConfig("worker-1")).thenReturn(CodexConfig.builder()
                 .baseUrl("http://localhost:3051")
                 .authToken("worker-token")
@@ -140,34 +127,43 @@ class CodexTaskControllerTest {
     }
 
     @Test
-    void getSessionFileHintsUsesBoundAppServerRevision() {
+    void getSessionFileHintsRejectsAppServerProvider() {
         CodexTaskEntity task = task("user-1");
         task.setRuntimeId("app-main");
         task.setRuntimeType("APP_SERVER");
         task.setRuntimeInstanceId("instance-a");
+        task.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         when(taskService.getTaskEntity("task-1")).thenReturn(task);
-        CodexRuntimeBinding binding = CodexRuntimeBinding.builder()
-                .runtimeId("app-main")
-                .runtimeRevision(1)
-                .runtimeType(CodexRuntimeType.APP_SERVER)
-                .workerId("worker-1")
-                .endpointUrl("http://127.0.0.1:3062")
-                .authToken("runtime-token")
-                .instanceId("instance-a")
-                .build();
-        when(runtimeRegistryService.resolveBoundRuntime(
-                "app-main", 1, "worker-1", "instance-a")).thenReturn(binding);
-        when(clientFactory.getOrCreate(
-                "runtime:app-main:1", "http://127.0.0.1:3062", "runtime-token", "instance-a"))
-                .thenReturn(client);
-        when(client.getSessionFileHints("thread-1", 30, null, null))
-                .thenReturn(Mono.just(Map.of("files", List.of(), "total", 0)));
 
-        controller.getSessionFileHints("task-1", 30, null, null);
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> controller.getSessionFileHints("task-1", 30, null, null));
 
-        verify(clientFactory).getOrCreate(
-                "runtime:app-main:1", "http://127.0.0.1:3062", "runtime-token", "instance-a");
-        verify(workerManagementFacade, never()).getCodexConfig("worker-1");
+        assertEquals("Task not found: task-1", error.getMessage());
+        verifyNoInteractions(workerManagementFacade, clientFactory, client);
+    }
+
+    @Test
+    void legacyCommandsRejectAppServerTasksBeforeMutation() {
+        when(taskService.getTaskForProvider(
+                "user-1", "task-app", CodexTaskService.CODEX_PROVIDER_TYPE))
+                .thenThrow(new IllegalArgumentException("Task not found: task-app"));
+
+        assertThrows(IllegalArgumentException.class, () -> controller.abortTask("task-app"));
+        assertThrows(IllegalArgumentException.class, () -> controller.reconnectTask("task-app"));
+
+        verify(taskService, never()).cancelTaskDirect("task-app", "user-1");
+        verify(taskService, never()).reconnectTask("task-app", "user-1");
+    }
+
+    @Test
+    void legacyListUsesSdkProviderScope() {
+        when(taskService.listTasksForProvider("user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
+                .thenReturn(List.of());
+
+        controller.listTasks(null);
+
+        verify(taskService).listTasksForProvider("user-1", CodexTaskService.CODEX_PROVIDER_TYPE);
+        verify(taskService, never()).listTasks("user-1");
     }
 
     private CodexTaskEntity task(String userId) {
@@ -183,6 +179,7 @@ class CodexTaskControllerTest {
         task.setRuntimeId("legacy-sdk:worker-1");
         task.setRuntimeRevision(1);
         task.setRuntimeType("SDK_EXEC");
+        task.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
         task.setStatus("COMPLETED");
         return task;
     }

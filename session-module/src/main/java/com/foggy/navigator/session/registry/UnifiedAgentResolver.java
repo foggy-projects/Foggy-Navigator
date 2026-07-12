@@ -53,9 +53,14 @@ public class UnifiedAgentResolver {
      * 按上下文解析 Agent 实例
      */
     public Optional<A2aAgent> resolveAgent(String agentId, AgentResolveContext context) {
-        Optional<A2aAgentProvider> preferredProvider = resolvePreferredProvider(context);
-        if (preferredProvider.isPresent()) {
-            return preferredProvider.get().resolveAgent(agentId, context);
+        String modelConfigId = context.getModelConfigId();
+        if (modelConfigId != null && !modelConfigId.isBlank()) {
+            String mappedProviderType = resolveProviderTypeFromModelConfig(modelConfigId);
+            if (mappedProviderType == null) {
+                return Optional.empty();
+            }
+            return findProviderByType(mappedProviderType)
+                    .flatMap(provider -> provider.resolveAgent(agentId, context));
         }
         return providers.stream()
                 .map(p -> p.resolveAgent(agentId, context))
@@ -68,11 +73,15 @@ public class UnifiedAgentResolver {
      * 获取能解析指定 agentId 的 Provider 类型
      */
     public Optional<String> getProviderType(String agentId, AgentResolveContext context) {
-        Optional<A2aAgentProvider> preferredProvider = resolvePreferredProvider(context);
-        if (preferredProvider.isPresent()) {
-            return preferredProvider.get().resolveAgent(agentId, context).isPresent()
-                    ? Optional.of(preferredProvider.get().getProviderType())
-                    : Optional.empty();
+        String modelConfigId = context.getModelConfigId();
+        if (modelConfigId != null && !modelConfigId.isBlank()) {
+            String mappedProviderType = resolveProviderTypeFromModelConfig(modelConfigId);
+            if (mappedProviderType == null) {
+                return Optional.empty();
+            }
+            return findProviderByType(mappedProviderType)
+                    .filter(provider -> provider.resolveAgent(agentId, context).isPresent())
+                    .map(A2aAgentProvider::getProviderType);
         }
         return providers.stream()
                 .filter(p -> p.resolveAgent(agentId, context).isPresent())
@@ -80,11 +89,7 @@ public class UnifiedAgentResolver {
                 .findFirst();
     }
 
-    private Optional<A2aAgentProvider> resolvePreferredProvider(AgentResolveContext context) {
-        String providerType = resolveProviderTypeFromModelConfig(context.getModelConfigId());
-        if (providerType == null) {
-            return Optional.empty();
-        }
+    private Optional<A2aAgentProvider> findProviderByType(String providerType) {
         return providers.stream()
                 .filter(p -> providerType.equals(p.getProviderType()))
                 .findFirst();

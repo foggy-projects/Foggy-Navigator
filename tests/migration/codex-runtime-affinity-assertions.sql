@@ -24,8 +24,9 @@ CALL assert_true(
        FROM sessions
       WHERE id IN ('sql-null', 'blank', 'invalid', 'json-null',
                    'string-scalar', 'number-scalar', 'array-value')
-        AND JSON_LENGTH(provider_state_json) = 4
-        AND JSON_UNQUOTE(JSON_EXTRACT(provider_state_json, '$.codexRuntimeType')) = 'SDK_EXEC'),
+        AND JSON_LENGTH(provider_state_json) = 5
+        AND JSON_UNQUOTE(JSON_EXTRACT(provider_state_json, '$.codexRuntimeType')) = 'SDK_EXEC'
+        AND JSON_UNQUOTE(JSON_EXTRACT(provider_state_json, '$.providerType')) = provider_type),
     'non-object provider states must be replaced, not reused'
 );
 
@@ -132,6 +133,73 @@ CALL assert_true(
         AND table_name = 'codex_runtime_revisions'
         AND column_name = 'archived_at'),
     'codex_runtime_revisions.archived_at must be a nullable DATETIME'
+);
+
+CALL assert_true(
+    (SELECT COUNT(*) = 16
+       FROM codex_tasks
+      WHERE provider_type = 'codex-worker'),
+    'legacy SDK affinities must receive the SDK provider route'
+);
+
+CALL assert_true(
+    (SELECT COUNT(*) = 8
+       FROM codex_tasks
+      WHERE provider_type = 'codex-biz-worker'
+        AND runtime_type = 'SDK_EXEC'),
+    'legacy SDK Biz tasks must retain the Biz provider route'
+);
+
+CALL assert_true(
+    (SELECT COUNT(*) = 1
+       FROM codex_tasks
+      WHERE task_id = 'pre-split-app-task'
+        AND runtime_type = 'APP_SERVER'
+        AND provider_type = 'codex-app-server-worker'),
+    'existing App Server affinities must receive the App Server provider route'
+);
+
+CALL assert_true(
+    (SELECT COUNT(*) = 1
+       FROM session_tasks
+      WHERE task_id = 'pre-split-app-task'
+        AND provider_type = 'codex-app-server-worker'),
+    'App Server unified task projection must use the App Server provider route'
+);
+
+CALL assert_true(
+    (SELECT provider_type = 'codex-app-server-worker'
+            AND JSON_UNQUOTE(JSON_EXTRACT(provider_state_json, '$.providerType'))
+                = 'codex-app-server-worker'
+       FROM sessions
+      WHERE id = 'app-existing'),
+    'App Server session projection and provider state must use the App Server provider route'
+);
+
+CALL assert_true(
+    (SELECT COUNT(*) = 2
+       FROM information_schema.statistics
+      WHERE table_schema = DATABASE()
+        AND table_name = 'codex_tasks'
+        AND index_name = 'idx_cxt_provider_status'),
+    'provider/status task index must exist'
+);
+
+CALL assert_true(
+    (SELECT COUNT(*) = 1
+       FROM information_schema.tables
+      WHERE table_schema = DATABASE()
+        AND table_name = 'codex_app_server_endpoints'),
+    'codex_app_server_endpoints table must exist'
+);
+
+CALL assert_true(
+    (SELECT COUNT(*) = 1
+       FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'codex_runtime_revisions'
+        AND column_name = 'runtime_source'),
+    'runtime revisions must record their Endpoint sync source'
 );
 
 SELECT VERSION() AS mysql_version,

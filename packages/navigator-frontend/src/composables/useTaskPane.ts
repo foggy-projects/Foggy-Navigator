@@ -24,6 +24,7 @@ const PAGE_SIZE = 800
 const NATIVE_SUBTASK_SNAPSHOT_RETRY_BASE_DELAY = 1000
 const NATIVE_SUBTASK_SNAPSHOT_RETRY_MAX_DELAY = 30000
 const NATIVE_SUBTASK_UNSUPPORTED_STATUSES = new Set([404, 405, 501])
+const CODEX_APP_SERVER_PROVIDER = 'codex-app-server-worker'
 
 export interface TaskPaneState {
   paneId: string
@@ -97,21 +98,25 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     chatState.setConnectionStatus(isConnected ? 'connected' : 'connecting')
   }, { immediate: true })
 
-  const stopTaskWatcher = watch(() => task.value?.taskId, (taskId) => {
-    if (!taskId) {
-      resetNativeSnapshotRecovery()
-      nativeSubtaskState.value = createNativeSubtaskState()
-      nativeSubtasksLoading.value = false
-      return
-    }
-    if (nativeSubtaskState.value.taskId === taskId) return
-    resetNativeSnapshotRecovery()
-    nativeSubtaskState.value = createNativeSubtaskState(taskId)
-    nativeSubtasksLoading.value = false
-    if (currentSessionId && unsubscribeSse) {
-      void loadNativeSubtaskSnapshot(taskId, connectVersion)
-    }
-  })
+  const stopTaskWatcher = watch(
+    () => [task.value?.taskId, task.value?.providerType] as const,
+    ([taskId, providerType]) => {
+      if (!taskId || providerType !== CODEX_APP_SERVER_PROVIDER) {
+        resetNativeSnapshotRecovery()
+        nativeSubtaskState.value = createNativeSubtaskState(taskId ?? null)
+        nativeSubtasksLoading.value = false
+        return
+      }
+      if (nativeSubtaskState.value.taskId !== taskId) {
+        resetNativeSnapshotRecovery()
+        nativeSubtaskState.value = createNativeSubtaskState(taskId)
+        nativeSubtasksLoading.value = false
+      }
+      if (currentSessionId && unsubscribeSse) {
+        void loadNativeSubtaskSnapshot(taskId, connectVersion)
+      }
+    },
+  )
 
   // User-level SSE fallback: listen for task_status_change, with task_completion as a terminal-state fallback.
   let taskUpdateHandler: ((event: Event) => void) | null = null
@@ -226,7 +231,11 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   function handleSseEvent(raw: AgentMessage) {
     if (raw.type === NATIVE_SUBTASK_UPDATE_TYPE) {
       const update = parseNativeSubtaskUpdate(raw.payload)
-      if (update && update.taskId === task.value?.taskId) {
+      if (
+        task.value?.providerType === CODEX_APP_SERVER_PROVIDER
+        && update
+        && update.taskId === task.value.taskId
+      ) {
         if (nativeSubtaskState.value.taskId !== update.taskId) {
           nativeSubtaskState.value = createNativeSubtaskState(update.taskId)
         }
@@ -262,7 +271,9 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
     if (raw.type === 'CONFIRMATION_REQUEST') {
       const hasQuestions = Array.isArray(payload.questions) && payload.questions.length > 0
-      task.value.status = inferTaskWorkerBackend(task.value) === 'OPENAI_CODEX' && hasQuestions
+      const backend = inferTaskWorkerBackend(task.value)
+      const isCodexTask = backend === 'OPENAI_CODEX' || backend === 'OPENAI_CODEX_APP_SERVER'
+      task.value.status = isCodexTask && hasQuestions
         ? 'AWAITING_INPUT'
         : 'AWAITING_PERMISSION'
     } else if (raw.type === 'TEXT_COMPLETE' || raw.type === 'SESSION_END') {
@@ -326,7 +337,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     return !disposed
       && connectVersion === version
       && task.value?.taskId === taskId
-      && inferTaskWorkerBackend(task.value) === 'OPENAI_CODEX'
+      && task.value.providerType === CODEX_APP_SERVER_PROVIDER
   }
 
   function nativeSnapshotHttpStatus(error: unknown): number | null {

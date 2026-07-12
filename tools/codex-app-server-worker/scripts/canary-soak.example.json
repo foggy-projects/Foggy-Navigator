@@ -9,7 +9,7 @@
     "routingEpoch": 1,
     "workerId": "replace-with-physical-worker-id",
     "model": "codex-ultra",
-    "providerType": "codex-worker",
+    "providerType": "codex-app-server-worker",
     "cohortMarkerEnv": "CODEX_CANARY_COHORT_MARKER"
   },
   "workers": [

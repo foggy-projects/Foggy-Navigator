@@ -153,7 +153,7 @@ test('configuration rejects embedded credentials and unsafe production evidence 
   const wrongProvider = productionRawConfig('state.json')
   wrongProvider.navigator = {
     ...(wrongProvider.navigator as Record<string, unknown>),
-    providerType: 'codex-biz-worker',
+    providerType: 'codex-worker',
   }
   assert.throws(
     () => resolveCanarySoakConfig(wrongProvider),
@@ -184,6 +184,30 @@ test('configuration rejects embedded credentials and unsafe production evidence 
     (error: unknown) => error instanceof CanarySoakError
       && error.code === 'CANARY_CONFIG_PRODUCTION_INSECURE_TRANSPORT',
   )
+})
+
+test('production canary accepts Sol and Terra Ultra cohorts but rejects Luna Ultra', () => {
+  for (const model of [
+    'codex-ultra',
+    'codex-latest:ultra',
+    'codex-terra:ultra',
+    'gpt-5.6-sol:ultra',
+    'gpt-5.6-terra:ultra',
+  ]) {
+    const raw = productionRawConfig('state.json')
+    raw.navigator = { ...(raw.navigator as Record<string, unknown>), model }
+    assert.equal(resolveCanarySoakConfig(raw).model, model)
+  }
+
+  for (const model of ['codex-luna:ultra', 'gpt-5.6-luna:ultra']) {
+    const raw = productionRawConfig('state.json')
+    raw.navigator = { ...(raw.navigator as Record<string, unknown>), model }
+    assert.throws(
+      () => resolveCanarySoakConfig(raw),
+      (error: unknown) => error instanceof CanarySoakError
+        && error.code === 'CANARY_CONFIG_PRODUCTION_MODEL_NOT_ULTRA',
+    )
+  }
 })
 
 test('atomic checkpoint contains only sanitized digests and leaves no temporary file', async () => {
@@ -328,7 +352,7 @@ test('production sampling counts only the exact healthy Ultra cohort and classif
     { ...exact, taskId: 'wrong-worker', workerId: 'other-worker' },
     { ...exact, taskId: 'wrong-model', model: 'codex-max' },
     { ...exact, taskId: 'canonical-model-is-not-ultra', model: 'gpt-5.6-sol' },
-    { ...exact, taskId: 'wrong-provider', providerType: 'codex-biz-worker' },
+    { ...exact, taskId: 'wrong-provider', providerType: 'codex-worker' },
     { ...exact, taskId: 'wrong-runtime-type', runtimeType: 'SDK_EXEC' },
     { ...exact, taskId: 'missing-marker', prompt: 'ordinary prompt' },
     { ...exact, taskId: 'unhealthy-instance', runtimeInstanceId: 'other-instance' },
@@ -623,7 +647,7 @@ function productionRawConfig(stateFile: string): Record<string, unknown> {
       runtimeRevision: 7,
       routingEpoch: 11,
       model: 'codex-ultra',
-      providerType: 'codex-worker',
+      providerType: 'codex-app-server-worker',
       cohortMarkerEnv: 'CODEX_CANARY_COHORT_MARKER',
     },
   }
@@ -642,7 +666,7 @@ function productionTask(taskId: string, now: Date, cohortMarker: string): Record
     runtimeInstanceId: 'production-instance',
     workerId: 'worker-canary',
     model: 'codex-ultra',
-    providerType: 'codex-worker',
+    providerType: 'codex-app-server-worker',
     prompt: `verify cohort ${cohortMarker}`,
     errorMessage: '',
     resultText: '',

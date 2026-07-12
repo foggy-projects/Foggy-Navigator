@@ -29,18 +29,30 @@ function config(overrides: Partial<LlmModelConfig> = {}): LlmModelConfig {
 describe('mobile llm model options', () => {
   it('keeps subscription Codex configs selectable without an API key', () => {
     expect(isMobileSelectablePlatformModel(config())).toBe(true)
+    expect(isMobileSelectablePlatformModel(config({
+      workerBackend: 'OPENAI_CODEX_APP_SERVER',
+    }))).toBe(true)
   })
 
-  it('mirrors the three Codex groups and omits Luna Ultra', () => {
-    const codex = MOBILE_MODEL_OPTIONS.filter(option => option.backend === 'OPENAI_CODEX')
-    expect(groupMobileModelOptions(codex).map(group => group.label)).toEqual([
+  it('keeps SDK and App Server catalogs independent with Ultra App-only', () => {
+    const sdk = MOBILE_MODEL_OPTIONS.filter(option => option.backend === 'OPENAI_CODEX')
+    const appServer = MOBILE_MODEL_OPTIONS.filter(option => option.backend === 'OPENAI_CODEX_APP_SERVER')
+    expect(groupMobileModelOptions(sdk).map(group => group.label)).toEqual([
       'Codex Sol',
       'Codex Terra',
       'Codex Luna',
     ])
-    expect(codex).toHaveLength(17)
-    expect(codex.some(option => option.value === 'codex-terra:ultra')).toBe(true)
-    expect(codex.some(option => option.value === 'codex-luna:ultra')).toBe(false)
+    expect(groupMobileModelOptions(appServer).map(group => group.label)).toEqual([
+      'Codex Sol',
+      'Codex Terra',
+      'Codex Luna',
+    ])
+    expect(sdk).toHaveLength(15)
+    expect(appServer).toHaveLength(17)
+    expect(sdk.some(option => option.reasoningEffort === 'ultra')).toBe(false)
+    expect(appServer.some(option => option.value === 'codex-latest:ultra')).toBe(true)
+    expect(appServer.some(option => option.value === 'codex-terra:ultra')).toBe(true)
+    expect(appServer.some(option => option.value === 'codex-luna:ultra')).toBe(false)
   })
 
   it('normalizes legacy aliases and exact real GPT-5.6 models', () => {
@@ -58,6 +70,24 @@ describe('mobile llm model options', () => {
       'codex-latest:high',
       'codex-terra:medium',
       'codex-luna:max',
+    ])
+  })
+
+  it('does not expose an Ultra grant through an SDK model config', () => {
+    const options = resolveMobileModelOptions(config({
+      availableModels: ['codex-latest:ultra', 'codex-terra:max'],
+    }))
+    expect(options.map(option => option.value)).toEqual(['codex-terra:max'])
+  })
+
+  it('resolves Ultra grants through an App Server model config', () => {
+    const options = resolveMobileModelOptions(config({
+      workerBackend: 'OPENAI_CODEX_APP_SERVER',
+      availableModels: ['gpt-5.6-sol:ultra', 'gpt-5.6-terra:ultra'],
+    }))
+    expect(options.map(option => option.value)).toEqual([
+      'codex-latest:ultra',
+      'codex-terra:ultra',
     ])
   })
 })

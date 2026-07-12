@@ -195,6 +195,14 @@ const RECOVERY_UNKNOWN = /APP_SERVER_RECOVERY_UNKNOWN/i
 const AFFINITY_ERROR = /AFFINITY/i
 const STATE_FORBIDDEN_KEY = /(?:^|_)(?:token|secret|password|authorization|prompt|result|error_message|endpoint|url|marker)(?:_|$)/i
 const MAX_WORKERS = 16
+const PRODUCTION_PROVIDER_TYPE = 'codex-app-server-worker'
+const PRODUCTION_ULTRA_MODELS = new Set([
+  'codex-ultra',
+  'codex-latest:ultra',
+  'codex-terra:ultra',
+  'gpt-5.6-sol:ultra',
+  'gpt-5.6-terra:ultra',
+])
 const MAX_NEXT_DUE_FUTURE_MS = 24 * 60 * 60 * 1_000
 
 interface StateLease {
@@ -278,7 +286,7 @@ export function resolveCanarySoakConfig(raw: unknown, baseDirectory = process.cw
       throw new CanarySoakError('CANARY_CONFIG_PRODUCTION_COHORT_INCOMPLETE')
     }
     if (!isUltraModel(model)) throw new CanarySoakError('CANARY_CONFIG_PRODUCTION_MODEL_NOT_ULTRA')
-    if (providerType !== 'codex-worker') {
+    if (providerType !== PRODUCTION_PROVIDER_TYPE) {
       throw new CanarySoakError('CANARY_CONFIG_PRODUCTION_PROVIDER_INVALID')
     }
     assertProductionTransport(navigatorBaseUrl)
@@ -1207,7 +1215,7 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 function isUltraModel(model: string): boolean {
-  return ['codex-ultra', 'gpt-5.6-sol:ultra'].includes(model.toLowerCase())
+  return PRODUCTION_ULTRA_MODELS.has(model.trim().toLowerCase())
 }
 
 function normalizedHttpUrl(value: unknown, requireHealthPath: boolean): string {

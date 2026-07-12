@@ -89,9 +89,15 @@
               <el-tag v-else size="small">全局</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="后端" width="100" align="center">
+          <el-table-column label="后端" width="120" align="center">
             <template #default="{ row }">
               <el-tag v-if="row.workerBackend === 'OPENAI_CODEX'" type="success" size="small">Codex</el-tag>
+              <el-tag
+                v-else-if="row.workerBackend === 'OPENAI_CODEX_APP_SERVER'"
+                type="primary"
+                size="small"
+                title="Codex App Server"
+              >App Server</el-tag>
               <el-tag v-else-if="row.workerBackend === 'GEMINI_CLI'" type="warning" size="small">Gemini</el-tag>
               <el-tag v-else-if="row.workerBackend === 'LANGGRAPH_BIZ'" type="info" size="small">LangGraph</el-tag>
               <el-tag v-else-if="row.workerBackend === 'CLAUDE_CODE'" size="small">Claude</el-tag>
@@ -613,7 +619,7 @@ curl -fsSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-app-server-wo
               <div class="help-section-text">安装目录中的 <code>.env</code> 只在首次安装时创建；升级不会覆盖已有配置。</div>
               <pre class="help-code">CODEX_APP_SERVER_WORKER_PORT=3062
 CODEX_APP_SERVER_WORKER_HOST=127.0.0.1
-# 留空表示关闭 Worker HTTP 认证；非空时 Runtime 填写相同值
+# 留空表示关闭 Worker HTTP 认证；非空时 Endpoint Profile 填写相同值
 CODEX_APP_SERVER_WORKER_TOKEN=
 CODEX_APP_SERVER_STATE_KEY=&lt;首装自动生成的32字节base64密钥&gt;
 CODEX_APP_SERVER_STATE_DIR=/absolute/state/path
@@ -638,10 +644,10 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
             <section class="help-section">
               <div class="help-section-title">平台接入与 Ultra</div>
               <ol class="help-list">
-                <li>在 Workers 页面选中物理 Worker，打开「编辑」，切到「Codex」Tab。</li>
+                <li>在 Workers 页面选中物理 Worker，打开「编辑」，切到「Codex App Server」Tab。</li>
                 <li>保留上方 SDK Codex endpoint 的原有配置；它与 App Server Runtime 独立。</li>
-                <li>在「App Server Runtime」注册 Runtime ID 和 <code>http://&lt;host&gt;:3062</code>；Worker Token 非空时再填写相同值。</li>
-                <li>Runtime 初始为 Dark。刷新 capability，确认 Ready 后再按路由策略启用 Ultra。</li>
+                <li>添加 <code>http://&lt;host&gt;:3062</code> Endpoint；Worker Token 非空时再填写相同值。</li>
+                <li>点击同步，由平台读取 capability 并派生 Dark Runtime；确认 Ready 后再按路由策略启用。</li>
               </ol>
             </section>
           </el-tab-pane>
@@ -744,11 +750,11 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
                 />
               </el-select>
               <ModelSelect
-                v-else-if="llmForm.workerBackend === 'OPENAI_CODEX'"
+                v-else-if="isCodexBackend(llmForm.workerBackend)"
                 v-model="llmForm.modelName"
-                :options="codexBackendOptions"
+                :options="activeCodexBackendOptions"
                 filterable
-                allow-create
+                :allow-create="llmForm.workerBackend !== 'OPENAI_CODEX_APP_SERVER'"
                 reserve-keyword
                 default-first-option
                 placeholder="选择或输入 Codex 模型别名"
@@ -786,6 +792,14 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
                 />
               </el-select>
               <el-input v-else v-model="llmForm.modelName" placeholder="如：qwen-max" />
+              <div
+                v-if="llmForm.workerBackend === 'OPENAI_CODEX_APP_SERVER'"
+                class="form-hint codex-capability-hint"
+              >
+                <template v-if="!llmTestWorkerId">请先选择连接测试 Worker，再加载该 Worker 可执行的模型</template>
+                <template v-else-if="appServerModelAvailabilityLoading">正在检查所选 Worker 的 Runtime 模型能力...</template>
+                <template v-else-if="activeCodexBackendOptions.length === 0">所选 Worker 当前没有可执行的 App Server 模型</template>
+              </div>
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -802,6 +816,11 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
         <el-form-item v-if="llmForm.workerBackend === 'OPENAI_CODEX'" label="">
           <div class="form-hint" style="color: #909399; font-size: 12px">
             Codex 支持两种认证模式：填写 API Key 使用 API 模式，留空则使用订阅模式（~/.codex/auth.json）
+          </div>
+        </el-form-item>
+        <el-form-item v-if="llmForm.workerBackend === 'OPENAI_CODEX_APP_SERVER'" label="">
+          <div class="form-hint" style="color: #909399; font-size: 12px">
+            App Server 使用物理 Worker 的 Endpoint Profile 与独立 Runtime；API Key 留空时使用该 Worker 的 CODEX_HOME 登录态
           </div>
         </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'GEMINI_CLI'" label="">
@@ -845,6 +864,24 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
             按模型族勾选可用推理档位；某组至少勾选一项即开放该组，不勾选任何项则不限制
           </div>
         </el-form-item>
+        <el-form-item v-if="llmForm.workerBackend === 'OPENAI_CODEX_APP_SERVER'" label="可用模型">
+          <el-checkbox-group v-model="llmForm.availableModels">
+            <div v-for="group in codexAppServerBackendOptionGroups" :key="group.label" class="codex-model-group">
+              <div class="codex-model-group__title">{{ group.label }}</div>
+              <div class="codex-model-group__options">
+                <el-checkbox
+                  v-for="opt in group.options"
+                  :key="opt.value"
+                  :value="opt.value"
+                  :label="opt.optionLabel || opt.label"
+                />
+              </div>
+            </div>
+          </el-checkbox-group>
+          <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
+            最终可用范围会与 Endpoint capability manifest 取交集；Ultra 仅在此后端开放
+          </div>
+        </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'GEMINI_CLI'" label="可用模型">
           <el-checkbox-group v-model="llmForm.availableModels">
             <el-checkbox
@@ -878,6 +915,7 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
           <el-radio-group v-model="llmForm.workerBackend" class="worker-backend-options">
             <el-radio-button v-if="llmForm.category === 'CODING'" value="CLAUDE_CODE">Claude Code</el-radio-button>
             <el-radio-button v-if="llmForm.category === 'CODING'" value="OPENAI_CODEX">OpenAI Codex</el-radio-button>
+            <el-radio-button v-if="llmForm.category === 'CODING'" value="OPENAI_CODEX_APP_SERVER">Codex App Server</el-radio-button>
             <el-radio-button v-if="llmForm.category === 'CODING'" value="GEMINI_CLI">Gemini CLI</el-radio-button>
             <el-radio-button value="LANGGRAPH_BIZ">LangGraph Biz</el-radio-button>
           </el-radio-group>
@@ -902,7 +940,7 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
                     </el-descriptions-item>
                   </el-descriptions>
                 </template>
-                <template v-else-if="llmForm.workerBackend === 'OPENAI_CODEX'">
+                <template v-else-if="isCodexBackend(llmForm.workerBackend)">
                   <el-descriptions :column="1" size="small" border>
                     <el-descriptions-item label="model_context_window">
                       模型可用的上下文窗口大小（token 数）。代理非原生模型时需按实际能力配置。<br/>
@@ -972,14 +1010,45 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="llmForm.scope === 'RESTRICTED'" label="允许的 Worker" required>
-          <el-select v-model="llmForm.allowedWorkerIds" multiple placeholder="选择 Worker" style="width: 100%">
+          <el-select
+            v-model="llmForm.allowedWorkerIds"
+            multiple
+            placeholder="选择 Worker"
+            style="width: 100%"
+            :loading="llmForm.workerBackend === 'OPENAI_CODEX_APP_SERVER' && appServerEndpointWorkersLoading"
+          >
             <el-option
-              v-for="w in workers"
+              v-for="w in codexCapabilityWorkers"
               :key="w.workerId"
               :label="w.name"
               :value="w.workerId"
             />
           </el-select>
+        </el-form-item>
+        <el-form-item
+          v-if="requiresWorkerConnectionTest(llmForm.workerBackend)"
+          label="连接测试 Worker"
+          required
+        >
+          <el-select
+            v-model="llmTestWorkerId"
+            placeholder="选择 Worker"
+            style="width: 100%"
+            :loading="llmForm.workerBackend === 'OPENAI_CODEX_APP_SERVER' && appServerEndpointWorkersLoading"
+          >
+            <el-option
+              v-for="w in codexCapabilityWorkers"
+              :key="w.workerId"
+              :label="w.name"
+              :value="w.workerId"
+            />
+          </el-select>
+          <div
+            v-if="llmForm.workerBackend === 'OPENAI_CODEX_APP_SERVER' && appServerEndpointWorkersLoaded && codexCapabilityWorkers.length === 0"
+            class="form-hint"
+          >
+            暂无已配置 App Server Endpoint 的 Worker
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1176,7 +1245,7 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import {
@@ -1213,6 +1282,10 @@ import {
   triggerHealthCheck as apiHealthCheck,
 } from '@/api/claudeWorker'
 import {
+  getCodexRuntimeAvailability,
+  listCodexAppServerEndpoints,
+} from '@/api/codexRuntime'
+import {
   getAssistantConfig as apiGetAssistantConfig,
   createAssistant as apiCreateAssistant,
   updateAssistantConfig as apiUpdateAssistantConfig,
@@ -1237,11 +1310,30 @@ import {
   normalizeAvailableModelGrants,
   normalizeModelValueForBackend,
 } from '@/utils/llmModelOptions'
+import {
+  filterModelOptionsByAvailability,
+  filterWorkersForCodexBackend,
+  resolveAvailableModelValues,
+} from '@/utils/codexCapability'
 // 统一 Claude / Codex / Gemini / LangGraph Biz 模型候选（见 utils/llmModelOptions.ts）。
 // Codex 使用稳定模型族 alias + reasoning 后缀，并在 UI 中按模型族分组。
 const claudeBackendOptions = getModelOptionsByBackend('CLAUDE_CODE' as WorkerBackend)
 const codexBackendOptions = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
 const codexBackendOptionGroups = groupModelOptions(codexBackendOptions)
+const codexAppServerBackendOptions = getModelOptionsByBackend('OPENAI_CODEX_APP_SERVER' as WorkerBackend)
+const appServerAvailableModelValues = ref<Set<string> | null>(null)
+const appServerModelAvailabilityLoading = ref(false)
+const appServerEndpointWorkerIds = ref<Set<string>>(new Set())
+const appServerEndpointWorkersLoading = ref(false)
+const appServerEndpointWorkersLoaded = ref(false)
+const activeCodexBackendOptions = computed(() => {
+  if (llmForm.value.workerBackend !== 'OPENAI_CODEX_APP_SERVER') return codexBackendOptions
+  return filterModelOptionsByAvailability(
+    codexAppServerBackendOptions,
+    appServerAvailableModelValues.value,
+  )
+})
+const codexAppServerBackendOptionGroups = computed(() => groupModelOptions(activeCodexBackendOptions.value))
 const geminiBackendOptions = getModelOptionsByBackend('GEMINI_CLI' as WorkerBackend)
 const langgraphBizBackendOptions = getModelOptionsByBackend('LANGGRAPH_BIZ' as WorkerBackend)
 
@@ -1267,6 +1359,11 @@ const gitProviders = ref<GitProviderConfig[]>([])
 const llmModels = ref<LlmModelConfig[]>([])
 const agentOverrides = ref<AgentModelOverride[]>([])
 const workers = ref<ClaudeWorker[]>([])
+const codexCapabilityWorkers = computed(() => filterWorkersForCodexBackend(
+  workers.value,
+  llmForm.value.workerBackend,
+  appServerEndpointWorkerIds.value,
+))
 const memories = ref<UserMemory[]>([])
 const credentials = ref<ApiCredential[]>([])
 const bizWorkerPools = ref<BizWorkerPool[]>([])
@@ -1475,6 +1572,8 @@ async function setGrantDefaultAction(row: ClientAppModelConfigGrant) {
 const showLlmDialog_ = ref(false)
 const llmDialogMode = ref<'add' | 'edit'>('add')
 const editingLlmId = ref('')
+const llmTestWorkerId = ref('')
+let hydratingLlmForm = false
 const llmForm = ref({
   name: '',
   category: 'GENERAL' as LlmModelCategory,
@@ -1488,6 +1587,111 @@ const llmForm = ref({
   workerBackend: undefined as import('@/types').WorkerBackend | undefined,
   availableModels: [] as string[],
 })
+let appServerEndpointRequestSequence = 0
+let appServerModelRequestSequence = 0
+
+async function refreshAppServerEndpointWorkers(): Promise<void> {
+  const requestSequence = ++appServerEndpointRequestSequence
+  const currentWorkers = [...workers.value]
+  appServerEndpointWorkersLoading.value = true
+  appServerEndpointWorkersLoaded.value = false
+  try {
+    const results = await Promise.allSettled(currentWorkers.map(async (worker) => ({
+      workerId: worker.workerId,
+      endpoints: await listCodexAppServerEndpoints(worker.workerId, {
+        suppressErrorMessage: true,
+      }),
+    })))
+    if (requestSequence !== appServerEndpointRequestSequence) return
+    appServerEndpointWorkerIds.value = new Set(
+      results
+        .filter((result): result is PromiseFulfilledResult<{
+          workerId: string
+          endpoints: Awaited<ReturnType<typeof listCodexAppServerEndpoints>>
+        }> => result.status === 'fulfilled')
+        .filter(({ value }) => value.endpoints.length > 0)
+        .map(({ value }) => value.workerId),
+    )
+  } finally {
+    if (requestSequence === appServerEndpointRequestSequence) {
+      appServerEndpointWorkersLoading.value = false
+      appServerEndpointWorkersLoaded.value = true
+    }
+  }
+}
+
+async function refreshAppServerModelAvailability(): Promise<void> {
+  const requestSequence = ++appServerModelRequestSequence
+  const workerId = llmTestWorkerId.value
+  appServerAvailableModelValues.value = null
+  if (llmForm.value.workerBackend !== 'OPENAI_CODEX_APP_SERVER'
+    || !workerId
+    || (appServerEndpointWorkersLoaded.value && !appServerEndpointWorkerIds.value.has(workerId))) {
+    appServerModelAvailabilityLoading.value = false
+    return
+  }
+
+  appServerModelAvailabilityLoading.value = true
+  try {
+    const availableValues = await resolveAvailableModelValues(
+      codexAppServerBackendOptions,
+      (model) => getCodexRuntimeAvailability(workerId, {
+        model,
+        suppressErrorMessage: true,
+      }),
+    )
+    if (requestSequence !== appServerModelRequestSequence
+      || llmForm.value.workerBackend !== 'OPENAI_CODEX_APP_SERVER'
+      || llmTestWorkerId.value !== workerId) return
+    appServerAvailableModelValues.value = availableValues
+  } finally {
+    if (requestSequence === appServerModelRequestSequence) {
+      appServerModelAvailabilityLoading.value = false
+    }
+  }
+}
+
+watch([
+  () => llmForm.value.workerBackend,
+  llmTestWorkerId,
+  appServerEndpointWorkerIds,
+], () => {
+  void refreshAppServerModelAvailability()
+}, { flush: 'sync' })
+
+watch([
+  codexCapabilityWorkers,
+  () => llmForm.value.workerBackend,
+  appServerEndpointWorkersLoaded,
+], () => {
+  const backend = llmForm.value.workerBackend
+  if (!isCodexBackend(backend)) return
+  if (backend === 'OPENAI_CODEX_APP_SERVER' && !appServerEndpointWorkersLoaded.value) return
+  const capableWorkerIds = new Set(codexCapabilityWorkers.value.map((worker) => worker.workerId))
+  llmForm.value.allowedWorkerIds = llmForm.value.allowedWorkerIds
+    .filter((workerId) => capableWorkerIds.has(workerId))
+  if (llmTestWorkerId.value && !capableWorkerIds.has(llmTestWorkerId.value)) {
+    llmTestWorkerId.value = ''
+  }
+}, { flush: 'sync' })
+
+watch(activeCodexBackendOptions, (options) => {
+  if (llmForm.value.workerBackend !== 'OPENAI_CODEX_APP_SERVER'
+    || !llmTestWorkerId.value
+    || appServerModelAvailabilityLoading.value) return
+  const optionValues = new Set(options.map((option) => option.value))
+  const normalizedModel = normalizeModelValueForBackend(
+    llmForm.value.modelName,
+    llmForm.value.workerBackend,
+  )
+  llmForm.value.modelName = optionValues.has(normalizedModel)
+    ? normalizedModel
+    : options[0]?.value ?? ''
+  llmForm.value.availableModels = normalizeAvailableModelGrants(
+    llmForm.value.availableModels,
+    llmForm.value.workerBackend,
+  ).filter((model) => optionValues.has(model))
+})
 
 const llmPresets = [
   { name: '阿里通义', displayName: '通义千问-Max', category: 'GENERAL' as LlmModelCategory, baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', modelName: 'qwen-max' },
@@ -1499,6 +1703,7 @@ function showLlmDialog(mode: 'add' | 'edit') {
   llmDialogMode.value = mode
   if (mode === 'add') {
     editingLlmId.value = ''
+    llmTestWorkerId.value = ''
     llmForm.value = { name: '', category: 'GENERAL', baseUrl: '', modelName: '', apiKey: '', isDefault: false, scope: 'GLOBAL', allowedWorkerIds: [], envVars: [], workerBackend: undefined, availableModels: [] }
   }
   showLlmDialog_.value = true
@@ -1511,6 +1716,34 @@ watch(() => llmForm.value.category, (category) => {
     llmForm.value.workerBackend = undefined
   }
 })
+
+watch(() => llmForm.value.workerBackend, (backend, previousBackend) => {
+  if (hydratingLlmForm) return
+  if (backend === previousBackend) return
+  llmTestWorkerId.value = ''
+  if (!backend || !supportsAvailableModels(backend)) return
+  if (backend === 'OPENAI_CODEX_APP_SERVER') {
+    llmForm.value.modelName = ''
+    llmForm.value.availableModels = []
+    return
+  }
+
+  const options = getModelOptionsByBackend(backend)
+  if (options.length === 0) return
+  const optionValues = new Set(options.map(option => option.value))
+  const normalizedModel = normalizeModelValueForBackend(llmForm.value.modelName, backend)
+  const switchedWithinCodex = isCodexBackend(backend) && isCodexBackend(previousBackend)
+  const sdkUltra = backend === 'OPENAI_CODEX' && isUltraModelValue(normalizedModel)
+  llmForm.value.modelName = normalizedModel && optionValues.has(normalizedModel)
+    ? normalizedModel
+    : switchedWithinCodex && normalizedModel && !sdkUltra
+      ? normalizedModel
+      : options[0]!.value
+  llmForm.value.availableModels = normalizeAvailableModelGrants(
+    llmForm.value.availableModels,
+    backend,
+  ).filter(model => optionValues.has(model))
+}, { flush: 'sync' })
 
 function applyPreset(preset: (typeof llmPresets)[number]) {
   llmDialogMode.value = 'add'
@@ -1534,6 +1767,7 @@ function applyPreset(preset: (typeof llmPresets)[number]) {
 function editLlmModel(row: LlmModelConfig) {
   llmDialogMode.value = 'edit'
   editingLlmId.value = row.id
+  hydratingLlmForm = true
   llmForm.value = {
     name: row.name,
     category: row.category,
@@ -1547,6 +1781,8 @@ function editLlmModel(row: LlmModelConfig) {
     workerBackend: row.workerBackend,
     availableModels: normalizeAvailableModelGrants(row.availableModels, row.workerBackend),
   }
+  hydratingLlmForm = false
+  llmTestWorkerId.value = row.allowedWorkerIds?.[0] || ''
   showLlmDialog_.value = true
 }
 
@@ -1569,6 +1805,7 @@ async function saveLlm() {
     ElMessage.warning('限定模式下请至少选择一个 Worker')
     return
   }
+  if (!validateCodexBackendSelection()) return
   saving.value = true
   try {
     if (llmDialogMode.value === 'add') {
@@ -1626,8 +1863,15 @@ async function saveLlm() {
 const testingLlm = ref(false)
 
 async function handleTestLlm() {
-  if (!llmForm.value.baseUrl || !llmForm.value.modelName || !llmForm.value.apiKey) {
-    ElMessage.warning('请先填写 Base URL、模型名称和 API Key')
+  const supportsSubscription = supportsSubscriptionBackend(llmForm.value.workerBackend)
+  if (!llmForm.value.modelName
+    || (!supportsSubscription && (!llmForm.value.baseUrl || !llmForm.value.apiKey))) {
+    ElMessage.warning(supportsSubscription ? '请先填写模型名称' : '请先填写 Base URL、模型名称和 API Key')
+    return
+  }
+  if (!validateCodexBackendSelection()) return
+  if (requiresWorkerConnectionTest(llmForm.value.workerBackend) && !llmTestWorkerId.value) {
+    ElMessage.warning('测试 Codex 连接前请选择 Worker')
     return
   }
   testingLlm.value = true
@@ -1636,6 +1880,8 @@ async function handleTestLlm() {
       baseUrl: llmForm.value.baseUrl,
       apiKey: llmForm.value.apiKey,
       modelName: llmForm.value.modelName,
+      workerBackend: llmForm.value.workerBackend,
+      workerId: llmTestWorkerId.value || undefined,
     })
     ElMessage.success('连接成功: ' + (reply || 'OK'))
   } catch (e: any) {
@@ -1646,12 +1892,61 @@ async function handleTestLlm() {
 }
 
 function supportsSubscriptionBackend(workerBackend?: import('@/types').WorkerBackend) {
-  return workerBackend === 'OPENAI_CODEX' || workerBackend === 'CLAUDE_CODE' || workerBackend === 'GEMINI_CLI' || workerBackend === 'LANGGRAPH_BIZ'
+  return workerBackend === 'OPENAI_CODEX'
+    || workerBackend === 'OPENAI_CODEX_APP_SERVER'
+    || workerBackend === 'CLAUDE_CODE'
+    || workerBackend === 'GEMINI_CLI'
+    || workerBackend === 'LANGGRAPH_BIZ'
+}
+
+function isCodexBackend(workerBackend?: import('@/types').WorkerBackend) {
+  return workerBackend === 'OPENAI_CODEX' || workerBackend === 'OPENAI_CODEX_APP_SERVER'
+}
+
+function requiresWorkerConnectionTest(workerBackend?: import('@/types').WorkerBackend) {
+  return workerBackend === 'OPENAI_CODEX'
+    || workerBackend === 'OPENAI_CODEX_APP_SERVER'
+}
+
+function isUltraModelValue(model?: string | null) {
+  const normalized = (model || '').trim().toLowerCase().replace(/\s+/g, '')
+  return normalized === 'codex-ultra' || normalized.endsWith(':ultra')
+}
+
+function validateCodexBackendSelection(): boolean {
+  if (llmForm.value.workerBackend === 'OPENAI_CODEX') {
+    if (isUltraModelValue(llmForm.value.modelName)
+      || llmForm.value.availableModels.some(isUltraModelValue)) {
+      ElMessage.warning('Ultra 仅支持 Codex App Server 后端')
+      return false
+    }
+    return true
+  }
+  if (llmForm.value.workerBackend === 'OPENAI_CODEX_APP_SERVER') {
+    if (!llmTestWorkerId.value) {
+      ElMessage.warning('请先选择具有 App Server Endpoint 的 Worker')
+      return false
+    }
+    if (appServerModelAvailabilityLoading.value) {
+      ElMessage.warning('正在检查 App Server Runtime 模型能力，请稍后重试')
+      return false
+    }
+    const normalizedModel = normalizeModelValueForBackend(
+      llmForm.value.modelName,
+      llmForm.value.workerBackend,
+    )
+    if (!appServerAvailableModelValues.value?.has(normalizedModel)) {
+      ElMessage.warning('所选 Worker 当前无法执行该 App Server 模型')
+      return false
+    }
+  }
+  return true
 }
 
 function supportsAvailableModels(workerBackend?: import('@/types').WorkerBackend) {
   return workerBackend === 'CLAUDE_CODE'
     || workerBackend === 'OPENAI_CODEX'
+    || workerBackend === 'OPENAI_CODEX_APP_SERVER'
     || workerBackend === 'GEMINI_CLI'
     || workerBackend === 'LANGGRAPH_BIZ'
 }
@@ -1662,6 +1957,9 @@ function baseUrlPlaceholder(workerBackend?: import('@/types').WorkerBackend) {
   }
   if (workerBackend === 'OPENAI_CODEX') {
     return '留空使用默认 OpenAI 端点（订阅模式无需填写）'
+  }
+  if (workerBackend === 'OPENAI_CODEX_APP_SERVER') {
+    return '留空使用 App Server Worker 的 CODEX_HOME 登录态'
   }
   if (workerBackend === 'GEMINI_CLI') {
     return '留空表示使用 Gemini CLI 登录态或订阅模式（依赖 Worker 本机 gemini login）'
@@ -1682,10 +1980,49 @@ function apiKeyPlaceholder(workerBackend?: import('@/types').WorkerBackend, mode
   return 'API Key'
 }
 
+async function findCapableWorkerForModel(row: LlmModelConfig): Promise<string | undefined> {
+  if (row.workerBackend === 'OPENAI_CODEX_APP_SERVER' && !appServerEndpointWorkersLoaded.value) {
+    await refreshAppServerEndpointWorkers()
+  }
+  const allowedWorkerIds = row.scope === 'RESTRICTED' && row.allowedWorkerIds?.length
+    ? new Set(row.allowedWorkerIds)
+    : null
+  const candidates = filterWorkersForCodexBackend(
+    workers.value,
+    row.workerBackend,
+    appServerEndpointWorkerIds.value,
+  ).filter(worker => !allowedWorkerIds || allowedWorkerIds.has(worker.workerId))
+  for (const worker of candidates) {
+    try {
+      const configs = await apiListLlm(worker.workerId)
+      if (!configs.some(config => config.id === row.id)) continue
+      if (row.workerBackend === 'OPENAI_CODEX_APP_SERVER') {
+        const availability = await getCodexRuntimeAvailability(worker.workerId, {
+          model: normalizeModelValueForBackend(row.modelName, row.workerBackend),
+          suppressErrorMessage: true,
+        })
+        if (!(availability.modelAvailable
+          ?? (isUltraModelValue(row.modelName) && availability.ultraAvailable))) continue
+      }
+      return worker.workerId
+    } catch {
+      // Try the next Worker; the connection test itself reports the final error.
+    }
+  }
+  return undefined
+}
+
 async function handleTestSaved(row: LlmModelConfig & { _testing?: boolean }) {
   row._testing = true
   try {
-    const reply = await apiTestSavedLlm(row.id)
+    const workerId = requiresWorkerConnectionTest(row.workerBackend)
+      ? await findCapableWorkerForModel(row)
+      : undefined
+    if (requiresWorkerConnectionTest(row.workerBackend) && !workerId) {
+      ElMessage.warning('没有 Worker 提供该模型后端能力')
+      return
+    }
+    const reply = await apiTestSavedLlm(row.id, workerId)
     ElMessage.success('连接成功: ' + (reply || 'OK'))
   } catch (e: any) {
     ElMessage.error('连接失败: ' + (e?.response?.data?.msg || e?.message || '未知错误'))
@@ -2099,7 +2436,10 @@ async function loadOverrides() {
 
 async function loadWorkers() {
   loadingWorkers.value = true
-  try { workers.value = await apiListWorkers() } catch { /* handled by interceptor */ }
+  try {
+    workers.value = await apiListWorkers()
+    await refreshAppServerEndpointWorkers()
+  } catch { /* handled by interceptor */ }
   finally { loadingWorkers.value = false }
 }
 
@@ -2204,6 +2544,14 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.codex-capability-hint {
+  width: 100%;
+  margin-top: 4px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .settings-layout {
   max-width: 960px;
   margin: 0 auto;

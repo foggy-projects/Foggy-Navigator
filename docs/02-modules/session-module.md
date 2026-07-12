@@ -6,7 +6,7 @@
 
 `session-module` 是 Foggy Navigator 的核心业务模块之一，负责把“会话、消息、统一任务分发、Agent 发现、SSE 推送”收口到一个平台层。
 
-它既服务主会话界面，也服务 Workers、任务看板、跨项目阶段回跳和通知链路。
+它既服务主会话界面，也服务 Workers、任务看板和通知链路。
 
 ## 2. 当前职责
 
@@ -28,7 +28,6 @@
 - `会话`
 - `任务`
 - `Workers` 中的任务交互能力
-- `跨项目` 中阶段会话回跳
 - 通知与 SSE 相关能力
 
 ### 3.2 它不负责什么
@@ -106,6 +105,8 @@ Task 是执行视角的主对象，负责表达：
 - `providerType`
 - `authModelConfigId`
 
+`providerType` 是强边界：`codex-worker` 只续接 SDK Thread，`codex-app-server-worker` 只续接 App Server Thread/Turn。请求携带的 Provider 与 Session 绑定不一致时返回稳定的 `SESSION_PROVIDER_MISMATCH`，不会自动切换或 fallback；用户切换后端时由调用端创建新 Session。
+
 这保证以下动作在同一执行语义下进行：
 
 - 继续对话
@@ -162,11 +163,10 @@ Task 是执行视角的主对象，负责表达：
 | 关联模块 | 关系 |
 |------|------|
 | `agent-framework` | 会话消息链路中的 Agent 调用底座 |
-| `tutor-agent` | 会话默认入口 Agent |
 | `metadata-config-module` | 任务分发时会读取模型配置与资源配置 |
 | `user-auth-module` | 所有会话与任务能力依赖用户身份 |
 | `addons/claude-worker-agent` | 提供 Worker 执行能力、目录会话与跨项目会话来源 |
-| `addons/codex-worker-agent` | 提供 Codex 类执行能力 |
+| `addons/codex-worker-agent` | 分别提供 `codex-worker` SDK 与 `codex-app-server-worker` App Server 执行能力，共享任务投影但不互相 fallback |
 | `addons/task-assistant` | 通过事件和 SSE 向会话侧发通知 |
 
 ## 9. 当前阅读建议

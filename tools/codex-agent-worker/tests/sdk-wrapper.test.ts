@@ -11,6 +11,8 @@ import {
   buildCodexInput,
   buildCodexProcessEnv,
   buildCodexTaskEnv,
+  CODEX_ULTRA_APP_SERVER_REQUIRED,
+  CodexUltraAppServerRequiredError,
   ensureNavigatorBusinessMcpHomeConfig,
   formatCollabToolDiagnostic,
   getRunningTaskCount,
@@ -24,6 +26,7 @@ import {
   resolveCodexHome,
   resolveNavigatorBusinessMcpServerPath,
   resolveModelAlias,
+  resolveSdkReasoningEffort,
   resolveSupportedModelAlias,
   seedCodexHomeAuthIfAvailable,
   saveAttachments,
@@ -58,14 +61,18 @@ test('parseModelString accepts xhigh reasoning directly', () => {
   })
 })
 
-test('parseModelString accepts Sol max but does not pass Ultra to the SDK', () => {
+test('parseModelString accepts Sol max and fails closed for every Ultra spelling', () => {
   assert.deepEqual(parseModelString('gpt-5.6-sol:max'), {
     model: 'gpt-5.6-sol',
     reasoningLevel: 'max',
   })
-  assert.deepEqual(parseModelString('gpt-5.6-sol:ultra'), {
-    model: 'gpt-5.6-sol',
-  })
+  for (const model of ['gpt-5.6-sol:ultra', 'gpt-5.6-sol: ULTRA', 'codex-ultra', 'CODEX-ULTRA:high']) {
+    assert.throws(
+      () => parseModelString(model),
+      (error: unknown) => error instanceof CodexUltraAppServerRequiredError
+        && error.code === CODEX_ULTRA_APP_SERVER_REQUIRED,
+    )
+  }
 })
 
 test('applyResolvedReasoningEffort lets explicit model suffix override generic config', () => {
@@ -80,6 +87,17 @@ test('applyResolvedReasoningEffort lets explicit model suffix override generic c
     model_reasoning_effort: 'max',
     tool_output_token_limit: 10000,
   })
+})
+
+test('resolveSdkReasoningEffort preserves the existing default, explicit Max, and rejects config Ultra', () => {
+  assert.equal(resolveSdkReasoningEffort(undefined, undefined), undefined)
+  assert.equal(resolveSdkReasoningEffort(undefined, { model_reasoning_effort: 'max' }), 'max')
+  assert.equal(resolveSdkReasoningEffort('max', { model_reasoning_effort: 'low' }), 'max')
+  assert.throws(
+    () => resolveSdkReasoningEffort('max', { model_reasoning_effort: ' ULTRA ' }),
+    (error: unknown) => error instanceof CodexUltraAppServerRequiredError
+      && error.code === CODEX_ULTRA_APP_SERVER_REQUIRED,
+  )
 })
 
 test('collab tool diagnostics expose counts without prompt or thread identifiers', () => {
@@ -186,6 +204,83 @@ test('resolveSupportedModelAlias rejects retired Mini after direct or alias reso
         && error.code === UNSUPPORTED_CODEX_MODEL,
     )
   }
+})
+
+test('resolveSupportedModelAlias rejects Ultra before the SDK for direct and aliased requests', () => {
+  const aliases = {
+    ...TEST_ALIASES,
+    'ultra-alias': 'gpt-5.6-sol:ultra',
+  }
+  for (const model of [
+    'codex-ultra',
+    'CODEX-ULTRA:high',
+    'gpt-5.6-sol:ultra',
+    'codex-latest:ultra',
+    'ultra-alias',
+    'ultra-alias:low',
+  ]) {
+    assert.throws(
+      () => resolveSupportedModelAlias(model, aliases),
+      (error: unknown) => error instanceof CodexUltraAppServerRequiredError
+        && error.code === CODEX_ULTRA_APP_SERVER_REQUIRED,
+    )
+  }
+})
+
+test('runQuery rejects Ultra before task state or Codex SDK allocation', async () => {
+  let codexFactoryCalls = 0
+  const dependencies = {
+    codexFactory: () => {
+      codexFactoryCalls += 1
+      throw new Error('Codex SDK must not be allocated for Ultra')
+    },
+  }
+
+  for (const [index, model] of ['codex-ultra', 'gpt-5.6-sol:ultra'].entries()) {
+    const taskId = `task-ultra-rejected-${index}`
+    await assert.rejects(
+      runQuery(
+        taskId,
+        'must fail before SDK allocation',
+        '/workspace',
+        index === 0 ? undefined : 'sdk-thread-existing',
+        model,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {},
+        dependencies,
+      ),
+      (error: unknown) => error instanceof CodexUltraAppServerRequiredError
+        && error.code === CODEX_ULTRA_APP_SERVER_REQUIRED,
+    )
+    assert.equal(taskBroadcasts.has(taskId), false)
+    assert.equal(taskRegistry.has(taskId), false)
+  }
+  const configTaskId = 'task-ultra-config-rejected'
+  await assert.rejects(
+    runQuery(
+      configTaskId,
+      'generic config must fail before SDK allocation',
+      '/workspace',
+      undefined,
+      'codex-latest',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { codexConfig: { model_reasoning_effort: 'ultra' } },
+      dependencies,
+    ),
+    (error: unknown) => error instanceof CodexUltraAppServerRequiredError
+      && error.code === CODEX_ULTRA_APP_SERVER_REQUIRED,
+  )
+  assert.equal(taskBroadcasts.has(configTaskId), false)
+  assert.equal(taskRegistry.has(configTaskId), false)
+  assert.equal(codexFactoryCalls, 0)
 })
 
 test('resolveModelAlias passes through unknown alias-like strings unchanged', () => {
@@ -697,6 +792,8 @@ test('start and resume both preserve Shell execution after a Responses Lite sess
     assert.deepEqual(resumedThreadOptions, startedThreadOptions)
     assert.equal(createdOptions[0]?.config?.model_catalog_json, undefined)
     assert.equal(typeof createdOptions[1]?.config?.model_catalog_json, 'string')
+    assert.equal(createdOptions[0]?.config?.model_reasoning_effort, undefined)
+    assert.equal(createdOptions[1]?.config?.model_reasoning_effort, undefined)
     assert.equal(compatibilityCatalogs[0]?.models[0]?.use_responses_lite, false)
     assert.equal(compatibilityCatalogs[0]?.models[0]?.marker, 'preserve-model-metadata')
     assert.equal(createdOptions[0]?.config?.developer_instructions, 'keep the current developer instructions')

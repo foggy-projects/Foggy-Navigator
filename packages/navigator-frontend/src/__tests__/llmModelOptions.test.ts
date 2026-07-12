@@ -62,6 +62,16 @@ describe('llmModelOptions', () => {
     expect(isSelectablePlatformModel(config)).toBe(true)
   })
 
+  it('keeps Codex App Server subscription configs selectable', () => {
+    const config = createModelConfig({
+      workerBackend: 'OPENAI_CODEX_APP_SERVER' as WorkerBackend,
+      hasApiKey: false,
+      modelName: 'codex-latest',
+    })
+
+    expect(isSelectablePlatformModel(config)).toBe(true)
+  })
+
   it('keeps LangGraph Biz configs selectable without api key', () => {
     const config = createModelConfig({
       workerBackend: 'LANGGRAPH_BIZ' as WorkerBackend,
@@ -90,18 +100,24 @@ describe('llmModelOptions', () => {
     expect(resolveModelOptions(config).map((item) => item.value)).toEqual(['opus'])
   })
 
-  it('exposes grouped canonical Codex model and reasoning values', () => {
-    const codex = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
-    const values = codex.map((opt) => opt.value)
-    expect(values).toHaveLength(17)
-    expect(values).toContain('codex-latest:low')
-    expect(values).toContain('codex-latest:ultra')
-    expect(values).toContain('codex-terra:max')
-    expect(values).toContain('codex-terra:ultra')
-    expect(values).toContain('codex-luna:xhigh')
-    expect(values).not.toContain('codex-luna:ultra')
+  it('keeps SDK Codex at Low through Max and reserves Ultra for App Server', () => {
+    const sdk = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
+    const appServer = getModelOptionsByBackend('OPENAI_CODEX_APP_SERVER' as WorkerBackend)
+    const sdkValues = sdk.map((opt) => opt.value)
+    const appServerValues = appServer.map((opt) => opt.value)
 
-    expect(groupModelOptions(codex).map((group) => group.label)).toEqual([
+    expect(sdkValues).toHaveLength(15)
+    expect(sdkValues).toContain('codex-latest:low')
+    expect(sdkValues).toContain('codex-terra:max')
+    expect(sdkValues).toContain('codex-luna:max')
+    expect(sdkValues.some((value) => value.endsWith(':ultra'))).toBe(false)
+
+    expect(appServerValues).toHaveLength(17)
+    expect(appServerValues).toContain('codex-latest:ultra')
+    expect(appServerValues).toContain('codex-terra:ultra')
+    expect(appServerValues).not.toContain('codex-luna:ultra')
+
+    expect(groupModelOptions(appServer).map((group) => group.label)).toEqual([
       'Codex Sol',
       'Codex Terra',
       'Codex Luna',
@@ -116,7 +132,7 @@ describe('llmModelOptions', () => {
   it('does not leak real Codex model names (gpt-5.x) into ALL_MODEL_OPTIONS', () => {
     // 1.0.4 alias-only：前端只展示 alias，真实模型名由 Worker 内部解析
     const codexValues = ALL_MODEL_OPTIONS
-      .filter((m) => m.backend === 'OPENAI_CODEX')
+      .filter((m) => m.backend === 'OPENAI_CODEX' || m.backend === 'OPENAI_CODEX_APP_SERVER')
       .map((m) => m.value)
     for (const v of codexValues) {
       expect(v).not.toMatch(/^gpt-5/)
@@ -147,17 +163,26 @@ describe('llmModelOptions', () => {
     ])
   })
 
-  it('requires explicit whitelist grants for Codex Max and Ultra when availableModels is restricted', () => {
-    const config = createModelConfig({
+  it('does not expose Ultra through an SDK Codex grant', () => {
+    const sdkConfig = createModelConfig({
       workerBackend: 'OPENAI_CODEX' as WorkerBackend,
       availableModels: ['codex-max', 'codex-ultra'],
     })
-    expect(resolveModelOptions(config).map((m) => m.value)).toEqual(['codex-latest:max', 'codex-latest:ultra'])
+    expect(resolveModelOptions(sdkConfig).map((m) => m.value)).toEqual(['codex-latest:max'])
+
+    const appServerConfig = createModelConfig({
+      workerBackend: 'OPENAI_CODEX_APP_SERVER' as WorkerBackend,
+      availableModels: ['codex-max', 'codex-ultra'],
+    })
+    expect(resolveModelOptions(appServerConfig).map((m) => m.value)).toEqual([
+      'codex-latest:max',
+      'codex-latest:ultra',
+    ])
   })
 
   it('maps exact GPT-5.6-Sol Max and Ultra grants to their stable aliases', () => {
     const config = createModelConfig({
-      workerBackend: 'OPENAI_CODEX' as WorkerBackend,
+      workerBackend: 'OPENAI_CODEX_APP_SERVER' as WorkerBackend,
       availableModels: ['gpt-5.6-sol:max', 'gpt-5.6-sol:ultra'],
     })
     expect(resolveModelOptions(config).map((m) => m.value)).toEqual(['codex-latest:max', 'codex-latest:ultra'])
@@ -184,6 +209,11 @@ describe('llmModelOptions', () => {
       ['codex-latest', 'codex-terra:high', 'gpt-5.6-luna:max'],
       'OPENAI_CODEX' as WorkerBackend,
     )).toEqual(['codex-latest:medium', 'codex-terra:high', 'codex-luna:max'])
+
+    expect(normalizeAvailableModelGrants(
+      ['codex-ultra', 'gpt-5.6-terra:max'],
+      'OPENAI_CODEX_APP_SERVER' as WorkerBackend,
+    )).toEqual(['codex-latest:ultra', 'codex-terra:max'])
   })
 
   it('rejects Codex configs for workers without a Codex endpoint', () => {
@@ -201,5 +231,19 @@ describe('llmModelOptions', () => {
     })
 
     expect(isModelConfigCompatibleWithWorker(config, worker)).toBe(true)
+  })
+
+  it('trusts the server-filtered App Server capability instead of physical Worker backend fields', () => {
+    const config = createModelConfig({ workerBackend: 'OPENAI_CODEX_APP_SERVER' as WorkerBackend })
+    const sdkWorker = createWorker({
+      workerBackend: 'CLAUDE_CODE' as WorkerBackend,
+      codexBaseUrl: 'http://127.0.0.1:3051',
+    })
+    const appServerWorker = createWorker({
+      workerBackend: 'OPENAI_CODEX_APP_SERVER' as WorkerBackend,
+    })
+
+    expect(isModelConfigCompatibleWithWorker(config, sdkWorker)).toBe(true)
+    expect(isModelConfigCompatibleWithWorker(config, appServerWorker)).toBe(true)
   })
 })

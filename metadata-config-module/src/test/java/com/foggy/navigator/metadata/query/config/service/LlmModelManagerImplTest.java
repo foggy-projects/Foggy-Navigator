@@ -2,14 +2,17 @@ package com.foggy.navigator.metadata.query.config.service;
 
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.LlmModelConfigEntity;
+import com.foggy.navigator.common.enums.ModelAccessScope;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.common.form.LlmModelConfigOwnerRepairForm;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.metadata.query.config.repository.AgentModelOverrideRepository;
 import com.foggy.navigator.metadata.query.config.repository.LlmModelConfigRepository;
 import com.foggy.navigator.metadata.query.config.repository.ModelWorkerAccessRepository;
+import com.foggy.navigator.spi.config.WorkerBackendConnectionTester;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -41,7 +45,43 @@ class LlmModelManagerImplTest {
     @BeforeEach
     void setUp() {
         service = new LlmModelManagerImpl(
-                llmModelRepo, overrideRepo, workerAccessRepo, credentialEncryptor, restTemplateBuilder);
+                llmModelRepo, overrideRepo, workerAccessRepo, credentialEncryptor,
+                restTemplateBuilder, java.util.List.of());
+    }
+
+    @Test
+    void saveModelConfigRejectsUltraForSdkBackendBeforePersistence() {
+        LlmModelConfigForm form = new LlmModelConfigForm();
+        form.setName("SDK Ultra");
+        form.setCategory(LlmModelCategory.CODING);
+        form.setModelName("codex-latest:ultra");
+        form.setAvailableModels(List.of("codex-latest:max"));
+        form.setWorkerBackend(ProviderRouteRegistry.BACKEND_OPENAI_CODEX);
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.saveModelConfig(
+                        "tenant-1", form, ResourceOwnerType.PLATFORM, "platform",
+                        ResourceOwnerType.PLATFORM, "admin-1", null));
+
+        assertTrue(error.getMessage().startsWith("CODEX_ULTRA_APP_SERVER_REQUIRED"));
+        verify(llmModelRepo, never()).save(any());
+    }
+
+    @Test
+    void updateModelConfigRejectsUnsupportedAppServerUltraCatalog() {
+        LlmModelConfigEntity entity = model(
+                "app-ultra", ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER,
+                ModelAccessScope.GLOBAL);
+        when(llmModelRepo.findById("app-ultra")).thenReturn(Optional.of(entity));
+        LlmModelConfigForm form = new LlmModelConfigForm();
+        form.setModelName("codex-latest:max");
+        form.setAvailableModels(List.of("codex-luna:ultra"));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.updateModelConfig("app-ultra", form));
+
+        assertTrue(error.getMessage().startsWith("CODEX_APP_SERVER_MODEL_UNSUPPORTED"));
+        verify(llmModelRepo, never()).save(any());
     }
 
     @Test
@@ -351,5 +391,178 @@ class LlmModelManagerImplTest {
         verify(llmModelRepo).save(argThat(saved ->
                 saved.getOwnerType() == ResourceOwnerType.PLATFORM
                         && "platform".equals(saved.getOwnerId())));
+    }
+
+    @Test
+    void listModelConfigsForWorkerFiltersSdkAndAppServerByIndependentCapabilities() {
+        WorkerBackendConnectionTester sdkTester = mock(WorkerBackendConnectionTester.class);
+        WorkerBackendConnectionTester appServerTester = mock(WorkerBackendConnectionTester.class);
+        when(sdkTester.getWorkerBackend()).thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX);
+        when(appServerTester.getWorkerBackend())
+                .thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
+        when(sdkTester.supportsWorker("worker-1", "gpt-5.6-codex")).thenReturn(true);
+        when(appServerTester.supportsWorker("worker-1", "gpt-5.6-codex")).thenReturn(false);
+        service = serviceWith(List.of(sdkTester, appServerTester));
+
+        LlmModelConfigEntity sdk = model(
+                "sdk", ProviderRouteRegistry.BACKEND_OPENAI_CODEX, ModelAccessScope.GLOBAL);
+        LlmModelConfigEntity appServer = model(
+                "app", ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER, ModelAccessScope.GLOBAL);
+        when(llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc("tenant-1"))
+                .thenReturn(List.of(sdk, appServer));
+
+        List<LlmModelConfigDTO> result = service.listModelConfigsForWorker("tenant-1", "worker-1");
+
+        assertEquals(List.of("sdk"), result.stream().map(LlmModelConfigDTO::getId).toList());
+        verify(sdkTester).supportsWorker("worker-1", "gpt-5.6-codex");
+        verify(appServerTester).supportsWorker("worker-1", "gpt-5.6-codex");
+    }
+
+    @Test
+    void listModelConfigsForWorkerFiltersUnsupportedAppServerVariantsAndKeepsBaseModel() {
+        WorkerBackendConnectionTester appServerTester = mock(WorkerBackendConnectionTester.class);
+        when(appServerTester.getWorkerBackend())
+                .thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
+        when(appServerTester.supportsWorker("worker-1", "codex-terra:high")).thenReturn(true);
+        when(appServerTester.supportsWorker("worker-1", "codex-terra:ultra")).thenReturn(false);
+        service = serviceWith(List.of(appServerTester));
+
+        LlmModelConfigEntity appConfig = model(
+                "app", ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER,
+                ModelAccessScope.GLOBAL);
+        appConfig.setModelName("codex-terra:high");
+        appConfig.setAvailableModels("[\"codex-terra:high\",\"codex-terra:ultra\"]");
+        when(llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc("tenant-1"))
+                .thenReturn(List.of(appConfig));
+
+        List<LlmModelConfigDTO> result = service.listModelConfigsForWorker(
+                "tenant-1", "worker-1");
+
+        assertEquals(1, result.size());
+        assertEquals(List.of("codex-terra:high"), result.get(0).getAvailableModels());
+        verify(appServerTester).supportsWorker("worker-1", "codex-terra:high");
+        verify(appServerTester).supportsWorker("worker-1", "codex-terra:ultra");
+    }
+
+    @Test
+    void validateModelAccessForWorkerRejectsAppServerModelWithoutEndpointCapability() {
+        WorkerBackendConnectionTester appServerTester = mock(WorkerBackendConnectionTester.class);
+        when(appServerTester.getWorkerBackend())
+                .thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
+        when(appServerTester.supportsWorker("worker-1", "gpt-5.6-codex")).thenReturn(false);
+        service = serviceWith(List.of(appServerTester));
+        when(llmModelRepo.findById("app"))
+                .thenReturn(Optional.of(model(
+                        "app", ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER,
+                        ModelAccessScope.GLOBAL)));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.validateModelAccessForWorker("app", "worker-1"));
+
+        assertEquals("WORKER_BACKEND_CAPABILITY_MISSING: Worker worker-1 does not provide "
+                + ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER, error.getMessage());
+    }
+
+    @Test
+    void validateModelAccessForWorkerChecksSelectedAgentModelInsteadOfConfigBaseModel() {
+        WorkerBackendConnectionTester appServerTester = mock(WorkerBackendConnectionTester.class);
+        when(appServerTester.getWorkerBackend())
+                .thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
+        when(appServerTester.supportsWorker("worker-1", "codex-terra:ultra")).thenReturn(false);
+        service = serviceWith(List.of(appServerTester));
+        LlmModelConfigEntity appConfig = model(
+                "app", ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER,
+                ModelAccessScope.GLOBAL);
+        appConfig.setModelName("codex-terra:high");
+        when(llmModelRepo.findById("app")).thenReturn(Optional.of(appConfig));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.validateModelAccessForWorker(
+                        "app", "worker-1", "codex-terra:ultra"));
+
+        assertTrue(error.getMessage().startsWith("WORKER_BACKEND_CAPABILITY_MISSING"));
+        verify(appServerTester).supportsWorker("worker-1", "codex-terra:ultra");
+        verify(appServerTester, never()).supportsWorker("worker-1", "codex-terra:high");
+    }
+
+    @Test
+    void restrictedModelAssignmentRejectsWorkerFromDifferentCodexBackend() {
+        WorkerBackendConnectionTester sdkTester = mock(WorkerBackendConnectionTester.class);
+        WorkerBackendConnectionTester appServerTester = mock(WorkerBackendConnectionTester.class);
+        when(sdkTester.getWorkerBackend()).thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX);
+        when(appServerTester.getWorkerBackend())
+                .thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
+        when(appServerTester.supportsWorker("sdk-only-worker", "codex-terra:ultra"))
+                .thenReturn(false);
+        service = serviceWith(List.of(sdkTester, appServerTester));
+        when(llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc("tenant-1"))
+                .thenReturn(List.of());
+
+        LlmModelConfigForm form = new LlmModelConfigForm();
+        form.setName("App Server");
+        form.setCategory(LlmModelCategory.CODING);
+        form.setModelName("codex-terra:ultra");
+        form.setWorkerBackend(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
+        form.setScope(ModelAccessScope.RESTRICTED);
+        form.setAllowedWorkerIds(List.of("sdk-only-worker"));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.saveModelConfig(
+                        "tenant-1", form, ResourceOwnerType.PLATFORM, "platform",
+                        ResourceOwnerType.PLATFORM, "user-1", null));
+
+        assertTrue(error.getMessage().startsWith("WORKER_BACKEND_CAPABILITY_MISSING"));
+        verify(workerAccessRepo, never()).save(any());
+        verify(sdkTester, never()).supportsWorker("sdk-only-worker", "codex-terra:ultra");
+    }
+
+    @Test
+    void capabilityMatchingCanonicalizesBackendAlias() {
+        WorkerBackendConnectionTester appServerTester = mock(WorkerBackendConnectionTester.class);
+        when(appServerTester.getWorkerBackend())
+                .thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
+        when(appServerTester.supportsWorker("worker-1", "gpt-5.6-codex")).thenReturn(false);
+        service = serviceWith(List.of(appServerTester));
+        when(llmModelRepo.findById("app-alias"))
+                .thenReturn(Optional.of(model(
+                        "app-alias", "openai-codex-app-server", ModelAccessScope.GLOBAL)));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.validateModelAccessForWorker("app-alias", "worker-1"));
+
+        verify(appServerTester).supportsWorker("worker-1", "gpt-5.6-codex");
+    }
+
+    @Test
+    void codexBackendsFailClosedWhenTheirCapabilityTesterIsUnavailable() {
+        when(llmModelRepo.findById("app"))
+                .thenReturn(Optional.of(model(
+                        "app", ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER,
+                        ModelAccessScope.GLOBAL)));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.validateModelAccessForWorker("app", "worker-1"));
+
+        assertTrue(error.getMessage().startsWith("WORKER_BACKEND_CAPABILITY_MISSING"));
+    }
+
+    private LlmModelManagerImpl serviceWith(List<WorkerBackendConnectionTester> testers) {
+        return new LlmModelManagerImpl(
+                llmModelRepo, overrideRepo, workerAccessRepo, credentialEncryptor,
+                restTemplateBuilder, testers);
+    }
+
+    private LlmModelConfigEntity model(String id, String backend, ModelAccessScope scope) {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId(id);
+        entity.setTenantId("tenant-1");
+        entity.setName(id);
+        entity.setCategory(LlmModelCategory.CODING);
+        entity.setWorkerBackend(backend);
+        entity.setModelName("gpt-5.6-codex");
+        entity.setScope(scope);
+        entity.setEnabled(true);
+        entity.setIsDefault(false);
+        return entity;
     }
 }

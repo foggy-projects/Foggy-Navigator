@@ -371,6 +371,7 @@ public class CodingAgentService {
         if (availableModels != null && !availableModels.isEmpty() && !availableModels.contains(normalizedModel)) {
             throw new IllegalArgumentException("defaultModel " + normalizedModel + " is not allowed by modelConfigId " + modelConfigId);
         }
+        llmModelManager.validateModelAccessForWorker(modelConfigId, workerId, normalizedModel);
     }
 
     private String blankToNull(String value) {

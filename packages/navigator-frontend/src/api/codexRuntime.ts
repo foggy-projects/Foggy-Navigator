@@ -6,7 +6,6 @@ import type {
   CodexRuntime,
   CodexRuntimeAvailability,
   CodexRuntimeRateLimits,
-  RegisterCodexRuntimeRequest,
   SaveCodexAppServerEndpointRequest,
   UpdateCodexRuntimeLifecycleRequest,
   UpdateCodexRuntimeRoutingRequest,
@@ -14,10 +13,12 @@ import type {
 
 export async function listCodexAppServerEndpoints(
   workerId: string,
+  options?: { suppressErrorMessage?: boolean },
 ): Promise<CodexAppServerEndpoint[]> {
   const rx = (await client.get('/codex-app-server-endpoints', {
     params: { workerId },
-  })) as unknown as RX<CodexAppServerEndpoint[]>
+    ...(options?.suppressErrorMessage ? { suppressErrorMessage: true } : {}),
+  } as any)) as unknown as RX<CodexAppServerEndpoint[]>
   return rx.data
 }
 
@@ -117,13 +118,6 @@ export async function unarchiveCodexRuntime(
     `/codex-runtimes/${encodeURIComponent(runtimeId)}/revisions/${revision}/unarchive`,
     request,
   )) as unknown as RX<CodexRuntime>
-  return rx.data
-}
-
-export async function registerCodexRuntime(
-  request: RegisterCodexRuntimeRequest,
-): Promise<CodexRuntime> {
-  const rx = (await client.post('/codex-runtimes', request)) as unknown as RX<CodexRuntime>
   return rx.data
 }
 

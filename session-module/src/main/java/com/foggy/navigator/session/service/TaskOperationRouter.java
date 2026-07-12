@@ -6,6 +6,7 @@ import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.util.DirectoryAgentId;
+import com.foggy.navigator.session.exception.SessionProviderBoundMismatchException;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -276,7 +277,7 @@ final class TaskOperationRouter {
     }
 
     /**
-     * Resume 上下文规范化：session 已绑定 provider 时，拒绝冲突的 providerType，并清除不兼容 modelConfigId。
+     * Resume 上下文规范化：session 已绑定 provider 时，拒绝任何显式或模型侧的跨 Provider 续接。
      */
     private void normalizeResumeRequest(TaskDispatchRequest request, String resolvedProviderType) {
         if (resolvedProviderType == null || resolvedProviderType.isBlank()) {
@@ -287,9 +288,8 @@ final class TaskOperationRouter {
         if (reqProvider == null || reqProvider.isBlank()) {
             request.setProviderType(resolvedProviderType);
         } else if (!resolvedProviderType.equals(reqProvider)) {
-            throw new IllegalArgumentException(
-                    "CONTEXT_WORKER_MISMATCH: providerType " + reqProvider
-                            + " conflicts with context/session-bound provider " + resolvedProviderType);
+            throw new SessionProviderBoundMismatchException(
+                    request.getSessionId(), resolvedProviderType, reqProvider);
         }
 
         String modelConfigId = request.getModelConfigId();
@@ -297,9 +297,8 @@ final class TaskOperationRouter {
             String modelProviderType = createTargetResolver.resolveProviderTypeFromModelConfig(modelConfigId);
             if (modelProviderType != null
                     && !TaskCreateTargetResolver.isModelProviderCompatible(modelProviderType, resolvedProviderType)) {
-                log.info("Resume normalize: clearing modelConfigId {} (targets {}, session bound to {})",
-                        modelConfigId, modelProviderType, resolvedProviderType);
-                request.setModelConfigId(null);
+                throw new SessionProviderBoundMismatchException(
+                        request.getSessionId(), resolvedProviderType, modelProviderType);
             }
         }
     }
@@ -327,8 +326,10 @@ final class TaskOperationRouter {
         if (userId == null || userId.isBlank()) {
             throw new IllegalArgumentException("Cannot cancel task " + taskId + ": userId is required for provider route");
         }
-        TaskCommandProvider provider = findTaskCommandProviderByType(providerType)
-                .orElseGet(() -> findProviderForTask(taskId));
+        TaskCommandProvider provider = providerType != null && !providerType.isBlank()
+                ? findTaskCommandProviderByType(providerType)
+                        .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerType))
+                : findProviderForTask(taskId);
         provider.cancelTaskDirect(taskId, userId);
         log.info("Cancelled task via provider route: taskId={}, providerType={}", taskId, provider.getProviderType());
     }

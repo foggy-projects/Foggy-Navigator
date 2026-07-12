@@ -16,6 +16,8 @@
 
 ## 总体实施原则
 
+> 2026-07-12 演进说明：本文保留 OPT-001 原始实施顺序与证据口径；“不新增 Provider/Backend”的前向设计已被 [OPT-005](./OPT-005-codex-app-server-independent-provider.md) 取代，当前路由以独立 Backend、Provider 和 Session 为准。
+
 1. 先解决“任务是否已被接受”的一致性，再讨论跨 Worker 路由。
 2. 新 Worker 全档位实现与生产路由分离；dark 能力不等于可切流。
 3. 独立部署但不新增 Provider，Java/Session/PC 继续消费统一 Codex 契约。

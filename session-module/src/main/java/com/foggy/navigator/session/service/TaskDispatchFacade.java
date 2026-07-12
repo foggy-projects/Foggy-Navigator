@@ -13,6 +13,7 @@ import com.foggy.navigator.common.repository.NativeSubtaskStateRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
+import com.foggy.navigator.session.exception.SessionProviderBoundMismatchException;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
@@ -152,6 +153,7 @@ public class TaskDispatchFacade {
 
         TaskCreateTargetResolver.CreateExecutionTarget target = createTargetResolver().resolveCreateExecutionTarget(request);
         if (target.directProviderRoute()) {
+            validateSessionProviderBeforeDispatch(request.getSessionId(), target.providerType());
             rejectBusyContextContinuationIfNeeded(target.providerType(), request, context);
             return createTaskDirect(target.providerType(), request, context);
         }
@@ -1105,6 +1107,21 @@ public class TaskDispatchFacade {
         sessionRepository.findById(sessionId).ifPresent(session -> {
             if (!userId.equals(trimToNull(session.getUserId()))) {
                 throw new IllegalArgumentException("SESSION_ACCESS_DENIED: session belongs to another user");
+            }
+        });
+    }
+
+    private void validateSessionProviderBeforeDispatch(String sessionId, String requestedProviderType) {
+        String normalizedSessionId = trimToNull(sessionId);
+        String normalizedRequestedProvider = trimToNull(requestedProviderType);
+        if (normalizedSessionId == null || normalizedRequestedProvider == null) {
+            return;
+        }
+        sessionRepository.findById(normalizedSessionId).ifPresent(session -> {
+            String boundProviderType = trimToNull(session.getProviderType());
+            if (boundProviderType != null && !boundProviderType.equals(normalizedRequestedProvider)) {
+                throw new SessionProviderBoundMismatchException(
+                        normalizedSessionId, boundProviderType, normalizedRequestedProvider);
             }
         });
     }

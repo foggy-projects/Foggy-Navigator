@@ -106,9 +106,14 @@ class CodexBizTaskProviderTest {
                 "permissionId", "task:task-biz-1:string:request-1",
                 "answers", Map.of("choice", "one"));
 
+        when(codexTaskService.getTaskByIdAndUserForProvider(
+                "task-biz-1", "user-1", "codex-biz-worker"))
+                .thenReturn(Optional.of(DispatchTaskDTO.builder().taskId("task-biz-1").build()));
+
         provider.respondToTask("task-biz-1", "user-1", response);
 
-        verify(codexTaskService).respondToTask("task-biz-1", "user-1", response);
+        verify(codexTaskService).respondToTaskForProvider(
+                "codex-biz-worker", "task-biz-1", "user-1", response);
     }
 
     @Test
@@ -129,7 +134,8 @@ class CodexBizTaskProviderTest {
                 .taskId("task-biz-1")
                 .providerType("codex-biz-worker")
                 .build();
-        when(codexTaskService.createTaskDirect(any(), eq("user-1"), eq("tenant-1"))).thenReturn(task);
+        when(codexTaskService.createTaskDirectForProvider(
+                eq("codex-biz-worker"), any(), eq("user-1"), eq("tenant-1"))).thenReturn(task);
 
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("workerId", "worker-1");
@@ -139,7 +145,7 @@ class CodexBizTaskProviderTest {
         DispatchTaskDTO result = provider.createTaskDirect(params, "user-1", "tenant-1");
 
         assertEquals("task-biz-1", result.getTaskId());
-        verify(codexTaskService).createTaskDirect(argThat(normalized ->
+        verify(codexTaskService).createTaskDirectForProvider(eq("codex-biz-worker"), argThat(normalized ->
                         "codex-biz-worker".equals(normalized.get("providerType"))
                                 && "tenant/world-sim/scenario-1/actor-1".equals(normalized.get("codexHomeKey"))
                                 && "danger-full-access".equals(normalized.get("sandboxMode"))
@@ -155,7 +161,8 @@ class CodexBizTaskProviderTest {
                 .taskId("task-biz-2")
                 .providerType("codex-biz-worker")
                 .build();
-        when(codexTaskService.createTaskDirect(any(), eq("user-1"), eq("tenant-1"))).thenReturn(task);
+        when(codexTaskService.createTaskDirectForProvider(
+                eq("codex-biz-worker"), any(), eq("user-1"), eq("tenant-1"))).thenReturn(task);
 
         provider.createTaskDirect(Map.of(
                 "workerId", "worker-1",
@@ -169,7 +176,7 @@ class CodexBizTaskProviderTest {
                 )
         ), "user-1", "tenant-1");
 
-        verify(codexTaskService).createTaskDirect(argThat(normalized ->
+        verify(codexTaskService).createTaskDirectForProvider(eq("codex-biz-worker"), argThat(normalized ->
                         "actor-home".equals(normalized.get("codexHomeKey"))
                                 && !normalized.containsKey("sandboxMode")
                                 && !normalized.containsKey("approvalPolicy")
@@ -184,7 +191,8 @@ class CodexBizTaskProviderTest {
                 .taskId("task-biz-3")
                 .providerType("codex-biz-worker")
                 .build();
-        when(codexTaskService.createTaskDirect(any(), eq("user-1"), eq("tenant-1"))).thenReturn(task);
+        when(codexTaskService.createTaskDirectForProvider(
+                eq("codex-biz-worker"), any(), eq("user-1"), eq("tenant-1"))).thenReturn(task);
 
         Map<String, Object> policy = Map.of(
                 "sandbox_mode", "workspace-write",
@@ -199,7 +207,7 @@ class CodexBizTaskProviderTest {
                 "codex_policy", policy
         ), "user-1", "tenant-1");
 
-        verify(codexTaskService).createTaskDirect(argThat(normalized ->
+        verify(codexTaskService).createTaskDirectForProvider(eq("codex-biz-worker"), argThat(normalized ->
                         "codex-biz-worker".equals(normalized.get("providerType"))
                                 && "tenant/world-sim/scenario-1/actor-2".equals(normalized.get("codexHomeKey"))
                                 && policy.equals(normalized.get("codex_policy"))
@@ -216,7 +224,8 @@ class CodexBizTaskProviderTest {
                 .taskId("task-biz-resume")
                 .providerType("codex-biz-worker")
                 .build();
-        when(codexTaskService.resumeTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(task);
+        when(codexTaskService.resumeTaskForProvider(
+                eq("codex-biz-worker"), eq("user-1"), eq("tenant-1"), any())).thenReturn(task);
 
         DispatchTaskDTO result = provider.resumeTask("user-1", "tenant-1", Map.of(
                 "workerId", "worker-1",
@@ -226,7 +235,8 @@ class CodexBizTaskProviderTest {
         ));
 
         assertEquals("task-biz-resume", result.getTaskId());
-        verify(codexTaskService).resumeTask(eq("user-1"), eq("tenant-1"), argThat(normalized ->
+        verify(codexTaskService).resumeTaskForProvider(eq("codex-biz-worker"),
+                eq("user-1"), eq("tenant-1"), argThat(normalized ->
                 "codex-biz-worker".equals(normalized.get("providerType"))
                         && "tenant/world-sim/scenario-1/actor-3".equals(normalized.get("codexHomeKey"))
                         && "danger-full-access".equals(normalized.get("sandboxMode"))
@@ -244,7 +254,7 @@ class CodexBizTaskProviderTest {
                 () -> provider.cancelTaskDirect("task-1", "user-1"));
 
         assertEquals("Task not found: task-1", error.getMessage());
-        verify(codexTaskService, never()).cancelTaskDirect(any(), any());
+        verify(codexTaskService, never()).cancelTaskDirectForProvider(any(), any(), any());
     }
 
     @Test
@@ -258,7 +268,8 @@ class CodexBizTaskProviderTest {
 
         provider.deleteTask("user-1", "task-biz-1");
 
-        verify(codexTaskService).deleteTask("user-1", "task-biz-1");
+        verify(codexTaskService).deleteTaskForProvider(
+                "codex-biz-worker", "user-1", "task-biz-1");
     }
 
     @Test
@@ -270,7 +281,7 @@ class CodexBizTaskProviderTest {
                 () -> provider.resyncTask("task-1", "user-1"));
 
         assertEquals("Task not found: task-1", error.getMessage());
-        verify(codexTaskService, never()).resyncTask(any(), any());
+        verify(codexTaskService, never()).resyncTaskForProvider(any(), any(), any());
     }
 
     @Test
@@ -283,11 +294,13 @@ class CodexBizTaskProviderTest {
                 "task-biz-1", "user-1", "codex-biz-worker")).thenReturn(Optional.of(task));
         Map<String, Object> params = Map.of("turnIndex", 1);
         Map<String, Object> result = Map.of("status", "rewound");
-        when(codexTaskService.rewindTask("task-biz-1", "user-1", params)).thenReturn(result);
+        when(codexTaskService.rewindTaskForProvider(
+                "codex-biz-worker", "task-biz-1", "user-1", params)).thenReturn(result);
 
         Object actual = provider.rewindTask("task-biz-1", "user-1", params);
 
         assertEquals(result, actual);
-        verify(codexTaskService).rewindTask("task-biz-1", "user-1", params);
+        verify(codexTaskService).rewindTaskForProvider(
+                "codex-biz-worker", "task-biz-1", "user-1", params);
     }
 }

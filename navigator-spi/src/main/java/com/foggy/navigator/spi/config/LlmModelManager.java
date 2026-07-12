@@ -156,6 +156,19 @@ public interface LlmModelManager {
      */
     void validateModelAccessForWorker(String modelConfigId, String workerId);
 
+    /**
+     * 校验指定 Worker 是否有权且有能力使用模型配置中的具体模型。
+     *
+     * @param modelConfigId 模型配置ID
+     * @param workerId Worker ID
+     * @param modelName 配置内选中的具体模型名称
+     * @throws IllegalArgumentException 如果模型不存在、Worker 无权使用或后端不支持所选模型
+     */
+    default void validateModelAccessForWorker(
+            String modelConfigId, String workerId, String modelName) {
+        validateModelAccessForWorker(modelConfigId, workerId);
+    }
+
     // ========== 排序 ==========
 
     /**

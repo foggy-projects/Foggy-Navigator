@@ -2,8 +2,10 @@ import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
 import {
+  assertSdkCodexConfigSupported,
+  CODEX_ULTRA_APP_SERVER_REQUIRED,
   CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR,
-  resolveModelAlias,
+  CodexUltraAppServerRequiredError,
   resolveSupportedModelAlias,
   runQuery,
   taskBroadcasts,
@@ -17,8 +19,7 @@ import { validateQueryRequest } from '../validation/query.js'
 import { isPathWithinAllowedCwd } from '../path-guards.js'
 
 export { isPathWithinAllowedCwd }
-
-export const CODEX_ULTRA_APP_SERVER_REQUIRED = 'CODEX_ULTRA_APP_SERVER_REQUIRED'
+export { CODEX_ULTRA_APP_SERVER_REQUIRED }
 
 export function isUnsupportedCodexModelRequest(
   model: unknown,
@@ -32,6 +33,7 @@ export function isUnsupportedCodexModelRequest(
     return false
   } catch (error) {
     if (error instanceof UnsupportedCodexModelError) return true
+    if (error instanceof CodexUltraAppServerRequiredError) return false
     throw error
   }
 }
@@ -39,17 +41,22 @@ export function isUnsupportedCodexModelRequest(
 export function requiresAppServerForUltra(
   model: unknown,
   defaultModel: string = config.defaultModel,
-  aliases: Record<string, string> = config.modelAliases
+  aliases: Record<string, string> = config.modelAliases,
+  codexConfig?: unknown
 ): boolean {
   // Keep malformed non-string values on the normal 400 validation path.
   if (model !== undefined && typeof model !== 'string') return false
 
   const requestedModel = model?.trim() || defaultModel
-  if (requestedModel.toLowerCase() === 'codex-ultra') return true
-  const resolvedModel = resolveModelAlias(requestedModel, aliases).resolved
-  const colonIndex = resolvedModel.indexOf(':')
-  return colonIndex > 0
-    && resolvedModel.substring(colonIndex + 1).trim().toLowerCase() === 'ultra'
+  try {
+    resolveSupportedModelAlias(requestedModel, aliases)
+    assertSdkCodexConfigSupported(codexConfig)
+    return false
+  } catch (error) {
+    if (error instanceof CodexUltraAppServerRequiredError) return true
+    if (error instanceof UnsupportedCodexModelError) return false
+    throw error
+  }
 }
 
 const router = Router()
@@ -62,7 +69,12 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     res.status(400).json({ error: UNSUPPORTED_CODEX_MODEL })
     return
   }
-  if (requiresAppServerForUltra(req.body?.model)) {
+  if (requiresAppServerForUltra(
+    req.body?.model,
+    config.defaultModel,
+    config.modelAliases,
+    req.body?.codex_config,
+  )) {
     res.status(409).json({
       code: CODEX_ULTRA_APP_SERVER_REQUIRED,
       error: CODEX_ULTRA_APP_SERVER_REQUIRED,

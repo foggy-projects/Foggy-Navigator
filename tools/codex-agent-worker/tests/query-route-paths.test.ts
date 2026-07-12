@@ -32,8 +32,16 @@ test('Mini requests are rejected after direct or alias resolution', () => {
 test('all Ultra queries fail closed for the independent app-server runtime', () => {
   assert.equal(CODEX_ULTRA_APP_SERVER_REQUIRED, 'CODEX_ULTRA_APP_SERVER_REQUIRED')
   assert.equal(requiresAppServerForUltra('codex-ultra', 'codex-latest', TEST_ALIASES), true)
+  assert.equal(requiresAppServerForUltra('CODEX-ULTRA:high', 'codex-latest', TEST_ALIASES), true)
   assert.equal(requiresAppServerForUltra('gpt-5.6-sol:ultra', 'codex-latest', TEST_ALIASES), true)
+  assert.equal(requiresAppServerForUltra('codex-latest:ultra', 'codex-latest', TEST_ALIASES), true)
   assert.equal(requiresAppServerForUltra(undefined, 'codex-ultra', TEST_ALIASES), true)
+  assert.equal(requiresAppServerForUltra(
+    'codex-latest',
+    'codex-latest',
+    TEST_ALIASES,
+    { model_reasoning_effort: ' ULTRA ' },
+  ), true)
   assert.equal(requiresAppServerForUltra('codex-max', 'codex-latest', TEST_ALIASES), false)
 })
 
@@ -50,6 +58,13 @@ test('query route rejects new and resumed Ultra sessions before creating Worker 
     for (const body of [
       { prompt: 'new Ultra task', model: 'codex-ultra' },
       { prompt: 'resume Ultra task', model: 'codex-ultra', session_id: 'sdk-thread-1' },
+      { prompt: 'alias override Ultra task', model: 'codex-latest:ultra' },
+      { prompt: 'stable Ultra name cannot be weakened', model: 'CODEX-ULTRA:high' },
+      {
+        prompt: 'generic config cannot bypass the SDK boundary',
+        model: 'codex-latest',
+        codex_config: { model_reasoning_effort: 'ultra' },
+      },
     ]) {
       const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/query`, {
         method: 'POST',

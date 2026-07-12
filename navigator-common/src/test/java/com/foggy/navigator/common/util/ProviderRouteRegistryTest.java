@@ -13,6 +13,9 @@ class ProviderRouteRegistryTest {
     void providerTypeForWorkerBackend_mapsSupportedBackends() {
         assertEquals(ProviderRouteRegistry.PROVIDER_CODEX_WORKER,
                 ProviderRouteRegistry.providerTypeForWorkerBackendOrNull(ProviderRouteRegistry.BACKEND_OPENAI_CODEX));
+        assertEquals(ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER,
+                ProviderRouteRegistry.providerTypeForWorkerBackendOrNull(
+                        ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER));
         assertEquals(ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
                 ProviderRouteRegistry.providerTypeForWorkerBackendOrNull(ProviderRouteRegistry.BACKEND_CLAUDE_CODE));
         assertEquals(ProviderRouteRegistry.PROVIDER_GEMINI_WORKER,
@@ -25,6 +28,8 @@ class ProviderRouteRegistryTest {
     void providerTypeForWorkerBackend_normalizesBackendTokens() {
         assertEquals(ProviderRouteRegistry.PROVIDER_CODEX_WORKER,
                 ProviderRouteRegistry.providerTypeForWorkerBackendOrNull("openai-codex"));
+        assertEquals(ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER,
+                ProviderRouteRegistry.providerTypeForWorkerBackendOrNull("openai-codex-app-server"));
         assertEquals(ProviderRouteRegistry.PROVIDER_LANGGRAPH_BIZ_WORKER,
                 ProviderRouteRegistry.providerTypeForWorkerBackendOrNull(" langgraph_biz "));
     }
@@ -40,6 +45,7 @@ class ProviderRouteRegistryTest {
     @Test
     void isKnownWorkerBackend_acceptsOnlyCanonicalBackendFamily() {
         assertTrue(ProviderRouteRegistry.isKnownWorkerBackend("openai-codex"));
+        assertTrue(ProviderRouteRegistry.isKnownWorkerBackend("openai-codex-app-server"));
         assertTrue(ProviderRouteRegistry.isKnownWorkerBackend("GEMINI_CLI"));
         assertFalse(ProviderRouteRegistry.isKnownWorkerBackend("codex-worker"));
         assertFalse(ProviderRouteRegistry.isKnownWorkerBackend("UNKNOWN"));
@@ -49,6 +55,8 @@ class ProviderRouteRegistryTest {
     void workerBackendForRouteToken_mapsProviderAndShortAliases() {
         assertEquals(ProviderRouteRegistry.BACKEND_OPENAI_CODEX,
                 ProviderRouteRegistry.workerBackendForRouteTokenOrNull("codex-biz-worker"));
+        assertEquals(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER,
+                ProviderRouteRegistry.workerBackendForRouteTokenOrNull("codex-app-server-worker"));
         assertEquals(ProviderRouteRegistry.BACKEND_CLAUDE_CODE,
                 ProviderRouteRegistry.workerBackendForRouteTokenOrNull("claude"));
         assertEquals(ProviderRouteRegistry.BACKEND_GEMINI_CLI,
@@ -78,6 +86,12 @@ class ProviderRouteRegistryTest {
         assertFalse(ProviderRouteRegistry.isModelProviderCompatible(
                 ProviderRouteRegistry.PROVIDER_CLAUDE_WORKER,
                 ProviderRouteRegistry.PROVIDER_CODEX_WORKER));
+        assertFalse(ProviderRouteRegistry.isModelProviderCompatible(
+                ProviderRouteRegistry.PROVIDER_CODEX_WORKER,
+                ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER));
+        assertFalse(ProviderRouteRegistry.isModelProviderCompatible(
+                ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER,
+                ProviderRouteRegistry.PROVIDER_CODEX_WORKER));
         assertFalse(ProviderRouteRegistry.isModelProviderCompatible(null,
                 ProviderRouteRegistry.PROVIDER_CODEX_WORKER));
         assertFalse(ProviderRouteRegistry.isModelProviderCompatible(
@@ -89,5 +103,7 @@ class ProviderRouteRegistryTest {
     void knownProviderTypes_includesDirectCodexBizRoute() {
         assertTrue(ProviderRouteRegistry.knownProviderTypes()
                 .contains(ProviderRouteRegistry.PROVIDER_CODEX_BIZ_WORKER));
+        assertTrue(ProviderRouteRegistry.knownProviderTypes()
+                .contains(ProviderRouteRegistry.PROVIDER_CODEX_APP_SERVER_WORKER));
     }
 }

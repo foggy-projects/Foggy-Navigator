@@ -1,9 +1,10 @@
-import type { LlmModelConfig } from '@/api/types'
+import type { LlmModelConfig, WorkerBackend } from '@/api/types'
+import { isCodexBackend } from '@/utils/workerBackend'
 
 export type MobileModelOption = {
   value: string
   label: string
-  backend: string
+  backend: WorkerBackend
   group?: string
   optionLabel?: string
   reasoningEffort?: string
@@ -28,27 +29,43 @@ const REASONING_LEVELS = [
   ['max', 'Max'],
 ] as const
 
-function codexFamily(alias: string, group: string, supportsUltra: boolean): MobileModelOption[] {
+function codexFamily(
+  alias: string,
+  group: string,
+  backend: 'OPENAI_CODEX' | 'OPENAI_CODEX_APP_SERVER',
+  supportsUltra: boolean,
+): MobileModelOption[] {
   const levels = supportsUltra ? [...REASONING_LEVELS, ['ultra', 'Ultra'] as const] : REASONING_LEVELS
   return levels.map(([effort, label]) => ({
     value: `${alias}:${effort}`,
     label: `${group} · ${label}`,
     optionLabel: label,
     group,
-    backend: 'OPENAI_CODEX',
+    backend,
     reasoningEffort: effort,
   }))
 }
 
+const CODEX_SDK_MODEL_OPTIONS: MobileModelOption[] = [
+  ...codexFamily('codex-latest', 'Codex Sol', 'OPENAI_CODEX', false),
+  ...codexFamily('codex-terra', 'Codex Terra', 'OPENAI_CODEX', false),
+  ...codexFamily('codex-luna', 'Codex Luna', 'OPENAI_CODEX', false),
+]
+
+const CODEX_APP_SERVER_MODEL_OPTIONS: MobileModelOption[] = [
+  ...codexFamily('codex-latest', 'Codex Sol', 'OPENAI_CODEX_APP_SERVER', true),
+  ...codexFamily('codex-terra', 'Codex Terra', 'OPENAI_CODEX_APP_SERVER', true),
+  ...codexFamily('codex-luna', 'Codex Luna', 'OPENAI_CODEX_APP_SERVER', false),
+]
+
 export const MOBILE_MODEL_OPTIONS: MobileModelOption[] = [
   ...BASE_MODELS,
-  ...codexFamily('codex-latest', 'Codex Sol', true),
-  ...codexFamily('codex-terra', 'Codex Terra', true),
-  ...codexFamily('codex-luna', 'Codex Luna', false),
+  ...CODEX_SDK_MODEL_OPTIONS,
+  ...CODEX_APP_SERVER_MODEL_OPTIONS,
 ]
 
 const CANONICAL_CODEX = new Set(
-  MOBILE_MODEL_OPTIONS.filter((option) => option.backend === 'OPENAI_CODEX').map((option) => option.value),
+  [...CODEX_SDK_MODEL_OPTIONS, ...CODEX_APP_SERVER_MODEL_OPTIONS].map((option) => option.value),
 )
 const LEGACY_CODEX = new Map([
   ['codex-latest', 'codex-latest:medium'],
@@ -89,7 +106,13 @@ export function normalizeMobileCodexModel(value: string | null | undefined): str
 }
 
 export function isMobileSelectablePlatformModel(model: LlmModelConfig): boolean {
-  return model.hasApiKey || ['CLAUDE_CODE', 'OPENAI_CODEX', 'GEMINI_CLI', 'LANGGRAPH_BIZ'].includes(model.workerBackend || '')
+  return model.hasApiKey || [
+    'CLAUDE_CODE',
+    'OPENAI_CODEX',
+    'OPENAI_CODEX_APP_SERVER',
+    'GEMINI_CLI',
+    'LANGGRAPH_BIZ',
+  ].includes(model.workerBackend || '')
 }
 
 export function resolveMobileModelOptions(config: LlmModelConfig | null | undefined): MobileModelOption[] {
@@ -97,7 +120,7 @@ export function resolveMobileModelOptions(config: LlmModelConfig | null | undefi
   const candidates = MOBILE_MODEL_OPTIONS.filter((option) => option.backend === backend)
   const allowed = config?.availableModels
   if (!allowed?.length) return candidates
-  if (backend !== 'OPENAI_CODEX') {
+  if (!isCodexBackend(backend)) {
     const allowedSet = new Set(allowed)
     return candidates.filter((option) => allowedSet.has(option.value))
   }

@@ -17,7 +17,7 @@ async function mockSettingsApi(page: Page) {
   })
 }
 
-test('documents Codex App Server Worker installation and runtime registration', async ({ page }) => {
+test('documents Codex App Server Worker installation and Endpoint synchronization', async ({ page }) => {
   await mockSettingsApi(page)
   await page.goto('/#/settings')
 
@@ -36,6 +36,9 @@ test('documents Codex App Server Worker installation and runtime registration', 
   await expect(drawer.getByText(/CODEX_APP_SERVER_STATE_KEY=<首装自动生成的32字节base64密钥>/)).toBeVisible()
   await expect(drawer.getByText(/CODEX_HOME=<install-dir>\/codex-home/)).toBeVisible()
   await expect(drawer.getByText(/模型 API Key 由 Navigator ModelConfig 按任务下发/)).toBeVisible()
-  await expect(drawer.getByText(/Worker Token 非空时再填写相同值/)).toBeVisible()
+  await expect(drawer.getByText(/切到「Codex App Server」Tab/)).toBeVisible()
+  await expect(drawer.getByText(/添加 .*Endpoint/)).toBeVisible()
+  await expect(drawer.getByText(/点击同步，由平台读取 capability 并派生 Dark Runtime/)).toBeVisible()
+  await expect(drawer.getByText(/注册 Runtime ID/)).toHaveCount(0)
   await expect(drawer.getByText('平台接入与 Ultra', { exact: true })).toBeVisible()
 })

@@ -33,6 +33,7 @@ public class CodexBizTaskProvider implements TaskLookupProvider, TaskCommandProv
             TaskQueryCapability.CREATE_TASK_DIRECT,
             TaskQueryCapability.RESUME_TASK,
             TaskQueryCapability.RESPOND_TO_TASK,
+            TaskQueryCapability.RECONNECT_TASK,
             TaskQueryCapability.CANCEL_TASK,
             TaskQueryCapability.DELETE_TASK,
             TaskQueryCapability.RESYNC_TASK,
@@ -55,17 +56,26 @@ public class CodexBizTaskProvider implements TaskLookupProvider, TaskCommandProv
 
     @Override
     public DispatchTaskDTO createTaskDirect(Map<String, Object> params, String userId, String tenantId) {
-        return codexTaskService.createTaskDirect(normalizeParams(params), userId, tenantId);
+        return codexTaskService.createTaskDirectForProvider(
+                getProviderType(), normalizeParams(params), userId, tenantId);
     }
 
     @Override
     public DispatchTaskDTO resumeTask(String userId, String tenantId, Map<String, Object> params) {
-        return codexTaskService.resumeTask(userId, tenantId, normalizeParams(params));
+        return codexTaskService.resumeTaskForProvider(
+                getProviderType(), userId, tenantId, normalizeParams(params));
     }
 
     @Override
     public void respondToTask(String taskId, String userId, Map<String, Object> response) {
-        codexTaskService.respondToTask(taskId, userId, response);
+        ensureTaskBelongsToProvider(taskId, userId);
+        codexTaskService.respondToTaskForProvider(getProviderType(), taskId, userId, response);
+    }
+
+    @Override
+    public void reconnectTask(String taskId, String userId) {
+        ensureTaskBelongsToProvider(taskId, userId);
+        codexTaskService.reconnectTaskForProvider(getProviderType(), taskId, userId);
     }
 
     @Override
@@ -135,7 +145,7 @@ public class CodexBizTaskProvider implements TaskLookupProvider, TaskCommandProv
     @Override
     public void cancelTaskDirect(String taskId, String userId) {
         ensureTaskBelongsToProvider(taskId, userId);
-        codexTaskService.cancelTaskDirect(taskId, userId);
+        codexTaskService.cancelTaskDirectForProvider(getProviderType(), taskId, userId);
     }
 
     @Deprecated(since = "1.3.1", forRemoval = false)
@@ -147,19 +157,19 @@ public class CodexBizTaskProvider implements TaskLookupProvider, TaskCommandProv
     @Override
     public void deleteTask(String userId, String taskId) {
         ensureTaskBelongsToProvider(taskId, userId);
-        codexTaskService.deleteTask(userId, taskId);
+        codexTaskService.deleteTaskForProvider(getProviderType(), userId, taskId);
     }
 
     @Override
     public Object resyncTask(String taskId, String userId) {
         ensureTaskBelongsToProvider(taskId, userId);
-        return codexTaskService.resyncTask(taskId, userId);
+        return codexTaskService.resyncTaskForProvider(getProviderType(), taskId, userId);
     }
 
     @Override
     public Object rewindTask(String taskId, String userId, Map<String, Object> params) {
         ensureTaskBelongsToProvider(taskId, userId);
-        return codexTaskService.rewindTask(taskId, userId, params);
+        return codexTaskService.rewindTaskForProvider(getProviderType(), taskId, userId, params);
     }
 
     private Map<String, Object> normalizeParams(Map<String, Object> params) {

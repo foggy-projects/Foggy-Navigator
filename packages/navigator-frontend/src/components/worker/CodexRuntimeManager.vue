@@ -158,15 +158,6 @@
             @click="loadRuntimes()"
           />
         </el-tooltip>
-        <el-button
-          text
-          type="primary"
-          :icon="Plus"
-          data-testid="add-codex-runtime"
-          @click="toggleRegistration"
-        >
-          手动注册
-        </el-button>
       </div>
     </div>
 
@@ -189,58 +180,6 @@
       <span class="status-dot" />
       <span>Codex Ultra 可用</span>
       <span class="ultra-ready-count">{{ readyUltraRuntimeCount }} 个 Runtime</span>
-    </div>
-
-    <div v-if="showRegistration" class="runtime-registration" data-testid="runtime-registration">
-      <div v-if="revisionSource" class="registration-context">
-        为 {{ revisionSource.runtimeId }}@{{ revisionSource.revision }} 新建修订；新修订固定从 Disabled + Dark 开始。
-      </div>
-      <div class="registration-grid">
-        <label class="runtime-field">
-          <span>Runtime ID</span>
-          <el-input
-            v-model="registration.runtimeId"
-            :disabled="!!revisionSource"
-            placeholder="如 codex-app-server-local"
-            data-testid="runtime-id-input"
-          />
-        </label>
-        <label class="runtime-field">
-          <span>Endpoint</span>
-          <el-input
-            v-model="registration.endpointUrl"
-            placeholder="如 http://localhost:3062"
-            data-testid="runtime-endpoint-input"
-          />
-        </label>
-        <label class="runtime-field runtime-token-field">
-          <span>Worker 服务令牌（可选）</span>
-          <el-input
-            v-model="registration.authToken"
-            type="password"
-            autocomplete="new-password"
-            placeholder="留空表示 Worker 未启用 HTTP 认证"
-            data-testid="runtime-token-input"
-          />
-        </label>
-      </div>
-      <div class="registration-footer">
-        <span class="dark-registration-state">
-          <el-tag size="small" type="info" effect="plain">Dark</el-tag>
-          <span>默认禁用，流量 0%</span>
-        </span>
-        <div class="registration-actions">
-          <el-button @click="cancelRegistration">取消</el-button>
-          <el-button
-            type="primary"
-            :loading="registering"
-            data-testid="register-codex-runtime"
-            @click="handleRegister"
-          >
-            {{ revisionSource ? '创建修订并检查' : '注册并检查' }}
-          </el-button>
-        </div>
-      </div>
     </div>
 
     <div v-loading="loading" class="runtime-list">
@@ -282,15 +221,6 @@
             </span>
           </div>
           <div class="runtime-actions">
-            <el-tooltip content="新建修订" placement="top">
-              <el-button
-                text
-                circle
-                :icon="DocumentAdd"
-                :aria-label="`为 ${runtime.runtimeId}@${runtime.revision} 新建修订`"
-                @click="startNewRevision(runtime)"
-              />
-            </el-tooltip>
             <el-tooltip v-if="runtime.archived" content="恢复为 Disabled + Dark" placement="top">
               <el-button
                 text
@@ -495,7 +425,6 @@ import {
   Box,
   Check,
   Delete,
-  DocumentAdd,
   Edit,
   Plus,
   Refresh,
@@ -511,7 +440,6 @@ import {
   listCodexAppServerEndpoints,
   listCodexRuntimes,
   refreshCodexRuntime,
-  registerCodexRuntime,
   syncCodexAppServerEndpoint,
   unarchiveCodexRuntime,
   updateCodexAppServerEndpoint,
@@ -544,6 +472,9 @@ import {
 const props = defineProps<{
   workerId: string
 }>()
+const emit = defineEmits<{
+  capabilityChanged: []
+}>()
 
 interface RoutingDraft {
   enabled: boolean
@@ -564,21 +495,13 @@ const loadFailed = ref(false)
 const showEndpointEditor = ref(false)
 const editingEndpointId = ref<string | null>(null)
 const endpointSaving = ref(false)
-const showRegistration = ref(false)
 const showArchived = ref(false)
-const registering = ref(false)
-const revisionSource = ref<Pick<CodexRuntime, 'runtimeId' | 'revision'> | null>(null)
 const refreshingKeys = reactive(new Set<string>())
 const savingKeys = reactive(new Set<string>())
 const archivingKeys = reactive(new Set<string>())
 const rateLimitsByRuntime = reactive<Record<string, CodexRuntimeRateLimits | undefined>>({})
 const rateLimitLoadingKeys = reactive(new Set<string>())
 const rateLimitErrorKeys = reactive(new Set<string>())
-const registration = reactive({
-  runtimeId: '',
-  endpointUrl: '',
-  authToken: '',
-})
 
 let autoRefreshTimer: ReturnType<typeof setInterval> | undefined
 let listRequestSequence = 0
@@ -888,6 +811,7 @@ async function handleSaveEndpoint(): Promise<void> {
     else endpoints.value.unshift(saved)
     const wasEditing = endpointId !== null
     cancelEndpointEditor()
+    emit('capabilityChanged')
     ElMessage.success(wasEditing ? 'Endpoint 已保存，请同步后生效' : 'Endpoint 已添加，请同步')
   } catch {
     if (isCurrentWorkerOperation(workerId, operationGeneration)) {
@@ -911,6 +835,7 @@ async function handleSyncEndpoint(endpoint: CodexAppServerEndpoint): Promise<voi
       replaceRuntime(result.runtime)
       void loadRuntimeRateLimits(result.runtime)
     }
+    emit('capabilityChanged')
     ElMessage.success(result.runtimeCreated ? 'Endpoint 已同步，已创建新的 Dark Runtime' : 'Endpoint 已同步，Runtime 保持不变')
   } catch {
     if (isCurrentWorkerOperation(workerId, operationGeneration)) {
@@ -941,6 +866,7 @@ async function handleDeleteEndpoint(endpoint: CodexAppServerEndpoint): Promise<v
     if (!isCurrentWorkerOperation(workerId, operationGeneration)) return
     endpoints.value = endpoints.value.filter(item => item.endpointId !== endpoint.endpointId)
     await loadRuntimes(false, false, true)
+    emit('capabilityChanged')
     ElMessage.success('Endpoint 已删除，关联 Runtime 已停止新任务路由')
   } catch {
     if (isCurrentWorkerOperation(workerId, operationGeneration)) {
@@ -950,79 +876,6 @@ async function handleDeleteEndpoint(endpoint: CodexAppServerEndpoint): Promise<v
     if (isCurrentWorkerOperation(workerId, operationGeneration)) {
       deletingEndpointIds.delete(endpoint.endpointId)
     }
-  }
-}
-
-function resetRegistration(): void {
-  registration.runtimeId = ''
-  registration.endpointUrl = ''
-  registration.authToken = ''
-  revisionSource.value = null
-}
-
-function toggleRegistration(): void {
-  if (showRegistration.value && !revisionSource.value) {
-    cancelRegistration()
-    return
-  }
-  resetRegistration()
-  showRegistration.value = true
-}
-
-function startNewRevision(runtime: CodexRuntime): void {
-  resetRegistration()
-  registration.runtimeId = runtime.runtimeId
-  revisionSource.value = { runtimeId: runtime.runtimeId, revision: runtime.revision }
-  showRegistration.value = true
-}
-
-function cancelRegistration(): void {
-  resetRegistration()
-  showRegistration.value = false
-}
-
-async function handleRegister(): Promise<void> {
-  const runtimeId = registration.runtimeId.trim()
-  const endpointUrl = registration.endpointUrl.trim()
-  const authToken = registration.authToken.trim()
-  if (!runtimeId || !endpointUrl) {
-    ElMessage.warning('请填写 Runtime ID 和 Endpoint')
-    return
-  }
-
-  const workerId = props.workerId
-  const operationGeneration = workerGeneration
-  const creatingRevision = revisionSource.value !== null
-  registering.value = true
-  try {
-    const created = await registerCodexRuntime({
-      runtimeId,
-      workerId,
-      runtimeType: 'APP_SERVER',
-      endpointUrl,
-      authToken,
-      enabled: false,
-      routingPolicy: 'DARK',
-      rolloutPercentage: 0,
-      priority: 0,
-      routingEpoch: 1,
-    })
-    if (!isCurrentWorkerOperation(workerId, operationGeneration)) return
-    resetRegistration()
-    showRegistration.value = false
-    replaceRuntime(created)
-    void loadRuntimeRateLimits(created)
-    ElMessage.success(creatingRevision
-      ? `Runtime rev ${created.revision} 已创建并保持 Dark`
-      : 'Dark Runtime 已注册')
-
-    await handleRefresh(created, false, workerId, operationGeneration)
-  } catch {
-    if (isCurrentWorkerOperation(workerId, operationGeneration)) {
-      ElMessage.error('Runtime 注册失败')
-    }
-  } finally {
-    if (isCurrentWorkerOperation(workerId, operationGeneration)) registering.value = false
   }
 }
 
@@ -1341,11 +1194,8 @@ watch(() => props.workerId, () => {
   deletingEndpointIds.clear()
   latestRateLimitRequestByKey.clear()
   for (const key of Object.keys(rateLimitsByRuntime)) delete rateLimitsByRuntime[key]
-  resetRegistration()
   resetEndpointEditor()
   showEndpointEditor.value = false
-  showRegistration.value = false
-  registering.value = false
   loadFailed.value = false
   loading.value = false
   void loadRuntimes(false, true, true)
@@ -1734,6 +1584,27 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 720px) {
+  .runtime-section-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .runtime-title-group {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .runtime-title {
+    white-space: nowrap;
+  }
+
+  .runtime-header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
   .registration-grid,
   .runtime-version-grid,
   .runtime-routing-grid {
@@ -1746,18 +1617,26 @@ onBeforeUnmount(() => {
     gap: 8px;
   }
 
+  .endpoint-row .runtime-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .endpoint-row .runtime-actions {
+    justify-self: end;
+  }
+
   .runtime-name-line {
-    display: grid;
+    display: flex;
+    flex-wrap: wrap;
     width: 100%;
-    grid-template-columns: max-content minmax(0, 1fr);
     gap: 4px 6px;
   }
 
   .runtime-name-line strong {
     display: block;
+    flex: 1 1 100%;
     width: 100%;
     min-width: 0;
-    grid-column: 1 / -1;
     overflow: hidden;
     overflow-wrap: normal;
     text-overflow: ellipsis;
@@ -1765,15 +1644,12 @@ onBeforeUnmount(() => {
   }
 
   .runtime-name-line :deep(.el-tag) {
+    flex: 0 0 auto;
     max-width: 100%;
-    min-width: 0;
-    justify-self: start;
-    overflow: hidden;
+    min-width: max-content;
   }
 
   .runtime-name-line :deep(.el-tag__content) {
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
 

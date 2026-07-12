@@ -69,6 +69,8 @@ import java.util.concurrent.atomic.AtomicReference;
 public class CodexStreamRelay {
 
     private static final String AGENT_ID = CodexTaskService.CODEX_PROVIDER_TYPE;
+    private static final String CODEX_APP_SERVER_AGENT_ID =
+            CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE;
     private static final String CODEX_BIZ_AGENT_ID = CodexTaskService.CODEX_BIZ_PROVIDER_TYPE;
     private static final int MAX_RECONNECT_ATTEMPTS = 3;
     private static final long RECONNECT_BASE_DELAY_MS = 2000;
@@ -111,7 +113,9 @@ public class CodexStreamRelay {
     @TransactionalEventListener(
             phase = TransactionPhase.AFTER_COMMIT,
             fallbackExecution = true,
-            condition = "#event.providerType == 'codex-worker' || #event.providerType == 'codex-biz-worker'")
+            condition = "#event.providerType == 'codex-worker'"
+                    + " || #event.providerType == 'codex-app-server-worker'"
+                    + " || #event.providerType == 'codex-biz-worker'")
     public void onTaskStart(WorkerTaskStartEvent event) {
         ReentrantLock operationLock = streamOperationLock(event.getTaskId());
         operationLock.lock();
@@ -140,6 +144,12 @@ public class CodexStreamRelay {
         try {
             CodexTaskEntity task = taskRepository.findByTaskId(taskId)
                     .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+            String persistedProviderType = providerType(task.getProviderType());
+            if (!persistedProviderType.equals(providerType)) {
+                throw new IllegalStateException("CODEX_TASK_PROVIDER_MISMATCH: event routes to "
+                        + providerType + " but task belongs to " + persistedProviderType);
+            }
+            providerType = persistedProviderType;
             if (!java.util.Objects.equals(sessionId, task.getSessionId())
                     || !java.util.Objects.equals(workerId, task.getWorkerId())) {
                 log.warn("Ignoring transient start affinity in favor of persisted task binding: taskId={}", taskId);
@@ -1260,9 +1270,10 @@ public class CodexStreamRelay {
 
     private String resolveTaskProviderType(String taskId) {
         try {
-            if (taskService.getTaskByIdForProvider(taskId, CODEX_BIZ_AGENT_ID).isPresent()) {
-                return CODEX_BIZ_AGENT_ID;
-            }
+            return taskRepository.findByTaskId(taskId)
+                    .map(CodexTaskEntity::getProviderType)
+                    .map(this::providerType)
+                    .orElse(AGENT_ID);
         } catch (Exception e) {
             log.debug("Failed to resolve Codex task providerType: taskId={}, type={}",
                     taskId, exceptionType(e));
@@ -1271,7 +1282,14 @@ public class CodexStreamRelay {
     }
 
     private String providerType(String providerType) {
-        return CODEX_BIZ_AGENT_ID.equals(providerType) ? CODEX_BIZ_AGENT_ID : AGENT_ID;
+        if (providerType == null || providerType.isBlank() || AGENT_ID.equals(providerType)) {
+            return AGENT_ID;
+        }
+        if (CODEX_APP_SERVER_AGENT_ID.equals(providerType)
+                || CODEX_BIZ_AGENT_ID.equals(providerType)) {
+            return providerType;
+        }
+        throw new IllegalArgumentException("Unsupported Codex providerType: " + providerType);
     }
 
     private void publishBuilt(AgentMessageBuilder builder, String messageId) {
@@ -1473,15 +1491,37 @@ public class CodexStreamRelay {
     }
 
     private CodexRuntimeBinding resolveRuntimeBinding(CodexTaskEntity task) {
-        return runtimeRegistryService.resolveBoundRuntime(
-                task.getRuntimeId(), task.getRuntimeRevision(), task.getWorkerId(), task.getRuntimeInstanceId());
+        String providerType = providerType(task.getProviderType());
+        if (CODEX_APP_SERVER_AGENT_ID.equals(providerType)) {
+            if (!CodexRuntimeType.APP_SERVER.name().equals(task.getRuntimeType())) {
+                throw new IllegalStateException("CODEX_PROVIDER_RUNTIME_MISMATCH: app-server provider "
+                        + "requires APP_SERVER affinity");
+            }
+            return runtimeRegistryService.resolveBoundRuntime(
+                    task.getRuntimeId(), task.getRuntimeRevision(), task.getWorkerId(),
+                    task.getRuntimeInstanceId());
+        }
+        if (!CodexRuntimeType.SDK_EXEC.name().equals(task.getRuntimeType())
+                || task.getRuntimeId() == null
+                || !task.getRuntimeId().startsWith("legacy-sdk:")) {
+            throw new IllegalStateException("CODEX_PROVIDER_RUNTIME_MISMATCH: provider "
+                    + providerType + " requires SDK_EXEC affinity");
+        }
+        return CodexRuntimeBinding.legacySdk(task.getWorkerId());
     }
 
     private CodexWorkerClient getCodexClient(CodexTaskEntity task, CodexRuntimeBinding runtime) {
-        if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER) {
+        String providerType = providerType(task.getProviderType());
+        if (CODEX_APP_SERVER_AGENT_ID.equals(providerType)) {
+            if (runtime.getRuntimeType() != CodexRuntimeType.APP_SERVER) {
+                throw new IllegalStateException("CODEX_PROVIDER_RUNTIME_MISMATCH");
+            }
             return clientFactory.getOrCreate(
                     "runtime:" + runtime.getRuntimeId() + ":" + runtime.getRuntimeRevision(),
                     runtime.getEndpointUrl(), runtime.getAuthToken(), runtime.getInstanceId());
+        }
+        if (runtime.getRuntimeType() != CodexRuntimeType.SDK_EXEC) {
+            throw new IllegalStateException("CODEX_PROVIDER_RUNTIME_MISMATCH");
         }
         CodexConfig config = workerManagementFacade.getCodexConfig(task.getWorkerId());
         if (config == null || config.getBaseUrl() == null || config.getBaseUrl().isBlank()) {

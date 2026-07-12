@@ -11,6 +11,7 @@ import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -227,6 +228,31 @@ class CodingAgentServiceTest {
                     () -> service.registerAgent(USER_ID, TENANT_ID, form));
             assertTrue(ex.getMessage().contains("not allowed"));
         }
+
+        @Test
+        void registerAgent_rejectsSelectedAppServerUltraUnsupportedByWorkerRuntime() {
+            when(llmModelManager.getModelConfig("app-config"))
+                    .thenReturn(Optional.of(appServerConfig()));
+            doThrow(new IllegalArgumentException("WORKER_BACKEND_CAPABILITY_MISSING"))
+                    .when(llmModelManager)
+                    .validateModelAccessForWorker(
+                            "app-config", WORKER_ID, "codex-terra:ultra");
+
+            RegisterAgentForm form = new RegisterAgentForm();
+            form.setName("app-server-agent");
+            form.setAgentType("LOCAL_CODEX_WORKER");
+            form.setWorkerId(WORKER_ID);
+            form.setDefaultModelConfigId("app-config");
+            form.setDefaultModel("codex-terra:ultra");
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> service.registerAgent(USER_ID, TENANT_ID, form));
+
+            assertTrue(error.getMessage().startsWith("WORKER_BACKEND_CAPABILITY_MISSING"));
+            verify(llmModelManager).validateModelAccessForWorker(
+                    "app-config", WORKER_ID, "codex-terra:ultra");
+            verify(agentRepository, never()).save(any());
+        }
     }
 
     // ========== Update ==========
@@ -318,6 +344,32 @@ class CodingAgentServiceTest {
 
             assertThrows(IllegalArgumentException.class,
                     () -> service.updateAgent(USER_ID, "missing", form));
+        }
+
+        @Test
+        void updateAgent_rejectsSelectedAppServerUltraUnsupportedByWorkerRuntime() {
+            CodingAgentEntity existing = createAgentEntity(AGENT_ID);
+            existing.setAgentType("LOCAL_CODEX_WORKER");
+            existing.setDefaultModelConfigId("app-config");
+            when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
+                    .thenReturn(Optional.of(existing));
+            when(llmModelManager.getModelConfig("app-config"))
+                    .thenReturn(Optional.of(appServerConfig()));
+            doThrow(new IllegalArgumentException("WORKER_BACKEND_CAPABILITY_MISSING"))
+                    .when(llmModelManager)
+                    .validateModelAccessForWorker(
+                            "app-config", WORKER_ID, "codex-terra:ultra");
+
+            UpdateAgentForm form = new UpdateAgentForm();
+            form.setDefaultModel("codex-terra:ultra");
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> service.updateAgent(USER_ID, AGENT_ID, form));
+
+            assertTrue(error.getMessage().startsWith("WORKER_BACKEND_CAPABILITY_MISSING"));
+            verify(llmModelManager).validateModelAccessForWorker(
+                    "app-config", WORKER_ID, "codex-terra:ultra");
+            verify(agentRepository, never()).save(any());
         }
     }
 
@@ -454,5 +506,15 @@ class CodingAgentServiceTest {
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         return entity;
+    }
+
+    private LlmModelConfigDTO appServerConfig() {
+        LlmModelConfigDTO config = new LlmModelConfigDTO();
+        config.setId("app-config");
+        config.setName("App Server");
+        config.setWorkerBackend(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
+        config.setModelName("codex-terra:high");
+        config.setAvailableModels(List.of("codex-terra:high", "codex-terra:ultra"));
+        return config;
     }
 }

@@ -267,10 +267,6 @@ data: {"type":"result","task_id":"...","session_id":"019d...","content":"PONG","
 { "model": "gpt-5.6-sol:high" }
 ```
 
-```json
-{ "model": "codex-ultra" }
-```
-
 ### 4.2 支持的思考等级
 
 当前 worker 会把 `model` 里的后缀透传为 Codex 的 `model_reasoning_effort`，支持：
@@ -281,7 +277,6 @@ data: {"type":"result","task_id":"...","session_id":"019d...","content":"PONG","
 - `high`
 - `xhigh`
 - `max`
-- `ultra`
 
 同时兼容一个前端别名：
 
@@ -678,15 +673,7 @@ curl -N -X POST http://localhost:3051/api/v1/query \
 
 ### 12.4 Ultra runtime 边界
 
-SDK Worker 不再接受新的 Ultra 会话。没有 `session_id` 的 `codex-ultra` 请求会在执行前返回 HTTP `409` 和稳定错误码 `CODEX_ULTRA_APP_SERVER_REQUIRED`，上游应把新会话路由到独立 App Server Worker。
-
-已有 SDK Ultra thread 为保持 runtime affinity，可以携带原 `session_id` 继续 drain：
-
-```bash
-curl -N -X POST http://localhost:3051/api/v1/query \
-  -H "Content-Type: application/json" \
-  -d "{\"prompt\":\"继续并汇总结论\",\"session_id\":\"019d1b11-f816-7e21-8ff6-2f9958abaf0d\",\"cwd\":\"D:\\\\projects\\\\demo-repo\",\"model\":\"codex-ultra\"}"
-```
+SDK Worker 不接受任何 Ultra 请求。新会话和携带 `session_id` 的续接请求都会在分配任务状态、创建 Codex SDK 实例之前失败，并返回 HTTP `409` 和稳定错误码 `CODEX_ULTRA_APP_SERVER_REQUIRED`。上游必须把 Ultra 会话路由到独立 App Server Worker；SDK Ultra thread 也不能通过本 Worker drain。
 
 ### 12.5 重连任务流
 

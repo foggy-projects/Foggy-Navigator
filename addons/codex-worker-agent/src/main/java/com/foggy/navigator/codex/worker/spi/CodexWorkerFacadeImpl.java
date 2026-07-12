@@ -3,15 +3,9 @@ package com.foggy.navigator.codex.worker.spi;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
-import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
-import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
-import com.foggy.navigator.codex.worker.service.CodexStreamRelay;
-import com.foggy.navigator.codex.worker.service.CodexAppServerAcceptanceService;
-import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
-import com.foggy.navigator.codex.worker.service.CodexTaskRuntimeStateService;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.spi.codex.CodexWorkerFacade;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
@@ -36,10 +30,6 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
     private final CodexTaskService taskService;
-    private final CodexStreamRelay streamRelay;
-    private final CodexRuntimeRegistryService runtimeRegistryService;
-    private final CodexTaskRuntimeStateService taskRuntimeStateService;
-    private final CodexAppServerAcceptanceService appServerAcceptanceService;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -51,6 +41,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
         form.setDirectoryId((String) params.get("directoryId"));
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
         form.setSessionId((String) params.get("sessionId"));
         form.setContextId((String) params.get("contextId"));
         form.setImages((String) params.get("images"));
@@ -63,13 +54,17 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
 
     @Override
     public Map<String, Object> getTaskStatus(String userId, String taskId) {
-        return taskToMap(taskService.getTask(userId, taskId));
+        return taskToMap(taskService.getTaskForProvider(
+                userId, taskId, CodexTaskService.CODEX_PROVIDER_TYPE));
     }
 
     @Override
     public Map<String, Object> abortTask(String userId, String taskId) {
         var task = taskService.getTaskEntity(taskId);
         if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if (!CodexTaskService.CODEX_PROVIDER_TYPE.equals(task.getProviderType())) {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
         taskService.abortTask(taskId);
@@ -131,24 +126,6 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
                         toInteger(result.get("numTurns")),
                         (String) result.get("model"));
             }
-        } catch (CodexSyncResultUnknownException e) {
-            log.warn("syncQueryTracked result unknown after acceptance: taskId={}, workerTaskId={}, type={}",
-                    taskId, e.workerTaskId, exceptionType(e.getCause()));
-            result = new LinkedHashMap<>();
-            result.put("workerTaskId", e.workerTaskId);
-            result.put("error", "CODEX_SYNC_RESULT_UNKNOWN");
-            try {
-                streamRelay.reconnectTask(taskId, sessionId, workerId);
-            } catch (Exception reconnectError) {
-                log.warn("Failed to schedule sync result reconciliation: taskId={}, type={}",
-                        taskId, exceptionType(reconnectError));
-            }
-        } catch (CodexAppServerAcceptanceService.UnknownException e) {
-            log.error("syncQueryTracked acceptance unknown: taskId={}, type={}",
-                    taskId, exceptionType(e.getCause()));
-            taskRuntimeStateService.markAcceptanceUnknown(taskId);
-            result = new LinkedHashMap<>();
-            result.put("error", "CODEX_RUNTIME_ACCEPTANCE_UNKNOWN");
         } catch (Exception e) {
             String failure = stableFailureCode(e, "CODEX_SYNC_QUERY_FAILED");
             log.error("syncQueryTracked failed: taskId={}, code={}, type={}",
@@ -171,63 +148,29 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
                                              String apiKey) {
         Map<String, Object> result = new LinkedHashMap<>();
         long startTime = System.currentTimeMillis();
-        boolean appServerAccepted = false;
-        String acceptedWorkerTaskId = null;
 
         try {
-            var task = taskService.getTaskEntity(taskId);
-            CodexRuntimeBinding runtime = runtimeRegistryService.resolveBoundRuntime(
-                    task.getRuntimeId(), task.getRuntimeRevision(), workerId, task.getRuntimeInstanceId());
-            if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER && maxTurns > 1) {
-                throw new IllegalArgumentException(
-                        "UNSUPPORTED_MAX_TURNS: APP_SERVER sync tasks support maxTurns <= 1");
+            if (codexConfig == null || codexConfig.getBaseUrl() == null || codexConfig.getBaseUrl().isBlank()) {
+                throw new IllegalArgumentException("Codex not configured for worker: " + workerId);
             }
-            CodexWorkerClient client;
-            if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER) {
-                client = clientFactory.getOrCreate(
-                        "runtime:" + runtime.getRuntimeId() + ":" + runtime.getRuntimeRevision(),
-                        runtime.getEndpointUrl(), runtime.getAuthToken(), runtime.getInstanceId());
-            } else {
-                if (codexConfig == null || codexConfig.getBaseUrl() == null || codexConfig.getBaseUrl().isBlank()) {
-                    throw new IllegalArgumentException("Codex not configured for worker: " + workerId);
-                }
-                client = clientFactory.getOrCreate(
-                        workerId + ":codex", codexConfig.getBaseUrl(), codexConfig.getAuthToken());
-            }
+            CodexWorkerClient client = clientFactory.getOrCreate(
+                    workerId + ":codex", codexConfig.getBaseUrl(), codexConfig.getAuthToken());
             long timeoutSeconds = Math.max(60, maxTurns * 30L);
 
             String effectiveModel = model != null ? model : codexConfig != null ? codexConfig.getModel() : null;
 
-            reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> events;
-            if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER) {
-                Map<String, Object> requestBody = client.buildTaskRequest(
-                        prompt, cwd, codexThreadId, effectiveModel, 1,
-                        null, null, apiKey, null, null,
-                        null, null, null, null, null, null, null, null, null, null);
-                taskRuntimeStateService.prepareAcceptance(taskId, requestBody);
-                acceptedWorkerTaskId = appServerAcceptanceService.accept(client, taskId, requestBody);
-                appServerAccepted = true;
-                if (!taskRuntimeStateService.markSubscribed(taskId)) {
-                    throw new IllegalStateException("CODEX_RUNTIME_ABORT_REQUESTED");
-                }
-                events = client.subscribeToTask(acceptedWorkerTaskId, 0);
-            } else {
-                events = client.streamQuery(
-                        prompt, cwd, codexThreadId, effectiveModel, maxTurns, null, null, apiKey, null, null);
-            }
+            reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> events =
+                    client.streamQuery(prompt, cwd, codexThreadId, effectiveModel, maxTurns,
+                            null, null, apiKey, null, null);
 
             SyncQueryAccumulator state = events
-                    .reduce(new SyncQueryAccumulator(codexThreadId, acceptedWorkerTaskId), (acc, sse) -> {
+                    .reduce(new SyncQueryAccumulator(codexThreadId, null), (acc, sse) -> {
                         consumeSyncEvent(acc, sse);
                         return acc;
                     })
                     .block(Duration.ofSeconds(timeoutSeconds));
             if (state == null) {
-                state = new SyncQueryAccumulator(codexThreadId, acceptedWorkerTaskId);
-            }
-            if (runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER && !state.hasTerminalEvent()) {
-                throw new IllegalStateException(
-                        "APP_SERVER stream completed without a result or error event");
+                state = new SyncQueryAccumulator(codexThreadId, null);
             }
 
             result.put("workerTaskId", state.workerTaskId);
@@ -246,12 +189,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
             log.info("doSyncQuery completed: workerId={}, events={}, hasResult={}, hasError={}",
                     workerId, state.eventCount, state.getResultText() != null, result.containsKey("error"));
 
-        } catch (CodexAppServerAcceptanceService.UnknownException e) {
-            throw e;
         } catch (Exception e) {
-            if (appServerAccepted) {
-                throw new CodexSyncResultUnknownException(acceptedWorkerTaskId, e);
-            }
             String failure = stableFailureCode(e, "CODEX_SYNC_QUERY_FAILED");
             log.error("syncQuery failed: workerId={}, code={}, type={}",
                     workerId, failure, exceptionType(e));
@@ -285,6 +223,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
         map.put("runtimeAcceptanceState", dto.getRuntimeAcceptanceState());
         map.put("sessionId", dto.getSessionId());
         map.put("workerId", dto.getWorkerId());
+        map.put("providerType", dto.getProviderType());
         map.put("prompt", dto.getPrompt());
         map.put("cwd", dto.getCwd());
         map.put("status", dto.getStatus());
@@ -375,14 +314,6 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
     private String stableFailureCode(Throwable error, String fallback) {
         Throwable current = error;
         while (current != null) {
-            if (current instanceof CodexAppServerAcceptanceService.RejectedException rejected
-                    && rejected.getWorkerErrorCode() != null) {
-                return rejected.getWorkerErrorCode();
-            }
-            current = current.getCause();
-        }
-        current = error;
-        while (current != null) {
             String message = current.getMessage();
             if (message != null) {
                 String candidate = message.split(":", 2)[0].trim();
@@ -427,17 +358,5 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
             return assistantText.isEmpty() ? null : assistantText.toString();
         }
 
-        private boolean hasTerminalEvent() {
-            return resultEventObserved || errorEventObserved;
-        }
-    }
-
-    private static final class CodexSyncResultUnknownException extends RuntimeException {
-        private final String workerTaskId;
-
-        private CodexSyncResultUnknownException(String workerTaskId, Throwable cause) {
-            super("CODEX_SYNC_RESULT_UNKNOWN", cause);
-            this.workerTaskId = workerTaskId;
-        }
     }
 }

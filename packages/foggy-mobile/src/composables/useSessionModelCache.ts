@@ -8,6 +8,7 @@ import type { DispatchTask } from '@/api/types'
 interface SessionModelState {
   modelConfigId: string
   model: string
+  providerType?: string
 }
 
 const cache = reactive<Map<string, SessionModelState>>(new Map())
@@ -22,14 +23,20 @@ export function initFromTask(task: DispatchTask): void {
   cache.set(task.sessionId, {
     modelConfigId: task.modelConfigId || '',
     model: task.model || '',
+    providerType: task.providerType,
   })
 }
 
 /**
  * Force-set cache entry (e.g., when user manually switches model).
  */
-export function setSessionModel(sessionId: string, modelConfigId: string, model: string): void {
-  cache.set(sessionId, { modelConfigId, model })
+export function setSessionModel(
+  sessionId: string,
+  modelConfigId: string,
+  model: string,
+  providerType?: string,
+): void {
+  cache.set(sessionId, { modelConfigId, model, providerType })
 }
 
 /**

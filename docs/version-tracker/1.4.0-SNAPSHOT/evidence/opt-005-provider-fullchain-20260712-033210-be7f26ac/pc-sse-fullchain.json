@@ -1,0 +1,77 @@
+{
+  "ok": true,
+  "stage": "complete",
+  "sdk": {
+    "taskId": "20260712-e529",
+    "sessionId": "4764849e-3236-4658-8db9-3ff0be3cd24f",
+    "providerType": "codex-worker",
+    "status": "COMPLETED",
+    "model": "gpt-5.6-sol",
+    "modelConfigId": "388d93d4-3902-4eb4-a30c-98f68c8b4fc3",
+    "workerTaskIdPresent": true,
+    "codexThreadIdPresent": true,
+    "runtimeId": "legacy-sdk:0d72d2a7",
+    "runtimeRevision": 1,
+    "runtimeType": "SDK_EXEC",
+    "runtimeInstanceId": null,
+    "resultExact": true
+  },
+  "app": {
+    "taskId": "20260712-2b64",
+    "sessionId": "799dbfb3-876d-4303-8b60-e382ce3a6b96",
+    "providerType": "codex-app-server-worker",
+    "status": "COMPLETED",
+    "model": "codex-terra:ultra",
+    "modelConfigId": "71427b1f-384f-4b64-ba95-75c25274b81d",
+    "workerTaskIdPresent": true,
+    "codexThreadIdPresent": true,
+    "runtimeId": "appserver-8a5dac990f5e4e20b9b4b9f00aa6e646",
+    "runtimeRevision": 1,
+    "runtimeType": "APP_SERVER",
+    "runtimeInstanceId": "codex-store-4ae33edb-a4e0-436c-b673-7fa82800c31d",
+    "resultExact": true
+  },
+  "browserSse": {
+    "connections": 1,
+    "relevantEventCount": 29,
+    "eventTypes": [
+      "session_event",
+      "task_update"
+    ],
+    "payloadTypes": [
+      "TEXT_COMPLETE",
+      "SESSION_END",
+      "task_status_change",
+      "TEXT_CHUNK"
+    ],
+    "taskIdsObserved": [
+      "20260712-e529",
+      "20260712-2b64"
+    ],
+    "sessionIdsObserved": [
+      "4764849e-3236-4658-8db9-3ff0be3cd24f",
+      "799dbfb3-876d-4303-8b60-e382ce3a6b96"
+    ]
+  },
+  "diagnostics": {
+    "consoleErrors": [],
+    "pageErrors": [],
+    "requestFailures": [
+      {
+        "method": "POST",
+        "path": "/api/v1/sse/unsubscribe",
+        "reason": "net::ERR_ABORTED"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/sse/subscribe",
+        "reason": "net::ERR_ABORTED"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/sse/subscribe",
+        "reason": "net::ERR_ABORTED"
+      }
+    ]
+  }
+}

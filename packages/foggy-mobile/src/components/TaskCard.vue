@@ -2,7 +2,10 @@
   <view class="task-card" @tap="$emit('tap')">
     <view class="task-header">
       <StatusBadge :status="task.status" :show-label="true" />
-      <text v-if="task.model" class="task-model">{{ task.model }}</text>
+      <view class="task-meta">
+        <ProviderBadge :provider-type="task.providerType" />
+        <text v-if="task.model" class="task-model">{{ task.model }}</text>
+      </view>
     </view>
     <text class="task-prompt">{{ task.prompt }}</text>
     <view class="task-footer">
@@ -16,6 +19,7 @@
 <script setup lang="ts">
 import type { ClaudeTask } from '@/api/types'
 import StatusBadge from './StatusBadge.vue'
+import ProviderBadge from './ProviderBadge.vue'
 import { shortDateTime, formatDuration } from '@/utils/time'
 
 defineProps<{
@@ -41,6 +45,8 @@ defineEmits<{
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8rpx;
   margin-bottom: 12rpx;
 }
 .task-model {
@@ -49,6 +55,19 @@ defineEmits<{
   background-color: #f0f0f0;
   padding: 4rpx 12rpx;
   border-radius: 8rpx;
+  max-width: 360rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-meta {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8rpx;
+  min-width: 0;
 }
 .task-prompt {
   font-size: 28rpx;

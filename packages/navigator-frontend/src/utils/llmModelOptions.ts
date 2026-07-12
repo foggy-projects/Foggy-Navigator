@@ -40,6 +40,7 @@ const CODEX_REASONING_LEVELS: readonly CodexReasoningLevel[] = [
 function createCodexFamilyOptions(
   alias: 'codex-latest' | 'codex-terra' | 'codex-luna',
   familyLabel: string,
+  backend: 'OPENAI_CODEX' | 'OPENAI_CODEX_APP_SERVER',
   supportsUltra: boolean,
 ): SelectableModelOption[] {
   const levels = supportsUltra
@@ -50,7 +51,7 @@ function createCodexFamilyOptions(
     label: `${familyLabel} · ${level.label}`,
     optionLabel: level.label,
     group: familyLabel,
-    backend: 'OPENAI_CODEX',
+    backend,
     reasoningEffort: level.value,
     description: level.description
       ? `${familyLabel} · ${level.label}（${level.description}）`
@@ -62,13 +63,21 @@ function createCodexFamilyOptions(
  * Codex 使用“稳定模型族 alias + reasoning 后缀”作为产品层规范值。
  * Runtime 仍负责把 alias 解析为真实 GPT 模型，并依据 capability manifest 做最终选路。
  */
-const CODEX_MODEL_OPTIONS: SelectableModelOption[] = [
-  ...createCodexFamilyOptions('codex-latest', 'Codex Sol', true),
-  ...createCodexFamilyOptions('codex-terra', 'Codex Terra', true),
-  ...createCodexFamilyOptions('codex-luna', 'Codex Luna', false),
+const CODEX_SDK_MODEL_OPTIONS: SelectableModelOption[] = [
+  ...createCodexFamilyOptions('codex-latest', 'Codex Sol', 'OPENAI_CODEX', false),
+  ...createCodexFamilyOptions('codex-terra', 'Codex Terra', 'OPENAI_CODEX', false),
+  ...createCodexFamilyOptions('codex-luna', 'Codex Luna', 'OPENAI_CODEX', false),
 ]
 
-const CODEX_CANONICAL_VALUES = new Set(CODEX_MODEL_OPTIONS.map((option) => option.value))
+const CODEX_APP_SERVER_MODEL_OPTIONS: SelectableModelOption[] = [
+  ...createCodexFamilyOptions('codex-latest', 'Codex Sol', 'OPENAI_CODEX_APP_SERVER', true),
+  ...createCodexFamilyOptions('codex-terra', 'Codex Terra', 'OPENAI_CODEX_APP_SERVER', true),
+  ...createCodexFamilyOptions('codex-luna', 'Codex Luna', 'OPENAI_CODEX_APP_SERVER', false),
+]
+
+const CODEX_CANONICAL_VALUES = new Set(
+  [...CODEX_SDK_MODEL_OPTIONS, ...CODEX_APP_SERVER_MODEL_OPTIONS].map((option) => option.value),
+)
 const CODEX_LEGACY_ALIASES = new Map<string, string>([
   ['codex-latest', 'codex-latest:medium'],
   ['codex-fast', 'codex-latest:low'],
@@ -98,7 +107,8 @@ const LANGGRAPH_BIZ_MODEL_OPTIONS: SelectableModelOption[] = [
 
 export const ALL_MODEL_OPTIONS: SelectableModelOption[] = [
   ...CLAUDE_MODEL_OPTIONS,
-  ...CODEX_MODEL_OPTIONS,
+  ...CODEX_SDK_MODEL_OPTIONS,
+  ...CODEX_APP_SERVER_MODEL_OPTIONS,
   ...GEMINI_MODEL_OPTIONS,
   ...LANGGRAPH_BIZ_MODEL_OPTIONS,
 ]
@@ -131,7 +141,7 @@ export function normalizeModelValueForBackend(
   backend: WorkerBackend | undefined,
 ): string {
   if (!value) return ''
-  if (backend === 'OPENAI_CODEX') return normalizeCodexModelValue(value) ?? value
+  if (isCodexBackend(backend)) return normalizeCodexModelValue(value) ?? value
   return value
 }
 
@@ -140,7 +150,7 @@ export function normalizeAvailableModelGrants(
   backend: WorkerBackend | undefined,
 ): string[] {
   if (!values) return []
-  if (backend !== 'OPENAI_CODEX') return [...values]
+  if (!isCodexBackend(backend)) return [...values]
   return [...new Set(values.map((value) => normalizeCodexModelValue(value) ?? value))]
 }
 
@@ -161,7 +171,15 @@ export function groupModelOptions(options: readonly SelectableModelOption[]): Se
 }
 
 function supportsSubscriptionSelection(backend: WorkerBackend | undefined): boolean {
-  return backend === 'CLAUDE_CODE' || backend === 'OPENAI_CODEX' || backend === 'GEMINI_CLI' || backend === 'LANGGRAPH_BIZ'
+  return backend === 'CLAUDE_CODE'
+    || backend === 'OPENAI_CODEX'
+    || backend === 'OPENAI_CODEX_APP_SERVER'
+    || backend === 'GEMINI_CLI'
+    || backend === 'LANGGRAPH_BIZ'
+}
+
+function isCodexBackend(backend: WorkerBackend | undefined): boolean {
+  return backend === 'OPENAI_CODEX' || backend === 'OPENAI_CODEX_APP_SERVER'
 }
 
 export function isSelectablePlatformModel(model: LlmModelConfig): boolean {
@@ -178,6 +196,10 @@ export function isModelConfigCompatibleWithWorker(
 
   if (backend === 'CLAUDE_CODE') return workerBackend === 'CLAUDE_CODE'
   if (backend === 'OPENAI_CODEX') return workerBackend === 'OPENAI_CODEX' || Boolean(worker.codexBaseUrl?.trim())
+  // App Server capability is owned by Endpoint Profiles rather than a field on
+  // the physical Worker DTO. listModelConfigs(workerId) already filters it via
+  // the backend capability tester, so a returned config is compatible here.
+  if (backend === 'OPENAI_CODEX_APP_SERVER') return true
   if (backend === 'GEMINI_CLI') return workerBackend === 'GEMINI_CLI' || Boolean(worker.geminiBaseUrl?.trim())
   if (backend === 'LANGGRAPH_BIZ') return workerBackend === 'LANGGRAPH_BIZ'
   return false
@@ -193,7 +215,7 @@ export function resolveModelOptions(modelConfig: LlmModelConfig | null | undefin
   const allowed = modelConfig?.availableModels
   if (!allowed || allowed.length === 0) return backendModels
 
-  if (backend !== 'OPENAI_CODEX') {
+  if (!isCodexBackend(backend)) {
     const allowedSet = new Set(allowed)
     return backendModels.filter((model) => allowedSet.has(model.value))
   }

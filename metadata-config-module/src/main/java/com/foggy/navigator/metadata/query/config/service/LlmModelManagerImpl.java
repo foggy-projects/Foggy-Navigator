@@ -12,11 +12,13 @@ import com.foggy.navigator.common.form.AgentModelOverrideForm;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.common.form.LlmModelConfigOwnerRepairForm;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.common.util.CodexModelBackendPolicy;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.metadata.query.config.repository.AgentModelOverrideRepository;
 import com.foggy.navigator.metadata.query.config.repository.LlmModelConfigRepository;
 import com.foggy.navigator.metadata.query.config.repository.ModelWorkerAccessRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.config.WorkerBackendConnectionTester;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -51,6 +53,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
     private final ModelWorkerAccessRepository workerAccessRepo;
     private final CredentialEncryptor credentialEncryptor;
     private final RestTemplateBuilder restTemplateBuilder;
+    private final List<WorkerBackendConnectionTester> workerBackendConnectionTesters;
 
     // ========== 模型配置 CRUD ==========
 
@@ -89,6 +92,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setCreatedByCredentialId(trimToNull(createdByCredentialId));
         entity.setEnabled(true);
         normalizeWorkerAuth(entity);
+        validateCodexBackendModels(entity);
 
         // 新增项排在最后
         int maxSort = llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc(tenantId).stream()
@@ -105,7 +109,8 @@ public class LlmModelManagerImpl implements LlmModelManager {
 
         // RESTRICTED 时保存关联表
         if (entity.getScope() == ModelAccessScope.RESTRICTED && form.getAllowedWorkerIds() != null) {
-            saveWorkerAccess(entity.getId(), tenantId, form.getAllowedWorkerIds());
+            saveWorkerAccess(entity.getId(), tenantId, entity.getWorkerBackend(),
+                    entity.getModelName(), form.getAllowedWorkerIds());
         }
 
         log.info("LLM model config saved: id={}", entity.getId());
@@ -153,6 +158,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
             entity.setRuntimeBudgetOverrideJson(trimToNull(form.getRuntimeBudgetOverrideJson()));
         }
         normalizeWorkerAuth(entity);
+        validateCodexBackendModels(entity);
 
         // scope 变化处理
         if (form.getScope() != null) {
@@ -161,7 +167,8 @@ public class LlmModelManagerImpl implements LlmModelManager {
                 // 替换关联表记录
                 workerAccessRepo.deleteByModelConfigId(id);
                 if (form.getAllowedWorkerIds() != null) {
-                    saveWorkerAccess(id, entity.getTenantId(), form.getAllowedWorkerIds());
+                    saveWorkerAccess(id, entity.getTenantId(), entity.getWorkerBackend(),
+                            entity.getModelName(), form.getAllowedWorkerIds());
                 }
             } else {
                 // GLOBAL：清空关联表
@@ -251,7 +258,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
                     ModelAccessScope s = entity.getScope() != null ? entity.getScope() : ModelAccessScope.GLOBAL;
                     return s == ModelAccessScope.GLOBAL || authorizedModelIds.contains(entity.getId());
                 })
-                .map(this::toDTO)
+                .filter(entity -> supportsWorkerBackend(
+                        entity.getWorkerBackend(), workerId, entity.getModelName()))
+                .map(entity -> toWorkerDTO(entity, workerId))
                 .collect(Collectors.toList());
     }
 
@@ -259,14 +268,34 @@ public class LlmModelManagerImpl implements LlmModelManager {
     public void validateModelAccessForWorker(String modelConfigId, String workerId) {
         LlmModelConfigEntity entity = llmModelRepo.findById(modelConfigId)
                 .orElseThrow(() -> new IllegalArgumentException("LLM model config not found: " + modelConfigId));
+        validateModelAccessForWorker(entity, workerId, entity.getModelName());
+    }
+
+    @Override
+    public void validateModelAccessForWorker(String modelConfigId, String workerId, String modelName) {
+        LlmModelConfigEntity entity = llmModelRepo.findById(modelConfigId)
+                .orElseThrow(() -> new IllegalArgumentException("LLM model config not found: " + modelConfigId));
+        String selectedModel = trimToNull(modelName);
+        if (selectedModel == null) {
+            throw new IllegalArgumentException("modelName is required");
+        }
+        validateModelAccessForWorker(entity, workerId, selectedModel);
+    }
+
+    private void validateModelAccessForWorker(
+            LlmModelConfigEntity entity, String workerId, String modelName) {
         ModelAccessScope scope = entity.getScope() != null ? entity.getScope() : ModelAccessScope.GLOBAL;
         if (scope == ModelAccessScope.RESTRICTED) {
-            boolean allowed = workerAccessRepo.findByModelConfigId(modelConfigId).stream()
+            boolean allowed = workerAccessRepo.findByModelConfigId(entity.getId()).stream()
                     .anyMatch(a -> a.getWorkerId().equals(workerId));
             if (!allowed) {
-                log.warn("Worker {} denied access to RESTRICTED model {}", workerId, modelConfigId);
+                log.warn("Worker {} denied access to RESTRICTED model {}", workerId, entity.getId());
                 throw new IllegalArgumentException("该模型未授权给当前 Worker 使用: " + entity.getName());
             }
+        }
+        if (!supportsWorkerBackend(entity.getWorkerBackend(), workerId, modelName)) {
+            throw new IllegalArgumentException("WORKER_BACKEND_CAPABILITY_MISSING: Worker "
+                    + workerId + " does not provide " + entity.getWorkerBackend());
         }
     }
 
@@ -475,8 +504,13 @@ public class LlmModelManagerImpl implements LlmModelManager {
         return "连接测试失败: " + msg;
     }
 
-    private void saveWorkerAccess(String modelConfigId, String tenantId, List<String> workerIds) {
+    private void saveWorkerAccess(String modelConfigId, String tenantId, String workerBackend,
+                                  String modelName, List<String> workerIds) {
         for (String workerId : workerIds) {
+            if (!supportsWorkerBackend(workerBackend, workerId, modelName)) {
+                throw new IllegalArgumentException("WORKER_BACKEND_CAPABILITY_MISSING: Worker "
+                        + workerId + " does not provide " + workerBackend);
+            }
             ModelWorkerAccessEntity access = new ModelWorkerAccessEntity();
             access.setId(UUID.randomUUID().toString());
             access.setTenantId(tenantId);
@@ -526,6 +560,33 @@ public class LlmModelManagerImpl implements LlmModelManager {
         return dto;
     }
 
+    private LlmModelConfigDTO toWorkerDTO(LlmModelConfigEntity entity, String workerId) {
+        LlmModelConfigDTO dto = toDTO(entity);
+        String backend = ProviderRouteRegistry.canonicalWorkerBackend(entity.getWorkerBackend())
+                .orElse(null);
+        if (!ProviderRouteRegistry.BACKEND_OPENAI_CODEX.equals(backend)
+                && !ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER.equals(backend)) {
+            return dto;
+        }
+
+        String baseModel = trimToNull(entity.getModelName());
+        LinkedHashSet<String> candidates = dto.getAvailableModels() == null
+                ? new LinkedHashSet<>()
+                : dto.getAvailableModels().stream()
+                        .map(this::trimToNull)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (baseModel != null) {
+            candidates.add(baseModel);
+        }
+        dto.setAvailableModels(candidates.stream()
+                // The stream's preceding filter already proved that the base model is available.
+                .filter(model -> Objects.equals(model, baseModel)
+                        || supportsWorkerBackend(backend, workerId, model))
+                .collect(Collectors.toList()));
+        return dto;
+    }
+
     private String trimToNull(String value) {
         return value != null && !value.isBlank() ? value.trim() : null;
     }
@@ -567,6 +628,31 @@ public class LlmModelManagerImpl implements LlmModelManager {
             // Subscription mode relies on the worker host's local login state and should not inject a platform API key.
             entity.setApiKey(null);
         }
+    }
+
+    private void validateCodexBackendModels(LlmModelConfigEntity entity) {
+        CodexModelBackendPolicy.validate(
+                entity.getWorkerBackend(), entity.getModelName(),
+                deserializeList(entity.getAvailableModels()));
+    }
+
+    private boolean supportsWorkerBackend(String workerBackend, String workerId, String modelName) {
+        if (workerBackend == null || workerBackend.isBlank()
+                || workerId == null || workerId.isBlank()) {
+            return true;
+        }
+        String canonicalBackend = ProviderRouteRegistry.canonicalWorkerBackend(workerBackend)
+                .orElse(workerBackend.trim());
+        Optional<WorkerBackendConnectionTester> tester = workerBackendConnectionTesters.stream()
+                .filter(candidate -> canonicalBackend.equals(
+                        ProviderRouteRegistry.canonicalWorkerBackend(candidate.getWorkerBackend())
+                                .orElse(candidate.getWorkerBackend())))
+                .findFirst();
+        if (tester.isPresent()) {
+            return tester.get().supportsWorker(workerId, modelName);
+        }
+        return !ProviderRouteRegistry.BACKEND_OPENAI_CODEX.equals(canonicalBackend)
+                && !ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER.equals(canonicalBackend);
     }
 
     private boolean isSubscriptionConfig(String workerBackend, String baseUrl) {

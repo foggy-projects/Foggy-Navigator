@@ -13,13 +13,16 @@ import com.foggy.navigator.common.form.UserMemoryForm;
 import com.foggy.navigator.spi.config.ApiCredentialManager;
 import com.foggy.navigator.spi.config.GitProviderManager;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.config.WorkerBackendConnectionTester;
 import com.foggy.navigator.spi.memory.UserMemoryManager;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 平台配置管理 REST API
@@ -36,6 +39,7 @@ public class PlatformConfigController {
     private final LlmModelManager llmModelManager;
     private final UserMemoryManager userMemoryManager;
     private final ApiCredentialManager apiCredentialManager;
+    private final List<WorkerBackendConnectionTester> workerBackendConnectionTesters;
 
     /**
      * 获取当前用户的 tenantId，SUPER_ADMIN 无 tenantId 时用 userId 兜底
@@ -106,18 +110,57 @@ public class PlatformConfigController {
     @PostMapping("/llm/test-connection")
     public RX<String> testLlmConnection(@RequestBody LlmModelConfigForm form) {
         log.info("Test LLM connection: baseUrl={}, model={}", form.getBaseUrl(), form.getModelName());
-        String reply = llmModelManager.testConnection(form.getBaseUrl(), form.getApiKey(), form.getModelName());
+        String reply = testModelBackend(form.getWorkerBackend(), form.getWorkerId(),
+                form.getModelName(), form.getBaseUrl(), form.getApiKey());
         return RX.ok(reply);
     }
 
     @PostMapping("/llm/{id}/test-connection")
-    public RX<String> testSavedLlmConnection(@PathVariable String id) {
+    public RX<String> testSavedLlmConnection(@PathVariable String id,
+                                             @RequestParam(required = false) String workerId) {
         log.info("Test saved LLM connection: id={}", id);
         LlmModelConfigDTO dto = llmModelManager.getModelConfig(id)
                 .orElseThrow(() -> RX.throwB("LLM model config not found: " + id));
         String apiKey = llmModelManager.getDecryptedApiKey(id);
-        String reply = llmModelManager.testConnection(dto.getBaseUrl(), apiKey, dto.getModelName());
+        String selectedWorkerId = firstNonBlank(workerId,
+                dto.getAllowedWorkerIds() != null && !dto.getAllowedWorkerIds().isEmpty()
+                        ? dto.getAllowedWorkerIds().get(0) : null);
+        String reply = testModelBackend(dto.getWorkerBackend(), selectedWorkerId,
+                dto.getModelName(), dto.getBaseUrl(), apiKey);
         return RX.ok(reply);
+    }
+
+    private String testModelBackend(String workerBackend, String workerId, String modelName,
+                                    String baseUrl, String apiKey) {
+        String canonicalBackend = ProviderRouteRegistry.canonicalWorkerBackend(workerBackend)
+                .orElse(workerBackend);
+        Optional<WorkerBackendConnectionTester> tester = workerBackendConnectionTesters.stream()
+                .filter(candidate -> canonicalBackend != null && canonicalBackend.equals(
+                        ProviderRouteRegistry.canonicalWorkerBackend(candidate.getWorkerBackend())
+                                .orElse(candidate.getWorkerBackend())))
+                .findFirst();
+        if (tester.isEmpty()) {
+            if (ProviderRouteRegistry.BACKEND_OPENAI_CODEX.equals(canonicalBackend)
+                    || ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER.equals(canonicalBackend)) {
+                throw new IllegalStateException(
+                        "WORKER_BACKEND_TESTER_UNAVAILABLE: " + canonicalBackend);
+            }
+            return llmModelManager.testConnection(baseUrl, apiKey, modelName);
+        }
+        if (workerId == null || workerId.isBlank()) {
+            throw new IllegalArgumentException(
+                    "WORKER_BACKEND_TEST_WORKER_REQUIRED: select a Worker for " + workerBackend);
+        }
+        CurrentUser user = UserContext.getCurrentUser();
+        return tester.get().testConnection(
+                user.getUserId(), resolveTenantId(), workerId.trim(), modelName);
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value;
+        }
+        return null;
     }
 
     @PostMapping("/llm")

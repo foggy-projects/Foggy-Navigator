@@ -4,10 +4,7 @@ import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.common.model.CodexConfig;
-import com.foggy.navigator.codex.worker.service.CodexStreamRelay;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
-import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
-import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggyframework.core.ex.RX;
@@ -30,10 +27,8 @@ import java.util.Map;
 public class CodexTaskController {
 
     private final CodexTaskService taskService;
-    private final CodexStreamRelay streamRelay;
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
-    private final CodexRuntimeRegistryService runtimeRegistryService;
 
     /**
      * 创建并启动 Codex 任务
@@ -42,6 +37,7 @@ public class CodexTaskController {
     public RX<CodexTaskDTO> createTask(@RequestBody CreateCodexTaskForm form) {
         String userId = UserContext.getCurrentUserId();
         String tenantId = UserContext.getCurrentTenantId();
+        form.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
         return RX.ok(taskService.createTask(userId, tenantId, form));
     }
 
@@ -51,7 +47,8 @@ public class CodexTaskController {
     @GetMapping("/{taskId}")
     public RX<CodexTaskDTO> getTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(taskService.getTask(userId, taskId));
+        return RX.ok(taskService.getTaskForProvider(
+                userId, taskId, CodexTaskService.CODEX_PROVIDER_TYPE));
     }
 
     /**
@@ -70,6 +67,9 @@ public class CodexTaskController {
         if (!task.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
+        if (!CodexTaskService.CODEX_PROVIDER_TYPE.equals(task.getProviderType())) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
 
         workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
 
@@ -79,14 +79,7 @@ public class CodexTaskController {
         }
 
         try {
-            var runtime = runtimeRegistryService.resolveBoundRuntime(
-                    task.getRuntimeId(), task.getRuntimeRevision(), task.getWorkerId(),
-                    task.getRuntimeInstanceId());
-            var client = runtime.getRuntimeType() == CodexRuntimeType.APP_SERVER
-                    ? clientFactory.getOrCreate(
-                            "runtime:" + runtime.getRuntimeId() + ":" + runtime.getRuntimeRevision(),
-                            runtime.getEndpointUrl(), runtime.getAuthToken(), runtime.getInstanceId())
-                    : legacyClient(task.getWorkerId());
+            var client = legacyClient(task.getWorkerId());
             Map<String, Object> workerResult = client.getSessionFileHints(
                             task.getCodexThreadId(), days, from, to)
                     .block(Duration.ofSeconds(10));
@@ -123,9 +116,10 @@ public class CodexTaskController {
             @RequestParam(required = false) String workerId) {
         String userId = UserContext.getCurrentUserId();
         if (workerId != null && !workerId.isBlank()) {
-            return RX.ok(taskService.listTasksByWorker(userId, workerId));
+            return RX.ok(taskService.listTasksByWorkerForProvider(
+                    userId, workerId, CodexTaskService.CODEX_PROVIDER_TYPE));
         }
-        return RX.ok(taskService.listTasks(userId));
+        return RX.ok(taskService.listTasksForProvider(userId, CodexTaskService.CODEX_PROVIDER_TYPE));
     }
 
     /**
@@ -135,14 +129,11 @@ public class CodexTaskController {
     public RX<Map<String, String>> abortTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();
 
-        // 验证任务属于该用户
-        var task = taskService.getTaskEntity(taskId);
-        if (!task.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("Task not found: " + taskId);
-        }
-
-        taskService.abortTask(taskId);
-        return RX.ok(Map.of("taskId", taskId, "status", taskService.getTaskEntity(taskId).getStatus()));
+        taskService.getTaskForProvider(userId, taskId, CodexTaskService.CODEX_PROVIDER_TYPE);
+        taskService.cancelTaskDirect(taskId, userId);
+        return RX.ok(Map.of("taskId", taskId, "status",
+                taskService.getTaskForProvider(
+                        userId, taskId, CodexTaskService.CODEX_PROVIDER_TYPE).getStatus()));
     }
 
     /**
@@ -152,16 +143,14 @@ public class CodexTaskController {
     public RX<Map<String, String>> reconnectTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();
 
-        var task = taskService.getTaskEntity(taskId);
-        if (!task.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("Task not found: " + taskId);
-        }
+        CodexTaskDTO task = taskService.getTaskForProvider(
+                userId, taskId, CodexTaskService.CODEX_PROVIDER_TYPE);
 
         if (!"RUNNING".equals(task.getStatus())) {
             return RX.ok(Map.of("taskId", taskId, "status", task.getStatus(), "message", "Task is not running"));
         }
 
-        streamRelay.reconnectTask(taskId, task.getSessionId(), task.getWorkerId());
+        taskService.reconnectTask(taskId, userId);
         return RX.ok(Map.of("taskId", taskId, "status", "RECONNECTING"));
     }
 

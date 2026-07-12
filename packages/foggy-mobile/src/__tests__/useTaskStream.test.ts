@@ -185,12 +185,14 @@ describe('useTaskStream', () => {
         inputTokens: 10,
         outputTokens: 20,
         model: 'sonnet',
+        providerType: 'codex-app-server-worker',
       },
     })
 
     expect(stream.task.value).toMatchObject({
       status: 'COMPLETED',
       model: 'sonnet',
+      providerType: 'codex-app-server-worker',
       numTurns: 2,
       costUsd: 0.1,
       durationMs: 1234,

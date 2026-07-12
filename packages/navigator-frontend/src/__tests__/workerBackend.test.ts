@@ -4,7 +4,9 @@ import {
   isClaudeCodeTask,
   providerTypeFromWorkerBackend,
   providerTypeLabel,
+  providerTypeShortLabel,
   taskSessionRefLabel,
+  workerBackendFromProviderType,
 } from '@/utils/workerBackend'
 import type { ClaudeTask } from '@/types'
 
@@ -24,6 +26,24 @@ function createTask(overrides: Partial<ClaudeTask>): ClaudeTask {
 describe('workerBackend utils', () => {
   it('maps LangGraph worker backend to provider type', () => {
     expect(providerTypeFromWorkerBackend('LANGGRAPH_BIZ')).toBe('langgraph-biz-worker')
+  })
+
+  it('maps Codex SDK and App Server backends to independent providers', () => {
+    expect(providerTypeFromWorkerBackend('OPENAI_CODEX')).toBe('codex-worker')
+    expect(providerTypeFromWorkerBackend('OPENAI_CODEX_APP_SERVER')).toBe('codex-app-server-worker')
+    expect(workerBackendFromProviderType('codex-worker')).toBe('OPENAI_CODEX')
+    expect(workerBackendFromProviderType('codex-app-server-worker')).toBe('OPENAI_CODEX_APP_SERVER')
+  })
+
+  it('uses the App Server provider as the strongest backend signal', () => {
+    const task = createTask({
+      providerType: 'codex-app-server-worker',
+      codexThreadId: 'thread-1',
+      model: 'codex-terra:ultra',
+    })
+
+    expect(inferTaskWorkerBackend(task)).toBe('OPENAI_CODEX_APP_SERVER')
+    expect(taskSessionRefLabel(task)).toBe('Codex App Server Thread ID')
   })
 
   it('uses providerType as the strongest task backend signal', () => {
@@ -61,7 +81,10 @@ describe('workerBackend utils', () => {
   it('labels all current provider types', () => {
     expect(providerTypeLabel('claude-worker')).toBe('Claude Worker')
     expect(providerTypeLabel('codex-worker')).toBe('Codex Worker')
+    expect(providerTypeLabel('codex-app-server-worker')).toBe('Codex App Server Worker')
     expect(providerTypeLabel('gemini-worker')).toBe('Gemini Worker')
     expect(providerTypeLabel('langgraph-biz-worker')).toBe('LangGraph Biz Worker')
+    expect(providerTypeShortLabel('codex-worker')).toBe('Codex SDK')
+    expect(providerTypeShortLabel('codex-app-server-worker')).toBe('Codex App Server')
   })
 })

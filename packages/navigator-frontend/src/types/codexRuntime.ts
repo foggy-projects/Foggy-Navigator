@@ -77,9 +77,11 @@ export interface CodexAppServerEndpointSync {
 
 export interface CodexRuntimeAvailability {
   appServerManaged: boolean
+  modelAvailable?: boolean
   ultraAvailable: boolean
   blockReason:
     | 'CODEX_ULTRA_RUNTIME_UNAVAILABLE'
+    | 'CODEX_RUNTIME_UNAVAILABLE'
     | 'CODEX_RUNTIME_MODEL_ALIAS_CONFLICT'
     | null
 }
@@ -117,20 +119,6 @@ export interface CodexRuntimeRateLimits {
   stale: boolean
   limits: CodexRuntimeRateLimit[]
   errorCode: string | null
-}
-
-export interface RegisterCodexRuntimeRequest {
-  runtimeId: string
-  workerId: string
-  runtimeType?: 'APP_SERVER'
-  endpointUrl: string
-  authToken?: string
-  instanceId?: string
-  enabled?: boolean
-  routingPolicy?: CodexRuntimeRoutingPolicy
-  rolloutPercentage?: number
-  priority?: number
-  routingEpoch?: number
 }
 
 export interface UpdateCodexRuntimeRoutingRequest {

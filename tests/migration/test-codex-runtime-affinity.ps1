@@ -32,6 +32,8 @@ $fixturePath = Join-Path $PSScriptRoot 'codex-runtime-affinity-fixture.sql'
 $migrationPath = Join-Path $repoRoot 'docs/migration/2026-07-10-codex-runtime-affinity.sql'
 $epochCompatibilityMigrationPath = Join-Path $repoRoot 'docs/migration/2026-07-10-codex-task-created-at-epoch-ms.sql'
 $runtimeArchiveMigrationPath = Join-Path $repoRoot 'docs/migration/2026-07-11-codex-runtime-archive.sql'
+$endpointMigrationPath = Join-Path $repoRoot 'docs/migration/2026-07-12-codex-app-server-endpoints.sql'
+$providerSplitMigrationPath = Join-Path $repoRoot 'docs/migration/2026-07-12-codex-provider-split.sql'
 $assertionsPath = Join-Path $PSScriptRoot 'codex-runtime-affinity-assertions.sql'
 $expectedVersions = @{
     'mysql:8.0.44' = '8.0.44'
@@ -350,7 +352,22 @@ $fixtureSql = Get-Content -Raw $fixturePath
 $migrationSql = Get-Content -Raw $migrationPath
 $epochCompatibilityMigrationSql = Get-Content -Raw $epochCompatibilityMigrationPath
 $runtimeArchiveMigrationSql = Get-Content -Raw $runtimeArchiveMigrationPath
+$endpointMigrationSql = Get-Content -Raw $endpointMigrationPath
+$providerSplitMigrationSql = Get-Content -Raw $providerSplitMigrationPath
 $assertionsSql = Get-Content -Raw $assertionsPath
+$providerSplitFixtureSql = @'
+INSERT INTO codex_tasks (
+    id, task_id, worker_task_id, session_id, worker_id, status,
+    runtime_id, runtime_revision, runtime_type, runtime_instance_id,
+    routing_epoch, runtime_acceptance_state, created_at_epoch_ms
+) VALUES (
+    25, 'pre-split-app-task', 'pre-split-app-worker-task', 'app-existing', 'app-worker', 'COMPLETED',
+    'app-runtime', 3, 'APP_SERVER', 'app-instance',
+    7, 'ACCEPTED', 1783785600000
+);
+INSERT INTO session_tasks (task_id, session_id, provider_type)
+VALUES ('pre-split-app-task', 'app-existing', 'codex-worker');
+'@
 
 foreach ($image in $Images) {
     $suffix = [Guid]::NewGuid().ToString('N').Substring(0, 12)
@@ -383,7 +400,13 @@ foreach ($image in $Images) {
         Invoke-MySql -Container $container -Password $password -Database $fixtureDatabase `
             -Sql $migrationSql | Out-Null
         Invoke-MySql -Container $container -Password $password -Database $fixtureDatabase `
+            -Sql $providerSplitFixtureSql | Out-Null
+        Invoke-MySql -Container $container -Password $password -Database $fixtureDatabase `
             -Sql $runtimeArchiveMigrationSql | Out-Null
+        Invoke-MySql -Container $container -Password $password -Database $fixtureDatabase `
+            -Sql $endpointMigrationSql | Out-Null
+        Invoke-MySql -Container $container -Password $password -Database $fixtureDatabase `
+            -Sql $providerSplitMigrationSql | Out-Null
         $evidence = Invoke-MySql -Container $container -Password $password -Database $fixtureDatabase `
             -Sql $assertionsSql
         Write-Host "[PASS] migration fixtures on $actualVersion"
@@ -404,8 +427,10 @@ foreach ($image in $Images) {
                     -Label "current launcher schema bootstrap on $actualVersion"
 
                 $downgradeSql = @'
+DROP TABLE IF EXISTS codex_app_server_endpoints;
 DROP TABLE IF EXISTS codex_runtime_revisions;
 ALTER TABLE codex_tasks
+    DROP COLUMN provider_type,
     DROP COLUMN created_at_epoch_ms,
     DROP COLUMN runtime_request_ciphertext,
     DROP COLUMN runtime_request_hash,
@@ -422,6 +447,10 @@ ALTER TABLE codex_tasks
                     -Sql $migrationSql | Out-Null
                 Invoke-MySql -Container $container -Password $password -Database $launcherDatabase `
                     -Sql $runtimeArchiveMigrationSql | Out-Null
+                Invoke-MySql -Container $container -Password $password -Database $launcherDatabase `
+                    -Sql $endpointMigrationSql | Out-Null
+                Invoke-MySql -Container $container -Password $password -Database $launcherDatabase `
+                    -Sql $providerSplitMigrationSql | Out-Null
                 Invoke-MySql -Container $container -Password $password -Database $launcherDatabase `
                     -Sql 'ALTER TABLE codex_tasks DROP COLUMN created_at_epoch_ms;' | Out-Null
                 Invoke-MySql -Container $container -Password $password -Database $launcherDatabase `

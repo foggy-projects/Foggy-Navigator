@@ -47,6 +47,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TimeZone;
 
 import reactor.core.publisher.Mono;
@@ -175,6 +176,54 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void sdkProviderParamsCannotOverrideRouteToAppServer() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.createTaskDirect(Map.of(
+                        "workerId", "worker-1",
+                        "prompt", "hello",
+                        "providerType", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE),
+                        "user-1", "tenant-1"));
+
+        assertTrue(error.getMessage().contains("CODEX_TASK_PROVIDER_MISMATCH"));
+        verifyNoInteractions(workerManagementFacade, eventPublisher);
+    }
+
+    @Test
+    void providerAliasesCannotHideAConflictingRoute() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.createTaskDirectForProvider(
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                        Map.of(
+                                "workerId", "worker-1",
+                                "prompt", "hello",
+                                "providerType", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                                "provider_type", CodexTaskService.CODEX_PROVIDER_TYPE),
+                        "user-1", "tenant-1"));
+
+        assertTrue(error.getMessage().contains("CODEX_TASK_PROVIDER_MISMATCH"));
+        verifyNoInteractions(workerManagementFacade, eventPublisher);
+    }
+
+    @Test
+    void sdkProviderCommandRejectsAppServerTask() {
+        CodexTaskEntity task = createTask(
+                "task-app", "session-app", "worker-1", "dir-1", "RUNNING", LocalDateTime.now());
+        task.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskRepository.findByTaskIdAndUserId("task-app", "user-1")).thenReturn(Optional.of(task));
+        when(taskRepository.findByTaskIdAndUserIdForUpdate("task-app", "user-1"))
+                .thenReturn(Optional.of(task));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.cancelTaskDirect("task-app", "user-1"));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.respondToTask("task-app", "user-1", Map.of(
+                        "permissionId", "request-1", "answers", Map.of("choice", "one"))));
+
+        verifyNoInteractions(streamRelay);
+        verifyNoInteractions(workerClient);
+    }
+
+    @Test
     void pendingUserInputAcceptsOpaquePoolInstanceAndProjectsAwaitingInput() {
         CodexTaskEntity task = appServerInputTask("RUNNING");
         SessionTaskEntity sessionTask = inputSessionTask();
@@ -254,7 +303,8 @@ class CodexTaskServiceTest {
                         "status", "running",
                         "request_id", "request-1")));
 
-        service.respondToTask("task-input", "user-1", Map.of(
+        service.respondToTaskForProvider(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                "task-input", "user-1", Map.of(
                 "permissionId", "task:task-input:string:request-1",
                 "answers", Map.of("choice", List.of("private answer"))));
 
@@ -265,7 +315,7 @@ class CodexTaskServiceTest {
                 "request-1".equals(body.get("request_id"))
                         && Map.of("choice", List.of("private answer")).equals(body.get("answers"))));
         verify(streamRelay).publishUserInputResponse(
-                "session-1", "codex-worker", "task-input",
+                "session-1", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-input",
                 "task:task-input:string:request-1", "allow", null);
 
         CodexTaskService.UserInputResolution replay = service.resolvePendingUserInput(
@@ -273,7 +323,9 @@ class CodexTaskServiceTest {
         assertFalse(replay.shouldPublish());
 
         IllegalStateException duplicate = assertThrows(IllegalStateException.class,
-                () -> service.respondToTask("task-input", "user-1", Map.of(
+                () -> service.respondToTaskForProvider(
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                        "task-input", "user-1", Map.of(
                         "permissionId", "task:task-input:string:request-1",
                         "answers", Map.of("choice", "private answer"))));
         assertEquals("CODEX_USER_INPUT_NOT_PENDING", duplicate.getMessage());
@@ -308,7 +360,9 @@ class CodexTaskServiceTest {
                 .thenReturn(Mono.error(new RuntimeException("response lost after acceptance")));
 
         IllegalStateException responseError = assertThrows(IllegalStateException.class,
-                () -> service.respondToTask("task-input", "user-1", Map.of(
+                () -> service.respondToTaskForProvider(
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                        "task-input", "user-1", Map.of(
                         "permissionId", "task:task-input:string:request-1",
                         "answers", Map.of("choice", "one"))));
         assertEquals("CODEX_USER_INPUT_RESPONSE_UNKNOWN", responseError.getMessage());
@@ -331,7 +385,7 @@ class CodexTaskServiceTest {
         CodexTaskEntity task = appServerInputTask("AWAITING_INPUT");
         SessionTaskEntity sessionTask = inputSessionTask();
         sessionTask.setTaskStateJson(ProviderStateCodec.mergeTaskValue(
-                null, "codex-worker", "codexPendingInteraction",
+                null, CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "codexPendingInteraction",
                 pendingState(pendingInputProjection(false), "PENDING")));
         when(taskRepository.findByTaskIdAndUserIdForUpdate("task-input", "user-1"))
                 .thenReturn(Optional.of(task));
@@ -342,7 +396,9 @@ class CodexTaskServiceTest {
                         "CODEX_RUNTIME_INSTANCE_AFFINITY_MISMATCH", "physical instance changed"));
 
         CodexRuntimeUnavailableException error = assertThrows(CodexRuntimeUnavailableException.class,
-                () -> service.respondToTask("task-input", "user-1", Map.of(
+                () -> service.respondToTaskForProvider(
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                        "task-input", "user-1", Map.of(
                         "permissionId", "task:task-input:string:request-1",
                         "answers", Map.of("choice", "one"))));
 
@@ -356,14 +412,16 @@ class CodexTaskServiceTest {
         CodexTaskEntity task = appServerInputTask("AWAITING_INPUT");
         SessionTaskEntity sessionTask = inputSessionTask();
         sessionTask.setTaskStateJson(ProviderStateCodec.mergeTaskValue(
-                null, "codex-worker", "codexPendingInteraction",
+                null, CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "codexPendingInteraction",
                 pendingState(pendingInputProjection(false), "PENDING")));
         when(taskRepository.findByTaskIdAndUserIdForUpdate("task-input", "user-1"))
                 .thenReturn(Optional.of(task));
         when(sessionTaskRepository.findByTaskId("task-input")).thenReturn(Optional.of(sessionTask));
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> service.respondToTask("task-input", "user-1", Map.of(
+                () -> service.respondToTaskForProvider(
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                        "task-input", "user-1", Map.of(
                         "permissionId", "task:task-input:string:request-1",
                         "answers", Map.of("choice", List.of("one", "two")))));
 
@@ -385,7 +443,9 @@ class CodexTaskServiceTest {
                 "task-input", pendingInputProjection(false, 1));
         assertEquals("task:task-input:number:1", registration.requestId());
         IllegalStateException stringToken = assertThrows(IllegalStateException.class,
-                () -> service.respondToTask("task-input", "user-1", Map.of(
+                () -> service.respondToTaskForProvider(
+                        CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                        "task-input", "user-1", Map.of(
                         "permissionId", "task:task-input:string:1",
                         "answers", Map.of("choice", "one"))));
         assertEquals("CODEX_USER_INPUT_REQUEST_MISMATCH", stringToken.getMessage());
@@ -403,7 +463,8 @@ class CodexTaskServiceTest {
                 .thenReturn(Mono.just(Map.of(
                         "task_id", "worker-task-1", "status", "running", "request_id", 1)));
 
-        service.respondToTask("task-input", "user-1", Map.of(
+        service.respondToTaskForProvider(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                "task-input", "user-1", Map.of(
                 "permissionId", "task:task-input:number:1",
                 "answers", Map.of("choice", "one")));
 
@@ -754,10 +815,12 @@ class CodexTaskServiceTest {
             return savedTask[0];
         });
         when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserId("thread-1", "worker-1", "user-1"))
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
+                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
                 .thenReturn(true);
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
-                "thread-1", "worker-1", "user-1", List.of("RUNNING", "AWAITING_INPUT")))
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
+                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT")))
                 .thenReturn(false);
         // providerStateJson 中存储 codexThreadId（resume 从此恢复）
         SessionEntity sessionWithState = new SessionEntity();
@@ -812,6 +875,26 @@ class CodexTaskServiceTest {
                         .equals(event.getProviderConfigString("images"))
                         && "thread-1".equals(event.getProviderConfigString("codexThreadId"))
         ));
+    }
+
+    @Test
+    void resumeTaskDoesNotAcceptThreadOwnedOnlyByAnotherProvider() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId("user-1");
+        session.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        session.setProviderStateJson("{\"codexThreadId\":\"thread-cross-provider\"}");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.resumeTask("user-1", "tenant-1", Map.of(
+                        "workerId", "worker-1",
+                        "sessionId", "session-1",
+                        "prompt", "continue")));
+
+        verify(taskRepository).existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
+                "thread-cross-provider", "worker-1", "user-1",
+                CodexTaskService.CODEX_PROVIDER_TYPE);
+        verify(taskRepository, never()).save(any());
     }
 
     @Test
@@ -961,7 +1044,8 @@ class CodexTaskServiceTest {
         params.put("networkAccessEnabled", false);
         params.put("webSearchMode", "disabled");
         params.put("additionalDirectories", List.of("/home/sa/workspace/shared"));
-        DispatchTaskDTO result = service.createTaskDirect(params, "user-1", "tenant-1");
+        DispatchTaskDTO result = service.createTaskDirectForProvider(
+                CodexTaskService.CODEX_BIZ_PROVIDER_TYPE, params, "user-1", "tenant-1");
 
         assertEquals("codex-biz-worker", result.getProviderType());
         verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
@@ -1022,7 +1106,8 @@ class CodexTaskServiceTest {
         params.put("web_search_mode", "disabled");
         params.put("additional_directories", List.of("/home/sa/workspace/shared", " "));
 
-        DispatchTaskDTO result = service.createTaskDirect(params, "user-1", "tenant-1");
+        DispatchTaskDTO result = service.createTaskDirectForProvider(
+                CodexTaskService.CODEX_BIZ_PROVIDER_TYPE, params, "user-1", "tenant-1");
 
         assertEquals("codex-biz-worker", result.getProviderType());
         verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
@@ -1055,7 +1140,8 @@ class CodexTaskServiceTest {
         params.put("prompt", "hello");
         params.put("privateAccountId", "tenant/world-sim/scenario-1/actor-3");
 
-        DispatchTaskDTO result = service.createTaskDirect(params, "user-1", "tenant-1");
+        DispatchTaskDTO result = service.createTaskDirectForProvider(
+                CodexTaskService.CODEX_BIZ_PROVIDER_TYPE, params, "user-1", "tenant-1");
 
         assertEquals("codex-biz-worker", result.getProviderType());
         verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
@@ -1203,14 +1289,15 @@ class CodexTaskServiceTest {
     @Test
     void createTaskDirect_allowsKnownGpt56SolGrantForStableAlias() {
         CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-ultra-real-grant");
-        LlmModelConfigDTO config = codexModelConfig(List.of("gpt-5.6-sol:ultra"));
+        LlmModelConfigDTO config = appServerModelConfig(List.of("gpt-5.6-sol:ultra"));
         when(llmModelManager.getModelConfig("cfg-ultra-real")).thenReturn(Optional.of(config));
 
-        service.createTaskDirect(Map.of(
+        service.createTaskDirectForProvider(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, Map.of(
                 "workerId", "worker-1",
                 "prompt", "hello",
                 "model", "codex-ultra",
-                "modelConfigId", "cfg-ultra-real"
+                "modelConfigId", "cfg-ultra-real",
+                "providerType", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE
         ), "user-1", "tenant-1");
 
         assertEquals("codex-ultra", savedTask[0].getModel());
@@ -1219,14 +1306,15 @@ class CodexTaskServiceTest {
     @Test
     void createTaskDirect_allowsStableAliasGrantForCodexLatestSuffix() {
         CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-latest-ultra");
-        LlmModelConfigDTO config = codexModelConfig(List.of("codex-ultra"));
+        LlmModelConfigDTO config = appServerModelConfig(List.of("codex-ultra"));
         when(llmModelManager.getModelConfig("cfg-latest-ultra")).thenReturn(Optional.of(config));
 
-        service.createTaskDirect(Map.of(
+        service.createTaskDirectForProvider(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, Map.of(
                 "workerId", "worker-1",
                 "prompt", "hello",
                 "model", "codex-latest:ultra",
-                "modelConfigId", "cfg-latest-ultra"
+                "modelConfigId", "cfg-latest-ultra",
+                "providerType", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE
         ), "user-1", "tenant-1");
 
         assertEquals("codex-latest:ultra", savedTask[0].getModel());
@@ -1235,14 +1323,15 @@ class CodexTaskServiceTest {
     @Test
     void createTaskDirect_allowsExactFutureGatedModelGrant() {
         CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-future-exact");
-        LlmModelConfigDTO config = codexModelConfig(List.of("gpt-5.7-sol:ultra"));
+        LlmModelConfigDTO config = appServerModelConfig(List.of("gpt-5.7-sol:ultra"));
         when(llmModelManager.getModelConfig("cfg-future-exact")).thenReturn(Optional.of(config));
 
-        service.createTaskDirect(Map.of(
+        service.createTaskDirectForProvider(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, Map.of(
                 "workerId", "worker-1",
                 "prompt", "hello",
                 "model", "gpt-5.7-sol:ultra",
-                "modelConfigId", "cfg-future-exact"
+                "modelConfigId", "cfg-future-exact",
+                "providerType", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE
         ), "user-1", "tenant-1");
 
         assertEquals("gpt-5.7-sol:ultra", savedTask[0].getModel());
@@ -1267,14 +1356,15 @@ class CodexTaskServiceTest {
     @Test
     void createTaskDirect_allowsGatedModelWhenWhitelistIsUnrestricted() {
         CodexTaskEntity[] savedTask = stubSuccessfulTaskCreation("session-unrestricted");
-        LlmModelConfigDTO config = codexModelConfig(List.of());
+        LlmModelConfigDTO config = appServerModelConfig(List.of());
         when(llmModelManager.getModelConfig("cfg-unrestricted")).thenReturn(Optional.of(config));
 
-        service.createTaskDirect(Map.of(
+        service.createTaskDirectForProvider(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, Map.of(
                 "workerId", "worker-1",
                 "prompt", "hello",
                 "model", "codex-ultra",
-                "modelConfigId", "cfg-unrestricted"
+                "modelConfigId", "cfg-unrestricted",
+                "providerType", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE
         ), "user-1", "tenant-1");
 
         assertEquals("codex-ultra", savedTask[0].getModel());
@@ -1461,10 +1551,12 @@ class CodexTaskServiceTest {
             return savedTask[0];
         });
         when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserId("thread-1", "worker-1", "user-1"))
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
+                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
                 .thenReturn(true);
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
-                "thread-1", "worker-1", "user-1", List.of("RUNNING", "AWAITING_INPUT")))
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
+                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT")))
                 .thenReturn(false);
         SessionEntity existingSession = new SessionEntity();
         existingSession.setId("session-1");
@@ -1713,56 +1805,37 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void trackedSyncResumeReusesAppServerThreadAffinity() {
-        CodexTaskEntity previous = new CodexTaskEntity();
-        previous.setTaskId("task-previous");
-        previous.setSessionId("session-app");
-        previous.setWorkerId("worker-1");
-        previous.setUserId("user-1");
-        previous.setCodexThreadId("thread-app-1");
-        previous.setRuntimeId("app-main");
-        previous.setRuntimeRevision(1);
-        previous.setRuntimeType("APP_SERVER");
-        when(taskRepository.findFirstByCodexThreadIdAndWorkerIdAndUserIdOrderByCreatedAtDesc(
-                "thread-app-1", "worker-1", "user-1"))
-                .thenReturn(Optional.of(previous));
-        CodexRuntimeBinding binding = CodexRuntimeBinding.builder()
-                .runtimeId("app-main")
-                .runtimeRevision(1)
-                .runtimeType(CodexRuntimeType.APP_SERVER)
-                .workerId("worker-1")
-                .endpointUrl("http://127.0.0.1:3062")
-                .instanceId("instance-a")
-                .routingEpoch(1L)
-                .build();
-        when(runtimeRegistryService.resolveBoundRuntime("app-main", 1, "worker-1", null))
-                .thenReturn(binding);
-        CodexTaskEntity[] saved = new CodexTaskEntity[1];
-        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
-            saved[0] = invocation.getArgument(0);
-            return saved[0];
-        });
+    void trackedSyncDoesNotReuseAnotherProviderThreadAffinity() {
+        when(taskRepository.findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeOrderByCreatedAtDesc(
+                "shared-thread", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
+                .thenReturn(Optional.empty());
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
 
         service.createTrackedSyncTask("user-1", "worker-1", null,
-                "continue", "D:/repo", null, "thread-app-1", "codex-latest");
+                "continue", "D:/repo", null, "shared-thread", "codex-latest");
 
-        assertNotNull(saved[0]);
-        assertEquals("APP_SERVER", saved[0].getRuntimeType());
-        assertEquals("app-main", saved[0].getRuntimeId());
-        assertEquals("thread-app-1", saved[0].getCodexThreadId());
+        verify(taskRepository).findFirstByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeOrderByCreatedAtDesc(
+                "shared-thread", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE);
+        verify(taskRepository).save(argThat(task ->
+                CodexTaskService.CODEX_PROVIDER_TYPE.equals(task.getProviderType())
+                        && CodexRuntimeType.SDK_EXEC.name().equals(task.getRuntimeType())
+                        && "legacy-sdk:worker-1".equals(task.getRuntimeId())));
+        verify(runtimeRegistryService, never()).resolveBoundRuntime(
+                anyString(), any(), anyString(), any());
     }
 
     @Test
-    void trackedSyncUsesPersistedSessionAffinityWhenHistoricalTaskIsMissing() {
+    void existingAppServerSessionValidatesModelAndFeaturesAgainstBoundRevision() {
         SessionEntity session = new SessionEntity();
         session.setId("session-app");
-        session.setUserId("user-1");
+        session.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         session.setProviderStateJson(ProviderStateCodec.writeObject(Map.of(
                 ProviderStateCodec.FIELD_CODEX_RUNTIME_ID, "app-main",
                 ProviderStateCodec.FIELD_CODEX_RUNTIME_REVISION, 1,
                 ProviderStateCodec.FIELD_CODEX_RUNTIME_TYPE, "APP_SERVER",
                 ProviderStateCodec.FIELD_CODEX_RUNTIME_INSTANCE_ID, "instance-a",
-                ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH, 3)));
+                ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH, 7)));
         when(sessionEntityRepository.findById("session-app")).thenReturn(Optional.of(session));
         CodexRuntimeBinding binding = CodexRuntimeBinding.builder()
                 .runtimeId("app-main")
@@ -1771,22 +1844,42 @@ class CodexTaskServiceTest {
                 .workerId("worker-1")
                 .endpointUrl("http://127.0.0.1:3062")
                 .instanceId("instance-a")
-                .routingEpoch(3L)
+                .routingEpoch(7L)
                 .build();
-        when(runtimeRegistryService.resolveBoundRuntime("app-main", 1, "worker-1", "instance-a"))
-                .thenReturn(binding);
-        CodexTaskEntity[] saved = new CodexTaskEntity[1];
-        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
-            saved[0] = invocation.getArgument(0);
-            return saved[0];
-        });
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 1, "worker-1", "instance-a")).thenReturn(binding);
 
-        service.createTrackedSyncTask("user-1", "worker-1", "session-app",
-                "continue", "D:/repo", null, null, "codex-latest");
+        CodexRuntimeBinding resolved = ReflectionTestUtils.invokeMethod(
+                service, "resolveRuntimeBinding", "worker-1", "codex-terra:ultra",
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE, "task-new", "session-app",
+                Set.of("attachments"));
 
-        assertNotNull(saved[0]);
-        assertEquals("APP_SERVER", saved[0].getRuntimeType());
-        assertEquals("app-main", saved[0].getRuntimeId());
+        assertEquals(binding, resolved);
+        verify(runtimeRegistryService).validateBoundRuntimeCapabilities(
+                binding, "codex-terra:ultra", Set.of("attachments"));
+        verify(runtimeRegistryService, never()).selectForNewTask(
+                anyString(), any(), anyString(), anyString(), any());
+    }
+
+    @Test
+    void trackedSyncRejectsAppServerSessionProvider() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-app");
+        session.setUserId("user-1");
+        session.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        session.setProviderStateJson(ProviderStateCodec.writeObject(Map.of(
+                ProviderStateCodec.FIELD_CODEX_RUNTIME_ID, "app-main",
+                ProviderStateCodec.FIELD_CODEX_RUNTIME_REVISION, 1,
+                ProviderStateCodec.FIELD_CODEX_RUNTIME_TYPE, "APP_SERVER",
+                ProviderStateCodec.FIELD_CODEX_RUNTIME_INSTANCE_ID, "instance-a",
+                ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH, 3)));
+        when(sessionEntityRepository.findById("session-app")).thenReturn(Optional.of(session));
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.createTrackedSyncTask("user-1", "worker-1", "session-app",
+                        "continue", "D:/repo", null, null, "codex-latest"));
+
+        assertTrue(error.getMessage().startsWith("SESSION_PROVIDER_MISMATCH"));
+        verify(taskRepository, never()).save(any());
         verify(runtimeRegistryService, never()).selectForNewTask(
                 anyString(), any(), anyString(), anyString(), any());
     }
@@ -1935,6 +2028,13 @@ class CodexTaskServiceTest {
         return config;
     }
 
+    private LlmModelConfigDTO appServerModelConfig(List<String> availableModels) {
+        LlmModelConfigDTO config = new LlmModelConfigDTO();
+        config.setWorkerBackend("OPENAI_CODEX_APP_SERVER");
+        config.setAvailableModels(availableModels);
+        return config;
+    }
+
     private CodexTaskEntity appServerInputTask(String status) {
         CodexTaskEntity task = createTask(
                 "task-input", "session-1", "worker-1", "dir-1", status, LocalDateTime.now());
@@ -1945,7 +2045,7 @@ class CodexTaskServiceTest {
         task.setRuntimeAcceptanceState("SUBSCRIBED");
         task.setWorkerTaskId("worker-task-1");
         task.setCodexThreadId("thread-1");
-        task.setProviderType("codex-worker");
+        task.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         return task;
     }
 
@@ -1956,10 +2056,12 @@ class CodexTaskServiceTest {
         session.setUserId("user-1");
         session.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
         when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserId(
-                "thread-1", "worker-1", "user-1")).thenReturn(true);
-        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatusIn(
-                "thread-1", "worker-1", "user-1", List.of("RUNNING", "AWAITING_INPUT")))
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderType(
+                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE))
+                .thenReturn(true);
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndProviderTypeAndStatusIn(
+                "thread-1", "worker-1", "user-1", CodexTaskService.CODEX_PROVIDER_TYPE,
+                List.of("RUNNING", "AWAITING_INPUT")))
                 .thenReturn(true);
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
@@ -1978,7 +2080,7 @@ class CodexTaskServiceTest {
         task.setTaskId("task-input");
         task.setSessionId("session-1");
         task.setUserId("user-1");
-        task.setProviderType("codex-worker");
+        task.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
         return task;
     }
 

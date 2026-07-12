@@ -16,6 +16,8 @@
 
 ## 需求
 
+> 2026-07-12 演进说明：模型族与 reasoning 目录仍有效；第 7 条“统一 Backend/Provider”的前向设计已被 [OPT-005](./OPT-005-codex-app-server-independent-provider.md) 取代。Low-Max 分别按所选 Backend 执行，Ultra 只属于 `OPENAI_CODEX_APP_SERVER` / `codex-app-server-worker`。
+
 1. 从产品模型目录移除 `codex-mini`。
 2. PC 与 APP 保持一个模型选择控件；Codex 在控件内部按 Sol、Terra、Luna 分组展示 reasoning 档位，其他编程 Worker 仍使用普通平铺选项。
 3. LLM 设置页同样按模型族分组，不设置 Sol/Terra/Luna 总开关；某组至少勾选一个 reasoning 档位即认为该组已开放。
@@ -107,6 +109,8 @@
 | 阻断项 | 无代码实现阻断；真实 Ultra 执行仍受 OPT-001 App Server readiness gate 约束 |
 
 ## 非目标
+
+以下 Backend/Provider 非目标是 OPT-002 当时的历史边界；相关条目由 OPT-005 覆盖，不再代表当前架构。
 
 - 不把模型族与推理档位拆成两个独立控件。
 - 不为每个 Terra/Luna 档位新增固定 alias。

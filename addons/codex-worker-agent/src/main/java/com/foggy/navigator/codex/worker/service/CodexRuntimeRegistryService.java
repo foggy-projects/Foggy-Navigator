@@ -13,7 +13,6 @@ import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeAvailabilityDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexAppServerEndpointEntity;
 import com.foggy.navigator.codex.worker.model.entity.CodexRuntimeEntity;
-import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRegistrationForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeLifecycleForm;
 import com.foggy.navigator.codex.worker.model.form.CodexRuntimeRoutingForm;
 import com.foggy.navigator.codex.worker.repository.CodexAppServerEndpointRepository;
@@ -103,58 +102,6 @@ public class CodexRuntimeRegistryService {
 
     @Value("${navigator.codex.runtime.capability-max-age-seconds:120}")
     private long capabilityMaxAgeSeconds = 120;
-
-    @Transactional
-    public CodexRuntimeDTO registerRevision(CodexRuntimeRegistrationForm form) {
-        validateRegistration(form);
-        List<CodexRuntimeEntity> existingRevisions = runtimeRepository
-                .findByRuntimeIdOrderByRevisionDesc(form.getRuntimeId());
-        if (existingRevisions.stream().anyMatch(existing ->
-                !form.getWorkerId().trim().equals(existing.getWorkerId()))) {
-            throw new IllegalArgumentException("Runtime ID is already owned by another worker");
-        }
-        Integer storedMaxRevision = runtimeRepository.findMaxRevision(form.getRuntimeId());
-        int maxRevision = storedMaxRevision != null ? storedMaxRevision : 0;
-        if (maxRevision == Integer.MAX_VALUE) {
-            throw new IllegalStateException("Runtime revision sequence is exhausted");
-        }
-        int nextRevision = maxRevision + 1;
-        if (form.getRevision() != null && form.getRevision() != nextRevision) {
-            throw new IllegalArgumentException("Runtime revision must be the next revision: " + nextRevision);
-        }
-        int revision = nextRevision;
-        if (runtimeRepository.findByRuntimeIdAndRevision(form.getRuntimeId(), revision).isPresent()) {
-            throw new IllegalArgumentException("Runtime revision already exists: "
-                    + form.getRuntimeId() + "@" + revision);
-        }
-
-        CodexRuntimeType runtimeType = parseRuntimeType(form.getRuntimeType());
-        CodexRuntimeRoutingPolicy routingPolicy = parseRoutingPolicy(form.getRoutingPolicy());
-        validateRollout(form.getRolloutPercentage());
-
-        CodexRuntimeEntity entity = new CodexRuntimeEntity();
-        entity.setRuntimeId(form.getRuntimeId().trim());
-        entity.setRevision(revision);
-        entity.setWorkerId(form.getWorkerId().trim());
-        entity.setRuntimeType(runtimeType.name());
-        entity.setEndpointUrl(trimTrailingSlash(form.getEndpointUrl()));
-        entity.setAuthTokenCiphertext(credentialEncryptor.encrypt(optionalToken(form.getAuthToken())));
-        entity.setInstanceId(blankToNull(form.getInstanceId()));
-        entity.setEnabled(Boolean.TRUE.equals(form.getEnabled()));
-        entity.setRoutingPolicy(routingPolicy.name());
-        entity.setRolloutPercentage(defaultValue(form.getRolloutPercentage(), 0));
-        entity.setPriority(defaultValue(form.getPriority(), 0));
-        entity.setRoutingEpoch(1L);
-        entity.setReadinessStatus("PENDING");
-        entity.setExpectedCliVersion(firstNonBlank(form.getExpectedCliVersion(), PINNED_APP_SERVER_CLI_VERSION));
-        entity.setExpectedSchemaDigest(firstNonBlank(form.getExpectedSchemaDigest(), PINNED_SCHEMA_DIGEST));
-
-        CodexRuntimeEntity saved = runtimeRepository.save(entity);
-        log.info("Registered Codex runtime revision: runtimeId={}, revision={}, workerId={}, type={}, policy={}",
-                saved.getRuntimeId(), saved.getRevision(), saved.getWorkerId(),
-                saved.getRuntimeType(), saved.getRoutingPolicy());
-        return toDTO(saved);
-    }
 
     /**
      * Probes an endpoint profile and creates a new platform runtime revision only
@@ -265,6 +212,8 @@ public class CodexRuntimeRegistryService {
                 .findByWorkerIdOrderByPriorityDescRevisionDesc(workerId);
         List<CodexRuntimeEntity> registeredCandidates = runtimes.stream()
                 .filter(entity -> CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType()))
+                .filter(entity -> "ENDPOINT_SYNC".equals(entity.getRuntimeSource()))
+                .filter(this::hasLiveEndpointProfile)
                 .filter(entity -> entity.getArchivedAt() == null)
                 .toList();
         boolean appServerManaged = !registeredCandidates.isEmpty();
@@ -279,23 +228,65 @@ public class CodexRuntimeRegistryService {
             if (!MODEL_ALIAS_CONFLICT_CODE.equals(error.getCode())) throw error;
             return CodexRuntimeAvailabilityDTO.builder()
                     .appServerManaged(appServerManaged)
+                    .modelAvailable(false)
                     .ultraAvailable(false)
                     .blockReason(MODEL_ALIAS_CONFLICT_CODE)
                     .build();
         }
-        boolean ultraAvailable = resolution.isUltra()
-                && enabledCandidates.stream()
-                .anyMatch(entity -> isUltraAvailable(entity, requestedModel));
+        boolean modelAvailable = enabledCandidates.stream()
+                .anyMatch(entity -> isModelAvailable(entity, requestedModel));
+        boolean ultraAvailable = resolution.isUltra() && modelAvailable;
         return CodexRuntimeAvailabilityDTO.builder()
                 .appServerManaged(appServerManaged)
+                .modelAvailable(modelAvailable)
                 .ultraAvailable(ultraAvailable)
-                .blockReason(ultraAvailable ? null : ULTRA_AVAILABILITY_BLOCK_REASON)
+                .blockReason(modelAvailable ? null : resolution.isUltra()
+                        ? ULTRA_AVAILABILITY_BLOCK_REASON : "CODEX_RUNTIME_UNAVAILABLE")
                 .build();
+    }
+
+    @Transactional(readOnly = true)
+    public String testEndpointConnection(String workerId, String model) {
+        List<CodexAppServerEndpointEntity> endpoints =
+                endpointRepository.findByWorkerIdOrderByUpdatedAtDesc(workerId);
+        if (endpoints.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "CODEX_APP_SERVER_ENDPOINT_MISSING: no Endpoint Profile for Worker " + workerId);
+        }
+        String lastFailure = "CODEX_APP_SERVER_ENDPOINT_UNAVAILABLE";
+        for (CodexAppServerEndpointEntity endpoint : endpoints) {
+            try {
+                CodexWorkerClient.CapabilityProbe probe = clientFactory.getOrCreate(
+                                "endpoint-test:" + endpoint.getEndpointId(),
+                                endpoint.getEndpointUrl(),
+                                credentialEncryptor.decrypt(endpoint.getAuthTokenCiphertext()),
+                                null)
+                        .probeCapabilities()
+                        .block(Duration.ofSeconds(10));
+                if (probe == null || probe.manifest() == null) {
+                    lastFailure = "CODEX_APP_SERVER_CAPABILITY_EMPTY";
+                    continue;
+                }
+                if (model != null && !model.isBlank()
+                        && (!supportsModel(probe.manifest(), model)
+                            || !supportsModelReasoning(probe.manifest(), model)
+                            || (resolveModel(model, modelAliases(probe.manifest())).isUltra()
+                                && !supportsNativeSubtaskContractV1(probe.manifest())))) {
+                    lastFailure = "CODEX_APP_SERVER_MODEL_UNSUPPORTED";
+                    continue;
+                }
+                return "Codex App Server READY: " + maskedEndpoint(endpoint.getEndpointUrl());
+            } catch (Exception error) {
+                lastFailure = capabilityFailureCode(error);
+            }
+        }
+        throw new IllegalStateException(lastFailure);
     }
 
     @Transactional
     public CodexRuntimeDTO updateRouting(String runtimeId, int revision, CodexRuntimeRoutingForm form) {
         CodexRuntimeEntity entity = requireRevisionForUpdate(runtimeId, revision);
+        requireLiveEndpointProfile(entity);
         if (entity.getArchivedAt() != null) {
             throw new IllegalStateException("CODEX_RUNTIME_ARCHIVED");
         }
@@ -342,6 +333,7 @@ public class CodexRuntimeRegistryService {
     public CodexRuntimeDTO unarchiveRevision(
             String runtimeId, int revision, CodexRuntimeLifecycleForm form) {
         CodexRuntimeEntity entity = requireRevisionForUpdate(runtimeId, revision);
+        requireLiveEndpointProfile(entity);
         requireRoutingEpoch(entity, form != null ? form.getExpectedRoutingEpoch() : null);
         if (entity.getArchivedAt() == null) {
             throw new IllegalStateException("CODEX_RUNTIME_NOT_ARCHIVED");
@@ -400,6 +392,7 @@ public class CodexRuntimeRegistryService {
      */
     public CodexRuntimeDTO recoverInstanceQuarantine(String runtimeId, int revision) {
         CodexRuntimeEntity probeTarget = requireRevision(runtimeId, revision);
+        requireLiveEndpointProfile(probeTarget);
         validateRecoveryEligibility(probeTarget);
         if (!hasReadinessCode(probeTarget, "CAPABILITY_INSTANCE_ID_MISMATCH")) {
             throw new IllegalStateException("CODEX_RUNTIME_INSTANCE_QUARANTINE_NOT_FOUND");
@@ -474,23 +467,28 @@ public class CodexRuntimeRegistryService {
     @Transactional(readOnly = true)
     public CodexRuntimeBinding selectForNewTask(String workerId, String model, String providerType,
                                                  String routingKey, Set<String> requiredFeatures) {
+        if (!CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE.equals(providerType)) {
+            throw new CodexRuntimeUnavailableException("CODEX_PROVIDER_RUNTIME_MISMATCH",
+                    "App-server runtime registry cannot route provider " + providerType);
+        }
         List<CodexRuntimeEntity> registeredCandidates = runtimeRepository
                 .findByWorkerIdOrderByPriorityDescRevisionDesc(workerId).stream()
                 .filter(entity -> CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType()))
+                .filter(entity -> "ENDPOINT_SYNC".equals(entity.getRuntimeSource()))
+                .filter(this::hasLiveEndpointProfile)
                 .filter(entity -> entity.getArchivedAt() == null)
                 .sorted(RUNTIME_ORDER)
                 .toList();
         List<CodexRuntimeEntity> candidates = runtimeRepository
                 .findByWorkerIdAndRuntimeTypeAndEnabledTrueOrderByPriorityDescRevisionDesc(
                         workerId, CodexRuntimeType.APP_SERVER.name()).stream()
+                .filter(entity -> "ENDPOINT_SYNC".equals(entity.getRuntimeSource()))
+                .filter(this::hasLiveEndpointProfile)
                 .filter(entity -> entity.getArchivedAt() == null)
                 .sorted(RUNTIME_ORDER)
                 .toList();
-        ModelResolution defaultResolution = resolveModel(model, DEFAULT_MODEL_ALIASES);
         ModelResolution registeredResolution = resolveCandidateModel(model, registeredCandidates);
-        boolean manifestSpecificAlias = !registeredResolution.equals(defaultResolution);
         boolean ultra = registeredResolution.isUltra();
-        boolean targeted = false;
 
         for (CodexRuntimeEntity candidate : candidates) {
             CodexRuntimeRoutingPolicy policy = parseRoutingPolicy(candidate.getRoutingPolicy());
@@ -498,18 +496,14 @@ public class CodexRuntimeRegistryService {
                     candidate.getRuntimeId())) {
                 continue;
             }
-            targeted = true;
             if (isUsable(candidate, model, providerType, requiredFeatures)) {
                 return toBinding(candidate);
             }
         }
 
-        if (targeted || ultra || manifestSpecificAlias) {
-            String code = ultra ? "CODEX_ULTRA_RUNTIME_UNAVAILABLE" : "CODEX_RUNTIME_UNAVAILABLE";
-            throw new CodexRuntimeUnavailableException(code,
-                    "No compatible READY app-server runtime is available for the selected rollout cohort");
-        }
-        return CodexRuntimeBinding.legacySdk(workerId);
+        String code = ultra ? "CODEX_ULTRA_RUNTIME_UNAVAILABLE" : "CODEX_RUNTIME_UNAVAILABLE";
+        throw new CodexRuntimeUnavailableException(code,
+                "No compatible READY app-server runtime is available for the selected rollout cohort");
     }
 
     @Transactional(readOnly = true)
@@ -521,19 +515,12 @@ public class CodexRuntimeRegistryService {
     public CodexRuntimeBinding resolveBoundRuntime(String runtimeId, Integer revision, String workerId,
                                                     String expectedInstanceId) {
         if (runtimeId == null || runtimeId.isBlank()) {
-            return CodexRuntimeBinding.legacySdk(workerId);
+            throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_INVALID",
+                    "App-server runtime affinity is missing");
         }
         if (runtimeId.startsWith("legacy-sdk:")) {
-            String boundWorkerId = runtimeId.substring("legacy-sdk:".length());
-            if (boundWorkerId.isBlank()) {
-                throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_INVALID",
-                        "Legacy SDK runtime affinity has no worker");
-            }
-            if (workerId != null && !workerId.equals(boundWorkerId)) {
-                throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_MISMATCH",
-                        "Legacy SDK runtime belongs to another worker");
-            }
-            return CodexRuntimeBinding.legacySdk(boundWorkerId);
+            throw new CodexRuntimeUnavailableException("CODEX_PROVIDER_RUNTIME_MISMATCH",
+                    "SDK affinity cannot be resolved by the app-server runtime registry");
         }
         if (revision == null) {
             throw new CodexRuntimeUnavailableException("CODEX_RUNTIME_AFFINITY_INVALID",
@@ -541,6 +528,11 @@ public class CodexRuntimeRegistryService {
         }
         return runtimeRepository.findByRuntimeIdAndRevision(runtimeId, revision)
                 .map(entity -> {
+                    if (!"ENDPOINT_SYNC".equals(entity.getRuntimeSource())) {
+                        throw new CodexRuntimeUnavailableException(
+                                "CODEX_RUNTIME_SOURCE_UNSUPPORTED",
+                                "Bound runtime was not created from an Endpoint Profile");
+                    }
                     if (workerId != null && !workerId.equals(entity.getWorkerId())) {
                         throw new CodexRuntimeUnavailableException(
                                 "CODEX_RUNTIME_AFFINITY_MISMATCH",
@@ -567,6 +559,32 @@ public class CodexRuntimeRegistryService {
                 .orElseThrow(() -> new CodexRuntimeUnavailableException(
                         "CODEX_RUNTIME_AFFINITY_MISSING",
                         "Bound runtime revision no longer exists: " + runtimeId + "@" + revision));
+    }
+
+    @Transactional(readOnly = true)
+    public void validateBoundRuntimeCapabilities(CodexRuntimeBinding binding, String model,
+                                                  Set<String> requiredFeatures) {
+        if (binding == null || binding.getRuntimeType() != CodexRuntimeType.APP_SERVER) {
+            throw new CodexRuntimeUnavailableException("CODEX_PROVIDER_RUNTIME_MISMATCH",
+                    "Bound capability validation requires an app-server runtime");
+        }
+        CodexRuntimeEntity entity = runtimeRepository
+                .findByRuntimeIdAndRevision(binding.getRuntimeId(), binding.getRuntimeRevision())
+                .orElseThrow(() -> new CodexRuntimeUnavailableException(
+                        "CODEX_RUNTIME_AFFINITY_MISSING",
+                        "Bound runtime revision no longer exists"));
+        Map<String, Object> manifest = parseManifest(entity.getCapabilityManifestJson());
+        boolean ultra = resolveModel(model, modelAliases(manifest)).isUltra();
+        boolean compatible = supportsCoreAppServerContract(manifest)
+                && supportsModelReasoning(manifest, model)
+                && supportsModel(manifest, model)
+                && (!ultra || supportsNativeSubtaskContractV1(manifest))
+                && supportsFeatures(manifest, requiredFeatures);
+        if (!compatible) {
+            throw new CodexRuntimeUnavailableException(
+                    "CODEX_BOUND_RUNTIME_CAPABILITY_MISMATCH",
+                    "The bound runtime revision cannot execute the requested model or features");
+        }
     }
 
     @Transactional(readOnly = true)
@@ -991,6 +1009,21 @@ public class CodexRuntimeRegistryService {
         return entity;
     }
 
+    private boolean hasLiveEndpointProfile(CodexRuntimeEntity entity) {
+        return entity != null
+                && "ENDPOINT_SYNC".equals(entity.getRuntimeSource())
+                && entity.getEndpointId() != null
+                && !entity.getEndpointId().isBlank()
+                && endpointRepository.findByEndpointId(entity.getEndpointId()).isPresent();
+    }
+
+    private void requireLiveEndpointProfile(CodexRuntimeEntity entity) {
+        if (!hasLiveEndpointProfile(entity)) {
+            throw new IllegalStateException(
+                    "CODEX_APP_SERVER_ENDPOINT_MISSING: runtime cannot accept new routing changes");
+        }
+    }
+
     private String managedRuntimeId(String endpointId) {
         return "appserver-" + endpointId.replace("endpoint-", "");
     }
@@ -1134,28 +1167,32 @@ public class CodexRuntimeRegistryService {
         Map<String, Object> manifest = parseManifest(entity.getCapabilityManifestJson());
         return supportsCoreAppServerContract(manifest)
                 && supportsNativeSubtaskContractV1(manifest)
-                && supportsModelReasoning(manifest, "gpt-5.6-sol:ultra")
-                && supportsModel(manifest, "gpt-5.6-sol:ultra");
+                && ((supportsModelReasoning(manifest, "gpt-5.6-sol:ultra")
+                        && supportsModel(manifest, "gpt-5.6-sol:ultra"))
+                    || (supportsModelReasoning(manifest, "gpt-5.6-terra:ultra")
+                        && supportsModel(manifest, "gpt-5.6-terra:ultra")));
     }
 
-    private boolean isUltraAvailable(CodexRuntimeEntity entity, String requestedModel) {
+    private boolean isModelAvailable(CodexRuntimeEntity entity, String requestedModel) {
         Map<String, Object> manifest = parseManifest(entity.getCapabilityManifestJson());
+        boolean ultra = resolveModel(requestedModel, modelAliases(manifest)).isUltra();
         if (!CodexRuntimeType.APP_SERVER.name().equals(entity.getRuntimeType())
                 || entity.getArchivedAt() != null
                 || !Boolean.TRUE.equals(entity.getEnabled())
                 || !"READY".equals(entity.getReadinessStatus())
                 || !isCapabilityFresh(entity)
-                || !resolveModel(requestedModel, modelAliases(manifest)).isUltra()
                 || !supportsCoreAppServerContract(manifest)
-                || !supportsNativeSubtaskContractV1(manifest)
+                || (ultra && !supportsNativeSubtaskContractV1(manifest))
                 || !supportsModelReasoning(manifest, requestedModel)
                 || !supportsModel(manifest, requestedModel)) {
             return false;
         }
         CodexRuntimeRoutingPolicy policy = parseRoutingPolicy(entity.getRoutingPolicy());
         return switch (policy) {
-            case ULTRA_CANARY -> defaultValue(entity.getRolloutPercentage(), 0) > 0;
-            case ULTRA_DEFAULT, ALL_CANARY, ALL_DEFAULT -> true;
+            case ULTRA_CANARY -> ultra && defaultValue(entity.getRolloutPercentage(), 0) > 0;
+            case ULTRA_DEFAULT -> ultra;
+            case ALL_CANARY -> ultra || defaultValue(entity.getRolloutPercentage(), 0) > 0;
+            case ALL_DEFAULT -> true;
             case DARK, DRAINING -> false;
         };
     }
@@ -1199,36 +1236,6 @@ public class CodexRuntimeRegistryService {
         }
     }
 
-    private void validateRegistration(CodexRuntimeRegistrationForm form) {
-        if (form == null) throw new IllegalArgumentException("runtime registration is required");
-        requireIdentifier(form.getRuntimeId(), "runtimeId", 64);
-        requireIdentifier(form.getWorkerId(), "workerId", 64);
-        if (parseRuntimeType(form.getRuntimeType()) != CodexRuntimeType.APP_SERVER) {
-            throw new IllegalArgumentException("runtimeType must be APP_SERVER");
-        }
-        requireText(form.getEndpointUrl(), "endpointUrl");
-        validateEndpoint(form.getEndpointUrl());
-        validateOptionalText(form.getAuthToken(), "authToken", 4096);
-        validateOptionalIdentifier(form.getInstanceId(), "instanceId", 128);
-        if (form.getRevision() != null && form.getRevision() < 1) {
-            throw new IllegalArgumentException("revision must be positive");
-        }
-        if (!PINNED_APP_SERVER_CLI_VERSION.equals(
-                firstNonBlank(form.getExpectedCliVersion(), PINNED_APP_SERVER_CLI_VERSION))) {
-            throw new IllegalArgumentException("expectedCliVersion must be pinned to "
-                    + PINNED_APP_SERVER_CLI_VERSION);
-        }
-        if (!PINNED_SCHEMA_DIGEST.equals(
-                firstNonBlank(form.getExpectedSchemaDigest(), PINNED_SCHEMA_DIGEST))) {
-            throw new IllegalArgumentException("expectedSchemaDigest must match the pinned canonical schema");
-        }
-        if (Boolean.TRUE.equals(form.getEnabled())
-                || parseRoutingPolicy(form.getRoutingPolicy()) != CodexRuntimeRoutingPolicy.DARK
-                || defaultValue(form.getRolloutPercentage(), 0) != 0) {
-            throw new IllegalArgumentException("New runtime revisions must start disabled in DARK with 0% rollout");
-        }
-    }
-
     private void validateRollout(Integer percentage) {
         if (percentage != null && (percentage < 0 || percentage > 100)) {
             throw new IllegalArgumentException("rolloutPercentage must be between 0 and 100");
@@ -1251,52 +1258,8 @@ public class CodexRuntimeRegistryService {
         };
     }
 
-    private void requireText(String value, String field) {
-        if (value == null || value.isBlank()) throw new IllegalArgumentException(field + " is required");
-    }
-
-    private void requireIdentifier(String value, String field, int maxLength) {
-        requireText(value, field);
-        if (value.length() > maxLength || !value.matches("[A-Za-z0-9._-]+")) {
-            throw new IllegalArgumentException(field + " contains unsupported characters or exceeds " + maxLength);
-        }
-    }
-
-    private void validateOptionalIdentifier(String value, String field, int maxLength) {
-        if (value == null || value.isBlank()) return;
-        requireIdentifier(value, field, maxLength);
-    }
-
     private boolean isValidIdentifier(String value, int maxLength) {
         return value != null && value.length() <= maxLength && value.matches("[A-Za-z0-9._-]+");
-    }
-
-    private void validateOptionalText(String value, String field, int maxLength) {
-        if (value == null) return;
-        if (value.length() > maxLength || value.chars().anyMatch(Character::isISOControl)) {
-            throw new IllegalArgumentException(field + " contains control characters or exceeds " + maxLength);
-        }
-    }
-
-    private void validateEndpoint(String endpointUrl) {
-        if (endpointUrl.length() > 512 || endpointUrl.chars().anyMatch(Character::isISOControl)) {
-            throw new IllegalArgumentException("endpointUrl contains control characters or exceeds 512");
-        }
-        try {
-            URI uri = URI.create(endpointUrl);
-            if (!("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
-                    || uri.getHost() == null || uri.getHost().isBlank()) {
-                throw new IllegalArgumentException("endpointUrl must be an absolute http(s) URL");
-            }
-            if (uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
-                throw new IllegalArgumentException(
-                        "endpointUrl must not contain userinfo, query parameters, or fragments");
-            }
-        } catch (IllegalArgumentException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new IllegalArgumentException("endpointUrl is invalid", e);
-        }
     }
 
     private CodexRuntimeType parseRuntimeType(String value) {
@@ -1345,12 +1308,6 @@ public class CodexRuntimeRegistryService {
             if (expected.equals(value)) return true;
         }
         return false;
-    }
-
-    private String trimTrailingSlash(String value) {
-        String result = value.trim();
-        while (result.endsWith("/")) result = result.substring(0, result.length() - 1);
-        return result;
     }
 
     private String capabilityFailureCode(Throwable error) {
@@ -1415,10 +1372,6 @@ public class CodexRuntimeRegistryService {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
-    }
-
-    private String optionalToken(String value) {
-        return value == null ? "" : value.trim();
     }
 
     private String firstNonBlank(String first, String fallback) {

@@ -18,6 +18,7 @@ import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.business.agent.transaction.ReadinessTransactional;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -330,13 +331,7 @@ public class UpstreamTenantClientAppProvisioningService {
         Optional<ClientAppModelConfigGrantDTO> defaultGrant = modelConfigGrantService.listGrants(tenantId, clientAppId).stream()
                 .filter(grant -> ClientAppModelConfigGrantService.STATUS_ENABLED.equals(grant.getStatus()))
                 .filter(grant -> Boolean.TRUE.equals(grant.getIsDefault()))
-                .filter(grant -> {
-                    String backend = grant.getWorkerBackend();
-                    return ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND.equals(backend)
-                            || "CLAUDE_CODE".equals(backend)
-                            || "OPENAI_CODEX".equals(backend)
-                            || "GEMINI_CLI".equals(backend);
-                })
+                .filter(grant -> ProviderRouteRegistry.isKnownWorkerBackend(grant.getWorkerBackend()))
                 .findFirst();
         if (defaultGrant.isPresent()) {
             ClientAppModelConfigGrantDTO grant = defaultGrant.get();

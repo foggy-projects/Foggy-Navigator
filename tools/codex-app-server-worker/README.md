@@ -225,7 +225,7 @@ values are accepted only from environment variables. They are never written to t
 included in CLI output.
 
 The production profile also requires an exact `runtimeRevision`, `routingEpoch`, physical
-`workerId`, Ultra `model`, `providerType=codex-worker`, and `cohortMarkerEnv`. A terminal task is
+`workerId`, Ultra `model`, `providerType=codex-app-server-worker`, and `cohortMarkerEnv`. A terminal task is
 counted only when all of those fields match, its prompt contains the current cohort marker, its
 runtime type is `APP_SERVER`, and its runtime instance was observed in the same complete health
 cycle. Production time filtering requires the numeric `createdAtEpochMs` persisted by Navigator
