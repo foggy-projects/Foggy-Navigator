@@ -1,5 +1,6 @@
 package com.foggy.navigator.codex.worker.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStartedEvent;
@@ -77,6 +78,12 @@ public class CodexStreamRelay {
     private static final long BACKGROUND_RECOVERY_DELAY_MS = 30_000;
     private static final int MAX_ABORT_STATUS_POLLS = 5;
     private static final long ABORT_STATUS_POLL_DELAY_MS = 200;
+    /**
+     * session_messages.metadata is currently backed by MySQL TEXT (65,535 bytes).
+     * Keep a conservative envelope for the serialized payload plus SessionEventListener fields.
+     */
+    static final int MAX_DURABLE_TOOL_RESULT_METADATA_BYTES = 48 * 1024;
+    private static final String TOOL_RESULT_TRUNCATION_REASON = "session_message_metadata_limit";
 
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
@@ -1106,8 +1113,7 @@ public class CodexStreamRelay {
                 case "tool_result" -> {
                     // 标准化: Codex 原字段 tool/output/isError → 统一 toolName/data/success
                     boolean success = event.getIsError() == null || !event.getIsError();
-                    publishBuilt(mb.toolCallResult(event.getToolUseId(), event.getTool(),
-                            event.getOutput(), success), workerMessageId(taskId, event));
+                    publishToolResult(mb, event, success, workerMessageId(taskId, event));
                 }
                 case "warning" -> {
                     String warning = event.getContent() != null ? event.getContent() : event.getError();
@@ -1326,6 +1332,92 @@ public class CodexStreamRelay {
         AgentMessage message = builder.build();
         message.setMessageId(messageId);
         publishDurableAgentMessage(message);
+    }
+
+    private void publishToolResult(AgentMessageBuilder builder, WorkerEvent event,
+                                   boolean success, String messageId) throws JsonProcessingException {
+        AgentMessage message = builder.toolCallResult(
+                event.getToolUseId(), event.getTool(), event.getOutput(), success).build();
+        message.setMessageId(messageId);
+        boundDurableToolResult(message);
+        publishDurableAgentMessage(message);
+    }
+
+    /**
+     * Preserve the full tool result in the Worker event log while keeping the durable/display copy
+     * below the database column limit. The explicit metadata lets clients distinguish truncation
+     * from genuine command output and prevents one oversized event from poisoning every replay.
+     */
+    private void boundDurableToolResult(AgentMessage message) throws JsonProcessingException {
+        if (!(message.getPayload() instanceof Map<?, ?> rawPayload)) {
+            return;
+        }
+        Object rawData = rawPayload.get("data");
+        if (!(rawData instanceof String output)) {
+            return;
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        rawPayload.forEach((key, value) -> payload.put(String.valueOf(key), value));
+        if (serializedSessionMetadataBytes(message, payload)
+                <= MAX_DURABLE_TOOL_RESULT_METADATA_BYTES) {
+            return;
+        }
+
+        int originalDataBytes = output.getBytes(StandardCharsets.UTF_8).length;
+        payload.put("dataTruncated", true);
+        payload.put("originalDataBytes", originalDataBytes);
+        payload.put("truncationReason", TOOL_RESULT_TRUNCATION_REASON);
+
+        String notice = "\n\n[Codex tool output truncated; full output remains in the Worker event log; "
+                + "original UTF-8 bytes: " + originalDataBytes + "]\n\n";
+        int codePointCount = output.codePointCount(0, output.length());
+        int low = 0;
+        int high = codePointCount;
+        String boundedData = notice;
+
+        while (low <= high) {
+            int retainedCodePoints = low + (high - low) / 2;
+            String candidate = retainToolOutputEdges(output, retainedCodePoints, notice);
+            payload.put("data", candidate);
+            if (serializedSessionMetadataBytes(message, payload)
+                    <= MAX_DURABLE_TOOL_RESULT_METADATA_BYTES) {
+                boundedData = candidate;
+                low = retainedCodePoints + 1;
+            } else {
+                high = retainedCodePoints - 1;
+            }
+        }
+
+        payload.put("data", boundedData);
+        int persistedMetadataBytes = serializedSessionMetadataBytes(message, payload);
+        if (persistedMetadataBytes > MAX_DURABLE_TOOL_RESULT_METADATA_BYTES) {
+            throw new IllegalStateException("CODEX_TOOL_RESULT_METADATA_OVERHEAD_EXCEEDS_LIMIT");
+        }
+        message.setPayload(payload);
+        log.warn("Truncated oversized Codex tool result before durable persistence: "
+                        + "taskId={}, messageId={}, originalBytes={}, metadataBytes={}",
+                message.getTaskId(), message.getMessageId(), originalDataBytes, persistedMetadataBytes);
+    }
+
+    private String retainToolOutputEdges(String output, int retainedCodePoints, String notice) {
+        int codePointCount = output.codePointCount(0, output.length());
+        if (retainedCodePoints >= codePointCount) {
+            return output;
+        }
+        int headCodePoints = (retainedCodePoints + 1) / 2;
+        int tailCodePoints = retainedCodePoints - headCodePoints;
+        int headEnd = output.offsetByCodePoints(0, headCodePoints);
+        int tailStart = output.offsetByCodePoints(output.length(), -tailCodePoints);
+        return output.substring(0, headEnd) + notice + output.substring(tailStart);
+    }
+
+    private int serializedSessionMetadataBytes(AgentMessage message,
+                                               Map<String, Object> payload) throws JsonProcessingException {
+        Map<String, Object> metadata = new LinkedHashMap<>(payload);
+        metadata.put("type", message.getType().name());
+        metadata.put("agentId", message.getAgentId());
+        return objectMapper.writeValueAsBytes(metadata).length;
     }
 
     private void publishEvent(AgentMessage message) {

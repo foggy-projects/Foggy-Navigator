@@ -29,7 +29,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -913,6 +915,64 @@ class CodexStreamRelayTest {
         Map<String, Object> payload = (Map<String, Object>) message.getPayload();
         assertEquals("commentary", payload.get("subtype"));
         assertEquals("I will inspect the process now.", payload.get("content"));
+    }
+
+    @Test
+    void oversizedToolResultIsBoundedBeforeDurablePersistenceAndAcknowledged() throws Exception {
+        CodexTaskEntity entity = legacyTask();
+        entity.setStatus("RUNNING");
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+
+        ObjectMapper mapper = new ObjectMapper();
+        String output = "HEAD_OF_TOOL_OUTPUT\n"
+                + "compile error 🚀 quoted=\" slash=\\\\ newline=\n".repeat(80_000)
+                + "TAIL_OF_TOOL_OUTPUT";
+        String eventJson = mapper.writeValueAsString(Map.of(
+                "type", "tool_result",
+                "task_id", "worker-task-1",
+                "session_id", "thread-1",
+                "seq", 1,
+                "tool_use_id", "tool-1",
+                "tool", "command_execution",
+                "output", output,
+                "is_error", true));
+
+        doAnswer(invocation -> {
+            AgentMessage message = invocation.getArgument(0);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+            Map<String, Object> metadata = new LinkedHashMap<>(payload);
+            metadata.put("type", message.getType().name());
+            metadata.put("agentId", message.getAgentId());
+            int serializedBytes = mapper.writeValueAsBytes(metadata).length;
+            if (serializedBytes > CodexStreamRelay.MAX_DURABLE_TOOL_RESULT_METADATA_BYTES) {
+                throw new IllegalStateException("simulated session_messages.metadata overflow");
+            }
+            return null;
+        }).when(sessionEventListener).handleMessageDurably(any(AgentMessage.class));
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(eventJson).build(),
+                "local-task-1", "session-1", "codex-worker",
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>());
+
+        ArgumentCaptor<AgentMessage> messages = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener).handleMessageDurably(messages.capture());
+        AgentMessage message = messages.getValue();
+        assertEquals(MessageType.TOOL_CALL_RESULT, message.getType());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        assertEquals(true, payload.get("dataTruncated"));
+        assertEquals(output.getBytes(StandardCharsets.UTF_8).length,
+                ((Number) payload.get("originalDataBytes")).intValue());
+        assertEquals("session_message_metadata_limit", payload.get("truncationReason"));
+        String persistedData = (String) payload.get("data");
+        assertTrue(persistedData.startsWith("HEAD_OF_TOOL_OUTPUT"));
+        assertTrue(persistedData.contains("Codex tool output truncated"));
+        assertTrue(persistedData.endsWith("TAIL_OF_TOOL_OUTPUT"));
+        verify(taskService).recordWorkerProgress(
+                "local-task-1", "worker-task-1", "thread-1", null, 1, false, true);
     }
 
     @Test
