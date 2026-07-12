@@ -54,14 +54,23 @@ class CodexAppServerBackendConnectionTesterTest {
     }
 
     @Test
-    void modelAwareCapabilityRequiresReadyCompatibleRuntime() {
+    void distinguishesConfigurationSupportFromReadyExecutionAvailability() {
         when(runtimeRegistryService.availability("worker-1", "codex-terra:ultra"))
-                .thenReturn(CodexRuntimeAvailabilityDTO.builder().modelAvailable(true).build());
+                .thenReturn(CodexRuntimeAvailabilityDTO.builder()
+                        .modelSupported(true)
+                        .modelAvailable(false)
+                        .build());
         when(runtimeRegistryService.availability("worker-1", "codex-latest:max"))
-                .thenReturn(CodexRuntimeAvailabilityDTO.builder().modelAvailable(false).build());
+                .thenReturn(CodexRuntimeAvailabilityDTO.builder()
+                        .modelSupported(false)
+                        .modelAvailable(false)
+                        .build());
 
-        assertTrue(tester.supportsWorker("worker-1", "codex-terra:ultra"));
+        assertTrue(tester.supportsWorkerConfiguration("worker-1", "codex-terra:ultra"));
+        assertFalse(tester.supportsWorker("worker-1", "codex-terra:ultra"));
+        assertFalse(tester.supportsWorkerConfiguration("worker-1", "codex-latest:max"));
         assertFalse(tester.supportsWorker("worker-1", "codex-latest:max"));
+        assertFalse(tester.supportsWorkerConfiguration("worker-1", "codex-luna:ultra"));
         assertFalse(tester.supportsWorker("worker-1", "codex-luna:ultra"));
     }
 

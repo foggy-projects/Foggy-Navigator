@@ -48,6 +48,18 @@ public class CodexAppServerBackendConnectionTester implements WorkerBackendConne
     }
 
     @Override
+    public boolean supportsWorkerConfiguration(String workerId, String modelName) {
+        try {
+            CodexModelBackendPolicy.validateModel(getWorkerBackend(), modelName);
+            CodexRuntimeAvailabilityDTO availability =
+                    runtimeRegistryService.availability(workerId, modelName);
+            return availability != null && Boolean.TRUE.equals(availability.getModelSupported());
+        } catch (RuntimeException unsupported) {
+            return false;
+        }
+    }
+
+    @Override
     public String testConnection(String userId, String tenantId, String workerId, String modelName) {
         CodexModelBackendPolicy.validateModel(getWorkerBackend(), modelName);
         workerManagementFacade.validateWorkerAccess(userId, tenantId, workerId);

@@ -258,7 +258,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
                     ModelAccessScope s = entity.getScope() != null ? entity.getScope() : ModelAccessScope.GLOBAL;
                     return s == ModelAccessScope.GLOBAL || authorizedModelIds.contains(entity.getId());
                 })
-                .filter(entity -> supportsWorkerBackend(
+                .filter(entity -> supportsWorkerBackendConfiguration(
                         entity.getWorkerBackend(), workerId, entity.getModelName()))
                 .map(entity -> toWorkerDTO(entity, workerId))
                 .collect(Collectors.toList());
@@ -507,7 +507,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
     private void saveWorkerAccess(String modelConfigId, String tenantId, String workerBackend,
                                   String modelName, List<String> workerIds) {
         for (String workerId : workerIds) {
-            if (!supportsWorkerBackend(workerBackend, workerId, modelName)) {
+            if (!supportsWorkerBackendConfiguration(workerBackend, workerId, modelName)) {
                 throw new IllegalArgumentException("WORKER_BACKEND_CAPABILITY_MISSING: Worker "
                         + workerId + " does not provide " + workerBackend);
             }
@@ -580,9 +580,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
             candidates.add(baseModel);
         }
         dto.setAvailableModels(candidates.stream()
-                // The stream's preceding filter already proved that the base model is available.
+                // The stream's preceding filter already proved that the base model is supported.
                 .filter(model -> Objects.equals(model, baseModel)
-                        || supportsWorkerBackend(backend, workerId, model))
+                        || supportsWorkerBackendConfiguration(backend, workerId, model))
                 .collect(Collectors.toList()));
         return dto;
     }
@@ -641,16 +641,37 @@ public class LlmModelManagerImpl implements LlmModelManager {
                 || workerId == null || workerId.isBlank()) {
             return true;
         }
+        return resolveWorkerBackendTester(workerBackend, workerId)
+                .map(tester -> tester.supportsWorker(workerId, modelName))
+                .orElseGet(() -> permitsMissingCapabilityTester(workerBackend));
+    }
+
+    private boolean supportsWorkerBackendConfiguration(
+            String workerBackend, String workerId, String modelName) {
+        if (workerBackend == null || workerBackend.isBlank()
+                || workerId == null || workerId.isBlank()) {
+            return true;
+        }
+        return resolveWorkerBackendTester(workerBackend, workerId)
+                .map(tester -> tester.supportsWorkerConfiguration(workerId, modelName))
+                .orElseGet(() -> permitsMissingCapabilityTester(workerBackend));
+    }
+
+    private Optional<WorkerBackendConnectionTester> resolveWorkerBackendTester(
+            String workerBackend, String workerId) {
         String canonicalBackend = ProviderRouteRegistry.canonicalWorkerBackend(workerBackend)
                 .orElse(workerBackend.trim());
-        Optional<WorkerBackendConnectionTester> tester = workerBackendConnectionTesters.stream()
+        return workerBackendConnectionTesters.stream()
                 .filter(candidate -> canonicalBackend.equals(
                         ProviderRouteRegistry.canonicalWorkerBackend(candidate.getWorkerBackend())
                                 .orElse(candidate.getWorkerBackend())))
                 .findFirst();
-        if (tester.isPresent()) {
-            return tester.get().supportsWorker(workerId, modelName);
-        }
+    }
+
+    private boolean permitsMissingCapabilityTester(String workerBackend) {
+        if (workerBackend == null || workerBackend.isBlank()) return true;
+        String canonicalBackend = ProviderRouteRegistry.canonicalWorkerBackend(workerBackend)
+                .orElse(workerBackend.trim());
         return !ProviderRouteRegistry.BACKEND_OPENAI_CODEX.equals(canonicalBackend)
                 && !ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER.equals(canonicalBackend);
     }

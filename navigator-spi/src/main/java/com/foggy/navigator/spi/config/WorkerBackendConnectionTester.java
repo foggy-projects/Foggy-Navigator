@@ -15,6 +15,16 @@ public interface WorkerBackendConnectionTester {
         return supportsWorker(workerId);
     }
 
+    /**
+     * Model support check used while listing or granting configurations.
+     * Defaults to current execution availability; backends with leased runtime
+     * readiness may override this to expose supported models while remaining
+     * fail-closed for actual task dispatch.
+     */
+    default boolean supportsWorkerConfiguration(String workerId, String modelName) {
+        return supportsWorker(workerId, modelName);
+    }
+
     /** Executes a real probe against the selected Worker backend. */
     String testConnection(String userId, String tenantId, String workerId, String modelName);
 }

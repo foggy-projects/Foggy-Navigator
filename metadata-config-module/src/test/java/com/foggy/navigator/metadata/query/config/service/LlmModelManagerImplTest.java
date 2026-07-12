@@ -394,14 +394,16 @@ class LlmModelManagerImplTest {
     }
 
     @Test
-    void listModelConfigsForWorkerFiltersSdkAndAppServerByIndependentCapabilities() {
+    void listModelConfigsForWorkerFiltersSdkAndAppServerByIndependentConfigurationSupport() {
         WorkerBackendConnectionTester sdkTester = mock(WorkerBackendConnectionTester.class);
         WorkerBackendConnectionTester appServerTester = mock(WorkerBackendConnectionTester.class);
         when(sdkTester.getWorkerBackend()).thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX);
         when(appServerTester.getWorkerBackend())
                 .thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
-        when(sdkTester.supportsWorker("worker-1", "gpt-5.6-codex")).thenReturn(true);
-        when(appServerTester.supportsWorker("worker-1", "gpt-5.6-codex")).thenReturn(false);
+        when(sdkTester.supportsWorkerConfiguration("worker-1", "gpt-5.6-codex"))
+                .thenReturn(true);
+        when(appServerTester.supportsWorkerConfiguration("worker-1", "gpt-5.6-codex"))
+                .thenReturn(false);
         service = serviceWith(List.of(sdkTester, appServerTester));
 
         LlmModelConfigEntity sdk = model(
@@ -414,7 +416,34 @@ class LlmModelManagerImplTest {
         List<LlmModelConfigDTO> result = service.listModelConfigsForWorker("tenant-1", "worker-1");
 
         assertEquals(List.of("sdk"), result.stream().map(LlmModelConfigDTO::getId).toList());
-        verify(sdkTester).supportsWorker("worker-1", "gpt-5.6-codex");
+        verify(sdkTester).supportsWorkerConfiguration("worker-1", "gpt-5.6-codex");
+        verify(appServerTester).supportsWorkerConfiguration("worker-1", "gpt-5.6-codex");
+    }
+
+    @Test
+    void listKeepsSupportedAppServerConfigWhileExecutionRemainsUnavailable() {
+        WorkerBackendConnectionTester appServerTester = mock(WorkerBackendConnectionTester.class);
+        when(appServerTester.getWorkerBackend())
+                .thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
+        when(appServerTester.supportsWorkerConfiguration("worker-1", "gpt-5.6-codex"))
+                .thenReturn(true);
+        when(appServerTester.supportsWorker("worker-1", "gpt-5.6-codex"))
+                .thenReturn(false);
+        service = serviceWith(List.of(appServerTester));
+        LlmModelConfigEntity appServer = model(
+                "app", ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER,
+                ModelAccessScope.GLOBAL);
+        when(llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc("tenant-1"))
+                .thenReturn(List.of(appServer));
+        when(llmModelRepo.findById("app")).thenReturn(Optional.of(appServer));
+
+        List<LlmModelConfigDTO> result =
+                service.listModelConfigsForWorker("tenant-1", "worker-1");
+
+        assertEquals(List.of("app"), result.stream().map(LlmModelConfigDTO::getId).toList());
+        assertThrows(IllegalArgumentException.class,
+                () -> service.validateModelAccessForWorker("app", "worker-1"));
+        verify(appServerTester).supportsWorkerConfiguration("worker-1", "gpt-5.6-codex");
         verify(appServerTester).supportsWorker("worker-1", "gpt-5.6-codex");
     }
 
@@ -423,8 +452,10 @@ class LlmModelManagerImplTest {
         WorkerBackendConnectionTester appServerTester = mock(WorkerBackendConnectionTester.class);
         when(appServerTester.getWorkerBackend())
                 .thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
-        when(appServerTester.supportsWorker("worker-1", "codex-terra:high")).thenReturn(true);
-        when(appServerTester.supportsWorker("worker-1", "codex-terra:ultra")).thenReturn(false);
+        when(appServerTester.supportsWorkerConfiguration("worker-1", "codex-terra:high"))
+                .thenReturn(true);
+        when(appServerTester.supportsWorkerConfiguration("worker-1", "codex-terra:ultra"))
+                .thenReturn(false);
         service = serviceWith(List.of(appServerTester));
 
         LlmModelConfigEntity appConfig = model(
@@ -440,8 +471,8 @@ class LlmModelManagerImplTest {
 
         assertEquals(1, result.size());
         assertEquals(List.of("codex-terra:high"), result.get(0).getAvailableModels());
-        verify(appServerTester).supportsWorker("worker-1", "codex-terra:high");
-        verify(appServerTester).supportsWorker("worker-1", "codex-terra:ultra");
+        verify(appServerTester).supportsWorkerConfiguration("worker-1", "codex-terra:high");
+        verify(appServerTester).supportsWorkerConfiguration("worker-1", "codex-terra:ultra");
     }
 
     @Test
@@ -492,7 +523,7 @@ class LlmModelManagerImplTest {
         when(sdkTester.getWorkerBackend()).thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX);
         when(appServerTester.getWorkerBackend())
                 .thenReturn(ProviderRouteRegistry.BACKEND_OPENAI_CODEX_APP_SERVER);
-        when(appServerTester.supportsWorker("sdk-only-worker", "codex-terra:ultra"))
+        when(appServerTester.supportsWorkerConfiguration("sdk-only-worker", "codex-terra:ultra"))
                 .thenReturn(false);
         service = serviceWith(List.of(sdkTester, appServerTester));
         when(llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc("tenant-1"))
@@ -513,7 +544,8 @@ class LlmModelManagerImplTest {
 
         assertTrue(error.getMessage().startsWith("WORKER_BACKEND_CAPABILITY_MISSING"));
         verify(workerAccessRepo, never()).save(any());
-        verify(sdkTester, never()).supportsWorker("sdk-only-worker", "codex-terra:ultra");
+        verify(sdkTester, never())
+                .supportsWorkerConfiguration("sdk-only-worker", "codex-terra:ultra");
     }
 
     @Test
