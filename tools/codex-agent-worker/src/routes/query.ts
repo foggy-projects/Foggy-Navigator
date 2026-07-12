@@ -9,6 +9,7 @@ import {
   resolveSupportedModelAlias,
   runQuery,
   taskBroadcasts,
+  taskRegistry,
   cleanupOldTasks,
   getRunningTaskCount,
   UnsupportedCodexModelError,
@@ -17,6 +18,11 @@ import {
 import type { WorkerEvent } from '../models.js'
 import { validateQueryRequest } from '../validation/query.js'
 import { isPathWithinAllowedCwd } from '../path-guards.js'
+import {
+  acquireCodexThreadReservation,
+  CodexThreadActiveError,
+  type CodexThreadReservation,
+} from '../codex/thread-reservations.js'
 
 export { isPathWithinAllowedCwd }
 export { CODEX_ULTRA_APP_SERVER_REQUIRED }
@@ -117,8 +123,34 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     return
   }
 
+  const taskId = uuidv4()
+
+  let threadReservation: CodexThreadReservation | undefined
+  if (body.session_id) {
+    try {
+      threadReservation = await acquireCodexThreadReservation(body.session_id, taskId, {
+        taskEntries: taskRegistry.values(),
+      })
+    } catch (error) {
+      if (error instanceof CodexThreadActiveError) {
+        res.status(409).json({
+          code: error.code,
+          error: error.code,
+          session_id: error.conflict.threadId,
+          active_task_id: error.conflict.taskId,
+          active_pid: error.conflict.pid,
+          conflict_source: error.conflict.source,
+        })
+        return
+      }
+      res.status(503).json({ error: 'CODEX_THREAD_LIVENESS_CHECK_FAILED' })
+      return
+    }
+  }
+
   const runningTasks = getRunningTaskCount()
   if (runningTasks >= config.maxConcurrentTasks) {
+    threadReservation?.release()
     res.status(429).json({
       error: `Too many concurrent Codex tasks: ${runningTasks}/${config.maxConcurrentTasks}`,
       running_tasks: runningTasks,
@@ -126,8 +158,6 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     })
     return
   }
-
-  const taskId = uuidv4()
 
   // Clean up old tasks periodically
   cleanupOldTasks()
@@ -164,7 +194,7 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
       businessRuntimeContext: body.business_runtime_context,
       additionalDirectories: body.additional_directories,
     }
-  )
+  ).finally(() => threadReservation?.release())
 
   // Wait a tick for broadcast to be registered
   await new Promise(resolve => setTimeout(resolve, 10))

@@ -1,13 +1,13 @@
 import { Router, Request, Response } from 'express'
 import { taskRegistry } from '../codex/sdk-wrapper.js'
-import { CodexProcessKillError, killCodexCliProcess, listCodexCliProcesses } from '../codex/processes.js'
+import {
+  CodexProcessKillError,
+  extractResumedThreadId,
+  killCodexCliProcess,
+  listCodexCliProcesses,
+} from '../codex/processes.js'
 
 const router = Router()
-
-function extractResumedThreadId(command: string): string | undefined {
-  const match = command.match(/\bresume\s+([^\s"]+)/)
-  return match?.[1]
-}
 
 router.get('/api/v1/processes', async (_req: Request, res: Response) => {
   try {

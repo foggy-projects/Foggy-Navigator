@@ -12,6 +12,10 @@ import {
   requiresAppServerForUltra,
 } from '../src/routes/query.ts'
 import { UNSUPPORTED_CODEX_MODEL } from '../src/codex/sdk-wrapper.ts'
+import {
+  acquireCodexThreadReservation,
+  clearCodexThreadReservationsForTests,
+} from '../src/codex/thread-reservations.ts'
 
 const TEST_ALIASES = {
   'codex-latest': 'gpt-5.6-sol',
@@ -106,6 +110,44 @@ test('query route rejects direct Mini requests before creating Worker task state
     }
     assert.equal(taskBroadcasts.size, taskCountBefore)
   } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve())
+    })
+  }
+})
+
+test('query route returns stable conflict details for an already reserved thread', async () => {
+  clearCodexThreadReservationsForTests()
+  const reservation = await acquireCodexThreadReservation('thread-active', 'task-active', {
+    listProcesses: async () => [],
+  })
+  const app = express()
+  app.use(express.json())
+  app.use(queryRouter)
+  const server = app.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address() as AddressInfo
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: 'must be rejected',
+        session_id: 'thread-active',
+      }),
+    })
+    assert.equal(response.status, 409)
+    assert.deepEqual(await response.json(), {
+      code: 'CODEX_THREAD_ACTIVE',
+      error: 'CODEX_THREAD_ACTIVE',
+      session_id: 'thread-active',
+      active_task_id: 'task-active',
+      conflict_source: 'reservation',
+    })
+  } finally {
+    reservation.release()
+    clearCodexThreadReservationsForTests()
     await new Promise<void>((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve())
     })

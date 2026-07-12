@@ -641,6 +641,23 @@ public class CodexStreamRelay {
             activeStreams.remove(taskId, failedSubscription);
         }
 
+        CodexWorkerClient.WorkerQueryRejectedException rejected = findCause(
+                error, CodexWorkerClient.WorkerQueryRejectedException.class);
+        if (rejected != null) {
+            if (rejected instanceof CodexWorkerClient.ThreadActiveException threadActive) {
+                log.warn("Codex thread already has a live execution: taskId={}, sessionId={}, activeTaskId={}, "
+                                + "activePid={}, source={}",
+                        taskId, threadActive.getSessionId(), threadActive.getActiveTaskId(),
+                        threadActive.getActivePid(), threadActive.getConflictSource());
+            } else {
+                log.warn("Codex Worker rejected query: taskId={}, status={}, code={}",
+                        taskId, rejected.getStatusCode(), rejected.getCode());
+            }
+            failStreamTask(taskId, sessionId, providerType, detectedCodexThreadId,
+                    rejected.getCode());
+            return;
+        }
+
         CodexTaskEntity task;
         try {
             task = taskRepository.findByTaskId(taskId).orElse(null);
@@ -1456,6 +1473,17 @@ public class CodexStreamRelay {
             current = current.getCause();
         }
         return fallback;
+    }
+
+    private <T extends Throwable> T findCause(Throwable error, Class<T> type) {
+        Throwable current = error;
+        while (current != null) {
+            if (type.isInstance(current)) {
+                return type.cast(current);
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 
     private String stableAcceptanceRejection(CodexAppServerAcceptanceService.RejectedException error) {

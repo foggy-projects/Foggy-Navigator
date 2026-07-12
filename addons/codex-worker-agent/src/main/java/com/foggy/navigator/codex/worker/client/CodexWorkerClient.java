@@ -105,6 +105,57 @@ public class CodexWorkerClient {
         }
     }
 
+    public static class WorkerQueryRejectedException extends IllegalStateException {
+        private final int statusCode;
+        private final String code;
+
+        public WorkerQueryRejectedException(int statusCode, String code) {
+            super(code);
+            this.statusCode = statusCode;
+            this.code = code;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
+        }
+
+        public String getCode() {
+            return code;
+        }
+    }
+
+    public static final class ThreadActiveException extends WorkerQueryRejectedException {
+        private final String sessionId;
+        private final String activeTaskId;
+        private final Integer activePid;
+        private final String conflictSource;
+
+        public ThreadActiveException(int statusCode, String code, String sessionId,
+                                     String activeTaskId, Integer activePid, String conflictSource) {
+            super(statusCode, code);
+            this.sessionId = sessionId;
+            this.activeTaskId = activeTaskId;
+            this.activePid = activePid;
+            this.conflictSource = conflictSource;
+        }
+
+        public String getSessionId() {
+            return sessionId;
+        }
+
+        public String getActiveTaskId() {
+            return activeTaskId;
+        }
+
+        public Integer getActivePid() {
+            return activePid;
+        }
+
+        public String getConflictSource() {
+            return conflictSource;
+        }
+    }
+
     /**
      * 健康检查
      */
@@ -238,8 +289,39 @@ public class CodexWorkerClient {
                 .uri("/api/v1/query")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
-                .retrieve()
-                .bodyToFlux(new org.springframework.core.ParameterizedTypeReference<ServerSentEvent<String>>() {});
+                .exchangeToFlux(response -> {
+                    if (response.statusCode().value() == 409) {
+                        return response.bodyToMono(Map.class)
+                                .defaultIfEmpty(Map.of())
+                                .flatMapMany(conflict -> {
+                                    String code = stringValue(conflict.get("error"),
+                                            stringValue(conflict.get("code"), "CODEX_WORKER_TASK_CONFLICT"));
+                                    if ("CODEX_THREAD_ACTIVE".equals(code)) {
+                                        return Flux.error(new ThreadActiveException(
+                                                409,
+                                                code,
+                                                stringValue(conflict.get("session_id"), null),
+                                                stringValue(conflict.get("active_task_id"), null),
+                                                integerValue(conflict.get("active_pid")),
+                                                stringValue(conflict.get("conflict_source"), null)));
+                                    }
+                                    return Flux.error(new WorkerQueryRejectedException(409, code));
+                                });
+                    }
+                    if (!response.statusCode().is2xxSuccessful()) {
+                        return response.createException().flatMapMany(Flux::error);
+                    }
+                    return response.bodyToFlux(
+                            new org.springframework.core.ParameterizedTypeReference<ServerSentEvent<String>>() {});
+                });
+    }
+
+    private static String stringValue(Object value, String fallback) {
+        return value instanceof String text && !text.isBlank() ? text : fallback;
+    }
+
+    private static Integer integerValue(Object value) {
+        return value instanceof Number number ? number.intValue() : null;
     }
 
     public Map<String, Object> buildTaskRequest(String prompt, String cwd,

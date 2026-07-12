@@ -6,10 +6,35 @@ import {
   buildListProcessesWindowsScript,
   buildWindowsKillAttemptArgs,
   CodexProcessKillError,
+  extractResumedThreadId,
+  findCodexCliProcessForThread,
   killCodexCliProcessWindows,
 } from '../src/codex/processes.ts'
 
 const execFileAsync = promisify(execFile)
+
+test('extractResumedThreadId reads resumed thread ids from Codex commands', () => {
+  assert.equal(
+    extractResumedThreadId('/usr/bin/codex exec --experimental-json resume thread-123'),
+    'thread-123',
+  )
+  assert.equal(
+    extractResumedThreadId('codex --experimental-json resume "thread quoted"'),
+    'thread',
+  )
+  assert.equal(extractResumedThreadId('codex exec --experimental-json'), undefined)
+})
+
+test('findCodexCliProcessForThread uses registry pid before command fallback', () => {
+  const processes = [
+    { pid: 101, command: 'codex exec --experimental-json', memory_mb: 10, started_at: '' },
+    { pid: 202, command: 'codex exec --experimental-json resume thread-orphan', memory_mb: 11, started_at: '' },
+  ]
+  assert.equal(findCodexCliProcessForThread('thread-known', processes, [
+    { threadId: 'thread-known', pid: 101 },
+  ])?.pid, 101)
+  assert.equal(findCodexCliProcessForThread('thread-orphan', processes)?.pid, 202)
+})
 
 test('buildListProcessesWindowsScript keeps PowerShell expressions intact', () => {
   const script = buildListProcessesWindowsScript()

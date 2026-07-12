@@ -243,6 +243,40 @@ class CodexStreamRelayTest {
     }
 
     @Test
+    void threadActiveConflictKeepsStableWorkerCodeAndDoesNotReconnect() {
+        CodexTaskEntity entity = legacyTask();
+
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        when(workerManagementFacade.getCodexConfig("worker-1"))
+                .thenReturn(CodexConfig.builder()
+                        .baseUrl("http://localhost:3051")
+                        .authToken("worker-token")
+                        .build());
+        when(clientFactory.getOrCreate("worker-1:codex", "http://localhost:3051", "worker-token"))
+                .thenReturn(client);
+        when(client.streamQuery(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Flux.error(new CodexWorkerClient.ThreadActiveException(
+                        409, "CODEX_THREAD_ACTIVE", "thread-1",
+                        "worker-task-old", 4321, "process_scan")));
+
+        relay.onTaskStart(WorkerTaskStartEvent.builder()
+                .taskId("local-task-1")
+                .sessionId("session-1")
+                .workerId("worker-1")
+                .prompt("continue")
+                .cwd("D:/repo")
+                .model("gpt-5.5")
+                .providerType("codex-worker")
+                .providerConfig(Map.of("codexThreadId", "thread-1"))
+                .build());
+
+        verify(taskService).failTask(eq("local-task-1"), isNull(), eq("thread-1"),
+                eq("CODEX_THREAD_ACTIVE"));
+        verify(client, never()).subscribeToTask(any(), anyInt());
+    }
+
+    @Test
     void onTaskStartForCodexBizWorkerForwardsCodexBizRuntimeOptions() {
         CodexTaskEntity entity = legacyTask();
         entity.setProviderType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);

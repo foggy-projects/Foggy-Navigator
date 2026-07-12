@@ -22,6 +22,30 @@ export interface CodexCliProcessInfo {
   started_at: string
 }
 
+export function extractResumedThreadId(command: string): string | undefined {
+  const match = command.match(/\bresume\s+(?:--[^\s]+\s+)*["']?([^\s"']+)/)
+  return match?.[1]
+}
+
+export function findCodexCliProcessForThread(
+  threadId: string,
+  processes: readonly CodexCliProcessInfo[],
+  taskEntries: readonly { threadId?: string; pid?: number }[] = [],
+): CodexCliProcessInfo | undefined {
+  const normalized = threadId.trim()
+  if (!normalized) return undefined
+
+  const knownPids = new Set(
+    taskEntries
+      .filter(entry => entry.threadId === normalized && entry.pid !== undefined)
+      .map(entry => entry.pid as number),
+  )
+  return processes.find(processInfo => (
+    knownPids.has(processInfo.pid)
+    || extractResumedThreadId(processInfo.command) === normalized
+  ))
+}
+
 export interface CodexKillAttemptResult {
   command: string
   args: string[]

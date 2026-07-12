@@ -110,6 +110,28 @@ class CodexWorkerClientTest {
     }
 
     @Test
+    void streamQueryPreservesThreadActiveConflictDetails() throws Exception {
+        try (CaptureServer server = CaptureServer.start()) {
+            server.queryReturnsThreadActiveConflict();
+            CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
+
+            CodexWorkerClient.ThreadActiveException error = assertThrows(
+                    CodexWorkerClient.ThreadActiveException.class,
+                    () -> client.streamQuery(
+                                    "continue", "D:/repo", "thread-1", "gpt-5.4",
+                                    null, null, null, null, null, null)
+                            .blockFirst(Duration.ofSeconds(5)));
+
+            assertEquals(409, error.getStatusCode());
+            assertEquals("CODEX_THREAD_ACTIVE", error.getCode());
+            assertEquals("thread-1", error.getSessionId());
+            assertEquals("worker-task-old", error.getActiveTaskId());
+            assertEquals(4321, error.getActivePid());
+            assertEquals("process_scan", error.getConflictSource());
+        }
+    }
+
+    @Test
     void createTaskUsesNavigatorTaskIdAsIdempotencyKey() throws Exception {
         try (CaptureServer server = CaptureServer.start()) {
             CodexWorkerClient client = new CodexWorkerClient(server.baseUrl(), "token");
@@ -325,6 +347,7 @@ class CodexWorkerClientTest {
         private final AtomicReference<String> expectedInstanceId = new AtomicReference<>();
         private final AtomicReference<String> authorization = new AtomicReference<>();
         private volatile boolean abortPendingConflict;
+        private volatile boolean queryThreadActiveConflict;
         private volatile int respondStatus = 200;
         private volatile String respondErrorCode;
         private volatile int deleteStatus = 200;
@@ -339,6 +362,19 @@ class CodexWorkerClientTest {
             CaptureServer capture = new CaptureServer(server);
             server.createContext("/api/v1/query", exchange -> {
                 capture.body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                if (capture.queryThreadActiveConflict) {
+                    byte[] response = ("{\"error\":\"CODEX_THREAD_ACTIVE\","
+                            + "\"session_id\":\"thread-1\","
+                            + "\"active_task_id\":\"worker-task-old\","
+                            + "\"active_pid\":4321,"
+                            + "\"conflict_source\":\"process_scan\"}")
+                            .getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(409, response.length);
+                    exchange.getResponseBody().write(response);
+                    exchange.close();
+                    return;
+                }
                 byte[] response = "data: {\"type\":\"done\"}\n\n".getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
                 exchange.sendResponseHeaders(200, response.length);
@@ -490,6 +526,10 @@ class CodexWorkerClientTest {
 
         void abortReturnsPendingConflict() {
             abortPendingConflict = true;
+        }
+
+        void queryReturnsThreadActiveConflict() {
+            queryThreadActiveConflict = true;
         }
 
         void respondReturns(int status, String errorCode) {
