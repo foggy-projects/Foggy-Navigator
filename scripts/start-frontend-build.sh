@@ -11,6 +11,7 @@ BUILD_OUTPUT_DIR="$REPO_ROOT/dist/nginx"
 NGINX_CONFIG_FILE="$REPO_ROOT/nginx/navigator.conf"
 LOCKFILE="$REPO_ROOT/pnpm-lock.yaml"
 MODULES_META="$REPO_ROOT/node_modules/.modules.yaml"
+FRONTEND_NODE_MAX_OLD_SPACE_SIZE="${FRONTEND_NODE_MAX_OLD_SPACE_SIZE:-4096}"
 
 # Colors
 RED='\033[0;31m'
@@ -83,7 +84,7 @@ fi
 # Build frontend
 echo -e "${YELLOW}[3/4] Building frontend...${NC}"
 cd "$FRONTEND_DIR"
-pnpm build
+NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=$FRONTEND_NODE_MAX_OLD_SPACE_SIZE" pnpm build
 if [ $? -ne 0 ]; then
     echo -e "${RED}  Frontend build failed!${NC}"
     exit 1
