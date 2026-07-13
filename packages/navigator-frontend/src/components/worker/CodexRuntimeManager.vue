@@ -271,7 +271,9 @@
           <div>
             <span class="meta-label">CLI</span>
             <span :class="{ mismatch: cliMismatch(runtime) }">
-              {{ runtime.cliVersion || '-' }} / {{ runtime.expectedCliVersion || '-' }}
+              {{ runtime.cliVersion || '-' }}<template v-if="runtime.expectedCliVersion">
+                / {{ runtime.expectedCliVersion }}
+              </template>
             </span>
           </div>
           <div>

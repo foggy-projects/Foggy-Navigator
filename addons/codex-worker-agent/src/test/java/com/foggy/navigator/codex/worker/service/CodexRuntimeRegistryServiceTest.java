@@ -220,6 +220,35 @@ class CodexRuntimeRegistryServiceTest {
     }
 
     @Test
+    void refreshCapabilitiesAcceptsDifferentCliVersionWhenNoVersionConstraintIsConfigured() throws Exception {
+        CodexRuntimeEntity entity = runtime("ULTRA_DEFAULT", 100);
+        Map<String, Object> manifest = topLevelManifest(
+                "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
+        manifest.put("cli_version", "0.144.3");
+        stubRefresh(entity, manifest);
+
+        var result = service.refreshCapabilities("app-main", 1);
+
+        assertEquals("READY", result.getReadinessStatus());
+        assertEquals("0.144.3", result.getCliVersion());
+        assertEquals("", result.getExpectedCliVersion());
+    }
+
+    @Test
+    void refreshCapabilitiesRejectsDifferentCliVersionWhenEnvConstraintIsConfigured() throws Exception {
+        ReflectionTestUtils.setField(service, "expectedCliVersion", "0.144.3");
+        CodexRuntimeEntity entity = runtime("ULTRA_DEFAULT", 100);
+        stubRefresh(entity, topLevelManifest(
+                "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST));
+
+        var result = service.refreshCapabilities("app-main", 1);
+
+        assertEquals("INCOMPATIBLE", result.getReadinessStatus());
+        assertEquals("0.144.3", result.getExpectedCliVersion());
+        assertTrue(result.getReadinessMessage().contains("CAPABILITY_CLI_VERSION_MISMATCH"));
+    }
+
+    @Test
     void endpointDisplayPreservesOriginWithoutLegacyUrlSecrets() {
         CodexRuntimeEntity entity = runtime("DARK", 0);
         entity.setEndpointUrl("https://user:password@192.168.31.119:3071/internal?token=secret#fragment");
@@ -1279,7 +1308,7 @@ class CodexRuntimeRegistryServiceTest {
         entity.setPriority(10);
         entity.setRoutingEpoch(1L);
         entity.setReadinessStatus("PENDING");
-        entity.setExpectedCliVersion(CodexRuntimeRegistryService.PINNED_APP_SERVER_CLI_VERSION);
+        entity.setExpectedCliVersion("");
         entity.setExpectedSchemaDigest(CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
         return entity;
     }

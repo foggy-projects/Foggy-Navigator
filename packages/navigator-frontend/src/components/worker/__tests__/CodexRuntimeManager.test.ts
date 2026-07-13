@@ -123,6 +123,23 @@ describe('CodexRuntimeManager', () => {
     expect(wrapper.text()).not.toContain('header-secret')
   })
 
+  it('shows only the reported CLI version when no platform version constraint is configured', async () => {
+    vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([makeRuntime({
+      readinessStatus: 'READY',
+      cliVersion: '0.144.3',
+      expectedCliVersion: '',
+    })])
+
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('0.144.3')
+    expect(wrapper.text()).not.toContain('0.144.3 /')
+  })
+
   it('does not expose a second manual Runtime registration source', async () => {
     vi.mocked(runtimeApi.listCodexRuntimes).mockResolvedValue([makeRuntime({
       runtimeSource: 'ENDPOINT_SYNC',

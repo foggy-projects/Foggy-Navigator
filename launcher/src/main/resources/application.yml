@@ -83,6 +83,10 @@ navigator:
   security:
     credential-key: ${NAVIGATOR_CREDENTIAL_KEY:default-dev-key-change-in-prod}
     credential-salt: ${NAVIGATOR_CREDENTIAL_SALT:abcdef0123456789}
+  codex:
+    runtime:
+      # Empty by default: compatible Codex CLI patch versions may coexist.
+      expected-cli-version: ${NAVIGATOR_CODEX_RUNTIME_EXPECTED_CLI_VERSION:}
 
 # Foggy Navigator 配置
 foggy:

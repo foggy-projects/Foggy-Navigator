@@ -16,7 +16,7 @@
 
 ## 版本目标
 
-新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持固定 CLI `0.144.1` 已验证的全部模型与 reasoning 档位。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径和非 Ultra 行为、最高支持 Max，并拒绝所有 Ultra 请求；它不承载 app-server。OPT-005/006 已在 2026-07-12 完成独立 Backend、Provider、Session 与 Endpoint-synced Runtime 联合隔离签收：Endpoint Profile 是 App Server endpoint/token 唯一人工写源，Runtime 只保存同步派生状态与 affinity，两 Provider 不互相 fallback。P3 生产样本、72 小时 soak、轮换与 release owner 批准仍未完成，隔离签收不等于生产批准。P7 SDK retirement 已延后，不属于 `1.4.0-SNAPSHOT` 的交付范围。
+新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持通过 capability/schema 验证的模型与 reasoning 档位；不同 Codex CLI patch 版本默认可共存，只有显式配置平台版本约束时才要求精确匹配。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径和非 Ultra 行为、最高支持 Max，并拒绝所有 Ultra 请求；它不承载 app-server。OPT-005/006 已在 2026-07-12 完成独立 Backend、Provider、Session 与 Endpoint-synced Runtime 联合隔离签收：Endpoint Profile 是 App Server endpoint/token 唯一人工写源，Runtime 只保存同步派生状态与 affinity，两 Provider 不互相 fallback。P3 生产样本、72 小时 soak、轮换与 release owner 批准仍未完成，隔离签收不等于生产批准。P7 SDK retirement 已延后，不属于 `1.4.0-SNAPSHOT` 的交付范围。
 
 ## 已确认决策
 
@@ -132,6 +132,7 @@ P3-P6 是 OPT-001 同 Provider 双 Runtime 方案的历史 gate，不再作为 O
 - [BUG-014 Linux 安装测试 glob 阻断](./workitems/BUG-014-app-worker-linux-test-glob-install-blocker.md)
 - [BUG-015 Node 18 `import.meta.dirname` 阻断](./workitems/BUG-015-app-worker-node18-import-meta-dirname.md)
 - [BUG-016 Codex Runtime list Java 签名兼容](./workitems/BUG-016-codex-runtime-list-source-compatibility.md)
+- [BUG-024 Codex Runtime CLI 版本过度约束](./workitems/BUG-024-codex-runtime-cli-version-overconstraint.md)
 
 ## 当前边界
 
