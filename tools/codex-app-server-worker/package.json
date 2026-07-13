@@ -1,6 +1,6 @@
 {
   "name": "codex-app-server-worker",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Foggy Navigator Codex app-server runtime worker",
   "type": "module",
   "scripts": {
@@ -17,7 +17,7 @@
     "verify:schema": "node scripts/verify-app-server-schema.mjs"
   },
   "dependencies": {
-    "@openai/codex": "0.144.1",
+    "@openai/codex": "0.144.3",
     "dotenv": "^16.4.0",
     "express": "^4.21.0"
   },

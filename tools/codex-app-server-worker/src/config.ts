@@ -45,6 +45,9 @@ export interface AppConfig {
   abortWaitTimeoutMs: number
   turnStallTimeoutMs: number
   stateDir: string
+  imageGenerationMode: 'disabled' | 'local'
+  imageGenerationOutputDir: string
+  imageGenerationMaxBytes: number
   stateEncryptionKey?: Buffer
   defaultModel: string
   modelAliases: Record<string, string>
@@ -79,6 +82,16 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     abortWaitTimeoutMs: integer(env.CODEX_APP_SERVER_ABORT_WAIT_TIMEOUT_MS, 7_000, 100, 60_000, 'CODEX_APP_SERVER_ABORT_WAIT_TIMEOUT_MS'),
     turnStallTimeoutMs: integer(env.CODEX_APP_SERVER_TURN_STALL_TIMEOUT_MS, 900_000, 1_000, 86_400_000, 'CODEX_APP_SERVER_TURN_STALL_TIMEOUT_MS'),
     stateDir,
+    imageGenerationMode: imageGenerationMode(env.CODEX_APP_SERVER_IMAGE_GENERATION_MODE),
+    imageGenerationOutputDir: optionalAbsolutePath(env.CODEX_APP_SERVER_IMAGE_GENERATION_OUTPUT_DIR)
+      || path.join(stateDir, 'generated-images'),
+    imageGenerationMaxBytes: integer(
+      env.CODEX_APP_SERVER_IMAGE_GENERATION_MAX_BYTES,
+      16 * 1024 * 1024,
+      1,
+      25 * 1024 * 1024,
+      'CODEX_APP_SERVER_IMAGE_GENERATION_MAX_BYTES',
+    ),
     stateEncryptionKey: parseEncryptionKey(env.CODEX_APP_SERVER_STATE_KEY),
     defaultModel: supportedDefaultModel(env.CODEX_DEFAULT_MODEL || 'codex-latest'),
     modelAliases: aliases(env.CODEX_MODEL_ALIASES),
@@ -99,6 +112,12 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     assertCodexHomeIsolation(result)
   }
   return result
+}
+
+function imageGenerationMode(raw: string | undefined): AppConfig['imageGenerationMode'] {
+  const value = (raw || 'disabled').trim().toLowerCase()
+  if (value === 'disabled' || value === 'local') return value
+  throw new Error('CODEX_APP_SERVER_IMAGE_GENERATION_MODE must be disabled or local')
 }
 
 function nonEmpty(raw: string, field: string, max: number): string {

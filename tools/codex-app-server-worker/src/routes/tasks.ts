@@ -18,11 +18,13 @@ import {
 } from '../model-resolution.js'
 import { validateTaskRequest } from '../validation/task-request.js'
 import type { WorkerEvent } from '../models.js'
+import { GeneratedImageStore } from '../generated-image-store.js'
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
 export function createTasksRouter(config: AppConfig, manager: TaskManager): Router {
   const router = Router()
+  const generatedImages = new GeneratedImageStore(config)
 
   router.post('/api/v1/tasks', async (req, res, next) => {
     try {
@@ -115,6 +117,32 @@ export function createTasksRouter(config: AppConfig, manager: TaskManager): Rout
 
   router.get('/api/v1/tasks/:taskId/subscribe', (req, res) => {
     subscribe(manager, req, res)
+  })
+
+  router.get('/api/v1/tasks/:taskId/generated-images/:artifactId', (req, res, next) => {
+    try {
+      const taskId = single(req.params.taskId)
+      const record = manager.get(taskId)
+      if (!record || record.tombstoned_at) {
+        res.status(404).json({ error: 'TASK_NOT_FOUND' })
+        return
+      }
+      const image = generatedImages.read(taskId, single(req.params.artifactId))
+      if (!image) {
+        res.status(404).json({ error: 'GENERATED_IMAGE_NOT_FOUND' })
+        return
+      }
+      res.set({
+        'Content-Type': image.data.mime_type,
+        'Content-Length': String(image.data.size_bytes),
+        'Content-Disposition': `inline; filename="${image.data.file_name}"`,
+        'Cache-Control': 'private, no-store',
+        ETag: `"${image.data.sha256}"`,
+      })
+      res.send(image.bytes)
+    } catch (error) {
+      next(error)
+    }
   })
 
   router.post('/api/v1/tasks/:taskId/respond', async (req, res, next) => {

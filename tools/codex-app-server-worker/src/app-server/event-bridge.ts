@@ -4,6 +4,7 @@ import {
   type WorkerEvent,
 } from '../models.js'
 import { EventBroadcast } from '../persistence/event-store.js'
+import { GeneratedImageStore } from '../generated-image-store.js'
 import { NativeSubtaskTracker, type AppServerNotification } from './native-subtask-tracker.js'
 
 type AppServerEventBridgeOptions = {
@@ -11,12 +12,14 @@ type AppServerEventBridgeOptions = {
   broadcast: EventBroadcast
   rootThreadId?: string
   recordFileHint?: (event: WorkerEvent) => void
+  generatedImageStore?: GeneratedImageStore
 }
 
 export class AppServerEventBridge {
   private readonly taskId: string
   private readonly broadcast: EventBroadcast
   private readonly recordFileHint?: (event: WorkerEvent) => void
+  private readonly generatedImageStore?: GeneratedImageStore
   private readonly subtaskTracker: NativeSubtaskTracker
   private readonly streamedAgentMessageText = new Map<string, string>()
   private readonly completedAgentMessageIds = new Set<string>()
@@ -33,6 +36,7 @@ export class AppServerEventBridge {
     this.broadcast = options.broadcast
     this.rootThreadId = options.rootThreadId
     this.recordFileHint = options.recordFileHint
+    this.generatedImageStore = options.generatedImageStore
     this.subtaskTracker = new NativeSubtaskTracker(options.rootThreadId)
   }
 
@@ -144,6 +148,9 @@ export class AppServerEventBridge {
     } else if (item.type === 'dynamicToolCall') {
       this.startedToolIds.add(itemId)
       this.emitToolUse(readString(item.tool) || 'dynamic_tool', asRecord(item.arguments), itemId)
+    } else if (item.type === 'imageGeneration' && this.generatedImageStore) {
+      this.startedToolIds.add(itemId)
+      this.emitToolUse('image_generation', {}, itemId)
     }
   }
 
@@ -222,6 +229,25 @@ export class AppServerEventBridge {
           output: JSON.stringify(item.contentItems ?? null),
           tool_use_id: itemId,
           is_error: item.success === false,
+        })
+        break
+      }
+      case 'imageGeneration': {
+        if (!this.generatedImageStore) break
+        if (!this.startedToolIds.has(itemId)) this.emitToolUse('image_generation', {}, itemId)
+        const data = this.generatedImageStore.persist({
+          taskId: this.taskId,
+          itemId,
+          result: item.result,
+          revisedPrompt: item.revisedPrompt,
+        })
+        this.emit({
+          type: 'image_generation',
+          task_id: this.taskId,
+          session_id: this.rootThreadId,
+          tool: 'image_generation',
+          tool_use_id: itemId,
+          data,
         })
         break
       }

@@ -1113,6 +1113,12 @@ public class CodexStreamRelay {
                     boolean success = event.getIsError() == null || !event.getIsError();
                     publishToolResult(mb, event, success, workerMessageId(taskId, event));
                 }
+                case "image_generation" -> {
+                    Map<String, Object> image = generatedImagePayload(event, taskId);
+                    publishBuilt(mb.toolCallResult(
+                                    event.getToolUseId(), "image_generation", image, true),
+                            workerMessageId(taskId, event));
+                }
                 case "warning" -> {
                     String warning = event.getContent() != null ? event.getContent() : event.getError();
                     publishBuilt(mb.stateSync(warning != null ? warning : "CODEX_WORKER_WARNING", "warning"),
@@ -1296,7 +1302,7 @@ public class CodexStreamRelay {
         if ("execution_committed".equals(event.getSubtype())) return true;
         if ("sync_checkpoint".equals(event.getSubtype())) return false;
         return switch (event.getType() != null ? event.getType() : "") {
-            case "assistant_text", "tool_use", "tool_result", "result", "error", "native_subtask_update",
+            case "assistant_text", "tool_use", "tool_result", "image_generation", "result", "error", "native_subtask_update",
                     "user_input_request", "user_input_resolved" -> true;
             default -> false;
         };
@@ -1448,7 +1454,7 @@ public class CodexStreamRelay {
         }
         return switch (event.getType()) {
             case "assistant_text" -> !"sync_checkpoint".equals(event.getSubtype());
-            case "tool_use", "tool_result", "result", "warning", "error", "user_input_request" -> true;
+            case "tool_use", "tool_result", "image_generation", "result", "warning", "error", "user_input_request" -> true;
             case "system", "progress" -> isVisibleStatusEvent(event);
             default -> false;
         };
@@ -1467,6 +1473,23 @@ public class CodexStreamRelay {
             return false;
         }
         return event.getContent() != null && !event.getContent().isBlank();
+    }
+
+    private Map<String, Object> generatedImagePayload(WorkerEvent event, String taskId) {
+        if (event.getData() == null) {
+            throw new IllegalArgumentException("image_generation requires data");
+        }
+        Map<String, Object> result = new LinkedHashMap<>(event.getData());
+        Object artifactValue = result.get("artifact_id");
+        String artifactId = artifactValue != null ? artifactValue.toString() : "";
+        if (!artifactId.matches("[a-f0-9]{32}")) {
+            throw new IllegalArgumentException("image_generation artifact_id is invalid");
+        }
+        // The local path is useful only inside the Worker/Java bridge and must not leak to clients.
+        result.remove("local_path");
+        result.put("url", "/api/v1/codex-tasks/" + taskId
+                + "/generated-images/" + artifactId);
+        return result;
     }
 
     private String truncateResult(String text) {

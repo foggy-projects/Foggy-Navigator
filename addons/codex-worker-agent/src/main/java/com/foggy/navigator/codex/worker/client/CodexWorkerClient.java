@@ -4,6 +4,7 @@ import com.foggy.navigator.codex.worker.model.dto.CodexRuntimeRateLimitsDTO;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskAcceptanceDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -35,12 +36,20 @@ public class CodexWorkerClient {
             "USER_INPUT_RUNTIME_AFFINITY_LOST");
 
     private final WebClient webClient;
+    private final WebClient generatedImageWebClient;
 
     public CodexWorkerClient(String baseUrl, String authToken) {
         this(baseUrl, authToken, null);
     }
 
     public CodexWorkerClient(String baseUrl, String authToken, String expectedInstanceId) {
+        this.webClient = buildWebClient(baseUrl, authToken, expectedInstanceId, 4 * 1024 * 1024);
+        this.generatedImageWebClient = buildWebClient(
+                baseUrl, authToken, expectedInstanceId, 32 * 1024 * 1024);
+    }
+
+    private WebClient buildWebClient(String baseUrl, String authToken,
+                                     String expectedInstanceId, int maxInMemorySize) {
         // 自定义 Netty HttpClient：30 分钟连接超时（SSE 长连接）
         HttpClient httpClient = HttpClient.create()
                 .responseTimeout(Duration.ofMinutes(30));
@@ -48,7 +57,7 @@ public class CodexWorkerClient {
         WebClient.Builder builder = WebClient.builder()
                 .baseUrl(baseUrl)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
-                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(4 * 1024 * 1024));
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(maxInMemorySize));
 
         if (authToken != null && !authToken.isEmpty()) {
             builder.defaultHeader("Authorization", "Bearer " + authToken);
@@ -69,7 +78,7 @@ public class CodexWorkerClient {
             }));
         }
 
-        this.webClient = builder.build();
+        return builder.build();
     }
 
     public static final class RuntimeInstanceProofException extends IllegalStateException {
@@ -425,6 +434,23 @@ public class CodexWorkerClient {
                     return response.createException().flatMap(Mono::error);
                 })
                 .timeout(Duration.ofSeconds(10));
+    }
+
+    /**
+     * Reads one generated image from the exact app-server Worker instance bound to the task.
+     */
+    public Mono<ResponseEntity<byte[]>> getGeneratedImage(String taskId, String artifactId) {
+        if (taskId == null || taskId.isBlank()) {
+            return Mono.error(new IllegalArgumentException("taskId is required"));
+        }
+        if (artifactId == null || !artifactId.matches("[a-f0-9]{32}")) {
+            return Mono.error(new IllegalArgumentException("artifactId is invalid"));
+        }
+        return generatedImageWebClient.get()
+                .uri("/api/v1/tasks/{taskId}/generated-images/{artifactId}", taskId, artifactId)
+                .retrieve()
+                .toEntity(byte[].class)
+                .timeout(Duration.ofSeconds(30));
     }
 
     /**

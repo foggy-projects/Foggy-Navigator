@@ -996,6 +996,54 @@ class CodexStreamRelayTest {
     }
 
     @Test
+    void generatedImagePublishesNavigatorUrlWithoutLeakingWorkerPath() {
+        CodexTaskEntity entity = stubAppServerTask("ACCEPTED");
+        entity.setStatus("RUNNING");
+        String artifactId = "0123456789abcdef0123456789abcdef";
+        String eventJson = """
+                {
+                  "type":"image_generation",
+                  "task_id":"worker-task-1",
+                  "session_id":"thread-1",
+                  "seq":1,
+                  "tool_use_id":"image-item-1",
+                  "data":{
+                    "contract_version":1,
+                    "artifact_id":"0123456789abcdef0123456789abcdef",
+                    "file_name":"generated.png",
+                    "local_path":"/home/sa/.codex-app-server-worker/generated-images/private.png",
+                    "mime_type":"image/png",
+                    "size_bytes":4,
+                    "sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  }
+                }
+                """;
+
+        ReflectionTestUtils.invokeMethod(relay, "handleSseEvent",
+                ServerSentEvent.builder(eventJson).build(),
+                "local-task-1", "session-1", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE,
+                new java.util.concurrent.atomic.AtomicReference<String>(),
+                new java.util.concurrent.atomic.AtomicReference<String>());
+
+        ArgumentCaptor<AgentMessage> messages = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener).handleMessageDurably(messages.capture());
+        AgentMessage message = messages.getValue();
+        assertEquals(MessageType.TOOL_CALL_RESULT, message.getType());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        assertEquals("image_generation", payload.get("toolName"));
+        assertEquals(true, payload.get("success"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> image = (Map<String, Object>) payload.get("data");
+        assertEquals(artifactId, image.get("artifact_id"));
+        assertEquals("/api/v1/codex-tasks/local-task-1/generated-images/" + artifactId,
+                image.get("url"));
+        assertFalse(image.containsKey("local_path"));
+        verify(taskService).recordWorkerProgress(
+                "local-task-1", "worker-task-1", "thread-1", null, 1, false, true);
+    }
+
+    @Test
     void unavailablePayloadPreviewStillAcknowledgesAndAllowsLaterEvents() throws Exception {
         CodexTaskEntity entity = legacyTask();
         entity.setStatus("RUNNING");

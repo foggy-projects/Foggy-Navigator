@@ -111,7 +111,20 @@ test('server-owned request_user_input feature cannot be disabled or broadened by
     model_auto_compact_token_limit: 140_000,
     approval_policy: 'never',
     'features.default_mode_request_user_input': true,
+    'features.image_generation': false,
     'notice.hide_rate_limit_model_nudge': true,
     model_reasoning_effort: 'ultra',
   })
+})
+
+test('server-owned image generation feature cannot be enabled by request config', () => {
+  assert.deepEqual(validateTaskRequest({
+    prompt: 'x',
+    codex_config: { 'features.image_generation': true },
+  }), {
+    ok: false,
+    error: 'UNSUPPORTED_CODEX_CONFIG_KEY',
+  })
+  assert.equal(buildCodexConfig({ prompt: 'x' }, undefined)['features.image_generation'], false)
+  assert.equal(buildCodexConfig({ prompt: 'x' }, undefined, true)['features.image_generation'], true)
 })

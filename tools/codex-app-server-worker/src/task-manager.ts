@@ -14,6 +14,7 @@ import { EventBroadcast } from './persistence/event-store.js'
 import { TaskStore } from './persistence/task-store.js'
 import { cleanupMaterializedInput, type TaskExecutor } from './app-server/executor.js'
 import { AppServerRuntimeError } from './app-server/runtime.js'
+import { GeneratedImageStore } from './generated-image-store.js'
 import {
   normalizeUserInputAnswers,
   sameRequestId,
@@ -117,6 +118,7 @@ export class TaskManager {
         this.releaseThreadReservations(record.task_id)
         if (record.tombstoned_at) {
           await EventBroadcast.purgePersisted(record.task_id, path.join(this.config.stateDir, 'events'))
+          new GeneratedImageStore(this.config).cleanup(record.task_id)
         }
         continue
       }
@@ -338,6 +340,7 @@ export class TaskManager {
       } finally {
         if (broadcast && this.broadcasts.get(taskId) === broadcast) this.broadcasts.delete(taskId)
         await cleanupMaterializedInput(taskId, this.config.stateDir)
+        new GeneratedImageStore(this.config).cleanup(taskId)
       }
       return tombstone
     })
@@ -861,6 +864,7 @@ export class TaskManager {
         || runtimeError?.turnMayHaveStarted === true
         || (!runtimeError && latest?.status === 'committed')
       const reconciliationUnsafe = runtimeError?.code === 'APP_SERVER_TURN_STALLED'
+        || runtimeError?.code === 'APP_SERVER_UNEXPECTED_IMAGE_GENERATION'
       if (latest && latest.status !== 'terminal' && mayHaveExecuted && this.executor.reconcile && !reconciliationUnsafe) {
         try {
           await this.reconcileCommitted(latest, broadcast)
@@ -1101,6 +1105,7 @@ function stableExecutionErrorCode(error: unknown): string {
     'APP_SERVER_POOL_DRAINING',
     'APP_SERVER_POOL_ACQUIRE_TIMEOUT',
     'APP_SERVER_TURN_STALLED',
+    'APP_SERVER_UNEXPECTED_IMAGE_GENERATION',
     'APP_SERVER_TOOL_CAPABILITY_UNAVAILABLE',
     'APP_SERVER_PROCESS_TREE_UNSAFE',
     'WORKING_DIRECTORY_NOT_ALLOWED',

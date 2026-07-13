@@ -27,7 +27,7 @@ export function createHealthRouter(config: AppConfig, manager: TaskManager): Rou
       queued_tasks: manager.queuedCount(),
       runtime_metrics: manager.runtimeMetrics(),
       cli_version: readiness.cliVersion || null,
-      cli_compatible: readiness.cliVersion === '0.144.1',
+      cli_compatible: readiness.cliVersion === '0.144.3',
       state_encryption_configured: Boolean(config.stateEncryptionKey),
     })
   })

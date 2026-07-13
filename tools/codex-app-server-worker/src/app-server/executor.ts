@@ -6,6 +6,7 @@ import { requireCodexConfigOverride } from '../codex-config.js'
 import type { CodexInput, StoredTaskRecord, TaskRequest } from '../models.js'
 import { parseModelString, resolveSupportedModelAlias } from '../model-resolution.js'
 import { EventBroadcast } from '../persistence/event-store.js'
+import { GeneratedImageStore } from '../generated-image-store.js'
 import { syncParentDirectory } from '../persistence/jsonl-durability.js'
 import {
   assertCodexHomeIsolation,
@@ -122,6 +123,9 @@ export class StrictAppServerExecutor implements TaskExecutor {
         taskId: options.taskId,
         broadcast: options.broadcast,
         rootThreadId: options.request.session_id,
+        generatedImageStore: this.config.imageGenerationMode === 'local'
+          ? new GeneratedImageStore(this.config)
+          : undefined,
       })
       const result = await lease.runtime.runTurn({
         taskId: options.taskId,
@@ -275,7 +279,11 @@ export class StrictAppServerExecutor implements TaskExecutor {
     const codexHome = await this.resolveCodexHome(request.codex_home_key)
     const apiKey = request.api_key || this.config.openaiApiKey || undefined
     const baseUrl = request.base_url || this.config.openaiBaseUrl || undefined
-    const codexConfig = buildCodexConfig(request, parsed.reasoningEffort)
+    const codexConfig = buildCodexConfig(
+      request,
+      parsed.reasoningEffort,
+      this.config.imageGenerationMode === 'local',
+    )
     if (baseUrl) codexConfig.openai_base_url = baseUrl
     const lane = await buildAppServerLane({
       cliVersion: VALIDATED_APP_SERVER_CLI_VERSION,
@@ -335,13 +343,20 @@ export class StrictAppServerExecutor implements TaskExecutor {
   }
 }
 
-export function buildCodexConfig(request: TaskRequest, effort: string | undefined): Record<string, unknown> {
+export function buildCodexConfig(
+  request: TaskRequest,
+  effort: string | undefined,
+  imageGenerationEnabled = false,
+): Record<string, unknown> {
   const result: Record<string, unknown> = {
     tool_output_token_limit: 10_000,
     model_auto_compact_token_limit: 140_000,
     ...requireCodexConfigOverride(request.codex_config),
     approval_policy: 'never',
     'features.default_mode_request_user_input': true,
+    // Request payloads cannot turn this capability on. It is controlled only by the Worker
+    // operator because image results require local persistence and a bounded metadata bridge.
+    'features.image_generation': imageGenerationEnabled,
     'notice.hide_rate_limit_model_nudge': true,
   }
   for (const key of ['model_context_window', 'model_auto_compact_token_limit', 'tool_output_token_limit']) {

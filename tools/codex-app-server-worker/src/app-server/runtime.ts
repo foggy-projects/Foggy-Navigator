@@ -41,7 +41,7 @@ const processTreeHelper = path.resolve(
   'scripts',
   'process-tree.mjs',
 )
-export const VALIDATED_APP_SERVER_CLI_VERSION = '0.144.1'
+export const VALIDATED_APP_SERVER_CLI_VERSION = '0.144.3'
 
 type JsonRpcId = number
 
@@ -111,7 +111,7 @@ export class AppServerRuntimeError extends Error {
   readonly turnMayHaveStarted: boolean
   readonly threadId?: string
   readonly turnId?: string
-  readonly reason: 'runtime' | 'aborted' | 'unsupported' | 'stalled'
+  readonly reason: 'runtime' | 'aborted' | 'unsupported' | 'stalled' | 'protocol'
 
   constructor(
     message: string,
@@ -460,6 +460,32 @@ export class AppServerRuntimeInstance {
     }
     const dispatchNotification = (notification: AppServerNotification): void => {
       const params = notification.params || {}
+      if (isDisabledImageGenerationNotification(notification, options.codexConfig)) {
+        const error = new AppServerRuntimeError(
+          'Codex app-server emitted image generation while the capability was disabled',
+          {
+            executionCommitted: true,
+            turnMayHaveStarted: true,
+            threadId: resolvedThreadId,
+            turnId: resolvedTurnId,
+            reason: 'protocol',
+            code: 'APP_SERVER_UNEXPECTED_IMAGE_GENERATION',
+          },
+        )
+        this.markFatal(error)
+        terminal.reject(error)
+        if (resolvedThreadId && resolvedTurnId && !interruptSent) {
+          interruptSent = true
+          void this.client.request('turn/interrupt', {
+            threadId: resolvedThreadId,
+            turnId: resolvedTurnId,
+          }, {
+            timeoutMs: options.interruptTimeoutMs ?? 5_000,
+            fatalOnTimeout: false,
+          }).catch(() => undefined)
+        }
+        return
+      }
       if (isMeaningfulTurnProgress(notification, resolvedThreadId, resolvedTurnId)) armStallTimer()
       options.onNotification(notification)
       if (notification.method === 'serverRequest/resolved'
@@ -630,6 +656,15 @@ export class AppServerRuntimeInstance {
       if (!this.healthy) await this.client.close()
     }
   }
+}
+
+function isDisabledImageGenerationNotification(
+  notification: AppServerNotification,
+  codexConfig: Record<string, unknown>,
+): boolean {
+  if (codexConfig['features.image_generation'] !== false) return false
+  if (notification.method !== 'item/started' && notification.method !== 'item/completed') return false
+  return asRecord(notification.params?.item)?.type === 'imageGeneration'
 }
 
 function isMeaningfulTurnProgress(

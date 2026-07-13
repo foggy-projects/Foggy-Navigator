@@ -2,9 +2,12 @@ package com.foggy.navigator.codex.worker.controller;
 
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
+import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
@@ -17,6 +20,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import reactor.core.publisher.Mono;
 
 import java.util.LinkedHashMap;
@@ -24,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -45,6 +52,9 @@ class CodexTaskControllerTest {
     private CodexWorkerClientFactory clientFactory;
 
     @Mock
+    private CodexRuntimeRegistryService runtimeRegistryService;
+
+    @Mock
     private CodexWorkerClient client;
 
     private CodexTaskController controller;
@@ -56,7 +66,7 @@ class CodexTaskControllerTest {
                 .tenantId("tenant-1")
                 .build());
         controller = new CodexTaskController(
-                taskService, workerManagementFacade, clientFactory);
+                taskService, workerManagementFacade, clientFactory, runtimeRegistryService);
     }
 
     @AfterEach
@@ -153,6 +163,52 @@ class CodexTaskControllerTest {
 
         verify(taskService, never()).cancelTaskDirect("task-app", "user-1");
         verify(taskService, never()).reconnectTask("task-app", "user-1");
+    }
+
+    @Test
+    void getGeneratedImageUsesPinnedAppServerRuntimeAndProxiesSafeHeaders() {
+        String artifactId = "0123456789abcdef0123456789abcdef";
+        byte[] image = new byte[]{(byte) 0x89, 0x50, 0x4e, 0x47};
+        CodexTaskEntity task = task("user-1");
+        task.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        task.setRuntimeId("app-main");
+        task.setRuntimeRevision(3);
+        task.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        task.setRuntimeInstanceId("instance-a");
+        task.setWorkerTaskId("worker-task-1");
+        when(taskService.getTaskEntity("task-1")).thenReturn(task);
+
+        CodexRuntimeBinding binding = CodexRuntimeBinding.builder()
+                .runtimeId("app-main")
+                .runtimeRevision(3)
+                .runtimeType(CodexRuntimeType.APP_SERVER)
+                .workerId("worker-1")
+                .endpointUrl("http://127.0.0.1:3062")
+                .authToken("runtime-token")
+                .instanceId("instance-a")
+                .routingEpoch(7L)
+                .build();
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a")).thenReturn(binding);
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-token", "instance-a"))
+                .thenReturn(client);
+        when(client.getGeneratedImage("worker-task-1", artifactId)).thenReturn(Mono.just(
+                ResponseEntity.ok()
+                        .contentType(MediaType.IMAGE_PNG)
+                        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=generated.png")
+                        .body(image)));
+
+        ResponseEntity<byte[]> response = controller.getGeneratedImage("task-1", artifactId);
+
+        assertEquals(200, response.getStatusCode().value());
+        assertEquals(MediaType.IMAGE_PNG, response.getHeaders().getContentType());
+        assertEquals("private, no-store", response.getHeaders().getCacheControl());
+        assertEquals("inline; filename=generated.png",
+                response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION));
+        assertArrayEquals(image, response.getBody());
+        verify(workerManagementFacade).validateWorkerAccess("user-1", "tenant-1", "worker-1");
+        verify(client).getGeneratedImage("worker-task-1", artifactId);
     }
 
     @Test

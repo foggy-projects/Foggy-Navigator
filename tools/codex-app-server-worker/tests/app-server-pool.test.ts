@@ -20,7 +20,7 @@ import { createStubbornProcessTreeFixture, isProcessAlive } from './stubborn-app
 
 const lane = (key: string): AppServerLane => ({
   key,
-  cliVersion: '0.144.1',
+  cliVersion: '0.144.3',
   authFingerprint: `auth-${key}`,
   codexHomeFingerprint: `home-${key}`,
   baseUrlFingerprint: `url-${key}`,
@@ -437,27 +437,27 @@ test('lane key changes for auth/home/base URL/environment and excludes Worker se
     TEMP: 'C:\\Temp',
   }
   const first = await buildAppServerLane({
-    cliVersion: '0.144.1',
+    cliVersion: '0.144.3',
     baseEnv,
     apiKey: 'sk-one',
     baseUrl: 'https://api.one.test',
     codexHome: 'C:\\codex\\one',
   })
   const same = await buildAppServerLane({
-    cliVersion: '0.144.1',
+    cliVersion: '0.144.3',
     baseEnv: { ...baseEnv },
     apiKey: 'sk-one',
     baseUrl: 'https://api.one.test',
     codexHome: 'C:\\codex\\one',
   })
   const differentAuth = await buildAppServerLane({
-    cliVersion: '0.144.1', baseEnv, apiKey: 'sk-two', baseUrl: 'https://api.one.test', codexHome: 'C:\\codex\\one',
+    cliVersion: '0.144.3', baseEnv, apiKey: 'sk-two', baseUrl: 'https://api.one.test', codexHome: 'C:\\codex\\one',
   })
   const differentHome = await buildAppServerLane({
-    cliVersion: '0.144.1', baseEnv, apiKey: 'sk-one', baseUrl: 'https://api.one.test', codexHome: 'C:\\codex\\two',
+    cliVersion: '0.144.3', baseEnv, apiKey: 'sk-one', baseUrl: 'https://api.one.test', codexHome: 'C:\\codex\\two',
   })
   const differentUrl = await buildAppServerLane({
-    cliVersion: '0.144.1', baseEnv, apiKey: 'sk-one', baseUrl: 'https://api.two.test', codexHome: 'C:\\codex\\one',
+    cliVersion: '0.144.3', baseEnv, apiKey: 'sk-one', baseUrl: 'https://api.two.test', codexHome: 'C:\\codex\\one',
   })
   assert.equal(first.key, same.key)
   assert.notEqual(first.key, differentAuth.key)
@@ -483,7 +483,7 @@ test('lane key changes for auth/home/base URL/environment and excludes Worker se
 
 test('default pool factory forwards the opaque lane API key only to runtime startup', async t => {
   const requestedLane = await buildAppServerLane({
-    cliVersion: '0.144.1',
+    cliVersion: '0.144.3',
     baseEnv: { PATH: 'C:\\bin' },
     apiKey: 'dummy-pool-key',
     baseUrl: 'https://api.example.test/v1',

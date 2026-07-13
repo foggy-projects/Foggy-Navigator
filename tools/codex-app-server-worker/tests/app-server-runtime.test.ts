@@ -8,6 +8,8 @@ import path from 'node:path'
 import { AppServerEventBridge } from '../src/app-server/event-bridge.js'
 import { buildCodexConfig } from '../src/app-server/executor.js'
 import { EventBroadcast } from '../src/persistence/event-store.js'
+import { GeneratedImageStore } from '../src/generated-image-store.js'
+import { testConfig } from './helpers.js'
 import {
   AppServerRuntimeError,
   AppServerRuntimeInstance,
@@ -37,7 +39,7 @@ class FakeProcess extends EventEmitter {
     private readonly childMetadataError?: string,
     private readonly interruptBehavior?: 'error' | 'timeout' | 'turn-start-hang' | 'stale-terminal' | 'same-batch-events'
       | 'running-after-start' | 'progress-before-complete' | 'noise-before-stall' | 'interactive-request' | 'unknown-server-request'
-      | 'server-resolved-request',
+      | 'server-resolved-request' | 'unexpected-image-generation',
     private readonly apiKeyLoginBehavior?: 'error' | 'invalid',
   ) {
     super()
@@ -128,6 +130,21 @@ class FakeProcess extends EventEmitter {
         })
       }
       this.send({ id: message.id, result: { turn: { id: 'turn-1', status: 'inProgress' } } })
+      if (this.interruptBehavior === 'unexpected-image-generation') {
+        this.send({
+          method: 'item/completed',
+          params: {
+            threadId: this.threadId,
+            turnId: 'turn-1',
+            item: {
+              id: 'image-1',
+              type: 'imageGeneration',
+              status: 'completed',
+              result: 'BASE64_IMAGE_MUST_NOT_CROSS_WORKER_BOUNDARY',
+            },
+          },
+        })
+      }
       if (this.interruptBehavior === 'interactive-request' || this.interruptBehavior === 'server-resolved-request') {
         this.send({
           id: 'server-input-1',
@@ -253,13 +270,14 @@ test('runtime resumes a persisted thread on the selected process and unsubscribe
   const received: JsonMessage[] = []
   const process = new FakeProcess(received, () => true)
   const cwd = '/workspace'
+  const codexConfig = buildCodexConfig({ prompt: 'continue' }, undefined)
   const result = await runAppServerTurn({
     taskId: 'resume-task',
     model: 'gpt-5.6-sol',
     cwd,
     threadId: 'thread-existing',
     sandboxMode: 'read-only',
-    codexConfig: {},
+    codexConfig,
     input: 'continue',
     env: {},
     signal: new AbortController().signal,
@@ -273,9 +291,10 @@ test('runtime resumes a persisted thread on the selected process and unsubscribe
     model: 'gpt-5.6-sol',
     cwd,
     sandbox: 'read-only',
-    config: {},
+    config: codexConfig,
     threadId: 'thread-existing',
   })
+  assert.equal(codexConfig['features.image_generation'], false)
   assert.deepEqual(received.find(message => message.method === 'thread/unsubscribe')?.params, {
     threadId: 'thread-existing',
   })
@@ -405,6 +424,37 @@ test('turn progress watchdog interrupts and retires a live process that stops em
   assert.equal(process.killed, true)
 })
 
+test('disabled image generation fails closed before base64 reaches the notification consumer', async () => {
+  const received: JsonMessage[] = []
+  const process = new FakeProcess(received, () => true, false, undefined, 'unexpected-image-generation')
+  const forwarded: JsonMessage[] = []
+
+  await assert.rejects(runAppServerTurn({
+    taskId: 'unexpected-image-generation',
+    model: 'gpt-5.6-sol',
+    sandboxMode: 'read-only',
+    codexConfig: { 'features.image_generation': false },
+    input: 'inspect',
+    env: {},
+    signal: new AbortController().signal,
+    onNotification: notification => forwarded.push(notification),
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+    interruptTimeoutMs: 100,
+  }), error => {
+    assert.ok(error instanceof AppServerRuntimeError)
+    assert.equal(error.code, 'APP_SERVER_UNEXPECTED_IMAGE_GENERATION')
+    assert.equal(error.reason, 'protocol')
+    assert.equal(error.executionCommitted, true)
+    assert.equal(error.turnMayHaveStarted, true)
+    return true
+  })
+
+  assert.equal(forwarded.some(notification => JSON.stringify(notification).includes('BASE64_IMAGE')), false)
+  assert.equal(received.some(message => message.method === 'turn/interrupt'), true)
+  assert.equal(process.killed, true)
+})
+
 test('turn progress notifications reset the watchdog until completion', async () => {
   const received: JsonMessage[] = []
   const process = new FakeProcess(received, () => true, false, undefined, 'progress-before-complete')
@@ -482,6 +532,7 @@ test('runtime enables and answers only the pinned request_user_input server requ
   assert.equal(initialize?.params?.capabilities?.experimentalApi, true)
   const threadStart = received.find(message => message.method === 'thread/start')
   assert.equal(threadStart?.params?.config?.['features.default_mode_request_user_input'], true)
+  assert.equal(threadStart?.params?.config?.['features.image_generation'], false)
   assert.equal(threadStart?.params?.config?.['notice.hide_rate_limit_model_nudge'], true)
   assert.equal(threadStart?.params?.config?.approval_policy, 'never')
   const response = received.find(message => message.id === 'server-input-1' && message.result)
@@ -979,11 +1030,54 @@ test('turn/start response and same-batch notifications replay only after turn co
   ])
 })
 
+test('local image mode persists image bytes and emits metadata without base64', async t => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-generated-image-'))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const config = testConfig(stateDir, { imageGenerationMode: 'local' })
+  const broadcast = new EventBroadcast('image-task', path.join(stateDir, 'events'))
+  const bridge = new AppServerEventBridge({
+    taskId: 'image-task',
+    broadcast,
+    rootThreadId: 'thread-image',
+    generatedImageStore: new GeneratedImageStore(config),
+  })
+  bridge.setRootTurnId('turn-image')
+  const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+  const encoded = imageBytes.toString('base64')
+
+  bridge.handle({
+    method: 'item/completed',
+    params: {
+      threadId: 'thread-image',
+      turnId: 'turn-image',
+      item: {
+        type: 'imageGeneration',
+        id: 'image-item-1',
+        status: 'completed',
+        result: encoded,
+        revisedPrompt: 'draw a compact test image',
+      },
+    },
+  })
+  await broadcast.flush()
+
+  const events = broadcast.getEventsAfter(0)
+  const imageEvent = events.find(event => event.type === 'image_generation')
+  assert.ok(imageEvent)
+  assert.equal(imageEvent.tool, 'image_generation')
+  assert.equal(imageEvent.data?.contract_version, 1)
+  assert.equal('local_path' in imageEvent.data!, true)
+  assert.equal(JSON.stringify(imageEvent).includes(encoded), false)
+  const localPath = (imageEvent.data as { local_path: string }).local_path
+  assert.deepEqual(fs.readFileSync(localPath), imageBytes)
+  assert.equal(fs.statSync(localPath).mode & 0o777, 0o600)
+})
+
 test('independent package pins the CLI and has no Codex SDK dependency', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8')) as {
     dependencies: Record<string, string>
   }
-  assert.equal(packageJson.dependencies['@openai/codex'], '0.144.1')
+  assert.equal(packageJson.dependencies['@openai/codex'], '0.144.3')
   assert.equal(packageJson.dependencies['@openai/codex-sdk'], undefined)
 })
 

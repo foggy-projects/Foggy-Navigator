@@ -7,6 +7,7 @@ import { TaskStore } from '../src/persistence/task-store.js'
 import { TaskManager } from '../src/task-manager.js'
 import { EventBroadcast } from '../src/persistence/event-store.js'
 import { FakeExecutor, tempDirectory, testConfig, waitFor } from './helpers.js'
+import { GeneratedImageStore } from '../src/generated-image-store.js'
 
 test('TaskManager persists committed before executor side effects and executes an accepted task once', async t => {
   const stateDir = await tempDirectory('codex-app-manager-')
@@ -199,12 +200,18 @@ test('terminal cleanup removes materialized input together with the event journa
   )
   await fs.mkdir(inputRoot, { recursive: true })
   await fs.writeFile(path.join(inputRoot, '0.png'), 'plaintext-image-bytes')
+  const generatedImage = new GeneratedImageStore(config).persist({
+    taskId: 'delete-cleanup',
+    itemId: 'generated-image-cleanup',
+    result: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64'),
+  })
   const manager = new TaskManager(config, store, new FakeExecutor())
 
   const tombstone = await manager.cleanupTerminal('delete-cleanup')
 
   assert.ok(tombstone?.tombstoned_at)
   await assert.rejects(fs.access(inputRoot), /ENOENT/)
+  await assert.rejects(fs.access(generatedImage.local_path), /ENOENT/)
   assert.deepEqual(await fs.readdir(path.join(stateDir, 'events')), [])
 })
 

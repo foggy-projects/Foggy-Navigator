@@ -5,12 +5,18 @@ import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
+import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -29,6 +35,7 @@ public class CodexTaskController {
     private final CodexTaskService taskService;
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
+    private final CodexRuntimeRegistryService runtimeRegistryService;
 
     /**
      * 创建并启动 Codex 任务
@@ -96,6 +103,52 @@ public class CodexTaskController {
             log.warn("Failed to get Codex session file hints: taskId={}, type={}",
                     taskId, e.getClass().getSimpleName());
             return RX.failA("获取 Codex 文件线索失败: CODEX_SESSION_FILE_HINTS_UNAVAILABLE");
+        }
+    }
+
+    /**
+     * Proxies a generated image through Navigator without exposing Worker credentials or WSL paths.
+     */
+    @GetMapping("/{taskId}/generated-images/{artifactId}")
+    public ResponseEntity<byte[]> getGeneratedImage(
+            @PathVariable String taskId,
+            @PathVariable String artifactId) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        var task = taskService.getTaskEntity(taskId);
+        if (!task.getUserId().equals(userId)
+                || !CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE.equals(task.getProviderType())
+                || !CodexRuntimeType.APP_SERVER.name().equals(task.getRuntimeType())) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        workerManagementFacade.validateWorkerAccess(userId, tenantId, task.getWorkerId());
+
+        CodexRuntimeBinding runtime = runtimeRegistryService.resolveBoundRuntime(
+                task.getRuntimeId(), task.getRuntimeRevision(), task.getWorkerId(),
+                task.getRuntimeInstanceId());
+        var client = clientFactory.getOrCreate(
+                "runtime:" + runtime.getRuntimeId() + ":" + runtime.getRuntimeRevision(),
+                runtime.getEndpointUrl(), runtime.getAuthToken(), runtime.getInstanceId());
+        String remoteTaskId = task.getWorkerTaskId() != null && !task.getWorkerTaskId().isBlank()
+                ? task.getWorkerTaskId()
+                : task.getTaskId();
+        try {
+            ResponseEntity<byte[]> response = client.getGeneratedImage(remoteTaskId, artifactId)
+                    .block(Duration.ofSeconds(30));
+            if (response == null) {
+                return ResponseEntity.internalServerError().build();
+            }
+            HttpHeaders headers = new HttpHeaders();
+            MediaType contentType = response.getHeaders().getContentType();
+            headers.setContentType(contentType != null ? contentType : MediaType.APPLICATION_OCTET_STREAM);
+            String contentDisposition = response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION);
+            if (contentDisposition != null) headers.set(HttpHeaders.CONTENT_DISPOSITION, contentDisposition);
+            headers.setCacheControl("private, no-store");
+            return new ResponseEntity<>(response.getBody(), headers, response.getStatusCode());
+        } catch (Exception e) {
+            log.warn("Failed to proxy generated Codex image: taskId={}, artifactId={}, type={}",
+                    taskId, artifactId, e.getClass().getSimpleName());
+            return ResponseEntity.internalServerError().build();
         }
     }
 

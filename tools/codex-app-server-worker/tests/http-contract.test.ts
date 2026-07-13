@@ -8,6 +8,7 @@ import type { ExecutionResult, TaskExecutor } from '../src/app-server/executor.j
 import { TaskStore } from '../src/persistence/task-store.js'
 import type { TaskRequest } from '../src/models.js'
 import { TaskManager } from '../src/task-manager.js'
+import { GeneratedImageStore } from '../src/generated-image-store.js'
 import { FakeExecutor, tempDirectory, testConfig, waitFor } from './helpers.js'
 import {
   ACTUAL_INSTANCE_HEADER,
@@ -41,6 +42,7 @@ test('instance affinity guard rejects every task route before manager access', a
     ['/api/v1/tasks', { method: 'POST', headers, body: JSON.stringify({ prompt: 'must not persist' }) }],
     ['/api/v1/tasks/task-1/status', { headers }],
     ['/api/v1/tasks/task-1/subscribe?ack_seq=0', { headers }],
+    ['/api/v1/tasks/task-1/generated-images/0123456789abcdef0123456789abcdef', { headers }],
     ['/api/v1/tasks/task-1/abort', { method: 'POST', headers }],
     ['/api/v1/tasks/task-1/respond', { method: 'POST', headers, body: JSON.stringify({ request_id: 'r', answers: {} }) }],
     ['/api/v1/tasks/task-1', { method: 'DELETE', headers }],
@@ -97,6 +99,54 @@ test('task and capability responses prove the actual instance while absent expec
   })
   assert.notEqual(status.status, 409)
   assert.equal(status.headers.get(ACTUAL_INSTANCE_HEADER), config.instanceId)
+})
+
+test('generated images are served through an authenticated task route and removed with the tombstone', async t => {
+  const stateDir = await tempDirectory('codex-app-generated-image-http-')
+  const config = testConfig(stateDir, { imageGenerationMode: 'local' })
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  await store.initialize()
+  await store.accept('generated-image-task', { prompt: 'draw' })
+  await store.transition('generated-image-task', 'terminal', { outcome: 'completed' })
+  const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7])
+  const image = new GeneratedImageStore(config).persist({
+    taskId: 'generated-image-task',
+    itemId: 'image-item-http',
+    result: imageBytes.toString('base64'),
+  })
+  const manager = new TaskManager(config, store, new FakeExecutor())
+  await manager.initialize()
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const unauthorized = await fetch(
+    `${baseUrl}/api/v1/tasks/generated-image-task/generated-images/${image.artifact_id}`,
+  )
+  assert.equal(unauthorized.status, 401)
+  const response = await fetch(
+    `${baseUrl}/api/v1/tasks/generated-image-task/generated-images/${image.artifact_id}`,
+    { headers: authHeaders() },
+  )
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-type'), 'image/png')
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), imageBytes)
+
+  const deleted = await fetch(`${baseUrl}/api/v1/tasks/generated-image-task`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  assert.equal(deleted.status, 200)
+  const afterDelete = await fetch(
+    `${baseUrl}/api/v1/tasks/generated-image-task/generated-images/${image.artifact_id}`,
+    { headers: authHeaders() },
+  )
+  assert.equal(afterDelete.status, 404)
+  await assert.rejects(fs.access(image.local_path), /ENOENT/)
 })
 
 test('task accept v1 is idempotent, conflicts on changed payload, and replays terminal SSE', async t => {
@@ -257,8 +307,8 @@ test('capability manifest exposes the Java registry contract and exact schema lo
   assert.equal(manifest.runtime_id, 'test-runtime')
   assert.equal(manifest.runtime_revision, 7)
   assert.equal(manifest.instance_id, 'test-instance')
-  assert.equal(manifest.app_server_protocol_version, '0.144.1')
-  assert.equal(manifest.cli_version, '0.144.1')
+  assert.equal(manifest.app_server_protocol_version, '0.144.3')
+  assert.equal(manifest.cli_version, '0.144.3')
   assert.equal(manifest.schema_digest, '6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f')
   assert.deepEqual(manifest.models, [
     'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5',
@@ -275,6 +325,7 @@ test('capability manifest exposes the Java registry contract and exact schema lo
   assert.equal(manifest.model_aliases['retired-mini'], undefined)
   assert.equal(manifest.model_capabilities.aliases['retired-mini'], undefined)
   assert.equal(manifest.model_capabilities.dynamic_passthrough.route_selectable, false)
+  assert.equal(manifest.features.image_generation, false)
   assert.equal(manifest.reasoning_efforts, undefined)
   assert.deepEqual(manifest.features.approval_modes, ['never'])
   assert.equal(manifest.features.interactive_user_input, true)

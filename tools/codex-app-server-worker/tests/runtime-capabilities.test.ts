@@ -30,19 +30,19 @@ test('readiness fails closed on missing encryption key, isolated CODEX_HOME, or 
   assert.deepEqual(evaluateRuntimeReadiness(config, '0.144.0', true).reasons, [
     'APP_SERVER_CLI_VERSION_MISMATCH',
   ])
-  assert.deepEqual(evaluateRuntimeReadiness({ ...config, stateEncryptionKey: undefined }, '0.144.1', true).reasons, [
+  assert.deepEqual(evaluateRuntimeReadiness({ ...config, stateEncryptionKey: undefined }, '0.144.3', true).reasons, [
     'STATE_ENCRYPTION_KEY_MISSING',
   ])
-  assert.deepEqual(evaluateRuntimeReadiness(config, '0.144.1', false).reasons, [
+  assert.deepEqual(evaluateRuntimeReadiness(config, '0.144.3', false).reasons, [
     'APP_SERVER_CLI_UNAVAILABLE',
   ])
-  assert.deepEqual(evaluateRuntimeReadiness({ ...config, codexHome: '' }, '0.144.1', true).reasons, [
+  assert.deepEqual(evaluateRuntimeReadiness({ ...config, codexHome: '' }, '0.144.3', true).reasons, [
     'CODEX_HOME_MISSING',
   ])
   assert.deepEqual(evaluateRuntimeReadiness({
     ...config,
     codexHome: path.join(config.stateDir, 'codex-home'),
-  }, '0.144.1', true).reasons, [
+  }, '0.144.3', true).reasons, [
     'CODEX_HOME_NOT_ISOLATED',
   ])
 })
@@ -60,7 +60,7 @@ test('readiness accepts a filesystem-root allowlist with isolated private paths'
     allowedCwds: [path.parse(root).root],
     workerToken: '',
   })
-  assert.deepEqual(evaluateRuntimeReadiness(config, '0.144.1', true).reasons, [])
+  assert.deepEqual(evaluateRuntimeReadiness(config, '0.144.3', true).reasons, [])
 })
 
 test('readiness rejects unavailable or wholly private workspace roots', t => {
@@ -75,9 +75,9 @@ test('readiness rejects unavailable or wholly private workspace roots', t => {
   assert.deepEqual(evaluateRuntimeReadiness({
     ...config,
     allowedCwds: [path.join(root, 'missing-drive')],
-  }, '0.144.1', true).reasons, ['ALLOWED_CWDS_UNAVAILABLE'])
+  }, '0.144.3', true).reasons, ['ALLOWED_CWDS_UNAVAILABLE'])
   assert.deepEqual(evaluateRuntimeReadiness({
     ...config,
     allowedCwds: [stateDir],
-  }, '0.144.1', true).reasons, ['ALLOWED_CWDS_UNAVAILABLE'])
+  }, '0.144.3', true).reasons, ['ALLOWED_CWDS_UNAVAILABLE'])
 })

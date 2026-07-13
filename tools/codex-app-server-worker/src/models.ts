@@ -87,6 +87,17 @@ export interface UserInputResolvedData {
   reason: 'answered' | 'auto_resolved' | 'cleared'
 }
 
+export interface GeneratedImageData {
+  contract_version: 1
+  artifact_id: string
+  file_name: string
+  local_path: string
+  mime_type: string
+  size_bytes: number
+  sha256: string
+  revised_prompt?: string
+}
+
 export interface EncryptedPayload {
   algorithm: 'aes-256-gcm'
   iv: string
@@ -139,7 +150,7 @@ export interface NativeSubtaskUpdateData {
 
 export interface WorkerEvent {
   type: 'assistant_text' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'native_subtask_update'
-    | 'user_input_request' | 'user_input_resolved'
+    | 'user_input_request' | 'user_input_resolved' | 'image_generation'
   task_id: string
   session_id?: string
   content?: string
@@ -157,6 +168,6 @@ export interface WorkerEvent {
   tool_use_id?: string
   is_error?: boolean
   subtype?: string
-  data?: NativeSubtaskUpdateData | UserInputRequestData | UserInputResolvedData
+  data?: NativeSubtaskUpdateData | UserInputRequestData | UserInputResolvedData | GeneratedImageData
   seq?: number
 }

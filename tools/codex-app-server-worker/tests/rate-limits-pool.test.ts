@@ -155,7 +155,7 @@ test('pool releases invalidation versions after a first quota read fails without
 function testLane(key: string): AppServerLane {
   return {
     key,
-    cliVersion: '0.144.1',
+    cliVersion: '0.144.3',
     authFingerprint: `${key}-auth`,
     codexHomeFingerprint: `${key}-home`,
     baseUrlFingerprint: `${key}-base`,

@@ -40,6 +40,9 @@ export function testConfig(stateDir: string, overrides: Partial<AppConfig> = {})
     abortWaitTimeoutMs: 500,
     turnStallTimeoutMs: 15_000,
     stateDir,
+    imageGenerationMode: 'disabled',
+    imageGenerationOutputDir: path.join(stateDir, 'generated-images'),
+    imageGenerationMaxBytes: 16 * 1024 * 1024,
     stateEncryptionKey: createTestEncryptionKey(),
     defaultModel: 'codex-latest',
     modelAliases: {
