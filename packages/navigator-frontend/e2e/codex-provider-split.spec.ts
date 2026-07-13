@@ -222,6 +222,14 @@ test.describe('Codex provider split acceptance', () => {
     await expect(sdkModels.getByRole('checkbox', { name: 'Max', exact: true })).toHaveCount(3)
     await expect(sdkModels.getByRole('checkbox', { name: 'Ultra', exact: true })).toHaveCount(0)
     await expect(dialog.getByText('Ultra 仅支持 Codex App Server 后端', { exact: true })).toHaveCount(0)
+    await expect(dialog.getByRole('combobox', { name: /连接测试 Worker/ })).toHaveCount(0)
+
+    await dialog.getByRole('button', { name: '测试连接', exact: true }).click()
+    await expect.poll(() => requests.connectionTests).toHaveLength(1)
+    expect(requests.connectionTests[0]).toEqual(expect.objectContaining({
+      workerBackend: 'OPENAI_CODEX',
+      workerId: worker.workerId,
+    }))
 
     await selectBackend(dialog, 'Codex App Server')
     const workerField = dialog.getByRole('combobox', { name: /连接测试 Worker/ })
@@ -236,8 +244,8 @@ test.describe('Codex provider split acceptance', () => {
     await selectModel(dialog, page, /^Ultra$/)
     await dialog.getByRole('button', { name: '测试连接', exact: true }).click()
 
-    await expect.poll(() => requests.connectionTests).toHaveLength(1)
-    expect(requests.connectionTests[0]).toEqual(expect.objectContaining({
+    await expect.poll(() => requests.connectionTests).toHaveLength(2)
+    expect(requests.connectionTests[1]).toEqual(expect.objectContaining({
       baseUrl: '',
       apiKey: '',
       modelName: 'codex-latest:ultra',

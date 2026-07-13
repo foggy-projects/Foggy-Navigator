@@ -7,6 +7,8 @@ import {
   isSelectablePlatformModel,
   normalizeAvailableModelGrants,
   normalizeCodexModelValue,
+  normalizeCodexSdkAvailableModelGrants,
+  normalizeCodexSdkModelValue,
   resolveModelOptions,
 } from '@/utils/llmModelOptions'
 import type { ClaudeWorker, LlmModelConfig, LlmModelCategory, ModelAccessScope, WorkerBackend } from '@/types'
@@ -149,6 +151,17 @@ describe('llmModelOptions', () => {
     expect(normalizeCodexModelValue('codex-fast:high')).toBe('codex-latest:low')
     expect(normalizeCodexModelValue('gpt-5.6-luna:xhigh')).toBe('codex-luna:xhigh')
     expect(normalizeCodexModelValue('gpt-5.7-sol:max')).toBeNull()
+  })
+
+  it('downgrades legacy SDK Ultra selections to Max without changing model family', () => {
+    expect(normalizeCodexSdkModelValue('codex-ultra')).toBe('codex-latest:max')
+    expect(normalizeCodexSdkModelValue('codex-terra:ultra')).toBe('codex-terra:max')
+    expect(normalizeCodexSdkModelValue('codex-luna:high')).toBe('codex-luna:high')
+    expect(normalizeCodexSdkAvailableModelGrants([
+      'codex-ultra',
+      'codex-latest:max',
+      'codex-terra:ultra',
+    ])).toEqual(['codex-latest:max', 'codex-terra:max'])
   })
 
   it('resolveModelOptions filters by canonical and legacy grants without opening the whole family', () => {

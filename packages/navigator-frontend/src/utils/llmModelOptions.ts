@@ -145,6 +145,23 @@ export function normalizeModelValueForBackend(
   return value
 }
 
+/** Downgrade legacy SDK Ultra selections to Max while preserving the family. */
+export function normalizeCodexSdkModelValue(value: string | null | undefined): string {
+  if (!value?.trim()) return ''
+  const normalized = normalizeCodexModelValue(value) ?? value.trim()
+  if (normalized.toLowerCase() === 'codex-ultra') return 'codex-latest:max'
+  return normalized.toLowerCase().endsWith(':ultra')
+    ? `${normalized.slice(0, -':ultra'.length)}:max`
+    : normalized
+}
+
+export function normalizeCodexSdkAvailableModelGrants(
+  values: readonly string[] | null | undefined,
+): string[] {
+  if (!values) return []
+  return [...new Set(values.map(normalizeCodexSdkModelValue).filter(Boolean))]
+}
+
 export function normalizeAvailableModelGrants(
   values: readonly string[] | null | undefined,
   backend: WorkerBackend | undefined,

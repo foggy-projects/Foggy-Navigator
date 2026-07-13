@@ -1026,7 +1026,7 @@ CODEX_APP_SERVER_RUNTIME_REVISION=1
           </el-select>
         </el-form-item>
         <el-form-item
-          v-if="requiresWorkerConnectionTest(llmForm.workerBackend)"
+          v-if="llmForm.workerBackend === 'OPENAI_CODEX_APP_SERVER'"
           label="连接测试 Worker"
           required
         >
@@ -1308,6 +1308,8 @@ import {
   getModelOptionsByBackend,
   groupModelOptions,
   normalizeAvailableModelGrants,
+  normalizeCodexSdkAvailableModelGrants,
+  normalizeCodexSdkModelValue,
   normalizeModelValueForBackend,
 } from '@/utils/llmModelOptions'
 import {
@@ -1731,18 +1733,19 @@ watch(() => llmForm.value.workerBackend, (backend, previousBackend) => {
   const options = getModelOptionsByBackend(backend)
   if (options.length === 0) return
   const optionValues = new Set(options.map(option => option.value))
-  const normalizedModel = normalizeModelValueForBackend(llmForm.value.modelName, backend)
+  const normalizedModel = backend === 'OPENAI_CODEX'
+    ? normalizeCodexSdkModelValue(llmForm.value.modelName)
+    : normalizeModelValueForBackend(llmForm.value.modelName, backend)
   const switchedWithinCodex = isCodexBackend(backend) && isCodexBackend(previousBackend)
-  const sdkUltra = backend === 'OPENAI_CODEX' && isUltraModelValue(normalizedModel)
   llmForm.value.modelName = normalizedModel && optionValues.has(normalizedModel)
     ? normalizedModel
-    : switchedWithinCodex && normalizedModel && !sdkUltra
+    : switchedWithinCodex && normalizedModel
       ? normalizedModel
       : options[0]!.value
-  llmForm.value.availableModels = normalizeAvailableModelGrants(
-    llmForm.value.availableModels,
-    backend,
-  ).filter(model => optionValues.has(model))
+  const normalizedGrants = backend === 'OPENAI_CODEX'
+    ? normalizeCodexSdkAvailableModelGrants(llmForm.value.availableModels)
+    : normalizeAvailableModelGrants(llmForm.value.availableModels, backend)
+  llmForm.value.availableModels = normalizedGrants.filter(model => optionValues.has(model))
 }, { flush: 'sync' })
 
 function applyPreset(preset: (typeof llmPresets)[number]) {
@@ -1768,22 +1771,33 @@ function editLlmModel(row: LlmModelConfig) {
   llmDialogMode.value = 'edit'
   editingLlmId.value = row.id
   hydratingLlmForm = true
+  const legacySdkUltra = row.workerBackend === 'OPENAI_CODEX'
+    && (isUltraModelValue(row.modelName) || row.availableModels?.some(isUltraModelValue))
   llmForm.value = {
     name: row.name,
     category: row.category,
     baseUrl: row.baseUrl,
-    modelName: normalizeModelValueForBackend(row.modelName, row.workerBackend),
+    modelName: row.workerBackend === 'OPENAI_CODEX'
+      ? normalizeCodexSdkModelValue(row.modelName)
+      : normalizeModelValueForBackend(row.modelName, row.workerBackend),
     apiKey: '',
     isDefault: row.isDefault,
     scope: row.scope || 'GLOBAL',
     allowedWorkerIds: row.allowedWorkerIds ? [...row.allowedWorkerIds] : [],
     envVars: row.envVars ? Object.entries(row.envVars).map(([key, value]) => ({ key, value })) : [],
     workerBackend: row.workerBackend,
-    availableModels: normalizeAvailableModelGrants(row.availableModels, row.workerBackend),
+    availableModels: row.workerBackend === 'OPENAI_CODEX'
+      ? normalizeCodexSdkAvailableModelGrants(row.availableModels)
+      : normalizeAvailableModelGrants(row.availableModels, row.workerBackend),
   }
   hydratingLlmForm = false
-  llmTestWorkerId.value = row.allowedWorkerIds?.[0] || ''
+  llmTestWorkerId.value = row.workerBackend === 'OPENAI_CODEX_APP_SERVER'
+    ? row.allowedWorkerIds?.[0] || ''
+    : ''
   showLlmDialog_.value = true
+  if (legacySdkUltra) {
+    ElMessage.warning('旧 OpenAI Codex Ultra 配置已自动调整为同模型族的 Max；Ultra 请改用 Codex App Server')
+  }
 }
 
 async function saveLlm() {
@@ -1870,8 +1884,9 @@ async function handleTestLlm() {
     return
   }
   if (!validateCodexBackendSelection()) return
-  if (requiresWorkerConnectionTest(llmForm.value.workerBackend) && !llmTestWorkerId.value) {
-    ElMessage.warning('测试 Codex 连接前请选择 Worker')
+  const testWorkerId = resolveConnectionTestWorkerId()
+  if (requiresWorkerConnectionTest(llmForm.value.workerBackend) && !testWorkerId) {
+    ElMessage.warning('没有 Worker 提供该模型后端能力')
     return
   }
   testingLlm.value = true
@@ -1881,7 +1896,7 @@ async function handleTestLlm() {
       apiKey: llmForm.value.apiKey,
       modelName: llmForm.value.modelName,
       workerBackend: llmForm.value.workerBackend,
-      workerId: llmTestWorkerId.value || undefined,
+      workerId: testWorkerId,
     })
     ElMessage.success('连接成功: ' + (reply || 'OK'))
   } catch (e: any) {
@@ -1906,6 +1921,19 @@ function isCodexBackend(workerBackend?: import('@/types').WorkerBackend) {
 function requiresWorkerConnectionTest(workerBackend?: import('@/types').WorkerBackend) {
   return workerBackend === 'OPENAI_CODEX'
     || workerBackend === 'OPENAI_CODEX_APP_SERVER'
+}
+
+function resolveConnectionTestWorkerId(): string | undefined {
+  if (llmForm.value.workerBackend === 'OPENAI_CODEX_APP_SERVER') {
+    return llmTestWorkerId.value || undefined
+  }
+  if (llmForm.value.workerBackend !== 'OPENAI_CODEX') return undefined
+  const allowedWorkerIds = llmForm.value.scope === 'RESTRICTED'
+    ? new Set(llmForm.value.allowedWorkerIds)
+    : null
+  return codexCapabilityWorkers.value
+    .find(worker => !allowedWorkerIds || allowedWorkerIds.has(worker.workerId))
+    ?.workerId
 }
 
 function isUltraModelValue(model?: string | null) {
