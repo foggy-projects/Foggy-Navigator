@@ -29,7 +29,7 @@ export type CodexThreadReservation = {
   release: () => void
 }
 
-type ReservationOwner = {
+export type CodexThreadReservationOwner = {
   taskId: string
   acquiredAt: number
 }
@@ -39,7 +39,7 @@ type AcquireOptions = {
   listProcesses?: () => Promise<CodexCliProcessInfo[]>
 }
 
-const reservations = new Map<string, ReservationOwner>()
+const reservations = new Map<string, CodexThreadReservationOwner>()
 
 export async function acquireCodexThreadReservation(
   threadId: string,
@@ -101,7 +101,18 @@ export async function acquireCodexThreadReservation(
   }
 }
 
-export function getCodexThreadReservations(): ReadonlyMap<string, Readonly<ReservationOwner>> {
+export function releaseCodexThreadReservationsForTask(taskId: string): string[] {
+  const releasedThreadIds: string[] = []
+  for (const [threadId, owner] of reservations) {
+    if (owner.taskId === taskId) {
+      reservations.delete(threadId)
+      releasedThreadIds.push(threadId)
+    }
+  }
+  return releasedThreadIds
+}
+
+export function getCodexThreadReservations(): ReadonlyMap<string, Readonly<CodexThreadReservationOwner>> {
   return reservations
 }
 

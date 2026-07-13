@@ -4,18 +4,20 @@
 
 - doc_type: version-index
 - intended_for: root-controller | execution-agent | reviewer | release-owner
-- purpose: 管理会话大消息分层存储、历史按需加载和过期清理的实施与验收。
+- purpose: 管理会话大消息分层存储及 Codex Worker 生命周期修复的实施与验收。
 
 ## 版本状态
 
-- status: planned-reviewed
-- primary_workitem: `OPT-001`
-- implementation_started: no
+- status: in-progress
+- primary_workitems: `OPT-001`, `BUG-001`
+- implementation_started: yes
 - production_migration_started: no
 
 ## 版本目标
 
 在不重新引入 Codex durable stream poison event 的前提下，将大型工具输出从 MySQL 消息正文中分离：MySQL 只保存可检索的消息、预览和载荷描述，完整工具输出保存在可配置的持久化载荷存储中，并由用户主动打开详情时读取。最终 Assistant 回复继续完整保存在消息/任务投影中，默认加载即可完整展示。
+
+同时修复 Codex CLI 被用户主动或意外关闭后，Worker 内存任务与 Thread reservation 未及时回收、导致相同会话无法继续的问题。锁继续由 Worker 管理，Java 侧不新增锁。
 
 ## 成功标准
 
@@ -26,6 +28,7 @@
 5. 载荷写入失败不得阻塞事件 ACK、终态收敛或后续消息持久化；失败必须显式可观察。
 6. 过期清理不删除消息记录，只清理完整载荷并保留 `EXPIRED` 描述状态。
 7. 相关 Java、前端、MySQL 迁移、Playwright 和故障注入测试全部运行通过后，才可进入验收。
+8. Codex Worker 能够安全识别真实 CLI 进程退出并收敛任务、释放 Thread reservation，同时不误释放仍在运行的长任务。
 
 ## 已确认决策
 
@@ -45,3 +48,5 @@
 - [OPT-001 需求与架构边界](./workitems/OPT-001-session-message-large-payload-tiered-storage.md)
 - [OPT-001 实施计划与代码清单](./workitems/OPT-001-session-message-large-payload-tiered-storage-plan.md)
 - [OPT-001 实施进度](./workitems/OPT-001-session-message-large-payload-tiered-storage-progress.md)
+- [BUG-001 Codex CLI 退出后 Thread 锁未自动回收](./workitems/BUG-001-codex-thread-lock-stale-after-cli-exit.md)
+- [BUG-001 Implementation Quality Gate](./quality/BUG-001-codex-thread-lock-stale-fix-quality-review.md)

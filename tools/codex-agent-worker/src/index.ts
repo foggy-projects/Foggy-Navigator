@@ -10,8 +10,23 @@ import tasksRouter from './routes/tasks.js'
 import sessionsRouter from './routes/sessions.js'
 import sessionFileHintsRouter from './routes/session-file-hints.js'
 import { ensureUserAgentsSkillsDir } from './startup/skills-link.js'
+import { abortTask, taskRegistry } from './codex/sdk-wrapper.js'
+import {
+  getCodexThreadReservations,
+  releaseCodexThreadReservationsForTask,
+} from './codex/thread-reservations.js'
+import { CodexThreadProcessWatchdog } from './codex/thread-process-watchdog.js'
 
 const app = express()
+const threadProcessWatchdog = new CodexThreadProcessWatchdog({
+  getTaskEntries: () => taskRegistry.values(),
+  getReservations: getCodexThreadReservations,
+  abortTask,
+  releaseReservationsForTask: releaseCodexThreadReservationsForTask,
+}, {
+  intervalMs: config.threadWatchdogIntervalMs,
+  missingGraceMs: config.threadProcessMissingGraceMs,
+})
 
 // Middleware
 app.use(cors())
@@ -54,18 +69,22 @@ async function bootstrap(): Promise<void> {
     console.log(`  Auth:   ${config.workerToken ? 'Enabled' : 'Disabled'}`)
     console.log(`  Codex:  ${authMode}`)
     console.log(`  MaxTasks: ${config.maxConcurrentTasks}`)
+    console.log(`  ThreadWatchdog: every ${config.threadWatchdogIntervalMs}ms, missing grace ${config.threadProcessMissingGraceMs}ms`)
     console.log(`  CWDs:   ${config.allowedCwds.length > 0 ? config.allowedCwds.join(', ') : 'All allowed'}`)
     console.log('='.repeat(60))
   })
+  threadProcessWatchdog.start()
 
   // Graceful shutdown
   process.on('SIGTERM', () => {
     console.log('SIGTERM received, shutting down...')
+    threadProcessWatchdog.stop()
     server.close(() => process.exit(0))
   })
 
   process.on('SIGINT', () => {
     console.log('SIGINT received, shutting down...')
+    threadProcessWatchdog.stop()
     server.close(() => process.exit(0))
   })
 }

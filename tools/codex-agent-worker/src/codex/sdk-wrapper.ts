@@ -13,6 +13,7 @@ import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
 import { recordSessionFileHintsForEventBestEffort } from '../persistence/session-file-hints.js'
 import { detectSpawnedCodexPid, snapshotCodexCliPids } from './processes.js'
+import { releaseCodexThreadReservationsForTask } from './thread-reservations.js'
 import {
   buildNavigatorBusinessMcpConfig,
   buildNavigatorBusinessMcpEnv,
@@ -1381,13 +1382,14 @@ export async function runQuery(
 /**
  * Abort a running task
  */
-export function abortTask(taskId: string): boolean {
+export function abortTask(taskId: string, reason = 'Task aborted'): boolean {
   const entry = taskRegistry.get(taskId)
   if (!entry || entry.status !== 'running') return false
 
-  entry.abortController?.abort()
+  entry.abortController?.abort(reason)
   entry.status = 'aborted'
   entry.completedAt = Date.now()
+  releaseCodexThreadReservationsForTask(taskId)
 
   return true
 }

@@ -19,6 +19,8 @@ test('createConfig normalizes placeholder api key and valid defaults', () => {
   assert.equal(config.logLevel, 'warn')
   assert.equal(config.codexBizHomeRoot, '')
   assert.equal(config.navigatorWorkerGatewayBaseUrl, 'http://localhost:8080')
+  assert.equal(config.threadWatchdogIntervalMs, 5_000)
+  assert.equal(config.threadProcessMissingGraceMs, 10_000)
 })
 
 test('createConfig rejects invalid port', () => {
@@ -49,6 +51,22 @@ test('createConfig parses max concurrent tasks and rejects invalid values', () =
   assert.throws(() => createConfig({
     CODEX_MAX_CONCURRENT_TASKS: '0',
   }), /CODEX_MAX_CONCURRENT_TASKS must be between 1 and 32/)
+})
+
+test('createConfig parses thread watchdog timing and rejects unsafe values', () => {
+  const config = createConfig({
+    CODEX_THREAD_WATCHDOG_INTERVAL_MS: '1500',
+    CODEX_THREAD_PROCESS_MISSING_GRACE_MS: '9000',
+  })
+
+  assert.equal(config.threadWatchdogIntervalMs, 1500)
+  assert.equal(config.threadProcessMissingGraceMs, 9000)
+  assert.throws(() => createConfig({
+    CODEX_THREAD_WATCHDOG_INTERVAL_MS: '100',
+  }), /CODEX_THREAD_WATCHDOG_INTERVAL_MS must be between 250 and 60000/)
+  assert.throws(() => createConfig({
+    CODEX_THREAD_PROCESS_MISSING_GRACE_MS: '500',
+  }), /CODEX_THREAD_PROCESS_MISSING_GRACE_MS must be between 1000 and 300000/)
 })
 
 test('createConfig falls back to alias codex-latest when CODEX_DEFAULT_MODEL is unset', () => {

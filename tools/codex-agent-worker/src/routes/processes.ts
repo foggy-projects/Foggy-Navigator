@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express'
-import { taskRegistry } from '../codex/sdk-wrapper.js'
+import { abortTask, taskRegistry } from '../codex/sdk-wrapper.js'
 import {
   CodexProcessKillError,
   extractResumedThreadId,
@@ -8,6 +8,16 @@ import {
 } from '../codex/processes.js'
 
 const router = Router()
+
+export function abortTaskBoundToProcess(
+  pid: number,
+  taskEntries: Iterable<{ taskId: string; pid?: number; status: string }>,
+  abort: (taskId: string, reason: string) => boolean = abortTask,
+): string | undefined {
+  const task = [...taskEntries].find(entry => entry.pid === pid && entry.status === 'running')
+  if (!task) return undefined
+  return abort(task.taskId, `Codex CLI process ${pid} was terminated`) ? task.taskId : undefined
+}
 
 router.get('/api/v1/processes', async (_req: Request, res: Response) => {
   try {
@@ -56,19 +66,23 @@ router.post('/api/v1/processes/:pid/kill', async (req: Request, res: Response) =
     }
 
     await killCodexCliProcess(pid, force)
+    const abortedTaskId = abortTaskBoundToProcess(pid, taskRegistry.values())
     res.json({
       pid,
       status: 'killed',
       message: `Process ${pid} terminated ${force ? 'forcefully' : 'gracefully'}`,
+      task_id: abortedTaskId,
     })
   } catch (error: any) {
     try {
       const remainingProcesses = await listCodexCliProcesses()
       if (!remainingProcesses.some(processInfo => processInfo.pid === pid)) {
+        const abortedTaskId = abortTaskBoundToProcess(pid, taskRegistry.values())
         res.json({
           pid,
           status: 'not_found',
           message: `Process ${pid} no longer exists`,
+          task_id: abortedTaskId,
         })
         return
       }

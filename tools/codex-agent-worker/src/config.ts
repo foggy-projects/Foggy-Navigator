@@ -17,6 +17,8 @@ export interface AppConfig {
   workerToken: string
   allowedCwds: string[]
   maxConcurrentTasks: number
+  threadWatchdogIntervalMs: number
+  threadProcessMissingGraceMs: number
   logLevel: 'debug' | 'info' | 'warn' | 'error'
   /** Root directory for per-account/actor CODEX_HOME folders. Empty disables codex_home_key requests. */
   codexBizHomeRoot: string
@@ -172,6 +174,24 @@ function parseMaxConcurrentTasks(rawValue: string | undefined): number {
   return parsed
 }
 
+function parseBoundedMilliseconds(
+  rawValue: string | undefined,
+  field: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = (rawValue || String(fallback)).trim()
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`${field} must be an integer`)
+  }
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${field} must be between ${minimum} and ${maximum}`)
+  }
+  return parsed
+}
+
 /**
  * 解析 CODEX_DEFAULT_MODEL，保持 runtime 行为稳定：
  * - 空值：回落到 alias `codex-latest`
@@ -277,6 +297,20 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     workerToken: parseToken(env.CODEX_WORKER_TOKEN),
     allowedCwds: parseAllowedCwds(env.CODEX_ALLOWED_CWDS),
     maxConcurrentTasks: parseMaxConcurrentTasks(env.CODEX_MAX_CONCURRENT_TASKS),
+    threadWatchdogIntervalMs: parseBoundedMilliseconds(
+      env.CODEX_THREAD_WATCHDOG_INTERVAL_MS,
+      'CODEX_THREAD_WATCHDOG_INTERVAL_MS',
+      5_000,
+      250,
+      60_000,
+    ),
+    threadProcessMissingGraceMs: parseBoundedMilliseconds(
+      env.CODEX_THREAD_PROCESS_MISSING_GRACE_MS,
+      'CODEX_THREAD_PROCESS_MISSING_GRACE_MS',
+      10_000,
+      1_000,
+      300_000,
+    ),
     logLevel: parseLogLevel(env.CODEX_LOG_LEVEL),
     codexBizHomeRoot: parseOptionalAbsolutePath(env.CODEX_BIZ_HOME_ROOT, 'CODEX_BIZ_HOME_ROOT'),
     navigatorWorkerGatewayBaseUrl: parseHttpUrl(
