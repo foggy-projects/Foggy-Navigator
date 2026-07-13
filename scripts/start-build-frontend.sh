@@ -19,6 +19,7 @@ DIST_DIR="$FRONTEND_DIR/dist"
 DOCKER_DIR="$REPO_ROOT/docker"
 CONTAINER_NAME="foggy-navigator-nginx"
 NGINX_PORT=80
+NGINX_HEALTH_TIMEOUT=40
 LOG_DIR="$REPO_ROOT/logs"
 LOCKFILE="$REPO_ROOT/pnpm-lock.yaml"
 MODULES_META="$REPO_ROOT/node_modules/.modules.yaml"
@@ -53,6 +54,26 @@ needs_pnpm_install() {
         fi
     done
 
+    return 1
+}
+
+wait_for_nginx_health() {
+    local attempt state health
+
+    for ((attempt = 1; attempt <= NGINX_HEALTH_TIMEOUT; attempt++)); do
+        state="$(docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+        health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+
+        if [ "$state" = "running" ] && [ "$health" = "healthy" ]; then
+            return 0
+        fi
+
+        sleep 1
+    done
+
+    echo -e "${RED}  Nginx did not become healthy within ${NGINX_HEALTH_TIMEOUT}s (state: ${state:-missing}, health: ${health:-unknown}).${NC}"
+    echo -e "${GRAY}  Recent container logs:${NC}"
+    docker logs --tail 30 "$CONTAINER_NAME" 2>&1 || true
     return 1
 }
 
@@ -180,9 +201,9 @@ else
     exit 1
 fi
 
-# Verify container is healthy
-sleep 1
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
+# Verify the configured health endpoint returns HTTP 200 before reporting success.
+echo -e "${GRAY}  Waiting for Nginx health check (up to ${NGINX_HEALTH_TIMEOUT}s)...${NC}"
+if wait_for_nginx_health; then
     echo ""
     echo -e "${GREEN}╔════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║  Frontend (Nginx) Started Successfully!        ║${NC}"
@@ -197,6 +218,6 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; 
     echo -e "${GRAY}  Stop:       docker rm -f ${CONTAINER_NAME}${NC}"
     echo ""
 else
-    echo -e "${RED}  Container failed to start! Check: docker logs ${CONTAINER_NAME}${NC}"
+    echo -e "${RED}  Frontend/Nginx startup failed.${NC}"
     exit 1
 fi
