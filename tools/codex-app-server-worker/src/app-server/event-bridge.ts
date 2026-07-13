@@ -273,10 +273,10 @@ export function stableAppServerTurnErrorCode(value: unknown): string {
 export function detectToolCapabilityFailure(assistantText: string | undefined): string | undefined {
   if (!assistantText?.trim()) return undefined
   const normalized = assistantText.toLowerCase().replace(/\s+/g, ' ')
-  const referencesExecutionTools = /functions?\.exec|shell\s*\/\s*文件操作工具|shell(?:\s+or\s+|\s*\/\s*)file operation tools?|shell tools?|file operation tools?/.test(normalized)
-  const reportsUnavailable = /不再可用|无法使用|不可用|未暴露|没有暴露|no longer available|unavailable|not available|not exposed|missing/.test(normalized)
-  const reportsBlockedContinuation = /无法继续|不能继续|无法运行|无法修改|cannot continue|can't continue|unable to continue|cannot run|can't run|cannot modify|can't modify/.test(normalized)
-  const onlyImageGenerationRemains = /仅(?:暴露|剩下|可用).{0,24}图片生成工具|only.{0,32}image generation tool.{0,16}(?:available|exposed|remain)/.test(normalized)
+  const referencesExecutionTools = /functions?\.exec|shell|terminal|workspace|文件(?:读取|写入|读写|操作)工具|执行工具|file (?:read|write|operation) tools?/.test(normalized)
+  const reportsUnavailable = /仍未恢复|尚未恢复|不再可用|无法使用|不可用|未暴露|没有暴露|没有 shell|没有.{0,16}文件编辑能力|工具列表仍只有|no longer available|unavailable|not available|not exposed|missing|not restored/.test(normalized)
+  const reportsBlockedContinuation = /无法继续|不能继续|无法运行|无法修改|仓库尚未修改|未修改.{0,16}(?:仓库|项目文件|文件)|需要重新开启|需要重建|后才能继续|cannot continue|can't continue|unable to continue|cannot run|can't run|cannot modify|can't modify|repository (?:is )?(?:still )?unmodified|need to (?:reopen|rebuild|start) a new/.test(normalized)
+  const onlyImageGenerationRemains = /(?:仅|只|只能|仅能).{0,16}(?:调用|使用|暴露|剩下|可用).{0,24}(?:图片|图像)生成工具|工具列表仍只有.{0,16}image_gen|only.{0,32}image generation tool.{0,16}(?:available|exposed|remain|can be (?:called|used))/.test(normalized)
   return reportsBlockedContinuation
     && ((referencesExecutionTools && reportsUnavailable) || onlyImageGenerationRemains)
     ? 'APP_SERVER_TOOL_CAPABILITY_UNAVAILABLE'

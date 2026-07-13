@@ -438,7 +438,7 @@ class CapabilityLossRuntime implements PoolRuntimeInstance {
         item: {
           id: 'message-capability-loss',
           type: 'agentMessage',
-          text: 'Shell/文件操作工具 `functions.exec` 不再可用，因此无法继续修改文件。',
+          text: '仍未恢复：当前会话依然只能调用图像生成工具；shell、文件读取和写入工具仍未暴露。因此仓库尚未修改。需要重新开启带 workspace/terminal 工具的 Codex 会话后再继续执行。',
         },
       },
     })
