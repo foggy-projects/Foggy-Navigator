@@ -6,7 +6,7 @@
     </div>
     <div
       ref="contentRef"
-      :class="['bubble-content', 'markdown-body', { 'content-collapsed': isLongAssistantMessage && !expanded }]"
+      class="bubble-content markdown-body"
       v-html="renderedContent"
     ></div>
     <ExecutionReportInline
@@ -48,12 +48,6 @@
         @click.stop="emit('view-records')"
       >&#128196; 查看记录</span>
       <span
-        v-if="isLongAssistantMessage"
-        class="action-btn"
-        :title="expanded ? '收起完整正文' : '展开完整正文'"
-        @click.stop="expanded = !expanded"
-      >{{ expanded ? '&#9650; 收起全文' : '&#9660; 展开全文' }}</span>
-      <span
         v-if="rewindable"
         class="action-btn"
         title="回退到此"
@@ -64,7 +58,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { AipMessageType } from '../types/aip'
 import type { ChatMessage } from '../types/chat'
 import { copyToClipboard } from '../utils/clipboard'
@@ -116,19 +110,6 @@ function cleanContent(content: string): string {
 }
 
 const isStreaming = computed(() => props.message.type === AipMessageType.TEXT_CHUNK)
-
-// Keep the main conversation scannable when an Agent returns a full work log.
-// The original text stays mounted (so copy/search behavior is unchanged) and
-// can be expanded in-place or reviewed in the session-record dialog.
-const isLongAssistantMessage = computed(() => (
-  props.message.sender === 'assistant'
-    && !isStreaming.value
-    && cleanContent(props.message.content || '').length > 1600
-))
-const expanded = ref(false)
-watch(() => props.message.id, () => {
-  expanded.value = false
-})
 
 const renderedContent = computed(() => {
   return renderMarkdown(props.message.id, cleanContent(props.message.content || ''), isStreaming.value)
@@ -233,23 +214,6 @@ onBeforeUnmount(() => {
 .bubble-content {
   word-break: break-word;
   line-height: 1.6;
-}
-
-.bubble-content.content-collapsed {
-  position: relative;
-  max-height: 360px;
-  overflow: hidden;
-}
-
-.bubble-content.content-collapsed::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 56px;
-  pointer-events: none;
-  background: linear-gradient(to bottom, rgba(245, 245, 245, 0), #f5f5f5 82%);
 }
 
 .bubble-content :deep(p) {
