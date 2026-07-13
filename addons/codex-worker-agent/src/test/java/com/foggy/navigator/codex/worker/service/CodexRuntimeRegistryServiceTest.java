@@ -127,6 +127,39 @@ class CodexRuntimeRegistryServiceTest {
     }
 
     @Test
+    void endpointSyncRestoresArchivedRuntimeWhenCapabilityFingerprintIsUnchanged() throws Exception {
+        CodexAppServerEndpointEntity endpoint = endpoint("endpoint-0123456789abcdef");
+        Map<String, Object> manifest = topLevelManifest("codex-app-server-primary", 2,
+                CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
+        CodexRuntimeEntity archived = runtime("DARK", 0);
+        archived.setRuntimeId("appserver-0123456789abcdef");
+        archived.setRuntimeSource("ENDPOINT_SYNC");
+        archived.setEndpointId(endpoint.getEndpointId());
+        archived.setReportedRuntimeId("codex-app-server-primary");
+        archived.setReportedRuntimeRevision(2);
+        archived.setArchivedAt(LocalDateTime.of(2026, 7, 13, 20, 0));
+        archived.setCapabilityFingerprint(ReflectionTestUtils.invokeMethod(
+                service, "capabilityFingerprint", endpoint, manifest, "instance-a"));
+        when(endpointRepository.findByEndpointIdForUpdate(endpoint.getEndpointId()))
+                .thenReturn(Optional.of(endpoint));
+        when(repository.findByEndpointIdOrderByRevisionDesc(endpoint.getEndpointId()))
+                .thenReturn(List.of(archived));
+        when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
+        when(client.probeCapabilities()).thenReturn(Mono.just(probe(manifest)));
+
+        var result = service.synchronizeEndpoint(endpoint.getEndpointId());
+
+        assertEquals(false, result.getRuntimeCreated());
+        assertEquals(true, result.getRuntimeRestored());
+        assertFalse(result.getRuntime().getArchived());
+        assertEquals(false, result.getRuntime().getEnabled());
+        assertEquals("DARK", result.getRuntime().getRoutingPolicy());
+        assertEquals(0, result.getRuntime().getRolloutPercentage());
+        assertEquals(2L, result.getRuntime().getRoutingEpoch());
+        verify(repository, never()).findMaxRevision(anyString());
+    }
+
+    @Test
     void routingCannotJumpDirectlyFromDarkToAllDefault() {
         CodexRuntimeEntity entity = runtime("DARK", 0);
         when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1)).thenReturn(Optional.of(entity));

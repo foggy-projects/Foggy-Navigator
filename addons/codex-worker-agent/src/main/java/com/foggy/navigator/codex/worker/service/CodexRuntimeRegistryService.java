@@ -148,6 +148,7 @@ public class CodexRuntimeRegistryService {
             return CodexAppServerEndpointSyncDTO.builder()
                     .endpoint(toEndpointDTO(endpoint))
                     .runtimeCreated(false)
+                    .runtimeRestored(false)
                     .build();
         }
 
@@ -158,19 +159,32 @@ public class CodexRuntimeRegistryService {
                 .filter(entity -> "ENDPOINT_SYNC".equals(entity.getRuntimeSource()))
                 .findFirst()
                 .orElse(null);
-        boolean created = current == null || !fingerprint.equals(current.getCapabilityFingerprint());
+        CodexRuntimeEntity matching = revisions.stream()
+                .filter(entity -> "ENDPOINT_SYNC".equals(entity.getRuntimeSource()))
+                .filter(entity -> fingerprint.equals(entity.getCapabilityFingerprint()))
+                .findFirst()
+                .orElse(null);
+        boolean created = matching == null;
         CodexRuntimeEntity runtime;
         if (created) {
             runtime = createSyncedRuntime(endpoint, manifest, fingerprint);
-            if (current != null && current.getArchivedAt() == null) {
-                current.setEnabled(false);
-                current.setRoutingPolicy(CodexRuntimeRoutingPolicy.DRAINING.name());
-                current.setRolloutPercentage(0);
-                current.setRoutingEpoch(current.getRoutingEpoch() + 1);
-                runtimeRepository.save(current);
-            }
         } else {
-            runtime = current;
+            runtime = matching;
+        }
+        if (current != null && current != runtime && current.getArchivedAt() == null) {
+            current.setEnabled(false);
+            current.setRoutingPolicy(CodexRuntimeRoutingPolicy.DRAINING.name());
+            current.setRolloutPercentage(0);
+            current.setRoutingEpoch(current.getRoutingEpoch() + 1);
+            runtimeRepository.save(current);
+        }
+        boolean restored = runtime.getArchivedAt() != null;
+        if (restored) {
+            runtime.setEnabled(false);
+            runtime.setRoutingPolicy(CodexRuntimeRoutingPolicy.DARK.name());
+            runtime.setRolloutPercentage(0);
+            runtime.setArchivedAt(null);
+            runtime.setRoutingEpoch(runtime.getRoutingEpoch() + 1);
         }
 
         try {
@@ -190,6 +204,7 @@ public class CodexRuntimeRegistryService {
                 .endpoint(toEndpointDTO(endpoint))
                 .runtime(toDTO(runtime))
                 .runtimeCreated(created)
+                .runtimeRestored(restored)
                 .build();
     }
 

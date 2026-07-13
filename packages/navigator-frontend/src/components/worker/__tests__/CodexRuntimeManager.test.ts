@@ -198,6 +198,40 @@ describe('CodexRuntimeManager', () => {
     expect(ElMessage.success).toHaveBeenCalledWith('Endpoint 已同步，已创建新的 Dark Runtime')
   })
 
+  it('reports when endpoint sync restores a matching archived runtime', async () => {
+    const endpoint = {
+      endpointId: 'endpoint-1',
+      workerId: 'worker-1',
+      endpointUrl: 'http://192.168.31.119:3071',
+      endpointDisplay: 'http://192.168.31.119:3071',
+      tokenConfigured: false,
+      configurationVersion: 1,
+      lastSyncStatus: 'READY',
+      createdAt: '2026-07-10T10:00:00',
+      updatedAt: '2026-07-10T10:00:00',
+    }
+    vi.mocked(runtimeApi.listCodexAppServerEndpoints).mockResolvedValue([endpoint])
+    vi.mocked(runtimeApi.syncCodexAppServerEndpoint).mockResolvedValue({
+      endpoint: { ...endpoint, lastRuntimeId: 'appserver-1', lastRuntimeRevision: 1 },
+      runtime: makeRuntime({ runtimeId: 'appserver-1', readinessStatus: 'READY', archived: false }),
+      runtimeCreated: false,
+      runtimeRestored: true,
+    })
+    wrapper = mount(CodexRuntimeManager, {
+      props: { workerId: 'worker-1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.get('[aria-label="同步 http://192.168.31.119:3071"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('appserver-1')
+    expect(ElMessage.success).toHaveBeenCalledWith(
+      'Endpoint 已同步，已恢复归档 Runtime 为 Disabled + Dark',
+    )
+  })
+
   it('saves an open HTTP Endpoint when the Worker token is blank', async () => {
     vi.mocked(runtimeApi.createCodexAppServerEndpoint).mockResolvedValue({
       endpointId: 'endpoint-no-token',
