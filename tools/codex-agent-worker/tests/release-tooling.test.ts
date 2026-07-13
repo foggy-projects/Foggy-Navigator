@@ -25,7 +25,7 @@ import {
   compareSemver,
   verifyPublishedRelease,
 } from '../scripts/publish-obs.mjs'
-import { resolveSmokeLevel, verifyArchiveStructure } from '../scripts/release-smoke.mjs'
+import { removeSmokeTempDirectory, resolveSmokeLevel, verifyArchiveStructure } from '../scripts/release-smoke.mjs'
 import { resolveReleaseVersion } from '../scripts/release-version.mjs'
 
 function makeReleaseTree(root: string, version = '1.2.3') {
@@ -108,6 +108,14 @@ test('auto smoke skips documentation-only changes and escalates release/runtime 
   assert.equal(resolveSmokeLevel('auto', ['release/install.sh']), 'full')
   assert.equal(resolveSmokeLevel('auto', ['src/codex/sdk-wrapper.ts']), 'full')
   assert.equal(resolveSmokeLevel('basic', ['release/install.sh']), 'basic')
+})
+
+test('release smoke cleanup removes an extracted candidate tree', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-worker-smoke-cleanup-'))
+  fs.mkdirSync(path.join(root, 'codex-worker', 'node_modules', 'package'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'codex-worker', 'node_modules', 'package', 'index.js'), 'export {}\n')
+  removeSmokeTempDirectory(root)
+  assert.equal(fs.existsSync(root), false)
 })
 
 test('release assets include integrity, evidence, and exact bootstrap URL injection', () => {

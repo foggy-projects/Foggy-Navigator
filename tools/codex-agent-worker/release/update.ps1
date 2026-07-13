@@ -143,17 +143,22 @@ function Invoke-NpmInstallWithRegistryFallback {
 function Test-WorkerHealth {
     param([int]$ListenPort, [int]$TimeoutSec = 30)
 
+    $healthUrls = @(
+        "http://127.0.0.1:$ListenPort/health"
+        "http://localhost:$ListenPort/health"
+    )
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        try {
-            $resp = Invoke-RestMethod -Uri "http://localhost:$ListenPort/health" -TimeoutSec 3 -ErrorAction Stop
-            if ($resp.status -eq "ok" -and $resp.codex_sdk_available -eq $true -and $resp.codex_sdk_compatible -eq $true) {
-                return @{ ok = $true; body = ($resp | ConvertTo-Json -Compress) }
+        foreach ($url in $healthUrls) {
+            try {
+                $resp = Invoke-RestMethod -Uri $url -TimeoutSec 3 -ErrorAction Stop
+                if ($resp.status -eq "ok" -and $resp.codex_sdk_available -eq $true -and $resp.codex_sdk_compatible -eq $true) {
+                    return @{ ok = $true; body = ($resp | ConvertTo-Json -Compress) }
+                }
             }
+            catch { }
         }
-        catch {
-            Start-Sleep -Seconds 1
-        }
+        Start-Sleep -Seconds 1
     }
     return @{ ok = $false; body = "" }
 }

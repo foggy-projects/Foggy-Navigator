@@ -51,13 +51,19 @@ function Get-WorkerPids {
 function Test-WorkerHealth {
     param([int]$ListenPort, [int]$TimeoutSec = 30)
 
+    $healthUrls = @(
+        "http://127.0.0.1:$ListenPort/health"
+        "http://localhost:$ListenPort/health"
+    )
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        try {
-            $response = Invoke-RestMethod -Uri "http://localhost:$ListenPort/health" -TimeoutSec 3 -ErrorAction Stop
-            if ($response.status -eq "ok") { return $true }
+        foreach ($url in $healthUrls) {
+            try {
+                $response = Invoke-RestMethod -Uri $url -TimeoutSec 3 -ErrorAction Stop
+                if ($response.status -eq "ok") { return $true }
+            }
+            catch { }
         }
-        catch { }
         Start-Sleep -Seconds 1
     }
     return $false

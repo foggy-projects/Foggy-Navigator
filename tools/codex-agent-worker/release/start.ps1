@@ -109,22 +109,40 @@ $process = Start-Process -FilePath "node" -ArgumentList "dist/index.js" `
 Write-Host "  PID: $($process.Id)" -ForegroundColor Green
 
 Write-Host "`n[4/4] Waiting for worker to be ready..." -ForegroundColor Yellow
-$maxWait = 30
+$maxWait = 60
 $waited = 0
 $ready = $false
+$healthUrls = @(
+    "http://127.0.0.1:$PORT/health"
+    "http://localhost:$PORT/health"
+)
+
+function Test-WorkerHealth {
+    param(
+        [string[]]$Urls
+    )
+
+    foreach ($url in $Urls) {
+        try {
+            $health = Invoke-RestMethod -Uri $url -TimeoutSec 2 -ErrorAction Stop
+            if ($health.status -eq "ok" -and $health.codex_sdk_available -eq $true -and $health.codex_sdk_compatible -eq $true) {
+                return $true
+            }
+        }
+        catch {
+        }
+    }
+
+    return $false
+}
 
 while ($waited -lt $maxWait) {
     Start-Sleep -Seconds 1
     $waited++
 
-    try {
-        $health = Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction Stop
-        if ($health.status -eq "ok" -and $health.codex_sdk_available -eq $true -and $health.codex_sdk_compatible -eq $true) {
-            $ready = $true
-            break
-        }
-    }
-    catch {
+    if (Test-WorkerHealth -Urls $healthUrls) {
+        $ready = $true
+        break
     }
 
     $process.Refresh()
@@ -151,10 +169,7 @@ if ($ready) {
         }
         exit 1
     }
-    try {
-        Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction Stop | Out-Null
-    }
-    catch {
+    if (-not (Test-WorkerHealth -Urls $healthUrls)) {
         Write-Host "`n  Worker health failed after readiness!" -ForegroundColor Red
         if (Test-Path $errFile) {
             Write-Host "`n  Error log:" -ForegroundColor Red

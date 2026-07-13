@@ -141,6 +141,36 @@ async function availablePort() {
   })
 }
 
+async function stopCandidate(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  const waitForExit = timeoutMs => new Promise(resolve => {
+    const onExit = () => {
+      clearTimeout(timer)
+      resolve(true)
+    }
+    const timer = setTimeout(() => {
+      child.off('exit', onExit)
+      resolve(false)
+    }, timeoutMs)
+    child.once('exit', onExit)
+    if (child.exitCode !== null || child.signalCode !== null) onExit()
+  })
+  child.kill('SIGTERM')
+  if (await waitForExit(2_000)) return
+  child.kill('SIGKILL')
+  if (!await waitForExit(2_000)) throw new Error('Candidate worker did not stop after SIGKILL')
+}
+
+export function removeSmokeTempDirectory(root) {
+  const result = process.platform === 'win32'
+    ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `rmdir /s /q "${root}"`], { stdio: 'ignore' })
+    : spawnSync('rm', ['-rf', root], { stdio: 'ignore' })
+  if (result.error) throw result.error
+  if (result.status !== 0 || fs.existsSync(root)) {
+    throw new Error(`Failed to remove release smoke directory: ${root}`)
+  }
+}
+
 async function runFullSmoke(outputDir, version) {
   const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux'
   const archivePath = path.join(outputDir, archiveName(version, platform))
@@ -184,12 +214,8 @@ async function runFullSmoke(outputDir, version) {
     const detail = logs.trim() ? `\nCandidate logs:\n${logs.slice(-4_000)}` : ''
     throw new Error(`${error instanceof Error ? error.message : String(error)}${detail}`)
   } finally {
-    if (child && child.exitCode === null) {
-      child.kill('SIGTERM')
-      await new Promise(resolve => setTimeout(resolve, 300))
-      if (child.exitCode === null) child.kill('SIGKILL')
-    }
-    fs.rmSync(tempRoot, { recursive: true, force: true })
+    await stopCandidate(child)
+    removeSmokeTempDirectory(tempRoot)
   }
 }
 
