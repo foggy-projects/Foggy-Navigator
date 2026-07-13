@@ -292,10 +292,14 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
                 acc.inputTokens = event.getInputTokens();
                 acc.outputTokens = event.getOutputTokens();
                 acc.numTurns = event.getNumTurns();
-            } else if ("assistant_text".equals(event.getType())) {
-                if (event.getContent() != null) {
-                    acc.assistantText.append(event.getContent());
-                }
+            } else if ("assistant_text".equals(event.getType())
+                    && !"text_delta".equals(event.getSubtype())
+                    && !"commentary".equals(event.getSubtype())) {
+                // App Server text_delta carries only an incremental fragment;
+                // the subsequent completed item carries the complete answer.
+                // Keep the latest completed item instead of joining every
+                // assistant event from the thread into one giant result.
+                acc.assistantText = event.getContent();
             } else if ("error".equals(event.getType())) {
                 acc.errorEventObserved = true;
                 acc.error = event.getError();
@@ -344,7 +348,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
         private boolean resultEventObserved;
         private boolean errorEventObserved;
         private int eventCount;
-        private final StringBuilder assistantText = new StringBuilder();
+        private String assistantText;
 
         private SyncQueryAccumulator(String initialCodexThreadId, String workerTaskId) {
             this.codexThreadId = initialCodexThreadId;
@@ -355,7 +359,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
             if (resultText != null) {
                 return resultText;
             }
-            return assistantText.isEmpty() ? null : assistantText.toString();
+            return assistantText;
         }
 
     }

@@ -165,6 +165,8 @@ export interface WorkerEvent {
   num_turns?: number
   model?: string
   error?: string
+  /** Stable text-stream identity for associating an App Server item's deltas and completion. */
+  stream_id?: string
   tool_use_id?: string
   is_error?: boolean
   subtype?: string

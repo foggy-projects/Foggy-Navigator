@@ -95,6 +95,32 @@ class CodexWorkerFacadeImplTest {
     }
 
     @Test
+    void syncQueryUsesLatestCompletedAssistantItemInsteadOfJoiningDeltas() {
+        mockSdkWorker();
+        when(taskService.createTrackedSyncTask(
+                "user-1", "worker-1", null, "check repo", "D:/repo", null,
+                "thread-0", "gpt-5.6-sol"))
+                .thenReturn("local-task-1");
+        when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("thread-0"),
+                eq("gpt-5.6-sol"), eq(2), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(Flux.just(
+                        sse("""
+                                {"type":"assistant_text","subtype":"text_delta","task_id":"worker-task-9","session_id":"thread-1","content":"old fragment"}
+                                """),
+                        sse("""
+                                {"type":"assistant_text","subtype":"commentary","task_id":"worker-task-9","session_id":"thread-1","content":"working"}
+                                """),
+                        sse("""
+                                {"type":"assistant_text","task_id":"worker-task-9","session_id":"thread-1","content":"LATEST_COMPLETED_ITEM"}
+                                """)));
+
+        Map<String, Object> result = facade.syncQuery(
+                "user-1", "worker-1", "check repo", "D:/repo", "thread-0", 2, null);
+
+        assertEquals("LATEST_COMPLETED_ITEM", result.get("resultText"));
+    }
+
+    @Test
     void trackedSdkQueryPersistsTerminalResult() {
         mockSdkWorker();
         when(taskService.createTrackedSyncTask(

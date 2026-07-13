@@ -59,6 +59,7 @@
         @plan-respond="handlePlanRespond"
         @question-respond="handleQuestionRespond"
         @permission-respond="handlePermissionRespond"
+        @view-records="showMessageRecords"
       />
     </view>
 
@@ -129,12 +130,63 @@
       @close="codexModelPickerVisible = false"
       @select="selectResumeModel"
     />
+
+    <!-- Keep the main chat compact; this independent viewer exposes every
+         persisted/live message as a readable line item when needed. -->
+    <view v-if="messageRecordsVisible" class="message-record-overlay">
+      <view class="message-record-dialog">
+        <view class="message-record-header">
+          <view>
+            <text class="message-record-title">逐条记录</text>
+            <text class="message-record-subtitle">按消息时间顺序展示</text>
+          </view>
+          <text class="message-record-close" @tap="hideMessageRecords">关闭</text>
+        </view>
+
+        <view class="message-record-identifiers">
+          <view class="record-identifier-row">
+            <view class="record-identifier-copy">
+              <text class="record-identifier-label">Session ID</text>
+              <text class="record-identifier-value" selectable>{{ recordSessionId }}</text>
+            </view>
+            <text class="record-copy-button" @tap="copyRecordIdentifier('Session ID', recordSessionId)">复制</text>
+          </view>
+          <view class="record-identifier-row">
+            <view class="record-identifier-copy">
+              <text class="record-identifier-label">Codex Thread ID</text>
+              <text class="record-identifier-value" selectable>{{ recordCodexThreadId }}</text>
+            </view>
+            <text class="record-copy-button" @tap="copyRecordIdentifier('Codex Thread ID', recordCodexThreadId)">复制</text>
+          </view>
+        </view>
+
+        <scroll-view scroll-y class="message-record-list">
+          <view v-if="messageRecordsLoading" class="message-record-loading">
+            <text>正在加载完整会话记录…</text>
+          </view>
+          <view v-if="messageRecordsError" class="message-record-error">
+            <text>{{ messageRecordsError }}</text>
+          </view>
+          <view v-if="recordMessages.length === 0" class="message-record-empty">
+            <text>暂无可查看的消息记录</text>
+          </view>
+          <view v-for="message in recordMessages" :key="message.id" class="message-record-item">
+            <view class="message-record-meta">
+              <text class="message-record-role">{{ recordRoleLabel(message.sender) }}</text>
+              <text class="message-record-time">{{ formatRecordTime(message.timestamp) }}</text>
+            </view>
+            <text class="message-record-content" selectable>{{ recordMessageText(message) }}</text>
+          </view>
+        </scroll-view>
+      </view>
+    </view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
+import type { ChatMessage } from '@foggy/chat-core'
 import { useTaskStream } from '@/composables/useTaskStream'
 import { useInputMemory } from '@/composables/useInputMemory'
 import { useSessionModelCache } from '@/composables/useSessionModelCache'
@@ -158,6 +210,7 @@ import MessageList from '@/components/MessageList.vue'
 import ChatInput from '@/components/ChatInput.vue'
 import CodexModelPicker from '@/components/CodexModelPicker.vue'
 import { formatDuration } from '@/utils/time'
+import { copyTextToClipboard } from '@/utils/clipboard'
 import { canResumeTask, executeTaskContinuation } from '@/utils/taskContinuation'
 import {
   isMobileSelectablePlatformModel,
@@ -185,6 +238,11 @@ const codexModelPickerVisible = ref(false)
 const editingTitle = ref(false)
 const titleDraft = ref('')
 const savingTitle = ref(false)
+const messageRecordsVisible = ref(false)
+const messageRecordsLoading = ref(false)
+const messageRecordsError = ref('')
+const recordMessages = ref<ChatMessage[]>([])
+let messageRecordsRequest = 0
 
 // Model cache
 const { initFromTask, setSessionModel, getSessionModel } = useSessionModelCache()
@@ -210,6 +268,8 @@ const taskStream = useTaskStream(() => {
 })
 
 const sortedMessages = computed(() => taskStream.chatState.sortedMessages.value)
+const recordSessionId = computed(() => taskStream.task.value?.sessionId || sessionId.value || '未提供')
+const recordCodexThreadId = computed(() => taskStream.task.value?.codexThreadId || '未提供')
 
 const isRunning = computed(() => {
   const status = taskStream.task.value?.status
@@ -659,6 +719,66 @@ function onSent(content: string) {
   clearDraft()
   resumeInput.value = ''
 }
+
+async function showMessageRecords() {
+  const request = ++messageRecordsRequest
+  messageRecordsVisible.value = true
+  messageRecordsError.value = ''
+  recordMessages.value = [...taskStream.chatState.sortedMessages.value]
+  messageRecordsLoading.value = true
+  try {
+    const fullHistory = await taskStream.getAllHistoryMessages()
+    if (request !== messageRecordsRequest) return
+    if (fullHistory.length > 0 || recordMessages.value.length === 0) {
+      recordMessages.value = fullHistory
+    }
+  } catch (error) {
+    if (request !== messageRecordsRequest) return
+    console.error('Failed to load complete mobile message records:', error)
+    messageRecordsError.value = '完整会话记录加载失败，当前仅展示已加载消息。'
+  } finally {
+    if (request === messageRecordsRequest) messageRecordsLoading.value = false
+  }
+}
+
+function hideMessageRecords() {
+  messageRecordsRequest++
+  messageRecordsVisible.value = false
+}
+
+async function copyRecordIdentifier(label: string, value: string) {
+  if (!value || value === '未提供') {
+    uni.showToast({ title: `${label} 暂不可用`, icon: 'none' })
+    return
+  }
+  try {
+    await copyTextToClipboard(value)
+    uni.showToast({ title: `${label} 已复制`, icon: 'none' })
+  } catch (error) {
+    console.error(`Failed to copy ${label}:`, error)
+    uni.showToast({ title: '复制失败', icon: 'none' })
+  }
+}
+
+function recordRoleLabel(sender: ChatMessage['sender']) {
+  return {
+    user: '用户',
+    assistant: '助手',
+    tool: '工具',
+    system: '系统',
+  }[sender]
+}
+
+function recordMessageText(message: ChatMessage) {
+  return message.error || message.content || message.thought || message.toolOutput || '（无文本内容）'
+}
+
+function formatRecordTime(timestamp: number) {
+  if (!Number.isFinite(timestamp)) return ''
+  const date = new Date(timestamp)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
 </script>
 
 <style scoped>
@@ -870,5 +990,147 @@ function onSent(content: string) {
 }
 .load-more-text.loading {
   color: #909399;
+}
+.message-record-overlay {
+  position: fixed;
+  z-index: 1000;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.46);
+}
+.message-record-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 80rpx);
+  padding: 28rpx 24rpx calc(24rpx + env(safe-area-inset-bottom));
+  border-radius: 28rpx 28rpx 0 0;
+  background: #ffffff;
+  box-sizing: border-box;
+}
+.message-record-header {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20rpx;
+}
+.message-record-title {
+  display: block;
+  color: #303133;
+  font-size: 32rpx;
+  font-weight: 600;
+}
+.message-record-subtitle {
+  display: block;
+  margin-top: 6rpx;
+  color: #909399;
+  font-size: 22rpx;
+}
+.message-record-close {
+  padding: 10rpx 16rpx;
+  border-radius: 999rpx;
+  background: #f4f4f5;
+  color: #606266;
+  font-size: 24rpx;
+}
+.message-record-identifiers {
+  margin-bottom: 20rpx;
+  padding: 10rpx 16rpx;
+  border-radius: 14rpx;
+  background: #f5f7fa;
+}
+.record-identifier-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 10rpx 0;
+}
+.record-identifier-copy {
+  flex: 1;
+  min-width: 0;
+}
+.record-identifier-label {
+  display: block;
+  color: #909399;
+  font-size: 20rpx;
+}
+.record-identifier-value {
+  display: block;
+  overflow: hidden;
+  color: #303133;
+  font-size: 22rpx;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.record-copy-button {
+  flex-shrink: 0;
+  margin-left: 20rpx;
+  padding: 8rpx 14rpx;
+  border-radius: 999rpx;
+  background: #ecf5ff;
+  color: #409eff;
+  font-size: 22rpx;
+}
+.message-record-list {
+  height: 64vh;
+  min-height: 220rpx;
+}
+.message-record-item {
+  margin-bottom: 14rpx;
+  padding: 18rpx;
+  border: 1rpx solid #ebeef5;
+  border-radius: 14rpx;
+  background: #ffffff;
+}
+.message-record-meta {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10rpx;
+}
+.message-record-role {
+  color: #667eea;
+  font-size: 22rpx;
+  font-weight: 600;
+}
+.message-record-time {
+  color: #909399;
+  font-size: 20rpx;
+}
+.message-record-content {
+  display: block;
+  color: #303133;
+  font-size: 25rpx;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.message-record-empty {
+  padding: 60rpx 0;
+  text-align: center;
+  color: #909399;
+  font-size: 26rpx;
+}
+.message-record-loading,
+.message-record-error {
+  margin-bottom: 14rpx;
+  padding: 16rpx 18rpx;
+  border-radius: 12rpx;
+  background: #f4f4f5;
+  color: #606266;
+  font-size: 23rpx;
+}
+.message-record-error {
+  background: #fdf6ec;
+  color: #e6a23c;
 }
 </style>

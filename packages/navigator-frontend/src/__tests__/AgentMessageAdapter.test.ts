@@ -61,7 +61,7 @@ describe('agentMessageAdapter', () => {
   // ========== Payload passthrough ==========
 
   it('passes TEXT_CHUNK payload through unchanged', () => {
-    const payload = { content: 'Hello world', messageId: 'inner-1' }
+    const payload = { content: 'Hello world', messageId: 'inner-1', taskId: 'task-1', streamId: 'item-1' }
     const result = agentMessageAdapter.convert(makeRaw('TEXT_CHUNK', payload), 's1')
 
     expect(result[0].payload).toEqual(payload)

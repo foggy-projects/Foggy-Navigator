@@ -27,6 +27,7 @@
       @load-more="emit('loadMore')"
       @load-all="(limit?: number) => emit('loadAll', limit)"
       @forward="(message) => emit('forward', message)"
+      @view-records="emit('view-records')"
       @link-click="(payload) => emit('link-click', payload)"
       @artifact-open="(action) => emit('artifact-open', action)"
     >
@@ -87,6 +88,7 @@ const emit = defineEmits<{
   (e: 'loadMore'): void
   (e: 'loadAll', limit?: number): void
   (e: 'forward', message: ChatMessage): void
+  (e: 'view-records'): void
   (e: 'link-click', payload: { href: string; text: string }): void
   (e: 'artifact-open', action: NavigatorUiAction): void
 }>()
