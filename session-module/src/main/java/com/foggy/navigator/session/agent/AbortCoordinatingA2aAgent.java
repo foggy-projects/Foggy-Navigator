@@ -8,7 +8,6 @@ import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
 import com.foggy.navigator.spi.agent.RemoteTaskIdResolution;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,17 +45,6 @@ public class AbortCoordinatingA2aAgent implements A2aAgent {
         this.delegate = delegate;
         this.innerAgent = innerAgent;
         this.taskLookupProvider = taskLookupProvider;
-    }
-
-    /**
-     * @deprecated Use the lookup-port constructor. Kept to preserve binary compatibility
-     * for provider adapters compiled against the former aggregate SPI signature.
-     */
-    @Deprecated(since = "1.3.1-SNAPSHOT", forRemoval = false)
-    public AbortCoordinatingA2aAgent(A2aAgent delegate,
-                                     InnerA2aAgent innerAgent,
-                                     TaskQueryProvider taskQueryProvider) {
-        this(delegate, innerAgent, (TaskLookupProvider) taskQueryProvider);
     }
 
     @Override

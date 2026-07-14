@@ -5,7 +5,6 @@ import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
@@ -95,7 +94,6 @@ class CodexBizTaskProviderTest {
         assertInstanceOf(TaskLookupProvider.class, provider);
         assertInstanceOf(TaskCommandProvider.class, provider);
         assertInstanceOf(TaskListingProvider.class, provider);
-        assertFalse(provider instanceof TaskQueryProvider);
         assertFalse(provider instanceof WorkerSessionQueryProvider);
         assertTrue(provider.getCapabilities().contains(TaskQueryCapability.RESPOND_TO_TASK));
     }

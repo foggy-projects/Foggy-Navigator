@@ -19,7 +19,6 @@ import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -106,7 +105,6 @@ class LanggraphTaskServiceTest {
     void exposes_only_supported_task_provider_ports() {
         assertInstanceOf(TaskLookupProvider.class, service);
         assertInstanceOf(TaskCommandProvider.class, service);
-        assertFalse(service instanceof TaskQueryProvider);
         assertFalse(service instanceof TaskListingProvider);
         assertFalse(service instanceof WorkerSessionQueryProvider);
     }

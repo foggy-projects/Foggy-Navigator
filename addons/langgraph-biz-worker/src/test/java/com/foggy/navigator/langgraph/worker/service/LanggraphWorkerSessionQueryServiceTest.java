@@ -80,7 +80,6 @@ class LanggraphWorkerSessionQueryServiceTest {
         assertEquals(SESSION_ID, result.get(0).sessionId());
         assertEquals("lgt_latest", result.get(0).latestTaskId());
         assertEquals("/home/sa/workspace/orders", result.get(0).project());
-        assertEquals(SESSION_ID, service.listWorkerSessions(WORKER_ID, USER_ID).get(0).get("session_id"));
     }
 
     @Test
@@ -100,7 +99,6 @@ class LanggraphWorkerSessionQueryServiceTest {
         assertEquals(1L, result.userCount());
         assertEquals(1L, result.assistantCount());
         assertEquals(3L, result.total());
-        assertEquals(3, service.getWorkerSessionMessageCount(WORKER_ID, SESSION_ID, USER_ID).get("total"));
     }
 
     @Test
@@ -122,8 +120,6 @@ class LanggraphWorkerSessionQueryServiceTest {
         assertEquals("assistant", result.get(0).role());
         assertEquals("second", result.get(0).content());
         assertEquals("lgt_task", result.get(0).taskId());
-        assertEquals("second", service.getWorkerSessionMessages(WORKER_ID, SESSION_ID, USER_ID, 1, 1)
-                .get(0).get("content"));
     }
 
     @Test
@@ -141,7 +137,6 @@ class LanggraphWorkerSessionQueryServiceTest {
         assertEquals(0L, result.synced());
         assertEquals(2L, result.total());
         assertEquals("session-store", result.source());
-        assertEquals(2L, service.syncWorkerSessions(WORKER_ID, USER_ID, TENANT_ID).get("total"));
     }
 
     @Test

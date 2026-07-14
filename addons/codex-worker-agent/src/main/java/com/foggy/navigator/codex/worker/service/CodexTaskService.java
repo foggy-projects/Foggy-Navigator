@@ -542,12 +542,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         }
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public void cancelTask(String taskId, String userId) {
-        cancelTaskDirect(taskId, userId);
-    }
-
     @Override
     public void reconnectTask(String taskId, String userId) {
         reconnectTaskForProvider(CODEX_PROVIDER_TYPE, taskId, userId);
@@ -1151,12 +1145,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return listTasksPagedForProvider(userId, page, size, state, AGENT_ID);
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Object listTasksPaged(String userId, int page, int size, String state) {
-        return listTaskPage(userId, page, size, state);
-    }
-
     public TaskPageResult listTasksPagedForProvider(String userId, int page, int size, String state, String providerType) {
         List<CodexTaskEntity> tasks = taskRepository.findByUserIdOrderByCreatedAtDesc(userId);
         tasks = filterTasksByProvider(tasks, providerType);
@@ -1166,12 +1154,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     @Override
     public TaskPageResult listDirectoryTaskPage(String userId, String directoryId, int page, int size, String state) {
         return listTasksByDirectoryPagedForProvider(userId, directoryId, page, size, state, AGENT_ID);
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Object listTasksByDirectoryPaged(String userId, String directoryId, int page, int size, String state) {
-        return listDirectoryTaskPage(userId, directoryId, page, size, state);
     }
 
     public TaskPageResult listTasksByDirectoryPagedForProvider(String userId, String directoryId, int page, int size,
@@ -1193,13 +1175,6 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
 
         String normalizedKeyword = keyword != null ? keyword.trim().toLowerCase(Locale.ROOT) : null;
         return searchSessionsForProvider(userId, normalizedKeyword, workerId, directoryId, page, size, AGENT_ID);
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Object searchSessions(String userId, String keyword, String workerId,
-                                 String directoryId, int page, int size) {
-        return searchSessionPage(userId, keyword, workerId, directoryId, page, size);
     }
 
     public TaskSearchResult searchSessionsForProvider(String userId, String normalizedKeyword, String workerId,

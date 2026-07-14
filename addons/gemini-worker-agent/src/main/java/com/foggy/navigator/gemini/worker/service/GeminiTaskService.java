@@ -474,12 +474,6 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
         }
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public void cancelTask(String taskId, String userId) {
-        cancelTaskDirect(taskId, userId);
-    }
-
     @Override
     @Transactional
     public void deleteTask(String userId, String taskId) {

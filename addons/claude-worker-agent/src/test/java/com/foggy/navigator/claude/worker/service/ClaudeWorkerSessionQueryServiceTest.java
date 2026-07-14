@@ -84,7 +84,6 @@ class ClaudeWorkerSessionQueryServiceTest {
         assertEquals(SESSION_ID, result.get(0).sessionId());
         assertEquals(WORKER_ID, result.get(0).workerId());
         assertEquals("ctask-1", result.get(0).latestTaskId());
-        assertEquals(SESSION_ID, service.listWorkerSessions(WORKER_ID, USER_ID).get(0).get("session_id"));
     }
 
     @Test
@@ -101,8 +100,6 @@ class ClaudeWorkerSessionQueryServiceTest {
         assertEquals(2L, result.userCount());
         assertEquals(3L, result.assistantCount());
         assertEquals(5L, result.total());
-        Number total = (Number) service.getWorkerSessionMessageCount(WORKER_ID, SESSION_ID, USER_ID).get("total");
-        assertEquals(5L, total.longValue());
     }
 
     @Test
@@ -119,8 +116,6 @@ class ClaudeWorkerSessionQueryServiceTest {
         assertEquals("assistant", result.get(0).role());
         assertEquals("second", result.get(0).content());
         assertEquals("ctask-2", result.get(1).taskId());
-        assertEquals("second", service.getWorkerSessionMessages(WORKER_ID, SESSION_ID, USER_ID, 1, 2)
-                .get(0).get("content"));
     }
 
     @Test
@@ -137,8 +132,7 @@ class ClaudeWorkerSessionQueryServiceTest {
 
         assertEquals(1L, result.synced());
         assertEquals(2L, result.total());
-        assertEquals(2L, service.syncWorkerSessions(WORKER_ID, USER_ID, TENANT_ID).get("total"));
-        verify(taskService, times(2)).syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
+        verify(taskService).syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
     }
 
     @Test

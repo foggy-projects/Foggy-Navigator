@@ -77,7 +77,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     @Value("${foggy.navigator.langgraph.worker.include-recent-conversation:false}")
     private boolean includeRecentConversation;
 
-    // ── TaskQueryProvider SPI ──────────────────────────────────────────────
+    // ── Typed task-provider ports ──────────────────────────────────────────
 
     @Override
     public String getProviderType() {
@@ -406,13 +406,6 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         publishStatusChange(entity, previousStatus);
         recordRecoverableInterruption(entity, "user_cancelled", "Cancelled by user");
         log.info("Task cancelled: taskId={}", taskId);
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    @Transactional
-    public void cancelTask(String taskId, String userId) {
-        cancelTaskDirect(taskId, userId);
     }
 
     public void recordTaskInterruption(String taskId, String reason, String errorMessage) {

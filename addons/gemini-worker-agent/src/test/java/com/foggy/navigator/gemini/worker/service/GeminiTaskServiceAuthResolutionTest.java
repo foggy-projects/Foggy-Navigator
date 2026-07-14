@@ -17,7 +17,6 @@ import com.foggy.navigator.gemini.worker.repository.GeminiTaskRepository;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
@@ -92,7 +91,6 @@ class GeminiTaskServiceAuthResolutionTest {
     void exposesOnlySupportedTaskProviderPorts() {
         assertInstanceOf(TaskLookupProvider.class, taskService);
         assertInstanceOf(TaskCommandProvider.class, taskService);
-        assertFalse(taskService instanceof TaskQueryProvider);
         assertFalse(taskService instanceof TaskListingProvider);
         assertFalse(taskService instanceof WorkerSessionQueryProvider);
     }

@@ -21,7 +21,6 @@ import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -134,7 +133,6 @@ class ClaudeTaskServiceAuthTest {
         assertFalse(service.supports(TaskQueryCapability.GET_WORKER_SESSION_MESSAGE_COUNT));
         assertFalse(service.supports(TaskQueryCapability.GET_WORKER_SESSION_MESSAGES));
         assertFalse(service.supports(TaskQueryCapability.SYNC_WORKER_SESSIONS));
-        assertFalse(service instanceof TaskQueryProvider);
     }
 
     @Test

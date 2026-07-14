@@ -63,14 +63,6 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
                 .toList();
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
-        return listWorkerSessionSummaries(workerId, userId).stream()
-                .map(WorkerSessionSummary::toMap)
-                .toList();
-    }
-
     @Override
     public WorkerSessionMessageCount getWorkerSessionMessageCountResult(String workerId, String sessionId, String userId) {
         assertSessionOwnedByWorker(workerId, sessionId, userId);
@@ -84,12 +76,6 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
         result.put("assistant_count", assistantCount);
         result.put("total", messages.size());
         return WorkerSessionMessageCount.from(result);
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
-        return getWorkerSessionMessageCountResult(workerId, sessionId, userId).toMap();
     }
 
     @Override
@@ -113,15 +99,6 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
                 .toList();
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
-                                                              String userId, Integer offset, Integer limit) {
-        return listWorkerSessionMessages(workerId, sessionId, userId, offset, limit).stream()
-                .map(WorkerSessionMessage::toMap)
-                .toList();
-    }
-
     @Override
     public WorkerSessionSyncResult syncWorkerSessionState(String workerId, String userId, String tenantId) {
         assertWorkerOwnedByUser(workerId, userId);
@@ -138,12 +115,6 @@ public class LanggraphWorkerSessionQueryService implements WorkerSessionQueryPro
         result.put("total", total);
         result.put("source", "session-store");
         return WorkerSessionSyncResult.from(result);
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
-        return syncWorkerSessionState(workerId, userId, tenantId).toMap();
     }
 
     private void assertWorkerOwnedByUser(String workerId, String userId) {

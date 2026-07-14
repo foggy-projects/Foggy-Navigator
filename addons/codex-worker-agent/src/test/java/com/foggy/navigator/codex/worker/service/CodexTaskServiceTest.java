@@ -27,7 +27,6 @@ import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
@@ -170,7 +169,6 @@ class CodexTaskServiceTest {
         assertInstanceOf(TaskLookupProvider.class, service);
         assertInstanceOf(TaskCommandProvider.class, service);
         assertInstanceOf(TaskListingProvider.class, service);
-        assertFalse(service instanceof TaskQueryProvider);
         assertFalse(service instanceof WorkerSessionQueryProvider);
         assertTrue(service.getCapabilities().contains(TaskQueryCapability.RESPOND_TO_TASK));
     }

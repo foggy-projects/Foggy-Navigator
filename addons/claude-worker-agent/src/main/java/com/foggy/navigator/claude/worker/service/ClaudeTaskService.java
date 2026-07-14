@@ -2844,12 +2844,6 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         abortTask(taskId);
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public void cancelTask(String taskId, String userId) {
-        cancelTaskDirect(taskId, userId);
-    }
-
     @Override
     public Optional<DispatchTaskDTO> getTaskById(String taskId) {
         return taskRepository.findByTaskId(taskId).map(this::toDispatchDTO);
@@ -3118,24 +3112,11 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         return TaskPageResult.of(result.getContent(), result.getTotalSessions(), result.getPage(), result.getSize());
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Object listTasksPaged(String userId, int page, int size, String state) {
-        return listTaskPage(userId, page, size, state);
-    }
-
     @Override
     public TaskSearchResult searchSessionPage(String userId, String keyword, String workerId,
                                               String directoryId, int page, int size) {
         SessionSearchResultDTO.Page result = searchSessionsPage(userId, keyword, workerId, directoryId, page, size);
         return TaskSearchResult.of(result.getResults(), result.getTotal(), result.getPage(), result.getSize());
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Object searchSessions(String userId, String keyword, String workerId,
-                                 String directoryId, int page, int size) {
-        return searchSessionPage(userId, keyword, workerId, directoryId, page, size);
     }
 
     @Override
@@ -3150,13 +3131,6 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                                                 int page, int size, String state) {
         SessionPageDTO result = listTasksByDirectorySession(userId, directoryId, page, size, state);
         return TaskPageResult.of(result.getContent(), result.getTotalSessions(), result.getPage(), result.getSize());
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Object listTasksByDirectoryPaged(String userId, String directoryId,
-                                            int page, int size, String state) {
-        return listDirectoryTaskPage(userId, directoryId, page, size, state);
     }
 
     static Map<String, String> normalizeTaskResponseAnswers(Object value) {

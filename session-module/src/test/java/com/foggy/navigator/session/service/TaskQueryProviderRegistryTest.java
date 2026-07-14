@@ -5,7 +5,6 @@ import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import org.junit.jupiter.api.Test;
 
@@ -130,7 +129,13 @@ class TaskQueryProviderRegistryTest {
         return new TaskQueryProviderRegistry(providers, providers, providers, providers);
     }
 
-    private static final class StubProvider implements TaskQueryProvider {
+    private interface TypedTaskProvider extends TaskLookupProvider,
+            TaskCommandProvider,
+            TaskListingProvider,
+            WorkerSessionQueryProvider {
+    }
+
+    private static final class StubProvider implements TypedTaskProvider {
 
         private final String providerType;
         private final Set<TaskQueryCapability> capabilities;

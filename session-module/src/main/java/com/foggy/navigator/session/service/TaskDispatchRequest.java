@@ -20,10 +20,9 @@ public class TaskDispatchRequest {
     /**
      * 目标执行 Provider（如 claude-worker / codex-worker / codex-biz-worker）。
      * <p>
-     * @deprecated 常规前端任务优先由后端从 modelConfigId 推导；OpenAPI 或独立执行 route
-     *             仍可显式传递 providerType。
+     * 常规前端任务优先由后端从 modelConfigId 推导；OpenAPI 或独立执行 route
+     * 仍可显式传递 providerType。
      */
-    @Deprecated
     private String providerType;
 
     /** 平台会话 ID（null 表示新建会话） */

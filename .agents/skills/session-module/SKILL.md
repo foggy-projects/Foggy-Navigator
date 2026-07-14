@@ -104,8 +104,7 @@ session-module/
     │   │   ├── SharingKeyController.java     # Sharing Key 管理 API
     │   │   └── UnifiedSseController.java     # 统一 SSE 推送 API
     │   ├── registry/
-    │   │   ├── DefaultA2aAgentRegistry.java  # 聚合所有 A2aAgentProvider
-    │   │   ├── UnifiedAgentResolver.java     # 上下文感知的 Agent 解析
+    │   │   ├── UnifiedAgentResolver.java     # 聚合 Provider 并按上下文解析 Agent
     │   │   └── JpaAgentRegistry.java         # Agent 配置持久化
     │   ├── service/
     │   │   ├── JpaSessionManager.java        # SessionManager JPA 实现

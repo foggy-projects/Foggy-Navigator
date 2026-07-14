@@ -41,25 +41,8 @@ public interface TaskCommandProvider extends TaskProviderPort {
         throw new UnsupportedOperationException("resume not supported by " + getProviderType());
     }
 
-    /**
-     * Directly cancel a provider task from the provider command route.
-     * <p>
-     * This is distinct from {@link A2aAgent#cancelTask(String)}, which
-     * coordinates A2A abort through the agent wrapper.
-     */
-    @SuppressWarnings("deprecation")
+    /** Directly cancel a provider task from the provider command route. */
     default void cancelTaskDirect(String taskId, String userId) {
-        cancelTask(taskId, userId);
-    }
-
-    /**
-     * Cancel a running task.
-     *
-     * @deprecated Use {@link #cancelTaskDirect(String, String)} for provider
-     * direct routes, or {@link A2aAgent#cancelTask(String)} for A2A abort.
-     */
-    @Deprecated(since = "1.0.0-SNAPSHOT", forRemoval = false)
-    default void cancelTask(String taskId, String userId) {
         throw new UnsupportedOperationException("cancel not supported by " + getProviderType());
     }
 

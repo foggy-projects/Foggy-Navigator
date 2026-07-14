@@ -35,7 +35,7 @@ public class CreateCodexTaskForm {
     private String sessionId;
     /** OpenAPI/A2A 多轮上下文 ID，用于统一任务投影诊断 */
     private String contextId;
-    /** Effective TaskQueryProvider route; defaults to codex-worker when omitted. */
+    /** Effective task-provider route; defaults to codex-worker when omitted. */
     @JsonAlias("provider_type")
     private String providerType;
     /** CodexBiz: actor/account scoped CODEX_HOME logical key; worker resolves it under CODEX_BIZ_HOME_ROOT. */

@@ -98,24 +98,11 @@ public class CodexAppServerTaskProvider
         return codexTaskService.listTasksPagedForProvider(userId, page, size, state, getProviderType());
     }
 
-    @Deprecated(since = "1.4.0", forRemoval = false)
-    @Override
-    public Object listTasksPaged(String userId, int page, int size, String state) {
-        return listTaskPage(userId, page, size, state);
-    }
-
     @Override
     public TaskPageResult listDirectoryTaskPage(String userId, String directoryId,
                                                 int page, int size, String state) {
         return codexTaskService.listTasksByDirectoryPagedForProvider(
                 userId, directoryId, page, size, state, getProviderType());
-    }
-
-    @Deprecated(since = "1.4.0", forRemoval = false)
-    @Override
-    public Object listTasksByDirectoryPaged(String userId, String directoryId,
-                                            int page, int size, String state) {
-        return listDirectoryTaskPage(userId, directoryId, page, size, state);
     }
 
     @Override
@@ -133,23 +120,10 @@ public class CodexAppServerTaskProvider
                 userId, normalizedKeyword, workerId, directoryId, page, size, getProviderType());
     }
 
-    @Deprecated(since = "1.4.0", forRemoval = false)
-    @Override
-    public Object searchSessions(String userId, String keyword, String workerId,
-                                 String directoryId, int page, int size) {
-        return searchSessionPage(userId, keyword, workerId, directoryId, page, size);
-    }
-
     @Override
     public void cancelTaskDirect(String taskId, String userId) {
         ensureTaskBelongsToProvider(taskId, userId);
         codexTaskService.cancelTaskDirectForProvider(getProviderType(), taskId, userId);
-    }
-
-    @Deprecated(since = "1.4.0", forRemoval = false)
-    @Override
-    public void cancelTask(String taskId, String userId) {
-        cancelTaskDirect(taskId, userId);
     }
 
     @Override
