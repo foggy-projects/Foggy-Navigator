@@ -9,6 +9,7 @@ owner: provider-and-integration-owners
 decision_date: 2026-07-14
 implementation_started: yes
 production_routing_changed: no
+launcher_default_agent_inventory_changed: yes
 external_contract_changed: no
 ---
 
@@ -34,7 +35,7 @@ Project Owner 于 2026-07-14 确认：项目仍处于 dev 阶段，现有上游�
 
 1. 确认安全、没有本仓消费者的实验性能力可以物理移除；旧 dev 数据允许丢弃。
 2. 旧 Provider API、deprecated SPI 与 DTO 不再设置跨版本兼容或流量观察窗口；本仓消费者迁移、安全语义补齐且 clean build 通过后，可在 1.4.2 同版本直接删除。
-3. Echo 先迁移为显式 dev/test fixture，保护普通 BusinessFunction Echo 适配器，再退出 production launcher；不能把测试夹具与生产 Agent 一起粗暴删除。
+3. Echo 先迁移为 test-only fixture，保护普通 BusinessFunction Echo 适配器，再退出默认 launcher；不能把测试夹具与运行时 Agent 一起粗暴删除。
 4. 上述结论是 Owner 提供的项目阶段假设，不是运行流量、GitLab 配置、数据库或独立部署的实测证据。
 5. 若后续发现共享环境、生产资源、仓库外部署或外部消费者，立即暂停对应切片，以新证据重新决策；不得用本次 dev 阶段授权推定可删除外部资源。
 
@@ -45,7 +46,7 @@ Project Owner 于 2026-07-14 确认：项目仍处于 dev 阶段，现有上游�
 | 切片 | 当前状态 | 本轮结论 | 下一门禁 |
 |---|---|---|---|
 | A：`addons/code-review-agent` | `implementation-complete / verification-partial` | 22 个 tracked files 已物理移除；未进入默认构建或路由 | 补齐最终文档/差异检查；若发现外部资源则重新决策 |
-| B：Echo Agent 生产隔离 | `not-started` | 保留 dev/test 能力，退出 production launcher | 先建立显式 fixture 并迁移现有测试 |
+| B：Echo Agent 默认制品收口 | `completed-local / verification-partial` | addon/reactor/launcher 已物理退出，test-only fixture 保留 A2A 回归 | 补 hosted CI、浏览器、PowerShell parser 和正式门禁 |
 | C：旧 Provider API/SPI/DTO | `not-started` | 不设生产或外部兼容窗口，同版本直接收口 | 先迁移全部本仓消费者并补齐安全语义 |
 
 明确不删除：
@@ -67,8 +68,8 @@ Project Owner 于 2026-07-14 确认：项目仍处于 dev 阶段，现有上游�
 - `addons/code-review-agent` 未进入根 `pom.xml` reactor、`launcher/pom.xml`、`.github/workflows/**` 或 `scripts/**`。
 - 2026-07-14 已物理移除 `addons/code-review-agent` 下全部 22 个 tracked files，包括 Maven 描述、源码、Spring auto-configuration 登记和测试。
 - 移除后执行 `mvn -B -pl launcher -am clean test`，clean reactor 测试通过。
-- Echo 切片与旧 Provider API/SPI/DTO 切片尚未实施；当前不能将其标记为已迁移或已删除。
-- 当前 `production_routing_changed: no`、`external_contract_changed: no`：Code Review 原本不在 launcher，本轮也未改 Echo 或旧 Provider 路由。
+- Echo 切片已完成本地实施：删除 addon 5 个 tracked files，移除 root reactor 与 launcher dependency，默认制品不再注册 Echo Agent。旧 Provider API/SPI/DTO 切片尚未实施。
+- `production_routing_changed: no`、`external_contract_changed: no`：当前不存在生产环境或生产契约；同时必须单独记录 `launcher_default_agent_inventory_changed: yes`，不能将默认制品中 Echo 的移除模糊表述为“无路由变化”。
 
 ### 静态搜索结论
 
@@ -80,9 +81,9 @@ Project Owner 于 2026-07-14 确认：项目仍处于 dev 阶段，现有上游�
 
 #### Echo
 
-- `addons/echo-agent` 当前仍同时在根 reactor 和 `launcher/pom.xml`。
-- auto-configuration 无 production/dev profile 隔离，Agent `echo-agent-default` 会随 launcher 注册。
-- `tests/integration/test_unified_task_dispatch.sh` 依赖 Echo discovery/A2A；`tests/migration/test-codex-runtime-affinity.ps1` 使用 `agentId=echo-agent`。
+- `addons/echo-agent` 的 POM、4 个 Java/资源文件（合计 5 个 tracked files）已删除，根 `pom.xml` 和 `launcher/pom.xml` 已移除装配。
+- `UnifiedAgentResolverTest` 增加 test-only 内存 fixture，覆盖 discovery、resolve、send、query 和 cancel，不注册到 launcher。
+- `tests/integration/test_unified_task_dispatch.sh` 已去除 Echo 运行依赖；`tests/migration/test-codex-runtime-affinity.ps1` 仅将旧 `agentId` literal 替换为迁移 fixture literal。静态运行引用扫描为 0。
 - `LocalEchoBusinessFunctionAdapterInvoker` 属于普通 BusinessFunction 本地适配能力，不得随 Echo addon 删除。
 
 #### 旧 Provider 契约
@@ -101,7 +102,8 @@ Project Owner 于 2026-07-14 确认：项目仍处于 dev 阶段，现有上游�
 - 本轮未查询或修改任何 GitLab project webhook。
 - 本轮未查询、备份、迁移或删除 `code_review_config`、`code_review_record` 数据。
 - 本轮未检查或停止独立 jar、容器、服务或其他 deployment。
-- 本轮未采集 Echo 或旧 Provider API 的运行流量，也未据此声明“零调用”。
+- 本轮未采集 Echo 或旧 Provider API 的运行流量；Echo 删除依据是 Owner 确认的 dev-only 边界、仓内静态引用扫描和本地回归，不是“零调用”运行态证据。
+- 本轮未运行 hosted CI、真实浏览器或 PowerShell parser；当前宿主不可用 `pwsh`。
 - 本轮未验证仓库外 SPI 二进制实现；当前按 Owner 的“所有上游本机孵化”阶段假设推进，而非把仓库外不存在写成事实。
 
 ### 已批准决策
@@ -109,7 +111,7 @@ Project Owner 于 2026-07-14 确认：项目仍处于 dev 阶段，现有上游�
 | 决策 | 状态 | 约束 |
 |---|---|---|
 | Code Review 物理移除 | `approved / executed` | 静态安全门已满足；若发现 GitLab、数据库或独立部署资源，暂停收口并重新决策 |
-| Echo dev/test retain、production retire | `approved / not-started` | fixture 和测试迁移先行，保护 `LocalEchoBusinessFunctionAdapterInvoker` |
+| Echo test fixture retain、默认制品 retire | `approved / completed-local / verification-partial` | test-only fixture 已先行，addon/reactor/launcher 已退出，`LocalEchoBusinessFunctionAdapterInvoker` 无 diff |
 | 旧 Provider API/SPI/DTO 同版本直接删除 | `approved / not-started` | 本仓消费者迁移、安全语义补齐、目标测试与 clean build 均通过后才删除 |
 
 ## 切片 A：code-review-agent
@@ -158,7 +160,7 @@ git diff --name-only -- addons/code-review-agent
 
 源码可通过只恢复该切片的版本提交回滚。由于本轮没有修改 GitLab、数据库或 deployment，不存在需要本次回滚恢复的外部状态；如果之后另行清理外部资源，必须在对应执行记录中单列备份和恢复方式。
 
-## 切片 B：Echo Agent 生产隔离
+## 切片 B：Echo Agent 默认制品收口
 
 ### 精确 inventory
 
@@ -169,14 +171,13 @@ git diff --name-only -- addons/code-review-agent
 - Agent discovery/A2A 文档与 fixture；
 - `business-agent-module/.../LocalEchoBusinessFunctionAdapterInvoker.java`（`do-not-touch`）。
 
-### 实施顺序
+### 实施结果
 
-1. 扫描所有 `echo-agent-default`、`providerType=echo-agent`、`agentId=echo-agent` 本仓引用，冻结 fixture 消费清单。
-2. 建立默认关闭、由 dev/test 显式启用的 Echo fixture 装配方式；迁移 discovery、A2A 和 runtime-affinity 测试。
-3. 增加 production launcher/profile 反向测试，证明生产上下文不会注册 Echo Agent。
-4. 确认 `LocalEchoBusinessFunctionAdapterInvoker` 仍可用且未随 addon 变更。
-5. fixture 验证通过后，从 production launcher 移除 Echo dependency；是否保留独立 test module 以测试价值决定。
-6. clean build 和 dev/test/production 差异验证通过后回写进度。本 dev 阶段不要求生产流量观察期。
+1. 已扫描 Echo agentId/providerType/addon 仓内运行引用，删除后静态运行引用为 0。
+2. `UnifiedAgentResolverTest` 内建 test-only fixture，可复现 Agent card discovery/resolve 及 task send/query/cancel，不依赖生产 Spring auto-configuration。
+3. `tests/integration/test_unified_task_dispatch.sh` 改为检查统一 discovery/task API，不再要求 Echo 存在；PowerShell migration 脚本仅替换 agentId literal。
+4. 已物理删除 `addons/echo-agent` 的 5 个 tracked files，并从 root reactor 和 `launcher` 移除装配。
+5. `LocalEchoBusinessFunctionAdapterInvoker` 无 diff，未随本切片变更。
 
 参考扫描：
 
@@ -188,10 +189,12 @@ rg -n 'LocalEchoBusinessFunctionAdapterInvoker|type.*echo' business-agent-module
 
 ### 验证与回滚
 
-- 自动验证：dev/test 显式启用后 Echo discovery、ask、status 回归；production context 不发现 Echo；迁移测试不再隐式依赖生产 Echo；launcher clean test 通过。
-- 手工验证：对比 production 与 dev/test Agent card，确认前者无 Echo、后者可按说明启用；验证普通 BusinessFunction echo adapter 未受影响。
-- 回滚：恢复 launcher dependency/装配条件和测试 fixture；不在本切片删除业务数据。
-- 当前状态：`not-started`，未改源码、launcher、测试或生产路由。
+- 定向 fixture 测试：16/16 tests 通过，覆盖 discovery/resolve/send/query/cancel。
+- launcher 定向验证：14 个 reactor modules `SUCCESS`，6/6 tests，`BUILD SUCCESS`，exit 0。该证据验证默认制品可在无 Echo module/dependency 时编译和测试，不是真实启动/浏览器证据。
+- `bash -n tests/integration/test_unified_task_dispatch.sh` 通过。当前宿主无 `pwsh`，因此 PowerShell 脚本未做 parser 验证，仅核对 agentId literal diff。
+- 手工/体验：`not-run`；未做真实 launcher 启动、Agent card 浏览器对比或 BusinessFunction echo 调用。`LocalEchoBusinessFunctionAdapterInvoker` 无 diff 只证明本切片未修改它，不代表已做运行态验证。
+- 回滚：独立 revert Echo 切片提交，恢复 5 个 addon 文件及 root/launcher 装配；测试 fixture 可随同一切片回滚。本切片未删除业务数据。
+- 当前状态：`completed-local / verification-partial`；hosted CI、浏览器、PowerShell parser、正式质量/覆盖/验收门禁未执行。
 
 ## 切片 C：旧 Provider API、SPI 与 DTO
 
@@ -250,7 +253,7 @@ git diff --check
 ~~~
 
 - Code Review：launcher clean reactor 已通过；最终 `git diff --check`、Markdown 链接与顶层状态仍由版本收口统一记录。
-- Echo：`not-run`，因为尚未实施。
+- Echo：定向 16/16 与 launcher 定向 6/6 tests 通过，`bash -n` 通过；hosted/browser/PS parser/formal gate `not-run`。
 - 旧 Provider API/SPI/DTO：`not-run`，因为尚未实施。
 - `mvn -B clean verify`：本工作项尚未记录执行结果，不得以 launcher clean test 替代。
 
@@ -260,7 +263,7 @@ git diff --check
 |---|---|---|
 | Owner 阶段假设与实际外部状态不一致 | 一旦发现共享/生产资源或仓库外消费者，暂停对应切片并重新决策 | 恢复对应 module/route，另立外部迁移记录 |
 | Code Review 外部 webhook/数据/deployment 未被静态搜索发现 | 明确记为未检查，不宣称运行态零使用 | 恢复源码；外部资源按其独立变更记录恢复 |
-| Echo 退出 launcher 破坏测试或 discovery | fixture 先行、显式 dev/test 启用、production 反向测试 | 恢复 launcher dependency/装配条件 |
+| Echo 退出 launcher 破坏测试或 discovery | test-only fixture 先行、默认制品定向构建测试；真实启动/浏览器差异留待后续补证 | 恢复 launcher dependency/装配条件 |
 | 直接删除旧 API 时遗漏安全语义 | 消费者矩阵、ownership/可信主体负例、按路由小批次收口 | 仅恢复失败 route 批次 |
 | SPI/DTO 删除造成本仓 Provider 编译失败 | typed replacement 先行、全仓 clean build | 恢复对应 SPI/DTO 小批次 |
 | 不同切片同提交难以回滚 | A/B/C 独立提交、独立 check-in | 只 revert 失败切片 |
@@ -270,7 +273,7 @@ git diff --check
 - [x] Code Review 22 个 tracked files 已物理移除，本仓源码/构建接线扫描无引用，launcher clean reactor 通过。
 - [x] Code Review 未检查的 GitLab、数据库和独立 deployment 状态已显式记录，没有虚构流量证据。
 - [ ] Code Review 切片随版本执行最终 diff、链接和质量门禁收口。
-- [ ] Echo dev/test fixture 已先行，production launcher 不再注册 Echo，`LocalEchoBusinessFunctionAdapterInvoker` 不受影响。
+- [x] Echo test-only fixture 已先行，默认 launcher 不再注册 Echo，`LocalEchoBusinessFunctionAdapterInvoker` 无 diff。
 - [ ] 旧 API 每个 method/path 及 deprecated SPI/DTO 都有本仓消费者、替代与迁移记录。
 - [ ] 统一契约的 ownership、可信主体、审批/恢复/取消负例测试通过。
 - [ ] SecurityConfig、Controller、SPI/DTO、tests、scripts 和当前文档按对应切片同步收口。
@@ -281,10 +284,11 @@ git diff --check
 ## 生产路由与外部契约状态
 
 - production_routing_changed: no
+- launcher_default_agent_inventory_changed: yes
 - external_contract_changed: no
 - code_review_slice: implementation-complete / verification-partial
-- echo_slice: not-started
+- echo_slice: completed-local / verification-partial
 - legacy_provider_contract_slice: not-started
 - production_enablement: not-applicable-at-current-dev-stage
 
-当前 `no` 仅表示已执行的 Code Review 删除没有改变 launcher 路由，Echo 和旧 Provider 切片尚未实施。后续一旦移除 Echo launcher dependency 或旧路由/SPI，必须按实际 changed surface 更新本工作项与 [Progress](../progress.md)；隔离构建通过不等于生产批准。
+当前无生产环境，因此 `production_routing_changed: no` 保留；但 Echo 已从默认 launcher 清单退出，必须同时读取 `launcher_default_agent_inventory_changed: yes`。该本机结论不等于 hosted CI、浏览器验证、正式验收或生产批准。

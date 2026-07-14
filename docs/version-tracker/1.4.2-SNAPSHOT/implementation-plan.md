@@ -14,6 +14,7 @@
 - implementation_started: yes
 - implementation_started_at: `2026-07-14`
 - production_routing_changed: no
+- launcher_default_agent_inventory_changed: yes
 - external_contract_changed: yes
 - external_enablement: no
 - production_enablement: not-applicable
@@ -48,7 +49,7 @@
 | E-007 | 本地构建证据 | launcher 主干依赖链从 clean 状态编译测试通过 | passed-local | `2026-07-14` 执行 `mvn -B -pl launcher -am clean test`，16 个 reactor 项 SUCCESS；不是根 `clean verify` 或 hosted runner 证据 |
 | E-008 | 本地构建证据 | Node/Vite/lockfile 不可复现基线已按 ODR-142-001 收口 | passed-local-partial-ci | Node `22.23.1`、pnpm `10.34.5`、单一根 frozen lockfile 与根 frontend matrix 已落地并本地通过；GitHub runner/nightly 未运行 |
 | E-009 | 本地构建证据 | 两个 `ClaudeWorkerView.vue` TypeScript 基线错误已做最小修复 | passed-local | 有效 PC/mobile type-check、全 frontend tests/build exit 0；浏览器体验未运行 |
-| E-010 | 静态搜索 + 实施证据 | Monitoring 与 code-review 已删除；metadata-query 已 completed-local；Echo 和旧 API 尚未实施 | partial-implementation | metadata-query 模块/装配/Skill/当前文档已收口，删除后 clean test 15/15 `SUCCESS`，依赖树和 clean target 无旧查询依赖；启动/浏览器、hosted CI、外部资源与正式验收不在该结论内。其余切片仍按独立门禁执行 |
+| E-010 | 静态搜索 + 实施证据 | Monitoring 与 code-review 已删除；metadata-query 已 completed-local；Echo 已 completed-local/verification-partial；旧 API 尚未实施 | partial-implementation | Echo addon/root/launcher 已收口，test-only fixture 覆盖 A2A lifecycle，定向 16/16 与 launcher 6/6 tests 通过；hosted/browser/PS parser/正式门禁未运行。其余切片仍按独立门禁执行 |
 | E-011 | 本地实施证据 | P2 首批默认关闭门禁和 readiness 已由 `12cbe697`、`5d62707b` 落地 | partial-implementation | 平台只门禁 `/api/v1/open` 路径根及子路径；三类 Worker 显式 external-enabled 仍因执行策略未齐保持 unready。task token、identity、审批/恢复绑定、审计和 ownership 不在该首批结论内 |
 | E-012 | 本地测试证据 | P2 首批 Java 与三类 Worker 定向矩阵通过 | passed-local | Java 74 tests、10/10 reactor；Codex SDK 163 passed/1 skipped，app-server 272 passed/1 skipped，LangGraph 766 passed；Node type-check/build 与 Python build 通过。覆盖 matrix parameter、context path、encoded path，并修复实际门禁绕过；不是生产或正式验收证据 |
 | E-013 | 本地实施 + 测试证据 | `cce75f1b` 使平台消费端尊重显式 `ready=false` | passed-local | unready Worker 不再被误标为可路由；缺少 `ready` 的旧 Worker保留兼容。兼容不适用于显式 unready，也不构成 external enablement |
@@ -151,6 +152,7 @@
 | 要素 | 计划 |
 |---|---|
 | 输入和前置条件 | P0 功能切片清单、P1 最小可复现基线；ODR-142-006 dev-only 物理删除授权；每个切片的仓内引用、装配、资源和测试清单。 |
+| 当前实施状态 | `in-progress`。Monitoring/code-review 已移除，metadata-query 已 `completed-local`；Echo 已 `completed-local / verification-partial`：5 个 addon tracked files 与 reactor/launcher 装配退出，test-only fixture 覆盖 discovery/resolve/send/query/cancel，定向 16/16 和 launcher 定向 6/6 tests 通过。 |
 | 涉及模块 | Monitoring 全切片、metadata-query 全切片、code-review addon、echo addon/测试装配、相关 launcher/root pom/security/script/UI/docs。 |
 | 实施内容 | Monitoring 按 API/UI/RabbitMQ collector/script/security/docs 完整切片删除；metadata-query 按 root reactor/launcher/module/config/docs/test 删除并保护 metadata-config；code-review 整个未装配 addon 独立删除；Echo 先把仍有价值的 discovery/A2A smoke 迁入 dev/test fixture，再移除生产 launcher 装配。每个切片独立提交，不合并成一次大删除。 |
 | 非目标 | 不因授权而跳过仓内引用扫描、测试或独立回滚；不操作未确认的共享/生产 RabbitMQ、数据库、webhook 或 credential；不把 `LocalEchoBusinessFunctionAdapterInvoker` 与 Echo addon 混删；不误删 metadata-config。 |
@@ -159,7 +161,7 @@
 | 风险 | 隐藏仓内消费者；误操作共享资源；launcher discovery 变化；多个同名模块误删；示例 Provider 仍承载测试。 |
 | 回滚方式 | 每切片独立 `git revert` 并保留删除前资源定义/路径清单；旧 dev 数据明确允许丢弃，不承诺数据恢复；如发现共享/生产资源，在执行外部资源动作前停止。 |
 | 完成判据 | Monitoring、metadata-query、code-review 各按完整切片退出；Echo production 装配退出且 test fixture 可复现；每项有引用扫描、迁移/替代、验证和回滚证据；禁止触碰项无变化。 |
-| 生产路由/外部契约 | production_routing_changed: no（当前 dev 前提）；external_contract_changed: no production contract。若发现实际生产/共享环境，立即停止并更新决策。 |
+| 生产路由/外部契约 | production_routing_changed: no（当前不存在生产环境）；external_contract_changed: no production contract；launcher_default_agent_inventory_changed: yes，默认制品不再注册 Echo Agent。若发现实际生产/共享环境，立即停止并更新决策。 |
 
 ## P6：超大类、Provider 状态 schema 与旧 API 渐进治理
 
@@ -232,7 +234,7 @@
 | ODR-142-003 | 服务端权威 opaque task token，30 分钟 TTL，完整授权交集，并与 Worker principal/lease 双重校验，暂停/终态失效 | P2 | implementation-partial；v2/TTL/撤销/definitive terminal、DB preselect/prebind 与 Gateway strict principal/lease 已落地；pause/generation、Codex 安全转发和运行态矩阵待办 |
 | ODR-142-004 | 双运行模式；external-enabled 目录/工具默认拒绝、`workspace-write`、任务工具 egress 默认拒绝、缺凭据 unready/fail closed | P2 | in-progress；模式/readiness 第一批已实施，执行策略尚未完成，因此显式 external 仍强制 unready、不得打开业务流量 |
 | ODR-142-005 | 本地关键状态事务 outbox；无状态拒绝可靠落档；远程调用意图/结果分段记录；高频遥测 best-effort | P2/P7 | approved |
-| ODR-142-006 | dev-only 安全后物理移除 Monitoring、metadata-query、code-review；Echo fixture 迁移后退出生产装配，旧数据可丢弃 | P5 | in-progress；Monitoring/code-review 已移除；metadata-query 已 completed-local，启动/浏览器与正式门禁待补；Echo 未开始；发现共享/生产资源即停止 |
+| ODR-142-006 | dev-only 安全后物理移除 Monitoring、metadata-query、code-review；Echo fixture 迁移后退出默认装配，旧数据可丢弃 | P5 | in-progress；Monitoring/code-review 已移除，metadata-query 已 completed-local；Echo 已 completed-local/verification-partial，默认 launcher inventory 已改变，hosted/browser/PS parser/正式门禁待补 |
 | ODR-142-007 | 仓内消费者迁移后在 1.4.2 直接删除旧 Provider API/SPI/DTO | P6 | approved-with-constraints；无外部窗口，clean build 仍是硬门 |
 | ODR-142-008 | 当前指引修正、历史证据标记、活跃 Skill 修正、确认失效 Skill 退出活跃发现 | P0/P4 | approved |
 

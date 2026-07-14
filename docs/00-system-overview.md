@@ -72,7 +72,6 @@ Launcher
   -> addons/gemini-worker-agent
   -> addons/langgraph-biz-worker
   -> addons/task-assistant
-  -> addons/echo-agent
 
 平台底座层
   -> agent-framework
@@ -119,7 +118,8 @@ Launcher
 | `addons/gemini-worker-agent` | Gemini Worker 任务和进程治理 |
 | `addons/langgraph-biz-worker` | LangGraph Biz Worker 接入与业务 Agent 执行通道 |
 | `addons/task-assistant` | 针对任务生命周期生成通知和摘要的助手能力 |
-| `addons/echo-agent` | 示例/测试型 Agent |
+
+`addons/echo-agent` 已在 1.4.2 dev 阶段从源码、根 reactor 和 `launcher` 物理退役，默认制品不再注册 Echo Agent。有价值的 A2A discovery/resolve/send/query/cancel 行为由 `session-module` 的 test-only 内存 fixture 回归；普通 BusinessFunction 的 `LocalEchoBusinessFunctionAdapterInvoker` 不在退役范围内。
 
 ## 4. 当前核心业务流程
 
@@ -187,7 +187,7 @@ Launcher
 
 - PC 顶部独立 `/chat` 会话入口已下线；`/c/:id` 暂作为深链兼容入口，不是主导航入口
 - 旧独立会话入口及其配套 `tutor-agent` 已移除
-- `echo-agent` 属于示例/测试能力
+- 旧 `echo-agent` 示例 Provider 已退出默认制品，仅保留 test-only A2A fixture 作为回归替代
 - 历史文档中的“语义层管理、数据分析 Agent、权限建模平台”不再是当前产品主线
 
 ## 6. 文档使用建议
@@ -217,6 +217,6 @@ Launcher
 
 ---
 
-**文档版本**: 4.1.0
-**更新日期**: 2026-05-31
+**文档版本**: 4.1.1
+**更新日期**: 2026-07-14
 **基准**: 当前仓库代码结构、前端路由、Provider 实现、控制器接口与模块依赖

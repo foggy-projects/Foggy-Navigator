@@ -31,7 +31,7 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 | 聚合启动 | `launcher` |
 | 底座与 SPI | `navigator-common`、`navigator-spi`、`agent-framework` |
 | 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module` |
-| Worker / Agent addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/echo-agent`、`addons/task-assistant` |
+| Worker / Agent addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/task-assistant` |
 | 对外 SDK / 本地 BFF | `navigator-open-sdk`、`tools/navigator-chat-observer-bff` |
 
 实验性的 `addons/code-review-agent` 源码已移除，当前不属于根 Maven reactor、`launcher` 或默认部署；如需恢复 GitLab MR 自动审查，应作为新接入重新完成消费者、鉴权和运行态审计。
@@ -41,6 +41,8 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 旧自研 `monitoring-module` 与 `tools/foggy-monitor` 已在 1.4.2 dev 阶段移除；不要把 RabbitMQ 或旧 Monitoring API/页面作为启动前置或当前能力。应用日志、健康检查、有限指标和安全审计仍需保留。
 
 旧 `metadata-query-module` 已在 1.4.2 dev 阶段物理退役，不得再将其加回根 reactor、`launcher` 或当前模块清单。`metadata-config-module` 仍是活跃的平台配置能力，不得因名称相近将其误删；LangGraph FSScript 也不属于本次退役范围。
+
+旧 `addons/echo-agent` 已在 1.4.2 dev 阶段从源码、根 reactor 和 `launcher` 物理退役，默认制品不再注册 Echo Agent。A2A discovery/resolve/send/query/cancel 回归由 `session-module` 内的 test-only 内存 fixture 覆盖；`LocalEchoBusinessFunctionAdapterInvoker` 是独立的 BusinessFunction 本地适配能力，仍保留。
 
 ### 前端与移动端
 
@@ -167,7 +169,7 @@ bash scripts/build-frontend.sh
 - **统一分派**: `TaskDispatchFacade`（session-module）是 Worker / Agent 任务入口，支持 A2A 路由和 Direct Provider 路由
 - **会话绑定**: `SessionBindingService`（session-module）管理 Session ↔ Agent 绑定生命周期，绑定后不可切换
 - **REST 端点**: `GET /api/v1/agents`（发现）、`POST /api/v1/agents/{id}/ask`（调用）、`POST /api/v1/tasks`（任务分派）
-- **当前 Provider**: Claude Worker、Codex Worker、Gemini Worker、LangGraph Biz Worker、Echo Agent
+- **当前 Provider**: Claude Worker、Codex Worker、Gemini Worker、LangGraph Biz Worker
 - **三个核心语义**（需求 26）：`logicalAgentId`（逻辑 Agent）、`providerType`（执行后端）、`modelConfigId`（模型配置）— 禁止混淆
 - **扩展**: 新 addon 只需实现 `A2aAgentProvider` + `@Component`，自动注入 Registry
 

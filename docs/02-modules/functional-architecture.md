@@ -150,7 +150,7 @@
 | 聚合启动 | `launcher` |
 | 平台底座 | `navigator-common`、`navigator-spi`、`agent-framework` |
 | 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module` |
-| Worker / Agent Addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/task-assistant`、`addons/echo-agent` |
+| Worker / Agent Addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/task-assistant` |
 | 开放集成 | `navigator-open-sdk`、`tools/navigator-upstream`、`tools/navigator-upstream-cli`、`tools/navigator-chat-observer-bff` |
 | 前端与多端 | `packages/navigator-frontend`、`packages/foggy-chat`、`packages/foggy-chat-core`、`packages/navigator-chat-widget`、`packages/foggy-mobile` |
 | Worker 运行时工具 | `tools/claude-agent-worker`、`tools/codex-agent-worker`、`tools/gemini-agent-worker`、`tools/langgraph-biz-worker`、`tools/mock-llm-service` |
@@ -160,6 +160,8 @@
 旧 `monitoring-module`、RabbitMQ 日志采集、PC Monitoring 页面/API 与 `tools/foggy-monitor` 已在 1.4.2 dev 阶段移除，不属于当前工程或产品入口；如未来需要集中观测，应按新需求接入，不恢复旧切片的隐式装配。
 
 旧 `metadata-query-module` 已在 1.4.2 dev 阶段从源码、根 reactor 和 `launcher` 物理退役；`metadata-config-module` 仍作为活跃的平台配置能力保留。LangGraph FSScript 不在该退役范围内。
+
+旧 `addons/echo-agent` 已在 1.4.2 dev 阶段从源码、根 reactor 和默认 `launcher` 物理退役。A2A 回归使用 `session-module` 内 test-only fixture，不再为测试向默认制品注册 Echo Agent；`LocalEchoBusinessFunctionAdapterInvoker` 作为独立 BusinessFunction 能力保留。
 
 ## 5. 推荐阅读顺序
 
