@@ -102,7 +102,6 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/task-assistant/", "/api/v1/task-assistant/**").permitAll()
                         .requestMatchers("/api/v1/notifications/stream", "/api/v1/notifications/stream/", "/api/v1/notifications/stream/**").permitAll()
                         .requestMatchers("/api/v1/sse/", "/api/v1/sse/**").permitAll()
-                        .requestMatchers("/api/v1/monitoring/", "/api/v1/monitoring/**").permitAll()
                         // UserController uses AuthInterceptor + @RequireAuth for user/API key management.
                         .requestMatchers("/api/v1/users", "/api/v1/users/**").permitAll()
                         .requestMatchers("/api/v1/auth/me").permitAll()
