@@ -3,7 +3,7 @@ type: governance
 version: 1.4.2-SNAPSHOT
 ticket: GOV-003
 priority: high
-status: planned-reviewed
+status: in-progress
 source: REQ-001
 owner: session-owner | provider-owner | internal-ui-owner
 ---
@@ -24,15 +24,35 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| Workitem | planned-reviewed | ownership 方向和边界已评审，invariant 尚未统一落地 |
-| Implementation | not-started | implementation_started: no |
-| Automated test | not-run | 未执行双用户枚举、操作或 Provider 回归测试 |
+| Workitem | in-progress | ownership 窄门面及首批 Session/Task 调用面已落地，剩余列表、系统主体与运行态门禁未闭环 |
+| Implementation | partial-implemented-local | implementation_started: yes；统一使用 `userId + tenantId` 校验 Session/Task，并收紧 Agent、SSE、config、shared、forward 与 context 绑定路径 |
+| Automated test | partial-passed-local | `EXEC-142-014` 定向 Maven 176 tests 通过；`mvn -B -pl launcher -am clean test` 15/15 reactor、2426 tests 全通过。hosted CI 与真实 L3 尚未执行 |
 | Manual verification | not-run | 未执行两账号内部 UI/API 主链验证 |
 | Experience verification | not-run | 未验证深链、刷新、重连和越权错误体验 |
 | Production routing | unchanged | production_routing_changed: no |
 | External contract | unchanged | external_contract_changed: no；越权请求行为计划定向收紧 |
 
-本文没有修改 Controller、service、repository、数据或 UI；静态调用链结论不等同已复现越权。
+本批次修改了 Session/Task 归属门面及其 Controller、service、repository 和测试调用面，没有修改 UI、生产路由或外部启用配置。定向自动化通过只证明已覆盖的本地代码路径，不等同真实双账号漏洞复现、完整列表覆盖、hosted CI、体验验证或正式验收。
+
+## 当前执行批次（`EXEC-142-014`）
+
+### 已落地
+
+1. 新增 `SessionTaskResourceAccessService`，普通用户必须同时提供非空 `userId` 与 `tenantId`；Session/Task、关联 Session、owner 缺失/冲突、不存在或软删除一律 fail closed，并使用统一的非泄露错误语义。该门面不提供 `null = system/admin` 的隐式旁路。
+2. Session、Task、AgentTask/AgentDiscovery、SSE subscribe、Session config、shared ask/task、Session forward/relation 的首批入口均在读取子资源或产生副作用前完成归属校验；批量 SSE/config 路径先验证完整 ID 集合，再执行订阅或写入，避免部分成功。
+3. `TaskDispatchFacade` 与 `TaskOperationRouter` 对 get/list/respond/reconnect/resync/rewind/resume/cancel/delete/scan 的首批路径先解析已授权 Task；cancel 的 Provider route 取自已授权持久化投影，不信任请求体 agent 字段。context 续接在解析 `navigatorSessionId` 后再次校验 Session；Provider 返回的 sessionId 也会重新授权后再读取。
+4. `AgentConversationContext` 的 assigned-ID 首次声明改为独立事务 `persist + flush`，并发冲突后重读胜出记录；后续更新使用 owner/agent 条件更新，避免检查与无条件 `save/merge` 间的 TOCTOU 覆盖。
+5. 显式 model config 必须存在且 enabled，Session 与配置 tenant 必须一致，owner metadata 必须完整，并继续通过 Worker grant 校验后才可解析订阅或解密凭据。该批次没有改变 owner/grant 的产品语义，相关语义仍需 Owner 复核。
+6. Sharing Key 路径先解析 key owner 的 user/tenant、确认资源授权与 Agent readiness，再在同一事务原子校验 operation 并消费 quota；未授权或 unready 请求不应消耗额度。
+
+### 当前限制
+
+- `active/page/search/directory` 等全列表调用面的 tenant 贯穿尚未完成；当前不能声称所有 Session/Task 枚举路径已经闭环。
+- `SessionMetadataService` 的 service-level tenant invariant 仍需收敛；本批次仅对显式 model config credential 边界做定向校验。
+- model config `ownerType/ownerId` 与 Worker grant 的最终授权语义尚待 Owner 明确，当前只执行“metadata 完整 + tenant 一致 + grant 通过”的保守门禁。
+- Provider 返回 sessionId 已重新授权；Provider 返回 taskId 的信任和落库一致性仍需继续治理。
+- 管理员、system、A2A/恢复路径尚无具名显式通路；当前不以空 user/tenant 或全局 admin bypass 放行。
+- 真实双账号 API/浏览器、hosted CI、Provider L3、历史数据扫描、性能/N+1 与正式质量/覆盖/验收门禁均未执行。
 
 ## 目标
 
@@ -102,7 +122,9 @@ owner: session-owner | provider-owner | internal-ui-owner
 5. `TaskOperationRouter` 的部分路径已经使用 `taskId + userId` 查询，说明统一操作路由已有可收敛基础。
 6. `SessionMetadataService` 已在若干查询中使用 sessionId/userId 或 sessionId 集合/userId 的组合谓词。
 
-## 静态搜索结论
+## 实施前静态搜索基线
+
+以下条目保留 P3 开工前的静态调用签名基线，用于解释本批次为何选择统一窄门面；其中 Session/Task/Agent/SSE/config/shared/forward 的首批缺口已经由 `EXEC-142-014` 定向收紧，不能再把本节单独当成当前代码状态。尚未覆盖的列表、metadata、Provider taskId 与系统主体边界以“当前限制”和 Progress 为准。
 
 ### Session 路径不一致
 
@@ -145,14 +167,14 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 | 决策 | Owner | 最晚时间 | 未决处理 |
 |---|---|---|---|
-| Session canonical owner 字段和 context 映射权威 | Session owner | P3 设计前 | 不实现多套 owner resolver |
-| Task owner 以 task.userId 还是 session owner 为主，冲突如何处理 | Session/Provider owners | P3 设计前 | 冲突默认 fail closed |
-| 404/403 等越权错误语义与审计策略 | API/Security | API 契约测试前 | 使用不泄露存在性的临时统一语义 |
+| Session canonical owner 字段和 context 映射权威 | Session owner | 首批已实施 | 普通用户门面使用持久化 Session `userId + tenantId`；context 绑定必须匹配 user/agent；全列表与系统主体继续收敛 |
+| Task owner 以 task.userId 还是 session owner 为主，冲突如何处理 | Session/Provider owners | 首批已实施 | Task 的 user/tenant 与关联 Session 必须同时匹配，任一缺失/冲突 fail closed；Provider taskId 仍待闭环 |
+| 404/403 等越权错误语义与审计策略 | API/Security | API 契约测试前 | 当前统一抛出非泄露 `Resource access denied`；最终 HTTP/UX 与审计策略待双账号 API/浏览器验证 |
 | 管理员访问的具名 role/scope 与允许动作 | Security/Operations | 管理员例外实现前 | 默认无管理员 bypass |
 | 系统/A2A/恢复 principal 模型 | A2A/Provider owners | Provider 操作迁移前 | 旧系统路径不扩大权限 |
 | 历史无 owner 数据的回填、隔离或只读兼容 | Data/Session owner | enforcement 灰度前 | 仅在明确 allowlist 上兼容 |
-| parent/child Session 和 AgentTask 的 owner 传播规则 | Session/A2A owner | 子资源测试前 | 先授权父资源再查询 |
-| 是否增加 owner-aware repository API 并限制旧方法可见性 | Session owner | 实现评审时 | 优先窄门面，不做无收益大改 |
+| parent/child Session 和 AgentTask 的 owner 传播规则 | Session/A2A owner | 首批已实施 | 当前先授权父 Session 再查询子资源；A2A/system 显式主体仍待定义 |
+| 是否增加 owner-aware repository API 并限制旧方法可见性 | Session owner | 首批已实施 | 已增加 user/tenant 联合查询并由窄门面消费；旧裸查询只允许在已授权内部上下文，后续继续扫描调用面 |
 
 ## 关键代码路径
 
@@ -162,9 +184,18 @@ owner: session-owner | provider-owner | internal-ui-owner
 - `session-module/src/main/java/com/foggy/navigator/session/controller/TaskController.java`
 - `session-module/src/main/java/com/foggy/navigator/session/controller/AgentTaskController.java`
 - `session-module/src/main/java/com/foggy/navigator/session/controller/UnifiedSseController.java`
+- `session-module/src/main/java/com/foggy/navigator/session/controller/SessionConfigController.java`
+- `session-module/src/main/java/com/foggy/navigator/session/controller/SessionRelationController.java`
+- `session-module/src/main/java/com/foggy/navigator/session/controller/SharedAskController.java`
+- `session-module/src/main/java/com/foggy/navigator/session/controller/SharedTaskController.java`
+- `session-module/src/main/java/com/foggy/navigator/session/service/SessionTaskResourceAccessService.java`
 - `session-module/src/main/java/com/foggy/navigator/session/service/TaskDispatchFacade.java`
 - `session-module/src/main/java/com/foggy/navigator/session/service/TaskOperationRouter.java`
 - `session-module/src/main/java/com/foggy/navigator/session/service/SessionMetadataService.java`
+- `session-module/src/main/java/com/foggy/navigator/session/service/SessionForwardService.java`
+- `session-module/src/main/java/com/foggy/navigator/session/service/AgentContextStoreImpl.java`
+- `session-module/src/main/java/com/foggy/navigator/session/service/AgentContextOwnershipClaimWriter.java`
+- `session-module/src/main/java/com/foggy/navigator/session/service/SharingKeyService.java`
 - `session-module/src/main/java/com/foggy/navigator/session/service/JpaSessionManager.java`
 - `session-module/src/main/java/com/foggy/navigator/session/service/OpenApiSessionQueryService.java`
 - `session-module/src/main/java/com/foggy/navigator/session/service/AgentTaskService.java`
@@ -176,6 +207,7 @@ owner: session-owner | provider-owner | internal-ui-owner
 - `navigator-common/src/main/java/com/foggy/navigator/common/entity/AgentConversationContextEntity.java`
 - `navigator-common/src/main/java/com/foggy/navigator/common/repository/SessionEntityRepository.java`
 - `navigator-common/src/main/java/com/foggy/navigator/common/repository/SessionTaskRepository.java`
+- `session-module/src/main/java/com/foggy/navigator/session/repository/SessionRepository.java`
 - `session-module/src/main/java/com/foggy/navigator/session/repository/SessionMessageRepository.java`
 - `session-module/src/main/java/com/foggy/navigator/session/repository/AgentConversationContextRepository.java`
 - `session-module/src/main/java/com/foggy/navigator/session/repository/AgentTaskRepository.java`
@@ -233,7 +265,7 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 ## 自动化测试计划
 
-当前状态：`not-run`。
+当前状态：`partial-passed-local`。`EXEC-142-014` 的 Session/Task ownership 定向 Maven 矩阵共计 176 tests，命令通过；随后执行 `mvn -B -pl launcher -am clean test`，15/15 reactor `SUCCESS`，全 reactor 2426 tests、0 failure/error/skipped，launcher 7 tests，总耗时 05:24。日志存在测试 JVM 退出后 30 秒的 fork kill 非失败诊断提示，但命令 exit 0。真实双账号 API、浏览器、Provider L3、全列表 tenant 贯穿与 hosted CI 不在本条证据内。
 
 ### Session
 

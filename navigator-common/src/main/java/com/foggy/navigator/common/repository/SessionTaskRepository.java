@@ -23,6 +23,8 @@ public interface SessionTaskRepository extends JpaRepository<SessionTaskEntity, 
 
     Optional<SessionTaskEntity> findByTaskIdAndUserId(String taskId, String userId);
 
+    Optional<SessionTaskEntity> findByTaskIdAndUserIdAndTenantId(String taskId, String userId, String tenantId);
+
     @Modifying
     @Transactional
     void deleteByTaskId(String taskId);
@@ -32,6 +34,9 @@ public interface SessionTaskRepository extends JpaRepository<SessionTaskEntity, 
     List<SessionTaskEntity> findBySessionIdOrderByCreatedAtDesc(String sessionId);
 
     List<SessionTaskEntity> findBySessionIdAndUserIdOrderByCreatedAtDesc(String sessionId, String userId);
+
+    List<SessionTaskEntity> findBySessionIdAndUserIdAndTenantIdOrderByCreatedAtDesc(
+            String sessionId, String userId, String tenantId);
 
     Optional<SessionTaskEntity> findFirstBySessionIdAndUserIdOrderByCreatedAtDesc(String sessionId, String userId);
 

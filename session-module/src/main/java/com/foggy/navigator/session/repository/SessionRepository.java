@@ -19,11 +19,32 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
 
     @Query("SELECT s FROM SessionEntity s " +
            "WHERE s.userId = :userId " +
+           "AND s.tenantId = :tenantId " +
+           "AND s.deletedAt IS NULL " +
+           "AND s.status <> 'DELETED' " +
+           "ORDER BY s.updatedAt DESC")
+    List<SessionEntity> findByUserIdAndTenantIdOrderByUpdatedAtDesc(@Param("userId") String userId,
+                                                                    @Param("tenantId") String tenantId);
+
+    @Query("SELECT s FROM SessionEntity s " +
+           "WHERE s.userId = :userId " +
            "AND s.agentId = :agentId " +
            "AND s.deletedAt IS NULL " +
            "AND s.status <> 'DELETED' " +
            "ORDER BY s.updatedAt DESC")
     List<SessionEntity> findByUserIdAndAgentIdOrderByUpdatedAtDesc(String userId, String agentId);
+
+    @Query("SELECT s FROM SessionEntity s " +
+           "WHERE s.userId = :userId " +
+           "AND s.tenantId = :tenantId " +
+           "AND s.agentId = :agentId " +
+           "AND s.deletedAt IS NULL " +
+           "AND s.status <> 'DELETED' " +
+           "ORDER BY s.updatedAt DESC")
+    List<SessionEntity> findByUserIdAndTenantIdAndAgentIdOrderByUpdatedAtDesc(
+            @Param("userId") String userId,
+            @Param("tenantId") String tenantId,
+            @Param("agentId") String agentId);
 
     @Query("SELECT s FROM SessionEntity s " +
            "WHERE s.userId = :userId " +
@@ -34,6 +55,8 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
     List<SessionEntity> findByUserIdAndStatusInOrderByUpdatedAtDesc(String userId, List<String> statuses);
 
     Optional<SessionEntity> findByIdAndUserId(String id, String userId);
+
+    Optional<SessionEntity> findByIdAndUserIdAndTenantId(String id, String userId, String tenantId);
 
     @Query("SELECT s FROM SessionEntity s " +
            "WHERE s.userId = :userId " +

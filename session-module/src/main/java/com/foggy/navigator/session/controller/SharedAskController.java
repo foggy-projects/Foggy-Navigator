@@ -8,7 +8,9 @@ import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.entity.AgentConsultationEntity;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
+import com.foggy.navigator.common.entity.UserEntity;
 import com.foggy.navigator.common.form.SharedAskForm;
+import com.foggy.navigator.auth.repository.UserRepository;
 import com.foggy.navigator.session.agent.TaskSubmittingA2aAgentDecorator;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
@@ -45,6 +47,7 @@ public class SharedAskController {
     private final UnifiedAgentResolver agentResolver;
     private final AgentConsultationRepository consultationRepository;
     private final AgentSubmitPipeline agentSubmitPipeline;
+    private final UserRepository userRepository;
 
     @PostMapping("/ask")
     public RX<A2aTask> ask(
@@ -58,7 +61,7 @@ public class SharedAskController {
 
         SharingKeyEntity keyEntity;
         try {
-            keyEntity = sharingKeyService.validateAndConsume(sharingKey);
+            keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
             sharingKeyService.checkOperation(keyEntity, "ask");
         } catch (IllegalArgumentException e) {
             return RX.failA(e.getMessage());
@@ -70,6 +73,11 @@ public class SharedAskController {
                 .orElse(null);
         if (agent == null) {
             return RX.failA("Shared agent not available");
+        }
+        try {
+            keyEntity = sharingKeyService.validateOperationAndConsume(sharingKey, "ask");
+        } catch (IllegalArgumentException e) {
+            return RX.failA(e.getMessage());
         }
 
         A2aAgentCard card = agent.getAgentCard();
@@ -120,8 +128,14 @@ public class SharedAskController {
     }
 
     private AgentResolveContext buildSharedContext(SharingKeyEntity keyEntity) {
+        UserEntity owner = userRepository.findById(keyEntity.getOwnerUserId())
+                .orElseThrow(() -> new SecurityException("shared resource is not accessible"));
+        if (owner.getTenantId() == null || owner.getTenantId().isBlank()) {
+            throw new SecurityException("shared resource is not accessible");
+        }
         return AgentResolveContext.builder()
                 .userId(keyEntity.getOwnerUserId())
+                .tenantId(owner.getTenantId())
                 .requestSource("SHARED_API")
                 .build();
     }

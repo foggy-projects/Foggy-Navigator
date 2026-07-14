@@ -57,6 +57,8 @@ class SessionForwardServiceTest {
     private TaskDispatchFacade taskDispatchFacade;
     @Mock
     private AgentSubmitPipeline agentSubmitPipeline;
+    @Mock
+    private SessionTaskResourceAccessService resourceAccessService;
 
     private SessionForwardService service;
 
@@ -70,7 +72,8 @@ class SessionForwardServiceTest {
                 workingDirectoryRepository,
                 sessionManager,
                 taskDispatchFacade,
-                agentSubmitPipeline
+                agentSubmitPipeline,
+                resourceAccessService
         );
     }
 
@@ -120,10 +123,13 @@ class SessionForwardServiceTest {
                 .providerType("codex-worker")
                 .build();
 
-        when(sessionRepository.findByIdAndUserId("session-source", "user-1")).thenReturn(Optional.of(sourceSession));
-        when(sessionRepository.findByIdAndUserId("session-child", "user-1")).thenReturn(Optional.of(targetSession));
+        when(resourceAccessService.requireOwnedSession("session-source", "user-1", "tenant-1"))
+                .thenReturn(sourceSession);
+        when(resourceAccessService.requireOwnedSession("session-child", "user-1", "tenant-1"))
+                .thenReturn(targetSession);
         when(sessionMessageRepository.findById("msg-1")).thenReturn(Optional.of(sourceMessage));
-        when(sessionTaskRepository.findByTaskIdAndUserId("task-target-latest", "user-1")).thenReturn(Optional.of(latestTask));
+        when(sessionTaskRepository.findByTaskIdAndUserIdAndTenantId(
+                "task-target-latest", "user-1", "tenant-1")).thenReturn(Optional.of(latestTask));
         when(taskDispatchFacade.resumeTask(any(), any())).thenReturn(resumedTask);
         when(sessionRelationRepository.save(any())).thenAnswer(invocation -> {
             SessionRelationEntity relation = invocation.getArgument(0);
@@ -182,6 +188,72 @@ class SessionForwardServiceTest {
     }
 
     @Test
+    void forwardToNewSession_rejectsUnownedSourceBeforeReadingMessageOrMutating() {
+        when(resourceAccessService.requireOwnedSession("session-other", "user-1", "tenant-1"))
+                .thenThrow(new SecurityException("Resource access denied"));
+
+        SessionForwardCreateRequest request = new SessionForwardCreateRequest();
+        request.setSourceSessionId("session-other");
+        request.setSourceMessageId("msg-secret");
+        request.setTargetMode("NEW_SESSION");
+        request.setWorkerId("worker-1");
+
+        SecurityException error = assertThrows(SecurityException.class,
+                () -> service.forwardToNewSession(request, "user-1", "tenant-1"));
+
+        assertEquals("Resource access denied", error.getMessage());
+        verify(sessionMessageRepository, never()).findById(any());
+        verify(sessionManager, never()).createSession(any());
+        verify(sessionRelationRepository, never()).save(any());
+        verify(taskDispatchFacade, never()).resumeTask(any(), any());
+    }
+
+    @Test
+    void forwardToExistingSession_rejectsLatestTaskBoundToAnotherSession() {
+        SessionEntity sourceSession = new SessionEntity();
+        sourceSession.setId("session-source");
+        sourceSession.setUserId("user-1");
+
+        SessionEntity targetSession = new SessionEntity();
+        targetSession.setId("session-target");
+        targetSession.setUserId("user-1");
+        targetSession.setParentSessionId("session-source");
+        targetSession.setLatestTaskId("task-cross-bound");
+
+        SessionMessageEntity sourceMessage = new SessionMessageEntity();
+        sourceMessage.setId("msg-1");
+        sourceMessage.setSessionId("session-source");
+        sourceMessage.setRole("ASSISTANT");
+        sourceMessage.setContent("原始回复");
+
+        SessionTaskEntity crossBoundTask = new SessionTaskEntity();
+        crossBoundTask.setTaskId("task-cross-bound");
+        crossBoundTask.setSessionId("session-other");
+
+        when(resourceAccessService.requireOwnedSession("session-source", "user-1", "tenant-1"))
+                .thenReturn(sourceSession);
+        when(resourceAccessService.requireOwnedSession("session-target", "user-1", "tenant-1"))
+                .thenReturn(targetSession);
+        when(sessionMessageRepository.findById("msg-1")).thenReturn(Optional.of(sourceMessage));
+        when(sessionTaskRepository.findByTaskIdAndUserIdAndTenantId(
+                "task-cross-bound", "user-1", "tenant-1"))
+                .thenReturn(Optional.of(crossBoundTask));
+
+        SessionForwardCreateRequest request = new SessionForwardCreateRequest();
+        request.setSourceSessionId("session-source");
+        request.setSourceMessageId("msg-1");
+        request.setTargetMode("EXISTING_SESSION");
+        request.setTargetSessionId("session-target");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.forwardToNewSession(request, "user-1", "tenant-1"));
+
+        assertEquals("Target session latest task binding is invalid", error.getMessage());
+        verify(taskDispatchFacade, never()).resumeTask(any(), any());
+        verify(sessionRelationRepository, never()).save(any());
+    }
+
+    @Test
     void forwardToNewSession_existingSession_rejectsUnrelatedTargetSession() {
         SessionEntity sourceSession = new SessionEntity();
         sourceSession.setId("session-source");
@@ -193,6 +265,10 @@ class SessionForwardServiceTest {
         unrelatedTarget.setParentSessionId("another-parent");
         unrelatedTarget.setLatestTaskId("task-2");
 
+        SessionEntity unrelatedRoot = new SessionEntity();
+        unrelatedRoot.setId("another-parent");
+        unrelatedRoot.setUserId("user-1");
+
         SessionMessageEntity sourceMessage = new SessionMessageEntity();
         sourceMessage.setId("msg-1");
         sourceMessage.setSessionId("session-source");
@@ -200,8 +276,12 @@ class SessionForwardServiceTest {
         sourceMessage.setContent("原始回复");
         sourceMessage.setCreatedAt(LocalDateTime.now());
 
-        when(sessionRepository.findByIdAndUserId("session-source", "user-1")).thenReturn(Optional.of(sourceSession));
-        when(sessionRepository.findByIdAndUserId("session-other", "user-1")).thenReturn(Optional.of(unrelatedTarget));
+        when(resourceAccessService.requireOwnedSession("session-source", "user-1", "tenant-1"))
+                .thenReturn(sourceSession);
+        when(resourceAccessService.requireOwnedSession("session-other", "user-1", "tenant-1"))
+                .thenReturn(unrelatedTarget);
+        when(resourceAccessService.requireOwnedSession("another-parent", "user-1", "tenant-1"))
+                .thenReturn(unrelatedRoot);
         when(sessionMessageRepository.findById("msg-1")).thenReturn(Optional.of(sourceMessage));
         when(sessionRelationRepository.existsByUserIdAndRelationTypeAndSourceSessionIdAndTargetSessionId(
                 "user-1", "FORWARD", "session-source", "session-other"
@@ -221,7 +301,8 @@ class SessionForwardServiceTest {
         assertEquals("Target session must be a previously forwarded child session", error.getMessage());
         verify(taskDispatchFacade, never()).resumeTask(any(), any());
         verify(sessionRelationRepository, never()).save(any());
-        verify(sessionTaskRepository, never()).findBySessionIdOrderByCreatedAtDesc(any());
+        verify(sessionTaskRepository, never())
+                .findBySessionIdAndUserIdAndTenantIdOrderByCreatedAtDesc(any(), any(), any());
     }
 
     @Test
@@ -255,8 +336,10 @@ class SessionForwardServiceTest {
                 .providerType("codex-worker")
                 .build();
 
-        when(sessionRepository.findByIdAndUserId("session-child-a", "user-1")).thenReturn(Optional.of(sourceChild));
-        when(sessionRepository.findByIdAndUserId("session-root", "user-1")).thenReturn(Optional.of(rootSession));
+        when(resourceAccessService.requireOwnedSession("session-child-a", "user-1", "tenant-1"))
+                .thenReturn(sourceChild);
+        when(resourceAccessService.requireOwnedSession("session-root", "user-1", "tenant-1"))
+                .thenReturn(rootSession);
         when(sessionMessageRepository.findById("msg-1")).thenReturn(Optional.of(sourceMessage));
         when(sessionManager.createSession(any())).thenReturn("session-child-b");
         when(sessionRepository.findById("session-child-b")).thenReturn(Optional.of(createdSession));
@@ -307,12 +390,13 @@ class SessionForwardServiceTest {
         relation.setTargetWorkerId("worker-target");
         relation.setCreatedAt(LocalDateTime.now());
 
-        when(sessionRepository.findByIdAndUserId("session-child-b", "user-1")).thenReturn(Optional.of(targetSession));
+        when(resourceAccessService.requireOwnedSession("session-child-b", "user-1", "tenant-1"))
+                .thenReturn(targetSession);
         when(sessionRelationRepository.findFirstByUserIdAndRelationTypeAndTargetSessionIdOrderByCreatedAtDesc(
                 "user-1", "FORWARD", "session-child-b"
         )).thenReturn(Optional.of(relation));
 
-        SessionRelationDTO result = service.findIncomingForwardRelation("session-child-b", "user-1");
+        SessionRelationDTO result = service.findIncomingForwardRelation("session-child-b", "user-1", "tenant-1");
 
         assertEquals(101L, result.getId());
         assertEquals("FORWARD", result.getRelationType());
@@ -322,5 +406,18 @@ class SessionForwardServiceTest {
         assertEquals("session-child-b", result.getTargetSessionId());
         assertEquals("worker-source", result.getSourceWorkerId());
         assertEquals("worker-target", result.getTargetWorkerId());
+    }
+
+    @Test
+    void findIncomingForwardRelation_rejectsUnownedTargetBeforeRelationLookup() {
+        when(resourceAccessService.requireOwnedSession("session-other", "user-1", "tenant-1"))
+                .thenThrow(new SecurityException("Resource access denied"));
+
+        SecurityException error = assertThrows(SecurityException.class,
+                () -> service.findIncomingForwardRelation("session-other", "user-1", "tenant-1"));
+
+        assertEquals("Resource access denied", error.getMessage());
+        verify(sessionRelationRepository, never())
+                .findFirstByUserIdAndRelationTypeAndTargetSessionIdOrderByCreatedAtDesc(any(), any(), any());
     }
 }

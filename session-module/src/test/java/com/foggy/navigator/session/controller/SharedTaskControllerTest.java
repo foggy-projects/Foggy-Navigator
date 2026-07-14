@@ -7,9 +7,11 @@ import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
+import com.foggy.navigator.common.entity.UserEntity;
+import com.foggy.navigator.auth.repository.UserRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
-import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.session.service.SharingKeyService;
+import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggyframework.core.ex.RX;
@@ -38,16 +40,17 @@ class SharedTaskControllerTest {
     @Mock
     private TaskDispatchFacade taskDispatchFacade;
     @Mock
-    private SessionRepository sessionRepository;
-    @Mock
     private SessionManager sessionManager;
+    @Mock
+    private UserRepository userRepository;
+    @Mock
+    private SessionTaskResourceAccessService resourceAccessService;
     @Mock
     private A2aAgent agent;
 
     @Test
     void getTask_returnsA2aTaskWhenSharingKeyMatchesTaskAgent() {
-        SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
+        SharedTaskController controller = controller();
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         DispatchTaskDTO dispatchTask = DispatchTaskDTO.builder()
                 .taskId("task-1")
@@ -68,8 +71,7 @@ class SharedTaskControllerTest {
 
     @Test
     void getTask_returnsFailWhenTaskAgentDoesNotMatchSharingKey() {
-        SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
+        SharedTaskController controller = controller();
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         DispatchTaskDTO dispatchTask = DispatchTaskDTO.builder()
                 .taskId("task-1")
@@ -87,8 +89,7 @@ class SharedTaskControllerTest {
 
     @Test
     void cancelTask_usesFacadeWhenTaskIsAuthorized() {
-        SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
+        SharedTaskController controller = controller();
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         DispatchTaskDTO dispatchTask = DispatchTaskDTO.builder()
                 .taskId("task-1")
@@ -106,8 +107,7 @@ class SharedTaskControllerTest {
 
     @Test
     void respondToTask_staleInteractionReturnsBusinessFailure() {
-        SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
+        SharedTaskController controller = controller();
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         DispatchTaskDTO dispatchTask = DispatchTaskDTO.builder()
                 .taskId("task-1")
@@ -119,7 +119,7 @@ class SharedTaskControllerTest {
         when(sharingKeyService.validateForKeyOnly("shk-1")).thenReturn(keyEntity);
         when(taskDispatchFacade.getTask(eq("task-1"), any())).thenReturn(Optional.of(dispatchTask));
         doThrow(new IllegalStateException("CODEX_USER_INPUT_REQUEST_MISMATCH"))
-                .when(taskDispatchFacade).respondToTask("task-1", "owner-1", body);
+                .when(taskDispatchFacade).respondToTask(eq("task-1"), any(), eq(body));
 
         RX<String> result = controller.respondToTask("shk-1", "task-1", body);
 
@@ -129,8 +129,7 @@ class SharedTaskControllerTest {
 
     @Test
     void getSessionMessages_returnsConversationWhenSessionBelongsToSharedAgent() {
-        SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
+        SharedTaskController controller = controller();
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         SessionEntity session = new SessionEntity();
         session.setId("session-1");
@@ -145,7 +144,8 @@ class SharedTaskControllerTest {
                 .build());
 
         when(sharingKeyService.validateForKeyOnly("shk-1")).thenReturn(keyEntity);
-        when(sessionRepository.findByIdAndUserId("session-1", "owner-1")).thenReturn(Optional.of(session));
+        when(resourceAccessService.requireOwnedSession("session-1", "owner-1", "tenant-1"))
+                .thenReturn(session);
         when(sessionManager.getAllMessages("session-1")).thenReturn(messages);
 
         RX<List<Message>> result = controller.getSessionMessages("shk-1", "session-1");
@@ -157,8 +157,7 @@ class SharedTaskControllerTest {
 
     @Test
     void getSessionMessages_returnsFailWhenSessionAgentDoesNotMatchSharingKey() {
-        SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
+        SharedTaskController controller = controller();
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         SessionEntity session = new SessionEntity();
         session.setId("session-1");
@@ -166,7 +165,8 @@ class SharedTaskControllerTest {
         session.setAgentId("agent-2");
 
         when(sharingKeyService.validateForKeyOnly("shk-1")).thenReturn(keyEntity);
-        when(sessionRepository.findByIdAndUserId("session-1", "owner-1")).thenReturn(Optional.of(session));
+        when(resourceAccessService.requireOwnedSession("session-1", "owner-1", "tenant-1"))
+                .thenReturn(session);
 
         RX<List<Message>> result = controller.getSessionMessages("shk-1", "session-1");
 
@@ -180,6 +180,20 @@ class SharedTaskControllerTest {
         entity.setAgentId(agentId);
         entity.setOwnerUserId(ownerUserId);
         entity.setEnabled(true);
+        UserEntity owner = new UserEntity();
+        owner.setId(ownerUserId);
+        owner.setTenantId("tenant-1");
+        lenient().when(userRepository.findById(ownerUserId)).thenReturn(Optional.of(owner));
         return entity;
+    }
+
+    private SharedTaskController controller() {
+        return new SharedTaskController(
+                sharingKeyService,
+                agentResolver,
+                taskDispatchFacade,
+                sessionManager,
+                userRepository,
+                resourceAccessService);
     }
 }

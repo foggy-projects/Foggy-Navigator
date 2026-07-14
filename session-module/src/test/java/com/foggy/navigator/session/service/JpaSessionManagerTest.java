@@ -14,6 +14,7 @@ import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.context.annotation.Bean;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -53,6 +54,29 @@ class JpaSessionManagerTest {
 
     @Autowired
     private AgentConversationContextRepository contextRepository;
+
+    @Autowired
+    private AgentContextOwnershipClaimWriter contextOwnershipClaimWriter;
+
+    @Test
+    void contextOwnershipClaim_duplicateAssignedIdNeverMergesWinnerBinding() {
+        AgentConversationContextEntity winner = context(
+                "ctx-ownership-claim", "owner-user", "agent-owner", "winner-session");
+        contextOwnershipClaimWriter.insert(winner);
+
+        AgentConversationContextEntity contender = context(
+                "ctx-ownership-claim", "contender-user", "agent-contender", "contender-session");
+
+        assertThrows(DataIntegrityViolationException.class,
+                () -> contextOwnershipClaimWriter.insert(contender));
+
+        AgentConversationContextEntity persisted = contextRepository
+                .findById("ctx-ownership-claim")
+                .orElseThrow();
+        assertEquals("owner-user", persisted.getUserId());
+        assertEquals("agent-owner", persisted.getTargetAgentId());
+        assertEquals("winner-session", persisted.getAgentSessionRef());
+    }
 
     @Test
     void createSession_shouldReturnSessionId() {
@@ -415,5 +439,18 @@ class JpaSessionManagerTest {
                 .tenantId("tenant-1")
                 .agentId("agent-1")
                 .build();
+    }
+
+    private AgentConversationContextEntity context(String contextId,
+                                                   String userId,
+                                                   String targetAgentId,
+                                                   String agentSessionRef) {
+        AgentConversationContextEntity entity = new AgentConversationContextEntity();
+        entity.setContextId(contextId);
+        entity.setUserId(userId);
+        entity.setTargetAgentId(targetAgentId);
+        entity.setAgentType("claude-worker");
+        entity.setAgentSessionRef(agentSessionRef);
+        return entity;
     }
 }

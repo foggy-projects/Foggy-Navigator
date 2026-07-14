@@ -7,9 +7,11 @@ import com.foggy.navigator.common.dto.a2a.A2aArtifact;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
+import com.foggy.navigator.common.entity.UserEntity;
+import com.foggy.navigator.auth.repository.UserRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
-import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.session.service.SharingKeyService;
+import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
@@ -38,8 +40,9 @@ public class SharedTaskController {
     private final SharingKeyService sharingKeyService;
     private final UnifiedAgentResolver agentResolver;
     private final TaskDispatchFacade taskDispatchFacade;
-    private final SessionRepository sessionRepository;
     private final SessionManager sessionManager;
+    private final UserRepository userRepository;
+    private final SessionTaskResourceAccessService resourceAccessService;
 
     @GetMapping("/tasks/{taskId}")
     public RX<A2aTask> getTask(
@@ -93,9 +96,10 @@ public class SharedTaskController {
         try {
             SharingKeyEntity keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
             sharingKeyService.checkOperation(keyEntity, "session:get");
-            Optional<SessionEntity> sessionOpt = sessionRepository.findByIdAndUserId(sessionId, keyEntity.getOwnerUserId())
-                    .filter(session -> keyEntity.getAgentId().equals(session.getAgentId()));
-            if (sessionOpt.isEmpty()) {
+            AgentResolveContext context = buildSharedContext(keyEntity);
+            SessionEntity session = resourceAccessService.requireOwnedSession(
+                    sessionId, context.getUserId(), context.getTenantId());
+            if (!keyEntity.getAgentId().equals(session.getAgentId())) {
                 return RX.failA("Session not found: " + sessionId);
             }
             return RX.ok(sessionManager.getAllMessages(sessionId));
@@ -120,7 +124,7 @@ public class SharedTaskController {
                 return RX.failA("Task not found: " + taskId);
             }
 
-            taskDispatchFacade.respondToTask(taskId, keyEntity.getOwnerUserId(), body);
+            taskDispatchFacade.respondToTask(taskId, buildSharedContext(keyEntity), body);
             return RX.ok("Response sent");
         } catch (UnsupportedOperationException e) {
             return RX.failA("Respond not supported for this agent: " + e.getMessage());
@@ -175,8 +179,14 @@ public class SharedTaskController {
     }
 
     private AgentResolveContext buildSharedContext(SharingKeyEntity keyEntity) {
+        UserEntity owner = userRepository.findById(keyEntity.getOwnerUserId())
+                .orElseThrow(() -> new SecurityException("shared resource is not accessible"));
+        if (owner.getTenantId() == null || owner.getTenantId().isBlank()) {
+            throw new SecurityException("shared resource is not accessible");
+        }
         return AgentResolveContext.builder()
                 .userId(keyEntity.getOwnerUserId())
+                .tenantId(owner.getTenantId())
                 .requestSource("SHARED_API")
                 .build();
     }

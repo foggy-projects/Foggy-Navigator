@@ -18,6 +18,7 @@ import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
+import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
@@ -70,6 +71,7 @@ public class TaskDispatchFacade {
     private final UnifiedAgentResolver agentResolver;
     private final SessionBindingService bindingService;
     private final SessionRepository sessionRepository;
+    private final SessionTaskResourceAccessService resourceAccessService;
     private final TaskQueryProviderRegistry taskQueryProviderRegistry;
     private final LlmModelManager llmModelManager;
 
@@ -91,11 +93,16 @@ public class TaskDispatchFacade {
 
     @Autowired(required = false)
     @Nullable
+    private AgentContextStore agentContextStore;
+
+    @Autowired(required = false)
+    @Nullable
     private PlatformTransactionManager transactionManager;
 
     public TaskDispatchFacade(UnifiedAgentResolver agentResolver,
                               SessionBindingService bindingService,
                               SessionRepository sessionRepository,
+                              SessionTaskResourceAccessService resourceAccessService,
                               List<? extends TaskLookupProvider> taskLookupProviders,
                               List<? extends TaskCommandProvider> taskCommandProviders,
                               List<? extends TaskListingProvider> taskListingProviders,
@@ -104,6 +111,7 @@ public class TaskDispatchFacade {
         this.agentResolver = agentResolver;
         this.bindingService = bindingService;
         this.sessionRepository = sessionRepository;
+        this.resourceAccessService = resourceAccessService;
         this.taskQueryProviderRegistry = new TaskQueryProviderRegistry(
                 taskLookupProviders,
                 taskCommandProviders,
@@ -129,6 +137,7 @@ public class TaskDispatchFacade {
                 agentResolver,
                 bindingService,
                 sessionRepository,
+                resourceAccessService,
                 sessionTaskRepository,
                 nativeSubtaskStateRepository,
                 taskQueryProviderRegistry,
@@ -223,10 +232,15 @@ public class TaskDispatchFacade {
     /**
      * 按会话查询任务列表（根据 session 绑定的 providerType 路由到对应 Provider）
      */
-    public List<DispatchTaskDTO> listTasksBySession(String sessionId) {
+    public List<DispatchTaskDTO> listTasksBySession(String sessionId, AgentResolveContext context) {
+        resourceAccessService.requireOwnedSession(
+                sessionId,
+                context != null ? context.getUserId() : null,
+                context != null ? context.getTenantId() : null);
         if (sessionTaskRepository != null) {
             List<DispatchTaskDTO> tasks = toDispatchTaskDTOs(
-                    sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(sessionId));
+                    sessionTaskRepository.findBySessionIdAndUserIdAndTenantIdOrderByCreatedAtDesc(
+                            sessionId, context.getUserId(), context.getTenantId()));
             if (!tasks.isEmpty()) {
                 return tasks;
             }
@@ -289,29 +303,29 @@ public class TaskDispatchFacade {
     /**
      * 回复权限请求 / 用户问题（不支持的 Provider 自动抛 UnsupportedOperationException）
      */
-    public void respondToTask(String taskId, String userId, Map<String, Object> response) {
-        operationRouter().respondToTask(taskId, userId, response);
+    public void respondToTask(String taskId, AgentResolveContext context, Map<String, Object> response) {
+        operationRouter().respondToTask(taskId, context, response);
     }
 
     /**
      * 重连任务 SSE 流
      */
-    public void reconnectTask(String taskId, String userId) {
-        operationRouter().reconnectTask(taskId, userId);
+    public void reconnectTask(String taskId, AgentResolveContext context) {
+        operationRouter().reconnectTask(taskId, context);
     }
 
     /**
      * 重新同步任务状态
      */
-    public Object resyncTask(String taskId, String userId) {
-        return operationRouter().resyncTask(taskId, userId);
+    public Object resyncTask(String taskId, AgentResolveContext context) {
+        return operationRouter().resyncTask(taskId, context);
     }
 
     /**
      * 回退到检查点
      */
-    public Object rewindTask(String taskId, String userId, Map<String, Object> params) {
-        return operationRouter().rewindTask(taskId, userId, params);
+    public Object rewindTask(String taskId, AgentResolveContext context, Map<String, Object> params) {
+        return operationRouter().rewindTask(taskId, context, params);
     }
 
     // ── Phase 3: 统一任务端点扩展 ──
@@ -329,15 +343,15 @@ public class TaskDispatchFacade {
     /**
      * 删除任务
      */
-    public void deleteTask(String taskId, String userId) {
-        operationRouter().deleteTask(taskId, userId);
+    public void deleteTask(String taskId, AgentResolveContext context) {
+        operationRouter().deleteTask(taskId, context);
     }
 
     /**
      * 扫描 checkpoints
      */
-    public Object scanCheckpoints(String taskId, String userId) {
-        return operationRouter().scanCheckpoints(taskId, userId);
+    public Object scanCheckpoints(String taskId, AgentResolveContext context) {
+        return operationRouter().scanCheckpoints(taskId, context);
     }
 
     /**
@@ -1047,6 +1061,10 @@ public class TaskDispatchFacade {
                             + ", but request sessionId is " + requestedSessionId);
         }
 
+        resourceAccessService.requireOwnedSession(
+                navigatorSessionId,
+                userId,
+                context != null ? context.getTenantId() : null);
         SessionEntity session = sessionRepository.findById(navigatorSessionId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "CONTEXT_SESSION_MISMATCH: contextId " + contextId
@@ -1100,15 +1118,10 @@ public class TaskDispatchFacade {
         if (request == null) return;
         String sessionId = trimToNull(request.getSessionId());
         if (sessionId == null) return;
-        String userId = context != null ? trimToNull(context.getUserId()) : null;
-        if (userId == null) {
-            throw new IllegalArgumentException("SESSION_ACCESS_DENIED: user identity is required");
-        }
-        sessionRepository.findById(sessionId).ifPresent(session -> {
-            if (!userId.equals(trimToNull(session.getUserId()))) {
-                throw new IllegalArgumentException("SESSION_ACCESS_DENIED: session belongs to another user");
-            }
-        });
+        resourceAccessService.requireOwnedSession(
+                sessionId,
+                context != null ? context.getUserId() : null,
+                context != null ? context.getTenantId() : null);
     }
 
     private void validateSessionProviderBeforeDispatch(String sessionId, String requestedProviderType) {
@@ -1183,7 +1196,7 @@ public class TaskDispatchFacade {
                                        TaskDispatchRequest request,
                                        AgentResolveContext context,
                                        String providerType) {
-        if (agentConversationContextRepository == null || dto == null) {
+        if (agentConversationContextRepository == null || agentContextStore == null || dto == null) {
             return;
         }
         String contextId = trimToNull(firstNonBlank(dto.getContextId(), request.getContextId()));
@@ -1201,34 +1214,20 @@ public class TaskDispatchFacade {
                 dto.getGeminiSessionId(),
                 dto.getWorkerTaskId());
 
-        AgentConversationContextEntity entity = agentConversationContextRepository.findById(contextId)
-                .orElseGet(AgentConversationContextEntity::new);
-        if (entity.getContextId() == null) {
-            entity.setContextId(contextId);
-        }
-        String existingUserId = trimToNull(entity.getUserId());
-        if (existingUserId != null && !existingUserId.equals(userId)) {
-            throw new IllegalArgumentException(
-                    "CONTEXT_WORKER_MISMATCH: contextId " + contextId + " is already bound to another user");
-        }
-        String existingTargetAgentId = trimToNull(entity.getTargetAgentId());
-        if (existingTargetAgentId != null && targetAgentId != null && !existingTargetAgentId.equals(targetAgentId)) {
-            throw new IllegalArgumentException(
-                    "CONTEXT_WORKER_MISMATCH: contextId " + contextId
-                            + " is already bound to agent " + existingTargetAgentId
-                            + ", but dispatched agent is " + targetAgentId);
-        }
-
-        entity.setUserId(userId);
-        entity.setTargetAgentId(firstNonBlank(existingTargetAgentId, targetAgentId, resolvedProviderType));
-        entity.setAgentType(firstNonBlank(resolvedProviderType, entity.getAgentType(), "unknown"));
-        entity.setAgentSessionRef(firstNonBlank(agentSessionRef, entity.getAgentSessionRef()));
-        entity.setNavigatorSessionId(sessionId);
-        if (request.getContextAlias() != null && !request.getContextAlias().isBlank()) {
-            entity.setContextAlias(request.getContextAlias().trim());
-        }
+        String effectiveTargetAgentId = firstNonBlank(targetAgentId, resolvedProviderType);
+        resourceAccessService.requireOwnedSession(
+                sessionId,
+                userId,
+                context != null ? context.getTenantId() : null);
+        agentContextStore.saveSessionRefFull(
+                contextId,
+                firstNonBlank(resolvedProviderType, "unknown"),
+                agentSessionRef,
+                sessionId,
+                userId,
+                effectiveTargetAgentId,
+                trimToNull(request.getContextAlias()));
         persistCodexBizScopedHomeBinding(sessionId, resolvedProviderType, request);
-        agentConversationContextRepository.save(entity);
     }
 
     private void validateContextScopedHomeCompatibility(TaskDispatchRequest request, SessionEntity session) {

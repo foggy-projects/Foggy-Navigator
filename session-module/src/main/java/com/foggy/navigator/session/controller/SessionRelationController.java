@@ -31,7 +31,8 @@ public class SessionRelationController {
     public RX<SessionRelationDTO> findIncomingForwardRelation(@PathVariable String targetSessionId) {
         return RX.ok(sessionForwardService.findIncomingForwardRelation(
                 targetSessionId,
-                UserContext.getCurrentUserId()
+                UserContext.getCurrentUserId(),
+                UserContext.getCurrentTenantId()
         ));
     }
 }

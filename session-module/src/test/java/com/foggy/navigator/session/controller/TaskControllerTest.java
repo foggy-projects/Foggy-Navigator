@@ -151,13 +151,15 @@ class TaskControllerTest {
         List<DispatchTaskDTO> tasks = List.of(
                 DispatchTaskDTO.builder().taskId("task-1").build()
         );
-        when(taskDispatchFacade.listTasksBySession("session-1")).thenReturn(tasks);
+        when(taskDispatchFacade.listTasksBySession(eq("session-1"), any(AgentResolveContext.class)))
+                .thenReturn(tasks);
 
         RX<List<DispatchTaskDTO>> result = controller.listTasks("session-1");
 
         assertNotNull(result.getData());
         assertEquals(1, result.getData().size());
-        verify(taskDispatchFacade).listTasksBySession("session-1");
+        verify(taskDispatchFacade).listTasksBySession(eq("session-1"), argThat(context ->
+                USER_ID.equals(context.getUserId()) && TENANT_ID.equals(context.getTenantId())));
         verify(taskDispatchFacade, never()).listActiveTasks(anyString());
     }
 
@@ -174,7 +176,7 @@ class TaskControllerTest {
         assertEquals(1, result.getData().size());
         assertEquals("task-active-1", result.getData().get(0).getTaskId());
         verify(taskDispatchFacade).listActiveTasks(USER_ID);
-        verify(taskDispatchFacade, never()).listTasksBySession(anyString());
+        verify(taskDispatchFacade, never()).listTasksBySession(anyString(), any(AgentResolveContext.class));
     }
 
     @Test
@@ -191,6 +193,22 @@ class TaskControllerTest {
 
         assertNotNull(result.getData());
         verify(taskDispatchFacade).cancelTask(eq("task-1"), eq("agent-1"), any(AgentResolveContext.class));
+    }
+
+    @Test
+    void cancelTask_ignoresCallerSuppliedAgentRoute() {
+        DispatchTaskDTO dto = DispatchTaskDTO.builder()
+                .taskId("task-1")
+                .agentId("agent-owner")
+                .status("RUNNING")
+                .build();
+        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(dto));
+
+        controller.cancelTask("task-1", Map.of("agentId", "agent-attacker"));
+
+        verify(taskDispatchFacade).cancelTask(
+                eq("task-1"), eq("agent-owner"), any(AgentResolveContext.class));
     }
 
     @Test
@@ -236,7 +254,8 @@ class TaskControllerTest {
         RX<String> result = controller.respondToTask("task-1", body);
 
         assertNotNull(result.getData());
-        verify(taskDispatchFacade).respondToTask("task-1", USER_ID, body);
+        verify(taskDispatchFacade).respondToTask(eq("task-1"), argThat(context ->
+                USER_ID.equals(context.getUserId()) && TENANT_ID.equals(context.getTenantId())), eq(body));
     }
 
     @Test
@@ -281,7 +300,7 @@ class TaskControllerTest {
     void respondToTask_unsupported() {
         Map<String, Object> body = Map.of("decision", "approve");
         doThrow(new UnsupportedOperationException("respond not supported by codex-worker"))
-                .when(taskDispatchFacade).respondToTask("task-1", USER_ID, body);
+                .when(taskDispatchFacade).respondToTask(eq("task-1"), any(AgentResolveContext.class), eq(body));
 
         RX<String> result = controller.respondToTask("task-1", body);
 
@@ -292,7 +311,7 @@ class TaskControllerTest {
     void respondToTask_invalidResponse_returnsFailA() {
         Map<String, Object> body = Map.of("permissionId", "request-1", "answers", Map.of());
         doThrow(new IllegalArgumentException("invalid response"))
-                .when(taskDispatchFacade).respondToTask("task-1", USER_ID, body);
+                .when(taskDispatchFacade).respondToTask(eq("task-1"), any(AgentResolveContext.class), eq(body));
 
         RX<String> result = controller.respondToTask("task-1", body);
 
@@ -304,7 +323,7 @@ class TaskControllerTest {
     void respondToTask_staleRequest_returnsFailB() {
         Map<String, Object> body = Map.of("permissionId", "stale", "answers", Map.of());
         doThrow(new IllegalStateException("CODEX_USER_INPUT_REQUEST_MISMATCH"))
-                .when(taskDispatchFacade).respondToTask("task-1", USER_ID, body);
+                .when(taskDispatchFacade).respondToTask(eq("task-1"), any(AgentResolveContext.class), eq(body));
 
         RX<String> result = controller.respondToTask("task-1", body);
 

@@ -2,14 +2,17 @@ package com.foggy.navigator.session.controller;
 
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.AgentConsultationEntity;
 import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.session.repository.AgentConsultationRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.session.agent.TaskSubmittingA2aAgentDecorator;
 import com.foggy.navigator.session.agent.pipeline.AgentSubmitPipeline;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
+import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
@@ -39,6 +42,7 @@ public class AgentDiscoveryController {
     private final SessionRepository sessionRepository;
     private final ObjectMapper objectMapper;
     private final AgentSubmitPipeline agentSubmitPipeline;
+    private final SessionTaskResourceAccessService resourceAccessService;
 
     @GetMapping
     public RX<List<A2aAgentCard>> listAgents(
@@ -67,7 +71,9 @@ public class AgentDiscoveryController {
     public RX<A2aTask> askAgent(
             @PathVariable String agentId,
             @RequestBody Map<String, String> body) {
-        String userId = UserContext.getCurrentUserId();
+        CurrentUser currentUser = UserContext.getCurrentUser();
+        String userId = currentUser.getUserId();
+        String tenantId = currentUser.getTenantId();
         String question = body.get("question");
         String sessionId = body.get("sessionId");
         String systemPrompt = body.get("systemPrompt");
@@ -75,8 +81,12 @@ public class AgentDiscoveryController {
         if (question == null || question.isBlank()) {
             return RX.failA("question is required");
         }
+        if (sessionId != null && !sessionId.isBlank()) {
+            resourceAccessService.requireOwnedSession(sessionId, userId, tenantId);
+        }
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId(userId)
+                .tenantId(tenantId)
                 .requestSource("UI")
                 .modelConfigId(body.get("modelConfigId"))
                 .build();
@@ -143,6 +153,7 @@ public class AgentDiscoveryController {
     public RX<A2aTask> getTaskStatus(
             @PathVariable String agentId,
             @PathVariable String taskId) {
+        requireOwnedAgentTask(agentId, taskId);
         A2aAgent agent = agentResolver.resolveAgent(agentId, buildContext())
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
         A2aTask task = agent.getTask(taskId)
@@ -157,6 +168,7 @@ public class AgentDiscoveryController {
     public RX<String> cancelTask(
             @PathVariable String agentId,
             @PathVariable String taskId) {
+        requireOwnedAgentTask(agentId, taskId);
         A2aAgent agent = agentResolver.resolveAgent(agentId, buildContext())
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
         agent.cancelTask(taskId);
@@ -166,6 +178,9 @@ public class AgentDiscoveryController {
     /** 查询某会话的所有 @agent 咨询记录 */
     @GetMapping("/consultations")
     public RX<List<AgentConsultationEntity>> listConsultations(@RequestParam String sessionId) {
+        CurrentUser currentUser = UserContext.getCurrentUser();
+        resourceAccessService.requireOwnedSession(
+                sessionId, currentUser.getUserId(), currentUser.getTenantId());
         return RX.ok(consultationRepository.findBySessionIdOrderByCreatedAtAsc(sessionId));
     }
 
@@ -234,9 +249,23 @@ public class AgentDiscoveryController {
     }
 
     private AgentResolveContext buildContext() {
+        CurrentUser currentUser = UserContext.getCurrentUser();
         return AgentResolveContext.builder()
-                .userId(UserContext.getCurrentUserId())
+                .userId(currentUser.getUserId())
+                .tenantId(currentUser.getTenantId())
                 .requestSource("UI")
                 .build();
+    }
+
+    private SessionTaskEntity requireOwnedAgentTask(String agentId, String taskId) {
+        CurrentUser currentUser = UserContext.getCurrentUser();
+        SessionTaskEntity task = resourceAccessService.requireOwnedTask(
+                taskId, currentUser.getUserId(), currentUser.getTenantId());
+        if (task.getAgentId() == null
+                || task.getAgentId().isBlank()
+                || !task.getAgentId().equals(agentId)) {
+            throw new SecurityException("Resource access denied");
+        }
+        return task;
     }
 }

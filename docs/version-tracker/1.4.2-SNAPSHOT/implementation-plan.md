@@ -54,6 +54,7 @@
 | E-013 | 本地实施 + 测试证据 | `cce75f1b` 使平台消费端尊重显式 `ready=false` | passed-local | unready Worker 不再被误标为可路由；缺少 `ready` 的旧 Worker保留兼容。兼容不适用于显式 unready，也不构成 external enablement |
 | E-014 | 本地构建证据 | `a2317ae2` 关闭 Open SDK clean 基线缺陷，根 Java clean test 通过 | passed-local-with-warning | Open SDK 142 tests；根 17/17 reactor、2304 tests、0 failure/error/skipped，exit 0。launcher 有 Surefire fork JVM 退出超时告警；hosted CI 与 `clean verify` 未执行，见 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) |
 | E-015 | 本地实施 + 测试证据 | `EXEC-142-013` 接通 Gateway strict Worker principal/lease、Biz Provider DB preselect/prebind、LangGraph credential 传播/secret boundary，并让 Codex credential-configured 路径 fail closed/unready | passed-local-partial-scope | launcher 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 174 pass/1 Windows skip + typecheck。平台/Gateway 开关组合、OS 隔离、Codex 安全转发、P3/L3/真实网络/hosted CI 仍未完成 |
+| E-016 | 本地实施 + 测试证据 | `EXEC-142-014` 建立 `userId + tenantId` Session/Task 归属窄门面，并收紧 Session/Task/Agent/SSE/config/shared/forward/context/model-config 首批路径 | passed-local-partial-scope | P3 定向 Maven 176 tests 通过；launcher 依赖链 clean test 15/15 reactor、2426 tests、0 failure/error/skipped、exit 0。日志有测试 JVM 退出后 30 秒 fork kill 非失败提示。真实双账号 API/浏览器、hosted CI/L3、全列表 tenant、service-level metadata invariant、Provider taskId 与显式 admin/system 通路仍未完成；不是正式质量门禁或验收 |
 
 ## 阶段与工作项映射
 
@@ -119,14 +120,15 @@
 | 要素 | 计划 |
 |---|---|
 | 输入和前置条件 | P0 资源模型、P1 测试门禁；复用 P2 principal 术语；列出可信内网管理员例外。 |
-| 涉及模块 | `session-module` 的 Controller/service/facade/repository/SSE；Provider operation adapters；必要的 auth context。 |
-| 实施内容 | 建立统一 `requireOwnedSession/Task` 或等价窄门面；Session get/messages/send/parent、Task list/get/respond/reconnect/resync/rewind/resume/cancel 先校验归属；任务归属从 task->session/user 可信关系解析；管理员/系统例外显式命名并审计；SSE 已有 session owner 校验保持一致。 |
+| 当前实施状态 | `in-progress / partial-implemented-local`。`EXEC-142-014` 已落统一 `userId + tenantId` 门面和首批 Session/Task/Agent/SSE/config/shared/forward/context/model-config 校验；P3 未完成，production routing 未改变，external 未启用。 |
+| 涉及模块 | `session-module` 的 Controller/service/facade/repository/SSE、`navigator-common` 的 SessionTask repository；Provider operation adapters；必要的 auth context。 |
+| 实施内容 | 已建立统一 `requireOwnedSession/Task` 窄门面；Session get/messages/send/parent/forward/config/shared/SSE 与 Task list/get/respond/reconnect/resync/rewind/resume/cancel 的首批路径先校验归属；Task route 不信任请求体 agent 字段；context assigned-ID 使用独立事务 insert 与 owner 条件更新；Provider 返回 sessionId 后重新授权；显式 model config 校验 enabled/tenant/owner metadata/Worker grant；shared quota 在授权/readiness 后原子消费。后续补全所有列表 tenant 贯穿、service-level metadata invariant、Provider taskId 可信绑定及具名管理员/系统路径。 |
 | 非目标 | 不要求全部内部 Controller 迁移到新鉴权框架；不重写 SecurityConfig；不实现多实例 SSE；不改变正常用户的数据模型。 |
-| 自动化测试 | 两用户 sessionId/taskId 枚举负向测试；跨用户 messages/list/operation/cancel/resume；parent session；管理员例外；正常 UI 回归；Provider 各操作路由的参数传播。 |
-| 手工验证 | 两账号执行创建、对话、任务操作、刷新/重连、深链 `/c/:id`；确认正常用户工作流不退化，越权响应一致且不泄露资源存在性。 |
-| 风险 | 历史系统任务没有 userId；Provider 内部恢复依赖系统身份；重复校验造成性能或错误码变化。 |
+| 自动化测试 | 已通过 176 个 P3 定向 Maven tests；随后 launcher 依赖链 clean test 15/15 reactor、2426 tests 全通过。覆盖统一门面、Session/Task/Agent/SSE/config/shared/forward、context 并发绑定、model config 与 quota 顺序。待补：真实双账号/API、`active/page/search/directory` 全列表、管理员/系统例外、Provider L3 与 hosted CI。 |
+| 手工验证 | `not-run`。仍需两账号执行创建、对话、任务操作、刷新/重连、深链 `/c/:id`；确认正常用户工作流不退化，越权响应一致且不泄露资源存在性。 |
+| 风险 | 历史系统任务没有 userId/tenantId；Provider 内部恢复依赖系统身份；列表 tenant 未完全贯穿；`SessionMetadataService` service-level tenant invariant 未统一；model config owner/grant 语义未冻结；Provider 返回 taskId 仍可能形成可信边界；重复校验可能造成 N+1、性能或错误码变化。 |
 | 回滚方式 | 归属门面与各调用点分步提交；数据回填/兼容规则版本化；若正常流量回归，回滚调用点但保留负向测试和问题记录，禁止改回无校验默认。 |
-| 完成判据 | 只凭 sessionId/taskId 不能跨用户读写；所有列出的操作进入统一 invariant；内部 UI/可信内网主流程通过自动和手工验证；管理员例外有清单与审计。 |
+| 完成判据 | 只凭 sessionId/taskId 不能跨用户读写；所有列出的单资源与列表操作进入统一 invariant；内部 UI/可信内网主流程通过自动和手工验证；Provider 返回 ID 不绕过归属；管理员/系统例外有具名通路、清单与审计。当前只满足首批本地实现与定向测试，不得标记完成。 |
 | 生产路由/外部契约 | production_routing_changed: no；external_contract_changed: no。越权请求的响应行为会定向收紧。 |
 
 ## P4：低风险孤儿代码和失效文档清理

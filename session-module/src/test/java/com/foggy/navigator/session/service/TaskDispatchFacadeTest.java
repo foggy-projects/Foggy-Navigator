@@ -21,6 +21,7 @@ import com.foggy.navigator.session.repository.AgentConversationContextRepository
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskPageResult;
@@ -70,6 +71,8 @@ class TaskDispatchFacadeTest {
     @Mock
     private SessionRepository sessionRepository;
     @Mock
+    private SessionTaskResourceAccessService resourceAccessService;
+    @Mock
     private A2aAgent agent;
     @Mock
     private TaskQueryProvider taskQueryProvider;
@@ -83,6 +86,8 @@ class TaskDispatchFacadeTest {
     private WorkingDirectoryRepository workingDirectoryRepository;
     @Mock
     private AgentConversationContextRepository agentConversationContextRepository;
+    @Mock
+    private AgentContextStore agentContextStore;
 
     private TaskDispatchFacade facade;
 
@@ -92,15 +97,18 @@ class TaskDispatchFacadeTest {
     }
 
     private TaskDispatchFacade createFacade(List<? extends TaskQueryProvider> providers) {
-        return new TaskDispatchFacade(
+        TaskDispatchFacade created = new TaskDispatchFacade(
                 agentResolver,
                 bindingService,
                 sessionRepository,
+                resourceAccessService,
                 providers,
                 providers,
                 providers,
                 providers,
                 llmModelManager);
+        ReflectionTestUtils.setField(created, "agentContextStore", agentContextStore);
+        return created;
     }
 
     @Test
@@ -146,18 +154,18 @@ class TaskDispatchFacadeTest {
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("attacker")
+                .tenantId("tenant-1")
                 .sessionId("session-private")
                 .requestSource("UI")
                 .build();
-        SessionEntity session = new SessionEntity();
-        session.setId("session-private");
-        session.setUserId("owner");
-        when(sessionRepository.findById("session-private")).thenReturn(Optional.of(session));
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedSession("session-private", "attacker", "tenant-1");
 
-        IllegalArgumentException error = assertThrows(
-                IllegalArgumentException.class, () -> facade.createTask(request, context));
+        SecurityException error = assertThrows(
+                SecurityException.class, () -> facade.createTask(request, context));
 
-        assertTrue(error.getMessage().contains("SESSION_ACCESS_DENIED"));
+        assertEquals("Resource access denied", error.getMessage());
         verifyNoInteractions(agentResolver, bindingService, taskQueryProvider);
     }
 
@@ -499,7 +507,6 @@ class TaskDispatchFacadeTest {
         when(codexBizProvider.getProviderType()).thenReturn("codex-biz-worker");
         when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(modelConfig));
         when(codexBizProvider.createTaskDirect(any(), eq("user-1"), eq("tenant-1"))).thenReturn(directTask);
-        when(agentConversationContextRepository.findById("ctx-codex-biz-new")).thenReturn(Optional.empty());
         when(sessionRepository.findById("session-codex-biz-new")).thenReturn(Optional.of(session));
 
         DispatchTaskDTO result = facade.createTask(request, context);
@@ -518,10 +525,14 @@ class TaskDispatchFacadeTest {
                     && "tenant/world-sim/scenario-1/actor-1".equals(
                     state.get(ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID));
         }));
-        verify(agentConversationContextRepository).save(argThat(saved ->
-                "ctx-codex-biz-new".equals(saved.getContextId())
-                        && "session-codex-biz-new".equals(saved.getNavigatorSessionId())
-                        && "codex-biz-worker".equals(saved.getAgentType())));
+        verify(agentContextStore).saveSessionRefFull(
+                "ctx-codex-biz-new",
+                "codex-biz-worker",
+                null,
+                "session-codex-biz-new",
+                "user-1",
+                "codex-biz-worker",
+                null);
         verify(codexProvider, never()).createTaskDirect(any(), anyString(), anyString());
         verifyNoInteractions(agentResolver, bindingService, agent);
     }
@@ -1509,7 +1520,7 @@ class TaskDispatchFacadeTest {
         when(sessionTaskRepository.findByTaskId("task-codex-1")).thenReturn(Optional.of(task));
         when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
 
-        facade.respondToTask("task-codex-1", "user-1", Map.of("decision", "approve"));
+        facade.respondToTask("task-codex-1", uiContext("user-1"), Map.of("decision", "approve"));
 
         verify(taskQueryProvider).respondToTask("task-codex-1", "user-1", Map.of("decision", "approve"));
         verify(taskQueryProvider, never()).getTaskById("task-codex-1");
@@ -1527,7 +1538,8 @@ class TaskDispatchFacadeTest {
         when(taskQueryProvider.rewindTask(eq("task-claude-1"), eq("user-1"), any()))
                 .thenReturn(Map.of("status", "rewound", "taskId", "task-claude-1"));
 
-        Object result = facade.rewindTask("task-claude-1", "user-1", Map.of("mode", "conversation_fork"));
+        Object result = facade.rewindTask(
+                "task-claude-1", uiContext("user-1"), Map.of("mode", "conversation_fork"));
 
         assertEquals(Map.of("status", "rewound", "taskId", "task-claude-1"), result);
         verify(taskQueryProvider).rewindTask("task-claude-1", "user-1", Map.of("mode", "conversation_fork"));
@@ -1544,7 +1556,7 @@ class TaskDispatchFacadeTest {
         when(sessionTaskRepository.findByTaskId("task-codex-reconnect")).thenReturn(Optional.of(task));
         when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
 
-        facade.reconnectTask("task-codex-reconnect", "user-1");
+        facade.reconnectTask("task-codex-reconnect", uiContext("user-1"));
 
         verify(taskQueryProvider).reconnectTask("task-codex-reconnect", "user-1");
         verify(taskQueryProvider, never()).getTaskById("task-codex-reconnect");
@@ -1562,7 +1574,7 @@ class TaskDispatchFacadeTest {
         when(taskQueryProvider.resyncTask("task-claude-resync", "user-1"))
                 .thenReturn(Map.of("status", "synced", "taskId", "task-claude-resync"));
 
-        Object result = facade.resyncTask("task-claude-resync", "user-1");
+        Object result = facade.resyncTask("task-claude-resync", uiContext("user-1"));
 
         assertEquals(Map.of("status", "synced", "taskId", "task-claude-resync"), result);
         verify(taskQueryProvider).resyncTask("task-claude-resync", "user-1");
@@ -1581,7 +1593,7 @@ class TaskDispatchFacadeTest {
         when(taskQueryProvider.scanCheckpoints("task-claude-checkpoints", "user-1"))
                 .thenReturn(Map.of("checkpoints", List.of(Map.of("id", "ckpt-1"))));
 
-        Object result = facade.scanCheckpoints("task-claude-checkpoints", "user-1");
+        Object result = facade.scanCheckpoints("task-claude-checkpoints", uiContext("user-1"));
 
         assertEquals(Map.of("checkpoints", List.of(Map.of("id", "ckpt-1"))), result);
         verify(taskQueryProvider).scanCheckpoints("task-claude-checkpoints", "user-1");
@@ -1662,12 +1674,121 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void getTask_rejectsUnownedResourceBeforeRepositoryOrProviderLookup() {
+        AgentResolveContext context = uiContext("attacker");
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedTask("task-private", "attacker", "tenant-1");
+
+        assertThrows(SecurityException.class, () -> facade.getTask("task-private", context));
+
+        verifyNoInteractions(taskQueryProvider);
+    }
+
+    @Test
+    void listTasksBySession_authorizesParentBeforeAnyChildQuery() {
+        AgentResolveContext context = uiContext("user-1");
+
+        assertEquals(List.of(), facade.listTasksBySession("session-1", context));
+
+        InOrder ordered = inOrder(resourceAccessService, sessionRepository);
+        ordered.verify(resourceAccessService)
+                .requireOwnedSession("session-1", "user-1", "tenant-1");
+        ordered.verify(sessionRepository).findById("session-1");
+    }
+
+    @Test
+    void listTasksBySession_primaryProjectionUsesUserAndTenantScope() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        AgentResolveContext context = uiContext("user-1");
+        SessionTaskEntity task = sessionTask(
+                "task-1", "session-1", "codex-worker", "worker-1", "dir-1",
+                "RUNNING", LocalDateTime.of(2026, 7, 14, 16, 0), null);
+        task.setTenantId("tenant-1");
+        when(sessionTaskRepository.findBySessionIdAndUserIdAndTenantIdOrderByCreatedAtDesc(
+                "session-1", "user-1", "tenant-1"))
+                .thenReturn(List.of(task));
+
+        List<DispatchTaskDTO> result = facade.listTasksBySession("session-1", context);
+
+        assertEquals(List.of("task-1"), result.stream().map(DispatchTaskDTO::getTaskId).toList());
+        InOrder ordered = inOrder(resourceAccessService, sessionTaskRepository);
+        ordered.verify(resourceAccessService)
+                .requireOwnedSession("session-1", "user-1", "tenant-1");
+        ordered.verify(sessionTaskRepository)
+                .findBySessionIdAndUserIdAndTenantIdOrderByCreatedAtDesc(
+                        "session-1", "user-1", "tenant-1");
+        verify(sessionTaskRepository, never())
+                .findBySessionIdAndUserIdOrderByCreatedAtDesc(anyString(), anyString());
+    }
+
+    @Test
+    void respondToTask_rejectsUnownedResourceBeforeProviderRouting() {
+        AgentResolveContext context = uiContext("attacker");
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedTask("task-private", "attacker", "tenant-1");
+
+        assertThrows(SecurityException.class,
+                () -> facade.respondToTask("task-private", context, Map.of("decision", "approve")));
+
+        verifyNoInteractions(taskQueryProvider);
+    }
+
+    @Test
+    void taskMutationsRejectUnownedResourceBeforeProviderRouting() {
+        AgentResolveContext context = uiContext("attacker");
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedTask("task-private", "attacker", "tenant-1");
+
+        assertThrows(SecurityException.class,
+                () -> facade.reconnectTask("task-private", context));
+        assertThrows(SecurityException.class,
+                () -> facade.resyncTask("task-private", context));
+        assertThrows(SecurityException.class,
+                () -> facade.rewindTask("task-private", context, Map.of()));
+        assertThrows(SecurityException.class,
+                () -> facade.scanCheckpoints("task-private", context));
+        assertThrows(SecurityException.class,
+                () -> facade.deleteTask("task-private", context));
+
+        verify(resourceAccessService, times(5))
+                .requireOwnedTask("task-private", "attacker", "tenant-1");
+        verifyNoInteractions(taskQueryProvider);
+    }
+
+    @Test
+    void resumeTask_rejectsUnownedSessionBeforeProviderRouting() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-private")
+                .providerType("claude-worker")
+                .prompt("continue")
+                .build();
+        AgentResolveContext context = uiContext("attacker");
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedSession("session-private", "attacker", "tenant-1");
+
+        assertThrows(SecurityException.class, () -> facade.resumeTask(request, context));
+
+        verifyNoInteractions(taskQueryProvider);
+    }
+
+    @Test
     void cancelTask_routesViaSessionStore() {
-        // cancelTask resolves agent through agentResolver, then calls agent.cancelTask
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
+                .taskId("task-cancel-1")
+                .agentId("agent-1")
+                .status("RUNNING")
+                .build();
+        when(taskQueryProvider.getTaskByIdAndUser("task-cancel-1", "user-1"))
+                .thenReturn(Optional.of(task));
         when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
 
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")
+                .tenantId("tenant-1")
                 .requestSource("UI")
                 .build();
 
@@ -1805,11 +1926,17 @@ class TaskDispatchFacadeTest {
 
     @Test
     void cancelTask_failsFastWhenAgentNotResolvable() {
-        // agentResolver 找不到 "codex-worker"（不是有效的 agent 实体 ID）
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
+                .taskId("task-codex-1")
+                .agentId("codex-worker")
+                .status("RUNNING")
+                .build();
+        when(taskQueryProvider.getTaskByIdAndUser("task-codex-1", "user-1"))
+                .thenReturn(Optional.of(task));
         when(agentResolver.resolveAgent(eq("codex-worker"), any())).thenReturn(Optional.empty());
 
         AgentResolveContext context = AgentResolveContext.builder()
-                .userId("user-1").requestSource("UI").build();
+                .userId("user-1").tenantId("tenant-1").requestSource("UI").build();
 
         // 不再 fallback 到 Provider，直接 fail-fast
         assertThrows(IllegalArgumentException.class,
@@ -1840,6 +1967,7 @@ class TaskDispatchFacadeTest {
                 agentResolver,
                 bindingService,
                 sessionRepository,
+                resourceAccessService,
                 List.of(),
                 List.of(),
                 List.of(),
@@ -2136,6 +2264,43 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_withKnownContextRejectsUnownedBoundSessionBeforeRepositoryOrProvider() {
+        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        facade = createFacade(List.of(codexBizProvider));
+        ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextId("ctx-owned-context")
+                .prompt("continue")
+                .resume(true)
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("OPEN_API")
+                .build();
+
+        AgentConversationContextEntity boundContext = new AgentConversationContextEntity();
+        boundContext.setContextId("ctx-owned-context");
+        boundContext.setUserId("user-1");
+        boundContext.setTargetAgentId("agent-1");
+        boundContext.setNavigatorSessionId("session-owned-by-other-tenant");
+
+        when(agentConversationContextRepository.findByContextIdAndUserId("ctx-owned-context", "user-1"))
+                .thenReturn(Optional.of(boundContext));
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedSession("session-owned-by-other-tenant", "user-1", "tenant-1");
+
+        SecurityException error = assertThrows(SecurityException.class,
+                () -> facade.createTask(request, context));
+
+        assertEquals("Resource access denied", error.getMessage());
+        verify(sessionRepository, never()).findById("session-owned-by-other-tenant");
+        verifyNoInteractions(codexBizProvider, agentResolver);
+    }
+
+    @Test
     void createTask_withKnownLangGraphBizContextCreatesDirectTaskWhenNotExplicitResume() {
         TaskQueryProvider langgraphBizProvider = mock(TaskQueryProvider.class);
         facade = createFacade(List.of(langgraphBizProvider));
@@ -2207,11 +2372,14 @@ class TaskDispatchFacadeTest {
                 eq("agent-owner-1"),
                 eq("tenant-1"));
         verify(langgraphBizProvider, never()).resumeTask(anyString(), anyString(), any());
-        verify(agentConversationContextRepository).save(argThat(saved ->
-                "bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28".equals(saved.getContextId())
-                        && "session-langgraph-biz-bound".equals(saved.getNavigatorSessionId())
-                        && "tms-tenant-88800-root-agent".equals(saved.getTargetAgentId())
-                        && "langgraph-biz-worker".equals(saved.getAgentType())));
+        verify(agentContextStore).saveSessionRefFull(
+                "bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28",
+                "langgraph-biz-worker",
+                null,
+                "session-langgraph-biz-bound",
+                "agent-owner-1",
+                "tms-tenant-88800-root-agent",
+                null);
         verifyNoInteractions(agentResolver);
     }
 
@@ -2500,7 +2668,7 @@ class TaskDispatchFacadeTest {
         Map<?, ?> beforeDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
         assertEquals(1L, beforeDelete.get("totalSessions"));
 
-        facade.deleteTask("task-delete-1", "user-1");
+        facade.deleteTask("task-delete-1", uiContext("user-1"));
 
         Map<?, ?> afterDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
         assertEquals(0L, afterDelete.get("totalSessions"));
@@ -2642,7 +2810,7 @@ class TaskDispatchFacadeTest {
         Map<?, ?> beforeDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
         assertEquals(1L, beforeDelete.get("totalSessions"));
 
-        assertDoesNotThrow(() -> facade.deleteTask("task-stale-1", "user-1"));
+        assertDoesNotThrow(() -> facade.deleteTask("task-stale-1", uiContext("user-1")));
 
         Map<?, ?> afterDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
         assertEquals(0L, afterDelete.get("totalSessions"));
@@ -2670,7 +2838,7 @@ class TaskDispatchFacadeTest {
                 .when(nativeSubtaskStateRepository).deleteByTaskId("task-stale-retry");
 
         assertThrows(IllegalStateException.class,
-                () -> facade.deleteTask("task-stale-retry", "user-1"));
+                () -> facade.deleteTask("task-stale-retry", uiContext("user-1")));
 
         verify(sessionTaskRepository, never()).deleteByTaskId("task-stale-retry");
     }
@@ -2679,24 +2847,23 @@ class TaskDispatchFacadeTest {
     void deleteTask_doesNotCleanAnotherUsersProjectionWhenProviderReportsMissing() {
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
         ReflectionTestUtils.setField(facade, "nativeSubtaskStateRepository", nativeSubtaskStateRepository);
-        SessionTaskEntity otherUsersTask = sessionTask(
-                "task-owned-by-other", "session-other", "claude-worker", "worker-1", "dir-1",
-                "COMPLETED", LocalDateTime.of(2026, 7, 10, 12, 0), null
-        );
-        otherUsersTask.setUserId("owner");
-        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
-        when(sessionTaskRepository.findByTaskId("task-owned-by-other"))
-                .thenReturn(Optional.of(otherUsersTask));
-        when(sessionTaskRepository.findByTaskIdAndUserId("task-owned-by-other", "attacker"))
-                .thenReturn(Optional.empty());
-        doThrow(new IllegalArgumentException("Task not found: task-owned-by-other"))
-                .when(taskQueryProvider).deleteTask("attacker", "task-owned-by-other");
+        doThrow(new SecurityException("resource is not accessible"))
+                .when(resourceAccessService)
+                .requireOwnedTask("task-owned-by-other", "attacker", "tenant-1");
 
-        assertThrows(IllegalArgumentException.class,
-                () -> facade.deleteTask("task-owned-by-other", "attacker"));
+        assertThrows(SecurityException.class,
+                () -> facade.deleteTask("task-owned-by-other", uiContext("attacker")));
 
         verify(sessionTaskRepository, never()).deleteByTaskId("task-owned-by-other");
         verify(nativeSubtaskStateRepository, never()).deleteByTaskId("task-owned-by-other");
+    }
+
+    private AgentResolveContext uiContext(String userId) {
+        return AgentResolveContext.builder()
+                .userId(userId)
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
     }
 
     private static final class WorkerSessionOnlyProvider implements WorkerSessionQueryProvider {
