@@ -11,7 +11,8 @@ import java.time.LocalDateTime;
  *
  * @deprecated 使用 {@link com.foggy.navigator.common.dto.DispatchTaskDTO} 替代。
  *             DispatchTaskDTO 是 Agent 无关的统一任务视图，覆盖所有字段。
- *             本 DTO 仅保留用于 CodexTaskController 旧端点的向后兼容。
+ *             本 DTO 暂作为 Codex Provider 内部 service、A2A adapter 与 facade 的共享模型；
+ *             外部 HTTP 任务契约统一使用 {@code /api/v1/tasks}。
  */
 @Deprecated(since = "unified-task-dispatch-refactor")
 @Data
