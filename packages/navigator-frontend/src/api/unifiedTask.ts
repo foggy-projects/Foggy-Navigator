@@ -1,8 +1,8 @@
 /**
  * Unified Task API (/api/v1/tasks)
  *
- * Agent-agnostic task operations. Frontend should gradually migrate
- * from /api/v1/claude-tasks to these endpoints.
+ * Agent-agnostic task operations. This is the canonical task HTTP boundary
+ * used by the Navigator frontend.
  *
  * Backend now routes by a richer execution context:
  * logical agentId, providerType, sessionId, and modelConfigId may all participate.

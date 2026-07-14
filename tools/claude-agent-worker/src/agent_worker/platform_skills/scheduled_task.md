@@ -557,7 +557,7 @@ curl -s -X DELETE {{NAVIGATOR_API_BASE}}/api/v1/sharing-keys/{keyId} \
 定时任务的每次执行都会自动记录在 Navigator 的 Worker 页面中：
 
 1. 登录 Navigator（默认 `http://localhost:5174`）
-2. 进入 **Workers 页面**（`/#/claude-tasks`）
+2. 进入 **Workers 页面**（`/#/`）
 3. 在左侧会话列表中找到 `Shared: {任务标签}` 开头的会话
 4. 点击查看 AI 的完整问答历史（包含 Prompt 和分析结果）
 

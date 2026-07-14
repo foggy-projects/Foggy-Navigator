@@ -677,17 +677,17 @@ Vue (fileBrowser.ts) → Java (FileBrowserController) → Python Worker (files.p
 | `deleteDirectory(id)` | DELETE | `/working-directories/{id}` |
 | `syncDirectoryGitInfo(id)` | POST | `/working-directories/{id}/sync` |
 | `listSkills(directoryId)` | GET | `/working-directories/{id}/skills` |
-| `createTask(form)` | POST | `/claude-tasks` |
-| `resumeTask(form)` | POST | `/claude-tasks/resume` |
-| `abortTask(id)` | POST | `/claude-tasks/{id}/abort` |
-| `deleteTask(id)` | DELETE | `/claude-tasks/{id}` |
-| `listTasksByDirectory(id)` | GET | `/claude-tasks/directory/{id}` |
-| `syncWorkerSessions(workerId)` | POST | `/claude-tasks/worker/{id}/sessions/sync` |
-| `updateConversationPin(sid, pinned)` | PATCH | `/claude-tasks/conversations/{sid}/pin` |
-| `updateConversationTitle(sid, title)` | PATCH | `/claude-tasks/conversations/{sid}/title` |
-| `bindConversationAuth(sid, form)` | POST | `/claude-tasks/conversations/{sid}/bind-auth` |
-| `listConversationConfigs(sids)` | GET | `/claude-tasks/conversation-configs` |
-| `batchBindConversationAuth(form)` | POST | `/claude-tasks/conversations/batch-bind-auth` |
+| `createTask(form)` | POST | `/tasks` |
+| `resumeTask(form)` | POST | `/tasks/resume` |
+| `abortTask(id)` | POST | `/tasks/{id}/cancel` |
+| `deleteTask(id)` | DELETE | `/tasks/{id}` |
+| `listTasksByDirectory(id)` | GET | `/tasks/directory/{id}` |
+| `syncWorkerSessions(workerId)` | POST | `/tasks/workers/{id}/sessions/sync` |
+| `updateConversationPin(sid, pinned)` | PATCH | `/sessions/{sid}/config/pin` |
+| `updateConversationTitle(sid, title)` | PATCH | `/sessions/{sid}/config/title` |
+| `bindConversationAuth(sid, form)` | POST | `/sessions/{sid}/config/bind-auth` |
+| `listConversationConfigs(sids)` | POST | `/sessions/configs` |
+| `batchBindConversationAuth(form)` | POST | `/sessions/configs/batch-bind-auth` |
 
 ### useClaudeWorker Composable
 

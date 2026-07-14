@@ -97,7 +97,7 @@ public class SessionController {
                     .collect(Collectors.toList());
         }
 
-        // claude-worker 会话由 /claude-tasks 页面独立管理，不在聊天列表中显示
+        // claude-worker 会话由 Workers 工作台独立管理，不在通用聊天列表中显示
         sessions = sessions.stream()
                 .filter(s -> !"claude-worker".equals(s.getAgentId()))
                 .collect(Collectors.toList());

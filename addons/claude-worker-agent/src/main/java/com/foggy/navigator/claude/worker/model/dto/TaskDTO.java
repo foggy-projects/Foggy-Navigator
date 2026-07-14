@@ -9,9 +9,9 @@ import java.time.LocalDateTime;
 /**
  * 任务信息 DTO
  *
- * @deprecated 使用 {@link com.foggy.navigator.common.dto.DispatchTaskDTO} 替代。
- *             DispatchTaskDTO 是 Agent 无关的统一任务视图，覆盖所有字段。
- *             本 DTO 仅保留用于 ClaudeTaskController 旧端点的向后兼容。
+ * @deprecated 边界层请使用 {@link com.foggy.navigator.common.dto.DispatchTaskDTO}。
+ *             本 DTO 目前仅作为 Claude provider 内部 service、A2A/SPI 与跨项目流程的过渡模型，
+ *             不得再暴露为 provider 专属 HTTP 契约。
  */
 @Deprecated(since = "unified-task-dispatch-refactor")
 @Data
@@ -52,7 +52,7 @@ public class TaskDTO {
     private String source;
     /** Agent Teams 配置 ID（任务创建时锁定） */
     private String agentTeamsConfigId;
-    /** 仅 /active 端点填充：工作目录名称 */
+    /** 活跃任务投影填充：工作目录名称 */
     private String directoryName;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

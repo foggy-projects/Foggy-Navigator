@@ -1,7 +1,7 @@
 /**
  * Unified Task API (/api/v1/tasks)
  *
- * Agent-agnostic task operations. Replaces legacy /api/v1/claude-tasks endpoints.
+ * Agent-agnostic task operations. This is the canonical task HTTP boundary.
  * Aligned with PC frontend: packages/navigator-frontend/src/api/unifiedTask.ts
  */
 import client from './client'

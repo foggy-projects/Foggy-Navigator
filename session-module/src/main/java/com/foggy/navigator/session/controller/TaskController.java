@@ -23,7 +23,7 @@ import java.util.Set;
 /**
  * 统一任务 API —— 屏蔽 Claude / Codex / 未来 Agent 差异。
  * <p>
- * 所有前端任务操作逐步迁移到这组端点，旧 /api/v1/claude-tasks 保持兼容。
+ * 内部 UI 的任务创建、查询和生命周期操作统一使用这组端点。
  */
 @Slf4j
 @RestController
@@ -356,7 +356,7 @@ public class TaskController {
         return RX.ok(taskDispatchFacade.listTasksByDirectoryPaged(userId, directoryId, page, size, state));
     }
 
-    // ── Worker Session 查询（统一端点，迁移自 ClaudeTaskController） ──
+    // ── Worker Session 统一查询端点 ──
 
     /**
      * 列出指定 Worker 上的会话列表

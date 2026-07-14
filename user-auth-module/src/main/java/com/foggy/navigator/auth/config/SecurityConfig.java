@@ -85,7 +85,6 @@ public class SecurityConfig {
                                 "/api/v1/codex-app-server-endpoints/**").permitAll()
                         .requestMatchers("/api/v1/langgraph-workers", "/api/v1/langgraph-workers/**").permitAll()
                         .requestMatchers("/api/v1/gemini-workers", "/api/v1/gemini-workers/**").permitAll()
-                        .requestMatchers("/api/v1/claude-tasks", "/api/v1/claude-tasks/**").permitAll()
                         .requestMatchers("/api/v1/codex-tasks", "/api/v1/codex-tasks/**").permitAll()
                         .requestMatchers("/api/v1/langgraph-tasks", "/api/v1/langgraph-tasks/**").permitAll()
                         .requestMatchers("/api/v1/tasks", "/api/v1/tasks/**").permitAll()

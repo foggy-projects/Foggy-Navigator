@@ -332,6 +332,36 @@ class TaskControllerTest {
     }
 
     @Test
+    void rewindTask_returnsProviderPayload() {
+        Map<String, Object> body = Map.of("mode", "conversation_fork", "turnIndex", 2);
+        Map<String, Object> payload = Map.of(
+                "status", "rewound",
+                "taskId", "task-1",
+                "userPrompt", "Generate a file"
+        );
+        when(taskDispatchFacade.rewindTask(eq("task-1"), any(AgentResolveContext.class), eq(body)))
+                .thenReturn(payload);
+
+        RX<?> result = controller.rewindTask("task-1", body);
+
+        assertEquals(payload, result.getData());
+        verify(taskDispatchFacade).rewindTask(eq("task-1"), argThat(context ->
+                USER_ID.equals(context.getUserId()) && TENANT_ID.equals(context.getTenantId())), eq(body));
+    }
+
+    @Test
+    void rewindTask_validationFailureReturnsFailB() {
+        Map<String, Object> body = Map.of("mode", "conversation_fork", "turnIndex", 2);
+        when(taskDispatchFacade.rewindTask(eq("task-1"), any(AgentResolveContext.class), eq(body)))
+                .thenThrow(new IllegalStateException("Cannot rewind a running task"));
+
+        RX<?> result = controller.rewindTask("task-1", body);
+
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("Cannot rewind a running task"));
+    }
+
+    @Test
     void listWorkerSessions_delegatesWithCurrentUser() {
         List<Map<String, Object>> sessions = List.of(
                 Map.of("sessionId", "worker-session-1", "source", "session-store")
