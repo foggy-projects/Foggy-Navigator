@@ -134,6 +134,53 @@ class BusinessTaskScopedTokenLifecycleJpaTest {
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void preboundCapabilityKeepsExactWorkerAndLeaseThroughBindAndRevocation() {
+        String plainToken = "btt_prebound_lifecycle";
+        BusinessTaskScopedTokenEntity token = lifecycleService.issuePreboundToken(
+                newToken("prebound-lifecycle", plainToken),
+                plainToken,
+                "worker-prebound",
+                "bwl-prebound");
+
+        BusinessTaskScopedTokenEntity issued = tokenRepository
+                .findByTokenIdAndTenantId(token.getTokenId(), TENANT_ID)
+                .orElseThrow();
+        assertThat(issued.getWorkerId()).isEqualTo("worker-prebound");
+        assertThat(issued.getWorkerLeaseId()).isEqualTo("bwl-prebound");
+        assertThat(issued.getWorkerTaskId()).isNull();
+
+        lifecycleService.bindIssuedTokenToWorkerTask(
+                TENANT_ID,
+                token.getTokenId(),
+                plainToken,
+                "worker-task-prebound",
+                "worker-session-prebound",
+                "worker-prebound",
+                "bwl-prebound");
+        lifecycleService.revokeTaskScopedToken(
+                TENANT_ID, token.getTokenId(), "system", "prebound lifecycle test");
+
+        assertThatThrownBy(() -> lifecycleService.bindIssuedTokenToWorkerTask(
+                TENANT_ID,
+                token.getTokenId(),
+                plainToken,
+                "worker-task-prebound",
+                "worker-session-prebound",
+                "worker-prebound",
+                "bwl-prebound"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("token is revoked");
+        BusinessTaskScopedTokenEntity revoked = tokenRepository
+                .findByTokenIdAndTenantId(token.getTokenId(), TENANT_ID)
+                .orElseThrow();
+        assertThat(revoked.getStatus()).isEqualTo(BusinessAgentTaskService.STATUS_REVOKED);
+        assertThat(revoked.getWorkerId()).isEqualTo("worker-prebound");
+        assertThat(revoked.getWorkerLeaseId()).isEqualTo("bwl-prebound");
+        assertThat(revoked.getWorkerTaskId()).isEqualTo("worker-task-prebound");
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void terminalEventBeforeWorkerBindingCreatesUnboundMarkerAndRejectsLateBind() {
         String plainToken = "btt_terminal_before_bind";
         BusinessTaskScopedTokenEntity token = lifecycleService.issueNewToken(

@@ -166,11 +166,37 @@ class BizWorkerPoolServiceTest {
     }
 
     @Test
+    void registerWorkerIdentity_rejectsRouteIdAlreadyUsedByPool() {
+        when(poolRepository.findByPoolId("shared-route"))
+                .thenReturn(Optional.of(pool("tenant-1")));
+        RegisterWorkerIdentityForm form = workerIdentityForm(
+                "shared-route", "LANGGRAPH_BIZ", "http://worker");
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> service.registerWorkerIdentity(form));
+
+        assertEquals("worker route id is already used by a worker pool", failure.getMessage());
+        verify(identityRepository, never()).save(any());
+    }
+
+    @Test
     void createPool_rejects_duplicate_pool_id() {
         when(poolRepository.findByPoolId("pool-1")).thenReturn(Optional.of(pool("tenant-1")));
 
         assertThrows(IllegalArgumentException.class,
                 () -> service.createPool("tenant-1", createPoolForm("pool-1")));
+    }
+
+    @Test
+    void createPool_rejectsRouteIdAlreadyUsedByWorkerIdentity() {
+        when(identityRepository.findByWorkerId("shared-route"))
+                .thenReturn(Optional.of(worker("LANGGRAPH_BIZ")));
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> service.createPool("tenant-1", createPoolForm("shared-route")));
+
+        assertEquals("worker route id is already used by a worker identity", failure.getMessage());
+        verify(poolRepository, never()).save(any());
     }
 
     @Test

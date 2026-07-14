@@ -29,6 +29,37 @@ public class BusinessTaskScopedTokenLifecycleService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public BusinessTaskScopedTokenEntity issueNewToken(
             BusinessTaskScopedTokenEntity token, String plainToken) {
+        return persistNewToken(token, plainToken);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public BusinessTaskScopedTokenEntity issuePreboundToken(
+            BusinessTaskScopedTokenEntity token,
+            String plainToken,
+            String workerId,
+            String workerLeaseId) {
+        requireText(workerId, "workerId is required for prebound token");
+        requireText(workerLeaseId, "workerLeaseId is required for prebound token");
+        if (token == null) {
+            throw new IllegalArgumentException("token is required");
+        }
+        String normalizedWorkerId = workerId.trim();
+        String normalizedWorkerLeaseId = workerLeaseId.trim();
+        if (StringUtils.hasText(token.getWorkerId())
+                && !normalizedWorkerId.equals(token.getWorkerId().trim())) {
+            throw new IllegalStateException("token already targets another worker");
+        }
+        if (StringUtils.hasText(token.getWorkerLeaseId())
+                && !normalizedWorkerLeaseId.equals(token.getWorkerLeaseId().trim())) {
+            throw new IllegalStateException("token already has another worker lease");
+        }
+        token.setWorkerId(normalizedWorkerId);
+        token.setWorkerLeaseId(normalizedWorkerLeaseId);
+        return persistNewToken(token, plainToken);
+    }
+
+    private BusinessTaskScopedTokenEntity persistNewToken(
+            BusinessTaskScopedTokenEntity token, String plainToken) {
         requireText(plainToken, "plainToken is required");
         if (token == null) {
             throw new IllegalArgumentException("token is required");
@@ -49,6 +80,20 @@ public class BusinessTaskScopedTokenLifecycleService {
             String plainToken,
             String workerTaskId,
             String workerSessionId) {
+        bindOpenApiTokenToWorkerTask(
+                tenantId, plainToken, workerTaskId, workerSessionId, null, null);
+    }
+
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            noRollbackFor = TerminalTaskBindingException.class)
+    public void bindOpenApiTokenToWorkerTask(
+            String tenantId,
+            String plainToken,
+            String workerTaskId,
+            String workerSessionId,
+            String workerId,
+            String workerLeaseId) {
         requireText(tenantId, "tenantId is required");
         requireText(plainToken, "plainToken is required");
         requireText(workerTaskId, "workerTaskId is required");
@@ -56,7 +101,7 @@ public class BusinessTaskScopedTokenLifecycleService {
         BusinessTaskScopedTokenEntity token = tokenRepository
                 .findByTokenHashForUpdate(SecretTokenSupport.sha256(plainToken))
                 .orElseThrow(() -> new IllegalArgumentException("invalid token"));
-        bindToken(token, tenantId, plainToken, workerTaskId, workerSessionId, null);
+        bindToken(token, tenantId, plainToken, workerTaskId, workerSessionId, workerId, workerLeaseId);
     }
 
     @Transactional(
@@ -69,6 +114,21 @@ public class BusinessTaskScopedTokenLifecycleService {
             String workerTaskId,
             String workerSessionId,
             String workerId) {
+        bindIssuedTokenToWorkerTask(
+                tenantId, tokenId, plainToken, workerTaskId, workerSessionId, workerId, null);
+    }
+
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            noRollbackFor = TerminalTaskBindingException.class)
+    public void bindIssuedTokenToWorkerTask(
+            String tenantId,
+            String tokenId,
+            String plainToken,
+            String workerTaskId,
+            String workerSessionId,
+            String workerId,
+            String workerLeaseId) {
         requireText(tenantId, "tenantId is required");
         requireText(tokenId, "tokenId is required");
         requireText(plainToken, "plainToken is required");
@@ -77,7 +137,7 @@ public class BusinessTaskScopedTokenLifecycleService {
         BusinessTaskScopedTokenEntity token = tokenRepository
                 .findByTokenIdAndTenantIdForUpdate(tokenId, tenantId)
                 .orElseThrow(() -> new IllegalArgumentException("task token not found"));
-        bindToken(token, tenantId, plainToken, workerTaskId, workerSessionId, workerId);
+        bindToken(token, tenantId, plainToken, workerTaskId, workerSessionId, workerId, workerLeaseId);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -340,7 +400,8 @@ public class BusinessTaskScopedTokenLifecycleService {
             String plainToken,
             String workerTaskId,
             String workerSessionId,
-            String workerId) {
+            String workerId,
+            String workerLeaseId) {
         if (!tenantId.equals(token.getTenantId())) {
             throw new SecurityException("token tenant mismatch");
         }
@@ -365,10 +426,19 @@ public class BusinessTaskScopedTokenLifecycleService {
             throw new IllegalStateException("token already bound to another worker session");
         }
         String resolvedWorkerId = trimToNull(workerId);
-        if (StringUtils.hasText(token.getWorkerId()) &&
-                StringUtils.hasText(resolvedWorkerId) &&
-                !resolvedWorkerId.equals(token.getWorkerId())) {
-            throw new IllegalStateException("token already bound to another worker");
+        String persistedWorkerId = trimToNull(token.getWorkerId());
+        String persistedWorkerLeaseId = trimToNull(token.getWorkerLeaseId());
+        String resolvedWorkerLeaseId = trimToNull(workerLeaseId);
+        if (persistedWorkerId != null) {
+            if (resolvedWorkerId == null || !resolvedWorkerId.equals(persistedWorkerId)) {
+                throw new IllegalStateException("token already bound to another worker");
+            }
+        }
+        if (persistedWorkerLeaseId != null) {
+            if (resolvedWorkerLeaseId == null
+                    || !resolvedWorkerLeaseId.equals(persistedWorkerLeaseId)) {
+                throw new IllegalStateException("token worker lease mismatch");
+            }
         }
 
         LocalDateTime now = LocalDateTime.now();

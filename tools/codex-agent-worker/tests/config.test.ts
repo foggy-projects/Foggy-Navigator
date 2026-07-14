@@ -20,6 +20,8 @@ test('createConfig normalizes placeholder api key and valid defaults', () => {
   assert.equal(config.externalEnabled, false)
   assert.equal(config.codexBizHomeRoot, '')
   assert.equal(config.navigatorWorkerGatewayBaseUrl, 'http://localhost:8080')
+  assert.equal(config.navigatorWorkerId, '')
+  assert.equal(config.navigatorWorkerCredential, '')
   assert.equal(config.threadWatchdogIntervalMs, 5_000)
   assert.equal(config.threadProcessMissingGraceMs, 10_000)
 })
@@ -141,6 +143,25 @@ test('createConfig rejects invalid Navigator worker gateway base URL', () => {
   assert.throws(() => createConfig({
     CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL: 'file:///tmp/gateway',
   }), /CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL must use http or https/)
+})
+
+test('createConfig reads paired Navigator Worker identity from local env', () => {
+  const config = createConfig({
+    CODEX_NAVIGATOR_WORKER_ID: 'worker-a',
+    CODEX_NAVIGATOR_WORKER_CREDENTIAL: 'bwc_secret',
+  })
+
+  assert.equal(config.navigatorWorkerId, 'worker-a')
+  assert.equal(config.navigatorWorkerCredential, 'bwc_secret')
+})
+
+test('createConfig rejects partial Navigator Worker identity', () => {
+  assert.throws(() => createConfig({
+    CODEX_NAVIGATOR_WORKER_ID: 'worker-a',
+  }), /must be configured together/)
+  assert.throws(() => createConfig({
+    CODEX_NAVIGATOR_WORKER_CREDENTIAL: 'bwc_secret',
+  }), /must be configured together/)
 })
 
 test('createConfig CODEX_MODEL_ALIASES JSON override merges into defaults', () => {

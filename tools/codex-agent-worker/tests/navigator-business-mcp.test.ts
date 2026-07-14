@@ -283,6 +283,31 @@ test('handleMcpRequest returns JSON-RPC tool list and sanitized errors', async (
   assert.doesNotMatch(errorResponse.error.message, /task-token/)
 })
 
+test('handleMcpRequest redacts Worker and task token shapes from gateway errors', async () => {
+  const errorResponse = await handleMcpRequest({
+    jsonrpc: '2.0',
+    id: 3,
+    method: 'tools/call',
+    params: {
+      name: 'list_business_functions',
+      arguments: {},
+    },
+  }, {
+    gatewayBaseUrl: 'http://navigator.example.com:8080',
+    taskScopedToken: 'btt_request_secret',
+    fetchImpl: async () => new Response(JSON.stringify({
+      error: 'rejected bwc_worker_secret for btt_request_secret',
+    }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  }) as Record<string, any>
+
+  assert.equal(errorResponse.error.code, -32000)
+  assert.match(errorResponse.error.message, /redacted/)
+  assert.doesNotMatch(errorResponse.error.message, /bwc_worker_secret|btt_request_secret/)
+})
+
 test('handleMcpRequest filters tools/list and tools/call by allowedTools', async () => {
   const recorder = createFetchRecorder({ ok: true })
   const runtime = {

@@ -23,15 +23,15 @@ owner: platform-security-owner | session-owner | provider-owner
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| Workitem | in-progress | P2 显式外部门禁与 readiness 消费已部分落地；task token、identity、audit 与 P3 ownership 仍未实施 |
-| Implementation | partial | implementation_started: yes；完成平台 Open API 默认关闭门禁、三类 Worker external profile 与平台 readiness 消费 |
-| Automated test | partial-passed | Java 定向 74 tests，10/10 reactor SUCCESS；Codex SDK 163 pass/1 skip、app-server 272 pass/1 skip、LangGraph 766 pass，三类 Worker 构建通过 |
+| Workitem | in-progress | P2 显式外部门禁、task capability/terminal、Worker identity/pool 与 Gateway strict principal/lease 已部分落地；开关组合、OS 隔离、可靠 audit 与 P3 ownership 仍未完成 |
+| Implementation | partial | implementation_started: yes；`EXEC-142-013` 已完成 Gateway strict Worker header、DB preselect/prebind、LangGraph credential 传播与 Codex credential-configured fail-closed readiness；external 仍未启用 |
+| Automated test | partial-passed | launcher 依赖链 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 175 tests 中 174 pass/1 Windows skip、typecheck 通过 |
 | Manual verification | not-run | 尚未在双用户、双 ClientApp 或外部 Worker 环境验证 |
 | Experience verification | not-run | 尚未验证内部 UI 和外部配置/错误反馈 |
 | Production routing | unchanged | production_routing_changed: no |
-| External contract | scoped-change | 新增显式关闭/未就绪语义；未启用 external-enabled，不代表对外可用或生产批准 |
+| External contract | scoped-change | 新增显式关闭/未就绪与严格 Gateway principal/lease 语义；未启用 external-enabled，不代表对外可用或生产批准 |
 
-本文已包含 `EXEC-142-008` 本地实施证据；其余源码结论仍是静态扫描，不是运行流量、外部部署或生产批准证据。后续执行结果统一回写 [Progress](../progress.md)。
+本文已包含 `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013` 本地实施证据；源码和测试结论不是运行流量、外部部署或生产批准证据。后续执行结果统一回写 [Progress](../progress.md)。
 
 ## 目标
 
@@ -91,6 +91,9 @@ owner: platform-security-owner | session-owner | provider-owner
 4. `UnifiedSseController` 的订阅入口已经检查当前用户是否拥有目标 Session；`UnifiedSseEmitter` 本身仍是单 JVM 内存态。ownership 治理应保持现有正向校验，而不是重复设计 SSE 总线。
 5. 新的 BusinessFunction 审批入口已经使用 control credential principal，恢复服务会保存和复核 tenant、ClientApp、upstream user、task/session、function/version 和 input hash 等绑定信息。
 6. 1.3.3 已形成 credential lane、ClientApp 运行资源和隔离 smoke 的历史输入，但其未完成项和隔离结果不能替代 1.4.2 的运行态验证或生产批准。
+7. Worker Gateway 严格请求现使用 `X-Navigator-Worker-Id`、`X-Navigator-Worker-Credential`、`X-Navigator-Worker-Lease-Id`，并将 task token 与 exact Worker principal/lease、tenant、active ClientApp、pool/member/backend/owner 或精确 physical route 求交；partial/blank header 与 legacy `X-Worker-Id` fail closed。
+8. `NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED` 默认 `false`；只有三项 Worker header 全部缺失时才保留 internal-dev token-only 兼容。平台 Open API 与 Gateway 开关当前独立，组合 startup/readiness invariant 尚未落地。
+9. Biz Provider 已在 task token 签发前完成 DB preselect/prebind；非 Biz Open API 明确不签发 Worker Gateway capability。LangGraph 已传播严格 header；Codex 配置长期 Worker credential 后保持 unready，Business MCP 在任务副作用前返回 503，尚未安全转发 credential。
 
 ## 静态搜索结论
 
@@ -132,7 +135,7 @@ owner: platform-security-owner | session-owner | provider-owner
 |---|---|---|
 | 运行模式 | ODR-142-004：`internal-dev` / `external-enabled` 双模式；external 配置意图必须显式、默认关闭，缺凭据或安全策略时 unready/fail closed | 平台与三类 Worker 的开关/readiness 骨架已实施；完整 execution policy 与 external enablement 未完成 |
 | upstream user 证明强度 | ODR-142-002：dev/internal 使用 ClientApp credential + mapping/grant 并标记 delegated assurance；signed assertion 延后为未来真正外部开放门禁 | 不阻塞当前 P2；external enablement 保持 `no` |
-| task token | ODR-142-003：服务端权威 opaque token、30 分钟租约、完整授权交集、task lease + Worker principal 双重绑定、暂停/终态失效、撤销和 generation 轮换 | 尚未实施，不发布新 token 契约 |
+| task token | ODR-142-003：服务端权威 opaque token、30 分钟租约、完整授权交集、task lease + Worker principal 双重绑定、暂停/终态失效、撤销和 generation 轮换 | v2、TTL、撤销、definitive terminal、DB preselect/prebind 与 Gateway strict principal/lease 已实施；pause/generation、Codex 安全转发和运行态矩阵未完成 |
 | 外部 Worker 安全上限 | ODR-142-004：目录/工具默认拒绝、`workspace-write`、任务工具 egress 默认拒绝，非 loopback 缺凭据 unready/fail closed | 仅模式门禁骨架完成；workspace/tool/sandbox/network 上限未完成，external 保持 unready |
 | 审计保证级别 | ODR-142-005：本地关键状态事务 outbox、无状态拒绝可靠安全事件、远程调用意图/结果分段记录、高频遥测 best-effort | 尚未实施，不宣称关键审计链路完成 |
 
@@ -167,6 +170,8 @@ owner: platform-security-owner | session-owner | provider-owner
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/ClientAppControlCredentialService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/WorkerGatewayController.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/config/WorkerGatewayProperties.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/WorkerGatewayRequestAuthorizationService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/WorkerGatewayService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/BusinessFunctionApprovalController.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessFunctionSuspensionService.java`
@@ -175,9 +180,15 @@ owner: platform-security-owner | session-owner | provider-owner
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/auth.py`
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/external_mode.py`
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/routes/health.py`
+- `tools/langgraph-biz-worker/src/langgraph_biz_worker/tools/business_function_tools.py`
+- `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/subprocess_env.py`
+- `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/skill_git_sync.py`
 - `tools/codex-agent-worker/src/auth.ts`
 - `tools/codex-agent-worker/src/external-mode.ts`
 - `tools/codex-agent-worker/src/routes/health.ts`
+- `tools/codex-agent-worker/src/routes/query.ts`
+- `tools/codex-agent-worker/src/business-mcp/navigator-business-mcp-server.ts`
+- `tools/codex-agent-worker/src/codex/sdk-wrapper.ts`
 - `tools/codex-app-server-worker/src/external-mode.ts`
 - `tools/codex-app-server-worker/src/routes/health.ts`
 
@@ -205,6 +216,16 @@ owner: platform-security-owner | session-owner | provider-owner
 - Codex app-server Worker：272 passed / 1 skipped，type-check 和 build 通过。
 - LangGraph Biz Worker：766 passed，build 通过。
 - self_check_decision: `continue-in-progress`；跨模块实现证据已回写，但手工网络/部署验证、浏览器体验和正式质量闸门均未执行。
+
+`EXEC-142-008` 是当时的首批门禁证据；后续 capability、credential/terminal 和 Gateway principal/lease 分别见 [Progress](../progress.md) 的 `EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`，不改写上述历史时点。
+
+## Gateway Principal / Lease 当前 Check-in（`EXEC-142-013`）
+
+1. Gateway 新增独立、默认关闭的 `navigator.worker-gateway.external-enabled` 配置。严格路径要求 `X-Navigator-Worker-Id`、`X-Navigator-Worker-Credential`、`X-Navigator-Worker-Lease-Id` 完整出现；partial/blank 与 legacy header fail closed。internal-dev 只有完全无 Worker header 时保留 task-token-only 兼容。
+2. Gateway 以 credential principal 与 task capability 同时校验 exact worker/lease、tenant、active ClientApp、pool/member/backend/owner 或精确 physical route；BusinessTask/Open API 的 Biz Provider 在签发前 DB preselect/prebind，启动结果不匹配时拒绝并撤销。非 Biz Open API 不获得 Gateway capability。
+3. LangGraph 已按可信 runtime worker/lease 传播严格 header，并以子进程环境 allowlist、无 profile shell、临时 askpass 和错误脱敏缩小 secret 暴露；Codex 因 CLI/MCP/工具环境共享而不安全转发长期 credential，配置后 readiness=false、Business MCP preflight 503。
+4. 本机验证为 launcher 依赖链 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 174 pass/1 Windows-only skip + typecheck。真实 L3、non-loopback、浏览器、hosted CI 与共享数据库均未运行。
+5. P2 仍为 `in-progress`：平台/Gateway 开关组合、OS 级隔离、Java LangGraph headerless client、Open API 远端孤儿补偿、pause/generation、reliable outbox、P3 ownership，以及 pool/worker 存量/并发冲突与 routeKind/schema 仍待处理。`production_routing_changed: no`、`external_enablement: no`。
 
 ## 实施步骤
 
@@ -246,7 +267,7 @@ owner: platform-security-owner | session-owner | provider-owner
 
 ## 自动化测试计划
 
-当前状态：`partial-passed`；显式开关、路径门禁、Worker unready 与平台 readiness 消费已有 `EXEC-142-008` 自动化证据，资源归属、token、身份与审计测试仍未运行。
+当前状态：`partial-passed`；显式开关、路径门禁、Worker unready、平台 readiness 消费、task capability/terminal、Worker credential/pool 与 Gateway strict principal/lease 已有 `EXEC-142-008/011/012/013` 本地自动化证据；P3 资源归属、可靠审计、真实 L3/网络和体验测试仍未运行。
 
 1. 入口契约测试：每类入口在缺 credential、错误 credential、错误 scope 下 fail closed。
 2. 内部 ownership 负向测试：两用户交叉 sessionId/taskId 的读取、消息、操作、取消和恢复。

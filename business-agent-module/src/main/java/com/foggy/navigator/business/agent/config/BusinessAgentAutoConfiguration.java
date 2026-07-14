@@ -22,7 +22,10 @@ import org.springframework.web.client.RestTemplate;
 import java.util.Arrays;
 
 @AutoConfiguration
-@EnableConfigurationProperties(BusinessTaskScopedTokenProperties.class)
+@EnableConfigurationProperties({
+        BusinessTaskScopedTokenProperties.class,
+        WorkerGatewayProperties.class
+})
 @ComponentScan(basePackages = {
         "com.foggy.navigator.business.agent.service",
         "com.foggy.navigator.business.agent.controller",

@@ -4,8 +4,10 @@ import {
   checkCodexSdkAvailable,
   resolveCodexAuthMode,
   resolveCodexBizReadiness,
+  resolveNavigatorWorkerCredentialReadiness,
   resolveWorkerHealthStatus,
 } from '../src/routes/health.ts'
+import { CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY } from '../src/codex/sdk-wrapper.ts'
 import { resolveExternalModeState } from '../src/external-mode.ts'
 
 test('resolveCodexAuthMode prefers api key over codex login', () => {
@@ -39,6 +41,14 @@ test('resolveCodexBizReadiness exposes only non-sensitive scoped home state', ()
     codex_biz_home_root_configured: false,
     codex_biz_scoped_home_ready: false,
   })
+})
+
+test('configured Navigator Worker credential keeps Codex Worker unready without exposing it', () => {
+  const reasons = resolveNavigatorWorkerCredentialReadiness('worker-a', true)
+
+  assert.deepEqual(reasons, [CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY])
+  assert.equal(reasons.some(reason => /bwc_|credential-value/.test(reason)), false)
+  assert.deepEqual(resolveNavigatorWorkerCredentialReadiness('', false), [])
 })
 
 test('external mode never treats a configured bearer token as execution readiness', () => {

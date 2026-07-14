@@ -127,6 +127,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertFalse(form.getContext().containsKey("skillName"));
         Map<String, Object> runtimeContext = form.getRuntimeContext();
         assertEquals("rt_token", runtimeContext.get("task_scoped_token"));
+        assertEquals("worker_01", runtimeContext.get("worker_id"));
+        assertEquals("bwl_test_01", runtimeContext.get("worker_lease_id"));
         assertEquals("skill_01", runtimeContext.get("skill_name"));
         assertEquals("vision_model_01", runtimeContext.get("vision_model_config_id"));
         @SuppressWarnings("unchecked")
@@ -141,6 +143,55 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertDoesNotThrow(() -> OffsetDateTime.parse((String) runtimeContext.get("current_time")));
         assertDoesNotThrow(() -> LocalDate.parse((String) runtimeContext.get("business_date")));
         assertTrue(((String) runtimeContext.get("timezone")).length() > 0);
+    }
+
+    @Test
+    void resolveWorkerId_selectsFromDatabaseWithoutAllocatingContextOrCreatingTask() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus(BizWorkerPoolService.STATUS_ENABLED);
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01"))
+                .thenReturn(List.of(member));
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_01");
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01"))
+                .thenReturn(worker);
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setContextId(null);
+        request.setSelectedWorkerId(null);
+
+        String workerId = launcher.resolveWorkerId(request);
+
+        assertEquals("worker_01", workerId);
+        verify(workerService, never()).createClient(any());
+        verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void launch_rejectsTaskCreatedOnDifferentWorker() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus(BizWorkerPoolService.STATUS_ENABLED);
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01"))
+                .thenReturn(List.of(member));
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_01");
+        worker.setTenantId("tenant_01");
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01"))
+                .thenReturn(worker);
+        when(taskService.createTask(
+                eq("actor_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class)))
+                .thenReturn(LanggraphTaskDTO.builder()
+                        .taskId("lgt_other")
+                        .workerId("worker_other")
+                        .build());
+
+        SecurityException error = assertThrows(
+                SecurityException.class, () -> launcher.launch(request()));
+
+        assertEquals("LangGraph task was created on a different worker", error.getMessage());
     }
 
     @Test
@@ -305,7 +356,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         disabled.setStatus("DISABLED");
         when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01")).thenReturn(List.of(disabled));
 
-        assertThrows(IllegalStateException.class, () -> launcher.launch(request()));
+        assertThrows(SecurityException.class, () -> launcher.launch(request()));
         verifyNoInteractions(taskService);
     }
 
@@ -335,7 +386,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
                 .thenReturn(List.of(member));
 
         BusinessAgentWorkerTaskLaunchRequest request = request();
-        request.setPhysicalWorkerId("worker_other");
+        request.setSelectedWorkerId("worker_other");
 
         assertThrows(SecurityException.class, () -> launcher.launch(request));
         verifyNoInteractions(workerService, taskService);
@@ -407,6 +458,10 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
                 .skillId("skill_01")
                 .skillName("skill_01")
                 .workerPoolId("pool_01")
+                .workerPoolOwnerType(ResourceOwnerType.PLATFORM)
+                .workerPoolOwnerId("tenant_01")
+                .selectedWorkerId("worker_01")
+                .workerLeaseId("bwl_test_01")
                 .workerBackend("LANGGRAPH_BIZ")
                 .modelConfigId("model_01")
                 .visionModelConfigId("vision_model_01")

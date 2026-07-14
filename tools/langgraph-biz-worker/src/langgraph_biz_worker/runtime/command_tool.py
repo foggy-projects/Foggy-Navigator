@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - command execution is Linux-only.
 
 from ..config import settings
 from .execution_policy import ExecutionPolicy
+from .subprocess_env import sanitized_worker_subprocess_env
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_TIMEOUT_SECONDS = 600.0
@@ -82,7 +83,7 @@ def run_command_tool(
     started = time.monotonic()
     try:
         completed = subprocess.run(
-            ["/bin/bash", "-lc", command],
+            ["/bin/bash", "--noprofile", "--norc", "-c", command],
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -157,7 +158,10 @@ def _resolve_cwd(value: Any, execution_policy: ExecutionPolicy) -> Path:
 def _subprocess_identity_kwargs(execution_policy: ExecutionPolicy) -> dict[str, Any]:
     """Return POSIX subprocess options that keep command-created files workspace-owned."""
 
-    options: dict[str, Any] = {"umask": COMMAND_UMASK}
+    options: dict[str, Any] = {
+        "umask": COMMAND_UMASK,
+        "env": sanitized_worker_subprocess_env(),
+    }
     if execution_policy.workdir is None:
         return options
     try:
@@ -222,7 +226,7 @@ def _command_env_for_uid(uid: int) -> dict[str, str] | None:
         user_info = pwd.getpwuid(uid)
     except KeyError:
         return None
-    env = os.environ.copy()
+    env = sanitized_worker_subprocess_env()
     env["HOME"] = user_info.pw_dir
     env["USER"] = user_info.pw_name
     env["LOGNAME"] = user_info.pw_name

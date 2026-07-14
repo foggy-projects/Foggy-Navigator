@@ -452,7 +452,10 @@ function jsonRpcError(id: JsonRpcId, code: number, message: string): Record<stri
 
 function sanitizeErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
-  return message.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+  return message
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/\bbwc_[A-Za-z0-9._-]+\b/g, '[worker-credential-redacted]')
+    .replace(/\bbtt_[A-Za-z0-9._-]+\b/g, '[task-token-redacted]')
 }
 
 function parseResponseBody(text: string): unknown {

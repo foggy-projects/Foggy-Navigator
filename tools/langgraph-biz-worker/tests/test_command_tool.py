@@ -52,7 +52,7 @@ def test_run_command_tool_executes_subprocess_in_policy_workdir(tmp_path, monkey
     assert result["ok"] is True
     assert result["exit_code"] == 0
     assert result["stdout"] == "ok\n"
-    assert captured["argv"] == ["/bin/bash", "-lc", "git status --short"]
+    assert captured["argv"] == ["/bin/bash", "--noprofile", "--norc", "-c", "git status --short"]
     assert captured["kwargs"]["cwd"] == str(policy.workdir)
     assert captured["kwargs"]["stdin"] is command_tool.subprocess.DEVNULL
     assert captured["kwargs"]["umask"] == command_tool.COMMAND_UMASK
@@ -84,7 +84,7 @@ def test_run_command_tool_drops_root_to_policy_workdir_owner(tmp_path, monkeypat
     result = run_command_tool({"command": "mkdir -p tasks/example"}, policy)
 
     assert result["ok"] is True
-    assert captured["argv"] == ["/bin/bash", "-lc", "mkdir -p tasks/example"]
+    assert captured["argv"] == ["/bin/bash", "--noprofile", "--norc", "-c", "mkdir -p tasks/example"]
     assert captured["kwargs"]["user"] == 1001
     assert captured["kwargs"]["group"] == 1002
     assert captured["kwargs"]["extra_groups"] == (1002, 1003)
@@ -108,6 +108,28 @@ def test_run_command_tool_keeps_current_identity_when_not_root(tmp_path, monkeyp
     monkeypatch.setattr(command_tool.os, "geteuid", lambda: 1001, raising=False)
     monkeypatch.setattr(command_tool, "_workspace_owner_ids", fail_owner_lookup)
     monkeypatch.setattr(command_tool.subprocess, "run", fake_run)
+    secret_env = {
+        "ANTHROPIC_API_KEY": "llm-secret",
+        "AWS_ACCESS_KEY_ID": "aws-access-key",
+        "AWS_SECRET_ACCESS_KEY": "aws-secret-key",
+        "AWS_SESSION_TOKEN": "aws-session-token",
+        "BIZ_WORKER_LLM_API_KEY": "provider-secret",
+        "BIZ_WORKER_NAVIGATOR_WORKER_CREDENTIAL": "bwc_secret",
+        "BIZ_WORKER_NAVIGATOR_WORKER_ID": "worker-a",
+        "BIZ_WORKER_SKILL_GIT_TOKEN": "skill-secret",
+        "BIZ_WORKER_SKILL_WEBHOOK_SECRET": "webhook-secret",
+        "BIZ_WORKER_WORKER_TOKEN": "inbound-secret",
+        "DATABASE_URL": "postgresql://user:secret@db/runtime",
+        "DB_PASSWORD": "db-secret",
+        "OPENAI_API_KEY": "openai-secret",
+        "PGPASSWORD": "postgres-secret",
+    }
+    for key, value in secret_env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin")
+    monkeypatch.setenv("JAVA_HOME", "/opt/jdk")
+    monkeypatch.setenv("PNPM_HOME", "/opt/pnpm")
+    monkeypatch.setenv("LANG", "C.UTF-8")
 
     result = run_command_tool({"command": "touch report.md"}, policy)
 
@@ -115,7 +137,12 @@ def test_run_command_tool_keeps_current_identity_when_not_root(tmp_path, monkeyp
     assert "user" not in captured["kwargs"]
     assert "group" not in captured["kwargs"]
     assert "extra_groups" not in captured["kwargs"]
-    assert "env" not in captured["kwargs"]
+    child_env = captured["kwargs"]["env"]
+    assert all(key not in child_env for key in secret_env)
+    assert child_env["PATH"] == "/usr/local/bin:/usr/bin"
+    assert child_env["JAVA_HOME"] == "/opt/jdk"
+    assert child_env["PNPM_HOME"] == "/opt/pnpm"
+    assert child_env["LANG"] == "C.UTF-8"
     assert captured["kwargs"]["umask"] == command_tool.COMMAND_UMASK
 
 
@@ -134,7 +161,7 @@ def test_run_command_tool_executes_without_command_allowlist(tmp_path, monkeypat
     result = run_command_tool({"command": "git status --short"}, policy)
 
     assert result["ok"] is True
-    assert captured["argv"] == ["/bin/bash", "-lc", "git status --short"]
+    assert captured["argv"] == ["/bin/bash", "--noprofile", "--norc", "-c", "git status --short"]
 
 
 def test_command_tool_rejects_read_only_workspace(tmp_path, monkeypatch):

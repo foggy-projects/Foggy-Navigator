@@ -83,6 +83,9 @@ navigator:
   external:
     # Internal-only by default. Opening the public API surface requires an explicit opt-in.
     enabled: ${NAVIGATOR_EXTERNAL_ENABLED:false}
+  worker-gateway:
+    # Headerless task-token access is only an internal-dev compatibility mode.
+    external-enabled: ${NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED:false}
   business-agent:
     task-token:
       # Capability tokens are short-lived; the implementation hard-caps TTL at 60 minutes.

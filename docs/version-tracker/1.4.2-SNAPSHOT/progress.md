@@ -48,7 +48,7 @@
 | 条件 | 状态 | 说明 |
 |---|---|---|
 | 产品定位和版本目标进入版本文档 | in-progress | README、REQ-001 与 Owner 决策已落档；当前系统总览、功能架构、观测和安装指引已开始对齐，历史快照保留原结论并增加 superseded 标记 |
-| 内外部信任边界冻结 | in-progress | ODR-142-002 至 ODR-142-005 已关闭方向决策；external gate、task capability v2、终态 tombstone、Worker credential v1 与 pool/identity 路由不变量已实施；Gateway principal/lease、可靠审计和 ownership 仍未完成 |
+| 内外部信任边界冻结 | in-progress | ODR-142-002 至 ODR-142-005 已关闭方向决策；external gate、task capability v2、终态 tombstone、Worker credential v1、pool/identity 路由不变量及 Gateway strict principal/lease 已实施；开关组合、OS 隔离、Codex 安全转发、可靠审计和 ownership 仍未完成 |
 | 模块职责和代码清单复核 | in-progress | 已按 Owner 决策更新；随实际删除继续校正路径和状态 |
 | 构建工具链决策 | approved-and-implemented-baseline | Node `22.23.1`、pnpm `10.34.5`、单一根 lockfile、根前端矩阵与 repository CI 已落地；GitHub runner/branch protection 尚未验证 |
 | 外部身份/token/Worker/审计决策 | approved-with-constraints | signed assertion 降为外部开放前置项；explicit external 默认关闭及其余边界仍是本版硬门 |
@@ -61,7 +61,7 @@
 |---|---|---|---|
 | P0 | 目标、边界、术语、ownership 和代码清单冻结 | in-progress | Owner 决策已落档；当前文档和代码清单同步中 |
 | P1 | Node、lockfile、全仓 clean build 和 CI 基线 | in-progress | 精确 Node/pnpm、根 frozen lockfile、全前端矩阵和 repository CI 已落地；本机 Java clean test 与前端 type/test/build 通过，GitHub runner/Worker lane/nightly 尚未闭合 |
-| P2 | 外部 Biz Worker/upstream user 边界治理 | in-progress | external gate/readiness、task capability v2、持久化终态门禁、Worker credential v1、pool owner/identity 路由与 best-effort audit 事务隔离已落地；Gateway principal/lease、generation/pause、可靠 outbox 与 external execution policy 未完成；见 `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012` |
+| P2 | 外部 Biz Worker/upstream user 边界治理 | in-progress | external gate/readiness、task capability v2、持久化终态门禁、Worker credential v1、pool owner/identity 路由、Gateway strict principal/lease、Biz Provider preselect/prebind 与 best-effort audit 事务隔离已落地；Codex 安全转发、开关组合、OS 隔离、generation/pause、可靠 outbox 与 external execution policy 未完成；见 `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013` |
 | P3 | Session/Task 定向 ownership 治理 | not-started | not-collected |
 | P4 | 低风险孤儿代码和失效文档清理 | not-started | not-collected |
 | P5 | Monitoring、metadata-query、code-review、echo dev-only 独立收口 | in-progress | Monitoring 与 code-review-agent 源码切片已物理移除；metadata-query 已 completed-local，删除后 clean test、依赖树与 clean target 扫描通过，启动/浏览器未跑；Echo 未开始 |
@@ -72,8 +72,8 @@
 
 | Workitem | 状态 | Development | Testing | Experience | Evidence |
 |---|---|---|---|---|---|
-| [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | in-progress | partial：平台 Open API 默认关闭、三类 Worker external profile、readiness、task capability v2、持久化终态门禁与 Worker identity/pool 定向治理已落地 | partial-passed：最终 11 reactor clean、2186 tests；BA integration typecheck；三组 migration 双 MySQL 版本验证 | not-run：内部 UI、真实网络部署与错误反馈体验未验证 | `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`；Gateway principal/lease、可靠 audit、ownership 仍未完成 |
-| [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | in-progress | partial：显式开关、task function scope/TTL/revoke、持久化 terminal tombstone、Worker credential rotate/revoke、pool owner/identity 路由与 audit writer 事务隔离已落地 | partial-passed：11 reactor clean、2186 tests；business-agent 590、Claude 368、LangGraph 165、Codex 358、Gemini 25；MySQL 8.0/8.4 三组 migration 往返；TS typecheck | not-run：ClientApp 双主体、审批恢复、非 loopback 部署和 Worker 错误体验未验证 | `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`；Gateway principal/lease、generation/pause、outbox 未完成 |
+| [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | in-progress | partial：平台 Open API 默认关闭、三类 Worker external profile、readiness、task capability v2、持久化终态门禁、Worker identity/pool 与 Gateway strict principal/lease 已落地 | partial-passed：launcher 依赖链 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 174 pass/1 Windows skip + typecheck；既有 migration 双 MySQL 版本验证 | not-run：内部 UI、真实网络部署与错误反馈体验未验证 | `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`；开关组合、Codex 安全转发、OS 隔离、可靠 audit、ownership 仍未完成 |
+| [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | in-progress | partial：显式开关、task function scope/TTL/revoke、持久化 terminal tombstone、Worker credential rotate/revoke、pool owner/identity、Gateway strict principal/lease、DB preselect/prebind 与 audit writer 事务隔离已落地；非 Biz Open API 不签发 Gateway capability | partial-passed：launcher 依赖链 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 175 tests 中 174 pass/1 Windows skip、typecheck；既有 MySQL migration 证据保持 | not-run：ClientApp 双主体、审批恢复、非 loopback 部署和 Worker 错误体验未验证 | `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`；Codex credential 安全转发、generation/pause、outbox、L3 未完成 |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | planned-reviewed | not-started | not-run | not-run：需验证内部 UI 工作流 | Owner 决策已关闭；实现证据未收集 |
 | [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | in-progress | baseline + required/nightly workflow implemented | passed-local：根 Java 17/17、frontend、五类 Worker clean 等价矩阵 | not-run：两个最小 TS 修复和 CI 配置尚未浏览器验证 | `EXEC-142-003`、`EXEC-142-006`、`EXEC-142-009`；GitHub runner/branch protection/nightly 实跑未完成 |
 | [BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md) | closed | LangGraph SSE 语义去重已排除传输层 event_id | passed：目标用例 1；全套 758；wheel/sdist build | not-applicable：修复事件重复，无新增 UI | `EXEC-142-006` |
@@ -99,11 +99,11 @@
 | INPUT-008 | Owner 阶段假设 | Monitoring 等候选处于 dev-only、本机孵化范围，旧数据可丢弃 | `2026-07-14` Owner 明确确认 + 每切片静态复核 | approved-assumption | 不替代共享/生产资源防误删；发现冲突证据即停止 |
 | INPUT-009 | Owner 阶段假设 | 旧 Provider API 无生产/外部兼容义务，所有上游仍在本机孵化 | `2026-07-14` Owner 明确确认 + 仓内消费者扫描 | approved-assumption | 取消仓外窗口，不取消仓内迁移、安全语义和 clean build |
 | DEC-001 | 决策项 | 明确受支持的 Node/pnpm/Corepack 版本 | ODR-142-001 + P1 | approved-and-applied | Node `22.23.1`、pnpm `10.34.5`；Corepack 只负责激活；hosted CI 实跑仍待完成 |
-| DEC-002 | 决策项 | 外部 credential 与 task token 的签发、轮换和撤销权威 | ODR-142-002 至 ODR-142-005 + P2 | implementation-partial | Worker credential v1 的 owner-scoped rotate/revoke/schema 已落地；Gateway principal、lease、出站 Worker auth 与可靠撤销传播仍待实施 |
+| DEC-002 | 决策项 | 外部 credential 与 task token 的签发、轮换和撤销权威 | ODR-142-002 至 ODR-142-005 + P2 | implementation-partial | Worker credential v1 的 owner-scoped rotate/revoke/schema、Gateway strict principal/lease 与 LangGraph 调用方传播已落地；Codex 安全转发、pause/generation、开关组合与可靠撤销传播仍待实施 |
 | DEC-003 | 决策项 | envelope v1 的 typed schema 演进、未知版本策略与兼容窗口 | P6 provider owners 决策 | pending-decision | 不允许无迁移链切换 |
 | ODR-142-001 | Owner 决策 + 实施 | Node/pnpm、lockfile 与 CI 分层 | [Owner 决策记录](./owner-decision-review.md) | in-progress | 本地 frozen/frontend/Worker 证据通过；required/nightly workflow 已建立，GitHub runner 与分支保护未执行 |
 | ODR-142-002 | Owner 决策 | internal-dev 保留 ClientApp 代办；signed assertion 延后到外部开放 | [Owner 决策记录](./owner-decision-review.md) | approved-with-constraints | explicit external 必须默认关闭；请求体 actor 仍不可信 |
-| ODR-142-003 | Owner 决策 + 实施 | task token scope、TTL、失效、撤销、轮换和 Worker lease | [Owner 决策记录](./owner-decision-review.md) | implementation-partial | v2 schema/function snapshot/TTL/撤销与 definitive terminal tombstone/物理撤销已实现；Worker principal/lease、pause 与 generation 轮换未实现 |
+| ODR-142-003 | Owner 决策 + 实施 | task token scope、TTL、失效、撤销、轮换和 Worker lease | [Owner 决策记录](./owner-decision-review.md) | implementation-partial | v2 schema/function snapshot/TTL/撤销、definitive terminal tombstone、DB preselect/prebind 与 Gateway Worker principal/lease 双重校验已实现；pause、generation 轮换、Codex 安全转发与运行态矩阵未实现 |
 | ODR-142-004 | Owner 决策 | external-enabled 目录、工具、sandbox、approval、network 和 readiness 上限 | [Owner 决策记录](./owner-decision-review.md) | approved-with-constraints | 门禁未完成前 external 保持 disabled |
 | ODR-142-005 | Owner 决策 + 实施 | 本地关键状态事务 outbox、拒绝可靠事件、远程调用分段审计、遥测 best-effort | [Owner 决策记录](./owner-decision-review.md) | implementation-partial | runtime audit writer 已用独立 bean + `REQUIRES_NEW/saveAndFlush` 隔离主事务；仍是 best-effort telemetry，关键拒绝/outbox 未实现 |
 | ODR-142-006 | Owner 决策 | 四个历史切片 dev-only 安全后物理收口 | [Owner 决策记录](./owner-decision-review.md) | approved-with-constraints | 数据可丢弃；发现共享/生产资源停止 |
@@ -125,6 +125,7 @@
 | EXEC-142-010 | 文档一致性与轻量实现自检 | P1/P2/BUG-002 回写、Owner 决策时态、工作项状态、external 模式术语和代码路径 | 两轮独立只读文档审计；版本目录 + 总索引 Markdown 相对链接/锚点检查；Code Inventory 具体路径复核；`git diff --check`、`git status --short` | passed-local | 21 个范围内 Markdown、337 个相对目标、5 个锚点缺失为 0；53 个应存在的关键具体路径均存在；12 个待提交路径均在 `docs/version-tracker/1.4.2-SNAPSHOT`；无业务代码改动。正式质量门禁仍未执行 |
 | EXEC-142-011 | P2 task capability v2 与 Codex Biz route | 结构化函数快照、TTL、结构化精确 runtime key、不可变 bind tuple、独立事务签发/补偿、Open API 失败撤销、SQL migration/安全 rollback、Codex Biz route | `mvn -B -pl business-agent-module -am test`；Open API 与跨 Provider 定向 Maven；H2 JPA 回滚与 bind/revoke 组合时序；一次性 MySQL 8.0.44/8.4.8 | passed-local-partial-scope | 5/5 reactor、770 tests；business-agent 510；Open API 43；跨 Provider 94；forward/rollback 脚本容器验证含幂等及 rollback 前撤销 ACTIVE token。JPA 用例只提供组合时序下观测到的最终状态证据，不证明确定性锁交错；共享/项目数据库迁移、launcher `ddl-auto=validate`、真实 Worker/浏览器/hosted CI 未执行；principal/lease、终态轮换、outbox/ownership 未完成 |
 | EXEC-142-012 | P2 Worker identity、终态与路由治理 | owner-scoped Worker credential v1；pool/identity owner 不变量；LangGraph identity-only pool route；definitive terminal tombstone、late-bind 撤销；Claude tenant 持久化；Codex pre-acceptance 终态；audit writer 独立事务 | 最终 11 reactor clean test；BA integration TypeScript；H2 JPA/定向测试；三组 SQL 在一次性 MySQL 8.0.44/8.4.8 forward×2/rollback×2/reapply | passed-local-partial-scope | 2186 tests、0 failure/error/skip；Node 22.23.1/pnpm 10.34.5 typecheck exit 0。external 仍 disabled/unready；Gateway 尚未消费 strict Worker principal/lease，关键审计 outbox、共享 DB migration、launcher validate、真实网络/浏览器/hosted CI 未执行 |
+| EXEC-142-013 | P2 Gateway principal/lease 与 Worker secret 边界 | strict Worker headers；external 默认关闭及 partial/legacy fail closed；DB preselect/prebind；exact worker/lease/tenant/ClientApp/pool/member/backend/owner/route 校验；非 Biz Open API 无 Gateway capability；LangGraph credential 传播与子进程 allowlist/askpass；Codex credential 配置后 unready/Business MCP 503；pool/worker 双向 collision guard | `mvn -B -pl launcher -am clean test`；LangGraph 全量 pytest + ruff；Codex 全量 npm test + typecheck；定向 Gateway/Open API/pool/launcher 测试包含在上述范围 | passed-local-partial-scope | launcher 依赖链 15/15 reactor、2357 tests、0 failure/error/skip；LangGraph 780 passed、ruff 通过；Codex 175 tests 中 174 passed、1 Windows-only skipped，typecheck 通过。未执行真实 L3、non-loopback、浏览器、hosted CI 或共享数据库；开关组合、OS 隔离、Codex 安全转发、Java LangGraph headerless client、远端孤儿补偿、pause/generation/outbox/P3 与 routeKind/schema/存量冲突扫描仍待办 |
 
 ## P2 Execution Check-in（`EXEC-142-008`）
 
@@ -213,20 +214,47 @@
 - runtime audit 仍是 best-effort；审批/恢复/取消主体绑定和关键拒绝/outbox 未闭合。
 - 真实 non-loopback、浏览器、hosted CI、共享 DB migration 和生产 enablement 全部未运行；`production_routing_changed: no`、`external_enablement: no` 保持不变。
 
+后续 `EXEC-142-013` 已接通 Gateway strict Worker principal/lease、Biz Provider preselect/prebind 和 LangGraph 调用方 header；本段保留 `EXEC-142-012` 当时的边界，不改写为当时已经完成。
+
+## P2 Gateway Principal / Lease / Secret Boundary Execution Check-in（`EXEC-142-013`）
+
+### Completed Work Summary
+
+1. Worker Gateway 四类 HTTP 路由统一先经 `WorkerGatewayRequestAuthorizationService` 授权，再进入 DTO/业务服务。严格调用使用 `X-Navigator-Worker-Id`、`X-Navigator-Worker-Credential`、`X-Navigator-Worker-Lease-Id`；legacy `X-Worker-Id`、任一 partial/blank 组合均 fail closed。`navigator.worker-gateway.external-enabled` / `NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED` 默认 `false`；仅在该开关关闭且三项 Worker header 全部缺失时保留 internal-dev token-only 兼容，出现任一新 header 就必须完整通过严格认证。
+2. 严格路径先校验 Worker credential 与 task capability，再校验 exact worker/lease、token tenant、active ClientApp、pool/member/backend/owner；physical route 只允许 `poolId == workerId` 的精确受治理 route。Gateway health snapshot 不作为 credential authority。poolId 与 workerId 的双向命名碰撞已在新建/注册 service 路径阻断；存量冲突、跨表并发竞态和显式 `routeKind`/schema 仍待后续治理。
+3. BusinessTask 与 Open API 的 Biz Provider 在签发 token 前通过 launcher 解析 Worker，生成 `bwl_` logical lease，并以独立事务预绑定 exact worker/lease；真实启动结果必须回报同一 Worker，否则 fail closed 并撤销 capability。Open API 的非 Biz Provider 明确不签发 Worker Gateway capability，不向 runtime context 注入 task token、worker 或 lease。
+4. LangGraph Biz Worker 使用成对配置的 `BIZ_WORKER_NAVIGATOR_WORKER_ID` / `BIZ_WORKER_NAVIGATOR_WORKER_CREDENTIAL`，只在可信 runtime `worker_id`/`worker_lease_id` 与本地 Worker 匹配时发送三项严格 header。模型/集成可控子进程环境改为 allowlist；shell 使用 `--noprofile --norc`；Skill Git token 仅通过临时 askpass 进程环境提供，clone/fetch URL 与 argv 不携带 token，临时目录在成功/失败后清理并对错误脱敏。
+5. Codex SDK Worker 接受成对的 `CODEX_NAVIGATOR_WORKER_ID` / `CODEX_NAVIGATOR_WORKER_CREDENTIAL` 配置，但当前 CLI、Shell 与 MCP 子进程共享环境，无法在不暴露长期 credential 的前提下安全转发。因此一旦配置长期 Worker credential，health 增加 `CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY` 并保持 `ready=false`；Business MCP 请求在 SSE、线程预留、任务注册和广播前返回 503。普通非 Business MCP 与未配置该 credential 的 internal token-only 路径保持原行为；通用 task 环境还会移除 ambient `NAVIGATOR_TASK_SCOPED_TOKEN`，仅按当前任务重新注入 MCP token。
+
+### Build / Test Evidence
+
+- `mvn -B -pl launcher -am clean test`：15/15 reactor `SUCCESS`，launcher 依赖链共 2357 tests、0 failure/error/skip。该结果是本地 clean test，不是 `clean verify` 或 hosted CI；launcher 保留已知 Surefire fork JVM 退出超时告警，但命令 exit 0。
+- LangGraph Biz Worker：全量 `pytest` 780 passed；`ruff check .` 通过。定向 secret boundary 测试覆盖 command subprocess 环境、无 profile shell、Skill Git askpass/URL/argv/清理/脱敏和 Gateway header 传播。
+- Codex SDK Worker：`npm test` 共 175 tests，174 passed、1 个 Windows-only skipped、0 failed；`npm run typecheck` 通过。覆盖 health unready、Business MCP preflight 503、无任务副作用、task env secret stripping 与既有非 Business/internal 路径。
+- 上述命令没有建立真实 Worker Gateway 网络链路、双 ClientApp/upstream user 数据矩阵、浏览器体验、共享数据库 migration、launcher `ddl-auto=validate` 或 hosted runner 证据。
+
+### Remaining Risks / Next Gate
+
+- 平台 `NAVIGATOR_EXTERNAL_ENABLED` 与 Gateway `NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED` 仍是独立开关，尚无组合 startup/readiness invariant；只开启其中之一不能视为 external-ready。
+- LangGraph Worker 主进程仍持有长期 credential，临时 askpass 也不能抵御同 UID `/proc`、ptrace 或等价主机级观察；Codex 父进程同样持有 credential。完成独立 UID/container、受限 `/proc` 或 credential broker 前，不具备 OS 级 secret 隔离，external enablement 保持 `no`。
+- Java `LanggraphWorkerClient` 仍是 internal/headerless Gateway 路径；Codex 的严格 credential 转发刻意保持 unready，不能记为已完成客户端接线。
+- Open API 在远端 submit 成功、后续本地 bind 失败时会撤销 token，但尚未取消可能已创建的远端任务，存在孤儿任务/成本风险。
+- pause/suspension、resume generation、关键拒绝与状态 outbox、P3 ownership、真实 L3/网络/浏览器/hosted CI 尚未完成。`production_routing_changed: no`、`external_enablement: no`、P2 `in-progress` 保持不变；下一实施阶段按计划进入 P3。
+
 ## Testing Progress
 
 | Test lane | 状态 | Evidence / 原因 |
 |---|---|---|
-| Java clean compile/test | passed-local | 根历史基线见 `EXEC-142-009`；本批 `EXEC-142-012` 对 Business Agent + 四 Java Provider 执行 11/11 reactor clean test，2186 tests、0 failure/error/skipped；`clean verify`/launcher/hosted CI 未重跑 |
+| Java clean compile/test | passed-local | 根历史基线见 `EXEC-142-009`；`EXEC-142-013` 执行 `mvn -B -pl launcher -am clean test`，15/15 reactor、2357 tests、0 failure/error/skipped；`clean verify` 与 hosted CI 未运行 |
 | Launcher assembly/package | partial | Maven clean test 已完成 launcher 编译和测试；`package`/`clean verify` 未运行 |
 | Navigator PC type-check/test/build | passed | 两个已知 TS 错误做最小修复后，根 frontend type/test/build matrix exit 0 |
 | chat-core/chat/widget build | passed | 根 `ci:frontend` / `build:frontend` 已覆盖；chat 测试 105、widget 测试 31 均通过 |
 | Mobile type-check/test/build | passed | mobile type-check、59 个测试与 H5 build 通过；非 H5 目标未运行 |
 | Claude/Codex/Gemini/LangGraph Worker tests/build | passed-local | 独立 clean worktree 五类 Worker install/type/test/build 通过；Python 本机为 3.12.3，GitHub 3.11 与 hosted runner 仍未运行；见 `EXEC-142-006` |
 | Ownership negative-path tests | not-run | Open API identity/resource 绑定与 P3 ownership 尚未实施 |
-| task-scoped token 越权测试 | partial-passed-local | v1/错误 claims、跨函数 snapshot、缺 taskId、secret mismatch、撤销、definitive terminal tombstone 与 late-bind/mismatch 物理重开均覆盖；Worker principal/lease、pause/generation、跨 task 手工 API 和真实网络未覆盖，见 `EXEC-142-011`、`EXEC-142-012` |
+| task-scoped token 越权测试 | partial-passed-local | v1/错误 claims、跨函数 snapshot、缺 taskId、secret mismatch、撤销、definitive terminal tombstone、late-bind/mismatch 物理重开，以及 strict Worker credential + exact lease/tenant/ClientApp/pool/member/backend/owner/route 均覆盖；pause/generation、跨 task 手工 API 和真实网络未覆盖，见 `EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013` |
 | External Worker switch/readiness contract | passed-local | 三类 Worker 默认开关、严格布尔、external unready/空 Token reason、精确 `/health` 豁免和业务 API 503 契约通过；真实 non-loopback 部署未运行，见 `EXEC-142-008` |
-| Platform external gate/readiness consumption | passed-local | 路径 canonicalization 绕过已修复；平台门禁、Open API mapping、LangGraph/Codex ready=false 消费纳入 Java 定向 74 tests，10/10 reactor SUCCESS |
+| Platform external gate/readiness consumption | partial-passed-local | 路径 canonicalization 绕过已修复；平台门禁、Open API mapping、LangGraph/Codex ready=false 消费已有回归。Gateway external 默认关闭、partial/legacy header fail closed 与 Codex credential-configured unready 已覆盖；平台/Gateway 双开关组合 invariant 与真实部署未覆盖 |
 | 删除项引用与 clean build 回归 | passed-local-partial-scope | Monitoring/code-review 精确静态扫描、shell syntax、Java clean 与前端 full matrix passed；metadata-query 删除后 clean test 15/15 SUCCESS，59 tests 通过，依赖树/clean target 无旧查询依赖；外部资源、启动和浏览器 smoke 未检查 |
 | GitHub Actions full-repository matrix | configured-not-run | `.github/workflows/repository-ci.yml` 已覆盖 Java、frontend、Node Worker、Python Worker；尚未由 GitHub runner 执行 |
 | 文档、配置与全工作树检查 | passed-local | `EXEC-142-005` 的 shell/JSON/YAML/lockfile 检查保持有效；本轮 `EXEC-142-010` 复核 21 个范围内 Markdown、337 个相对目标、5 个锚点，缺失为 0；`git diff --check` exit 0，工作树仅含 12 个 1.4.2 文档路径 |
@@ -257,12 +285,12 @@
 | Requirement | 状态 | Evidence |
 |---|---|---|
 | 1. 内部 UI 和可信内网工作流不大面积回归 | not-started | not-collected |
-| 2. 外部 Biz Worker 请求可追溯到 tenant、ClientApp、upstream user 和任务 | not-started | not-collected |
+| 2. 外部 Biz Worker 请求可追溯到 tenant、ClientApp、upstream user 和任务 | partial-passed-local | `EXEC-142-013`：严格 Gateway 路径从 task capability 与 Worker credential 解析并校验 tenant、active ClientApp、upstream user 非空、exact worker/lease、pool/member/backend/owner/route；真实 L3、双主体与可查询审计链未完成 |
 | 3. 外部审批、恢复、取消不能只凭 taskId | not-started | not-collected |
 | 4. 外部身份不直接取自可伪造请求字段 | not-started | not-collected |
-| 5. task-scoped token 不越权访问其他任务或函数 | partial-passed-local | `EXEC-142-011/012`：结构化函数快照、当前授权交集、缺 taskId、撤销及 definitive terminal tombstone/late-bind fail-closed 通过；Worker principal/lease、pause/generation 和跨 task 手工矩阵未完成 |
-| 6. 非 loopback 外部 Worker 缺凭据时 fail closed 或 unready | partial-passed-local-contract | external-enabled 当前因执行策略未就绪始终 unready，空 Token 叠加认证 reason，业务 API 503；三类 Worker 契约测试通过，真实 non-loopback 部署未运行；`EXEC-142-008` |
-| 7. Java clean 构建测试通过 | passed-current-batch | 根 17/17 历史基线见 `EXEC-142-009`；本 P2 批次 `EXEC-142-012` 的 11/11 clean reactor、2186 tests 全通过；`clean verify`、launcher 全根复跑与 hosted CI 仍待执行 |
+| 5. task-scoped token 不越权访问其他任务或函数 | partial-passed-local | `EXEC-142-011/012/013`：结构化函数快照、当前授权交集、缺 taskId、撤销、definitive terminal tombstone/late-bind，以及 exact Worker principal/lease 绑定均通过；pause/generation 和跨 task 手工矩阵未完成 |
+| 6. 非 loopback 外部 Worker 缺凭据时 fail closed 或 unready | partial-passed-local-contract | Worker external-enabled 当前因执行策略未就绪始终 unready；Gateway external-enabled 缺完整 Worker principal header fail closed；Codex 配置长期 Worker credential 后因安全转发未就绪而 health unready、Business MCP preflight 503。真实 non-loopback 部署与平台/Gateway组合开关未运行；`EXEC-142-008/013` |
+| 7. Java clean 构建测试通过 | passed-current-batch | 根 17/17 历史基线见 `EXEC-142-009`；本 P2 批次 `EXEC-142-013` 的 launcher 依赖链 15/15 clean reactor、2357 tests 全通过；`clean verify` 与 hosted CI 仍待执行 |
 | 8. 纳入范围的前端类型检查、测试和构建通过 | passed-current-batch | `EXEC-142-003`；浏览器体验与非 H5 mobile 不在本证据内 |
 | 9. Node、包管理器和 lockfile 可复现 | partial | 精确版本与本地 frozen lockfile 校验通过；clean checkout/GitHub runner 待证 |
 | 10. 所有删除项有扫描、迁移/替代和回滚证据 | partial | Monitoring/code-review/metadata-query 已记录；Echo、旧契约尚未实施 |
@@ -273,10 +301,10 @@
 ## Implementation Self-Check
 
 - quality_mode: lightweight-self-check
-- quality_scope: `GOV-001/GOV-002 P2 external gate/readiness + task capability v2 + Worker credential/pool/terminal/audit isolation + BUG-002`
-- changed_code_paths: 平台/Worker external gate 与 readiness；BusinessTask token/terminal lifecycle；BizWorker credential/pool；LangGraph governed identity route；Claude/Codex/Gemini/LangGraph terminal event；Claude tenant 与三组 SQL；runtime audit writer；Open SDK POM 与测试
-- self_check_summary: 默认关闭/unready、task capability v2、definitive terminal tombstone、Worker credential schema/API、pool owner/identity route 与 audit telemetry 事务隔离均有自动化和迁移证据。P2 仍为 in-progress，不把尚未接线的 Gateway principal/lease、pause/generation、ownership 或可靠 outbox 表述为完成
-- obvious_risks_or_follow_ups: `internal-dev` 仍依赖网络隔离；平台开关只覆盖 Open API；strict Worker credential 尚无 Gateway 消费者，lease/prebind、outbox、审批恢复主体与 execution policy 未完成；migration 未部署/launcher validate 未跑；真实网络、浏览器和 hosted CI 未运行
+- quality_scope: `GOV-001/GOV-002 P2 external gate/readiness + task capability v2 + Worker credential/pool/terminal/audit isolation + Gateway strict principal/lease + Worker secret boundary + BUG-002`
+- changed_code_paths: 平台/Worker external gate 与 readiness；BusinessTask token/terminal lifecycle 与 DB preselect/prebind；BizWorker credential/pool/collision guard；Worker Gateway request authorization；LangGraph governed identity route、credential header 与子进程环境/askpass；Codex readiness/MCP preflight/task env；Claude/Codex/Gemini/LangGraph terminal event；Claude tenant 与三组 SQL；runtime audit writer；Open SDK POM 与测试
+- self_check_summary: 默认关闭/unready、task capability v2、definitive terminal tombstone、Worker credential schema/API、pool owner/identity route、Gateway strict principal/lease、Biz Provider preselect/prebind、LangGraph secret propagation 和 Codex fail-closed readiness 均有本地自动化证据。P2 仍为 in-progress，不把 Codex 安全转发、OS 隔离、开关组合、pause/generation、ownership、L3 或可靠 outbox 表述为完成
+- obvious_risks_or_follow_ups: `internal-dev` 仍依赖网络隔离；平台与 Gateway 双开关尚无组合 invariant；LangGraph/Codex 长期 credential 缺 OS 级隔离，Codex 严格转发保持 unready；Java LangGraph client headerless；Open API bind 失败可能遗留远端任务；pool/worker 存量/并发冲突与 routeKind/schema 待办；migration 未部署/launcher validate 未跑；真实网络、浏览器和 hosted CI 未运行
 - self_check_decision: needs-formal-quality-gate
 - formal_gate_timing: P2/P3 实现收口并准备进入 coverage audit 前；当前只是部分阶段 check-in，不提前生成正式质量报告
 
@@ -291,7 +319,7 @@
 - [x] 已判断需要在跨模块阶段收口时执行正式 `foggy-implementation-quality-gate`，本轮不把执行 check-in 变成正式验收。
 - [x] 当前批次进度与证据已回写。
 
-- execution_checkin_summary: partial-passed-for-current-batch；P2 显式关闭、task capability v2、definitive terminal、Worker credential v1、pool identity route 与 audit isolation 已通过本地 clean/迁移矩阵；hosted CI、真实网络、浏览器、Gateway principal/lease、pause/generation、可靠 audit/ownership、其余 P2-P6 和正式门禁未完成
+- execution_checkin_summary: partial-passed-for-current-batch；P2 显式关闭、task capability v2、definitive terminal、Worker credential v1、pool identity route、Gateway strict principal/lease、Biz Provider preselect/prebind、LangGraph secret boundary、Codex fail-closed readiness 与 audit isolation 已通过本地 clean/Worker 矩阵；hosted CI、真实网络、浏览器、Codex 安全转发、OS 隔离、开关组合、pause/generation、可靠 audit/ownership、其余 P2-P6 和正式门禁未完成
 - execution_decision: continue-in-progress
 - formal_quality_gate_required: yes-cross-module-shared-contract-and-cleanup
 - formal_quality_gate_status: not-started
@@ -306,9 +334,11 @@
 | Item | 状态 | Owner/Decision |
 |---|---|---|
 | GitHub repository CI 首次 hosted run、required check 与 nightly workflow | pending-execution | root build owner / repository owner |
-| Worker credential authority、轮换与撤销传播 | implementation-partial | owner-scoped v1 schema/API/strict verifier 已落地；Gateway principal/header、lease/prebind、客户端传播、审计/outbox 与出站 Worker auth 待办 |
+| Worker credential authority、轮换与撤销传播 | implementation-partial | owner-scoped v1 schema/API/strict verifier、Gateway strict principal/header/lease/prebind 与 LangGraph 客户端传播已落地；Codex 安全转发、OS 隔离、审计/outbox 与撤销传播待办 |
 | upstream user mapping/grant 的权威数据源细节 | pending-implementation-design | ClientApp / upstream integration owner；signed assertion 不阻塞 internal-dev |
-| task-scoped token 的 per-intent 最小函数 scope、generation 轮换、Worker principal/lease/PoP | pending-implementation | BusinessTask / BusinessFunction / Worker Gateway owner；v2 grant snapshot、TTL、撤销、definitive terminal tombstone 与 late-bind 基线已落地；lease/prebind、pause/generation 和真实跨 Worker 负向验证仍缺失 |
+| task-scoped token 的 per-intent 最小函数 scope、generation 轮换、Worker principal/lease/PoP | pending-implementation | BusinessTask / BusinessFunction / Worker Gateway owner；v2 grant snapshot、TTL、撤销、definitive terminal tombstone、DB preselect/prebind 与 strict principal/lease 已落地；pause/generation、per-intent 最小 scope、Codex 安全转发和真实跨 Worker 负向验证仍缺失 |
+| 平台/Gateway external 开关组合与 Worker secret OS 隔离 | pending-implementation-design | Platform / Worker / Security owner；当前两个开关均默认关闭但相互独立，LangGraph/Codex 主进程持有长期 credential；需冻结组合 readiness 与独立 UID/container/受限 `/proc`/credential broker 路径 |
+| poolId/workerId route 判别与冲突治理 | pending-implementation-design | Business Agent / DB owner；新写入已有双向 service guard，仍需存量扫描、并发唯一性及显式 `routeKind`/schema 决策 |
 | external execution policy、workspace/tool/sandbox/network 上限与真实网络部署验证 | pending-implementation | Worker / Platform / Security owner；显式默认关闭的开关、unready 骨架与平台 ready=false 消费已落地，安全上限未齐前 external 保持未启用 |
 | 权威 audit sink、outbox schema、拒绝事件可靠落档实现 | pending-implementation-design | Security / Operations / Business Agent owner |
 | metadata-query 启动/浏览器体验与后置正式门禁 | pending-experience-and-signoff | metadata-query / launcher owner；本地代码与自动化门禁已完成，不等于正式验收 |
@@ -324,5 +354,6 @@
 1. 本轮 Markdown 链接、`git diff --check` 和工作树范围检查已经完成；workflow/shell/JSON/YAML/lockfile 证据沿用 `EXEC-142-005`，未运行项继续保留。
 2. 让 repository CI 在 hosted runner 首次执行并决定 required checks；nightly 与 release/RC 分层单独落档。
 3. metadata-query 保持 completed-local 并在适用环境补启动/浏览器体验；后续逐切片推进 Echo 和旧 Provider 契约，每批先做仓内迁移/保护清单，再删除并重跑 clean test，不把 Owner 的 dev-only 授权扩大到未知共享资源。
-4. P2 已完成 explicit external gate/readiness、task capability v2、definitive terminal、Worker credential v1 与 pool identity route；下一批接入 Gateway Worker principal/lease/prebind 与调用方 header，再补 pause/generation、可靠审计和执行策略上限。signed assertion 保留为未来真正外部开放门禁。
-5. 每完成一个跨模块或删除阶段先执行 implementation self-check，再按需要执行正式质量检查；P7 仍按质量检查、覆盖审计、正式签收顺序收口，隔离验证不等于生产批准。
+4. P2 已完成 explicit external gate/readiness、task capability v2、definitive terminal、Worker credential v1、pool identity route、Gateway strict principal/lease、Biz Provider preselect/prebind 与 LangGraph header 传播；Codex 安全转发、OS 隔离、开关组合、pause/generation、可靠审计和执行策略上限保留为后续 P2 门禁。signed assertion 仍是未来真正外部开放门禁。
+5. 下一实施阶段按既定顺序进入 P3 Session/Task ownership；P2 的运行态/L3/hosted 缺口继续登记，不以阶段切换冒充 P2 完成。
+6. 每完成一个跨模块或删除阶段先执行 implementation self-check，再按需要执行正式质量检查；P7 仍按质量检查、覆盖审计、正式签收顺序收口，隔离验证不等于生产批准。

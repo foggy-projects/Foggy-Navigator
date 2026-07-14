@@ -56,6 +56,9 @@ public class BizWorkerPoolService {
         String normalizedOwnerId = ownerId.trim();
         String workerBackend = form.getWorkerBackend().trim();
         Optional<BizWorkerIdentityEntity> existing = workerIdentityRepository.findByWorkerId(workerId);
+        if (existing.isEmpty() && workerPoolRepository.findByPoolId(workerId).isPresent()) {
+            throw new IllegalArgumentException("worker route id is already used by a worker pool");
+        }
         BizWorkerIdentityEntity entity = existing.orElseGet(BizWorkerIdentityEntity::new);
         if (existing.isPresent()) {
             requireSameWorkerOwner(entity, ownerType, normalizedOwnerId);
@@ -119,6 +122,9 @@ public class BizWorkerPoolService {
         workerPoolRepository.findByPoolId(normalizedPoolId).ifPresent(existing -> {
             throw new IllegalArgumentException("worker pool already exists: " + normalizedPoolId);
         });
+        if (workerIdentityRepository.findByWorkerId(normalizedPoolId).isPresent()) {
+            throw new IllegalArgumentException("worker route id is already used by a worker identity");
+        }
 
         BizWorkerPoolEntity entity = new BizWorkerPoolEntity();
         entity.setPoolId(normalizedPoolId);

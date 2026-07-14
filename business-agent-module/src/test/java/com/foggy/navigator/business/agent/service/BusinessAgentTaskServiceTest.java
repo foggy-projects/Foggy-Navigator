@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -93,6 +94,28 @@ class BusinessAgentTaskServiceTest {
             token.setExpiresAt(LocalDateTime.now().plusMinutes(30));
             return token;
         });
+        lenient().when(tokenLifecycleService.issuePreboundToken(
+                any(BusinessTaskScopedTokenEntity.class), anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> {
+                    BusinessTaskScopedTokenEntity token = invocation.getArgument(0);
+                    token.setWorkerId(invocation.getArgument(2));
+                    token.setWorkerLeaseId(invocation.getArgument(3));
+                    token.setTokenVersion(BusinessTaskScopedTokenPolicyService.CURRENT_TOKEN_VERSION);
+                    token.setGeneration(BusinessTaskScopedTokenPolicyService.INITIAL_GENERATION);
+                    token.setAudience(BusinessTaskScopedTokenPolicyService.AUDIENCE_WORKER_GATEWAY);
+                    token.setIdentityAssurance(BusinessTaskScopedTokenPolicyService.IDENTITY_ASSURANCE_CLIENT_APP_DELEGATED);
+                    token.setFunctionScopeJson("[]");
+                    token.setIssuedAt(LocalDateTime.now());
+                    token.setExpiresAt(LocalDateTime.now().plusMinutes(30));
+                    return token;
+                });
+        lenient().when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenAnswer(invocation -> {
+                    BusinessAgentWorkerTaskLaunchRequest request = invocation.getArgument(0);
+                    return request.getPhysicalWorkerId() != null
+                            ? request.getPhysicalWorkerId()
+                            : "worker_01";
+                });
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
                 .thenAnswer(invocation -> {
                     BusinessAgentSessionDTO dto = new BusinessAgentSessionDTO();
@@ -320,15 +343,31 @@ class BusinessAgentTaskServiceTest {
 
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
                 ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
-        verify(tokenLifecycleService).issueNewToken(tokenCaptor.capture(), eq(result.getTaskScopedToken()));
+        verify(tokenLifecycleService).issuePreboundToken(
+                tokenCaptor.capture(), eq(result.getTaskScopedToken()), eq("worker_01"), anyString());
         BusinessTaskScopedTokenEntity issuedToken = tokenCaptor.getValue();
+        assertEquals("worker_01", issuedToken.getWorkerId());
+        assertTrue(issuedToken.getWorkerLeaseId().matches("bwl_[A-Za-z0-9_-]{43}"));
+        assertEquals("worker_01", requestCaptor.getValue().getSelectedWorkerId());
+        assertEquals(issuedToken.getWorkerLeaseId(), requestCaptor.getValue().getWorkerLeaseId());
         verify(tokenLifecycleService).bindIssuedTokenToWorkerTask(
                 "tenant_01",
                 issuedToken.getTokenId(),
                 result.getTaskScopedToken(),
                 "lgt_123",
                 "worker_session_123",
-                "worker_01");
+                "worker_01",
+                issuedToken.getWorkerLeaseId());
+        InOrder dispatchOrder = inOrder(workerTaskLauncher, tokenLifecycleService);
+        dispatchOrder.verify(workerTaskLauncher)
+                .resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class));
+        dispatchOrder.verify(tokenLifecycleService).issuePreboundToken(
+                any(BusinessTaskScopedTokenEntity.class),
+                eq(result.getTaskScopedToken()),
+                eq("worker_01"),
+                eq(issuedToken.getWorkerLeaseId()));
+        dispatchOrder.verify(workerTaskLauncher)
+                .launch(any(BusinessAgentWorkerTaskLaunchRequest.class));
     }
 
     @Test
@@ -373,9 +412,67 @@ class BusinessAgentTaskServiceTest {
         assertEquals("worker launch failed", error.getMessage());
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
                 ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
-        verify(tokenLifecycleService).issueNewToken(tokenCaptor.capture(), anyString());
+        verify(tokenLifecycleService).issuePreboundToken(
+                tokenCaptor.capture(), anyString(), eq("worker_01"), anyString());
         verify(tokenLifecycleService).revokeTaskScopedToken(
                 "tenant_01", tokenCaptor.getValue().getTokenId(), "system", "worker dispatch failed");
+    }
+
+    @Test
+    void createTask_whenLauncherReturnsDifferentWorker_failsClosedAndRevokesToken() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                List.of(workerTaskLauncher));
+        BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
+        pool.setPoolId("pool_01");
+        pool.setWorkerBackend("LANGGRAPH_BIZ");
+        when(bizWorkerPoolService.requireAvailablePool(
+                "tenant_01", ResourceOwnerType.PLATFORM, "tenant_01", "pool_01"))
+                .thenReturn(pool);
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn("worker_01");
+        when(workerTaskLauncher.launch(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(BusinessAgentWorkerTaskLaunchResult.builder()
+                        .workerTaskId("worker_task_02")
+                        .workerId("worker_02")
+                        .providerType("langgraph-biz-worker")
+                        .build());
+        when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> {
+            BusinessAgentTaskEntity entity = invocation.getArgument(0);
+            entity.setId(1L);
+            return entity;
+        });
+
+        SecurityException error = assertThrows(
+                SecurityException.class,
+                () -> serviceWithLauncher.createTask("tenant_01", "actor_01", form));
+
+        assertEquals("worker task launcher returned a different worker", error.getMessage());
+        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
+                ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
+        verify(tokenLifecycleService).issuePreboundToken(
+                tokenCaptor.capture(), anyString(), eq("worker_01"), anyString());
+        verify(tokenLifecycleService).revokeTaskScopedToken(
+                "tenant_01",
+                tokenCaptor.getValue().getTokenId(),
+                "system",
+                "worker dispatch failed");
+        verify(tokenLifecycleService, never()).bindIssuedTokenToWorkerTask(
+                any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -471,7 +568,8 @@ class BusinessAgentTaskServiceTest {
 
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
                 ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
-        verify(tokenLifecycleService).issueNewToken(tokenCaptor.capture(), anyString());
+        verify(tokenLifecycleService).issuePreboundToken(
+                tokenCaptor.capture(), anyString(), eq("worker_01"), anyString());
         assertEquals("worker_01", tokenCaptor.getValue().getWorkerPoolId());
     }
 
@@ -713,6 +811,104 @@ class BusinessAgentTaskServiceTest {
         assertEquals(SecretTokenSupport.sha256(plainToken), savedToken.getTokenHash());
         assertTrue(savedToken.getTaskId().matches("obt_[a-f0-9]{32}"));
         assertEquals(BusinessAgentTaskService.STATUS_ACTIVE, savedToken.getStatus());
+    }
+
+    @Test
+    void prepareOpenApiTaskScopedToken_resolvesAndPersistsExactWorkerBeforeDispatch() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                List.of(workerTaskLauncher));
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", "model_01", LlmModelCategory.GENERAL))
+                .thenReturn("model_01");
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.resolveWorkerId(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn("worker_01");
+        BusinessAgentWorkerTaskLaunchRequest selectionRequest =
+                BusinessAgentWorkerTaskLaunchRequest.builder()
+                        .workerPoolId("pool_01")
+                        .workerPoolOwnerType(ResourceOwnerType.PLATFORM)
+                        .workerPoolOwnerId("tenant_01")
+                        .workerBackend("LANGGRAPH_BIZ")
+                        .build();
+
+        BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared =
+                serviceWithLauncher.prepareOpenApiTaskScopedToken(
+                        "tenant_01",
+                        "actor_01",
+                        "app_01",
+                        "user_01",
+                        "skill_01",
+                        "session_01",
+                        "model_01",
+                        selectionRequest);
+
+        assertTrue(prepared.plainToken().matches("btt_[A-Za-z0-9_-]{43}"));
+        assertTrue(prepared.tokenId().matches("tst_[a-f0-9]{32}"));
+        assertEquals("worker_01", prepared.workerId());
+        assertTrue(prepared.workerLeaseId().matches("bwl_[A-Za-z0-9_-]{43}"));
+        assertEquals("pool_01", prepared.workerPoolId());
+        assertEquals("LANGGRAPH_BIZ", prepared.workerBackend());
+        assertEquals("worker_01", selectionRequest.getSelectedWorkerId());
+        assertEquals(prepared.workerLeaseId(), selectionRequest.getWorkerLeaseId());
+
+        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
+                ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
+        verify(tokenLifecycleService).issuePreboundToken(
+                tokenCaptor.capture(),
+                eq(prepared.plainToken()),
+                eq("worker_01"),
+                eq(prepared.workerLeaseId()));
+        BusinessTaskScopedTokenEntity persisted = tokenCaptor.getValue();
+        assertEquals("worker_01", persisted.getWorkerId());
+        assertEquals(prepared.workerLeaseId(), persisted.getWorkerLeaseId());
+        assertEquals("pool_01", persisted.getWorkerPoolId());
+        verify(workerTaskLauncher, never()).launch(any());
+    }
+
+    @Test
+    void prepareOpenApiTaskScopedToken_returnsNoCapabilityForNonBizProvider() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                List.of(workerTaskLauncher));
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        BusinessAgentWorkerTaskLaunchRequest selectionRequest =
+                BusinessAgentWorkerTaskLaunchRequest.builder()
+                        .workerBackend("CLAUDE_CODE")
+                        .build();
+
+        BusinessAgentTaskService.PreparedOpenApiTaskScopedToken prepared =
+                serviceWithLauncher.prepareOpenApiTaskScopedToken(
+                        "tenant_01",
+                        "actor_01",
+                        "app_01",
+                        "user_01",
+                        "skill_01",
+                        "session_01",
+                        "model_01",
+                        selectionRequest);
+
+        assertNull(prepared);
+        verify(clientAppService, never()).requireActiveClientApp(anyString(), anyString());
+        verify(tokenLifecycleService, never()).issuePreboundToken(any(), anyString(), anyString(), anyString());
     }
 
     @Test

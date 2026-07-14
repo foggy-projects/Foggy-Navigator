@@ -37,7 +37,12 @@ public class WorkerGatewayService {
 
     @Transactional(readOnly = true)
     public WorkerGatewayFunctionListDTO listBusinessFunctions(String tokenStr, String domain, String riskLevel) {
-        BusinessTaskScopedTokenDTO token = taskService.resolveTaskScopedToken(tokenStr);
+        return listBusinessFunctions(taskService.resolveTaskScopedToken(tokenStr), domain, riskLevel);
+    }
+
+    @Transactional(readOnly = true)
+    public WorkerGatewayFunctionListDTO listBusinessFunctions(
+            BusinessTaskScopedTokenDTO token, String domain, String riskLevel) {
         requireCompleteToken(token);
         tokenPolicyService.requireGatewayToken(token);
 
@@ -77,7 +82,13 @@ public class WorkerGatewayService {
 
     @Transactional(readOnly = true)
     public WorkerGatewayFunctionSchemaDTO getBusinessFunctionSchema(String tokenStr, String functionId, String version) {
-        BusinessTaskScopedTokenDTO token = taskService.resolveTaskScopedToken(tokenStr);
+        return getBusinessFunctionSchema(
+                taskService.resolveTaskScopedToken(tokenStr), functionId, version);
+    }
+
+    @Transactional(readOnly = true)
+    public WorkerGatewayFunctionSchemaDTO getBusinessFunctionSchema(
+            BusinessTaskScopedTokenDTO token, String functionId, String version) {
         requireCompleteToken(token);
         tokenPolicyService.requireGatewayToken(token);
 
@@ -112,6 +123,15 @@ public class WorkerGatewayService {
 
     @Transactional
     public WorkerGatewayInvokeResponseDTO invokeBusinessFunction(String tokenStr, String functionId, com.foggy.navigator.business.agent.model.form.WorkerGatewayInvokeForm form) {
+        return invokeBusinessFunction(
+                taskService.resolveTaskScopedToken(tokenStr), functionId, form);
+    }
+
+    @Transactional
+    public WorkerGatewayInvokeResponseDTO invokeBusinessFunction(
+            BusinessTaskScopedTokenDTO token,
+            String functionId,
+            com.foggy.navigator.business.agent.model.form.WorkerGatewayInvokeForm form) {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
@@ -119,7 +139,6 @@ public class WorkerGatewayService {
             throw new IllegalArgumentException("inputJson or input is required");
         }
 
-        BusinessTaskScopedTokenDTO token = taskService.resolveTaskScopedToken(tokenStr);
         requireCompleteToken(token);
         tokenPolicyService.requireGatewayToken(token);
 
@@ -203,11 +222,17 @@ public class WorkerGatewayService {
     public com.foggy.navigator.business.agent.model.dto.WorkerGatewayToolMessageResponseDTO reportToolMessage(
             String tokenStr,
             com.foggy.navigator.business.agent.model.form.WorkerGatewayToolMessageForm form) {
+        return reportToolMessage(taskService.resolveTaskScopedToken(tokenStr), form);
+    }
+
+    @Transactional
+    public com.foggy.navigator.business.agent.model.dto.WorkerGatewayToolMessageResponseDTO reportToolMessage(
+            BusinessTaskScopedTokenDTO token,
+            com.foggy.navigator.business.agent.model.form.WorkerGatewayToolMessageForm form) {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
 
-        BusinessTaskScopedTokenDTO token = taskService.resolveTaskScopedToken(tokenStr);
         requireCompleteToken(token);
         tokenPolicyService.requireGatewayToken(token);
 

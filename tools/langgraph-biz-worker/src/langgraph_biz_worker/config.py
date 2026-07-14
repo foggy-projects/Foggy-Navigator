@@ -1,6 +1,6 @@
 import os
 
-from pydantic import field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     worker_token: str = ""
     external_enabled: bool = False
     worker_name: str = ""
+    # Outbound Worker -> Navigator Gateway identity. The credential is
+    # provisioned once into this Worker and must never come from task input or
+    # Navigator's stored credential hash.
+    navigator_worker_id: str = ""
+    navigator_worker_credential: str = Field(default="", repr=False, exclude=True)
     max_concurrent_tasks: int = 5
 
     # Data root for file-based persistence (frames, accounts, etc.)
@@ -86,11 +91,29 @@ class Settings(BaseSettings):
                 return False
         raise ValueError("BIZ_WORKER_EXTERNAL_ENABLED must be true or false")
 
+    @field_validator("navigator_worker_id", "navigator_worker_credential", mode="before")
+    @classmethod
+    def normalize_navigator_worker_identity(cls, value: object) -> str:
+        normalized = "" if value is None else str(value).strip()
+        if any(character.isspace() for character in normalized):
+            raise ValueError("Navigator Worker identity values must not contain whitespace")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_navigator_worker_identity_pair(self):
+        if bool(self.navigator_worker_id) != bool(self.navigator_worker_credential):
+            raise ValueError(
+                "BIZ_WORKER_NAVIGATOR_WORKER_ID and "
+                "BIZ_WORKER_NAVIGATOR_WORKER_CREDENTIAL must be configured together"
+            )
+        return self
+
     model_config = SettingsConfigDict(
         env_prefix="BIZ_WORKER_",
         env_file=os.environ.get("BIZ_WORKER_ENV_FILE", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
 

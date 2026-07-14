@@ -17,6 +17,7 @@ import { releaseCodexThreadReservationsForTask } from './thread-reservations.js'
 import {
   buildNavigatorBusinessMcpConfig,
   buildNavigatorBusinessMcpEnv,
+  isNavigatorBusinessMcpEnabled,
 } from '../business-mcp/navigator-business-mcp-server.js'
 import { normalizeCodexReasoningEffort, type CodexReasoningEffort } from './reasoning.js'
 import { pathApiFor } from '../path-guards.js'
@@ -58,6 +59,18 @@ export const taskBroadcasts = new Map<string, EventBroadcast>()
 export const CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR = 'CODEX_BIZ_HOME_ROOT is required when codex_home_key is provided'
 export const UNSUPPORTED_CODEX_MODEL = 'UNSUPPORTED_CODEX_MODEL'
 export const CODEX_ULTRA_APP_SERVER_REQUIRED = 'CODEX_ULTRA_APP_SERVER_REQUIRED'
+export const CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY =
+  'CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY'
+
+const CODEX_TASK_BLOCKED_WORKER_ENV_KEYS = [
+  'CODEX_WORKER_TOKEN',
+  'CODEX_NAVIGATOR_WORKER_ID',
+  'CODEX_NAVIGATOR_WORKER_CREDENTIAL',
+  'NAVIGATOR_TASK_SCOPED_TOKEN',
+  'NAVIGATOR_WORKER_ID',
+  'NAVIGATOR_WORKER_CREDENTIAL',
+  'NAVIGATOR_WORKER_LEASE_ID',
+] as const
 
 export class UnsupportedCodexModelError extends Error {
   readonly code = UNSUPPORTED_CODEX_MODEL
@@ -336,6 +349,9 @@ export function buildCodexTaskEnv(
   }
 ): Record<string, string> {
   const envSource: NodeJS.ProcessEnv = { ...baseEnv }
+  for (const blockedKey of CODEX_TASK_BLOCKED_WORKER_ENV_KEYS) {
+    deleteEnvKeyCaseInsensitive(envSource, blockedKey)
+  }
   setEnvKeyCaseInsensitive(envSource, 'OPENAI_API_KEY', options.effectiveApiKey)
   setEnvKeyCaseInsensitive(envSource, 'CODEX_API_KEY', options.effectiveApiKey)
   setEnvKeyCaseInsensitive(envSource, 'OPENAI_BASE_URL', options.effectiveBaseUrl)
@@ -347,6 +363,47 @@ export function buildCodexTaskEnv(
     envSource.FOGGY_CODEX_THREAD_ID = options.threadId
   }
   return buildCodexProcessEnv(envSource)
+}
+
+export function assertNavigatorBusinessMcpCredentialIsolation(
+  context: Record<string, unknown> | undefined,
+  localWorkerId: string,
+  credentialConfigured: boolean,
+): void {
+  if (!isNavigatorBusinessMcpEnabled(context)) return
+  if (!localWorkerId && !credentialConfigured) return
+  if (!localWorkerId || !credentialConfigured) {
+    throw new Error('Codex Navigator Worker ID and credential must be configured together')
+  }
+
+  const runtimeWorkerId = readRuntimeText(context, 'worker_id')
+  const runtimeLeaseId = readRuntimeText(context, 'worker_lease_id')
+  if (!runtimeWorkerId) {
+    throw new Error('Trusted runtime worker_id is required for authenticated Worker Gateway calls')
+  }
+  if (runtimeWorkerId !== localWorkerId) {
+    throw new Error('Local Worker ID does not match trusted runtime worker_id')
+  }
+  if (!runtimeLeaseId) {
+    throw new Error('Trusted runtime worker_lease_id is required for authenticated Worker Gateway calls')
+  }
+
+  // Codex CLI and its Shell tool share codexOptions.env with MCP children.
+  // Until MCP credentials have an OS-isolated channel, forwarding the
+  // long-lived Worker credential would expose it to model-controlled code.
+  throw new Error(CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY)
+}
+
+function readRuntimeText(
+  context: Record<string, unknown> | undefined,
+  ...keys: string[]
+): string {
+  if (!context) return ''
+  for (const key of keys) {
+    const value = context[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
 }
 
 export function resolveCodexHome(codexHomeKey: string | undefined, codexBizHomeRoot = config.codexBizHomeRoot): string | undefined {
@@ -1134,6 +1191,11 @@ export async function runQuery(
         )
       }
     }
+    assertNavigatorBusinessMcpCredentialIsolation(
+      runOptions.businessRuntimeContext,
+      config.navigatorWorkerId,
+      Boolean(config.navigatorWorkerCredential),
+    )
     const navigatorBusinessMcpConfig = buildNavigatorBusinessMcpConfig(
       runOptions.businessRuntimeContext,
       config.navigatorWorkerGatewayBaseUrl,

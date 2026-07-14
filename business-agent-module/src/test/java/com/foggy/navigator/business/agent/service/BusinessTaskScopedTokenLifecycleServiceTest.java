@@ -68,6 +68,41 @@ class BusinessTaskScopedTokenLifecycleServiceTest {
     }
 
     @Test
+    void issuePreboundToken_persistsExactWorkerAndLeaseBeforeRuntimeRegistration() {
+        BusinessTaskScopedTokenEntity token = activeToken();
+        when(tokenRepository.save(token)).thenReturn(token);
+
+        BusinessTaskScopedTokenEntity result = service().issuePreboundToken(
+                token, "btt_plain", " worker_01 ", " bwl_lease_01 ");
+
+        assertEquals("worker_01", result.getWorkerId());
+        assertEquals("bwl_lease_01", result.getWorkerLeaseId());
+        verify(tokenPolicyService).initializeNewToken(token);
+        verify(tokenRepository).save(token);
+        verify(tokenRuntimeStore).registerToken(
+                "tenant_01", "session_01", "bt_01", "btt_plain", token.getExpiresAt());
+    }
+
+    @Test
+    void issuePreboundToken_rejectsChangingExistingWorkerOrLease() {
+        BusinessTaskScopedTokenEntity token = activeToken();
+        token.setWorkerId("worker_01");
+        token.setWorkerLeaseId("bwl_lease_01");
+
+        IllegalStateException workerMismatch = assertThrows(IllegalStateException.class, () ->
+                service().issuePreboundToken(
+                        token, "btt_plain", "worker_02", "bwl_lease_01"));
+        assertEquals("token already targets another worker", workerMismatch.getMessage());
+
+        IllegalStateException leaseMismatch = assertThrows(IllegalStateException.class, () ->
+                service().issuePreboundToken(
+                        token, "btt_plain", "worker_01", "bwl_lease_02"));
+        assertEquals("token already has another worker lease", leaseMismatch.getMessage());
+        verify(tokenRepository, never()).save(any());
+        verifyNoInteractions(tokenRuntimeStore);
+    }
+
+    @Test
     void issueNewToken_withSynchronization_registersOnlyAfterCommit() {
         BusinessTaskScopedTokenEntity token = activeToken();
         when(tokenRepository.save(token)).thenReturn(token);
@@ -138,6 +173,49 @@ class BusinessTaskScopedTokenLifecycleServiceTest {
 
         assertEquals("token already bound to another worker task", error.getMessage());
         verify(tokenRepository, times(1)).save(token);
+    }
+
+    @Test
+    void bindPreboundIssuedToken_requiresExactWorkerAndLease() {
+        BusinessTaskScopedTokenEntity token = activeToken();
+        token.setWorkerId("worker_01");
+        token.setWorkerLeaseId("bwl_lease_01");
+        when(tokenRepository.findByTokenIdAndTenantIdForUpdate("tst_01", "tenant_01"))
+                .thenReturn(Optional.of(token));
+
+        BusinessTaskScopedTokenLifecycleService service = service();
+        service.bindIssuedTokenToWorkerTask(
+                "tenant_01", "tst_01", "btt_plain",
+                "worker_task_01", "worker_session_01", "worker_01", "bwl_lease_01");
+
+        assertEquals("worker_task_01", token.getWorkerTaskId());
+        assertEquals("worker_01", token.getWorkerId());
+        assertEquals("bwl_lease_01", token.getWorkerLeaseId());
+        verify(tokenRepository).save(token);
+    }
+
+    @Test
+    void bindPreboundIssuedToken_rejectsMissingOrMismatchedWorkerLease() {
+        BusinessTaskScopedTokenEntity token = activeToken();
+        token.setWorkerId("worker_01");
+        token.setWorkerLeaseId("bwl_lease_01");
+        when(tokenRepository.findByTokenIdAndTenantIdForUpdate("tst_01", "tenant_01"))
+                .thenReturn(Optional.of(token));
+
+        BusinessTaskScopedTokenLifecycleService service = service();
+        IllegalStateException missingLease = assertThrows(IllegalStateException.class, () ->
+                service.bindIssuedTokenToWorkerTask(
+                        "tenant_01", "tst_01", "btt_plain",
+                        "worker_task_01", "worker_session_01", "worker_01", null));
+        assertEquals("token worker lease mismatch", missingLease.getMessage());
+
+        IllegalStateException mismatchedLease = assertThrows(IllegalStateException.class, () ->
+                service.bindIssuedTokenToWorkerTask(
+                        "tenant_01", "tst_01", "btt_plain",
+                        "worker_task_01", "worker_session_01", "worker_01", "bwl_lease_02"));
+        assertEquals("token worker lease mismatch", mismatchedLease.getMessage());
+        verify(tokenRepository, never()).save(any());
+        verifyNoInteractions(tokenRuntimeStore);
     }
 
     @Test

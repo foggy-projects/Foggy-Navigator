@@ -197,6 +197,20 @@ public class BusinessAgentTaskService {
         task.setStatus(STATUS_CREATED);
         task = taskRepository.save(task);
 
+        BusinessAgentWorkerTaskLaunchRequest launchRequest = buildWorkerTaskLaunchRequest(
+                tenantId, actorUserId, task, workerPool, agentResource, finalModelResource,
+                finalVisionModelConfigId, contextId, skillName, form, workspaceResource, clientApp);
+        BusinessAgentWorkerTaskLauncher workerTaskLauncher = findWorkerTaskLauncher(
+                launchRequest.getWorkerBackend());
+        String selectedWorkerId = null;
+        String workerLeaseId = null;
+        if (workerTaskLauncher != null) {
+            selectedWorkerId = requireResolvedWorkerId(workerTaskLauncher.resolveWorkerId(launchRequest));
+            workerLeaseId = newWorkerLeaseId();
+            launchRequest.setSelectedWorkerId(selectedWorkerId);
+            launchRequest.setWorkerLeaseId(workerLeaseId);
+        }
+
         // Token must exist before the worker task starts so it can be passed as hidden runtime context.
         String plainToken = SecretTokenSupport.randomToken("btt_");
         BusinessTaskScopedTokenEntity token = new BusinessTaskScopedTokenEntity();
@@ -212,14 +226,21 @@ public class BusinessAgentTaskService {
         token.setWorkerPoolId(task.getWorkerPoolId());
         token.setModelConfigId(task.getModelConfigId());
         token.setStatus(STATUS_ACTIVE);
-        token = tokenLifecycleService.issueNewToken(token, plainToken);
+        if (workerTaskLauncher != null) {
+            token.setWorkerId(selectedWorkerId);
+            token.setWorkerLeaseId(workerLeaseId);
+            token = tokenLifecycleService.issuePreboundToken(
+                    token, plainToken, selectedWorkerId, workerLeaseId);
+            launchRequest.setTaskScopedToken(plainToken);
+        } else {
+            token = tokenLifecycleService.issueNewToken(token, plainToken);
+        }
         registerRollbackRevocation(token.getTenantId(), token.getTokenId());
 
         BusinessAgentWorkerTaskLaunchResult launchResult;
         try {
-            launchResult = launchWorkerTaskIfAvailable(
-                    tenantId, actorUserId, task, workerPool, agentResource, finalModelResource, plainToken,
-                    finalVisionModelConfigId, contextId, skillName, form, workspaceResource, clientApp);
+            launchResult = launchPreparedWorkerTask(
+                    workerTaskLauncher, launchRequest, selectedWorkerId);
         } catch (RuntimeException e) {
             revokeAfterDispatchFailure(token, e);
             throw e;
@@ -246,7 +267,8 @@ public class BusinessAgentTaskService {
                     plainToken,
                     task.getWorkerTaskId(),
                     task.getWorkerSessionId(),
-                    task.getWorkerId());
+                    task.getWorkerId(),
+                    workerLeaseId);
         }
 
         CreatedBusinessAgentTaskDTO dto = new CreatedBusinessAgentTaskDTO();
@@ -325,6 +347,91 @@ public class BusinessAgentTaskService {
         return plainToken;
     }
 
+    /**
+     * Resolves and persists an exact Worker binding before an OpenAPI task can
+     * reach any provider network boundary. Providers without a Biz Worker
+     * launcher do not use Worker Gateway capabilities and therefore return no
+     * token preparation result.
+     */
+    @Transactional
+    public PreparedOpenApiTaskScopedToken prepareOpenApiTaskScopedToken(
+            String tenantId,
+            String actorUserId,
+            String clientAppId,
+            String upstreamUserId,
+            String skillId,
+            String sessionId,
+            String requestedModelConfigId,
+            BusinessAgentWorkerTaskLaunchRequest selectionRequest) {
+        requireText(tenantId, "tenantId is required");
+        requireText(actorUserId, "actorUserId is required");
+        requireText(clientAppId, "clientAppId is required");
+        requireText(upstreamUserId, "upstreamUserId is required");
+        requireText(skillId, "skillId is required");
+        requireText(sessionId, "sessionId is required");
+        if (selectionRequest == null) {
+            throw new IllegalArgumentException("worker selection request is required");
+        }
+        requireText(selectionRequest.getWorkerBackend(), "workerBackend is required");
+        BusinessAgentWorkerTaskLauncher launcher = findWorkerTaskLauncher(
+                selectionRequest.getWorkerBackend());
+        if (launcher == null) {
+            return null;
+        }
+
+        clientAppService.requireActiveClientApp(tenantId, clientAppId);
+        userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
+        skillRegistryService.checkClientAppSkillAccess(tenantId, clientAppId, skillId);
+
+        String finalModelConfigId = resourceResolver.resolveRequiredModelConfigId(
+                tenantId,
+                clientAppId,
+                requestedModelConfigId,
+                LlmModelCategory.GENERAL);
+
+        selectionRequest.setTenantId(tenantId);
+        selectionRequest.setActorUserId(actorUserId);
+        selectionRequest.setClientAppId(clientAppId);
+        selectionRequest.setUpstreamUserId(upstreamUserId);
+        selectionRequest.setSkillId(skillId);
+        selectionRequest.setSessionId(sessionId);
+        selectionRequest.setModelConfigId(finalModelConfigId);
+        requireText(selectionRequest.getWorkerPoolId(), "workerPoolId is required");
+        String selectedWorkerId = requireResolvedWorkerId(launcher.resolveWorkerId(selectionRequest));
+        String workerLeaseId = newWorkerLeaseId();
+        selectionRequest.setSelectedWorkerId(selectedWorkerId);
+        selectionRequest.setWorkerLeaseId(workerLeaseId);
+
+        String taskId = "obt_" + UUID.randomUUID().toString().replace("-", "");
+        String plainToken = SecretTokenSupport.randomToken("btt_");
+        BusinessTaskScopedTokenEntity token = new BusinessTaskScopedTokenEntity();
+        token.setTokenId("tst_" + UUID.randomUUID().toString().replace("-", ""));
+        token.setTokenHash(SecretTokenSupport.sha256(plainToken));
+        token.setTaskId(taskId);
+        token.setSessionId(sessionId);
+        token.setTenantId(tenantId);
+        token.setClientAppId(clientAppId);
+        token.setUpstreamUserId(upstreamUserId);
+        token.setNavigatorEffectiveUserId(actorUserId);
+        token.setSkillId(skillId);
+        token.setWorkerPoolId(selectionRequest.getWorkerPoolId().trim());
+        token.setModelConfigId(finalModelConfigId);
+        token.setWorkerId(selectedWorkerId);
+        token.setWorkerLeaseId(workerLeaseId);
+        token.setStatus(STATUS_ACTIVE);
+        token = tokenLifecycleService.issuePreboundToken(
+                token, plainToken, selectedWorkerId, workerLeaseId);
+        registerRollbackRevocation(token.getTenantId(), token.getTokenId());
+
+        return new PreparedOpenApiTaskScopedToken(
+                plainToken,
+                token.getTokenId(),
+                selectedWorkerId,
+                workerLeaseId,
+                token.getWorkerPoolId(),
+                selectionRequest.getWorkerBackend().trim());
+    }
+
     @Transactional(readOnly = true)
     public boolean hasOpenApiTaskScopedTokenForContext(
             String tenantId,
@@ -351,6 +458,22 @@ public class BusinessAgentTaskService {
             String workerSessionId) {
         tokenLifecycleService.bindOpenApiTokenToWorkerTask(
                 tenantId, plainToken, workerTaskId, workerSessionId);
+    }
+
+    public void bindOpenApiTaskScopedTokenToWorkerTask(
+            String tenantId,
+            String plainToken,
+            String workerTaskId,
+            String workerSessionId,
+            String workerId,
+            String workerLeaseId) {
+        tokenLifecycleService.bindOpenApiTokenToWorkerTask(
+                tenantId,
+                plainToken,
+                workerTaskId,
+                workerSessionId,
+                workerId,
+                workerLeaseId);
     }
 
     @Transactional(readOnly = true)
@@ -460,29 +583,21 @@ public class BusinessAgentTaskService {
         return normalizedSkillName;
     }
 
-    private BusinessAgentWorkerTaskLaunchResult launchWorkerTaskIfAvailable(
+    private BusinessAgentWorkerTaskLaunchRequest buildWorkerTaskLaunchRequest(
             String tenantId,
             String actorUserId,
             BusinessAgentTaskEntity task,
             BizWorkerPoolEntity workerPool,
             A2AgentResourceResolver.ResolvedAgentResource agentResource,
             A2AgentResourceResolver.ResolvedModelResource modelResource,
-            String taskScopedToken,
             String visionModelConfigId,
             String contextId,
             String skillName,
             CreateBusinessAgentTaskForm form,
             A2AgentResourceResolver.ResolvedWorkspaceResource workspaceResource,
             ClientAppEntity clientApp) {
-        if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
-            return null;
-        }
         String workerBackend = resolveWorkerBackend(agentResource, workerPool, modelResource);
-        return workerTaskLaunchers.stream()
-                .filter(Objects::nonNull)
-                .filter(launcher -> workerBackend.equals(launcher.getWorkerBackend()))
-                .findFirst()
-                .map(launcher -> launcher.launch(BusinessAgentWorkerTaskLaunchRequest.builder()
+        return BusinessAgentWorkerTaskLaunchRequest.builder()
                         .tenantId(tenantId)
                         .actorUserId(actorUserId)
                         .businessTaskId(task.getTaskId())
@@ -494,6 +609,8 @@ public class BusinessAgentTaskService {
                         .skillId(task.getSkillId())
                         .skillName(skillName)
                         .workerPoolId(task.getWorkerPoolId())
+                        .workerPoolOwnerType(agentResource.workerPoolOwnerType())
+                        .workerPoolOwnerId(agentResource.workerPoolOwnerId())
                         .physicalWorkerId(resolveLaunchPhysicalWorkerId(agentResource, modelResource, clientApp))
                         .workerBackend(workerBackend)
                         .modelConfigId(task.getModelConfigId())
@@ -506,12 +623,60 @@ public class BusinessAgentTaskService {
                         .workspaceQuotaPolicy(workspaceResource != null ? workspaceResource.quotaPolicy() : null)
                         .workspaceRetentionPolicy(workspaceResource != null ? workspaceResource.retentionPolicy() : null)
                         .workspaceConcurrencyPolicy(workspaceResource != null ? workspaceResource.concurrencyPolicy() : null)
-                        .taskScopedToken(taskScopedToken)
                         .workdir(workspaceResource != null ? workspaceResource.workdir() : null)
                         .allowedDirs(workspaceResource != null ? workspaceResource.allowedDirs() : null)
                         .allowedTools(cleanStringList(form.getAllowedTools()))
-                        .build()))
+                        .build();
+    }
+
+    private BusinessAgentWorkerTaskLauncher findWorkerTaskLauncher(String workerBackend) {
+        if (!StringUtils.hasText(workerBackend)
+                || workerTaskLaunchers == null
+                || workerTaskLaunchers.isEmpty()) {
+            return null;
+        }
+        String normalizedBackend = workerBackend.trim();
+        return workerTaskLaunchers.stream()
+                .filter(Objects::nonNull)
+                .filter(launcher -> normalizedBackend.equals(launcher.getWorkerBackend()))
+                .findFirst()
                 .orElse(null);
+    }
+
+    private BusinessAgentWorkerTaskLaunchResult launchPreparedWorkerTask(
+            BusinessAgentWorkerTaskLauncher launcher,
+            BusinessAgentWorkerTaskLaunchRequest request,
+            String selectedWorkerId) {
+        if (launcher == null) {
+            return null;
+        }
+        BusinessAgentWorkerTaskLaunchResult result = launcher.launch(request);
+        if (result == null) {
+            throw new IllegalStateException("worker task launcher returned no result");
+        }
+        String actualWorkerId = trimToNull(result.getWorkerId());
+        if (actualWorkerId == null || !selectedWorkerId.equals(actualWorkerId)) {
+            throw new SecurityException("worker task launcher returned a different worker");
+        }
+        return result;
+    }
+
+    private String requireResolvedWorkerId(String workerId) {
+        requireText(workerId, "worker task launcher resolved no worker");
+        return workerId.trim();
+    }
+
+    private String newWorkerLeaseId() {
+        return SecretTokenSupport.randomToken("bwl_");
+    }
+
+    public record PreparedOpenApiTaskScopedToken(
+            String plainToken,
+            String tokenId,
+            String workerId,
+            String workerLeaseId,
+            String workerPoolId,
+            String workerBackend) {
     }
 
     private String resolveWorkerBackend(
