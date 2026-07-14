@@ -2,8 +2,8 @@ package com.foggy.navigator.codex.worker.adapter;
 
 import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
-import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aPart;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
@@ -90,7 +90,7 @@ class CodexAppServerWorkerAgentProviderTest {
         when(llmModelManager.getModelConfig("cfg-app"))
                 .thenReturn(Optional.of(config("OPENAI_CODEX_APP_SERVER")));
         when(taskService.createTask(eq("user-1"), eq("tenant-1"), any()))
-                .thenReturn(CodexTaskDTO.builder()
+                .thenReturn(DispatchTaskDTO.builder()
                         .taskId("task-app")
                         .sessionId("session-app")
                         .codexThreadId("thread-app")

@@ -7,8 +7,7 @@ import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
-import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
-import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
+import com.foggy.navigator.codex.worker.model.command.CodexTaskCreateCommand;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
@@ -562,9 +561,9 @@ class CodexTaskServiceTest {
         TimeZone originalTimeZone = TimeZone.getDefault();
         try {
             TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
-            CodexTaskDTO utcResult = service.getTask("user-1", "task-biz");
+            DispatchTaskDTO utcResult = service.getTask("user-1", "task-biz");
             TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
-            CodexTaskDTO shanghaiResult = service.getTask("user-1", "task-biz");
+            DispatchTaskDTO shanghaiResult = service.getTask("user-1", "task-biz");
 
             assertEquals(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE, utcResult.getProviderType());
             assertEquals(createdAtEpochMs, utcResult.getCreatedAtEpochMs());
@@ -586,6 +585,10 @@ class CodexTaskServiceTest {
                 "task-session", "session-2", "worker-1", null, "COMPLETED", createdAt.minusMinutes(1));
         CodexTaskEntity defaultFallback = createTask(
                 "task-default", null, "worker-1", null, "COMPLETED", createdAt.minusMinutes(2));
+        List.of(taskProjection, sessionFallback, defaultFallback).forEach(task -> {
+            task.setResolvedAgentId("agent-1");
+            task.setContextId("context-" + task.getTaskId());
+        });
         when(taskRepository.findByUserIdOrderByCreatedAtDesc("user-1"))
                 .thenReturn(List.of(taskProjection, sessionFallback, defaultFallback));
 
@@ -599,13 +602,13 @@ class CodexTaskServiceTest {
         session.setProviderType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);
         when(sessionEntityRepository.findAllById(any())).thenReturn(List.of(session));
 
-        List<CodexTaskDTO> result = service.listTasks("user-1");
+        List<DispatchTaskDTO> result = service.listTasks("user-1");
 
         assertEquals(List.of(
                         CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
                         CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
                         CodexTaskService.CODEX_PROVIDER_TYPE),
-                result.stream().map(CodexTaskDTO::getProviderType).toList());
+                result.stream().map(DispatchTaskDTO::getProviderType).toList());
         verify(sessionTaskRepository).findByTaskIdIn(any());
         verify(sessionEntityRepository).findAllById(any());
         verify(sessionTaskRepository, never()).findByTaskId(anyString());
@@ -1179,7 +1182,7 @@ class CodexTaskServiceTest {
 
     @Test
     void createTask_rejectsLegacyCodexBizProviderWithoutScopedHomeKey() {
-        CreateCodexTaskForm form = new CreateCodexTaskForm();
+        CodexTaskCreateCommand form = new CodexTaskCreateCommand();
         form.setProviderType("codex-biz-worker");
         form.setWorkerId("worker-1");
         form.setPrompt("hello");

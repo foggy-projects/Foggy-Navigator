@@ -1,7 +1,6 @@
 package com.foggy.navigator.codex.worker.adapter;
 
-import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
-import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
+import com.foggy.navigator.codex.worker.model.command.CodexTaskCreateCommand;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.*;
@@ -79,7 +78,7 @@ class CodexWorkerA2aAgentTest {
 
     @Test
     void sendTask_usesRequestedDirectoryCwdAndModelConfig() {
-        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                 .taskId("task-1")
                 .sessionId("session-1")
                 .workerId("worker-effective")
@@ -100,7 +99,7 @@ class CodexWorkerA2aAgentTest {
 
         agent.sendTask(message);
 
-        ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+        ArgumentCaptor<CodexTaskCreateCommand> captor = ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
         assertEquals("agent-1", captor.getValue().getAgentId());
         assertEquals("worker-effective", captor.getValue().getWorkerId());
@@ -111,7 +110,7 @@ class CodexWorkerA2aAgentTest {
 
     @Test
     void sendTask_forwardsImagesMetadata() {
-        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                 .taskId("task-images")
                 .sessionId("session-images")
                 .workerId("worker-1")
@@ -128,7 +127,7 @@ class CodexWorkerA2aAgentTest {
 
         agent.sendTask(message);
 
-        ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+        ArgumentCaptor<CodexTaskCreateCommand> captor = ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
         assertEquals("[{\"name\":\"screen.png\",\"data\":\"YmFzZTY0\",\"mime_type\":\"image/png\"}]",
                 captor.getValue().getImages());
@@ -152,7 +151,7 @@ class CodexWorkerA2aAgentTest {
 
     @Test
     void sendTask_appliesFirstMsgOnFirstTurn() {
-        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                 .taskId("task-first-msg")
                 .sessionId("session-first-msg")
                 .workerId("worker-1")
@@ -167,7 +166,7 @@ class CodexWorkerA2aAgentTest {
 
         agent.sendTask(message);
 
-        ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+        ArgumentCaptor<CodexTaskCreateCommand> captor = ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
         assertTrue(captor.getValue().getPrompt().contains("[Initial Message]"));
         assertTrue(captor.getValue().getPrompt().contains("Project context"));
@@ -186,7 +185,7 @@ class CodexWorkerA2aAgentTest {
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
             when(contextStore.findContextForAgent("ctx-1", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
-            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                     .taskId("task-2")
                     .sessionId("session-2")
                     .workerId("worker-1")
@@ -203,10 +202,10 @@ class CodexWorkerA2aAgentTest {
             A2aTask result = agent.sendTask(message);
 
             verify(contextStore).findContextForAgent("ctx-1", "user-1", "agent-1");
-            ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+            ArgumentCaptor<CodexTaskCreateCommand> captor = ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("thread-existing", captor.getValue().getCodexThreadId(),
-                    "contextStore 查到的 codexThreadId 应通过 A2aContext 传给 CreateCodexTaskForm");
+                    "contextStore 查到的 codexThreadId 应通过 A2aContext 传给 CodexTaskCreateCommand");
             assertEquals("nav-sess-existing", captor.getValue().getSessionId());
             assertEquals("ctx-1", captor.getValue().getContextId());
             assertEquals("ctx-1", result.getContextId());
@@ -214,7 +213,7 @@ class CodexWorkerA2aAgentTest {
 
         @Test
         void contextSave_afterCreation() {
-            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                     .taskId("task-3")
                     .sessionId("session-3")
                     .workerId("worker-1")
@@ -246,7 +245,7 @@ class CodexWorkerA2aAgentTest {
             ctxEntity.setContextAlias("my-alias");
             when(contextStore.findByAlias("my-alias", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
-            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                     .taskId("task-alias")
                     .sessionId("session-alias")
                     .workerId("worker-1")
@@ -263,7 +262,7 @@ class CodexWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+            ArgumentCaptor<CodexTaskCreateCommand> captor = ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("thread-alias", captor.getValue().getCodexThreadId(),
                     "Alias resolution should provide codexThreadId");
@@ -279,7 +278,7 @@ class CodexWorkerA2aAgentTest {
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
             when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
-            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                     .taskId("task-continue")
                     .sessionId("session-continue")
                     .workerId("worker-1")
@@ -296,7 +295,7 @@ class CodexWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+            ArgumentCaptor<CodexTaskCreateCommand> captor = ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("continue work", captor.getValue().getPrompt());
         }
@@ -308,7 +307,7 @@ class CodexWorkerA2aAgentTest {
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
             when(contextStore.findContextForAgent("ctx-nav-only", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
-            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                     .taskId("task-nav-only")
                     .sessionId("session-nav-only")
                     .workerId("worker-1")
@@ -324,7 +323,7 @@ class CodexWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+            ArgumentCaptor<CodexTaskCreateCommand> captor = ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("continue work", captor.getValue().getPrompt());
             assertEquals("nav-sess-existing", captor.getValue().getSessionId());
@@ -335,7 +334,7 @@ class CodexWorkerA2aAgentTest {
 
     @Test
     void sendTask_nullMetadata_usesDefaults() {
-        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                 .taskId("task-4")
                 .sessionId("session-4")
                 .workerId("worker-1")
@@ -351,7 +350,7 @@ class CodexWorkerA2aAgentTest {
 
         A2aTask result = agent.sendTask(message);
 
-        ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+        ArgumentCaptor<CodexTaskCreateCommand> captor = ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
         assertEquals("D:\\default", captor.getValue().getCwd());
         assertEquals("dir-default", captor.getValue().getDirectoryId());
@@ -361,7 +360,7 @@ class CodexWorkerA2aAgentTest {
 
     @Test
     void sendTask_noContextStore_createsNormally() {
-        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                 .taskId("task-5")
                 .sessionId("session-5")
                 .workerId("worker-1")

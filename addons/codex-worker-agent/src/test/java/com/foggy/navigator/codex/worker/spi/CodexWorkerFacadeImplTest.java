@@ -3,9 +3,10 @@ package com.foggy.navigator.codex.worker.spi;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
-import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
+import com.foggy.navigator.codex.worker.model.command.CodexTaskCreateCommand;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,7 +54,7 @@ class CodexWorkerFacadeImplTest {
     @Test
     void createTaskForcesSdkProvider() {
         when(taskService.createTask(eq("user-1"), eq("tenant-1"), any()))
-                .thenReturn(CodexTaskDTO.builder().taskId("task-1").build());
+                .thenReturn(DispatchTaskDTO.builder().taskId("task-1").build());
 
         facade.createTask("user-1", Map.of(
                 "tenantId", "tenant-1",
@@ -61,8 +62,7 @@ class CodexWorkerFacadeImplTest {
                 "prompt", "hello",
                 "providerType", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE));
 
-        var form = ArgumentCaptor.forClass(
-                com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm.class);
+        var form = ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), form.capture());
         assertEquals(CodexTaskService.CODEX_PROVIDER_TYPE, form.getValue().getProviderType());
     }
@@ -173,7 +173,7 @@ class CodexWorkerFacadeImplTest {
 
     @Test
     void statusUsesSdkProviderScope() {
-        CodexTaskDTO task = CodexTaskDTO.builder()
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
                 .taskId("task-1")
                 .providerType(CodexTaskService.CODEX_PROVIDER_TYPE)
                 .build();
