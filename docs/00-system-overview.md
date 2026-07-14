@@ -67,7 +67,6 @@ Launcher
   -> business-agent-module
   -> user-auth-module
   -> metadata-config-module
-  -> metadata-query-module
   -> addons/claude-worker-agent
   -> addons/codex-worker-agent
   -> addons/gemini-worker-agent
@@ -104,11 +103,12 @@ Launcher
 | `session-module` | 会话、消息、统一任务分发、SSE、分享与 Agent 发现 |
 | `business-agent-module` | 业务 Agent、上游接入资源、业务动作与开放集成治理 |
 | `user-auth-module` | 登录认证、用户管理、API Key 管理 |
-| `metadata-config-module` | 平台配置写接口，管理 Git/LLM/凭证/记忆/覆盖配置 |
-| `metadata-query-module` | 平台配置读接口与查询能力 |
+| `metadata-config-module` | 活跃的平台配置能力，管理 Git/LLM/凭证/记忆/覆盖配置 |
 旧独立“会话”入口配套的 `tutor-agent` 已从源码目录、根 `pom.xml` 与 `launcher` 运行时依赖中移除；当前主线不再保留旧引导 Agent。
 
 旧自研 `monitoring-module`、`tools/foggy-monitor` 及 PC Monitoring 页面/API 已在 1.4.2 dev 阶段物理移除；RabbitMQ 不再是当前主线前置依赖。平台继续保留应用日志、健康检查、有限的 Micrometer 指标、SSE 运行信号与安全审计，退役旧 Monitoring 不等于取消运行观测。
+
+旧 `metadata-query-module` 已在 1.4.2 dev 阶段从源码、根 reactor 和 `launcher` 物理退役。该结论不延伸到 `metadata-config-module` 或 LangGraph FSScript：前者仍是当前平台配置能力，后者仍按其现有 Worker 边界保留。
 
 ### 3.3 Addon 能力模块
 

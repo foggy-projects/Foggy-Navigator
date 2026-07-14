@@ -2,7 +2,7 @@
 
 > 本文用于承接“先看是否过时，再按模块 review”的复盘入口。它不替代模块设计文档，只记录当前代码结构与文档体系之间的漂移点。
 
-> 历史快照说明：本文保留 `2026-05-31` 当时的审查结论，不作为当前模块清单。Monitoring 与 code-review-agent 的后续删除决策及现状以 [系统架构概览](../00-system-overview.md) 和 [1.4.2 版本记录](../version-tracker/1.4.2-SNAPSHOT/README.md) 为准。
+> 历史快照说明：本文保留 `2026-05-31` 当时的审查结论，不作为当前模块清单，下文历史正文中的模块判断不代表 1.4.2 执行后现状。Monitoring、code-review-agent 与 metadata-query-module 的后续物理退役及现状以 [系统架构概览](../00-system-overview.md) 和 [1.4.2 版本记录](../version-tracker/1.4.2-SNAPSHOT/README.md) 为准；metadata-config-module 继续作为活跃的平台配置能力保留。
 
 ## 1. 结论摘要
 

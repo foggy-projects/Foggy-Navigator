@@ -31,8 +31,7 @@ Foggy Navigator 是一个面向企业研发与业务自动化场景的多 Agent 
 核心业务层
   -> session-module                 会话、消息、任务、SSE、共享访问
   -> user-auth-module               登录、用户、角色、API Key
-  -> metadata-config-module         Git、LLM、凭证、记忆、Worker 等配置写入
-  -> metadata-query-module          平台配置查询
+  -> metadata-config-module         Git、LLM、凭证、记忆、Worker 等平台配置
 
 Agent 与执行层
   -> agent-framework                Agent 调用、工具、Skill、上下文编排底座
@@ -55,6 +54,8 @@ Agent 与执行层
   -> Nginx                          前端静态资源与反向代理
   -> 本地或云端 LLM 服务            OpenAI 兼容模型、Claude、Gemini 等
 ```
+
+`metadata-config-module` 继续作为活跃的平台配置能力。旧 `metadata-query-module` 已在 1.4.2 dev 阶段物理退役，不再是当前部署或启动依赖；LangGraph FSScript 不属于该退役范围。
 
 ## 3. 核心能力架构
 

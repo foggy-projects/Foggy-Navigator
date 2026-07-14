@@ -12,9 +12,10 @@
 对应后端模块：
 
 - `metadata-config-module`
-- `metadata-query-module`
 - `addons/task-assistant`
 - `addons/claude-worker-agent`
+
+其中 `metadata-config-module` 是当前活跃的平台配置能力。旧 `metadata-query-module` 已在 1.4.2 dev 阶段物理退役，不再属于设置面当前依赖；该退役不包含 `metadata-config-module` 或 LangGraph FSScript。
 
 ## 2. 功能范围
 

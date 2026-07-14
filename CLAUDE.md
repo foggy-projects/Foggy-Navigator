@@ -30,7 +30,7 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 |------|------|
 | 聚合启动 | `launcher` |
 | 底座与 SPI | `navigator-common`、`navigator-spi`、`agent-framework` |
-| 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module`、`metadata-query-module` |
+| 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module` |
 | Worker / Agent addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/echo-agent`、`addons/task-assistant` |
 | 对外 SDK / 本地 BFF | `navigator-open-sdk`、`tools/navigator-chat-observer-bff` |
 
@@ -39,6 +39,8 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 旧独立“会话”入口及其配套 `tutor-agent` 模块已移除；不要再把它当作当前主线模块设计新能力。
 
 旧自研 `monitoring-module` 与 `tools/foggy-monitor` 已在 1.4.2 dev 阶段移除；不要把 RabbitMQ 或旧 Monitoring API/页面作为启动前置或当前能力。应用日志、健康检查、有限指标和安全审计仍需保留。
+
+旧 `metadata-query-module` 已在 1.4.2 dev 阶段物理退役，不得再将其加回根 reactor、`launcher` 或当前模块清单。`metadata-config-module` 仍是活跃的平台配置能力，不得因名称相近将其误删；LangGraph FSScript 也不属于本次退役范围。
 
 ### 前端与移动端
 

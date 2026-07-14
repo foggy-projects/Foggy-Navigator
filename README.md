@@ -44,14 +44,15 @@ Foggy-Navigator/
 ├── navigator-spi/              # SPI 接口定义
 ├── agent-framework/            # Agent 核心框架
 ├── user-auth-module/           # JWT 认证
-├── metadata-config-module/     # Skill 配置管理
-├── metadata-query-module/      # 元数据查询服务
+├── metadata-config-module/     # 平台配置管理（Git、LLM、凭据等）
 ├── session-module/             # 会话管理 + SSE
 ├── addons/claude-worker-agent/ # Claude Code 工人 Agent
 ├── addons/codex-worker-agent/  # Codex Worker Agent
 ├── addons/gemini-worker-agent/ # Gemini Worker Agent
 └── launcher/                   # Spring Boot 启动器
 ```
+
+旧 `metadata-query-module` 已在 1.4.2 dev 阶段物理退役；`metadata-config-module` 继续作为活跃的平台配置能力，不属于该退役范围。
 
 ### 前端（pnpm workspace）
 
