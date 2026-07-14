@@ -37,7 +37,7 @@ owner: root-build-owner
 3. 构建成功必须来自 clean 环境；旧 `target`、`dist`、`node_modules` 或本机缓存不能作为通过证据。
 4. 本轮已生成根 `pnpm-lock.yaml`、移除 `packages/foggy-chat/pnpm-lock.yaml`，并以精确 Node/pnpm 工具运行 lockfile-only install、frozen install、全前端 typecheck/test/build。
 5. `mvn -B -pl launcher -am clean test` 已完成，16 个 reactor project 均为 `SUCCESS`，测试 `0 failures`，命令退出码为 `0`。
-6. `.github/workflows/repository-ci.yml` 已落地 Java、前端、Node Worker 与 Python Worker lane；该 workflow 尚未在 GitHub runner 执行，不能登记为 CI pass。
+6. `.github/workflows/repository-ci.yml` 已落地 Java、前端、Node Worker 与 Python Worker lane；五类 Worker 已在独立 clean worktree 本地实跑，workflow 仍未在 GitHub runner 执行，不能登记为 hosted CI pass。
 
 ### 静态搜索结论
 
@@ -56,7 +56,7 @@ owner: root-build-owner
 1. 独立 Linux clean checkout 以及 Windows/WSL clean checkout 下 Node、Corepack、pnpm 的安装和 lockfile 解析一致性；本轮 frozen install 来自当前工作树，不等同于跨 checkout 复现证据。
 2. Maven 全 reactor 与 `launcher -am` 的实际耗时、资源上限和测试稳定性。
 3. mobile H5、微信小程序、widget Playwright 的 required/nightly 最终分层和实际 runner 时长。
-4. Claude、Codex、Gemini、LangGraph Worker 在 GitHub runner 的平台依赖和无凭据测试结果；Node/Python Worker jobs 尚未在本机逐项执行。
+4. Claude、Codex、Gemini、LangGraph Worker 在 GitHub runner 的平台依赖和无凭据测试结果；本机已完成 Node 22.23.1 与 Python 3.12.3 等价命令，GitHub Python 3.11 lane 仍待实跑。
 5. CI 缓存关闭与开启时是否仍能从 frozen lockfile 得到同一依赖图。
 
 ### 决策项
@@ -67,7 +67,7 @@ owner: root-build-owner
 | pnpm/Corepack | 已批准并落地：`packageManager: pnpm@10.34.5`；精确工具执行结果见下文 | frontend/build owner | approved/implemented |
 | chat 独立 lockfile | 已批准并移除嵌套 lockfile，根 workspace lockfile 成为单一权威 | chat owner | approved/implemented |
 | mobile/widget 门禁层级 | 核心 type/test/build 已进入根矩阵；required/nightly 分层仍需用 runner 时长定稿 | frontend/mobile owner | in-progress |
-| Worker 矩阵 | Node/Python 无凭据 job 已写入 workflow；本机逐项执行和 GitHub runner 结果待补 | Worker owners | in-progress |
+| Worker 矩阵 | Node/Python 无凭据 job 已写入 workflow；本机 clean worktree 逐项通过，GitHub runner 结果待补 | Worker owners | in-progress |
 
 已完成的冻结决策不等同于 workitem 完成。GitHub required check 生效、nightly 分层、Worker 执行和跨 checkout 复现证据补齐前，不得宣称全仓 CI 门禁已经验收。
 
@@ -91,12 +91,17 @@ owner: root-build-owner
 | `pnpm run ci:frontend` | 根 workspace typecheck/test/build 聚合 | passed，exit `0` | 测试存在预期 stderr/构建告警；未在 GitHub runner 执行 |
 | `pnpm run build:frontend` | chat-core、chat、widget、PC、mobile H5 独立复跑 | passed，exit `0` | 有 chunk、导入方式及 uni-app 版本提示，未登记为失败 |
 | `mvn -B -pl launcher -am clean test` | JDK 17、launcher 依赖链 clean test | passed，exit `0`；16 reactor `SUCCESS`；测试 `0 failures` | 尚未补根 `mvn -B clean verify` 和 GitHub runner 证据 |
+| Codex SDK `npm ci && typecheck && test && build` | 独立 clean worktree，Node `22.23.1` | passed，159 pass、1 skip，exit `0` | 无凭据 lane；不含真实 Codex/外部联调 |
+| Codex app-server `npm ci && typecheck && test && build` | 独立 clean worktree，Node `22.23.1` | passed，269 pass、1 skip，exit `0` | 长生命周期/安装脚本单测通过；不等于 RC 或生产证据 |
+| Gemini `npm ci && typecheck && build` | 独立 clean worktree，Node `22.23.1` | passed，exit `0` | package 无 test script；`npm audit` 报 1 low/4 moderate，登记为非阻断依赖风险 |
+| Claude `pip check && pytest -m "not e2e" && build` | 独立 clean worktree，Python `3.12.3` | passed，495 pass、11 deselected，wheel/sdist 成功，exit `0` | 当前机器无 Python 3.11；GitHub 3.11 lane 未跑 |
+| LangGraph `pip check && pytest -m "not e2e" && build` | Python `3.12.3`；修复 [BUG-001](./BUG-001-langgraph-progress-event-duplication.md) 后 | passed，758 pass、3 warnings，wheel/sdist 成功，exit `0` | 复跑显式清除本机代理变量；GitHub 3.11 lane未跑 |
 
 ### 尚未执行/尚未生效
 
 1. `.github/workflows/repository-ci.yml` 尚未由 GitHub runner 执行，分支保护中的 required check 也尚无生效证据。
-2. Node Worker 与 Python Worker jobs 已写入 workflow，但尚未在本机按矩阵逐项执行，不能登记为 passed。
-3. required/nightly 的最终分层尚未建立，nightly workflow 未建立、未运行。
+2. 五类 Worker 已在独立 clean worktree 按 CI 等价命令本机执行通过；GitHub runner，特别是 Python 3.11，尚未执行。
+3. `.github/workflows/repository-nightly.yml` 已建立 full reactor、前端扩展目标和跨平台 Worker 矩阵，但尚未由 runner 执行；required check/分支保护也未生效。
 4. 第二个 Linux clean checkout、Windows/WSL clean checkout、根 `mvn -B clean verify` 仍待补证据。
 
 ## 精确代码与配置清单
@@ -117,8 +122,9 @@ owner: root-build-owner
 | `packages/navigator-frontend/package.json` | 主前端 | 修正有效 type-check，纳入 test/build |
 | `packages/foggy-mobile/package.json` | mobile 交付物 | 增加稳定 type-check 入口并纳入 test/H5 build；小程序按矩阵执行 |
 | `scripts/build-frontend.sh`、`scripts/build-frontend.ps1` | 本地聚合脚本 | 与根 scripts 和 frozen install 对齐，不再跳过 widget/mobile |
-| `.github/workflows/repository-ci.yml` | 全仓 build workflow | 已新增矩阵；待 GitHub runner、required check 和 nightly 分层证据 |
-| `tools/*worker*/package.json`、`pyproject.toml` | Worker 构建入口 | 无凭据 clean lane 已写入 workflow；待本机逐项和 runner 执行 |
+| `.github/workflows/repository-ci.yml` | PR required 候选 workflow | 已新增 Java/前端/Worker 矩阵并打印工具版本；待 GitHub runner 和 required check 证据 |
+| `.github/workflows/repository-nightly.yml` | 周期扩展 workflow | 已新增 full reactor、mobile mp-weixin、widget Playwright 和 Linux/Windows Worker 矩阵；尚未实跑 |
+| `tools/*worker*/package.json`、`pyproject.toml` | Worker 构建入口 | 无凭据 clean lane 已写入 workflow并在本机 clean worktree 通过；待 hosted runner |
 
 ## 实施步骤
 
@@ -196,7 +202,7 @@ owner: root-build-owner
 - 每类 Worker 至少有无凭据 unit/type/build 证据；
 - 缺少凭据被记录为受控 smoke `not-run`，不伪装 pass。
 
-本轮状态：Java launcher 依赖链 clean test 已通过；Node/Python Worker jobs 已落地但尚未在本机逐项或 GitHub runner 执行，根 `clean verify` 也尚未运行。
+本轮状态：Java launcher 依赖链 clean test 已通过；Node/Python Worker jobs 已在本机 clean worktree 逐项通过，GitHub runner 与根 `clean verify` 尚未运行。
 
 ### Step 5：全仓 GitHub Actions 门禁
 
@@ -220,11 +226,11 @@ Workflow 必须：
 - 取消时不登记为 pass；
 - 发布 workflow 继续独立存在，不作为合并门禁替代品。
 
-本轮状态：repository CI workflow 文件已落地；required check 尚未在分支保护中证明生效，nightly 未建立、未运行。
+本轮状态：repository CI 与 nightly workflow 文件均已落地；required check 尚未在分支保护中证明生效，两者均未由 GitHub runner 执行。
 
 ## 自动化验证计划
 
-下列是本事项的目标命令集；本轮实际执行项及退出码以“Execution Check-in”证据表为准。`mvn -B clean verify`、Worker 本机逐项命令和所有 GitHub runner 命令仍为 `not-run`：
+下列是本事项的目标命令集；本轮实际执行项及退出码以“Execution Check-in”证据表为准。`mvn -B clean verify` 和所有 GitHub runner 命令仍为 `not-run`：
 
 ~~~bash
 mvn -B -pl launcher -am clean test
@@ -282,7 +288,7 @@ Experience 状态为 `not-applicable`：本事项不直接改变 UI；若修复 
 - [x] chat-core、chat、widget、主前端、mobile 的 type/test/build 均有本地明确结果。
 - [x] 主前端有效 type-check 会检查 app project，两个存量错误已关闭。
 - [x] Claude/Codex/Gemini/LangGraph Worker 的无凭据 clean jobs 已写入 repository CI workflow。
-- [ ] Node/Python Worker jobs 的本机逐项执行和 GitHub runner 通过证据尚未补齐。
+- [x] Node/Python Worker jobs 已有本机 clean worktree 逐项通过证据；GitHub runner 仍待补。
 - [ ] GitHub Actions 全仓矩阵和 required check 策略已生效。
 - [ ] 所有命令、版本、退出码和证据路径已回写 [Progress](../progress.md)。
 - [ ] 已执行 `git diff --check` 和 Markdown 相对链接检查。

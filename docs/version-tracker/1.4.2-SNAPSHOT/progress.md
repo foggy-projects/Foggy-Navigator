@@ -73,7 +73,8 @@
 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | planned-reviewed | not-started | not-run | not-run：需验证内部 UI、外部配置与错误反馈 | Owner 决策已关闭；实现证据未收集 |
 | [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | planned-reviewed | not-started | not-run | not-run：需验证 ClientApp、审批恢复和 Worker readiness 体验 | Owner 决策已关闭；实现证据未收集 |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | planned-reviewed | not-started | not-run | not-run：需验证内部 UI 工作流 | Owner 决策已关闭；实现证据未收集 |
-| [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | in-progress | baseline-implemented | passed-local：Java clean + frontend type/test/build；CI/Worker lane 待跑 | not-run：仅做两个最小 TS 类型修复，尚未浏览器验证 | `EXEC-142-003`；GitHub runner/nightly 未完成 |
+| [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | in-progress | baseline + required/nightly workflow implemented | passed-local：Java、frontend、五类 Worker clean 等价矩阵 | not-run：两个最小 TS 修复和 CI 配置尚未浏览器验证 | `EXEC-142-003`、`EXEC-142-006`；GitHub runner/branch protection/nightly 实跑未完成 |
+| [BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md) | closed | LangGraph SSE 语义去重已排除传输层 event_id | passed：目标用例 1；全套 758；wheel/sdist build | not-applicable：修复事件重复，无新增 UI | `EXEC-142-006` |
 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md) | planned | not-started | not-run | not-run：涉及工作台渐进拆分时必须验证 | not-collected |
 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md) | planned | not-started | not-run | not-run：UI/mobile 候选需按实际切片验证 | not-collected |
 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md) | in-progress | code-slice-removed；当前权威文档已同步 | passed-local：Java clean、frontend full matrix、shell syntax；GitHub CI 未跑 | not-run：静态无残留路由，浏览器/启动 smoke 尚未执行 | `EXEC-142-002`、`EXEC-142-003` |
@@ -97,7 +98,7 @@
 | DEC-001 | 决策项 | 明确受支持的 Node/pnpm/Corepack 版本 | ODR-142-001 + P1 | approved-and-applied | Node `22.23.1`、pnpm `10.34.5`；Corepack 只负责激活；hosted CI 实跑仍待完成 |
 | DEC-002 | 决策项 | 外部 credential 与 task token 的签发、轮换和撤销权威 | ODR-142-002 至 ODR-142-005 + P2 | partially-decided | token/Worker/audit方向获批；具体 credential authority 仍需实施级确认 |
 | DEC-003 | 决策项 | envelope v1 的 typed schema 演进、未知版本策略与兼容窗口 | P6 provider owners 决策 | pending-decision | 不允许无迁移链切换 |
-| ODR-142-001 | Owner 决策 + 实施 | Node/pnpm、lockfile 与 CI 分层 | [Owner 决策记录](./owner-decision-review.md) | in-progress | 本地 clean/frozen/frontend 证据通过；repository CI 尚未在 GitHub runner 运行，nightly 未建立 |
+| ODR-142-001 | Owner 决策 + 实施 | Node/pnpm、lockfile 与 CI 分层 | [Owner 决策记录](./owner-decision-review.md) | in-progress | 本地 frozen/frontend/Worker 证据通过；required/nightly workflow 已建立，GitHub runner 与分支保护未执行 |
 | ODR-142-002 | Owner 决策 | internal-dev 保留 ClientApp 代办；signed assertion 延后到外部开放 | [Owner 决策记录](./owner-decision-review.md) | approved-with-constraints | explicit external 必须默认关闭；请求体 actor 仍不可信 |
 | ODR-142-003 | Owner 决策 | task token scope、TTL、失效、撤销、轮换和 Worker lease | [Owner 决策记录](./owner-decision-review.md) | approved | 未发布新 token schema，implementation not-started |
 | ODR-142-004 | Owner 决策 | external-enabled 目录、工具、sandbox、approval、network 和 readiness 上限 | [Owner 决策记录](./owner-decision-review.md) | approved-with-constraints | 门禁未完成前 external 保持 disabled |
@@ -111,9 +112,10 @@
 | ODR-142-008 | Owner 决策 | 当前/历史文档和 Skill 分级治理 | [Owner 决策记录](./owner-decision-review.md) | approved | 文档对齐 in-progress |
 | EXEC-142-001 | 决策证据 | Owner 明确 dev/internal 阶段、external 显式开关、dev 数据可丢弃和旧契约可直接移除 | 当前项目会话，`2026-07-14` | recorded | 只授权本项目 dev 范围，不是生产启用授权 |
 | EXEC-142-002 | 实施证据 | Monitoring 10 个 Java/module 文件、5 个 Python tool 文件、PC View/API、Security 放行与启动脚本已移除；repo-local ignored `target/.venv/.pytest_cache` 已清除 | 工作树 diff + 精确 `rg` + 本地目录检查 + `bash -n scripts/start-all.sh` | passed-local-partial-experience | 仓内切片闭合；未操作 RabbitMQ/DB/部署，浏览器与启动 smoke 未运行 |
-| EXEC-142-003 | 构建证据 | 精确 Node/pnpm、单根 lockfile、frontend matrix、repository CI 配置和 Java clean 基线 | Node `v22.23.1` + pnpm `10.34.5` frozen 校验；frontend type/test/build；Maven clean test | passed-local | Maven 16 reactor SUCCESS；frontend commands exit 0；GitHub hosted CI、Worker matrix 和 nightly 未运行 |
+| EXEC-142-003 | 构建证据 | 精确 Node/pnpm、单根 lockfile、frontend matrix、repository CI 配置和 Java clean 基线 | Node `v22.23.1` + pnpm `10.34.5` frozen 校验；frontend type/test/build；Maven clean test | passed-local | Maven 16 reactor SUCCESS；frontend commands exit 0；Worker 见 EXEC-142-006；GitHub hosted CI/nightly 未运行 |
 | EXEC-142-004 | 实施证据 | 未装配的 `addons/code-review-agent` 22 个 tracked files 已物理移除 | root/launcher/CI/scripts/源码精确 `rg` + 工作树 diff + Maven clean test | passed-local-partial-external | 无当前仓内 package/API/table 引用；没有 GitLab/DB/独立部署运行态证据，也未执行外部资源动作 |
 | EXEC-142-005 | 文档与配置验证 | 本轮 Markdown、shell、JSON/YAML、清理残留和 lockfile 跟踪状态 | Node 相对链接/锚点检查、`bash -n`、Node JSON/YAML parse、精确 `rg`、`git check-ignore`、`git diff --check` | passed-local | 32 个 Markdown、411 个相对文件目标和 3 个锚点均存在；hosted CI 与手工审阅不在此证据内 |
+| EXEC-142-006 | clean Worker 矩阵与缺陷回归 | Codex SDK/app-server、Gemini、Claude、LangGraph 的 install/type/test/build；修复 LangGraph progress 事件重复 | 独立 clean worktree；Node `22.23.1`；Python `3.12.3`；[BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md) | passed-local-with-hosted-gap | Node 三 lane 通过；Claude 495 pass/11 deselect；LangGraph 758 pass；本机无 Python 3.11，GitHub runner 未执行；Gemini audit 有 1 low/4 moderate |
 
 ## Testing Progress
 
@@ -124,7 +126,7 @@
 | Navigator PC type-check/test/build | passed | 两个已知 TS 错误做最小修复后，根 frontend type/test/build matrix exit 0 |
 | chat-core/chat/widget build | passed | 根 `ci:frontend` / `build:frontend` 已覆盖；chat 测试 105、widget 测试 31 均通过 |
 | Mobile type-check/test/build | passed | mobile type-check、59 个测试与 H5 build 通过；非 H5 目标未运行 |
-| Claude/Codex/Gemini/LangGraph Worker tests/build | configured-not-run | Node/Python Worker jobs 已写入 repository CI，脚本/pyproject 静态核对通过；本机逐项和 GitHub runner 未运行 |
+| Claude/Codex/Gemini/LangGraph Worker tests/build | passed-local | 独立 clean worktree 五类 Worker install/type/test/build 通过；Python 本机为 3.12.3，GitHub 3.11 与 hosted runner 仍未运行；见 `EXEC-142-006` |
 | Ownership negative-path tests | not-run | P2/P3 尚未实施 |
 | task-scoped token 越权测试 | not-run | P2 尚未实施 |
 | Non-loopback missing credential readiness | not-run | P2 尚未实施 |
@@ -184,14 +186,14 @@
 - [x] 已判断需要在跨模块阶段收口时执行正式 `foggy-implementation-quality-gate`，本轮不把执行 check-in 变成正式验收。
 - [x] 当前批次进度与证据已回写。
 
-- self_check_summary: partial-passed-for-current-batch；hosted CI、Worker matrix、浏览器体验、其余 P2-P6 实施和正式门禁未完成
+- self_check_summary: partial-passed-for-current-batch；本机 Worker matrix 已通过，hosted CI/branch protection/nightly 实跑、浏览器体验、其余 P2-P6 和正式门禁未完成
 - self_check_decision: continue-in-progress
 - formal_quality_gate_required: yes-cross-module-shared-contract-and-cleanup
 - formal_quality_gate_status: not-started
 
 ## 计划外变更
 
-- 当前：none。实施按已批准的 P1、Monitoring 和 code-review 独立批次推进；未把其他并行前端工作纳入 1.4.2 治理范围。
+- P1 clean Worker 矩阵发现并关闭 [BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md)：只修复 LangGraph SSE progress 语义去重，不扩张为图执行或事件协议重构。
 
 ## 后续实施待确认项
 

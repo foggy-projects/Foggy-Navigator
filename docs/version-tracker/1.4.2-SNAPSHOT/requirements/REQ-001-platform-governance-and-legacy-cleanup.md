@@ -57,7 +57,7 @@ Foggy Navigator 当前是内部系统，核心目标是：
 |---|---|---|
 | 已确认事实 | 本文产品定位、版本目标、治理边界和非目标 | 可作为需求基线，不代表代码已实现 |
 | 用户提供的静态线索 | 单 JVM SSE、addon 编译期依赖、重类、前端类型错误、lockfile 忽略、候选孤儿文件等 | 执行 Agent 必须复核路径、引用和当前分支状态 |
-| 本轮构建实施与本机证据 | 已落地 Node `22.23.1`、pnpm `10.34.5`、根 lockfile、前端 workspace 矩阵和仓库级 CI workflow；精确版本 frozen install、前端类型检查/测试/构建通过，launcher 主依赖链 clean test 的 16 个 reactor 模块全部 `SUCCESS` | 只证明当前工作树的本机命令结果；GitHub runner、Worker jobs、nightly 和真实浏览器尚未运行，不得据此宣称合并门禁、体验或正式验收通过 |
+| 本轮构建实施与本机证据 | 已落地 Node `22.23.1`、pnpm `10.34.5`、根 lockfile、前端 workspace、required/nightly workflow；精确 frozen install、前端、launcher clean test 和五类 Worker clean 等价矩阵通过 | Worker 结果来自独立 clean worktree，Python 本机为 3.12.3；GitHub runner、分支保护、nightly 实跑和真实浏览器仍未完成，不得据此宣称合并门禁、体验或正式验收通过 |
 | Owner 已确认的开发环境边界 | Monitoring、metadata-query、code-review、echo 与旧 Provider API 不承担上游或生产兼容义务；开发数据可丢弃，允许按完整切片物理删除 | 免除生产流量静默、数据备份/保留和兼容窗口；不免除 dev-only 环境确认、完整 inventory、仓内引用迁移、测试和回滚记录 |
 | 需要运行态确认 | 执行中发现的共享基础设施、生产部署、外部 webhook/调用方或无法归属的数据库、队列和凭据 | 一旦发现即停止对应破坏性动作并重新取得 Owner 授权，不把本次 dev-only 结论扩展到生产 |
 | 决策项 | 八组 ODR 已完成评审；credential authority、mapping/grant 权威源、Provider state 具体迁移和超大类拆分顺序仍属于实施级决策 | 已批准项按评审约束执行；剩余实施级决定必须记录 Owner、日期和影响，不得由执行 Agent静默决定 |
@@ -245,7 +245,7 @@ Owner 已确认当前范围没有上游或生产兼容义务，开发数据允�
 ## Progress Tracking
 
 - development: in-progress；P1 构建基线以及 Monitoring、`addons/code-review-agent` 两个 dev-only 切片已实施，`metadata-query-module`、Echo Agent 和旧 Provider 契约尚未开始
-- testing: partial-passed；本机精确版本 frozen install、前端类型检查/测试/构建和 Java launcher clean test（16 个 reactor 模块 `SUCCESS`）通过，GitHub runner、Worker jobs、nightly 与真实浏览器尚未运行
+- testing: partial-passed；本机精确版本 frozen install、前端、Java launcher clean test（16 个 reactor 模块 `SUCCESS`）和五类 Worker clean 矩阵通过，GitHub runner/分支保护/nightly 实跑、根 reactor verify 与真实浏览器尚未完成
 - experience: not-run
 - implementation_plan: [1.4.2 implementation plan](../implementation-plan.md)
 - progress_record: [1.4.2 progress](../progress.md)

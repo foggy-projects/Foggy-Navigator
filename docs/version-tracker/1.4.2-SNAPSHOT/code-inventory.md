@@ -68,7 +68,7 @@
 
 | 批次 | 实际路径/切片 | 状态 | 已有验证 | 尚未验证/未操作 |
 |---|---|---|---|---|
-| P1 构建基线 | `.nvmrc`、根 `package.json`、`.gitignore`、根 `pnpm-lock.yaml`、前端 package/scripts、`.github/workflows/repository-ci.yml`、现有 Codex RC workflow、README/CLAUDE | implemented-in-working-tree | 精确 Node/pnpm frozen 校验、frontend type/test/build、launcher clean test passed | hosted CI、Worker matrix 本机逐项、nightly、浏览器体验 |
+| P1 构建基线 | `.nvmrc`、根 `package.json`、`.gitignore`、根 `pnpm-lock.yaml`、前端 package/scripts、required/nightly workflows、现有 Codex RC workflow、README/CLAUDE | in-progress-implemented | 精确 Node/pnpm frozen 校验、frontend、launcher clean test、五类 Worker clean 等价矩阵 passed；nightly 已配置 | hosted CI、branch protection、nightly 实跑、根 reactor verify、浏览器体验 |
 | Monitoring | `monitoring-module/**`、`tools/foggy-monitor/**`、PC View/API、SecurityConfig 放行、`scripts/start-all.sh` 与当前权威文档 | code-slice-removed | tracked 源码及 repo-local ignored `target/.venv/.pytest_cache` 均移除；静态扫描、shell syntax、Java clean、frontend full matrix passed | RabbitMQ/DB/deployment 等外部资源未操作；启动/浏览器 smoke 未跑 |
 | Code Review | `addons/code-review-agent/**` 共 22 个 tracked files、当前开发指引 | code-slice-removed | root/launcher/CI/scripts/source 扫描与 Java clean passed | GitLab webhook、DB、独立 deployment 未操作/未做运行态读取 |
 | metadata-query / Echo / 旧 Provider 契约 | 对应后续独立切片 | not-started | 删除前 Java clean 基线 passed | 仓内迁移、物理删除和删除后回归均未运行 |

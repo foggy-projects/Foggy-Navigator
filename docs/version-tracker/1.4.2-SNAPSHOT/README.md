@@ -73,7 +73,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 - P1 已落地 Node `22.23.1`、pnpm `10.34.5`、单一根 `pnpm-lock.yaml`、前端 workspace 矩阵和仓库级 CI workflow；本机使用精确版本完成 frozen install，前端类型检查、测试和构建均通过。
 - Java 已执行 launcher 主依赖链 clean test，16 个 reactor 模块全部 `SUCCESS`。
 - P5 已物理移除 Monitoring 和 `addons/code-review-agent` 两个 dev-only 完整切片；`metadata-query-module`、Echo Agent 和旧 Provider API/SPI/DTO 尚未开始移除。
-- GitHub runner 实际执行、Worker jobs、nightly 分层和真实浏览器体验验证尚未运行，因此 P1、P5 和版本整体仍保持 `in-progress`，`acceptance_status` 仍为 `not-started`。
+- 五类 Worker 已在独立 clean worktree 完成本机等价矩阵，nightly workflow 已建立；GitHub runner、分支保护、nightly 实际执行和真实浏览器体验仍未完成，因此 P1、P5 和版本整体保持 `in-progress`，`acceptance_status` 仍为 `not-started`。
 
 命令、结果、限制和后续补证统一登记在 [进度记录](./progress.md) 及对应 workitem 中；这里的本机通过不代表 GitHub 合并门禁已生效，也不代表验收或生产批准。
 
@@ -85,6 +85,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 | [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | Biz Worker、ClientApp、upstream user、凭据与 task token | P2 | planned-reviewed |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | Session/Task ownership 与审批、恢复、取消约束 | P3 | planned-reviewed |
 | [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | Node、lockfile、Java/前端/Worker clean build 与 CI | P1 | in-progress |
+| [BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md) | LangGraph 实时工具进度事件重复 | P1 | closed |
 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md) | 超大类、模块边界和 Provider 状态 schema 渐进治理 | P6 | planned |
 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md) | 低风险孤儿文件、未引用导出和失效文档 | P4 | planned |
 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md) | Monitoring dev-only 完整功能切片移除 | P5 | in-progress |
@@ -171,6 +172,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 - [GOV-002 Biz Worker 与 upstream user 边界](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md)
 - [GOV-003 Session/Task 资源归属](./workitems/GOV-003-session-task-resource-ownership.md)
 - [OPT-001 构建与 CI 基线](./workitems/OPT-001-build-and-ci-baseline.md)
+- [BUG-001 LangGraph 实时工具进度事件重复](./workitems/BUG-001-langgraph-progress-event-duplication.md)
 - [OPT-002 核心代码可维护性](./workitems/OPT-002-core-code-maintainability.md)
 - [CLEAN-001 低风险孤儿清理](./workitems/CLEAN-001-low-risk-orphan-cleanup.md)
 - [CLEAN-002 Monitoring 退役](./workitems/CLEAN-002-monitoring-retirement.md)
