@@ -146,7 +146,6 @@ jobs:
         run: python -m pytest -m "not e2e"
         env:
           NO_PROXY: 127.0.0.1,localhost
-          no_proxy: 127.0.0.1,localhost
 
       - name: Build Worker wheel and sdist
         run: python -m build
