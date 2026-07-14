@@ -672,7 +672,7 @@ public class BusinessAgentApiSmokeTest {
         assertTrue(lastBody.contains("\"directoryId\":\"dir-123\""));
         assertTrue(lastBody.contains("\"skillId\":\"skill-001\""));
         assertTrue(lastBody.contains("\"skill_name\":\"skill-001\""));
-        assertTrue(lastBody.contains("\"workdir\":\"/home/sa/workspace/app/""));
+        assertTrue(lastBody.contains("\"workdir\":\"/home/sa/workspace/app\""));
         assertTrue(lastBody.contains("\"allowed_dirs\":[\"/home/sa/workspace\"]"));
         assertTrue(lastBody.contains("\"allowed_tools\":[\"read_file\",\"invoke_business_function\"]"));
         assertCommon();
