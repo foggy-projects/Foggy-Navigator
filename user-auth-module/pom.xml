@@ -67,13 +67,6 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Foggy Core (统一返回对象 RX) -->
-        <dependency>
-            <groupId>com.foggysource</groupId>
-            <artifactId>foggy-core</artifactId>
-            <version>8.1.10.beta</version>
-        </dependency>
-
         <!-- MySQL Driver -->
         <dependency>
             <groupId>com.mysql</groupId>

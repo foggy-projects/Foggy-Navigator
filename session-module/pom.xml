@@ -15,10 +15,6 @@
     <name>Session Module</name>
     <description>会话管理模块 - JPA持久化、SSE推送、REST API</description>
 
-    <properties>
-        <foggy-model.version>8.1.10.beta</foggy-model.version>
-    </properties>
-
     <dependencies>
         <!-- Agent Framework (AgentInvoker, SessionManager接口, AgentMessage) -->
         <dependency>
@@ -51,13 +47,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
-        </dependency>
-
-        <!-- Foggy Core (RX统一返回) -->
-        <dependency>
-            <groupId>com.foggysource</groupId>
-            <artifactId>foggy-core</artifactId>
-            <version>${foggy-model.version}</version>
         </dependency>
 
         <!-- Lombok -->
