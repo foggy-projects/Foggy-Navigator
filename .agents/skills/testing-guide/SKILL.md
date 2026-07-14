@@ -532,7 +532,6 @@ packages/navigator-frontend/
 | session-module | 5 | L1 + L2 + L3 | 🟡 基本 | 含独立集成测试项目 |
 | addons/task-assistant | 3 | L1 | 🟡 基本 | — |
 | metadata-config-module | 3 | L2 | 🟡 基本 | — |
-| metadata-query-module | 2 | L1 + L2 | 🔴 偏少 | — |
 | user-auth-module | 1 | L2 | 🔴 偏少 | 仅 JWT 测试 |
 | navigator-common | 0 | — | ⬜ 无 | Entity/DTO 模块，优先级低 |
 | navigator-spi | 0 | — | ⬜ 无 | 接口定义模块，无需测试 |
@@ -551,17 +550,15 @@ packages/navigator-frontend/
 
 1. **user-auth-module** — 认证/授权是安全基础
 2. **metadata-config-module** — 配置管理影响全局
-3. **metadata-query-module** — 查询逻辑正确性关键
-
 ### 第二优先级：增强已有测试
 
-4. **session-module** — 补充 SSE 推送、消息持久化的单元测试
-5. **claude-worker-agent** — 补充任务分派、状态流转的边界测试
+3. **session-module** — 补充 SSE 推送、消息持久化的单元测试
+4. **claude-worker-agent** — 补充任务分派、状态流转的边界测试
 
 ### 第三优先级：E2E 与前端
 
-6. **navigator-frontend** — Playwright E2E 核心流程
-7. **foggy-chat** — 组件交互测试
+5. **navigator-frontend** — Playwright E2E 核心流程
+6. **foggy-chat** — 组件交互测试
 
 ## 约束条件
 

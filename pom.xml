@@ -33,7 +33,6 @@
         <module>agent-framework</module>
         <module>user-auth-module</module>
         <module>metadata-config-module</module>
-        <module>metadata-query-module</module>
         <module>session-module</module>
         <module>business-agent-module</module>
         <module>addons/claude-worker-agent</module>
