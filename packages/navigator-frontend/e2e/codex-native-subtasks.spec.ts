@@ -193,7 +193,7 @@ async function mockApi(page: Page) {
       await fulfill(route, [])
       return
     }
-    if (path === `/codex-tasks/${task.taskId}/file-hints`) {
+    if (path === `/tasks/${task.taskId}/file-hints`) {
       await fulfill(route, { taskId: task.taskId, files: [], total: 0, truncated: false })
       return
     }

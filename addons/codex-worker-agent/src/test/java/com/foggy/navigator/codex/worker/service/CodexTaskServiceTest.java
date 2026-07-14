@@ -806,6 +806,35 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void canaryPageScopesTasksByUserTenantWorkerAndPreservesCreationEpoch() {
+        CodexTaskEntity included = createTask(
+                "task-included", "session-included", "worker-1", "dir-1", "COMPLETED",
+                LocalDateTime.of(2026, 7, 10, 18, 30));
+        included.setTenantId("tenant-1");
+        included.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        included.setCreatedAtEpochMs(1_783_685_415_123L);
+
+        CodexTaskEntity otherWorker = createTask(
+                "task-other-worker", "session-other", "worker-2", "dir-1", "COMPLETED",
+                LocalDateTime.of(2026, 7, 10, 18, 29));
+        otherWorker.setTenantId("tenant-1");
+        otherWorker.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+
+        when(taskRepository.findByUserIdAndTenantIdOrderByCreatedAtDesc("user-1", "tenant-1"))
+                .thenReturn(List.of(included, otherWorker));
+
+        TaskPageResult page = service.listTasksPagedForProvider(
+                "user-1", "tenant-1", 0, 20, null, "worker-1",
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+
+        assertEquals(1L, page.totalSessions());
+        DispatchTaskDTO task = assertInstanceOf(DispatchTaskDTO.class, page.content().get(0));
+        assertEquals("task-included", task.getTaskId());
+        assertEquals(1_783_685_415_123L, task.getCreatedAtEpochMs());
+        verify(taskRepository).findByUserIdAndTenantIdOrderByCreatedAtDesc("user-1", "tenant-1");
+    }
+
+    @Test
     void resumeTask_reusesExistingPlatformSessionAndCodexThread() {
         CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
         when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {

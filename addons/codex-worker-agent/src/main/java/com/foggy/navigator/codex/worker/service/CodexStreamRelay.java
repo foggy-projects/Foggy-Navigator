@@ -1488,7 +1488,7 @@ public class CodexStreamRelay {
         }
         // The local path is useful only inside the Worker/Java bridge and must not leak to clients.
         result.remove("local_path");
-        result.put("url", "/api/v1/codex-tasks/" + taskId
+        result.put("url", "/api/v1/tasks/" + taskId
                 + "/generated-images/" + artifactId);
         return result;
     }

@@ -50,6 +50,8 @@ public class DispatchTaskDTO {
     private Long responseTimeoutThresholdSeconds;
     private String source;
     private LocalDateTime createdAt;
+    /** Exact creation instant used by operations/canary consumers without timezone inference. */
+    private Long createdAtEpochMs;
     private LocalDateTime updatedAt;
 
     // Session summary fields populated by paged history APIs.

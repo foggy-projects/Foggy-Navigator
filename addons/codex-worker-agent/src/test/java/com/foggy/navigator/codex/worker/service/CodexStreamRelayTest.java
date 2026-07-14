@@ -1046,7 +1046,7 @@ class CodexStreamRelayTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> image = (Map<String, Object>) payload.get("data");
         assertEquals(artifactId, image.get("artifact_id"));
-        assertEquals("/api/v1/codex-tasks/local-task-1/generated-images/" + artifactId,
+        assertEquals("/api/v1/tasks/local-task-1/generated-images/" + artifactId,
                 image.get("url"));
         assertFalse(image.containsKey("local_path"));
         verify(taskService).recordWorkerProgress(

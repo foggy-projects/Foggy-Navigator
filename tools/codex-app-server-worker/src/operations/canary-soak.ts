@@ -195,6 +195,8 @@ const RECOVERY_UNKNOWN = /APP_SERVER_RECOVERY_UNKNOWN/i
 const AFFINITY_ERROR = /AFFINITY/i
 const STATE_FORBIDDEN_KEY = /(?:^|_)(?:token|secret|password|authorization|prompt|result|error_message|endpoint|url|marker)(?:_|$)/i
 const MAX_WORKERS = 16
+const NAVIGATOR_TASK_PAGE_SIZE = 100
+const MAX_NAVIGATOR_TASK_PAGES = 1_000
 const PRODUCTION_PROVIDER_TYPE = 'codex-app-server-worker'
 const PRODUCTION_ULTRA_MODELS = new Set([
   'codex-ultra',
@@ -254,7 +256,8 @@ export function resolveCanarySoakConfig(raw: unknown, baseDirectory = process.cw
     throw new CanarySoakError('CANARY_CONFIG_WORKERS_INVALID')
   }
   const navigatorBaseUrl = normalizedHttpUrl(navigator.baseUrl, false)
-  const navigatorTasksPath = optionalString(navigator.tasksPath) || '/api/v1/codex-tasks'
+  const navigatorTasksPath = optionalString(navigator.tasksPath)
+    || '/api/v1/tasks/operations/codex-canary'
   validateTasksPath(navigatorTasksPath, navigatorBaseUrl)
   const navigatorTokenEnv = environmentName(navigator.tokenEnv, 'CANARY_CONFIG_TOKEN_ENV_INVALID')
   const runtimeId = boundedString(navigator.runtimeId, 128, 'CANARY_CONFIG_RUNTIME_ID_INVALID')
@@ -714,25 +717,54 @@ async function fetchNavigatorTasks(
   token: string,
   fetchImpl: typeof fetch,
 ): Promise<Record<string, unknown>[]> {
-  const url = new URL(config.navigatorTasksPath, `${config.navigatorBaseUrl}/`)
-  if (url.origin !== new URL(config.navigatorBaseUrl).origin) {
+  const baseUrl = new URL(config.navigatorTasksPath, `${config.navigatorBaseUrl}/`)
+  if (baseUrl.origin !== new URL(config.navigatorBaseUrl).origin) {
     throw new CanarySoakError('CANARY_CONFIG_TASKS_PATH_INVALID')
   }
-  if (config.workerId) url.searchParams.set('workerId', config.workerId)
-  const payload = await fetchJson(
-    url.toString(),
-    { Authorization: `Bearer ${token}` },
-    config.requestTimeoutMs,
-    fetchImpl,
-    'CANARY_NAVIGATOR_POLL_FAILED',
-  )
-  const envelope = asOptionalRecord(payload)
-  if (envelope && typeof envelope.code === 'number' && envelope.code !== 200) {
-    throw new CanarySoakError('CANARY_NAVIGATOR_ENVELOPE_FAILED')
+  if (config.workerId) baseUrl.searchParams.set('workerId', config.workerId)
+
+  const tasks: Record<string, unknown>[] = []
+  for (let page = 0; page < MAX_NAVIGATOR_TASK_PAGES; page++) {
+    const url = new URL(baseUrl)
+    url.searchParams.set('page', String(page))
+    url.searchParams.set('size', String(NAVIGATOR_TASK_PAGE_SIZE))
+    const payload = await fetchJson(
+      url.toString(),
+      { Authorization: `Bearer ${token}` },
+      config.requestTimeoutMs,
+      fetchImpl,
+      'CANARY_NAVIGATOR_POLL_FAILED',
+    )
+    const envelope = asOptionalRecord(payload)
+    if (envelope && typeof envelope.code === 'number' && envelope.code !== 200) {
+      throw new CanarySoakError('CANARY_NAVIGATOR_ENVELOPE_FAILED')
+    }
+    const data = Array.isArray(payload) ? payload : envelope?.data
+    if (Array.isArray(data)) {
+      if (page !== 0) throw new CanarySoakError('CANARY_NAVIGATOR_RESPONSE_INVALID')
+      return data.map(task => asRecord(task, 'CANARY_NAVIGATOR_TASK_INVALID'))
+    }
+
+    const pageEnvelope = asOptionalRecord(data)
+    const content = pageEnvelope?.content
+    if (!pageEnvelope || !Array.isArray(content)) {
+      throw new CanarySoakError('CANARY_NAVIGATOR_RESPONSE_INVALID')
+    }
+    const responsePage = nonNegativeInteger(
+      pageEnvelope.page,
+      'CANARY_NAVIGATOR_RESPONSE_INVALID',
+    )
+    const totalSessions = nonNegativeInteger(
+      pageEnvelope.totalSessions,
+      'CANARY_NAVIGATOR_RESPONSE_INVALID',
+    )
+    if (responsePage !== page) throw new CanarySoakError('CANARY_NAVIGATOR_RESPONSE_INVALID')
+    tasks.push(...content.map(task => asRecord(task, 'CANARY_NAVIGATOR_TASK_INVALID')))
+
+    if ((page + 1) * NAVIGATOR_TASK_PAGE_SIZE >= totalSessions) return tasks
+    if (content.length === 0) throw new CanarySoakError('CANARY_NAVIGATOR_RESPONSE_INVALID')
   }
-  const tasks = Array.isArray(payload) ? payload : envelope?.data
-  if (!Array.isArray(tasks)) throw new CanarySoakError('CANARY_NAVIGATOR_RESPONSE_INVALID')
-  return tasks.map(task => asRecord(task, 'CANARY_NAVIGATOR_TASK_INVALID'))
+  throw new CanarySoakError('CANARY_NAVIGATOR_RESPONSE_INVALID')
 }
 
 async function fetchJson(

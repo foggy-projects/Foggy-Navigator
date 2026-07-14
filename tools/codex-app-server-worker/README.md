@@ -291,8 +291,9 @@ permitted only for loopback endpoints; remote endpoints must use HTTPS.
 Missing or unrecognized app-server instance IDs are excluded from the terminal denominator and
 recorded as deduplicated, digest-keyed affinity violations, which fail the zero-tolerance gate.
 
-Use `--once` from cron, Task Scheduler, or another supervisor. Each due run polls the Navigator
-`/api/v1/codex-tasks` API, samples every configured Worker `/health` endpoint, atomically replaces
+Use `--once` from cron, Task Scheduler, or another supervisor. Each due run traverses the authenticated
+Navigator `/api/v1/tasks/operations/codex-canary` pages, samples every configured Worker `/health`
+endpoint, atomically replaces
 the checkpoint, and exits. Invocations before `next_due_at` perform no network requests. `--report`
 reads the checkpoint without requiring credentials or making requests:
 

@@ -390,7 +390,7 @@ export async function getTask(taskId: string): Promise<ClaudeTask> {
 
 export async function getCodexTaskFileHints(taskId: string): Promise<SessionFileHintsResponse> {
   const rx = (await client.get(
-    `/codex-tasks/${taskId}/file-hints`,
+    `/tasks/${taskId}/file-hints`,
     { suppressErrorMessage: true } as any,
   )) as unknown as RX<SessionFileHintsResponse>
   return rx.data

@@ -1151,6 +1151,22 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         return buildSessionPage(tasks, page, size, state);
     }
 
+    public TaskPageResult listTasksPagedForProvider(String userId, String tenantId,
+                                                     int page, int size, String state,
+                                                     String workerId,
+                                                     String providerType) {
+        List<CodexTaskEntity> tasks = taskRepository
+                .findByUserIdAndTenantIdOrderByCreatedAtDesc(userId, tenantId);
+        tasks = filterTasksByProvider(tasks, providerType);
+        if (workerId != null && !workerId.isBlank()) {
+            String normalizedWorkerId = workerId.trim();
+            tasks = tasks.stream()
+                    .filter(task -> normalizedWorkerId.equals(task.getWorkerId()))
+                    .toList();
+        }
+        return buildSessionPage(tasks, page, size, state);
+    }
+
     @Override
     public TaskPageResult listDirectoryTaskPage(String userId, String directoryId, int page, int size, String state) {
         return listTasksByDirectoryPagedForProvider(userId, directoryId, page, size, state, AGENT_ID);
@@ -1233,6 +1249,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
                 .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
+                .createdAtEpochMs(entity.getCreatedAtEpochMs())
                 .updatedAt(entity.getUpdatedAt())
                 // Codex-specific
                 .codexThreadId(entity.getCodexThreadId())
@@ -1613,6 +1630,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         putIfNotBlank(state, ProviderStateCodec.FIELD_CODEX_RUNTIME_TYPE, entity.getRuntimeType());
         putIfNotBlank(state, ProviderStateCodec.FIELD_CODEX_RUNTIME_INSTANCE_ID, entity.getRuntimeInstanceId());
         putIfNotNull(state, ProviderStateCodec.FIELD_CODEX_ROUTING_EPOCH, entity.getRoutingEpoch());
+        putIfNotNull(state, ProviderStateCodec.FIELD_CREATED_AT_EPOCH_MS, entity.getCreatedAtEpochMs());
         putIfNotBlank(state, ProviderStateCodec.FIELD_RUNTIME_ACCEPTANCE_STATE,
                 entity.getRuntimeAcceptanceState());
         return ProviderStateCodec.mergeTaskValues(existingJson, resolveProviderType(entity), state);

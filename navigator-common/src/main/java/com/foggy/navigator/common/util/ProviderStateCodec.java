@@ -26,6 +26,7 @@ public final class ProviderStateCodec {
     public static final String FIELD_CODEX_RUNTIME_TYPE = "codexRuntimeType";
     public static final String FIELD_CODEX_RUNTIME_INSTANCE_ID = "codexRuntimeInstanceId";
     public static final String FIELD_CODEX_ROUTING_EPOCH = "codexRoutingEpoch";
+    public static final String FIELD_CREATED_AT_EPOCH_MS = "createdAtEpochMs";
     public static final String FIELD_RUNTIME_ACCEPTANCE_STATE = "runtimeAcceptanceState";
     public static final String FIELD_GEMINI_SESSION_ID = "geminiSessionId";
     public static final String FIELD_CONTEXT_ID = "contextId";

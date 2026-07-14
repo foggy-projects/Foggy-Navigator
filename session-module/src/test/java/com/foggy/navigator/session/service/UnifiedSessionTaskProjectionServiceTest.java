@@ -78,6 +78,20 @@ class UnifiedSessionTaskProjectionServiceTest {
         assertNull(projected.getRoutingEpoch());
     }
 
+    @Test
+    void taskProjectionReadsAuthoritativeCreationEpochFromVersionedState() {
+        SessionTaskEntity entity = new SessionTaskEntity();
+        entity.setTaskId("task-created-epoch");
+        entity.setSessionId("session-created-epoch");
+        entity.setTaskStateJson("{\"" + ProviderStateCodec.FIELD_SCHEMA_VERSION + "\":"
+                + ProviderStateCodec.CURRENT_SCHEMA_VERSION + ",\""
+                + ProviderStateCodec.FIELD_CREATED_AT_EPOCH_MS + "\":1783685415123}");
+
+        var projected = service.toDispatchTaskDTO(entity);
+
+        assertEquals(1_783_685_415_123L, projected.getCreatedAtEpochMs());
+    }
+
     public static class LegacySearchPage {
         private final List<Object> results;
         private final long total;
