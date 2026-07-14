@@ -156,7 +156,7 @@ Foggy Navigator 当前是内部系统，核心目标是：
 Owner 已确认当前范围没有上游或生产兼容义务，开发数据允许丢弃，以下切片可在 P5/P6 物理删除。该授权不允许命令命中共享或生产资源；执行前必须再次确认环境、资源名称与仓内引用。
 
 1. Monitoring：`monitoring-module`、`tools/foggy-monitor`、`MonitoringView.vue`、`api/monitoring.ts`、Security 放行项和 `scripts/start-all.sh` 安装步骤已作为 dev-only 切片物理移除；当前状态为已实施、待随 P5 完成剩余文档与门禁收口，开发数据库与 RabbitMQ 资源无需备份保留。
-2. `metadata-query-module`：尚未开始；后续从根 reactor、launcher、模块源码、专属配置、旧 Foggy Dataset/FSScript 依赖和当前文档完整移除，`metadata-config-module` 仍为禁止触碰项。
+2. `metadata-query-module`：本地实施完成；模块目录、根 reactor 条目、launcher 依赖、launcher 专属 bean 断言、专属 Skill 与当前文档已退出现行树。删除后 metadata-config/launcher clean test 15/15 `SUCCESS`，dependency tree 与 clean target 无旧查询依赖；`metadata-config-module` 23 个 tracked files 保留、业务树 diff 为 0。状态为 `completed-local`，启动/浏览器 smoke、hosted CI 与正式验收仍未完成。
 3. `addons/code-review-agent`：源码与切片内配置已成组物理移除；当前状态为已实施、待随 P5 完成剩余文档与门禁收口。如后续扫描发现遗留 GitLab webhook 或 credential，仍须撤销或删除，禁止遗留可调用入口。
 4. `echo-agent`：尚未开始；迁移或删除仓内已知 smoke/test 引用后物理移除 addon、reactor/launcher 装配和 discovery 残留，不得误删 `LocalEchoBusinessFunctionAdapterInvoker`。
 5. 旧 Provider API：尚未开始；在同一阶段迁移或删除 PC、测试、Worker/canary 和其他仓内引用后，直接删除 `/claude-tasks`、`/codex-tasks`、`/langgraph-tasks` 对应 Controller、deprecated SPI 和兼容 DTO，不设置上游/生产弃用或静默窗口。
@@ -244,8 +244,8 @@ Owner 已确认当前范围没有上游或生产兼容义务，开发数据允�
 
 ## Progress Tracking
 
-- development: in-progress；P1 构建基线以及 Monitoring、`addons/code-review-agent` 两个 dev-only 切片已实施，`metadata-query-module`、Echo Agent 和旧 Provider 契约尚未开始
-- testing: partial-passed；本机精确版本 frozen install、前端、Java launcher clean test（16 个 reactor 模块 `SUCCESS`）和五类 Worker clean 矩阵通过，GitHub runner/分支保护/nightly 实跑、根 reactor verify 与真实浏览器尚未完成
+- development: in-progress；P1 构建基线以及 Monitoring、`addons/code-review-agent` 两个 dev-only 切片已实施；metadata-query 已 `completed-local`；Echo Agent 和旧 Provider 契约尚未开始
+- testing: partial-passed；本机精确版本 frozen install、前端、五类 Worker clean 矩阵和 metadata-query 删除后的 metadata-config/launcher clean test 通过；GitHub runner/分支保护/nightly 实跑、根 reactor verify、metadata-query 启动/浏览器 smoke 与正式验收尚未完成
 - experience: not-run
 - implementation_plan: [1.4.2 implementation plan](../implementation-plan.md)
 - progress_record: [1.4.2 progress](../progress.md)

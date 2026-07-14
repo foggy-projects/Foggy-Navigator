@@ -26,6 +26,8 @@
 | `update` | 已有文件的定向变更；实施前需重新确认行级上下文 |
 | `read-only-analysis` | 只做引用、配置、数据或依赖审计，未满足门禁不得修改 |
 | `delete-authorized` | Owner 已批准在明确的 dev-only 范围内物理删除；仍须处理仓内引用、确认不命中共享/生产资源并完成测试和回滚记录 |
+| `removed-pending-verification` | 授权切片已从工作树移除，但删除后构建、定向回归、启动/体验或文档收口尚未完成；不得标记 completed |
+| `completed-local` | 代码、装配、当前文档与本地自动化门禁已经收口；启动/浏览器、hosted CI 或正式验收若未执行仍须单独标记 |
 | `do-not-touch` | 1.4.2 明确保留，或必须先完成迁移/备份/轮换 |
 
 ## 本轮实际文档落档
@@ -71,7 +73,8 @@
 | P1 构建基线 | `.nvmrc`、根 `package.json`、`.gitignore`、根 `pnpm-lock.yaml`、前端 package/scripts、required/nightly workflows、现有 Codex RC workflow、README/CLAUDE | in-progress-implemented | 精确 Node/pnpm frozen 校验、frontend、launcher clean test、五类 Worker clean 等价矩阵 passed；nightly 已配置 | hosted CI、branch protection、nightly 实跑、根 reactor verify、浏览器体验 |
 | Monitoring | `monitoring-module/**`、`tools/foggy-monitor/**`、PC View/API、SecurityConfig 放行、`scripts/start-all.sh` 与当前权威文档 | code-slice-removed | tracked 源码及 repo-local ignored `target/.venv/.pytest_cache` 均移除；静态扫描、shell syntax、Java clean、frontend full matrix passed | RabbitMQ/DB/deployment 等外部资源未操作；启动/浏览器 smoke 未跑 |
 | Code Review | `addons/code-review-agent/**` 共 22 个 tracked files、当前开发指引 | code-slice-removed | root/launcher/CI/scripts/source 扫描与 Java clean passed | GitLab webhook、DB、独立 deployment 未操作/未做运行态读取 |
-| metadata-query / Echo / 旧 Provider 契约 | 对应后续独立切片 | not-started | 删除前 Java clean 基线 passed | 仓内迁移、物理删除和删除后回归均未运行 |
+| metadata-query | `metadata-query-module/**`、根 `pom.xml`、`launcher/pom.xml`、launcher context test、`.agents/skills/metadata-query-module/**`、当前 README/架构文档 | completed-local | 模块、装配、断言、Skill 与当前文档已收口；根 reactor 当前为 16 个模块；删除后 clean test 15/15 `SUCCESS`，依赖树与 clean target 无旧查询依赖 | 启动/浏览器 smoke、hosted CI 与正式验收未运行；外部资源未操作 |
+| Echo / 旧 Provider 契约 | 对应后续独立切片 | not-started | 删除前 Java clean 基线 passed | 仓内迁移、物理删除和删除后回归均未运行 |
 
 ## Worker 与外部执行触点
 
@@ -141,12 +144,12 @@
 
 ## 第二档 dev-only 完整功能切片
 
-下列切片已获 Owner 物理删除授权，开发数据可丢弃且不设置上游/生产兼容窗口。Monitoring 和 code-review 已开始执行，其他 `delete-authorized` 切片仍不是“立即删除”：必须确认 dev-only 边界、处理仓内引用并在独立批次验证。
+下列切片已获 Owner 物理删除授权，开发数据可丢弃且不设置上游/生产兼容窗口。Monitoring、code-review 和 metadata-query 已开始执行；其中 metadata-query 已完成代码/装配/Skill/当前文档收口和本地自动化验证。尚未执行的 `delete-authorized` 切片仍不是“立即删除”：必须确认 dev-only 边界、处理仓内引用并在独立批次验证。
 
 | 仓库 | 路径/切片 | 角色 | 预期变更 | 删除前门禁 |
 |---|---|---|---|---|
 | root | `monitoring-module/`、`tools/foggy-monitor/`、`packages/navigator-frontend/src/views/MonitoringView.vue`、`packages/navigator-frontend/src/api/monitoring.ts`、`scripts/start-all.sh`、`SecurityConfig` 放行项、相关当前文档 | Monitoring | removed-in-working-tree | Java/Python/UI/API/auth/script 及 repo-local ignored 构建残留已删除并通过本地构建；外部 RabbitMQ/DB/deployment 未操作，体验/hosted CI 待跑 |
-| root | `metadata-query-module/`、根 reactor、`launcher/pom.xml`、专属配置/依赖/文档 | 旧语义查询 | delete-authorized | 精确删除专属切片并回归 `metadata-config-module`；发现共享/生产 datasource 或服务立即停止 |
+| root | `metadata-query-module/`、根 reactor、`launcher/pom.xml`、launcher context test、专属 Skill、当前 README/架构文档 | 旧语义查询 | completed-local | 模块、装配、专属断言、Skill 与当前文档已收口；`metadata-config-module` 23 个 tracked files 保留、业务树 diff 为 0；删除后 clean test、依赖树和 clean target 扫描通过。启动/浏览器、hosted CI 和正式验收仍未运行 |
 | root | `addons/code-review-agent/`、专属源码/配置/测试和当前开发指引 | GitLab code review | removed-in-working-tree | 22 个 tracked files 已删除；仓内扫描和 Java clean 通过；GitLab/DB/独立 deployment 未操作 |
 | root | `addons/echo-agent/`、根 reactor、`launcher/pom.xml`、discovery 与已知测试引用 | 示例 Provider | delete-authorized | 迁移或删除仓内 smoke/test 引用；保留 `LocalEchoBusinessFunctionAdapterInvoker` |
 | root | `/api/v1/claude-tasks`、`/api/v1/codex-tasks`、`/api/v1/langgraph-tasks` 对应 Controller、DTO、SPI、前端/Worker/SDK/CLI 调用 | 旧 Provider API | delete-authorized | 迁移或删除 PC、L3、Worker/canary、stream relay 等全部仓内引用后直接删除；无需外部静默或兼容窗口 |

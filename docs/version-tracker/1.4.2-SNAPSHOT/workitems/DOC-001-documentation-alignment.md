@@ -151,7 +151,7 @@ Foggy Navigator 当前是内部多 Worker 远程编程工作台，主线是统�
 
 - 当前根 README、系统总览、A2A 文档、模块导航和项目 Skills 不得把 Foggy Dataset、FSScript 或语义分析写成 Navigator 的产品主线。
 - `metadata-config-module` 仍有独立配置职责，不得因名称相似而删除。
-- `metadata-query-module` 已由 Owner 批准按 dev-only 完整切片退役；物理删除、`metadata-config-module` 保护和删除后测试由 [CLEAN-003](./CLEAN-003-metadata-query-retirement-audit.md) 独立执行，DOC-001 只同步当前事实和历史边界。
+- `metadata-query-module` 已按 Owner 的 dev-only 授权完成本地退役；物理删除、`metadata-config-module` 保护和删除后 clean test 证据见 [CLEAN-003](./CLEAN-003-metadata-query-retirement-audit.md)。DOC-001 已同步当前事实和历史边界；启动/浏览器与正式验收仍不由文案对齐替代。
 - 历史语义层文档应保留其当时背景，必要时加当前基线勘误或移动到明确归档导航，而不是抹除历史。
 
 ## 项目 Skills 对齐要求
@@ -173,7 +173,7 @@ Foggy Navigator 当前是内部多 Worker 远程编程工作台，主线是统�
 | 后置流程 | 需要时指向 progress、自检、质量检查、覆盖审计和验收 |
 | 生命周期 | active、legacy、candidate-for-removal 或 archived 状态明确 |
 
-对仍活跃的 `metadata-config-module` Skill 只修正定位；`metadata-query-module` Skill 在 CLEAN-003 物理删除批次中退出活跃发现；对已经删除且无引用的 tutor/OpenHands Skill 按 CLEAN-001 门禁处理。
+对仍活跃的 `metadata-config-module` Skill 只修正定位；`metadata-query-module` Skill 已随 CLEAN-003 物理删除批次退出活跃发现；对已经删除且无引用的 tutor/OpenHands Skill 按 CLEAN-001 门禁处理。
 
 ## 证据分类
 
@@ -220,7 +220,7 @@ Foggy Navigator 当前是内部多 Worker 远程编程工作台，主线是统�
 
 1. 历史材料默认不改；对确实会误导当前执行的文档追加日期化勘误和新基线链接。
 2. 将 tutor、OpenHands、旧 chat-first 和语义层描述按“当前失效/历史保留/仍有技术消费者”分类处理。
-3. 删除候选转交 CLEAN-001；metadata-query 去留转交 CLEAN-003；旧 Provider API 去留转交 CLEAN-004。
+3. 删除候选转交 CLEAN-001；metadata-query 本地退役与验证证据由 CLEAN-003 收口；旧 Provider API 去留转交 CLEAN-004。
 4. 不在 DOC-001 中直接执行模块、API、Skill 或 evidence 删除。
 
 完成判据：当前失效描述不再作为入口指引，历史事实和证据仍可追溯。
@@ -324,7 +324,7 @@ rg --files .agents/skills docs/skills docs/01-overview docs/02-modules \
 5. 历史版本、测试和验收证据保持可追溯；必要勘误注明日期、替代文档和“历史结论不变”。
 6. 项目 `.agents/skills` 与 `docs/skills` 的触发、路径、模块职责和状态与当前仓库一致。
 7. tutor/OpenHands 等失效 Skill 或文档候选都有引用扫描、替代说明、Owner 和回滚记录，再由 CLEAN-001 决定是否删除。
-8. metadata-query 如实标记为 Owner 已批准、但物理删除尚未开始；metadata-config 明确保留且不由 DOC-001 修改。
+8. metadata-query 如实标记为 `completed-local`，当前入口已移除现行模块描述；metadata-config 23 个 tracked files 保留、业务树未被 DOC-001 修改；启动/浏览器和正式验收不得虚报为完成。
 9. 所有新增或修改的相对链接、文件路径和锚点检查通过，并留下实际命令与结果。
 10. 产品、架构、模块、Skill 和 release Owner 的手工审阅有记录，未审阅项不得标记完成。
 11. [进度记录](../progress.md) 已回写 development、testing、experience、self-check、风险与证据状态。

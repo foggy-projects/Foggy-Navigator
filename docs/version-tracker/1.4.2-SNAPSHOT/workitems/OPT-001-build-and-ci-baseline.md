@@ -41,7 +41,7 @@ owner: root-build-owner
 
 ### 静态搜索结论
 
-1. 根 `pom.xml` 当前包含 17 个 reactor 模块；`launcher/pom.xml` 直接装配 Session、Business Agent、metadata-config、metadata-query、Claude/Codex/Gemini/LangGraph、Echo 和 Task Assistant。
+1. 根 `pom.xml` 在 metadata-query 切片移除后当前包含 16 个 reactor 模块；`launcher/pom.xml` 已不再装配 metadata-query，仍直接装配 Session、Business Agent、metadata-config、Claude/Codex/Gemini/LangGraph、Echo 和 Task Assistant。删除后 `mvn -B -pl metadata-config-module,launcher -am clean test` 已 15/15 `SUCCESS`；既有删除前 16-reactor launcher 记录继续作为独立历史基线保留。
 2. 根 `package.json` 已提供 `typecheck:frontend`、`test:frontend`、`build:frontend` 和 `ci:frontend` 聚合命令，覆盖 chat-core、chat、widget、navigator-frontend 和 mobile。
 3. `pnpm-workspace.yaml` 和根 `package.json` 均把 `packages/*` 纳入 workspace，根 lockfile 包含根 importer 及 chat-core、chat、mobile、widget、navigator-frontend 五个 package importer。
 4. `.gitignore` 已显式放行根 `pnpm-lock.yaml`，根 lockfile 已作为本轮单一 workspace 依赖记录生成；是否已进入最终提交仍以版本控制提交结果为准。

@@ -46,7 +46,7 @@
 | E-007 | 本地构建证据 | launcher 主干依赖链从 clean 状态编译测试通过 | passed-local | `2026-07-14` 执行 `mvn -B -pl launcher -am clean test`，16 个 reactor 项 SUCCESS；不是根 `clean verify` 或 hosted runner 证据 |
 | E-008 | 本地构建证据 | Node/Vite/lockfile 不可复现基线已按 ODR-142-001 收口 | passed-local-partial-ci | Node `22.23.1`、pnpm `10.34.5`、单一根 frozen lockfile 与根 frontend matrix 已落地并本地通过；GitHub runner/nightly 未运行 |
 | E-009 | 本地构建证据 | 两个 `ClaudeWorkerView.vue` TypeScript 基线错误已做最小修复 | passed-local | 有效 PC/mobile type-check、全 frontend tests/build exit 0；浏览器体验未运行 |
-| E-010 | 静态搜索 + 实施证据 | Monitoring 与 code-review 已删除；metadata-query、Echo 和旧 API 尚未实施 | partial-implementation | 前两切片的仓内扫描和 Java/frontend 回归通过；未操作外部资源，其余切片仍按独立门禁执行 |
+| E-010 | 静态搜索 + 实施证据 | Monitoring 与 code-review 已删除；metadata-query 已 completed-local；Echo 和旧 API 尚未实施 | partial-implementation | metadata-query 模块/装配/Skill/当前文档已收口，删除后 clean test 15/15 `SUCCESS`，依赖树和 clean target 无旧查询依赖；启动/浏览器、hosted CI、外部资源与正式验收不在该结论内。其余切片仍按独立门禁执行 |
 
 ## 阶段与工作项映射
 
@@ -222,7 +222,7 @@
 | ODR-142-003 | 服务端权威 opaque task token，30 分钟 TTL，完整授权交集，并与 Worker principal/lease 双重校验，暂停/终态失效 | P2 | approved |
 | ODR-142-004 | 双运行模式；external-enabled 目录/工具默认拒绝、`workspace-write`、任务工具 egress 默认拒绝、缺凭据 unready/fail closed | P2 | approved-with-constraints；门禁未齐不得打开 |
 | ODR-142-005 | 本地关键状态事务 outbox；无状态拒绝可靠落档；远程调用意图/结果分段记录；高频遥测 best-effort | P2/P7 | approved |
-| ODR-142-006 | dev-only 安全后物理移除 Monitoring、metadata-query、code-review；Echo fixture 迁移后退出生产装配，旧数据可丢弃 | P5 | in-progress；Monitoring/code-review 已移除，metadata-query/Echo 未开始；发现共享/生产资源即停止 |
+| ODR-142-006 | dev-only 安全后物理移除 Monitoring、metadata-query、code-review；Echo fixture 迁移后退出生产装配，旧数据可丢弃 | P5 | in-progress；Monitoring/code-review 已移除；metadata-query 已 completed-local，启动/浏览器与正式门禁待补；Echo 未开始；发现共享/生产资源即停止 |
 | ODR-142-007 | 仓内消费者迁移后在 1.4.2 直接删除旧 Provider API/SPI/DTO | P6 | approved-with-constraints；无外部窗口，clean build 仍是硬门 |
 | ODR-142-008 | 当前指引修正、历史证据标记、活跃 Skill 修正、确认失效 Skill 退出活跃发现 | P0/P4 | approved |
 

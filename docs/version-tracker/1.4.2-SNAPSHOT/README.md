@@ -71,8 +71,8 @@
 Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下本机实施与验证证据，但尚未进入覆盖审计、体验验证或正式验收：
 
 - P1 已落地 Node `22.23.1`、pnpm `10.34.5`、单一根 `pnpm-lock.yaml`、前端 workspace 矩阵和仓库级 CI workflow；本机使用精确版本完成 frozen install，前端类型检查、测试和构建均通过。
-- Java 已执行 launcher 主依赖链 clean test，16 个 reactor 模块全部 `SUCCESS`。
-- P5 已物理移除 Monitoring 和 `addons/code-review-agent` 两个 dev-only 完整切片；`metadata-query-module`、Echo Agent 和旧 Provider API/SPI/DTO 尚未开始移除。
+- Java 删除前历史基线继续保留；metadata-query 删除后另行执行 `mvn -B -pl metadata-config-module,launcher -am clean test`，15/15 reactor project 全部 `SUCCESS`，launcher 7 tests、0 failure/error。
+- P5 已物理移除 Monitoring 和 `addons/code-review-agent` 两个 dev-only 完整切片；metadata-query 的模块、reactor/launcher 装配、launcher 专属 bean 断言、专属 Skill 与当前文档也已收口，dependency tree 和 clean target 无旧查询依赖。CLEAN-003 为 `completed-local`，但启动/浏览器 smoke、hosted CI 与正式验收未完成；Echo Agent 和旧 Provider API/SPI/DTO 尚未开始移除。
 - 五类 Worker 已在独立 clean worktree 完成本机等价矩阵，nightly workflow 已建立；GitHub runner、分支保护、nightly 实际执行和真实浏览器体验仍未完成，因此 P1、P5 和版本整体保持 `in-progress`，`acceptance_status` 仍为 `not-started`。
 
 命令、结果、限制和后续补证统一登记在 [进度记录](./progress.md) 及对应 workitem 中；这里的本机通过不代表 GitHub 合并门禁已生效，也不代表验收或生产批准。
@@ -89,7 +89,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md) | 超大类、模块边界和 Provider 状态 schema 渐进治理 | P6 | planned |
 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md) | 低风险孤儿文件、未引用导出和失效文档 | P4 | planned |
 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md) | Monitoring dev-only 完整功能切片移除 | P5 | in-progress |
-| [CLEAN-003](./workitems/CLEAN-003-metadata-query-retirement-audit.md) | metadata-query dev-only 完整功能切片移除 | P5 | planned-reviewed |
+| [CLEAN-003](./workitems/CLEAN-003-metadata-query-retirement-audit.md) | metadata-query dev-only 完整功能切片移除 | P5 | completed-local |
 | [CLEAN-004](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) | code-review、echo、旧 Provider API 与兼容 SPI | P5、P6 | in-progress |
 | [DOC-001](./workitems/DOC-001-documentation-alignment.md) | 产品定位、架构、部署和历史文档对齐 | P0、P4 | in-progress |
 

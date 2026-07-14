@@ -20,7 +20,7 @@
 - owner_decision_review: [Owner Decision Review](./owner-decision-review.md)
 - progress: [Progress](./progress.md)
 
-当前检查点：`2026-07-14` 已实施 P1 本地基线以及 Monitoring/code-review 两个独立删除切片；后续执行者必须先读 Progress，不能重复删除或把尚未执行的 metadata-query、Echo、旧 Provider 契约和 P2/P3 治理写成已完成。
+当前检查点：`2026-07-14` 已实施 P1 本地基线以及 Monitoring/code-review 两个独立删除切片；metadata-query 的模块、reactor/launcher 装配、专属 bean 断言、专属 Skill 与当前文档已收口，删除后 metadata-config/launcher clean test 15/15 `SUCCESS`，依赖树和 clean target 无旧查询依赖，CLEAN-003 状态为 `completed-local`。启动/浏览器、hosted CI 与正式验收未执行。后续执行者必须先读 Progress，不得重复删除、把本地结果冒充生产/验收证据，或把 Echo、旧 Provider 契约和 P2/P3 治理写成已完成。
 
 ## 可复制执行提示词
 

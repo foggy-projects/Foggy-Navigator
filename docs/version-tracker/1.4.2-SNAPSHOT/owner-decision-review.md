@@ -350,10 +350,11 @@ outbox 可使用现有数据库，不要求 1.4.2 同时引入 Kafka，也不等
 
 ### metadata-query
 
-- 当前仍在根 reactor 和 launcher，且依赖旧语义层能力；仓内未发现明显消费者只是静态结论。
+- 评审时仍在根 reactor 和 launcher，且依赖旧语义层能力；当时“仓内未发现明显消费者”只是静态结论。
 - 静态扫描 `/api/metadata/query/**`、`foggy.api.base-url`、TM/QM、datasource、独立部署配置和仓内 SDK 引用；本轮不要求 60 天运行流量观察或仓外客户清单。
 - 退役只能精确移除 `metadata-query-module` 专属切片，必须对 `metadata-config-module` 做完整回归，不按相邻 package 前缀批量删除；根 reactor、launcher、配置、文档和测试必须同切片收口。
 - 若扫描意外发现实际活跃的共享部署或仓外集成，记录为“与 dev-only 假设冲突”并停止，不自行扩张删除授权。
+- `2026-07-14` 实施回写：模块、reactor/launcher 装配、专属 bean 断言、专属 Skill 与当前文档已退出；删除后 metadata-config/launcher clean test 15/15 `SUCCESS`，dependency tree 与 clean target 对旧查询依赖无命中，`metadata-config-module` 23 个 tracked files 保留且业务树 diff 为 0。CLEAN-003 为 `completed-local`；启动/浏览器、hosted CI 与正式验收未运行。
 
 ### code-review-agent
 
@@ -442,7 +443,7 @@ outbox 可使用现有数据库，不要求 1.4.2 同时引入 Kafka，也不等
 特别约束：
 
 - 不因旧 OpenHands/tutor 文档删除当前通用 `CodingAgentEntity` 和 `/api/v1/coding-agents`。
-- metadata-query Skill 在模块正式退役前只能标记 legacy/candidate；`metadata-config-module` 和对应 Skill 保留。
+- metadata-query Skill 在模块正式退役前只能标记 legacy/candidate；当前其模块退役切片已完成并已移出活跃发现，`metadata-config-module` 和对应 Skill 保留。
 - 旧 chat-first 文档可标记历史，但不能据此删除 chat package、widget、mobile 或 `/c/:id` 深链。
 - 先做分类、勘误和索引，再做物理移动；移动前必须建立链接映射或兼容入口。
 - 术语表必须从 Navigator 视角定义 upstream user，并区分 Navigator user、ClientApp、external subject、Worker、LLM Provider、Agent Provider、BusinessFunction 和 Skill。
