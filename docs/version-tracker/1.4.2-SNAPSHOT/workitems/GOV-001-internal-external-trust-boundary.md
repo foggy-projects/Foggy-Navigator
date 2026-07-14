@@ -3,7 +3,7 @@ type: governance
 version: 1.4.2-SNAPSHOT
 ticket: GOV-001
 priority: high
-status: planned
+status: planned-reviewed
 source: REQ-001
 owner: platform-security-owner | session-owner | provider-owner
 ---
@@ -23,7 +23,7 @@ owner: platform-security-owner | session-owner | provider-owner
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| Workitem | planned | 本文冻结边界和实施门禁，尚未修改业务行为 |
+| Workitem | planned-reviewed | Owner 方向决策已关闭；P2/P3 业务实现尚未开始 |
 | Implementation | not-started | implementation_started: no |
 | Automated test | not-run | 规划阶段未执行 Java、前端或 Worker 测试 |
 | Manual verification | not-run | 尚未在双用户、双 ClientApp 或外部 Worker 环境验证 |
@@ -133,7 +133,7 @@ owner: platform-security-owner | session-owner | provider-owner
 | internal-dev、trusted-intranet、external-enabled 的配置模型和命名 | Platform/Security | P0 出口 | 不允许 external enablement |
 | 每类入口的 principal authority 和可信字段表 | Security/Module owners | P0 出口 | 对外入口保持现状但不得扩大 |
 | 管理员、系统任务、A2A 的具名 ownership 例外 | Session/A2A owner | P3 设计前 | 不引入通用 bypass |
-| upstream user 采用 ClientApp 代办 grant 还是 signed assertion | ClientApp/Upstream owner | P2 设计前 | GOV-002 identity enforcement blocked |
+| upstream user 证明强度 | Owner 已决：internal-dev 使用 ClientApp 代办 grant 并标记 delegated assurance；signed assertion 延后为未来真正外部开放门禁 | external 开放里程碑前 | 不阻塞 P2；external-enabled 仍默认关闭 |
 | task token 的函数 scope、TTL、终态失效、撤销和轮换 | Business Agent/Security | P2 schema 前 | 不上线新 token 契约 |
 | 外部 Codex/LangGraph 的 sandbox、工具、网络和目录上限 | Provider/Security | external-enabled 前 | external-enabled 保持 disabled/unready |
 | 关键拒绝、审批、恢复审计采用 best-effort 还是强保证 | Security/Operations | P2 签收前 | 不宣称审计门禁完成 |

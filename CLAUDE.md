@@ -34,11 +34,11 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 | Worker / Agent addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/echo-agent`、`addons/task-assistant` |
 | 对外 SDK / 本地 BFF | `navigator-open-sdk`、`tools/navigator-chat-observer-bff` |
 
-`addons/code-review-agent` 目前存在源码目录，但未纳入根 `pom.xml`，开发前先确认是否仍为实验模块或待接入模块。
+实验性的 `addons/code-review-agent` 源码已移除，当前不属于根 Maven reactor、`launcher` 或默认部署；如需恢复 GitLab MR 自动审查，应作为新接入重新完成消费者、鉴权和运行态审计。
 
 旧独立“会话”入口及其配套 `tutor-agent` 模块已移除；不要再把它当作当前主线模块设计新能力。
 
-`monitoring-module` 与 `tools/foggy-monitor` 当前仅保留源码，不纳入根 Maven reactor、`launcher` 运行时或默认部署；不要把 RabbitMQ 作为启动前置依赖。
+旧自研 `monitoring-module` 与 `tools/foggy-monitor` 已在 1.4.2 dev 阶段移除；不要把 RabbitMQ 或旧 Monitoring API/页面作为启动前置或当前能力。应用日志、健康检查、有限指标和安全审计仍需保留。
 
 ### 前端与移动端
 
@@ -61,7 +61,7 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 | `tools/langgraph-biz-worker` | LangGraph Biz Worker Python 服务 |
 | `tools/mock-llm-service` | Mock LLM 端点 |
 | `tools/navigator-upstream`、`tools/navigator-upstream-cli` | 上游接入工具与 CLI |
-| `tools/code-server`、`tools/foggy-monitor` | 开发辅助；`tools/foggy-monitor` 当前暂停接入 |
+| `tools/code-server` | 远程代码服务辅助能力 |
 | `tools/claude-code-proxy`、`tools/llm-gateway`、`tools/llm-recorder-proxy` | LLM / Claude Code 调试与代理工具 |
 
 ## 项目启动
@@ -130,8 +130,10 @@ powershell -ExecutionPolicy Bypass -File scripts/stop-launcher.ps1
 powershell -ExecutionPolicy Bypass -File scripts/start-frontend.ps1
 
 # 手动启动
-cd packages/navigator-frontend
-pnpm install && pnpm dev
+nvm use
+corepack enable
+pnpm install --frozen-lockfile
+pnpm --filter @foggy/navigator-frontend dev
 ```
 
 前端端口：5174，登录账号：root / root123

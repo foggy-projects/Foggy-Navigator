@@ -17,7 +17,6 @@
 平台治理能力
   -> 设置
   -> 用户
-  -> 监控
 
 平台支撑能力
   -> SSE
@@ -102,16 +101,15 @@
 - 角色与状态管理
 - API Key 创建、撤销、查看使用情况
 
-### 2.7 监控与通知
+### 2.7 通知与基础运行观测
 
-目标：让平台具备最基础的运行可见性。
+目标：在不维护旧自研 Monitoring 产品切片的前提下，保留任务实时通知和最低限度的运行诊断能力。
 
 包含能力：
 
-- 监控事件查询
-- 错误统计
-- 事件详情查看
 - SSE 通知与助手通知
+- 应用日志与健康检查
+- 有限的 Micrometer 指标和安全/运行审计
 
 ### 2.8 开放集成
 
@@ -159,7 +157,7 @@
 
 旧独立会话入口及其配套 `tutor-agent` 已从源码目录、根 `pom.xml` 与 `launcher` 运行时依赖中移除；当前主线功能模块不再保留旧引导 Agent。
 
-`monitoring-module` 与 RabbitMQ 监控事件链路当前暂停，只保留源码，不属于主线 Maven reactor、`launcher` 或默认部署。
+旧 `monitoring-module`、RabbitMQ 日志采集、PC Monitoring 页面/API 与 `tools/foggy-monitor` 已在 1.4.2 dev 阶段移除，不属于当前工程或产品入口；如未来需要集中观测，应按新需求接入，不恢复旧切片的隐式装配。
 
 ## 5. 推荐阅读顺序
 
@@ -170,4 +168,4 @@
 5. [跨项目编排](./cross-project-orchestration.md)
 6. [平台设置与资源治理](./platform-governance.md)
 7. [用户与访问控制](./user-and-access-control.md)
-8. [监控、通知与开放集成](./observability-notification-integration.md)
+8. [通知、基础观测与开放集成](./observability-notification-integration.md)

@@ -3,7 +3,7 @@ type: optimization
 version: 1.4.2-SNAPSHOT
 ticket: OPT-001
 priority: high
-status: planned
+status: in-progress
 source: REQ-001
 owner: root-build-owner
 ---
@@ -21,54 +21,83 @@ owner: root-build-owner
 - [版本索引](../README.md)
 - [REQ-001 平台治理与历史能力收口](../requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
 - [实施计划](../implementation-plan.md)
-- [ODR-142-001 Owner 决策评审稿](../owner-decision-review.md)
+- [ODR-142 Owner 决策记录](../owner-decision-review.md)
 - [统一进度记录](../progress.md)
 
 ## 背景与目标
 
-当前 Java launcher 主依赖链有可用的历史构建基线，但前端工具链、根 lockfile、类型检查命令和 CI 覆盖不能保证从 clean 环境稳定复现。本事项只治理构建和合并门禁，不改变业务路由；目标是让同一提交在受支持环境中以固定工具链、冻结依赖和明确矩阵得到一致结果，并把所有未执行或平台条件跳过项如实写入 [进度记录](../progress.md)。
+当前 Java launcher 主依赖链有可用的历史构建基线，但前端工具链、根 lockfile、类型检查命令和 CI 覆盖此前不能保证从 clean 环境稳定复现。本事项已于 2026-07-14 开工，只治理构建和合并门禁，不改变业务路由；目标是让同一提交在受支持环境中以固定工具链、冻结依赖和明确矩阵得到一致结果，并把所有未执行或平台条件跳过项如实写入 [进度记录](../progress.md)。
 
 ## 证据分类
 
 ### 已确认事实
 
-1. 1.4.2 必须选择一个与当前 Vite 7 工具链兼容的明确 Node 支持版本，不继续以 README 中笼统的 Node 18+ 作为支持基线；ODR-142-001 当前建议 Node `22.23.1`，尚待 Owner 批准。
+1. Owner 已批准 ODR-142-001：CI 与版本文件固定 Node `22.23.1`，根 `engines` 声明 `>=22.23.1 <23`，包管理器固定为 pnpm `10.34.5`。
 2. Java 使用 JDK 17，根 Maven reactor 和 `launcher` 是当前服务端构建入口。
 3. 构建成功必须来自 clean 环境；旧 `target`、`dist`、`node_modules` 或本机缓存不能作为通过证据。
-4. 规划阶段没有执行 Java、全仓前端或 Worker build，所有 Testing 状态保持 `not-run`。
+4. 本轮已生成根 `pnpm-lock.yaml`、移除 `packages/foggy-chat/pnpm-lock.yaml`，并以精确 Node/pnpm 工具运行 lockfile-only install、frozen install、全前端 typecheck/test/build。
+5. `mvn -B -pl launcher -am clean test` 已完成，16 个 reactor project 均为 `SUCCESS`，测试 `0 failures`，命令退出码为 `0`。
+6. `.github/workflows/repository-ci.yml` 已落地 Java、前端、Node Worker 与 Python Worker lane；该 workflow 尚未在 GitHub runner 执行，不能登记为 CI pass。
 
 ### 静态搜索结论
 
 1. 根 `pom.xml` 当前包含 17 个 reactor 模块；`launcher/pom.xml` 直接装配 Session、Business Agent、metadata-config、metadata-query、Claude/Codex/Gemini/LangGraph、Echo 和 Task Assistant。
-2. 根 `package.json` 的 `build:frontend` 只覆盖 `@foggy/chat` 与 `@foggy/navigator-frontend`。
-3. `pnpm-workspace.yaml` 和根 `package.json` 均把 `packages/*` 纳入 workspace，实际包含 chat-core、chat、mobile、widget 和 navigator-frontend 五个包。
-4. 根 `pnpm-lock.yaml` 存在且包含五个 workspace importer，但 `.gitignore` 全局忽略 `pnpm-lock.yaml`，该根 lockfile 当前未纳入 Git。
-5. `packages/foggy-chat/pnpm-lock.yaml` 是已跟踪的旧独立 lockfile，需决定是否仍保留独立安装/发布语义。
-6. workspace manifests 均未声明 `engines` 或 `packageManager`。
-7. 当前 Vite 7 安装结果要求 Node `^20.19.0 || >=22.12.0`；README 的 `Node.js 18+` 与之冲突。
-8. `packages/navigator-frontend/package.json` 的 `build` 仅执行 `vite build`；`type-check` 对引用型根 tsconfig 使用 `vue-tsc --noEmit`，不能证明 app project 被实际检查。
-9. 显式只读检查 `vue-tsc -p tsconfig.app.json --noEmit` 已定位 `ClaudeWorkerView.vue` 两个错误，但这只是规划期静态/诊断输入，不是通过证据。
-10. `.github/workflows` 仅有 Codex Worker release candidate 流程，没有全仓 clean build 门禁。
+2. 根 `package.json` 已提供 `typecheck:frontend`、`test:frontend`、`build:frontend` 和 `ci:frontend` 聚合命令，覆盖 chat-core、chat、widget、navigator-frontend 和 mobile。
+3. `pnpm-workspace.yaml` 和根 `package.json` 均把 `packages/*` 纳入 workspace，根 lockfile 包含根 importer 及 chat-core、chat、mobile、widget、navigator-frontend 五个 package importer。
+4. `.gitignore` 已显式放行根 `pnpm-lock.yaml`，根 lockfile 已作为本轮单一 workspace 依赖记录生成；是否已进入最终提交仍以版本控制提交结果为准。
+5. `packages/foggy-chat/pnpm-lock.yaml` 已从本轮变更中移除，不再与根 lockfile 形成双权威。
+6. 根 manifest 已声明 `packageManager: pnpm@10.34.5` 和受支持 Node `engines`。
+7. 当前 Vite 7 安装结果要求 Node `^20.19.0 || >=22.12.0`；README 已从旧 `Node.js 18+` 声明对齐到本轮 Node 22 基线。
+8. `packages/navigator-frontend/package.json` 的有效类型检查已显式检查 app project；此前定位的 `ClaudeWorkerView.vue` 两个 TypeScript 错误已作窄修复并通过聚合 typecheck。
+9. `.github/workflows/repository-ci.yml` 已补充全仓构建 workflow；它与 Codex Worker release candidate 发布流程相互独立。
 
 ### 需要运行态确认
 
-1. Linux 与 Windows/WSL clean checkout 下 Node、Corepack、pnpm 的安装和 lockfile 解析一致性。
+1. 独立 Linux clean checkout 以及 Windows/WSL clean checkout 下 Node、Corepack、pnpm 的安装和 lockfile 解析一致性；本轮 frozen install 来自当前工作树，不等同于跨 checkout 复现证据。
 2. Maven 全 reactor 与 `launcher -am` 的实际耗时、资源上限和测试稳定性。
-3. mobile H5、微信小程序、widget Playwright 是否适合作为每 PR 强门禁，还是拆为 required 与 nightly。
-4. Claude、Codex、Gemini、LangGraph Worker 的平台依赖、发布脚本和可在 CI 使用的无凭据测试范围。
+3. mobile H5、微信小程序、widget Playwright 的 required/nightly 最终分层和实际 runner 时长。
+4. Claude、Codex、Gemini、LangGraph Worker 在 GitHub runner 的平台依赖和无凭据测试结果；Node/Python Worker jobs 尚未在本机逐项执行。
 5. CI 缓存关闭与开启时是否仍能从 frozen lockfile 得到同一依赖图。
 
 ### 决策项
 
-| 决策 | 建议基线 | Owner | 最晚时间 |
+| 决策 | 结论与实施状态 | Owner | 当前状态 |
 |---|---|---|---|
-| Node 精确版本 | ODR-142-001 建议 CI/版本文件固定 `22.23.1`，`engines >=22.23.1 <23`；当前 pending-decision | root build owner | P1 Step 1 前 |
-| pnpm/Corepack | ODR-142-001 建议 `packageManager: pnpm@10.34.5`；Corepack 仅作 bootstrap 并打印实际版本；当前 pending-decision | frontend/build owner | 生成新 lockfile 前 |
-| chat 独立 lockfile | 建议确认无独立消费者后移除嵌套 lockfile，从根 workspace pack/publish；若有证据则补独立验证 lane | chat owner | P1 Step 2 前 |
-| mobile/widget 门禁层级 | 核心 type/test/build required；完整平台 E2E nightly；真实外部集成进入 RC/受控环境 | frontend/mobile owner | CI 合并前 |
-| Worker 矩阵 | 无外部凭据的 unit/type/build required；跨平台/安装包 nightly；真实凭据 smoke 进入 RC/受控环境 | Worker owners | CI 合并前 |
+| Node 精确版本 | 已批准并落地：CI/版本文件 `22.23.1`，`engines >=22.23.1 <23` | root build owner | approved/implemented |
+| pnpm/Corepack | 已批准并落地：`packageManager: pnpm@10.34.5`；精确工具执行结果见下文 | frontend/build owner | approved/implemented |
+| chat 独立 lockfile | 已批准并移除嵌套 lockfile，根 workspace lockfile 成为单一权威 | chat owner | approved/implemented |
+| mobile/widget 门禁层级 | 核心 type/test/build 已进入根矩阵；required/nightly 分层仍需用 runner 时长定稿 | frontend/mobile owner | in-progress |
+| Worker 矩阵 | Node/Python 无凭据 job 已写入 workflow；本机逐项执行和 GitHub runner 结果待补 | Worker owners | in-progress |
 
-未完成以上决策时不得宣称依赖可复现，也不得提交由未知 pnpm 版本生成的新根 lockfile。
+已完成的冻结决策不等同于 workitem 完成。GitHub required check 生效、nightly 分层、Worker 执行和跨 checkout 复现证据补齐前，不得宣称全仓 CI 门禁已经验收。
+
+## Execution Check-in（2026-07-14）
+
+### 已实施
+
+1. 固定 Node `22.23.1` 和 pnpm `10.34.5`，根 `engines` 保持 Node 22 范围约束，CI 使用精确 Node patch。
+2. 生成根 `pnpm-lock.yaml` 并解除其忽略规则；移除 chat 独立 lockfile；mobile 对 chat-core 的本地依赖对齐为 workspace 依赖。
+3. 根前端矩阵已覆盖 chat-core、chat、widget、navigator-frontend 与 mobile 的有效 typecheck、test 和 build 入口。
+4. 新增 `.github/workflows/repository-ci.yml`，包含 Java、全前端、Node Worker 与 Python Worker jobs；现有发布 workflow 保持独立。
+5. 对 `ClaudeWorkerView.vue` 的两个已知 TypeScript 错误作窄修复，未通过排除文件或跳过类型检查制造绿色结果。
+
+### 已执行证据
+
+| 命令 | 环境/范围 | 结果 | 证据边界 |
+|---|---|---|---|
+| `pnpm install --lockfile-only --ignore-scripts` | 通过 Node `22.23.1`、pnpm `10.34.5` 精确工具执行 | passed，exit `0` | 生成根 lockfile；不是第二个 clean checkout 证据 |
+| `pnpm install --frozen-lockfile --force` | 同上，根 workspace | passed，exit `0` | lockfile 未被安装命令改写；存在依赖告警，不等同于零告警 |
+| `pnpm run typecheck:frontend` | chat-core、chat、widget、PC、mobile 聚合类型检查 | passed，exit `0` | 已关闭主前端两个已知 TypeScript 错误 |
+| `pnpm run ci:frontend` | 根 workspace typecheck/test/build 聚合 | passed，exit `0` | 测试存在预期 stderr/构建告警；未在 GitHub runner 执行 |
+| `pnpm run build:frontend` | chat-core、chat、widget、PC、mobile H5 独立复跑 | passed，exit `0` | 有 chunk、导入方式及 uni-app 版本提示，未登记为失败 |
+| `mvn -B -pl launcher -am clean test` | JDK 17、launcher 依赖链 clean test | passed，exit `0`；16 reactor `SUCCESS`；测试 `0 failures` | 尚未补根 `mvn -B clean verify` 和 GitHub runner 证据 |
+
+### 尚未执行/尚未生效
+
+1. `.github/workflows/repository-ci.yml` 尚未由 GitHub runner 执行，分支保护中的 required check 也尚无生效证据。
+2. Node Worker 与 Python Worker jobs 已写入 workflow，但尚未在本机按矩阵逐项执行，不能登记为 passed。
+3. required/nightly 的最终分层尚未建立，nightly workflow 未建立、未运行。
+4. 第二个 Linux clean checkout、Windows/WSL clean checkout、根 `mvn -B clean verify` 仍待补证据。
 
 ## 精确代码与配置清单
 
@@ -76,20 +105,20 @@ owner: root-build-owner
 |---|---|---|
 | `pom.xml` | Java 根 reactor | 核对全 reactor clean verify 入口，不借机调整业务模块 |
 | `launcher/pom.xml` | 生产 launcher 装配 | 建立 `launcher -am` clean test/package 门禁 |
-| `package.json` | 根 workspace scripts | 增加有效 type/test/build 聚合命令及工具版本声明 |
+| `package.json` | 根 workspace scripts | 已增加有效 type/test/build/ci 聚合命令及工具版本声明；待 runner 验证 |
 | `pnpm-workspace.yaml` | pnpm workspace 范围 | 保持五个包的单一 workspace 定义 |
-| `pnpm-lock.yaml` | 根依赖锁定 | 用冻结 pnpm 版本重建、提交并执行 frozen install |
-| `packages/foggy-chat/pnpm-lock.yaml` | 旧嵌套 lockfile | 按 Owner 决策保留独立语义或移除 |
-| `.gitignore` | 全局忽略规则 | 取消根 lockfile 的错误忽略，保留 node_modules/dist 忽略 |
-| `README.md` | 环境要求 | 对齐 Node 22、Corepack/pnpm 和 clean build 命令 |
+| `pnpm-lock.yaml` | 根依赖锁定 | 已用冻结 pnpm 版本生成并通过 frozen install；待 clean checkout 复验和最终提交确认 |
+| `packages/foggy-chat/pnpm-lock.yaml` | 旧嵌套 lockfile | 已移除，统一使用根 workspace lockfile |
+| `.gitignore` | 全局忽略规则 | 已取消根 lockfile 的错误忽略，保留 node_modules/dist 忽略 |
+| `README.md` | 环境要求 | 已对齐 Node 22、pnpm 和根构建命令 |
 | `packages/foggy-chat-core/package.json` | chat-core build | 纳入根 build；补必要的 test/type 门禁或明确 not-applicable 及原因 |
 | `packages/foggy-chat/package.json` | chat library | 纳入 test/build |
 | `packages/navigator-chat-widget/package.json` | 外部 widget 交付物 | 纳入 test/build，按层级执行 Playwright |
 | `packages/navigator-frontend/package.json` | 主前端 | 修正有效 type-check，纳入 test/build |
 | `packages/foggy-mobile/package.json` | mobile 交付物 | 增加稳定 type-check 入口并纳入 test/H5 build；小程序按矩阵执行 |
 | `scripts/build-frontend.sh`、`scripts/build-frontend.ps1` | 本地聚合脚本 | 与根 scripts 和 frozen install 对齐，不再跳过 widget/mobile |
-| `.github/workflows` | 当前仅 Worker 发布 | 新增全仓 build workflow，发布流程不能替代 PR 门禁 |
-| `tools/*worker*/package.json`、`pyproject.toml` | Worker 构建入口 | 按各自 package manager 和语言建立无凭据 clean lane |
+| `.github/workflows/repository-ci.yml` | 全仓 build workflow | 已新增矩阵；待 GitHub runner、required check 和 nightly 分层证据 |
+| `tools/*worker*/package.json`、`pyproject.toml` | Worker 构建入口 | 无凭据 clean lane 已写入 workflow；待本机逐项和 runner 执行 |
 
 ## 实施步骤
 
@@ -97,8 +126,8 @@ owner: root-build-owner
 
 输入与前置条件：
 
-- 必须冻结明确受支持的 Node 版本；ODR-142-001 的 Node `22.23.1` 建议已进入评审但尚未批准；
-- build owner 已评审并签署 ODR-142-001 的精确 Node、pnpm/Corepack 约束；
+- Owner 已批准 ODR-142-001 的 Node `22.23.1` 与 pnpm `10.34.5`；
+- build owner 按批准值实施精确 Node、pnpm/Corepack 约束；
 - 不存在需要继续支持 Node 18 的主前端发布承诺，或已记录例外边界。
 
 实施内容：
@@ -119,6 +148,8 @@ owner: root-build-owner
 - Linux 与 Windows/WSL 使用相同约束；
 - 工具版本决策已回写 progress。
 
+本轮状态：版本文件、根 manifest 和 CI 精确版本已落地；本地精确工具验证通过，跨平台 fail-fast 行为和 GitHub runner 仍待验证。
+
 ### Step 2：建立单一 workspace lockfile
 
 1. 从 clean checkout 使用冻结 pnpm 生成根 lockfile。
@@ -132,6 +163,8 @@ owner: root-build-owner
 - `corepack pnpm install --frozen-lockfile` 在 clean checkout 成功；
 - 安装后 `git status --short` 不出现 lockfile 变化；
 - 根 lockfile 成为唯一或明确分层的权威依赖记录。
+
+本轮状态：根 lockfile 已生成并通过 frozen install，chat 独立 lockfile 已移除；第二个 clean checkout 复验尚未执行。
 
 ### Step 3：修正前端命令与覆盖范围
 
@@ -147,6 +180,8 @@ owner: root-build-owner
 - 每个纳入包有明确 pass、not-run 或 not-applicable，不能被递归命令静默跳过；
 - type-check 的失败样本能使命令和 CI 返回非零。
 
+本轮状态：全前端 typecheck/test/build 聚合命令已通过；GitHub runner 上的失败传播仍待 workflow 首次运行确认。
+
 ### Step 4：建立 Java 与 Worker clean lanes
 
 1. Java 必须覆盖 `mvn -B -pl launcher -am clean test`。
@@ -160,6 +195,8 @@ owner: root-build-owner
 - Java clean test 和 launcher assembly 均有日志与退出码；
 - 每类 Worker 至少有无凭据 unit/type/build 证据；
 - 缺少凭据被记录为受控 smoke `not-run`，不伪装 pass。
+
+本轮状态：Java launcher 依赖链 clean test 已通过；Node/Python Worker jobs 已落地但尚未在本机逐项或 GitHub runner 执行，根 `clean verify` 也尚未运行。
 
 ### Step 5：全仓 GitHub Actions 门禁
 
@@ -183,9 +220,11 @@ Workflow 必须：
 - 取消时不登记为 pass；
 - 发布 workflow 继续独立存在，不作为合并门禁替代品。
 
+本轮状态：repository CI workflow 文件已落地；required check 尚未在分支保护中证明生效，nightly 未建立、未运行。
+
 ## 自动化验证计划
 
-以下命令均为计划命令，当前状态 `not-run`；最终以 Step 1 固化的脚本为准：
+下列是本事项的目标命令集；本轮实际执行项及退出码以“Execution Check-in”证据表为准。`mvn -B clean verify`、Worker 本机逐项命令和所有 GitHub runner 命令仍为 `not-run`：
 
 ~~~bash
 mvn -B -pl launcher -am clean test
@@ -235,13 +274,15 @@ Experience 状态为 `not-applicable`：本事项不直接改变 UI；若修复 
 
 ## 完成判据
 
-- [ ] 明确的 Node、pnpm/Corepack 版本已由 Owner 冻结并机器校验；若批准 ODR-142-001，则为 Node `22.23.1`、pnpm `10.34.5`。
-- [ ] 根 lockfile 已提交，frozen install 在 clean checkout 无漂移。
-- [ ] chat 嵌套 lockfile 已有明确保留或移除决策。
-- [ ] Java `launcher -am clean test` 和全 reactor clean 验证有可定位证据。
-- [ ] chat-core、chat、widget、主前端、mobile 的 type/test/build 均有明确结果。
-- [ ] 主前端有效 type-check 会检查 app project，两个存量错误已关闭。
-- [ ] Claude/Codex/Gemini/LangGraph Worker 的无凭据 clean lane 已建立。
+- [x] Node `22.23.1`、pnpm `10.34.5` 已由 Owner 冻结并完成本地精确工具校验。
+- [ ] 根 lockfile 已生成且当前工作树 frozen install 无漂移；最终提交和第二个 clean checkout 复验待补。
+- [x] chat 嵌套 lockfile 已决定并实施移除，统一使用根 workspace lockfile。
+- [x] Java `mvn -B -pl launcher -am clean test` 有 16 reactor `SUCCESS`、测试 `0 failures`、exit `0` 的本地证据。
+- [ ] 根 `mvn -B clean verify` 尚未执行。
+- [x] chat-core、chat、widget、主前端、mobile 的 type/test/build 均有本地明确结果。
+- [x] 主前端有效 type-check 会检查 app project，两个存量错误已关闭。
+- [x] Claude/Codex/Gemini/LangGraph Worker 的无凭据 clean jobs 已写入 repository CI workflow。
+- [ ] Node/Python Worker jobs 的本机逐项执行和 GitHub runner 通过证据尚未补齐。
 - [ ] GitHub Actions 全仓矩阵和 required check 策略已生效。
 - [ ] 所有命令、版本、退出码和证据路径已回写 [Progress](../progress.md)。
 - [ ] 已执行 `git diff --check` 和 Markdown 相对链接检查。

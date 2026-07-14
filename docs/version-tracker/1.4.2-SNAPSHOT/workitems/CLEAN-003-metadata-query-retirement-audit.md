@@ -3,208 +3,166 @@ type: cleanup
 version: 1.4.2-SNAPSHOT
 ticket: CLEAN-003
 priority: high
-status: planned
+status: planned-reviewed
 source: REQ-001
 owner: metadata-query-and-launcher-owner
 ---
 
-# metadata-query 运行依赖与退役审计
+# metadata-query dev-only 完整退役
 
 ## 文档作用
 
 - doc_type: workitem
-- intended_for: project-root-session | metadata-owner | deployment-owner | reviewer | signoff-owner
-- purpose: 审计旧语义层查询模块的真实流量、外部依赖和数据责任，满足门禁后才允许从 launcher 完整退役。
+- intended_for: project-root-session | metadata-owner | launcher-owner | reviewer | signoff-owner
+- purpose: 按 ODR-142-006-MQ 将旧 `metadata-query-module` 从 reactor、launcher、源码、测试、Skill 和当前文档中完整移除，同时保护 `metadata-config-module`。
 
 ## 关联文档
 
 - [版本索引](../README.md)
 - [REQ-001](../requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
 - [实施计划](../implementation-plan.md)
-- [ODR-142-006 Owner 决策评审稿](../owner-decision-review.md)
+- [ODR-142-006 Owner 决策](../owner-decision-review.md)
 - [统一进度记录](../progress.md)
+
+## Owner 决策与当前状态
+
+- decision: `retire`
+- environment_scope: `development-only`
+- physical_deletion_authorized: `yes`
+- dev_data_discard_authorized: `yes`
+- production_or_external_compatibility_window: `not-required`
+- implementation: `not-started`
+- pre_removal_clean_baseline: `passed`
+- post_removal_verification: `not-run`
+- production_routing_changed: `no`
+- external_contract_changed: `no`
+
+Owner 已确认当前项目未生产、上游仍在本机共同孵化，因此本切片不再等待生产流量静默、客户迁移窗口或旧 dev 数据备份。该授权不覆盖后来发现的共享或生产资源；命中此类证据时，只停止相应外部资源动作，不把未知资源随代码批量删除。
 
 ## 证据分类
 
 ### 已确认事实
 
-- Navigator 当前不是语义层或数据分析平台。
-- 规划阶段不删除 `metadata-query-module`，也不修改根 reactor 或 launcher。
-- 静态无消费者不等于无外部调用；API、部署、配置、数据和第三方审计未完成前禁止退役。
+1. Navigator 当前不是语义层或数据分析平台。
+2. `metadata-query-module` 当前仍在根 reactor 和 `launcher`，本轮尚未物理删除。
+3. Owner 已批准 1.4.2 在仓内引用处理和 clean gate 通过后完整删除该模块，旧 dev 数据允许丢弃。
+4. `metadata-config-module` 是当前平台配置治理能力，必须保留，不能按相邻 Java package 或模块名称误删。
+5. 删除前基线 `mvn -B -pl launcher -am clean test` 已于 `2026-07-14` 通过，16 个 reactor 项全部 `SUCCESS`；这不是删除后的验证证据。
 
 ### 静态搜索结论
 
-1. `metadata-query-module` 仍在根 `pom.xml` 和 `launcher/pom.xml`。
-2. API 基路径为 `/api/metadata/query`，包含 GET/POST 简单查询、`/execute`、`/available` 和参数定义接口。
-3. 模块依赖 `foggy-dataset-model`、`foggy-fsscript`、`foggy-core`，版本来自 `8.1.10.beta`。
-4. 服务调用 `foggy.api.base-url` 下的 `/jdbc-model/query-model/v2/*`，内置 datasource/semantic-layer TM/QM 模板。
-5. 模块外未发现对 `com.foggy.navigator.metadata.query` 非 config 类型的 Java import，也未发现 PC、Mobile、SDK、CLI 对 `/api/metadata/query` 的静态调用。
-6. 当前总览把它描述为“平台配置读接口”，与源码中的旧 Foggy Dataset/语义层查询职责不一致。
-7. `metadata-config-module` 使用相邻包名 `com.foggy.navigator.metadata.query.config.*`，是当前平台配置能力，不能按包名前缀误删。
+1. 根 `pom.xml` 含 `<module>metadata-query-module</module>`。
+2. `launcher/pom.xml` 直接依赖 `metadata-query-module`。
+3. `launcher/src/test/java/com/foggy/navigator/launcher/CommonRepositoryOwnershipContextTest.java` 获取名为 `metadataQueryRestTemplate` 的 bean；删除模块时必须同步调整该专属断言，同时保留其他 RestTemplate ownership 检查。
+4. API 基路径为 `/api/metadata/query`，模块内含 controller、service、模型、TM/QM 模板和两组测试。
+5. 模块依赖旧 Foggy Dataset/FSScript 查询能力，并使用 `foggy.api.base-url` 访问外部查询服务。
+6. 排除模块自身、`metadata-config-module`、version-tracker 和构建产物后，当前仓内未发现业务源码对 `/api/metadata/query` 或 `metadataQueryRestTemplate` 的消费者；项目级 metadata-query Skill 仍描述已计划删除的 API。
 
 ### 需要运行态确认
 
-- 全环境 access/gateway/application log 的 `/api/metadata/query/**` 调用方、次数、最后调用和响应状态。
-- 外部客户、脚本、定时任务、SDK fork、反向代理或第三方系统调用。
-- `foggy.api.base-url` 在各环境的实际配置、目标服务、网络和凭据。
-- datasource/semantic-layer 配置、TM/QM 资源、外部数据库或 Foggy 服务的数据 owner 与保留要求。
-- 自定义 launcher、独立 jar、Maven profile、部署清单和依赖扫描。
-- 移除模块后 Maven 依赖树、启动时间、自动配置和配置键的变化。
+Owner 已免除普通 dev 删除所需的生产流量审计。只有静态或执行中出现以下冲突证据时才暂停对应危险动作：
 
-### 决策项
+- 共享/生产 deployment、反向代理或外部仓配置明确引用该模块/API；
+- `foggy.api.base-url` 指向需要随本次操作删除的共享服务或凭据；
+- 待执行命令会删除共享 datasource、TM/QM、数据库、队列或其他仓外资源。
 
-| 决策 | Owner | 未决处理 |
-|---|---|---|
-| retain / migrate / retire / defer | platform + metadata owner | ODR-142-006-MQ 建议 1.4.2 `defer` 物理删除、以 migrate/retire 为目标；当前不删除 |
-| 流量审计窗口 | operations | 建议不少于 60 天或最长业务周期两倍，取更长者；未完成不声明静默 |
-| 外部查询替代 API | consumer owners | 不下线旧 API |
-| TM/QM 与配置保留 | data owner | 不删除资源/数据 |
-| 弃用和截止日期 | release owner | 不返回永久 404 |
+本 workitem 默认只删除 Git 仓内代码、配置和文档，不主动调用外部服务、不删数据库、不改网关、不撤销凭据。
 
 ## 完整功能切片
 
-| 层 | 精确路径/资源 |
-|---|---|
-| Reactor | `pom.xml` 中 `<module>metadata-query-module</module>` |
-| Launcher | `launcher/pom.xml` 的 `metadata-query-module` dependency |
-| Module | `metadata-query-module/pom.xml`、`src/main/java/**`、`src/test/**` |
-| API | `metadata-query-module/src/main/java/com/foggy/navigator/metadata/query/controller/MetadataQueryController.java` |
-| Service/config | `MetadataQueryService*.java`、`MetadataQueryAutoConfiguration.java`、`RestTemplateConfig.java`、`application.yml` |
-| Models/resources | `model/**`、`resources/foggy/templates/models/**`、`queries/**` |
-| External dependency | `foggy.api.base-url`、Foggy Dataset/FSScript artifacts 和目标查询服务 |
-| Skill/docs | `.agents/skills/metadata-query-module/**`、README、系统总览、模块文档、安装文档 |
+| 层 | 精确范围 | 当前动作 |
+|---|---|---|
+| Reactor | 根 `pom.xml` 的 `metadata-query-module` module | 删除条目 |
+| Launcher | `launcher/pom.xml` 的 module dependency | 删除 dependency |
+| Launcher test | `launcher/src/test/java/com/foggy/navigator/launcher/CommonRepositoryOwnershipContextTest.java` | 只删除 `metadataQueryRestTemplate` 专属断言，保留其余 ownership 测试 |
+| Module | `metadata-query-module/pom.xml`、`README.md`、`src/main/**`、`src/test/**` | 完整目录删除 |
+| API | `MetadataQueryController.java` 与 `/api/metadata/query/**` | 随模块删除 |
+| Service/config | `MetadataQueryService*.java`、`MetadataQueryAutoConfiguration.java`、`RestTemplateConfig.java`、`application.yml` | 随模块删除 |
+| Models/templates | `model/**`、`resources/foggy/templates/models/**`、`resources/foggy/templates/queries/**` | 随模块删除 |
+| Skill/docs | `.agents/skills/metadata-query-module/**` 与当前模块/安装说明 | 移出活跃发现或删除，并对齐当前文档；历史版本证据不改写 |
+| External resources | datasource、TM/QM、外部 Foggy 服务、数据库和凭据 | 本批次不操作 |
 
-`metadata-config-module`、其 entity/repository/service/controller、平台设置 API 和数据表全部为 do-not-touch，除非另有独立需求。
+## Do-not-touch 保护清单
 
-## 审计步骤与运行态门禁
+- `metadata-config-module/**`
+- `com.foggy.navigator.metadata.query.config.*` 下属于 metadata-config 的平台配置代码
+- 平台设置中的 Git、LLM、凭据、记忆、Worker、ClientApp 和 Business Agent 配置能力
+- LangGraph Biz Worker 自己使用的 FSScript/审批运行时
+- 历史 `docs/version-tracker/1.3.*/`、`1.4.0-SNAPSHOT/`、`1.4.1-SNAPSHOT/` 证据
 
-### Q0：冻结基线
+## 实施步骤
 
-1. 记录源码 commit、根/launcher 依赖树和 clean test 基线。
-2. 导出所有环境的配置键与 deployment inventory，敏感值只记录存在性和归属。
-3. 指定 metadata、deployment、data 和 consumer Owner。
+### Q0：冻结删除前证据
 
-完成门：无法归属的环境或配置标记 blocked，不推断无人使用。
+1. 记录上述精确引用扫描结果和当前 commit/worktree 范围。
+2. 保留 `2026-07-14` launcher clean test 作为删除前基线。
+3. 核对待删除路径不越过完整切片和 do-not-touch 清单。
 
-### Q1：静态消费者与契约扫描
+### Q1：仓内切片删除
 
-~~~bash
-rg -n --hidden 'metadata-query-module|/api/metadata/query|foggy[.]api[.]base-url|datasource-latest|semantic-layer-latest' \
-  . -g '!**/.git/**' -g '!**/target/**' -g '!**/node_modules/**'
-rg -n --hidden 'import com[.]foggy[.]navigator[.]metadata[.]query[.]' \
-  . -g '!metadata-query-module/**' -g '!metadata-config-module/**' -g '!**/target/**'
-rg -n 'metadata-query-module' pom.xml launcher/pom.xml .github scripts docker deploy docs
-~~~
+1. 从根 reactor 和 launcher dependency 中移除模块。
+2. 删除 `metadata-query-module/**`。
+3. 调整 launcher context test 中专属 bean 断言，不削弱其他 RestTemplate ownership 测试。
+4. 移除/更新 metadata-query 专属 Skill 和当前文档；历史版本证据只保留或增加 superseded 链接。
+5. 重新扫描 API、package、bean、module、模板和配置键残留。
 
-必须记录 PC、Mobile、Open SDK、CLI、Worker、脚本、文档和外部仓消费者矩阵；搜索结果为零也要保留命令和 commit SHA。
+### Q2：删除后验证
 
-### Q2：运行流量、外部服务与数据审计
-
-1. 对所有环境统计精确 API 路径的请求数、主体、最后调用、成功/失败和 queryId。
-2. 盘点 `foggy.api.base-url` 目标、第三方服务、网络规则和运维 Owner。
-3. 盘点 TM/QM 模板、datasource/semantic-layer 配置及其数据库/外部存储。
-4. 检查启动日志中 auto-configuration、模板加载和外部连接行为。
-5. 明确数据保留、导出、迁移和删除不属于同一 Git 提交。
-
-运行态证据必须脱敏；不得记录 tenant 数据、数据库凭据或完整查询参数。
-
-完成门：每个真实消费者有替代/迁移决定；目标服务和数据均有 Owner。
-
-### Q3：去留决策
-
-- `retain`：重命名/重文档化真实职责，补认证、测试和 Owner；不得继续冒充平台配置读接口。
-- `migrate`：先提供替代 API/SDK，迁移消费者并进入静默窗口。
-- `retire`：进入 Q4-Q5。
-- `defer`：缺证据时保留模块并写明解除条件。
-
-决策审计本身不改路由；实际 retire 必须单独批准并更新 `production_routing_changed` / `external_contract_changed`。
-
-### Q4：迁移、禁用与回滚演练
-
-仅在 migrate/retire 获批后：
-
-1. 发布弃用通知和替代说明，迁移所有已知消费者。
-2. 以可回滚配置或网关策略禁用新调用，观察完整静默窗口。
-3. 保留模块二进制、模板、配置和旧路由恢复步骤。
-4. 在隔离环境演练重新装配 launcher dependency 和恢复 API。
-
-完成门：无未迁移调用；回滚可在约定时间内完成。
-
-### Q5：完整切片移除
-
-1. 从 launcher 和根 reactor 移除模块。
-2. 删除模块 Java、tests、resources 和专属配置。
-3. 更新 skill、README、系统总览、模块职责和安装文档。
-4. 清理不再需要的 Maven artifacts/config；不得误删 metadata-config。
-5. 数据/外部服务下线使用独立运维审批和可恢复备份。
-
-非目标：
-
-- 不删除 `metadata-config-module`；
-- 不把 LangGraph Biz Worker 的 FSScript 审批运行时等同于本模块；
-- 不重写语义层平台或为退役引入新通用查询框架。
+1. 执行 launcher 依赖链 clean test，确认 application context 不再需要 MetadataQuery bean。
+2. 执行 `metadata-config-module` 相关测试和 launcher context test，防止相邻 package 被误删。
+3. 检查 Maven dependency tree 中仅由 metadata-query 引入的旧 artifact 是否退出。
+4. 启动 smoke 时检查设置、模型、凭据、Git Provider、memory 和 ClientApp/Business Agent 配置入口。
+5. 运行 Markdown 链接、`git diff --check` 和工作树范围检查。
 
 ## 自动化验证
 
-当前均 `not-run`：
+| 命令/检查 | 当前状态 | 证据边界 |
+|---|---|---|
+| `mvn -B -pl launcher -am clean test`（删除前） | passed | 2026-07-14；16 reactor SUCCESS，0 failures |
+| 精确 `rg` 仓内消费者扫描 | partial-passed | 已确认 root/launcher/context test/Skill 命中；删除前须保存最终结果 |
+| `mvn -B -pl launcher -am clean test`（删除后） | not-run | 物理删除尚未开始 |
+| metadata-config 定向测试 | not-run | 删除后执行 |
+| Maven dependency tree | not-run | 删除后执行 |
+| 启动 smoke | not-run | 删除后执行 |
+| Markdown links / `git diff --check` | not-run-for-slice | 删除后执行 |
 
-~~~bash
-mvn -B -pl metadata-query-module -am test
-mvn -B -pl launcher -am clean test
-mvn -B clean verify
-git diff --check
-~~~
-
-退役后还需：
-
-- launcher application context 启动且不加载 MetadataQuery bean；
-- metadata-config 的 controller/service/repository 测试通过；
-- Maven dependency tree 不再包含仅由 metadata-query 引入的旧 artifacts；
-- 获批环境中旧端点状态符合弃用契约；
-- Markdown 相对链接检查通过。
-
-不得用退役前模块测试通过证明退役后 launcher 正常，也不得把预期 404 当作生产批准。
+不得用删除前的绿色 reactor 证明删除后成功，也不得用静态无引用证明仓外不存在任何资源。
 
 ## 手工验证
 
-1. 在可信内网启动 Navigator，检查设置、模型、凭据、Git Provider、memory 等 metadata-config 页面正常。
-2. 按 consumer matrix 对替代 API 执行 smoke。
-3. 检查启动日志无 metadata-query 模板加载/外部 Foggy API 连接错误。
-4. 在隔离环境执行一次模块恢复 runbook。
-5. 由 data owner 确认外部 TM/QM 和数据资源的保留/迁移状态。
-
-Experience 在纯审计阶段为 `not-applicable`；若实际退役影响任何 UI/SDK/客户调用，必须改为 `not-run` 并补相应体验证据。
+1. 在可信内网启动 Navigator，检查设置、模型、凭据、Git Provider、memory、ClientApp 和 Business Agent 页面/接口。
+2. 检查启动日志没有 metadata-query bean、模板或外部 Foggy API 初始化错误。
+3. 请求旧 `/api/metadata/query/**` 时确认结果与当前 dev 删除预期一致；这不是生产弃用契约。
+4. 查看 `git diff`，确认没有删除 `metadata-config-module` 或同名但不同职责代码。
 
 ## 风险与回滚
 
 | 风险 | 控制 | 回滚 |
 |---|---|---|
-| 未知外部消费者 | 多环境流量 + Owner 确认 + 静默窗口 | 恢复 launcher dependency/模块和网关路由 |
-| 包名相邻导致误删 metadata-config | 精确目录/依赖清单和禁止前缀删除 | 立即 revert，恢复 config module clean test |
-| 外部 Foggy 服务仍承担业务 | 配置、网络和服务 Owner 审计 | 恢复旧 API adapter，延后服务下线 |
-| TM/QM 或配置丢失 | 独立备份/导出和 data approval | 从备份恢复；Git revert 不替代数据恢复 |
-| Maven 传递依赖变化破坏 launcher | 退役前后 dependency tree + clean verify | revert POM/module 提交 |
+| 相邻 package 误删 metadata-config | 精确文件清单、do-not-touch 扫描和定向测试 | 只 revert metadata-query 独立批次，恢复误删文件 |
+| launcher context 因 bean 断言或自动配置失败 | 同步修改专属断言并执行 clean test | 恢复 module/dependency/test 断言 |
+| 隐式仓内消费者漏扫 | API/package/config/resource 多维 `rg` + clean test | 恢复模块并补迁移 |
+| 发现共享/生产外部资源 | 本批次不执行外部资源删除，命中即停手 | 保持外部资源不变并单独决策 |
+| Git revert 不能恢复外部数据 | 明确代码批次不操作 DB/TM/QM/凭据 | 如曾有独立外部操作，按其独立快照/runbook 恢复 |
 
-源码、POM、文档分为可审查但同一退役阶段的提交；回滚顺序先恢复 module/POM/API，再恢复外部配置。数据和第三方服务必须有独立恢复方案。
+回滚采用 metadata-query 独立 Git 提交：恢复 module 目录、根 reactor、launcher dependency、context test 和当前文档。不得以回滚该提交为理由恢复旧语义层为产品主线。
 
 ## 完成判据
 
-- [ ] 全环境 API 流量、部署、配置、第三方服务和数据审计完成。
-- [ ] PC/Mobile/SDK/CLI/Worker/脚本/外部客户矩阵有 Owner 和迁移状态。
-- [ ] 去留决策明确，缺证据时以 defer 收口而非伪退役。
-- [ ] 若 retire，消费者迁移、弃用窗口、静默和回滚演练完成。
-- [ ] 若 retire，reactor、launcher、module、resources、config、skill 和 docs 完整切片退出。
-- [ ] metadata-config 明确保留并完成回归。
-- [ ] Java clean、context、dependency tree 和手工 smoke 有真实证据。
-- [ ] 结果和 changed paths 已回写 [Progress](../progress.md)。
-- [ ] 正式质量检查、覆盖审计和签收完成。
+- [ ] 根 reactor、launcher dependency、module 源码/资源/测试、专属 Skill 和当前文档完整退出。
+- [ ] `metadata-config-module` 和其配置入口未被删除且定向回归通过。
+- [ ] launcher clean test、context test、依赖树检查和启动 smoke 有真实结果。
+- [ ] 仓内 API/package/bean/config/template 引用扫描无未解释残留。
+- [ ] 未执行或发现的外部资源明确记录为 `not-run` / `not-found-static`，不虚构流量或删除证据。
+- [ ] Git 回滚范围、命令和顺序可定位。
+- [ ] 进度与 changed paths 回写 [Progress](../progress.md)。
+- [ ] 正式质量检查、覆盖审计和签收按 P7 执行。
 
 ## 生产路由与外部契约状态
 
-- audit_production_routing_changed: no
-- audit_external_contract_changed: no
-- retirement_production_routing_changed: yes
-- retirement_external_contract_changed: yes
-- production_approval_required_for_retirement: yes
+- production_routing_changed: no
+- external_contract_changed: no
+- development_contract_changed_after_removal: yes
+- production_enablement: not-applicable
 
-当前 YAML 中的 `no` 只描述规划/审计状态；实际移除 API 或 launcher 模块时必须更新为 `yes`，且隔离验证不能替代生产批准。
+旧 API 的 dev 删除不等于生产发布或外部开放批准；如后续发现真实共享/生产部署，本 workitem 的授权不自动适用。

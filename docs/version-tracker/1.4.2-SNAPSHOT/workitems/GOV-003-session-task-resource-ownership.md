@@ -3,7 +3,7 @@ type: governance
 version: 1.4.2-SNAPSHOT
 ticket: GOV-003
 priority: high
-status: planned
+status: planned-reviewed
 source: REQ-001
 owner: session-owner | provider-owner | internal-ui-owner
 ---
@@ -24,7 +24,7 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| Workitem | planned | ownership invariant 尚未统一落地 |
+| Workitem | planned-reviewed | ownership 方向和边界已评审，invariant 尚未统一落地 |
 | Implementation | not-started | implementation_started: no |
 | Automated test | not-run | 未执行双用户枚举、操作或 Provider 回归测试 |
 | Manual verification | not-run | 未执行两账号内部 UI/API 主链验证 |

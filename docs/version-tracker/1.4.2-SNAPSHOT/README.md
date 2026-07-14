@@ -8,9 +8,10 @@
 
 ## 版本状态
 
-- status: planned
+- status: in-progress
 - primary_workitem: `REQ-001`
-- implementation_started: no
+- implementation_started: yes
+- implementation_started_at: `2026-07-14`
 - production_routing_changed: no
 - production_enablement: not-applicable
 - acceptance_status: not-started
@@ -33,8 +34,8 @@
 2. 明确内部控制面与外部运行面的信任边界、配置模式和 readiness 差异。
 3. 在不重构整个鉴权框架的情况下，补齐 Session、Task 等用户资源的归属不变量和外部调用约束。
 4. 治理 LangBizWorker、CodexBizWorker 与 upstream user 的凭据、身份、tenant、ClientApp、资源作用域和审计链路。
-5. 恢复可复现的 Java、前端和 Worker 构建基线，冻结一个明确受支持的 Node 版本、根 lockfile/workspace 和全仓 CI 门禁；ODR-142-001 当前建议 Node `22.23.1`，尚待批准。
-6. 对旧模块、孤儿代码、兼容 API 和失效文档实施分级清理，不在无引用、流量和回滚证据时直接删除。
+5. 恢复可复现的 Java、前端和 Worker 构建基线，按 ODR-142-001 冻结 Node `22.23.1`、pnpm `10.34.5`、单一根 lockfile/workspace 和全仓 CI 门禁。
+6. 对旧模块、孤儿代码、兼容 API 和失效文档实施分级清理；dev-only 切片可在仓内引用迁移、构建验证和独立回滚门禁后直接物理移除，不设置生产流量或客户兼容等待期。
 7. 为超大类、模块边界和 Provider 状态契约建立渐进治理计划，不进行一次性重写。
 8. 建立后续删除、迁移、覆盖审计、体验验证和正式签收的明确门禁。
 
@@ -49,13 +50,14 @@
 
 ### 外部运行面
 
-- LangBizWorker、CodexBizWorker、Worker Gateway、ClientApp 和 upstream user 的调用主体必须可确认。
+- LangBizWorker、CodexBizWorker、Worker Gateway、ClientApp 和 upstream user 的调用主体必须可确认；独立 signed assertion 降为未来外部开放门禁，不阻塞当前 internal-dev。
 - tenant、ClientApp、upstream user mapping/grant、credential 和 task-scoped token 必须形成可追溯链路。
 - 请求体中的 `userId`、`reviewedBy`、`tenantId` 等字段不得直接作为可信身份来源。
 - task-scoped token 只能访问对应任务和被授权的 BusinessFunction。
 - 审批、恢复、取消必须同时绑定任务归属和调用主体。
 - 非 loopback 外部 Worker 缺少必要凭据时必须 fail closed 或保持 unready。
 - 外部触发的 Agent/Worker 必须受工作目录与工具能力边界约束，并记录调用、审批、恢复、失败和拒绝审计。
+- 外部模式必须由单一显式开关开启且默认关闭；空 Token、监听地址或其他开发配置均不得隐式开启。
 
 ## 证据边界
 
@@ -63,37 +65,44 @@
 |---|---|---|
 | 已确认事实 | 用户已确认的产品定位、目标、边界和非目标 | 可直接作为规划约束，不等同于实现或测试证据 |
 | 静态搜索结论 | 当前输入中列出的源码、依赖、文件和构建线索 | 执行前必须复核引用和实际路径，不推断运行流量 |
-| 需要运行态确认 | 外部调用、历史 API、Monitoring、metadata-query、code-review 等实际消费者和流量 | 未完成日志、部署、数据库和第三方审计前不得退役 |
-| 决策项 | Node/包管理器精确版本、生产存储/部署、旧能力去留等 | 必须由对应 Owner 留下决策记录，不允许由执行 Agent 静默决定 |
+| 需要运行态确认 | 与“仅 dev、本机共同孵化”前提冲突的共享/生产资源或活跃独立部署 | 一旦静态扫描发现此类证据，停止对应删除并重新请示；不为已授权 dev 清理虚构生产流量证据 |
+| 决策项 | Provider state 演进、credential authority、mapping/grant 权威源、超大类拆分顺序等尚未关闭事项 | 必须由对应 Owner 留下决策记录，不允许由执行 Agent静默决定 |
 
-本规划没有执行构建、流量审计、删除、生产迁移或外部路由变更。现有输入中的测试结果只作为待复核基线，不作为 `1.4.2-SNAPSHOT` 的新验收证据。
+Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下本机实施与验证证据，但尚未进入覆盖审计、体验验证或正式验收：
+
+- P1 已落地 Node `22.23.1`、pnpm `10.34.5`、单一根 `pnpm-lock.yaml`、前端 workspace 矩阵和仓库级 CI workflow；本机使用精确版本完成 frozen install，前端类型检查、测试和构建均通过。
+- Java 已执行 launcher 主依赖链 clean test，16 个 reactor 模块全部 `SUCCESS`。
+- P5 已物理移除 Monitoring 和 `addons/code-review-agent` 两个 dev-only 完整切片；`metadata-query-module`、Echo Agent 和旧 Provider API/SPI/DTO 尚未开始移除。
+- GitHub runner 实际执行、Worker jobs、nightly 分层和真实浏览器体验验证尚未运行，因此 P1、P5 和版本整体仍保持 `in-progress`，`acceptance_status` 仍为 `not-started`。
+
+命令、结果、限制和后续补证统一登记在 [进度记录](./progress.md) 及对应 workitem 中；这里的本机通过不代表 GitHub 合并门禁已生效，也不代表验收或生产批准。
 
 ## 工作项总览
 
-| Workitem | 范围 | 计划阶段 | 初始状态 |
+| Workitem | 范围 | 计划阶段 | 当前状态 |
 |---|---|---|---|
-| [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | 内部控制面与外部运行面信任边界 | P0、P2、P3 | planned |
-| [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | Biz Worker、ClientApp、upstream user、凭据与 task token | P2 | planned |
-| [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | Session/Task ownership 与审批、恢复、取消约束 | P3 | planned |
-| [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | Node、lockfile、Java/前端/Worker clean build 与 CI | P1 | planned |
+| [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | 内部控制面与外部运行面信任边界 | P0、P2、P3 | planned-reviewed |
+| [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | Biz Worker、ClientApp、upstream user、凭据与 task token | P2 | planned-reviewed |
+| [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | Session/Task ownership 与审批、恢复、取消约束 | P3 | planned-reviewed |
+| [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | Node、lockfile、Java/前端/Worker clean build 与 CI | P1 | in-progress |
 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md) | 超大类、模块边界和 Provider 状态 schema 渐进治理 | P6 | planned |
 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md) | 低风险孤儿文件、未引用导出和失效文档 | P4 | planned |
-| [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md) | Monitoring 完整功能切片退役审计 | P5 | planned |
-| [CLEAN-003](./workitems/CLEAN-003-metadata-query-retirement-audit.md) | metadata-query 运行流量与外部依赖审计 | P5 | planned |
-| [CLEAN-004](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) | code-review、echo、旧 Provider API 与兼容 SPI | P5、P6 | planned |
-| [DOC-001](./workitems/DOC-001-documentation-alignment.md) | 产品定位、架构、部署和历史文档对齐 | P0、P4 | planned |
+| [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md) | Monitoring dev-only 完整功能切片移除 | P5 | in-progress |
+| [CLEAN-003](./workitems/CLEAN-003-metadata-query-retirement-audit.md) | metadata-query dev-only 完整功能切片移除 | P5 | planned-reviewed |
+| [CLEAN-004](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) | code-review、echo、旧 Provider API 与兼容 SPI | P5、P6 | in-progress |
+| [DOC-001](./workitems/DOC-001-documentation-alignment.md) | 产品定位、架构、部署和历史文档对齐 | P0、P4 | in-progress |
 
 ## 阶段总览
 
-| 阶段 | 目标 | 初始状态 | 生产路由/外部契约影响 |
+| 阶段 | 目标 | 当前状态 | 生产路由/外部契约影响 |
 |---|---|---|---|
-| P0 | 冻结目标、边界、术语、ownership 和代码清单 | not-started | 否；仅规划与文档基线 |
-| P1 | 冻结 Node、包管理器、lockfile、全仓 clean build 和 CI 矩阵 | not-started | 否；构建与合并门禁会变化 |
+| P0 | 冻结目标、边界、术语、ownership 和代码清单 | in-progress | 否；仅规划与文档基线 |
+| P1 | 冻结 Node、包管理器、lockfile、全仓 clean build 和 CI 矩阵 | in-progress | 否；构建与合并门禁会变化 |
 | P2 | 治理外部 Biz Worker、Worker Gateway 和 upstream user 边界 | not-started | 可能；必须先冻结兼容、迁移和回滚方案 |
 | P3 | 在 service/facade 层补齐 Session/Task ownership | not-started | 可能影响越权或依赖旧行为的调用；不得大范围改内部 UI |
 | P4 | 清理低风险孤儿代码和失效文档 | not-started | 否；每项仍需引用扫描、验证和回滚证据 |
-| P5 | 对 Monitoring、metadata-query、code-review、echo 作去留决策；仅对获批项独立退役 | not-started | 可能；获批退役者必须按完整功能切片和独立门禁执行 |
-| P6 | 渐进治理超大类、Provider 状态 schema 和旧 API | not-started | 可能；必须版本化、兼容和分阶段迁移 |
+| P5 | 按 dev-only 授权独立移除 Monitoring、metadata-query、code-review，并迁移 Echo fixture 后退出生产装配 | in-progress | 当前无生产路由；发现共享/生产资源即停止 |
+| P6 | 渐进治理超大类和 Provider 状态 schema；仓内迁移后直接移除旧 API/SPI/DTO | not-started | 当前无生产契约；替代入口安全语义仍是硬门 |
 | P7 | 执行质量检查、覆盖审计、体验验证和正式签收 | not-started | 不直接改变路由；隔离验收不等于生产批准 |
 
 各阶段的输入、模块、实施内容、测试、手工验证、风险、回滚和完成判据以 [实施计划](./implementation-plan.md) 为准，执行状态统一回写到 [进度记录](./progress.md)。
@@ -105,7 +114,7 @@
 3. 不引入通用 RBAC/ABAC 平台。
 4. 不在本版本实现多实例 SSE 事件总线。
 5. 不在本版本实现动态插件加载。
-6. 不在规划阶段直接删除 Monitoring、metadata-query 或旧 Provider API。
+6. 不把“已授权 dev 删除”扩大成无引用扫描、无仓内迁移、无测试或跨切片批量删除。
 7. 不把 Claude/Codex/Gemini 内部 Worker 的所有开发模式一刀切关闭。
 8. 不进行无明确收益的大范围代码重构。
 
@@ -125,22 +134,22 @@
 12. 当前文档不得继续把 tutor、旧 chat-first 或语义层写成产品主线。
 13. 不把隔离验收等同于生产批准。
 
-第 11 项不授权规划阶段直接删除：获批退役的能力必须完整切片退出；审计结论为保留、延后或证据不足时，必须如实记录并由 Owner 在签收范围中处理，不能以局部删除冒充退役完成。
+第 11 项的 dev-only 物理删除授权已由 Owner 给出；获批能力仍必须完整切片退出。发现共享/生产资源、迁移缺口或构建失败时必须如实停止并记录，不能以局部删除冒充完成。
 
-## Owner 决策评审
+## Owner 决策
 
-八组核心建议已集中到 [Owner 决策评审稿](./owner-decision-review.md)。该文档当前为 `pending-owner-review`，建议值不等于批准，不改变本版本 `planned` 状态，也不授权实现、生产启用或退役。
+八组核心建议和 `2026-07-14` Owner 结论已集中到 [Owner 决策记录](./owner-decision-review.md)。该文档为 `review-complete`，已经授权 dev 阶段实施，但不等于实现完成、验收通过、生产启用或外部开放。
 
-| 决策 | 建议摘要 | 当前状态 |
+| 决策 | Owner 结论摘要 | 当前状态 |
 |---|---|---|
-| ODR-142-001 | Node `22.23.1`、pnpm `10.34.5`、单一根 lockfile 和三层 CI | pending-decision |
-| ODR-142-002 | external-enabled 使用 signed assertion，ClientApp 代办仅受限兼容 | pending-decision |
-| ODR-142-003 | 30 分钟 opaque task token，绑定完整授权 scope，并与 Worker principal/lease 双重校验 | pending-decision |
-| ODR-142-004 | external-enabled 默认拒绝、`workspace-write`、任务工具 egress 默认拒绝、缺凭据 unready | pending-decision |
-| ODR-142-005 | 本地关键状态事务 outbox、拒绝可靠落档、远程调用分段审计、遥测 best-effort | pending-decision |
-| ODR-142-006 | 四类历史能力按不同目标态治理，当前均不授权物理退役 | pending-decision |
-| ODR-142-007 | 1.4.2 不删旧 Provider API/SPI/DTO，按兼容窗口逐路由迁移 | pending-decision |
-| ODR-142-008 | 当前文档修正、历史证据标记、失效 Skill 退出活跃发现 | pending-decision |
+| ODR-142-001 | Node `22.23.1`、pnpm `10.34.5`、单一根 lockfile和三层 CI | approved |
+| ODR-142-002 | internal-dev 保留 ClientApp 代办；signed assertion 延后到外部开放，external 必须显式且默认关闭 | approved-with-constraints |
+| ODR-142-003 | 30 分钟 opaque task token，绑定完整授权 scope，并与 Worker principal/lease 双重校验 | approved |
+| ODR-142-004 | external-enabled 默认拒绝、`workspace-write`、任务工具 egress 默认拒绝、缺凭据 unready | approved-with-constraints |
+| ODR-142-005 | 本地关键状态事务 outbox、拒绝可靠落档、远程调用分段审计、遥测 best-effort | approved |
+| ODR-142-006 | dev-only 切片安全后物理移除，旧数据可丢弃；Echo 先迁移 fixture | approved-with-constraints |
+| ODR-142-007 | 仓内消费者迁移后在 1.4.2 直接删除旧 Provider API/SPI/DTO，无外部兼容窗口 | approved-with-constraints |
+| ODR-142-008 | 当前文档修正、历史证据标记、失效 Skill 退出活跃发现 | approved |
 
 以下事项不属于本次八组建议的完整决策，仍单独保持待确认：
 
@@ -155,7 +164,7 @@
 - [模块职责](./module-responsibility.md)
 - [代码清单](./code-inventory.md)
 - [实施计划](./implementation-plan.md)
-- [Owner 决策评审稿](./owner-decision-review.md)
+- [Owner 决策记录](./owner-decision-review.md)
 - [执行提示词](./execution-prompt.md)
 - [实施与门禁进度](./progress.md)
 - [GOV-001 内外部信任边界](./workitems/GOV-001-internal-external-trust-boundary.md)

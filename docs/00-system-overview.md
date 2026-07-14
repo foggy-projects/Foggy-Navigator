@@ -38,7 +38,6 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 - `/c/:id`：会话深链兼容入口，主要用于跨项目阶段回跳等历史路径
 - `/tasks`：任务看板
 - `/cross-tasks`：跨项目任务
-- `/monitoring`：监控事件（当前暂停）
 - `/users`：用户管理
 - `/settings`：平台设置
 - `/files`：文件浏览器
@@ -109,7 +108,7 @@ Launcher
 | `metadata-query-module` | 平台配置读接口与查询能力 |
 旧独立“会话”入口配套的 `tutor-agent` 已从源码目录、根 `pom.xml` 与 `launcher` 运行时依赖中移除；当前主线不再保留旧引导 Agent。
 
-`monitoring-module` 源码当前保留，但不纳入根 `pom.xml`、`launcher` 运行时依赖或部署脚本；RabbitMQ 不再是当前主线前置依赖。
+旧自研 `monitoring-module`、`tools/foggy-monitor` 及 PC Monitoring 页面/API 已在 1.4.2 dev 阶段物理移除；RabbitMQ 不再是当前主线前置依赖。平台继续保留应用日志、健康检查、有限的 Micrometer 指标、SSE 运行信号与安全审计，退役旧 Monitoring 不等于取消运行观测。
 
 ### 3.3 Addon 能力模块
 
@@ -180,7 +179,7 @@ Launcher
 - 跨项目阶段式任务编排
 - 平台级 Git/LLM/凭证/记忆治理
 - 用户管理与 API Key
-- 监控事件与统计
+- 应用日志、健康检查、有限指标与运行审计
 - 对外 Open API / SDK / 上游 CLI
 - 嵌入式聊天组件与移动端入口
 
@@ -214,7 +213,7 @@ Launcher
 - [跨项目编排](./02-modules/cross-project-orchestration.md)
 - [平台设置与资源治理](./02-modules/platform-governance.md)
 - [用户与访问控制](./02-modules/user-and-access-control.md)
-- [监控、通知与开放集成](./02-modules/observability-notification-integration.md)
+- [通知、基础观测与开放集成](./02-modules/observability-notification-integration.md)
 
 ---
 

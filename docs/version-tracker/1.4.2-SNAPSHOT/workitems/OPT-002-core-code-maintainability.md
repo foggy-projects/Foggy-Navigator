@@ -34,7 +34,7 @@ owner: platform-and-provider-owners
 1. 为职责较重的 Java/Vue 类建立可验证的拆分顺序、目标边界和停止条件。
 2. 以 1.3.1 已完成的 facade/registry/router/schema v1 为起点，只治理仍存在的职责和契约缺口。
 3. 使 `providerStateJson`、`taskStateJson` 的版本、Provider 类型、迁移和错误行为可验证、可观测。
-4. 让旧 Provider API 的迁移按“统一 API 能力补齐 -> 消费者迁移 -> 静默窗口 -> 独立删除”推进。
+4. 在补齐统一替代入口的必要能力和安全语义后，迁移或删除所有本仓 PC、Mobile、SDK、CLI、L3、Worker、canary/soak 和 stream relay 引用，并在 1.4.2 同版本直接物理移除旧 Provider API、deprecated SPI 和无剩余用途的兼容 DTO。
 
 ## 范围与准确触点
 
@@ -48,7 +48,7 @@ owner: platform-and-provider-owners
 | `navigator-common/src/main/java/com/foggy/navigator/common/util/ProviderStateCodec.java` | 已有 `schemaVersion=1`、`providerType` envelope；仍使用通用 Map | 加严格版本策略、typed adapter、迁移链、解析失败可观测性 |
 | `navigator-common/src/main/java/com/foggy/navigator/common/entity/SessionEntity.java`、`navigator-common/src/main/java/com/foggy/navigator/common/entity/SessionTaskEntity.java` | 持有 `providerStateJson` / `taskStateJson` | 新写入统一走 codec/adapter，旧数据保持兼容读取 |
 | `navigator-common/src/main/java/com/foggy/navigator/common/repository/SessionEntityRepository.java` | 存在 JSON `LIKE` 查询 | 先做数据/性能审计，再设计显式字段或索引迁移 |
-| `/api/v1/claude-tasks`、`/api/v1/codex-tasks`、`/api/v1/langgraph-tasks` | 仍有 PC/Worker/L3/外部兼容消费者 | 逐路由建立 parity 和弃用门禁，不能按 Controller 整体删除 |
+| `/api/v1/claude-tasks`、`/api/v1/codex-tasks`、`/api/v1/langgraph-tasks` | 静态扫描已发现 PC/Worker/L3/canary/stream relay 等本仓消费者；项目尚未生产，上游仍在本机共同孵化 | 先逐 method/route 补齐统一替代和安全语义，再迁移或删除全部本仓引用，同版本物理删除；不设生产流量、外部客户或静默窗口门禁 |
 
 ## 证据边界
 
@@ -57,18 +57,18 @@ owner: platform-and-provider-owners
 | E-OPT2-01 | 已确认事实 | Provider state envelope v1 已实现并在多 Provider 使用 | confirmed；不能再写“完全没有 schema” |
 | E-OPT2-02 | 已确认事实 | 1.3.1 已完成多个 facade/registry/projection/router 阶段 | confirmed；本工作项只处理剩余增量 |
 | E-OPT2-03 | 静态搜索结论 | codec 对未知/损坏 JSON 的处理、通用 Map 和 JSON LIKE 查询仍有治理空间 | static-only；需测试和数据样本确认 |
-| E-OPT2-04 | 静态搜索结论 | PC 使用 Codex file-hints、LangGraph approve；Codex app-server/canary 与 stream URL 使用旧路径 | static-only；不代表全部消费者 |
-| E-OPT2-05 | 需要运行态确认 | 每个旧路由的访问量、外部客户、数据版本分布、恢复失败率 | not-collected；删除/迁移前阻塞 |
+| E-OPT2-04 | 静态搜索结论 | PC 使用 Codex file-hints、LangGraph approve；Business Agent L3/dev bootstrap 使用 LangGraph GET；Codex app-server canary/soak 与 `CodexStreamRelay` generated-image URL 使用旧路径 | static-only；实施前需以 `rg` 补齐 PC/Mobile/SDK/CLI/L3/Worker/canary/stream relay 全量清单 |
+| E-OPT2-05 | Owner 阶段假设 + 仓内扫描 | 项目尚未生产，全部上游仍在本机共同孵化；本版不以生产流量、外部客户清单或静默窗口作为删除前置 | owner-approved-stage-assumption；仓内引用扫描和 clean build 仍是硬门，若发现共享或生产资源则立即停手并重审 |
 | D-OPT2-01 | 决策项 | 每个大类的第一条拆分 seam 和成功指标 | pending-decision |
 | D-OPT2-02 | 决策项 | 状态未知版本是拒绝、只读降级还是 Provider 专用恢复 | pending-decision |
-| D-OPT2-03 | 决策项 | 旧 API 兼容窗口与响应弃用信号 | pending-decision |
+| D-OPT2-03 | Owner 已决 | ODR-142-007：不设“两版本 + 90 天 + 30 天零流量”、180 天 SPI/DTO 兼容期、sunset header 或外部客户窗口；全部仓内引用迁移后在 1.4.2 直接物理移除 | approved-with-constraints；统一替代和安全语义、仓内零引用、clean build/test 为硬门 |
 
 ## 明确非目标
 
 - 不以行数达标为目的，不一次性重写任何大类。
 - 不重做 schema v1、TaskQueryProviderRegistry、TaskCreateTargetResolver、projection service 或 TaskOperationRouter。
-- 不在没有迁移/回滚方案时改变状态数据 schema 或批量重写历史 JSON。
-- 不在统一 API 缺少 file hints、artifact/generated-image、approval 等能力时删除旧 API。
+- 不在没有迁移/回滚方案时改变状态数据 schema 或批量重写历史 JSON；历史 `providerStateJson` / `taskStateJson` 的安全读取和迁移兼容不因旧 API 可直接删除而降级。
+- 不在统一 API 缺少 file hints、artifact/generated-image、approval 等当前必要能力或安全语义时删除旧 API，不在 PC/Mobile/SDK/CLI/L3/Worker/canary/stream relay 仓内引用未迁完时先删 Controller。
 - 不实现动态插件加载，不实现多实例 SSE 事件总线。
 - 不借拆分改变外部授权模型；安全边界由 GOV-001/GOV-002/GOV-003 负责。
 
@@ -104,10 +104,11 @@ owner: platform-and-provider-owners
 
 ### Step 4：旧 API 能力补齐和迁移
 
-- 为每个旧路由建立“定义位置—消费者—统一 API 缺口—替代版本—流量指标”清单。
-- 先在统一 API/SDK 补 file hints、generated image/artifact、LangGraph 受控审批等缺口。
-- 迁移 PC、Mobile、SDK、CLI、L3、canary/soak 和外部客户；发出版本化弃用信号。
-- 满足静默窗口和 [CLEAN-004](./CLEAN-004-experimental-and-legacy-addon-governance.md) 门禁后，逐路由独立退役。
+- 为每个旧 method/route 建立“定义位置—本仓消费者—当前必要语义—统一替代/删除动作—验证命令—回滚提交”清单。
+- 先在统一 API/SDK 补 file hints、generated image/artifact、LangGraph 受控审批等当前需要的语义；审批、恢复、取消必须使用可信 principal/token context，不得继续信任请求体中的 `userId`、`reviewedBy` 或 `tenantId`。
+- 迁移或删除 PC、Mobile、SDK、CLI、L3、Worker、canary/soak 和 stream relay 的全部引用；不为已无使用场景新建一层兼容 facade。
+- 完成仓内零引用扫描和定向测试后，在 1.4.2 同一受控批次物理删除旧 Controller、deprecated SPI 和无剩余用途的兼容 DTO；每组 route/SPI/DTO 保持可独立 revert。
+- 不等待外部客户清单、生产流量、弃用信号或静默窗口；若仓内扫描、配置或部署核对发现共享/生产资源，立即停手并回到 Owner 重审。
 
 ## 验证计划
 
@@ -115,7 +116,7 @@ owner: platform-and-provider-owners
 
 - Provider state：旧裸状态/envelope v1/未知版本/损坏 JSON/Provider 不匹配/迁移幂等/恢复兼容。
 - Java：被提取职责的 unit/contract/characterization，四 Provider create/stream/resume/reconnect/cancel。
-- API：统一与旧路由 parity、弃用 header/error、授权负向用例。
+- API：统一替代覆盖仍需保留的语义、审批/恢复/取消的可信主体与授权负向用例、旧路由不再注册的契约检查。
 - PC：有效 `vue-tsc -p tsconfig.app.json --noEmit`、Vitest、build、相关 Playwright。
 - SDK/Worker：file hints、artifact/generated image、approval、canary/soak 迁移测试。
 
@@ -127,7 +128,7 @@ owner: platform-and-provider-owners
 | LangGraph | 暂停、受控审批、恢复、拒绝、旧入口提示 | not-run |
 | Gemini | 状态保存与恢复兼容 | not-run |
 | 深链/会话 | `/c/:id`、历史消息、任务列表和 SSE | not-run |
-| 数据迁移演练 | 生产副本上的版本分布、迁移、回退和性能 | not-run |
+| 历史状态迁移演练 | 代表性历史 `providerStateJson` / `taskStateJson` 样本（若存在可用运行副本则纳入）的版本分布、兼容读取、迁移、回退和性能 | not-run |
 
 ## 风险与回滚
 
@@ -136,8 +137,9 @@ owner: platform-and-provider-owners
 | 提取破坏隐式状态时序 | 先特征测试；一次一个 seam；保持同步点 | revert 单次提取提交，保留新增测试 |
 | 新 codec 无法读取历史状态 | 双读、兼容 adapter、数据副本演练 | 切回旧 reader；禁止覆盖原始 JSON |
 | UI 拆分造成响应式状态丢失 | 小步组件化，Playwright 覆盖交互/刷新 | revert 当前面板/composable 提取 |
-| 统一 API 缺能力 | parity 清单先行，先增后迁 | 调用方按路由开关回到旧接口 |
-| 外部客户未迁移 | access log、弃用指标、客户清单和静默窗口 | 保持旧路由只读/兼容，不物理删除 |
+| 统一 API 缺少当前必要能力或安全语义 | method/route 清单先行，先补替代再迁移 | 回滚对应删除批次，保留旧入口直到缺口补齐 |
+| 实施中发现共享/生产资源 | 删除前复核仓内配置、部署与资源指向 | 立即停手，不适用 dev-stage 直接删除授权，回到 Owner 重审 |
+| 将旧 API 数据可丢弃误解为历史 Provider 状态可不兼容 | 分离 API 消费者迁移和状态 schema 迁移证据 | 恢复旧 state reader/adapter，不覆盖原始 JSON；API 删除批次独立处理 |
 
 ## 完成判据
 
@@ -145,7 +147,9 @@ owner: platform-and-provider-owners
 - [ ] 不再新增绕过 codec/typed adapter 的 Provider 状态写入。
 - [ ] 未知版本、损坏 JSON 和 Provider 不匹配的行为有测试和可观测证据。
 - [ ] 历史数据迁移有副本演练、幂等和回退证据；未演练则不执行生产迁移。
-- [ ] 每个旧 API 路由都有精确消费者、统一替代、迁移版本、静默窗口和回滚方式。
+- [ ] 每个旧 API method/route 都有精确仓内消费者、统一替代或删除动作、安全语义、验证命令和独立回滚方式。
+- [ ] PC、Mobile、SDK、CLI、L3、Worker、canary/soak 和 stream relay 对目标旧契约的仓内引用已迁移或删除，旧 Controller、deprecated SPI 和无剩余用途 DTO 已在 1.4.2 物理移除并通过 clean build/test。
+- [ ] 旧 API 删除不依赖生产流量、外部客户、sunset header 或静默窗口证据；若发现共享/生产资源，已停手并重审。
 - [ ] `ClaudeWorkerView.vue` 的拆分通过有效类型检查、单测、构建和关键体验验证。
 - [ ] 未重复建设 1.3.1 已完成能力，未一次性重写大类。
 - [ ] production routing/external contract 的实际变化已单独批准并回写；默认保持 no。

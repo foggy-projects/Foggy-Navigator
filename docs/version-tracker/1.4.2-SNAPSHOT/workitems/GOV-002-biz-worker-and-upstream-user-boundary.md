@@ -3,7 +3,7 @@ type: governance
 version: 1.4.2-SNAPSHOT
 ticket: GOV-002
 priority: high
-status: planned
+status: planned-reviewed
 source: REQ-001
 owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 ---
@@ -15,7 +15,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 - 版本索引：[1.4.2-SNAPSHOT](../README.md)
 - 总需求：[REQ-001 平台治理与历史能力收口](../requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
 - 实施阶段：[P2 外部 Biz Worker 与 upstream user 边界治理](../implementation-plan.md#p2外部-biz-worker-与-upstream-user-边界治理)
-- Owner 决策：[ODR-142-002 至 ODR-142-005 评审稿](../owner-decision-review.md)
+- Owner 决策：[ODR-142-002 至 ODR-142-005、ODR-142-007 决策记录](../owner-decision-review.md)
 - 状态与证据：[Progress](../progress.md)
 - 上位边界：[GOV-001 内外部信任边界](./GOV-001-internal-external-trust-boundary.md)
 - 相关归属：[GOV-003 Session/Task 资源归属](./GOV-003-session-task-resource-ownership.md)
@@ -25,7 +25,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| Workitem | planned | 外部治理尚未实施 |
+| Workitem | planned-reviewed | 2026-07-14 Owner 已冻结当前 dev/internal 方案与未来外部开放门禁；P2 尚未实施 |
 | Implementation | not-started | implementation_started: no |
 | Automated test | not-run | 未执行 token、越权、readiness 或 SDK 契约测试 |
 | Manual verification | not-run | 未执行双 tenant/ClientApp/upstream user/task/function 矩阵 |
@@ -58,15 +58,15 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 - BusinessTask/task-scoped token 的签发、绑定、解析、撤销、轮换、终态失效和运行时注入。
 - Worker Gateway 的函数列表、schema、invoke、tool message、暂停和恢复。
 - LangGraph Biz Worker、Codex Biz Worker 的认证、readiness、任务启动和执行策略。
-- Open SDK 与上游调用方的兼容、迁移和错误契约。
-- 旧 LangGraph task/approval API 的隔离、消费者审计和迁移。
+- Open SDK 与本仓 PC、Mobile、CLI、L3、Worker 调用方的契约迁移和错误语义。
+- 旧 LangGraph/Claude/Codex Provider API、deprecated SPI/DTO 的本仓消费者迁移与同版本删除。
 
 ## 非目标
 
 1. 不实现通用 IAM、RBAC/ABAC 或全平台 Spring Security 重构。
 2. 不一刀切关闭 loopback/internal-dev Worker。
 3. 不在本工作项实现动态插件或多实例 SSE 事件总线。
-4. 不在未审计 PC、Mobile、SDK、CLI 和外部客户前删除旧 Provider API。
+4. 不为尚未投产的旧 Provider API、deprecated SPI/DTO 建立生产兼容窗口；但删除前仍须完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 消费者迁移、安全语义复核和 clean build。
 5. 不把所有外部任务强制成同一种 Provider、sandbox 或审批策略；只冻结服务端安全上限。
 6. 不把隔离 smoke 等同于 production enablement。
 
@@ -75,12 +75,12 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 | 对象/动作 | 必须满足的不变量 |
 |---|---|
 | runtime token | 由有效 ClientApp credential 签发；绑定 tenant/ClientApp/scope；有 TTL、状态、撤销与轮换语义 |
-| upstream user | 由已批准的证明模型解析；必须匹配 tenant + ClientApp grant；请求字段不能自行提升身份 |
+| upstream user | 当前 dev/internal 由已认证 ClientApp 代办，并以 tenant + ClientApp mapping/grant 解析；审计保证级别标记为 `client-app-delegated`；请求字段不能自行提升身份。未来真正 external-enabled 前必须补 signed assertion 或等强证明 |
 | BusinessTask | 服务端绑定 tenant、ClientApp、upstream user、Agent/skill/model/workspace 和 session/task |
 | task-scoped token | 版本化；绑定 task/session/worker pool；限定允许函数；过期、撤销、任务终态后不可用 |
 | Worker Gateway | 每次调用从 token 解析上下文；不能用请求体替换 tenant/user/task；函数必须在 token 与 ClientApp 授权交集中 |
 | 审批/恢复/取消 | principal、tenant、ClientApp、upstream user、task/session、function、当前状态均匹配；actor 从 credential 派生 |
-| external Worker | 非 loopback + external-enabled 时认证强制开启，缺配置 fail closed/unready |
+| external Worker | `external-enabled` 是单一显式开关且默认 `false`；非 loopback + external-enabled 时认证强制开启，任一门禁未齐均保持 disabled，并在误开启时 fail closed/unready |
 | 执行策略 | workspace/allowed dirs/tools/functions/sandbox/network 上限由服务端可信上下文决定，caller 只能在上限内收窄 |
 | 审计 | 成功、拒绝、暂停、审批、恢复、取消、失败可按 tenant/ClientApp/user/task/function 查询，不保存明文 token |
 
@@ -101,7 +101,8 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 - `OpenApiController` 从外部请求头解析 upstream user，再通过 ClientApp grant 约束 token 签发。
 - 当前语义更接近“已认证 ClientApp 代办一个已登记 upstream user”，而不是 upstream user 自身的加密签名认证。
-- 这是需要 Owner 冻结的身份模型，不应表述为完全未校验，也不能表述为已具备强 user assertion。
+- 2026-07-14 Owner 已冻结阶段性模型：当前 dev/internal 使用 ClientApp credential + tenant/ClientApp/upstream user mapping/grant，审计保证级别必须标记为 `client-app-delegated`；signed assertion 下放为未来真正外部开放的启用门禁，不阻塞当前 P2 的其他治理。
+- 当前模型不应表述为“完全未校验”，也不能表述为“upstream user 已具备独立强证明”；外部开关实现和 signed assertion 均尚未完成。
 
 ### Open API 资源隔离
 
@@ -120,7 +121,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 - 新 `BusinessFunctionApprovalController` + `BusinessFunctionSuspensionService` 会校验 control principal 和持久化 binding，并在执行前再次校验。
 - 旧 `LanggraphTaskController` 没有相同的 credential/binding 语义：GET 接受 `userId` 参数；approve 仅按 taskId + form；`LanggraphTaskService` 使用 `form.reviewedBy` 写审批记录并异步恢复 Worker。
-- 旧链路直接对应“不能只凭 taskId”和“不能信任 reviewedBy”的迁移需求，但删除前必须审计真实消费者。
+- 旧链路直接对应“不能只凭 taskId”和“不能信任 reviewedBy”的迁移需求。项目尚未生产、上游均在本机共同孵化，因此无需外部客户兼容期；完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 消费者迁移、安全语义复核和 clean build 后，可在 1.4.2 同版本物理删除。
 
 ### Worker 与执行策略
 
@@ -139,27 +140,27 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 | 待证项 | 验证方式 | 门禁 |
 |---|---|---|
-| ClientApp/upstream user 的真实权威来源和唯一性 | 上游配置、grant 数据、账号生命周期、Owner 访谈 | 未确认前不改变身份模型 |
+| ClientApp/upstream user mapping/grant 的唯一性和生命周期 | 本地配置、grant 数据、账号生命周期与负向测试 | 不阻塞 dev/internal；未形成证据前 `external-enabled` 保持 `false` |
 | runtime/task token 的撤销、轮换、过期传播 | API/DB/缓存演练，含重启与多实例 | 未通过前不宣称 token 生命周期闭环 |
 | task terminal/cancel 后 token 是否立即失效 | 创建任务、捕获 token、完成/取消后重放 | AC-05 未通过 |
 | 同 tenant/Agent 下跨 ClientApp/user 读取 | 双 ClientApp/user task/session 负向矩阵 | 未通过前外部隔离不可签收 |
-| 旧 LangGraph/Claude/Codex API 消费者 | PC、Mobile、SDK、CLI、日志、外部客户 | 未审计前不得删除 |
+| 旧 LangGraph/Claude/Codex API 本仓消费者 | PC、Mobile、SDK、CLI、L3、Worker、canary 的静态引用、契约测试和 clean build | 未完成迁移与验证前不得删除；不要求外部客户流量或静默窗口 |
 | 非 loopback 空 Token 的实际部署 | 环境变量、启动参数、监听地址、网络策略 | external enablement 保持未批准 |
 | allowed dirs/tools/sandbox/network 的实际配置 | 任务运行上下文、Worker 日志、越界测试 | 未通过前不对外启用高权限模式 |
 | 审计表、留存、拒绝事件和查询能力 | schema、索引、数据样本、失败注入、告警 | AC-02/03 不得只凭日志签收 |
 | upstream user token 的静态/传输/存储保护 | DB/TDE、备份、日志脱敏、密钥轮换 | 未确认前登记安全风险 |
 
-## 决策项
+## 已批准决策与执行状态
 
-| 决策 | ODR 建议/仍需确认 | Owner | 未决处理 |
+| 决策 | 2026-07-14 已批准基线 | Owner | 当前执行状态 |
 |---|---|---|---|
-| upstream user 证明 | ODR-142-002：external-enabled 以 signed assertion 为目标；ClientApp 代办仅受限兼容；pending-decision | ClientApp/Upstream/Security | identity enforcement blocked |
+| upstream user 证明 | ODR-142-002 已批准：当前 dev/internal 使用 ClientApp credential + mapping/grant，审计标记 `client-app-delegated`；signed assertion 是未来真正外部开放门禁 | ClientApp/Upstream/Security | 不阻塞当前 P2；门禁未齐时 `external-enabled=false` |
 | task function scope | ODR-142-003：Gateway capability + 明确 `BusinessFunctionId@version`/policy snapshot，并与 tenant/ClientApp、subject mapping/user、skill、function grant 及 task/session/lease 当前状态求交集 | Business Agent/Security | 不发布新 task token 契约 |
 | token 生命周期 | ODR-142-003：30 分钟租约、上限 60 分钟；暂停/终态失效；支持人工/批量撤销和 generation 轮换 | Business Agent/Operations | external enablement 不批准 |
 | Worker 绑定 | ODR-142-003：task token 绑定逻辑 lease，Gateway 还须校验独立 Worker principal/credential 或 PoP；重调度签发新 generation 并撤销旧 token | Worker/Platform | 跨 Worker 重放风险保持开放 |
 | 外部 Codex/LangGraph 安全上限 | ODR-142-004：双模式、默认拒绝、`workspace-write`、任务工具 egress 默认拒绝并保留控制面/LLM 基础 allowlist、非 loopback 缺凭据 unready/fail closed | Worker/Security | 保持 external-enabled disabled |
-| 旧 LangGraph approval | ODR-142-007：兼容路径可保留，但 1.4.2 立即改为可信 principal，不保留请求体 actor 语义 | LangGraph/API owner | 先补身份硬化与监测，不直接删除 |
-| Open API 收敛 | 补 ClientApp/user binding；或迁移到 Business Agent 专用 API | API/SDK owner | 保持兼容但不扩大消费者 |
+| 旧 Provider API、deprecated SPI/DTO | ODR-142-007 已批准：不设生产或外部兼容窗口；本仓消费者迁移、安全语义复核和 clean build 后在 1.4.2 同版本删除 | Provider/API/SDK owner | 删除前不扩大消费者；运行中任务状态按版本化迁移规则收口 |
+| Open API 收敛 | 补 ClientApp/user binding，或把本仓调用方迁移到 Business Agent 专用 API | API/SDK owner | 随本仓消费者迁移收口，不建立外部兼容层 |
 | 审计保证级别 | ODR-142-005：本地关键状态事务 outbox；无状态拒绝可靠落档；远程调用意图/结果分段记录；高频遥测 best-effort | Security/Operations | 不宣称关键拒绝或外部副作用审计完备 |
 | upstream user token 存储保护 | 应用层加密、外部 secret store、DB/TDE 组合 | Security/DB owner | 风险不关闭 |
 
@@ -208,13 +209,15 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 1. 列出 runtime/control/task credential 的签发者、principal、scope、TTL、存储、撤销、轮换和审计责任。
 2. 冻结 tenant -> ClientApp -> upstream user grant -> Agent/skill/model/workspace 的权威关系。
-3. 明确请求 header/body 中的 identity 字段只能作为 assertion 输入，最终主体必须来自 credential + grant 校验结果。
+3. 当前 dev/internal 明确以 ClientApp credential 为调用主体，以 mapping/grant 解析 upstream user；header/body 中的 identity 字段只能用于定位已授权映射，不能自行提升 tenant、ClientApp 或 user 身份。
+4. 所有当前模式审计记录写入 `client-app-delegated` assurance，避免把 ClientApp 代办误报为 upstream user 独立强认证。
 
 ### 2. 冻结 upstream user 证明模型
 
-1. 由 Owner 选择 ClientApp 代办或 signed assertion，不由执行 Agent静默决定。
+1. 按 Owner 决策实现当前 dev/internal 的 ClientApp 代办模型，不等待 signed assertion 才推进 task token、资源绑定、审批恢复和审计治理。
 2. 定义用户创建、禁用、tenant/ClientApp 迁移、重复映射和 token 轮换行为。
 3. 对 upstream user token 的存储、日志、备份和脱敏形成证据。
+4. 把 signed assertion 或等强 upstream user 独立证明登记为未来真正 external-enabled 的硬门禁；它不是当前 dev/internal 的身份阻塞项。
 
 ### 3. 演进 task-scoped token
 
@@ -231,16 +234,18 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ### 5. 隔离旧审批链路
 
-1. 为 `/langgraph-tasks` 加消费者指标、部署清单和调用方登记。
-2. 在不删除的前提下先限制到可信内网或兼容开关，并停止采用请求体 `reviewedBy` 作为可信 actor。
-3. 提供 control credential 新入口与 SDK/CLI 迁移说明，完成静默窗口后再进入 CLEAN-004 退役门禁。
+1. 对 `/langgraph-tasks`、`/claude-tasks`、`/codex-tasks`、deprecated SPI/DTO 完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 静态引用与契约清单。
+2. 将仍在使用的本仓消费者迁移到可信 principal、持久化 binding 和当前 Provider/Business Agent 入口；不保留请求体 `reviewedBy` 作为可信 actor。
+3. 完成安全语义复核、相关自动化测试和全仓 clean build 后，在 1.4.2 同版本物理删除旧入口与兼容类型；无需外部客户流量审计、静默窗口或生产兼容开关。
+4. 若扫描发现共享环境、独立部署或生产资源，立即停止该切片并升级为 Owner 决策，不以“dev 阶段”推断可删除。
 
 ### 6. Worker external readiness 与执行策略
 
-1. 将 internal-dev/external-enabled 设为显式模式；external-enabled 非 loopback 空 Token 启动失败或 unready。
-2. health/readiness 输出认证模式、安全策略就绪状态，但不泄露 credential。
-3. 服务端固定 workspace、allowed dirs/tools/functions、sandbox、approval、network 上限；caller 只能收窄。
-4. Codex/LangGraph 分别补路径逃逸、工具升级、网络升级和错误配置测试。
+1. 引入单一 `external-enabled` 显式开关，默认 `false`；门禁未齐时保持 disabled，不能由监听地址、空 Token 或其他分散配置隐式开启。
+2. `external-enabled=true` 时，non-loopback 空 Token 或任一必要门禁缺失必须启动失败或 unready；本计划不宣称该开关当前已经实现。
+3. health/readiness 输出认证模式、安全策略就绪状态，但不泄露 credential。
+4. 服务端固定 workspace、allowed dirs/tools/functions、sandbox、approval、network 上限；caller 只能收窄。
+5. Codex/LangGraph 分别补路径逃逸、工具升级、网络升级和错误配置测试。
 
 ### 7. 审计与可观测性
 
@@ -250,9 +255,9 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ### 8. 兼容、灰度与签收
 
-1. Open SDK、ClientApp 和上游调用方先支持新契约，再按 ClientApp/Worker 灰度 enforcement。
-2. 保留旧 token/version 的只读兼容窗口；禁止回滚到请求体身份信任。
-3. 完成自动化、手工、体验、迁移和回滚演练后，进入 P7 覆盖审计与正式签收。
+1. 本仓 Open SDK、PC、Mobile、CLI、L3、Worker、canary 先迁移到新契约，再删除旧 Provider API、deprecated SPI/DTO；不建立外部客户兼容窗口。
+2. 对已经签发、仍在运行或暂停待恢复的 task token/state 使用版本化读取、排空或显式迁移，防止任务无法恢复；这是运行状态安全门禁，不是对外兼容期。
+3. 禁止回滚到请求体身份信任；完成自动化、手工、体验、迁移和回滚演练后，进入 P7 覆盖审计与正式签收。
 
 ## 自动化测试计划
 
@@ -263,6 +268,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 - runtime/control credential 正常、缺失、错误 scope、过期、撤销、轮换。
 - 伪造或交换 `tenantId`、ClientApp、upstream user、`reviewedBy` 后必须拒绝。
 - ClientApp 禁用、user grant 禁用、skill/model/function grant 撤销后的即时或约定传播。
+- 当前 dev/internal 审计 assurance 必须为 `client-app-delegated`；不得标记为 upstream user 独立强认证。
 
 ### Task/token 隔离
 
@@ -280,7 +286,8 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 ### Worker 与策略
 
 - loopback internal-dev 显式无 Token 模式的允许用例。
-- non-loopback/external-enabled 空 Token、无 workspace policy、错误 credential 时启动失败或 unready。
+- `external-enabled` 未显式设置时保持 `false`；不能由非 loopback、空 Token 或其他配置组合隐式开启。
+- `external-enabled=true` 且 non-loopback 空 Token、无 workspace policy、错误 credential 或未来身份门禁不齐时启动失败或 unready。
 - workdir traversal、allowed dirs 越界、未允许 tool/function、sandbox/network/web 升级拒绝。
 - health/readiness 不泄露 token，且能区分 process-live 与 external-ready。
 
@@ -289,7 +296,8 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 - 成功、拒绝、暂停、审批、恢复、取消、失败、过期、撤销事件字段完整。
 - 审计持久化失败的告警/补偿符合 Owner 决策。
 - DTO、日志和错误响应不包含明文 token、secret、完整敏感输入。
-- Open SDK/ClientApp contract test 覆盖新旧版本兼容窗口。
+- 本仓 PC、Mobile、Open SDK、CLI、L3、Worker、canary contract test 迁移到新入口；旧 Provider API、deprecated SPI/DTO 删除后静态引用扫描与 clean build 均通过。
+- 运行中/暂停任务的 token/state 版本化读取、排空或迁移测试通过，删除旧 API 不破坏已存在任务的恢复安全。
 
 ## 手工验证计划
 
@@ -301,7 +309,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 4. 在任务运行、完成、取消和 token 过期后分别重放 Gateway 调用。
 5. 分别启动 loopback internal-dev、non-loopback external-enabled 有 Token和无 Token配置，检查 readiness 与日志。
 6. 检查 Codex/LangGraph 的工作目录、附加目录、工具、函数、sandbox 和网络边界。
-7. 对旧 `/langgraph-tasks`、`/claude-tasks`、`/codex-tasks` 收集访问日志、SDK/CLI/PC/Mobile 调用和 Owner 确认，不以 `rg` 无命中代替。
+7. 对旧 `/langgraph-tasks`、`/claude-tasks`、`/codex-tasks` 和 deprecated SPI/DTO 完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 的静态引用、契约测试和 clean build；不以单次 `rg` 无命中代替组合证据。
 
 ## 体验验证计划
 
@@ -317,40 +325,42 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| upstream user 证明模型选错 | 冒名或兼容中断 | Owner 先决策，双轨兼容和负向测试 |
+| ClientApp 代办被误报为用户独立强认证 | 审计主体可信度被高估 | 固定 `client-app-delegated` assurance；未来 external-enabled 前补 signed assertion 或等强证明 |
 | token schema 一次切换 | 运行任务无法恢复 | 版本化、兼容读、灰度写、回滚演练 |
 | 仅内存 token 注入 | 重启/多实例恢复失败 | 明确恢复权威和跨实例策略 |
 | 函数 scope 只依赖 ClientApp grant | task token 可调用过多函数 | 引入 task scope 与 grant 交集 |
 | 收紧 Codex 策略破坏开发流程 | 内部效率回归 | internal-dev 与 external-enabled 分离 |
-| 旧 API 有未知客户 | 下线造成外部故障 | 指标、消费者登记、迁移和静默窗口 |
+| 本仓旧 API 消费者迁移遗漏 | 本地孵化链路或 clean build 失败 | PC/Mobile/SDK/CLI/L3/Worker/canary 组合扫描、契约测试、clean build；发现共享/生产资源立即停手 |
 | best-effort 审计丢拒绝记录 | 无法追溯与签收 | 分级强保证、告警、失败注入 |
 | 敏感 upstream token 存储不清晰 | 凭据泄露 | 基础设施审计、加密/secret store 决策 |
 
 ## 回滚方式
 
 1. authority/mapping、token schema、Gateway enforcement、Worker readiness、审计和旧 API 迁移分开提交。
-2. 新 token 先兼容读取旧版本，再灰度新签发；回滚写入策略时仍保留已撤销/过期状态，不恢复旧明文或宽 scope。
+2. 新 token 先版本化读取旧状态并为运行中/暂停任务提供排空或显式迁移，再切换新签发；回滚写入策略时仍保留已撤销/过期状态，不恢复旧明文或宽 scope。该读取能力只服务任务状态安全，不构成外部兼容窗口。
 3. Gateway scope enforcement 按 ClientApp/Worker allowlist 灰度；出现兼容问题可回滚灰度范围，但不得重新信任请求体身份。
 4. Worker external readiness 使用版本化配置；回滚只能回到显式 internal-dev，不允许非 loopback 空 Token 静默 ready。
-5. 旧 Provider API 先软隔离/弃用，保留前一制品和路由开关；物理删除由 CLEAN-004 独立执行。
+5. 旧 Provider API、deprecated SPI/DTO 在本仓消费者迁移和 clean build 后同版本物理删除；若需要回退，以对应提交/制品恢复整个安全一致切片并重新验证，不能只恢复请求体 actor 或宽松授权语义。
 6. 数据库变更必须有向后兼容 migration、备份和恢复演练；token/secret 不进入回滚文档。
 
 ## 完成判据
 
 - [ ] 外部请求可从 audit/correlation 追溯到 tenant、ClientApp、upstream user、task/session 和 Worker。
-- [ ] upstream user 证明模型、mapping/grant 权威和生命周期已由 Owner 冻结并实现。
+- [ ] 当前 dev/internal 的 ClientApp credential + mapping/grant 模型已实现并以 `client-app-delegated` assurance 审计；未来真正外部开放前的 signed assertion 门禁已明确登记。
 - [ ] task-scoped token 有版本、scope、TTL、撤销/轮换和终态失效，且不能跨 task/session/function。
 - [ ] Gateway 执行函数是 task scope 与当前 ClientApp grant 的交集。
 - [ ] 外部审批、恢复、拒绝、取消不能只凭 taskId，actor 不取自可伪造字段。
 - [ ] generic Open API task/session 查询不跨 ClientApp/upstream user 泄露。
 - [ ] non-loopback external Worker 缺 credential 时 fail closed 或 unready。
+- [ ] `external-enabled` 为单一显式、默认 `false` 的开关；任一外部门禁未齐均保持 disabled，且没有把规划误报为已实现。
 - [ ] workspace、目录、工具、函数、sandbox、approval、network 上限由服务端控制。
 - [ ] 成功、拒绝、暂停、审批、恢复、取消、失败、过期和撤销审计可查询且不泄露明文凭据。
-- [ ] Open SDK、PC、Mobile、CLI 和已识别外部调用方完成兼容验证；旧 API 未在无证据时删除。
+- [ ] 本仓 Open SDK、PC、Mobile、CLI、L3、Worker、canary 已迁移并通过安全语义复核与 clean build；旧 Provider API、deprecated SPI/DTO 已在同版本删除，不保留生产/外部兼容窗口。
+- [ ] 已签发且仍在运行/暂停的任务完成 token/state 版本化读取、排空或迁移验证，旧 API 删除不破坏任务恢复安全。
 - [ ] 自动化、手工、体验和回滚演练结果回写 Progress；AC-02 至 AC-06 有可定位证据。
 
 ## 生产路由与外部契约状态
 
 - 当前：`production_routing_changed: no`，`external_contract_changed: no`，`production_enablement: not-applicable`。
-- 规划影响：新 token scope、认证失败、readiness、错误码和旧接口隔离预计会收紧外部契约；是否改变生产路由取决于灰度与旧接口迁移方案。
-- 启用门禁：Owner 决策、SDK/调用方兼容、负向矩阵、审计、灰度与回滚证据缺一不可。隔离测试通过不自动批准生产启用。
+- 规划影响：新 token scope、认证失败、readiness、错误码和旧接口删除会收紧 dev/internal 契约，但项目尚未生产且不存在需要保留的外部兼容窗口；当前 P2 与显式开关均尚未实施。
+- 启用门禁：`external-enabled` 必须显式且默认 `false`；signed assertion 或等强用户证明、SDK/调用方迁移、负向矩阵、审计、安全上限与回滚证据缺一不可。隔离测试通过不自动批准真正外部开放。

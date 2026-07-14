@@ -534,10 +534,8 @@ packages/navigator-frontend/
 | metadata-config-module | 3 | L2 | 🟡 基本 | — |
 | metadata-query-module | 2 | L1 + L2 | 🔴 偏少 | — |
 | user-auth-module | 1 | L2 | 🔴 偏少 | 仅 JWT 测试 |
-| tutor-agent | 1 | L2 | 🔴 偏少 | 仅引导卡片测试 |
 | navigator-common | 0 | — | ⬜ 无 | Entity/DTO 模块，优先级低 |
 | navigator-spi | 0 | — | ⬜ 无 | 接口定义模块，无需测试 |
-| monitoring-module | 0 | — | ⬜ 无 | 待补充 |
 
 ### 前端模块覆盖清单
 

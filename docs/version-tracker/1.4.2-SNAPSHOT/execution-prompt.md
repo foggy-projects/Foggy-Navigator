@@ -9,15 +9,18 @@
 ## 基本信息
 
 - version: `1.4.2-SNAPSHOT`
-- status: planned
+- status: planned-reviewed
+- owner_decision_status: review-complete
 - operation_mode: single-root-delivery
-- implementation_started: no
+- implementation_started: yes
 - requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
 - implementation_plan: [Implementation Plan](./implementation-plan.md)
 - module_responsibility: [Module Responsibility](./module-responsibility.md)
 - code_inventory: [Code Inventory](./code-inventory.md)
 - owner_decision_review: [Owner Decision Review](./owner-decision-review.md)
 - progress: [Progress](./progress.md)
+
+当前检查点：`2026-07-14` 已实施 P1 本地基线以及 Monitoring/code-review 两个独立删除切片；后续执行者必须先读 Progress，不能重复删除或把尚未执行的 metadata-query、Echo、旧 Provider 契约和 P2/P3 治理写成已完成。
 
 ## 可复制执行提示词
 
@@ -37,7 +40,7 @@
 
 执行方式：single-root-delivery。一次只实施一个已明确授权的阶段或工作项，不得把 P0-P7 一次性混成大提交。
 
-Owner 决策评审稿中的建议只有在单项 `review_result=approved` 或 `approved-with-constraints` 且签署表包含 Owner、日期和约束后，才能作为实施决策。`pending-owner-review`、`pending-decision`、`deferred` 或空签署项不得被执行 Agent 当作已批准；但不改变生产状态的只读扫描、证据收集和方案补充可以按 workitem 继续。
+Owner 决策评审已经 `review-complete`。ODR-142-001/003/004/005/008 按批准结论执行；ODR-142-002 按“signed assertion 降为低优先级、external 显式开关保持硬门”执行；ODR-142-006 已授权 dev-only 数据丢弃和完整切片物理删除；ODR-142-007 已取消上游/生产兼容窗口，仓内消费者迁移后可直接删除旧 API/SPI/DTO。批准只解除设计/删除决策门，不表示实现、测试、验收或生产启用完成。
 
 先报告：
 - 本次阶段/工作项；
@@ -50,25 +53,27 @@ Owner 决策评审稿中的建议只有在单项 `review_result=approved` 或 `a
 实施约束：
 - 内部控制面保持轻量认证，在统一 service/facade 建立 Session/Task ownership 不变量；不要重写 Spring Security。
 - 外部运行面使用服务端可信 principal 和绑定，不信任请求体中的 userId、tenantId、reviewedBy 等身份字段。
+- 1.4.2 以 ClientApp credential + upstream user mapping/grant 作为当前身份基线，并在审计中标记 delegated assurance；independent signed assertion 是低优先级后续项，不阻塞 P2/P7，也不得被虚报为已实现。
 - task-scoped token 必须绑定任务和允许的 BusinessFunction，并具备明确 TTL、撤销/轮换和终态失效策略。
-- external-enabled 的非 loopback Worker 缺必要凭据时必须 fail closed 或 unready；显式 loopback internal-dev 可保留。
+- external-enabled 必须由默认关闭的显式配置开关启用；不得由监听地址、请求参数或空 Token 自动推断。开关启用后，非 loopback Worker 缺必要凭据必须 fail closed 或 unready；显式 loopback internal-dev 可保留。
 - 外部工作目录、工具、sandbox、approval、network 上限由服务端策略约束，Worker 不得扩大权限。
 - Provider 状态已经有 envelope schema v1；本版本只做版本验证、typed adapter、迁移和可观测性增量，不重复建设 v1。
 - UnifiedSseEmitter 仍是单 JVM 内存态；本版本不实现多实例事件总线。
 - Addon 是编译期模块化单体；本版本不实现动态插件加载。
 - ClaudeWorkerView.vue、OpenApiController、ClaudeTaskService、CodexTaskService、TaskDispatchFacade 只能渐进拆分，禁止一次性重写。
 - 不得删除 CodingAgentEntity、/api/v1/coding-agents、ProfileView.vue、/c/:id、navigator-chat-widget、mobile uni_modules、keystore 或 metadata-config-module。
-- Monitoring、metadata-query、code-review、echo、旧 Provider API 只有在各自运行态/消费者/数据/部署/迁移/回滚门禁齐备且 Owner 批准后，才能按独立功能切片退役。
-- 静态未发现引用不等于无运行流量；不得虚构测试、流量、审批或生产证据。
+- Monitoring、metadata-query、code-review、echo 已获 dev-only 物理删除授权，开发数据可丢弃；按完整功能切片独立执行，不等待生产流量静默或数据备份/保留。执行前必须确认目标不是共享/生产资源，发现此类资源立即停止。
+- 旧 Provider API/SPI/DTO 不设上游/生产弃用或兼容窗口；必须先迁移或删除 PC、L3、Worker/canary、stream relay 等全部仓内引用，再在 P6 直接删除旧契约。
+- 静态引用命中必须处理；不得虚构测试、流量、审批、环境范围或生产证据。
 
 执行顺序：
 P0 目标/边界/术语/清单冻结
 P1 clean build、Node/pnpm/lockfile、全仓 CI
-P2 外部 Biz Worker/upstream user 治理
+P2 explicit external 开关、ClientApp/grant 身份基线、task token、Worker policy 与审计；signed assertion 为低优先级后续项
 P3 Session/Task ownership
 P4 第一档清理
-P5 第二档审计与独立去留/退役
-P6 大类、Provider 状态、旧 API 渐进治理
+P5 dev-only 第二档完整切片独立物理清理
+P6 大类、Provider 状态治理；仓内迁移后直接删除旧 API/SPI/DTO
 P7 质量、覆盖、体验和正式签收
 
 每个实现阶段都必须：
@@ -76,7 +81,7 @@ P7 质量、覆盖、体验和正式签收
 2. 保持 launcher 为部署壳，不把业务逻辑放入 launcher。
 3. 将代码改动、测试命令、环境版本、结果、手工体验、风险、阻塞和生产影响实时回写 progress.md。
 4. 对计划外变更先更新 code-inventory.md 并说明原因；不得静默扩范围。
-5. 一个删除/迁移功能切片一个可回滚提交，记录引用扫描、替代、数据/配置处理和 git revert 路径。
+5. 一个删除/迁移功能切片一个可回滚提交，记录引用扫描、仓内消费者处理、开发数据/配置处理和 git revert 路径；数据丢弃获批时明确写 `backup: not-required-by-owner`，不能伪造备份。
 6. UI 改动运行有效的类型检查、单测、构建和相关 Playwright/手工体验；不能以 vue-tsc 空检查作为通过。
 7. 阶段结束运行 git diff --check、git status --short、Markdown 相对链接检查，并确认改动路径符合清单。
 
@@ -89,9 +94,11 @@ P7 质量、覆盖、体验和正式签收
 只有当 requirement、workitem、implementation plan、progress、代码、测试和体验证据一致时才可申请签收。隔离 smoke 不等于生产批准；production enablement 必须单独记录。
 
 遇到以下情况立即停止当前危险动作，回写 blocked/pending-decision，并请求 Owner：
-- upstream user 证明方式或 task token scope 未决定；
-- 删除候选仍有静态消费者、运行流量或未知部署；
-- 需要改变生产路由、删除外部 API、执行数据删除/不可逆迁移；
+- explicit external 开关无法保证默认关闭，或启用时无法满足 credential、task scope、Worker policy、readiness 和审计硬门；
+- task token 的函数 scope、Worker principal/lease 或撤销/终态语义需要偏离已批准 ODR-142-003；
+- dev-only 删除命中共享/生产数据库、RabbitMQ、部署、webhook、credential 或上游消费者；
+- 旧 Provider 契约仍有未处理的仓内编译、运行、测试或持久链接引用；
+- 需要改变生产路由、生产数据或生产外部契约；本次 dev-only 授权不得外推；
 - 需要扩大 Worker 工具/目录/网络权限；
 - 无法在 clean 环境复现基线；
 - 现有用户改动与本阶段路径冲突。
@@ -110,7 +117,7 @@ P7 质量、覆盖、体验和正式签收
 | OPT-002 | [核心代码可维护性](./workitems/OPT-002-core-code-maintainability.md) |
 | CLEAN-001 | [低风险孤儿清理](./workitems/CLEAN-001-low-risk-orphan-cleanup.md) |
 | CLEAN-002 | [Monitoring 退役](./workitems/CLEAN-002-monitoring-retirement.md) |
-| CLEAN-003 | [metadata-query 退役审计](./workitems/CLEAN-003-metadata-query-retirement-audit.md) |
+| CLEAN-003 | [metadata-query dev-only 完整退役](./workitems/CLEAN-003-metadata-query-retirement-audit.md) |
 | CLEAN-004 | [实验性 Addon 与旧 API 治理](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) |
 | DOC-001 | [文档对齐](./workitems/DOC-001-documentation-alignment.md) |
 

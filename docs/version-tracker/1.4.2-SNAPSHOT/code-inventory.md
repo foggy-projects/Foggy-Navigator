@@ -9,12 +9,14 @@
 ## 基本信息
 
 - version: `1.4.2-SNAPSHOT`
-- status: planned
+- status: in-progress
+- owner_decision_status: review-complete
+- authorized_cleanup_scope: development-only; data-discard-approved
 - requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
 - module_responsibility: [Module Responsibility](./module-responsibility.md)
 - implementation_plan: [Implementation Plan](./implementation-plan.md)
 - owner_decision_review: [Owner Decision Review](./owner-decision-review.md)
-- inventory_rule: 路径为当前静态扫描结果；`update` 表示后续阶段的预期，不表示本轮已修改业务代码。
+- inventory_rule: 路径为当前静态扫描与执行结果；计划动作和已执行动作分别标注，真实状态以 [Progress](./progress.md) 为准。
 
 ## 变更分类
 
@@ -22,7 +24,8 @@
 |---|---|
 | `create` | 1.4.2 规划或执行时新增的文档、测试或窄边界实现 |
 | `update` | 已有文件的定向变更；实施前需重新确认行级上下文 |
-| `read-only-analysis` | 只做引用、流量、配置、数据或依赖审计，未满足门禁不得修改 |
+| `read-only-analysis` | 只做引用、配置、数据或依赖审计，未满足门禁不得修改 |
+| `delete-authorized` | Owner 已批准在明确的 dev-only 范围内物理删除；仍须处理仓内引用、确认不命中共享/生产资源并完成测试和回滚记录 |
 | `do-not-touch` | 1.4.2 明确保留，或必须先完成迁移/备份/轮换 |
 
 ## 本轮实际文档落档
@@ -34,7 +37,7 @@
 | root | `docs/version-tracker/1.4.2-SNAPSHOT/module-responsibility.md` | 模块职责 | create | 依赖方向与 Owner 交接点 |
 | root | `docs/version-tracker/1.4.2-SNAPSHOT/code-inventory.md` | 代码清单 | create | 本文件 |
 | root | `docs/version-tracker/1.4.2-SNAPSHOT/implementation-plan.md` | 阶段计划 | create | P0-P7 执行与回滚门禁 |
-| root | `docs/version-tracker/1.4.2-SNAPSHOT/owner-decision-review.md` | Owner 决策评审 | create | 八组建议、替代方案、签署状态与实施门禁；建议不等于批准 |
+| root | `docs/version-tracker/1.4.2-SNAPSHOT/owner-decision-review.md` | Owner 决策评审 | create | 八组决策已完成评审；批准不等于实现、测试或生产启用 |
 | root | `docs/version-tracker/1.4.2-SNAPSHOT/execution-prompt.md` | 开工提示 | create | 后续执行 Agent 的范围和记录要求 |
 | root | `docs/version-tracker/1.4.2-SNAPSHOT/progress.md` | 进度模板 | create | 与 execution prompt 配套，当前不写虚假证据 |
 | root | `docs/version-tracker/1.4.2-SNAPSHOT/workitems/*.md` | 工作项 | create | 3 个治理、2 个优化、4 个清理、1 个文档工作项 |
@@ -52,7 +55,7 @@
 | root | `session-module/src/main/java/com/foggy/navigator/session/sse/UnifiedSseEmitter.java` | 单 JVM SSE | read-only-analysis | 记录限制；多实例总线不在本版本实现 |
 | root | `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiController.java` | ClientApp Open API | update | 收窄可信 principal、查询/操作归属；渐进拆分 |
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/ClientAppRuntimeCredentialResolver.java` | runtime credential 解析 | update | 复核 TTL、撤销、轮换和 scope |
-| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/ClientAppUserGrantService.java` | upstream user grant | update | 冻结 upstream subject 证明模式 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/ClientAppUserGrantService.java` | upstream user grant | update | 1.4.2 维持 ClientApp credential + mapping/grant 基线并记录 delegated assurance；signed assertion 降为低优先级后续项 |
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BusinessTaskScopedTokenEntity.java` | task token 持久 claims | update | 增加函数 scope/version 与撤销语义，需迁移设计 |
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskService.java` | BusinessTask 创建/恢复 | update | 服务端固化 tenant/ClientApp/upstream user/task/function scope |
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/WorkerGatewayController.java` | Worker Gateway 入口 | update | 只接受 task token principal，不信任身份字段 |
@@ -61,15 +64,24 @@
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessFunctionSuspensionService.java` | 暂停/恢复绑定 | update | 统一审批、恢复、取消归属和审计语义 |
 | root | `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/tool/TaskScopedTokenResolver.java` | Worker token 注入 | update | 禁止跨任务 fallback；明确重启/恢复行为 |
 
+## `2026-07-14` 执行快照
+
+| 批次 | 实际路径/切片 | 状态 | 已有验证 | 尚未验证/未操作 |
+|---|---|---|---|---|
+| P1 构建基线 | `.nvmrc`、根 `package.json`、`.gitignore`、根 `pnpm-lock.yaml`、前端 package/scripts、`.github/workflows/repository-ci.yml`、现有 Codex RC workflow、README/CLAUDE | implemented-in-working-tree | 精确 Node/pnpm frozen 校验、frontend type/test/build、launcher clean test passed | hosted CI、Worker matrix 本机逐项、nightly、浏览器体验 |
+| Monitoring | `monitoring-module/**`、`tools/foggy-monitor/**`、PC View/API、SecurityConfig 放行、`scripts/start-all.sh` 与当前权威文档 | code-slice-removed | tracked 源码及 repo-local ignored `target/.venv/.pytest_cache` 均移除；静态扫描、shell syntax、Java clean、frontend full matrix passed | RabbitMQ/DB/deployment 等外部资源未操作；启动/浏览器 smoke 未跑 |
+| Code Review | `addons/code-review-agent/**` 共 22 个 tracked files、当前开发指引 | code-slice-removed | root/launcher/CI/scripts/source 扫描与 Java clean passed | GitLab webhook、DB、独立 deployment 未操作/未做运行态读取 |
+| metadata-query / Echo / 旧 Provider 契约 | 对应后续独立切片 | not-started | 删除前 Java clean 基线 passed | 仓内迁移、物理删除和删除后回归均未运行 |
+
 ## Worker 与外部执行触点
 
 | 仓库 | 路径 | 角色 | 预期变更 | 说明 |
 |---|---|---|---|---|
-| root | `tools/claude-agent-worker/src/agent_worker/auth.py` | Claude Worker HTTP auth | update | external-enabled 非 loopback 空凭据 fail closed/unready |
+| root | `tools/claude-agent-worker/src/agent_worker/auth.py` | Claude Worker HTTP auth | update | 增加默认关闭的 explicit external 开关；启用后非 loopback 空凭据 fail closed/unready |
 | root | `tools/codex-agent-worker/src/auth.ts` | Codex Worker HTTP auth | update | 同上，保留显式 loopback internal-dev |
-| root | `tools/codex-app-server-worker/src/auth.ts` | Codex app-server auth | update | 对齐部署模式与 readiness |
-| root | `tools/gemini-agent-worker/src/auth.ts` | Gemini Worker auth | update | 对齐统一模式和负向测试 |
-| root | `tools/langgraph-biz-worker/src/langgraph_biz_worker/auth.py` | LangGraph Worker auth | update | 默认外部绑定不得因空 Token 跳过认证 |
+| root | `tools/codex-app-server-worker/src/auth.ts` | Codex app-server auth | update | 对齐 explicit external 开关、部署模式与 readiness |
+| root | `tools/gemini-agent-worker/src/auth.ts` | Gemini Worker auth | update | 对齐 explicit external 开关和负向测试 |
+| root | `tools/langgraph-biz-worker/src/langgraph_biz_worker/auth.py` | LangGraph Worker auth | update | external 开关默认关闭；显式启用后不得因空 Token 跳过认证 |
 | root | `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/execution_policy.py` | workdir/tool policy | update | 外部模式服务端限制优先，空 allowlist 语义明确 |
 | root | `tools/codex-agent-worker/src` | Codex 执行策略 | update | 冻结 allowed cwd/tool/sandbox/approval/network 上限 |
 | root | `tools/gemini-agent-worker/src` | Gemini 执行策略 | read-only-analysis | 确认实际工作目录、工具和配置边界 |
@@ -78,12 +90,12 @@
 
 | 仓库 | 路径 | 角色 | 预期变更 | 说明 |
 |---|---|---|---|---|
-| root | `pom.xml` | Maven reactor | update | 仅在模块去留决策获批后调整；Java clean gate 以此为基线 |
-| root | `launcher/pom.xml` | 生产装配 | update | 仅在独立退役/装配决策后调整 |
+| root | `pom.xml` | Maven reactor | update | ODR-142-006 已批准 dev-only 切片移除；每次调整后执行 Java clean gate |
+| root | `launcher/pom.xml` | 部署装配 | update | 按独立 dev-only 退役切片移除 dependency，不将业务逻辑放入 launcher |
 | root | `package.json` | pnpm workspace 根入口 | update | 增加 `packageManager`、`engines` 和全包脚本 |
 | root | `pnpm-workspace.yaml` | 前端 workspace | update | 明确纳入 chat-core、chat、PC、widget、mobile |
 | root | `.gitignore` | lockfile 跟踪规则 | update | 解除根 `pnpm-lock.yaml` 的全局忽略，保留生成物排除 |
-| root | `pnpm-lock.yaml` | 根依赖锁 | create | 在已冻结 Node/pnpm 环境重建并提交 |
+| root | `pnpm-lock.yaml` | 根依赖锁 | create | 使用已批准的 Node `22.23.1`、pnpm `10.34.5` 重建并提交 |
 | root | `scripts/build-frontend.sh` | 前端聚合构建 | update | 覆盖全部交付包或明确分 lane 调用 |
 | root | `packages/foggy-chat-core/package.json` | chat-core lane | update | 补齐一致的 type/test/build 入口或在矩阵显式声明 |
 | root | `packages/foggy-chat/package.json` | chat lane | update | frozen install 后 test/build |
@@ -92,7 +104,7 @@
 | root | `packages/foggy-mobile/package.json` | mobile lane | update | 至少 type/test 与目标平台 build |
 | root | `.github/workflows/codex-worker-release-candidate.yml` | 现有 Codex 发布流程 | read-only-analysis | 不把单 Worker 发布流当全仓 CI |
 | root | `.github/workflows/` | 全仓 CI | create | Java、pnpm、Node Worker、Python Worker 矩阵 |
-| root | `README.md` | 环境说明 | update | 从 Node 18+ 修正为 Owner 最终批准的明确支持线；当前提案为 Node `22.23.1` |
+| root | `README.md` | 环境说明 | update | 从 Node 18+ 修正为 Owner 已批准的 Node `22.23.1`、pnpm `10.34.5` 支持线 |
 
 ## 渐进维护性触点
 
@@ -127,15 +139,17 @@
 | root | 前端 API 导出、旧测试 mock | 待生成精确清单 | read-only-analysis | 禁止以泛化名称批量删除 |
 | root | tutor-agent/OpenHands addon 的旧技能和文档 | 失效指引 | read-only-analysis | 区分历史版本证据与当前指引；历史证据不篡改 |
 
-## 第二档完整功能切片
+## 第二档 dev-only 完整功能切片
+
+下列切片已获 Owner 物理删除授权，开发数据可丢弃且不设置上游/生产兼容窗口。Monitoring 和 code-review 已开始执行，其他 `delete-authorized` 切片仍不是“立即删除”：必须确认 dev-only 边界、处理仓内引用并在独立批次验证。
 
 | 仓库 | 路径/切片 | 角色 | 预期变更 | 删除前门禁 |
 |---|---|---|---|---|
-| root | `monitoring-module/`、`tools/foggy-monitor/`、`packages/navigator-frontend/src/views/MonitoringView.vue`、`packages/navigator-frontend/src/api/monitoring.ts`、`scripts/start-all.sh`、`SecurityConfig` 放行项、相关文档/部署 | Monitoring | read-only-analysis | 流量、部署、替代、配置、数据和回滚齐备，成组退役 |
-| root | `metadata-query-module/`、根 reactor、`launcher/pom.xml`、配置/数据库/文档 | 旧语义查询 | read-only-analysis | 运行日志、外部流量、DB、部署、第三方调用核对，独立决策 |
-| root | `addons/code-review-agent/` | GitLab code review | read-only-analysis | webhook、外部消费者、配置、持久数据审计 |
-| root | `addons/echo-agent/`、根 reactor、`launcher/pom.xml` | 示例 Provider | read-only-analysis | 替代 smoke/dev fixture 与生产装配影响确认 |
-| root | `/api/v1/claude-tasks`、`/api/v1/codex-tasks`、`/api/v1/langgraph-tasks` 对应 Controller、DTO、SPI、前端/Worker/SDK/CLI 调用 | 旧 Provider API | read-only-analysis | 消费者迁移、流量静默、兼容窗口和逐路由回滚 |
+| root | `monitoring-module/`、`tools/foggy-monitor/`、`packages/navigator-frontend/src/views/MonitoringView.vue`、`packages/navigator-frontend/src/api/monitoring.ts`、`scripts/start-all.sh`、`SecurityConfig` 放行项、相关当前文档 | Monitoring | removed-in-working-tree | Java/Python/UI/API/auth/script 及 repo-local ignored 构建残留已删除并通过本地构建；外部 RabbitMQ/DB/deployment 未操作，体验/hosted CI 待跑 |
+| root | `metadata-query-module/`、根 reactor、`launcher/pom.xml`、专属配置/依赖/文档 | 旧语义查询 | delete-authorized | 精确删除专属切片并回归 `metadata-config-module`；发现共享/生产 datasource 或服务立即停止 |
+| root | `addons/code-review-agent/`、专属源码/配置/测试和当前开发指引 | GitLab code review | removed-in-working-tree | 22 个 tracked files 已删除；仓内扫描和 Java clean 通过；GitLab/DB/独立 deployment 未操作 |
+| root | `addons/echo-agent/`、根 reactor、`launcher/pom.xml`、discovery 与已知测试引用 | 示例 Provider | delete-authorized | 迁移或删除仓内 smoke/test 引用；保留 `LocalEchoBusinessFunctionAdapterInvoker` |
+| root | `/api/v1/claude-tasks`、`/api/v1/codex-tasks`、`/api/v1/langgraph-tasks` 对应 Controller、DTO、SPI、前端/Worker/SDK/CLI 调用 | 旧 Provider API | delete-authorized | 迁移或删除 PC、L3、Worker/canary、stream relay 等全部仓内引用后直接删除；无需外部静默或兼容窗口 |
 
 ## 明确保留/禁止触碰
 
@@ -153,7 +167,7 @@
 ## 清单维护规则
 
 1. 执行阶段发现新路径时，先更新本清单和 [Progress](./progress.md)，再修改代码。
-2. 从 `read-only-analysis` 提升为 `update/delete` 必须附对应 workitem 的证据与 Owner 决策。
+2. 第一档从 `read-only-analysis` 提升为 `update/delete` 必须附对应 workitem 的证据；第二档已经取得 dev-only `delete-authorized`，但仍须记录实际环境、精确范围、仓内引用和验证结果。
 3. 删除使用独立、可回滚提交；不得把多个第二档功能切片混成一个提交。
-4. 任何生产路由或外部契约变化都必须回写版本状态；本规划落档本身不改变生产路由。
-5. 静态搜索没有命中只代表“未发现静态引用”，不代表无运行流量或外部消费者。
+4. 任何生产路由或外部契约变化都必须回写版本状态；本授权仅覆盖 dev-only 范围，本规划落档本身不改变生产路由。
+5. 第二档不再以生产流量审计或兼容窗口作为 dev-only 删除 blocker；但静态搜索命中的仓内引用必须全部处理，发现共享/生产资源或上游消费者时必须停止并重新评审。

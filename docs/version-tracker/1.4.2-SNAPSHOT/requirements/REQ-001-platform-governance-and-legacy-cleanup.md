@@ -3,7 +3,8 @@ type: requirement
 version: 1.4.2-SNAPSHOT
 ticket: REQ-001
 priority: high
-status: planned
+status: in-progress
+decision_status: review-complete
 source: project-governance-iteration
 owner: root-workspace
 ---
@@ -24,7 +25,7 @@ Foggy Navigator 已形成覆盖多 Provider、多 Worker、Session/Task、文件
 
 ## 与版本目标的关系
 
-本需求是 `1.4.2-SNAPSHOT` 的总需求，统领 10 个工作项和 P0-P7 八个阶段。各工作项可以独立实施和签收，但不得偏离本文冻结的产品定位、信任边界、非目标与验收门禁。需要 Owner 拍板的八组建议集中记录在 [Owner 决策评审稿](../owner-decision-review.md)；其当前状态为 `pending-owner-review`，不构成已批准实现或生产授权。
+本需求是 `1.4.2-SNAPSHOT` 的总需求，统领 10 个工作项和 P0-P7 八个阶段。各工作项可以独立实施和签收，但不得偏离本文冻结的产品定位、信任边界、非目标与验收门禁。八组 Owner 决策集中记录在 [Owner 决策评审稿](../owner-decision-review.md)，当前状态为 `review-complete`：ODR-142-002 以“signed assertion 降为低优先级后续项、external 显式开关保持硬门”为约束，其余事项按 Owner 结论批准。Owner 决策已经触发 P0、P1 和 P5 开工，版本状态为 `in-progress`；这不表示全部实现完成、验收通过、生产启用或外部开放。
 
 ## 产品定位
 
@@ -36,7 +37,7 @@ Foggy Navigator 当前是内部系统，核心目标是：
 4. 文件、Git、工作目录、终端和跨项目协作；
 5. Business Agent、Open SDK、ClientApp 和 upstream user 集成。
 
-当前不是语义层或数据分析平台。历史 metadata 能力是否保留，应按实际 Navigator 运行职责和消费者审计决定，不能反向改变产品主线。
+当前不是语义层或数据分析平台。Owner 已批准物理删除旧 `metadata-query-module`，同时明确保留 `metadata-config-module`；二者不得因相邻命名被混为同一能力，也不能反向改变产品主线。
 
 ## 术语
 
@@ -56,9 +57,10 @@ Foggy Navigator 当前是内部系统，核心目标是：
 |---|---|---|
 | 已确认事实 | 本文产品定位、版本目标、治理边界和非目标 | 可作为需求基线，不代表代码已实现 |
 | 用户提供的静态线索 | 单 JVM SSE、addon 编译期依赖、重类、前端类型错误、lockfile 忽略、候选孤儿文件等 | 执行 Agent 必须复核路径、引用和当前分支状态 |
-| 用户提供的构建基线 | launcher 主干依赖链 clean test 当前可通过 | 本轮未复跑；P1 必须从 clean 环境形成新证据 |
-| 需要运行态确认 | Monitoring、metadata-query、code-review、echo 和旧 Provider API 的真实消费者、流量与部署 | 未确认前不得删除或宣布退役 |
-| 决策项 | 精确工具链版本、credential authority、mapping/grant 权威、状态 schema、退役窗口 | 必须记录 Owner、决定和日期，不得由聊天结论替代 |
+| 本轮构建实施与本机证据 | 已落地 Node `22.23.1`、pnpm `10.34.5`、根 lockfile、前端 workspace 矩阵和仓库级 CI workflow；精确版本 frozen install、前端类型检查/测试/构建通过，launcher 主依赖链 clean test 的 16 个 reactor 模块全部 `SUCCESS` | 只证明当前工作树的本机命令结果；GitHub runner、Worker jobs、nightly 和真实浏览器尚未运行，不得据此宣称合并门禁、体验或正式验收通过 |
+| Owner 已确认的开发环境边界 | Monitoring、metadata-query、code-review、echo 与旧 Provider API 不承担上游或生产兼容义务；开发数据可丢弃，允许按完整切片物理删除 | 免除生产流量静默、数据备份/保留和兼容窗口；不免除 dev-only 环境确认、完整 inventory、仓内引用迁移、测试和回滚记录 |
+| 需要运行态确认 | 执行中发现的共享基础设施、生产部署、外部 webhook/调用方或无法归属的数据库、队列和凭据 | 一旦发现即停止对应破坏性动作并重新取得 Owner 授权，不把本次 dev-only 结论扩展到生产 |
+| 决策项 | 八组 ODR 已完成评审；credential authority、mapping/grant 权威源、Provider state 具体迁移和超大类拆分顺序仍属于实施级决策 | 已批准项按评审约束执行；剩余实施级决定必须记录 Owner、日期和影响，不得由执行 Agent静默决定 |
 
 ## 总体目标
 
@@ -87,6 +89,7 @@ Foggy Navigator 当前是内部系统，核心目标是：
 1. LangBizWorker、CodexBizWorker、Worker Gateway、ClientApp 和 upstream user 的调用方身份必须可确认。
 2. tenant、ClientApp 与 upstream user mapping/grant 必须有明确权威来源、唯一性规则和失效语义。
 3. 不得直接信任请求体中的 `userId`、`reviewedBy`、`tenantId` 或同类身份字段；这些字段只能作为业务数据，并与可信主体交叉校验。
+4. 1.4.2 以 ClientApp credential 与 upstream user mapping/grant 作为当前身份基线；独立 signed assertion 降为低优先级后续能力，不作为本版本 P2 或 P7 的阻塞项。审计必须如实标记 `client-app-delegated`，不得把代办身份虚报为独立用户签名证明。
 
 ### Credential 与 token
 
@@ -102,15 +105,16 @@ Foggy Navigator 当前是内部系统，核心目标是：
 
 ### Worker 与工具边界
 
-1. 外部模式下，非 loopback Worker 不允许因空 Token 意外关闭认证。
-2. 缺少必要 credential 的非 loopback 外部 Worker 必须 fail closed 或保持 unready。
-3. 内部开发模式和外部启用模式必须有明确配置、readiness 与诊断差异。
-4. 外部触发的 Agent/Worker 必须受工作目录、允许工具、BusinessFunction 和附加目录边界约束。
-5. 必须记录必要的调用、审批、恢复、取消、失败和拒绝审计，且审计不泄露 token 或完整敏感输入。
+1. `external-enabled` 必须由显式配置开关启用，默认关闭；不得根据监听地址、请求参数或空 Token 自动推断进入外部模式。
+2. 外部模式下，非 loopback Worker 不允许因空 Token 意外关闭认证。
+3. 缺少必要 credential 的非 loopback 外部 Worker 必须 fail closed 或保持 unready。
+4. 内部开发模式和外部启用模式必须有明确配置、readiness 与诊断差异；开关关闭时不得报告 external ready 或开放外部路由。
+5. 外部触发的 Agent/Worker 必须受工作目录、允许工具、BusinessFunction 和附加目录边界约束。
+6. 必须记录必要的调用、审批、恢复、取消、失败和拒绝审计，且审计不泄露 token 或完整敏感输入。
 
 ## 构建与 CI 基线需求
 
-1. P1 必须选择并机器校验一个与当前前端工具链兼容的明确 Node、pnpm 与 Corepack 版本；ODR-142-001 建议 Node `22.23.1`、pnpm `10.34.5`，评审通过前不视为需求已冻结。
+1. P1 使用 Owner 已批准的 Node `22.23.1` 与 pnpm `10.34.5`，并机器校验 Node、pnpm 与实际 Corepack/bootstrap 版本。
 2. 根 workspace 必须提交并使用可复现 lockfile；当前 `pnpm-lock.yaml` 被全局忽略的问题必须关闭。
 3. 根构建必须明确覆盖主前端、chat-core、chat/widget、mobile 及纳入交付的其他前端包，不得用局部成功代表全仓成功。
 4. Java 必须从 clean 环境执行 launcher 主依赖链编译和测试，禁止依赖旧构建产物。
@@ -147,15 +151,17 @@ Foggy Navigator 当前是内部系统，核心目标是：
 
 每项删除前必须记录引用扫描、验证命令、迁移或替代说明、恢复来源和回滚方式。不得只写“删除文件”。
 
-### 第二档：运行流量与外部依赖审计后成组退役
+### 第二档：Owner 已批准的 dev-only 完整切片清理
 
-1. Monitoring：`monitoring-module`、`tools/foggy-monitor`、`MonitoringView.vue`、`api/monitoring.ts`、Security 放行项、`scripts/start-all.sh` 安装步骤及相关部署和文档作为一个完整功能切片。
-2. `metadata-query-module`：检查根 reactor、launcher、运行日志、外部流量、数据库、部署配置、第三方调用和旧 Foggy Dataset/FSScript 依赖。
-3. `addons/code-review-agent`：确认 GitLab webhook 或其他外部消费者后再决定去留。
-4. `echo-agent`：评估从生产 launcher 移出并转为 test/dev fixture，不能直接删除测试基线。
-5. 旧 Provider API：`/claude-tasks`、`/codex-tasks`、`/langgraph-tasks`、deprecated SPI 和兼容 DTO；必须审计 PC、Mobile、SDK、CLI 和外部客户调用。
+Owner 已确认当前范围没有上游或生产兼容义务，开发数据允许丢弃，以下切片可在 P5/P6 物理删除。该授权不允许命令命中共享或生产资源；执行前必须再次确认环境、资源名称与仓内引用。
 
-每个功能切片必须独立建退役门禁，不允许通过单次大提交混合删除。
+1. Monitoring：`monitoring-module`、`tools/foggy-monitor`、`MonitoringView.vue`、`api/monitoring.ts`、Security 放行项和 `scripts/start-all.sh` 安装步骤已作为 dev-only 切片物理移除；当前状态为已实施、待随 P5 完成剩余文档与门禁收口，开发数据库与 RabbitMQ 资源无需备份保留。
+2. `metadata-query-module`：尚未开始；后续从根 reactor、launcher、模块源码、专属配置、旧 Foggy Dataset/FSScript 依赖和当前文档完整移除，`metadata-config-module` 仍为禁止触碰项。
+3. `addons/code-review-agent`：源码与切片内配置已成组物理移除；当前状态为已实施、待随 P5 完成剩余文档与门禁收口。如后续扫描发现遗留 GitLab webhook 或 credential，仍须撤销或删除，禁止遗留可调用入口。
+4. `echo-agent`：尚未开始；迁移或删除仓内已知 smoke/test 引用后物理移除 addon、reactor/launcher 装配和 discovery 残留，不得误删 `LocalEchoBusinessFunctionAdapterInvoker`。
+5. 旧 Provider API：尚未开始；在同一阶段迁移或删除 PC、测试、Worker/canary 和其他仓内引用后，直接删除 `/claude-tasks`、`/codex-tasks`、`/langgraph-tasks` 对应 Controller、deprecated SPI 和兼容 DTO，不设置上游/生产弃用或静默窗口。
+
+每个功能切片必须独立提交、独立验证和独立回滚，不允许通过单次大提交混合删除。静态引用命中是必须处理的仓内依赖，不再被解释为需要外部兼容窗口。
 
 ### 暂时保留
 
@@ -177,7 +183,7 @@ Foggy Navigator 当前是内部系统，核心目标是：
 | OPT-002 | 重类、模块边界、Provider state schema | owning modules | [工作项](../workitems/OPT-002-core-code-maintainability.md) |
 | CLEAN-001 | 低风险孤儿候选 | root + owning module | [工作项](../workitems/CLEAN-001-low-risk-orphan-cleanup.md) |
 | CLEAN-002 | Monitoring 功能切片 | monitoring / deployment owners | [工作项](../workitems/CLEAN-002-monitoring-retirement.md) |
-| CLEAN-003 | metadata-query 退役审计 | metadata-query / launcher owners | [工作项](../workitems/CLEAN-003-metadata-query-retirement-audit.md) |
+| CLEAN-003 | metadata-query dev-only 完整退役 | metadata-query / launcher owners | [工作项](../workitems/CLEAN-003-metadata-query-retirement-audit.md) |
 | CLEAN-004 | code-review、echo、旧 Provider API | provider / SDK / client owners | [工作项](../workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) |
 | DOC-001 | 产品、架构、部署和历史文档对齐 | root documentation owner | [工作项](../workitems/DOC-001-documentation-alignment.md) |
 
@@ -187,13 +193,13 @@ Foggy Navigator 当前是内部系统，核心目标是：
 
 | 阶段 | 必须完成的需求输出 | 状态 |
 |---|---|---|
-| P0 | 产品定位、信任边界、术语、ownership、代码清单和证据分类冻结 | not-started |
-| P1 | 明确 Node 支持线、精确工具版本、lockfile、Java/前端/Worker clean build 与 CI 矩阵 | not-started |
-| P2 | 外部 Biz Worker/upstream user 身份、credential、task token、审计和 fail-closed 边界 | not-started |
+| P0 | 产品定位、信任边界、术语、ownership、代码清单和证据分类冻结 | in-progress |
+| P1 | 明确 Node 支持线、精确工具版本、lockfile、Java/前端/Worker clean build 与 CI 矩阵 | in-progress |
+| P2 | external 显式开关、ClientApp/grant 身份基线、credential、task token、审计和 fail-closed 边界；signed assertion 为低优先级后续项 | not-started |
 | P3 | Session/Task ownership、审批/恢复/取消主体校验和内部 UI 回归 | not-started |
 | P4 | 第一档孤儿项逐项扫描、验证、删除与回滚记录；失效文档对齐 | not-started |
-| P5 | 第二档能力完成运行态审计、Owner 决策和相互独立的退役计划 | not-started |
-| P6 | 重类、状态 schema 与旧 API 按兼容窗口渐进治理 | not-started |
+| P5 | 在 dev-only 授权范围内完成 Monitoring、metadata-query、code-review、echo 的完整 inventory、仓内引用处理和相互独立的物理删除 | in-progress |
+| P6 | 重类与状态 schema 渐进治理；旧 Provider API/SPI/DTO 在仓内消费者迁移后直接删除 | not-started |
 | P7 | 实现质量检查、测试覆盖审计、体验验证和正式签收 | not-started |
 
 详细输入、非目标、测试、风险、回滚和完成判据见 [实施计划](../implementation-plan.md)。
@@ -205,7 +211,7 @@ Foggy Navigator 当前是内部系统，核心目标是：
 3. 不引入通用 RBAC/ABAC 平台。
 4. 不在本版本实现多实例 SSE 事件总线。
 5. 不在本版本实现动态插件加载。
-6. 不在规划阶段直接删除 Monitoring、metadata-query 或旧 Provider API。
+6. 不在已批准的 dev-only 切片、仓内引用迁移和独立回滚边界之外扩大物理删除范围。
 7. 不把 Claude/Codex/Gemini 内部 Worker 的所有开发模式一刀切关闭。
 8. 不进行无明确收益的大范围代码重构。
 
@@ -221,25 +227,25 @@ Foggy Navigator 当前是内部系统，核心目标是：
 8. 主前端及纳入范围的其他前端包类型检查、测试和构建通过。
 9. Node 和包管理器版本明确，lockfile 可复现。
 10. 所有删除项都有引用扫描、迁移/替代说明和回滚证据。
-11. Monitoring、metadata-query 等凡获批退役者必须按完整功能切片退出；retain、migrate 或 defer 必须有 Owner 决策、范围、后续版本和生产影响记录。
+11. Monitoring、metadata-query、code-review、echo 和旧 Provider 契约按已批准 dev-only 范围完整退出；仓内引用、装配、配置、开发资源和文档无半退役残留，明确保留项无误删。
 12. 当前文档不得继续把 tutor、旧 chat-first 或语义层写成产品主线。
 13. 不把隔离验收等同于生产批准。
 
-其中第 11 项约束的是退役粒度：凡 1.4.2 批准退役的能力，必须按完整功能切片执行；若运行态审计得出 `retain`、`defer` 或证据不足，则不得伪报“已退役”，必须由 Owner 明确移出本版本退役范围并在正式签收中记录。
+其中第 11 项约束的是退役粒度和环境边界：dev-only 数据丢弃授权免除生产流量静默、备份和兼容等待，但不免除环境防误删、仓内消费者迁移、完整切片检查、clean build/test 与回滚记录。发现共享或生产资源时必须停止并重新取得授权。
 
 ## 约束与风险
 
-- 本需求只授权规划和后续按工作项实施，不授权本轮删除、业务代码修改、生产配置、数据库迁移或外部路由变更。
-- 静态无引用不能证明无运行时消费者；反射、配置、脚本、webhook、SDK 和外部客户必须单独审计。
-- 外部调用约束可能影响依赖旧宽松行为的消费者，必须先形成兼容、迁移和回滚方案。
+- 本需求已完成 Owner 评审并进入实施；当前改动必须受对应工作项、完整切片、仓内引用迁移和独立回滚约束，不得触碰生产配置、共享资源或外部路由。
+- dev-only 物理删除前仍须处理反射、配置、脚本、webhook、SDK 和仓内调用；发现共享/生产部署或上游消费者时，本次授权立即停止适用。
+- 旧 Provider 契约不设上游/生产兼容窗口，但仓内消费者必须先迁移或随切片删除，并保留可执行的 Git 回滚说明。
 - ownership 校验应集中建立不变量；若散落在 Controller，容易出现不同入口语义漂移。
 - 构建工具升级和 lockfile 纳管可能暴露隐藏依赖差异，必须从 clean 环境验证而不是沿用本地缓存。
 - 大型类拆分和状态 schema 迁移具有高回归风险，必须按小步阶段签收。
 
 ## Progress Tracking
 
-- development: not-started
-- testing: not-run
+- development: in-progress；P1 构建基线以及 Monitoring、`addons/code-review-agent` 两个 dev-only 切片已实施，`metadata-query-module`、Echo Agent 和旧 Provider 契约尚未开始
+- testing: partial-passed；本机精确版本 frozen install、前端类型检查/测试/构建和 Java launcher clean test（16 个 reactor 模块 `SUCCESS`）通过，GitHub runner、Worker jobs、nightly 与真实浏览器尚未运行
 - experience: not-run
 - implementation_plan: [1.4.2 implementation plan](../implementation-plan.md)
 - progress_record: [1.4.2 progress](../progress.md)

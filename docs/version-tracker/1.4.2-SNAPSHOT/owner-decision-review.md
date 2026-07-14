@@ -9,12 +9,12 @@
 ## 基本信息
 
 - version: `1.4.2-SNAPSHOT`
-- status: planned
+- status: review-complete
 - decision_status: review-complete
 - proposal_date: `2026-07-13`
 - decision_date: `2026-07-14`
 - decision_authority: Project Owner（当前项目会话中的明确确认）
-- implementation_started: no
+- implementation_started: yes
 - production_routing_changed: no
 - production_enablement: not-applicable
 - acceptance_status: not-started
@@ -80,12 +80,12 @@
 | ID | 未推荐方案 | 未作为默认建议的原因 |
 |---|---|---|
 | ODR-142-001 | 同时切 Node 24、pnpm 11；或继续 Node 18 | 前者把构建恢复扩大为两次 major 迁移，后者不满足当前 Vite 7 工具链；建议先冻结最小可验证支持线 |
-| ODR-142-002 | 所有外部请求永久只用 ClientApp 代办；或一次性强制所有旧 ClientApp signed assertion | 前者用户证明强度不足，后者会无兼容窗口地中断现有接入；建议目标模式与兼容模式分层 |
+| ODR-142-002 | 立即强制所有 dev/internal 调用 signed assertion；或未来外部开放仍永久只用 ClientApp 代办 | 前者在当前阶段收益不足，后者在外部场景证明强度不足；Owner 选择本版保留代办、显式关闭外部模式，并把 assertion 设为外部开放门禁 |
 | ODR-142-003 | 完全自包含 JWT；或长期不轮换 token | JWT 的即时撤销和任务状态传播更复杂，长期 token 会放大泄漏与重放窗口；Gateway 已有服务端校验点，opaque 更合适 |
 | ODR-142-004 | 继续用多个布尔开关推断“是否外部安全”；或全面关闭内部开发模式 | 布尔组合容易产生隐式放宽，全面关闭会破坏内部开发；显式双模式能同时保留开发效率和外部门禁 |
 | ODR-142-005 | 所有事件 best-effort；或所有事件同步强保证 | 前者无法保证关键审批/撤销可追溯，后者会让高频 SSE/心跳耦合主事务；分级 outbox 兼顾一致性和可用性 |
-| ODR-142-006 | 四项一起删除；或因不确定而无限期全部保留 | 四项装配、消费者和数据风险不同；统一动作既可能误删，也会继续保留半残留，必须独立目标态和授权 |
-| ODR-142-007 | 1.4.2 直接删 Controller/SPI/DTO；或永久保留所有兼容入口 | 前者已有静态消费者和未知客户风险，后者持续扩大维护面；逐路由 parity、期限和零流量门禁更可控 |
+| ODR-142-006 | 四项在一个不可回滚提交中一起删除；或因不确定而无限期全部保留 | Owner 已授权 dev 物理清理，但四项装配和测试价值不同；仍须独立盘点、提交和回滚 |
+| ODR-142-007 | 未迁移仓内消费者就删 Controller/SPI/DTO；或继续保留生产级兼容窗口 | 前者会直接破坏本仓，后者与当前未生产阶段不匹配；选择仓内迁移后同版本直接删除 |
 | ODR-142-008 | 批量重写历史文档；或把失效 Skill 留在活跃发现目录作“归档” | 前者破坏历史证据，后者继续误导 Agent 路由；当前基线、历史证据和活跃发现应分开治理 |
 
 ## ODR-142-001：Node、pnpm、lockfile 与 CI 分层
@@ -321,109 +321,106 @@ outbox 可使用现有数据库，不要求 1.4.2 同时引入 Kafka，也不等
 
 ## ODR-142-006：Monitoring、metadata-query、code-review 与 Echo 去留
 
-### 总体建议
+### Owner 决策
 
-四个切片必须独立决定、独立提交、独立回滚和独立签收。下表是目标方向，不是当前生产退役授权。
+四个切片继续独立盘点、独立提交、独立回滚和独立签收，但当前 dev 阶段已经授权在满足仓内安全门禁后物理移除。授权前提是项目尚未进入生产、上游仍在本机共同孵化、旧开发数据允许丢弃；若审计发现共享/生产资源、活跃独立部署或与此前提冲突的消费者，立即停止对应切片并重新请示。
 
-| 能力 | 建议目标态 | 当前动作 | 方向置信度 | 当前可否物理退役 |
-|---|---|---|---:|---|
-| Monitoring | `retire` 自研 RabbitMQ Monitoring 切片 | 收集运行态证据和替代观测方案 | 高 | no |
-| metadata-query | `migrate/retire` | 1.4.2 `defer` 删除，先查外部消费者 | 中高 | no |
-| code-review-agent | `archive/freeze` | 不接回默认构建，先查 GitLab 和独立部署 | 高 | no |
-| Echo Agent | dev/test `retain`、production `retire` | 先建立 fixture 和生产显式关闭 | 很高 | no |
-
-ODR-142-006 只批准“四项必须独立决策”的总体政策。每个切片使用独立子决策，允许得到不同结论：
-
-| 子决策 | 建议结论 | Required approval roles | 当前状态 | production retirement authorization |
+| 能力 | 1.4.2 目标态 | 物理删除授权 | 数据处理 | 实施硬门禁 |
 |---|---|---|---|---|
-| ODR-142-006-MON | Monitoring 以完整切片 retire 为目标 | Platform、Operations；涉及数据/消息删除时追加 Data、Messaging、Release | pending-decision | no |
-| ODR-142-006-MQ | metadata-query 在 1.4.2 defer 物理删除，以 migrate/retire 为方向 | Platform、Metadata、Data、所有已识别 consumer owners、Release | pending-decision | no |
-| ODR-142-006-CR | code-review-agent archive/freeze，不接回默认 launcher | Product/Platform、GitLab/integration、Security | pending-decision | no |
-| ODR-142-006-ECHO | Echo dev/test retain、production discovery/runtime retire | Provider、Test、Release/Platform | pending-decision | no |
+| Monitoring | 删除自研 RabbitMQ Monitoring 完整切片 | dev-only: yes | 旧 dev 队列、表和数据可丢弃 | 完整资源清单、仓内引用扫描、替代基础日志/健康观测、受影响 clean build/test |
+| metadata-query | 删除 `metadata-query-module` 专属切片 | dev-only: yes | 旧 dev 查询数据可丢弃 | 保护 `metadata-config-module`、迁移/删除仓内引用、launcher/reactor clean build |
+| code-review-agent | 删除未装配的历史实验 addon | dev-only: yes | 旧 dev 配置/记录可丢弃 | 扫描 GitLab/webhook/独立部署配置；发现实际活跃外部资源则停手 |
+| Echo Agent | 退出生产装配/发现；把必要价值迁为 dev/test fixture | dev-only: yes | 示例数据可丢弃 | 先迁移统一分派、测试、探针所需 fixture；不得删除 `LocalEchoBusinessFunctionAdapterInvoker` |
 
-某个子决策获批不影响其他三个子决策。任何 `production retirement authorization` 只能在运行态证据、迁移、数据处理和回滚演练齐备后单独从 `no` 更新，不得由 ODR-142-006 总体签字推导。
+| 子决策 | Owner 结论 | environment_scope | data_discard_authorized | physical_deletion_authorized |
+|---|---|---|---|---|
+| ODR-142-006-MON | approved-with-constraints | development-only | yes | yes |
+| ODR-142-006-MQ | approved-with-constraints | development-only | yes | yes |
+| ODR-142-006-CR | approved-with-constraints | development-only | yes | yes |
+| ODR-142-006-ECHO | approved-with-constraints | development-only | yes | yes，完成 fixture 迁移后 |
+
+上述授权免除生产流量观察期、客户兼容窗口和旧 dev 数据备份要求，不免除精确环境确认、仓内依赖迁移、测试、回滚和完整功能切片治理。删除代码与删除 RabbitMQ topology、数据库对象、webhook/credential 等外部资源仍分开记录；本轮可丢弃数据不等于允许对未确认环境执行破坏性操作。
 
 ### Monitoring
 
 - 退役范围是 RabbitMQ 日志采集、事件持久化、告警、Monitoring 页面/API、SecurityConfig 残留、启动安装步骤和相关部署文档，不是取消应用日志、指标和安全审计。
-- 必查 `/api/v1/monitoring/**` access log、RabbitMQ exchange/queue/binding、publisher/consumer、`monitoring_events`、独立 jar/镜像、dashboard、告警和定时任务。
-- 先明确应用日志、Actuator/公司观测设施等替代路径，再停止 publisher/consumer并保留资源观察。
-- 静默窗口不少于 30 天或最长已知调度周期的两倍，取更长者；代码退出、RabbitMQ 资源和数据库数据删除分别审批。
-- 回滚需要代码 revert、RabbitMQ topology 快照和数据库备份，Git 回滚不等于数据恢复。
+- 盘点 `/api/v1/monitoring/**`、RabbitMQ exchange/queue/binding、publisher/consumer、`monitoring_events`、独立 jar/镜像、dashboard、告警、启动脚本和文档，按完整切片删除。
+- 删除前保留应用日志、健康检查等最低替代观测；不把自研 Monitoring 退役误写为取消安全审计或所有运行观测。
+- 不要求 30 天静默或旧 dev 数据备份；回滚以独立代码提交、资源定义清单和必要的重建脚本/说明为准，不承诺恢复已明确允许丢弃的旧数据。
 
 ### metadata-query
 
 - 当前仍在根 reactor 和 launcher，且依赖旧语义层能力；仓内未发现明显消费者只是静态结论。
-- 必查 `/api/metadata/query/**` method/path/queryId 流量、调用主体/版本、`foggy.api.base-url`、外部 Foggy 服务、TM/QM、datasource、独立部署和仓库外 SDK。
-- 建议观察不少于 60 天或最长业务周期两倍，取更长者。无消费者才批准 retire；少量消费者先 migrate；重要消费者则 `retain-as-legacy` 并冻结新增能力；无法确认则继续 defer。
-- 退役只能精确移除 `metadata-query-module` 专属切片，必须对 `metadata-config-module` 做完整回归，不按相邻 package 前缀批量删除。
+- 静态扫描 `/api/metadata/query/**`、`foggy.api.base-url`、TM/QM、datasource、独立部署配置和仓内 SDK 引用；本轮不要求 60 天运行流量观察或仓外客户清单。
+- 退役只能精确移除 `metadata-query-module` 专属切片，必须对 `metadata-config-module` 做完整回归，不按相邻 package 前缀批量删除；根 reactor、launcher、配置、文档和测试必须同切片收口。
+- 若扫描意外发现实际活跃的共享部署或仓外集成，记录为“与 dev-only 假设冲突”并停止，不自行扩张删除授权。
 
 ### code-review-agent
 
 - 当前源码包含 GitLab webhook、配置/记录表、credential 和 MR 评论逻辑，但不在默认 reactor/launcher，更接近历史实验能力。
-- 必查 GitLab project webhook/delivery、独立 jar/容器/反向代理、`code_review_config`、`code_review_record`、MR 评论、Git Provider credential 和 CI 外部调用。
-- 建议标记 unsupported/frozen，不重新装配。无人使用后先导出记录、移除 webhook、撤销或轮换 token、完成静默，再以 tag/runbook 保留恢复能力并退出活跃源码树。
+- 静态扫描 GitLab project webhook/delivery、独立 jar/容器/反向代理、`code_review_config`、`code_review_record`、MR 评论、Git Provider credential 和 CI 外部调用。没有实际活跃资源时直接物理移除，不再只做 archive/freeze。
+- dev 数据可丢弃，不要求导出记录或静默窗口；发现真实 webhook、共享 credential 或独立部署时先停手，避免对未确认外部资源产生副作用。
 - 如 Owner 决定恢复产品能力，应另立需求并按当前 ClientApp、BusinessTask/Function、task token 和审计边界重新设计，不能原样加回 launcher。
 
 ### Echo Agent
 
 - Echo 有统一任务分派和迁移测试价值，但当前默认进入生产 discovery 不合适。
-- 第一步增加显式 enable condition，生产默认关闭，dev/test/integration 显式开启；补 production/dev 两套 discovery contract。
-- 测试迁移完成并审计 session/task/grant/audit、Open SDK/CLI、演示和探针使用后，再从生产 launcher runtime dependency 移除；根 reactor 可以保留 fixture。
+- 先把仍有价值的统一任务分派、迁移测试、演示或探针依赖迁入明确的 dev/test fixture；生产装配和 discovery 必须显式关闭或删除。
+- fixture 迁移和引用扫描完成后，可从 launcher/runtime dependency 与生产发现中物理移除 Echo addon；是否保留根 reactor 中的测试 fixture 由最小可维护结构决定。
 - 不删除 `LocalEchoBusinessFunctionAdapterInvoker`，它不是 Echo Agent addon。
 
 ### Owner 评审
 
-- decision_owner: Product + Platform + Operations + 各切片 Owner
-- proposed_result: approve-target-directions-only
-- production_retirement_authorization: no
-- review_result: pending-decision
-- review_date: pending
-- rationale_or_constraints: pending
+- decision_owner: Project Owner；实施复核为 Platform + 各切片 Owner
+- proposed_result: approve-dev-physical-removal
+- environment_scope: development-only
+- production_retirement_authorization: not-applicable
+- data_discard_authorized: yes
+- review_result: approved-with-constraints
+- review_date: `2026-07-14`
+- rationale_or_constraints: 满足精确环境确认、仓内引用迁移、完整切片、测试和独立回滚后可直接物理移除；发现共享/生产资源时停止并重审。
 
 ## ODR-142-007：旧 Provider API、deprecated SPI 与 DTO 窗口
 
-### 建议决策
+### Owner 决策
 
-1. 1.4.2 不删除 `/api/v1/claude-tasks`、`/api/v1/codex-tasks`、`/api/v1/langgraph-tasks`、deprecated SPI 或兼容 DTO。
-2. 采用“先补等价替代、逐路由迁移、可观测归零后 sunset”，不能按 Controller 整体删除。
-3. HTTP 路由的通用删除门槛取以下三者中最晚者：
-   - 替代契约已经随至少两个正式版本发布；
-   - 替代契约稳定可用满 90 天；
-   - 所有生产和准生产实例连续 30 天旧路由全部请求为 0，且静默期不短于已知最长客户调用周期；如仍有非 2xx，请求必须逐笔归属为 synthetic、攻击流量或经 Owner 批准的例外。
-4. 同时必须没有未知或无法归属的请求/调用方，响应、错误码、过滤和 ownership 语义已经对齐，且旧路由可独立恢复。持续 401/403/404/5xx 的旧客户端仍是活跃消费者，不能因 2xx 为 0 而批准删除。
-5. 建议节奏：1.4.2 增加指标、身份硬化、替代和仓内迁移；1.4.3 冻结旧契约并返回弃用/sunset/link 信息；最早 1.5.0 按路由删除。
+1. 1.4.2 直接移除 `/api/v1/claude-tasks`、`/api/v1/codex-tasks`、`/api/v1/langgraph-tasks`、deprecated SPI 和仅服务这些入口的兼容 DTO；项目尚未进入生产，所有上游仍在本机共同孵化，不设置外部客户兼容窗口。
+2. 取消“两版本 + 90 天 + 30 天零流量”、sunset header、仓外消费者清单和旧 Provider 二进制兼容期要求；旧 dev 数据、历史生成图片链接和过渡记录允许丢弃。
+3. 直接删除不等于先删 Controller 再修编译。必须先按 method/route 盘点并迁移或删除全部仓内消费者、测试、canary/soak、SDK/CLI 和前端调用，再在同一受控批次移除契约。
+4. 统一 `/api/v1/tasks`、当前 Provider 能力、`TaskDispatchRequest.providerType`、通用 Agent 注册和本版明确保留的集成资产不属于删除对象。
+5. LangGraph 审批、恢复、取消等身份语义即使随旧路由删除，也必须在替代入口使用可信 principal/token context，不得把请求体 `userId`、`reviewedBy` 或 `tenantId` 迁入新契约继续信任。
 
-### 路由例外与专属门禁
+### 仓内迁移与专属门禁
 
-- Claude：task/session 主链大体有统一入口，但 worker session、conversation config、分页和过滤语义仍需逐方法 parity；静态无当前 PC/Mobile 字面调用不能证明外部客户为零。
-- Codex：`file-hints` 仍有 PC 消费者；root GET 被 App Server canary/soak 使用；generated-image URL 已写入持久会话历史。前两者先补 ownership-aware 替代；generated-image 薄别名至少保留到最长制品保留期后再观察 90 天，无法证明历史链接已回填或过期时建议跨 1.x 保留。
-- LangGraph：GET 和 approve 均有仓内消费者。1.4.2 必须立即把 actor 改为可信 principal/token context，并校验 tenant、ClientApp、subject 与 task/approval 归属。兼容窗口只保留路径和响应，不保留信任 `userId`/`reviewedBy` 的旧安全语义。
+- Claude：逐方法确认 worker session、conversation config、分页和过滤是否已有统一入口；只迁移当前仓内仍需语义，不为未使用方法新建一套兼容 facade。
+- Codex：PC `file-hints`、App Server canary/soak root GET、`CodexStreamRelay` 的 generated-image URL 必须迁移或随失效场景删除；历史 dev 会话中的旧图片链接无需保留。
+- LangGraph：仓内 GET 和 approve 调用必须迁移到统一入口；审批 actor 改为可信 principal/token context，并校验 tenant、ClientApp、subject 与 task/approval 归属。
 
-### 外部消费者清单
+### 消费者清单
 
-每个 method + route template 至少登记：环境、调用方、Owner/联系人、tenant、ClientApp、upstream user 类别、客户端/包版本、证据来源、首次/最后访问、30/60/90 天 2xx/4xx/5xx、替代版本、迁移状态、截止日、例外批准和回滚联系人。指标按 route template + method 聚合，记录可归属的 tenant/ClientApp/client-version，但不记录 token 和用户内容；synthetic/canary 与真实客户分开。
-
-当前静态已知消费者包括 PC -> Codex file-hints、PC -> LangGraph approve、Business Agent L3 与 dev bootstrap -> LangGraph GET、Codex App Server canary/soak -> Codex root GET、Codex 历史消息 -> generated-image URL。仍需补 Open SDK、CLI、已发布 PC/Mobile 旧版本、部署配置、Gateway/access log 和外部客户清单。
+当前静态已知消费者包括 PC -> Codex file-hints、PC -> LangGraph approve、Business Agent L3 与 dev bootstrap -> LangGraph GET、Codex App Server canary/soak -> Codex root GET、Codex 历史消息 -> generated-image URL。实施清单至少记录仓内路径、调用 method/route、替代或删除动作、验证命令和回滚提交；不要求补生产流量指标、已发布客户版本或仓外联系人。
 
 ### SPI 与 DTO
 
-- 1.4.2 先让框架内部只调用 typed API，保留 legacy default bridge，并盘点仓外 Provider 编译制品。
-- SPI 物理删除不早于两个 Provider artifact 版本且不少于 180 天；须通过受支持外部 Provider 样例编译测试。没有外部消费者登记体系时再多保留一个 minor。
-- Provider 旧 DTO/Form 先收敛为边界 compatibility adapter，不能与 Controller 同批删除；建议旧 HTTP 删除后至少再保留一个正式版本，物理删除不早于 1.5.1 或 180 天。
+- 让框架内部和全部仓内 Provider 只调用 typed API，随后在 1.4.2 同批删除 legacy default bridge、deprecated SPI 和无剩余用途的兼容 DTO/Form。
+- 不保留两个 artifact 版本、180 天或额外 minor 的二进制兼容窗口；仓内 Provider 样例、launcher reactor 和受影响 Worker 编译测试必须通过。
+- DTO/Form 只有在仍服务当前 typed/unified 契约时保留；不得因名称相似批量删除当前请求模型。
 - `TaskDispatchRequest.providerType` 仍服务统一 OpenAPI/独立执行，不属于本轮删除对象。
 
 ### 回滚与否决条件
 
-旧路由保留独立 feature flag 或薄 adapter。出现未知调用方、替代错误率/延迟超基线、响应语义缺口、历史图片链接失败或 canary 证据断档即恢复对应路由。LangGraph 身份硬化不得回滚为信任请求体 actor。
+每组路由/SPI/DTO 采用独立可 revert 提交；删除前保存引用扫描和迁移动作清单。clean build/test 失败、仓内调用未迁完、统一入口缺少当前必需语义或误删非兼容能力时回滚对应提交。旧 dev 图片和数据丢失不是回滚触发条件；LangGraph 身份硬化不得回滚为信任请求体 actor。
 
 ### Owner 评审
 
-- decision_owner: API/SDK owner + PC/Mobile/CLI owners + Provider owners + external customer owner
-- proposed_result: approve-compatibility-policy
-- review_result: pending-decision
-- review_date: pending
-- rationale_or_constraints: pending
+- decision_owner: Project Owner；实施复核为 API/SDK + Provider + 仓内消费者 owners
+- proposed_result: approve-direct-dev-removal
+- environment_scope: development-only
+- external_compatibility_window: not-required
+- data_discard_authorized: yes
+- review_result: approved-with-constraints
+- review_date: `2026-07-14`
+- rationale_or_constraints: 所有上游仍在本机孵化，可直接移除旧契约；先完成仓内消费者迁移、可信 actor 语义和 clean build/test，不保留生产兼容窗口。
 
 ## ODR-142-008：失效 Skills 与文档处理
 
@@ -458,35 +455,35 @@ ODR-142-006 只批准“四项必须独立决策”的总体政策。每个切�
 
 ### Owner 评审
 
-- decision_owner: Documentation owner + Product/Architecture + Skill/module owners
+- decision_owner: Project Owner；实施复核为 Documentation + Product/Architecture + Skill/module owners
 - proposed_result: approve-classification-policy
-- review_result: pending-decision
-- review_date: pending
-- rationale_or_constraints: pending
+- review_result: approved
+- review_date: `2026-07-14`
+- rationale_or_constraints: 按当前/派生/历史证据/删除候选分级治理；物理删除仍保留引用扫描、替代和独立回滚。
 
-## Owner 签署表
+## Owner 决策记录
 
-评审时由每个 required role 留下姓名、角色和日期；如使用外部评审系统，应在“约束/记录”中填写可追溯链接。所有 required approvals 齐备后才能更新 `review_result`。
+Project Owner 已在当前项目会话中明确确认产品阶段、优先级、删除授权和其余建议。下表只记录该正式授权及实施约束；不虚构模块、安全或构建 Owner 的姓名。后续角色复核写入各 workitem 的 execution check-in 和 evidence。
 
-| ID | review_result | Required approvals | Recorded approvals（姓名 / 角色 / 日期） | 约束或外部记录 |
+| ID | review_result | 实施复核 | Recorded authorization（主体 / 角色 / 日期） | 约束或记录 |
 |---|---|---|---|---|
-| ODR-142-001 | pending-decision | Build、Frontend、相关 Worker lane | not-recorded | not-recorded |
-| ODR-142-002 | pending-decision | ClientApp/Upstream、Security、Platform | not-recorded | not-recorded |
-| ODR-142-003 | pending-decision | Business Agent、Worker Gateway、Security、Operations | not-recorded | not-recorded |
-| ODR-142-004 | pending-decision | Codex/LangGraph Worker、Platform、Security | not-recorded | not-recorded |
-| ODR-142-005 | pending-decision | Security、Operations/SRE、Business Agent | not-recorded | not-recorded |
-| ODR-142-006 | pending-decision | Product、Platform | not-recorded | 只批准分切片政策，不代表任何子项退役 |
-| ODR-142-006-MON | pending-decision | Platform、Operations；按资源追加 Data/Messaging/Release | not-recorded | production retirement authorization: no |
-| ODR-142-006-MQ | pending-decision | Platform、Metadata、Data、Consumer owners、Release | not-recorded | production retirement authorization: no |
-| ODR-142-006-CR | pending-decision | Product/Platform、GitLab/Integration、Security | not-recorded | production retirement authorization: no |
-| ODR-142-006-ECHO | pending-decision | Provider、Test、Release/Platform | not-recorded | production retirement authorization: no |
-| ODR-142-007 | pending-decision | API/SDK、Release、所有登记消费者、必要时外部客户归口 | not-recorded | 逐路由批准；未知调用方阻塞删除 |
-| ODR-142-008 | pending-decision | Product/Architecture、Documentation；删除时追加 Skill/module owner | not-recorded | 删除项仍需引用扫描和独立回滚 |
+| ODR-142-001 | approved | Build、Frontend、相关 Worker lane | Project Owner / decision authority / `2026-07-14` | 精确工具版本、单根 lockfile、CI 分层 |
+| ODR-142-002 | approved-with-constraints | ClientApp/Upstream、Security、Platform | Project Owner / decision authority / `2026-07-14` | assertion 降优先级；external 显式、默认关闭 |
+| ODR-142-003 | approved | Business Agent、Worker Gateway、Security、Operations | Project Owner / decision authority / `2026-07-14` | token scope、TTL、撤销、轮换、Worker lease |
+| ODR-142-004 | approved-with-constraints | Codex/LangGraph Worker、Platform、Security | Project Owner / decision authority / `2026-07-14` | 外部模式门禁未齐前不得打开 |
+| ODR-142-005 | approved | Security、Operations/SRE、Business Agent | Project Owner / decision authority / `2026-07-14` | 分级可靠审计 |
+| ODR-142-006 | approved-with-constraints | Platform、各切片 owner | Project Owner / decision authority / `2026-07-14` | dev-only 安全后物理清理，数据可丢弃 |
+| ODR-142-006-MON | approved-with-constraints | Platform、Observability | Project Owner / decision authority / `2026-07-14` | 完整切片、dev-only |
+| ODR-142-006-MQ | approved-with-constraints | Platform、Metadata | Project Owner / decision authority / `2026-07-14` | 保护 metadata-config、dev-only |
+| ODR-142-006-CR | approved-with-constraints | Platform、GitLab/Integration | Project Owner / decision authority / `2026-07-14` | 发现活跃外部资源则停止 |
+| ODR-142-006-ECHO | approved-with-constraints | Provider、Test、Platform | Project Owner / decision authority / `2026-07-14` | 先迁移 fixture；保留同名非 addon adapter |
+| ODR-142-007 | approved-with-constraints | API/SDK、Provider、仓内消费者 | Project Owner / decision authority / `2026-07-14` | 无外部窗口；仓内迁移和 clean build 是硬门 |
+| ODR-142-008 | approved | Product/Architecture、Documentation、相关 Skill owner | Project Owner / decision authority / `2026-07-14` | 引用扫描和独立回滚仍保留 |
 
 ## 评审后回写规则
 
-1. 批准或退回后更新本文 `review_result` 和签署表，并同步 [Implementation Plan](./implementation-plan.md) 的决策门禁与 [Progress](./progress.md) 的 Decision Register。
+1. 已同步本文 `review_result` 和决策表；继续同步 [Implementation Plan](./implementation-plan.md) 的阶段门禁与 [Progress](./progress.md) 的 Decision Register。
 2. 批准只解除相应设计门禁，不把 workitem、测试或验收状态改为完成。
-3. ODR-142-006 即使批准目标方向，仍须在各切片 workitem 中另行登记 `production_retirement_authorization`；未授权时不得删除生产路由、消息资源、数据库或外部配置。
-4. ODR-142-007 的物理删除按 route/SPI/DTO 独立记录，不能用 Controller 级一次批准覆盖全部消费者。
+3. ODR-142-006 的物理删除授权仅适用于已确认的 dev 环境；外部资源动作必须记录精确目标，发现共享/生产资源时停止并重新决策。
+4. ODR-142-007 的物理删除按 route/SPI/DTO 独立记录；Owner 取消外部兼容窗口，但没有取消仓内消费者迁移和构建测试。
 5. 实施中发现新消费者、契约差距或风险时，将对应 ODR 状态改为 `revise-required` 或 `deferred`，并保留原评审记录。

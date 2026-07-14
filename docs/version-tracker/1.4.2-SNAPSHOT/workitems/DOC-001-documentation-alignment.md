@@ -3,7 +3,7 @@ type: documentation
 version: 1.4.2-SNAPSHOT
 ticket: DOC-001
 priority: high
-status: planned
+status: in-progress
 source: REQ-001
 owner: root-documentation
 ---
@@ -20,7 +20,7 @@ owner: root-documentation
 
 - version: `1.4.2-SNAPSHOT`
 - ticket: `DOC-001`
-- status: planned
+- status: in-progress
 - requirement: [REQ-001 平台治理与历史能力收口](../requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
 - implementation_plan: [1.4.2 实施计划](../implementation-plan.md)
 - owner_decision_review: [ODR-142-008 Owner 决策评审稿](../owner-decision-review.md)
@@ -29,8 +29,8 @@ owner: root-documentation
 - progress_record: [1.4.2 进度](../progress.md)
 - production_routing_changed: no
 - external_contract_changed: no
-- implementation_started: no
-- testing: not-run
+- implementation_started: yes
+- testing: in-progress
 - acceptance_status: not-started
 
 ## 背景
@@ -59,7 +59,7 @@ Foggy Navigator 当前是内部多 Worker 远程编程工作台，主线是统�
 - 不重写全部历史版本文档、验收报告、测试报告或 evidence 文件。
 - 不因出现 `metadata`、`query`、`dataset` 等名称就删除仍有当前职责的模块或 Skill。
 - 不在未完成引用和消费者审计前删除项目 Skill、模块文档或外部集成指南。
-- 不把文案对齐当作 Monitoring、metadata-query、旧 Provider API 等能力的退役批准。
+- 不把文案对齐本身当作 Monitoring、metadata-query、旧 Provider API 等能力的退役批准；各能力只按其 Owner 决策和独立 cleanup workitem 执行。
 - 不用本次文档审阅替代实现质量检查、测试覆盖审计或正式验收。
 
 ## 对齐基线
@@ -151,7 +151,7 @@ Foggy Navigator 当前是内部多 Worker 远程编程工作台，主线是统�
 
 - 当前根 README、系统总览、A2A 文档、模块导航和项目 Skills 不得把 Foggy Dataset、FSScript 或语义分析写成 Navigator 的产品主线。
 - `metadata-config-module` 仍有独立配置职责，不得因名称相似而删除。
-- `metadata-query-module` 的去留由 [CLEAN-003](./CLEAN-003-metadata-query-retirement-audit.md) 通过运行流量和外部依赖审计决定；在审计完成前只修正定位，不宣布退役。
+- `metadata-query-module` 已由 Owner 批准按 dev-only 完整切片退役；物理删除、`metadata-config-module` 保护和删除后测试由 [CLEAN-003](./CLEAN-003-metadata-query-retirement-audit.md) 独立执行，DOC-001 只同步当前事实和历史边界。
 - 历史语义层文档应保留其当时背景，必要时加当前基线勘误或移动到明确归档导航，而不是抹除历史。
 
 ## 项目 Skills 对齐要求
@@ -173,7 +173,7 @@ Foggy Navigator 当前是内部多 Worker 远程编程工作台，主线是统�
 | 后置流程 | 需要时指向 progress、自检、质量检查、覆盖审计和验收 |
 | 生命周期 | active、legacy、candidate-for-removal 或 archived 状态明确 |
 
-对仍活跃的 `metadata-config-module` Skill 只修正定位；对 `metadata-query-module` Skill 保持可用直到 CLEAN-003 得出退役决定；对已经删除且无引用的 tutor/OpenHands Skill 才允许进入清理流程。
+对仍活跃的 `metadata-config-module` Skill 只修正定位；`metadata-query-module` Skill 在 CLEAN-003 物理删除批次中退出活跃发现；对已经删除且无引用的 tutor/OpenHands Skill 按 CLEAN-001 门禁处理。
 
 ## 证据分类
 
@@ -187,7 +187,7 @@ Foggy Navigator 当前是内部多 Worker 远程编程工作台，主线是统�
 | DOC-E06 | Owner 决策 | 冲突文档哪个是权威源、历史材料是否追加勘误 | 形成有日期的决策记录 |
 | DOC-E07 | 验证证据 | 相对链接、Markdown、Skill 路径和手工审阅是否通过 | 仅实际执行并记录结果后可标 passed |
 
-本规划没有执行上述扫描、链接检查或手工审阅；所有验证状态初始为 `not-run`。
+`2026-07-14` 已开始执行当前文档对齐：根 README/CLAUDE、系统总览、功能架构、观测/通知文档、安装说明和 testing-guide 的明确失效条目已更新；`module-review-2026-05-31.md` 只追加历史快照提示，未改写原结论。全量关键词分类、Markdown 链接/锚点检查和 Owner 手工审阅仍未完成。
 
 ## 实施步骤
 
@@ -211,7 +211,7 @@ Foggy Navigator 当前是内部多 Worker 远程编程工作台，主线是统�
 
 1. 先更新根 README、CLAUDE、系统总览和 A2A 架构，再更新导航、模块摘要与操作指南。
 2. 统一产品主线、内部/外部边界、编译期模块化单体、单 JVM SSE 和 Provider/Worker 术语。
-3. 当前构建说明与 [OPT-001 构建基线](./OPT-001-build-and-ci-baseline.md) 保持一致；在 P1 完成前不把 Node、pnpm 或 clean build 写成已验证事实。
+3. 当前构建说明与 [OPT-001 构建基线](./OPT-001-build-and-ci-baseline.md) 保持一致；只把本地实际通过的 Node、pnpm、frozen install、frontend matrix 和 Java clean test 写为本地证据，hosted CI/nightly 继续标记未运行。
 4. 当前安全说明与 GOV-001/002/003 保持一致，不扩大到全平台 Spring Security 重写。
 
 完成判据：当前入口间不存在相互冲突的主线、信任边界和架构声明。
@@ -286,7 +286,7 @@ rg --files .agents/skills docs/skills docs/01-overview docs/02-modules \
 - YAML metadata 与状态字段一致性检查
 - 版本 README、REQ-001、DOC-001 与 progress 的相互链接检查
 
-当前结果：`not-run`。
+当前结果：`passed-local / workitem-still-in-progress`。本批次检查 32 个 Markdown、411 个相对文件目标和 3 个锚点，缺失均为 0；`git diff --check` exit 0。全量历史/Skill 分类和 Owner 手工审阅仍未完成，不能据此关闭 DOC-001。
 
 ## 手工审阅清单
 
@@ -297,7 +297,7 @@ rg --files .agents/skills docs/skills docs/01-overview docs/02-modules \
 | Session/Task/A2A Owner | Session、Task、A2A 与审批恢复术语和边界一致 | not-run |
 | Biz Worker/ClientApp Owner | LangBizWorker、CodexBizWorker、upstream user 和外部模式描述准确 | not-run |
 | Frontend Owner | chat 组件、`/c/:id`、Profile 与当前工作台关系没有被误删或误述 | not-run |
-| Metadata Owner | metadata-config 保留边界和 metadata-query 待审计状态准确 | not-run |
+| Metadata Owner | metadata-config 保留边界和 metadata-query dev-only 退役状态准确 | not-run |
 | Skill Owner | 项目 Skills trigger、路径、状态和模块分工准确 | not-run |
 | Release/Signoff Owner | 历史证据未被改写，隔离验收未被表述为生产批准 | not-run |
 
@@ -324,7 +324,7 @@ rg --files .agents/skills docs/skills docs/01-overview docs/02-modules \
 5. 历史版本、测试和验收证据保持可追溯；必要勘误注明日期、替代文档和“历史结论不变”。
 6. 项目 `.agents/skills` 与 `docs/skills` 的触发、路径、模块职责和状态与当前仓库一致。
 7. tutor/OpenHands 等失效 Skill 或文档候选都有引用扫描、替代说明、Owner 和回滚记录，再由 CLEAN-001 决定是否删除。
-8. metadata-query 只标记为待运行态审计，不在 DOC-001 中宣布退役；metadata-config 明确保留。
+8. metadata-query 如实标记为 Owner 已批准、但物理删除尚未开始；metadata-config 明确保留且不由 DOC-001 修改。
 9. 所有新增或修改的相对链接、文件路径和锚点检查通过，并留下实际命令与结果。
 10. 产品、架构、模块、Skill 和 release Owner 的手工审阅有记录，未审阅项不得标记完成。
 11. [进度记录](../progress.md) 已回写 development、testing、experience、self-check、风险与证据状态。
@@ -332,7 +332,7 @@ rg --files .agents/skills docs/skills docs/01-overview docs/02-modules \
 
 ## 完成判据
 
-DOC-001 只有同时满足以下条件才可从 `planned` 转为完成态：
+DOC-001 只有同时满足以下条件才可从 `in-progress` 转为完成态：
 
 - 当前文档清单、历史文档清单和项目 Skill 清单均已分类；
 - 当前权威入口完成对齐，派生文档不存在已知冲突；
@@ -342,20 +342,20 @@ DOC-001 只有同时满足以下条件才可从 `planned` 转为完成态：
 - 手工审阅清单全部关闭或有明确、已接受的例外；
 - progress 已回写真实变更、命令、结果、未运行项和风险；
 - 完成 implementation self-check，并根据跨模块影响决定是否进入正式质量检查；
-- 没有修改业务代码、生产路由、数据库或外部契约。
+- DOC-001 自身没有修改业务代码、生产路由、数据库或外部契约；同一版本其他独立 workitem 的代码变更必须分别记证。
 
 ## Progress Tracking
 
 ### Development
 
-- status: not-started
-- current: 仅完成规划落档，尚未执行文档或 Skill 对齐。
+- status: partial-passed
+- current: 已对齐 P1 工具链、Monitoring/code-review 删除现状和外部模式默认关闭等当前入口；历史/Skill 全量分类及手工审阅待完成。
 
 ### Testing
 
-- status: not-run
+- status: in-progress
 - automation: required-for-links-paths-and-metadata
-- evidence: not-collected
+- evidence: 32 Markdown / 411 relative targets / 3 anchors missing 0；`git diff --check` exit 0；关键词按 current/historical 语义人工抽查
 
 ### Experience
 
