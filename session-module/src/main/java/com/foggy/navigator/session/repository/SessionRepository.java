@@ -58,6 +58,8 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
 
     Optional<SessionEntity> findByIdAndUserIdAndTenantId(String id, String userId, String tenantId);
 
+    Optional<SessionEntity> findByIdAndUserIdAndTenantIdIsNull(String id, String userId);
+
     @Query("SELECT s FROM SessionEntity s " +
            "WHERE s.userId = :userId " +
            "AND s.parentSessionId = :parentSessionId " +

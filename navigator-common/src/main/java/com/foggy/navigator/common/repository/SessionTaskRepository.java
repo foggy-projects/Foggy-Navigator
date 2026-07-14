@@ -25,6 +25,8 @@ public interface SessionTaskRepository extends JpaRepository<SessionTaskEntity, 
 
     Optional<SessionTaskEntity> findByTaskIdAndUserIdAndTenantId(String taskId, String userId, String tenantId);
 
+    Optional<SessionTaskEntity> findByTaskIdAndUserIdAndTenantIdIsNull(String taskId, String userId);
+
     @Modifying
     @Transactional
     void deleteByTaskId(String taskId);

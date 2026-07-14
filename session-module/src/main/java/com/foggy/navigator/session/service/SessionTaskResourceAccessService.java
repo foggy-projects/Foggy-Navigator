@@ -8,11 +8,14 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Optional;
+
 /**
  * Session/Task 资源归属校验的统一窄门面。
  *
- * <p>普通用户访问必须同时提供 userId 与 tenantId，并且两者都与资源持久化归属一致。
- * 本服务不提供 null=system/admin 等隐式旁路；管理员或系统调用应通过后续独立、显式的授权路径实现。
+ * <p>租户主体访问必须同时匹配 userId 与 tenantId。身份模型允许本地/平台账号没有 tenantId，
+ * 此时只能访问同 userId 且 tenantId 同样为 null 的资源。tenantless owner scope 不是管理员旁路，
+ * 不允许跨用户或访问任何租户绑定资源；管理员跨主体和系统调用仍须使用后续独立、显式的授权路径。
  */
 @Service
 @RequiredArgsConstructor
@@ -25,15 +28,14 @@ public class SessionTaskResourceAccessService {
     private final SessionTaskRepository sessionTaskRepository;
 
     /**
-     * 返回当前用户与租户共同拥有的 Session。
+     * 返回当前主体拥有的 Session。
      *
-     * @throws SecurityException 请求上下文不完整，或资源不存在、不属于调用方、归属字段缺失时
+     * @throws SecurityException 请求上下文缺少资源或用户，或资源不存在、不属于调用方、归属字段冲突时
      */
     public SessionEntity requireOwnedSession(String sessionId, String userId, String tenantId) {
-        requireAccessContext(sessionId, userId, tenantId);
+        requireAccessContext(sessionId, userId);
 
-        SessionEntity session = sessionRepository
-                .findByIdAndUserIdAndTenantId(sessionId, userId, tenantId)
+        SessionEntity session = findOwnedSession(sessionId, userId, tenantId)
                 .orElseThrow(SessionTaskResourceAccessService::accessDenied);
         if (!ownerMatches(session.getUserId(), session.getTenantId(), userId, tenantId)
                 || isDeleted(session)) {
@@ -43,23 +45,21 @@ public class SessionTaskResourceAccessService {
     }
 
     /**
-     * 返回当前用户与租户共同拥有的 Task，并同时校验其关联 Session 的归属。
+     * 返回当前主体拥有的 Task，并同时校验其关联 Session 的归属。
      *
-     * @throws SecurityException 请求上下文不完整，或 Task/Session 任一不存在、不属于调用方、归属字段缺失时
+     * @throws SecurityException 请求上下文缺少资源或用户，或 Task/Session 任一不存在、不属于调用方、归属字段冲突时
      */
     public SessionTaskEntity requireOwnedTask(String taskId, String userId, String tenantId) {
-        requireAccessContext(taskId, userId, tenantId);
+        requireAccessContext(taskId, userId);
 
-        SessionTaskEntity task = sessionTaskRepository
-                .findByTaskIdAndUserIdAndTenantId(taskId, userId, tenantId)
+        SessionTaskEntity task = findOwnedTask(taskId, userId, tenantId)
                 .orElseThrow(SessionTaskResourceAccessService::accessDenied);
         if (!ownerMatches(task.getUserId(), task.getTenantId(), userId, tenantId)
                 || !hasText(task.getSessionId())) {
             throw accessDenied();
         }
 
-        SessionEntity session = sessionRepository
-                .findByIdAndUserIdAndTenantId(task.getSessionId(), userId, tenantId)
+        SessionEntity session = findOwnedSession(task.getSessionId(), userId, tenantId)
                 .orElseThrow(SessionTaskResourceAccessService::accessDenied);
         if (!ownerMatches(session.getUserId(), session.getTenantId(), userId, tenantId)
                 || isDeleted(session)) {
@@ -68,8 +68,26 @@ public class SessionTaskResourceAccessService {
         return task;
     }
 
-    private static void requireAccessContext(String resourceId, String userId, String tenantId) {
-        if (!hasText(resourceId) || !hasText(userId) || !hasText(tenantId)) {
+    private Optional<SessionEntity> findOwnedSession(String sessionId,
+                                                     String userId,
+                                                     String tenantId) {
+        if (hasText(tenantId)) {
+            return sessionRepository.findByIdAndUserIdAndTenantId(sessionId, userId, tenantId);
+        }
+        return sessionRepository.findByIdAndUserIdAndTenantIdIsNull(sessionId, userId);
+    }
+
+    private Optional<SessionTaskEntity> findOwnedTask(String taskId,
+                                                      String userId,
+                                                      String tenantId) {
+        if (hasText(tenantId)) {
+            return sessionTaskRepository.findByTaskIdAndUserIdAndTenantId(taskId, userId, tenantId);
+        }
+        return sessionTaskRepository.findByTaskIdAndUserIdAndTenantIdIsNull(taskId, userId);
+    }
+
+    private static void requireAccessContext(String resourceId, String userId) {
+        if (!hasText(resourceId) || !hasText(userId)) {
             throw accessDenied();
         }
     }
@@ -78,10 +96,12 @@ public class SessionTaskResourceAccessService {
                                         String actualTenantId,
                                         String expectedUserId,
                                         String expectedTenantId) {
-        return hasText(actualUserId)
-                && hasText(actualTenantId)
-                && actualUserId.equals(expectedUserId)
-                && actualTenantId.equals(expectedTenantId);
+        if (!hasText(actualUserId) || !actualUserId.equals(expectedUserId)) {
+            return false;
+        }
+        return hasText(expectedTenantId)
+                ? expectedTenantId.equals(actualTenantId)
+                : !hasText(actualTenantId);
     }
 
     private static boolean hasText(String value) {

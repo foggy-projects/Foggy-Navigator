@@ -120,14 +120,33 @@ class SessionConfigControllerTest {
     }
 
     @Test
-    void listConfigs_whenAnySessionIsUnauthorized_doesNotReadMetadata() {
+    void listConfigs_whenAnySessionIsUnauthorized_readsOnlyOwnedMetadata() {
+        List<SessionConfigDTO> configs = List.of(SessionConfigDTO.builder()
+                .sessionId("session-1")
+                .build());
         stubOwned("session-1");
         when(resourceAccessService.requireOwnedSession("session-2", USER_ID, TENANT_ID))
                 .thenThrow(denied());
+        when(sessionMetadataService.listBySessionIds(USER_ID, List.of("session-1")))
+                .thenReturn(configs);
 
-        assertThrows(SecurityException.class,
-                () -> controller.listConfigs("session-1,session-2"));
+        RX<List<SessionConfigDTO>> result = controller.listConfigs("session-1,session-2");
 
+        assertEquals(configs, result.getData());
+        InOrder order = inOrder(resourceAccessService, sessionMetadataService);
+        order.verify(resourceAccessService).requireOwnedSession("session-1", USER_ID, TENANT_ID);
+        order.verify(resourceAccessService).requireOwnedSession("session-2", USER_ID, TENANT_ID);
+        order.verify(sessionMetadataService).listBySessionIds(USER_ID, List.of("session-1"));
+    }
+
+    @Test
+    void listConfigs_whenNoSessionIsOwned_returnsEmptyWithoutReadingMetadata() {
+        when(resourceAccessService.requireOwnedSession("session-1", USER_ID, TENANT_ID))
+                .thenThrow(denied());
+
+        RX<List<SessionConfigDTO>> result = controller.listConfigs("session-1");
+
+        assertEquals(List.of(), result.getData());
         verifyNoInteractions(sessionMetadataService);
     }
 

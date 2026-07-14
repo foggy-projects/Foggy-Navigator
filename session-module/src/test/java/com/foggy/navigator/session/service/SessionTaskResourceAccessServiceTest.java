@@ -51,6 +51,28 @@ class SessionTaskResourceAccessServiceTest {
     }
 
     @Test
+    void requireOwnedSession_tenantlessActorAndResourceWithSameUser_returnsSession() {
+        SessionEntity session = ownedSession("session-1", USER_ID, null);
+        when(sessionRepository.findByIdAndUserIdAndTenantIdIsNull("session-1", USER_ID))
+                .thenReturn(Optional.of(session));
+
+        SessionEntity result = service.requireOwnedSession("session-1", USER_ID, null);
+
+        assertSame(session, result);
+    }
+
+    @Test
+    void requireOwnedSession_tenantlessActorCannotAccessTenantBoundOrOtherUsersResource() {
+        when(sessionRepository.findByIdAndUserIdAndTenantIdIsNull("tenant-bound", USER_ID))
+                .thenReturn(Optional.empty());
+        when(sessionRepository.findByIdAndUserIdAndTenantIdIsNull("other-user-session", USER_ID))
+                .thenReturn(Optional.of(ownedSession("other-user-session", "other-user", null)));
+
+        assertDenied(() -> service.requireOwnedSession("tenant-bound", USER_ID, null));
+        assertDenied(() -> service.requireOwnedSession("other-user-session", USER_ID, null));
+    }
+
+    @Test
     void requireOwnedSession_missingResourceAndWrongOwner_shareGenericFailure() {
         when(sessionRepository.findByIdAndUserIdAndTenantId("missing", USER_ID, TENANT_ID))
                 .thenReturn(Optional.empty());
@@ -88,7 +110,6 @@ class SessionTaskResourceAccessServiceTest {
     @Test
     void requireOwnedSession_missingContext_failsBeforeRepositoryLookup() {
         assertDenied(() -> service.requireOwnedSession("session-1", null, TENANT_ID));
-        assertDenied(() -> service.requireOwnedSession("session-1", USER_ID, " "));
         assertDenied(() -> service.requireOwnedSession(" ", USER_ID, TENANT_ID));
 
         verifyNoInteractions(sessionRepository, sessionTaskRepository);
@@ -104,6 +125,20 @@ class SessionTaskResourceAccessServiceTest {
                 .thenReturn(Optional.of(session));
 
         SessionTaskEntity result = service.requireOwnedTask("task-1", USER_ID, TENANT_ID);
+
+        assertSame(task, result);
+    }
+
+    @Test
+    void requireOwnedTask_tenantlessTaskAndSessionWithSameUser_returnsTask() {
+        SessionTaskEntity task = ownedTask("task-1", "session-1", USER_ID, null);
+        SessionEntity session = ownedSession("session-1", USER_ID, null);
+        when(sessionTaskRepository.findByTaskIdAndUserIdAndTenantIdIsNull("task-1", USER_ID))
+                .thenReturn(Optional.of(task));
+        when(sessionRepository.findByIdAndUserIdAndTenantIdIsNull("session-1", USER_ID))
+                .thenReturn(Optional.of(session));
+
+        SessionTaskEntity result = service.requireOwnedTask("task-1", USER_ID, null);
 
         assertSame(task, result);
     }
@@ -181,7 +216,6 @@ class SessionTaskResourceAccessServiceTest {
     void requireOwnedTask_missingContext_failsBeforeRepositoryLookup() {
         assertDenied(() -> service.requireOwnedTask(null, USER_ID, TENANT_ID));
         assertDenied(() -> service.requireOwnedTask("task-1", "", TENANT_ID));
-        assertDenied(() -> service.requireOwnedTask("task-1", USER_ID, null));
 
         verifyNoInteractions(sessionRepository, sessionTaskRepository);
     }

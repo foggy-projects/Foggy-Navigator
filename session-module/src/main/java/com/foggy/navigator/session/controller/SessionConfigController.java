@@ -11,6 +11,7 @@ import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -84,8 +85,11 @@ public class SessionConfigController {
             return RX.ok(List.of());
         }
         CurrentUser user = UserContext.getCurrentUser();
-        requireOwnedSessions(ids, user);
-        return RX.ok(sessionMetadataService.listBySessionIds(user.getUserId(), ids));
+        List<String> ownedIds = filterOwnedSessions(ids, user);
+        if (ownedIds.isEmpty()) {
+            return RX.ok(List.of());
+        }
+        return RX.ok(sessionMetadataService.listBySessionIds(user.getUserId(), ownedIds));
     }
 
     @PostMapping("/configs/batch-bind-auth")
@@ -140,6 +144,20 @@ public class SessionConfigController {
         for (String sessionId : sessionIds) {
             resourceAccessService.requireOwnedSession(sessionId, user.getUserId(), user.getTenantId());
         }
+    }
+
+    private List<String> filterOwnedSessions(List<String> sessionIds, CurrentUser user) {
+        // 只读聚合允许忽略已失效或无权 ID，避免单个历史项拖垮整个 PC 页面；写批次仍使用全量校验。
+        List<String> ownedIds = new ArrayList<>(sessionIds.size());
+        for (String sessionId : sessionIds) {
+            try {
+                resourceAccessService.requireOwnedSession(sessionId, user.getUserId(), user.getTenantId());
+                ownedIds.add(sessionId);
+            } catch (SecurityException ignored) {
+                // 对调用方不区分资源不存在与无权访问，也不把未授权 ID 交给 metadata service。
+            }
+        }
+        return ownedIds;
     }
 
     @Data
