@@ -120,6 +120,9 @@ credentials, tokens, or other secrets are discarded at the Worker boundary.
 3. Optionally set `CODEX_APP_SERVER_WORKER_TOKEN`. When non-empty, all endpoints except `/health`
    require the same Bearer token. When empty, HTTP authentication is disabled and every caller has
    full Worker API access.
+   `CODEX_APP_SERVER_EXTERNAL_ENABLED` defaults to `false`. Enabling it explicitly does not yet
+   authorize external traffic: until the full execution-policy boundary is governed, health stays
+   observable with `external_ready=false` and every non-health endpoint fails closed with HTTP 503.
 4. Configure at least one absolute root in `CODEX_APP_SERVER_ALLOWED_CWDS`. Release installers
    populate this only for a fresh `.env`; source-based setup remains explicit.
 5. Set `CODEX_HOME` to an isolated service directory that is not shared with the SDK Worker.

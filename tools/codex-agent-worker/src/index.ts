@@ -2,6 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import { config } from './config.js'
 import { authMiddleware } from './auth.js'
+import { createExternalModeMiddleware } from './external-mode.js'
 import healthRouter from './routes/health.js'
 import processesRouter from './routes/processes.js'
 import queryRouter from './routes/query.js'
@@ -30,6 +31,7 @@ const threadProcessWatchdog = new CodexThreadProcessWatchdog({
 
 // Middleware
 app.use(cors())
+app.use(createExternalModeMiddleware(config))
 app.use(express.json({ limit: '10mb' }))
 app.use(authMiddleware)
 

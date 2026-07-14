@@ -17,10 +17,18 @@ test('createConfig normalizes placeholder api key and valid defaults', () => {
   assert.equal(config.port, 3051)
   assert.deepEqual(config.allowedCwds, ['D:\\repo'])
   assert.equal(config.logLevel, 'warn')
+  assert.equal(config.externalEnabled, false)
   assert.equal(config.codexBizHomeRoot, '')
   assert.equal(config.navigatorWorkerGatewayBaseUrl, 'http://localhost:8080')
   assert.equal(config.threadWatchdogIntervalMs, 5_000)
   assert.equal(config.threadProcessMissingGraceMs, 10_000)
+})
+
+test('createConfig parses the explicit external switch and rejects ambiguous values', () => {
+  assert.equal(createConfig({ CODEX_WORKER_EXTERNAL_ENABLED: 'true' }).externalEnabled, true)
+  assert.throws(() => createConfig({
+    CODEX_WORKER_EXTERNAL_ENABLED: 'yes',
+  }), /CODEX_WORKER_EXTERNAL_ENABLED must be true or false/)
 })
 
 test('createConfig rejects invalid port', () => {

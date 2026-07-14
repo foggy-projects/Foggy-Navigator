@@ -21,6 +21,7 @@ import {
   CAPABILITY_CONTRACT_VERSION,
   WORKER_CONTRACT_VERSION,
 } from './version.js'
+import { resolveExternalModeState } from './external-mode.js'
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const schemaLock = JSON.parse(fs.readFileSync(
@@ -58,6 +59,7 @@ export function evaluateRuntimeReadiness(
   cliAvailable: boolean,
 ): RuntimeReadiness {
   const reasons: string[] = []
+  const external = resolveExternalModeState(config)
   if (!config.stateEncryptionKey) reasons.push('STATE_ENCRYPTION_KEY_MISSING')
   if (config.allowedCwds.length === 0) reasons.push('ALLOWED_CWDS_MISSING')
   else if (!hasUsableAllowedWorkingRoot(config.allowedCwds, workerPrivatePaths(config))) {
@@ -73,6 +75,7 @@ export function evaluateRuntimeReadiness(
   }
   if (!cliAvailable) reasons.push('APP_SERVER_CLI_UNAVAILABLE')
   if (cliVersion !== VALIDATED_APP_SERVER_CLI_VERSION) reasons.push('APP_SERVER_CLI_VERSION_MISMATCH')
+  reasons.push(...external.reasons)
   return { ready: reasons.length === 0, reasons, cliVersion, cliAvailable }
 }
 
@@ -82,6 +85,7 @@ export function resetRuntimeProbeCacheForTests(): void {
 
 export function buildCapabilityManifest(config: AppConfig, manager: TaskManager): Record<string, unknown> {
   const readiness = resolveRuntimeReadiness(config)
+  const external = resolveExternalModeState(config)
   const modelAliases = supportedModelAliases(config.modelAliases)
   if (!manager.isAccepting()) {
     readiness.ready = false
@@ -179,6 +183,10 @@ export function buildCapabilityManifest(config: AppConfig, manager: TaskManager)
       ready: readiness.ready,
       reasons: readiness.reasons,
       cli_available: readiness.cliAvailable,
+      mode: external.mode,
+      external_enabled: external.external_enabled,
+      external_ready: external.external_ready,
+      auth_configured: external.auth_configured,
     },
   }
 }

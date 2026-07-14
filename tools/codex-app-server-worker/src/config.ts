@@ -24,6 +24,7 @@ export interface AppConfig {
   host: string
   workerName: string
   workerToken: string
+  externalEnabled: boolean
   runtimeId: string
   runtimeRevision: number
   instanceId: string
@@ -61,6 +62,10 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     host: nonEmpty(env.CODEX_APP_SERVER_WORKER_HOST || '127.0.0.1', 'CODEX_APP_SERVER_WORKER_HOST', 255),
     workerName: nonEmpty(env.CODEX_APP_SERVER_WORKER_NAME || 'codex-app-server-worker-default', 'CODEX_APP_SERVER_WORKER_NAME', 128),
     workerToken: token(env.CODEX_APP_SERVER_WORKER_TOKEN),
+    externalEnabled: booleanFlag(
+      env.CODEX_APP_SERVER_EXTERNAL_ENABLED,
+      'CODEX_APP_SERVER_EXTERNAL_ENABLED',
+    ),
     runtimeId: nonEmpty(env.CODEX_APP_SERVER_RUNTIME_ID || 'codex-app-server-primary', 'CODEX_APP_SERVER_RUNTIME_ID', 64),
     runtimeRevision: integer(env.CODEX_APP_SERVER_RUNTIME_REVISION, 1, 1, 2_147_483_647, 'CODEX_APP_SERVER_RUNTIME_REVISION'),
     instanceId: resolveInstanceId(env.CODEX_APP_SERVER_INSTANCE_ID, stateDir),
@@ -130,6 +135,13 @@ function token(raw: string | undefined, max = 1024): string {
   const value = (raw || '').trim()
   if (/\s/.test(value) || value.length > max) throw new Error('token configuration is invalid')
   return value
+}
+
+function booleanFlag(raw: string | undefined, field: string, fallback = false): boolean {
+  const value = (raw || String(fallback)).trim().toLowerCase()
+  if (value === 'true') return true
+  if (value === 'false') return false
+  throw new Error(`${field} must be true or false`)
 }
 
 function integer(raw: string | undefined, fallback: number, min: number, max: number, field: string): number {

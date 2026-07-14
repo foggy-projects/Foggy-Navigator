@@ -3,6 +3,15 @@ import path from 'node:path'
 import test from 'node:test'
 import { createConfig, resolveInstanceId } from '../src/config.js'
 
+test('external mode is default-off and accepts only an explicit boolean', () => {
+  assert.equal(createConfig({ ...process.env, CODEX_APP_SERVER_EXTERNAL_ENABLED: undefined }).externalEnabled, false)
+  assert.equal(createConfig({ ...process.env, CODEX_APP_SERVER_EXTERNAL_ENABLED: 'true' }).externalEnabled, true)
+  assert.throws(() => createConfig({
+    ...process.env,
+    CODEX_APP_SERVER_EXTERNAL_ENABLED: 'yes',
+  }), /CODEX_APP_SERVER_EXTERNAL_ENABLED must be true or false/)
+})
+
 test('default instance id is stable across process restarts and unique per state directory', () => {
   const first = resolveInstanceId(undefined, 'C:\\state\\one', 'worker-host')
   const restarted = resolveInstanceId(undefined, 'C:\\state\\one', 'worker-host')

@@ -1,5 +1,6 @@
 import os
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +14,7 @@ class Settings(BaseSettings):
     port: int = 3061
     host: str = "0.0.0.0"
     worker_token: str = ""
+    external_enabled: bool = False
     worker_name: str = ""
     max_concurrent_tasks: int = 5
 
@@ -69,6 +71,20 @@ class Settings(BaseSettings):
     # Optional path to foggy-data-mcp-bridge-python. When set, the worker
     # prepends either <path>/src or <path> to sys.path before importing FSScript.
     fsscript_python_path: str = ""
+
+    @field_validator("external_enabled", mode="before")
+    @classmethod
+    def validate_external_enabled(cls, value: object) -> bool:
+        """Accept only an explicit true/false external exposure switch."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized == "true":
+                return True
+            if normalized == "false":
+                return False
+        raise ValueError("BIZ_WORKER_EXTERNAL_ENABLED must be true or false")
 
     model_config = SettingsConfigDict(
         env_prefix="BIZ_WORKER_",

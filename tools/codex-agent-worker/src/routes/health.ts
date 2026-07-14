@@ -8,6 +8,7 @@ import { taskRegistry } from '../codex/sdk-wrapper.js'
 import type { HealthResponse } from '../models.js'
 import { resolveCodexSdkRuntimeStatus } from '../runtime-requirements.js'
 import { APP_VERSION } from '../version.js'
+import { resolveExternalModeState } from '../external-mode.js'
 
 const router = Router()
 
@@ -57,9 +58,20 @@ router.get('/health', (_req: Request, res: Response) => {
   }))
   const codexSdkStatus = resolveCodexSdkRuntimeStatus()
   const codexBizReadiness = resolveCodexBizReadiness(config.codexBizHomeRoot)
+  const external = resolveExternalModeState(config)
+  const reasons = [...external.reasons]
+  if (!codexSdkAvailable) reasons.push('CODEX_SDK_UNAVAILABLE')
+  if (!codexSdkStatus.compatible) reasons.push('CODEX_SDK_VERSION_INCOMPATIBLE')
+  const ready = reasons.length === 0
 
   const response: HealthResponse = {
-    status: resolveWorkerHealthStatus(codexSdkAvailable, codexSdkStatus.compatible),
+    status: ready ? 'ok' : 'degraded',
+    ready,
+    reasons,
+    mode: external.mode,
+    external_enabled: external.external_enabled,
+    external_ready: external.external_ready,
+    auth_configured: external.auth_configured,
     hostname: os.hostname(),
     version: APP_VERSION,
     worker_name: config.workerName,

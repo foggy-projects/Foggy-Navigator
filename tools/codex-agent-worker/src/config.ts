@@ -15,6 +15,7 @@ export interface AppConfig {
   openaiApiKey: string
   openaiBaseUrl: string
   workerToken: string
+  externalEnabled: boolean
   allowedCwds: string[]
   maxConcurrentTasks: number
   threadWatchdogIntervalMs: number
@@ -95,6 +96,13 @@ function parseToken(rawToken: string | undefined): string {
     throw new Error('CODEX_WORKER_TOKEN must not contain whitespace')
   }
   return token
+}
+
+function parseBoolean(rawValue: string | undefined, field: string, fallback = false): boolean {
+  const value = (rawValue || String(fallback)).trim().toLowerCase()
+  if (value === 'true') return true
+  if (value === 'false') return false
+  throw new Error(`${field} must be true or false`)
 }
 
 function parseApiKey(rawApiKey: string): string {
@@ -295,6 +303,7 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     openaiApiKey,
     openaiBaseUrl: getOptionalEnvFromEnv(env, 'OPENAI_BASE_URL') || '',
     workerToken: parseToken(env.CODEX_WORKER_TOKEN),
+    externalEnabled: parseBoolean(env.CODEX_WORKER_EXTERNAL_ENABLED, 'CODEX_WORKER_EXTERNAL_ENABLED'),
     allowedCwds: parseAllowedCwds(env.CODEX_ALLOWED_CWDS),
     maxConcurrentTasks: parseMaxConcurrentTasks(env.CODEX_MAX_CONCURRENT_TASKS),
     threadWatchdogIntervalMs: parseBoundedMilliseconds(

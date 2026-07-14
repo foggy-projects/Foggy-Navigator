@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from . import __version__
+from .config import settings
+from .external_mode import EXTERNAL_WORKER_UNREADY, resolve_external_mode
 from .routes import account_context, frame_interruption, frame_reports, health, query, resume, skills, standalone
 
 logger = logging.getLogger("langgraph_biz_worker")
@@ -82,6 +85,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def enforce_external_readiness(request: Request, call_next):
+    """Keep health observable while external business ingress is not ready."""
+    if request.url.path != "/health":
+        external = resolve_external_mode(settings.external_enabled, settings.worker_token)
+        if external.external_enabled and not external.external_ready:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "External worker is not ready",
+                    "code": EXTERNAL_WORKER_UNREADY,
+                    "reasons": list(external.reasons),
+                },
+            )
+    return await call_next(request)
 
 # Register routes
 app.include_router(health.router)

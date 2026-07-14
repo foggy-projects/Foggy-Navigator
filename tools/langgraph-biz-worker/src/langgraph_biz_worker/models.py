@@ -376,3 +376,10 @@ class HealthResponse(BaseModel):
     active_tasks: int
     worker_name: str
     capabilities: WorkerCapabilities
+    status: str
+    ready: bool
+    mode: str
+    external_enabled: bool
+    external_ready: bool
+    auth_configured: bool
+    reasons: list[str] = Field(default_factory=list)
