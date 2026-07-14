@@ -80,6 +80,9 @@ agent:
 
 # 凭证加密配置
 navigator:
+  external:
+    # Internal-only by default. Opening the public API surface requires an explicit opt-in.
+    enabled: ${NAVIGATOR_EXTERNAL_ENABLED:false}
   security:
     credential-key: ${NAVIGATOR_CREDENTIAL_KEY:default-dev-key-change-in-prod}
     credential-salt: ${NAVIGATOR_CREDENTIAL_SALT:abcdef0123456789}
