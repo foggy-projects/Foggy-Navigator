@@ -1,5 +1,5 @@
 # Navigator Frontend - Build Verification Script (Windows)
-# Builds workspace packages (foggy-chat-core, foggy-chat) then navigator-frontend.
+# Runs the canonical root frontend type-check, test, and build matrix.
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/build-frontend.ps1
 
 $ErrorActionPreference = "Stop"
@@ -17,55 +17,29 @@ Write-Host ""
 
 # Check pnpm
 if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
-    Write-Host "  pnpm not found! Install: npm install -g pnpm" -ForegroundColor Red
+    Write-Host "  pnpm not found! Use Node 22.23.1 and run: corepack enable" -ForegroundColor Red
     exit 1
 }
 
 # Step 1: Install dependencies if needed
 if (-not (Test-Path "packages/navigator-frontend/node_modules")) {
-    Write-Host "[1/3] Installing dependencies..." -ForegroundColor Yellow
-    pnpm install --no-frozen-lockfile
+    Write-Host "[1/2] Installing dependencies..." -ForegroundColor Yellow
+    pnpm install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  pnpm install failed!" -ForegroundColor Red
         exit 1
     }
 } else {
-    Write-Host "[1/3] Dependencies already installed" -ForegroundColor Green
+    Write-Host "[1/2] Dependencies already installed" -ForegroundColor Green
 }
 
-# Step 2: Build workspace packages (foggy-chat-core -> foggy-chat)
-# Always rebuild to ensure dist/ type declarations are up-to-date
-Write-Host "[2/3] Building workspace packages (foggy-chat-core, foggy-chat)..." -ForegroundColor Yellow
-
-Push-Location "packages/foggy-chat-core"
-pnpm build
+# Step 2: Run the canonical frontend matrix from the workspace root.
+Write-Host "[2/2] Running frontend CI baseline..." -ForegroundColor Yellow
+pnpm run ci:frontend
 if ($LASTEXITCODE -ne 0) {
-    Pop-Location
-    Write-Host "  foggy-chat-core build failed!" -ForegroundColor Red
+    Write-Host "  Frontend CI baseline failed!" -ForegroundColor Red
     exit 1
 }
-Pop-Location
-
-Push-Location "packages/foggy-chat"
-pnpm build
-if ($LASTEXITCODE -ne 0) {
-    Pop-Location
-    Write-Host "  foggy-chat build failed!" -ForegroundColor Red
-    exit 1
-}
-Pop-Location
-
-# Step 3: Build navigator-frontend (vue-tsc type-check + vite build)
-Write-Host "[3/3] Building navigator-frontend..." -ForegroundColor Yellow
-
-Push-Location "packages/navigator-frontend"
-pnpm build
-if ($LASTEXITCODE -ne 0) {
-    Pop-Location
-    Write-Host "  Frontend build failed!" -ForegroundColor Red
-    exit 1
-}
-Pop-Location
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green

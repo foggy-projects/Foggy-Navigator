@@ -1,9 +1,8 @@
 # Foggy Navigator - Build Frontend & Restart Nginx
 #
 # 1. Install dependencies (if needed)
-# 2. Build workspace packages (foggy-chat-core, foggy-chat)
-# 3. Build navigator-frontend → packages/navigator-frontend/dist/
-# 4. Restart the docker-compose nginx container (foggy-navigator-nginx)
+# 2. Run the root frontend CI baseline
+# 3. Restart the docker-compose nginx container (foggy-navigator-nginx)
 #
 # Usage:
 #   .\scripts\start-build-frontend.ps1              # full build + restart nginx
@@ -84,16 +83,16 @@ if (-not $SkipBuild) {
     # Check pnpm
     $pnpmCmd = Get-Command pnpm -ErrorAction SilentlyContinue
     if (-not $pnpmCmd) {
-        Write-ColorText "  pnpm not found! Install: npm install -g pnpm" "Red"
+        Write-ColorText "  pnpm not found! Use Node 22.23.1 and run: corepack enable" "Red"
         exit 1
     }
 
     # Install dependencies if needed
     if (Test-PnpmInstallRequired) {
-        Write-ColorText "[1/3] Installing dependencies (workspace missing/stale)..." "Yellow"
+        Write-ColorText "[1/2] Installing dependencies (workspace missing/stale)..." "Yellow"
         Push-Location $RepoRoot
         try {
-            pnpm install --no-frozen-lockfile
+            pnpm install --frozen-lockfile
             if ($LASTEXITCODE -ne 0) {
                 Write-ColorText "  pnpm install failed!" "Red"
                 exit 1
@@ -102,11 +101,10 @@ if (-not $SkipBuild) {
             Pop-Location
         }
     } else {
-        Write-ColorText "[1/3] Dependencies already installed, skipped" "Gray"
+        Write-ColorText "[1/2] Dependencies already installed, skipped" "Gray"
     }
 
-    # Build workspace packages if dist is missing, stale, or -Force
-    $WsNeedsBuild = $false
+    # -Force preserves the previous clean-rebuild behavior for workspace libraries.
     $ChatCoreDir = Join-Path $RepoRoot "packages\foggy-chat-core"
     $ChatDir = Join-Path $RepoRoot "packages\foggy-chat"
     $ChatCoreDist = Join-Path $ChatCoreDir "dist"
@@ -116,71 +114,16 @@ if (-not $SkipBuild) {
         Write-ColorText "  -Force: cleaning workspace dist..." "Yellow"
         if (Test-Path $ChatCoreDist) { Remove-Item -Recurse -Force $ChatCoreDist }
         if (Test-Path $ChatDist) { Remove-Item -Recurse -Force $ChatDist }
-        $WsNeedsBuild = $true
-    } elseif (-not (Test-Path $ChatCoreDist) -or -not (Test-Path $ChatDist)) {
-        $WsNeedsBuild = $true
-    } else {
-        # Check if any src file is newer than dist (stale detection)
-        $CoreNewestSrc = Get-ChildItem -Path (Join-Path $ChatCoreDir "src") -Recurse -File -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty LastWriteTime
-
-        $CoreOldestDist = Get-ChildItem -Path $ChatCoreDist -Recurse -File -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime | Select-Object -First 1 -ExpandProperty LastWriteTime
-
-        $ChatNewestSrc = Get-ChildItem -Path (Join-Path $ChatDir "src") -Recurse -File -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty LastWriteTime
-
-        $ChatOldestDist = Get-ChildItem -Path $ChatDist -Recurse -File -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime | Select-Object -First 1 -ExpandProperty LastWriteTime
-
-        if ($CoreNewestSrc -and $CoreOldestDist -and $CoreNewestSrc -gt $CoreOldestDist) {
-            Write-ColorText "  foggy-chat-core src is newer than dist, rebuilding..." "Yellow"
-            $WsNeedsBuild = $true
-        } elseif ($ChatNewestSrc -and $ChatOldestDist -and $ChatNewestSrc -gt $ChatOldestDist) {
-            Write-ColorText "  foggy-chat src is newer than dist, rebuilding..." "Yellow"
-            $WsNeedsBuild = $true
-        }
     }
 
-    if ($WsNeedsBuild) {
-        Write-ColorText "[2/3] Building workspace packages (foggy-chat-core, foggy-chat)..." "Yellow"
-
-        # Build foggy-chat-core
-        Push-Location $ChatCoreDir
-        try {
-            pnpm build
-            if ($LASTEXITCODE -ne 0) {
-                Write-ColorText "  foggy-chat-core build failed!" "Red"
-                exit 1
-            }
-        } finally {
-            Pop-Location
-        }
-
-        # Build foggy-chat
-        Push-Location $ChatDir
-        try {
-            pnpm build
-            if ($LASTEXITCODE -ne 0) {
-                Write-ColorText "  foggy-chat build failed!" "Red"
-                exit 1
-            }
-        } finally {
-            Pop-Location
-        }
-    } else {
-        Write-ColorText "[2/3] Workspace packages already built, skipped" "Gray"
-    }
-
-    # Build navigator-frontend
-    Write-ColorText "[3/3] Building navigator-frontend..." "Yellow"
+    Write-ColorText "[2/2] Running frontend CI baseline..." "Yellow"
     $BuildLogPath = Join-Path $LogDir "frontend-build.log"
 
-    Push-Location $FrontendDir
+    Push-Location $RepoRoot
     try {
-        pnpm build *>&1 | Out-File -FilePath $BuildLogPath -Encoding UTF8
+        pnpm run ci:frontend *>&1 | Out-File -FilePath $BuildLogPath -Encoding UTF8
         if ($LASTEXITCODE -ne 0) {
-            Write-ColorText "  Frontend build failed! Check logs\frontend-build.log" "Red"
+            Write-ColorText "  Frontend CI baseline failed! Check logs\frontend-build.log" "Red"
             Get-Content $BuildLogPath -Tail 20
             exit 1
         }

@@ -51,7 +51,7 @@ function Test-PnpmInstallRequired {
 
 # Check pnpm
 if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
-    Write-Host "  pnpm not found! Install: npm install -g pnpm" -ForegroundColor Red
+    Write-Host "  pnpm not found! Use Node 22.23.1 and run: corepack enable" -ForegroundColor Red
     exit 1
 }
 
@@ -59,7 +59,11 @@ if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
 if (Test-PnpmInstallRequired) {
     Write-Host "[1] Installing dependencies (workspace missing/stale)..." -ForegroundColor Yellow
     Set-Location $RepoRoot
-    pnpm install
+    pnpm install --frozen-lockfile
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  pnpm install failed!" -ForegroundColor Red
+        exit 1
+    }
     Set-Location $RepoRoot
 } else {
     Write-Host "[1] Dependencies ready" -ForegroundColor Gray
@@ -97,17 +101,10 @@ if ($Force) {
 
 if ($wsNeedsBuild) {
     Write-Host "[2] Building workspace packages (foggy-chat-core, foggy-chat)..." -ForegroundColor Yellow
-    Set-Location "$chatCoreDir"
-    pnpm build
+    Set-Location $RepoRoot
+    pnpm run prepare:frontend
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  foggy-chat-core build FAILED!" -ForegroundColor Red
-        Set-Location $RepoRoot
-        exit 1
-    }
-    Set-Location "$chatDir"
-    pnpm build
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  foggy-chat build FAILED!" -ForegroundColor Red
+        Write-Host "  Workspace package build FAILED!" -ForegroundColor Red
         Set-Location $RepoRoot
         exit 1
     }
@@ -121,10 +118,10 @@ if ($Build -or $BuildOnly) {
     Write-Host "[3] Building for Nginx (dist/nginx)..." -ForegroundColor Yellow
     $buildStart = Get-Date
 
-    Set-Location $FRONTEND_PATH
-    pnpm build
+    Set-Location $RepoRoot
+    pnpm run ci:frontend
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  Build FAILED!" -ForegroundColor Red
+        Write-Host "  Frontend CI baseline FAILED!" -ForegroundColor Red
         Set-Location $RepoRoot
         exit 1
     }

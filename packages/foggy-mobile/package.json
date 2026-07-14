@@ -11,6 +11,7 @@
                     "build:wgt":  "uni build -p app-android \u0026\u0026 node scripts/pack-wgt.js",
                     "release:wgt:wsl":  "bash scripts/release-wgt.sh",
                     "build:apk:wsl":  "bash scripts/build-apk-wsl.sh",
+                    "type-check":  "vue-tsc -p tsconfig.json --noEmit",
                     "test":  "vitest run --config vitest.config.ts",
                     "test:watch":  "vitest --config vitest.config.ts"
                 },
@@ -20,7 +21,7 @@
                          "@dcloudio/uni-components":  "3.0.0-4080720251210001",
                          "@dcloudio/uni-h5":  "3.0.0-4080720251210001",
                          "@dcloudio/uni-mp-weixin":  "3.0.0-4080720251210001",
-                         "@foggy/chat-core":  "file:../foggy-chat-core",
+                         "@foggy/chat-core":  "workspace:*",
                          "@vue/compiler-core":  "3.4.21",
                          "@vue/compiler-dom":  "3.4.21",
                          "@vue/compiler-sfc":  "3.4.21",

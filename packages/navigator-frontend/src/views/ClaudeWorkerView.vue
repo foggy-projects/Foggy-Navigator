@@ -3365,7 +3365,7 @@ let narrowViewportMediaQuery: MediaQueryList | null = null
 
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
-const editWorkerActiveTab = ref<'basic' | 'remote-access' | 'codex' | 'gemini'>('basic')
+const editWorkerActiveTab = ref<'basic' | 'remote-access' | 'codex' | 'codex-app-server' | 'gemini'>('basic')
 const showAddDirectoryDialog = ref(false)
 const showEditDirectoryDialog = ref(false)
 const saving = ref(false)
@@ -7348,7 +7348,7 @@ async function divertCrossProviderResume(
       cwd: sourceTask.cwd,
       directoryId: sourceTask.directoryId,
       model: taskForm.value.model,
-      maxTurns: taskForm.value.maxTurns,
+      maxTurns: taskForm.value.maxTurns ?? undefined,
       modelConfigId: platformModelConfigId.value || undefined,
       providerType: targetProviderType,
     }

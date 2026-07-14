@@ -59,14 +59,14 @@ fi
 
 # Check pnpm
 if ! command -v pnpm &> /dev/null; then
-    echo -e "${RED}  pnpm not found! Install: npm install -g pnpm${NC}"
+    echo -e "${RED}  pnpm not found! Use Node 22.23.1 and run: corepack enable${NC}"
     exit 1
 fi
 
 # Install dependencies if needed
 if needs_pnpm_install; then
     echo -e "${YELLOW}[1/3] Installing dependencies (workspace missing/stale)...${NC}"
-    (cd "$REPO_ROOT" && pnpm install --no-frozen-lockfile)
+    (cd "$REPO_ROOT" && pnpm install --frozen-lockfile)
     if [ $? -ne 0 ]; then
         echo -e "${RED}  pnpm install failed!${NC}"
         exit 1
@@ -76,7 +76,7 @@ fi
 # Build workspace packages if dist is missing
 if [ ! -d "$REPO_ROOT/packages/foggy-chat-core/dist" ] || [ ! -d "$REPO_ROOT/packages/foggy-chat/dist" ]; then
     echo -e "${YELLOW}[2/3] Building workspace packages...${NC}"
-    (cd "$REPO_ROOT/packages/foggy-chat-core" && pnpm build) && (cd "$REPO_ROOT/packages/foggy-chat" && pnpm build)
+    (cd "$REPO_ROOT" && pnpm run prepare:frontend)
     if [ $? -ne 0 ]; then
         echo -e "${RED}  Workspace package build failed!${NC}"
         exit 1

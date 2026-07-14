@@ -2,9 +2,8 @@
 # Foggy Navigator - Build Frontend & Restart Nginx
 #
 # 1. Install dependencies (if needed)
-# 2. Build workspace packages (foggy-chat-core, foggy-chat)
-# 3. Build navigator-frontend → packages/navigator-frontend/dist/
-# 4. Restart the docker-compose nginx container (foggy-navigator-nginx)
+# 2. Run the root frontend CI baseline
+# 3. Restart the docker-compose nginx container (foggy-navigator-nginx)
 #
 # Usage:
 #   ./scripts/start-build-frontend.sh              # full build + restart nginx
@@ -81,69 +80,35 @@ if [ "$SKIP_BUILD" = false ]; then
 
     # Check pnpm
     if ! command -v pnpm &> /dev/null; then
-        echo -e "${RED}  pnpm not found! Install: npm install -g pnpm${NC}"
+        echo -e "${RED}  pnpm not found! Use Node 22.23.1 and run: corepack enable${NC}"
         exit 1
     fi
 
     # Install dependencies if needed
     if needs_pnpm_install; then
-        echo -e "${YELLOW}[1/3] Installing dependencies (workspace missing/stale)...${NC}"
-        (cd "$REPO_ROOT" && pnpm install --no-frozen-lockfile)
+        echo -e "${YELLOW}[1/2] Installing dependencies (workspace missing/stale)...${NC}"
+        (cd "$REPO_ROOT" && pnpm install --frozen-lockfile)
         if [ $? -ne 0 ]; then
             echo -e "${RED}  pnpm install failed!${NC}"
             exit 1
         fi
     else
-        echo -e "${GRAY}[1/3] Dependencies already installed, skipped${NC}"
+        echo -e "${GRAY}[1/2] Dependencies already installed, skipped${NC}"
     fi
 
-    # Build workspace packages if dist is missing, stale, or --force
-    WS_NEEDS_BUILD=false
+    # --force preserves the previous clean-rebuild behavior for workspace libraries.
     CHAT_CORE_DIR="$REPO_ROOT/packages/foggy-chat-core"
     CHAT_DIR="$REPO_ROOT/packages/foggy-chat"
 
     if [ "$FORCE_REBUILD" = true ]; then
         echo -e "${YELLOW}  --force: cleaning workspace dist...${NC}"
         rm -rf "$CHAT_CORE_DIR/dist" "$CHAT_DIR/dist"
-        WS_NEEDS_BUILD=true
-    elif [ ! -d "$CHAT_CORE_DIR/dist" ] || [ ! -d "$CHAT_DIR/dist" ] || \
-         [ -z "$(find "$CHAT_CORE_DIR/dist" -name '*.d.ts' 2>/dev/null)" ] || \
-         [ -z "$(find "$CHAT_DIR/dist" -name '*.d.ts' 2>/dev/null)" ]; then
-        WS_NEEDS_BUILD=true
-    else
-        # Check if any src file is newer than dist (stale detection)
-        CORE_NEWEST_SRC=$(find "$CHAT_CORE_DIR/src" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
-        CORE_OLDEST_DIST=$(find "$CHAT_CORE_DIR/dist" -type f -printf '%T@\n' 2>/dev/null | sort -n | head -1)
-        CHAT_NEWEST_SRC=$(find "$CHAT_DIR/src" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
-        CHAT_OLDEST_DIST=$(find "$CHAT_DIR/dist" -type f -printf '%T@\n' 2>/dev/null | sort -n | head -1)
-        if [ -n "$CORE_NEWEST_SRC" ] && [ -n "$CORE_OLDEST_DIST" ] && \
-           [ "$(echo "$CORE_NEWEST_SRC > $CORE_OLDEST_DIST" | bc 2>/dev/null)" = "1" ]; then
-            echo -e "${YELLOW}  foggy-chat-core src is newer than dist, rebuilding...${NC}"
-            WS_NEEDS_BUILD=true
-        elif [ -n "$CHAT_NEWEST_SRC" ] && [ -n "$CHAT_OLDEST_DIST" ] && \
-             [ "$(echo "$CHAT_NEWEST_SRC > $CHAT_OLDEST_DIST" | bc 2>/dev/null)" = "1" ]; then
-            echo -e "${YELLOW}  foggy-chat src is newer than dist, rebuilding...${NC}"
-            WS_NEEDS_BUILD=true
-        fi
     fi
 
-    if [ "$WS_NEEDS_BUILD" = true ]; then
-        echo -e "${YELLOW}[2/3] Building workspace packages (foggy-chat-core, foggy-chat)...${NC}"
-        (cd "$CHAT_CORE_DIR" && pnpm build) && \
-        (cd "$CHAT_DIR" && pnpm build)
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}  Workspace package build failed!${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GRAY}[2/3] Workspace packages already built, skipped${NC}"
-    fi
-
-    # Build navigator-frontend
-    echo -e "${YELLOW}[3/3] Building navigator-frontend...${NC}"
-    (cd "$FRONTEND_DIR" && pnpm build) > "$LOG_DIR/frontend-build.log" 2>&1
+    echo -e "${YELLOW}[2/2] Running frontend CI baseline...${NC}"
+    (cd "$REPO_ROOT" && pnpm run ci:frontend) > "$LOG_DIR/frontend-build.log" 2>&1
     if [ $? -ne 0 ]; then
-        echo -e "${RED}  Frontend build failed! Check logs/frontend-build.log${NC}"
+        echo -e "${RED}  Frontend CI baseline failed! Check logs/frontend-build.log${NC}"
         tail -20 "$LOG_DIR/frontend-build.log"
         exit 1
     fi
