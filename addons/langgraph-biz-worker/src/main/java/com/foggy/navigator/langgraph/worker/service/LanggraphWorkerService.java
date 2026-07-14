@@ -7,6 +7,7 @@ import com.foggy.navigator.business.agent.model.entity.BizWorkerIdentityEntity;
 import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphWorkerHealthDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
@@ -56,9 +57,41 @@ public class LanggraphWorkerService {
 
     public LanggraphWorkerEntity getWorkerEntity(String workerId) {
         String normalizedWorkerId = requireWorkerId(workerId);
-        return workerRepository.findByWorkerId(normalizedWorkerId)
-                .or(() -> findIdentityBackedWorker(normalizedWorkerId))
+        // A governed identity owns its globally unique workerId. Prefer it on
+        // collisions so later task/stream lookups cannot switch a route that
+        // was authorized from BizWorkerIdentity back to a legacy endpoint.
+        // Legacy-only workerIds retain their existing resolution behavior.
+        return findIdentityBackedWorker(normalizedWorkerId)
+                .or(() -> workerRepository.findByWorkerId(normalizedWorkerId))
                 .orElseThrow(() -> new IllegalArgumentException("LangGraph worker not found: " + workerId));
+    }
+
+    /**
+     * Resolves a Business Agent runtime route exclusively from the governed
+     * {@link BizWorkerIdentityEntity}. A same-named legacy LangGraph worker is
+     * deliberately ignored so it cannot replace the pool-selected identity's
+     * endpoint or capabilities.
+     *
+     * <p>When a real pool owns the route, an upstream-system identity must
+     * match that pool owner exactly. Platform identities retain the existing
+     * shared-infrastructure exception, but only for the canonical
+     * {@code (PLATFORM, platform)} owner. With no real pool (physical-only
+     * compatibility), only that canonical platform identity is trusted.</p>
+     */
+    public LanggraphWorkerEntity getBusinessAgentWorkerEntity(
+            String workerId,
+            ResourceOwnerType poolOwnerType,
+            String poolOwnerId) {
+        String normalizedWorkerId = requireWorkerId(workerId);
+        if (workerIdentityRepository == null) {
+            throw new IllegalStateException("BizWorker identity registry is not available");
+        }
+        BizWorkerIdentityEntity identity = workerIdentityRepository.findByWorkerId(normalizedWorkerId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "LangGraph BizWorker identity not found: " + normalizedWorkerId));
+        requireLanggraphBizBackend(identity);
+        requireBusinessAgentIdentityVisibility(identity, poolOwnerType, poolOwnerId);
+        return toRuntimeWorker(identity);
     }
 
     public List<LanggraphWorkerEntity> listWorkers(String userId) {
@@ -68,8 +101,8 @@ public class LanggraphWorkerService {
     public String resolveTaskWorkerId(String preferredWorkerId) {
         if (StringUtils.hasText(preferredWorkerId)) {
             String workerId = preferredWorkerId.trim();
-            Optional<LanggraphWorkerEntity> worker = workerRepository.findByWorkerId(workerId)
-                    .or(() -> findIdentityBackedWorker(workerId));
+            Optional<LanggraphWorkerEntity> worker = findIdentityBackedWorker(workerId)
+                    .or(() -> workerRepository.findByWorkerId(workerId));
             if (worker.isPresent()) {
                 return worker.get().getWorkerId();
             }
@@ -153,6 +186,43 @@ public class LanggraphWorkerService {
         return ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND.equals(worker.getWorkerBackend().trim());
     }
 
+    private void requireLanggraphBizBackend(BizWorkerIdentityEntity identity) {
+        String backend = StringUtils.hasText(identity.getWorkerBackend())
+                ? identity.getWorkerBackend().trim()
+                : null;
+        if (!ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND.equals(backend)) {
+            throw new IllegalStateException(
+                    "BizWorker identity backend mismatch: " + identity.getWorkerId());
+        }
+    }
+
+    private void requireBusinessAgentIdentityVisibility(
+            BizWorkerIdentityEntity identity,
+            ResourceOwnerType poolOwnerType,
+            String poolOwnerId) {
+        if (identity.getOwnerType() == null || !StringUtils.hasText(identity.getOwnerId())) {
+            throw new IllegalStateException(
+                    "LangGraph worker identity owner is not configured: " + identity.getWorkerId());
+        }
+
+        String identityOwnerId = identity.getOwnerId().trim();
+        if (identity.getOwnerType() == ResourceOwnerType.PLATFORM) {
+            if (!BizWorkerPoolService.PLATFORM_OWNER_ID.equals(identityOwnerId)) {
+                throw new SecurityException(
+                        "LangGraph platform worker identity owner mismatch: " + identity.getWorkerId());
+            }
+            return;
+        }
+
+        if (identity.getOwnerType() != ResourceOwnerType.UPSTREAM_SYSTEM
+                || poolOwnerType != ResourceOwnerType.UPSTREAM_SYSTEM
+                || !StringUtils.hasText(poolOwnerId)
+                || !identityOwnerId.equals(poolOwnerId.trim())) {
+            throw new SecurityException(
+                    "LangGraph worker identity is not visible to worker pool: " + identity.getWorkerId());
+        }
+    }
+
     private LanggraphWorkerEntity toRuntimeWorker(BizWorkerIdentityEntity identity) {
         if (!BizWorkerPoolService.STATUS_ENABLED.equals(identity.getStatus())) {
             throw new IllegalStateException("LangGraph worker identity is disabled: " + identity.getWorkerId());
@@ -168,6 +238,10 @@ public class LanggraphWorkerService {
         worker.setWorkerId(identity.getWorkerId());
         worker.setName("BizWorker " + identity.getWorkerId());
         worker.setBaseUrl(identity.getBaseUrl().trim());
+        // BizWorkerIdentity stores only a credential hash. It authenticates
+        // inbound Worker -> Gateway calls and must never be sent as an
+        // outbound Bearer secret. Internal-dev keeps its existing no-auth
+        // Worker client behavior until a dedicated outbound credential exists.
         worker.setAuthToken("");
         worker.setAuthMode("IDENTITY");
         worker.setStatus("ONLINE");

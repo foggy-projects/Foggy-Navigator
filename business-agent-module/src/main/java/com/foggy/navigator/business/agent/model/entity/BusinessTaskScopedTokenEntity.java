@@ -8,7 +8,8 @@ import java.time.LocalDateTime;
 @Data
 @Entity
 @Table(name = "business_task_scoped_token", indexes = {
-        @Index(name = "idx_biz_token_task", columnList = "taskId")
+        @Index(name = "idx_biz_token_task", columnList = "taskId"),
+        @Index(name = "idx_biz_token_tenant_worker_task", columnList = "tenantId,workerTaskId")
 })
 public class BusinessTaskScopedTokenEntity {
 

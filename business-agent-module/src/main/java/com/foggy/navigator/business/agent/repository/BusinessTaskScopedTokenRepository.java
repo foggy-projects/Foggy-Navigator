@@ -41,6 +41,13 @@ public interface BusinessTaskScopedTokenRepository extends JpaRepository<Busines
             @Param("taskId") String taskId,
             @Param("tenantId") String tenantId);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select token from BusinessTaskScopedTokenEntity token " +
+            "where token.tenantId = :tenantId and token.workerTaskId = :workerTaskId")
+    List<BusinessTaskScopedTokenEntity> findByTenantIdAndWorkerTaskIdForUpdate(
+            @Param("tenantId") String tenantId,
+            @Param("workerTaskId") String workerTaskId);
+
     Optional<BusinessTaskScopedTokenEntity> findFirstByWorkerTaskIdAndTenantIdAndClientAppIdOrderByCreatedAtDesc(
             String workerTaskId, String tenantId, String clientAppId);
 

@@ -25,15 +25,15 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| Workitem | in-progress | 2026-07-14 Owner 已冻结当前 dev/internal 方案与未来外部开放门禁；P2 显式开关与 readiness 已部分实施 |
-| Implementation | partial | implementation_started: yes；已实施平台 Open API 默认关闭、三类 Worker external profile、平台 readiness 消费、task capability v2 首个切片和 Codex Biz 专用创建路由修正；runtime principal、Worker lease、终态轮换和 audit outbox 未实施 |
-| Automated test | partial-passed | 既有外部门禁/readiness 证据保持有效；最终 `business-agent-module -am` 5 个 reactor、770 tests 通过，其中 business-agent 510 tests；Open API mapping 43 tests、跨 Provider 定向回归 94 tests 通过；MySQL 8.0.44/8.4.8 迁移、重复执行和安全回滚通过 |
+| Workitem | in-progress | 2026-07-14 Owner 已冻结当前 dev/internal 方案与未来外部开放门禁；P2 第一批已完成 external gate、task capability、Worker credential schema/API、pool/identity route、definitive terminal tombstone 和 audit writer 隔离 |
+| Implementation | partial | implementation_started: yes；`EXEC-142-012` 已实施 Worker credential v1 schema/API、owner-scoped pool/identity 与 LangGraph governed route、持久化 definitive terminal tombstone、Claude tenant 持久化及 best-effort audit 独立事务；Gateway principal/lease、pause/generation、可靠审计 outbox 和 L3 仍未完成 |
+| Automated test | partial-passed | `EXEC-142-012` 最终 11/11 reactor clean test、2186 tests 通过；Business Agent integration TypeScript typecheck 通过；credential/terminal/Claude tenant 三组迁移在 MySQL 8.0.44/8.4.8 完成 forward×2、rollback×2、reapply；真实 L3 未运行 |
 | Manual verification | not-run | 未执行双 tenant/ClientApp/upstream user/task/function 矩阵 |
 | Experience verification | not-run | 未检查外部配置、错误提示或审批恢复体验 |
 | Production routing | unchanged | production_routing_changed: no |
-| External contract | scoped-change | 新增显式关闭/未就绪错误语义，并在当前工作树落地 task capability v2 fail-closed 契约；没有启用 external-enabled，旧 token 只具备已验证但尚未部署的迁移/回滚脚本，独立 upstream identity 和生产启用均未完成 |
+| External contract | scoped-change | 新增显式关闭/未就绪错误语义，并在当前工作树落地 capability/terminal fail-closed 与 Worker credential 管理契约；严格 Worker credential 尚未接入 Gateway principal，external-enabled 仍关闭且 unready，没有生产批准 |
 
-本文已回写 `EXEC-142-008` 及当前工作树的 task capability v2/Codex Biz route 实施与定向测试证据；迁移脚本仅在一次性 MySQL 8.0.44/8.4.8 容器执行，没有操作项目共享数据库，也没有执行真实凭据签发、流量读取、外部部署或生产路由变更。
+本文已回写 `EXEC-142-008`、`EXEC-142-011` 和 `EXEC-142-012`。所有迁移脚本只在一次性 MySQL 8.0.44/8.4.8 容器执行，没有操作项目共享数据库；没有执行真实 L3、凭据流量、外部部署、浏览器验证或生产路由变更。
 
 ## 目标
 
@@ -96,8 +96,13 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 8. BusinessFunction runtime audit 已覆盖 invoke、suspend、success、failed、tool message 和 resume 生命周期的多类事件。
 9. 当前工作树已实现 task capability v2 首个切片：新签发 token 固定 `tokenVersion=2`、`generation=1`、`audience=WORKER_GATEWAY`、`identityAssurance=client-app-delegated`，并持久化结构化 `{functionId, version}` JSON 快照、签发/过期和撤销字段。
 10. 新签发 token 使用 32 字节 `SecureRandom` 生成的 `btt_` Base64URL 形式，数据库继续只保存 SHA-256 hash；默认 TTL 30 分钟且实现硬上限 60 分钟。
-11. `BusinessAgentTaskService` 已提供单 token 撤销和按 tenant/task 批量撤销服务，并按 hash 条件清理 business-task、worker-task、worker-session runtime aliases；这些服务尚未接入 pause/terminal/cancel 状态机。
+11. `BusinessAgentTaskService` 已提供单 token 撤销和按 tenant/task 批量撤销服务，并按 hash 条件清理 business-task、worker-task、worker-session runtime aliases；definitive terminal 已通过持久化 tombstone 接线，pause/suspension、cancel 和 resume generation 仍未接入。
 12. Codex Business Agent launcher 已改走 `CodexBizTaskProvider.createTaskDirect`，从而固定 `codex-biz-worker` Provider route，不再误入默认 `codex-worker` 创建端口。
+13. Worker credential v1 已增加乐观版本、credential version、签发/过期/撤销/轮换时间；平台 `SUPER_ADMIN` 和 upstream `WORKER_MANAGE` 可 owner-scoped rotate/revoke，服务端只在 rotate 响应一次性返回 `bwc_` 明文，数据库只保存 SHA-256。该服务尚无 Gateway 调用方，不能表述为 Worker principal 已完成。
+14. pool/identity 运行时不变量已收紧：全局 workerId 不得跨 owner/backend 重注册，pool 操作绑定 tenant + owner，成员和路由重验 enabled/healthy/backend/可见性；LangGraph Business Agent route 只采用受治理 identity endpoint，同名 legacy 不得覆盖。
+15. `business_task_terminal_state` 已成为 definitive terminal 的持久化授权 tombstone；Provider 仅对显式 `recoverable=false` 事件写入，late-bind 会持久化 worker tuple、撤销 token 并补全 marker 后抛专用异常，Gateway resolve 即使面对错误物理重开也由 tombstone fail closed。
+16. Claude task 已持久化可信 `tenantId`，并为 legacy 记录提供 entity、Session、dedicated Worker 的有界回填；tenant 仍无法解析时不发布空 tenant terminal 事件。
+17. `BusinessFunctionRuntimeAuditWriter` 使用独立 bean 的 `REQUIRES_NEW + saveAndFlush`；外层捕获 commit/flush 失败，best-effort telemetry 不再回滚主业务。关键审批、拒绝和远程副作用仍未进入可靠 outbox。
 
 ## 静态搜索结论
 
@@ -120,8 +125,8 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 - `BusinessTaskScopedTokenPolicyService` 在签发时快照当时 ENABLED 的 ClientApp function grants，编码为排序后的结构化 `{functionId, version}` JSON 列表；Gateway list/schema/invoke 现在以精确字段对约束当前可见/可执行函数，并继续经过现有 ClientApp、user、skill、function grant 校验。
 - Gateway 对 v1、错误 audience、错误 assurance、非法 generation 或缺失/畸形 function scope fail closed；迁移脚本把旧行回填为 `v1/LEGACY/legacy-unverified/[]`，因此旧 token 不会被 Gateway v2 接受。脚本已在一次性 MySQL 8.0.44/8.4.8 验证，但尚未部署到项目数据库。
 - `BusinessFunctionAuthorizationService` 明确将 SkillFunctionAllowlist 作为 materialization/recommendation 提示，而不是运行时硬门禁。
-- `workerId` 已能在 Business Agent launcher 成功后落到 token；`workerLeaseId` 目前只是 nullable schema 预留，Gateway 尚未验证独立 Worker principal/credential、lease 或 PoP，不能把 Worker 绑定标记完成。
-- `generation` 当前固定为 1，尚无 resume/重调度轮换；单 token 和按 task 批量撤销服务虽已落地，但 pause/terminal/cancel 尚未调用，不能把终态失效标记完成。
+- `workerId` 已能在 Business Agent launcher 成功后落到 token；Worker credential v1 已提供 owner-scoped rotate/revoke 和严格校验服务，但 `workerLeaseId` 仍只是 nullable schema 预留，Gateway 尚未消费独立 Worker principal/credential、lease 或 PoP，不能把 Worker 绑定标记完成。
+- `generation` 当前固定为 1，尚无 resume/重调度轮换；definitive terminal 已通过持久化 tombstone fail closed，并以物理 `REVOKED` 作为可重试 materialization。pause/suspension、cancel 与 generation 轮换仍未闭合，不能把完整 token 生命周期标记完成。
 - `BusinessAgentTaskScopedTokenRuntimeStore` 仍使用单 JVM 内存缓存保存运行时明文 token；v2 只允许 `tenant + session + task` 精确键，缺少 taskId 不再退化为 session token；hash-conditional removal 可避免撤销旧 token 时删除同 task 的新 token，但重启、多实例恢复仍未解决。
 
 ### 审批、恢复与旧接口
@@ -139,9 +144,10 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ### credential 与审计生命周期
 
-- task token 已增加单 token/按 task 批量撤销 service 与撤销字段，但尚无面向可信 principal 的管理入口，也未接入 pause/terminal/cancel、generation 轮换或跨实例恢复；ClientApp runtime credential 的完整撤销/轮换闭环仍待确认。
+- task token 已增加单 token/按 task 批量撤销 service 与撤销字段，definitive terminal tombstone 已接入；pause/suspension、cancel、generation 轮换和跨实例恢复仍待实现。
+- Worker credential v1 已有平台/upstream owner-scoped rotate/revoke API、TTL 和严格 credential 校验服务，但 Gateway 尚未解析该 principal，也没有 lease/preselect/prebind 或 credential 生命周期审计；这只是 schema/API 切片。
 - `ClientAppUserGrantService` 会保存和解析 upstream user token；主源码中未见应用层加密包装，数据库/TDE/密钥管理需基础设施确认。
-- `BusinessFunctionRuntimeAuditService` 是 best-effort，写失败只记录 warn；Worker Gateway 的部分授权拒绝发生在 invoke audit 之前，未见统一持久化拒绝事件。
+- runtime audit writer 已通过独立 `REQUIRES_NEW + saveAndFlush` 隔离 best-effort 写失败，避免回滚主业务；Worker Gateway 的部分授权拒绝仍发生在 invoke audit 之前，关键审批/拒绝/远程副作用没有可靠 outbox，不能宣称审计闭环。
 
 ## 运行态待证
 
@@ -149,7 +155,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 |---|---|---|
 | ClientApp/upstream user mapping/grant 的唯一性和生命周期 | 本地配置、grant 数据、账号生命周期与负向测试 | 不阻塞 dev/internal；未形成证据前 `external-enabled` 保持 `false` |
 | runtime/task token 的撤销、轮换、过期传播 | 单 token 与按 task 批量撤销及 hash-conditional alias cleanup 已有定向测试；仍需 API/DB/缓存演练，含重启、多实例和 generation 轮换 | 只登记首个撤销切片，不宣称 token 生命周期闭环 |
-| task terminal/cancel 后 token 是否立即失效 | 已有按 tenant/task 批量撤销 service，但尚未接入终态；创建任务、捕获 token、完成/取消后重放 | AC-05 未通过 |
+| task terminal/cancel 后 token 是否立即失效 | definitive terminal tombstone、late-bind 撤销和错误物理重开均有自动化证据；cancel、pause/suspension 和 generation 仍需创建任务后的重放矩阵 | definitive terminal 为 partial-passed；完整 AC-05 未通过 |
 | 同 tenant/Agent 下跨 ClientApp/user 读取 | 双 ClientApp/user task/session 负向矩阵 | 未通过前外部隔离不可签收 |
 | 旧 LangGraph/Claude/Codex API 本仓消费者 | PC、Mobile、SDK、CLI、L3、Worker、canary 的静态引用、契约测试和 clean build | 未完成迁移与验证前不得删除；不要求外部客户流量或静默窗口 |
 | 非 loopback 与空 Token 的实际部署 | 环境变量、启动参数、监听地址、网络策略与 readiness 响应 | 本地契约门禁已通过，真实网络部署未验证；external enablement 保持未批准 |
@@ -163,11 +169,11 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 |---|---|---|---|
 | upstream user 证明 | ODR-142-002 已批准：当前 dev/internal 使用 ClientApp credential + mapping/grant，审计标记 `client-app-delegated`；signed assertion 是未来真正外部开放门禁 | ClientApp/Upstream/Security | 不阻塞当前 P2；门禁未齐时 `external-enabled=false` |
 | task function scope | ODR-142-003：Gateway capability + 明确 `BusinessFunctionId@version`/policy snapshot，并与 tenant/ClientApp、subject mapping/user、skill、function grant 及 task/session/lease 当前状态求交集 | Business Agent/Security | v2 首切片已快照 ClientApp ENABLED function grants，并在 list/schema/invoke 与当前授权求交；精确按任务最小能力选择、旧 token 迁移和 lease 交集仍待实施 |
-| token 生命周期 | ODR-142-003：30 分钟租约、上限 60 分钟；暂停/终态失效；支持人工/批量撤销和 generation 轮换 | Business Agent/Operations | TTL、单 token 撤销、按 task 批量撤销及 runtime alias cleanup 已实施；终态/暂停接线、可信管理入口、generation 轮换和跨实例恢复未实施，external enablement 不批准 |
-| Worker 绑定 | ODR-142-003：task token 绑定逻辑 lease，Gateway 还须校验独立 Worker principal/credential 或 PoP；重调度签发新 generation 并撤销旧 token | Worker/Platform | 已增加 `workerId/workerLeaseId` schema 且 launcher 成功后写入 `workerId`；lease/principal/PoP 未签发或校验，跨 Worker 重放风险保持开放 |
+| token 生命周期 | ODR-142-003：30 分钟租约、上限 60 分钟；暂停/终态失效；支持人工/批量撤销和 generation 轮换 | Business Agent/Operations | TTL、单 token/按 task 撤销、runtime alias cleanup 与 definitive terminal tombstone 已实施；pause/suspension、cancel、可信管理入口、generation 轮换和跨实例恢复未实施，external enablement 不批准 |
+| Worker 绑定 | ODR-142-003：task token 绑定逻辑 lease，Gateway 还须校验独立 Worker principal/credential 或 PoP；重调度签发新 generation 并撤销旧 token | Worker/Platform | Worker credential v1 schema/API 与 owner-scoped rotate/revoke 已实施；Gateway 未消费 strict principal，lease/preselect/prebind/PoP 仍未实现，跨 Worker 重放风险保持开放 |
 | 外部 Codex/LangGraph 安全上限 | ODR-142-004：双模式、默认拒绝、`workspace-write`、任务工具 egress 默认拒绝并保留控制面/LLM 基础 allowlist、非 loopback 缺凭据 unready/fail closed | Worker/Security | 显式开关和 unready/fail-closed 骨架已实施；完整 workspace/tool/sandbox/network 安全上限未实施，external 保持未启用 |
 | 旧 Provider API、deprecated SPI/DTO | ODR-142-007 已批准：不设生产或外部兼容窗口；本仓消费者迁移、安全语义复核和 clean build 后在 1.4.2 同版本删除 | Provider/API/SDK owner | 删除前不扩大消费者；运行中任务状态按版本化迁移规则收口 |
-| 审计保证级别 | ODR-142-005：本地关键状态事务 outbox；无状态拒绝可靠落档；远程调用意图/结果分段记录；高频遥测 best-effort | Security/Operations | 不宣称关键拒绝或外部副作用审计完备 |
+| 审计保证级别 | ODR-142-005：本地关键状态事务 outbox；无状态拒绝可靠落档；远程调用意图/结果分段记录；高频遥测 best-effort | Security/Operations | best-effort writer 已完成事务隔离；关键拒绝、审批和外部副作用 outbox 未实现，不宣称审计完备 |
 
 ### 仍待实施级 Owner 决策
 
@@ -199,14 +205,28 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskScopedTokenRuntimeStore.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessTaskScopedTokenLifecycleService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessTaskScopedTokenPolicyService.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BizWorkerIdentityEntity.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BizWorkerCredentialService.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/BizWorkerCredentialController.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/UpstreamAdminWorkerCredentialController.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BizWorkerPoolService.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BusinessTaskTerminalStateEntity.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/event/BusinessTaskScopedTokenTerminalListener.java`
 - `docs/migration/2026-07-14-business-task-token-v2.sql`
 - `docs/migration/2026-07-14-business-task-token-v2-rollback.sql`
+- `docs/migration/2026-07-14-biz-worker-credential-v1.sql`
+- `docs/migration/2026-07-14-biz-worker-credential-v1-rollback.sql`
+- `docs/migration/2026-07-14-business-task-terminal-state.sql`
+- `docs/migration/2026-07-14-business-task-terminal-state-rollback.sql`
+- `docs/migration/2026-07-14-claude-task-tenant.sql`
+- `docs/migration/2026-07-14-claude-task-tenant-rollback.sql`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/WorkerGatewayController.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/WorkerGatewayService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessFunctionAuthorizationService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/BusinessFunctionApprovalController.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessFunctionSuspensionService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessFunctionRuntimeAuditService.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessFunctionRuntimeAuditWriter.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BusinessFunctionRuntimeAuditEntity.java`
 
 ### LangGraph/Codex Biz Worker
@@ -221,6 +241,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/execution_policy.py`
 - `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/model/dto/LanggraphWorkerHealthDTO.java`
 - `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/service/LanggraphWorkerService.java`
+- `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/service/LanggraphBusinessAgentWorkerTaskLauncher.java`
 - `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexBizTaskProvider.java`
 - `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexBusinessAgentWorkerTaskLauncher.java`
 - `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexSdkBackendConnectionTester.java`
@@ -296,11 +317,44 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 - `workerLeaseId` 没有签发，Gateway 没有独立 Worker principal/credential、lease 或 PoP 校验。
 - generation 没有在 resume/重调度时递增；旧 generation 没有自动撤销。
-- 单 token/批量撤销尚未接入 task terminal、pause、cancel 和审批恢复状态机，也没有可信管理 Controller。
+- definitive terminal 已由后续 `EXEC-142-012` tombstone 接线；单 token/批量撤销尚未接入 pause/suspension、cancel、resume generation 和审批恢复状态机，也没有可信管理 Controller。
 - runtime store 仍是单 JVM 内存态；重启、多实例恢复和跨实例撤销传播未解决。
 - tool message 只校验 v2 token 基础 claims，尚未形成与具体 `functionId@version` 一致的完整能力校验。
 - upstream user runtime principal、Open API task/session ownership、关键状态 outbox/可靠拒绝审计和 P3 Session/Task ownership 均未在本批实现。
 - Codex Biz route 修正只解决 Provider 路由正确性；其 `danger-full-access` / `never` 等 internal-dev 默认策略未因此成为 external-ready，外部执行策略 pending 门禁保持不变。
+
+## P2 Worker Identity / Terminal 实施 Check-in（`EXEC-142-012`）
+
+### 已完成内容
+
+1. Worker credential v1 已落地 schema 与管理 API：`BizWorkerIdentityEntity` 增加乐观版本及 credential 版本、签发、过期、撤销、轮换字段；平台 `SUPER_ADMIN` 与 upstream `WORKER_MANAGE` 可在 owner scope 内 rotate/revoke。服务端仅在 rotate 响应一次性返回 `bwc_` 明文，持久化 SHA-256；严格校验拒绝 legacy v0、错误、过期、撤销、禁用或缺失 credential。`BizWorkerCredentialService.requireStrictCredential` 尚无 Gateway 调用方，因此本项不代表 Gateway Worker principal 已完成。
+2. pool/identity 约束与 LangGraph governed route 已落地：全局 `workerId` 不得跨 owner/backend 重注册；pool 与成员操作绑定 tenant + owner，路由重验 pool/identity enabled、healthy、backend 与可见性。LangGraph Business Agent pool route 只使用受治理 identity endpoint，同名 legacy 不能覆盖；upstream identity 要求 exact owner，`PLATFORM/platform` 是显式共享例外，physical-only 仅允许平台 identity，`tokenHash` 不作为出站 Bearer。
+3. definitive terminal 已落为持久化授权 tombstone：仅显式 `recoverable=false` 的 Provider 事件写入 `business_task_terminal_state`；物理 token `REVOKED` 是可重试 materialization。terminal 先于 bind 时，late-bind 在独立事务中保存 worker tuple、撤销 token 并补全 marker 后抛专用异常；marker 冲突不覆盖原归属，但仍撤销冲突 token；即使物理 token 行被错误重开，Gateway resolve 仍由 tombstone fail closed。
+4. Claude task 已持久化可信 `tenantId`，并以 entity -> Session -> dedicated Worker 的有界顺序回填 legacy 记录；definitive terminal 无法解析 tenant 时不发布空 tenant 事件。Codex pre-acceptance 且无远端 task 的 `FAILED` 已明确为不可恢复，Claude、Codex、Gemini、LangGraph 的 definitive/recoverable 事件语义均有回归覆盖。
+5. `BusinessFunctionRuntimeAuditWriter` 已作为独立 bean 使用 `REQUIRES_NEW + saveAndFlush`；外层捕获包括 commit/flush 在内的写失败，best-effort telemetry 不再回滚主业务。关键审批、拒绝和远程副作用仍没有可靠 outbox/强保证，不能据此把审计链标记完成。
+
+### 主要代码与迁移面
+
+- Worker credential/pool：`business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BizWorkerIdentityEntity.java`、`service/BizWorkerCredentialService.java`、`service/BizWorkerPoolService.java`、`controller/BizWorkerCredentialController.java`、`controller/UpstreamAdminWorkerCredentialController.java`。
+- terminal/audit：`business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BusinessTaskTerminalStateEntity.java`、`event/BusinessTaskScopedTokenTerminalListener.java`、`service/BusinessFunctionRuntimeAuditWriter.java`。
+- LangGraph route：`addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/service/LanggraphWorkerService.java`、`LanggraphBusinessAgentWorkerTaskLauncher.java`。
+- Claude tenant：`addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/model/entity/ClaudeTaskEntity.java`、`service/ClaudeTaskService.java`。
+- 迁移：`docs/migration/2026-07-14-biz-worker-credential-v1*.sql`、`2026-07-14-business-task-terminal-state*.sql`、`2026-07-14-claude-task-tenant*.sql`；通配写法仅用于归组，实际 forward/rollback 文件均已登记在上方代码清单。
+
+### 构建、测试与迁移证据
+
+- 最终命令：`mvn -B -pl business-agent-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am clean test`。11/11 reactor `SUCCESS`，共 2186 tests、0 failure/error/skip：common 47、agent-framework 213、user-auth 72、session 348、business-agent 590、Claude 368、LangGraph 165、Codex 358、Gemini 25；navigator-spi 无测试，总时 03:25。
+- 定向证据：terminal 66 tests；Claude + Codex 121 tests；Gemini 11 tests；LangGraph identity/pool 35 tests，且 LangGraph 全模块 165 tests 通过。上述结果均为本地自动化证据，不替代真实网络或外部调用验收。
+- `business-agent-module/integration-tests` 在 Node `22.23.1`、pnpm `10.34.5` 下执行 `tsc --noEmit`，exit 0。因本机 `localhost:8112` 未启动，带数据写入的 L3 integration test 未运行。
+- `2026-07-14-biz-worker-credential-v1`、`2026-07-14-business-task-terminal-state`、`2026-07-14-claude-task-tenant` 三组 forward/rollback 在一次性 MySQL 8.0.44、8.4.8 完成 forward×2、rollback×2、reapply。仅操作隔离容器；未操作项目共享数据库，未执行 launcher `ddl-auto=validate`。
+
+### 实施自检与下一门禁
+
+- self_check_decision: `continue-in-progress`。本批达成 local partial scope，不构成正式质量闸门、L3 验收或 production enablement。
+- Gateway 仍未接入 strict Worker principal/credential header、credential propagation、logical lease、preselect/prebind 或 PoP；跨 Worker 重放拒绝仍待实现。
+- task token definitive terminal 已闭合；pause/suspension、cancel、resume generation 轮换、跨实例 runtime secret 恢复和 tombstone 清理任务仍待实现。
+- runtime audit 仍是 best-effort；审批/恢复/取消主体绑定、关键拒绝与远程副作用的 reliable audit/outbox 仍待实现。
+- 真实 L3、双 ClientApp/upstream user 手工矩阵、non-loopback 网络、浏览器、hosted CI、共享数据库迁移和 launcher validate 均未执行。`production_routing_changed: no`，external-enabled 继续 disabled/unready。
 
 ## 实施步骤
 
@@ -325,7 +379,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 3. 定义 cancel、complete、expire、人工 revoke、ClientApp/user grant 撤销后的传播。
 4. 替换或增强仅内存运行时注入方案，至少形成重启和多实例可验证的恢复策略。
 
-当前进度：v2 新签发、ClientApp function grant 快照、30/60 分钟 TTL、单 token/按 task 批量撤销及 hash-conditional runtime alias cleanup 已实现；旧 token 兼容迁移、worker lease、generation 轮换、终态传播和跨实例恢复仍未实现。
+当前进度：v2 新签发、ClientApp function grant 快照、30/60 分钟 TTL、单 token/按 task 批量撤销、hash-conditional runtime alias cleanup 与 definitive terminal 持久化 tombstone 已实现；旧行 fail-closed migration 仅在隔离 MySQL 8.0.44/8.4.8 验证，尚未部署到项目数据库。worker principal/lease、pause/suspension、cancel、resume generation 轮换和跨实例恢复仍未实现。
 
 ### 4. 收敛 Gateway 与 Open API 资源绑定
 
@@ -362,7 +416,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ## 自动化测试计划
 
-当前状态：`partial-passed`；external switch/readiness/fail-closed、平台消费和 task capability v2 首个定向矩阵已有本地自动化证据；credential 全生命周期、runtime identity、Worker principal/lease、终态/generation、跨实例、Open API ownership 和审计矩阵仍 `not-run`。
+当前状态：`partial-passed`；external switch/readiness/fail-closed、平台消费、task capability v2、Worker credential v1 schema/API 与严格 service、pool/identity LangGraph route、definitive terminal tombstone、Claude tenant 和 best-effort audit writer 隔离已有本地自动化证据。Gateway principal/credential header 与 lease、pause/suspension/cancel 和 generation、跨实例、Open API ownership、reliable audit/outbox 及真实 L3 仍 `not-run`。
 
 ### Credential 与 identity
 
@@ -448,7 +502,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 - [ ] 外部请求可从 audit/correlation 追溯到 tenant、ClientApp、upstream user、task/session 和 Worker。
 - [ ] 当前 dev/internal 的 ClientApp credential + mapping/grant 模型已实现并以 `client-app-delegated` assurance 审计；未来真正外部开放前的 signed assertion 门禁已明确登记。
-- [ ] task-scoped token 有版本、scope、TTL、撤销/轮换和终态失效，且不能跨 task/session/function。
+- [ ] task-scoped token 有版本、scope、TTL、撤销/轮换和终态失效，且不能跨 task/session/function；function scope/TTL/人工与批量撤销/definitive terminal 已有证据，Worker principal/lease、pause/generation 与完整跨主体矩阵未完成。
 - [ ] Gateway 执行函数是 task scope 与当前 ClientApp grant 的交集。
 - [ ] 外部审批、恢复、拒绝、取消不能只凭 taskId，actor 不取自可伪造字段。
 - [ ] generic Open API task/session 查询不跨 ClientApp/upstream user 泄露。
@@ -463,5 +517,5 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 ## 生产路由与外部契约状态
 
 - 当前：`production_routing_changed: no`，`production_enablement: not-applicable`；external contract 仅新增显式关闭/未就绪错误语义，没有启用 external-enabled。
-- 实施影响：平台 `/api/v1/open` 路由面默认关闭，Worker 仅在显式 external-enabled 配置意图下新增 unready/503 语义；internal-dev 的监听、空 Token 与业务入口认证行为保留，但平台对 health 缺失或显式 `ready=false` 的路由判定已收紧，可能影响内部异常场景。task capability v2 首切片与 Codex Biz route 修正已在当前工作树实施，但旧 token/schema 迁移、Worker principal/lease、终态轮换、identity、ownership、审计和旧接口删除仍未完成。
+- 实施影响：平台 `/api/v1/open` 路由面默认关闭，Worker 仅在显式 external-enabled 配置意图下新增 unready/503 语义；internal-dev 的监听、空 Token 与业务入口认证行为保留，但平台对 health 缺失或显式 `ready=false` 的路由判定已收紧，可能影响内部异常场景。task capability v2、Worker credential v1 schema/API、pool/identity LangGraph route、definitive terminal tombstone、Claude tenant 与 best-effort audit writer 隔离已在当前工作树实施；Gateway strict principal/lease、pause/generation、Open API ownership、reliable audit/outbox、真实 L3 和旧接口删除仍未完成。
 - 启用门禁：`external-enabled` 必须显式且默认 `false`；signed assertion 或等强用户证明、SDK/调用方迁移、负向矩阵、审计、安全上限与回滚证据缺一不可。隔离测试通过不自动批准真正外部开放。

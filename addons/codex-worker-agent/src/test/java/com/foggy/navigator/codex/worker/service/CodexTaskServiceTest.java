@@ -1703,6 +1703,7 @@ class CodexTaskServiceTest {
                         && "RUNNING".equals(event.getPreviousStatus())
                         && "COMPLETED".equals(event.getStatus())
                         && "AWAITING_REPLY".equals(event.getInteractionState())
+                        && Boolean.FALSE.equals(event.getRecoverable())
         ));
     }
 
@@ -1723,7 +1724,64 @@ class CodexTaskServiceTest {
                         && "RUNNING".equals(event.getPreviousStatus())
                         && "worker timeout".equals(event.getErrorMessage())
                         && "AWAITING_REPLY".equals(event.getInteractionState())
+                        && Boolean.TRUE.equals(event.getRecoverable())
         ));
+    }
+
+    @Test
+    void preAcceptanceFailurePublishesDefinitiveTerminalEvent() {
+        CodexTaskEntity entity = createTask(
+                "task-not-accepted", "session-2", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 14, 12, 0)
+        );
+        entity.setTenantId("tenant-1");
+        entity.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        entity.setRuntimeAcceptanceState("PREPARED");
+        entity.setWorkerTaskId(null);
+        when(taskRepository.findByTaskIdForUpdate("task-not-accepted"))
+                .thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertTrue(service.failTaskIfAcceptanceNotStarted(
+                "task-not-accepted", "CODEX_RUNTIME_ACCEPT_FAILED"));
+
+        assertEquals("FAILED", entity.getStatus());
+        assertEquals("TERMINAL", entity.getRuntimeAcceptanceState());
+        assertNull(entity.getWorkerTaskId(),
+                "A task rejected before acceptance has no Worker task to reconnect");
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-not-accepted".equals(event.getTaskId())
+                        && "tenant-1".equals(event.getTenantId())
+                        && "RUNNING".equals(event.getPreviousStatus())
+                        && "FAILED".equals(event.getStatus())
+                        && Boolean.FALSE.equals(event.getRecoverable())
+        ));
+    }
+
+    @Test
+    void resyncFailedTaskPublishesNonTerminalRecoveryTransition() {
+        CodexTaskEntity entity = createTask(
+                "task-resync", "session-resync", "worker-1", "dir-1", "FAILED",
+                LocalDateTime.of(2026, 3, 26, 11, 30)
+        );
+        entity.setWorkerTaskId("worker-task-resync");
+        when(taskRepository.findByTaskIdAndUserIdForUpdate("task-resync", "user-1"))
+                .thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.resyncTaskForProvider(
+                CodexTaskService.CODEX_PROVIDER_TYPE, "task-resync", "user-1");
+
+        assertEquals("RUNNING", entity.getStatus());
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-resync".equals(event.getTaskId())
+                        && "FAILED".equals(event.getPreviousStatus())
+                        && "RUNNING".equals(event.getStatus())
+                        && event.getRecoverable() == null
+        ));
+        verify(streamRelay).reconnectTask("task-resync", "session-resync", "worker-1");
     }
 
     @Test

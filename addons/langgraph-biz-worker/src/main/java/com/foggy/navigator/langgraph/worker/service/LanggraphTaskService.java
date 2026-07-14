@@ -2,6 +2,7 @@ package com.foggy.navigator.langgraph.worker.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.MessageRole;
@@ -355,6 +356,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void completeTask(String taskId, String resultText, String structuredOutput, Long durationMs) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String previousStatus = entity.getStatus();
             entity.setStatus("COMPLETED");
             entity.setResultText(resultText);
             entity.setStructuredOutput(structuredOutput);
@@ -364,6 +366,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
             entity.setInterruptionMessage(null);
             entity.setRecoverable(false);
             persistTask(entity);
+            publishStatusChange(entity, previousStatus);
             log.info("Task completed: taskId={}", taskId);
         });
     }
@@ -371,12 +374,15 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void failTask(String taskId, String errorMessage) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String previousStatus = entity.getStatus();
             entity.setStatus("FAILED");
             entity.setErrorMessage(errorMessage);
             if (!StringUtils.hasText(entity.getTaskSubStatus())) {
                 entity.setTaskSubStatus("FAILED");
             }
+            entity.setRecoverable(false);
             persistTask(entity);
+            publishStatusChange(entity, previousStatus);
             log.warn("Task failed: taskId={}, error={}", taskId, errorMessage);
         });
     }
@@ -389,6 +395,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         if (!"RUNNING".equals(entity.getStatus()) && !"PENDING".equals(entity.getStatus())) {
             return;
         }
+        String previousStatus = entity.getStatus();
         entity.setStatus("ABORTED");
         entity.setTaskSubStatus("INTERRUPTED");
         entity.setInterruptionReason("user_cancelled");
@@ -396,6 +403,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         entity.setRecoverable(true);
         entity.setErrorMessage("Cancelled by user");
         persistTask(entity);
+        publishStatusChange(entity, previousStatus);
         recordRecoverableInterruption(entity, "user_cancelled", "Cancelled by user");
         log.info("Task cancelled: taskId={}", taskId);
     }
@@ -695,6 +703,31 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
+    }
+
+    private void publishStatusChange(LanggraphTaskEntity entity, String previousStatus) {
+        eventPublisher.publishEvent(TaskStatusChangeEvent.builder()
+                .taskId(entity.getTaskId())
+                .sessionId(entity.getSessionId())
+                .userId(entity.getUserId())
+                .tenantId(entity.getTenantId())
+                .agentId(resolveAgentId(entity))
+                .status(entity.getStatus())
+                .previousStatus(previousStatus)
+                .errorMessage(entity.getErrorMessage())
+                .interactionState(deriveInteractionState(entity.getStatus()))
+                .recoverable(entity.getRecoverable())
+                .build());
+    }
+
+    private String deriveInteractionState(String status) {
+        if ("RUNNING".equals(status) || "PENDING".equals(status)) {
+            return "PROCESSING";
+        }
+        if ("COMPLETED".equals(status) || "FAILED".equals(status) || "ABORTED".equals(status)) {
+            return "AWAITING_REPLY";
+        }
+        return null;
     }
 
     private static String truncate(String s, int maxLen) {

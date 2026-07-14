@@ -1,11 +1,9 @@
 package com.foggy.navigator.business.agent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
-@Component
 @ConfigurationProperties(prefix = "navigator.business-agent.task-token")
 public class BusinessTaskScopedTokenProperties {
 
@@ -32,12 +30,16 @@ public class BusinessTaskScopedTokenProperties {
     }
 
     public Duration effectiveTtl() {
-        Duration configuredMax = isPositive(maxTtl) ? maxTtl : DEFAULT_MAX_TTL;
-        if (configuredMax.compareTo(DEFAULT_MAX_TTL) > 0) {
-            configuredMax = DEFAULT_MAX_TTL;
-        }
+        Duration configuredMax = effectiveMaxTtl();
         Duration configuredTtl = isPositive(ttl) ? ttl : DEFAULT_TTL;
         return configuredTtl.compareTo(configuredMax) > 0 ? configuredMax : configuredTtl;
+    }
+
+    public Duration effectiveMaxTtl() {
+        Duration configuredMax = isPositive(maxTtl) ? maxTtl : DEFAULT_MAX_TTL;
+        return configuredMax.compareTo(DEFAULT_MAX_TTL) > 0
+                ? DEFAULT_MAX_TTL
+                : configuredMax;
     }
 
     private boolean isPositive(Duration value) {

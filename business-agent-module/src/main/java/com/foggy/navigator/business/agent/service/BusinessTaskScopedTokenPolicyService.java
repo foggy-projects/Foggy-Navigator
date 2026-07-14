@@ -51,6 +51,11 @@ public class BusinessTaskScopedTokenPolicyService {
         token.setExpiresAt(issuedAt.plus(properties.effectiveTtl()));
     }
 
+    /** Upper bound used to retain terminal authorization tombstones. */
+    public java.time.Duration maximumCapabilityLifetime() {
+        return properties.effectiveMaxTtl();
+    }
+
     public void requireGatewayToken(BusinessTaskScopedTokenDTO token) {
         if (token == null) {
             throw new IllegalArgumentException("token is required");

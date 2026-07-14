@@ -174,7 +174,8 @@ class BusinessAgentTaskServiceTest {
         assertTrue(result.getTaskScopedToken().matches("btt_[A-Za-z0-9_-]{43}"));
 
         verify(clientAppService).requireActiveClientApp("tenant_01", "app_01");
-        verify(bizWorkerPoolService).requireAvailablePool("tenant_01", "pool_01");
+        verify(bizWorkerPoolService).requireAvailablePool(
+                "tenant_01", ResourceOwnerType.PLATFORM, "tenant_01", "pool_01");
         verify(businessAgentSessionService).validateContextResourceCompatibility(
                 "tenant_01", "app_01", "user_01", null,
                 "agent_01", "skill_01", "dir_01", "model_01");
@@ -249,7 +250,9 @@ class BusinessAgentTaskServiceTest {
         pool.setPoolId("pool_01");
         pool.setWorkerBackend("LANGGRAPH_BIZ");
 
-        when(bizWorkerPoolService.requireAvailablePool("tenant_01", "pool_01")).thenReturn(pool);
+        when(bizWorkerPoolService.requireAvailablePool(
+                "tenant_01", ResourceOwnerType.PLATFORM, "tenant_01", "pool_01"))
+                .thenReturn(pool);
         when(resourceResolver.resolveRequiredModelForAgent(
                 eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
                 .thenReturn(modelResource("model_01", null));
@@ -346,7 +349,9 @@ class BusinessAgentTaskServiceTest {
         BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
         pool.setPoolId("pool_01");
         pool.setWorkerBackend("LANGGRAPH_BIZ");
-        when(bizWorkerPoolService.requireAvailablePool("tenant_01", "pool_01")).thenReturn(pool);
+        when(bizWorkerPoolService.requireAvailablePool(
+                "tenant_01", ResourceOwnerType.PLATFORM, "tenant_01", "pool_01"))
+                .thenReturn(pool);
         when(resourceResolver.resolveRequiredModelForAgent(
                 eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
                 .thenReturn(modelResource("model_01", null));
@@ -452,7 +457,8 @@ class BusinessAgentTaskServiceTest {
         assertEquals("lgt_456", result.getWorkerTaskId());
         assertEquals("worker_01", result.getWorkerPoolId());
         assertEquals("worker_01", result.getWorkerId());
-        verify(bizWorkerPoolService, never()).requireAvailablePool(anyString(), anyString());
+        verify(bizWorkerPoolService, never()).requireAvailablePool(
+                anyString(), any(ResourceOwnerType.class), anyString(), anyString());
 
         ArgumentCaptor<BusinessAgentWorkerTaskLaunchRequest> requestCaptor =
                 ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
@@ -572,7 +578,8 @@ class BusinessAgentTaskServiceTest {
         assertEquals("school-sim-wsl-biz", requestCaptor.getValue().getPhysicalWorkerId());
         assertEquals("dir_01", requestCaptor.getValue().getDirectoryId());
         assertEquals("CLIENT_APP_SHARED", requestCaptor.getValue().getWorkspaceScope());
-        verify(bizWorkerPoolService, never()).requireAvailablePool(anyString(), anyString());
+        verify(bizWorkerPoolService, never()).requireAvailablePool(
+                anyString(), any(ResourceOwnerType.class), anyString(), anyString());
     }
 
     @Test
@@ -789,8 +796,47 @@ class BusinessAgentTaskServiceTest {
 
     @Test
     void createTask_invalidWorkerPool_rejected() {
-        doThrow(new IllegalStateException("pool not available")).when(bizWorkerPoolService).requireAvailablePool("tenant_01", "pool_01");
+        doThrow(new IllegalStateException("pool not available"))
+                .when(bizWorkerPoolService)
+                .requireAvailablePool(
+                        "tenant_01", ResourceOwnerType.PLATFORM, "tenant_01", "pool_01");
         assertThrows(IllegalStateException.class, () -> taskService.createTask("tenant_01", "actor_01", form));
+    }
+
+    @Test
+    void createTask_workerPoolOwnerMismatchRejectedBeforeDispatch() {
+        when(resourceResolver.resolveRequiredAgent(
+                "tenant_01", "app_01", "user_01", "agent_01"))
+                .thenReturn(new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent_01",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app_01",
+                        "app_01",
+                        "skill_01",
+                        "pool_01",
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "ups-a",
+                        "WORKER_POOL:UPSTREAM_SYSTEM",
+                        "LANGGRAPH_BIZ",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "dir_01",
+                        "AGENT:CLIENT_APP"));
+        doThrow(new SecurityException("worker pool owner mismatch"))
+                .when(bizWorkerPoolService)
+                .requireAvailablePool(
+                        "tenant_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-a", "pool_01");
+
+        assertThrows(SecurityException.class,
+                () -> taskService.createTask("tenant_01", "actor_01", form));
+
+        verify(taskRepository, never()).save(any());
+        verify(tokenLifecycleService, never()).issueNewToken(any(), anyString());
+        verify(workerTaskLauncher, never()).launch(any());
     }
 
     @Test
@@ -805,6 +851,28 @@ class BusinessAgentTaskServiceTest {
         com.foggy.navigator.business.agent.model.dto.BusinessTaskScopedTokenDTO result = taskService.resolveTaskScopedToken("plain_token");
         assertNotNull(result);
         assertEquals("tst_01", result.getTokenId());
+        verify(tokenLifecycleService).requireNotTerminal(token);
+    }
+
+    @Test
+    void resolveTaskScopedToken_terminalTombstoneFailurePropagatesFromGatewayResolvePath() {
+        BusinessTaskScopedTokenEntity token = new BusinessTaskScopedTokenEntity();
+        token.setTokenId("tst_terminal");
+        token.setTenantId("tenant_01");
+        token.setTaskId("bt_terminal");
+        token.setWorkerTaskId("worker_task_terminal");
+        token.setStatus(BusinessAgentTaskService.STATUS_ACTIVE);
+        token.setExpiresAt(java.time.LocalDateTime.now().plusHours(1));
+        when(tokenRepository.findByTokenHash(SecretTokenSupport.sha256("plain_token")))
+                .thenReturn(Optional.of(token));
+        doThrow(new IllegalStateException("task token belongs to a terminal task"))
+                .when(tokenLifecycleService).requireNotTerminal(token);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> taskService.resolveTaskScopedToken("plain_token"));
+
+        assertEquals("task token belongs to a terminal task", error.getMessage());
+        verify(tokenLifecycleService).requireNotTerminal(token);
     }
 
     @Test

@@ -93,6 +93,7 @@ class ClaudeTaskServiceAuthTest {
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
         worker.setWorkerId(WORKER_ID);
         worker.setUserId(USER_ID);
+        worker.setTenantId(TENANT_ID);
         worker.setStatus("ONLINE");
         when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(worker);
 
@@ -158,6 +159,8 @@ class ClaudeTaskServiceAuthTest {
         assertNotNull(result);
         assertEquals(SESSION_ID, result.getSessionId());
         assertEquals(WORKER_ID, result.getWorkerId());
+        verify(taskRepository, atLeastOnce()).save(argThat((ClaudeTaskEntity entity) ->
+                TENANT_ID.equals(entity.getTenantId())));
 
         // Verify SessionEntity was saved with auth fields
         verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
@@ -320,6 +323,8 @@ class ClaudeTaskServiceAuthTest {
         service.resumeTask(USER_ID, TENANT_ID, form);
 
         // Assert: auth should be saved to SessionEntity
+        verify(taskRepository, atLeastOnce()).save(argThat((ClaudeTaskEntity entity) ->
+                TENANT_ID.equals(entity.getTenantId())));
         verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
                 SESSION_ID.equals(entity.getId())
                         && "CUSTOM_ENDPOINT".equals(entity.getAuthMode())

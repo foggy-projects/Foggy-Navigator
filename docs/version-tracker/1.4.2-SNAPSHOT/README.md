@@ -83,8 +83,9 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 - Java 删除前历史基线继续保留；metadata-query 删除后另行执行 `mvn -B -pl metadata-config-module,launcher -am clean test`，15/15 reactor project 全部 `SUCCESS`，launcher 7 tests、0 failure/error。
 - P2 首批提交后执行根 `mvn -B clean test`，发现并关闭 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md)：Open SDK 恢复可信的 JUnit 5 clean 基线，最终 17/17 reactor project 全部 `SUCCESS`，2304 tests、0 failure/error/skipped，exit 0；GitHub hosted runner 与根 `clean verify` 仍未执行。
 - P2 首批由提交 `12cbe697`、`5d62707b`、`cce75f1b` 落地平台/三类 Worker 默认关闭门禁、readiness 诊断及平台消费约束。Java 定向矩阵 74 tests、10/10 reactor 通过；Codex SDK Worker 163 passed/1 skipped、Codex app-server Worker 272 passed/1 skipped、LangGraph Biz Worker 766 passed，Node type-check/build 与 Python build 均通过。平台路径 matrix parameter、context path、encoded path 回归覆盖并修复了实际门禁绕过。
+- `EXEC-142-012` 已完成 Worker credential v1 schema/API 与 owner-scoped rotate/revoke、pool owner/identity route、definitive terminal tombstone 与 late-bind 撤销、Claude tenant 持久化，以及 audit writer 独立 bean + `REQUIRES_NEW/saveAndFlush` 事务隔离。最终 11 reactor clean test 共 2186 tests，0 failure/error/skip；三组 SQL migration 已在一次性 MySQL `8.0.44` 与 `8.4.8` 完成 forward×2、rollback×2、reapply；Node `22.23.1` / pnpm `10.34.5` 的 Business Agent integration TypeScript typecheck exit 0。
 - P5 已物理移除 Monitoring 和 `addons/code-review-agent` 两个 dev-only 完整切片；metadata-query 的模块、reactor/launcher 装配、launcher 专属 bean 断言、专属 Skill 与当前文档也已收口，dependency tree 和 clean target 无旧查询依赖。CLEAN-003 为 `completed-local`，但启动/浏览器 smoke、hosted CI 与正式验收未完成；Echo Agent 和旧 Provider API/SPI/DTO 尚未开始移除。
-- 五类 Worker 已在独立 clean worktree 完成 P1 本机等价矩阵，nightly workflow 已建立；P2 的 task token 函数 scope/生命周期、ClientApp/upstream identity、审批恢复主体绑定、审计和 ownership 尚未完成。GitHub runner、分支保护、nightly 实际执行和真实浏览器体验仍未完成，因此 P1、P2、P5 和版本整体保持 `in-progress`，`acceptance_status` 仍为 `not-started`。
+- 五类 Worker 已在独立 clean worktree 完成 P1 本机等价矩阵，nightly workflow 已建立。P2 仍为 `partial`：Gateway strict Worker principal/lease、task pause/generation、关键拒绝与状态的 reliable audit/outbox、L3 集成验证，以及 ClientApp 双主体、审批/恢复/取消与 ownership 闭环尚未完成；external-enabled 继续默认关闭并保持 unready。GitHub runner、分支保护、nightly 实际执行和真实浏览器体验也仍未完成，因此 P1、P2、P5 和版本整体保持 `in-progress`，`acceptance_status` 仍为 `not-started`。
 
 命令、结果、限制和后续补证统一登记在 [进度记录](./progress.md) 及对应 workitem 中；这里的本机通过不代表 GitHub 合并门禁已生效，也不代表验收或生产批准。
 
@@ -111,7 +112,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 |---|---|---|---|
 | P0 | 冻结目标、边界、术语、ownership 和代码清单 | in-progress | 否；仅规划与文档基线 |
 | P1 | 冻结 Node、包管理器、lockfile、全仓 clean build 和 CI 矩阵 | in-progress | 否；构建与合并门禁会变化 |
-| P2 | 治理外部 Biz Worker、Worker Gateway 和 upstream user 边界 | in-progress | 生产路由未改变、external 未启用；开发树的默认关闭、503 和 readiness 契约已收紧 |
+| P2 | 治理外部 Biz Worker、Worker Gateway 和 upstream user 边界 | in-progress（partial） | 生产路由未改变、external 默认关闭且未启用；credential v1、pool identity route、definitive terminal、Claude tenant 与 audit writer 事务隔离已落地，Gateway principal/lease、pause/generation、reliable audit/outbox 和 L3 仍待完成 |
 | P3 | 在 service/facade 层补齐 Session/Task ownership | not-started | 可能影响越权或依赖旧行为的调用；不得大范围改内部 UI |
 | P4 | 清理低风险孤儿代码和失效文档 | not-started | 否；每项仍需引用扫描、验证和回滚证据 |
 | P5 | 按 dev-only 授权独立移除 Monitoring、metadata-query、code-review，并迁移 Echo fixture 后退出生产装配 | in-progress | 当前无生产路由；发现共享/生产资源即停止 |
@@ -164,9 +165,11 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 | ODR-142-007 | 仓内消费者迁移后在 1.4.2 直接删除旧 Provider API/SPI/DTO，无外部兼容窗口 | approved-with-constraints |
 | ODR-142-008 | 当前文档修正、历史证据标记、失效 Skill 退出活跃发现 | approved |
 
-以下事项不属于本次八组建议的完整决策，仍单独保持待确认：
+`EXEC-142-012` 是对 ODR-142-003、ODR-142-005 的阶段性实施，不改变这两项决策的约束：Worker credential v1、pool identity route、definitive terminal、Claude tenant 与 best-effort audit writer 事务隔离已有本机证据，但不构成 P2 完成或 external enablement 批准。以下事项不属于本次八组建议的完整决策，或虽有方向结论但实现仍未闭环，继续保持待确认/待实施：
 
-- LangBizWorker、CodexBizWorker 与 Worker Gateway 的具体 credential authority、轮换责任人和撤销传播实现。
+- Worker Gateway strict Worker principal/lease/prebind 与调用方 header 的具体落点，以及 task token pause/generation、轮换责任和撤销传播实现。
+- 关键审批、拒绝、恢复和终态事件的 reliable audit/outbox；当前 audit writer 的事务隔离仍只是 best-effort telemetry，不可替代可靠落档。
+- P2 L3 集成矩阵、共享数据库 migration、launcher `ddl-auto=validate`、真实网络/浏览器和 hosted CI 证据；补齐前 external-enabled 必须保持默认关闭和 unready。
 - upstream user mapping/grant 的权威数据源、tenant 迁移策略和最终审计留存要求。
 - Provider state envelope v1 的严格校验、typed schema 演进、未知版本策略、兼容窗口和迁移 Owner。
 - 超大类拆分优先级及可接受的阶段性边界，特别是 `ClaudeWorkerView.vue` 的渐进拆分顺序。

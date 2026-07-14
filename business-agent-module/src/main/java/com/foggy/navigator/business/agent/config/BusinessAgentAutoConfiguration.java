@@ -2,6 +2,7 @@ package com.foggy.navigator.business.agent.config;
 
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
@@ -21,9 +22,11 @@ import org.springframework.web.client.RestTemplate;
 import java.util.Arrays;
 
 @AutoConfiguration
+@EnableConfigurationProperties(BusinessTaskScopedTokenProperties.class)
 @ComponentScan(basePackages = {
         "com.foggy.navigator.business.agent.service",
-        "com.foggy.navigator.business.agent.controller"
+        "com.foggy.navigator.business.agent.controller",
+        "com.foggy.navigator.business.agent.event"
 })
 @EntityScan(basePackages = {
         "com.foggy.navigator.business.agent.model.entity",

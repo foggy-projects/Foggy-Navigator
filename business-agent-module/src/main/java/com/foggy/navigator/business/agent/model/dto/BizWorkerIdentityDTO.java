@@ -4,6 +4,8 @@ import com.foggy.navigator.business.agent.model.entity.BizWorkerIdentityEntity;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import lombok.Data;
 
+import java.time.LocalDateTime;
+
 @Data
 public class BizWorkerIdentityDTO {
     private String workerId;
@@ -14,6 +16,11 @@ public class BizWorkerIdentityDTO {
     private String version;
     private String status;
     private String healthStatus;
+    private Integer credentialVersion;
+    private LocalDateTime credentialIssuedAt;
+    private LocalDateTime credentialExpiresAt;
+    private LocalDateTime credentialRevokedAt;
+    private LocalDateTime credentialRotatedAt;
     private String capabilitiesJson;
     private String labelsJson;
 
@@ -27,6 +34,11 @@ public class BizWorkerIdentityDTO {
         dto.setVersion(entity.getVersion());
         dto.setStatus(entity.getStatus());
         dto.setHealthStatus(entity.getHealthStatus());
+        dto.setCredentialVersion(entity.getCredentialVersion());
+        dto.setCredentialIssuedAt(entity.getCredentialIssuedAt());
+        dto.setCredentialExpiresAt(entity.getCredentialExpiresAt());
+        dto.setCredentialRevokedAt(entity.getCredentialRevokedAt());
+        dto.setCredentialRotatedAt(entity.getCredentialRotatedAt());
         dto.setCapabilitiesJson(entity.getCapabilitiesJson());
         dto.setLabelsJson(entity.getLabelsJson());
         return dto;

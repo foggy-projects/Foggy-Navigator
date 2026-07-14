@@ -1,7 +1,9 @@
 package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
+import com.foggy.navigator.business.agent.model.entity.BusinessTaskTerminalStateEntity;
 import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
+import com.foggy.navigator.business.agent.repository.BusinessTaskTerminalStateRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -13,12 +15,14 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
 public class BusinessTaskScopedTokenLifecycleService {
 
     private final BusinessTaskScopedTokenRepository tokenRepository;
+    private final BusinessTaskTerminalStateRepository terminalStateRepository;
     private final BusinessTaskScopedTokenPolicyService tokenPolicyService;
     private final BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
 
@@ -37,7 +41,9 @@ public class BusinessTaskScopedTokenLifecycleService {
         return saved;
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            noRollbackFor = TerminalTaskBindingException.class)
     public void bindOpenApiTokenToWorkerTask(
             String tenantId,
             String plainToken,
@@ -53,7 +59,9 @@ public class BusinessTaskScopedTokenLifecycleService {
         bindToken(token, tenantId, plainToken, workerTaskId, workerSessionId, null);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            noRollbackFor = TerminalTaskBindingException.class)
     public void bindIssuedTokenToWorkerTask(
             String tenantId,
             String tokenId,
@@ -120,9 +128,199 @@ public class BusinessTaskScopedTokenLifecycleService {
         requireText(taskId, "taskId is required");
         requireText(reason, "reason is required");
 
+        return revokeTokens(
+                tokenRepository.findByTaskIdAndTenantIdForUpdate(taskId, tenantId),
+                revokedBy,
+                reason);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int revokeTaskScopedTokensForWorkerTask(
+            String tenantId, String workerTaskId, String revokedBy, String reason) {
+        requireText(tenantId, "tenantId is required");
+        requireText(workerTaskId, "workerTaskId is required");
+        requireText(reason, "reason is required");
+
+        return revokeTokens(
+                tokenRepository.findByTenantIdAndWorkerTaskIdForUpdate(tenantId, workerTaskId),
+                revokedBy,
+                reason);
+    }
+
+    /**
+     * Writes the authorization-authoritative terminal tombstone in the
+     * provider status transaction. Physical token-row revocation is
+     * deliberately not performed here: a token write failure must never roll
+     * back or erase the tombstone that makes Gateway authorization fail closed.
+     */
+    @Transactional(propagation = Propagation.REQUIRED)
+    public boolean recordTerminalState(
+            String tenantId,
+            String workerTaskId,
+            String providerTaskUserId,
+            String sourceAgentId,
+            String terminalStatus) {
+        requireText(tenantId, "tenantId is required");
+        requireText(workerTaskId, "workerTaskId is required");
+        requireText(providerTaskUserId, "providerTaskUserId is required");
+        requireText(terminalStatus, "terminalStatus is required");
+
+        String normalizedTenant = tenantId.trim();
+        String normalizedWorkerTask = workerTaskId.trim();
+        String normalizedProviderUser = providerTaskUserId.trim();
+        // Keep every terminal path on the same lock order as bindToken:
+        // task-token row(s) first, then the terminal marker.
+        CapabilityCorrelation correlation = consistentCorrelation(
+                tokenRepository.findByTenantIdAndWorkerTaskIdForUpdate(
+                        normalizedTenant, normalizedWorkerTask),
+                normalizedTenant,
+                normalizedWorkerTask);
+
+        LocalDateTime now = LocalDateTime.now();
+        BusinessTaskTerminalStateEntity terminal = terminalStateRepository
+                .findByTenantIdAndWorkerTaskIdForUpdate(
+                        normalizedTenant, normalizedWorkerTask)
+                .orElseGet(BusinessTaskTerminalStateEntity::new);
+        if (terminal.getId() == null) {
+            terminal.setTenantId(normalizedTenant);
+            terminal.setWorkerTaskId(normalizedWorkerTask);
+            terminal.setTerminalAt(now);
+        }
+        if (StringUtils.hasText(terminal.getProviderTaskUserId())
+                && !normalizedProviderUser.equals(terminal.getProviderTaskUserId())) {
+            throw new SecurityException("worker task terminal provider owner mismatch");
+        }
+        terminal.setProviderTaskUserId(normalizedProviderUser);
+        if (correlation != null) {
+            if (StringUtils.hasText(terminal.getBusinessTaskId())
+                    && !correlation.businessTaskId().equals(terminal.getBusinessTaskId())) {
+                throw new IllegalStateException(
+                        "worker task terminal capability task mismatch");
+            }
+            if (StringUtils.hasText(terminal.getNavigatorEffectiveUserId())
+                    && !correlation.navigatorEffectiveUserId().equals(
+                            terminal.getNavigatorEffectiveUserId())) {
+                throw new SecurityException(
+                        "worker task terminal capability actor mismatch");
+            }
+            terminal.setBusinessTaskId(correlation.businessTaskId());
+            terminal.setNavigatorEffectiveUserId(
+                    correlation.navigatorEffectiveUserId());
+        }
+        terminal.setSourceAgentId(trimToNull(sourceAgentId));
+        terminal.setTerminalStatus(terminalStatus.trim().toUpperCase(Locale.ROOT));
+        terminal.setExpiresAt(now.plus(tokenPolicyService.maximumCapabilityLifetime())
+                .plusHours(1));
+        terminalStateRepository.saveAndFlush(terminal);
+        return true;
+    }
+
+    /**
+     * Best-effort materialization of the durable tombstone into token rows.
+     * The tombstone remains authoritative if this independent transaction
+     * fails; replaying the terminal event safely retries this operation.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int materializeTerminalRevocation(
+            String tenantId,
+            String workerTaskId,
+            String revokedBy) {
+        requireText(tenantId, "tenantId is required");
+        requireText(workerTaskId, "workerTaskId is required");
+        String normalizedTenant = tenantId.trim();
+        String normalizedWorkerTask = workerTaskId.trim();
+
+        // Use the same token -> terminal lock order as recordTerminalState and
+        // bindToken so replay cannot invert row locks under concurrent bind.
+        List<BusinessTaskScopedTokenEntity> candidates = tokenRepository
+                .findByTenantIdAndWorkerTaskIdForUpdate(
+                        normalizedTenant, normalizedWorkerTask);
+        CapabilityCorrelation correlation = consistentCorrelation(
+                candidates, normalizedTenant, normalizedWorkerTask);
+        if (correlation == null) {
+            // An event-before-bind marker remains authoritative for late bind,
+            // but there is no token row to materialize or mark completed yet.
+            return 0;
+        }
+        BusinessTaskTerminalStateEntity terminal = terminalStateRepository
+                .findByTenantIdAndWorkerTaskIdForUpdate(
+                        normalizedTenant, normalizedWorkerTask)
+                .orElse(null);
+        if (terminal == null || !terminal.getExpiresAt().isAfter(LocalDateTime.now())) {
+            return 0;
+        }
+        if (StringUtils.hasText(terminal.getBusinessTaskId())
+                && !correlation.businessTaskId().equals(terminal.getBusinessTaskId())) {
+            throw new SecurityException("terminal tombstone capability correlation mismatch");
+        }
+        if (StringUtils.hasText(terminal.getNavigatorEffectiveUserId())
+                && !correlation.navigatorEffectiveUserId().equals(
+                        terminal.getNavigatorEffectiveUserId())) {
+            throw new SecurityException("terminal tombstone capability correlation mismatch");
+        }
+        terminal.setBusinessTaskId(correlation.businessTaskId());
+        terminal.setNavigatorEffectiveUserId(
+                correlation.navigatorEffectiveUserId());
+        int revoked = revokeTokens(
+                candidates,
+                revokedBy,
+                "worker task reached terminal status: "
+                        + terminal.getTerminalStatus());
+        terminal.setRevocationCompletedAt(LocalDateTime.now());
+        terminalStateRepository.save(terminal);
+        return revoked;
+    }
+
+    private CapabilityCorrelation consistentCorrelation(
+            List<BusinessTaskScopedTokenEntity> candidates,
+            String tenantId,
+            String workerTaskId) {
+        if (candidates == null || candidates.isEmpty()) {
+            return null;
+        }
+        BusinessTaskScopedTokenEntity first = candidates.get(0);
+        requireText(first.getTaskId(), "persisted task token taskId is required");
+        requireText(first.getNavigatorEffectiveUserId(),
+                "persisted task token navigatorEffectiveUserId is required");
+        String businessTaskId = first.getTaskId().trim();
+        String navigatorEffectiveUserId = first.getNavigatorEffectiveUserId().trim();
+        for (BusinessTaskScopedTokenEntity candidate : candidates) {
+            if (candidate == null
+                    || !tenantId.equals(trimToNull(candidate.getTenantId()))
+                    || !workerTaskId.equals(trimToNull(candidate.getWorkerTaskId()))
+                    || !businessTaskId.equals(trimToNull(candidate.getTaskId()))
+                    || !navigatorEffectiveUserId.equals(
+                            trimToNull(candidate.getNavigatorEffectiveUserId()))) {
+                throw new SecurityException(
+                        "worker task is bound to inconsistent task capabilities");
+            }
+        }
+        return new CapabilityCorrelation(businessTaskId, navigatorEffectiveUserId);
+    }
+
+    @Transactional(readOnly = true)
+    public void requireNotTerminal(BusinessTaskScopedTokenEntity token) {
+        if (token == null) {
+            throw new IllegalArgumentException("token is required");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        boolean terminalBusinessTask = StringUtils.hasText(token.getTaskId())
+                && terminalStateRepository.existsByTenantIdAndBusinessTaskIdAndExpiresAtAfter(
+                        token.getTenantId(), token.getTaskId(), now);
+        boolean terminalWorkerTask = StringUtils.hasText(token.getWorkerTaskId())
+                && terminalStateRepository.existsByTenantIdAndWorkerTaskIdAndExpiresAtAfter(
+                        token.getTenantId(), token.getWorkerTaskId(), now);
+        if (terminalBusinessTask || terminalWorkerTask) {
+            throw new IllegalStateException("task token belongs to a terminal task");
+        }
+    }
+
+    private int revokeTokens(
+            List<BusinessTaskScopedTokenEntity> tokens,
+            String revokedBy,
+            String reason) {
         List<BusinessTaskScopedTokenEntity> revoked = new ArrayList<>();
-        for (BusinessTaskScopedTokenEntity token :
-                tokenRepository.findByTaskIdAndTenantIdForUpdate(taskId, tenantId)) {
+        for (BusinessTaskScopedTokenEntity token : tokens) {
             if (!isRevoked(token)) {
                 markTokenRevoked(token, revokedBy, reason);
                 revoked.add(token);
@@ -150,8 +348,9 @@ public class BusinessTaskScopedTokenLifecycleService {
             throw new SecurityException("task token secret mismatch");
         }
         requireActive(token);
+        String normalizedWorkerTaskId = workerTaskId.trim();
         if (StringUtils.hasText(token.getWorkerTaskId()) &&
-                !workerTaskId.equals(token.getWorkerTaskId())) {
+                !normalizedWorkerTaskId.equals(token.getWorkerTaskId())) {
             throw new IllegalStateException("token already bound to another worker task");
         }
 
@@ -172,7 +371,33 @@ public class BusinessTaskScopedTokenLifecycleService {
             throw new IllegalStateException("token already bound to another worker");
         }
 
-        token.setWorkerTaskId(workerTaskId);
+        LocalDateTime now = LocalDateTime.now();
+        BusinessTaskTerminalStateEntity terminal = terminalStateRepository
+                .findByTenantIdAndWorkerTaskIdForUpdate(
+                        token.getTenantId(), normalizedWorkerTaskId)
+                .filter(marker -> marker.getExpiresAt() != null
+                        && marker.getExpiresAt().isAfter(now))
+                .orElse(null);
+        if (terminal != null) {
+            persistRejectedTerminalBinding(
+                    token,
+                    terminal,
+                    normalizedWorkerTaskId,
+                    resolvedWorkerSessionId,
+                    resolvedWorkerId);
+            throw new TerminalTaskBindingException(
+                    "cannot bind task token to a terminal worker task");
+        }
+        if (terminalStateRepository.existsByTenantIdAndBusinessTaskIdAndExpiresAtAfter(
+                token.getTenantId(), token.getTaskId(), now)) {
+            // This tombstone belongs to another worker-task tuple. Fail closed
+            // without overwriting either tuple; the dedicated late-bind
+            // exception is reserved for safety writes committed above.
+            throw new IllegalStateException(
+                    "cannot bind task token to a terminal worker task");
+        }
+
+        token.setWorkerTaskId(normalizedWorkerTaskId);
         token.setWorkerSessionId(resolvedWorkerSessionId);
         if (StringUtils.hasText(resolvedWorkerId)) {
             token.setWorkerId(resolvedWorkerId);
@@ -181,12 +406,58 @@ public class BusinessTaskScopedTokenLifecycleService {
 
         afterCommit(() -> {
             tokenRuntimeStore.registerToken(
-                    tenantId, token.getSessionId(), workerTaskId, plainToken, token.getExpiresAt());
+                    tenantId, token.getSessionId(), normalizedWorkerTaskId,
+                    plainToken, token.getExpiresAt());
             if (!resolvedWorkerSessionId.equals(token.getSessionId())) {
                 tokenRuntimeStore.registerToken(
-                        tenantId, resolvedWorkerSessionId, workerTaskId, plainToken, token.getExpiresAt());
+                        tenantId, resolvedWorkerSessionId, normalizedWorkerTaskId,
+                        plainToken, token.getExpiresAt());
             }
         });
+    }
+
+    private void persistRejectedTerminalBinding(
+            BusinessTaskScopedTokenEntity token,
+            BusinessTaskTerminalStateEntity terminal,
+            String workerTaskId,
+            String workerSessionId,
+            String workerId) {
+        requireText(token.getTaskId(), "persisted task token taskId is required");
+        requireText(token.getNavigatorEffectiveUserId(),
+                "persisted task token navigatorEffectiveUserId is required");
+        String businessTaskId = token.getTaskId().trim();
+        String capabilityActor = token.getNavigatorEffectiveUserId().trim();
+        boolean businessTaskMismatch = StringUtils.hasText(terminal.getBusinessTaskId())
+                && !businessTaskId.equals(terminal.getBusinessTaskId());
+        boolean capabilityActorMismatch =
+                StringUtils.hasText(terminal.getNavigatorEffectiveUserId())
+                        && !capabilityActor.equals(
+                                terminal.getNavigatorEffectiveUserId());
+
+        token.setWorkerTaskId(workerTaskId);
+        token.setWorkerSessionId(workerSessionId);
+        if (StringUtils.hasText(workerId)) {
+            token.setWorkerId(workerId);
+        }
+        markTokenRevoked(
+                token,
+                "system:terminal-late-bind",
+                "worker task reached terminal state before token binding");
+        tokenRepository.save(token);
+
+        afterCommit(() -> removeRuntimeTokenAliases(token));
+        if (businessTaskMismatch || capabilityActorMismatch) {
+            // Never rewrite an established marker correlation. The exact
+            // tenant + workerTask tombstone still authorizes the safety write
+            // above, which must commit before this mismatch reaches callers.
+            throw new TerminalTaskBindingException(
+                    "terminal tombstone capability correlation mismatch");
+        }
+
+        terminal.setBusinessTaskId(businessTaskId);
+        terminal.setNavigatorEffectiveUserId(capabilityActor);
+        terminal.setRevocationCompletedAt(LocalDateTime.now());
+        terminalStateRepository.saveAndFlush(terminal);
     }
 
     private void requireActive(BusinessTaskScopedTokenEntity token) {
@@ -251,5 +522,10 @@ public class BusinessTaskScopedTokenLifecycleService {
 
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private record CapabilityCorrelation(
+            String businessTaskId,
+            String navigatorEffectiveUserId) {
     }
 }

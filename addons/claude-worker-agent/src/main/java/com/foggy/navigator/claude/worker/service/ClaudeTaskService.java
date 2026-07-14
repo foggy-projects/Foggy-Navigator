@@ -60,6 +60,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -210,6 +211,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         entity.setSessionId(sessionId);
         entity.setWorkerId(form.getWorkerId());
         entity.setUserId(userId);
+        entity.setTenantId(normalizeTenantId(tenantId));
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
@@ -373,6 +375,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         entity.setSessionId(sessionId);
         entity.setWorkerId(form.getWorkerId());
         entity.setUserId(userId);
+        entity.setTenantId(normalizeTenantId(tenantId));
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
@@ -458,6 +461,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         entity.setSessionId(sessionId);
         entity.setWorkerId(workerId);
         entity.setUserId(userId);
+        entity.setTenantId(resolveTaskTenantId(entity));
         entity.setPrompt(truncate(prompt, 200));
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
@@ -1252,6 +1256,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             entity.setSessionId(sessionId);
             entity.setWorkerId(workerId);
             entity.setUserId(userId);
+            entity.setTenantId(normalizeTenantId(tenantId));
             entity.setPrompt(prompt);
             entity.setCwd(cwd);
             entity.setDirectoryId(directoryId);
@@ -2454,16 +2459,72 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
 
     private void publishStatusChange(ClaudeTaskEntity entity, String previousStatus) {
         String interactionState = deriveInteractionState(entity.getStatus());
+        Boolean recoverable = terminalRecoverability(entity.getStatus());
+        String tenantId = resolveTaskTenantId(entity);
+        if (Boolean.FALSE.equals(recoverable) && !StringUtils.hasText(tenantId)) {
+            throw new IllegalStateException(
+                    "CLAUDE_TASK_TENANT_MISSING: refusing definitive terminal event for task "
+                            + entity.getTaskId());
+        }
         eventPublisher.publishEvent(TaskStatusChangeEvent.builder()
                 .taskId(entity.getTaskId())
                 .sessionId(entity.getSessionId())
                 .userId(entity.getUserId())
+                .tenantId(tenantId)
                 .agentId(AGENT_ID)
                 .status(entity.getStatus())
                 .previousStatus(previousStatus)
                 .errorMessage(entity.getErrorMessage())
                 .interactionState(interactionState)
+                .recoverable(recoverable)
                 .build());
+    }
+
+    private String resolveTaskTenantId(ClaudeTaskEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        String tenantId = normalizeTenantId(entity.getTenantId());
+        if (tenantId != null) {
+            return tenantId;
+        }
+        if (sessionEntityRepository != null && StringUtils.hasText(entity.getSessionId())) {
+            tenantId = sessionEntityRepository.findById(entity.getSessionId())
+                    .map(SessionEntity::getTenantId)
+                    .map(this::normalizeTenantId)
+                    .orElse(null);
+        }
+        if (tenantId == null && StringUtils.hasText(entity.getWorkerId())) {
+            try {
+                ClaudeWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
+                tenantId = worker == null ? null : normalizeTenantId(worker.getTenantId());
+            } catch (RuntimeException e) {
+                log.debug("Unable to resolve tenant from Worker for Claude task {}: {}",
+                        entity.getTaskId(), e.getMessage());
+            }
+        }
+        if (tenantId != null) {
+            entity.setTenantId(tenantId);
+        }
+        return tenantId;
+    }
+
+    private String normalizeTenantId(String tenantId) {
+        return StringUtils.hasText(tenantId) ? tenantId.trim() : null;
+    }
+
+    private Boolean terminalRecoverability(String status) {
+        if ("FAILED".equals(status)) {
+            // FAILED can be reset/resynced while the Claude CLI session is
+            // still alive, so it must never create a permanent tombstone.
+            return Boolean.TRUE;
+        }
+        if ("COMPLETED".equals(status) || "ABORTED".equals(status)
+                || "REJECTED".equals(status) || "TIMED_OUT".equals(status)
+                || "CANCELLED".equals(status) || "CANCELED".equals(status)) {
+            return Boolean.FALSE;
+        }
+        return null;
     }
 
     private String deriveInteractionState(String taskStatus) {
@@ -2476,6 +2537,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     }
 
     private ClaudeTaskEntity persistTask(ClaudeTaskEntity entity) {
+        // Backfill legacy rows whenever they are next written. New create,
+        // resume and sync paths already capture tenantId directly.
+        resolveTaskTenantId(entity);
         ClaudeTaskEntity saved = taskRepository.save(entity);
         syncSessionTask(saved);
         syncSessionProjection(saved);
@@ -2497,8 +2561,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         sessionTask.setWorkerId(entity.getWorkerId());
         sessionTask.setUserId(entity.getUserId());
         sessionTask.setAgentId(agentId);
-        // ClaudeTaskEntity 没有 tenantId 字段，从 SessionEntity 获取
-        if (sessionEntityRepository != null && entity.getSessionId() != null) {
+        sessionTask.setTenantId(normalizeTenantId(entity.getTenantId()));
+        if (sessionTask.getTenantId() == null
+                && sessionEntityRepository != null && entity.getSessionId() != null) {
             sessionEntityRepository.findById(entity.getSessionId())
                     .ifPresent(session -> sessionTask.setTenantId(session.getTenantId()));
         }

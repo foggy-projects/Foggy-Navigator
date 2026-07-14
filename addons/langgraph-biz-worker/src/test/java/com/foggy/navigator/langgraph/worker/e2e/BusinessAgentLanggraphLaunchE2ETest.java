@@ -13,6 +13,7 @@ import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm;
 import com.foggy.navigator.business.agent.repository.BusinessAgentTaskRepository;
 import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
+import com.foggy.navigator.business.agent.repository.BusinessTaskTerminalStateRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentDirectoryBindingRepository;
 import com.foggy.navigator.business.agent.repository.BusinessAgentModelBindingRepository;
 import com.foggy.navigator.business.agent.repository.BizWorkerIdentityRepository;
@@ -99,6 +100,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
 
     @Mock private BusinessAgentTaskRepository businessTaskRepository;
     @Mock private BusinessTaskScopedTokenRepository tokenRepository;
+    @Mock private BusinessTaskTerminalStateRepository terminalStateRepository;
     @Mock private ClientAppService clientAppService;
     @Mock private BizWorkerPoolService bizWorkerPoolService;
     @Mock private ClientAppModelConfigGrantService modelGrantService;
@@ -140,6 +142,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 sessionMessageRepository
         );
         LanggraphBusinessAgentWorkerTaskLauncher launcher = new LanggraphBusinessAgentWorkerTaskLauncher(
+                poolRepository,
                 poolMemberRepository,
                 langgraphWorkerService,
                 langgraphTaskService
@@ -176,7 +179,8 @@ class BusinessAgentLanggraphLaunchE2ETest {
             return null;
         }).when(tokenPolicyService).initializeNewToken(any(BusinessTaskScopedTokenEntity.class));
         BusinessTaskScopedTokenLifecycleService tokenLifecycleService =
-                new BusinessTaskScopedTokenLifecycleService(tokenRepository, tokenPolicyService, tokenRuntimeStore);
+                new BusinessTaskScopedTokenLifecycleService(
+                        tokenRepository, terminalStateRepository, tokenPolicyService, tokenRuntimeStore);
         businessAgentTaskService = new BusinessAgentTaskService(
                 businessTaskRepository,
                 tokenRepository,
@@ -371,7 +375,9 @@ class BusinessAgentLanggraphLaunchE2ETest {
         pool.setStatus(BizWorkerPoolService.STATUS_ENABLED);
         pool.setHealthStatus(BizWorkerPoolService.HEALTHY);
         pool.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
-        when(bizWorkerPoolService.requireAvailablePool(TENANT, WORKER_POOL_ID)).thenReturn(pool);
+        when(bizWorkerPoolService.requireAvailablePool(
+                TENANT, ResourceOwnerType.UPSTREAM_SYSTEM, "ups_e2e", WORKER_POOL_ID))
+                .thenReturn(pool);
         when(poolRepository.findByPoolIdAndTenantId(WORKER_POOL_ID, TENANT)).thenReturn(Optional.of(pool));
 
         when(modelGrantService.resolveEffectiveModelConfigId(TENANT, CLIENT_APP_ID, MODEL_CONFIG_ID, LlmModelCategory.GENERAL))
@@ -450,6 +456,8 @@ class BusinessAgentLanggraphLaunchE2ETest {
         worker.setWorkerId(WORKER_ID);
         worker.setTenantId(TENANT);
         worker.setUserId(ACTOR);
+        when(langgraphWorkerService.getBusinessAgentWorkerEntity(
+                WORKER_ID, ResourceOwnerType.UPSTREAM_SYSTEM, "ups_e2e")).thenReturn(worker);
         when(langgraphWorkerService.getWorkerEntity(WORKER_ID)).thenReturn(worker);
 
         when(sessionManager.getSession(SESSION_ID)).thenReturn(Session.builder()

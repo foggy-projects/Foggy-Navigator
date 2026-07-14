@@ -8,5 +8,11 @@ public class RegisterWorkerIdentityForm {
     private String workerBackend;
     private String baseUrl;
     private String version;
+
+    /**
+     * Development-only legacy v0 token. It is not valid for strict external
+     * Worker authentication. Use the credential rotation endpoint to obtain a
+     * server-generated, expiring credential.
+     */
     private String identityToken;
 }

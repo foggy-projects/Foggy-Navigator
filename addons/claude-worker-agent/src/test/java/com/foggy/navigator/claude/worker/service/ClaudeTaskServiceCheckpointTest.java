@@ -40,6 +40,7 @@ class ClaudeTaskServiceCheckpointTest {
     private static final String CLAUDE_SESSION_ID = "claude-session-cp-001";
     private static final String WORKER_ID = "worker-cp-001";
     private static final String USER_ID = "user-cp-001";
+    private static final String TENANT_ID = "tenant-cp-001";
 
     @BeforeEach
     void setUp() {
@@ -218,6 +219,7 @@ class ClaudeTaskServiceCheckpointTest {
         entity.setSessionId(SESSION_ID);
         entity.setWorkerId(WORKER_ID);
         entity.setUserId(USER_ID);
+        entity.setTenantId(TENANT_ID);
         entity.setStatus("RUNNING");
         entity.setCwd("D:\\projects");
         return entity;

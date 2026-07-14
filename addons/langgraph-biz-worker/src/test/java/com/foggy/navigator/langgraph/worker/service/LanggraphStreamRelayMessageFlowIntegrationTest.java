@@ -2,6 +2,8 @@ package com.foggy.navigator.langgraph.worker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
+import com.foggy.navigator.business.agent.config.BusinessTaskScopedTokenProperties;
+import com.foggy.navigator.business.agent.event.BusinessTaskScopedTokenTerminalListener;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.session.event.SessionEventListener;
 import com.foggy.navigator.session.service.JpaSessionManager;
@@ -63,6 +65,12 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
     @Autowired
     private LlmModelManager llmModelManager;
 
+    @Autowired
+    private BusinessTaskScopedTokenProperties taskScopedTokenProperties;
+
+    @Autowired
+    private BusinessTaskScopedTokenTerminalListener taskScopedTokenTerminalListener;
+
     private LanggraphTaskService taskService;
     private LanggraphStreamRelay relay;
     private String sessionId;
@@ -90,6 +98,10 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
 
     @Test
     void toolMessagesShouldBeVisibleByCursorBeforeTaskCompletes() throws Exception {
+        assertNotNull(taskScopedTokenProperties,
+                "Business Agent auto-configuration should register task token properties");
+        assertNotNull(taskScopedTokenTerminalListener,
+                "Business Agent auto-configuration should register terminal token listener");
         String cursor = invokeEvent("""
                 {
                   "type": "skill_frame_open",

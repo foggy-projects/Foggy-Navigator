@@ -29,7 +29,10 @@ public class UpstreamAdminWorkerPoolController {
     public RX<List<BizWorkerPoolDTO>> listPools(HttpServletRequest request,
                                                 @RequestParam(required = false) String targetTenantId) {
         UpstreamClientAppAdminPrincipal principal = requireAccess(request);
-        return RX.ok(workerPoolService.listPools(resolveTargetTenantId(principal, request, targetTenantId)));
+        return RX.ok(workerPoolService.listPools(
+                resolveTargetTenantId(principal, request, targetTenantId),
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                principal.getUpstreamSystemId()));
     }
 
     @PostMapping
@@ -50,7 +53,12 @@ public class UpstreamAdminWorkerPoolController {
                               @PathVariable String poolId,
                               @RequestBody AddWorkerPoolMemberForm form) {
         UpstreamClientAppAdminPrincipal principal = requireAccess(request);
-        workerPoolService.addMember(resolveTargetTenantId(principal, request, targetTenantId), poolId, form);
+        workerPoolService.addMember(
+                resolveTargetTenantId(principal, request, targetTenantId),
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                principal.getUpstreamSystemId(),
+                poolId,
+                form);
         return RX.ok(null);
     }
 
@@ -62,6 +70,8 @@ public class UpstreamAdminWorkerPoolController {
         UpstreamClientAppAdminPrincipal principal = requireAccess(request);
         return RX.ok(workerPoolService.updatePoolStatus(
                 resolveTargetTenantId(principal, request, targetTenantId),
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                principal.getUpstreamSystemId(),
                 poolId,
                 form == null ? null : form.getStatus()));
     }

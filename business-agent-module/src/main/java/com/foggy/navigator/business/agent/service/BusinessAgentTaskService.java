@@ -87,7 +87,11 @@ public class BusinessAgentTaskService {
         // 3. 由 Agent 绑定解析 worker route。新模型优先支持 PhysicalWorker，旧 WorkerPool 路由继续兼容。
         BizWorkerPoolEntity workerPool = null;
         if (StringUtils.hasText(agentResource.workerPoolId())) {
-            workerPool = bizWorkerPoolService.requireAvailablePool(tenantId, agentResource.workerPoolId());
+            workerPool = bizWorkerPoolService.requireAvailablePool(
+                    tenantId,
+                    agentResource.workerPoolOwnerType(),
+                    agentResource.workerPoolOwnerId(),
+                    agentResource.workerPoolId());
         }
 
         // 校验 client app skill grant
@@ -384,6 +388,7 @@ public class BusinessAgentTaskService {
         if (token.getExpiresAt() == null || !token.getExpiresAt().isAfter(LocalDateTime.now())) {
             throw new IllegalStateException("token is expired");
         }
+        tokenLifecycleService.requireNotTerminal(token);
 
         return com.foggy.navigator.business.agent.model.dto.BusinessTaskScopedTokenDTO.fromEntity(token);
     }

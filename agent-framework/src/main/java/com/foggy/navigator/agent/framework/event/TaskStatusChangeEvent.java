@@ -17,10 +17,20 @@ public class TaskStatusChangeEvent {
 
     private String taskId;
     private String sessionId;
+    /** User copied from the persisted provider task, not from a terminal callback body. */
     private String userId;
+    /** Trusted tenant copied from the persisted provider task/session. */
+    private String tenantId;
+    /** Source logical Agent ID when known; this is not a trusted Provider type. */
     private String agentId;         // e.g. "claude-worker"
     private String status;          // RUNNING / COMPLETED / FAILED / AWAITING_PERMISSION / ABORTED
     private String previousStatus;
     private String errorMessage;
     private String interactionState;  // PROCESSING / AWAITING_REPLY / ARCHIVED
+    /**
+     * Explicit lifecycle contract: false means definitive terminal, true means
+     * recoverable, and null means unspecified/non-terminal. Governance must
+     * never interpret null as a definitive transition.
+     */
+    private Boolean recoverable;
 }

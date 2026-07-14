@@ -1002,7 +1002,11 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         entity.setLastAliveAt(now);
         entity.setLastOutputAt(now);
         persistTask(entity);
-        publishStatusChange(entity, previousStatus);
+        // This transition happens before the Worker accepted a task, so there
+        // is deliberately no workerTaskId that resync could reconnect to. It
+        // is a definitive failure even though ordinary Worker-side FAILED
+        // transitions remain recoverable.
+        publishStatusChange(entity, previousStatus, Boolean.FALSE);
         return true;
     }
 
@@ -1337,6 +1341,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
             throw new IllegalStateException("No worker task ID, cannot resync");
         }
 
+        String previousStatus = entity.getStatus();
         entity.setStatus("RUNNING");
         entity.setErrorMessage(null);
         LocalDateTime now = LocalDateTime.now();
@@ -1344,6 +1349,7 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
         entity.setLastOutputAt(now);
         persistTask(entity);
         log.info("Resync: reset task {} to RUNNING, attempting SSE reconnect", taskId);
+        publishStatusChange(entity, previousStatus);
 
         try {
             streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
@@ -1454,16 +1460,37 @@ public class CodexTaskService implements TaskLookupProvider, TaskCommandProvider
     }
 
     private void publishStatusChange(CodexTaskEntity entity, String previousStatus) {
+        publishStatusChange(entity, previousStatus, terminalRecoverability(entity.getStatus()));
+    }
+
+    private void publishStatusChange(CodexTaskEntity entity, String previousStatus,
+                                     Boolean recoverable) {
         eventPublisher.publishEvent(TaskStatusChangeEvent.builder()
                 .taskId(entity.getTaskId())
                 .sessionId(entity.getSessionId())
                 .userId(entity.getUserId())
+                .tenantId(entity.getTenantId())
                 .agentId(firstNonBlank(resolveLogicalAgentId(entity), resolveProviderType(entity)))
                 .status(entity.getStatus())
                 .previousStatus(previousStatus)
                 .errorMessage(entity.getErrorMessage())
                 .interactionState(deriveInteractionState(entity.getStatus()))
+                .recoverable(recoverable)
                 .build());
+    }
+
+    private Boolean terminalRecoverability(String status) {
+        if ("FAILED".equals(status)) {
+            // FAILED is explicitly accepted by resyncTaskForProvider and can
+            // return to RUNNING, so it is recoverable rather than definitive.
+            return Boolean.TRUE;
+        }
+        if ("COMPLETED".equals(status) || "ABORTED".equals(status)
+                || "REJECTED".equals(status) || "TIMED_OUT".equals(status)
+                || "CANCELLED".equals(status) || "CANCELED".equals(status)) {
+            return Boolean.FALSE;
+        }
+        return null;
     }
 
     private boolean containsIgnoreCase(String value, String keyword) {
