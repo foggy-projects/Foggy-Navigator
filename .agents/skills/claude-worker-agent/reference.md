@@ -231,14 +231,18 @@ public class ClaudeWorkerEntity {
 
 ## Java DTO
 
-### TaskDTO
+### DispatchTaskDTO
 
 ```java
+// navigator-common：Controller、统一分派、A2A/SPI 和 Provider service 共用的任务视图
 @Builder
-public class TaskDTO {
+public class DispatchTaskDTO {
     String taskId;
     String sessionId;
     String workerId;
+    String userId;
+    String agentId;
+    String providerType;
     String prompt;
     String cwd;
     String directoryId;
@@ -250,7 +254,12 @@ public class TaskDTO {
     Long durationMs;
     Integer numTurns;
     String model;
+    String modelConfigId;
+    String resultText;
     String errorMessage;
+    String contextId;
+    String checkpoints;
+    Boolean fileCheckpointingEnabled;
     LocalDateTime createdAt;
     LocalDateTime updatedAt;
 }
@@ -274,12 +283,14 @@ public class ConversationConfigDTO {
 
 ---
 
-## Java Form
+## Java Command / Form
 
-### CreateTaskForm
+### ClaudeTaskCreateCommand
 
 ```java
-public class CreateTaskForm {
+// addons/claude-worker-agent 内部命令，不得作为 Controller 请求契约
+public class ClaudeTaskCreateCommand {
+    String agentId;
     String workerId;       // required
     String prompt;         // required
     String cwd;            // optional (从 directoryId 自动解析)
@@ -287,8 +298,13 @@ public class CreateTaskForm {
     String model;          // optional
     Integer maxTurns;      // optional
     String agentTeamsJson; // optional
+    String contextId;      // optional, A2A 上下文
+    String claudeSessionId;// optional, Claude provider 会话复用
+    String sessionId;      // optional, Navigator 会话复用
 }
 ```
+
+Controller 和统一任务分派边界使用 `TaskDispatchRequest`，仅在进入 Claude provider 后构造上述内部命令。
 
 ### ResumeTaskForm
 

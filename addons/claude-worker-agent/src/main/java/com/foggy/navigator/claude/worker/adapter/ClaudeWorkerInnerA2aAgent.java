@@ -1,8 +1,8 @@
 package com.foggy.navigator.claude.worker.adapter;
 
-import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
-import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
+import com.foggy.navigator.claude.worker.model.command.ClaudeTaskCreateCommand;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.dto.a2a.A2aArtifact;
 import com.foggy.navigator.common.dto.a2a.A2aContext;
@@ -70,7 +70,7 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
                 ? requestedDirectoryId
                 : entity.getDefaultDirectoryId();
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setAgentId(entity.getAgentId());
         form.setWorkerId(effectiveWorkerId);
         form.setPrompt(prompt);
@@ -90,7 +90,7 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setClaudeSessionId(context.getAgentSessionRef());
         form.setSessionId(context.getNavigatorSessionId());
 
-        TaskDTO task = taskService.createTask(entity.getUserId(), entity.getTenantId(), form);
+        DispatchTaskDTO task = taskService.createTask(entity.getUserId(), entity.getTenantId(), form);
 
         log.info("A2A sendTask via createTask: agentId={}, taskId={}, sessionId={}",
                 entity.getAgentId(), task.getTaskId(), task.getSessionId());
@@ -120,11 +120,11 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
     public Optional<A2aTask> findRecentDuplicate(A2aContext context) {
         String prompt = extractPrompt(context.getMessage());
         String dedupKey = computeDedupKey(entity.getUserId(), entity.getAgentId(), prompt);
-        Optional<TaskDTO> duplicate = taskService.findRecentByDedupKey(dedupKey, DEDUP_WINDOW_SECONDS);
+        Optional<DispatchTaskDTO> duplicate = taskService.findRecentByDedupKey(dedupKey, DEDUP_WINDOW_SECONDS);
         if (duplicate.isEmpty()) {
             return Optional.empty();
         }
-        TaskDTO dto = duplicate.get();
+        DispatchTaskDTO dto = duplicate.get();
         log.info("A2A dedup hit: returning existing taskId={}, dedupKey={}", dto.getTaskId(), dedupKey);
         return Optional.of(toA2aTask(dto));
     }
@@ -139,7 +139,7 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
     @Override
     public Optional<A2aTask> getTask(String taskId) {
         try {
-            TaskDTO dto = taskService.getTask(entity.getUserId(), taskId);
+            DispatchTaskDTO dto = taskService.getTask(entity.getUserId(), taskId);
             return Optional.of(toA2aTask(dto));
         } catch (IllegalArgumentException e) {
             return Optional.empty();
@@ -199,7 +199,7 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
         }
     }
 
-    private A2aTask toA2aTask(TaskDTO dto) {
+    private A2aTask toA2aTask(DispatchTaskDTO dto) {
         A2aTaskState state = switch (dto.getStatus()) {
             case "PENDING" -> A2aTaskState.SUBMITTED;
             case "RUNNING" -> A2aTaskState.WORKING;

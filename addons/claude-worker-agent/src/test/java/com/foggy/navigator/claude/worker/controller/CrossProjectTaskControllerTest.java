@@ -2,12 +2,12 @@ package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.model.dto.CrossProjectPhaseDTO;
 import com.foggy.navigator.claude.worker.model.dto.CrossProjectTaskDTO;
-import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.form.AdvancePhaseForm;
 import com.foggy.navigator.claude.worker.model.form.CreateCrossProjectTaskForm;
 import com.foggy.navigator.claude.worker.service.CrossProjectTaskService;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggyframework.core.ex.RX;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -97,13 +97,13 @@ class CrossProjectTaskControllerTest {
 
     @Test
     void triggerReview_returnsResumedTask() {
-        TaskDTO resumed = TaskDTO.builder()
+        DispatchTaskDTO resumed = DispatchTaskDTO.builder()
                 .taskId("ct-review-001")
                 .sessionId("sess-init")
                 .build();
         when(taskService.triggerReview(USER_ID, TENANT_ID, CONTEXT_ID)).thenReturn(resumed);
 
-        RX<TaskDTO> result = controller.triggerReview(CONTEXT_ID);
+        RX<DispatchTaskDTO> result = controller.triggerReview(CONTEXT_ID);
 
         assertEquals(200, result.getCode());
         assertEquals("ct-review-001", result.getData().getTaskId());

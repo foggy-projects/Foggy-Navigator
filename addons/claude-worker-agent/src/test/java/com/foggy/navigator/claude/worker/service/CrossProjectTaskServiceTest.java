@@ -3,12 +3,12 @@ package com.foggy.navigator.claude.worker.service;
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.claude.worker.model.dto.CrossProjectPhaseDTO;
 import com.foggy.navigator.claude.worker.model.dto.CrossProjectTaskDTO;
-import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.CrossProjectPhaseEntity;
 import com.foggy.navigator.claude.worker.model.entity.CrossProjectTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.claude.worker.model.form.CreateCrossProjectTaskForm;
 import com.foggy.navigator.claude.worker.repository.CrossProjectPhaseRepository;
 import com.foggy.navigator.claude.worker.repository.CrossProjectTaskRepository;
@@ -229,7 +229,7 @@ class CrossProjectTaskServiceTest {
                     .thenReturn(worktreeDTO);
 
             // ClaudeTask creation
-            TaskDTO claudeTask = TaskDTO.builder()
+            DispatchTaskDTO claudeTask = DispatchTaskDTO.builder()
                     .taskId("ct-001")
                     .sessionId("sess-001")
                     .build();
@@ -309,7 +309,7 @@ class CrossProjectTaskServiceTest {
                     .thenReturn(worktreeDTO);
 
             // ClaudeTask
-            TaskDTO claudeTask = TaskDTO.builder()
+            DispatchTaskDTO claudeTask = DispatchTaskDTO.builder()
                     .taskId("ct-002")
                     .sessionId("sess-002")
                     .build();

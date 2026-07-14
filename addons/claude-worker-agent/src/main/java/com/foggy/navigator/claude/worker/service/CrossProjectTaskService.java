@@ -5,12 +5,12 @@ import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.claude.worker.model.dto.CrossProjectPhaseDTO;
 import com.foggy.navigator.claude.worker.model.dto.CrossProjectTaskDTO;
-import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
+import com.foggy.navigator.claude.worker.model.command.ClaudeTaskCreateCommand;
 import com.foggy.navigator.claude.worker.model.entity.CrossProjectPhaseEntity;
 import com.foggy.navigator.claude.worker.model.entity.CrossProjectTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.claude.worker.model.form.CreateCrossProjectTaskForm;
-import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
 import com.foggy.navigator.claude.worker.repository.CrossProjectPhaseRepository;
 import com.foggy.navigator.claude.worker.repository.CrossProjectTaskRepository;
@@ -185,7 +185,7 @@ public class CrossProjectTaskService {
     // === 审查触发 ===
 
     @Transactional
-    public TaskDTO triggerReview(String userId, String tenantId, String contextId) {
+    public DispatchTaskDTO triggerReview(String userId, String tenantId, String contextId) {
         CrossProjectTaskEntity task = getTaskEntity(userId, contextId);
 
         int currentIdx = task.getCurrentPhaseIndex() != null ? task.getCurrentPhaseIndex() : 0;
@@ -243,7 +243,7 @@ public class CrossProjectTaskService {
         resumeForm.setSessionId(task.getInitialSessionId());
         resumeForm.setDirectoryId(directoryId);
 
-        TaskDTO resumedTask = claudeTaskService.resumeTask(userId, tenantId, resumeForm);
+        DispatchTaskDTO resumedTask = claudeTaskService.resumeTask(userId, tenantId, resumeForm);
         log.info("Review triggered for cross-project task: contextId={}, phaseIndex={}, resumedTaskId={}",
                 contextId, currentIdx, resumedTask.getTaskId());
         return resumedTask;
@@ -402,12 +402,12 @@ public class CrossProjectTaskService {
         String fullPrompt = buildPhasePrompt(phase, handoffFromPrevious, projectTaskPrompt);
 
         // 创建 ClaudeTask
-        CreateTaskForm createForm = new CreateTaskForm();
+        ClaudeTaskCreateCommand createForm = new ClaudeTaskCreateCommand();
         createForm.setWorkerId(phase.getWorkerId());
         createForm.setPrompt(fullPrompt);
         createForm.setDirectoryId(worktreeDTO.getDirectoryId());
 
-        TaskDTO claudeTask = claudeTaskService.createTask(userId, tenantId, createForm);
+        DispatchTaskDTO claudeTask = claudeTaskService.createTask(userId, tenantId, createForm);
 
         phase.setClaudeTaskId(claudeTask.getTaskId());
         phase.setPhaseSessionId(claudeTask.getSessionId());

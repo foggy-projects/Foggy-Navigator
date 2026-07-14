@@ -94,13 +94,13 @@ addons/claude-worker-agent/
 │   │   │   ├── ClaudeTaskEntity.java
 │   │   │   ├── WorkingDirectoryEntity.java  # +directoryType, parentProjectId, worktree 等
 │   │   │   └── ConversationConfigEntity.java
+│   │   ├── command/
+│   │   │   └── ClaudeTaskCreateCommand.java # Provider 内部创建命令，非 HTTP Form
 │   │   ├── dto/
 │   │   │   ├── WorkerDTO.java
-│   │   │   ├── TaskDTO.java
 │   │   │   ├── WorkingDirectoryDTO.java     # +children, directoryType, worktree 等
 │   │   │   └── ConversationConfigDTO.java
 │   │   ├── form/
-│   │   │   ├── CreateTaskForm.java
 │   │   │   ├── CreateWorkingDirectoryForm.java  # +directoryType, parentProjectId
 │   │   │   ├── UpdateWorkingDirectoryForm.java  # +projectTaskPrompt, parentProjectId
 │   │   │   ├── ResumeTaskForm.java
@@ -342,7 +342,8 @@ SSE 桥接组件，监听 `ClaudeTaskStartEvent`，消费 Worker SSE 流，转�
 
 ```
 前端: WorkingDirectory.agentTeamsConfig (JSON string)
-  → CreateTaskForm.agentTeamsJson
+  → TaskDispatchRequest.agentTeamsJson
+  → ClaudeTaskCreateCommand.agentTeamsJson
   → ClaudeTaskStartEvent.agentTeamsJson
   → ClaudeWorkerClient.streamQuery(agentTeamsJson)
     body.extra_args = { "agents": agentTeamsJson }
