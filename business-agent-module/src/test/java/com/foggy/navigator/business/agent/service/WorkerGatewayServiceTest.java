@@ -42,6 +42,8 @@ class WorkerGatewayServiceTest {
     private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     @Mock
     private BusinessFunctionRuntimeAuditService auditService;
+    @Mock
+    private BusinessTaskScopedTokenPolicyService tokenPolicyService;
 
     @InjectMocks
     private WorkerGatewayService workerGatewayService;
@@ -58,19 +60,22 @@ class WorkerGatewayServiceTest {
         tokenDTO.setTaskId("task1");
         tokenDTO.setSessionId("session1");
         tokenDTO.setWorkerPoolId("pool1");
+        lenient().when(tokenPolicyService.allowsFunction(any(), anyString(), anyString())).thenReturn(true);
     }
 
     @Test
-    void listFunctions_success_returns_client_app_visible_functions_without_allowlist_filter() {
+    void listFunctions_success_returns_functions_in_current_grants_and_token_snapshot() {
         when(taskService.resolveTaskScopedToken("valid_token")).thenReturn(tokenDTO);
 
         BusinessFunctionSummaryDTO f1 = new BusinessFunctionSummaryDTO();
         f1.setFunctionId("f1");
+        f1.setVersion("v1");
         f1.setDomain("domain1");
         f1.setRiskLevel("readonly");
 
         BusinessFunctionSummaryDTO f2 = new BusinessFunctionSummaryDTO();
         f2.setFunctionId("f2");
+        f2.setVersion("v1");
         f2.setDomain("domain2");
         f2.setRiskLevel("state_change");
 
@@ -144,8 +149,30 @@ class WorkerGatewayServiceTest {
     }
 
     @Test
-    void listFunctions_does_expose_client_app_granted_function_even_when_unallowlisted() {
-        listFunctions_success_returns_client_app_visible_functions_without_allowlist_filter();
+    void listFunctions_does_not_use_skill_allowlist_as_an_additional_runtime_gate() {
+        listFunctions_success_returns_functions_in_current_grants_and_token_snapshot();
+    }
+
+    @Test
+    void listFunctions_filters_function_not_present_in_token_snapshot() {
+        when(taskService.resolveTaskScopedToken("valid_token")).thenReturn(tokenDTO);
+
+        BusinessFunctionSummaryDTO issued = new BusinessFunctionSummaryDTO();
+        issued.setFunctionId("issued");
+        issued.setVersion("v1");
+        BusinessFunctionSummaryDTO grantedLater = new BusinessFunctionSummaryDTO();
+        grantedLater.setFunctionId("granted-later");
+        grantedLater.setVersion("v1");
+        when(functionRegistryService.listClientAppVisibleFunctionSummaries("tenant1", "app1"))
+                .thenReturn(Arrays.asList(issued, grantedLater));
+        when(tokenPolicyService.allowsFunction(tokenDTO, "issued", "v1")).thenReturn(true);
+        when(tokenPolicyService.allowsFunction(tokenDTO, "granted-later", "v1")).thenReturn(false);
+
+        WorkerGatewayFunctionListDTO result = workerGatewayService.listBusinessFunctions(
+                "valid_token", null, null);
+
+        assertEquals(1, result.getFunctions().size());
+        assertEquals("issued", result.getFunctions().get(0).getFunctionId());
     }
 
     @Test
@@ -195,6 +222,22 @@ class WorkerGatewayServiceTest {
         assertThrows(IllegalArgumentException.class, () ->
             workerGatewayService.getBusinessFunctionSchema("valid_token", "f1", "v1")
         );
+    }
+
+    @Test
+    void getSchema_rejects_function_outside_token_snapshot() {
+        when(taskService.resolveTaskScopedToken("valid_token")).thenReturn(tokenDTO);
+        BusinessFunctionRuntimeContextDTO context = runtimeContext("f1", "v1", false);
+        when(authorizationService.resolveExecutableBusinessFunction(
+                "tenant1", "app1", "user1", "skill1", "f1", "v1"
+        )).thenReturn(context);
+        doThrow(new SecurityException("business function is outside task token scope"))
+                .when(tokenPolicyService).requireFunctionAllowed(tokenDTO, "f1", "v1");
+
+        SecurityException error = assertThrows(SecurityException.class, () ->
+                workerGatewayService.getBusinessFunctionSchema("valid_token", "f1", "v1"));
+
+        assertEquals("business function is outside task token scope", error.getMessage());
     }
 
     @Test
@@ -538,5 +581,18 @@ class WorkerGatewayServiceTest {
             workerGatewayService.reportToolMessage("valid_token", form)
         );
         assertEquals("token missing taskId", ex.getMessage());
+    }
+
+    private BusinessFunctionRuntimeContextDTO runtimeContext(
+            String functionId, String version, boolean approvalRequired) {
+        BusinessFunctionRuntimeContextDTO context = new BusinessFunctionRuntimeContextDTO();
+        BusinessFunctionDTO function = new BusinessFunctionDTO();
+        function.setFunctionId(functionId);
+        function.setApprovalRequired(approvalRequired);
+        context.setFunction(function);
+        BusinessFunctionVersionDTO versionData = new BusinessFunctionVersionDTO();
+        versionData.setVersion(version);
+        context.setVersionData(versionData);
+        return context;
     }
 }

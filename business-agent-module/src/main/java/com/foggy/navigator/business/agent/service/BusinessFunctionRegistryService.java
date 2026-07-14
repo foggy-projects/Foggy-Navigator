@@ -252,6 +252,10 @@ public class BusinessFunctionRegistryService {
         if (inlineVersionIndex > 0 && inlineVersionIndex < normalizedFunctionId.length() - 1) {
             String inlineVersion = normalizedFunctionId.substring(inlineVersionIndex + 1).trim();
             normalizedFunctionId = normalizedFunctionId.substring(0, inlineVersionIndex).trim();
+            if (StringUtils.hasText(normalizedVersion) && StringUtils.hasText(inlineVersion) &&
+                    !normalizedVersion.equals(inlineVersion)) {
+                throw new IllegalArgumentException("function version conflicts with inline version");
+            }
             if (!StringUtils.hasText(normalizedVersion) && StringUtils.hasText(inlineVersion)) {
                 normalizedVersion = inlineVersion;
             }

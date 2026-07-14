@@ -24,7 +24,7 @@ import java.util.Map;
 public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorkerTaskLauncher {
 
     private final BizWorkerPoolMemberRepository poolMemberRepository;
-    private final CodexTaskService codexTaskService;
+    private final CodexBizTaskProvider codexBizTaskProvider;
 
     @Override
     public String getWorkerBackend() {
@@ -55,7 +55,8 @@ public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorker
         }
         putStringList(params, "additionalDirectories", request.getAllowedDirs());
 
-        DispatchTaskDTO workerTask = codexTaskService.createTaskDirect(params, request.getActorUserId(), request.getTenantId());
+        DispatchTaskDTO workerTask = codexBizTaskProvider.createTaskDirect(
+                params, request.getActorUserId(), request.getTenantId());
         return BusinessAgentWorkerTaskLaunchResult.builder()
                 .workerTaskId(workerTask.getTaskId())
                 .workerSessionId(workerTask.getSessionId())

@@ -156,12 +156,20 @@ class BusinessAgentE2ESampleTest {
                 java.util.List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, identityRepository, java.util.List.of());
+        BusinessTaskScopedTokenPolicyService tokenPolicyService = new BusinessTaskScopedTokenPolicyService(
+                functionGrantRepository,
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new com.foggy.navigator.business.agent.config.BusinessTaskScopedTokenProperties());
+        BusinessTaskScopedTokenLifecycleService tokenLifecycleService =
+                new BusinessTaskScopedTokenLifecycleService(tokenRepository, tokenPolicyService, tokenRuntimeStore);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService,
+                bizWorkerPoolService, resourceResolver, userGrantService, skillRegistryService,
+                businessAgentSessionService, identityRepository, tokenLifecycleService, java.util.List.of());
         authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService, skillRegistryService, functionRegistryService);
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
         com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker adapterInvoker = new com.foggy.navigator.business.agent.service.adapter.LocalEchoBusinessFunctionAdapterInvoker(objectMapper);
         suspensionService = new BusinessFunctionSuspensionService(suspensionRepository, eventPublisher, auditService, authorizationService, adapterInvoker);
-        workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, clientAppUserGrantService, suspensionService, adapterInvoker, objectMapper, auditService);
+        workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, clientAppUserGrantService, suspensionService, adapterInvoker, objectMapper, auditService, tokenPolicyService);
     }
 
     // ===== Helper: build active ClientApp entity =====

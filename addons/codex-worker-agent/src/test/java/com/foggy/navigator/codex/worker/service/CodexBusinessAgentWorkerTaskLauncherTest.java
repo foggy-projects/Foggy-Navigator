@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertIterableEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -36,7 +37,7 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
     @Test
     void getWorkerBackendReturnsOpenAiCodex() {
         CodexBusinessAgentWorkerTaskLauncher launcher = new CodexBusinessAgentWorkerTaskLauncher(
-                poolMemberRepository, codexTaskService);
+                poolMemberRepository, new CodexBizTaskProvider(codexTaskService));
 
         assertEquals(ClientAppModelConfigGrantService.OPENAI_CODEX_BACKEND, launcher.getWorkerBackend());
     }
@@ -44,11 +45,12 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
     @Test
     void launchCreatesCodexBizWorkerTaskWithScopedAccount() {
         CodexBusinessAgentWorkerTaskLauncher launcher = new CodexBusinessAgentWorkerTaskLauncher(
-                poolMemberRepository, codexTaskService);
+                poolMemberRepository, new CodexBizTaskProvider(codexTaskService));
         BusinessAgentWorkerTaskLaunchRequest request = fullRequestBuilder()
                 .physicalWorkerId("codex_worker_01")
                 .build();
-        when(codexTaskService.createTaskDirect(anyMap(), eq("owner_01"), eq("tenant_01")))
+        when(codexTaskService.createTaskDirectForProvider(
+                eq(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE), anyMap(), eq("owner_01"), eq("tenant_01")))
                 .thenReturn(DispatchTaskDTO.builder()
                         .taskId("ct_01")
                         .sessionId("session_01")
@@ -64,7 +66,10 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
         assertEquals(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE, result.getProviderType());
 
         ArgumentCaptor<Map<String, Object>> paramsCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(codexTaskService).createTaskDirect(paramsCaptor.capture(), eq("owner_01"), eq("tenant_01"));
+        verify(codexTaskService).createTaskDirectForProvider(
+                eq(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE), paramsCaptor.capture(),
+                eq("owner_01"), eq("tenant_01"));
+        verify(codexTaskService, never()).createTaskDirect(anyMap(), eq("owner_01"), eq("tenant_01"));
         Map<String, Object> params = paramsCaptor.getValue();
         assertEquals(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE, params.get("providerType"));
         assertEquals("agent_01", params.get("agentId"));
@@ -91,11 +96,12 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
     @Test
     void launchUsesFirstEnabledPoolMemberWhenPhysicalWorkerMissing() {
         CodexBusinessAgentWorkerTaskLauncher launcher = new CodexBusinessAgentWorkerTaskLauncher(
-                poolMemberRepository, codexTaskService);
+                poolMemberRepository, new CodexBizTaskProvider(codexTaskService));
         BizWorkerPoolMemberEntity disabled = member("pool_01", "disabled_worker", "DISABLED");
         BizWorkerPoolMemberEntity enabled = member("pool_01", "enabled_worker", BizWorkerPoolService.STATUS_ENABLED);
         when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01")).thenReturn(List.of(disabled, enabled));
-        when(codexTaskService.createTaskDirect(anyMap(), eq("owner_01"), eq("tenant_01")))
+        when(codexTaskService.createTaskDirectForProvider(
+                eq(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE), anyMap(), eq("owner_01"), eq("tenant_01")))
                 .thenReturn(DispatchTaskDTO.builder()
                         .taskId("ct_02")
                         .sessionId("session_01")
@@ -106,7 +112,9 @@ class CodexBusinessAgentWorkerTaskLauncherTest {
 
         assertEquals("enabled_worker", result.getWorkerId());
         ArgumentCaptor<Map<String, Object>> paramsCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(codexTaskService).createTaskDirect(paramsCaptor.capture(), eq("owner_01"), eq("tenant_01"));
+        verify(codexTaskService).createTaskDirectForProvider(
+                eq(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE), paramsCaptor.capture(),
+                eq("owner_01"), eq("tenant_01"));
         assertEquals("enabled_worker", paramsCaptor.getValue().get("workerId"));
     }
 

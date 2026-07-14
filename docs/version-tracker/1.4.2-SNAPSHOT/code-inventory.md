@@ -58,13 +58,18 @@
 | root | `session-module/src/main/java/com/foggy/navigator/session/service/SessionMetadataService.java` | 已有 owned-session 逻辑 | update | 复用/抽取一致的资源归属不变量 |
 | root | `session-module/src/main/java/com/foggy/navigator/session/service/TaskDispatchFacade.java` | 统一 Task 查询与操作 | update | 收敛 ownership 调用；按职责渐进拆分 |
 | root | `session-module/src/main/java/com/foggy/navigator/session/sse/UnifiedSseEmitter.java` | 单 JVM SSE | read-only-analysis | 记录限制；多实例总线不在本版本实现 |
-| root | `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiController.java` | ClientApp Open API | update | 收窄可信 principal、查询/操作归属；渐进拆分 |
+| root | `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiController.java` | ClientApp Open API | update-in-progress | task token 签发后 submit、空 task/taskId 与 bind 失败均 best-effort 独立撤销，撤销失败不泄露 token 且不遮蔽原结果；查询/操作 ownership 与可信 runtime principal 仍待收敛 |
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/ClientAppRuntimeCredentialResolver.java` | runtime credential 解析 | update | 复核 TTL、撤销、轮换和 scope |
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/ClientAppUserGrantService.java` | upstream user grant | update | 1.4.2 维持 ClientApp credential + mapping/grant 基线并记录 delegated assurance；signed assertion 降为低优先级后续项 |
-| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BusinessTaskScopedTokenEntity.java` | task token 持久 claims | update | 增加函数 scope/version 与撤销语义，需迁移设计 |
-| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskService.java` | BusinessTask 创建/恢复 | update | 服务端固化 tenant/ClientApp/upstream user/task/function scope |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/config/BusinessTaskScopedTokenProperties.java` | task token TTL 配置 | create-completed-local | 默认 30 分钟、硬上限 60 分钟；schema/运行态总门禁尚未完成 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BusinessTaskScopedTokenEntity.java` | task token 持久 claims | update-completed-local | v2 claims、结构化 function snapshot、`@Version`、worker/lease 预留与撤销字段已落地；forward/rollback 脚本已在一次性 MySQL 8.0.44/8.4.8 容器验证（含幂等及回滚前撤销 ACTIVE token），共享/项目数据库迁移和 launcher `ddl-auto=validate` 尚未执行 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/dto/BusinessTaskScopedTokenDTO.java` | Gateway token claims DTO | update-completed-local | 携带 v2 claims；不含 token 明文/hash |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/repository/BusinessTaskScopedTokenRepository.java` | task token 查询 | update-completed-local | 增加按 tenant/task 查询，支撑批量撤销；未形成终态自动传播 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessTaskScopedTokenPolicyService.java` | capability v2 签发与校验 | create-completed-local | 快照 ENABLED ClientApp function grants；Gateway 校验 version/generation/audience/assurance/scope |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskService.java` | BusinessTask 创建/恢复/token 生命周期 | update-completed-local | 新签发、单 token/按 task 撤销与 alias cleanup 已实现；终态、暂停、轮换和可信管理入口待办 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskScopedTokenRuntimeStore.java` | JVM runtime token aliases | update-completed-local | 使用结构化 `tenant/session/task` record key 避免分隔符碰撞，并新增 hash-conditional removal；仍未解决重启/多实例 |
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/WorkerGatewayController.java` | Worker Gateway 入口 | update | 只接受 task token principal，不信任身份字段 |
-| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/WorkerGatewayService.java` | 函数授权与执行 | update | enforce task-level function scope、跨任务拒绝与拒绝审计 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/WorkerGatewayService.java` | 函数授权与执行 | update-completed-local | list/schema/invoke 已 enforce token snapshot 与当前授权交集；Worker principal/lease、tool-message 精确函数 scope 和拒绝 outbox 待办 |
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/BusinessFunctionApprovalController.java` | 审批控制面 | update | 保持 credential principal；补全 task/subject 绑定负向验证 |
 | root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessFunctionSuspensionService.java` | 暂停/恢复绑定 | update | 统一审批、恢复、取消归属和审计语义 |
 | root | `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/tool/TaskScopedTokenResolver.java` | Worker token 注入 | update | 禁止跨任务 fallback；明确重启/恢复行为 |
@@ -75,12 +80,57 @@
 |---|---|---|---|---|
 | P1 构建基线 | `.nvmrc`、根 `package.json`、`.gitignore`、根 `pnpm-lock.yaml`、前端 package/scripts、`navigator-open-sdk/pom.xml` 与测试、required/nightly workflows、现有 Codex RC workflow、README/CLAUDE | in-progress-implemented | 精确 Node/pnpm frozen 校验、frontend、五类 Worker clean 等价矩阵 passed；[BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) 关闭后根 `mvn -B clean test` 17/17 reactor、2304 tests 全通过；nightly 已配置 | hosted CI、branch protection、nightly 实跑、根 reactor `clean verify`、跨 checkout 与浏览器体验 |
 | P2 首批外部门禁/readiness | 平台 `/api/v1/open` 路由门禁、LangGraph Biz Worker、Codex SDK Worker、Codex App Server Worker 及 Java 健康状态消费者 | in-progress-implemented | 三个独立提交：`12cbe697`、`5d62707b`、`cce75f1b`；默认关闭的显式开关、脱敏健康状态、external-enabled 503 门禁与旧 Worker 健康响应兼容逻辑已落码 | task token、可信 upstream identity、授权交集、审计 outbox、完整 execution policy、Claude/Gemini Worker、生产 readiness 与外部开放均未完成 |
+| P2 task capability v2 / Codex Biz route | `business-agent-module` token entity/DTO/config/policy/lifecycle/task/runtime store/Gateway、Open API 失败补偿、SQL migration/rollback、launcher TTL 配置、Codex Business Agent launcher 与 tests | in-progress-implemented | 5 个 reactor、770 tests 全通过，其中 business-agent 510；H2 JPA 2 tests 提供外层回滚与 bind/revoke 组合时序下的最终状态证据，不证明确定性的悲观锁交错；Open API mapping 43；LangGraph E2E 2 + Codex route/provider/service 92；forward/rollback 脚本已在一次性 MySQL 8.0.44/8.4.8 容器验证（含幂等/安全回滚） | 共享/项目数据库迁移和 launcher `ddl-auto=validate` 尚未执行；Worker principal/lease、终态/暂停/generation、跨实例、Open API ownership、outbox、真实 Worker/体验均未完成 |
 | Monitoring | `monitoring-module/**`、`tools/foggy-monitor/**`、PC View/API、SecurityConfig 放行、`scripts/start-all.sh` 与当前权威文档 | code-slice-removed | tracked 源码及 repo-local ignored `target/.venv/.pytest_cache` 均移除；静态扫描、shell syntax、Java clean、frontend full matrix passed | RabbitMQ/DB/deployment 等外部资源未操作；启动/浏览器 smoke 未跑 |
 | Code Review | `addons/code-review-agent/**` 共 22 个 tracked files、当前开发指引 | code-slice-removed | root/launcher/CI/scripts/source 扫描与 Java clean passed | GitLab webhook、DB、独立 deployment 未操作/未做运行态读取 |
 | metadata-query | `metadata-query-module/**`、根 `pom.xml`、`launcher/pom.xml`、launcher context test、`.agents/skills/metadata-query-module/**`、当前 README/架构文档 | completed-local | 模块、装配、断言、Skill 与当前文档已收口；根 reactor 当前为 16 个模块；删除后 clean test 15/15 `SUCCESS`，依赖树与 clean target 无旧查询依赖 | 启动/浏览器 smoke、hosted CI 与正式验收未运行；外部资源未操作 |
 | Echo / 旧 Provider 契约 | 对应后续独立切片 | not-started | 删除前 Java clean 基线 passed | 仓内迁移、物理删除和删除后回归均未运行 |
 
 ## Worker 与外部执行触点
+
+### P2 task capability v2 与 Codex Biz route fix（当前工作树）
+
+| 仓库 | 路径 | 角色 | 实施状态 | 准确变化与限制 |
+|---|---|---|---|---|
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/config/BusinessTaskScopedTokenProperties.java` | TTL 配置 | create-completed-local | `navigator.business-agent.task-token`；默认 TTL `PT30M`，配置最大值和实现硬上限均不超过 `PT60M` |
+| root | `launcher/src/main/resources/application.yml` | TTL launcher 配置 | update-completed-local | 新增 `NAVIGATOR_TASK_TOKEN_TTL`、`NAVIGATOR_TASK_TOKEN_MAX_TTL`；不改变 external routing 开关 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BusinessTaskScopedTokenEntity.java` | v2 持久 schema | update-completed-local | 新增 `@Version`、非空 version/generation/audience/assurance/结构化 function scope/issuedAt，nullable worker/lease/revocation 字段 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/dto/BusinessTaskScopedTokenDTO.java` | v2 claims DTO | update-completed-local | 映射新增 claims；继续不返回 token hash 或明文 token |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/repository/BusinessTaskScopedTokenRepository.java` | token 查询/并发锁 | update-completed-local | bind/revoke 使用 `PESSIMISTIC_WRITE` 精确查询；tenant/task 锁定列表支撑批量撤销；未接入 task 状态机 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessTaskScopedTokenPolicyService.java` | capability snapshot 与 Gateway 校验 | create-completed-local | 新签发写 `v2/generation=1/WORKER_GATEWAY/client-app-delegated`，快照排序后的 `{functionId, version}` 字段对；不是 per-intent 最小 scope，也未校验 Worker lease |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessTaskScopedTokenLifecycleService.java` | token 事务生命周期 | create-completed-local | `REQUIRES_NEW` 签发/绑定/撤销；生命周期服务从明文统一计算 hash；写锁保护且 task/session/worker 首次绑定后不可改写；runtime alias 在 after-commit 变更 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskService.java` | task 编排与 token 补偿 | update-completed-local | 32 字节 SecureRandom `btt_` token；先独立提交再 dispatch；launcher 异常、Open API submit/bind 失败和外层 rollback 独立撤销；终态/暂停/generation 接线待办 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/SecretTokenSupport.java` | token 生成/hash 工具 | read-only-analysis | 复用既有 32 字节 `SecureRandom` Base64URL 与 SHA-256；本批未修改该工具 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskScopedTokenRuntimeStore.java` | runtime alias 生命周期 | update-completed-local | 仅接受结构化 `tenant + session + task` 精确 record key，缺 taskId fail closed；按 token hash 条件清理 task aliases；仍为单 JVM 内存态 |
+| root | `docs/migration/2026-07-14-business-task-token-v2.sql`、`docs/migration/2026-07-14-business-task-token-v2-rollback.sql` | MySQL schema 前向/回滚 | create-completed-local | forward 幂等回填 legacy fail-closed claims；rollback 在删 v2 字段前先撤销 ACTIVE token；均已在一次性 MySQL 8.0.44/8.4.8 容器验证；共享/项目数据库迁移和 launcher `ddl-auto=validate` 尚未执行 |
+| root | `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/WorkerGatewayService.java` | Gateway capability enforcement | update-completed-local | list 过滤 token snapshot；schema/invoke 需要 snapshot 与当前授权同时满足；tool message 尚未按具体函数版本校验 |
+| root | `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexBusinessAgentWorkerTaskLauncher.java` | Codex Biz 创建路由 | update-completed-local | 从默认 `CodexTaskService.createTaskDirect` 切换为 `CodexBizTaskProvider.createTaskDirect`，固定 `codex-biz-worker` route；只修路由正确性，不解除 external execution policy pending |
+| root | `business-agent-module/src/test/java/com/foggy/navigator/business/agent/service/BusinessTaskScopedTokenPolicyServiceTest.java` | v2 policy 测试 | create-completed-local | 覆盖 TTL cap、函数快照、旧版本/错误 audience/畸形 scope 拒绝 |
+| root | `business-agent-module/src/test/java/com/foggy/navigator/business/agent/service/BusinessTaskScopedTokenLifecycleServiceTest.java` | lifecycle 单元测试 | create-completed-local | 15 tests 覆盖 after-commit、rollback、plain/hash 不变量、secret/tenant 不匹配、绑定 tuple 不可变与单/批/按明文撤销 |
+| root | `business-agent-module/src/test/java/com/foggy/navigator/business/agent/repository/BusinessTaskScopedTokenLifecycleJpaTest.java` | lifecycle JPA 测试 | create-completed-local | 2 tests 提供外层 rollback 补偿及 bind/revoke 组合时序下 token 最终不复活的证据；不声称确定性复现或证明悲观锁交错 |
+| root | `business-agent-module/src/test/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskServiceTest.java` | 签发/绑定/撤销测试 | update-completed-local | 覆盖 policy initializer、SecureRandom token 形态、单/批量撤销、三类 alias cleanup、幂等和 launcher 异常清理 |
+| root | `business-agent-module/src/test/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskScopedTokenRuntimeStoreTest.java` | runtime store 测试 | update-completed-local | 10 tests 覆盖精确匹配、过期、匹配删除、旧 hash 不删除新 alias 及含冒号 identity 不碰撞 |
+| root | `business-agent-module/src/test/java/com/foggy/navigator/business/agent/service/WorkerGatewayServiceTest.java` | Gateway scope 测试 | update-completed-local | 旧“仅 ClientApp grant”夹具已改为 token snapshot 与当前授权交集语义 |
+| root | `business-agent-module/src/test/java/com/foggy/navigator/business/agent/e2e/BusinessAgentE2ESampleTest.java`、`business-agent-module/src/test/java/com/foggy/navigator/business/agent/e2e/RestAdapterUpstreamE2ETest.java` | Business Agent 夹具 | update-completed-local | 对齐 v2 policy service；未替代真实 Worker/数据库验证 |
+| root | `addons/langgraph-biz-worker/src/test/java/com/foggy/navigator/langgraph/worker/e2e/BusinessAgentLanggraphLaunchE2ETest.java` | LangGraph 跨模块 E2E | update-completed-local | 2 tests 定向通过；仍是测试环境 E2E，不是 external enablement |
+| root | `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexBizTaskProvider.java` | 既有 Codex Biz 专用 route | read-only-analysis | 本批复用其 `createTaskDirectForProvider(codex-biz-worker, ...)` 与 Biz 参数规范化，Provider 本身未修改 |
+| root | `addons/codex-worker-agent/src/test/java/com/foggy/navigator/codex/worker/service/CodexBusinessAgentWorkerTaskLauncherTest.java` | Codex route 回归 | update-completed-local | 断言只走 `createTaskDirectForProvider(codex-biz-worker, ...)`，不调用默认 direct route |
+| root | `addons/codex-worker-agent/src/test/java/com/foggy/navigator/codex/worker/service/CodexBizTaskProviderTest.java`、`addons/codex-worker-agent/src/test/java/com/foggy/navigator/codex/worker/service/CodexTaskServiceTest.java` | Codex Provider/service 回归 | update-completed-local | 与 launcher suite 合计 92 tests 定向通过；internal-dev 默认策略仍需后续治理 |
+
+Schema 精确新增字段如下；forward/rollback 脚本已在一次性 MySQL 8.0.44/8.4.8 容器验证（含幂等及回滚前撤销 ACTIVE token）；共享/项目数据库迁移和 launcher `ddl-auto=validate` 尚未执行：
+
+| 字段 | JPA 约束 | 当前写入/校验 |
+|---|---|---|
+| `rowVersion` | JPA `@Version` | 与悲观写锁共同保护 bind/revoke |
+| `tokenVersion`、`generation` | 非空 Integer | 新签发 `2` / `1`；Gateway fail closed；旧 token legacy 回填脚本已验证，轮换未实施 |
+| `audience`、`identityAssurance` | 非空，长度 64 | `WORKER_GATEWAY` / `client-app-delegated`；后者不表示 upstream user 独立强证明 |
+| `functionScopeJson` | 非空 LOB | ENABLED ClientApp grants 的 `{functionId, version}` JSON 快照 |
+| `workerId`、`workerLeaseId` | nullable，长度 128 | launcher 成功后可写 `workerId`；lease 仅预留 |
+| `issuedAt`、`expiresAt` | 非空时间 | policy initializer 同时写入；30 分钟默认、60 分钟硬上限 |
+| `revokedAt` | nullable 时间 | 单/批量撤销写入 |
+| `revokedBy`、`revokeReason` | nullable，长度 128 / 512 | 单/批量撤销写入；可信控制面 actor/outbox 未完成 |
+
+测试证据口径：task capability 首轮 4 个失败来自旧夹具与新 v2 claims/function snapshot 契约不一致，修正后统一全量回归。最终 `mvn -B -pl business-agent-module -am test` 为 5/5 reactor、770 tests 通过，其中 business-agent 510；修复后 Open API 43 + LangGraph E2E 2 + Codex route/provider/service 92 共 137 tests 在同一 10/10 reactor 定向矩阵通过。H2 JPA 2 tests 仅提供外层回滚和 bind/revoke 组合时序下的最终状态证据，不声称确定性复现或证明悲观锁交错。forward/rollback 脚本已在一次性 MySQL 8.0.44/8.4.8 容器验证（含幂等，以及回滚前撤销 ACTIVE token）；共享/项目数据库迁移、launcher `ddl-auto=validate`、真实 Worker、双 ClientApp/user 手工矩阵、浏览器体验、hosted CI 和正式验收均未执行。
 
 ### P2 首批已实施的平台路由门禁（`12cbe697`）
 
@@ -130,7 +180,7 @@
 | `external-enabled` | 三个 Worker 当前即使配置了 Token，也固定因 `EXTERNAL_EXECUTION_POLICY_PENDING` 而 `external_ready=false`；缺 Token 时另有 `EXTERNAL_AUTH_TOKEN_REQUIRED` | 完成目录、工具、sandbox、approval、network、task token、身份和审计策略及负向测试后，才可设计解除 pending 的条件 |
 | 平台 surface | `NAVIGATOR_EXTERNAL_ENABLED=true` 只打开 `/api/v1/open` 路由门禁；`surfaceReady=true` 只表示 routing gate open | 不覆盖 upstream-admin、`/internal/worker-gateway/v1/**` 或内部 Controller；这些边界须由各自 principal/ownership 方案治理 |
 | 兼容 | 平台消费者仅在健康响应显式 `ready=false` 时判 unready；缺字段按旧 Worker 兼容 | 兼容逻辑不等于外部安全；升级期结束后是否收紧须另行决策 |
-| 未完成能力 | 本批未实现 task token 函数 scope/生命周期、upstream identity、调用/审批/恢复审计、生产 readiness 或外部启用 | 保持 GOV-001/GOV-002 为 `in-progress`，不得据此签收 P2 或批准生产路由 |
+| 未完成能力 | task token 首个函数 scope/TTL/撤销/事务切片已实现；Worker principal/lease、终态轮换、upstream identity、调用/审批/恢复可靠审计、生产 readiness 或外部启用仍未实现 | 保持 GOV-001/GOV-002 为 `in-progress`，不得据此签收 P2 或批准生产路由 |
 
 ### 尚未实施的 Worker 治理触点
 

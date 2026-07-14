@@ -26,7 +26,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.List;
 
@@ -58,11 +61,11 @@ class BusinessAgentTaskServiceTest {
     @Mock
     private SkillRegistryService skillRegistryService;
     @Mock
-    private BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
-    @Mock
     private BusinessAgentSessionService businessAgentSessionService;
     @Mock
     private BizWorkerIdentityRepository workerIdentityRepository;
+    @Mock
+    private BusinessTaskScopedTokenLifecycleService tokenLifecycleService;
     @Mock
     private BusinessAgentWorkerTaskLauncher workerTaskLauncher;
 
@@ -78,7 +81,18 @@ class BusinessAgentTaskServiceTest {
         form.setSessionId("session_01");
         form.setAgentId("agent_01");
         form.setUpstreamUserId("user_01");
-        lenient().when(tokenRepository.save(any(BusinessTaskScopedTokenEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(tokenLifecycleService.issueNewToken(
+                any(BusinessTaskScopedTokenEntity.class), anyString())).thenAnswer(invocation -> {
+            BusinessTaskScopedTokenEntity token = invocation.getArgument(0);
+            token.setTokenVersion(BusinessTaskScopedTokenPolicyService.CURRENT_TOKEN_VERSION);
+            token.setGeneration(BusinessTaskScopedTokenPolicyService.INITIAL_GENERATION);
+            token.setAudience(BusinessTaskScopedTokenPolicyService.AUDIENCE_WORKER_GATEWAY);
+            token.setIdentityAssurance(BusinessTaskScopedTokenPolicyService.IDENTITY_ASSURANCE_CLIENT_APP_DELEGATED);
+            token.setFunctionScopeJson("[]");
+            token.setIssuedAt(LocalDateTime.now());
+            token.setExpiresAt(LocalDateTime.now().plusMinutes(30));
+            return token;
+        });
         lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
                 .thenAnswer(invocation -> {
                     BusinessAgentSessionDTO dto = new BusinessAgentSessionDTO();
@@ -157,7 +171,7 @@ class BusinessAgentTaskServiceTest {
         assertEquals("model_01", result.getModelConfigId());
         assertEquals(BusinessAgentTaskService.STATUS_CREATED, result.getStatus());
         assertNotNull(result.getTaskScopedToken());
-        assertTrue(result.getTaskScopedToken().startsWith("btt_"));
+        assertTrue(result.getTaskScopedToken().matches("btt_[A-Za-z0-9_-]{43}"));
 
         verify(clientAppService).requireActiveClientApp("tenant_01", "app_01");
         verify(bizWorkerPoolService).requireAvailablePool("tenant_01", "pool_01");
@@ -166,15 +180,51 @@ class BusinessAgentTaskServiceTest {
                 "agent_01", "skill_01", "dir_01", "model_01");
 
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor = ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
-        verify(tokenRepository).save(tokenCaptor.capture());
+        verify(tokenLifecycleService).issueNewToken(tokenCaptor.capture(), eq(result.getTaskScopedToken()));
 
         BusinessTaskScopedTokenEntity savedToken = tokenCaptor.getValue();
         assertEquals(SecretTokenSupport.sha256(result.getTaskScopedToken()), savedToken.getTokenHash());
         assertEquals(result.getTaskId(), savedToken.getTaskId());
         assertEquals("model_01", savedToken.getModelConfigId());
         assertEquals(BusinessAgentTaskService.STATUS_ACTIVE, savedToken.getStatus());
+    }
 
-        verify(tokenRuntimeStore).registerToken("tenant_01", "session_01", result.getTaskId(), result.getTaskScopedToken(), savedToken.getExpiresAt());
+    @Test
+    void createTask_whenOuterTransactionRollsBack_delegatesTokenRevocation() {
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
+        doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
+        when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> {
+            BusinessAgentTaskEntity entity = invocation.getArgument(0);
+            entity.setId(1L);
+            return entity;
+        });
+        TransactionSynchronizationManager.initSynchronization();
+
+        try {
+            CreatedBusinessAgentTaskDTO result = taskService.createTask("tenant_01", "actor_01", form);
+            ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
+                    ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
+            verify(tokenLifecycleService).issueNewToken(
+                    tokenCaptor.capture(), eq(result.getTaskScopedToken()));
+
+            List<TransactionSynchronization> synchronizations =
+                    TransactionSynchronizationManager.getSynchronizations();
+            assertEquals(1, synchronizations.size());
+            synchronizations.forEach(synchronization ->
+                    synchronization.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+            verify(tokenLifecycleService).revokeTaskScopedToken(
+                    "tenant_01",
+                    tokenCaptor.getValue().getTokenId(),
+                    "system",
+                    "task creation transaction rolled back");
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
@@ -190,9 +240,9 @@ class BusinessAgentTaskServiceTest {
                 resourceResolver,
                 userGrantService,
                 skillRegistryService,
-                tokenRuntimeStore,
                 businessAgentSessionService,
                 workerIdentityRepository,
+                tokenLifecycleService,
                 List.of(workerTaskLauncher));
 
         BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
@@ -265,14 +315,62 @@ class BusinessAgentTaskServiceTest {
         assertEquals(List.of("/home/sa/workspace"), requestCaptor.getValue().getAllowedDirs());
         assertEquals(List.of("read_file", "invoke_business_function"), requestCaptor.getValue().getAllowedTools());
 
-        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor = ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
-        verify(tokenRepository, atLeastOnce()).save(tokenCaptor.capture());
-        BusinessTaskScopedTokenEntity finalSavedToken = tokenCaptor.getAllValues().get(tokenCaptor.getAllValues().size() - 1);
-        assertEquals("lgt_123", finalSavedToken.getWorkerTaskId());
-        assertEquals("worker_session_123", finalSavedToken.getWorkerSessionId());
+        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
+                ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
+        verify(tokenLifecycleService).issueNewToken(tokenCaptor.capture(), eq(result.getTaskScopedToken()));
+        BusinessTaskScopedTokenEntity issuedToken = tokenCaptor.getValue();
+        verify(tokenLifecycleService).bindIssuedTokenToWorkerTask(
+                "tenant_01",
+                issuedToken.getTokenId(),
+                result.getTaskScopedToken(),
+                "lgt_123",
+                "worker_session_123",
+                "worker_01");
+    }
 
-        verify(tokenRuntimeStore).registerToken(eq("tenant_01"), eq("session_01"), eq(result.getTaskId()), eq(result.getTaskScopedToken()), any());
-        verify(tokenRuntimeStore).registerToken(eq("tenant_01"), eq("session_01"), eq("lgt_123"), eq(result.getTaskScopedToken()), any());
+    @Test
+    void createTask_whenWorkerLauncherFails_revokesIssuedToken() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                resourceResolver,
+                userGrantService,
+                skillRegistryService,
+                businessAgentSessionService,
+                workerIdentityRepository,
+                tokenLifecycleService,
+                List.of(workerTaskLauncher));
+
+        BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
+        pool.setPoolId("pool_01");
+        pool.setWorkerBackend("LANGGRAPH_BIZ");
+        when(bizWorkerPoolService.requireAvailablePool("tenant_01", "pool_01")).thenReturn(pool);
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant_01"), eq("app_01"), any(), any(), nullable(String.class), eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource("model_01", null));
+        doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
+        doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.launch(any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenThrow(new IllegalStateException("worker launch failed"));
+        when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> {
+            BusinessAgentTaskEntity entity = invocation.getArgument(0);
+            entity.setId(1L);
+            return entity;
+        });
+
+        IllegalStateException error = assertThrows(
+                IllegalStateException.class,
+                () -> serviceWithLauncher.createTask("tenant_01", "actor_01", form));
+
+        assertEquals("worker launch failed", error.getMessage());
+        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
+                ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
+        verify(tokenLifecycleService).issueNewToken(tokenCaptor.capture(), anyString());
+        verify(tokenLifecycleService).revokeTaskScopedToken(
+                "tenant_01", tokenCaptor.getValue().getTokenId(), "system", "worker dispatch failed");
     }
 
     @Test
@@ -287,9 +385,9 @@ class BusinessAgentTaskServiceTest {
                 resourceResolver,
                 userGrantService,
                 skillRegistryService,
-                tokenRuntimeStore,
                 businessAgentSessionService,
                 workerIdentityRepository,
+                tokenLifecycleService,
                 List.of(workerTaskLauncher));
 
         when(resourceResolver.resolveRequiredAgent(
@@ -367,8 +465,8 @@ class BusinessAgentTaskServiceTest {
 
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
                 ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
-        verify(tokenRepository, atLeastOnce()).save(tokenCaptor.capture());
-        assertEquals("worker_01", tokenCaptor.getAllValues().get(tokenCaptor.getAllValues().size() - 1).getWorkerPoolId());
+        verify(tokenLifecycleService).issueNewToken(tokenCaptor.capture(), anyString());
+        assertEquals("worker_01", tokenCaptor.getValue().getWorkerPoolId());
     }
 
     @Test
@@ -383,9 +481,9 @@ class BusinessAgentTaskServiceTest {
                 resourceResolver,
                 userGrantService,
                 skillRegistryService,
-                tokenRuntimeStore,
                 businessAgentSessionService,
                 workerIdentityRepository,
+                tokenLifecycleService,
                 List.of(workerTaskLauncher));
 
         ClientAppEntity clientApp = new ClientAppEntity();
@@ -570,34 +668,44 @@ class BusinessAgentTaskServiceTest {
 
         assertTrue(error.getMessage().contains(BusinessAgentSessionService.CONTEXT_WORKER_MISMATCH));
         verify(taskRepository, never()).save(any());
-        verify(tokenRepository, never()).save(any());
-        verify(tokenRuntimeStore, never()).registerToken(anyString(), anyString(), anyString(), anyString(), any());
+        verify(tokenLifecycleService, never()).issueNewToken(any(), anyString());
     }
 
     @Test
-    void bindOpenApiTaskScopedTokenToWorkerTask_persistsMappingAndRegistersWorkerAlias() {
-        BusinessTaskScopedTokenEntity token = new BusinessTaskScopedTokenEntity();
-        token.setTokenId("tst_open_api");
-        token.setTokenHash(SecretTokenSupport.sha256("btt_open_api"));
-        token.setTaskId("obt_123");
-        token.setSessionId("ctx_123");
-        token.setTenantId("tenant_01");
-        token.setStatus(BusinessAgentTaskService.STATUS_ACTIVE);
-        token.setExpiresAt(java.time.LocalDateTime.now().plusHours(1));
-
-        when(tokenRepository.findByTokenHash(SecretTokenSupport.sha256("btt_open_api"))).thenReturn(Optional.of(token));
-
+    void bindOpenApiTaskScopedTokenToWorkerTask_delegatesToLifecycle() {
         taskService.bindOpenApiTaskScopedTokenToWorkerTask(
                 "tenant_01",
                 "btt_open_api",
                 "lgt_123",
                 "worker_session_123");
 
-        assertEquals("lgt_123", token.getWorkerTaskId());
-        assertEquals("worker_session_123", token.getWorkerSessionId());
-        verify(tokenRepository).save(token);
-        verify(tokenRuntimeStore).registerToken("tenant_01", "ctx_123", "lgt_123", "btt_open_api", token.getExpiresAt());
-        verify(tokenRuntimeStore).registerToken("tenant_01", "worker_session_123", "lgt_123", "btt_open_api", token.getExpiresAt());
+        verify(tokenLifecycleService).bindOpenApiTokenToWorkerTask(
+                "tenant_01", "btt_open_api", "lgt_123", "worker_session_123");
+    }
+
+    @Test
+    void issueOpenApiTaskScopedToken_initializesPolicyAndReturnsSecureRandomTokenShape() {
+        when(resourceResolver.resolveRequiredModelConfigId(
+                "tenant_01", "app_01", "model_01", LlmModelCategory.GENERAL))
+                .thenReturn("model_01");
+
+        String plainToken = taskService.issueOpenApiTaskScopedToken(
+                "tenant_01",
+                "actor_01",
+                "app_01",
+                "user_01",
+                "skill_01",
+                "session_01",
+                "model_01");
+
+        assertTrue(plainToken.matches("btt_[A-Za-z0-9_-]{43}"));
+        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor =
+                ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
+        verify(tokenLifecycleService).issueNewToken(tokenCaptor.capture(), eq(plainToken));
+        BusinessTaskScopedTokenEntity savedToken = tokenCaptor.getValue();
+        assertEquals(SecretTokenSupport.sha256(plainToken), savedToken.getTokenHash());
+        assertTrue(savedToken.getTaskId().matches("obt_[a-f0-9]{32}"));
+        assertEquals(BusinessAgentTaskService.STATUS_ACTIVE, savedToken.getStatus());
     }
 
     @Test
@@ -708,6 +816,35 @@ class BusinessAgentTaskServiceTest {
         when(tokenRepository.findByTokenHash(SecretTokenSupport.sha256("plain_token"))).thenReturn(Optional.of(token));
 
         assertThrows(IllegalStateException.class, () -> taskService.resolveTaskScopedToken("plain_token"));
+    }
+
+    @Test
+    void revokeTaskScopedToken_delegatesToLifecycle() {
+        taskService.revokeTaskScopedToken("tenant_01", "tst_01", " operator_01 ", " manual revoke ");
+        verify(tokenLifecycleService).revokeTaskScopedToken(
+                "tenant_01", "tst_01", " operator_01 ", " manual revoke ");
+    }
+
+    @Test
+    void revokeOpenApiTaskScopedToken_delegatesPlainTokenToLifecycle() {
+        taskService.revokeOpenApiTaskScopedToken(
+                "tenant_01", "btt_plain", "system", "open api submit failed");
+
+        verify(tokenLifecycleService).revokeTaskScopedTokenByPlainToken(
+                "tenant_01", "btt_plain", "system", "open api submit failed");
+    }
+
+    @Test
+    void revokeTaskScopedTokensForTask_delegatesToLifecycle() {
+        when(tokenLifecycleService.revokeTaskScopedTokensForTask(
+                "tenant_01", "bt_123", "system", "task terminal")).thenReturn(1);
+
+        int revokedCount = taskService.revokeTaskScopedTokensForTask(
+                "tenant_01", "bt_123", "system", "task terminal");
+
+        assertEquals(1, revokedCount);
+        verify(tokenLifecycleService).revokeTaskScopedTokensForTask(
+                "tenant_01", "bt_123", "system", "task terminal");
     }
 
     @Test

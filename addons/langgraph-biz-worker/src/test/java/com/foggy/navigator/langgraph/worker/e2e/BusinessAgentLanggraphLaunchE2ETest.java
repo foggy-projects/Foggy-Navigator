@@ -22,6 +22,8 @@ import com.foggy.navigator.business.agent.repository.BusinessCodingAgentReposito
 import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskScopedTokenRuntimeStore;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
+import com.foggy.navigator.business.agent.service.BusinessTaskScopedTokenLifecycleService;
+import com.foggy.navigator.business.agent.service.BusinessTaskScopedTokenPolicyService;
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
@@ -65,6 +67,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -152,6 +155,28 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
+        AtomicReference<BusinessTaskScopedTokenEntity> issuedToken = new AtomicReference<>();
+        when(tokenRepository.save(any(BusinessTaskScopedTokenEntity.class))).thenAnswer(invocation -> {
+            BusinessTaskScopedTokenEntity token = invocation.getArgument(0);
+            issuedToken.set(token);
+            return token;
+        });
+        when(tokenRepository.findByTokenIdAndTenantIdForUpdate(anyString(), eq(TENANT)))
+                .thenAnswer(invocation -> Optional.ofNullable(issuedToken.get()));
+        BusinessTaskScopedTokenPolicyService tokenPolicyService = mock(BusinessTaskScopedTokenPolicyService.class);
+        doAnswer(invocation -> {
+            BusinessTaskScopedTokenEntity token = invocation.getArgument(0);
+            token.setTokenVersion(BusinessTaskScopedTokenPolicyService.CURRENT_TOKEN_VERSION);
+            token.setGeneration(BusinessTaskScopedTokenPolicyService.INITIAL_GENERATION);
+            token.setAudience(BusinessTaskScopedTokenPolicyService.AUDIENCE_WORKER_GATEWAY);
+            token.setIdentityAssurance(BusinessTaskScopedTokenPolicyService.IDENTITY_ASSURANCE_CLIENT_APP_DELEGATED);
+            token.setFunctionScopeJson("[]");
+            token.setIssuedAt(LocalDateTime.now());
+            token.setExpiresAt(LocalDateTime.now().plusMinutes(30));
+            return null;
+        }).when(tokenPolicyService).initializeNewToken(any(BusinessTaskScopedTokenEntity.class));
+        BusinessTaskScopedTokenLifecycleService tokenLifecycleService =
+                new BusinessTaskScopedTokenLifecycleService(tokenRepository, tokenPolicyService, tokenRuntimeStore);
         businessAgentTaskService = new BusinessAgentTaskService(
                 businessTaskRepository,
                 tokenRepository,
@@ -160,9 +185,9 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 resourceResolver,
                 userGrantService,
                 skillRegistryService,
-                tokenRuntimeStore,
                 businessAgentSessionService,
                 identityRepository,
+                tokenLifecycleService,
                 List.of(launcher)
         );
 
@@ -173,7 +198,6 @@ class BusinessAgentLanggraphLaunchE2ETest {
             }
             return task;
         });
-        when(tokenRepository.save(any(BusinessTaskScopedTokenEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
         when(sessionTaskRepository.save(any(SessionTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(sessionEntityRepository.findById(anyString())).thenReturn(Optional.empty());

@@ -63,6 +63,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
@@ -698,6 +699,141 @@ class OpenApiControllerMessageMappingTest {
                 "btt_open_api_1",
                 "lgt_visible_1",
                 "worker_session_1");
+    }
+
+    @Test
+    void askAgent_revokesOpenApiBusinessRuntimeTokenWhenWorkerTaskBindingFails() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("创建车辆并走审批");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.issueOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class)))
+                .thenReturn("btt_bind_failure");
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("lgt_bind_failure")
+                .contextId("ctx-1")
+                .metadata(Map.of("sessionId", "worker_session_1"))
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+        doThrow(new IllegalStateException("worker task token binding rejected"))
+                .when(taskService)
+                .bindOpenApiTaskScopedTokenToWorkerTask(
+                        "tenant-1",
+                        "btt_bind_failure",
+                        "lgt_bind_failure",
+                        "worker_session_1");
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("worker task token binding rejected"));
+        verify(taskService).revokeOpenApiTaskScopedToken(
+                "tenant-1",
+                "btt_bind_failure",
+                "system",
+                "open api task token binding failed");
+    }
+
+    @Test
+    void askAgent_revokesOpenApiBusinessRuntimeTokenBeforeRethrowingUnexpectedSubmitFailure() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("触发未知提交异常");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.issueOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class)))
+                .thenReturn("btt_unexpected_submit_failure");
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenThrow(new UnsupportedOperationException("unexpected submit failure"));
+
+        UnsupportedOperationException failure = assertThrows(
+                UnsupportedOperationException.class,
+                () -> controller.askAgent("agent-1", form, request));
+
+        assertEquals("unexpected submit failure", failure.getMessage());
+        verify(taskService).revokeOpenApiTaskScopedToken(
+                "tenant-1",
+                "btt_unexpected_submit_failure",
+                "system",
+                "open api task submission failed");
+    }
+
+    @Test
+    void askAgent_revokesOpenApiBusinessRuntimeTokenWhenSubmitReturnsTaskWithoutId() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("返回缺少任务编号的任务");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.issueOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class)))
+                .thenReturn("btt_missing_task_id");
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNull(result.getData());
+        assertEquals("open api task submission returned no task id", result.getMsg());
+        verify(taskService).revokeOpenApiTaskScopedToken(
+                "tenant-1",
+                "btt_missing_task_id",
+                "system",
+                "open api task submission returned no task id");
+        verify(taskService, never()).bindOpenApiTaskScopedTokenToWorkerTask(
+                any(), any(), any(), any());
     }
 
     @Test
@@ -1599,6 +1735,7 @@ class OpenApiControllerMessageMappingTest {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
         BusinessAgentSessionService sessionService = mock(BusinessAgentSessionService.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
         CodingAgentRepository codingAgentRepository = mock(CodingAgentRepository.class);
         OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
         A2aAgent agent = mock(A2aAgent.class);
@@ -1606,6 +1743,7 @@ class OpenApiControllerMessageMappingTest {
                 agentResolver,
                 credentialResolver,
                 sessionService,
+                taskService,
                 codingAgentRepository,
                 sessionQueryService);
         HttpServletRequest request = mock(HttpServletRequest.class);
@@ -1620,6 +1758,15 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(Optional.of(credential()));
         when(sessionService.getSession("tenant-1", "app-1", "upstream-a", STANDARD_CONTEXT_ID))
                 .thenReturn(new BusinessAgentSessionDTO());
+        when(taskService.issueOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                eq(STANDARD_CONTEXT_ID),
+                nullable(String.class)))
+                .thenReturn("btt_submit_failure");
         CodingAgentEntity agentEntity = new CodingAgentEntity();
         agentEntity.setAgentId("agent-1");
         agentEntity.setTenantId("tenant-1");
@@ -1632,6 +1779,13 @@ class OpenApiControllerMessageMappingTest {
         when(agent.sendTask(any())).thenThrow(new IllegalStateException(
                 "CONTEXT_RUNTIME_BUSY: contextId " + STANDARD_CONTEXT_ID
                         + " already has active task lgt_45e01f2e4dfd42e9"));
+        doThrow(new IllegalStateException("revocation storage failure"))
+                .when(taskService)
+                .revokeOpenApiTaskScopedToken(
+                        "tenant-1",
+                        "btt_submit_failure",
+                        "system",
+                        "open api task submission failed");
 
         var result = controller.askAgent("agent-1", form, request);
 
@@ -1640,6 +1794,11 @@ class OpenApiControllerMessageMappingTest {
         assertTrue(result.getMsg().contains("lgt_45e01f2e4dfd42e9"));
         verify(sessionService, never()).bindOpenApiSession(
                 any(), any(), any(), any(), any(), any(), any(), any());
+        verify(taskService).revokeOpenApiTaskScopedToken(
+                "tenant-1",
+                "btt_submit_failure",
+                "system",
+                "open api task submission failed");
     }
 
     @Test

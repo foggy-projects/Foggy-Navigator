@@ -26,14 +26,14 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 | 项目 | 状态 | 说明 |
 |---|---|---|
 | Workitem | in-progress | 2026-07-14 Owner 已冻结当前 dev/internal 方案与未来外部开放门禁；P2 显式开关与 readiness 已部分实施 |
-| Implementation | partial | implementation_started: yes；已实施平台 Open API 默认关闭、三类 Worker external profile 和平台 readiness 消费；token/identity/audit 未实施 |
-| Automated test | partial-passed | Java 定向 74 tests，10/10 reactor SUCCESS；Codex SDK 163 pass/1 skip、app-server 272 pass/1 skip、LangGraph 766 pass，相关 type/build 通过 |
+| Implementation | partial | implementation_started: yes；已实施平台 Open API 默认关闭、三类 Worker external profile、平台 readiness 消费、task capability v2 首个切片和 Codex Biz 专用创建路由修正；runtime principal、Worker lease、终态轮换和 audit outbox 未实施 |
+| Automated test | partial-passed | 既有外部门禁/readiness 证据保持有效；最终 `business-agent-module -am` 5 个 reactor、770 tests 通过，其中 business-agent 510 tests；Open API mapping 43 tests、跨 Provider 定向回归 94 tests 通过；MySQL 8.0.44/8.4.8 迁移、重复执行和安全回滚通过 |
 | Manual verification | not-run | 未执行双 tenant/ClientApp/upstream user/task/function 矩阵 |
 | Experience verification | not-run | 未检查外部配置、错误提示或审批恢复体验 |
 | Production routing | unchanged | production_routing_changed: no |
-| External contract | scoped-change | 新增显式关闭/未就绪错误语义；没有启用 external-enabled，token/scope/identity 契约尚未切换 |
+| External contract | scoped-change | 新增显式关闭/未就绪错误语义，并在当前工作树落地 task capability v2 fail-closed 契约；没有启用 external-enabled，旧 token 只具备已验证但尚未部署的迁移/回滚脚本，独立 upstream identity 和生产启用均未完成 |
 
-本文已回写 `EXEC-142-008` 本地实施与测试证据；没有执行凭据签发、流量读取、数据库修改、外部部署或生产路由变更。
+本文已回写 `EXEC-142-008` 及当前工作树的 task capability v2/Codex Biz route 实施与定向测试证据；迁移脚本仅在一次性 MySQL 8.0.44/8.4.8 容器执行，没有操作项目共享数据库，也没有执行真实凭据签发、流量读取、外部部署或生产路由变更。
 
 ## 目标
 
@@ -94,6 +94,10 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 6. 新审批/恢复服务持久化 suspension binding；`approvedBy` 从 control credential principal 派生，请求体中的同名字段不是最终可信 actor。
 7. LangGraph 执行策略已有工作目录、允许目录和工具校验；Codex Biz launcher 已注入 tenant、ClientApp、upstream user、workspace、allowed dirs/tools 等服务端运行上下文。
 8. BusinessFunction runtime audit 已覆盖 invoke、suspend、success、failed、tool message 和 resume 生命周期的多类事件。
+9. 当前工作树已实现 task capability v2 首个切片：新签发 token 固定 `tokenVersion=2`、`generation=1`、`audience=WORKER_GATEWAY`、`identityAssurance=client-app-delegated`，并持久化结构化 `{functionId, version}` JSON 快照、签发/过期和撤销字段。
+10. 新签发 token 使用 32 字节 `SecureRandom` 生成的 `btt_` Base64URL 形式，数据库继续只保存 SHA-256 hash；默认 TTL 30 分钟且实现硬上限 60 分钟。
+11. `BusinessAgentTaskService` 已提供单 token 撤销和按 tenant/task 批量撤销服务，并按 hash 条件清理 business-task、worker-task、worker-session runtime aliases；这些服务尚未接入 pause/terminal/cancel 状态机。
+12. Codex Business Agent launcher 已改走 `CodexBizTaskProvider.createTaskDirect`，从而固定 `codex-biz-worker` Provider route，不再误入默认 `codex-worker` 创建端口。
 
 ## 静态搜索结论
 
@@ -112,10 +116,13 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ### task-scoped token 与函数 scope
 
-- `BusinessTaskScopedTokenEntity` 未见任务级函数 allowlist、物理 worker identity 或明确 `revokedAt` 字段。
+- `BusinessTaskScopedTokenEntity` 当前工作树已增加 v2 capability claims：`tokenVersion`、`generation`、`audience`、`identityAssurance`、`functionScopeJson`、`workerId`、`workerLeaseId`、`issuedAt`、`revokedAt`、`revokedBy`、`revokeReason`。
+- `BusinessTaskScopedTokenPolicyService` 在签发时快照当时 ENABLED 的 ClientApp function grants，编码为排序后的结构化 `{functionId, version}` JSON 列表；Gateway list/schema/invoke 现在以精确字段对约束当前可见/可执行函数，并继续经过现有 ClientApp、user、skill、function grant 校验。
+- Gateway 对 v1、错误 audience、错误 assurance、非法 generation 或缺失/畸形 function scope fail closed；迁移脚本把旧行回填为 `v1/LEGACY/legacy-unverified/[]`，因此旧 token 不会被 Gateway v2 接受。脚本已在一次性 MySQL 8.0.44/8.4.8 验证，但尚未部署到项目数据库。
 - `BusinessFunctionAuthorizationService` 明确将 SkillFunctionAllowlist 作为 materialization/recommendation 提示，而不是运行时硬门禁。
-- `WorkerGatewayService.listBusinessFunctions` 返回 ClientApp 可见函数；当前函数执行边界是 ClientApp grant，不是明确的 task-level function scope。
-- `BusinessAgentTaskScopedTokenRuntimeStore` 使用 JVM 内存缓存保存运行时明文 token，重启、多实例、取消和恢复行为需要单独验证。
+- `workerId` 已能在 Business Agent launcher 成功后落到 token；`workerLeaseId` 目前只是 nullable schema 预留，Gateway 尚未验证独立 Worker principal/credential、lease 或 PoP，不能把 Worker 绑定标记完成。
+- `generation` 当前固定为 1，尚无 resume/重调度轮换；单 token 和按 task 批量撤销服务虽已落地，但 pause/terminal/cancel 尚未调用，不能把终态失效标记完成。
+- `BusinessAgentTaskScopedTokenRuntimeStore` 仍使用单 JVM 内存缓存保存运行时明文 token；v2 只允许 `tenant + session + task` 精确键，缺少 taskId 不再退化为 session token；hash-conditional removal 可避免撤销旧 token 时删除同 task 的新 token，但重启、多实例恢复仍未解决。
 
 ### 审批、恢复与旧接口
 
@@ -132,7 +139,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ### credential 与审计生命周期
 
-- 本次主源码静态扫描未发现完整的 ClientApp runtime/task token 撤销、轮换和终态传播 API 闭环；不能排除存在运维或数据库流程，需运行态确认。
+- task token 已增加单 token/按 task 批量撤销 service 与撤销字段，但尚无面向可信 principal 的管理入口，也未接入 pause/terminal/cancel、generation 轮换或跨实例恢复；ClientApp runtime credential 的完整撤销/轮换闭环仍待确认。
 - `ClientAppUserGrantService` 会保存和解析 upstream user token；主源码中未见应用层加密包装，数据库/TDE/密钥管理需基础设施确认。
 - `BusinessFunctionRuntimeAuditService` 是 best-effort，写失败只记录 warn；Worker Gateway 的部分授权拒绝发生在 invoke audit 之前，未见统一持久化拒绝事件。
 
@@ -141,8 +148,8 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 | 待证项 | 验证方式 | 门禁 |
 |---|---|---|
 | ClientApp/upstream user mapping/grant 的唯一性和生命周期 | 本地配置、grant 数据、账号生命周期与负向测试 | 不阻塞 dev/internal；未形成证据前 `external-enabled` 保持 `false` |
-| runtime/task token 的撤销、轮换、过期传播 | API/DB/缓存演练，含重启与多实例 | 未通过前不宣称 token 生命周期闭环 |
-| task terminal/cancel 后 token 是否立即失效 | 创建任务、捕获 token、完成/取消后重放 | AC-05 未通过 |
+| runtime/task token 的撤销、轮换、过期传播 | 单 token 与按 task 批量撤销及 hash-conditional alias cleanup 已有定向测试；仍需 API/DB/缓存演练，含重启、多实例和 generation 轮换 | 只登记首个撤销切片，不宣称 token 生命周期闭环 |
+| task terminal/cancel 后 token 是否立即失效 | 已有按 tenant/task 批量撤销 service，但尚未接入终态；创建任务、捕获 token、完成/取消后重放 | AC-05 未通过 |
 | 同 tenant/Agent 下跨 ClientApp/user 读取 | 双 ClientApp/user task/session 负向矩阵 | 未通过前外部隔离不可签收 |
 | 旧 LangGraph/Claude/Codex API 本仓消费者 | PC、Mobile、SDK、CLI、L3、Worker、canary 的静态引用、契约测试和 clean build | 未完成迁移与验证前不得删除；不要求外部客户流量或静默窗口 |
 | 非 loopback 与空 Token 的实际部署 | 环境变量、启动参数、监听地址、网络策略与 readiness 响应 | 本地契约门禁已通过，真实网络部署未验证；external enablement 保持未批准 |
@@ -155,9 +162,9 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 | 决策 | 2026-07-14 已批准基线 | Owner | 当前执行状态 |
 |---|---|---|---|
 | upstream user 证明 | ODR-142-002 已批准：当前 dev/internal 使用 ClientApp credential + mapping/grant，审计标记 `client-app-delegated`；signed assertion 是未来真正外部开放门禁 | ClientApp/Upstream/Security | 不阻塞当前 P2；门禁未齐时 `external-enabled=false` |
-| task function scope | ODR-142-003：Gateway capability + 明确 `BusinessFunctionId@version`/policy snapshot，并与 tenant/ClientApp、subject mapping/user、skill、function grant 及 task/session/lease 当前状态求交集 | Business Agent/Security | 不发布新 task token 契约 |
-| token 生命周期 | ODR-142-003：30 分钟租约、上限 60 分钟；暂停/终态失效；支持人工/批量撤销和 generation 轮换 | Business Agent/Operations | external enablement 不批准 |
-| Worker 绑定 | ODR-142-003：task token 绑定逻辑 lease，Gateway 还须校验独立 Worker principal/credential 或 PoP；重调度签发新 generation 并撤销旧 token | Worker/Platform | 跨 Worker 重放风险保持开放 |
+| task function scope | ODR-142-003：Gateway capability + 明确 `BusinessFunctionId@version`/policy snapshot，并与 tenant/ClientApp、subject mapping/user、skill、function grant 及 task/session/lease 当前状态求交集 | Business Agent/Security | v2 首切片已快照 ClientApp ENABLED function grants，并在 list/schema/invoke 与当前授权求交；精确按任务最小能力选择、旧 token 迁移和 lease 交集仍待实施 |
+| token 生命周期 | ODR-142-003：30 分钟租约、上限 60 分钟；暂停/终态失效；支持人工/批量撤销和 generation 轮换 | Business Agent/Operations | TTL、单 token 撤销、按 task 批量撤销及 runtime alias cleanup 已实施；终态/暂停接线、可信管理入口、generation 轮换和跨实例恢复未实施，external enablement 不批准 |
+| Worker 绑定 | ODR-142-003：task token 绑定逻辑 lease，Gateway 还须校验独立 Worker principal/credential 或 PoP；重调度签发新 generation 并撤销旧 token | Worker/Platform | 已增加 `workerId/workerLeaseId` schema 且 launcher 成功后写入 `workerId`；lease/principal/PoP 未签发或校验，跨 Worker 重放风险保持开放 |
 | 外部 Codex/LangGraph 安全上限 | ODR-142-004：双模式、默认拒绝、`workspace-write`、任务工具 egress 默认拒绝并保留控制面/LLM 基础 allowlist、非 loopback 缺凭据 unready/fail closed | Worker/Security | 显式开关和 unready/fail-closed 骨架已实施；完整 workspace/tool/sandbox/network 安全上限未实施，external 保持未启用 |
 | 旧 Provider API、deprecated SPI/DTO | ODR-142-007 已批准：不设生产或外部兼容窗口；本仓消费者迁移、安全语义复核和 clean build 后在 1.4.2 同版本删除 | Provider/API/SDK owner | 删除前不扩大消费者；运行中任务状态按版本化迁移规则收口 |
 | 审计保证级别 | ODR-142-005：本地关键状态事务 outbox；无状态拒绝可靠落档；远程调用意图/结果分段记录；高频遥测 best-effort | Security/Operations | 不宣称关键拒绝或外部副作用审计完备 |
@@ -184,9 +191,16 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ### BusinessTask、Gateway、函数与审计
 
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/config/BusinessTaskScopedTokenProperties.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/dto/BusinessTaskScopedTokenDTO.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/model/entity/BusinessTaskScopedTokenEntity.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/repository/BusinessTaskScopedTokenRepository.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentTaskScopedTokenRuntimeStore.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessTaskScopedTokenLifecycleService.java`
+- `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessTaskScopedTokenPolicyService.java`
+- `docs/migration/2026-07-14-business-task-token-v2.sql`
+- `docs/migration/2026-07-14-business-task-token-v2-rollback.sql`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/WorkerGatewayController.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/WorkerGatewayService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessFunctionAuthorizationService.java`
@@ -238,11 +252,55 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ### 自检与测试证据
 
-- Java 最终三模块定向矩阵：74 tests，10/10 reactor SUCCESS；平台门禁 8 项 + Open API mapping 40 项，平台批次合计 48 项。
+- `EXEC-142-008` 当时的 Java 三模块定向矩阵：74 tests，10/10 reactor SUCCESS；平台门禁 8 项 + 当时 Open API mapping 40 项，平台批次合计 48 项。后续 capability 修复后的 Open API 43 项证据见下方 task capability check-in。
 - Codex SDK Worker：163 passed / 1 skipped，type-check 和 build 通过。
 - Codex app-server Worker：272 passed / 1 skipped，type-check 和 build 通过。
 - LangGraph Biz Worker：766 passed，build 通过。
 - self_check_decision: `continue-in-progress`；本批只达到实施 check-in，未执行真实外部网络、手工 ClientApp 链路、浏览器体验或正式质量闸门。
+
+## Task capability v2 与 Codex Biz route 实施 Check-in（当前工作树）
+
+### 已实施事实
+
+1. `BusinessTaskScopedTokenPolicyService` 统一初始化新 token：版本 `2`、generation `1`、audience `WORKER_GATEWAY`、assurance `client-app-delegated`，并快照签发时 ENABLED 的 ClientApp function grants 为排序后的结构化 `{functionId, version}` JSON 列表，避免字符串拼接碰撞。
+2. `BusinessAgentTaskService.createTask` 与 `issueOpenApiTaskScopedToken` 均改用 32 字节 `SecureRandom` + Base64URL 的 `btt_` token，并调用统一 policy initializer；数据库继续只保存 token hash。
+3. `BusinessTaskScopedTokenLifecycleService` 以 `REQUIRES_NEW` 先提交 token 再启动 Worker，并从明文自行计算 hash；bind/revoke 使用悲观写锁与实体版本，task/session/worker 首次绑定后不可改写；runtime alias 只在事务提交后注册/移除。launcher、Open API submit/null task/bind 失败或外层任务事务回滚时，会在独立事务撤销已签发 token。
+4. 已增加单 token 撤销和 `tenantId + taskId` 批量撤销 service，记录 `REVOKED`、`revokedAt`、`revokedBy`、`revokeReason`，并清理 business-task、worker-task、worker-session aliases；重复撤销保持幂等。
+5. `WorkerGatewayService` 对 v2 version/generation/audience/assurance/function scope fail closed；list 过滤到 token snapshot，schema/invoke 要求函数同时存在于 token snapshot 和当前授权链。
+6. launcher 配置新增 `NAVIGATOR_TASK_TOKEN_TTL`，默认 `PT30M`；`NAVIGATOR_TASK_TOKEN_MAX_TTL` 默认且硬封顶 `PT60M`，非正配置回退安全默认值。
+7. `CodexBusinessAgentWorkerTaskLauncher` 改为调用 `CodexBizTaskProvider.createTaskDirect`，由 Provider 固定 `codex-biz-worker` route 并执行 Biz 参数规范化；不再调用固定默认 `codex-worker` 的 `CodexTaskService.createTaskDirect`。
+
+### Schema 变化
+
+| 字段 | 约束/语义 | 当前状态 |
+|---|---|---|
+| `rowVersion` | JPA `@Version` | 实现与悲观写锁共同保护 bind/revoke；现有 H2 JPA 用例只提供组合时序下的最终状态证据，不证明确定性的锁交错 |
+| `tokenVersion`、`generation` | 非空；新签发分别为 `2`、`1` | 已写入并由 Gateway 校验；forward/rollback 脚本已在一次性 MySQL 8.0.44/8.4.8 容器验证（含幂等、旧行 fail-closed 回填和回滚），共享/项目数据库迁移和 launcher `ddl-auto=validate` 尚未执行；generation 轮换待办 |
+| `audience`、`identityAssurance` | 非空，长度 64；当前为 `WORKER_GATEWAY`、`client-app-delegated` | 已写入并 fail closed 校验；不等于 upstream user 独立强证明 |
+| `functionScopeJson` | 非空 LOB；JSON 对象数组，元素为 `{functionId, version}` | 已用于 list/schema/invoke 精确字段匹配；当前快照来源是签发时 ClientApp ENABLED grants，不是 per-intent 最小函数选择 |
+| `workerId`、`workerLeaseId` | nullable，长度 128 | `workerId` 可在 launcher 成功后写入；`workerLeaseId` 仅预留，未签发/校验 |
+| `issuedAt`、`expiresAt` | 非空 | 默认 30 分钟，硬上限 60 分钟 |
+| `revokedAt`、`revokedBy`、`revokeReason` | nullable；actor 128、reason 512 | 单 token/按 task 批量撤销已写入；可信控制面入口与审计 outbox 待办 |
+
+已登记 `docs/migration/2026-07-14-business-task-token-v2.sql` 与对应 rollback：前向脚本幂等增加 12 个字段，将旧行回填为 Gateway 必然拒绝的 legacy claims，并补齐非空约束；rollback 先撤销 ACTIVE token，再删除 v2 scope/lifecycle 字段，禁止旧代码把原 scoped token 当宽 token 接受。forward/rollback 脚本已在一次性 MySQL 8.0.44 与 8.4.8 容器验证（含第二次重复执行、旧行回填、撤销和回滚检查）；共享/项目数据库迁移和 launcher `ddl-auto=validate` 尚未执行。
+
+### 定向测试证据
+
+- task capability v2 首轮定向矩阵发现 4 处旧测试夹具与新 v2 claims/function snapshot 契约不一致；修正夹具后既有矩阵 73 tests 通过。该结论是测试基线修正，不把 4 个夹具问题记为生产缺陷。
+- 随后新增单 token/按 task/按明文撤销、hash-conditional alias cleanup、安全随机 token、plain/hash 不变量、绑定 tuple 不可变、launcher/Open API/外层回滚补偿、无 taskId fail-closed，以及 bind/revoke 组合时序下最终不复活的测试。
+- 最终 `mvn -B -pl business-agent-module -am test`：5/5 reactor SUCCESS，770 tests、0 failure/error/skip；其中 `business-agent-module` 510 tests。真实 H2 JPA 用例 2/2 提供 `REQUIRES_NEW` + rollback compensation 及 bind/revoke 组合时序下 token 最终不复活的证据；该用例不声称确定性复现或证明悲观锁交错。
+- 修复后跨模块定向矩阵为 Open API mapping 43 + LangGraph Business Agent E2E 2 + Codex launcher/route、`CodexBizTaskProvider`、`CodexTaskService` 92，共 137 tests、10/10 reactor SUCCESS。Open API 子集覆盖 submit 已知/意外异常、空 task/taskId、bind 失败，以及补偿撤销自身失败不遮蔽原响应或异常。
+- forward/rollback 脚本已在一次性 MySQL 8.0.44/8.4.8 容器验证（含幂等及回滚前撤销 ACTIVE token）；共享/项目数据库迁移、launcher `ddl-auto=validate`、真实 Worker、双 ClientApp/user 手工矩阵、浏览器体验、hosted CI 和正式验收均未执行。
+
+### 明确保留的未完成项
+
+- `workerLeaseId` 没有签发，Gateway 没有独立 Worker principal/credential、lease 或 PoP 校验。
+- generation 没有在 resume/重调度时递增；旧 generation 没有自动撤销。
+- 单 token/批量撤销尚未接入 task terminal、pause、cancel 和审批恢复状态机，也没有可信管理 Controller。
+- runtime store 仍是单 JVM 内存态；重启、多实例恢复和跨实例撤销传播未解决。
+- tool message 只校验 v2 token 基础 claims，尚未形成与具体 `functionId@version` 一致的完整能力校验。
+- upstream user runtime principal、Open API task/session ownership、关键状态 outbox/可靠拒绝审计和 P3 Session/Task ownership 均未在本批实现。
+- Codex Biz route 修正只解决 Provider 路由正确性；其 `danger-full-access` / `never` 等 internal-dev 默认策略未因此成为 external-ready，外部执行策略 pending 门禁保持不变。
 
 ## 实施步骤
 
@@ -266,6 +324,8 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 2. 固化 task/session、worker pool/lease、skill、允许函数 scope、签发时间、过期时间和状态。
 3. 定义 cancel、complete、expire、人工 revoke、ClientApp/user grant 撤销后的传播。
 4. 替换或增强仅内存运行时注入方案，至少形成重启和多实例可验证的恢复策略。
+
+当前进度：v2 新签发、ClientApp function grant 快照、30/60 分钟 TTL、单 token/按 task 批量撤销及 hash-conditional runtime alias cleanup 已实现；旧 token 兼容迁移、worker lease、generation 轮换、终态传播和跨实例恢复仍未实现。
 
 ### 4. 收敛 Gateway 与 Open API 资源绑定
 
@@ -302,7 +362,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ## 自动化测试计划
 
-当前状态：`partial-passed`；external switch/readiness/fail-closed 与平台消费已有本地自动化证据，credential 生命周期、identity、task token、函数 scope 和审计矩阵仍 `not-run`。
+当前状态：`partial-passed`；external switch/readiness/fail-closed、平台消费和 task capability v2 首个定向矩阵已有本地自动化证据；credential 全生命周期、runtime identity、Worker principal/lease、终态/generation、跨实例、Open API ownership 和审计矩阵仍 `not-run`。
 
 ### Credential 与 identity
 
@@ -403,5 +463,5 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 ## 生产路由与外部契约状态
 
 - 当前：`production_routing_changed: no`，`production_enablement: not-applicable`；external contract 仅新增显式关闭/未就绪错误语义，没有启用 external-enabled。
-- 实施影响：平台 `/api/v1/open` 路由面默认关闭，Worker 仅在显式 external-enabled 配置意图下新增 unready/503 语义；internal-dev 的监听、空 Token 与业务入口认证行为保留，但平台对 health 缺失或显式 `ready=false` 的路由判定已收紧，可能影响内部异常场景。新 token scope、identity、审计和旧接口删除仍未实施。
+- 实施影响：平台 `/api/v1/open` 路由面默认关闭，Worker 仅在显式 external-enabled 配置意图下新增 unready/503 语义；internal-dev 的监听、空 Token 与业务入口认证行为保留，但平台对 health 缺失或显式 `ready=false` 的路由判定已收紧，可能影响内部异常场景。task capability v2 首切片与 Codex Biz route 修正已在当前工作树实施，但旧 token/schema 迁移、Worker principal/lease、终态轮换、identity、ownership、审计和旧接口删除仍未完成。
 - 启用门禁：`external-enabled` 必须显式且默认 `false`；signed assertion 或等强用户证明、SDK/调用方迁移、负向矩阵、审计、安全上限与回滚证据缺一不可。隔离测试通过不自动批准真正外部开放。

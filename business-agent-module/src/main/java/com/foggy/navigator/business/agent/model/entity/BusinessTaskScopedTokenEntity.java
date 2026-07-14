@@ -16,6 +16,9 @@ public class BusinessTaskScopedTokenEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Version
+    private Long rowVersion;
+
     @Column(length = 64, nullable = false, unique = true)
     private String tokenId;
 
@@ -57,6 +60,39 @@ public class BusinessTaskScopedTokenEntity {
 
     @Column(length = 32, nullable = false)
     private String status;
+
+    @Column(nullable = false)
+    private Integer tokenVersion;
+
+    @Column(nullable = false)
+    private Integer generation;
+
+    @Column(length = 64, nullable = false)
+    private String audience;
+
+    @Column(length = 64, nullable = false)
+    private String identityAssurance;
+
+    @Lob
+    @Column(nullable = false)
+    private String functionScopeJson;
+
+    @Column(length = 128)
+    private String workerId;
+
+    @Column(length = 128)
+    private String workerLeaseId;
+
+    @Column(nullable = false)
+    private LocalDateTime issuedAt;
+
+    private LocalDateTime revokedAt;
+
+    @Column(length = 128)
+    private String revokedBy;
+
+    @Column(length = 512)
+    private String revokeReason;
 
     @Column(nullable = false)
     private LocalDateTime expiresAt;

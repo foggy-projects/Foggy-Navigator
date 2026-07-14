@@ -183,7 +183,15 @@ class RestAdapterUpstreamE2ETest {
                 java.util.List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, identityRepository, java.util.List.of());
+        BusinessTaskScopedTokenPolicyService tokenPolicyService = new BusinessTaskScopedTokenPolicyService(
+                functionGrantRepository,
+                objectMapper,
+                new com.foggy.navigator.business.agent.config.BusinessTaskScopedTokenProperties());
+        BusinessTaskScopedTokenLifecycleService tokenLifecycleService =
+                new BusinessTaskScopedTokenLifecycleService(tokenRepository, tokenPolicyService, tokenRuntimeStore);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService,
+                bizWorkerPoolService, resourceResolver, userGrantService1, skillRegistryService,
+                businessAgentSessionService, identityRepository, tokenLifecycleService, java.util.List.of());
         BusinessFunctionAuthorizationService authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService1, skillRegistryService, functionRegistryService);
 
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
@@ -199,7 +207,7 @@ class RestAdapterUpstreamE2ETest {
         );
         suspensionService = new BusinessFunctionSuspensionService(suspensionRepository, eventPublisher, auditService, authorizationService, adapterInvoker);
 
-        workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, userGrantService1, suspensionService, adapterInvoker, objectMapper, auditService);
+        workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, userGrantService1, suspensionService, adapterInvoker, objectMapper, auditService, tokenPolicyService);
     }
 
     @AfterEach
@@ -519,6 +527,8 @@ class RestAdapterUpstreamE2ETest {
         funcGrant.setStatus("ENABLED");
         when(functionGrantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion(TENANT, APP_ID, FUNCTION_ID, VERSION))
                 .thenReturn(Optional.of(funcGrant));
+        when(functionGrantRepository.findByTenantIdAndClientAppId(TENANT, APP_ID))
+                .thenReturn(List.of(funcGrant));
     }
 
     private BusinessSuspensionResumeDecisionEvent captureBusinessDecisionEvent() {

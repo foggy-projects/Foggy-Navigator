@@ -93,6 +93,13 @@ public class OpenApiController {
     private static final String TASK_DIRECTORY_REQUIRED = "TASK_DIRECTORY_REQUIRED";
     private static final String TASK_DIRECTORY_REQUIRED_MESSAGE =
             TASK_DIRECTORY_REQUIRED + ": directoryId is required for Actor-owned BizWorker task";
+    private static final String BUSINESS_RUNTIME_TOKEN_REVOKED_BY = "system";
+    private static final String BUSINESS_RUNTIME_SUBMIT_FAILURE_REASON =
+            "open api task submission failed";
+    private static final String BUSINESS_RUNTIME_MISSING_TASK_REASON =
+            "open api task submission returned no task id";
+    private static final String BUSINESS_RUNTIME_BIND_FAILURE_REASON =
+            "open api task token binding failed";
     private static final int MAX_STRUCTURED_OUTPUT_CONTENT_LENGTH = 64 * 1024;
 
     private final OpenApiProvisioningService provisioningService;
@@ -550,14 +557,47 @@ public class OpenApiController {
                     .attachments(normalizedAttachments.isEmpty() ? null : normalizedAttachments)
                     .build());
         } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            revokeBusinessRuntimeTokenAfterFailure(
+                    tenantId,
+                    businessRuntimeToken,
+                    BUSINESS_RUNTIME_SUBMIT_FAILURE_REASON);
             return RX.failB(firstNonBlank(
                     sanitizeDiagnosticText(e.getMessage()),
                     "open api request rejected"));
+        } catch (RuntimeException e) {
+            revokeBusinessRuntimeTokenAfterFailure(
+                    tenantId,
+                    businessRuntimeToken,
+                    BUSINESS_RUNTIME_SUBMIT_FAILURE_REASON);
+            throw e;
         }
-        if (task != null && !StringUtils.hasText(task.getContextId())) {
+        if (task == null || !StringUtils.hasText(task.getId())) {
+            revokeBusinessRuntimeTokenAfterFailure(
+                    tenantId,
+                    businessRuntimeToken,
+                    BUSINESS_RUNTIME_MISSING_TASK_REASON);
+            return RX.failB(BUSINESS_RUNTIME_MISSING_TASK_REASON);
+        }
+        if (!StringUtils.hasText(task.getContextId())) {
             task.setContextId(contextId);
         }
-        bindBusinessRuntimeTokenToWorkerTaskIfPossible(tenantId, businessRuntimeToken, task);
+        try {
+            bindBusinessRuntimeTokenToWorkerTaskIfPossible(tenantId, businessRuntimeToken, task);
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            revokeBusinessRuntimeTokenAfterFailure(
+                    tenantId,
+                    businessRuntimeToken,
+                    BUSINESS_RUNTIME_BIND_FAILURE_REASON);
+            return RX.failB(firstNonBlank(
+                    sanitizeDiagnosticText(e.getMessage()),
+                    "open api request rejected"));
+        } catch (RuntimeException e) {
+            revokeBusinessRuntimeTokenAfterFailure(
+                    tenantId,
+                    businessRuntimeToken,
+                    BUSINESS_RUNTIME_BIND_FAILURE_REASON);
+            throw e;
+        }
         if (clientContextJson != null) {
             sessionQueryService.updateClientContextJson(contextId, agentOwnerUserId, route.agentId(), clientContextJson);
         }
@@ -1401,6 +1441,37 @@ public class OpenApiController {
                 businessRuntimeToken,
                 task.getId(),
                 resolveTaskSessionId(task));
+    }
+
+    private void revokeBusinessRuntimeTokenAfterFailure(
+            String tenantId,
+            String businessRuntimeToken,
+            String reason) {
+        if (!StringUtils.hasText(businessRuntimeToken)) {
+            return;
+        }
+        BusinessAgentTaskService service = businessAgentTaskService.getIfAvailable();
+        if (service == null) {
+            log.warn("Unable to compensate Open API business runtime token: tenantId={}, reason={}, "
+                            + "businessAgentTaskService=unavailable",
+                    tenantId,
+                    reason);
+            return;
+        }
+        try {
+            service.revokeOpenApiTaskScopedToken(
+                    tenantId,
+                    businessRuntimeToken,
+                    BUSINESS_RUNTIME_TOKEN_REVOKED_BY,
+                    reason);
+        } catch (RuntimeException revocationFailure) {
+            // Do not let best-effort compensation hide the original submit/bind failure.
+            // The token and exception message are deliberately excluded from the log.
+            log.warn("Failed to compensate Open API business runtime token: tenantId={}, reason={}, errorType={}",
+                    tenantId,
+                    reason,
+                    revocationFailure.getClass().getSimpleName());
+        }
     }
 
     private String resolveTaskSessionId(A2aTask task) {
