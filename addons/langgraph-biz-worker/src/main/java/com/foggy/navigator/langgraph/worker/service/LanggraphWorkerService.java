@@ -119,10 +119,13 @@ public class LanggraphWorkerService {
         if (worker == null) {
             throw new IllegalArgumentException("LangGraph worker is required");
         }
-        worker.setStatus("ONLINE");
         if (health == null) {
+            worker.setStatus("OFFLINE");
             return;
         }
+        // Missing `ready` keeps legacy Worker compatibility. An explicit false
+        // must never be promoted to ONLINE merely because /health returned 200.
+        worker.setStatus(Boolean.FALSE.equals(health.getReady()) ? "OFFLINE" : "ONLINE");
         if (StringUtils.hasText(health.getHostname())) {
             worker.setHostname(health.getHostname().trim());
         }

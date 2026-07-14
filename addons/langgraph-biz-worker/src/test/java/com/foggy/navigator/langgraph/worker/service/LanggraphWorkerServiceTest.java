@@ -206,6 +206,30 @@ class LanggraphWorkerServiceTest {
         assertEquals("invoke_business_agent", spawnAgent.get("tool_name"));
     }
 
+    @Test
+    void applyHealthSnapshotDoesNotPromoteExplicitlyUnreadyWorker() {
+        LanggraphWorkerEntity worker = worker("worker_01", "UNKNOWN");
+        LanggraphWorkerHealthDTO health = new LanggraphWorkerHealthDTO();
+        health.setReady(false);
+        health.setMode("external-enabled");
+        health.setReasons(List.of("EXTERNAL_EXECUTION_POLICY_PENDING"));
+        health.setHostname("external-worker-host");
+
+        service.applyHealthSnapshot(worker, health);
+
+        assertEquals("OFFLINE", worker.getStatus());
+        assertEquals("external-worker-host", worker.getHostname());
+    }
+
+    @Test
+    void applyHealthSnapshotTreatsMissingResponseAsOffline() {
+        LanggraphWorkerEntity worker = worker("worker_01", "ONLINE");
+
+        service.applyHealthSnapshot(worker, null);
+
+        assertEquals("OFFLINE", worker.getStatus());
+    }
+
     private LanggraphWorkerEntity worker(String workerId, String status) {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         worker.setWorkerId(workerId);
