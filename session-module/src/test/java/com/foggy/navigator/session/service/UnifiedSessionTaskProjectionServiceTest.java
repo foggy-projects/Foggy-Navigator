@@ -92,6 +92,22 @@ class UnifiedSessionTaskProjectionServiceTest {
         assertEquals(1_783_685_415_123L, projected.getCreatedAtEpochMs());
     }
 
+    @Test
+    void taskProjectionReadsStructuredOutputFromVersionedProviderState() {
+        SessionTaskEntity entity = new SessionTaskEntity();
+        entity.setTaskId("task-structured-output");
+        entity.setSessionId("session-structured-output");
+        entity.setTaskStateJson(ProviderStateCodec.mergeTaskValue(
+                null,
+                "langgraph-biz-worker",
+                ProviderStateCodec.FIELD_STRUCTURED_OUTPUT,
+                "{\"type\":\"OPEN_ARTIFACT\"}"));
+
+        var projected = service.toDispatchTaskDTO(entity);
+
+        assertEquals("{\"type\":\"OPEN_ARTIFACT\"}", projected.getStructuredOutput());
+    }
+
     public static class LegacySearchPage {
         private final List<Object> results;
         private final long total;

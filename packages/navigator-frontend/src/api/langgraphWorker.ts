@@ -38,15 +38,17 @@ export async function triggerHealthCheck(workerId: string): Promise<ClaudeWorker
 }
 
 /**
- * Approve or reject a pending Skill approval for a langgraph-biz-worker task.
+ * Respond to a pending Skill approval through the unified Task API.
+ *
+ * The authenticated UI principal is the reviewer authority; caller-supplied
+ * reviewer identity fields are deliberately excluded from this body.
  */
 export async function approveTask(
   taskId: string,
   form: {
-    approvalResult: string
+    approvalResult: 'approved' | 'rejected'
     comment?: string
-    reviewedBy?: string
   },
 ): Promise<void> {
-  await client.post(`/langgraph-tasks/${taskId}/approve`, form)
+  await client.post(`/tasks/${encodeURIComponent(taskId)}/respond`, form)
 }

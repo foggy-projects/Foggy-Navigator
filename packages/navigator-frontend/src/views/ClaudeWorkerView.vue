@@ -6598,9 +6598,10 @@ async function handleSkillApprovalRespond(paneId: string, taskId: string, decisi
 
   try {
     const { approveTask } = await import('@/api/langgraphWorker')
-    await approveTask(taskId, { approvalResult: decision, comment })
-    pane.chatState.resolveSkillApproval(taskId, decision === 'approved' ? 'approved' : 'rejected')
-    syncSidebarAfterRespond(pane, decision === 'approved' ? 'allow' : 'deny')
+    const approvalResult = decision === 'approved' ? 'approved' : 'rejected'
+    await approveTask(taskId, { approvalResult, comment })
+    pane.chatState.resolveSkillApproval(taskId, approvalResult)
+    syncSidebarAfterRespond(pane, approvalResult === 'approved' ? 'allow' : 'deny')
   } catch {
     ElMessage.error('Skill approval response failed')
   }

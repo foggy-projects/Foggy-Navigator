@@ -42,6 +42,8 @@ public class DispatchTaskDTO {
     private Long durationMs;
     private Integer numTurns;
     private String resultText;
+    /** Provider-produced structured result payload serialized as JSON. */
+    private String structuredOutput;
     private String errorMessage;
     private Integer lastAckedSeq;
     private LocalDateTime lastOutputAt;

@@ -580,6 +580,7 @@ final class UnifiedSessionTaskProjectionService {
                 .durationMs(entity.getDurationMs())
                 .numTurns(entity.getNumTurns())
                 .resultText(entity.getResultText())
+                .structuredOutput(asString(state.get(ProviderStateCodec.FIELD_STRUCTURED_OUTPUT)))
                 .errorMessage(entity.getErrorMessage())
                 .lastAckedSeq(entity.getLastAckedSeq())
                 .lastOutputAt(entity.getLastOutputAt())

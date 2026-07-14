@@ -363,7 +363,7 @@ if RUN_SMOKE_TASK:
             try:
                 worker_task = request(
                     "GET",
-                    f"/api/v1/langgraph-tasks/{worker_task_id}?userId={admin_user_id}",
+                    f"/api/v1/tasks/{worker_task_id}",
                     token=admin_token,
                 )
             except Exception as exc:

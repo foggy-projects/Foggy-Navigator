@@ -30,6 +30,7 @@ public final class ProviderStateCodec {
     public static final String FIELD_RUNTIME_ACCEPTANCE_STATE = "runtimeAcceptanceState";
     public static final String FIELD_GEMINI_SESSION_ID = "geminiSessionId";
     public static final String FIELD_CONTEXT_ID = "contextId";
+    public static final String FIELD_STRUCTURED_OUTPUT = "structuredOutput";
     public static final String FIELD_AGENT_TEAMS_CONFIG_ID = "agentTeamsConfigId";
     public static final String FIELD_CHECKPOINTS = "checkpoints";
 

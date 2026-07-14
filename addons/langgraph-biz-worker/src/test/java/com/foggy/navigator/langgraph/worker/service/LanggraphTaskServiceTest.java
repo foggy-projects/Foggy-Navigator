@@ -19,6 +19,7 @@ import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -107,6 +108,7 @@ class LanggraphTaskServiceTest {
         assertInstanceOf(TaskCommandProvider.class, service);
         assertFalse(service instanceof TaskListingProvider);
         assertFalse(service instanceof WorkerSessionQueryProvider);
+        assertTrue(service.supports(TaskQueryCapability.RESPOND_TO_TASK));
     }
 
     // -- createTask ----------------------------------------------------------
@@ -516,6 +518,15 @@ class LanggraphTaskServiceTest {
             assertEquals("COMPLETED", event.getStatus());
             assertEquals("AWAITING_REPLY", event.getInteractionState());
             assertEquals(Boolean.FALSE, event.getRecoverable());
+        }
+
+        @Test
+        void providerLookupProjectsStructuredOutput() {
+            existingTask.setStructuredOutput("{\"type\":\"OPEN_ARTIFACT\"}");
+
+            var projected = service.getTaskById("lgt_existing").orElseThrow();
+
+            assertEquals("{\"type\":\"OPEN_ARTIFACT\"}", projected.getStructuredOutput());
         }
 
         @Test
