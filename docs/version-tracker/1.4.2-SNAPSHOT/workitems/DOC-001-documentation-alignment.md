@@ -31,7 +31,8 @@ owner: root-documentation
 - external_contract_changed: no
 - implementation_started: yes
 - testing: in-progress
-- acceptance_status: not-started
+- acceptance_status: rejected
+- acceptance_record: [Version Signoff](../acceptance/version-signoff.md)
 
 ## 背景
 
@@ -211,7 +212,7 @@ Foggy Navigator 当前是内部多 Worker 远程编程工作台，主线是统�
 
 1. 先更新根 README、CLAUDE、系统总览和 A2A 架构，再更新导航、模块摘要与操作指南。
 2. 统一产品主线、内部/外部边界、编译期模块化单体、单 JVM SSE 和 Provider/Worker 术语。
-3. 当前构建说明与 [OPT-001 构建基线](./OPT-001-build-and-ci-baseline.md) 保持一致；只把本地实际通过的 Node、pnpm、frozen install、frontend matrix 和 Java clean test 写为本地证据，hosted CI/nightly 继续标记未运行。
+3. 当前构建说明与 [OPT-001 构建基线](./OPT-001-build-and-ci-baseline.md) 保持一致；本地 Node、pnpm、frozen install、frontend/Worker/Java clean 证据与截至正式闸门的最新已验证实现 head 对应 Repository CI run `29324741945` 的 7 jobs success 分开记录，branch protection 与修复后 nightly 继续标记未运行。
 4. 当前安全说明与 GOV-001/002/003 保持一致，不扩大到全平台 Spring Security 重写。
 
 完成判据：当前入口间不存在相互冲突的主线、信任边界和架构声明。

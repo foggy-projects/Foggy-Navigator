@@ -57,8 +57,9 @@ Foggy Navigator 当前是内部系统，核心目标是：
 |---|---|---|
 | 已确认事实 | 本文产品定位、版本目标、治理边界和非目标 | 可作为需求基线，不代表代码已实现 |
 | 用户提供的静态线索 | 单 JVM SSE、addon 编译期依赖、重类、前端类型错误、lockfile 忽略、候选孤儿文件等 | 执行 Agent 必须复核路径、引用和当前分支状态 |
-| 本轮构建实施与本机证据 | 已落地 Node `22.23.1`、pnpm `10.34.5`、根 lockfile、前端 workspace、required/nightly workflow；精确 frozen install、前端、五类 Worker clean 等价矩阵通过；关闭 BUG-002 后根 Java clean test 17/17 reactor、2304 tests 通过 | Worker 结果来自独立 clean worktree，Python 本机为 3.12.3；根 Java 结果有 launcher Surefire fork JVM 退出超时告警；GitHub runner、分支保护、nightly、`clean verify` 和真实浏览器仍未完成，不得据此宣称合并门禁、体验或正式验收通过 |
-| P2 首批本机实施与测试证据 | `12cbe697`、`5d62707b`、`cce75f1b` 已落地平台/三类 Worker default-off、external-enabled、readiness 和平台不误路由；Java 74 tests/10 reactor、Codex SDK 163 passed/1 skipped、app-server 272 passed/1 skipped、LangGraph 766 passed，Node type-check/build 与 Python build 通过 | 仅证明模式/门禁/readiness 第一批在本机通过；matrix parameter、context path、encoded path 回归已覆盖并修复实际绕过。external 未启用，task token、ClientApp/upstream identity、审计、审批恢复绑定和 ownership 尚无完成证据 |
+| 本轮构建实施与可复现证据 | 已落地 Node `22.23.1`、pnpm `10.34.5`、根 lockfile、前端 workspace、required 候选/nightly workflow；精确 frozen install、前端、五类 Worker clean 等价矩阵通过；Navigator-owned `RX` 兼容层消除了 hosted clean runner 无法解析私有 `foggy-core` 的阻塞；Repository CI run `29323068427` 在 head `9008c554` 的 Java launcher 依赖链、前端、三类 Node Worker、两类 Python Worker共 7 个 job 全部 `success` | hosted 成功证明该提交的 Repository CI 基线；main required checks/branch protection 未配置，修复后 nightly、根 `clean verify` 和生产批准均未完成；本机 Java 日志仍有 launcher Surefire fork JVM 退出超时告警 |
+| 本轮浏览器与隔离数据库证据 | `9d03bee9` 新增显式 opt-in 的双用户 ownership live 用例；一次性 H2、真实注册/登录 UI、Session API、深链、history 和 SSE 上 1 test passed（2.9s，整次 3.9s）；同轮 mock Playwright 为 17 passed、1 live test skipped（35.2s） | 仅覆盖 Session ownership 的 loopback 隔离链路；未使用共享数据库，未建立真实 Provider Task fixture，不代表共享环境、外部网络、生产路由或正式验收通过 |
+| P2/P3 分阶段实施与测试证据 | P2 已落地平台/三类 Worker default-off、external-enabled、readiness、task capability/终态门禁、Worker principal/lease 与 Gateway约束；P3 `2a705e09` 已落地 Session/Task ownership 首批，`9f3f1422` 将 LangGraph 审批切到 unified respond 的可信主体；本机 clean Java、Worker 矩阵、hosted Repository CI 与 Session 双用户隔离浏览器均已有通过证据 | external 仍未启用；ClientApp/upstream user 外部强身份、可靠审计/outbox、external 工具/目录/网络上限、真实 Provider Task、共享数据库和显式 admin/system 通路尚未完成。局部通过不能提升 external readiness 或版本验收状态 |
 | Owner 已确认的开发环境边界 | Monitoring、metadata-query、code-review、echo 与旧 Provider API 不承担上游或生产兼容义务；开发数据可丢弃，允许按完整切片物理删除 | 免除生产流量静默、数据备份/保留和兼容窗口；不免除 dev-only 环境确认、完整 inventory、仓内引用迁移、测试和回滚记录 |
 | 需要运行态确认 | 执行中发现的共享基础设施、生产部署、外部 webhook/调用方或无法归属的数据库、队列和凭据 | 一旦发现即停止对应破坏性动作并重新取得 Owner 授权，不把本次 dev-only 结论扩展到生产 |
 | 决策项 | 八组 ODR 已完成评审；credential authority、mapping/grant 权威源、Provider state 具体迁移和超大类拆分顺序仍属于实施级决策 | 已批准项按评审约束执行；剩余实施级决定必须记录 Owner、日期和影响，不得由执行 Agent静默决定 |
@@ -168,10 +169,10 @@ Foggy Navigator 当前是内部系统，核心目标是：
 Owner 已确认当前范围没有上游或生产兼容义务，开发数据允许丢弃，以下切片可在 P5/P6 物理删除。该授权不允许命令命中共享或生产资源；执行前必须再次确认环境、资源名称与仓内引用。
 
 1. Monitoring：`monitoring-module`、`tools/foggy-monitor`、`MonitoringView.vue`、`api/monitoring.ts`、Security 放行项和 `scripts/start-all.sh` 安装步骤已作为 dev-only 切片物理移除；当前状态为已实施、待随 P5 完成剩余文档与门禁收口，开发数据库与 RabbitMQ 资源无需备份保留。
-2. `metadata-query-module`：本地实施完成；模块目录、根 reactor 条目、launcher 依赖、launcher 专属 bean 断言、专属 Skill 与当前文档已退出现行树。删除后 metadata-config/launcher clean test 15/15 `SUCCESS`，dependency tree 与 clean target 无旧查询依赖；`metadata-config-module` 23 个 tracked files 保留、业务树 diff 为 0。状态为 `completed-local`，启动/浏览器 smoke、hosted CI 与正式验收仍未完成。
+2. `metadata-query-module`：本地实施完成；模块目录、根 reactor 条目、launcher 依赖、launcher 专属 bean 断言、专属 Skill 与当前文档已退出现行树。删除后 metadata-config/launcher clean test 15/15 `SUCCESS`，dependency tree 与 clean target 无旧查询依赖；`metadata-config-module` 23 个 tracked files 保留、业务树 diff 为 0。状态为 `completed-local`；hosted CI 已通过、版本签收已执行并拒绝，专项启动/浏览器 smoke 和模块级签收仍未完成。
 3. `addons/code-review-agent`：源码与切片内配置已成组物理移除；当前状态为已实施、待随 P5 完成剩余文档与门禁收口。如后续扫描发现遗留 GitLab webhook 或 credential，仍须撤销或删除，禁止遗留可调用入口。
-4. `echo-agent`：尚未开始；迁移或删除仓内已知 smoke/test 引用后物理移除 addon、reactor/launcher 装配和 discovery 残留，不得误删 `LocalEchoBusinessFunctionAdapterInvoker`。
-5. 旧 Provider API：尚未开始；在同一阶段迁移或删除 PC、测试、Worker/canary 和其他仓内引用后，直接删除 `/claude-tasks`、`/codex-tasks`、`/langgraph-tasks` 对应 Controller、deprecated SPI 和兼容 DTO，不设置上游/生产弃用或静默窗口。
+4. `echo-agent`：已从生产 reactor、launcher 与运行时物理移除，A2A 生命周期由 test-only 内存 fixture 回归；`LocalEchoBusinessFunctionAdapterInvoker` 保留。状态为 `completed-local / verification-partial`，hosted CI 和版本正式质量/覆盖/验收已执行，版本结论为 `rejected`；Echo 专项体验、PowerShell parser 和模块级签收仍待执行。
+5. 旧 Provider API：三组 `/claude-tasks`、`/codex-tasks`、`/langgraph-tasks` Controller 已在仓内消费者迁移到 unified task routes 后物理移除；Provider legacy bridge、Claude/Codex deprecated task form/DTO 同步退出，LangGraph 审批迁移到可信主体派生的 unified respond。当前 hosted CI 已通过；本项不宣称全仓所有非 Provider `@Deprecated` 均已清零，也不替代后续正式覆盖审计。
 
 每个功能切片必须独立提交、独立验证和独立回滚，不允许通过单次大提交混合删除。静态引用命中是必须处理的仓内依赖，不再被解释为需要外部兼容窗口。
 
@@ -208,11 +209,11 @@ Owner 已确认当前范围没有上游或生产兼容义务，开发数据允�
 | P0 | 产品定位、信任边界、术语、ownership、代码清单和证据分类冻结 | in-progress |
 | P1 | 明确 Node 支持线、精确工具版本、lockfile、Java/前端/Worker clean build 与 CI 矩阵 | in-progress |
 | P2 | external 显式开关、ClientApp/grant 身份基线、credential、task token、审计和 fail-closed 边界；signed assertion 为低优先级后续项 | in-progress；模式/门禁/readiness 第一批已实施，其余边界未完成 |
-| P3 | Session/Task ownership、审批/恢复/取消主体校验和内部 UI 回归 | not-started |
+| P3 | Session/Task ownership、审批/恢复/取消主体校验和内部 UI 回归 | in-progress；统一 ownership 首批与 Session 双用户隔离浏览器链路已通过，真实 Provider Task、共享数据库及显式 admin/system 通路仍待闭合 |
 | P4 | 第一档孤儿项逐项扫描、验证、删除与回滚记录；失效文档对齐 | not-started |
 | P5 | 在 dev-only 授权范围内完成 Monitoring、metadata-query、code-review、echo 的完整 inventory、仓内引用处理和相互独立的物理删除 | in-progress |
-| P6 | 重类与状态 schema 渐进治理；旧 Provider API/SPI/DTO 在仓内消费者迁移后直接删除 | not-started |
-| P7 | 实现质量检查、测试覆盖审计、体验验证和正式签收 | not-started |
+| P6 | 重类与状态 schema 渐进治理；旧 Provider API/SPI/DTO 在仓内消费者迁移后直接删除 | in-progress；旧 Provider 契约子切片已完成并通过 hosted CI，超大类与 Provider state schema 仍未实施 |
+| P7 | 实现质量检查、测试覆盖审计、体验验证和正式签收 | completed-formal-review / rejected |
 
 详细输入、非目标、测试、风险、回滚和完成判据见 [实施计划](../implementation-plan.md)。
 
@@ -257,12 +258,26 @@ Owner 已确认当前范围没有上游或生产兼容义务，开发数据允�
 
 ## Progress Tracking
 
-- development: in-progress；P1 构建基线、P2 模式/门禁/readiness 第一批，以及 Monitoring、`addons/code-review-agent` 两个 dev-only 切片已实施；metadata-query 已 `completed-local`；P2 的 task token/identity/audit/ownership、Echo Agent 和旧 Provider 契约尚未完成
-- testing: partial-passed；除 P1 frozen install、前端、五类 Worker clean 矩阵和 metadata-query 删除后 clean test 外，P2 首批 Java 74 tests/10 reactor、Codex SDK 163 passed/1 skipped、app-server 272 passed/1 skipped、LangGraph 766 passed及对应 build/type-check 均通过；路径 matrix/context/encoded 回归覆盖并修复实际门禁绕过。GitHub runner/分支保护/nightly 实跑、根 reactor verify、完整 P2 负向矩阵、手工体验和正式验收尚未完成
-- experience: not-run
+- development: in-progress；P1 clean 基线、P2 外部边界首批、P3 ownership 首批、Monitoring/metadata-query/code-review/Echo 完整切片和旧 Provider 契约子切片已实施；P2 的外部身份/可靠审计/工具上限、P3 真实 Provider Task 与系统主体、P4 低风险清理、P6 超大类/state schema 仍未完成
+- testing: partial-passed-local-and-hosted；Repository CI run `29323068427` 的 7 个 job 全部成功，Session ownership 隔离 H2 live 浏览器 1 passed，mock Playwright 17 passed/1 opt-in live skipped；main 分支保护/required checks 未配置，修复后 nightly、根 reactor `clean verify`、共享数据库、真实 Provider Task/L3 和完整 P2 负向矩阵仍未完成；正式门禁已执行并因这些关键缺口给出 `rejected`
+- experience: partial-passed-isolated；Session 双用户深链/拒绝反馈已在 loopback H2 验证，不代表共享环境或生产体验批准
 - implementation_plan: [1.4.2 implementation plan](../implementation-plan.md)
 - progress_record: [1.4.2 progress](../progress.md)
-- acceptance_status: not-started
+- quality_gate: [ready-with-risks](../quality/executed-governance-slices-implementation-quality.md)
+- coverage_audit: [needs-more-tests](../coverage/1.4.2-coverage-audit.md)
+- acceptance_status: rejected
+
+## Acceptance Status
+
+- acceptance_status: rejected
+- acceptance_decision: rejected
+- signed_off_by: root-controller
+- signed_off_at: 2026-07-14
+- acceptance_record: [Version Signoff](../acceptance/version-signoff.md)
+- blocking_items: external-runtime-boundary-incomplete, task-ownership-live-matrix-incomplete, p4-and-p6-scope-incomplete, coverage-audit-needs-more-tests
+- follow_up_required: yes
+
+本次签收拒绝的依据是 critical AC 和计划范围存在已知未完成项，不是证据无法判断；补齐阻断项后必须重新执行质量闸门、覆盖审计与版本验收。
 
 ## 相关文档
 

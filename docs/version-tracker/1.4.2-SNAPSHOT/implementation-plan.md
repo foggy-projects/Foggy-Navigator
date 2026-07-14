@@ -18,7 +18,7 @@
 - external_contract_changed: yes
 - external_enablement: no
 - production_enablement: not-applicable
-- acceptance_status: not-started
+- acceptance_status: rejected
 - requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
 - module_responsibility: [Module Responsibility](./module-responsibility.md)
 - code_inventory: [Code Inventory](./code-inventory.md)
@@ -44,18 +44,21 @@
 | E-002 | 已确认事实 | Provider 状态已有 `ProviderStateCodec` envelope v1 | confirmed | 目标是版本验证、typed adapter、迁移和可观测性，不重复建设 v1 |
 | E-003 | 静态搜索结论 | 多个 Session/Task 调用链没有一致传入当前用户 ownership 谓词 | static-only | 需跨用户负向集成测试确认真实暴露面 |
 | E-004 | 已确认事实 | ClientApp runtime credential、user grant、task token、审批绑定和审计已有基础实现 | confirmed | 不能描述为从零建设；需补 task 函数 scope、生命周期和拒绝审计 |
-| E-005 | 静态搜索结论 | 旧 LangGraph approval 可按 taskId 调用并采用请求体 `reviewedBy` | static-only | P2 优先补负向测试、隔离和迁移 |
+| E-005 | 实施前静态结论 + 当前收口证据 | 旧 LangGraph approval 可按 taskId 调用并采用请求体 `reviewedBy`；`9f3f1422` 已移除该路由 | resolved-current-dev-tree | 当前统一使用 `/api/v1/tasks/{taskId}/respond`；Task 先按已认证 `userId + tenantId` 授权，LangGraph 按同一 user 查 pending approval，`reviewedBy` 强制取认证主体。真实 Provider Task/L3 矩阵仍待执行 |
 | E-006 | 已确认事实 | Codex/LangGraph 等 Worker 在空 Token 时可跳过认证；部分默认非 loopback | confirmed | 需明确 external-enabled 与 internal-dev 模式 |
 | E-007 | 本地构建证据 | launcher 主干依赖链从 clean 状态编译测试通过 | passed-local | `2026-07-14` 执行 `mvn -B -pl launcher -am clean test`，16 个 reactor 项 SUCCESS；不是根 `clean verify` 或 hosted runner 证据 |
-| E-008 | 本地构建证据 | Node/Vite/lockfile 不可复现基线已按 ODR-142-001 收口 | passed-local-partial-ci | Node `22.23.1`、pnpm `10.34.5`、单一根 frozen lockfile 与根 frontend matrix 已落地并本地通过；GitHub runner/nightly 未运行 |
+| E-008 | 本地 + hosted 构建证据 | Node/Vite/lockfile 不可复现基线已按 ODR-142-001 收口 | passed-local-and-hosted-repository-matrix | Node `22.23.1`、pnpm `10.34.5`、单一根 frozen lockfile 与根 frontend matrix 已落地；截至本次正式闸门的最新已验证实现 HEAD `9d03bee9` 的 Repository CI [`29324741945`](https://github.com/foggy-projects/Foggy-Navigator/actions/runs/29324741945) 7/7 jobs 成功。main branch protection/required checks 当前未配置；修复后 nightly 与完整 Playwright 分层仍待执行 |
 | E-009 | 本地构建证据 | 两个 `ClaudeWorkerView.vue` TypeScript 基线错误已做最小修复 | passed-local | 有效 PC/mobile type-check、全 frontend tests/build exit 0；浏览器体验未运行 |
-| E-010 | 静态搜索 + 实施证据 | Monitoring 与 code-review 已删除；metadata-query 已 completed-local；Echo 已 completed-local/verification-partial；旧 API 尚未实施 | partial-implementation | Echo addon/root/launcher 已收口，test-only fixture 覆盖 A2A lifecycle，定向 16/16 与 launcher 6/6 tests 通过；hosted/browser/PS parser/正式门禁未运行。其余切片仍按独立门禁执行 |
+| E-010 | 静态搜索 + 实施证据 | Monitoring、code-review、metadata-query、Echo 及旧 Provider API/SPI/DTO 子切片已物理收口 | partial-implementation | Echo test-only fixture 覆盖 A2A lifecycle，旧 Provider 仓内消费端已迁移到统一 route/typed ports；最新 hosted CI 通过。PowerShell parser、真实 Provider Task/人工体验、共享资源与正式门禁的限制仍保留 |
 | E-011 | 本地实施证据 | P2 首批默认关闭门禁和 readiness 已由 `12cbe697`、`5d62707b` 落地 | partial-implementation | 平台只门禁 `/api/v1/open` 路径根及子路径；三类 Worker 显式 external-enabled 仍因执行策略未齐保持 unready。task token、identity、审批/恢复绑定、审计和 ownership 不在该首批结论内 |
 | E-012 | 本地测试证据 | P2 首批 Java 与三类 Worker 定向矩阵通过 | passed-local | Java 74 tests、10/10 reactor；Codex SDK 163 passed/1 skipped，app-server 272 passed/1 skipped，LangGraph 766 passed；Node type-check/build 与 Python build 通过。覆盖 matrix parameter、context path、encoded path，并修复实际门禁绕过；不是生产或正式验收证据 |
 | E-013 | 本地实施 + 测试证据 | `cce75f1b` 使平台消费端尊重显式 `ready=false` | passed-local | unready Worker 不再被误标为可路由；缺少 `ready` 的旧 Worker保留兼容。兼容不适用于显式 unready，也不构成 external enablement |
 | E-014 | 本地构建证据 | `a2317ae2` 关闭 Open SDK clean 基线缺陷，根 Java clean test 通过 | passed-local-with-warning | Open SDK 142 tests；根 17/17 reactor、2304 tests、0 failure/error/skipped，exit 0。launcher 有 Surefire fork JVM 退出超时告警；hosted CI 与 `clean verify` 未执行，见 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) |
 | E-015 | 本地实施 + 测试证据 | `EXEC-142-013` 接通 Gateway strict Worker principal/lease、Biz Provider DB preselect/prebind、LangGraph credential 传播/secret boundary，并让 Codex credential-configured 路径 fail closed/unready | passed-local-partial-scope | launcher 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 174 pass/1 Windows skip + typecheck。平台/Gateway 开关组合、OS 隔离、Codex 安全转发、P3/L3/真实网络/hosted CI 仍未完成 |
-| E-016 | 本地实施 + 测试证据 | `EXEC-142-014` 建立 `userId + tenantId` Session/Task 归属窄门面，并收紧 Session/Task/Agent/SSE/config/shared/forward/context/model-config 首批路径 | passed-local-partial-scope | P3 定向 Maven 176 tests 通过；launcher 依赖链 clean test 15/15 reactor、2426 tests、0 failure/error/skipped、exit 0。日志有测试 JVM 退出后 30 秒 fork kill 非失败提示。真实双账号 API/浏览器、hosted CI/L3、全列表 tenant、service-level metadata invariant、Provider taskId 与显式 admin/system 通路仍未完成；不是正式质量门禁或验收 |
+| E-016 | 本地实施 + 测试证据 | `EXEC-142-014` 建立 `userId + tenantId` Session/Task 归属窄门面，并收紧 Session/Task/Agent/SSE/config/shared/forward/context/model-config 首批路径 | passed-local-partial-scope | P3 定向 Maven 176 tests 通过；launcher 依赖链 clean test 15/15 reactor、2426 tests、0 failure/error/skipped、exit 0。日志有测试 JVM 退出后 30 秒 fork kill 非失败提示。后续 hosted 与隔离 Session 浏览器证据见 E-008/E-019；Provider Task L3、共享 DB、全列表 tenant、service-level metadata invariant、Provider taskId 与显式 admin/system 通路仍未完成；不是正式质量门禁或验收 |
+| E-017 | 本地实施 + hosted 测试证据 | `50351ada`、`73d31a19`、`97240642`、`fb11137d`、`9f3f1422`、`edee0fc4`、`9008c554` 完成旧 Provider API/SPI/DTO 子切片的仓内迁移和物理删除 | passed-local-and-hosted-partial-scope | LangGraph 8/8 reactor、68 Java tests + frontend type-check/1 Vitest + L3 TypeScript；Claude 8/8、367 tests；Codex 8/8、1757 total/371 Codex tests；最新 Repository CI 7/7 jobs 成功。仍活跃的 LangGraph 内部 `LanggraphTaskDTO`/`CreateLanggraphTaskForm` 已保留；巨类拆分和 state schema 强化未完成 |
+| E-018 | 构建可复现性证据 | `2a859336` 将仓内实际使用的 RX/异常 wire contract 收入 `navigator-common/src/main/java/com/foggyframework/core/ex/` | passed-local-and-hosted | 移除无法从 clean runner 获取的 `com.foggysource:foggy-core:8.1.10.beta`；`RXContractTest` 和 `GlobalExceptionHandlerTest` 保护序列化/异常契约，截至正式闸门的最新已验证实现 hosted Java job 成功。该 shim 只覆盖当前仓内契约，不声称兼容原库所有 API |
+| E-019 | 隔离运行态/浏览器证据 | `9d03bee9` 增加 `packages/navigator-frontend/e2e/ownership-live.spec.ts`，在一次性 H2 上用两个真实登录用户验证 Session ownership | passed-isolated-partial-scope | owner list/深链/history 成功，non-owner list 隐藏且 history/SSE/direct read 均 403，拒绝体不泄露资源/owner 信息。未使用真实 Provider Task 或共享 DB；不等同人工验证、正式验收或生产批准 |
 
 ## 阶段与工作项映射
 
@@ -67,8 +70,8 @@
 | P3 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | 统一内部 Session/Task ownership | P0、P1；复用 P2 术语 | no；越权请求响应会收紧 |
 | P4 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md)、[DOC-001](./workitems/DOC-001-documentation-alignment.md) | 清理已核准孤儿和失效当前指引 | P0、P1 | no |
 | P5 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md)、[CLEAN-003](./workitems/CLEAN-003-metadata-query-retirement-audit.md)、[CLEAN-004](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) | dev-only 独立移除 Monitoring、metadata-query、code-review；迁移 Echo fixture 后退出生产装配 | P0 清单、P1 最小基线；各切片引用扫描 | 当前无生产路由；发现共享/生产资源即停止 |
-| P6 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md)、[CLEAN-004](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) | 渐进拆分、状态契约强化；仓内迁移后直接删除旧 Provider API/SPI/DTO | P1-P3；当前仓内消费者替代入口 | 当前无生产契约；统一入口的安全语义和 clean build 是硬门 |
-| P7 | 全部工作项 | 质量、覆盖、体验、证据和正式签收 | P0-P6 完成或明确移出版本 | no |
+| P6 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md)、[CLEAN-004](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) | 旧 Provider API/SPI/DTO 子切片已物理收口；继续渐进拆分与状态契约强化 | P1-P3；旧契约仓内消费者已迁移 | 当前无生产契约；统一入口的安全语义和 clean build 是硬门 |
+| P7 | 全部工作项 | hosted CI 和隔离 Session 浏览器已有证据；正式质量/覆盖/签收已执行并拒绝，后续补体验、共享 DB 与阻断项后重验 | P0-P6 完成或明确移出版本 | no |
 
 ## P0：目标、边界、术语和代码清单冻结
 
@@ -91,9 +94,10 @@
 |---|---|
 | 输入和前置条件 | P0 清单；支持版本矩阵；干净 clone/容器；现有 Maven、npm/pnpm/pyproject 配置；ODR-142-001 已批准。 |
 | 涉及模块 | 根 `pom.xml`、`launcher/pom.xml`、`package.json`、`pnpm-workspace.yaml`、lockfile、五个前端包、Node/Python Worker、`.github/workflows/`。 |
+| 当前实施状态 | `in-progress / repository-hosted-matrix-passed`。`2a859336` 以 Navigator-owned RX shim 取代 clean runner 不可获取的 `foggy-core` 依赖；截至本次正式闸门的最新已验证实现 HEAD `9d03bee9` 的 Repository CI `29324741945` 7/7 jobs 成功，其中 Java lane 只覆盖 launcher 依赖链。main branch protection/required checks 当前未配置；修复后 nightly、根 `clean verify` 和完整浏览器分层尚未执行。 |
 | 实施内容 | 按已批准的 [ODR-142-001](./owner-decision-review.md)冻结 Node `22.23.1`、pnpm `10.34.5`、单一根 lockfile 和 required/nightly/RC 三层 CI；跟踪根 lockfile并使用 frozen install；移除无独立消费者的 chat 嵌套 lockfile；修正 PC 有效 type-check 及两个现存错误；让根脚本覆盖 chat-core/chat/PC/widget/mobile；建立 Java、pnpm、Node Worker、Python Worker clean CI；记录工具版本和制品。 |
 | 非目标 | 不借构建修复重构业务；不要求所有 E2E 每 PR 执行；不把 Codex Worker 发布流程当全仓门禁。 |
-| 自动化测试 | `mvn -B clean test -pl launcher -am`；必要时根 reactor lane；`corepack pnpm install --frozen-lockfile`；各包有效 type-check/test/build；Node Worker `npm ci` 后 test/typecheck/build；Python Worker 新 venv 安装、pytest/build；命令以各包真实 script 为准并回写。 |
+| 自动化测试 | 本地 Java/frozen frontend/五类 Worker 矩阵已通过；截至正式闸门的最新已验证实现对应 Repository CI 的 Java launcher 依赖链 clean test、Frontend clean checks、3 类 Node Worker 和 2 类 Python Worker 7/7 jobs 成功；Java lane 不含 Open SDK 与 chat observer BFF。main branch protection/required checks 已核对为未配置；修复后 nightly、根 `clean verify` 与完整 Playwright/cross-platform 分层待执行。 |
 | 手工验证 | 从无缓存环境复跑；核对制品可启动、CI 矩阵覆盖表、Node/pnpm 版本报错是否清晰；PC/widget/mobile 做目标页面 smoke。 |
 | 风险 | lockfile 重建带来大范围依赖漂移；mobile/浏览器 lane 过慢；当前 `vue-tsc --noEmit` 空通过造成假绿。 |
 | 回滚方式 | 环境声明、lockfile、脚本和 CI 分提交；依赖升级与门禁修复分离；通过 revert 恢复上一基线，保留失败日志。 |
@@ -121,16 +125,16 @@
 | 要素 | 计划 |
 |---|---|
 | 输入和前置条件 | P0 资源模型、P1 测试门禁；复用 P2 principal 术语；列出可信内网管理员例外。 |
-| 当前实施状态 | `in-progress / partial-implemented-local`。`EXEC-142-014` 已落统一 `userId + tenantId` 门面和首批 Session/Task/Agent/SSE/config/shared/forward/context/model-config 校验；P3 未完成，production routing 未改变，external 未启用。 |
+| 当前实施状态 | `in-progress / partial-implemented-local-and-isolated-verified`。`2a705e09` 已落统一 `userId + tenantId` 门面和首批 Session/Task/Agent/SSE/config/shared/forward/context/model-config 校验；`9f3f1422` 将 LangGraph 审批收口到统一 respond 并使用可信主体；`9d03bee9` 增加隔离 H2 真实双用户 Session 浏览器证据。P3 仍未完成，production routing 未改变，external 未启用。 |
 | 涉及模块 | `session-module` 的 Controller/service/facade/repository/SSE、`navigator-common` 的 SessionTask repository；Provider operation adapters；必要的 auth context。 |
-| 实施内容 | 已建立统一 `requireOwnedSession/Task` 窄门面；Session get/messages/send/parent/forward/config/shared/SSE 与 Task list/get/respond/reconnect/resync/rewind/resume/cancel 的首批路径先校验归属；Task route 不信任请求体 agent 字段；context assigned-ID 使用独立事务 insert 与 owner 条件更新；Provider 返回 sessionId 后重新授权；显式 model config 校验 enabled/tenant/owner metadata/Worker grant；shared quota 在授权/readiness 后原子消费。后续补全所有列表 tenant 贯穿、service-level metadata invariant、Provider taskId 可信绑定及具名管理员/系统路径。 |
+| 实施内容 | 已建立统一 `requireOwnedSession/Task` 窄门面；Session get/messages/send/parent/forward/config/shared/SSE 与 Task list/get/respond/reconnect/resync/rewind/resume/cancel 的首批路径先校验归属；Task route 不信任请求体 agent 字段；context assigned-ID 使用独立事务 insert 与 owner 条件更新；Provider 返回 sessionId 后重新授权；显式 model config 校验 enabled/tenant/owner metadata/Worker grant；shared quota 在授权/readiness 后原子消费。LangGraph approval 现由 `/api/v1/tasks/{taskId}/respond` 先做 user/tenant ownership，Provider 再用已认证 user 查 pending approval 并强制写入 `reviewedBy`，不采信请求体身份。后续补全所有列表 tenant 贯穿、service-level metadata invariant、Provider taskId 可信绑定及具名管理员/系统路径。 |
 | 非目标 | 不要求全部内部 Controller 迁移到新鉴权框架；不重写 SecurityConfig；不实现多实例 SSE；不改变正常用户的数据模型。 |
-| 自动化测试 | 已通过 176 个 P3 定向 Maven tests；随后 launcher 依赖链 clean test 15/15 reactor、2426 tests 全通过。覆盖统一门面、Session/Task/Agent/SSE/config/shared/forward、context 并发绑定、model config 与 quota 顺序。待补：真实双账号/API、`active/page/search/directory` 全列表、管理员/系统例外、Provider L3 与 hosted CI。 |
-| 手工验证 | `not-run`。仍需两账号执行创建、对话、任务操作、刷新/重连、深链 `/c/:id`；确认正常用户工作流不退化，越权响应一致且不泄露资源存在性。 |
+| 自动化测试 | 已通过 176 个 P3 定向 Maven tests；随后 launcher 依赖链 clean test 15/15 reactor、2426 tests 全通过。`ownership-live.spec.ts` 在隔离 H2 上验证 owner list/深链/history 正向与 non-owner list 隐藏、history/SSE/direct read 403、通用错误不泄露资源/owner；最新 Repository CI 7/7 jobs 成功。待补：真实 Provider Task/L3、共享 DB、`active/page/search/directory` 全列表、管理员/系统例外。 |
+| 手工验证 | `not-run`（自动化隔离浏览器为 partial-passed）。仍需人工两账号执行创建、对话、多 Provider 任务操作、刷新/重连、深链 `/c/:id`；确认正常用户工作流不退化。不将自动化 UI 证据冒充人工体验。 |
 | 风险 | 历史系统任务没有 userId/tenantId；Provider 内部恢复依赖系统身份；列表 tenant 未完全贯穿；`SessionMetadataService` service-level tenant invariant 未统一；model config owner/grant 语义未冻结；Provider 返回 taskId 仍可能形成可信边界；重复校验可能造成 N+1、性能或错误码变化。 |
 | 回滚方式 | 归属门面与各调用点分步提交；数据回填/兼容规则版本化；若正常流量回归，回滚调用点但保留负向测试和问题记录，禁止改回无校验默认。 |
-| 完成判据 | 只凭 sessionId/taskId 不能跨用户读写；所有列出的单资源与列表操作进入统一 invariant；内部 UI/可信内网主流程通过自动和手工验证；Provider 返回 ID 不绕过归属；管理员/系统例外有具名通路、清单与审计。当前只满足首批本地实现与定向测试，不得标记完成。 |
-| 生产路由/外部契约 | production_routing_changed: no；external_contract_changed: no。越权请求的响应行为会定向收紧。 |
+| 完成判据 | 只凭 sessionId/taskId 不能跨用户读写；所有列出的单资源与列表操作进入统一 invariant；内部 UI/可信内网主流程通过自动和手工验证；Provider 返回 ID 不绕过归属；管理员/系统例外有具名通路、清单与审计。当前已增加 Session 隔离运行态与 hosted CI 证据，但 Task/共享 DB/人工/系统主体等门禁未满足，不得标记完成。 |
+| 生产路由/外部契约 | production_routing_changed: no；external_contract_changed: yes（development tree 的旧 LangGraph approval route 已移除）；external_enablement: no。越权请求的响应行为已定向收紧。 |
 
 ## P4：低风险孤儿代码和失效文档清理
 
@@ -168,30 +172,42 @@
 | 要素 | 计划 |
 |---|---|
 | 输入和前置条件 | P1 可靠测试；P2/P3 稳定授权入口；1.3.1 已完成的 facade/SPI/schema v1 证据；ODR-142-007 直接删除授权；旧 API 仓内消费者清单和替代差距。 |
-| 涉及模块 | `ClaudeWorkerView.vue`、`OpenApiController`、Claude/Codex TaskService、`TaskDispatchFacade`、ProviderStateCodec/实体/repository、旧 Provider Controller/SPI/DTO、PC/Mobile/SDK/CLI/Worker。 |
-| 实施内容 | 先特征测试和职责图，再按窄接口提取；页面优先拆 API adapter/composable/panel，不一次重写；状态 envelope v1 增加严格版本验证、typed Provider adapter、迁移链和解析失败可观测性，替换 JSON LIKE 查询需单独数据计划；补齐或确认统一 API 的 file hints/generated image/approval/task detail 等当前仓内必需能力，迁移 PC、L3、bootstrap、SDK/CLI、canary/soak 和 Worker 引用，随后在 1.4.2 独立删除旧路由、deprecated SPI bridge 和无剩余用途 DTO。 |
+| 当前实施状态 | `in-progress / legacy-contract-slice-completed`。仓内消费者已迁移，三组旧 Provider HTTP Controller、deprecated SPI bridge 及无剩余用途的 Claude/Codex DTO/form 已分提交物理删除；LangGraph 旧 approval form/controller 也已退出。巨类拆分和 Provider state schema/version 强化仍未开始收口，因此 P6 整体不得标记 completed。 |
+| 涉及模块 | 已实施子切片：`session-module/.../TaskController.java`、`navigator-spi/.../TaskCommandProvider.java`、`TaskListingProvider.java`、`WorkerSessionQueryProvider.java`、`addons/codex-worker-agent/.../CodexTaskExtensionController.java`、Claude/Codex 内部 create command、PC/Mobile/L3/bootstrap/Worker canary；待续范围：`ClaudeWorkerView.vue`、`OpenApiController`、Claude/Codex TaskService、`TaskDispatchFacade`、ProviderStateCodec/实体/repository。 |
+| 实施内容 | 已完成：统一 API 承接 task detail/respond/rewind/resume 等通用操作，Codex extension route 承接 file hints/generated image/canary，PC、Mobile、Business Agent L3、bootstrap、Worker canary/soak 等仓内引用迁移；删除 `TaskQueryProvider`、`DefaultA2aAgentRegistry`、三组旧 HTTP Controller、`ApproveTaskForm`、Claude `TaskDTO/CreateTaskForm` 与 Codex `CodexTaskDTO/CreateCodexTaskForm`；新增 Claude/Codex 内部 create command。活跃 `LanggraphTaskDTO`/`CreateLanggraphTaskForm` 仍被 A2A、Business launcher 与 service 使用，明确保留。待续：先特征测试和职责图，再渐进拆分页面/大类；为 state envelope 增加严格版本验证、typed adapter、迁移链和解析失败可观测性，JSON LIKE 迁移保持独立数据计划。 |
 | 非目标 | 不重做已完成的 schema v1/registry/projection/router；不以行数作为唯一拆分目标；不误删仍服务 typed/unified 契约的 DTO；不动态加载 Addon；不为不存在的仓外客户保留兼容层。 |
-| 自动化测试 | characterization/unit/contract；状态 v0/v1/未知版本/损坏 JSON/迁移幂等；Provider resume/reconnect；PC type/Vitest/Playwright；统一入口当前语义；SDK/CLI/canary；旧路由和 legacy SPI 无当前源码引用。 |
-| 手工验证 | Claude/Codex/Gemini/LangGraph 创建、流式、恢复、审批、生成图片/file hints；页面主流程和深链；升级前数据副本迁移演练；性能对比。 |
+| 自动化测试 | 旧契约子切片已通过：LangGraph 8/8 reactor、68 Java tests、主前端 type-check + 1 Vitest、Business Agent L3 TypeScript；Claude 8/8 reactor、367 tests；Codex 8/8 reactor、1757 total/371 Codex tests；最新 Repository CI 7/7 jobs 成功；旧路由/已删 class 对当前业务源码无引用。待续巨类/state schema 需执行 characterization、v0/v1/未知版本/损坏 JSON/迁移幂等、resume/reconnect、性能与数据迁移测试。 |
+| 手工验证 | `not-run`。仍需 Claude/Codex/Gemini/LangGraph 真实 Provider 创建、流式、恢复、审批、生成图片/file hints；页面主流程和深链；升级前数据副本迁移演练；性能对比。Session ownership 隔离浏览器不替代这些 Provider 体验。 |
 | 风险 | 超大类隐式状态耦合；Provider 恢复兼容破坏；JSON 查询迁移影响数据；仓内 canary、UI 或测试仍依赖旧响应语义；并行改动冲突。 |
 | 回滚方式 | 提取与行为变更分提交；保留旧 envelope reader 和双读/回退窗口；统一 API 先增后迁；旧 route/SPI/DTO 分批删除并可独立 revert。旧 dev 数据和历史图片链接无需恢复。 |
-| 完成判据 | 每次拆分有可读职责和等价测试；新写入遵守版本化 typed contract；未知/损坏状态行为明确；旧 API 每个路由有仓内消费者迁移/删除、验证和回滚记录；deprecated SPI/DTO 无当前调用且 clean build 通过。 |
-| 生产路由/外部契约 | production_routing_changed: no（当前 dev 前提）；external_contract_changed: no production contract。未来外部开放不提供旧契约。 |
+| 完成判据 | 旧 API 子判据已满足：每个旧路由有仓内消费者迁移/删除、对应提交和验证，deprecated SPI/无用 DTO 无当前调用且 clean/hosted build 通过。P6 整体完成仍要求每次巨类拆分有可读职责和等价测试，新写入遵守版本化 typed contract，未知/损坏状态行为明确。后两项尚未满足。 |
+| 生产路由/外部契约 | production_routing_changed: no（当前 dev 前提）；external_contract_changed: yes（development tree 旧 Provider route/SPI/DTO 已移除）；当前无 production contract，external_enablement: no。未来外部开放不提供旧契约。 |
 
 ## P7：覆盖审计、体验验证和正式签收
 
 | 要素 | 计划 |
 |---|---|
 | 输入和前置条件 | P0-P6 进度、测试日志、手工体验、运行态审计、迁移/回滚演练、所有 Owner 决策；未完成项必须明确移出版本或阻塞。 |
+| 当前实施状态 | `completed-formal-review / exit-failed`。截至本次正式闸门的最新已验证实现 Repository CI 已 7/7 jobs 成功，Session ownership 已有隔离 H2 真实双用户浏览器证据；[质量闸门](./quality/executed-governance-slices-implementation-quality.md) 为 `ready-with-risks`，[覆盖审计](./coverage/1.4.2-coverage-audit.md) 为 `needs-more-tests`，[正式签收](./acceptance/version-signoff.md) 为 `rejected`。共享 DB、真实 Provider Task/L3 和完整人工体验仍未执行。 |
 | 涉及模块 | 全部本版本触点与文档门禁。 |
 | 实施内容 | 更新 [Progress](./progress.md)；先做 implementation self-check；跨模块改动执行 `foggy-implementation-quality-gate` 正式质量闸门；随后执行 `foggy-test-coverage-audit` 映射 requirement/workitem/acceptance 到证据；最后执行 `foggy-acceptance-signoff` 输出 accepted/rejected/blocked；单独记录 production enablement 决定。 |
 | 非目标 | 不以文档完整代替实现；不以测试数量代替风险覆盖；不把 isolated smoke 视为 production approval；不在验收时顺手修复未评审的新问题。 |
-| 自动化测试 | Java clean、全部纳入前端/Worker lane、授权负向矩阵、兼容/迁移、Markdown 链接和 `git diff --check`；具体命令以 P1 固化矩阵为准。 |
-| 手工验证 | 内部 UI/可信内网；外部 ClientApp/upstream user 全链路；审批/恢复/取消；readiness；PC/widget/mobile 关键体验；退役/回滚演练。 |
+| 自动化测试 | 已有：HEAD `9d03bee9` 的 Repository CI [`29324741945`](https://github.com/foggy-projects/Foggy-Navigator/actions/runs/29324741945) Java/frontend/3 类 Node Worker/2 类 Python Worker 7/7 jobs 成功；隔离 H2 的 `ownership-live.spec.ts` 覆盖 Session owner/non-owner 正负向。待执行：真实 Provider Task 授权矩阵、共享 DB/迁移、完整 Playwright/nightly/cross-platform；本轮 Markdown 相对链接与 `git diff --check` 结果回写到 Progress。 |
+| 手工验证 | `not-run`。仍需内部 UI/可信内网；外部 ClientApp/upstream user 全链路；真实 Provider 审批/恢复/取消；readiness；PC/widget/mobile 关键体验；退役/回滚演练。已有 Playwright 自动化证据不冒充人工体验。 |
 | 风险 | 证据来自不同提交；测试环境与生产配置差异；未决 Owner 项被隐藏；隔离通过被误当生产批准。 |
 | 回滚方式 | 验收不直接改变生产；失败项回到对应阶段，保留 rejected/blocked 证据；生产启用有独立审批、灰度和回滚 runbook。 |
-| 完成判据 | 13 项版本门禁都有可定位证据；质量闸门通过；覆盖审计允许进入验收；正式签收明确 accepted/rejected/blocked；production enablement 单独决策。 |
+| 完成判据 | 13 项版本门禁都有可定位证据；质量闸门通过；覆盖审计允许进入正向验收；正式签收明确 accepted/rejected/blocked；production enablement 单独决策。当前正式流程已完成但结论为 `rejected`，P7 出口未通过；关闭签收记录中的 blocker 后重跑。 |
 | 生产路由/外部契约 | production_routing_changed: no（验收动作）；production_enablement 不得由验收结果自动推导。 |
+
+## Acceptance Status
+
+- acceptance_status: rejected
+- acceptance_decision: rejected
+- signed_off_by: root-controller
+- signed_off_at: 2026-07-14
+- acceptance_record: [Version Signoff](./acceptance/version-signoff.md)
+- blocking_items: external-runtime-boundary-incomplete, task-ownership-live-matrix-incomplete, p4-and-p6-scope-incomplete, coverage-audit-needs-more-tests
+- follow_up_required: yes
 
 ## 阶段出口记录要求
 
@@ -229,13 +245,13 @@
 
 | ID | Owner 决策 | 落实阶段 | 状态/实施约束 |
 |---|---|---|---|
-| ODR-142-001 | Node `22.23.1`、pnpm `10.34.5`、单一根 lockfile；核心构建 required，完整 E2E/cross-platform nightly，真实凭据 smoke 进入 RC | P1 | in-progress；本地 clean/frozen/frontend 通过，hosted CI 与 nightly 待执行 |
+| ODR-142-001 | Node `22.23.1`、pnpm `10.34.5`、单一根 lockfile；核心构建 required，完整 E2E/cross-platform nightly，真实凭据 smoke 进入 RC | P1 | in-progress；本地 clean/frozen/frontend 与截至正式闸门的最新已验证实现 Repository CI 7/7 jobs 通过；main required checks/branch protection 未配置，修复后 nightly 与完整 E2E/cross-platform 待执行 |
 | ODR-142-002 | internal-dev 保留 ClientApp 代办；signed assertion 降为未来外部开放门禁 | P2 / future external | in-progress；显式、默认关闭的首批平台/Worker 开关已落地，ClientApp/upstream identity 链路尚未收口 |
 | ODR-142-003 | 服务端权威 opaque task token，30 分钟 TTL，完整授权交集，并与 Worker principal/lease 双重校验，暂停/终态失效 | P2 | implementation-partial；v2/TTL/撤销/definitive terminal、DB preselect/prebind 与 Gateway strict principal/lease 已落地；pause/generation、Codex 安全转发和运行态矩阵待办 |
 | ODR-142-004 | 双运行模式；external-enabled 目录/工具默认拒绝、`workspace-write`、任务工具 egress 默认拒绝、缺凭据 unready/fail closed | P2 | in-progress；模式/readiness 第一批已实施，执行策略尚未完成，因此显式 external 仍强制 unready、不得打开业务流量 |
 | ODR-142-005 | 本地关键状态事务 outbox；无状态拒绝可靠落档；远程调用意图/结果分段记录；高频遥测 best-effort | P2/P7 | approved |
-| ODR-142-006 | dev-only 安全后物理移除 Monitoring、metadata-query、code-review；Echo fixture 迁移后退出默认装配，旧数据可丢弃 | P5 | in-progress；Monitoring/code-review 已移除，metadata-query 已 completed-local；Echo 已 completed-local/verification-partial，默认 launcher inventory 已改变，hosted/browser/PS parser/正式门禁待补 |
-| ODR-142-007 | 仓内消费者迁移后在 1.4.2 直接删除旧 Provider API/SPI/DTO | P6 | approved-with-constraints；无外部窗口，clean build 仍是硬门 |
+| ODR-142-006 | dev-only 安全后物理移除 Monitoring、metadata-query、code-review；Echo fixture 迁移后退出默认装配，旧数据可丢弃 | P5 | in-progress；Monitoring/code-review 已移除，metadata-query 已 completed-local；Echo 已 completed-local/verification-partial，默认 launcher inventory 已改变，hosted 与版本正式门禁已执行且签收拒绝，专项 browser/PS parser/模块签收待补 |
+| ODR-142-007 | 仓内消费者迁移后在 1.4.2 直接删除旧 Provider API/SPI/DTO | P6 | legacy-contract-slice-completed；仓内迁移和物理删除已分提交完成，分 Provider clean/前端/L3 与截至正式闸门的最新已验证实现 hosted CI 通过；版本正式门禁已执行且签收拒绝，真实 Provider 体验仍待执行，P6 巨类/state schema 仍未完成 |
 | ODR-142-008 | 当前指引修正、历史证据标记、活跃 Skill 修正、确认失效 Skill 退出活跃发现 | P0/P4 | approved |
 
 既有 `DEC-003` Provider state envelope 演进、credential authority、mapping/grant 权威数据源和超大类拆分顺序不因上述评审稿自动关闭，仍按各自 workitem 保持 `pending-decision`。

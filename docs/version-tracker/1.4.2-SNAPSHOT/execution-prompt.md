@@ -17,16 +17,18 @@
 - external_contract_changed: yes
 - external_enablement: no
 - production_enablement: not-applicable
-- acceptance_status: not-started
+- formal_quality_gate: reviewed-ready-with-risks
+- coverage_audit: reviewed-needs-more-tests
+- acceptance_status: rejected
 - requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
 - implementation_plan: [Implementation Plan](./implementation-plan.md)
 - module_responsibility: [Module Responsibility](./module-responsibility.md)
 - code_inventory: [Code Inventory](./code-inventory.md)
 - owner_decision_review: [Owner Decision Review](./owner-decision-review.md)
 - progress: [Progress](./progress.md)
-- last_execution_checkin: `2026-07-14 / P2-first-external-gate-readiness`
+- last_execution_checkin: `2026-07-14 / formal-gates-rejected`
 
-当前检查点：`2026-07-14` 已实施 P1 本地基线以及 Monitoring/code-review 两个独立删除切片；metadata-query 的模块、reactor/launcher 装配、专属 bean 断言、专属 Skill 与当前文档已收口，CLEAN-003 状态为 `completed-local`。P2 首批平台 Open API routing gate、LangGraph Biz/Codex SDK/Codex App Server Worker external gate/readiness，以及 Java 健康状态消费者已分别落在 `12cbe697`、`5d62707b`、`cce75f1b`。根 Java clean test 随后发现并由 `a2317ae2` 关闭 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md)，当前 17/17 reactor、2304 tests 全通过；launcher 仍有 Surefire fork JVM 退出超时告警，hosted CI 与 `clean verify` 未执行。这只是 execution check-in：task token、可信 upstream identity、审计、完整 execution policy、Claude/Gemini Worker、生产 readiness 和外部开放均未完成。启动/浏览器与正式验收未执行。后续执行者必须先读 Progress，不得重复实施已落码门禁、把本地结果冒充生产/验收证据，或把 Echo、旧 Provider 契约和 P2/P3 治理写成已完成。
+当前检查点：`2026-07-14` 已实施 P1 clean 基线、P2 外部边界首批、P3 ownership 首批，以及 Monitoring、metadata-query、code-review、Echo 四个独立 dev-only 删除切片；旧 Claude/Codex/LangGraph task HTTP、Provider legacy bridge 与对应 deprecated form/DTO 也已在仓内消费者迁移后物理退出。`2a859336` 以 Navigator-owned 最小 `RX` wire-compatible 实现解除 clean runner 对不可公开解析 `foggy-core` 的依赖，Repository CI run `29323068427` 在 head `9008c554` 的 7 个 job 全部成功。`9d03bee9` 的显式 opt-in live 用例在一次性 H2 上完成真实双用户登录、Session 深链/history/SSE ownership 验证（1 passed），同轮 mock Playwright 17 passed/1 live skipped。正式质量闸门为 `ready-with-risks`、覆盖审计为 `needs-more-tests`、版本签收为 `rejected`。仍未完成：外部强身份与完整 execution policy、可靠审计、真实 Provider Task、共享数据库、分支保护/nightly 实跑、超大类/state schema 和 P4。后续执行者必须先读 Progress 和 signoff blocker，不得重复已完成切片，也不得把隔离或 hosted 构建成功冒充生产批准。
 
 ## P2 首批实现交接
 
@@ -83,17 +85,17 @@ Owner 决策评审已经 `review-complete`。ODR-142-001/003/004/005/008 按批�
 - ClaudeWorkerView.vue、OpenApiController、ClaudeTaskService、CodexTaskService、TaskDispatchFacade 只能渐进拆分，禁止一次性重写。
 - 不得删除 CodingAgentEntity、/api/v1/coding-agents、ProfileView.vue、/c/:id、navigator-chat-widget、mobile uni_modules、keystore 或 metadata-config-module。
 - Monitoring、metadata-query、code-review、echo 已获 dev-only 物理删除授权，开发数据可丢弃；按完整功能切片独立执行，不等待生产流量静默或数据备份/保留。执行前必须确认目标不是共享/生产资源，发现此类资源立即停止。
-- 旧 Provider API/SPI/DTO 不设上游/生产弃用或兼容窗口；必须先迁移或删除 PC、L3、Worker/canary、stream relay 等全部仓内引用，再在 P6 直接删除旧契约。
+- 旧 Provider API/SPI/DTO 子切片已在 PC、L3、Worker/canary、stream relay 等仓内引用迁移后退出；不得恢复旧路由或为了兼容重新引入 bridge/form/DTO。非 Provider deprecated API 仍按各自边界治理，不能伪报全仓清零。
 - 静态引用命中必须处理；不得虚构测试、流量、审批、环境范围或生产证据。
 
 执行顺序：
 P0 目标/边界/术语/清单冻结
 P1 clean build、Node/pnpm/lockfile、全仓 CI
 P2 已完成首批平台/三个 Worker explicit external routing/readiness gate；继续实施 ClientApp/grant 身份基线、task token、完整 Worker policy 与审计；signed assertion 为低优先级后续项
-P3 Session/Task ownership
+P3 已完成首批 Session/Task ownership 与隔离 Session 浏览器验证；继续补真实 Provider Task、显式 admin/system 和共享环境证据
 P4 第一档清理
 P5 dev-only 第二档完整切片独立物理清理
-P6 大类、Provider 状态治理；仓内迁移后直接删除旧 API/SPI/DTO
+P6 旧 Provider API/SPI/DTO 子切片已完成；继续大类与 Provider 状态 schema 渐进治理
 P7 质量、覆盖、体验和正式签收
 
 每个实现阶段都必须：
@@ -117,7 +119,7 @@ P7 质量、覆盖、体验和正式签收
 - explicit external 开关无法保证默认关闭，或启用时无法满足 credential、task scope、Worker policy、readiness 和审计硬门；
 - task token 的函数 scope、Worker principal/lease 或撤销/终态语义需要偏离已批准 ODR-142-003；
 - dev-only 删除命中共享/生产数据库、RabbitMQ、部署、webhook、credential 或上游消费者；
-- 旧 Provider 契约仍有未处理的仓内编译、运行、测试或持久链接引用；
+- 旧 Provider 契约被重新引入，或静态扫描重新出现仓内编译、运行、测试或持久链接引用；
 - 需要改变生产路由、生产数据或生产外部契约；本次 dev-only 授权不得外推；
 - 需要扩大 Worker 工具/目录/网络权限；
 - 无法在 clean 环境复现基线；
@@ -147,4 +149,14 @@ P7 质量、覆盖、体验和正式签收
 
 - 本提示词不授权一次性执行全部阶段；实际请求必须指定阶段或 workitem。
 - 如果执行 Agent 使用 `foggy-versioned-doc-tracking`，应继续沿用本版本目录并实时维护 `progress.md`。
-- 规划执行完成后，质量、覆盖和验收材料在对应门禁真正执行时再创建；不得预写 `passed` 或 `accepted`。
+- 正式质量、覆盖和验收材料已经创建，当前结论为 `ready-with-risks / needs-more-tests / rejected`；后续关闭 blocker 后更新或重建下一轮记录，不得直接改写为 `passed` 或 `accepted`。
+
+## Acceptance Status
+
+- acceptance_status: rejected
+- acceptance_decision: rejected
+- signed_off_by: root-controller
+- signed_off_at: 2026-07-14
+- acceptance_record: [Version Signoff](./acceptance/version-signoff.md)
+- blocking_items: external-runtime-boundary-incomplete, task-ownership-live-matrix-incomplete, p4-and-p6-scope-incomplete, coverage-audit-needs-more-tests
+- follow_up_required: yes

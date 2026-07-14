@@ -17,7 +17,9 @@
 - external_contract_changed: yes
 - external_enablement: no
 - production_enablement: not-applicable
-- acceptance_status: not-started
+- formal_quality_gate: reviewed-ready-with-risks
+- coverage_audit: reviewed-needs-more-tests
+- acceptance_status: rejected
 
 ## 版本定位
 
@@ -78,19 +80,21 @@ P2 首批模式门禁已经本机落地，但只完成了“默认关闭、显�
 | 需要运行态确认 | 与“仅 dev、本机共同孵化”前提冲突的共享/生产资源或活跃独立部署 | 一旦静态扫描发现此类证据，停止对应删除并重新请示；不为已授权 dev 清理虚构生产流量证据 |
 | 决策项 | Provider state 演进、credential authority、mapping/grant 权威源、超大类拆分顺序等尚未关闭事项 | 必须由对应 Owner 留下决策记录，不允许由执行 Agent静默决定 |
 
-Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下本机实施与验证证据，但尚未进入覆盖审计、体验验证或正式验收：
+Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下本机、隔离浏览器与 GitHub hosted runner 证据，并已据此执行正式质量闸门、覆盖审计和版本签收：
 
 - P1 已落地 Node `22.23.1`、pnpm `10.34.5`、单一根 `pnpm-lock.yaml`、前端 workspace 矩阵和仓库级 CI workflow；本机使用精确版本完成 frozen install，前端类型检查、测试和构建均通过。
 - Java 删除前历史基线继续保留；metadata-query 删除后另行执行 `mvn -B -pl metadata-config-module,launcher -am clean test`，15/15 reactor project 全部 `SUCCESS`，launcher 7 tests、0 failure/error。
-- P2 首批提交后执行根 `mvn -B clean test`，发现并关闭 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md)：Open SDK 恢复可信的 JUnit 5 clean 基线，最终 17/17 reactor project 全部 `SUCCESS`，2304 tests、0 failure/error/skipped，exit 0；GitHub hosted runner 与根 `clean verify` 仍未执行。
+- P2 首批提交后执行根 `mvn -B clean test`，发现并关闭 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md)：Open SDK 恢复可信的 JUnit 5 clean 基线，最终 17/17 reactor project 全部 `SUCCESS`，2304 tests、0 failure/error/skipped，exit 0。该条保留为当时的本机历史基线；`EXEC-142-017` 的 hosted Java lane 只覆盖 launcher 依赖链，不包含 `navigator-open-sdk` 和 `tools/navigator-chat-observer-bff`，因此不能作为 Open SDK 或根 reactor 的 hosted 复验；根 `clean verify` 仍未执行。
 - P2 首批由提交 `12cbe697`、`5d62707b`、`cce75f1b` 落地平台/三类 Worker 默认关闭门禁、readiness 诊断及平台消费约束。Java 定向矩阵 74 tests、10/10 reactor 通过；Codex SDK Worker 163 passed/1 skipped、Codex app-server Worker 272 passed/1 skipped、LangGraph Biz Worker 766 passed，Node type-check/build 与 Python build 均通过。平台路径 matrix parameter、context path、encoded path 回归覆盖并修复了实际门禁绕过。
 - `EXEC-142-012` 已完成 Worker credential v1 schema/API 与 owner-scoped rotate/revoke、pool owner/identity route、definitive terminal tombstone 与 late-bind 撤销、Claude tenant 持久化，以及 audit writer 独立 bean + `REQUIRES_NEW/saveAndFlush` 事务隔离。最终 11 reactor clean test 共 2186 tests，0 failure/error/skip；三组 SQL migration 已在一次性 MySQL `8.0.44` 与 `8.4.8` 完成 forward×2、rollback×2、reapply；Node `22.23.1` / pnpm `10.34.5` 的 Business Agent integration TypeScript typecheck exit 0。
 - `EXEC-142-013` 已将 Worker Gateway HTTP 调用收紧为 task token 与 Worker principal/lease 双重校验：严格头为 `X-Navigator-Worker-Id`、`X-Navigator-Worker-Credential`、`X-Navigator-Worker-Lease-Id`，partial/blank 组合及 legacy `X-Worker-Id` 均 fail closed；external-enabled 默认 `false`，只有完全无 Worker header 的 internal-dev 请求保留 token-only 兼容。BusinessTask/Open API 的 Biz Provider 会在签发前完成 DB preselect/prebind，Gateway 再校验 exact worker/lease、tenant、active ClientApp、pool/member/backend/owner 或精确 physical route；非 Biz Open API 不签发 Worker Gateway capability。LangGraph 已传播 Worker credential 并收紧子进程 allowlist/临时 askpass；Codex 长期 credential 尚无安全隔离转发通道，因此配置后 readiness=false，Business MCP 在创建任务副作用前返回 503。最终 `mvn -B -pl launcher -am clean test` 15/15 reactor、2357 tests 全通过；LangGraph 780 pytest + ruff 通过；Codex 175 tests 中 174 通过、1 个 Windows-only 跳过，typecheck 通过。
-- `EXEC-142-014` 已启动 P3 Session/Task ownership：新增统一 `userId + tenantId` 资源门面，Session/Task/Agent/SSE/config/shared/forward 首批路径先授权；Task route 不信任请求体 agent；context assigned-ID 使用独立事务 `persist + flush` 与 owner 条件更新；Provider 返回 sessionId 后重新授权；显式 model config 校验 enabled/tenant/owner metadata/Worker grant；Sharing Key quota 在授权和 readiness 后原子消费；软删除资源 fail closed。P3 定向 Maven 176 tests 通过；随后 `mvn -B -pl launcher -am clean test` 15/15 reactor、2426 tests 全通过，exit 0（日志有测试 JVM 退出后 30 秒 fork kill 非失败提示）。真实双账号 API/浏览器、hosted CI/L3、全列表 tenant、SessionMetadata service invariant、model owner/grant 语义、Provider taskId 和 admin/system 显式通路仍未完成，因此 GOV-003 只标记 `in-progress / partial`。
-- P5 已物理移除 Monitoring、`addons/code-review-agent` 和 Echo Agent 三个 dev-only 切片；metadata-query 也已 `completed-local`。Echo 的 5 个 tracked addon 文件及 root reactor/launcher 装配已退出，`UnifiedAgentResolverTest` 的 test-only 内存 fixture 覆盖 discovery/resolve/send/query/cancel，定向 16/16 tests 和 launcher 定向 14 modules、6/6 tests 通过。当前状态为 `completed-local / verification-partial`：hosted CI、浏览器、PowerShell 语法解析和正式门禁未执行。旧 Provider API/SPI/DTO 尚未开始移除。
-- 五类 Worker 已在独立 clean worktree 完成 P1 本机等价矩阵，nightly workflow 已建立。P2 仍为 `partial`：Gateway strict Worker principal/lease 与 Biz Provider preselect/prebind 已有本机证据，但平台/Gateway 开关组合约束、Codex credential 安全转发、OS 级隔离、task pause/generation、关键拒绝与状态的 reliable audit/outbox、L3 集成验证，以及 ClientApp 双主体和外部审批/恢复/取消仍未完成。P3 也只完成首批本地 ownership，尚未闭合全列表、系统主体和运行态证据；external-enabled 继续默认关闭且未启用。GitHub runner、分支保护、nightly 实际执行和真实浏览器体验也仍未完成，因此 P1、P2、P3、P5 和版本整体保持 `in-progress`，`acceptance_status` 仍为 `not-started`。
+- `EXEC-142-014` 已启动 P3 Session/Task ownership：新增统一 `userId + tenantId` 资源门面，Session/Task/Agent/SSE/config/shared/forward 首批路径先授权；Task route 不信任请求体 agent；context assigned-ID 使用独立事务 `persist + flush` 与 owner 条件更新；Provider 返回 sessionId 后重新授权；显式 model config 校验 enabled/tenant/owner metadata/Worker grant；Sharing Key quota 在授权和 readiness 后原子消费；软删除资源 fail closed。P3 定向 Maven 176 tests 通过；随后 `mvn -B -pl launcher -am clean test` 15/15 reactor、2426 tests 全通过，exit 0（日志有测试 JVM 退出后 30 秒 fork kill 非失败提示）。`EXEC-142-018` 又以隔离 H2、真实 UI/API/SSE 和同 tenant 双账号验证 Session owner 可访问、非 owner 列表不可见且 deep-link/history/SSE/direct read 被拒绝；Task live Provider fixture、共享数据库、L3、全列表 tenant、SessionMetadata service invariant、model owner/grant 语义、Provider taskId 和 admin/system 显式通路仍未完成，因此 GOV-003 只标记 `in-progress / partial`。
+- P5 已物理移除 Monitoring、`addons/code-review-agent` 和 Echo Agent 三个 dev-only 切片；metadata-query 也已 `completed-local`。Echo 的 5 个 tracked addon 文件及 root reactor/launcher 装配已退出，`UnifiedAgentResolverTest` 的 test-only 内存 fixture 覆盖 discovery/resolve/send/query/cancel，定向 16/16 tests 和 launcher 定向 14 modules、6/6 tests 通过。P6 的旧契约子切片也已完成仓内消费者迁移和物理收口：提交 `50351ada`、`73d31a19`、`97240642`、`fb11137d`、`9f3f1422`、`edee0fc4`、`9008c554` 移除 Claude/Codex/LangGraph 旧 Provider HTTP 入口、deprecated SPI/DTO，并将审批等调用迁入统一 Task API；更广泛的 Provider state schema 和超大类治理仍未完成。
+- `2a859336` 以 Navigator 自有 clean-room 兼容层固定现用 REST `RX` wire contract，并移除 clean runner 无法解析的 `foggy-core` 外部 Maven 依赖。head `9008c554` 的 [Repository CI run 29323068427](https://github.com/foggy-projects/Foggy-Navigator/actions/runs/29323068427) 首次在 hosted runner 完成 Repository CI 7-job 矩阵；浏览器测试提交后的、截至正式闸门的最新已验证实现 head `9d03bee9` 又由 [run 29324741945](https://github.com/foggy-projects/Foggy-Navigator/actions/runs/29324741945) 复验。两次均为 Java launcher 依赖链、前端、Codex SDK Worker、Codex app-server Worker、Gemini Worker、Claude Worker、LangGraph Biz Worker 共 7 个 jobs 全部 `success`；Java lane 不含 `navigator-open-sdk` 和 `tools/navigator-chat-observer-bff`。main 当前未配置 required check/分支保护，修复后的 nightly 也未实跑。
+- `9d03bee9` 新增受显式环境变量保护的 Session ownership live Playwright；隔离 H2 + loopback 前后端下 1 passed（Playwright `2.9s`，编排总时 `3.9s`），全量 mock Playwright 为 17 passed、1 skipped（`35.2s`）。mock suite 不构成运行态 ownership 证据，hosted workflow 的成功也不代表 guarded live 用例在 hosted 环境执行；共享数据库因没有明确隔离目标和授权而 `not-run`，Task live Provider fixture 也为 `not-run`。隔离验证不等于生产批准。
+- 五类 Worker 已在独立 clean worktree 完成 P1 本机等价矩阵，Repository CI 7-job hosted 矩阵也已通过；nightly workflow 已建立，但旧版本曾在 workflow 校验阶段失败且未启动 job，语法修复后的矩阵尚未实际运行。P2 仍为 `partial`：Gateway strict Worker principal/lease 与 Biz Provider preselect/prebind 已有自动化证据，但平台/Gateway 开关组合约束、Codex credential 安全转发、OS 级隔离、task pause/generation、关键拒绝与状态的 reliable audit/outbox、L3 集成验证，以及 ClientApp 双主体和外部审批/恢复/取消运行态矩阵仍未完成。P3 也只完成首批 ownership 与隔离 Session 双账号验证，尚未闭合全列表、系统主体、Task live fixture 和共享数据库证据；external-enabled 继续默认关闭且未启用。正式质量闸门对已执行切片给出 `ready-with-risks`，版本覆盖审计为 `needs-more-tests`，因此正式签收为 `rejected`；P1、P2、P3、P5、P6 和版本整体仍保持 `in-progress`。
 
-命令、结果、限制和后续补证统一登记在 [进度记录](./progress.md) 及对应 workitem 中；这里的本机通过不代表 GitHub 合并门禁已生效，也不代表验收或生产批准。
+命令、结果、限制和后续补证统一登记在 [进度记录](./progress.md) 及对应 workitem 中；本机与 hosted runner 通过不代表 GitHub required check/分支保护已生效，也不代表验收或生产批准。
 
 ## 工作项总览
 
@@ -114,15 +118,27 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 | 阶段 | 目标 | 当前状态 | 生产路由/外部契约影响 |
 |---|---|---|---|
 | P0 | 冻结目标、边界、术语、ownership 和代码清单 | in-progress | 否；仅规划与文档基线 |
-| P1 | 冻结 Node、包管理器、lockfile、全仓 clean build 和 CI 矩阵 | in-progress | 否；构建与合并门禁会变化 |
+| P1 | 冻结 Node、包管理器、lockfile、全仓 clean build 和 CI 矩阵 | in-progress（hosted baseline passed） | 否；Repository CI 7-job 矩阵已通过，main required check/分支保护未配置，修复后 nightly、根 reactor hosted 验证仍待完成 |
 | P2 | 治理外部 Biz Worker、Worker Gateway 和 upstream user 边界 | in-progress（partial） | 生产路由未改变、external 默认关闭且未启用；credential v1、pool identity route、Gateway strict principal/lease、Biz Provider preselect/prebind、definitive terminal、Claude tenant 与 audit writer 事务隔离已落地；Codex 安全转发、开关组合、OS 隔离、pause/generation、reliable audit/outbox 和 L3 仍待完成 |
-| P3 | 在 service/facade 层补齐 Session/Task ownership | in-progress（partial） | 首批 userId+tenantId 门面及 Session/Task/Agent/SSE/config/shared/forward/context/model-config 已落地；越权行为收紧但生产路由未改变。全列表 tenant、Provider taskId、admin/system 与双账号/L3/hosted/浏览器仍待完成 |
+| P3 | 在 service/facade 层补齐 Session/Task ownership | in-progress（partial） | 首批 userId+tenantId 门面及 Session/Task/Agent/SSE/config/shared/forward/context/model-config 已落地；隔离 Session 双账号 UI/API/SSE 已通过，越权行为收紧但生产路由未改变。全列表 tenant、Provider taskId、admin/system、Task live Provider fixture、共享数据库与 L3 仍待完成 |
 | P4 | 清理低风险孤儿代码和失效文档 | not-started | 否；每项仍需引用扫描、验证和回滚证据 |
-| P5 | 按 dev-only 授权独立移除 Monitoring、metadata-query、code-review，并用 test-only fixture 替代 Echo 后退出默认装配 | in-progress | 无生产环境，`production_routing_changed: no`；但 `launcher_default_agent_inventory_changed: yes`，默认制品不再注册 Echo；hosted/browser/正式门禁待补 |
-| P6 | 渐进治理超大类和 Provider 状态 schema；仓内迁移后直接移除旧 API/SPI/DTO | not-started | 当前无生产契约；替代入口安全语义仍是硬门 |
-| P7 | 执行质量检查、覆盖审计、体验验证和正式签收 | not-started | 不直接改变路由；隔离验收不等于生产批准 |
+| P5 | 按 dev-only 授权独立移除 Monitoring、metadata-query、code-review，并用 test-only fixture 替代 Echo 后退出默认装配 | in-progress | 无生产环境，`production_routing_changed: no`；但 `launcher_default_agent_inventory_changed: yes`，默认制品不再注册 Echo；hosted CI 和版本正式门禁已执行，签收为 `rejected`，切片专项浏览器/PowerShell/模块级签收仍待补 |
+| P6 | 渐进治理超大类和 Provider 状态 schema；仓内迁移后直接移除旧 API/SPI/DTO | in-progress（legacy contract slice completed） | 旧 HTTP/SPI/DTO 已迁入统一入口后物理收口，当前 dev 外部契约发生变化但生产路由未改变；Provider state schema 和超大类渐进治理仍未完成 |
+| P7 | 执行质量检查、覆盖审计、体验验证和正式签收 | completed-formal-review / rejected | 质量闸门 `ready-with-risks`、覆盖审计 `needs-more-tests`、签收 `rejected`；不改变路由，隔离验收不等于生产批准 |
 
 各阶段的输入、模块、实施内容、测试、手工验证、风险、回滚和完成判据以 [实施计划](./implementation-plan.md) 为准，执行状态统一回写到 [进度记录](./progress.md)。
+
+## Acceptance Status
+
+- acceptance_status: rejected
+- acceptance_decision: rejected
+- signed_off_by: root-controller
+- signed_off_at: 2026-07-14
+- acceptance_record: [Version Signoff](./acceptance/version-signoff.md)
+- blocking_items: external-runtime-boundary-incomplete, task-ownership-live-matrix-incomplete, p4-and-p6-scope-incomplete, coverage-audit-needs-more-tests
+- follow_up_required: yes
+
+正式门禁材料：已执行切片的 [Implementation Quality Gate](./quality/executed-governance-slices-implementation-quality.md) 为 `ready-with-risks`；版本级 [Test Coverage Audit](./coverage/1.4.2-coverage-audit.md) 为 `needs-more-tests`。拒绝结论表示当前版本不能签收，不否定已完成切片，也不改变 `external_enablement: no` 或生产路由。
 
 ## 明确非目标
 
@@ -165,7 +181,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 | ODR-142-004 | external-enabled 默认拒绝、`workspace-write`、任务工具 egress 默认拒绝、缺凭据 unready | approved-with-constraints |
 | ODR-142-005 | 本地关键状态事务 outbox、拒绝可靠落档、远程调用分段审计、遥测 best-effort | approved |
 | ODR-142-006 | dev-only 切片安全后物理移除，旧数据可丢弃；Echo 已以 test-only fixture 替代并退出默认 launcher | implementation-partial |
-| ODR-142-007 | 仓内消费者迁移后在 1.4.2 直接删除旧 Provider API/SPI/DTO，无外部兼容窗口 | approved-with-constraints |
+| ODR-142-007 | 仓内消费者迁移后在 1.4.2 直接删除旧 Provider API/SPI/DTO，无外部兼容窗口 | implementation-complete-verification-partial |
 | ODR-142-008 | 当前文档修正、历史证据标记、失效 Skill 退出活跃发现 | approved |
 
 `EXEC-142-012`、`EXEC-142-013` 是对 ODR-142-003、ODR-142-005 的阶段性实施，不改变这两项决策的约束：Worker credential v1、pool identity route、Gateway strict Worker principal/lease、Biz Provider preselect/prebind、definitive terminal、Claude tenant 与 best-effort audit writer 事务隔离已有本机证据，但不构成 P2 完成或 external enablement 批准。以下事项不属于本次八组建议的完整决策，或虽有方向结论但实现仍未闭环，继续保持待确认/待实施：
@@ -175,7 +191,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 - Java LangGraph Gateway client 仍是 internal/headerless 路径；Open API prebind 后远端 submit 成功但本地 bind 失败时只撤销 token，尚未取消可能存在的远端孤儿任务。
 - pool/worker 双向命名冲突已对新写入做 service guard；存量冲突扫描、并发唯一性与显式 `routeKind`/schema 仍待设计和验证。
 - 关键审批、拒绝、恢复和终态事件的 reliable audit/outbox；当前 audit writer 的事务隔离仍只是 best-effort telemetry，不可替代可靠落档。
-- P2 L3 集成矩阵、共享数据库 migration、launcher `ddl-auto=validate`、真实网络/浏览器和 hosted CI 证据；补齐前 external-enabled 必须保持默认关闭和 unready。
+- P2 L3 集成矩阵、共享数据库 migration、launcher `ddl-auto=validate`、真实网络与外部 Worker 浏览器反馈证据；Repository CI 7-job hosted 矩阵已经通过，但不能替代这些运行态证据。补齐前 external-enabled 必须保持默认关闭和 unready。
 - upstream user mapping/grant 的权威数据源、tenant 迁移策略和最终审计留存要求。
 - Provider state envelope v1 的严格校验、typed schema 演进、未知版本策略、兼容窗口和迁移 Owner。
 - 超大类拆分优先级及可接受的阶段性边界，特别是 `ClaudeWorkerView.vue` 的渐进拆分顺序。

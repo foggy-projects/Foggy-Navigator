@@ -35,8 +35,8 @@ owner: metadata-query-and-launcher-owner
 - code_and_assembly_slice: `removed`
 - current_document_alignment: `completed`
 - pre_removal_clean_baseline: `passed`
-- post_removal_verification: `partial-passed`
-- testing: `partial-passed`
+- post_removal_verification: `partial-passed-local-and-hosted`
+- testing: `partial-passed-local-and-hosted`
 - experience: `not-run`
 - production_routing_changed: `no`
 - external_contract_changed: `no`
@@ -55,7 +55,7 @@ Owner 已确认当前项目未生产、上游仍在本机共同孵化，因此�
 
 ### 静态搜索结论
 
-1. 删除前，根 `pom.xml` 含 `<module>metadata-query-module</module>`；当前该条目已移除，根 reactor 从 17 个模块收缩为 16 个模块。
+1. 删除前，根 `pom.xml` 含 `<module>metadata-query-module</module>`；该条目已移除，metadata-query 删除当时根 reactor 从 17 个模块收缩为 16 个模块；后续 Echo 退出后当前根 reactor 为 15 个模块。
 2. 删除前，`launcher/pom.xml` 直接依赖 `metadata-query-module`；当前 dependency 已移除。
 3. `launcher/src/test/java/com/foggy/navigator/launcher/CommonRepositoryOwnershipContextTest.java` 中 `metadataQueryRestTemplate` 专属断言已移除，其他 RestTemplate ownership 断言保留。
 4. 包含 `/api/metadata/query`、controller、service、模型、TM/QM 模板和模块测试的 `metadata-query-module/**` 已删除。
@@ -77,7 +77,7 @@ Owner 已免除普通 dev 删除所需的生产流量审计。只有静态或执
 
 | 层 | 精确范围 | 当前动作 |
 |---|---|---|
-| Reactor | 根 `pom.xml` 的 `metadata-query-module` module | 已删除；当前根 reactor 为 16 个模块 |
+| Reactor | 根 `pom.xml` 的 `metadata-query-module` module | 已删除；本切片完成时根 reactor 为 16 个模块，后续 Echo 退出后当前为 15 个模块 |
 | Launcher | `launcher/pom.xml` 的 module dependency | 已删除 dependency；删除后 clean test 已通过 |
 | Launcher test | `launcher/src/test/java/com/foggy/navigator/launcher/CommonRepositoryOwnershipContextTest.java` | 已只删除 `metadataQueryRestTemplate` 专属断言，保留其余 ownership 测试 |
 | Module | `metadata-query-module/pom.xml`、`README.md`、`src/main/**`、`src/test/**` | 完整目录已删除 |
@@ -130,16 +130,17 @@ Owner 已免除普通 dev 删除所需的生产流量审计。只有静态或执
 | metadata-config 保留与定向测试 | passed | 23 个 tracked files 保留，`metadata-config-module/**` 业务树 diff 为 0；上述删除后 clean test 覆盖其测试与 launcher 装配 |
 | Maven dependency tree | passed-static | 删除后 dependency tree 对 `metadata-query`、`foggy-dataset-model`、`foggy-dataset`、`foggy-fsscript` 均无命中 |
 | clean target 残留扫描 | passed-static | clean 后 target 未发现 metadata-query、Dataset 或 FSScript 旧依赖残留 |
+| Repository CI run `29324741945` | passed-hosted | 截至正式闸门的最新已验证实现 head `9d03bee9` 的 Java、前端和五类 Worker共 7 jobs 全 success；证明该实现快照 clean runner 基线，不替代 metadata-query 专属启动/体验 |
 | 启动 smoke | not-run | 删除后尚未执行 |
 | Markdown links / `git diff --check` | pending-final-check | 当前文档已收口；本轮结束前执行最终 whitespace/链接检查 |
 
-不得用删除前的绿色 reactor 或删除后 `validate` 证明删除后 compile/test 成功，也不得用静态无引用证明仓外不存在任何资源。本次结论使用删除后 `clean test`、dependency tree 与 clean target 扫描；它们仍不等于启动/浏览器体验、hosted CI、运行流量审计或正式验收。
+不得用删除前的绿色 reactor 或删除后 `validate` 证明删除后 compile/test 成功，也不得用静态无引用证明仓外不存在任何资源。本次结论使用删除后 `clean test`、dependency tree、clean target 扫描与已验证实现 head 的 hosted CI；它们仍不等于 metadata-query 专属启动/浏览器体验、运行流量审计或验收通过。版本正式签收已执行并为 `rejected`。
 
 ## Execution Check-in（2026-07-14，completed-local）
 
 ### 已实施变更
 
-1. 从根 `pom.xml` 移除 `metadata-query-module`，根 reactor 当前为 16 个模块。
+1. 从根 `pom.xml` 移除 `metadata-query-module`；本切片执行当时根 reactor 为 16 个模块，后续 Echo 退出后当前为 15 个模块。
 2. 从 `launcher/pom.xml` 移除 metadata-query dependency。
 3. 删除 `metadata-query-module/**` 的源码、资源、测试、POM 和 README。
 4. 从 launcher context test 移除 `metadataQueryRestTemplate` 专属断言，保留其他 RestTemplate ownership 断言。
@@ -157,10 +158,10 @@ Owner 已免除普通 dev 删除所需的生产流量审计。只有静态或执
 ### 当前门禁判断
 
 - development: `implementation-complete`；代码、装配、Skill 与当前权威文档切片均已收口，历史 module review 正文未被改写。
-- testing: `partial-passed`；删除后 `mvn -B -pl metadata-config-module,launcher -am clean test` 15/15 `SUCCESS`，metadata-config 4 suites/52 tests、launcher 3 suites/7 tests，均 0 failure/error/skipped；dependency tree 和 clean target 扫描无旧查询依赖。启动/浏览器、hosted CI 未运行。
+- testing: `partial-passed-local-and-hosted`；删除后 `mvn -B -pl metadata-config-module,launcher -am clean test` 15/15 `SUCCESS`，metadata-config 4 suites/52 tests、launcher 3 suites/7 tests，均 0 failure/error/skipped；dependency tree 和 clean target 扫描无旧查询依赖；截至正式闸门的最新已验证实现 head 对应 Repository CI run `29324741945` 的 7 jobs 全 success。metadata-query 专属启动/浏览器未运行。
 - experience: `not-run`；需在 clean 启动后检查设置、模型、凭据、Git Provider、memory、ClientApp 和 Business Agent 主链。
 - deviations: 无业务范围扩张；当前文档已同步，历史证据不改写，仅为历史 module review 增加快照提示。
-- next_gate: 补启动/浏览器 smoke、hosted CI（如进入仓库门禁）与 P7 质量/覆盖/正式签收；本地实施完成不等于正式验收。
+- next_gate: 补启动/浏览器 smoke 与模块级签收；版本 P7 质量/覆盖/签收已执行并拒绝，本地和 hosted CI 通过不等于验收通过。
 
 ## 手工验证
 
@@ -192,7 +193,7 @@ Owner 已免除普通 dev 删除所需的生产流量审计。只有静态或执
 - [x] 未执行或发现的外部资源明确记录为 `not-run` / `not-found-static`，不虚构流量或删除证据。
 - [x] Git 回滚范围、命令和顺序可定位。
 - [x] 进度与 changed paths 回写 [Progress](../progress.md)。
-- [ ] 正式质量检查、覆盖审计和签收按 P7 执行。
+- [x] 版本正式质量检查、覆盖审计和签收已按 P7 执行，结论为 `ready-with-risks / needs-more-tests / rejected`；模块级签收仍待补。
 
 ## 生产路由与外部契约状态
 

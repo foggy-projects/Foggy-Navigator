@@ -19,7 +19,8 @@
 - external_contract_changed: yes
 - external_enablement: no
 - production_enablement: not-applicable
-- acceptance_status: not-started
+- acceptance_status: rejected
+- acceptance_record: [Version Signoff](./acceptance/version-signoff.md)
 - requirement: [REQ-001 平台治理与历史能力收口](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
 - implementation_plan: [1.4.2 实施计划](./implementation-plan.md)
 - progress_record: [1.4.2 进度](./progress.md)
@@ -113,9 +114,9 @@
 ### `2026-07-14` 实施回写（非验收）
 
 - Node `22.23.1`、pnpm `10.34.5`、单一根 workspace lockfile 已按批准方案落地；根 `pnpm-lock.yaml` 已纳入版本控制，chat 嵌套 lockfile 已移除。
-- 根前端脚本、repository required workflow 和 nightly workflow 已建立；本机 frozen install、前端矩阵和五类 Worker clean 等价矩阵已通过。
+- 根前端脚本、Repository CI required 候选 workflow 和 nightly workflow 已建立；候选 workflow 尚未设为 main required check，本机 frozen install、前端矩阵和五类 Worker clean 等价矩阵已通过。
 - [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) 关闭后，根 `mvn -B clean test` 为 17/17 reactor project、2304 tests 全通过；launcher 仍有 Surefire fork JVM 退出超时告警。
-- GitHub hosted runner、branch protection/required checks、nightly 首次实跑、第二个 clean checkout 和根 `clean verify` 仍未完成，因此 OPT-001 与 P1 保持 `in-progress`，不构成正式质量门禁或验收。
+- `2a859336` 以 Navigator-owned 最小 `RX` wire-compatible 实现解除 hosted clean runner 对不可公开解析 `foggy-core` 的依赖；Repository CI run `29323068427`（head `9008c554`）的 Java、前端和五类 Worker 共 7 个 job 全部 `success`。当前 main 未配置 branch protection/required checks；修复后的 nightly、Windows/WSL clean checkout 和根 `clean verify` 仍未运行，因此 OPT-001 与 P1 保持 `in-progress`，不构成正式质量门禁或验收。
 
 ### 已批准方案（原建议）
 
@@ -371,7 +372,7 @@ outbox 可使用现有数据库，不要求 1.4.2 同时引入 Kafka，也不等
 - 静态扫描 `/api/metadata/query/**`、`foggy.api.base-url`、TM/QM、datasource、独立部署配置和仓内 SDK 引用；本轮不要求 60 天运行流量观察或仓外客户清单。
 - 退役只能精确移除 `metadata-query-module` 专属切片，必须对 `metadata-config-module` 做完整回归，不按相邻 package 前缀批量删除；根 reactor、launcher、配置、文档和测试必须同切片收口。
 - 若扫描意外发现实际活跃的共享部署或仓外集成，记录为“与 dev-only 假设冲突”并停止，不自行扩张删除授权。
-- `2026-07-14` 实施回写：模块、reactor/launcher 装配、专属 bean 断言、专属 Skill 与当前文档已退出；删除后 metadata-config/launcher clean test 15/15 `SUCCESS`，dependency tree 与 clean target 对旧查询依赖无命中，`metadata-config-module` 23 个 tracked files 保留且业务树 diff 为 0。CLEAN-003 为 `completed-local`；启动/浏览器、hosted CI 与正式验收未运行。
+- `2026-07-14` 实施回写：模块、reactor/launcher 装配、专属 bean 断言、专属 Skill 与当前文档已退出；删除后 metadata-config/launcher clean test 15/15 `SUCCESS`，dependency tree 与 clean target 对旧查询依赖无命中，`metadata-config-module` 23 个 tracked files 保留且业务树 diff 为 0。后续 Repository CI run `29323068427` 已覆盖当前树并全绿；版本签收已执行并拒绝，metadata-query 专属启动/浏览器场景与模块级签收仍未运行，CLEAN-003 保持 `completed-local / verification-partial`。
 
 ### code-review-agent
 
@@ -379,6 +380,7 @@ outbox 可使用现有数据库，不要求 1.4.2 同时引入 Kafka，也不等
 - 静态扫描 GitLab project webhook/delivery、独立 jar/容器/反向代理、`code_review_config`、`code_review_record`、MR 评论、Git Provider credential 和 CI 外部调用。没有实际活跃资源时直接物理移除，不再只做 archive/freeze。
 - dev 数据可丢弃，不要求导出记录或静默窗口；发现真实 webhook、共享 credential 或独立部署时先停手，避免对未确认外部资源产生副作用。
 - 如 Owner 决定恢复产品能力，应另立需求并按当前 ClientApp、BusinessTask/Function、task token 和审计边界重新设计，不能原样加回 launcher。
+- `2026-07-14` 实施回写：22 个 tracked files 与切片内配置已独立物理移除；仓内 reactor/launcher 未重新接入该能力。未发现并操作任何共享 GitLab webhook/credential；若后续发现此类外部资源，仍须单独授权处理。
 
 ### Echo Agent
 
@@ -386,6 +388,7 @@ outbox 可使用现有数据库，不要求 1.4.2 同时引入 Kafka，也不等
 - 先把仍有价值的统一任务分派、迁移测试、演示或探针依赖迁入明确的 dev/test fixture；生产装配和 discovery 必须显式关闭或删除。
 - fixture 迁移和引用扫描完成后，可从 launcher/runtime dependency 与生产发现中物理移除 Echo addon；是否保留根 reactor 中的测试 fixture 由最小可维护结构决定。
 - 不删除 `LocalEchoBusinessFunctionAdapterInvoker`，它不是 Echo Agent addon。
+- `2026-07-14` 实施回写：5 个 tracked addon files、根 reactor 与 launcher 装配已退出；`UnifiedAgentResolverTest` 的 test-only 内存 fixture 覆盖统一 discovery/resolve/send/query/cancel，定向 16/16 与 launcher 定向 6/6 tests 通过；`LocalEchoBusinessFunctionAdapterInvoker` 保留。后续 Repository CI run `29323068427` 已覆盖当前树。
 
 ### Owner 评审
 
@@ -424,6 +427,13 @@ outbox 可使用现有数据库，不要求 1.4.2 同时引入 Kafka，也不等
 - 不保留两个 artifact 版本、180 天或额外 minor 的二进制兼容窗口；仓内 Provider 样例、launcher reactor 和受影响 Worker 编译测试必须通过。
 - DTO/Form 只有在仍服务当前 typed/unified 契约时保留；不得因名称相似批量删除当前请求模型。
 - `TaskDispatchRequest.providerType` 仍服务统一 OpenAPI/独立执行，不属于本轮删除对象。
+
+### `2026-07-14` 实施回写（非验收）
+
+- Provider legacy bridge 由 `50351ada` 移除；Claude 旧 HTTP 与 deprecated task models 分别由 `73d31a19`、`edee0fc4` 移除；Codex unified extension/旧 HTTP/deprecated task models 分别由 `97240642`、`fb11137d`、`9008c554` 收口。
+- LangGraph 旧 HTTP 与请求体 reviewer 链路由 `9f3f1422` 迁移到 shared task `respond`；当前认证用户派生 `reviewedBy`，并先校验 user + tenant 的 task ownership 与 pending approval owner。
+- 仓内运行代码对三组旧 route、Controller 与对应旧类型的静态扫描为零；仍活跃的 LangGraph internal DTO、Codex OpenAPI/runtime DTO、通用 `TaskDispatchRequest.providerType` 与非 Provider deprecated API 不属于此切片，未按名称误删。
+- 本机 Claude/Codex/LangGraph clean reactor、定向/全量测试、前端类型检查/Vitest、Business Agent L3 TypeScript 检查均通过；Repository CI run `29323068427` 的 7 个 job 全部 `success`。该结果不替代真实 Provider Task、共享数据库、正式覆盖审计或验收。
 
 ### 回滚与否决条件
 

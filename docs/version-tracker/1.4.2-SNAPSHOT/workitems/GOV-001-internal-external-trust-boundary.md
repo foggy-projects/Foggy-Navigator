@@ -23,11 +23,11 @@ owner: platform-security-owner | session-owner | provider-owner
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| Workitem | in-progress | P2 显式外部门禁、task capability/terminal、Worker identity/pool 与 Gateway strict principal/lease 已部分落地；开关组合、OS 隔离、可靠 audit 与 P3 ownership 仍未完成 |
-| Implementation | partial | implementation_started: yes；`EXEC-142-013` 已完成 Gateway strict Worker header、DB preselect/prebind、LangGraph credential 传播与 Codex credential-configured fail-closed readiness；external 仍未启用 |
-| Automated test | partial-passed | launcher 依赖链 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 175 tests 中 174 pass/1 Windows skip、typecheck 通过 |
-| Manual verification | not-run | 尚未在双用户、双 ClientApp 或外部 Worker 环境验证 |
-| Experience verification | not-run | 尚未验证内部 UI 和外部配置/错误反馈 |
+| Workitem | in-progress | P2 显式外部门禁、task capability/terminal、Worker identity/pool 与 Gateway strict principal/lease 已部分落地；P3 ownership 首批和旧 Provider 契约收口已完成。开关组合、OS 隔离、可靠 audit、真实 Provider Task 和显式 system/admin 仍未完成 |
+| Implementation | partial | implementation_started: yes；`EXEC-142-013` 已完成 Gateway strict Worker header、DB preselect/prebind、LangGraph credential 传播与 Codex credential-configured fail-closed readiness；`2a705e09` 完成 ownership 首批，`9f3f1422` 完成 trusted approval；external 仍未启用 |
+| Automated test | partial-passed-local-and-hosted | launcher clean 15/15、2426 tests；截至正式闸门的最新已验证实现 head `9d03bee9` 对应 Repository CI run `29324741945` 7 jobs 全 success；隔离 H2 ownership live 浏览器 1 passed，mock Playwright 17 passed/1 live skipped |
+| Manual verification | partial-passed-isolated | 已在同 tenant 双用户 loopback/H2 验证 Session 列表、深链、history、SSE 与 direct-read；双 ClientApp、真实 Provider Task、non-loopback 和共享环境未运行 |
+| Experience verification | partial-passed-isolated | owner 深链正常，非 owner 显示无权限且不泄露资源内容；外部配置、审批/恢复与生产相似体验未验证 |
 | Production routing | unchanged | production_routing_changed: no |
 | External contract | scoped-change | 新增显式关闭/未就绪与严格 Gateway principal/lease 语义；未启用 external-enabled，不代表对外可用或生产批准 |
 
@@ -81,7 +81,7 @@ owner: platform-security-owner | session-owner | provider-owner
 | ClientApp control | control credential principal | tenant、ClientApp、审批/恢复对象 | control scope | scope 或绑定不匹配即拒绝并审计 | GOV-002 |
 | Biz Worker | 由受控任务启动上下文派生 | task、session、worker pool、workspace、tool/function scope | task-scoped token | token 缺失、过期、终态或越权即拒绝 | GOV-002 |
 | 系统/A2A 执行 | 具名 system principal 或可信调度上下文 | 明确的父子 session/task | 系统身份，不复用普通 userId 字段 | 未登记的系统例外拒绝 | GOV-003 |
-| 旧 Provider API | 当前本仓兼容入口 | 本仓消费者与运行/暂停任务状态 | 现有轻量认证或旧参数 | 本仓迁移、安全复核和 clean build 后同版删除，无仓外窗口 | GOV-002/CLEAN-004 |
+| 已退役旧 Provider API | 三组历史 HTTP 路由已退出当前树 | 仓内消费者已迁移到 shared task/Provider typed 能力 | 不再接受旧参数 | 静态扫描或测试若发现重引入即失败；通过独立 commit `git revert` 回滚，不恢复请求体 actor 信任 | GOV-002/CLEAN-004 |
 
 ## 已确认事实
 
@@ -99,7 +99,7 @@ owner: platform-security-owner | session-owner | provider-owner
 
 ### 认证与授权分层
 
-- `user-auth-module/src/main/java/com/foggy/navigator/auth/config/SecurityConfig.java` 对 Session、Task、旧 Provider、Open API、Business Agent 和 Worker Gateway 等多类路径使用 `permitAll`。
+- `user-auth-module/src/main/java/com/foggy/navigator/auth/config/SecurityConfig.java` 对 Session、Task、Open API、Business Agent 和 Worker Gateway 等多类路径使用 `permitAll`；三组旧 Provider matcher 已随路由删除退出。
 - `user-auth-module/src/main/java/com/foggy/navigator/auth/interceptor/AuthInterceptor.java` 在凭据有效时建立上下文，但拦截器自身不统一阻断所有请求；强制认证还依赖 `@RequireAuth` 或入口专用 credential/token 校验。
 - 因此 P0 必须建立“入口 -> principal resolver -> resource invariant -> audit”的清单，禁止把 `permitAll` 直接等同为匿名可调用，也禁止把 `@RequireAuth` 等同为已经完成资源归属校验。
 
@@ -108,12 +108,12 @@ owner: platform-security-owner | session-owner | provider-owner
 - `SessionController` 的删除路径带当前用户参数，但若干读取、消息和发送路径在 Controller 调用链中只传 `sessionId`。
 - `TaskController` 的单任务路径存在当前用户上下文，而按 Session 列表路径调用 `TaskDispatchFacade.listTasksBySession(sessionId)`。
 - `AgentTaskController` 和 `AgentTaskRepository.findByParentSessionId` 的静态签名未携带当前用户。
-- 以上是“ownership 谓词不一致”的静态结论，不在没有负向测试时宣称已证实跨用户利用。
+- 以上内容保留为规划时静态基线；`2a705e09` 已将首批 Session/Task/Agent/SSE/config/shared/forward 路径收敛到 user + tenant ownership，`9d03bee9` 已在隔离 H2 上完成真实双用户 Session 负向浏览器验证。尚未覆盖的 Provider Task、system/admin 和全列表路径仍不得外推。
 
 ### 外部边界
 
 - ClientApp runtime/control credential、upstream user grant、BusinessTask token 和 Worker Gateway 已有分层实现，但通用 Open API 的部分 task/session 查询静态谓词主要停留在 tenant + agent，未统一绑定 ClientApp/upstream user。
-- 旧 `LanggraphTaskController` 的 GET 接受 `userId` 参数，审批入口按 `taskId` 和请求体处理；`LanggraphTaskService` 会使用请求体 `reviewedBy`。该路径与新的 control credential 审批链路安全语义不一致。
+- 规划时旧 `LanggraphTaskController` 的 GET/approve 接受请求字段 actor；`9f3f1422` 已移除该 Controller/Form 并迁移到 shared task GET/respond，认证用户派生 `reviewedBy`，先校验 user + tenant task ownership 与 pending approval owner。该历史风险不得在新入口重现。
 - LangGraph 和 Codex SDK Worker 在 internal-dev 下仍保留 Token 为空时跳过 bearer 认证、默认监听 `0.0.0.0` 的既有开发行为；本批已为显式 external-enabled 增加 fail-closed/unready 门禁和可观测 reason，但 internal-dev 并不是网络防火墙，仍必须依赖可信网络、ACL 或主机防护。
 - Worker 的工作目录和工具策略已有实际校验实现，但空 allowlist、caller 可选的 sandbox/approval/network 参数和 external-enabled 默认上限仍需统一。
 
@@ -123,8 +123,8 @@ owner: platform-security-owner | session-owner | provider-owner
 |---|---|---|
 | 当前 dev 部署是否存在非 loopback + 空 Worker Token | 部署配置、进程参数、监听地址、readiness 响应与网络/ACL | 不宣称已完成运行态隔离验证；external-enabled 保持未批准 |
 | 同 tenant/Agent 下不同 ClientApp/upstream user 是否可读取相同 task/session | 双 ClientApp 负向 API 测试与访问日志 | 静态谓词不足不等于已复现漏洞 |
-| 内部 sessionId/taskId 是否可跨用户枚举和操作 | 两账号集成测试、UI/API 复现记录 | 不宣称 exploitability 已确认 |
-| 旧 Provider API 的本仓消费者 | PC、Mobile、SDK、CLI、L3、Worker、canary 的静态引用、契约测试与 clean build | 迁移和安全语义复核完成前不删除；完成后可同版物理删除，不等待仓外流量或兼容窗口 |
+| 内部 sessionId/taskId 是否可跨用户枚举和操作 | Session 已有两账号 UI/API/SSE 隔离证据；Task 仍需真实 Provider fixture | Session 子集可引用 `9d03bee9`；不得据此宣称 Task/system/admin 全面闭环 |
+| 旧 Provider API 的本仓消费者 | PC、Mobile、SDK、CLI、L3、Worker、canary 的迁移矩阵、静态扫描、clean build 与 hosted CI | 已完成当前仓内子切片；后续扫描出现重引入即阻断，不宣称非 Provider deprecated API 全仓清零 |
 | credential/token 的实际撤销、轮换和传播 | 管理 API、数据库、缓存、重启、多实例演练 | 不宣称生命周期闭环 |
 | 系统/A2A 任务所需 ownership 例外 | 任务样本、调用栈、Owner 说明 | 不允许通过宽泛 bypass 解决 |
 | 审计持久化、留存和拒绝事件覆盖 | 数据库表、索引、日志、查询、失败演练 | best-effort 日志不等同验收证据 |
@@ -175,7 +175,7 @@ owner: platform-security-owner | session-owner | provider-owner
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/WorkerGatewayService.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/controller/BusinessFunctionApprovalController.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessFunctionSuspensionService.java`
-- `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/controller/LanggraphTaskController.java`
+- `session-module/src/main/java/com/foggy/navigator/session/controller/SharedTaskController.java`
 - `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/service/LanggraphTaskService.java`
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/auth.py`
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/external_mode.py`
@@ -215,7 +215,7 @@ owner: platform-security-owner | session-owner | provider-owner
 - Codex SDK Worker：163 passed / 1 skipped，type-check 和 build 通过。
 - Codex app-server Worker：272 passed / 1 skipped，type-check 和 build 通过。
 - LangGraph Biz Worker：766 passed，build 通过。
-- self_check_decision: `continue-in-progress`；跨模块实现证据已回写，但手工网络/部署验证、浏览器体验和正式质量闸门均未执行。
+- self_check_decision: `continue-in-progress`；跨模块实现证据已回写。后续版本正式质量闸门已执行并为 `ready-with-risks`、版本签收已拒绝；手工网络/部署验证和 external 浏览器体验仍未执行。
 
 `EXEC-142-008` 是当时的首批门禁证据；后续 capability、credential/terminal 和 Gateway principal/lease 分别见 [Progress](../progress.md) 的 `EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`，不改写上述历史时点。
 
@@ -226,6 +226,8 @@ owner: platform-security-owner | session-owner | provider-owner
 3. LangGraph 已按可信 runtime worker/lease 传播严格 header，并以子进程环境 allowlist、无 profile shell、临时 askpass 和错误脱敏缩小 secret 暴露；Codex 因 CLI/MCP/工具环境共享而不安全转发长期 credential，配置后 readiness=false、Business MCP preflight 503。
 4. 本机验证为 launcher 依赖链 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 174 pass/1 Windows-only skip + typecheck。真实 L3、non-loopback、浏览器、hosted CI 与共享数据库均未运行。
 5. P2 仍为 `in-progress`：平台/Gateway 开关组合、OS 级隔离、Java LangGraph headerless client、Open API 远端孤儿补偿、pause/generation、reliable outbox、P3 ownership，以及 pool/worker 存量/并发冲突与 routeKind/schema 仍待处理。`production_routing_changed: no`、`external_enablement: no`。
+
+上述第 4、5 点是 `EXEC-142-013` 时点记录。后续 `2a705e09` 已完成 P3 ownership 首批，`9f3f1422` 已将 LangGraph 审批迁到 trusted shared-task respond；截至正式闸门的最新已验证实现 head `9d03bee9` 对应 Repository CI run `29324741945` 7 jobs 全 success，隔离 H2 双用户 ownership live 浏览器 1 passed。版本正式闸门已执行并拒绝；真实 Provider Task、双 ClientApp、non-loopback、共享数据库、可靠 outbox 与模块级签收仍未完成。
 
 ## 实施步骤
 
@@ -255,19 +257,19 @@ owner: platform-security-owner | session-owner | provider-owner
 
 ### 5. 兼容、灰度和运行态审计
 
-1. 旧 Provider API/SPI/DTO 先完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 迁移、安全语义复核和 clean build，再于同版物理删除；不要求仓外流量审计或兼容窗口。
+1. 旧 Provider API/SPI/DTO 已完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 迁移、安全语义复核和同版物理删除；后续禁止恢复旧 route/bridge，回滚按各独立 commit 执行。
 2. 外部 enforcement 按 ClientApp/Worker 显式 allowlist 灰度；不得用全局降级重新信任请求体字段。
 3. 对所有拒绝路径验证不会暴露资源存在性或明文凭据。
 
 ### 6. 证据和签收
 
 1. 自动化、手工和体验结果按 commit、环境、命令、退出码回写 Progress。
-2. P2/P3 完成后执行实现质量检查和覆盖审计；正式验收仍在 P7。
+2. 本轮版本级实现质量、覆盖审计和正式验收已执行并拒绝；P2/P3 blocker 关闭后按同一顺序重新执行，不沿用当前拒绝记录冒充通过。
 3. isolated smoke 与 production enablement 分开记录。
 
 ## 自动化测试计划
 
-当前状态：`partial-passed`；显式开关、路径门禁、Worker unready、平台 readiness 消费、task capability/terminal、Worker credential/pool 与 Gateway strict principal/lease 已有 `EXEC-142-008/011/012/013` 本地自动化证据；P3 资源归属、可靠审计、真实 L3/网络和体验测试仍未运行。
+当前状态：`partial-passed-local-and-hosted`；显式开关、路径门禁、Worker unready、平台 readiness 消费、task capability/terminal、Worker credential/pool、Gateway strict principal/lease 与 P3 ownership 首批已有自动化证据；截至正式闸门的最新已验证实现 head 对应 hosted CI 全绿，Session 双用户隔离 live 浏览器已通过。可靠审计、真实 Provider Task/L3、non-loopback、双 ClientApp 与共享环境仍未运行。
 
 1. 入口契约测试：每类入口在缺 credential、错误 credential、错误 scope 下 fail closed。
 2. 内部 ownership 负向测试：两用户交叉 sessionId/taskId 的读取、消息、操作、取消和恢复。
@@ -281,7 +283,7 @@ owner: platform-security-owner | session-owner | provider-owner
 
 ## 手工验证计划
 
-当前状态：`not-run`。
+当前状态：`partial-passed-isolated`；第 3 项 Session 子集已运行，其余仍 `not-run`。
 
 1. 使用两个 tenant、每个 tenant 两个 ClientApp、每个 ClientApp 两个 upstream user 创建独立任务。
 2. 验证正确主体可读取和操作自己的任务；交换任一 tenant、ClientApp、user、task、function 后被拒绝。
@@ -291,7 +293,7 @@ owner: platform-security-owner | session-owner | provider-owner
 
 ## 体验验证计划
 
-当前状态：`not-run`。
+当前状态：`partial-passed-isolated`；内部 `/c/:id` owner/非 owner 深链和稳定 403 反馈已运行，其余仍 `not-run`。
 
 1. 内部 UI：新建/继续会话、任务流式输出、刷新、深链、审批、恢复、取消不出现大面积回归。
 2. 越权反馈：用户看到稳定且不泄露资源存在性的错误，不出现空白页或无限重试。
@@ -324,7 +326,7 @@ owner: platform-security-owner | session-owner | provider-owner
 - [ ] 请求字段身份与可信 principal 的取值/校验规则明确，并被 GOV-002/GOV-003 采用。
 - [ ] Session/Task ownership 和 BusinessTask/task-token 不变量在统一门面落地，不依赖各 Controller 自行解释。
 - [x] 显式 external-enabled 在执行策略未齐时 unready，空 credential 会额外记录原因并 fail closed；已有本地契约测试，真实非 loopback 部署验证仍待执行。
-- [ ] 旧 Provider API 的本仓消费者迁移、安全语义复核、clean build 和回滚证据完成，并在同版物理删除。
+- [x] 旧 Provider API 的本仓消费者迁移、安全语义复核、clean build、hosted CI 和回滚提交已完成，并在同版物理删除；非 Provider deprecated API 不在此勾选范围。
 - [ ] 自动化、手工和体验矩阵均有实际结果；任何 `not-run` 都有阻塞或移出版本说明。
 - [ ] 内部 UI/可信内网主链没有大面积回归，外部负向矩阵通过。
 - [ ] isolated acceptance 与 production enablement 分别记录。
@@ -333,5 +335,5 @@ owner: platform-security-owner | session-owner | provider-owner
 ## 生产路由与外部契约状态
 
 - 当前：`production_routing_changed: no`；external contract 仅新增显式关闭/未就绪语义，未启用 external-enabled。
-- 实施影响：平台默认关闭 `/api/v1/open` 路由面，三类 Worker 仅在显式 external-enabled 配置意图下新增 unready/503 语义；internal-dev 的监听、空 Token 与业务入口认证行为保留，但平台对 health 缺失或显式 `ready=false` 的路由判定已收紧，可能影响内部异常场景。P3 越权响应仍未实施。
+- 实施影响：平台默认关闭 `/api/v1/open` 路由面，三类 Worker 仅在显式 external-enabled 配置意图下新增 unready/503 语义；internal-dev 的监听、空 Token 与业务入口认证行为保留，但平台对 health 缺失或显式 `ready=false` 的路由判定已收紧，可能影响内部异常场景。P3 首批越权响应已实施并在 Session 隔离浏览器验证，真实 Provider Task/system/admin 仍未闭合。
 - 启用门禁：任何 production routing、外部强制认证或旧入口下线必须有独立批准、灰度、监控和回滚证据，不能因本 workitem 完成而自动启用。

@@ -26,14 +26,14 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 | 项目 | 状态 | 说明 |
 |---|---|---|
 | Workitem | in-progress | 2026-07-14 Owner 已冻结当前 dev/internal 方案与未来外部开放门禁；P2 已完成 external gate、task capability、Worker credential/pool、definitive terminal、Gateway strict principal/lease、Biz Provider preselect/prebind 和 audit writer 隔离等本机切片 |
-| Implementation | partial | implementation_started: yes；`EXEC-142-013` 已接通 Gateway strict Worker header、exact principal/lease/resource 校验、DB preselect/prebind 与 LangGraph credential 传播；Codex credential 配置后刻意 unready，pause/generation、可靠审计 outbox、P3/L3 仍未完成 |
-| Automated test | partial-passed | launcher 依赖链 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 175 tests 中 174 pass/1 Windows skip、typecheck 通过；既有 migration 证据保持，真实 L3 未运行 |
+| Implementation | partial | implementation_started: yes；`EXEC-142-013` 已接通 Gateway strict Worker header、exact principal/lease/resource 校验、DB preselect/prebind 与 LangGraph credential 传播；`9f3f1422` 已将旧 LangGraph request-body reviewer 迁到 shared task trusted respond；旧 Provider 契约子切片已退出。Codex credential 配置后刻意 unready，pause/generation、可靠审计 outbox 与真实 L3 仍未完成 |
+| Automated test | partial-passed-local-and-hosted | launcher 本机 clean、LangGraph/Codex 全量与 migration 隔离证据保持；截至正式闸门的最新已验证实现 head `9d03bee9` 对应 Repository CI run `29324741945` 7 jobs 全 success；真实外部 L3 未运行 |
 | Manual verification | not-run | 未执行双 tenant/ClientApp/upstream user/task/function 矩阵 |
 | Experience verification | not-run | 未检查外部配置、错误提示或审批恢复体验 |
 | Production routing | unchanged | production_routing_changed: no |
 | External contract | scoped-change | 新增显式关闭/未就绪、capability/terminal fail-closed 与严格 Worker principal/lease 契约；external-enabled 仍关闭且未启用，没有生产批准 |
 
-本文已回写 `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012` 和 `EXEC-142-013`。所有迁移脚本只在一次性 MySQL 8.0.44/8.4.8 容器执行，没有操作项目共享数据库；没有执行真实 L3、凭据流量、外部部署、浏览器验证或生产路由变更。
+本文已回写 `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012` 和 `EXEC-142-013`，后续旧 Provider/trusted approval 与 hosted 证据见 [Progress](../progress.md)。所有 migration 脚本只在一次性 MySQL 8.0.44/8.4.8 容器执行，没有操作项目共享数据库；Session ownership 隔离浏览器已经运行，但不能替代本工作项所需的真实 ClientApp/Worker L3、凭据流量或外部部署。生产路由未变更。
 
 ## 目标
 
@@ -66,7 +66,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 1. 不实现通用 IAM、RBAC/ABAC 或全平台 Spring Security 重构。
 2. 不一刀切关闭 loopback/internal-dev Worker。
 3. 不在本工作项实现动态插件或多实例 SSE 事件总线。
-4. 不为尚未投产的旧 Provider API、deprecated SPI/DTO 建立生产兼容窗口；但删除前仍须完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 消费者迁移、安全语义复核和 clean build。
+4. 不为已退役旧 Provider API、deprecated SPI/DTO 恢复生产兼容窗口；其本仓消费者迁移、安全语义复核、clean build 与 hosted CI 已完成，非 Provider deprecated API 不在该结论内。
 5. 不把所有外部任务强制成同一种 Provider、sandbox 或审批策略；只冻结服务端安全上限。
 6. 不把隔离 smoke 等同于 production enablement。
 
@@ -133,11 +133,11 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 - `generation` 当前固定为 1，尚无 resume/重调度轮换；definitive terminal 已通过持久化 tombstone fail closed，并以物理 `REVOKED` 作为可重试 materialization。pause/suspension、cancel 与 generation 轮换仍未闭合，不能把完整 token 生命周期标记完成。
 - `BusinessAgentTaskScopedTokenRuntimeStore` 仍使用单 JVM 内存缓存保存运行时明文 token；v2 只允许 `tenant + session + task` 精确键，缺少 taskId 不再退化为 session token；hash-conditional removal 可避免撤销旧 token 时删除同 task 的新 token，但重启、多实例恢复仍未解决。
 
-### 审批、恢复与旧接口
+### 审批、恢复与旧接口（规划基线与当前结果）
 
 - 新 `BusinessFunctionApprovalController` + `BusinessFunctionSuspensionService` 会校验 control principal 和持久化 binding，并在执行前再次校验。
-- 旧 `LanggraphTaskController` 没有相同的 credential/binding 语义：GET 接受 `userId` 参数；approve 仅按 taskId + form；`LanggraphTaskService` 使用 `form.reviewedBy` 写审批记录并异步恢复 Worker。
-- 旧链路直接对应“不能只凭 taskId”和“不能信任 reviewedBy”的迁移需求。项目尚未生产、上游均在本机共同孵化，因此无需外部客户兼容期；完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 消费者迁移、安全语义复核和 clean build 后，可在 1.4.2 同版本物理删除。
+- 规划时旧 `LanggraphTaskController` 没有同等 credential/binding 语义：GET 接受 `userId`，approve 使用 taskId + form，`reviewedBy` 来自请求体。
+- `9f3f1422` 已将仓内 GET/approve 消费者迁到 shared task GET/respond 并物理删除旧 Controller/Form；respond 从认证用户派生 reviewer，并校验 user + tenant task ownership 与 pending approval owner。该内部可信主体链不等于外部 ClientApp control credential 链完成，外部审批/恢复/取消仍须继续 GOV-002 矩阵。
 
 ### Worker 与执行策略
 
@@ -161,7 +161,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 | runtime/task token 的撤销、轮换、过期传播 | 单 token 与按 task 批量撤销及 hash-conditional alias cleanup 已有定向测试；仍需 API/DB/缓存演练，含重启、多实例和 generation 轮换 | 只登记首个撤销切片，不宣称 token 生命周期闭环 |
 | task terminal/cancel 后 token 是否立即失效 | definitive terminal tombstone、late-bind 撤销和错误物理重开均有自动化证据；cancel、pause/suspension 和 generation 仍需创建任务后的重放矩阵 | definitive terminal 为 partial-passed；完整 AC-05 未通过 |
 | 同 tenant/Agent 下跨 ClientApp/user 读取 | 双 ClientApp/user task/session 负向矩阵 | 未通过前外部隔离不可签收 |
-| 旧 LangGraph/Claude/Codex API 本仓消费者 | PC、Mobile、SDK、CLI、L3、Worker、canary 的静态引用、契约测试和 clean build | 未完成迁移与验证前不得删除；不要求外部客户流量或静默窗口 |
+| 旧 LangGraph/Claude/Codex API 本仓消费者 | PC、Mobile、SDK、CLI、L3、Worker、canary 的迁移矩阵、静态扫描、clean build 与 hosted CI | 当前子切片已完成；后续重引入旧 route/bridge/form/DTO 即阻断，非 Provider deprecated API 独立治理 |
 | 非 loopback 与空 Token 的实际部署 | 环境变量、启动参数、监听地址、网络策略与 readiness 响应 | 本地契约门禁已通过，真实网络部署未验证；external enablement 保持未批准 |
 | allowed dirs/tools/sandbox/network 的实际配置 | 任务运行上下文、Worker 日志、越界测试 | 未通过前不对外启用高权限模式 |
 | 审计表、留存、拒绝事件和查询能力 | schema、索引、数据样本、失败注入、告警 | AC-02/03 不得只凭日志签收 |
@@ -176,7 +176,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 | token 生命周期 | ODR-142-003：30 分钟租约、上限 60 分钟；暂停/终态失效；支持人工/批量撤销和 generation 轮换 | Business Agent/Operations | TTL、单 token/按 task 撤销、runtime alias cleanup 与 definitive terminal tombstone 已实施；pause/suspension、cancel、可信管理入口、generation 轮换和跨实例恢复未实施，external enablement 不批准 |
 | Worker 绑定 | ODR-142-003：task token 绑定逻辑 lease，Gateway 还须校验独立 Worker principal/credential 或 PoP；重调度签发新 generation 并撤销旧 token | Worker/Platform | Worker credential v1、DB preselect/prebind、strict Gateway principal/header/lease 与 LangGraph 传播已实施；Codex 安全转发、OS 隔离、PoP、generation 轮换和真实跨 Worker 验证仍未实现 |
 | 外部 Codex/LangGraph 安全上限 | ODR-142-004：双模式、默认拒绝、`workspace-write`、任务工具 egress 默认拒绝并保留控制面/LLM 基础 allowlist、非 loopback 缺凭据 unready/fail closed | Worker/Security | 显式开关和 unready/fail-closed 骨架已实施；完整 workspace/tool/sandbox/network 安全上限未实施，external 保持未启用 |
-| 旧 Provider API、deprecated SPI/DTO | ODR-142-007 已批准：不设生产或外部兼容窗口；本仓消费者迁移、安全语义复核和 clean build 后在 1.4.2 同版本删除 | Provider/API/SDK owner | 删除前不扩大消费者；运行中任务状态按版本化迁移规则收口 |
+| 旧 Provider API、deprecated SPI/DTO | ODR-142-007 已批准：不设生产或外部兼容窗口；本仓消费者迁移、安全语义复核和 clean build 后在 1.4.2 同版本删除 | Provider/API/SDK owner | 已完成当前 Provider 子切片并通过 hosted CI；禁止恢复旧路由/bridge，请按独立提交回滚整个安全一致切片 |
 | 审计保证级别 | ODR-142-005：本地关键状态事务 outbox；无状态拒绝可靠落档；远程调用意图/结果分段记录；高频遥测 best-effort | Security/Operations | best-effort writer 已完成事务隔离；关键拒绝、审批和外部副作用 outbox 未实现，不宣称审计完备 |
 
 ### 仍待实施级 Owner 决策
@@ -237,8 +237,8 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ### LangGraph/Codex Biz Worker
 
-- `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/controller/LanggraphTaskController.java`
-- `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/model/form/ApproveTaskForm.java`
+- `session-module/src/main/java/com/foggy/navigator/session/controller/SharedTaskController.java`
+- `session-module/src/main/java/com/foggy/navigator/session/service/TaskDispatchFacade.java`
 - `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/service/LanggraphTaskService.java`
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/config.py`
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/auth.py`
@@ -322,7 +322,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 - 随后新增单 token/按 task/按明文撤销、hash-conditional alias cleanup、安全随机 token、plain/hash 不变量、绑定 tuple 不可变、launcher/Open API/外层回滚补偿、无 taskId fail-closed，以及 bind/revoke 组合时序下最终不复活的测试。
 - 最终 `mvn -B -pl business-agent-module -am test`：5/5 reactor SUCCESS，770 tests、0 failure/error/skip；其中 `business-agent-module` 510 tests。真实 H2 JPA 用例 2/2 提供 `REQUIRES_NEW` + rollback compensation 及 bind/revoke 组合时序下 token 最终不复活的证据；该用例不声称确定性复现或证明悲观锁交错。
 - 修复后跨模块定向矩阵为 Open API mapping 43 + LangGraph Business Agent E2E 2 + Codex launcher/route、`CodexBizTaskProvider`、`CodexTaskService` 92，共 137 tests、10/10 reactor SUCCESS。Open API 子集覆盖 submit 已知/意外异常、空 task/taskId、bind 失败，以及补偿撤销自身失败不遮蔽原响应或异常。
-- forward/rollback 脚本已在一次性 MySQL 8.0.44/8.4.8 容器验证（含幂等及回滚前撤销 ACTIVE token）；共享/项目数据库迁移、launcher `ddl-auto=validate`、真实 Worker、双 ClientApp/user 手工矩阵、浏览器体验、hosted CI 和正式验收均未执行。
+- forward/rollback 脚本已在一次性 MySQL 8.0.44/8.4.8 容器验证（含幂等及回滚前撤销 ACTIVE token）；本条形成时共享/项目数据库迁移、launcher `ddl-auto=validate`、真实 Worker、双 ClientApp/user 手工矩阵、浏览器体验、hosted CI 和正式验收均未执行。后续 hosted CI 已通过、版本签收已拒绝，其余运行态缺口仍未执行。
 
 ### 明确保留的未完成项
 
@@ -418,9 +418,9 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ### 5. 隔离旧审批链路
 
-1. 对 `/langgraph-tasks`、`/claude-tasks`、`/codex-tasks`、deprecated SPI/DTO 完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 静态引用与契约清单。
-2. 将仍在使用的本仓消费者迁移到可信 principal、持久化 binding 和当前 Provider/Business Agent 入口；不保留请求体 `reviewedBy` 作为可信 actor。
-3. 完成安全语义复核、相关自动化测试和全仓 clean build 后，在 1.4.2 同版本物理删除旧入口与兼容类型；无需外部客户流量审计、静默窗口或生产兼容开关。
+1. 已对 `/langgraph-tasks`、`/claude-tasks`、`/codex-tasks`、Provider deprecated SPI/DTO 完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 静态引用与契约清单。
+2. 已将本仓消费者迁移到可信 principal、持久化 binding、shared task 和当前 Provider/Business Agent 入口；LangGraph 不再保留请求体 `reviewedBy` 作为可信 actor。
+3. 已在安全语义复核、相关自动化测试和 clean build 后，于 1.4.2 同版本物理删除旧入口与兼容类型；截至正式闸门的最新已验证实现 head 对应 hosted CI 全绿，无外部客户流量审计、静默窗口或生产兼容开关。
 4. 若扫描发现共享环境、独立部署或生产资源，立即停止该切片并升级为 Owner 决策，不以“dev 阶段”推断可删除。
 
 ### 6. Worker external readiness 与执行策略
@@ -439,13 +439,13 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 
 ### 8. 兼容、灰度与签收
 
-1. 本仓 Open SDK、PC、Mobile、CLI、L3、Worker、canary 先迁移到新契约，再删除旧 Provider API、deprecated SPI/DTO；不建立外部客户兼容窗口。
+1. 本仓 Open SDK、PC、Mobile、CLI、L3、Worker、canary 已迁移到新契约并删除旧 Provider API、deprecated SPI/DTO；不建立外部客户兼容窗口，也不恢复兼容层。
 2. 对已经签发、仍在运行或暂停待恢复的 task token/state 使用版本化读取、排空或显式迁移，防止任务无法恢复；这是运行状态安全门禁，不是对外兼容期。
 3. 禁止回滚到请求体身份信任；完成自动化、手工、体验、迁移和回滚演练后，进入 P7 覆盖审计与正式签收。
 
 ## 自动化测试计划
 
-当前状态：`partial-passed`；external switch/readiness/fail-closed、平台消费、task capability v2、Worker credential/pool、definitive terminal、Gateway strict principal/credential header/lease、DB preselect/prebind、LangGraph credential/secret boundary、Codex configured-credential unready 和 best-effort audit writer 隔离已有本地自动化证据。pause/suspension/cancel、generation、Codex 安全转发、OS 隔离、跨实例、Open API ownership、reliable audit/outbox 及真实 L3 仍 `not-run`。
+当前状态：`partial-passed-local-and-hosted`；external switch/readiness/fail-closed、平台消费、task capability v2、Worker credential/pool、definitive terminal、Gateway strict principal/credential header/lease、DB preselect/prebind、LangGraph credential/secret boundary、trusted shared-task respond、旧 Provider 契约删除、Codex configured-credential unready 和 best-effort audit writer 隔离已有自动化证据，截至正式闸门的最新已验证实现 head 对应 hosted CI 7 jobs 全绿。pause/suspension/cancel、generation、Codex 安全转发、OS 隔离、跨实例、Open API ownership、reliable audit/outbox 及真实外部 L3 仍 `not-run`。
 
 ### Credential 与 identity
 
@@ -493,7 +493,7 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 4. 在任务运行、完成、取消和 token 过期后分别重放 Gateway 调用。
 5. 分别启动 loopback internal-dev、non-loopback external-enabled 有 Token和无 Token配置，检查 readiness 与日志。
 6. 检查 Codex/LangGraph 的工作目录、附加目录、工具、函数、sandbox 和网络边界。
-7. 对旧 `/langgraph-tasks`、`/claude-tasks`、`/codex-tasks` 和 deprecated SPI/DTO 完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 的静态引用、契约测试和 clean build；不以单次 `rg` 无命中代替组合证据。
+7. 已对旧 `/langgraph-tasks`、`/claude-tasks`、`/codex-tasks` 和 Provider deprecated SPI/DTO 完成本仓迁移、静态引用、契约测试、clean build 与 hosted CI；后续手工检查只验证未重引入，不把非 Provider deprecated API 误算为本切片残留。
 
 ## 体验验证计划
 
@@ -539,12 +539,12 @@ owner: business-agent-owner | clientapp-owner | provider-owner | security-owner
 - [x] 三类 Worker 均使用单一显式、默认 `false` 的开关，不由其他配置隐式开启；平台 Open API 路由面亦默认关闭。
 - [ ] workspace、目录、工具、函数、sandbox、approval、network 上限由服务端控制。
 - [ ] 成功、拒绝、暂停、审批、恢复、取消、失败、过期和撤销审计可查询且不泄露明文凭据。
-- [ ] 本仓 Open SDK、PC、Mobile、CLI、L3、Worker、canary 已迁移并通过安全语义复核与 clean build；旧 Provider API、deprecated SPI/DTO 已在同版本删除，不保留生产/外部兼容窗口。
+- [x] 本仓 Open SDK、PC、Mobile、CLI、L3、Worker、canary 已迁移并通过安全语义复核、clean build 与 hosted CI；旧 Provider API、Provider deprecated SPI/DTO 已在同版本删除，不保留生产/外部兼容窗口。
 - [ ] 已签发且仍在运行/暂停的任务完成 token/state 版本化读取、排空或迁移验证，旧 API 删除不破坏任务恢复安全。
 - [ ] 自动化、手工、体验和回滚演练结果回写 Progress；AC-02 至 AC-06 有可定位证据。
 
 ## 生产路由与外部契约状态
 
 - 当前：`production_routing_changed: no`，`production_enablement: not-applicable`；external contract 仅新增显式关闭/未就绪错误语义，没有启用 external-enabled。
-- 实施影响：平台 `/api/v1/open` 与 Gateway external 路由面均默认关闭；internal-dev 只有完全缺失 Worker principal header 时保留 Gateway token-only 兼容，partial/legacy header fail closed。task capability v2、Worker credential v1、pool/identity route、Gateway strict principal/lease、Biz Provider preselect/prebind、definitive terminal、LangGraph credential 传播、Codex credential-configured unready 与 best-effort audit writer 隔离已实施；开关组合、Codex 安全转发、OS 隔离、pause/generation、Open API ownership、reliable audit/outbox、真实 L3 和旧接口删除仍未完成。
+- 实施影响：平台 `/api/v1/open` 与 Gateway external 路由面均默认关闭；internal-dev 只有完全缺失 Worker principal header 时保留 Gateway token-only 兼容，partial/legacy header fail closed。task capability v2、Worker credential v1、pool/identity route、Gateway strict principal/lease、Biz Provider preselect/prebind、definitive terminal、LangGraph credential传播/trusted respond、旧 Provider 契约删除、Codex credential-configured unready 与 best-effort audit writer 隔离已实施；开关组合、Codex 安全转发、OS 隔离、pause/generation、Open API ownership、reliable audit/outbox 与真实外部 L3 仍未完成。
 - 启用门禁：`external-enabled` 必须显式且默认 `false`；signed assertion 或等强用户证明、SDK/调用方迁移、负向矩阵、审计、安全上限与回滚证据缺一不可。隔离测试通过不自动批准真正外部开放。

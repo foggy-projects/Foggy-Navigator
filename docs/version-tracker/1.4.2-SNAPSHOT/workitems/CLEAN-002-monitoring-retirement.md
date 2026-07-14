@@ -64,6 +64,7 @@ Project Owner 于 `2026-07-14` 确认当前项目仍处于 dev 阶段、尚未�
 | `bash -n scripts/start-all.sh` | passed | shell 语法通过；未实际启动整套服务 |
 | `mvn -B -pl launcher -am clean test` | passed | launcher 依赖链从 clean 状态编译和测试通过 |
 | 根前端 full matrix | passed | 纳入范围的类型检查、测试和构建通过，覆盖 PC 删除切片后的编译链 |
+| Repository CI run `29324741945` | passed-hosted | 截至正式闸门的最新已验证实现 head `9d03bee9` 的 Java、前端和五类 Worker共 7 jobs 全 success；不替代 Monitoring 专属启动/体验验证 |
 
 ### 尚未执行或需要运行态确认
 
@@ -71,7 +72,7 @@ Project Owner 于 `2026-07-14` 确认当前项目仍处于 dev 阶段、尚未�
 2. 未查询 `monitoring_events` 的表结构、数据量、最后写入或实例归属，也未执行 drop、truncate、导出或备份。
 3. 未检查主机 venv、独立镜像、自定义 JAR/classpath、部署配置、dashboard、告警或第三方脚本。
 4. 未执行真实 `scripts/start-all.sh` 启动 smoke、浏览器导航/深链体验验证或替代观测路径检查。
-5. 新增/调整的 GitHub Actions 全仓 CI 尚未在 GitHub runner 上实际运行；本地通过不能替代远端 CI 证据。
+5. GitHub Actions Repository CI 7-job 矩阵已在截至正式闸门的最新已验证实现 head 对应 hosted runner 实际通过；branch protection、修复后 nightly 与 Monitoring 专属启动/体验仍未执行。
 
 ## 已移除切片
 
@@ -140,7 +141,7 @@ Project Owner 于 `2026-07-14` 确认当前项目仍处于 dev 阶段、尚未�
 
 - 自动化测试：Java clean reactor 和根前端 full matrix passed，`bash -n` passed。
 - 手工验证：not-run。
-- 风险：本地通过不等于 GitHub Actions 或真实部署通过。
+- 风险：本地与 hosted CI 通过仍不等于真实启动、部署或替代观测体验通过。
 - 回滚：任一后续构建回归可单独 revert Monitoring 切片，不能以恢复匿名放行作为长期修复。
 - 完成判据：当前本地自动化基线已通过。
 - 生产路由或外部契约：`no`。
@@ -178,19 +179,20 @@ Project Owner 于 `2026-07-14` 确认当前项目仍处于 dev 阶段、尚未�
 - [x] RabbitMQ、数据库、部署和第三方资源没有被本轮擅自操作。
 - [ ] 当前权威文档已完成同步，历史文档与当前状态不混淆。
 - [ ] 浏览器体验、真实启动 smoke 和替代日志/health 诊断路径已验证。
-- [ ] GitHub Actions 全仓 CI 已在远端 runner 实际通过，或明确记录为签收前待证。
+- [x] GitHub Actions Repository CI 7-job 矩阵已在截至正式闸门的最新已验证实现 head `9d03bee9` 的远端 runner 实际通过（run `29324741945`，7 jobs success）。
 - [ ] 最终 `git diff --check`、Markdown 相对链接和全局引用扫描通过并回写 [Progress](../progress.md)。
-- [ ] 正式质量检查、覆盖审计和签收完成。
+- [x] 版本正式质量检查、覆盖审计和签收已执行，结论为 `ready-with-risks / needs-more-tests / rejected`；本工作项仍未单独签收。
 
 ## 当前状态
 
 - development_status: `in-progress`（代码切片已移除，当前文档同步中）
-- testing_status: `partial-pass`（本地 clean Java、前端矩阵和 shell 语法已通过；远端 CI 未运行）
+- testing_status: `partial-pass-local-and-hosted`（本地 clean Java、前端矩阵和 shell 语法已通过；截至正式闸门的最新已验证实现 head hosted CI 7 jobs success；专属启动/体验未运行）
 - experience_status: `not-run`
 - external_resource_cleanup: `not-run`
 - production_routing_changed: `no`
 - dev_source_contract_changed: `yes`（旧 `/api/v1/monitoring/**` 源码已移除）
 - production_enablement: `not-applicable`
-- acceptance_status: `not-started`
+- acceptance_status: `rejected`
+- acceptance_record: [Version Signoff](../acceptance/version-signoff.md)
 
 本 workitem 保持 `in-progress`，直至当前文档和体验证据闭合；本地自动化通过不等同于生产批准，也不证明未知外部资源已经退役。

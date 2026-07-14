@@ -24,15 +24,16 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| Workitem | in-progress | ownership 窄门面及首批 Session/Task 调用面已落地，剩余列表、系统主体与运行态门禁未闭环 |
-| Implementation | partial-implemented-local | implementation_started: yes；统一使用 `userId + tenantId` 校验 Session/Task，并收紧 Agent、SSE、config、shared、forward 与 context 绑定路径 |
-| Automated test | partial-passed-local | `EXEC-142-014` 定向 Maven 176 tests 通过；`mvn -B -pl launcher -am clean test` 15/15 reactor、2426 tests 全通过。hosted CI 与真实 L3 尚未执行 |
-| Manual verification | not-run | 未执行两账号内部 UI/API 主链验证 |
-| Experience verification | not-run | 未验证深链、刷新、重连和越权错误体验 |
+| Workitem | in-progress | ownership 窄门面、首批 Session/Task 调用面和 LangGraph 审批统一入口已落地；剩余列表、系统主体、真实 Provider Task 与共享数据库门禁未闭环 |
+| Implementation | partial-implemented-local | implementation_started: yes；`2a705e09` 统一使用 `userId + tenantId` 校验 Session/Task，并收紧 Agent、SSE、config、shared、forward 与 context 绑定路径；`9f3f1422` 将 LangGraph 审批收口到统一 respond 链路 |
+| Automated test | partial-passed-local-and-hosted | `EXEC-142-014` 定向 Maven 176 tests 通过；`mvn -B -pl launcher -am clean test` 15/15 reactor、2426 tests 全通过；截至正式闸门的最新已验证实现 head `9d03bee9` 对应 GitHub Repository CI `29324741945` 共 7 个 job 全部成功 |
+| Isolated browser verification | partial-passed-isolated | `9d03bee9` 增加隔离 H2 真实双用户 Playwright；owner list/深链/history 成功，non-owner list 隐藏且 history/SSE/direct read 返回 403，通用拒绝体不泄露 sessionId、标题或 owner 用户名 |
+| Manual verification | not-run | 已有真实 UI 自动化证据，但尚未执行人工双账号内部主链、多 Provider Task 操作与共享数据库验证 |
+| Experience verification | partial-passed-isolated | 隔离环境已验证 owner 深链与 non-owner “无权限访问”体验；刷新/重连、Task Pane、多 Provider 审批/恢复/取消仍未运行 |
 | Production routing | unchanged | production_routing_changed: no |
-| External contract | unchanged | external_contract_changed: no；越权请求行为计划定向收紧 |
+| External contract | changed-dev-tree | external_contract_changed: yes（development tree）；旧 LangGraph approval HTTP 路由已移除，统一使用 `/api/v1/tasks/{taskId}/respond`；当前无生产契约 |
 
-本批次修改了 Session/Task 归属门面及其 Controller、service、repository 和测试调用面，没有修改 UI、生产路由或外部启用配置。定向自动化通过只证明已覆盖的本地代码路径，不等同真实双账号漏洞复现、完整列表覆盖、hosted CI、体验验证或正式验收。
+当前已有本地定向、launcher clean、hosted CI 和隔离 H2 双用户真实浏览器证据。隔离用例只验证 Session list/深链/history/SSE/direct read 边界，不等同真实 Provider Task 矩阵、共享数据库数据扫描、人工体验、正式验收或生产批准。
 
 ## 当前执行批次（`EXEC-142-014`）
 
@@ -52,7 +53,24 @@ owner: session-owner | provider-owner | internal-ui-owner
 - model config `ownerType/ownerId` 与 Worker grant 的最终授权语义尚待 Owner 明确，当前只执行“metadata 完整 + tenant 一致 + grant 通过”的保守门禁。
 - Provider 返回 sessionId 已重新授权；Provider 返回 taskId 的信任和落库一致性仍需继续治理。
 - 管理员、system、A2A/恢复路径尚无具名显式通路；当前不以空 user/tenant 或全局 admin bypass 放行。
-- 真实双账号 API/浏览器、hosted CI、Provider L3、历史数据扫描、性能/N+1 与正式质量/覆盖/验收门禁均未执行。
+- Session 的隔离 H2 双用户浏览器与 hosted CI 已执行；版本正式质量/覆盖/验收门禁也已执行并给出 `ready-with-risks / needs-more-tests / rejected`。真实 Provider Task fixture/L3、共享数据库、历史数据扫描、性能/N+1、人工体验和本工作项模块级签收仍未执行。
+
+## 后续归属与运行态证据
+
+### LangGraph 审批统一 respond（`9f3f1422`）
+
+1. 删除 `LanggraphTaskController` 及 `ApproveTaskForm`，前端、Business Agent L3 和 dev bootstrap 迁移到 `/api/v1/tasks/{taskId}/respond`。
+2. `TaskController`/`TaskDispatchFacade` 先使用已认证的 `userId + tenantId` 解析已授权 Task，再路由到 Provider command；LangGraph 只接受该可信主体并查询同一用户的 pending approval。
+3. `reviewedBy` 由已认证用户强制设置；请求体中的 `userId`、`reviewedBy` 不能改变调用主体。respond 请求体仅提取 approval decision/comment 的约定字段。
+4. 该提交同时保留 LangGraph 内部 `LanggraphTaskDTO` 和 `CreateLanggraphTaskForm`；它们仍被 A2A、Business Agent launcher 与 service 使用，不属于本次删除的 deprecated HTTP DTO/form。
+
+### 隔离 H2 真实双用户浏览器（`9d03bee9`）
+
+- 测试路径：`packages/navigator-frontend/e2e/ownership-live.spec.ts`。
+- 环境边界：仅允许 loopback 前端，必须显式设置 `OWNERSHIP_LIVE_E2E=1` 和 `OWNERSHIP_E2E_ISOLATED=1`；后端使用一次性 H2，不访问共享数据库或既有 Worker。
+- 正向：owner 通过真实登录 UI 创建 Session，list 可见，`/c/:id` 深链可打开，history 返回 200，测试后由 owner 删除资源。
+- 负向：non-owner list 不包含该 Session 或标题，history、SSE subscribe 和 direct read 均返回 403，页面显示“无权限访问”，通用拒绝体不包含 sessionId、标题或 owner 用户名。
+- 限制：该 fixture 没有创建真实 Provider Task，因此不证明 task get/respond/reconnect/resync/rewind/resume/cancel 矩阵；共享 DB 验证也保持 `not-run`。
 
 ## 目标
 
@@ -154,13 +172,13 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 | 待证项 | 所需证据 | 未证实前限制 |
 |---|---|---|
-| sessionId 跨用户读取/发送消息是否可达 | 两账号 API 集成测试、日志、实际响应 | 不宣称漏洞已复现 |
+| sessionId 跨用户读取是否可达 | 隔离 H2 双账号 API/浏览器、实际响应 | `9d03bee9` 已证实 non-owner history/SSE/direct read 返回 403 且 list 不可见；发送消息、共享 DB 与历史数据仍不在本证据内 |
 | taskId 跨用户 get/respond/reconnect/resync/rewind/resume/cancel | Provider 全矩阵负向测试 | AC-01/GOV-003 未签收 |
 | 按 sessionId 列 Task/AgentTask 是否泄露 | 两账号父子资源测试 | 不仅凭方法签名定性生产影响 |
 | 历史 Session/Task 缺失或冲突 owner 的数量 | 数据库只读统计、迁移报告 | 未盘点前不启用严格全量 enforcement |
 | 系统/A2A/定时恢复所需例外 | 调用链、任务样本、Owner 签字 | 不允许通用 bypass |
 | 管理员真实使用场景 | 内网 API/UI、运维手册、审计样本 | 未确认前只定义最小候选范围 |
-| UI 深链 `/c/:id`、刷新、重连依赖 | Playwright/手工体验与路由调用 | 不删除或禁用深链 |
+| UI 深链 `/c/:id`、刷新、重连依赖 | Playwright/手工体验与路由调用 | 隔离 Playwright 已覆盖 owner/non-owner 深链与 history；刷新、重连和 Task Pane 仍待证，不删除或禁用深链 |
 | ownership 校验的性能影响 | 查询计划、批量列表基准、N+1 检查 | 性能未验证前不做全量强制发布 |
 
 ## 决策项
@@ -265,7 +283,7 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 ## 自动化测试计划
 
-当前状态：`partial-passed-local`。`EXEC-142-014` 的 Session/Task ownership 定向 Maven 矩阵共计 176 tests，命令通过；随后执行 `mvn -B -pl launcher -am clean test`，15/15 reactor `SUCCESS`，全 reactor 2426 tests、0 failure/error/skipped，launcher 7 tests，总耗时 05:24。日志存在测试 JVM 退出后 30 秒的 fork kill 非失败诊断提示，但命令 exit 0。真实双账号 API、浏览器、Provider L3、全列表 tenant 贯穿与 hosted CI 不在本条证据内。
+当前状态：`partial-passed-local-and-hosted-with-isolated-browser`。`EXEC-142-014` 的 Session/Task ownership 定向 Maven 矩阵共计 176 tests，命令通过；随后执行 `mvn -B -pl launcher -am clean test`，15/15 reactor `SUCCESS`，全 reactor 2426 tests、0 failure/error/skipped，launcher 7 tests，总耗时 05:24。日志存在测试 JVM 退出后 30 秒的 fork kill 非失败诊断提示，但命令 exit 0。截至正式闸门的最新已验证实现 head `9d03bee9` 对应 GitHub Repository CI run [`29324741945`](https://github.com/foggy-projects/Foggy-Navigator/actions/runs/29324741945) 中 Java、frontend、3 类 Node Worker 和 2 类 Python Worker 共 7 个 job 全部成功。同一提交的隔离 H2 双用户 Playwright 也已通过已登记场景。版本正式门禁已执行并拒绝；真实 Provider Task fixture/L3、全列表 tenant 贯穿、共享数据库和本工作项模块级签收不在这些自动化证据内。
 
 ### Session
 
@@ -297,7 +315,7 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 ## 手工验证计划
 
-当前状态：`not-run`。
+当前状态：`not-run`。隔离 H2 上的真实 UI Playwright 是自动化运行态证据，不冒充人工验证。
 
 1. 使用内部账号 A/B 分别创建 Session、发送消息、创建多 Provider Task 和 A2A 子任务。
 2. 交换 sessionId、taskId、contextId、parentSessionId，验证读取、消息、列表和所有操作均被拒绝。
@@ -308,7 +326,7 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 ## 体验验证计划
 
-当前状态：`not-run`。
+当前状态：`partial-passed-isolated`。owner 深链/history 及 non-owner 无权页面已有真实浏览器自动化证据；其余项目仍按下列计划执行。
 
 1. 内部 UI 的会话列表、会话页、Task Pane、审批、恢复、取消、刷新和深链不大面积回归。
 2. 无权资源显示稳定的“不可访问/不存在”体验，不暴露标题、消息摘要、任务状态或 owner 信息。
@@ -363,6 +381,7 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 ## 生产路由与外部契约状态
 
-- 当前：`production_routing_changed: no`，`external_contract_changed: no`。
-- 规划影响：不改变正常生产路由或正常用户契约；无权访问的响应、旧内部调用和未登记系统例外会定向收紧。
+- 当前：`production_routing_changed: no`，`external_contract_changed: yes (development tree)`，`external_enablement: no`。
+- 已发生影响：旧 LangGraph approval HTTP 路由已退出，当前开发树统一使用 `/api/v1/tasks/{taskId}/respond`；没有生产契约或外部启用被改变。
+- 规划影响：不改变正常生产路由；无权访问的响应、旧内部调用和未登记系统例外会定向收紧。
 - 启用门禁：必须先完成历史数据盘点、两用户负向矩阵、内部 UI/Provider 回归、性能基线和灰度回滚方案。隔离验证通过不自动批准生产全量 enforcement。
