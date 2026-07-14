@@ -14,6 +14,8 @@
 - implementation_started: yes
 - implementation_started_at: `2026-07-14`
 - production_routing_changed: no
+- external_contract_changed: yes
+- external_enablement: no
 - production_enablement: not-applicable
 - acceptance_status: not-started
 - requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
@@ -25,7 +27,7 @@
 
 ## 执行总则
 
-1. 本计划是实施依据；`2026-07-14` Owner 决策后已经启动 P0、P1 与已核准的 dev-only 清理。计划描述不代表某项实现或测试已经完成，实际结果以 [Progress](./progress.md) 为准。
+1. 本计划是实施依据；`2026-07-14` Owner 决策后已经启动 P0、P1、P2 首批模式门禁与已核准的 dev-only 清理。计划描述不代表某项实现或测试已经完成，实际结果以 [Progress](./progress.md) 为准。
 2. 每次只启动一个可独立回滚的阶段或工作项；跨阶段并行必须先冻结共享契约，并分别回写进度。
 3. 每个删除候选先完成静态引用扫描、仓内消费者迁移和独立回滚设计。Owner 已免除获批 dev-only 切片的生产流量观察、客户兼容窗口和旧数据备份；若扫描发现共享/生产资源或活跃独立部署，立即停止对应删除并重新决策。
 4. 外部治理采用“可信 principal -> 资源归属 -> 作用域 -> 执行 -> 审计”的同一链路；请求体身份字段只可作为业务输入或比对值。
@@ -47,6 +49,10 @@
 | E-008 | 本地构建证据 | Node/Vite/lockfile 不可复现基线已按 ODR-142-001 收口 | passed-local-partial-ci | Node `22.23.1`、pnpm `10.34.5`、单一根 frozen lockfile 与根 frontend matrix 已落地并本地通过；GitHub runner/nightly 未运行 |
 | E-009 | 本地构建证据 | 两个 `ClaudeWorkerView.vue` TypeScript 基线错误已做最小修复 | passed-local | 有效 PC/mobile type-check、全 frontend tests/build exit 0；浏览器体验未运行 |
 | E-010 | 静态搜索 + 实施证据 | Monitoring 与 code-review 已删除；metadata-query 已 completed-local；Echo 和旧 API 尚未实施 | partial-implementation | metadata-query 模块/装配/Skill/当前文档已收口，删除后 clean test 15/15 `SUCCESS`，依赖树和 clean target 无旧查询依赖；启动/浏览器、hosted CI、外部资源与正式验收不在该结论内。其余切片仍按独立门禁执行 |
+| E-011 | 本地实施证据 | P2 首批默认关闭门禁和 readiness 已由 `12cbe697`、`5d62707b` 落地 | partial-implementation | 平台只门禁 `/api/v1/open` 路径根及子路径；三类 Worker 显式 external-enabled 仍因执行策略未齐保持 unready。task token、identity、审批/恢复绑定、审计和 ownership 不在该首批结论内 |
+| E-012 | 本地测试证据 | P2 首批 Java 与三类 Worker 定向矩阵通过 | passed-local | Java 74 tests、10/10 reactor；Codex SDK 163 passed/1 skipped，app-server 272 passed/1 skipped，LangGraph 766 passed；Node type-check/build 与 Python build 通过。覆盖 matrix parameter、context path、encoded path，并修复实际门禁绕过；不是生产或正式验收证据 |
+| E-013 | 本地实施 + 测试证据 | `cce75f1b` 使平台消费端尊重显式 `ready=false` | passed-local | unready Worker 不再被误标为可路由；缺少 `ready` 的旧 Worker保留兼容。兼容不适用于显式 unready，也不构成 external enablement |
+| E-014 | 本地构建证据 | `a2317ae2` 关闭 Open SDK clean 基线缺陷，根 Java clean test 通过 | passed-local-with-warning | Open SDK 142 tests；根 17/17 reactor、2304 tests、0 failure/error/skipped，exit 0。launcher 有 Surefire fork JVM 退出超时告警；hosted CI 与 `clean verify` 未执行，见 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) |
 
 ## 阶段与工作项映射
 
@@ -54,7 +60,7 @@
 |---|---|---|---|---|
 | P0 | [DOC-001](./workitems/DOC-001-documentation-alignment.md) + 全部 workitem | 冻结定位、术语、证据边界、代码清单和 Owner | 本计划批准 | no |
 | P1 | [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | 恢复 Java、前端和 Worker 可复现 clean build | P0 | no |
-| P2 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md)、[GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | 收敛外部 Biz Worker/upstream user 边界 | P0、P1 最小门禁 | no；启用前可改变外部错误/认证契约 |
+| P2 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md)、[GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | 收敛外部 Biz Worker/upstream user 边界；首批模式门禁/readiness 已实施 | P0、P1 最小门禁 | no production routing；external 未启用，开发树的错误/readiness 契约已收紧 |
 | P3 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | 统一内部 Session/Task ownership | P0、P1；复用 P2 术语 | no；越权请求响应会收紧 |
 | P4 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md)、[DOC-001](./workitems/DOC-001-documentation-alignment.md) | 清理已核准孤儿和失效当前指引 | P0、P1 | no |
 | P5 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md)、[CLEAN-003](./workitems/CLEAN-003-metadata-query-retirement-audit.md)、[CLEAN-004](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) | dev-only 独立移除 Monitoring、metadata-query、code-review；迁移 Echo fixture 后退出生产装配 | P0 清单、P1 最小基线；各切片引用扫描 | 当前无生产路由；发现共享/生产资源即停止 |
@@ -73,7 +79,7 @@
 | 手工验证 | Owner 逐项审阅信任矩阵、保留/清理清单、Launcher 装配边界、外部消费者范围和待决策表。 |
 | 风险 | 术语未统一导致 P2/P3 各自实现授权；把静态未命中误判为无运行流量；重复规划 1.3.1 已完成能力。 |
 | 回滚方式 | 文档独立提交；发现事实错误时回滚该提交或以勘误提交更新，不篡改历史版本证据。 |
-| 完成判据 | 10 个工作项都有 Owner/边界/证据分类；代码清单路径可核对；八组 Owner 决策已同步；其余技术决策有截止阶段；版本状态为 in-progress。 |
+| 完成判据 | 10 个计划工作项及实施期缺陷记录都有 Owner/边界/证据分类；代码清单路径可核对；八组 Owner 决策已同步；其余技术决策有截止阶段；版本状态为 in-progress。 |
 | 生产路由/外部契约 | production_routing_changed: no；external_contract_changed: no。 |
 
 ## P1：构建环境、Node、lockfile 和全仓 CI 基线
@@ -97,14 +103,15 @@
 |---|---|
 | 输入和前置条件 | P0 信任矩阵、P1 最小测试门禁；现有 ClientApp runtime/control credential、upstream user grant、BusinessTask、task token、Gateway、审批绑定与审计；ODR-142-002 至 ODR-142-005 已批准。 |
 | 涉及模块 | `business-agent-module`、Claude Open API、Codex/LangGraph Biz Addon、`navigator-open-sdk`、Claude/Codex/Gemini/LangGraph Worker、配置/readiness。 |
-| 实施内容 | 先落单一显式、默认关闭的 `external-enabled` 模式和 readiness；internal-dev 继续以 ClientApp credential + upstream user mapping/grant 为现行身份基线；用 credential principal 确认 tenant/ClientApp，不直接信任请求体 actor；服务端固化 task/session/user/skill/workspace/model/function scope；task token 加版本、TTL、撤销/轮换和 terminal invalidation；Gateway 强制跨任务/跨函数拒绝；审批、恢复、取消绑定主体和任务；隔离旧 LangGraph taskId/reviewedBy 链路；external-enabled 非 loopback 缺凭据 fail closed/unready；服务端固定 workdir/tool/sandbox 上限；补调用、拒绝、暂停、审批、恢复、取消、失败审计与查询。signed assertion/JWK/jti 作为未来外部开放门禁保留设计，不阻塞当前 internal-dev 收口。 |
+| 当前实施状态 | `in-progress`。`12cbe697` 已增加平台 `NAVIGATOR_EXTERNAL_ENABLED=false`，只门禁 `/api/v1/open` 路径根及子路径，关闭时返回 `503 / EXTERNAL_SURFACE_DISABLED`；`5d62707b` 已为 LangGraph Biz、Codex SDK、Codex app-server Worker 分别增加 `BIZ_WORKER_EXTERNAL_ENABLED`、`CODEX_WORKER_EXTERNAL_ENABLED`、`CODEX_APP_SERVER_EXTERNAL_ENABLED`，均严格接受 `true/false`、默认关闭并暴露 `/health` 诊断。显式开启时仍因 `EXTERNAL_EXECUTION_POLICY_PENDING` 保持 unready，空 Token 另报 `EXTERNAL_AUTH_TOKEN_REQUIRED`，业务请求返回 `503 / EXTERNAL_WORKER_UNREADY`；`cce75f1b` 已让平台消费显式 `ready=false`，同时兼容未返回 `ready` 的旧 Worker。以上仅完成模式、门禁和 readiness 第一批。 |
+| 实施内容 | 首批已落单一显式、默认关闭的 `external-enabled` 模式、Worker readiness 和平台消费约束。后续继续以 ClientApp credential + upstream user mapping/grant 为 internal-dev 身份基线；用 credential principal 确认 tenant/ClientApp，不直接信任请求体 actor；服务端固化 task/session/user/skill/workspace/model/function scope；task token 加版本、TTL、撤销/轮换和 terminal invalidation；Gateway 强制跨任务/跨函数拒绝；审批、恢复、取消绑定主体和任务；隔离旧 LangGraph taskId/reviewedBy 链路；服务端固定 workdir/tool/sandbox 上限；补调用、拒绝、暂停、审批、恢复、取消、失败审计与查询。signed assertion/JWK/jti 作为未来外部开放门禁保留设计，不阻塞当前 internal-dev 收口。 |
 | 非目标 | 不在本版强制所有 internal-dev ClientApp 接入 signed assertion；不关闭显式 loopback internal-dev；不重写 Spring Security；不实现通用权限平台；不实现动态插件；不在未迁移仓内消费者前删旧 Provider API。 |
-| 自动化测试 | external-enabled 默认关闭及显式开启；credential 过期/撤销/轮换；伪造 tenant/user/reviewer；跨 ClientApp/upstream user/task/function；token TTL/终态撤销/重启恢复；审批 binding mismatch；非 loopback 缺凭据；workdir traversal/tool escalation；审计成功与拒绝事件；SDK 契约。signed assertion 专属负向矩阵延后到外部开放前。 |
-| 手工验证 | 用两个 tenant、两个 ClientApp、两个 upstream user 和两个任务做正负矩阵；检查 readiness/auth mode；审批暂停恢复全链路；核对审计可追溯字段且不泄露明文 token。 |
-| 风险 | external 开关默认值或配置别名错误导致隐式暴露；现有调用方只传 upstream user header；多实例内存 token 注入恢复不一致；收紧 Codex sandbox 破坏开发工作流；best-effort 审计丢关键拒绝。 |
-| 回滚方式 | 默认关闭 external-enabled；先以版本化配置和兼容读取落地；保留旧 token schema 只读期；发现回归关闭外部模式并回滚策略提交，不恢复请求体身份信任；旧 API 删除以独立提交 revert。 |
-| 完成判据 | 每个外部请求可追溯 tenant/ClientApp/upstream user/task；task token 不能跨任务/函数；审批/恢复/取消不能只凭 taskId；非 loopback 空凭据 fail closed/unready；审计负向用例有证据。 |
-| 生产路由/外部契约 | 默认 production_routing_changed: no；external_contract_changed: yes（认证失败、scope、readiness 和错误语义会收紧）。正式启用必须独立审批并回写状态。 |
+| 自动化测试 | 已执行：平台门禁与 Open API 定向 Java 矩阵共 74 tests、10/10 reactor 通过，包含 path root/child、matrix parameter、context path、encoded path 和非目标路由；Codex SDK 163 passed/1 skipped、app-server 272 passed/1 skipped、LangGraph 766 passed，Node type-check/build 与 Python build 通过；平台消费 `ready=false` 和旧 Worker 无 `ready` 兼容均有回归。待执行：credential 过期/撤销/轮换；伪造 tenant/user/reviewer；跨 ClientApp/upstream user/task/function；token TTL/终态撤销/重启恢复；审批 binding mismatch；workdir traversal/tool escalation；审计成功与拒绝事件；SDK 完整契约。signed assertion 专属负向矩阵延后到外部开放前。 |
+| 手工验证 | 当前 `not-run`。后续用两个 tenant、两个 ClientApp、两个 upstream user 和两个任务做正负矩阵；检查 readiness/auth mode；审批暂停恢复全链路；核对审计可追溯字段且不泄露明文 token。还需确认平台 `/api/v1/health/external-surface` 与三类 Worker 精确 `GET /health` 的运维探针配置。 |
+| 风险 | external 开关默认值或配置别名错误导致隐式暴露；平台开关只覆盖 `/api/v1/open`，不覆盖 upstream-admin、Worker Gateway 或内部 Controller；平台 `surfaceReady` 只表示 HTTP gate，不能作为 Provider/生产 readiness；`internal-dev` 不是网络防火墙，LangGraph/Codex SDK 的 `0.0.0.0` 与空 Token 必须受可信网络/ACL 约束；现有调用方只传 upstream user header；多实例内存 token 注入恢复不一致；收紧 Codex sandbox 破坏开发工作流；best-effort 审计丢关键拒绝。 |
+| 回滚方式 | external 当前保持默认关闭；配置/门禁、Worker readiness、平台消费分别位于 `12cbe697`、`5d62707b`、`cce75f1b`，可按依赖逆序独立 revert。发现回归先关闭显式 external 开关，再回滚对应策略提交，不恢复请求体身份信任；后续 token schema 保留只读迁移期；旧 API 删除继续使用独立提交 revert。 |
+| 完成判据 | 每个外部请求可追溯 tenant/ClientApp/upstream user/task；task token 不能跨任务/函数；审批/恢复/取消不能只凭 taskId；非 loopback 空凭据 fail closed/unready；审计负向用例有证据。当前只满足“默认关闭、显式 external 保持 unready、平台不误路由”的首批判据，P2 不得标记完成。 |
+| 生产路由/外部契约 | production_routing_changed: no；external_enablement: no；external_contract_changed: yes（开发树的默认关闭、503、readiness 和错误语义已收紧）。平台 `surfaceReady` 仅代表 routing gate；正式启用必须等待其余 P2 门禁、独立审批并回写状态。 |
 
 ## P3：Session/Task 定向 ownership 治理
 
@@ -218,9 +225,9 @@
 | ID | Owner 决策 | 落实阶段 | 状态/实施约束 |
 |---|---|---|---|
 | ODR-142-001 | Node `22.23.1`、pnpm `10.34.5`、单一根 lockfile；核心构建 required，完整 E2E/cross-platform nightly，真实凭据 smoke 进入 RC | P1 | in-progress；本地 clean/frozen/frontend 通过，hosted CI 与 nightly 待执行 |
-| ODR-142-002 | internal-dev 保留 ClientApp 代办；signed assertion 降为未来外部开放门禁 | P2 / future external | approved-with-constraints；external 必须显式且默认关闭 |
+| ODR-142-002 | internal-dev 保留 ClientApp 代办；signed assertion 降为未来外部开放门禁 | P2 / future external | in-progress；显式、默认关闭的首批平台/Worker 开关已落地，ClientApp/upstream identity 链路尚未收口 |
 | ODR-142-003 | 服务端权威 opaque task token，30 分钟 TTL，完整授权交集，并与 Worker principal/lease 双重校验，暂停/终态失效 | P2 | approved |
-| ODR-142-004 | 双运行模式；external-enabled 目录/工具默认拒绝、`workspace-write`、任务工具 egress 默认拒绝、缺凭据 unready/fail closed | P2 | approved-with-constraints；门禁未齐不得打开 |
+| ODR-142-004 | 双运行模式；external-enabled 目录/工具默认拒绝、`workspace-write`、任务工具 egress 默认拒绝、缺凭据 unready/fail closed | P2 | in-progress；模式/readiness 第一批已实施，执行策略尚未完成，因此显式 external 仍强制 unready、不得打开业务流量 |
 | ODR-142-005 | 本地关键状态事务 outbox；无状态拒绝可靠落档；远程调用意图/结果分段记录；高频遥测 best-effort | P2/P7 | approved |
 | ODR-142-006 | dev-only 安全后物理移除 Monitoring、metadata-query、code-review；Echo fixture 迁移后退出生产装配，旧数据可丢弃 | P5 | in-progress；Monitoring/code-review 已移除；metadata-query 已 completed-local，启动/浏览器与正式门禁待补；Echo 未开始；发现共享/生产资源即停止 |
 | ODR-142-007 | 仓内消费者迁移后在 1.4.2 直接删除旧 Provider API/SPI/DTO | P6 | approved-with-constraints；无外部窗口，clean build 仍是硬门 |

@@ -3,7 +3,7 @@ type: governance
 version: 1.4.2-SNAPSHOT
 ticket: GOV-001
 priority: high
-status: planned-reviewed
+status: in-progress
 source: REQ-001
 owner: platform-security-owner | session-owner | provider-owner
 ---
@@ -14,7 +14,7 @@ owner: platform-security-owner | session-owner | provider-owner
 
 - 版本索引：[1.4.2-SNAPSHOT](../README.md)
 - 总需求：[REQ-001 平台治理与历史能力收口](../requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
-- 实施阶段：[Implementation Plan](../implementation-plan.md#p0目标边界术语和代码清单冻结)
+- 实施阶段：[P0 边界冻结](../implementation-plan.md#p0目标边界术语和代码清单冻结)、[P2 外部边界](../implementation-plan.md#p2外部-biz-worker-与-upstream-user-边界治理)、[P3 ownership](../implementation-plan.md#p3sessiontask-定向-ownership-治理)
 - 状态与证据：[Progress](../progress.md)
 - 相关工作项：[GOV-002 Biz Worker 与 upstream user 边界](./GOV-002-biz-worker-and-upstream-user-boundary.md)、[GOV-003 Session/Task 资源归属](./GOV-003-session-task-resource-ownership.md)
 - 代码与职责：[Code Inventory](../code-inventory.md)、[Module Responsibility](../module-responsibility.md)
@@ -23,15 +23,15 @@ owner: platform-security-owner | session-owner | provider-owner
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| Workitem | planned-reviewed | Owner 方向决策已关闭；P2/P3 业务实现尚未开始 |
-| Implementation | not-started | implementation_started: no |
-| Automated test | not-run | 规划阶段未执行 Java、前端或 Worker 测试 |
+| Workitem | in-progress | P2 显式外部门禁与 readiness 消费已部分落地；task token、identity、audit 与 P3 ownership 仍未实施 |
+| Implementation | partial | implementation_started: yes；完成平台 Open API 默认关闭门禁、三类 Worker external profile 与平台 readiness 消费 |
+| Automated test | partial-passed | Java 定向 74 tests，10/10 reactor SUCCESS；Codex SDK 163 pass/1 skip、app-server 272 pass/1 skip、LangGraph 766 pass，三类 Worker 构建通过 |
 | Manual verification | not-run | 尚未在双用户、双 ClientApp 或外部 Worker 环境验证 |
 | Experience verification | not-run | 尚未验证内部 UI 和外部配置/错误反馈 |
 | Production routing | unchanged | production_routing_changed: no |
-| External contract | unchanged | external_contract_changed: no；P2 实施时可能收紧 |
+| External contract | scoped-change | 新增显式关闭/未就绪语义；未启用 external-enabled，不代表对外可用或生产批准 |
 
-本文的源码结论是规划期静态扫描，不是运行流量、部署配置、自动化测试或生产批准证据。后续执行结果统一回写 [Progress](../progress.md)。
+本文已包含 `EXEC-142-008` 本地实施证据；其余源码结论仍是静态扫描，不是运行流量、外部部署或生产批准证据。后续执行结果统一回写 [Progress](../progress.md)。
 
 ## 目标
 
@@ -68,7 +68,7 @@ owner: platform-security-owner | session-owner | provider-owner
 2. 不构建通用 RBAC/ABAC、策略语言或全平台 IAM。
 3. 不关闭所有 Claude、Codex、Gemini、LangGraph 的本地开发模式。
 4. 不在本工作项实现多实例 SSE 事件总线或动态插件加载。
-5. 不因发现旧接口风险就在规划阶段直接删除 `/claude-tasks`、`/codex-tasks`、`/langgraph-tasks` 等兼容 API。
+5. 不为未投产的旧 Provider API/SPI/DTO 建立仓外兼容窗口；但本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 迁移、安全语义复核和 clean build 完成前不物理删除。
 6. 不把内部可信内网假设扩展到 ClientApp、upstream user 或非 loopback Worker。
 
 ## 目标信任矩阵
@@ -81,7 +81,7 @@ owner: platform-security-owner | session-owner | provider-owner
 | ClientApp control | control credential principal | tenant、ClientApp、审批/恢复对象 | control scope | scope 或绑定不匹配即拒绝并审计 | GOV-002 |
 | Biz Worker | 由受控任务启动上下文派生 | task、session、worker pool、workspace、tool/function scope | task-scoped token | token 缺失、过期、终态或越权即拒绝 | GOV-002 |
 | 系统/A2A 执行 | 具名 system principal 或可信调度上下文 | 明确的父子 session/task | 系统身份，不复用普通 userId 字段 | 未登记的系统例外拒绝 | GOV-003 |
-| 旧 Provider API | 当前兼容入口 | 待运行态审计 | 现有轻量认证或旧参数 | 在迁移前先隔离、监测和告警 | GOV-002/CLEAN-004 |
+| 旧 Provider API | 当前本仓兼容入口 | 本仓消费者与运行/暂停任务状态 | 现有轻量认证或旧参数 | 本仓迁移、安全复核和 clean build 后同版删除，无仓外窗口 | GOV-002/CLEAN-004 |
 
 ## 已确认事实
 
@@ -111,32 +111,38 @@ owner: platform-security-owner | session-owner | provider-owner
 
 - ClientApp runtime/control credential、upstream user grant、BusinessTask token 和 Worker Gateway 已有分层实现，但通用 Open API 的部分 task/session 查询静态谓词主要停留在 tenant + agent，未统一绑定 ClientApp/upstream user。
 - 旧 `LanggraphTaskController` 的 GET 接受 `userId` 参数，审批入口按 `taskId` 和请求体处理；`LanggraphTaskService` 会使用请求体 `reviewedBy`。该路径与新的 control credential 审批链路安全语义不一致。
-- LangGraph 和 Codex Worker 在 Token 为空时会跳过 bearer 认证，默认监听配置允许非 loopback；health/readiness 未完整表达“外部监听但认证关闭”的不安全状态。
+- LangGraph 和 Codex SDK Worker 在 internal-dev 下仍保留 Token 为空时跳过 bearer 认证、默认监听 `0.0.0.0` 的既有开发行为；本批已为显式 external-enabled 增加 fail-closed/unready 门禁和可观测 reason，但 internal-dev 并不是网络防火墙，仍必须依赖可信网络、ACL 或主机防护。
 - Worker 的工作目录和工具策略已有实际校验实现，但空 allowlist、caller 可选的 sandbox/approval/network 参数和 external-enabled 默认上限仍需统一。
 
 ## 运行态待证
 
 | 待证项 | 所需证据 | 未证实前的限制 |
 |---|---|---|
-| 当前生产/预发是否存在非 loopback + 空 Worker Token | 部署配置、进程参数、监听地址、readiness 响应 | 不宣称线上已暴露；external-enabled 保持未批准 |
+| 当前 dev 部署是否存在非 loopback + 空 Worker Token | 部署配置、进程参数、监听地址、readiness 响应与网络/ACL | 不宣称已完成运行态隔离验证；external-enabled 保持未批准 |
 | 同 tenant/Agent 下不同 ClientApp/upstream user 是否可读取相同 task/session | 双 ClientApp 负向 API 测试与访问日志 | 静态谓词不足不等于已复现漏洞 |
 | 内部 sessionId/taskId 是否可跨用户枚举和操作 | 两账号集成测试、UI/API 复现记录 | 不宣称 exploitability 已确认 |
-| 旧 Provider API 的真实消费者 | PC、Mobile、SDK、CLI、访问日志、外部客户清单 | 不允许直接删除或改变路由 |
+| 旧 Provider API 的本仓消费者 | PC、Mobile、SDK、CLI、L3、Worker、canary 的静态引用、契约测试与 clean build | 迁移和安全语义复核完成前不删除；完成后可同版物理删除，不等待仓外流量或兼容窗口 |
 | credential/token 的实际撤销、轮换和传播 | 管理 API、数据库、缓存、重启、多实例演练 | 不宣称生命周期闭环 |
 | 系统/A2A 任务所需 ownership 例外 | 任务样本、调用栈、Owner 说明 | 不允许通过宽泛 bypass 解决 |
 | 审计持久化、留存和拒绝事件覆盖 | 数据库表、索引、日志、查询、失败演练 | best-effort 日志不等同验收证据 |
 
-## 决策项
+## 已批准治理基线与执行状态
+
+| 决策 | 已批准基线 | 当前执行状态 |
+|---|---|---|
+| 运行模式 | ODR-142-004：`internal-dev` / `external-enabled` 双模式；external 配置意图必须显式、默认关闭，缺凭据或安全策略时 unready/fail closed | 平台与三类 Worker 的开关/readiness 骨架已实施；完整 execution policy 与 external enablement 未完成 |
+| upstream user 证明强度 | ODR-142-002：dev/internal 使用 ClientApp credential + mapping/grant 并标记 delegated assurance；signed assertion 延后为未来真正外部开放门禁 | 不阻塞当前 P2；external enablement 保持 `no` |
+| task token | ODR-142-003：服务端权威 opaque token、30 分钟租约、完整授权交集、task lease + Worker principal 双重绑定、暂停/终态失效、撤销和 generation 轮换 | 尚未实施，不发布新 token 契约 |
+| 外部 Worker 安全上限 | ODR-142-004：目录/工具默认拒绝、`workspace-write`、任务工具 egress 默认拒绝，非 loopback 缺凭据 unready/fail closed | 仅模式门禁骨架完成；workspace/tool/sandbox/network 上限未完成，external 保持 unready |
+| 审计保证级别 | ODR-142-005：本地关键状态事务 outbox、无状态拒绝可靠安全事件、远程调用意图/结果分段记录、高频遥测 best-effort | 尚未实施，不宣称关键审计链路完成 |
+
+## 仍待实施级 Owner 决策
 
 | 决策 | Owner | 最晚时间 | 未决处理 |
 |---|---|---|---|
-| internal-dev、trusted-intranet、external-enabled 的配置模型和命名 | Platform/Security | P0 出口 | 不允许 external enablement |
-| 每类入口的 principal authority 和可信字段表 | Security/Module owners | P0 出口 | 对外入口保持现状但不得扩大 |
+| 每类入口的 principal authority 和可信字段表 | Security/Module owners | 对应 P2/P3 切片设计前 | 对外入口保持默认关闭，不扩大可信字段 |
 | 管理员、系统任务、A2A 的具名 ownership 例外 | Session/A2A owner | P3 设计前 | 不引入通用 bypass |
-| upstream user 证明强度 | Owner 已决：internal-dev 使用 ClientApp 代办 grant 并标记 delegated assurance；signed assertion 延后为未来真正外部开放门禁 | external 开放里程碑前 | 不阻塞 P2；external-enabled 仍默认关闭 |
-| task token 的函数 scope、TTL、终态失效、撤销和轮换 | Business Agent/Security | P2 schema 前 | 不上线新 token 契约 |
-| 外部 Codex/LangGraph 的 sandbox、工具、网络和目录上限 | Provider/Security | external-enabled 前 | external-enabled 保持 disabled/unready |
-| 关键拒绝、审批、恢复审计采用 best-effort 还是强保证 | Security/Operations | P2 签收前 | 不宣称审计门禁完成 |
+| ClientApp/upstream user mapping/grant 的权威数据源和迁移策略 | ClientApp/Upstream owner | P2 identity 切片设计前 | 沿用现有数据源但不宣称生命周期闭环；不得以请求体 actor 替代权威 mapping |
 
 ## 关键代码路径
 
@@ -153,6 +159,9 @@ owner: platform-security-owner | session-owner | provider-owner
 
 ### 外部边界
 
+- `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/config/ExternalSurfaceProperties.java`
+- `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/filter/ExternalSurfaceGateFilter.java`
+- `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/health/ExternalSurfaceHealthController.java`
 - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiController.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/ClientAppRuntimeCredentialResolver.java`
 - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/ClientAppControlCredentialService.java`
@@ -164,9 +173,38 @@ owner: platform-security-owner | session-owner | provider-owner
 - `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/controller/LanggraphTaskController.java`
 - `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/service/LanggraphTaskService.java`
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/auth.py`
+- `tools/langgraph-biz-worker/src/langgraph_biz_worker/external_mode.py`
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/routes/health.py`
 - `tools/codex-agent-worker/src/auth.ts`
+- `tools/codex-agent-worker/src/external-mode.ts`
 - `tools/codex-agent-worker/src/routes/health.ts`
+- `tools/codex-app-server-worker/src/external-mode.ts`
+- `tools/codex-app-server-worker/src/routes/health.ts`
+
+## 本批实施 Check-in（`EXEC-142-008`）
+
+### 已完成内容
+
+1. 提交 `12cbe697` 增加平台 `NAVIGATOR_EXTERNAL_ENABLED`，默认 `false`；门禁仅覆盖规范化后的 `/api/v1/open` 及其子路径，关闭时返回 HTTP 503 + `EXTERNAL_SURFACE_DISABLED`。路径 matrix/context/encoded 回归曾发现规范化绕过，已在同批修复并回补测试。
+2. 平台健康入口 `/api/v1/health/external-surface` 输出开关与路由面就绪状态；`surfaceReady=true` 只表示 Open API routing gate 打开，不表示 Provider、外部执行策略或 production ready。
+3. 提交 `5d62707b` 为 LangGraph Biz Worker、Codex SDK Worker 和 Codex app-server Worker 增加严格布尔开关 `BIZ_WORKER_EXTERNAL_ENABLED`、`CODEX_WORKER_EXTERNAL_ENABLED`、`CODEX_APP_SERVER_EXTERNAL_ENABLED`，仅接受 `true` / `false`，默认 `false`，mode 统一为 `internal-dev` / `external-enabled`。
+4. 显式外部模式当前因 `EXTERNAL_EXECUTION_POLICY_PENDING` 始终 unready；Token 为空时叠加 `EXTERNAL_AUTH_TOKEN_REQUIRED`。除精确 `/health` 外，业务 API 统一返回 HTTP 503 + `EXTERNAL_WORKER_UNREADY`；`/health/` 不是豁免路径，显式外部模式下可返回 503。
+5. 提交 `cce75f1b` 让平台消费 Worker `ready=false`：LangGraph 标记 `OFFLINE`，Codex SDK connection tester 判定 unready；对尚未输出 `ready` 字段的旧 Worker 继续保留 HTTP 200 兼容。
+
+### 边界和未完成项
+
+- 平台开关不覆盖 upstream-admin、`/internal/worker-gateway/v1/**` 或其他内部 Controller；它不是全局 SecurityConfig 替代品。
+- internal-dev 不是网络防火墙。LangGraph/Codex SDK 默认 `0.0.0.0` 且空 Token 跳过 bearer 的开发行为未改，只能放在 loopback 或受信网络/ACL 中。
+- task-scoped token、upstream identity authority、BusinessFunction 审批/恢复/取消审计、Session/Task ownership 尚未实施；本批不是 GOV-001/GOV-002 完成或生产就绪证据。
+- production routing 未改变，没有启用 external-enabled；外部契约仅新增显式关闭和未就绪语义。
+
+### 实施自检与测试
+
+- Java 最终三模块定向矩阵：74 tests，10/10 reactor SUCCESS；其中平台门禁 8 项 + Open API mapping 40 项，平台批次合计 48 项。
+- Codex SDK Worker：163 passed / 1 skipped，type-check 和 build 通过。
+- Codex app-server Worker：272 passed / 1 skipped，type-check 和 build 通过。
+- LangGraph Biz Worker：766 passed，build 通过。
+- self_check_decision: `continue-in-progress`；跨模块实现证据已回写，但手工网络/部署验证、浏览器体验和正式质量闸门均未执行。
 
 ## 实施步骤
 
@@ -184,9 +222,9 @@ owner: platform-security-owner | session-owner | provider-owner
 
 ### 3. 建立模式和 readiness 契约
 
-1. internal-dev 仅允许明确 loopback 或受控开发网络配置。
-2. external-enabled 模式必须校验 credential、监听地址、workspace/tool policy 和依赖 readiness。
-3. 非 loopback 且缺少必要 credential 时启动失败或 readiness 为 unready；health 中不得仅显示进程存活。
+1. 已实施平台与三类 Worker 显式、默认 `false` 的外部开关；internal-dev 只能依赖 loopback 或受信开发网络/ACL，不能将 mode 标签当作网络隔离。
+2. external-enabled 当前因外部执行策略未就绪而统一 unready；后续仍须实施 credential、监听地址、workspace/tool policy 和依赖 readiness 的完整求交集。
+3. health 已区分 process-live、surface routing-ready 与 external-ready；任何外部门禁未齐不得通过进程存活冒充对外就绪。
 
 ### 4. 对接 GOV-002 与 GOV-003
 
@@ -196,7 +234,7 @@ owner: platform-security-owner | session-owner | provider-owner
 
 ### 5. 兼容、灰度和运行态审计
 
-1. 旧接口先加指标、告警和消费者登记，再决定隔离、迁移或退役。
+1. 旧 Provider API/SPI/DTO 先完成本仓 PC、Mobile、SDK、CLI、L3、Worker、canary 迁移、安全语义复核和 clean build，再于同版物理删除；不要求仓外流量审计或兼容窗口。
 2. 外部 enforcement 按 ClientApp/Worker 显式 allowlist 灰度；不得用全局降级重新信任请求体字段。
 3. 对所有拒绝路径验证不会暴露资源存在性或明文凭据。
 
@@ -208,12 +246,12 @@ owner: platform-security-owner | session-owner | provider-owner
 
 ## 自动化测试计划
 
-当前状态：`not-run`。
+当前状态：`partial-passed`；显式开关、路径门禁、Worker unready 与平台 readiness 消费已有 `EXEC-142-008` 自动化证据，资源归属、token、身份与审计测试仍未运行。
 
 1. 入口契约测试：每类入口在缺 credential、错误 credential、错误 scope 下 fail closed。
 2. 内部 ownership 负向测试：两用户交叉 sessionId/taskId 的读取、消息、操作、取消和恢复。
 3. ClientApp 隔离测试：双 tenant、双 ClientApp、双 upstream user、双 task 的全组合拒绝矩阵。
-4. Worker readiness 测试：loopback/internal-dev 可按显式配置启动；non-loopback/external-enabled 空 Token 必须失败或 unready。
+4. Worker readiness 测试：internal-dev 的既有监听、空 Token 与业务入口认证行为保持，平台对显式 `ready=false` 的判定收紧；external-enabled 当前因执行策略未就绪而拒绝业务 API，空 Token 叠加认证缺失 reason。已完成单元/契约测试，非 loopback 真实部署验证仍 `not-run`。
 5. 身份字段伪造测试：请求体/header 中的 `tenantId`、`userId`、`reviewedBy` 不得覆盖 credential principal。
 6. 审计测试：成功、拒绝、过期、撤销、审批、恢复、取消和失败产生规定字段，且不包含明文 token。
 7. 兼容测试：内部 UI、Provider 统一任务接口和明确保留的旧入口在兼容期行为可预期。
@@ -244,7 +282,7 @@ owner: platform-security-owner | session-owner | provider-owner
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 把 `permitAll` 误判成完全匿名 | 规划错误或重复实现 | 按完整认证调用链登记入口 |
-| 收紧外部边界破坏旧客户 | 外部契约回归 | 先做消费者审计、兼容窗口和 ClientApp 灰度 |
+| 收紧边界破坏本仓孵化链路 | dev/internal 契约回归 | 保留 internal-dev；旧契约按本仓消费者矩阵迁移、安全复核和 clean build 后同版删除 |
 | 宽泛 system/admin bypass | 形成新的横向越权面 | 例外具名、最小范围、强审计 |
 | external/internal 模式配置混淆 | 空 Token 外部暴露 | 启动校验 + readiness + 部署策略三层门禁 |
 | 审计 best-effort 丢失关键拒绝 | 无法追责或验收 | Owner 决定强保证级别并做失败演练 |
@@ -264,8 +302,8 @@ owner: platform-security-owner | session-owner | provider-owner
 - [ ] internal-dev、trusted-intranet、external-enabled 和 system-internal 的配置边界冻结。
 - [ ] 请求字段身份与可信 principal 的取值/校验规则明确，并被 GOV-002/GOV-003 采用。
 - [ ] Session/Task ownership 和 BusinessTask/task-token 不变量在统一门面落地，不依赖各 Controller 自行解释。
-- [ ] 非 loopback external Worker 缺 credential 时 fail closed 或 unready。
-- [ ] 旧 Provider API 有消费者、隔离、迁移、弃用和回滚计划，未在无证据时删除。
+- [x] 显式 external-enabled 在执行策略未齐时 unready，空 credential 会额外记录原因并 fail closed；已有本地契约测试，真实非 loopback 部署验证仍待执行。
+- [ ] 旧 Provider API 的本仓消费者迁移、安全语义复核、clean build 和回滚证据完成，并在同版物理删除。
 - [ ] 自动化、手工和体验矩阵均有实际结果；任何 `not-run` 都有阻塞或移出版本说明。
 - [ ] 内部 UI/可信内网主链没有大面积回归，外部负向矩阵通过。
 - [ ] isolated acceptance 与 production enablement 分别记录。
@@ -273,6 +311,6 @@ owner: platform-security-owner | session-owner | provider-owner
 
 ## 生产路由与外部契约状态
 
-- 当前：`production_routing_changed: no`，`external_contract_changed: no`。
-- 规划影响：P0 文档冻结不改变路由；P2 的认证失败、scope、readiness 和错误语义可能收紧外部契约；P3 的越权响应会定向收紧。
+- 当前：`production_routing_changed: no`；external contract 仅新增显式关闭/未就绪语义，未启用 external-enabled。
+- 实施影响：平台默认关闭 `/api/v1/open` 路由面，三类 Worker 仅在显式 external-enabled 配置意图下新增 unready/503 语义；internal-dev 的监听、空 Token 与业务入口认证行为保留，但平台对 health 缺失或显式 `ready=false` 的路由判定已收紧，可能影响内部异常场景。P3 越权响应仍未实施。
 - 启用门禁：任何 production routing、外部强制认证或旧入口下线必须有独立批准、灰度、监控和回滚证据，不能因本 workitem 完成而自动启用。

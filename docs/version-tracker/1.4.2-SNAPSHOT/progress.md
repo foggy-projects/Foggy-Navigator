@@ -16,6 +16,8 @@
 - implementation_started_at: `2026-07-14`
 - last_updated_at: `2026-07-14`
 - production_routing_changed: no
+- external_contract_changed: yes
+- external_enablement: no
 - production_enablement: not-applicable
 - formal_quality_gate: not-started
 - coverage_audit: not-started
@@ -46,7 +48,7 @@
 | 条件 | 状态 | 说明 |
 |---|---|---|
 | 产品定位和版本目标进入版本文档 | in-progress | README、REQ-001 与 Owner 决策已落档；当前系统总览、功能架构、观测和安装指引已开始对齐，历史快照保留原结论并增加 superseded 标记 |
-| 内外部信任边界冻结 | planned-reviewed | ODR-142-002 至 ODR-142-005 已关闭方向决策；实现与测试未开始 |
+| 内外部信任边界冻结 | in-progress | ODR-142-002 至 ODR-142-005 已关闭方向决策；平台 Open API 默认关闭、三类 Worker external profile 和平台 readiness 消费已部分实施，token/identity/audit/ownership 未实施 |
 | 模块职责和代码清单复核 | in-progress | 已按 Owner 决策更新；随实际删除继续校正路径和状态 |
 | 构建工具链决策 | approved-and-implemented-baseline | Node `22.23.1`、pnpm `10.34.5`、单一根 lockfile、根前端矩阵与 repository CI 已落地；GitHub runner/branch protection 尚未验证 |
 | 外部身份/token/Worker/审计决策 | approved-with-constraints | signed assertion 降为外部开放前置项；explicit external 默认关闭及其余边界仍是本版硬门 |
@@ -59,7 +61,7 @@
 |---|---|---|---|
 | P0 | 目标、边界、术语、ownership 和代码清单冻结 | in-progress | Owner 决策已落档；当前文档和代码清单同步中 |
 | P1 | Node、lockfile、全仓 clean build 和 CI 基线 | in-progress | 精确 Node/pnpm、根 frozen lockfile、全前端矩阵和 repository CI 已落地；本机 Java clean test 与前端 type/test/build 通过，GitHub runner/Worker lane/nightly 尚未闭合 |
-| P2 | 外部 Biz Worker/upstream user 边界治理 | not-started | not-collected |
+| P2 | 外部 Biz Worker/upstream user 边界治理 | in-progress | 显式默认关闭的平台/Worker 开关、external unready/fail-closed 与平台 readiness 消费已落地；task token、identity、audit 与 external execution policy 未完成；见 `EXEC-142-008` |
 | P3 | Session/Task 定向 ownership 治理 | not-started | not-collected |
 | P4 | 低风险孤儿代码和失效文档清理 | not-started | not-collected |
 | P5 | Monitoring、metadata-query、code-review、echo dev-only 独立收口 | in-progress | Monitoring 与 code-review-agent 源码切片已物理移除；metadata-query 已 completed-local，删除后 clean test、依赖树与 clean target 扫描通过，启动/浏览器未跑；Echo 未开始 |
@@ -70,11 +72,12 @@
 
 | Workitem | 状态 | Development | Testing | Experience | Evidence |
 |---|---|---|---|---|---|
-| [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | planned-reviewed | not-started | not-run | not-run：需验证内部 UI、外部配置与错误反馈 | Owner 决策已关闭；实现证据未收集 |
-| [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | planned-reviewed | not-started | not-run | not-run：需验证 ClientApp、审批恢复和 Worker readiness 体验 | Owner 决策已关闭；实现证据未收集 |
+| [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | in-progress | partial：平台 Open API 默认关闭、三类 Worker external profile、平台 readiness 消费已落地 | partial-passed：Java 定向 74 tests，Worker 契约/type/build 通过 | not-run：内部 UI、真实网络部署与错误反馈体验未验证 | `EXEC-142-008`；task token、identity、audit、ownership 仍未实施 |
+| [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | in-progress | partial：显式开关、unready/fail-closed 及 ready=false 平台消费已落地 | partial-passed：Codex SDK 163 pass/1 skip、app-server 272 pass/1 skip、LangGraph 766 pass；Java 定向通过 | not-run：ClientApp、审批恢复、非 loopback 部署和 Worker 错误体验未验证 | `EXEC-142-008`；token/identity/audit 仍未实施 |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | planned-reviewed | not-started | not-run | not-run：需验证内部 UI 工作流 | Owner 决策已关闭；实现证据未收集 |
-| [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | in-progress | baseline + required/nightly workflow implemented | passed-local：Java、frontend、五类 Worker clean 等价矩阵 | not-run：两个最小 TS 修复和 CI 配置尚未浏览器验证 | `EXEC-142-003`、`EXEC-142-006`；GitHub runner/branch protection/nightly 实跑未完成 |
+| [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | in-progress | baseline + required/nightly workflow implemented | passed-local：根 Java 17/17、frontend、五类 Worker clean 等价矩阵 | not-run：两个最小 TS 修复和 CI 配置尚未浏览器验证 | `EXEC-142-003`、`EXEC-142-006`、`EXEC-142-009`；GitHub runner/branch protection/nightly 实跑未完成 |
 | [BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md) | closed | LangGraph SSE 语义去重已排除传输层 event_id | passed：目标用例 1；全套 758；wheel/sdist build | not-applicable：修复事件重复，无新增 UI | `EXEC-142-006` |
+| [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) | closed | 修复 Open SDK 测试语法、JUnit 5 执行器与 WSL 用例宿主依赖 | passed：Open SDK 142；根 reactor 2304 tests、17/17 SUCCESS | not-applicable：仅构建和测试基线 | `EXEC-142-009`；未改运行时 API 或生产门禁 |
 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md) | planned | not-started | not-run | not-run：涉及工作台渐进拆分时必须验证 | not-collected |
 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md) | planned | not-started | not-run | not-run：UI/mobile 候选需按实际切片验证 | not-collected |
 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md) | in-progress | code-slice-removed；当前权威文档已同步 | passed-local：Java clean、frontend full matrix、shell syntax；GitHub CI 未跑 | not-run：静态无残留路由，浏览器/启动 smoke 尚未执行 | `EXEC-142-002`、`EXEC-142-003` |
@@ -117,23 +120,56 @@
 | EXEC-142-005 | 文档与配置验证 | 本轮 Markdown、shell、JSON/YAML、清理残留和 lockfile 跟踪状态 | Node 相对链接/锚点检查、`bash -n`、Node JSON/YAML parse、精确 `rg`、`git check-ignore`、`git diff --check` | passed-local | 32 个 Markdown、411 个相对文件目标和 3 个锚点均存在；hosted CI 与手工审阅不在此证据内 |
 | EXEC-142-006 | clean Worker 矩阵与缺陷回归 | Codex SDK/app-server、Gemini、Claude、LangGraph 的 install/type/test/build；修复 LangGraph progress 事件重复 | 独立 clean worktree；Node `22.23.1`；Python `3.12.3`；[BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md) | passed-local-with-hosted-gap | Node 三 lane 通过；Claude 495 pass/11 deselect；LangGraph 758 pass；本机无 Python 3.11，GitHub runner 未执行；Gemini audit 有 1 low/4 moderate |
 | EXEC-142-007 | metadata-query 删除后实施与验证 | 模块/装配/断言/Skill/当前文档退出，metadata-config 保留 | `mvn -B -pl metadata-config-module,launcher -am clean test`、dependency tree、clean target 与 tracked/diff 检查 | completed-local | 15/15 reactor project SUCCESS，总时 `05:23`；metadata-config 4 suites/52 tests、launcher 3 suites/7 tests，均 0 failure/error/skipped；启动/浏览器、hosted CI、外部资源和正式验收未运行 |
+| EXEC-142-008 | P2 显式外部门禁与 readiness 实施 | 平台 `/api/v1/open` 默认关闭、三类 Worker external profile/fail-closed、平台消费 Worker `ready=false` | 提交 `12cbe697`、`5d62707b`、`cce75f1b`；Java 定向矩阵；Codex SDK/app-server 与 LangGraph 测试/type/build | passed-local-partial-scope | Java 74 tests、10/10 reactor；Codex SDK 163 pass/1 skip，app-server 272 pass/1 skip，LangGraph 766 pass，构建通过。路径 canonicalization 绕过已发现并修复；未启用 external，未覆盖 token/identity/audit/ownership、真实网络部署或生产批准 |
+| EXEC-142-009 | 根 Java clean test 与 Open SDK 缺陷回归 | 修复 Open SDK 测试编译、显式 JUnit Platform 和 WSL 用例跨平台隔离；复跑根 reactor | 提交 `a2317ae2`；`mvn -B -pl navigator-open-sdk clean test`；`mvn -B clean test`；Surefire XML 汇总 | passed-local-with-warning | Open SDK 142 tests；根 17/17 reactor SUCCESS、2304 tests、0 failure/error/skipped、exit 0、总时 05:43。launcher 有 fork JVM 退出超时告警；hosted CI 与 `clean verify` 未运行；见 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) |
+| EXEC-142-010 | 文档一致性与轻量实现自检 | P1/P2/BUG-002 回写、Owner 决策时态、工作项状态、external 模式术语和代码路径 | 两轮独立只读文档审计；版本目录 + 总索引 Markdown 相对链接/锚点检查；Code Inventory 具体路径复核；`git diff --check`、`git status --short` | passed-local | 21 个范围内 Markdown、337 个相对目标、5 个锚点缺失为 0；53 个应存在的关键具体路径均存在；12 个待提交路径均在 `docs/version-tracker/1.4.2-SNAPSHOT`；无业务代码改动。正式质量门禁仍未执行 |
+
+## P2 Execution Check-in（`EXEC-142-008`）
+
+### Completed Work Summary
+
+1. `12cbe697` 增加 `NAVIGATOR_EXTERNAL_ENABLED=false`，仅门禁规范化后的 `/api/v1/open` 及其子路径；关闭返回 HTTP 503 + `EXTERNAL_SURFACE_DISABLED`。`/api/v1/health/external-surface` 中的 `surfaceReady` 只表示 routing gate，不表示 Provider/production ready。matrix/context/encoded 回归曾发现并修复路径规范化绕过。
+2. `5d62707b` 为 LangGraph Biz Worker、Codex SDK Worker、Codex app-server Worker 分别增加严格布尔开关 `BIZ_WORKER_EXTERNAL_ENABLED`、`CODEX_WORKER_EXTERNAL_ENABLED`、`CODEX_APP_SERVER_EXTERNAL_ENABLED`，仅接受 `true` / `false`，默认 `false`，mode 统一为 `internal-dev` / `external-enabled`。
+3. external-enabled 当前因 `EXTERNAL_EXECUTION_POLICY_PENDING` 始终 unready；空 Token 时叠加 `EXTERNAL_AUTH_TOKEN_REQUIRED`。除精确 `/health` 外，业务 API 返回 HTTP 503 + `EXTERNAL_WORKER_UNREADY`；`/health/` 不在豁免契约内。
+4. `cce75f1b` 让平台消费 Worker `ready=false`：LangGraph 标记 `OFFLINE`，Codex SDK connection tester 判定 unready；对未输出 `ready` 字段的旧 Worker 保留 HTTP 200 兼容。
+
+### Changed Surfaces
+
+- 平台 Open API 门禁：`addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/config/ExternalSurfaceProperties.java`、`addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/filter/ExternalSurfaceGateFilter.java`、`addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/health/ExternalSurfaceHealthController.java`、`launcher/src/main/resources/application.yml`。
+- Worker external profile：`tools/langgraph-biz-worker/src/langgraph_biz_worker/external_mode.py`、`tools/codex-agent-worker/src/external-mode.ts`、`tools/codex-app-server-worker/src/external-mode.ts` 及各自 config/health/入口/契约测试。
+- 平台 readiness 消费：`addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/model/dto/LanggraphWorkerHealthDTO.java`、`addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/service/LanggraphWorkerService.java`、`addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexSdkBackendConnectionTester.java` 及对应测试。
+
+### Build / Test / Experience
+
+- Java：最终三模块定向 74 tests，10/10 reactor SUCCESS；其中平台门禁 8 项 + Open API mapping 40 项，平台批次 48 项。
+- Codex SDK Worker：163 passed / 1 skipped，type-check/build 通过。Codex app-server Worker：272 passed / 1 skipped，type-check/build 通过。LangGraph Biz Worker：766 passed，build 通过。
+- Manual/Experience：`not-run`；没有执行真实非 loopback 部署、手工 ClientApp/upstream user 链路、浏览器错误反馈或内部 UI 回归。
+
+### Remaining Risks / Next Gate
+
+- internal-dev 不是网络防火墙；LangGraph/Codex SDK 默认 `0.0.0.0` + 空 Token 的既有开发行为保留，须使用 loopback 或可信网络/ACL。
+- 平台 `NAVIGATOR_EXTERNAL_ENABLED` 不覆盖 upstream-admin、`/internal/worker-gateway/v1/**` 或其他内部 Controller。
+- task token 函数 scope/TTL/终态失效/撤销/轮换、upstream identity authority、审批/恢复/取消审计、Session/Task ownership 仍未实施。
+- 旧 Provider API/SPI/DTO 按 Owner 决策在本仓消费者迁移、安全语义复核和 clean build 后可同版物理删除，无仓外兼容窗口；本批未执行删除。
+- self_check_decision: `continue-in-progress`；formal quality gate 仍 `not-started`，不将本地契约测试当作生产启用或正式验收。
 
 ## Testing Progress
 
 | Test lane | 状态 | Evidence / 原因 |
 |---|---|---|
-| Java clean compile/test | passed | 删除后执行 `mvn -B -pl metadata-config-module,launcher -am clean test`：15/15 reactor project SUCCESS，59 tests 的 failure/error 为 0，exit 0 |
+| Java clean compile/test | passed-local | 提交 `a2317ae2` 后执行根 `mvn -B clean test`：17/17 reactor project SUCCESS；2304 tests、0 failure/error/skipped，exit 0；launcher 有 Surefire fork JVM 退出超时告警；`clean verify`/hosted CI 未运行，见 `EXEC-142-009` |
 | Launcher assembly/package | partial | Maven clean test 已完成 launcher 编译和测试；`package`/`clean verify` 未运行 |
 | Navigator PC type-check/test/build | passed | 两个已知 TS 错误做最小修复后，根 frontend type/test/build matrix exit 0 |
 | chat-core/chat/widget build | passed | 根 `ci:frontend` / `build:frontend` 已覆盖；chat 测试 105、widget 测试 31 均通过 |
 | Mobile type-check/test/build | passed | mobile type-check、59 个测试与 H5 build 通过；非 H5 目标未运行 |
 | Claude/Codex/Gemini/LangGraph Worker tests/build | passed-local | 独立 clean worktree 五类 Worker install/type/test/build 通过；Python 本机为 3.12.3，GitHub 3.11 与 hosted runner 仍未运行；见 `EXEC-142-006` |
-| Ownership negative-path tests | not-run | P2/P3 尚未实施 |
+| Ownership negative-path tests | not-run | P2 identity/resource 绑定与 P3 ownership 尚未实施 |
 | task-scoped token 越权测试 | not-run | P2 尚未实施 |
-| Non-loopback missing credential readiness | not-run | P2 尚未实施 |
+| External Worker switch/readiness contract | passed-local | 三类 Worker 默认开关、严格布尔、external unready/空 Token reason、精确 `/health` 豁免和业务 API 503 契约通过；真实 non-loopback 部署未运行，见 `EXEC-142-008` |
+| Platform external gate/readiness consumption | passed-local | 路径 canonicalization 绕过已修复；平台门禁、Open API mapping、LangGraph/Codex ready=false 消费纳入 Java 定向 74 tests，10/10 reactor SUCCESS |
 | 删除项引用与 clean build 回归 | passed-local-partial-scope | Monitoring/code-review 精确静态扫描、shell syntax、Java clean 与前端 full matrix passed；metadata-query 删除后 clean test 15/15 SUCCESS，59 tests 通过，依赖树/clean target 无旧查询依赖；外部资源、启动和浏览器 smoke 未检查 |
 | GitHub Actions full-repository matrix | configured-not-run | `.github/workflows/repository-ci.yml` 已覆盖 Java、frontend、Node Worker、Python Worker；尚未由 GitHub runner 执行 |
-| 文档、配置与全工作树检查 | passed-local | 32 个 Markdown/411 个相对目标/3 个锚点缺失为 0；修改 shell `bash -n`、JSON/YAML parse、lockfile 跟踪检查通过；`git diff --check` exit 0 |
+| 文档、配置与全工作树检查 | passed-local | `EXEC-142-005` 的 shell/JSON/YAML/lockfile 检查保持有效；本轮 `EXEC-142-010` 复核 21 个范围内 Markdown、337 个相对目标、5 个锚点，缺失为 0；`git diff --check` exit 0，工作树仅含 12 个 1.4.2 文档路径 |
 
 ## Experience Progress
 
@@ -165,8 +201,8 @@
 | 3. 外部审批、恢复、取消不能只凭 taskId | not-started | not-collected |
 | 4. 外部身份不直接取自可伪造请求字段 | not-started | not-collected |
 | 5. task-scoped token 不越权访问其他任务或函数 | not-started | not-collected |
-| 6. 非 loopback 外部 Worker 缺凭据时 fail closed 或 unready | not-started | not-collected |
-| 7. Java clean 构建测试通过 | passed-current-batch | `EXEC-142-003`、`EXEC-142-007`；metadata-query 删除后已重跑，后续删除批次仍须重跑 |
+| 6. 非 loopback 外部 Worker 缺凭据时 fail closed 或 unready | partial-passed-local-contract | external-enabled 当前因执行策略未就绪始终 unready，空 Token 叠加认证 reason，业务 API 503；三类 Worker 契约测试通过，真实 non-loopback 部署未运行；`EXEC-142-008` |
+| 7. Java clean 构建测试通过 | passed-current-batch | `EXEC-142-009`：当前提交根 `mvn -B clean test` 17/17 SUCCESS、2304 tests；`clean verify` 与 hosted CI 仍待执行，后续删除批次仍须重跑 |
 | 8. 纳入范围的前端类型检查、测试和构建通过 | passed-current-batch | `EXEC-142-003`；浏览器体验与非 H5 mobile 不在本证据内 |
 | 9. Node、包管理器和 lockfile 可复现 | partial | 精确版本与本地 frozen lockfile 校验通过；clean checkout/GitHub runner 待证 |
 | 10. 所有删除项有扫描、迁移/替代和回滚证据 | partial | Monitoring/code-review/metadata-query 已记录；Echo、旧契约尚未实施 |
@@ -175,6 +211,14 @@
 | 13. 隔离验收不等同于生产批准 | not-started | not-collected |
 
 ## Implementation Self-Check
+
+- quality_mode: lightweight-self-check
+- quality_scope: `GOV-001/GOV-002 P2-first-gate-readiness + BUG-002`
+- changed_code_paths: 平台 `ExternalSurface*` 与 launcher 配置；LangGraph Biz/Codex SDK/Codex App Server Worker external mode/config/health/ingress；LangGraph/Codex Java readiness 消费；Open SDK POM 与测试
+- self_check_summary: 当前实现与“默认关闭、显式 external-enabled 配置意图仍 unready、平台不误路由、恢复 clean test”范围一致；未发现 debug/临时分支、越界业务重构或阻断性实现缺口。路径规范化、严格布尔、空凭据、显式 unready、旧 Worker 缺字段兼容和 WSL 宿主隔离均有对应测试
+- obvious_risks_or_follow_ups: `internal-dev` 仍依赖网络隔离；平台开关只覆盖 Open API；完整 task token/identity/audit/execution policy 未实现；两个 Codex Worker 各自维护相似 external-state helper，当前因独立发布边界保留，若继续扩展到 Claude/Gemini 应先统一契约生成/适配策略；launcher Surefire fork JVM 退出超时告警待构建 Owner 后续降噪
+- self_check_decision: needs-formal-quality-gate
+- formal_gate_timing: P2/P3 实现收口并准备进入 coverage audit 前；当前只是部分阶段 check-in，不提前生成正式质量报告
 
 - [x] requirement 与当前阶段 scope 已收口。
 - [x] 非目标没有被意外扩张。
@@ -187,14 +231,15 @@
 - [x] 已判断需要在跨模块阶段收口时执行正式 `foggy-implementation-quality-gate`，本轮不把执行 check-in 变成正式验收。
 - [x] 当前批次进度与证据已回写。
 
-- self_check_summary: partial-passed-for-current-batch；本机 Worker matrix 已通过，hosted CI/branch protection/nightly 实跑、浏览器体验、其余 P2-P6 和正式门禁未完成
-- self_check_decision: continue-in-progress
+- execution_checkin_summary: partial-passed-for-current-batch；P2 平台/Worker 显式关闭、unready 和 readiness 消费已通过本地契约矩阵；hosted CI/branch protection/nightly、真实网络部署、浏览器体验、task token/identity/audit/ownership、其余 P2-P6 和正式门禁未完成
+- execution_decision: continue-in-progress
 - formal_quality_gate_required: yes-cross-module-shared-contract-and-cleanup
 - formal_quality_gate_status: not-started
 
 ## 计划外变更
 
 - P1 clean Worker 矩阵发现并关闭 [BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md)：只修复 LangGraph SSE progress 语义去重，不扩张为图执行或事件协议重构。
+- P1 根 Java clean test 发现并关闭 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md)：只修复 Open SDK 测试编译、JUnit 5 执行器和跨平台 WSL 测试隔离，不改变 SDK 运行时 API 或放宽生产平台门禁。
 
 ## 后续实施待确认项
 
@@ -204,7 +249,7 @@
 | credential authority、轮换与撤销传播的具体 schema/事务边界 | pending-implementation-design | Biz Worker / gateway / platform owner |
 | upstream user mapping/grant 的权威数据源细节 | pending-implementation-design | ClientApp / upstream integration owner；signed assertion 不阻塞 internal-dev |
 | task-scoped token 字段、函数 allowlist、generation/lease 并发语义 | pending-implementation-design | BusinessTask / BusinessFunction / Worker Gateway owner |
-| `external-enabled` 配置名、默认值、readiness 与 Worker 上限的代码落点 | pending-implementation-design | Worker / Platform / Security owner；方向已批准，默认必须关闭 |
+| external execution policy、workspace/tool/sandbox/network 上限与真实网络部署验证 | pending-implementation | Worker / Platform / Security owner；显式默认关闭的开关、unready 骨架与平台 ready=false 消费已落地，安全上限未齐前 external 保持未启用 |
 | 权威 audit sink、outbox schema、拒绝事件可靠落档实现 | pending-implementation-design | Security / Operations / Business Agent owner |
 | metadata-query 启动/浏览器体验与后置正式门禁 | pending-experience-and-signoff | metadata-query / launcher owner；本地代码与自动化门禁已完成，不等于正式验收 |
 | Echo dev/test fixture 形态和 production launcher 退出方式 | pending-implementation-design | provider/test owner；不得误删 LocalEcho adapter |
@@ -216,8 +261,8 @@
 
 下一批按以下顺序衔接：
 
-1. 先完成本轮 Markdown 链接、workflow 语法、shell 语法、`git diff --check` 和工作树范围检查，保留未运行项。
+1. 本轮 Markdown 链接、`git diff --check` 和工作树范围检查已经完成；workflow/shell/JSON/YAML/lockfile 证据沿用 `EXEC-142-005`，未运行项继续保留。
 2. 让 repository CI 在 hosted runner 首次执行并决定 required checks；nightly 与 release/RC 分层单独落档。
 3. metadata-query 保持 completed-local 并在适用环境补启动/浏览器体验；后续逐切片推进 Echo 和旧 Provider 契约，每批先做仓内迁移/保护清单，再删除并重跑 clean test，不把 Owner 的 dev-only 授权扩大到未知共享资源。
-4. P2 优先实现显式、默认关闭的 `external-enabled` 与 readiness，再补 task token、调用主体和审计；signed assertion 保留为未来真正外部开放门禁。
+4. P2 已完成显式、默认关闭的平台/Worker 开关、外部 unready/fail-closed 和平台 readiness 消费骨架；下一批补 task token、调用主体、审计和执行策略上限，signed assertion 保留为未来真正外部开放门禁。
 5. 每完成一个跨模块或删除阶段先执行 implementation self-check，再按需要执行正式质量检查；P7 仍按质量检查、覆盖审计、正式签收顺序收口，隔离验证不等于生产批准。

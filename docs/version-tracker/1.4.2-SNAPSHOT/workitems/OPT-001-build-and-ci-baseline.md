@@ -38,6 +38,7 @@ owner: root-build-owner
 4. 本轮已生成根 `pnpm-lock.yaml`、移除 `packages/foggy-chat/pnpm-lock.yaml`，并以精确 Node/pnpm 工具运行 lockfile-only install、frozen install、全前端 typecheck/test/build。
 5. `mvn -B -pl launcher -am clean test` 已完成，16 个 reactor project 均为 `SUCCESS`，测试 `0 failures`，命令退出码为 `0`。
 6. `.github/workflows/repository-ci.yml` 已落地 Java、前端、Node Worker 与 Python Worker lane；五类 Worker 已在独立 clean worktree 本地实跑，workflow 仍未在 GitHub runner 执行，不能登记为 hosted CI pass。
+7. 修复 [BUG-002](./BUG-002-open-sdk-clean-test-baseline.md) 后，根 `mvn -B clean test` 已完成：17 个 reactor project 均为 `SUCCESS`，286 份 Surefire XML 汇总 2304 tests、0 failure/error/skipped，exit `0`；根 `clean verify` 仍未执行。
 
 ### 静态搜索结论
 
@@ -91,6 +92,7 @@ owner: root-build-owner
 | `pnpm run ci:frontend` | 根 workspace typecheck/test/build 聚合 | passed，exit `0` | 测试存在预期 stderr/构建告警；未在 GitHub runner 执行 |
 | `pnpm run build:frontend` | chat-core、chat、widget、PC、mobile H5 独立复跑 | passed，exit `0` | 有 chunk、导入方式及 uni-app 版本提示，未登记为失败 |
 | `mvn -B -pl launcher -am clean test` | JDK 17、launcher 依赖链 clean test | passed，exit `0`；16 reactor `SUCCESS`；测试 `0 failures` | 尚未补根 `mvn -B clean verify` 和 GitHub runner 证据 |
+| `mvn -B clean test` | JDK 17、根 reactor；关闭 [BUG-002](./BUG-002-open-sdk-clean-test-baseline.md) 后 | passed，exit `0`；17/17 reactor `SUCCESS`；2304 tests、0 failure/error/skipped；总时 `05:43` | launcher 结束时有 Surefire fork JVM 退出超时告警；GitHub runner 与 `clean verify` 未执行 |
 | Codex SDK `npm ci && typecheck && test && build` | 独立 clean worktree，Node `22.23.1` | passed，159 pass、1 skip，exit `0` | 无凭据 lane；不含真实 Codex/外部联调 |
 | Codex app-server `npm ci && typecheck && test && build` | 独立 clean worktree，Node `22.23.1` | passed，269 pass、1 skip，exit `0` | 长生命周期/安装脚本单测通过；不等于 RC 或生产证据 |
 | Gemini `npm ci && typecheck && build` | 独立 clean worktree，Node `22.23.1` | passed，exit `0` | package 无 test script；`npm audit` 报 1 low/4 moderate，登记为非阻断依赖风险 |
@@ -102,7 +104,7 @@ owner: root-build-owner
 1. `.github/workflows/repository-ci.yml` 尚未由 GitHub runner 执行，分支保护中的 required check 也尚无生效证据。
 2. 五类 Worker 已在独立 clean worktree 按 CI 等价命令本机执行通过；GitHub runner，特别是 Python 3.11，尚未执行。
 3. `.github/workflows/repository-nightly.yml` 已建立 full reactor、前端扩展目标和跨平台 Worker 矩阵，但尚未由 runner 执行；required check/分支保护也未生效。
-4. 第二个 Linux clean checkout、Windows/WSL clean checkout、根 `mvn -B clean verify` 仍待补证据。
+4. 第二个 Linux clean checkout、Windows/WSL clean checkout、根 `mvn -B clean verify` 仍待补证据；根 `clean test` 已通过，不与 `verify` 混同。
 
 ## 精确代码与配置清单
 
@@ -202,7 +204,7 @@ owner: root-build-owner
 - 每类 Worker 至少有无凭据 unit/type/build 证据；
 - 缺少凭据被记录为受控 smoke `not-run`，不伪装 pass。
 
-本轮状态：Java launcher 依赖链 clean test 已通过；Node/Python Worker jobs 已在本机 clean worktree 逐项通过，GitHub runner 与根 `clean verify` 尚未运行。
+本轮状态：Java launcher 依赖链和根 reactor `clean test` 均已通过；根 reactor 首轮暴露并关闭 [BUG-002](./BUG-002-open-sdk-clean-test-baseline.md)。Node/Python Worker jobs 已在本机 clean worktree 逐项通过，GitHub runner 与根 `clean verify` 尚未运行。
 
 ### Step 5：全仓 GitHub Actions 门禁
 
@@ -234,6 +236,7 @@ Workflow 必须：
 
 ~~~bash
 mvn -B -pl launcher -am clean test
+mvn -B clean test
 mvn -B clean verify
 
 corepack pnpm install --frozen-lockfile
@@ -284,6 +287,7 @@ Experience 状态为 `not-applicable`：本事项不直接改变 UI；若修复 
 - [ ] 根 lockfile 已生成且当前工作树 frozen install 无漂移；最终提交和第二个 clean checkout 复验待补。
 - [x] chat 嵌套 lockfile 已决定并实施移除，统一使用根 workspace lockfile。
 - [x] Java `mvn -B -pl launcher -am clean test` 有 16 reactor `SUCCESS`、测试 `0 failures`、exit `0` 的本地证据。
+- [x] 根 `mvn -B clean test` 有 17/17 reactor `SUCCESS`、2304 tests、0 failure/error/skipped、exit `0` 的本地证据。
 - [ ] 根 `mvn -B clean verify` 尚未执行。
 - [x] chat-core、chat、widget、主前端、mobile 的 type/test/build 均有本地明确结果。
 - [x] 主前端有效 type-check 会检查 app project，两个存量错误已关闭。
@@ -291,7 +295,7 @@ Experience 状态为 `not-applicable`：本事项不直接改变 UI；若修复 
 - [x] Node/Python Worker jobs 已有本机 clean worktree 逐项通过证据；GitHub runner 仍待补。
 - [ ] GitHub Actions 全仓矩阵和 required check 策略已生效。
 - [ ] 所有命令、版本、退出码和证据路径已回写 [Progress](../progress.md)。
-- [ ] 已执行 `git diff --check` 和 Markdown 相对链接检查。
+- [x] 已执行 `git diff --check` 和 Markdown 相对链接检查；见 `EXEC-142-010`，正式提交后仍须复核工作树状态。
 
 ## 生产路由与外部契约状态
 

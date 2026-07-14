@@ -27,6 +27,9 @@
 | `read-only-analysis` | 只做引用、配置、数据或依赖审计，未满足门禁不得修改 |
 | `delete-authorized` | Owner 已批准在明确的 dev-only 范围内物理删除；仍须处理仓内引用、确认不命中共享/生产资源并完成测试和回滚记录 |
 | `removed-pending-verification` | 授权切片已从工作树移除，但删除后构建、定向回归、启动/体验或文档收口尚未完成；不得标记 completed |
+| `in-progress-implemented` | 工作项已有一部分实现和本地证据，但剩余范围或后置门禁尚未完成 |
+| `code-slice-removed` | 完整代码切片已在独立提交中物理移除并完成已登记的本地静态/自动化回归；外部资源、体验、hosted CI 或正式验收按说明保留未完成状态 |
+| `create-completed-local` / `update-completed-local` | 对应新增或更新路径已在当前批次落地，并完成已登记的本地自动化验证；不表示整个工作项或版本完成 |
 | `completed-local` | 代码、装配、当前文档与本地自动化门禁已经收口；启动/浏览器、hosted CI 或正式验收若未执行仍须单独标记 |
 | `do-not-touch` | 1.4.2 明确保留，或必须先完成迁移/备份/轮换 |
 
@@ -42,7 +45,7 @@
 | root | `docs/version-tracker/1.4.2-SNAPSHOT/owner-decision-review.md` | Owner 决策评审 | create | 八组决策已完成评审；批准不等于实现、测试或生产启用 |
 | root | `docs/version-tracker/1.4.2-SNAPSHOT/execution-prompt.md` | 开工提示 | create | 后续执行 Agent 的范围和记录要求 |
 | root | `docs/version-tracker/1.4.2-SNAPSHOT/progress.md` | 进度模板 | create | 与 execution prompt 配套，当前不写虚假证据 |
-| root | `docs/version-tracker/1.4.2-SNAPSHOT/workitems/*.md` | 工作项 | create | 3 个治理、2 个优化、4 个清理、1 个文档工作项 |
+| root | `docs/version-tracker/1.4.2-SNAPSHOT/workitems/*.md` | 工作项 | create | 10 个计划工作项：3 个治理、2 个优化、4 个清理、1 个文档；另有实施期 BUG-001、BUG-002 两个缺陷记录 |
 | root | `docs/version-tracker/README.md` | 总版本索引 | update | 只增加 `1.4.2-SNAPSHOT` 链接 |
 
 ## 治理与授权触点
@@ -70,7 +73,8 @@
 
 | 批次 | 实际路径/切片 | 状态 | 已有验证 | 尚未验证/未操作 |
 |---|---|---|---|---|
-| P1 构建基线 | `.nvmrc`、根 `package.json`、`.gitignore`、根 `pnpm-lock.yaml`、前端 package/scripts、required/nightly workflows、现有 Codex RC workflow、README/CLAUDE | in-progress-implemented | 精确 Node/pnpm frozen 校验、frontend、launcher clean test、五类 Worker clean 等价矩阵 passed；nightly 已配置 | hosted CI、branch protection、nightly 实跑、根 reactor verify、浏览器体验 |
+| P1 构建基线 | `.nvmrc`、根 `package.json`、`.gitignore`、根 `pnpm-lock.yaml`、前端 package/scripts、`navigator-open-sdk/pom.xml` 与测试、required/nightly workflows、现有 Codex RC workflow、README/CLAUDE | in-progress-implemented | 精确 Node/pnpm frozen 校验、frontend、五类 Worker clean 等价矩阵 passed；[BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) 关闭后根 `mvn -B clean test` 17/17 reactor、2304 tests 全通过；nightly 已配置 | hosted CI、branch protection、nightly 实跑、根 reactor `clean verify`、跨 checkout 与浏览器体验 |
+| P2 首批外部门禁/readiness | 平台 `/api/v1/open` 路由门禁、LangGraph Biz Worker、Codex SDK Worker、Codex App Server Worker 及 Java 健康状态消费者 | in-progress-implemented | 三个独立提交：`12cbe697`、`5d62707b`、`cce75f1b`；默认关闭的显式开关、脱敏健康状态、external-enabled 503 门禁与旧 Worker 健康响应兼容逻辑已落码 | task token、可信 upstream identity、授权交集、审计 outbox、完整 execution policy、Claude/Gemini Worker、生产 readiness 与外部开放均未完成 |
 | Monitoring | `monitoring-module/**`、`tools/foggy-monitor/**`、PC View/API、SecurityConfig 放行、`scripts/start-all.sh` 与当前权威文档 | code-slice-removed | tracked 源码及 repo-local ignored `target/.venv/.pytest_cache` 均移除；静态扫描、shell syntax、Java clean、frontend full matrix passed | RabbitMQ/DB/deployment 等外部资源未操作；启动/浏览器 smoke 未跑 |
 | Code Review | `addons/code-review-agent/**` 共 22 个 tracked files、当前开发指引 | code-slice-removed | root/launcher/CI/scripts/source 扫描与 Java clean passed | GitLab webhook、DB、独立 deployment 未操作/未做运行态读取 |
 | metadata-query | `metadata-query-module/**`、根 `pom.xml`、`launcher/pom.xml`、launcher context test、`.agents/skills/metadata-query-module/**`、当前 README/架构文档 | completed-local | 模块、装配、断言、Skill 与当前文档已收口；根 reactor 当前为 16 个模块；删除后 clean test 15/15 `SUCCESS`，依赖树与 clean target 无旧查询依赖 | 启动/浏览器 smoke、hosted CI 与正式验收未运行；外部资源未操作 |
@@ -78,16 +82,64 @@
 
 ## Worker 与外部执行触点
 
+### P2 首批已实施的平台路由门禁（`12cbe697`）
+
+| 仓库 | 路径 | 角色 | 实施状态 | 说明 |
+|---|---|---|---|---|
+| root | `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/config/ExternalSurfaceProperties.java` | 平台 external surface 配置 | create-completed-local | 绑定 `navigator.external.enabled`；Java 默认值为 `false` |
+| root | `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/filter/ExternalSurfaceGateFilter.java` | Open API 路由门禁 | create-completed-local | 仅匹配 `/api/v1/open` 与 `/api/v1/open/**`；开关关闭时返回 `503 / EXTERNAL_SURFACE_DISABLED`，不改写既有 Open API 鉴权 |
+| root | `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/health/ExternalSurfaceHealthController.java` | 平台路由状态 | create-completed-local | `/api/v1/health/external-surface` 输出非敏感状态；`surfaceReady` 只表示平台路由开关已打开，不表示 Provider 或生产 ready |
+| root | `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/config/ClaudeWorkerAutoConfiguration.java` | 门禁装配 | update-completed-local | 注册配置属性和高优先级 Filter；未重构全局 `SecurityConfig` |
+| root | `launcher/src/main/resources/application.yml` | launcher 显式开关 | update-completed-local | `navigator.external.enabled: ${NAVIGATOR_EXTERNAL_ENABLED:false}`；默认不开放 Open API surface |
+| root | `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/filter/ExternalSurfaceGateFilterTest.java` | 路由门禁负向/范围测试 | create-completed-local | 覆盖默认关闭、显式开启、精确路径边界及非目标路由不受影响 |
+
+### P2 首批已实施的 Worker 门禁/readiness（`5d62707b`）
+
+| Worker | 路径 | 角色 | 实施状态 | 说明 |
+|---|---|---|---|---|
+| LangGraph Biz | `tools/langgraph-biz-worker/src/langgraph_biz_worker/config.py` | 运行模式配置 | update-completed-local | 严格解析 `BIZ_WORKER_EXTERNAL_ENABLED`，默认 `false` |
+| LangGraph Biz | `tools/langgraph-biz-worker/src/langgraph_biz_worker/external_mode.py` | 外部模式状态机 | create-completed-local | 输出 `internal-dev` / `external-enabled`、auth 状态与原因码；external-enabled 当前固定包含 `EXTERNAL_EXECUTION_POLICY_PENDING` |
+| LangGraph Biz | `tools/langgraph-biz-worker/src/langgraph_biz_worker/main.py` | 全局 HTTP ingress 门禁 | update-completed-local | 仅精确 `GET /health` 保持可观测；external-enabled 且 unready 时其他 HTTP 路由返回 `503 / EXTERNAL_WORKER_UNREADY`，`/health/` 不属于豁免路径 |
+| LangGraph Biz | `tools/langgraph-biz-worker/src/langgraph_biz_worker/models.py` | 健康响应契约 | update-completed-local | 增加 mode、external/auth/readiness 与 reasons 字段 |
+| LangGraph Biz | `tools/langgraph-biz-worker/src/langgraph_biz_worker/routes/health.py` | Worker readiness | update-completed-local | external-enabled 未就绪时 `ready=false`、`status=degraded`；不输出 Token |
+| Codex SDK | `tools/codex-agent-worker/src/config.ts` | 运行模式配置 | update-completed-local | 严格解析 `CODEX_WORKER_EXTERNAL_ENABLED`，默认 `false` |
+| Codex SDK | `tools/codex-agent-worker/src/external-mode.ts` | 外部模式状态与 middleware | create-completed-local | 仅精确 `GET /health` 例外；external-enabled 未就绪时统一返回 503，并记录非敏感原因码；`/health/` 不等价 |
+| Codex SDK | `tools/codex-agent-worker/src/index.ts` | middleware 装配 | update-completed-local | 在 JSON body 和既有 auth middleware 前装配 external gate |
+| Codex SDK | `tools/codex-agent-worker/src/models.ts` | 健康响应契约 | update-completed-local | 增加 mode、external/auth/readiness 与 reasons 字段 |
+| Codex SDK | `tools/codex-agent-worker/src/routes/health.ts` | Worker readiness | update-completed-local | 合并 Codex SDK 运行条件与 external 原因；任一原因存在均不 ready |
+| Codex App Server | `tools/codex-app-server-worker/src/config.ts` | 运行模式配置 | update-completed-local | 严格解析 `CODEX_APP_SERVER_EXTERNAL_ENABLED`，默认 `false` |
+| Codex App Server | `tools/codex-app-server-worker/src/external-mode.ts` | 外部模式状态机 | create-completed-local | external-enabled 当前固定因完整执行策略未就绪而 fail closed |
+| Codex App Server | `tools/codex-app-server-worker/src/auth.ts` | HTTP ingress/auth 门禁 | update-completed-local | 仅精确 `GET /health` 例外；在原空 Token 放行逻辑前拒绝 external-enabled unready 请求；`/health/` 在 external-enabled 下可能返回 503 |
+| Codex App Server | `tools/codex-app-server-worker/src/routes/health.ts` | Worker readiness | update-completed-local | 返回 mode、external/auth/readiness 和原因；不输出凭据 |
+| Codex App Server | `tools/codex-app-server-worker/src/runtime-capabilities.ts` | runtime readiness/capability | update-completed-local | 将 external 原因并入 runtime readiness，并在 capability manifest 暴露非敏感状态 |
+| 三类 Worker | 对应 `.env.example`、README/集成说明及 tests | 配置说明与回归保护 | update-completed-local | 明确开关默认关闭并覆盖严格布尔解析、健康字段和 external-enabled 503 行为 |
+
+### 平台健康状态消费者（`cce75f1b`）
+
+| 仓库 | 路径 | 角色 | 实施状态 | 说明 |
+|---|---|---|---|---|
+| root | `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/model/dto/LanggraphWorkerHealthDTO.java` | LangGraph 健康契约消费者 | update-completed-local | 接收 `ready`、mode、external/auth/readiness 与 reasons；字段保持 nullable 兼容旧 Worker |
+| root | `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/service/LanggraphWorkerService.java` | LangGraph 平台状态映射 | update-completed-local | 显式 `ready=false` 映射为 `OFFLINE`；旧 Worker 缺少 `ready` 时仍按既有 200 健康响应兼容为在线 |
+| root | `addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexSdkBackendConnectionTester.java` | Codex SDK 后端连接检查 | update-completed-local | 显式 `ready=false` 报 `CODEX_SDK_WORKER_UNREADY`；缺少 `ready` 的旧 Worker 继续按原契约处理 |
+
+### 首批实现限制与后续触点
+
+| 类别 | 当前事实 | 后续要求 |
+|---|---|---|
+| `internal-dev` | 是可信网络内的兼容 profile，不是防火墙或外部安全声明；三个 Worker 在 external 开关为 `false` 时保留原监听地址和空 Token 行为 | 部署侧仍须限制网络可达性；不得把 `internal-dev` 暴露到不可信网络 |
+| `external-enabled` | 三个 Worker 当前即使配置了 Token，也固定因 `EXTERNAL_EXECUTION_POLICY_PENDING` 而 `external_ready=false`；缺 Token 时另有 `EXTERNAL_AUTH_TOKEN_REQUIRED` | 完成目录、工具、sandbox、approval、network、task token、身份和审计策略及负向测试后，才可设计解除 pending 的条件 |
+| 平台 surface | `NAVIGATOR_EXTERNAL_ENABLED=true` 只打开 `/api/v1/open` 路由门禁；`surfaceReady=true` 只表示 routing gate open | 不覆盖 upstream-admin、`/internal/worker-gateway/v1/**` 或内部 Controller；这些边界须由各自 principal/ownership 方案治理 |
+| 兼容 | 平台消费者仅在健康响应显式 `ready=false` 时判 unready；缺字段按旧 Worker 兼容 | 兼容逻辑不等于外部安全；升级期结束后是否收紧须另行决策 |
+| 未完成能力 | 本批未实现 task token 函数 scope/生命周期、upstream identity、调用/审批/恢复审计、生产 readiness 或外部启用 | 保持 GOV-001/GOV-002 为 `in-progress`，不得据此签收 P2 或批准生产路由 |
+
+### 尚未实施的 Worker 治理触点
+
 | 仓库 | 路径 | 角色 | 预期变更 | 说明 |
 |---|---|---|---|---|
-| root | `tools/claude-agent-worker/src/agent_worker/auth.py` | Claude Worker HTTP auth | update | 增加默认关闭的 explicit external 开关；启用后非 loopback 空凭据 fail closed/unready |
-| root | `tools/codex-agent-worker/src/auth.ts` | Codex Worker HTTP auth | update | 同上，保留显式 loopback internal-dev |
-| root | `tools/codex-app-server-worker/src/auth.ts` | Codex app-server auth | update | 对齐 explicit external 开关、部署模式与 readiness |
-| root | `tools/gemini-agent-worker/src/auth.ts` | Gemini Worker auth | update | 对齐 explicit external 开关和负向测试 |
-| root | `tools/langgraph-biz-worker/src/langgraph_biz_worker/auth.py` | LangGraph Worker auth | update | external 开关默认关闭；显式启用后不得因空 Token 跳过认证 |
-| root | `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/execution_policy.py` | workdir/tool policy | update | 外部模式服务端限制优先，空 allowlist 语义明确 |
-| root | `tools/codex-agent-worker/src` | Codex 执行策略 | update | 冻结 allowed cwd/tool/sandbox/approval/network 上限 |
-| root | `tools/gemini-agent-worker/src` | Gemini 执行策略 | read-only-analysis | 确认实际工作目录、工具和配置边界 |
+| root | `tools/claude-agent-worker/src/agent_worker/auth.py` | Claude Worker HTTP auth | update | 后续对齐默认关闭的 explicit external 开关、readiness 和负向测试 |
+| root | `tools/gemini-agent-worker/src/auth.ts` | Gemini Worker HTTP auth | update | 后续对齐默认关闭的 explicit external 开关、readiness 和负向测试 |
+| root | `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/execution_policy.py` | LangGraph workdir/tool policy | update | 外部模式服务端限制优先，明确缺失 policy 与空 allowlist 语义 |
+| root | `tools/codex-agent-worker/src`、`tools/codex-app-server-worker/src` | Codex 执行策略 | update | 冻结 allowed cwd/tool/sandbox/approval/network 上限并补完整负向矩阵 |
 
 ## 构建与 CI 触点
 
@@ -148,9 +200,9 @@
 
 | 仓库 | 路径/切片 | 角色 | 预期变更 | 删除前门禁 |
 |---|---|---|---|---|
-| root | `monitoring-module/`、`tools/foggy-monitor/`、`packages/navigator-frontend/src/views/MonitoringView.vue`、`packages/navigator-frontend/src/api/monitoring.ts`、`scripts/start-all.sh`、`SecurityConfig` 放行项、相关当前文档 | Monitoring | removed-in-working-tree | Java/Python/UI/API/auth/script 及 repo-local ignored 构建残留已删除并通过本地构建；外部 RabbitMQ/DB/deployment 未操作，体验/hosted CI 待跑 |
+| root | `monitoring-module/`、`tools/foggy-monitor/`、`packages/navigator-frontend/src/views/MonitoringView.vue`、`packages/navigator-frontend/src/api/monitoring.ts`、`scripts/start-all.sh`、`SecurityConfig` 放行项、相关当前文档 | Monitoring | code-slice-removed | Java/Python/UI/API/auth/script 及 repo-local ignored 构建残留已删除并通过本地构建；外部 RabbitMQ/DB/deployment 未操作，体验/hosted CI 待跑 |
 | root | `metadata-query-module/`、根 reactor、`launcher/pom.xml`、launcher context test、专属 Skill、当前 README/架构文档 | 旧语义查询 | completed-local | 模块、装配、专属断言、Skill 与当前文档已收口；`metadata-config-module` 23 个 tracked files 保留、业务树 diff 为 0；删除后 clean test、依赖树和 clean target 扫描通过。启动/浏览器、hosted CI 和正式验收仍未运行 |
-| root | `addons/code-review-agent/`、专属源码/配置/测试和当前开发指引 | GitLab code review | removed-in-working-tree | 22 个 tracked files 已删除；仓内扫描和 Java clean 通过；GitLab/DB/独立 deployment 未操作 |
+| root | `addons/code-review-agent/`、专属源码/配置/测试和当前开发指引 | GitLab code review | code-slice-removed | 22 个 tracked files 已删除；仓内扫描和 Java clean 通过；GitLab/DB/独立 deployment 未操作 |
 | root | `addons/echo-agent/`、根 reactor、`launcher/pom.xml`、discovery 与已知测试引用 | 示例 Provider | delete-authorized | 迁移或删除仓内 smoke/test 引用；保留 `LocalEchoBusinessFunctionAdapterInvoker` |
 | root | `/api/v1/claude-tasks`、`/api/v1/codex-tasks`、`/api/v1/langgraph-tasks` 对应 Controller、DTO、SPI、前端/Worker/SDK/CLI 调用 | 旧 Provider API | delete-authorized | 迁移或删除 PC、L3、Worker/canary、stream relay 等全部仓内引用后直接删除；无需外部静默或兼容窗口 |
 

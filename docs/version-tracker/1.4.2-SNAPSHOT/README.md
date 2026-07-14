@@ -13,6 +13,8 @@
 - implementation_started: yes
 - implementation_started_at: `2026-07-14`
 - production_routing_changed: no
+- external_contract_changed: yes
+- external_enablement: no
 - production_enablement: not-applicable
 - acceptance_status: not-started
 
@@ -59,6 +61,13 @@
 - 外部触发的 Agent/Worker 必须受工作目录与工具能力边界约束，并记录调用、审批、恢复、失败和拒绝审计。
 - 外部模式必须由单一显式开关开启且默认关闭；空 Token、监听地址或其他开发配置均不得隐式开启。
 
+P2 首批模式门禁已经本机落地，但只完成了“默认关闭、显式声明 external-enabled 配置意图、readiness 可观察、平台不误路由”这一层；配置意图不等于 `external_ready`，更不等于 external enablement 或 production enablement：
+
+- 平台通过 `NAVIGATOR_EXTERNAL_ENABLED=false` 默认关闭 `/api/v1/open` 路径根及其子路径；关闭时在进入 Controller 前返回 `503 / EXTERNAL_SURFACE_DISABLED`。该开关不覆盖 `/api/v1/upstream-admin/**`、`/internal/worker-gateway/v1/**` 或其他内部 Controller，`/api/v1/health/external-surface` 的 `surfaceReady` 也只表示 HTTP 路由门禁状态，不表示 Provider 或生产 readiness。
+- LangGraph Biz Worker、Codex SDK Worker、Codex app-server Worker 分别使用 `BIZ_WORKER_EXTERNAL_ENABLED`、`CODEX_WORKER_EXTERNAL_ENABLED`、`CODEX_APP_SERVER_EXTERNAL_ENABLED`，只接受显式 `true/false` 且默认 `false`。当前即使显式开启，也会因 `EXTERNAL_EXECUTION_POLICY_PENDING` 保持 unready；空 Token 还会增加 `EXTERNAL_AUTH_TOKEN_REQUIRED`，除精确规范路径 `GET /health` 外的业务请求返回 `503 / EXTERNAL_WORKER_UNREADY`。
+- 平台消费端已经识别 Worker 显式 `ready=false`，不会再将其提升为可路由状态；未返回 `ready` 的旧 Worker 暂按原行为兼容。此兼容只用于仓内渐进迁移，不代表允许 external-enabled Worker 绕过 readiness。
+- `internal-dev` 不是网络防火墙。LangGraph/Codex SDK Worker 的 `0.0.0.0` 监听和空 Token 仅适用于可信开发网络，部署侧仍须通过 loopback、ACL 或等价网络边界阻断非可信访问。
+
 ## 证据边界
 
 | 分类 | 本版本定义 | 当前使用规则 |
@@ -72,8 +81,10 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 
 - P1 已落地 Node `22.23.1`、pnpm `10.34.5`、单一根 `pnpm-lock.yaml`、前端 workspace 矩阵和仓库级 CI workflow；本机使用精确版本完成 frozen install，前端类型检查、测试和构建均通过。
 - Java 删除前历史基线继续保留；metadata-query 删除后另行执行 `mvn -B -pl metadata-config-module,launcher -am clean test`，15/15 reactor project 全部 `SUCCESS`，launcher 7 tests、0 failure/error。
+- P2 首批提交后执行根 `mvn -B clean test`，发现并关闭 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md)：Open SDK 恢复可信的 JUnit 5 clean 基线，最终 17/17 reactor project 全部 `SUCCESS`，2304 tests、0 failure/error/skipped，exit 0；GitHub hosted runner 与根 `clean verify` 仍未执行。
+- P2 首批由提交 `12cbe697`、`5d62707b`、`cce75f1b` 落地平台/三类 Worker 默认关闭门禁、readiness 诊断及平台消费约束。Java 定向矩阵 74 tests、10/10 reactor 通过；Codex SDK Worker 163 passed/1 skipped、Codex app-server Worker 272 passed/1 skipped、LangGraph Biz Worker 766 passed，Node type-check/build 与 Python build 均通过。平台路径 matrix parameter、context path、encoded path 回归覆盖并修复了实际门禁绕过。
 - P5 已物理移除 Monitoring 和 `addons/code-review-agent` 两个 dev-only 完整切片；metadata-query 的模块、reactor/launcher 装配、launcher 专属 bean 断言、专属 Skill 与当前文档也已收口，dependency tree 和 clean target 无旧查询依赖。CLEAN-003 为 `completed-local`，但启动/浏览器 smoke、hosted CI 与正式验收未完成；Echo Agent 和旧 Provider API/SPI/DTO 尚未开始移除。
-- 五类 Worker 已在独立 clean worktree 完成本机等价矩阵，nightly workflow 已建立；GitHub runner、分支保护、nightly 实际执行和真实浏览器体验仍未完成，因此 P1、P5 和版本整体保持 `in-progress`，`acceptance_status` 仍为 `not-started`。
+- 五类 Worker 已在独立 clean worktree 完成 P1 本机等价矩阵，nightly workflow 已建立；P2 的 task token 函数 scope/生命周期、ClientApp/upstream identity、审批恢复主体绑定、审计和 ownership 尚未完成。GitHub runner、分支保护、nightly 实际执行和真实浏览器体验仍未完成，因此 P1、P2、P5 和版本整体保持 `in-progress`，`acceptance_status` 仍为 `not-started`。
 
 命令、结果、限制和后续补证统一登记在 [进度记录](./progress.md) 及对应 workitem 中；这里的本机通过不代表 GitHub 合并门禁已生效，也不代表验收或生产批准。
 
@@ -81,11 +92,12 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 
 | Workitem | 范围 | 计划阶段 | 当前状态 |
 |---|---|---|---|
-| [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | 内部控制面与外部运行面信任边界 | P0、P2、P3 | planned-reviewed |
-| [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | Biz Worker、ClientApp、upstream user、凭据与 task token | P2 | planned-reviewed |
+| [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | 内部控制面与外部运行面信任边界 | P0、P2、P3 | in-progress |
+| [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | Biz Worker、ClientApp、upstream user、凭据与 task token | P2 | in-progress |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | Session/Task ownership 与审批、恢复、取消约束 | P3 | planned-reviewed |
 | [OPT-001](./workitems/OPT-001-build-and-ci-baseline.md) | Node、lockfile、Java/前端/Worker clean build 与 CI | P1 | in-progress |
 | [BUG-001](./workitems/BUG-001-langgraph-progress-event-duplication.md) | LangGraph 实时工具进度事件重复 | P1 | closed |
+| [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) | Open SDK 测试编译、JUnit 5 与跨平台 clean 基线 | P1 | closed |
 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md) | 超大类、模块边界和 Provider 状态 schema 渐进治理 | P6 | planned |
 | [CLEAN-001](./workitems/CLEAN-001-low-risk-orphan-cleanup.md) | 低风险孤儿文件、未引用导出和失效文档 | P4 | planned |
 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md) | Monitoring dev-only 完整功能切片移除 | P5 | in-progress |
@@ -99,7 +111,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 |---|---|---|---|
 | P0 | 冻结目标、边界、术语、ownership 和代码清单 | in-progress | 否；仅规划与文档基线 |
 | P1 | 冻结 Node、包管理器、lockfile、全仓 clean build 和 CI 矩阵 | in-progress | 否；构建与合并门禁会变化 |
-| P2 | 治理外部 Biz Worker、Worker Gateway 和 upstream user 边界 | not-started | 可能；必须先冻结兼容、迁移和回滚方案 |
+| P2 | 治理外部 Biz Worker、Worker Gateway 和 upstream user 边界 | in-progress | 生产路由未改变、external 未启用；开发树的默认关闭、503 和 readiness 契约已收紧 |
 | P3 | 在 service/facade 层补齐 Session/Task ownership | not-started | 可能影响越权或依赖旧行为的调用；不得大范围改内部 UI |
 | P4 | 清理低风险孤儿代码和失效文档 | not-started | 否；每项仍需引用扫描、验证和回滚证据 |
 | P5 | 按 dev-only 授权独立移除 Monitoring、metadata-query、code-review，并迁移 Echo fixture 后退出生产装配 | in-progress | 当前无生产路由；发现共享/生产资源即停止 |
@@ -173,6 +185,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 - [GOV-003 Session/Task 资源归属](./workitems/GOV-003-session-task-resource-ownership.md)
 - [OPT-001 构建与 CI 基线](./workitems/OPT-001-build-and-ci-baseline.md)
 - [BUG-001 LangGraph 实时工具进度事件重复](./workitems/BUG-001-langgraph-progress-event-duplication.md)
+- [BUG-002 Open SDK clean test 基线](./workitems/BUG-002-open-sdk-clean-test-baseline.md)
 - [OPT-002 核心代码可维护性](./workitems/OPT-002-core-code-maintainability.md)
 - [CLEAN-001 低风险孤儿清理](./workitems/CLEAN-001-low-risk-orphan-cleanup.md)
 - [CLEAN-002 Monitoring 退役](./workitems/CLEAN-002-monitoring-retirement.md)

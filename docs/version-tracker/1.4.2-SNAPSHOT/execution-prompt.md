@@ -9,18 +9,36 @@
 ## 基本信息
 
 - version: `1.4.2-SNAPSHOT`
-- status: planned-reviewed
+- status: in-progress
 - owner_decision_status: review-complete
 - operation_mode: single-root-delivery
 - implementation_started: yes
+- production_routing_changed: no
+- external_contract_changed: yes
+- external_enablement: no
+- production_enablement: not-applicable
+- acceptance_status: not-started
 - requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
 - implementation_plan: [Implementation Plan](./implementation-plan.md)
 - module_responsibility: [Module Responsibility](./module-responsibility.md)
 - code_inventory: [Code Inventory](./code-inventory.md)
 - owner_decision_review: [Owner Decision Review](./owner-decision-review.md)
 - progress: [Progress](./progress.md)
+- last_execution_checkin: `2026-07-14 / P2-first-external-gate-readiness`
 
-当前检查点：`2026-07-14` 已实施 P1 本地基线以及 Monitoring/code-review 两个独立删除切片；metadata-query 的模块、reactor/launcher 装配、专属 bean 断言、专属 Skill 与当前文档已收口，删除后 metadata-config/launcher clean test 15/15 `SUCCESS`，依赖树和 clean target 无旧查询依赖，CLEAN-003 状态为 `completed-local`。启动/浏览器、hosted CI 与正式验收未执行。后续执行者必须先读 Progress，不得重复删除、把本地结果冒充生产/验收证据，或把 Echo、旧 Provider 契约和 P2/P3 治理写成已完成。
+当前检查点：`2026-07-14` 已实施 P1 本地基线以及 Monitoring/code-review 两个独立删除切片；metadata-query 的模块、reactor/launcher 装配、专属 bean 断言、专属 Skill 与当前文档已收口，CLEAN-003 状态为 `completed-local`。P2 首批平台 Open API routing gate、LangGraph Biz/Codex SDK/Codex App Server Worker external gate/readiness，以及 Java 健康状态消费者已分别落在 `12cbe697`、`5d62707b`、`cce75f1b`。根 Java clean test 随后发现并由 `a2317ae2` 关闭 [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md)，当前 17/17 reactor、2304 tests 全通过；launcher 仍有 Surefire fork JVM 退出超时告警，hosted CI 与 `clean verify` 未执行。这只是 execution check-in：task token、可信 upstream identity、审计、完整 execution policy、Claude/Gemini Worker、生产 readiness 和外部开放均未完成。启动/浏览器与正式验收未执行。后续执行者必须先读 Progress，不得重复实施已落码门禁、把本地结果冒充生产/验收证据，或把 Echo、旧 Provider 契约和 P2/P3 治理写成已完成。
+
+## P2 首批实现交接
+
+| 边界 | 已实施 | 后续执行必须保持的限制 |
+|---|---|---|
+| 平台 Open API surface | `NAVIGATOR_EXTERNAL_ENABLED=false`；只门禁 `/api/v1/open` 与 `/api/v1/open/**`；开关关闭返回 `503 / EXTERNAL_SURFACE_DISABLED` | `/api/v1/health/external-surface` 的 `surfaceReady` 只表示 routing gate open；不覆盖 upstream-admin、`/internal/worker-gateway/v1/**` 或内部 Controller，也不证明 Provider/生产 ready |
+| LangGraph Biz Worker | `BIZ_WORKER_EXTERNAL_ENABLED=false`；仅精确 `GET /health` 保持可见；external-enabled unready 时其他 HTTP ingress 返回 `503 / EXTERNAL_WORKER_UNREADY` | 当前无论 Token 是否存在都包含 `EXTERNAL_EXECUTION_POLICY_PENDING`；`/health/` 不属于豁免路径；不得删除 pending 或开始接外部任务 |
+| Codex SDK Worker | `CODEX_WORKER_EXTERNAL_ENABLED=false`；external middleware 在既有 auth 前执行；精确 `GET /health` 输出非敏感原因 | external-enabled 当前始终 unready；`/health/` 不等价于 canonical probe；不得把现有 allowed cwd、空 Token 或开发默认值解释为完整外部策略 |
+| Codex App Server Worker | `CODEX_APP_SERVER_EXTERNAL_ENABLED=false`；auth 和 runtime capability/readiness 共同尊重 external 状态；仅精确 `GET /health` 豁免 | external-enabled 当前始终 unready；`/health/` 可能返回 503；完整 tool/sandbox/approval/network policy 未完成 |
+| Java 消费者 | LangGraph/Codex 平台消费者尊重显式 `ready=false`；旧 Worker 缺 `ready` 字段仍兼容 | 缺字段兼容只是滚动升级行为，不是 external-ready 证明 |
+
+`internal-dev` 是可信网络 profile，不是防火墙。三个 Worker 在 external 开关为 `false` 时保留既有默认监听和空 Token 行为，部署者仍须用网络边界限制可达性；不得通过把该 profile 暴露到不可信网络来绕过 external 门禁。
 
 ## 可复制执行提示词
 
@@ -55,7 +73,9 @@ Owner 决策评审已经 `review-complete`。ODR-142-001/003/004/005/008 按批�
 - 外部运行面使用服务端可信 principal 和绑定，不信任请求体中的 userId、tenantId、reviewedBy 等身份字段。
 - 1.4.2 以 ClientApp credential + upstream user mapping/grant 作为当前身份基线，并在审计中标记 delegated assurance；independent signed assertion 是低优先级后续项，不阻塞 P2/P7，也不得被虚报为已实现。
 - task-scoped token 必须绑定任务和允许的 BusinessFunction，并具备明确 TTL、撤销/轮换和终态失效策略。
-- external-enabled 必须由默认关闭的显式配置开关启用；不得由监听地址、请求参数或空 Token 自动推断。开关启用后，非 loopback Worker 缺必要凭据必须 fail closed 或 unready；显式 loopback internal-dev 可保留。
+- external-enabled 必须由默认关闭的显式配置开关启用；不得由监听地址、请求参数或空 Token 自动推断。首批三个 Worker 的开关启用后当前一律因 `EXTERNAL_EXECUTION_POLICY_PENDING` unready/fail closed，缺 Token 还必须报告 `EXTERNAL_AUTH_TOKEN_REQUIRED`。开关关闭时保留既有监听/空 Token 行为，但 `internal-dev` 只适用于可信网络，不是防火墙或外部安全 profile。
+- 平台 `NAVIGATOR_EXTERNAL_ENABLED` 只控制 `/api/v1/open` routing surface；`surfaceReady` 不得作为 Worker、身份、审计、外部契约或生产 readiness。upstream-admin、Worker Gateway 和内部 Controller 继续按各自治理工作项处理。
+- LangGraph/Codex 平台健康消费者必须拒绝显式 `ready=false`；对缺少 `ready` 的旧 Worker 保持当前兼容，不能把兼容结果写成 external-ready 证据。
 - 外部工作目录、工具、sandbox、approval、network 上限由服务端策略约束，Worker 不得扩大权限。
 - Provider 状态已经有 envelope schema v1；本版本只做版本验证、typed adapter、迁移和可观测性增量，不重复建设 v1。
 - UnifiedSseEmitter 仍是单 JVM 内存态；本版本不实现多实例事件总线。
@@ -69,7 +89,7 @@ Owner 决策评审已经 `review-complete`。ODR-142-001/003/004/005/008 按批�
 执行顺序：
 P0 目标/边界/术语/清单冻结
 P1 clean build、Node/pnpm/lockfile、全仓 CI
-P2 explicit external 开关、ClientApp/grant 身份基线、task token、Worker policy 与审计；signed assertion 为低优先级后续项
+P2 已完成首批平台/三个 Worker explicit external routing/readiness gate；继续实施 ClientApp/grant 身份基线、task token、完整 Worker policy 与审计；signed assertion 为低优先级后续项
 P3 Session/Task ownership
 P4 第一档清理
 P5 dev-only 第二档完整切片独立物理清理
@@ -120,6 +140,8 @@ P7 质量、覆盖、体验和正式签收
 | CLEAN-003 | [metadata-query dev-only 完整退役](./workitems/CLEAN-003-metadata-query-retirement-audit.md) |
 | CLEAN-004 | [实验性 Addon 与旧 API 治理](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) |
 | DOC-001 | [文档对齐](./workitems/DOC-001-documentation-alignment.md) |
+| BUG-001 | [LangGraph progress 事件重复（实施期缺陷，closed）](./workitems/BUG-001-langgraph-progress-event-duplication.md) |
+| BUG-002 | [Open SDK clean test 基线（实施期缺陷，closed）](./workitems/BUG-002-open-sdk-clean-test-baseline.md) |
 
 ## 使用说明
 

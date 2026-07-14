@@ -25,7 +25,7 @@ Foggy Navigator 已形成覆盖多 Provider、多 Worker、Session/Task、文件
 
 ## 与版本目标的关系
 
-本需求是 `1.4.2-SNAPSHOT` 的总需求，统领 10 个工作项和 P0-P7 八个阶段。各工作项可以独立实施和签收，但不得偏离本文冻结的产品定位、信任边界、非目标与验收门禁。八组 Owner 决策集中记录在 [Owner 决策评审稿](../owner-decision-review.md)，当前状态为 `review-complete`：ODR-142-002 以“signed assertion 降为低优先级后续项、external 显式开关保持硬门”为约束，其余事项按 Owner 结论批准。Owner 决策已经触发 P0、P1 和 P5 开工，版本状态为 `in-progress`；这不表示全部实现完成、验收通过、生产启用或外部开放。
+本需求是 `1.4.2-SNAPSHOT` 的总需求，统领 10 个计划工作项、实施期间按证据新增的缺陷记录和 P0-P7 八个阶段；当前另有 BUG-001、BUG-002 两个已关闭缺陷记录。各工作项可以独立实施和签收，但不得偏离本文冻结的产品定位、信任边界、非目标与验收门禁。八组 Owner 决策集中记录在 [Owner 决策评审稿](../owner-decision-review.md)，当前状态为 `review-complete`：ODR-142-002 以“signed assertion 降为低优先级后续项、external 显式开关保持硬门”为约束，其余事项按 Owner 结论批准。Owner 决策已经触发 P0、P1、P2 首批模式门禁和 P5 开工，版本状态为 `in-progress`；这不表示全部实现完成、验收通过、生产启用或外部开放。
 
 ## 产品定位
 
@@ -57,7 +57,8 @@ Foggy Navigator 当前是内部系统，核心目标是：
 |---|---|---|
 | 已确认事实 | 本文产品定位、版本目标、治理边界和非目标 | 可作为需求基线，不代表代码已实现 |
 | 用户提供的静态线索 | 单 JVM SSE、addon 编译期依赖、重类、前端类型错误、lockfile 忽略、候选孤儿文件等 | 执行 Agent 必须复核路径、引用和当前分支状态 |
-| 本轮构建实施与本机证据 | 已落地 Node `22.23.1`、pnpm `10.34.5`、根 lockfile、前端 workspace、required/nightly workflow；精确 frozen install、前端、launcher clean test 和五类 Worker clean 等价矩阵通过 | Worker 结果来自独立 clean worktree，Python 本机为 3.12.3；GitHub runner、分支保护、nightly 实跑和真实浏览器仍未完成，不得据此宣称合并门禁、体验或正式验收通过 |
+| 本轮构建实施与本机证据 | 已落地 Node `22.23.1`、pnpm `10.34.5`、根 lockfile、前端 workspace、required/nightly workflow；精确 frozen install、前端、五类 Worker clean 等价矩阵通过；关闭 BUG-002 后根 Java clean test 17/17 reactor、2304 tests 通过 | Worker 结果来自独立 clean worktree，Python 本机为 3.12.3；根 Java 结果有 launcher Surefire fork JVM 退出超时告警；GitHub runner、分支保护、nightly、`clean verify` 和真实浏览器仍未完成，不得据此宣称合并门禁、体验或正式验收通过 |
+| P2 首批本机实施与测试证据 | `12cbe697`、`5d62707b`、`cce75f1b` 已落地平台/三类 Worker default-off、external-enabled、readiness 和平台不误路由；Java 74 tests/10 reactor、Codex SDK 163 passed/1 skipped、app-server 272 passed/1 skipped、LangGraph 766 passed，Node type-check/build 与 Python build 通过 | 仅证明模式/门禁/readiness 第一批在本机通过；matrix parameter、context path、encoded path 回归已覆盖并修复实际绕过。external 未启用，task token、ClientApp/upstream identity、审计、审批恢复绑定和 ownership 尚无完成证据 |
 | Owner 已确认的开发环境边界 | Monitoring、metadata-query、code-review、echo 与旧 Provider API 不承担上游或生产兼容义务；开发数据可丢弃，允许按完整切片物理删除 | 免除生产流量静默、数据备份/保留和兼容窗口；不免除 dev-only 环境确认、完整 inventory、仓内引用迁移、测试和回滚记录 |
 | 需要运行态确认 | 执行中发现的共享基础设施、生产部署、外部 webhook/调用方或无法归属的数据库、队列和凭据 | 一旦发现即停止对应破坏性动作并重新取得 Owner 授权，不把本次 dev-only 结论扩展到生产 |
 | 决策项 | 八组 ODR 已完成评审；credential authority、mapping/grant 权威源、Provider state 具体迁移和超大类拆分顺序仍属于实施级决策 | 已批准项按评审约束执行；剩余实施级决定必须记录 Owner、日期和影响，不得由执行 Agent静默决定 |
@@ -111,6 +112,17 @@ Foggy Navigator 当前是内部系统，核心目标是：
 4. 内部开发模式和外部启用模式必须有明确配置、readiness 与诊断差异；开关关闭时不得报告 external ready 或开放外部路由。
 5. 外部触发的 Agent/Worker 必须受工作目录、允许工具、BusinessFunction 和附加目录边界约束。
 6. 必须记录必要的调用、审批、恢复、取消、失败和拒绝审计，且审计不泄露 token 或完整敏感输入。
+
+### P2 首批实施事实与剩余边界
+
+以下是 `2026-07-14` 的本机实施事实，不是需求完成或正式验收结论：
+
+1. 平台 `NAVIGATOR_EXTERNAL_ENABLED` 已默认 `false`，只控制 `/api/v1/open` 路径根及子路径；关闭时返回 `503 / EXTERNAL_SURFACE_DISABLED`。它不控制 `/api/v1/upstream-admin/**`、`/internal/worker-gateway/v1/**` 或其他内部 Controller。
+2. 平台 `/api/v1/health/external-surface` 的 `surfaceReady` 只表达 platform routing gate，不评估 Provider 或生产 readiness，不能单独作为 external enablement 条件。
+3. LangGraph Biz、Codex SDK、Codex app-server Worker 分别使用 `BIZ_WORKER_EXTERNAL_ENABLED`、`CODEX_WORKER_EXTERNAL_ENABLED`、`CODEX_APP_SERVER_EXTERNAL_ENABLED`；三个开关只接受显式 `true/false` 且默认 `false`。当前显式开启仍固定包含 `EXTERNAL_EXECUTION_POLICY_PENDING` 并保持 unready；空 Token 另含 `EXTERNAL_AUTH_TOKEN_REQUIRED`，精确规范路径 `GET /health` 保持可观察，其他业务请求返回 `503 / EXTERNAL_WORKER_UNREADY`。
+4. 平台已拒绝将显式 `ready=false` 的 Worker 提升为可路由状态；未返回 `ready` 的旧 Worker 暂时兼容原行为。此兼容是仓内迁移措施，不允许覆盖显式 unready。
+5. `internal-dev` 只是应用模式，不是网络防火墙。LangGraph/Codex SDK Worker 的 `0.0.0.0` 监听和空 Token 仅可在可信网络使用，部署必须另配 loopback、ACL 或等价网络隔离。
+6. 尚未完成的 P2 核心需求包括：task token 函数 scope、TTL/终态失效/撤销与 Worker 绑定，ClientApp/upstream user 身份链，审批/恢复/取消主体绑定，外部目录/工具/sandbox/approval/network 上限，以及调用与拒绝审计。因此 external-enabled 业务面不得启用，P2 保持 `in-progress`。
 
 ## 构建与 CI 基线需求
 
@@ -195,7 +207,7 @@ Owner 已确认当前范围没有上游或生产兼容义务，开发数据允�
 |---|---|---|
 | P0 | 产品定位、信任边界、术语、ownership、代码清单和证据分类冻结 | in-progress |
 | P1 | 明确 Node 支持线、精确工具版本、lockfile、Java/前端/Worker clean build 与 CI 矩阵 | in-progress |
-| P2 | external 显式开关、ClientApp/grant 身份基线、credential、task token、审计和 fail-closed 边界；signed assertion 为低优先级后续项 | not-started |
+| P2 | external 显式开关、ClientApp/grant 身份基线、credential、task token、审计和 fail-closed 边界；signed assertion 为低优先级后续项 | in-progress；模式/门禁/readiness 第一批已实施，其余边界未完成 |
 | P3 | Session/Task ownership、审批/恢复/取消主体校验和内部 UI 回归 | not-started |
 | P4 | 第一档孤儿项逐项扫描、验证、删除与回滚记录；失效文档对齐 | not-started |
 | P5 | 在 dev-only 授权范围内完成 Monitoring、metadata-query、code-review、echo 的完整 inventory、仓内引用处理和相互独立的物理删除 | in-progress |
@@ -236,6 +248,7 @@ Owner 已确认当前范围没有上游或生产兼容义务，开发数据允�
 ## 约束与风险
 
 - 本需求已完成 Owner 评审并进入实施；当前改动必须受对应工作项、完整切片、仓内引用迁移和独立回滚约束，不得触碰生产配置、共享资源或外部路由。
+- P2 首批代码没有改变生产路由，也没有启用 external。平台开关只覆盖 Open API surface，Worker `internal-dev` 也不提供网络隔离；在后续门禁完成并独立批准前，禁止把 `surfaceReady`、HTTP 200 health、已配置 Token 或监听地址解释为生产就绪。
 - dev-only 物理删除前仍须处理反射、配置、脚本、webhook、SDK 和仓内调用；发现共享/生产部署或上游消费者时，本次授权立即停止适用。
 - 旧 Provider 契约不设上游/生产兼容窗口，但仓内消费者必须先迁移或随切片删除，并保留可执行的 Git 回滚说明。
 - ownership 校验应集中建立不变量；若散落在 Controller，容易出现不同入口语义漂移。
@@ -244,8 +257,8 @@ Owner 已确认当前范围没有上游或生产兼容义务，开发数据允�
 
 ## Progress Tracking
 
-- development: in-progress；P1 构建基线以及 Monitoring、`addons/code-review-agent` 两个 dev-only 切片已实施；metadata-query 已 `completed-local`；Echo Agent 和旧 Provider 契约尚未开始
-- testing: partial-passed；本机精确版本 frozen install、前端、五类 Worker clean 矩阵和 metadata-query 删除后的 metadata-config/launcher clean test 通过；GitHub runner/分支保护/nightly 实跑、根 reactor verify、metadata-query 启动/浏览器 smoke 与正式验收尚未完成
+- development: in-progress；P1 构建基线、P2 模式/门禁/readiness 第一批，以及 Monitoring、`addons/code-review-agent` 两个 dev-only 切片已实施；metadata-query 已 `completed-local`；P2 的 task token/identity/audit/ownership、Echo Agent 和旧 Provider 契约尚未完成
+- testing: partial-passed；除 P1 frozen install、前端、五类 Worker clean 矩阵和 metadata-query 删除后 clean test 外，P2 首批 Java 74 tests/10 reactor、Codex SDK 163 passed/1 skipped、app-server 272 passed/1 skipped、LangGraph 766 passed及对应 build/type-check 均通过；路径 matrix/context/encoded 回归覆盖并修复实际门禁绕过。GitHub runner/分支保护/nightly 实跑、根 reactor verify、完整 P2 负向矩阵、手工体验和正式验收尚未完成
 - experience: not-run
 - implementation_plan: [1.4.2 implementation plan](../implementation-plan.md)
 - progress_record: [1.4.2 progress](../progress.md)

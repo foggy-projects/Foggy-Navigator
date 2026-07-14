@@ -16,6 +16,8 @@
 - decision_authority: Project Owner（当前项目会话中的明确确认）
 - implementation_started: yes
 - production_routing_changed: no
+- external_contract_changed: yes
+- external_enablement: no
 - production_enablement: not-applicable
 - acceptance_status: not-started
 - requirement: [REQ-001 平台治理与历史能力收口](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
@@ -92,14 +94,14 @@
 
 ### 决策问题
 
-当前 README 仍声明 Node 18，而已安装 Vite 7 工具链要求更高的 Node 版本；根 `pnpm-lock.yaml` 存在但被忽略，`packages/foggy-chat/pnpm-lock.yaml` 又形成第二套旧依赖解析结果；根构建和 GitHub Actions 均未覆盖完整前端、Worker 和 clean build 基线。
+以下为 `2026-07-13` 的决策时基线，保留用于解释 ODR-142-001 的输入，不代表当前实现状态：当时 README 仍声明 Node 18，而已安装 Vite 7 工具链要求更高的 Node 版本；根 `pnpm-lock.yaml` 存在但被忽略，`packages/foggy-chat/pnpm-lock.yaml` 又形成第二套旧依赖解析结果；根构建和 GitHub Actions 均未覆盖完整前端、Worker 和 clean build 基线。
 
 ### 证据分类
 
-- 已确认事实：1.4.2 必须选择一个与当前工具链兼容、可机器校验的明确 Node 版本，不继续维持笼统的 Node 18+ 声明；JDK 17 和 Maven reactor/launcher 是 Java 基线。Node 22 是 ODR-142-001 的建议方向，不是已批准事实。
-- 静态搜索结论：五个前端包处于同一 pnpm workspace；根 lockfile 未跟踪；chat 嵌套 lockfile 为旧格式；当前 CI 主要是 Codex Worker 发布流程。
-- 本地诊断：主前端有效 app type-check 已发现 `ClaudeWorkerView.vue` 两个错误；这不是通过证据。
-- 外部版本资料：截至 `2026-07-13`，Node v22 归档列出的最新 patch 为 `22.23.1`；Vite 7 支持 Node `20.19+` 或 `22.12+`；pnpm release 列表中的当前 10.x patch 为 `10.34.5`。精确版本在真正实施 P1 时仍需由 build owner 再核对一次。
+- 决策时已确认事实：1.4.2 必须选择一个与当前工具链兼容、可机器校验的明确 Node 版本，不继续维持笼统的 Node 18+ 声明；JDK 17 和 Maven reactor/launcher 是 Java 基线。当时 Node 22 仍是待批准建议。
+- 决策时静态搜索结论：五个前端包处于同一 pnpm workspace；根 lockfile 未跟踪；chat 嵌套 lockfile 为旧格式；当时 CI 主要是 Codex Worker 发布流程。
+- 决策时本地诊断：主前端有效 app type-check 发现 `ClaudeWorkerView.vue` 两个错误；该结果不是通过证据。
+- 决策时外部版本资料：截至 `2026-07-13`，Node v22 归档列出的最新 patch 为 `22.23.1`；Vite 7 支持 Node `20.19+` 或 `22.12+`；pnpm release 列表中的当前 10.x patch 为 `10.34.5`。这些版本随后由 Owner 批准并在 P1 实施。
 
 参考：
 
@@ -108,7 +110,14 @@
 - [Vite 7 Migration Guide](https://v7.vite.dev/guide/migration)
 - [pnpm Releases](https://github.com/pnpm/pnpm/releases)
 
-### 建议决策
+### `2026-07-14` 实施回写（非验收）
+
+- Node `22.23.1`、pnpm `10.34.5`、单一根 workspace lockfile 已按批准方案落地；根 `pnpm-lock.yaml` 已纳入版本控制，chat 嵌套 lockfile 已移除。
+- 根前端脚本、repository required workflow 和 nightly workflow 已建立；本机 frozen install、前端矩阵和五类 Worker clean 等价矩阵已通过。
+- [BUG-002](./workitems/BUG-002-open-sdk-clean-test-baseline.md) 关闭后，根 `mvn -B clean test` 为 17/17 reactor project、2304 tests 全通过；launcher 仍有 Surefire fork JVM 退出超时告警。
+- GitHub hosted runner、branch protection/required checks、nightly 首次实跑、第二个 clean checkout 和根 `clean verify` 仍未完成，因此 OPT-001 与 P1 保持 `in-progress`，不构成正式质量门禁或验收。
+
+### 已批准方案（原建议）
 
 1. CI、开发版本文件和 clean build 镜像固定 Node `22.23.1`；根 `engines.node` 声明 `>=22.23.1 <23`。
 2. 根 `packageManager` 固定为 `pnpm@10.34.5`，所有生成 lockfile 和 frozen install 的流程只使用该版本。
@@ -268,6 +277,14 @@ task token 需要同时解决任务隔离、函数范围、生命周期、即时
 - review_result: approved-with-constraints
 - review_date: `2026-07-14`
 - rationale_or_constraints: external-enabled 必须显式、默认关闭；本轮优先实现模式与 readiness 门禁，未完成全部外部约束前不得打开。
+
+### `2026-07-14` 实施回写（execution check-in，非验收）
+
+- `12cbe697` 已增加平台级 `NAVIGATOR_EXTERNAL_ENABLED=false` routing gate，只覆盖 `/api/v1/open` 与其子路径。`/api/v1/health/external-surface` 的 `surfaceReady` 只说明路由门已打开，不评估 Provider 或生产 readiness；该开关不覆盖 upstream-admin、`/internal/worker-gateway/v1/**` 和内部 Controller。
+- `5d62707b` 已为 LangGraph Biz、Codex SDK、Codex App Server Worker 增加各自默认关闭的显式 external 开关、脱敏 readiness 和 ingress 503。开关为 `true` 时，即使 Token 已配置，当前也固定包含 `EXTERNAL_EXECUTION_POLICY_PENDING` 并保持 `external_ready=false`；缺 Token 时另报 `EXTERNAL_AUTH_TOKEN_REQUIRED`。
+- `cce75f1b` 已让 Java 平台消费者尊重 Worker 显式 `ready=false`；为滚动升级兼容，旧 Worker 缺少 `ready` 字段时沿用原健康判断。该兼容行为不是 external-ready 证明。
+- 三个 Worker 在开关为 `false` 时保留既有默认监听和空 Token 行为。这里的 `internal-dev` 只能视为依赖可信网络隔离的兼容 profile，不是防火墙；因此本次实现没有完成本决策中更强的 loopback、目录、工具、sandbox、approval、network 和 policy version 约束。
+- 本回写不改变 `approved-with-constraints` 的结论，也不把 GOV-001/GOV-002、task token、upstream identity、审批/恢复/取消绑定、审计或 production readiness 标记为完成。解除 `EXTERNAL_EXECUTION_POLICY_PENDING` 必须另有实现、负向测试和评审证据。
 
 ## ODR-142-005：关键审计保证级别
 
