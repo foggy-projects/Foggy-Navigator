@@ -70,7 +70,7 @@ function Get-GitMetadata {
 
     $distroLines = @(& wsl.exe --list --quiet 2>$null)
     foreach ($rawDistro in $distroLines) {
-        $distro = ([string]$rawDistro).Replace([char]0, "").Trim()
+        $distro = ([string]$rawDistro).Replace([string][char]0, "").Trim()
         if (-not $distro) { continue }
 
         $commitLines = @(& wsl.exe -d $distro -- git -C $wslRepoRoot rev-parse HEAD 2>$null)
