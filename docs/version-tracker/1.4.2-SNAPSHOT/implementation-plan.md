@@ -4,7 +4,7 @@
 
 - doc_type: implementation-plan
 - intended_for: root-controller | execution-agent | reviewer | signoff-owner
-- purpose: 将 [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md) 拆成 P0-P7 可执行阶段，定义输入、验证、回滚和完成门禁。
+- purpose: 将 [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md) 与 [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) 拆成 P0-P8 可执行阶段，定义输入、验证、回滚和完成门禁。
 
 ## 基本信息
 
@@ -19,7 +19,7 @@
 - external_enablement: no
 - production_enablement: not-applicable
 - acceptance_status: rejected
-- requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
+- requirements: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md), [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md)
 - module_responsibility: [Module Responsibility](./module-responsibility.md)
 - code_inventory: [Code Inventory](./code-inventory.md)
 - owner_decision_review: [Owner Decision Review](./owner-decision-review.md)
@@ -72,6 +72,7 @@
 | P5 | [CLEAN-002](./workitems/CLEAN-002-monitoring-retirement.md)、[CLEAN-003](./workitems/CLEAN-003-metadata-query-retirement-audit.md)、[CLEAN-004](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) | dev-only 独立移除 Monitoring、metadata-query、code-review；迁移 Echo fixture 后退出生产装配 | P0 清单、P1 最小基线；各切片引用扫描 | 当前无生产路由；发现共享/生产资源即停止 |
 | P6 | [OPT-002](./workitems/OPT-002-core-code-maintainability.md)、[CLEAN-004](./workitems/CLEAN-004-experimental-and-legacy-addon-governance.md) | 旧 Provider API/SPI/DTO 子切片已物理收口；继续渐进拆分与状态契约强化 | P1-P3；旧契约仓内消费者已迁移 | 当前无生产契约；统一入口的安全语义和 clean build 是硬门 |
 | P7 | 全部工作项 | hosted CI 和隔离 Session 浏览器已有证据；正式质量/覆盖/签收已执行并拒绝，后续补体验、共享 DB 与阻断项后重验 | P0-P6 完成或明确移出版本 | no |
+| P8 | [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) | 结构化错误诊断、诊断快照、登录态详情和按需临时分享链接 | P1 构建基线；P3 ownership 语义；REQ-002 已确认 | no production routing；新增匿名只读 surface 默认关闭 |
 
 ## P0：目标、边界、术语和代码清单冻结
 
@@ -199,6 +200,90 @@
 | 完成判据 | 13 项版本门禁都有可定位证据；质量闸门通过；覆盖审计允许进入正向验收；正式签收明确 accepted/rejected/blocked；production enablement 单独决策。当前正式流程已完成但结论为 `rejected`，P7 出口未通过；关闭签收记录中的 blocker 后重跑。 |
 | 生产路由/外部契约 | production_routing_changed: no（验收动作）；production_enablement 不得由验收结果自动推导。 |
 
+## P8：结构化错误诊断与临时分享链接
+
+P8 采用单一项目顶层会话跨模块实施，不拆分子模块独立需求或进度文档。阶段内部按以下 Step 顺序推进；前一步契约或安全门未通过时，不进入匿名分享实现。
+
+### Step 8.1：冻结公共契约、错误分类和脱敏规则
+
+| 要素 | 计划 |
+|---|---|
+| 输入和前置条件 | [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md)、现有 `WorkerEvent`/AgentMessage/Task/SSE 契约、Codex 两类 Worker failure classifier、当前 ErrorBlock 具体化改动；确认工作树已有前端修改属于本需求连续输入，不覆盖用户改动。 |
+| 涉及模块 | `agent-framework`、`navigator-common`、`tools/codex-agent-worker`、`tools/codex-app-server-worker`。 |
+| 实施内容 | 定义可选 error envelope；冻结 category/runtimePhase 枚举和缺字段兼容；实现 allowlist 诊断输入模型与版本化脱敏器；SDK Worker 在稳定化前提取 safe metadata，App Server 保留 code/kind/status/phase。 |
+| 非目标 | 不持久化快照；不创建 API/UI；不把 raw exception、Prompt 或工具数据写入 WorkerEvent。 |
+| 自动化测试 | Worker 分类、凭据/URL/路径/Prompt/工具数据脱敏、限长、控制字符、旧 payload 兼容；`npm --prefix tools/codex-agent-worker run typecheck && npm --prefix tools/codex-agent-worker test`；`npm --prefix tools/codex-app-server-worker run typecheck && npm --prefix tools/codex-app-server-worker test`；公共 Java 契约定向测试。 |
+| 输出物 | 公共字段、枚举、safe diagnostic input、脱敏规则和测试。 |
+| 进入下一步条件 | 原始敏感数据负向测试通过；旧 `error` 消费保持兼容；字段命名与缺省语义无歧义。 |
+| progress 回写 | 记录最终字段、枚举、脱敏版本、Worker 能力差异及实际测试结果。 |
+
+### Step 8.2：诊断快照、ownership、留存与迁移
+
+| 要素 | 计划 |
+|---|---|
+| 输入和前置条件 | Step 8.1 契约通过；复核现有 Task/Session ownership facade、实体分层、startup migration 和清理任务模式。 |
+| 涉及模块 | `session-module`、`navigator-common`、`docs/migration`、`launcher`。 |
+| 实施内容 | 新增 provider-neutral 诊断快照实体/repository/service；绑定 task/session/user/tenant；默认 90 天 expiry；实现幂等清理；提供登录态详情查询；写入失败安全降级且不改变任务终态。 |
+| 非目标 | 不复用 `codex_tasks.errorMessage` 保存详情；不公开匿名 route；不引入通用日志索引。 |
+| 自动化测试 | entity/repository/service、owner/tenant 正负矩阵、不存在/过期统一反馈、写入失败降级、清理幂等、migration 与 rollback/forward-only 校验；运行 `mvn -B -pl session-module,addons/codex-worker-agent -am test`，最终阶段再跑 launcher clean。 |
+| 输出物 | schema、迁移、内部查询 API、retention 配置和测试证据。 |
+| 进入下一步条件 | ownership 和过期语义通过；敏感字段未进入数据库快照；migration 在项目支持数据库上验证。 |
+| progress 回写 | 记录 schema、配置默认值、清理策略、ownership 矩阵与 migration 证据。 |
+
+### Step 8.3：Codex 中继、Task/SSE 与诊断引用
+
+| 要素 | 计划 |
+|---|---|
+| 输入和前置条件 | Step 8.1/8.2 完成；确认 SDK/App Server Worker 滚动升级兼容矩阵。 |
+| 涉及模块 | `addons/codex-worker-agent`、`agent-framework`、Task DTO/status notifier、两类 Codex Worker。 |
+| 实施内容 | Java relay 接收安全错误元数据并创建快照；ERROR AgentMessage、Task DTO 和 SSE 返回结构化摘要及 `diagnosticRef`；保留稳定 error/errorMessage；App Server 不虚构 raw detail；诊断失败降级。 |
+| 非目标 | 不在事件中返回 share token/URL；不要求 Claude/Gemini/LangGraph 同步适配。 |
+| 自动化测试 | SDK/App Server 新旧 Worker × 新平台兼容、快照成功/失败、任务终态不被诊断失败覆盖、AgentMessage/Task/SSE payload contract。 |
+| 输出物 | Codex 首批端到端结构化错误与诊断引用。 |
+| 进入下一步条件 | `CODEX_WORKER_REMOTE_ERROR` 等稳定码仍可消费；新客户端获得安全详情；无 raw message 泄漏。 |
+| progress 回写 | 记录两类 Worker 的实际信息层级和兼容矩阵。 |
+
+### Step 8.4：错误卡片与登录态详情体验
+
+| 要素 | 计划 |
+|---|---|
+| 输入和前置条件 | Step 8.3 payload 已稳定；保留并复核工作树中已有 `ErrorBlock.vue`、`errorPresentation.ts` 和测试改动。 |
+| 涉及模块 | `packages/foggy-chat-core`、`packages/foggy-chat`、`packages/navigator-frontend`。 |
+| 实施内容 | 归一化新旧错误 payload；卡片显示具体说明/错误码/建议；增加查看详情、复制安全诊断信息；新增登录态详情页面和 API adapter；缺 `diagnosticRef` 时合理降级。 |
+| 非目标 | 不自动签发分享 token；不在 chat store 或浏览器持久化 share token。 |
+| 自动化测试 | chat-core payload、ErrorBlock 状态、详情加载/403/404/expired、复制内容敏感字段扫描；`pnpm --filter @foggy/chat test`、相关 typecheck/build、`bash scripts/build-frontend.sh`。 |
+| 体验验证 | 登录用户真实浏览器查看含/不含 diagnosticRef 的错误；无权用户统一拒绝；窄屏和长错误码不破坏布局。 |
+| 输出物 | 内部可用的错误诊断体验。 |
+| 进入下一步条件 | ED-AC-01 至 ED-AC-05、ED-AC-11、ED-AC-12 的相关项有证据。 |
+| progress 回写 | changed paths、测试命令、浏览器证据和剩余 UX 风险。 |
+
+### Step 8.5：按需临时分享链接与匿名页面
+
+| 要素 | 计划 |
+|---|---|
+| 输入和前置条件 | 内部详情已完成；feature flag、默认 7 天、最大 30 天、快照 90 天口径已配置；SecurityConfig 实际路径已核对。 |
+| 涉及模块 | `session-module`、`user-auth-module`、`launcher`、`packages/navigator-frontend`、`packages/foggy-chat`。 |
+| 实施内容 | 新增 share token hash、签发、列表/状态、撤销、访问计数；匿名单快照只读 API/页面；分享默认关闭；no-store/no-referrer/noindex/CSP；UI 生成/复制/撤销和过期反馈。 |
+| 非目标 | 不复用 Sharing Key；不提供永久链接；匿名 token 不允许 Task/Session/附件操作。 |
+| 自动化测试 | 256-bit 级高熵 token 生成、只存 hash、默认/最大 TTL、快照 expiry 上限、撤销、过期、横向越权、枚举、并发访问、关闭开关 fail closed、安全响应头。 |
+| 体验验证 | 生成后未登录浏览器可访问；过期/撤销后不可访问；页面源和网络请求无第三方资源或敏感字段。 |
+| 输出物 | 可控、可撤销、默认关闭的临时匿名分享能力。 |
+| 进入下一步条件 | ED-AC-06 至 ED-AC-10、ED-AC-14 有自动化与浏览器证据。 |
+| progress 回写 | token/TTL/config 事实、匿名路由、负向矩阵和截图/日志证据位置。 |
+
+### Step 8.6：收口、文档与正式门禁重验
+
+| 要素 | 计划 |
+|---|---|
+| 输入和前置条件 | Step 8.1-8.5 完成；所有未运行项、偏差和风险已回写。 |
+| 涉及模块 | 全部 P8 changed surface、当前版本文档。 |
+| 实施内容 | 更新观测边界文档、配置说明、错误码说明和 progress；执行 implementation self-check；因跨协议、持久化、匿名访问和 UI，进入正式 quality gate、coverage audit、acceptance signoff。 |
+| 自动化测试 | `mvn -B -pl launcher -am clean test`；两类 Codex Worker typecheck/test/build；`pnpm --filter @foggy/chat test`；`bash scripts/build-frontend.sh`；适用 migration、API 集成和 Playwright。命令必须实际执行，未运行写明原因。 |
+| 体验验证 | 内部详情、按需分享、匿名访问、过期、撤销、无权访问和敏感信息负向全链路。 |
+| 输出物 | execution check-in、测试/体验证据、更新后的质量/覆盖/签收记录。 |
+| 完成判据 | ED-AC-01 至 ED-AC-14 全部映射到代码和证据；分享默认关闭；不存在未解释的敏感信息暴露或旧协议回归。 |
+| 生产路由/外部契约 | production_routing_changed: no；external_contract_changed: yes；diagnostic_public_sharing_enabled 默认为 false。 |
+
 ## Acceptance Status
 
 - acceptance_status: rejected
@@ -238,6 +323,16 @@
 | AC-11 | 凡获批退役的 Monitoring、metadata-query 等能力按完整切片退出；保留、迁移或延后项有 Owner 记录 | P5 |
 | AC-12 | 当前文档不再把 tutor、旧 chat-first 或语义层作为主线 | P0/P4 |
 | AC-13 | 隔离验收与生产批准分离 | P7 |
+
+REQ-002 追加门禁：
+
+| Gate | 判定标准 | 主阶段 |
+|---|---|---|
+| ED-AC-01..03 | 公共错误信封兼容，SDK/App Server 提供真实且安全的信息层级 | P8 Step 8.1-8.3 |
+| ED-AC-04..05 | 快照 ownership、统一拒绝、90 天留存和清理通过 | P8 Step 8.2 |
+| ED-AC-06..10 | 分享按需签发、7/30 天限制、hash/撤销/默认关闭和匿名最小权限通过 | P8 Step 8.5 |
+| ED-AC-11..12 | 旧 payload 兼容，错误卡片与内部详情体验通过 | P8 Step 8.4 |
+| ED-AC-13..14 | 全栈构建测试、浏览器与敏感信息负向证据完整 | P8 Step 8.6 |
 
 ## Owner 决策落实表
 

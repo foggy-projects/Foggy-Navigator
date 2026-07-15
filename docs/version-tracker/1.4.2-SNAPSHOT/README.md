@@ -10,6 +10,7 @@
 
 - status: in-progress
 - primary_workitem: `REQ-001`
+- additional_requirements: `REQ-002`
 - implementation_started: yes
 - implementation_started_at: `2026-07-14`
 - production_routing_changed: no
@@ -43,6 +44,7 @@
 6. 对旧模块、孤儿代码、兼容 API 和失效文档实施分级清理；dev-only 切片可在仓内引用迁移、构建验证和独立回滚门禁后直接物理移除，不设置生产流量或客户兼容等待期。
 7. 为超大类、模块边界和 Provider 状态契约建立渐进治理计划，不进行一次性重写。
 8. 建立后续删除、迁移、覆盖审计、体验验证和正式签收的明确门禁。
+9. 增加 Provider 无关的结构化错误诊断、90 天诊断快照、登录态详情和按需生成的临时匿名分享链接。
 
 ## 信任边界摘要
 
@@ -102,6 +104,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 
 | Workitem | 范围 | 计划阶段 | 当前状态 |
 |---|---|---|---|
+| [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) | 结构化错误、诊断快照、内部详情与临时分享链接 | P8 | approved-for-implementation |
 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | 内部控制面与外部运行面信任边界 | P0、P2、P3 | in-progress |
 | [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | Biz Worker、ClientApp、upstream user、凭据与 task token | P2 | in-progress |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | Session/Task ownership 与审批、恢复、取消约束 | P3 | in-progress |
@@ -129,6 +132,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 | P5 | 按 dev-only 授权独立移除 Monitoring、metadata-query、code-review，并用 test-only fixture 替代 Echo 后退出默认装配 | in-progress | 无生产环境，`production_routing_changed: no`；但 `launcher_default_agent_inventory_changed: yes`，默认制品不再注册 Echo；hosted CI 和版本正式门禁已执行，签收为 `rejected`，切片专项浏览器/PowerShell/模块级签收仍待补 |
 | P6 | 渐进治理超大类和 Provider 状态 schema；仓内迁移后直接移除旧 API/SPI/DTO | in-progress（legacy contract slice completed） | 旧 HTTP/SPI/DTO 已迁入统一入口后物理收口，当前 dev 外部契约发生变化但生产路由未改变；Provider state schema 和超大类渐进治理仍未完成 |
 | P7 | 执行质量检查、覆盖审计、体验验证和正式签收 | completed-formal-review / rejected | 质量闸门 `ready-with-risks`、覆盖审计 `needs-more-tests`、签收 `rejected`；不改变路由，隔离验收不等于生产批准 |
+| P8 | 实施结构化错误诊断、诊断快照、登录态详情和按需临时分享链接 | approved-for-implementation / not-started | 新增可选错误契约、诊断数据与匿名只读 surface；分享默认关闭，实施前后均不自动启用 external runtime |
 
 各阶段的输入、模块、实施内容、测试、手工验证、风险、回滚和完成判据以 [实施计划](./implementation-plan.md) 为准，执行状态统一回写到 [进度记录](./progress.md)。
 
@@ -143,6 +147,8 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 - follow_up_required: yes
 
 正式门禁材料：已执行切片的 [Implementation Quality Gate](./quality/executed-governance-slices-implementation-quality.md) 为 `ready-with-risks`；版本级 [Test Coverage Audit](./coverage/1.4.2-coverage-audit.md) 为 `needs-more-tests`。拒绝结论表示当前版本不能签收，不否定已完成切片，也不改变 `external_enablement: no` 或生产路由。
+
+`REQ-002` 于 `2026-07-15` 在上述签收之后新增并获方案确认，尚未实施，不受既有质量、覆盖和签收结果覆盖。P8 完成后必须重新执行实现质量、覆盖审计和正式签收。
 
 ## 明确非目标
 
@@ -203,6 +209,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 ## 文档清单
 
 - [REQ-001 平台治理与历史能力收口需求](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
+- [REQ-002 结构化错误诊断与临时分享链接](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md)
 - [模块职责](./module-responsibility.md)
 - [代码清单](./code-inventory.md)
 - [实施计划](./implementation-plan.md)

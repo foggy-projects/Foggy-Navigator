@@ -12,7 +12,7 @@
 - status: in-progress
 - owner_decision_status: review-complete
 - operation_mode: single-root-delivery
-- requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
+- requirements: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md), [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md)
 - implementation_plan: [Implementation Plan](./implementation-plan.md)
 - code_inventory: [Code Inventory](./code-inventory.md)
 - owner_decision_review: [Owner Decision Review](./owner-decision-review.md)
@@ -90,6 +90,23 @@ P0 术语/边界/清单冻结
 - P4 只处理已经完成引用扫描且具备独立回滚的候选；P5 使用单独的 dev-only 物理删除授权，仍须逐切片确认环境与仓内引用。
 - P6 的旧 API 子切片已在 P2/P3 新入口与仓内调用方迁移后完成；P6 剩余超大类和状态 schema 仍按小步门禁推进，不因旧契约删除完成而自动签收。
 - 每个跨模块阶段完成 implementation self-check 后，依次进入正式实现质量闸门、测试覆盖审计和正式验收；隔离验证不等于生产批准。
+
+## REQ-002 错误诊断职责增量
+
+| 模块/目录 | P8 责任 | 依赖/前置 | In scope | Out of scope |
+|---|---|---|---|---|
+| `agent-framework` | 定义 Provider 无关、向后兼容的错误信封字段 | 现有 `WorkerEvent`、`AgentMessageBuilder` | 可选 error code/category/phase/message/recoverable/diagnosticRef | 保存诊断、签发链接、Provider 原始异常处理 |
+| `session-module` | 作为 Task/Session 诊断资源 owner，负责快照、ownership、留存、内部查询、分享签发/撤销和匿名只读查询 | 现有 Task ownership、认证上下文、SSE/DTO | 新实体/repository/service/controller、90 天清理、统一不可枚举反馈 | 通用日志平台、Provider 特定分类规则 |
+| `navigator-common` | 承载必要的公共 DTO、枚举或 migration support；是否放置实体由实施时按现有依赖方向确认 | `session-module` 数据模型设计 | provider-neutral value types、启动 migration 支持 | 业务 Controller、匿名授权逻辑 |
+| `addons/codex-worker-agent` | 将两类 Codex Worker 错误适配为统一信封，在任务终态前后以非阻塞方式创建诊断快照 | Worker safe metadata、session diagnostic service | relay、task DTO/status/SSE 适配和降级 | 持有匿名 share token、公开原始 Worker message |
+| `tools/codex-agent-worker` | 在稳定化之前捕获、分类、脱敏 SDK Worker 失败 | Codex SDK event | safe message/category/phase/metadata，旧 `error` 兼容 | 将原始 Prompt、工具数据或凭据发给平台 |
+| `tools/codex-app-server-worker` | 保留稳定 code/kind/status/phase，按能力提供安全诊断元数据 | App Server 现有 failure classifier | 结构化 safe metadata 和协议兼容 | 为已丢失的原始原因虚构详情 |
+| `packages/foggy-chat-core` | 解析和保存新旧错误 payload，向 UI 暴露诊断能力 | 公共错误契约 | backward-compatible normalization | 签发 token、业务 ownership |
+| `packages/foggy-chat` | 展示具体错误、查看详情、复制诊断信息和分享操作入口 | chat-core normalized error | 错误卡片和交互状态 | 自动生成分享链接、持久化 token |
+| `packages/navigator-frontend` | 提供登录态诊断详情和匿名分享页面，并复用平台登录/路由约定 | session diagnostic APIs、chat component | 页面、API adapter、公开页安全体验 | 第三方分析资源、匿名任务操作 |
+| `launcher` / `user-auth-module` | 装配配置、迁移和精确匿名 route；分享默认关闭 | session-module API 和部署配置 | feature flag、retention/TTL 配置、精确安全路由 | 扩大 `/api/v1/open` 或现有 permitAll 范围 |
+
+P8 必须先完成公共契约和脱敏规则，再实现持久化与访问控制，最后接入 Worker 和 UI。诊断写入属于辅助链路，失败时只能降级为无 `diagnosticRef` 的稳定错误，不得覆盖任务终态。
 
 ## Owner 决策落地
 

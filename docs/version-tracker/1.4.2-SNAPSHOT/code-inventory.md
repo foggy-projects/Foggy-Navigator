@@ -12,7 +12,7 @@
 - status: in-progress
 - owner_decision_status: review-complete
 - authorized_cleanup_scope: development-only; data-discard-approved
-- requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
+- requirements: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md), [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md)
 - module_responsibility: [Module Responsibility](./module-responsibility.md)
 - implementation_plan: [Implementation Plan](./implementation-plan.md)
 - owner_decision_review: [Owner Decision Review](./owner-decision-review.md)
@@ -345,6 +345,124 @@ Schema 精确新增字段如下；forward/rollback 脚本已在一次性 MySQL 8
 | root | `packages/foggy-mobile/keystore/foggy-navigator.keystore` | 移动端签名材料 | do-not-touch | 必须先迁移、备份、访问收敛和轮换，不能直接删除 |
 | root | `metadata-config-module/` | 配置模块 | do-not-touch | 与旧 metadata-query 不是同一退役结论 |
 | root | `docs/version-tracker/1.3.*/`、`1.4.0-SNAPSHOT/`、`1.4.1-SNAPSHOT/` | 历史证据 | do-not-touch | 可加更正文档链接，不篡改既有验收事实 |
+
+## REQ-002 P8 计划代码清单
+
+```yaml
+code_inventory:
+  - module: agent-framework
+    path: agent-framework/src/main/java/com/foggy/navigator/agent/framework/protocol/WorkerEvent.java
+    role: Worker 到平台的通用事件契约
+    expected_change: update
+    notes: 增加可选安全错误字段，保留 error 字符串兼容
+  - module: agent-framework
+    path: agent-framework/src/main/java/com/foggy/navigator/agent/framework/protocol/AgentMessageBuilder.java
+    role: ERROR AgentMessage 构造
+    expected_change: update
+    notes: 统一写入结构化错误信封，不携带 share token
+  - module: session-module
+    path: session-module/src/main/java/com/foggy/navigator/session
+    role: Task/Session 诊断资源、ownership、留存和访问 API
+    expected_change: create
+    notes: 新增 provider-neutral entity/repository/service/controller；具体 package 按现有分层确定
+  - module: navigator-common
+    path: navigator-common/src/main/java/com/foggy/navigator/common
+    role: 公共 DTO、枚举和必要 migration support
+    expected_change: update
+    notes: 只放跨模块稳定类型，不放 Provider 逻辑或匿名授权
+  - module: migration
+    path: docs/migration
+    role: 诊断快照与分享 token schema
+    expected_change: create
+    notes: 包含 forward migration 及 rollback 或明确 forward-only 验证方案
+  - module: session-module
+    path: session-module/src/main/java/com/foggy/navigator/session/controller
+    role: 登录态详情、分享签发/撤销和匿名只读接口
+    expected_change: create
+    notes: 匿名 route 必须精确匹配且由 token hash、expiry、revoke 校验保护
+  - module: launcher
+    path: launcher/src/main/resources/application.yml
+    role: retention、share TTL 和 feature flag 默认配置
+    expected_change: update
+    notes: 分享能力默认关闭，90 天快照、7 天默认分享、30 天上限
+  - module: user-auth-module
+    path: user-auth-module/src/main/java/com/foggy/navigator/auth/config/SecurityConfig.java
+    role: 匿名诊断 surface 精确安全配置
+    expected_change: update
+    notes: 只放行精确匿名诊断 route；不得扩大既有 open/shared route
+  - module: codex-worker-addon
+    path: addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexStreamRelay.java
+    role: Codex Worker ERROR 中继、稳定化和诊断创建
+    expected_change: update
+    notes: 诊断创建失败不覆盖任务终态；原始错误不得直接发布
+  - module: codex-worker-addon
+    path: addons/codex-worker-agent/src/main/java/com/foggy/navigator/codex/worker/service/CodexTaskService.java
+    role: Task 失败持久化与统一 Task DTO/SSE 适配
+    expected_change: update
+    notes: errorMessage 保持兼容，诊断数据进入独立表
+  - module: navigator-common
+    path: navigator-common/src/main/java/com/foggy/navigator/common/dto/DispatchTaskDTO.java
+    role: 统一 Task 查询错误摘要
+    expected_change: update
+    notes: 增加可选错误信封/diagnosticRef，不返回 share token
+  - module: agent-framework
+    path: agent-framework/src/main/java/com/foggy/navigator/agent/framework/event/TaskStatusChangeEvent.java
+    role: Task 状态变化事件
+    expected_change: update
+    notes: 传播可选结构化错误摘要
+  - module: session-module
+    path: session-module/src/main/java/com/foggy/navigator/session/sse/TaskUpdateNotifier.java
+    role: Task SSE 状态通知
+    expected_change: update
+    notes: 保持旧 errorMessage 并透传安全诊断字段
+  - module: codex-sdk-worker
+    path: tools/codex-agent-worker/src/codex/sdk-wrapper.ts
+    role: SDK 原始失败捕获点
+    expected_change: update
+    notes: 分类和脱敏后再输出 safe metadata
+  - module: codex-sdk-worker
+    path: tools/codex-agent-worker/src/codex/event-mapper.ts
+    role: WorkerEvent ERROR 映射
+    expected_change: update
+    notes: 保留 error 兼容字段并增加可选结构化字段
+  - module: codex-app-server-worker
+    path: tools/codex-app-server-worker/src/app-server/event-bridge.ts
+    role: App Server failure classifier 与事件桥
+    expected_change: update
+    notes: 保留 code/kind/status/phase；原始捕获必须经过统一脱敏
+  - module: codex-app-server-worker
+    path: tools/codex-app-server-worker/src/task-manager.ts
+    role: App Server Worker ERROR 终态输出
+    expected_change: update
+    notes: 向后兼容并输出 safe metadata
+  - module: foggy-chat-core
+    path: packages/foggy-chat-core/src/store/chatState.ts
+    role: ERROR payload 解析和状态归一化
+    expected_change: update
+    notes: 新旧 payload 均可用，token 不持久化
+  - module: foggy-chat-core
+    path: packages/foggy-chat-core/src/types/aip.ts
+    role: 错误 payload 类型
+    expected_change: update
+    notes: 增加 Provider 无关的可选诊断字段
+  - module: foggy-chat
+    path: packages/foggy-chat/src/components/ErrorBlock.vue
+    role: 错误卡片与诊断操作入口
+    expected_change: update
+    notes: 保留当前具体化文案改动，增加详情/复制/分享交互
+  - module: navigator-frontend
+    path: packages/navigator-frontend/src
+    role: 登录态详情页、匿名分享页、API adapter 与路由
+    expected_change: create
+    notes: 匿名页无第三方资源，不执行任务动作
+  - module: documentation
+    path: docs/02-modules/observability-system.md
+    role: 当前观测与诊断边界说明
+    expected_change: update
+    notes: 明确诊断快照不是通用日志/Monitoring 平台
+```
+
+执行前必须再次用 `rg` 核对实际 SecurityConfig、Task DTO、SSE 状态通知和前端路由落点。上述目录级 `create` 不锁死类名；如发现更符合现有依赖方向的归属，先回写本清单和 [Progress](./progress.md)，再实施。
 
 ## 清单维护规则
 

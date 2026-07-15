@@ -20,7 +20,7 @@
 - formal_quality_gate: reviewed-ready-with-risks
 - coverage_audit: reviewed-needs-more-tests
 - acceptance_status: rejected
-- requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
+- requirements: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md), [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md)
 - implementation_plan: [Implementation Plan](./implementation-plan.md)
 - module_responsibility: [Module Responsibility](./module-responsibility.md)
 - code_inventory: [Code Inventory](./code-inventory.md)
@@ -29,6 +29,8 @@
 - last_execution_checkin: `2026-07-14 / formal-gates-rejected`
 
 当前检查点：`2026-07-14` 已实施 P1 clean 基线、P2 外部边界首批、P3 ownership 首批，以及 Monitoring、metadata-query、code-review、Echo 四个独立 dev-only 删除切片；旧 Claude/Codex/LangGraph task HTTP、Provider legacy bridge 与对应 deprecated form/DTO 也已在仓内消费者迁移后物理退出。`2a859336` 以 Navigator-owned 最小 `RX` wire-compatible 实现解除 clean runner 对不可公开解析 `foggy-core` 的依赖，Repository CI run `29323068427` 在 head `9008c554` 的 7 个 job 全部成功。`9d03bee9` 的显式 opt-in live 用例在一次性 H2 上完成真实双用户登录、Session 深链/history/SSE ownership 验证（1 passed），同轮 mock Playwright 17 passed/1 live skipped。正式质量闸门为 `ready-with-risks`、覆盖审计为 `needs-more-tests`、版本签收为 `rejected`。仍未完成：外部强身份与完整 execution policy、可靠审计、真实 Provider Task、共享数据库、分支保护/nightly 实跑、超大类/state schema 和 P4。后续执行者必须先读 Progress 和 signoff blocker，不得重复已完成切片，也不得把隔离或 hosted 构建成功冒充生产批准。
+
+`2026-07-15` 新增并确认 [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md)：P8 将实施 Provider 无关的结构化错误、90 天诊断快照、登录态详情及按需生成的 7 天默认/30 天上限可撤销匿名链接。分享默认关闭，匿名内容严格脱敏；既有 `2026-07-14` 正式门禁不覆盖该需求，完成后必须重验。
 
 ## P2 首批实现交接
 
@@ -50,15 +52,16 @@
 开始前必须完整读取：
 1. docs/version-tracker/1.4.2-SNAPSHOT/README.md
 2. docs/version-tracker/1.4.2-SNAPSHOT/requirements/REQ-001-platform-governance-and-legacy-cleanup.md
-3. docs/version-tracker/1.4.2-SNAPSHOT/module-responsibility.md
-4. docs/version-tracker/1.4.2-SNAPSHOT/code-inventory.md
-5. docs/version-tracker/1.4.2-SNAPSHOT/owner-decision-review.md
-6. docs/version-tracker/1.4.2-SNAPSHOT/implementation-plan.md
-7. docs/version-tracker/1.4.2-SNAPSHOT/progress.md
-8. 本次指定阶段对应的 workitem
-9. 当前代码、配置和同类测试；不得只按规划文本猜实现
+3. docs/version-tracker/1.4.2-SNAPSHOT/requirements/REQ-002-structured-error-diagnostics-and-share-links.md（实施 P8 时必读）
+4. docs/version-tracker/1.4.2-SNAPSHOT/module-responsibility.md
+5. docs/version-tracker/1.4.2-SNAPSHOT/code-inventory.md
+6. docs/version-tracker/1.4.2-SNAPSHOT/owner-decision-review.md
+7. docs/version-tracker/1.4.2-SNAPSHOT/implementation-plan.md
+8. docs/version-tracker/1.4.2-SNAPSHOT/progress.md
+9. 本次指定阶段对应的 workitem
+10. 当前代码、配置和同类测试；不得只按规划文本猜实现
 
-执行方式：single-root-delivery。一次只实施一个已明确授权的阶段或工作项，不得把 P0-P7 一次性混成大提交。
+执行方式：single-root-delivery。一次只实施一个已明确授权的阶段或工作项，不得把 P0-P8 一次性混成大提交。
 
 Owner 决策评审已经 `review-complete`。ODR-142-001/003/004/005/008 按批准结论执行；ODR-142-002 按“signed assertion 降为低优先级、external 显式开关保持硬门”执行；ODR-142-006 已授权 dev-only 数据丢弃和完整切片物理删除；ODR-142-007 已取消上游/生产兼容窗口，仓内消费者迁移后可直接删除旧 API/SPI/DTO。批准只解除设计/删除决策门，不表示实现、测试、验收或生产启用完成。
 
@@ -87,6 +90,8 @@ Owner 决策评审已经 `review-complete`。ODR-142-001/003/004/005/008 按批�
 - Monitoring、metadata-query、code-review、echo 已获 dev-only 物理删除授权，开发数据可丢弃；按完整功能切片独立执行，不等待生产流量静默或数据备份/保留。执行前必须确认目标不是共享/生产资源，发现此类资源立即停止。
 - 旧 Provider API/SPI/DTO 子切片已在 PC、L3、Worker/canary、stream relay 等仓内引用迁移后退出；不得恢复旧路由或为了兼容重新引入 bridge/form/DTO。非 Provider deprecated API 仍按各自边界治理，不能伪报全仓清零。
 - 静态引用命中必须处理；不得虚构测试、流量、审批、环境范围或生产证据。
+- P8 错误事件只携带安全摘要和 `diagnosticRef`，不得自动生成或持久化匿名 share token；快照默认 90 天，分享默认 7 天/最大 30 天且可撤销，匿名内容使用 allowlist 组装并禁止原始堆栈、Prompt、完整路径和工具数据。
+- P8 分享能力默认关闭；匿名 route 必须精确放行并只授予单个诊断快照的只读能力，不复用 Sharing Key，不恢复旧 Monitoring 或建设通用日志平台。
 
 执行顺序：
 P0 目标/边界/术语/清单冻结
@@ -97,6 +102,7 @@ P4 第一档清理
 P5 dev-only 第二档完整切片独立物理清理
 P6 旧 Provider API/SPI/DTO 子切片已完成；继续大类与 Provider 状态 schema 渐进治理
 P7 质量、覆盖、体验和正式签收
+P8 结构化错误契约、诊断快照、登录态详情、按需临时分享链接及正式门禁重验
 
 每个实现阶段都必须：
 1. 先补足能证明问题或约束的测试；安全边界至少有正向、伪造身份、跨租户/ClientApp/upstream user/任务/函数、过期/撤销等负向用例。
@@ -132,6 +138,7 @@ P7 质量、覆盖、体验和正式签收
 
 | 工作项 | 执行入口 |
 |---|---|
+| REQ-002 | [结构化错误诊断与临时分享链接](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) |
 | GOV-001 | [内部控制面与外部运行面信任边界](./workitems/GOV-001-internal-external-trust-boundary.md) |
 | GOV-002 | [Biz Worker 与 upstream user 边界](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) |
 | GOV-003 | [Session/Task 资源归属](./workitems/GOV-003-session-task-resource-ownership.md) |
@@ -149,7 +156,7 @@ P7 质量、覆盖、体验和正式签收
 
 - 本提示词不授权一次性执行全部阶段；实际请求必须指定阶段或 workitem。
 - 如果执行 Agent 使用 `foggy-versioned-doc-tracking`，应继续沿用本版本目录并实时维护 `progress.md`。
-- 正式质量、覆盖和验收材料已经创建，当前结论为 `ready-with-risks / needs-more-tests / rejected`；后续关闭 blocker 后更新或重建下一轮记录，不得直接改写为 `passed` 或 `accepted`。
+- 正式质量、覆盖和验收材料已经创建，当前结论为 `ready-with-risks / needs-more-tests / rejected`；后续关闭 blocker 或完成 REQ-002/P8 后更新或重建下一轮记录，不得直接改写为 `passed` 或 `accepted`。
 
 ## Acceptance Status
 

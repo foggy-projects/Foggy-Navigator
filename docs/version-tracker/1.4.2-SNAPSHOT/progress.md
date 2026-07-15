@@ -10,7 +10,7 @@
 
 - version: `1.4.2-SNAPSHOT`
 - status: in-progress
-- requirement: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md)
+- requirements: [REQ-001](./requirements/REQ-001-platform-governance-and-legacy-cleanup.md), [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md)
 - implementation_plan: [Implementation Plan](./implementation-plan.md)
 - owner_decision_review: [Owner Decision Review](./owner-decision-review.md)
 - implementation_started_at: `2026-07-14`
@@ -44,6 +44,15 @@
 | 2026-07-13 | 反引号中的精确仓库路径存在性 | passed | 缺失精确路径 0；API 路由、通配符和未来 create 路径不计入 |
 | 2026-07-13 | `git status --short` 范围检查 | scoped-pass-with-external-changes | 本任务变更限定为 `docs/version-tracker/README.md` 和 `docs/version-tracker/1.4.2-SNAPSHOT/`；工作树另有并行的 Codex/Worker 业务代码及 `1.4.1-SNAPSHOT` 文档改动，均未触碰 |
 
+## REQ-002 方案落档验证
+
+| 日期 | 检查 | 状态 | 结果 |
+|---|---|---|---|
+| 2026-07-15 | `git diff --check` | passed | exit 0；无 whitespace error |
+| 2026-07-15 | REQ-002 及 6 份顶层关联文档的相对链接和 Markdown 表格列数 | passed | 7 个 Markdown 的相对目标存在，表格列数一致 |
+| 2026-07-15 | 工作树范围 | scoped-pass-with-user-changes | 本轮只修改 `docs/version-tracker/1.4.2-SNAPSHOT/`；既有 `packages/foggy-chat` 三个错误展示文件保持原状，未覆盖或回退 |
+| 2026-07-15 | 业务构建、单测和浏览器验证 | not-run | 本轮只生成已确认方案，未修改业务代码；按 P8 各 Step 实施时执行并回写 |
+
 ## 前置条件
 
 | 条件 | 状态 | 说明 |
@@ -68,11 +77,13 @@
 | P5 | Monitoring、metadata-query、code-review、echo dev-only 独立收口 | in-progress | Monitoring/code-review 已移除，metadata-query 已 completed-local；Echo 已 completed-local/verification-partial，5 个 addon tracked files 与 reactor/launcher 装配退出，test-only fixture 定向 16/16 及 launcher 定向 6/6 tests 通过；hosted CI 已通过，版本正式门禁已执行并拒绝，切片专项浏览器/PS parser/模块级签收未跑 |
 | P6 | 超大类、Provider state schema 和旧 API 渐进治理 | in-progress | 旧 Provider HTTP/SPI/DTO 子切片已完成仓内迁移、物理删除、定向 clean matrix 与 hosted CI；Provider state schema 和超大类渐进治理未开始；见 `EXEC-142-016`、`EXEC-142-017` |
 | P7 | 质量检查、覆盖审计、体验验证和正式签收 | completed-formal-review / rejected | [质量闸门](./quality/executed-governance-slices-implementation-quality.md) `ready-with-risks`；[覆盖审计](./coverage/1.4.2-coverage-audit.md) `needs-more-tests`；[正式签收](./acceptance/version-signoff.md) `rejected` |
+| P8 | 结构化错误诊断、诊断快照、登录态详情和临时分享链接 | approved-for-implementation / not-started | `2026-07-15` 已确认两阶段、90 天快照、7/30 天分享、匿名脱敏和 Provider 无关协议；[REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) 与 P8 计划已落档，尚未修改业务代码或运行测试 |
 
 ## Workitem Progress
 
 | Workitem | 状态 | Development | Testing | Experience | Evidence |
 |---|---|---|---|---|---|
+| [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) | approved-for-implementation | planning-complete / implementation-not-started：公共错误信封、快照、ownership、留存、内部详情、分享 token 和匿名页面边界已冻结 | not-run：当前仅生成方案文档 | not-run：当前仅生成方案文档 | `INPUT-010`；现有源码只读审计确认 SDK raw error 在 Java relay 稳定化时丢失、App Server 主动收敛 raw detail，实施按 P8 Step 8.1-8.6 推进 |
 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | in-progress | partial：平台 Open API 默认关闭、三类 Worker external profile、readiness、task capability v2、持久化终态门禁、Worker identity/pool、Gateway strict principal/lease 与 P3 首批 ownership 已落地 | partial-passed-local-and-hosted：P2 launcher/Worker、P3 定向 176 tests、既有 migration 双 MySQL 版本及 Repository CI 7/7 均通过 | partial-passed-isolated：内部登录/Session ownership 错误反馈已验证；真实 external/network/Task 体验未验证 | `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`、`EXEC-142-014`、`EXEC-142-016`、`EXEC-142-017`、`EXEC-142-018`；开关组合、Codex 安全转发、OS 隔离、可靠 audit、ownership 全列表/显式系统主体仍未完成 |
 | [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | in-progress | partial：显式开关、task function scope/TTL/revoke、持久化 terminal tombstone、Worker credential rotate/revoke、pool owner/identity、Gateway strict principal/lease、DB preselect/prebind 与 audit writer 事务隔离已落地；非 Biz Open API 不签发 Gateway capability | partial-passed-local-and-hosted：launcher 依赖链 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 175 tests 中 174 pass/1 Windows skip、typecheck；既有 MySQL migration；hosted 7/7 jobs | not-run：ClientApp 双主体、审批恢复、非 loopback 部署和 Worker 错误体验未验证 | `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`、`EXEC-142-017`；Codex credential 安全转发、generation/pause、outbox、L3 未完成 |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | in-progress | partial：租户主体 userId+tenantId 精确匹配；tenantless 仅同 userId+tenant null/blank，认证和 Session 新写入规范为 null；Session/Task/Agent/SSE/config/shared/forward 先授权；context 条件 claim/update；Provider sessionId 再授权；model config 与 quota 顺序收紧；LangGraph 审批迁入统一 respond 并绑定认证主体 | partial-passed：P3 定向 176 tests；launcher clean 15/15 reactor、2426 tests；hosted CI；隔离 H2 Session 双账号 live 1 passed；BUG-003 定向 27/clean 748；BUG-004 定向 66/clean 753 | partial-passed-isolated / dev-retest-pending：同 tenant 双账号真实登录与 Session ownership 已验证；tenantless dev PC Session 三入口和 Codex Task create/get/respond/cancel、共享 DB 与完整内部任务主链未运行 | `EXEC-142-014`、`EXEC-142-016`、`EXEC-142-017`、`EXEC-142-018`、`EXEC-142-019`、`EXEC-142-020`；全列表 tenant、SessionMetadata service invariant、model owner/grant、Provider taskId、显式 admin/system 通路仍缺失 |
@@ -103,6 +114,7 @@
 | INPUT-007 | 已修复基线 | 根前端脚本覆盖 chat-core/chat/widget/PC/mobile 的 type/test/build | `pnpm run typecheck:frontend`、`pnpm run ci:frontend`、`pnpm run build:frontend` | passed-local | 存在既有测试 stderr/构建 chunk warning；命令 exit 0，浏览器体验未运行 |
 | INPUT-008 | Owner 阶段假设 | Monitoring 等候选处于 dev-only、本机孵化范围，旧数据可丢弃 | `2026-07-14` Owner 明确确认 + 每切片静态复核 | approved-assumption | 不替代共享/生产资源防误删；发现冲突证据即停止 |
 | INPUT-009 | Owner 阶段假设 | 旧 Provider API 无生产/外部兼容义务，所有上游仍在本机孵化 | `2026-07-14` Owner 明确确认 + 仓内消费者扫描 | approved-assumption | 取消仓外窗口，不取消仓内迁移、安全语义和 clean build |
+| INPUT-010 | Owner 已确认需求口径 | 错误诊断采用两阶段；快照 90 天；分享默认 7 天、最大 30 天、可撤销；匿名页不含原始堆栈/Prompt/路径/工具数据；协议 Provider 无关 | `2026-07-15` 用户确认 + [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) | approved-for-implementation | 当前只完成规划落档，尚无实现、测试或验收证据；既有 `2026-07-14` 签收不覆盖本需求 |
 | DEC-001 | 决策项 | 明确受支持的 Node/pnpm/Corepack 版本 | ODR-142-001 + P1 | approved-and-applied | Node `22.23.1`、pnpm `10.34.5`；Corepack 只负责激活；Repository CI 7-job 矩阵已通过；main required checks/branch protection 未配置，修复后 nightly 未实跑 |
 | DEC-002 | 决策项 | 外部 credential 与 task token 的签发、轮换和撤销权威 | ODR-142-002 至 ODR-142-005 + P2 | implementation-partial | Worker credential v1 的 owner-scoped rotate/revoke/schema、Gateway strict principal/lease 与 LangGraph 调用方传播已落地；Codex 安全转发、pause/generation、开关组合与可靠撤销传播仍待实施 |
 | DEC-003 | 决策项 | envelope v1 的 typed schema 演进、未知版本策略与兼容窗口 | P6 provider owners 决策 | pending-decision | 不允许无迁移链切换 |
