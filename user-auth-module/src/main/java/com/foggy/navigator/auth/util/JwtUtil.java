@@ -31,7 +31,7 @@ public class JwtUtil {
         Map<String, Object> claims = new HashMap<>();
         claims.put("userId", userId);
         claims.put("username", username);
-        claims.put("tenantId", tenantId);
+        claims.put("tenantId", normalizeTenantId(tenantId));
         claims.put("roles", roles);
 
         return Jwts.builder()
@@ -133,5 +133,9 @@ public class JwtUtil {
     private SecretKey getSigningKey() {
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         return Keys.hmacShaKeyFor(keyBytes);
+    }
+
+    private static String normalizeTenantId(String tenantId) {
+        return tenantId == null || tenantId.isBlank() ? null : tenantId;
     }
 }

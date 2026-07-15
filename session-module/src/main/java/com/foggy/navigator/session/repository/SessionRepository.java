@@ -58,7 +58,12 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
 
     Optional<SessionEntity> findByIdAndUserIdAndTenantId(String id, String userId, String tenantId);
 
-    Optional<SessionEntity> findByIdAndUserIdAndTenantIdIsNull(String id, String userId);
+    @Query("SELECT s FROM SessionEntity s " +
+           "WHERE s.id = :id " +
+           "AND s.userId = :userId " +
+           "AND (s.tenantId IS NULL OR TRIM(s.tenantId) = '')")
+    Optional<SessionEntity> findTenantlessByIdAndUserId(@Param("id") String id,
+                                                        @Param("userId") String userId);
 
     @Query("SELECT s FROM SessionEntity s " +
            "WHERE s.userId = :userId " +

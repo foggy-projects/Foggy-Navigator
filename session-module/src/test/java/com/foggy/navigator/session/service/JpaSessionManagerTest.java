@@ -2,6 +2,9 @@ package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.agent.framework.session.*;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
@@ -57,6 +60,38 @@ class JpaSessionManagerTest {
 
     @Autowired
     private AgentContextOwnershipClaimWriter contextOwnershipClaimWriter;
+
+    @Autowired
+    private SessionTaskRepository sessionTaskRepository;
+
+    @Autowired
+    private SessionTaskResourceAccessService resourceAccessService;
+
+    @Test
+    void tenantlessOwnership_acceptsLegacyBlankTenantRowsWithoutCrossUserBypass() {
+        SessionEntity session = new SessionEntity();
+        session.setId("legacy-blank-session");
+        session.setUserId("tenantless-user");
+        session.setTenantId("");
+        session.setStatus("ACTIVE");
+        sessionRepository.saveAndFlush(session);
+
+        SessionTaskEntity task = new SessionTaskEntity();
+        task.setTaskId("legacy-blank-task");
+        task.setSessionId(session.getId());
+        task.setProviderType("codex-worker");
+        task.setUserId("tenantless-user");
+        task.setTenantId("");
+        task.setStatus("RUNNING");
+        sessionTaskRepository.saveAndFlush(task);
+
+        assertEquals(session.getId(), resourceAccessService
+                .requireOwnedSession(session.getId(), "tenantless-user", null).getId());
+        assertEquals(task.getTaskId(), resourceAccessService
+                .requireOwnedTask(task.getTaskId(), "tenantless-user", "").getTaskId());
+        assertThrows(SecurityException.class, () -> resourceAccessService
+                .requireOwnedTask(task.getTaskId(), "other-user", null));
+    }
 
     @Test
     void contextOwnershipClaim_duplicateAssignedIdNeverMergesWinnerBinding() {

@@ -102,7 +102,7 @@ public class AuthInterceptor implements HandlerInterceptor {
             return CurrentUser.builder()
                     .userId(jwtUtil.getUserIdFromToken(token))
                     .username(jwtUtil.getUsernameFromToken(token))
-                    .tenantId(jwtUtil.getTenantIdFromToken(token))
+                    .tenantId(normalizeTenantId(jwtUtil.getTenantIdFromToken(token)))
                     .roles(jwtUtil.getRolesFromToken(token))
                     .build();
         } catch (Exception e) {
@@ -125,12 +125,16 @@ public class AuthInterceptor implements HandlerInterceptor {
             return CurrentUser.builder()
                     .userId(user.getId())
                     .username(user.getUsername())
-                    .tenantId(user.getTenantId())
+                    .tenantId(normalizeTenantId(user.getTenantId()))
                     .roles(user.getRoles())
                     .build();
         } catch (Exception e) {
             log.warn("Invalid API key: {}", e.getMessage());
             return null;
         }
+    }
+
+    private static String normalizeTenantId(String tenantId) {
+        return tenantId == null || tenantId.isBlank() ? null : tenantId;
     }
 }

@@ -49,6 +49,13 @@ class JwtUtilTest {
         assertNull(jwtUtil.getRolesFromToken(token));
     }
 
+    @Test
+    void generateToken_blankTenant_isCanonicalizedToNull() {
+        String token = jwtUtil.generateToken("u1", "alice", " ", "DEVELOPER");
+
+        assertNull(jwtUtil.getTenantIdFromToken(token));
+    }
+
     // ---- validateToken ----
 
     @Test

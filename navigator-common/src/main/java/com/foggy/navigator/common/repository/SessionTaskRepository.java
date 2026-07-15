@@ -25,7 +25,12 @@ public interface SessionTaskRepository extends JpaRepository<SessionTaskEntity, 
 
     Optional<SessionTaskEntity> findByTaskIdAndUserIdAndTenantId(String taskId, String userId, String tenantId);
 
-    Optional<SessionTaskEntity> findByTaskIdAndUserIdAndTenantIdIsNull(String taskId, String userId);
+    @Query("SELECT task FROM SessionTaskEntity task " +
+           "WHERE task.taskId = :taskId " +
+           "AND task.userId = :userId " +
+           "AND (task.tenantId IS NULL OR TRIM(task.tenantId) = '')")
+    Optional<SessionTaskEntity> findTenantlessByTaskIdAndUserId(@Param("taskId") String taskId,
+                                                                @Param("userId") String userId);
 
     @Modifying
     @Transactional

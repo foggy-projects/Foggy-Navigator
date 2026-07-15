@@ -24,9 +24,9 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| Workitem | in-progress | ownership 窄门面、首批 Session/Task 调用面和 LangGraph 审批统一入口已落地；BUG-003 tenantless exact-owner 修复待 dev PC 复测；剩余列表、显式系统主体、真实 Provider Task 与共享数据库门禁未闭环 |
-| Implementation | partial-implemented-local | implementation_started: yes；`2a705e09` 建立租户主体 `userId + tenantId` 精确校验并收紧 Agent、SSE、config、shared、forward 与 context 绑定路径；`EXEC-142-019` 补充只允许同 userId + tenant null 的 tenantless owner scope，并让 config 只读批次过滤无权/失效 ID；`9f3f1422` 将 LangGraph 审批收口到统一 respond 链路 |
-| Automated test | partial-passed-local-and-hosted | `EXEC-142-014` 定向 Maven 176 tests 与 launcher clean 15/15 reactor、2426 tests 通过；`EXEC-142-019` 定向 27 tests、session 依赖链 clean 748 tests 通过；截至正式闸门的最新已验证实现 head `9d03bee9` 对应 GitHub Repository CI `29324741945` 共 7 个 job 全部成功，新修复尚无 hosted 证据 |
+| Workitem | in-progress | ownership 窄门面、首批 Session/Task 调用面和 LangGraph 审批统一入口已落地；BUG-003/004 的 null/blank tenantless exact-owner 修复待 dev PC 复测；剩余列表、显式系统主体、真实 Provider Task 与共享数据库门禁未闭环 |
+| Implementation | partial-implemented-local | implementation_started: yes；`2a705e09` 建立租户主体 `userId + tenantId` 精确校验并收紧 Agent、SSE、config、shared、forward 与 context 绑定路径；`EXEC-142-019` 补充只允许同 userId + tenant null 的 tenantless owner scope，并让 config 只读批次过滤无权/失效 ID；`EXEC-142-020` 在认证和 Session 新写入边界把空白 tenant 规范为 null，并让 exact-user tenantless 查询兼容历史 NULL/空白行；`9f3f1422` 将 LangGraph 审批收口到统一 respond 链路 |
+| Automated test | partial-passed-local-and-hosted | `EXEC-142-014` 定向 Maven 176 tests 与 launcher clean 15/15 reactor、2426 tests 通过；`EXEC-142-019` 定向 27 tests、session 依赖链 clean 748 tests 通过；`EXEC-142-020` 定向 66 tests、session 依赖链 clean 753 tests 通过；截至正式闸门的最新已验证实现 head `9d03bee9` 对应 GitHub Repository CI `29324741945` 共 7 个 job 全部成功，新修复尚无 hosted 证据 |
 | Isolated browser verification | partial-passed-isolated | `9d03bee9` 增加隔离 H2 真实双用户 Playwright；owner list/深链/history 成功，non-owner list 隐藏且 history/SSE/direct read 返回 403，通用拒绝体不泄露 sessionId、标题或 owner 用户名 |
 | Manual verification | not-run | 已有真实 UI 自动化证据，但尚未执行人工双账号内部主链、多 Provider Task 操作与共享数据库验证 |
 | Experience verification | partial-passed-isolated | 隔离环境已验证 owner 深链与 non-owner “无权限访问”体验；刷新/重连、Task Pane、多 Provider 审批/恢复/取消仍未运行 |
@@ -39,7 +39,7 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 ### 已落地
 
-1. 新增 `SessionTaskResourceAccessService`：租户主体必须同时精确匹配 `userId` 与 `tenantId`；身份模型允许的无租户主体只能访问同 userId、tenantId 为 null 的 Session/Task。关联 Session、owner 缺失/冲突、不存在或软删除一律 fail closed，并使用统一非泄露错误语义。tenantless owner scope 不是 `null = system/admin` 或 SUPER_ADMIN 跨主体旁路。
+1. 新增 `SessionTaskResourceAccessService`：租户主体必须同时精确匹配 `userId` 与 `tenantId`；身份模型允许的无租户主体只能访问同 userId、tenantId 为 NULL 或历史空白值的 Session/Task。新签发 JWT、JWT/API Key 认证上下文和 Session 新写入把空白 tenant 规范为 null；兼容查询继续精确匹配 userId。关联 Session、owner 缺失/冲突、不存在或软删除一律 fail closed，并使用统一非泄露错误语义。tenantless owner scope 不是 `null = system/admin` 或 SUPER_ADMIN 跨主体旁路。
 2. Session、Task、AgentTask/AgentDiscovery、SSE subscribe、Session config、shared ask/task、Session forward/relation 的首批入口均在读取子资源或产生副作用前完成归属校验。SSE 与写批次先验证完整 ID 集合；config 只读聚合在 `BUG-003` 后改为仅查询已授权 ID，避免单个历史/无权 ID 拖垮 PC 页面，写批次仍保持原子 fail closed。
 3. `TaskDispatchFacade` 与 `TaskOperationRouter` 对 get/list/respond/reconnect/resync/rewind/resume/cancel/delete/scan 的首批路径先解析已授权 Task；cancel 的 Provider route 取自已授权持久化投影，不信任请求体 agent 字段。context 续接在解析 `navigatorSessionId` 后再次校验 Session；Provider 返回的 sessionId 也会重新授权后再读取。
 4. `AgentConversationContext` 的 assigned-ID 首次声明改为独立事务 `persist + flush`，并发冲突后重读胜出记录；后续更新使用 owner/agent 条件更新，避免检查与无条件 `save/merge` 间的 TOCTOU 覆盖。
@@ -52,7 +52,7 @@ owner: session-owner | provider-owner | internal-ui-owner
 - `SessionMetadataService` 的 service-level tenant invariant 仍需收敛；本批次仅对显式 model config credential 边界做定向校验。
 - model config `ownerType/ownerId` 与 Worker grant 的最终授权语义尚待 Owner 明确，当前只执行“metadata 完整 + tenant 一致 + grant 通过”的保守门禁。
 - Provider 返回 sessionId 已重新授权；Provider 返回 taskId 的信任和落库一致性仍需继续治理。
-- tenantId 为空不再被误判为无效上下文，但只能进入同 userId + tenant null 的 owner scope；管理员跨用户、system、A2A/恢复路径仍无具名显式通路，当前不提供全局 admin bypass。
+- tenantId 为空不再被误判为无效上下文，NULL 与历史空白值只能进入同 userId 的 tenantless owner scope；管理员跨用户、system、A2A/恢复路径仍无具名显式通路，当前不提供全局 admin bypass。
 - Session 的隔离 H2 双用户浏览器与 hosted CI 已执行；版本正式质量/覆盖/验收门禁也已执行并给出 `ready-with-risks / needs-more-tests / rejected`。真实 Provider Task fixture/L3、共享数据库、历史数据扫描、性能/N+1、人工体验和本工作项模块级签收仍未执行。
 
 ## 后续归属与运行态证据
@@ -283,7 +283,7 @@ owner: session-owner | provider-owner | internal-ui-owner
 
 ## 自动化测试计划
 
-当前状态：`partial-passed-local-and-hosted-with-isolated-browser`。`EXEC-142-014` 的 Session/Task ownership 定向 Maven 矩阵共计 176 tests，命令通过；随后执行 `mvn -B -pl launcher -am clean test`，15/15 reactor `SUCCESS`，全 reactor 2426 tests、0 failure/error/skipped，launcher 7 tests，总耗时 05:24。日志存在测试 JVM 退出后 30 秒的 fork kill 非失败诊断提示，但命令 exit 0。截至正式闸门的最新已验证实现 head `9d03bee9` 对应 GitHub Repository CI run [`29324741945`](https://github.com/foggy-projects/Foggy-Navigator/actions/runs/29324741945) 中 Java、frontend、3 类 Node Worker 和 2 类 Python Worker 共 7 个 job 全部成功。同一提交的隔离 H2 双用户 Playwright 也已通过已登记场景。版本正式门禁已执行并拒绝；真实 Provider Task fixture/L3、全列表 tenant 贯穿、共享数据库和本工作项模块级签收不在这些自动化证据内。
+当前状态：`partial-passed-local-and-hosted-with-isolated-browser`。`EXEC-142-014` 的 Session/Task ownership 定向 Maven 矩阵共计 176 tests，命令通过；随后执行 `mvn -B -pl launcher -am clean test`，15/15 reactor `SUCCESS`，全 reactor 2426 tests、0 failure/error/skipped，launcher 7 tests，总耗时 05:24。`EXEC-142-019` 的 BUG-003 定向 27 tests 与依赖链 clean 748 tests 通过；`EXEC-142-020` 的 BUG-004 定向 66 tests 与依赖链 clean 753 tests 通过，其中 H2 真实覆盖历史空字符串 tenant 行的同 owner 访问和跨用户拒绝。日志存在测试 JVM 退出后 30 秒的 fork kill 非失败诊断提示，但命令 exit 0。截至正式闸门的最新已验证实现 head `9d03bee9` 对应 GitHub Repository CI run [`29324741945`](https://github.com/foggy-projects/Foggy-Navigator/actions/runs/29324741945) 中 Java、frontend、3 类 Node Worker 和 2 类 Python Worker 共 7 个 job 全部成功。同一提交的隔离 H2 双用户 Playwright 也已通过已登记场景。版本正式门禁已执行并拒绝；BUG-003/004 dev PC 复测、真实 Provider Task fixture/L3、全列表 tenant 贯穿、共享数据库和本工作项模块级签收不在这些自动化证据内。
 
 ### Session
 

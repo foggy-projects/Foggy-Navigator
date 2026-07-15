@@ -44,7 +44,7 @@ public class JpaSessionManager implements SessionManager {
         SessionEntity entity = new SessionEntity();
         entity.setId(sessionId);
         entity.setUserId(request.getUserId());
-        entity.setTenantId(request.getTenantId());
+        entity.setTenantId(normalizeTenantId(request.getTenantId()));
         entity.setAgentId(request.getAgentId());
         String providerType = resolveProviderType(request);
         if (providerType != null) {
@@ -68,6 +68,10 @@ public class JpaSessionManager implements SessionManager {
             return request.getAgentId().trim();
         }
         return null;
+    }
+
+    private static String normalizeTenantId(String tenantId) {
+        return tenantId == null || tenantId.isBlank() ? null : tenantId;
     }
 
     @Override
