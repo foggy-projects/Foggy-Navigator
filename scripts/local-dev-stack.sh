@@ -266,8 +266,7 @@ start_local_biz_worker() {
     rm -f logs/worker.pid
     export PYTHONPATH="$dir/src"
     export BIZ_WORKER_ENV_FILE="$dir/$env_file"
-    nohup "$python_bin" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port "$port" > logs/worker.log 2> logs/worker-error.log < /dev/null &
-    echo $! > logs/worker.pid
+    setsid -f sh -c 'echo $$ > logs/worker.pid; exec "$1" -m uvicorn langgraph_biz_worker.main:app --host 0.0.0.0 --port "$2"' sh "$python_bin" "$port" > logs/worker.log 2> logs/worker-error.log < /dev/null
   )
 
   for _ in $(seq 1 40); do
