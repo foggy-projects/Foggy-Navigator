@@ -74,7 +74,7 @@ public class SessionTaskResourceAccessService {
         if (hasText(tenantId)) {
             return sessionRepository.findByIdAndUserIdAndTenantId(sessionId, userId, tenantId);
         }
-        return sessionRepository.findByIdAndUserIdAndTenantIdIsNull(sessionId, userId);
+        return sessionRepository.findTenantlessByIdAndUserId(sessionId, userId);
     }
 
     private Optional<SessionTaskEntity> findOwnedTask(String taskId,
@@ -83,7 +83,7 @@ public class SessionTaskResourceAccessService {
         if (hasText(tenantId)) {
             return sessionTaskRepository.findByTaskIdAndUserIdAndTenantId(taskId, userId, tenantId);
         }
-        return sessionTaskRepository.findByTaskIdAndUserIdAndTenantIdIsNull(taskId, userId);
+        return sessionTaskRepository.findTenantlessByTaskIdAndUserId(taskId, userId);
     }
 
     private static void requireAccessContext(String resourceId, String userId) {

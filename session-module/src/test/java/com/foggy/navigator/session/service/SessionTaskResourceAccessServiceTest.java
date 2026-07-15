@@ -53,7 +53,7 @@ class SessionTaskResourceAccessServiceTest {
     @Test
     void requireOwnedSession_tenantlessActorAndResourceWithSameUser_returnsSession() {
         SessionEntity session = ownedSession("session-1", USER_ID, null);
-        when(sessionRepository.findByIdAndUserIdAndTenantIdIsNull("session-1", USER_ID))
+        when(sessionRepository.findTenantlessByIdAndUserId("session-1", USER_ID))
                 .thenReturn(Optional.of(session));
 
         SessionEntity result = service.requireOwnedSession("session-1", USER_ID, null);
@@ -63,9 +63,9 @@ class SessionTaskResourceAccessServiceTest {
 
     @Test
     void requireOwnedSession_tenantlessActorCannotAccessTenantBoundOrOtherUsersResource() {
-        when(sessionRepository.findByIdAndUserIdAndTenantIdIsNull("tenant-bound", USER_ID))
+        when(sessionRepository.findTenantlessByIdAndUserId("tenant-bound", USER_ID))
                 .thenReturn(Optional.empty());
-        when(sessionRepository.findByIdAndUserIdAndTenantIdIsNull("other-user-session", USER_ID))
+        when(sessionRepository.findTenantlessByIdAndUserId("other-user-session", USER_ID))
                 .thenReturn(Optional.of(ownedSession("other-user-session", "other-user", null)));
 
         assertDenied(() -> service.requireOwnedSession("tenant-bound", USER_ID, null));
@@ -133,9 +133,9 @@ class SessionTaskResourceAccessServiceTest {
     void requireOwnedTask_tenantlessTaskAndSessionWithSameUser_returnsTask() {
         SessionTaskEntity task = ownedTask("task-1", "session-1", USER_ID, null);
         SessionEntity session = ownedSession("session-1", USER_ID, null);
-        when(sessionTaskRepository.findByTaskIdAndUserIdAndTenantIdIsNull("task-1", USER_ID))
+        when(sessionTaskRepository.findTenantlessByTaskIdAndUserId("task-1", USER_ID))
                 .thenReturn(Optional.of(task));
-        when(sessionRepository.findByIdAndUserIdAndTenantIdIsNull("session-1", USER_ID))
+        when(sessionRepository.findTenantlessByIdAndUserId("session-1", USER_ID))
                 .thenReturn(Optional.of(session));
 
         SessionTaskEntity result = service.requireOwnedTask("task-1", USER_ID, null);

@@ -64,6 +64,22 @@ class AuthInterceptorTest {
     }
 
     @Test
+    void preHandle_bearerToken_blankTenant_normalizesTenantlessContext() {
+        when(request.getHeader("Authorization")).thenReturn("Bearer legacy-token");
+        when(jwtUtil.validateToken("legacy-token")).thenReturn(true);
+        when(jwtUtil.getUserIdFromToken("legacy-token")).thenReturn("user-1");
+        when(jwtUtil.getUsernameFromToken("legacy-token")).thenReturn("alice");
+        when(jwtUtil.getTenantIdFromToken("legacy-token")).thenReturn("");
+        when(jwtUtil.getRolesFromToken("legacy-token")).thenReturn("DEVELOPER,TENANT_ADMIN");
+        when(jwtUtil.needsRenewal("legacy-token")).thenReturn(false);
+
+        interceptor.preHandle(request, response, new Object());
+
+        assertNull(UserContext.getCurrentUser().getTenantId());
+        verify(request).setAttribute("tenantId", null);
+    }
+
+    @Test
     void preHandle_invalidBearerToken_noUserContext() {
         when(request.getHeader("Authorization")).thenReturn("Bearer bad-token");
         when(jwtUtil.validateToken("bad-token")).thenReturn(false);
@@ -127,6 +143,24 @@ class AuthInterceptorTest {
 
         assertTrue(result);
         assertEquals("user-3", UserContext.getCurrentUser().getUserId());
+    }
+
+    @Test
+    void preHandle_apiKey_blankTenant_normalizesTenantlessContext() {
+        when(request.getHeader("Authorization")).thenReturn(null);
+        when(request.getParameter("token")).thenReturn(null);
+        when(request.getHeader("X-API-Key")).thenReturn("sk-tenantless");
+
+        UserDTO dto = new UserDTO();
+        dto.setId("user-3");
+        dto.setUsername("charlie");
+        dto.setTenantId(" ");
+        dto.setRoles("DEVELOPER");
+        when(userAuthService.getUserByApiKey("sk-tenantless")).thenReturn(Optional.of(dto));
+
+        interceptor.preHandle(request, response, new Object());
+
+        assertNull(UserContext.getCurrentUser().getTenantId());
     }
 
     @Test
