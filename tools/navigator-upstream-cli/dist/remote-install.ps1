@@ -4,6 +4,23 @@
 
 $ErrorActionPreference = "Stop"
 
+function Get-Sha256 {
+    param([string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($hasher.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+        }
+        finally {
+            $hasher.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 $ReleaseBaseUrl = "__RELEASE_BASE_URL__"
 
 if ($ReleaseBaseUrl -eq "__RELEASE_BASE_URL__" -or -not $ReleaseBaseUrl) {
@@ -36,7 +53,7 @@ Invoke-WebRequest -Uri $downloadUrl -OutFile $archive
 
 $expectedSha = $latest.sha256.windows
 if ($expectedSha) {
-    $actualSha = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+    $actualSha = Get-Sha256 -Path $archive
     if ($actualSha -ne ([string]$expectedSha).ToLowerInvariant()) {
         throw "SHA256 mismatch for downloaded archive"
     }

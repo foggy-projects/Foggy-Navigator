@@ -19,6 +19,23 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
 }
 
+function Get-Sha256 {
+    param([string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($hasher.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+        }
+        finally {
+            $hasher.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 function Read-ReleaseConfig {
     param([string]$DotEnv)
 
@@ -157,7 +174,7 @@ if (Test-Path $archivePath) {
     Remove-Item -LiteralPath $archivePath -Force
 }
 Compress-Archive -Path (Join-Path $stageRoot "*") -DestinationPath $archivePath -Force
-$sha = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToLowerInvariant()
+$sha = Get-Sha256 -Path $archivePath
 
 $files = Get-ChildItem -LiteralPath $stageSkill -Recurse -File |
     ForEach-Object { Get-RelativeSlashPath -Root $stageSkill -Path $_.FullName } |

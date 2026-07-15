@@ -17,6 +17,23 @@ $Version = if (Test-Path $VersionFile) { (Get-Content $VersionFile -Raw).Trim() 
 $BuildInfoFile = Join-Path $InstallDir "BUILD_INFO.json"
 $ReleaseManifestFile = Join-Path $InstallDir "RELEASE_MANIFEST.json"
 
+function Get-Sha256 {
+    param([string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($hasher.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+        }
+        finally {
+            $hasher.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 function Get-ProjectRoot {
     if ($env:NAVI_UPSTREAM_PROJECT_ROOT) {
         return (Resolve-Path $env:NAVI_UPSTREAM_PROJECT_ROOT).Path
@@ -142,7 +159,7 @@ function Invoke-SelfUpdate {
 
     $expectedSha = $latest.sha256.windows
     if ($expectedSha) {
-        $actualSha = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+        $actualSha = Get-Sha256 -Path $archive
         if ($actualSha -ne ([string]$expectedSha).ToLowerInvariant()) {
             throw "SHA256 mismatch for downloaded archive"
         }
