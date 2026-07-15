@@ -66,6 +66,16 @@ public final class ProviderRouteRegistry {
         return canonicalWorkerBackend(workerBackend).isPresent();
     }
 
+    /**
+     * Backends that can authenticate through the selected Worker's local subscription/login state.
+     * These model configs do not require a platform-managed Base URL or API key.
+     */
+    public static boolean isManagedCredentialOptionalBackend(String workerBackend) {
+        String backend = canonicalWorkerBackendOrNull(workerBackend);
+        return BACKEND_OPENAI_CODEX.equals(backend)
+                || BACKEND_OPENAI_CODEX_APP_SERVER.equals(backend);
+    }
+
     public static Optional<String> canonicalWorkerBackend(String workerBackend) {
         String normalizedWorkerBackend = normalizeWorkerBackend(workerBackend);
         if (normalizedWorkerBackend == null || !WORKER_BACKEND_TO_PROVIDER_TYPE.containsKey(normalizedWorkerBackend)) {

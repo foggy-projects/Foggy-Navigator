@@ -6,10 +6,12 @@ import com.foggy.navigator.business.agent.model.form.ClientAppModelConfigForm;
 import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.business.agent.model.form.RotateModelConfigKeyForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ModelAccessScope;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -30,6 +32,7 @@ public class ClientAppOwnedModelConfigService {
     private final ClientAppModelConfigGrantService grantService;
     private final ClientAppModelConfigGrantRepository grantRepository;
     private final LlmModelManager llmModelManager;
+    private final ModelConfigConnectionTestService connectionTestService;
 
     @Transactional
     public ClientAppModelConfigGrantDTO create(String tenantId, String actorUserId, String clientAppId,
@@ -93,6 +96,20 @@ public class ClientAppOwnedModelConfigService {
         return ClientAppModelConfigGrantDTO.fromEntity(grant);
     }
 
+    public String testConnection(String tenantId, String actorUserId, String clientAppId,
+                                 ClientAppModelConfigForm form) {
+        clientAppService.requireClientApp(tenantId, clientAppId);
+        return connectionTestService.test(actorUserId, tenantId, form);
+    }
+
+    public String testSavedConnection(String tenantId, String actorUserId, String clientAppId,
+                                      String modelConfigId, String workerId) {
+        requireOwnedGrant(tenantId, clientAppId, modelConfigId);
+        LlmModelConfigDTO model = llmModelManager.getModelConfig(modelConfigId)
+                .orElseThrow(() -> new IllegalArgumentException("model config not found: " + modelConfigId));
+        return connectionTestService.testSaved(actorUserId, tenantId, model, workerId);
+    }
+
     private ClientAppModelConfigGrantEntity requireOwnedGrant(String tenantId, String clientAppId, String modelConfigId) {
         clientAppService.requireClientApp(tenantId, clientAppId);
         ClientAppModelConfigGrantEntity grant = grantRepository
@@ -138,7 +155,8 @@ public class ClientAppOwnedModelConfigService {
         }
         if (!ClientAppModelConfigGrantService.isSupportedWorkerBackend(normalized)) {
             throw new IllegalArgumentException(
-                    "workerBackend must be LANGGRAPH_BIZ, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
+                    "workerBackend must be LANGGRAPH_BIZ, CLAUDE_CODE, OPENAI_CODEX, "
+                            + "OPENAI_CODEX_APP_SERVER, or GEMINI_CLI");
         }
         return normalized;
     }
@@ -161,9 +179,11 @@ public class ClientAppOwnedModelConfigService {
             throw new IllegalArgumentException("form is required");
         }
         requireText(form.getName(), "name is required");
-        requireText(form.getBaseUrl(), "baseUrl is required");
         requireText(form.getModelName(), "modelName is required");
-        requireText(form.getApiKey(), "apiKey is required");
+        if (!ProviderRouteRegistry.isManagedCredentialOptionalBackend(form.getWorkerBackend())) {
+            requireText(form.getBaseUrl(), "baseUrl is required");
+            requireText(form.getApiKey(), "apiKey is required");
+        }
     }
 
     private String trimToNull(String value) {

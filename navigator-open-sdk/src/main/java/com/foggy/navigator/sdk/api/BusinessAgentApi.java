@@ -126,6 +126,14 @@ public class BusinessAgentApi {
         return http.getWithUpstreamAdminAuth(path, null, new TypeReference<>() {});
     }
 
+    public LlmModelConfigDTO getUpstreamSystemModelConfig(String modelConfigId, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/model-configs/" + urlEncode(modelConfigId);
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.getWithUpstreamAdminAuth(path, null, new TypeReference<>() {});
+    }
+
     public LlmModelConfigDTO createUpstreamSystemModelConfig(ClientAppModelConfigForm form, String targetTenantId) {
         String path = "/api/v1/upstream-admin/model-configs";
         if (targetTenantId != null && !targetTenantId.isBlank()) {
@@ -152,6 +160,30 @@ public class BusinessAgentApi {
             path += "?targetTenantId=" + urlEncode(targetTenantId);
         }
         return http.putWithUpstreamAdminAuth(path, form, null, new TypeReference<>() {});
+    }
+
+    public String testUpstreamSystemModelConfig(ClientAppModelConfigForm form, String targetTenantId) {
+        String path = "/api/v1/upstream-admin/model-configs/test-connection";
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += "?targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.postWithUpstreamAdminAuth(path, form, null, new TypeReference<>() {});
+    }
+
+    public String testSavedUpstreamSystemModelConfig(String modelConfigId,
+                                                     String workerId,
+                                                     String targetTenantId) {
+        String path = "/api/v1/upstream-admin/model-configs/" + urlEncode(modelConfigId)
+                + "/test-connection";
+        String separator = "?";
+        if (workerId != null && !workerId.isBlank()) {
+            path += separator + "workerId=" + urlEncode(workerId);
+            separator = "&";
+        }
+        if (targetTenantId != null && !targetTenantId.isBlank()) {
+            path += separator + "targetTenantId=" + urlEncode(targetTenantId);
+        }
+        return http.postWithUpstreamAdminAuth(path, null, null, new TypeReference<>() {});
     }
 
     public List<Map<String, Object>> listUpstreamWorkerPools(String targetTenantId) {
@@ -302,6 +334,20 @@ public class BusinessAgentApi {
 
     public ClientAppModelConfigGrantDTO createClientAppModelConfig(String clientAppId, ClientAppModelConfigForm form) {
         return http.post("/api/v1/client-apps/" + clientAppId + "/model-configs", form, new TypeReference<>() {});
+    }
+
+    public String testClientAppModelConfig(String clientAppId, ClientAppModelConfigForm form) {
+        return http.post("/api/v1/client-apps/" + urlEncode(clientAppId) + "/model-configs/test-connection",
+                form, new TypeReference<>() {});
+    }
+
+    public String testSavedClientAppModelConfig(String clientAppId, String modelConfigId, String workerId) {
+        String path = "/api/v1/client-apps/" + urlEncode(clientAppId) + "/model-configs/"
+                + urlEncode(modelConfigId) + "/test-connection";
+        if (workerId != null && !workerId.isBlank()) {
+            path += "?workerId=" + urlEncode(workerId);
+        }
+        return http.post(path, null, new TypeReference<>() {});
     }
 
     public ClientAppModelConfigGrantDTO updateClientAppModelConfig(String clientAppId, String modelConfigId,

@@ -127,7 +127,7 @@ Read the smallest matching reference before using detailed flows:
 - `references/worker-setup-handoff.md`: external AI handoff package for installing Claude/Codex workers, verifying local runtimes, and configuring/updating them in a provided Navigator account.
 - `references/programming-project-orchestration.md`: non-TMS coding-project bootstrap for worker, directory, ClientApp, model config, and A2A agent sync.
 - `references/smoke-and-diagnostics.md`: owner-smoke, verify-agent-readiness, live ask/messages polling, Codex Biz Worker local sim lane, skill artifact reads, sessions, and session-messages.
-- `references/model-and-e2e.md`: model grant management, ClientApp-owned model create/update/rotate-key, runtime budget preset options, deterministic E2E model, and `navi-e2e` wrapper.
+- `references/model-and-e2e.md`: model grant management, ClientApp/upstream-system model maintenance, Codex SDK/App Server subscription configs, GPT-5.6 variants, connection tests, runtime budget preset options, deterministic E2E model, and `navi-e2e` wrapper.
 - `references/bundle-and-function-management.md`: agent bundle sync, skill bundle sync, schema placeholders, Business Function import/grant/visibility, and ClientApp control credential delivery.
 - `references/maintenance-and-troubleshooting.md`: stale skill clear commands, account-context files, self update semantics, package metadata checks, and troubleshooting entries.
 

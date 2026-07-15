@@ -190,7 +190,8 @@ public class ClientAppModelConfigGrantService {
         }
         String backend = normalizeWorkerBackend(model.getWorkerBackend());
         if (!isSupportedWorkerBackend(backend)) {
-            throw new IllegalArgumentException("model config worker backend must be LANGGRAPH_BIZ, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
+            throw new IllegalArgumentException("model config worker backend must be LANGGRAPH_BIZ, CLAUDE_CODE, "
+                    + "OPENAI_CODEX, OPENAI_CODEX_APP_SERVER, or GEMINI_CLI");
         }
         return model;
     }

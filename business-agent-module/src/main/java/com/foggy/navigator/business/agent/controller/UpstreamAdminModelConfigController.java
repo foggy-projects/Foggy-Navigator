@@ -30,12 +30,40 @@ public class UpstreamAdminModelConfigController {
         return RX.ok(modelConfigService.list(resolveTargetTenantId(principal, request, targetTenantId), principal));
     }
 
+    @GetMapping("/{modelConfigId}")
+    public RX<LlmModelConfigDTO> get(HttpServletRequest request,
+                                     @RequestParam(required = false) String targetTenantId,
+                                     @PathVariable String modelConfigId) {
+        UpstreamClientAppAdminPrincipal principal = requireAccess(request);
+        return RX.ok(modelConfigService.get(
+                resolveTargetTenantId(principal, request, targetTenantId), principal, modelConfigId));
+    }
+
     @PostMapping
     public RX<LlmModelConfigDTO> create(HttpServletRequest request,
                                         @RequestParam(required = false) String targetTenantId,
                                         @RequestBody ClientAppModelConfigForm form) {
         UpstreamClientAppAdminPrincipal principal = requireAccess(request);
         return RX.ok(modelConfigService.create(resolveTargetTenantId(principal, request, targetTenantId), principal, form));
+    }
+
+    @PostMapping("/test-connection")
+    public RX<String> testConnection(HttpServletRequest request,
+                                     @RequestParam(required = false) String targetTenantId,
+                                     @RequestBody ClientAppModelConfigForm form) {
+        UpstreamClientAppAdminPrincipal principal = requireAccess(request);
+        return RX.ok(modelConfigService.testConnection(
+                resolveTargetTenantId(principal, request, targetTenantId), principal, form));
+    }
+
+    @PostMapping("/{modelConfigId}/test-connection")
+    public RX<String> testSavedConnection(HttpServletRequest request,
+                                          @RequestParam(required = false) String targetTenantId,
+                                          @PathVariable String modelConfigId,
+                                          @RequestParam(required = false) String workerId) {
+        UpstreamClientAppAdminPrincipal principal = requireAccess(request);
+        return RX.ok(modelConfigService.testSavedConnection(
+                resolveTargetTenantId(principal, request, targetTenantId), principal, modelConfigId, workerId));
     }
 
     @PutMapping("/{modelConfigId}")

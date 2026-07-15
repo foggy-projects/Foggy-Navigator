@@ -25,6 +25,7 @@ class ClientAppOwnedModelConfigServiceTest {
     private ClientAppModelConfigGrantService grantService;
     private ClientAppModelConfigGrantRepository grantRepository;
     private LlmModelManager llmModelManager;
+    private ModelConfigConnectionTestService connectionTestService;
     private ClientAppOwnedModelConfigService service;
 
     @BeforeEach
@@ -33,7 +34,9 @@ class ClientAppOwnedModelConfigServiceTest {
         grantService = mock(ClientAppModelConfigGrantService.class);
         grantRepository = mock(ClientAppModelConfigGrantRepository.class);
         llmModelManager = mock(LlmModelManager.class);
-        service = new ClientAppOwnedModelConfigService(clientAppService, grantService, grantRepository, llmModelManager);
+        connectionTestService = mock(ModelConfigConnectionTestService.class);
+        service = new ClientAppOwnedModelConfigService(
+                clientAppService, grantService, grantRepository, llmModelManager, connectionTestService);
 
         when(clientAppService.requireClientApp("tenant-1", "capp-1")).thenReturn(clientApp());
         when(llmModelManager.saveModelConfig(
@@ -95,6 +98,36 @@ class ClientAppOwnedModelConfigServiceTest {
                 eq("capp-1"),
                 eq("actor-1"));
         assertEquals(ClientAppModelConfigGrantService.OPENAI_CODEX_BACKEND, modelCaptor.getValue().getWorkerBackend());
+    }
+
+    @Test
+    void create_acceptsAppServerSubscriptionWithoutBaseUrlOrApiKey() {
+        ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        form.setName("App Server GPT-5.6");
+        form.setModelName("codex-ultra");
+        form.setWorkerBackend("OPENAI_CODEX_APP_SERVER");
+
+        service.create("tenant-1", "actor-1", "capp-1", form);
+
+        ArgumentCaptor<LlmModelConfigForm> modelCaptor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
+        verify(llmModelManager).saveModelConfig(
+                eq("tenant-1"), modelCaptor.capture(), eq(ResourceOwnerType.CLIENT_APP), eq("capp-1"),
+                eq(ResourceOwnerType.CLIENT_APP), eq("capp-1"), eq("actor-1"));
+        assertEquals("OPENAI_CODEX_APP_SERVER", modelCaptor.getValue().getWorkerBackend());
+        assertNull(modelCaptor.getValue().getBaseUrl());
+        assertNull(modelCaptor.getValue().getApiKey());
+    }
+
+    @Test
+    void create_nonSubscriptionStillRequiresBaseUrlAndApiKey() {
+        ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        form.setName("Biz model");
+        form.setModelName("gpt-test");
+        form.setWorkerBackend("LANGGRAPH_BIZ");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.create("tenant-1", "actor-1", "capp-1", form));
+        verify(llmModelManager, never()).saveModelConfig(anyString(), any(), any(), anyString(), any(), anyString(), anyString());
     }
 
     @Test

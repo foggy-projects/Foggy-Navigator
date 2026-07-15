@@ -40,6 +40,52 @@ $env:NAVI_LLM_API_KEY="<new-llm-api-key>"
 
 Use `--model-base-url` for the upstream LLM/OpenAI-compatible endpoint; `--base-url` is still the Navigator service URL. `model create` creates a `LANGGRAPH_BIZ` model and binds it to the current ClientApp with `grantScope=CLIENT_APP_OWNED`; `model update` and `model rotate-key` only work for those ClientApp-owned grants, not shared admin-provisioned grants.
 
+For a Codex subscription authenticated by the selected Worker's local Codex login, omit both the model Base URL and API key:
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream model create `
+  --name "Codex App Server" `
+  --worker-backend OPENAI_CODEX_APP_SERVER `
+  --model-name codex-latest `
+  --available-models codex-latest,codex-terra,codex-luna,codex-fast,codex-deep,codex-xhigh,codex-max,codex-ultra `
+  --set-default `
+  --write-profile
+```
+
+Use `OPENAI_CODEX` for the native SDK Worker and `OPENAI_CODEX_APP_SERVER` for the App Server Worker. Current GPT-5.6 aliases resolve as follows:
+
+- `codex-latest` → `gpt-5.6-sol`
+- `codex-terra` → `gpt-5.6-terra`
+- `codex-luna` → `gpt-5.6-luna`
+- `codex-fast/deep/xhigh/max` → GPT-5.6 Sol with the matching reasoning level
+- `codex-ultra` → GPT-5.6 Sol Ultra and requires `OPENAI_CODEX_APP_SERVER`
+
+Do not configure retired `gpt-5.4-mini`. The SDK Worker rejects Ultra; App Server permits Ultra only for the supported Sol/Terra model family. Use `--available-models <csv>` to constrain runtime `--model-variant` selection inside the same backend.
+
+`model system-create/system-update` maintains upstream-system-owned shared configurations with `NAVI_ADMIN_API_KEY`. It supports the same worker backends, subscription behavior, model names, and `--available-models` rules as ClientApp-owned model commands.
+
+Probe a candidate configuration before saving it, or probe a saved configuration against a selected physical Worker:
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream model test `
+  --worker-backend OPENAI_CODEX_APP_SERVER `
+  --worker-id <workerId> `
+  --model-name codex-ultra
+
+.\tools\navigator-upstream\navi.ps1 upstream model test-saved `
+  --model-config-id <modelConfigId> `
+  --worker-id <workerId>
+
+.\tools\navigator-upstream\navi.ps1 upstream model system-test-saved `
+  --model-config-id <modelConfigId> `
+  --worker-id <workerId> `
+  --target-tenant-id <tenantId>
+```
+
+Codex SDK/App Server probes require `--worker-id`. App Server tests verify the Endpoint Profile, runtime capability manifest, requested GPT model/reasoning level, and Ultra contract when applicable. Saved restricted configurations default to their first allowed Worker when `--worker-id` is omitted; otherwise select the intended Worker explicitly.
+
+Use `model system-list` for a tenant-wide audit and `model system-get --model-config-id <id>` for one configuration. Audit output includes the backend, available models, allowed Worker IDs, default and scope state, managed-key presence, and runtime budget fields; it never prints the API key value.
+
 Use `--write-profile` only when the project-local, gitignored `.navigator/upstream.env` should be updated with `NAVI_MODEL_CONFIG_ID`. Do not use these commands for the deterministic E2E model lane; use `navi-e2e model ensure ...` for that.
 
 The current `model create/update` CLI surface configures LangGraph Biz prompt-budget preset keys through backend `LlmModelConfig`. Use `--runtime-budget-preset` normally and `--runtime-budget-override-json` only for small exceptions. Do not encode `runtimeBudgetPresetKey`, `contextWindowTokens`, `maxInputTokens`, `maxOutputTokens`, compaction thresholds, or tool-result budgets in `clientContext`, user messages, or ad hoc env vars.

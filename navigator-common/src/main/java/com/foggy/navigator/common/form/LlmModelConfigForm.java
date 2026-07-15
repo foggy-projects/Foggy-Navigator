@@ -59,7 +59,8 @@ public class LlmModelConfigForm {
     private List<String> allowedWorkerIds;
 
     /**
-     * Worker 后端类型（CLAUDE_CODE / OPENAI_CODEX / null）
+     * Worker 后端类型（LANGGRAPH_BIZ / CLAUDE_CODE / OPENAI_CODEX /
+     * OPENAI_CODEX_APP_SERVER / GEMINI_CLI / null）
      */
     private String workerBackend;
 
@@ -72,7 +73,7 @@ public class LlmModelConfigForm {
     private Map<String, String> envVars;
 
     /**
-     * 可用模型列表（workerBackend=CLAUDE_CODE 时有效）
+     * 可用模型列表（Claude/Codex 等支持模型变体的后端有效）
      * 为空或 null 表示不限制
      */
     private List<String> availableModels;

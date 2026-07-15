@@ -3,7 +3,7 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package-skill.ps1
 #   powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package-skill.ps1 -Upload
-#   powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package-skill.ps1 -Version 1.0.19 -Upload
+#   powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package-skill.ps1 -Version 1.0.20 -Upload
 
 param(
     [string]$Version = "",

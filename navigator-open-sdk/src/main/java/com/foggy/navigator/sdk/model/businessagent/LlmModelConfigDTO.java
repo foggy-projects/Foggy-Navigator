@@ -14,6 +14,7 @@ public class LlmModelConfigDTO {
     private String category;
     private String baseUrl;
     private String modelName;
+    private Boolean isDefault;
     private Boolean hasApiKey;
     private String scope;
     private List<String> allowedWorkerIds;
@@ -25,6 +26,7 @@ public class LlmModelConfigDTO {
     private String ownerType;
     private String ownerId;
     private Boolean enabled;
+    private Integer sortOrder;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -40,6 +42,8 @@ public class LlmModelConfigDTO {
     public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
     public String getModelName() { return modelName; }
     public void setModelName(String modelName) { this.modelName = modelName; }
+    public Boolean getIsDefault() { return isDefault; }
+    public void setIsDefault(Boolean isDefault) { this.isDefault = isDefault; }
     public Boolean getHasApiKey() { return hasApiKey; }
     public void setHasApiKey(Boolean hasApiKey) { this.hasApiKey = hasApiKey; }
     public String getScope() { return scope; }
@@ -62,6 +66,8 @@ public class LlmModelConfigDTO {
     public void setOwnerId(String ownerId) { this.ownerId = ownerId; }
     public Boolean getEnabled() { return enabled; }
     public void setEnabled(Boolean enabled) { this.enabled = enabled; }
+    public Integer getSortOrder() { return sortOrder; }
+    public void setSortOrder(Integer sortOrder) { this.sortOrder = sortOrder; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

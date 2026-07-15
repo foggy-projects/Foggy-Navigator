@@ -52,6 +52,15 @@ class ProviderRouteRegistryTest {
     }
 
     @Test
+    void managedCredentialOptionalBackend_acceptsOnlyCodexRuntimes() {
+        assertTrue(ProviderRouteRegistry.isManagedCredentialOptionalBackend("openai-codex"));
+        assertTrue(ProviderRouteRegistry.isManagedCredentialOptionalBackend("openai-codex-app-server"));
+        assertFalse(ProviderRouteRegistry.isManagedCredentialOptionalBackend("CLAUDE_CODE"));
+        assertFalse(ProviderRouteRegistry.isManagedCredentialOptionalBackend("LANGGRAPH_BIZ"));
+        assertFalse(ProviderRouteRegistry.isManagedCredentialOptionalBackend(null));
+    }
+
+    @Test
     void workerBackendForRouteToken_mapsProviderAndShortAliases() {
         assertEquals(ProviderRouteRegistry.BACKEND_OPENAI_CODEX,
                 ProviderRouteRegistry.workerBackendForRouteTokenOrNull("codex-biz-worker"));

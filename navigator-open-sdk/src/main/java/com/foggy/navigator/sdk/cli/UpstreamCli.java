@@ -234,11 +234,16 @@ public class UpstreamCli {
             case "model set-default" -> modelSetDefault(args);
             case "model create" -> modelCreate(args);
             case "model update" -> modelUpdate(args);
+            case "model test", "model test-connection" -> modelTest(args);
+            case "model test-saved" -> modelTestSaved(args);
             case "model rotate-key" -> modelRotateKey(args);
             case "model clear-key" -> modelClearKey(args);
             case "model system-list" -> modelSystemList(args);
+            case "model system-get" -> modelSystemGet(args);
             case "model system-create" -> modelSystemCreate(args);
             case "model system-update" -> modelSystemUpdate(args);
+            case "model system-test", "model system-test-connection" -> modelSystemTest(args);
+            case "model system-test-saved" -> modelSystemTestSaved(args);
             case "model system-rotate-key" -> modelSystemRotateKey(args);
             case "model system-clear-key" -> modelSystemClearKey(args);
             case "admin-key", "admin-key help" -> adminKeyUsage();
@@ -303,7 +308,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, auth login, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, model clear-key, model system-list/system-create/system-update/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, auth login, runtime-token, owner-smoke, inspect runtime, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, diagnostics, diagnostics session-dir, evidence, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, agent model-bindings/bind-model/unbind-model/set-default-model, agent workspace-bindings/bind-workspace/unbind-workspace/set-default-workspace, agent worker-bindings/bind-worker/unbind-worker/set-default-worker, agent system-list/system-create/system-get/system-update, agent system-model-bindings/system-bind-model/system-unbind-model/system-set-default-model, agent system-workspace-bindings/system-bind-workspace/system-unbind-workspace/system-set-default-workspace, agent system-worker-bindings/system-bind-worker/system-unbind-worker/system-set-default-worker, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model test/test-saved, model rotate-key, model clear-key, model system-list/system-get/system-create/system-update/system-test/system-test-saved/system-rotate-key/system-clear-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-runtime-key, client-app issue-control-key, worker-host apply/update/verify/install, worker list/create/get/update/delete/health/processes/kill, directory list/init/get/delete/env/files/client-list/client-init/client-get/client-delete/client-env/client-files, account-context list, account-context read, account-context write-policy");
         out.println("Internal compatibility: worker-pool list/create/register-worker/add-member/status. Normal upstream bootstrap should use worker-host apply.");
         out.println("  owner-smoke --upstream-user-id <id> [--agent-code <id>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--no-directory-required]");
         out.println("  ask --upstream-user-id <id> --message <text> [--context-id <returnedContextId>] [--max-turns <n>] [--model-config-id <id>] [--model-variant <name>] [--directory-id <id>] [--provider-type codex-biz-worker] [--private-account-id <id>|--codex-home-key <key>] [--allowed-tools <csv>] [--client-context-json <json>|--client-context-file <path>]");
@@ -314,7 +319,7 @@ public class UpstreamCli {
         out.println("    New sessions should omit --context-id; reuse the returned contextId only for continuation. clientContext is metadata, not prompt/model-budget config.");
         out.println("  model create/update uses NAVI_CONTROL_API_KEY and creates ClientApp-owned models.");
         out.println("  model system-create/system-update uses NAVI_ADMIN_API_KEY and creates UpstreamSystem-owned shared models.");
-        out.println("  model create/system-create accepts --worker-backend LANGGRAPH_BIZ|OPENAI_CODEX|CLAUDE_CODE|GEMINI_CLI.");
+        out.println("  model create/system-create accepts --worker-backend LANGGRAPH_BIZ|OPENAI_CODEX|OPENAI_CODEX_APP_SERVER|CLAUDE_CODE|GEMINI_CLI.");
         return 0;
     }
 
@@ -420,12 +425,23 @@ public class UpstreamCli {
 
     private int modelUsage() {
         out.println("Usage: navi upstream model <command> [options]");
-        out.println("Commands: grants, grant, set-default, create, update, rotate-key, clear-key, system-list, system-create, system-update, system-rotate-key, system-clear-key");
+        out.println("Commands: grants, grant, set-default, create, update, test, test-saved, rotate-key, clear-key, system-list, system-get, system-create, system-update, system-test, system-test-saved, system-rotate-key, system-clear-key");
         out.println("  grants --client-app-id <id>");
         out.println("  grant --client-app-id <id> --model-config-id <id> [--set-default] [--write-profile]");
-        out.println("  create|update --client-app-id <id> --name <name> --model-name <name> [--worker-backend <backend>] [--api-key-env <env>] [--set-default]");
+        out.println("  create --client-app-id <id> --name <name> --model-name <name> [--worker-backend <backend>] [--model-base-url <url>] [--api-key-env <env>] [--available-models <csv>] [--set-default]");
+        out.println("  update --client-app-id <id> --model-config-id <id> [--name <name>] [--model-name <name>] [--worker-backend <backend>] [--model-base-url <url>] [--available-models <csv>] [--set-default]");
+        out.println("  test --client-app-id <id> --worker-backend <backend> --model-name <name> [--worker-id <id>] [--model-base-url <url>] [--api-key-env <env>]");
+        out.println("  test-saved --client-app-id <id> --model-config-id <id> [--worker-id <id>]");
         out.println("  rotate-key --client-app-id <id> --model-config-id <id> --api-key-env <env>");
-        out.println("  system-create|system-update --name <name> --model-name <name> [--target-tenant-id <tenantId>] [--api-key-env <env>]");
+        out.println("  system-list [--target-tenant-id <tenantId>]");
+        out.println("  system-get --model-config-id <id> [--target-tenant-id <tenantId>]");
+        out.println("  system-create --name <name> --model-name <name> [--worker-backend <backend>] [--model-base-url <url>] [--api-key-env <env>] [--available-models <csv>] [--target-tenant-id <tenantId>]");
+        out.println("  system-update --model-config-id <id> [--name <name>] [--model-name <name>] [--worker-backend <backend>] [--model-base-url <url>] [--available-models <csv>] [--target-tenant-id <tenantId>]");
+        out.println("  system-test --worker-backend <backend> --model-name <name> [--worker-id <id>] [--model-base-url <url>] [--api-key-env <env>] [--target-tenant-id <tenantId>]");
+        out.println("  system-test-saved --model-config-id <id> [--worker-id <id>] [--target-tenant-id <tenantId>]");
+        out.println("Backends: LANGGRAPH_BIZ, OPENAI_CODEX, OPENAI_CODEX_APP_SERVER, CLAUDE_CODE, GEMINI_CLI.");
+        out.println("OPENAI_CODEX and OPENAI_CODEX_APP_SERVER subscription configs omit --model-base-url and --api-key-env.");
+        out.println("GPT-5.6 aliases include codex-latest/terra/luna/fast/deep/xhigh/max; codex-ultra requires OPENAI_CODEX_APP_SERVER.");
         out.println("ClientApp model create/update/grant/default commands use NAVI_CONTROL_API_KEY. System model commands use NAVI_ADMIN_API_KEY.");
         return 0;
     }
@@ -3216,6 +3232,25 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int modelTest(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String reply = businessAgentControlApi().testClientAppModelConfig(
+                clientAppId, buildModelConnectionTestForm(args));
+        out.println("model test ok");
+        out.println("reply=" + valueOrEmpty(reply));
+        return 0;
+    }
+
+    private int modelTestSaved(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        String reply = businessAgentControlApi().testSavedClientAppModelConfig(
+                clientAppId, modelConfigId, args.option("worker-id"));
+        out.println("model test-saved ok");
+        out.println("reply=" + valueOrEmpty(reply));
+        return 0;
+    }
+
     private int modelRotateKey(CliArguments args) {
         String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
         String modelConfigId = requiredOption(args, "model-config-id", "model config id");
@@ -3293,6 +3328,31 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int modelSystemGet(CliArguments args) {
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        LlmModelConfigDTO model = upstreamAdminApi()
+                .getUpstreamSystemModelConfig(modelConfigId, args.option("target-tenant-id"));
+        printLlmModelConfig("modelConfig", model);
+        return 0;
+    }
+
+    private int modelSystemTest(CliArguments args) {
+        String reply = upstreamAdminApi().testUpstreamSystemModelConfig(
+                buildModelConnectionTestForm(args), args.option("target-tenant-id"));
+        out.println("model system-test ok");
+        out.println("reply=" + valueOrEmpty(reply));
+        return 0;
+    }
+
+    private int modelSystemTestSaved(CliArguments args) {
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        String reply = upstreamAdminApi().testSavedUpstreamSystemModelConfig(
+                modelConfigId, args.option("worker-id"), args.option("target-tenant-id"));
+        out.println("model system-test-saved ok");
+        out.println("reply=" + valueOrEmpty(reply));
+        return 0;
+    }
+
     private int modelSystemRotateKey(CliArguments args) {
         String modelConfigId = requiredOption(args, "model-config-id", "model config id");
         RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
@@ -3319,8 +3379,12 @@ public class UpstreamCli {
 
     private ClientAppModelConfigForm buildModelConfigForm(CliArguments args, boolean create) {
         ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        String workerBackend = args.option("worker-backend");
+        boolean subscriptionBackend = isSubscriptionWorkerBackend(workerBackend);
         form.setName(create ? requiredOption(args, "name", "model name") : args.option("name"));
-        form.setBaseUrl(create ? requiredOption(args, "model-base-url", "LLM model base URL") : args.option("model-base-url"));
+        form.setBaseUrl(create && !subscriptionBackend
+                ? requiredOption(args, "model-base-url", "LLM model base URL")
+                : args.option("model-base-url"));
         form.setModelName(create ? requiredOption(args, "model-name", "LLM model name") : args.option("model-name"));
         form.setCategory(args.option("category"));
         String provider = args.option("provider");
@@ -3333,11 +3397,38 @@ public class UpstreamCli {
         }
         form.setRuntimeBudgetPresetKey(args.option("runtime-budget-preset"));
         form.setRuntimeBudgetOverrideJson(args.option("runtime-budget-override-json"));
-        form.setWorkerBackend(args.option("worker-backend"));
-        if (create) {
+        form.setWorkerBackend(workerBackend);
+        if (create && !subscriptionBackend) {
             form.setApiKey(config.required("NAVI_LLM_API_KEY", "LLM API key; pass --api-key-env <envName>"));
         }
         return form;
+    }
+
+    private ClientAppModelConfigForm buildModelConnectionTestForm(CliArguments args) {
+        ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        String workerBackend = requiredOption(args, "worker-backend", "worker backend");
+        form.setWorkerBackend(workerBackend);
+        form.setWorkerId(args.option("worker-id"));
+        form.setModelName(requiredOption(args, "model-name", "LLM model name"));
+        form.setBaseUrl(args.option("model-base-url"));
+        String availableModels = args.option("available-models");
+        if (hasText(availableModels)) {
+            form.setAvailableModels(parseCsv(availableModels));
+        }
+        if (!isSubscriptionWorkerBackend(workerBackend)) {
+            form.setBaseUrl(requiredOption(args, "model-base-url", "LLM model base URL"));
+            form.setApiKey(config.required("NAVI_LLM_API_KEY", "LLM API key; pass --api-key-env <envName>"));
+        }
+        return form;
+    }
+
+    private boolean isSubscriptionWorkerBackend(String workerBackend) {
+        if (!hasText(workerBackend)) {
+            return false;
+        }
+        String normalized = workerBackend.trim().replace('-', '_').toUpperCase(Locale.ROOT);
+        return "OPENAI_CODEX".equals(normalized)
+                || "OPENAI_CODEX_APP_SERVER".equals(normalized);
     }
 
     private void printLlmModelConfig(String prefix, LlmModelConfigDTO model) {
@@ -3348,11 +3439,26 @@ public class UpstreamCli {
         out.println(prefix + ".tenantId=" + valueOrEmpty(model.getTenantId()));
         out.println(prefix + ".name=" + valueOrEmpty(model.getName()));
         out.println(prefix + ".category=" + valueOrEmpty(model.getCategory()));
+        out.println(prefix + ".baseUrl=" + valueOrEmpty(model.getBaseUrl()));
         out.println(prefix + ".modelName=" + valueOrEmpty(model.getModelName()));
+        out.println(prefix + ".isDefault=" + valueOrEmpty(model.getIsDefault()));
+        out.println(prefix + ".hasApiKey=" + valueOrEmpty(model.getHasApiKey()));
+        out.println(prefix + ".scope=" + valueOrEmpty(model.getScope()));
+        out.println(prefix + ".allowedWorkerIds=" + joinValues(model.getAllowedWorkerIds()));
         out.println(prefix + ".workerBackend=" + valueOrEmpty(model.getWorkerBackend()));
+        out.println(prefix + ".availableModels=" + joinValues(model.getAvailableModels()));
+        out.println(prefix + ".runtimeBudgetPresetKey=" + valueOrEmpty(model.getRuntimeBudgetPresetKey()));
+        out.println(prefix + ".runtimeBudgetOverrideJson=" + valueOrEmpty(model.getRuntimeBudgetOverrideJson()));
         out.println(prefix + ".ownerType=" + valueOrEmpty(model.getOwnerType()));
         out.println(prefix + ".ownerId=" + valueOrEmpty(model.getOwnerId()));
         out.println(prefix + ".enabled=" + valueOrEmpty(model.getEnabled()));
+        out.println(prefix + ".sortOrder=" + valueOrEmpty(model.getSortOrder()));
+        out.println(prefix + ".createdAt=" + valueOrEmpty(model.getCreatedAt()));
+        out.println(prefix + ".updatedAt=" + valueOrEmpty(model.getUpdatedAt()));
+    }
+
+    private static String joinValues(List<String> values) {
+        return values == null || values.isEmpty() ? "(empty)" : String.join(",", values);
     }
 
     private String modelConfigIdFromGrant(ClientAppModelConfigGrantDTO grant) {

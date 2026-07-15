@@ -27,6 +27,25 @@ public class ClientAppOwnedModelConfigController {
         return RX.ok(modelConfigService.create(principal.getTenantId(), principal.getActorUserId(), clientAppId, form));
     }
 
+    @PostMapping("/test-connection")
+    public RX<String> testConnection(HttpServletRequest request,
+                                     @PathVariable String clientAppId,
+                                     @RequestBody ClientAppModelConfigForm form) {
+        ClientAppControlPlanePrincipal principal = requireAccess(request, clientAppId);
+        return RX.ok(modelConfigService.testConnection(
+                principal.getTenantId(), principal.getActorUserId(), clientAppId, form));
+    }
+
+    @PostMapping("/{modelConfigId}/test-connection")
+    public RX<String> testSavedConnection(HttpServletRequest request,
+                                          @PathVariable String clientAppId,
+                                          @PathVariable String modelConfigId,
+                                          @RequestParam(required = false) String workerId) {
+        ClientAppControlPlanePrincipal principal = requireAccess(request, clientAppId);
+        return RX.ok(modelConfigService.testSavedConnection(
+                principal.getTenantId(), principal.getActorUserId(), clientAppId, modelConfigId, workerId));
+    }
+
     @PutMapping("/{modelConfigId}")
     public RX<ClientAppModelConfigGrantDTO> update(HttpServletRequest request,
                                                    @PathVariable String clientAppId,

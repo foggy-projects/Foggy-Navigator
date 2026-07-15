@@ -8,6 +8,7 @@ import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.common.enums.ModelAccessScope;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
+import com.foggy.navigator.common.util.ProviderRouteRegistry;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,7 @@ import java.util.Map;
 public class UpstreamAdminModelConfigService {
 
     private final LlmModelManager llmModelManager;
+    private final ModelConfigConnectionTestService connectionTestService;
 
     @Transactional(readOnly = true)
     public List<LlmModelConfigDTO> list(String tenantId, UpstreamClientAppAdminPrincipal principal) {
@@ -30,6 +32,14 @@ public class UpstreamAdminModelConfigService {
         return llmModelManager.listModelConfigs(tenantId).stream()
                 .filter(model -> isOwnedByPrincipal(model, principal))
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public LlmModelConfigDTO get(String tenantId,
+                                 UpstreamClientAppAdminPrincipal principal,
+                                 String modelConfigId) {
+        requirePrincipal(principal);
+        return requireModel(tenantId, principal, modelConfigId);
     }
 
     @Transactional
@@ -88,6 +98,21 @@ public class UpstreamAdminModelConfigService {
         return requireModel(tenantId, principal, modelConfigId);
     }
 
+    public String testConnection(String tenantId,
+                                 UpstreamClientAppAdminPrincipal principal,
+                                 ClientAppModelConfigForm form) {
+        requirePrincipal(principal);
+        return connectionTestService.test(principalActorId(principal), tenantId, form);
+    }
+
+    public String testSavedConnection(String tenantId,
+                                      UpstreamClientAppAdminPrincipal principal,
+                                      String modelConfigId,
+                                      String workerId) {
+        LlmModelConfigDTO model = requireModel(tenantId, principal, modelConfigId);
+        return connectionTestService.testSaved(principalActorId(principal), tenantId, model, workerId);
+    }
+
     private LlmModelConfigDTO requireModel(String tenantId,
                                            UpstreamClientAppAdminPrincipal principal,
                                            String modelConfigId) {
@@ -143,7 +168,8 @@ public class UpstreamAdminModelConfigService {
         }
         if (!ClientAppModelConfigGrantService.isSupportedWorkerBackend(normalized)) {
             throw new IllegalArgumentException(
-                    "workerBackend must be LANGGRAPH_BIZ, CLAUDE_CODE, OPENAI_CODEX, or GEMINI_CLI");
+                    "workerBackend must be LANGGRAPH_BIZ, CLAUDE_CODE, OPENAI_CODEX, "
+                            + "OPENAI_CODEX_APP_SERVER, or GEMINI_CLI");
         }
         return normalized;
     }
@@ -166,15 +192,27 @@ public class UpstreamAdminModelConfigService {
             throw new IllegalArgumentException("form is required");
         }
         requireText(form.getName(), "name is required");
-        requireText(form.getBaseUrl(), "baseUrl is required");
         requireText(form.getModelName(), "modelName is required");
-        requireText(form.getApiKey(), "apiKey is required");
+        if (!ProviderRouteRegistry.isManagedCredentialOptionalBackend(form.getWorkerBackend())) {
+            requireText(form.getBaseUrl(), "baseUrl is required");
+            requireText(form.getApiKey(), "apiKey is required");
+        }
     }
 
     private void requirePrincipal(UpstreamClientAppAdminPrincipal principal) {
         if (principal == null || !StringUtils.hasText(principal.getUpstreamSystemId())) {
             throw new SecurityException("upstream admin principal is required");
         }
+    }
+
+    private String principalActorId(UpstreamClientAppAdminPrincipal principal) {
+        if (StringUtils.hasText(principal.getPrincipalId())) {
+            return principal.getPrincipalId().trim();
+        }
+        if (StringUtils.hasText(principal.getUpstreamSystemId())) {
+            return principal.getUpstreamSystemId().trim();
+        }
+        return principal.getCredentialId();
     }
 
     private String trimToNull(String value) {

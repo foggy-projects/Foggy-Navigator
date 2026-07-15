@@ -25,7 +25,9 @@ import static org.mockito.Mockito.*;
 class UpstreamAdminModelConfigServiceTest {
 
     private final LlmModelManager llmModelManager = mock(LlmModelManager.class);
-    private final UpstreamAdminModelConfigService service = new UpstreamAdminModelConfigService(llmModelManager);
+    private final ModelConfigConnectionTestService connectionTestService = mock(ModelConfigConnectionTestService.class);
+    private final UpstreamAdminModelConfigService service =
+            new UpstreamAdminModelConfigService(llmModelManager, connectionTestService);
 
     @Test
     void create_savesUpstreamSystemOwnedModel() {
@@ -106,6 +108,31 @@ class UpstreamAdminModelConfigServiceTest {
     }
 
     @Test
+    void create_acceptsAppServerSubscriptionWithoutBaseUrlOrApiKey() {
+        ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        form.setName("Shared App Server");
+        form.setModelName("codex-ultra");
+        form.setWorkerBackend("OPENAI_CODEX_APP_SERVER");
+
+        when(llmModelManager.saveModelConfig(
+                eq("tenant-1"), any(LlmModelConfigForm.class), eq(ResourceOwnerType.UPSTREAM_SYSTEM),
+                eq("ups-1"), eq(ResourceOwnerType.UPSTREAM_SYSTEM), eq("ups-1"), eq("cred-1")))
+                .thenReturn("model-app-server");
+        when(llmModelManager.getModelConfig("model-app-server"))
+                .thenReturn(Optional.of(model("model-app-server", "ups-1")));
+
+        service.create("tenant-1", principal(), form);
+
+        ArgumentCaptor<LlmModelConfigForm> captor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
+        verify(llmModelManager).saveModelConfig(
+                eq("tenant-1"), captor.capture(), eq(ResourceOwnerType.UPSTREAM_SYSTEM), eq("ups-1"),
+                eq(ResourceOwnerType.UPSTREAM_SYSTEM), eq("ups-1"), eq("cred-1"));
+        assertEquals("OPENAI_CODEX_APP_SERVER", captor.getValue().getWorkerBackend());
+        assertNull(captor.getValue().getBaseUrl());
+        assertNull(captor.getValue().getApiKey());
+    }
+
+    @Test
     void create_rejectsUnsupportedWorkerBackend() {
         ClientAppModelConfigForm form = new ClientAppModelConfigForm();
         form.setName("Shared Unknown");
@@ -152,6 +179,17 @@ class UpstreamAdminModelConfigServiceTest {
 
         assertEquals(1, result.size());
         assertEquals("model-1", result.get(0).getId());
+    }
+
+    @Test
+    void get_returnsOwnedModelForAudit() {
+        when(llmModelManager.getModelConfig("model-1"))
+                .thenReturn(Optional.of(model("model-1", "ups-1")));
+
+        LlmModelConfigDTO result = service.get("tenant-1", principal(), "model-1");
+
+        assertEquals("model-1", result.getId());
+        assertEquals("ups-1", result.getOwnerId());
     }
 
     @Test

@@ -19,4 +19,5 @@ public class ClientAppModelConfigForm {
     private String runtimeBudgetPresetKey;
     private String runtimeBudgetOverrideJson;
     private String workerBackend;
+    private String workerId;
 }

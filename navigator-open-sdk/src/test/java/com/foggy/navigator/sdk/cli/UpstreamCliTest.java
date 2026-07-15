@@ -3056,6 +3056,90 @@ class UpstreamCliTest {
     }
 
     @Test
+    void modelCreateAcceptsAppServerSubscriptionWithoutManagedCredentials() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":44,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-app-server",
+                  "modelConfigName":"App Server GPT-5.6",
+                  "workerBackend":"OPENAI_CODEX_APP_SERVER",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP_OWNED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "create",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--name", "App Server GPT-5.6",
+                "--model-name", "codex-ultra",
+                "--available-models", "codex-latest,codex-ultra",
+                "--worker-backend", "OPENAI_CODEX_APP_SERVER",
+                "--set-default"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs", lastPath);
+        assertTrue(lastBody.contains("\"workerBackend\":\"OPENAI_CODEX_APP_SERVER\""));
+        assertTrue(lastBody.contains("\"modelName\":\"codex-ultra\""));
+        assertTrue(lastBody.contains("\"availableModels\":[\"codex-latest\",\"codex-ultra\"]"));
+        assertTrue(lastBody.contains("\"baseUrl\":null"));
+        assertTrue(lastBody.contains("\"apiKey\":null"));
+        assertTrue(output.contains("model create ok"));
+    }
+
+    @Test
+    void modelTestProbesAppServerWorker() {
+        responseOverride = """
+                {"code":0,"data":"Codex App Server READY"}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "test",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--worker-backend", "OPENAI_CODEX_APP_SERVER",
+                "--worker-id", "worker-1",
+                "--model-name", "gpt-5.6-sol:ultra"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs/test-connection", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"workerBackend\":\"OPENAI_CODEX_APP_SERVER\""));
+        assertTrue(lastBody.contains("\"workerId\":\"worker-1\""));
+        assertTrue(lastBody.contains("\"modelName\":\"gpt-5.6-sol:ultra\""));
+        assertTrue(lastBody.contains("\"apiKey\":null"));
+        assertTrue(output.contains("model test ok"));
+        assertTrue(output.contains("reply=Codex App Server READY"));
+    }
+
+    @Test
+    void modelTestSavedUsesSelectedWorker() {
+        responseOverride = """
+                {"code":0,"data":"READY"}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "test-saved",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--model-config-id", "model-app-server",
+                "--worker-id", "worker-1"}, Map.of());
+
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs/model-app-server/test-connection?workerId=worker-1", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("model test-saved ok"));
+    }
+
+    @Test
     void modelRotateKeyUsesApiKeyEnvWithoutPrintingSecret() {
         responseOverride = """
                 {"code":0,"data":{
@@ -3153,6 +3237,83 @@ class UpstreamCliTest {
         assertFalse(lastBody.contains("apiKey"));
         assertTrue(output.contains("model system-clear-key ok"));
         assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
+    void modelSystemListPrintsAuditFieldsWithoutSecret() {
+        responseOverride = """
+                {"code":0,"data":[{
+                  "id":"model-app-server",
+                  "tenantId":"tenant-1",
+                  "name":"App Server GPT-5.6",
+                  "baseUrl":null,
+                  "modelName":"codex-ultra",
+                  "isDefault":true,
+                  "hasApiKey":false,
+                  "scope":"RESTRICTED",
+                  "allowedWorkerIds":["worker-1","worker-2"],
+                  "workerBackend":"OPENAI_CODEX_APP_SERVER",
+                  "availableModels":["codex-latest","codex-ultra"],
+                  "runtimeBudgetPresetKey":"codex-large",
+                  "runtimeBudgetOverrideJson":"{\\"maxOutputTokens\\":8192}",
+                  "ownerType":"UPSTREAM_SYSTEM",
+                  "ownerId":"ups-1",
+                  "enabled":true,
+                  "sortOrder":5,
+                  "apiKey":"must-not-print"
+                }]}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "system-list",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--admin-api-key", "naa-secret-admin-key",
+                "--target-tenant-id", "tenant-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/model-configs?targetTenantId=tenant-1", lastPath);
+        assertEquals("GET", lastMethod);
+        assertTrue(output.contains("modelConfigCount=1"));
+        assertTrue(output.contains("modelConfig.workerBackend=OPENAI_CODEX_APP_SERVER"));
+        assertTrue(output.contains("modelConfig.availableModels=codex-latest,codex-ultra"));
+        assertTrue(output.contains("modelConfig.allowedWorkerIds=worker-1,worker-2"));
+        assertTrue(output.contains("modelConfig.runtimeBudgetPresetKey=codex-large"));
+        assertTrue(output.contains("modelConfig.isDefault=true"));
+        assertTrue(output.contains("modelConfig.hasApiKey=false"));
+        assertFalse(output.contains("must-not-print"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
+    void modelSystemGetPrintsOneAuditableConfiguration() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":"model-app-server",
+                  "tenantId":"tenant-1",
+                  "name":"App Server GPT-5.6",
+                  "modelName":"gpt-5.6-sol:ultra",
+                  "workerBackend":"OPENAI_CODEX_APP_SERVER",
+                  "availableModels":["gpt-5.6-sol:ultra"],
+                  "allowedWorkerIds":["worker-1"],
+                  "enabled":true
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "system-get",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--admin-api-key", "naa-secret-admin-key",
+                "--target-tenant-id", "tenant-1",
+                "--model-config-id", "model-app-server"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/model-configs/model-app-server?targetTenantId=tenant-1", lastPath);
+        assertEquals("GET", lastMethod);
+        assertTrue(output.contains("modelConfig.id=model-app-server"));
+        assertTrue(output.contains("modelConfig.availableModels=gpt-5.6-sol:ultra"));
+        assertTrue(output.contains("modelConfig.allowedWorkerIds=worker-1"));
     }
 
     @Test
@@ -3518,7 +3679,7 @@ class UpstreamCliTest {
         assertTrue(output.contains("worker list/create/get/update/delete/health/processes/kill"));
         assertTrue(output.contains("directory list/init/get/delete/env/files"));
         assertTrue(output.contains("Internal compatibility: worker-pool list/create/register-worker/add-member/status"));
-        assertTrue(output.contains("model system-list/system-create/system-update/system-rotate-key"));
+        assertTrue(output.contains("model system-list/system-get/system-create/system-update/system-test"));
         assertTrue(output.contains("[--max-turns <n>]"));
         assertTrue(output.contains("[--allowed-tools <csv>]"));
     }
@@ -3832,6 +3993,38 @@ class UpstreamCliTest {
         assertTrue(output.contains("modelConfig.workerBackend=OPENAI_CODEX"));
         assertFalse(output.contains("naa-secret-admin-key"));
         assertFalse(output.contains("llm-secret"));
+    }
+
+    @Test
+    void modelSystemTestSavedUsesAdminCredentialAndTargetTenant() {
+        responseOverride = """
+                {"code":0,"data":"READY"}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "system-test-saved",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--admin-api-key", "naa-secret-admin-key",
+                "--target-tenant-id", "tenant-1",
+                "--model-config-id", "model-app-server",
+                "--worker-id", "worker-1"}, Map.of());
+
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/model-configs/model-app-server/test-connection?workerId=worker-1&targetTenantId=tenant-1", lastPath);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(stdout.toString(StandardCharsets.UTF_8).contains("model system-test-saved ok"));
+    }
+
+    @Test
+    void modelHelpDocumentsAppServerAndGpt56Boundaries() {
+        int code = run(new String[]{"upstream", "model", "help"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertTrue(output.contains("OPENAI_CODEX_APP_SERVER"));
+        assertTrue(output.contains("codex-ultra requires OPENAI_CODEX_APP_SERVER"));
+        assertTrue(output.contains("test-saved"));
+        assertTrue(output.contains("available-models"));
     }
 
     private int run(String[] args, Map<String, String> env) {
