@@ -73,11 +73,16 @@ function Get-GitMetadata {
         $distro = ([string]$rawDistro).Replace([string][char]0, "").Trim()
         if (-not $distro) { continue }
 
-        $commitLines = @(& wsl.exe -d $distro -- git -C $wslRepoRoot rev-parse HEAD 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $commitLines.Count -eq 0) { continue }
+        try {
+            $commitLines = @(& wsl.exe -d $distro -- git -C $wslRepoRoot rev-parse HEAD 2>$null)
+            if ($LASTEXITCODE -ne 0 -or $commitLines.Count -eq 0) { continue }
 
-        $branchLines = @(& wsl.exe -d $distro -- git -C $wslRepoRoot rev-parse --abbrev-ref HEAD 2>$null)
-        $statusLines = @(& wsl.exe -d $distro -- git -C $wslRepoRoot status --porcelain 2>$null)
+            $branchLines = @(& wsl.exe -d $distro -- git -C $wslRepoRoot rev-parse --abbrev-ref HEAD 2>$null)
+            $statusLines = @(& wsl.exe -d $distro -- git -C $wslRepoRoot status --porcelain 2>$null)
+        }
+        catch {
+            continue
+        }
         return @{
             commit = ([string]$commitLines[0]).Trim()
             branch = if ($branchLines.Count -gt 0) { ([string]$branchLines[0]).Trim() } else { "" }
