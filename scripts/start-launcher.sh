@@ -34,6 +34,8 @@ ROOT_PASSWORD=${ROOT_PASSWORD:-root123}
 ROOT_EMAIL=${ROOT_EMAIL:-root@foggy.local}
 ROOT_PASSWORD_RESET=${ROOT_PASSWORD_RESET:-false}
 SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
+JAVA_HEAP_MIN=${JAVA_HEAP_MIN:-1g}
+JAVA_HEAP_MAX=${JAVA_HEAP_MAX:-4g}
 
 echo ""
 echo -e "${CYAN}========================================${NC}"
@@ -103,10 +105,12 @@ echo -e "${GRAY}  JAR: ${JAR_PATH}${NC}"
 echo -e "${GRAY}  Profile: ${SPRING_PROFILES_ACTIVE}${NC}"
 echo -e "${GRAY}  Port: ${BACKEND_PORT}${NC}"
 echo -e "${GRAY}  Root User: ${ROOT_USERNAME}${NC}"
+echo -e "${GRAY}  JVM Heap: ${JAVA_HEAP_MIN} - ${JAVA_HEAP_MAX}${NC}"
 echo ""
 
-# JVM tuning: 4-8G heap, G1GC, better throughput
-JAVA_OPTS="-Xms4g -Xmx8g \
+# JVM tuning defaults target an 8G development host. Override JAVA_HEAP_MIN and
+# JAVA_HEAP_MAX in launcher/.env for larger production-like workloads.
+JAVA_OPTS="-Xms${JAVA_HEAP_MIN} -Xmx${JAVA_HEAP_MAX} \
     -XX:+UseG1GC \
     -XX:MaxGCPauseMillis=200 \
     -XX:+ParallelRefProcEnabled \

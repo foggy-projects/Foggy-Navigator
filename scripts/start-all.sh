@@ -2,8 +2,8 @@
 # Foggy Navigator - One-Click Start All Services
 #
 # Starts:
-#   1. Backend          (Spring Boot · port 8112)
-#   2. Frontend         (Vue 3 · port 5174)
+#   1. Frontend         (Nginx · port 80)
+#   2. Backend          (Spring Boot · port 8112)
 #   3. Claude Agent Worker  (Python · port 3031)
 #   4. Code Server      (Web VS Code · port 18443)
 #
@@ -64,29 +64,40 @@ else
 fi
 echo -e "${GRAY}  $(date '+%Y-%m-%d %H:%M:%S')${NC}"
 
-# ══ 1. Backend ════════════════════════════════════════════════════════════════
-echo ""
-sep
-echo -e "${BOLD}[1/${TOTAL}] Backend${NC}  ${GRAY}(Spring Boot · http://localhost:8112)${NC}"
-sep
-if bash "$SCRIPT_DIR/start-launcher.sh" $SKIP_BUILD; then
-    SVC_STATUS["backend"]="ok"
-else
-    echo -e "${RED}  ✗ Backend startup failed — continuing with other services${NC}"
-    SVC_STATUS["backend"]="fail"
-    FAIL_COUNT=$((FAIL_COUNT + 1))
+# Release the existing JVM before a full frontend build. On an 8G development
+# host the Java process and Vite/TypeScript build can otherwise compete for the
+# same memory. The backend is started again in step 2 even if the frontend fails.
+if [ -z "$SKIP_BUILD" ]; then
+    echo ""
+    echo -e "${GRAY}  Releasing backend memory before frontend build...${NC}"
+    if ! bash "$SCRIPT_DIR/stop-launcher.sh"; then
+        echo -e "${YELLOW}  ⚠ Could not stop the existing backend cleanly; continuing.${NC}"
+    fi
 fi
 
-# ══ 2. Frontend (Build + Nginx) ═══════════════════════════════════════════════
+# ══ 1. Frontend (Build + Nginx) ═══════════════════════════════════════════════
 echo ""
 sep
-echo -e "${BOLD}[2/${TOTAL}] Frontend${NC}  ${GRAY}(Nginx · http://localhost:80)${NC}"
+echo -e "${BOLD}[1/${TOTAL}] Frontend${NC}  ${GRAY}(Nginx · http://localhost:80)${NC}"
 sep
 if bash "$SCRIPT_DIR/start-build-frontend.sh" $SKIP_BUILD; then
     SVC_STATUS["frontend"]="ok"
 else
     echo -e "${RED}  ✗ Frontend build/nginx startup failed${NC}"
     SVC_STATUS["frontend"]="fail"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# ══ 2. Backend ════════════════════════════════════════════════════════════════
+echo ""
+sep
+echo -e "${BOLD}[2/${TOTAL}] Backend${NC}  ${GRAY}(Spring Boot · http://localhost:8112)${NC}"
+sep
+if bash "$SCRIPT_DIR/start-launcher.sh" $SKIP_BUILD; then
+    SVC_STATUS["backend"]="ok"
+else
+    echo -e "${RED}  ✗ Backend startup failed — continuing with other services${NC}"
+    SVC_STATUS["backend"]="fail"
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 

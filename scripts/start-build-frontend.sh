@@ -22,6 +22,7 @@ NGINX_HEALTH_TIMEOUT=40
 LOG_DIR="$REPO_ROOT/logs"
 LOCKFILE="$REPO_ROOT/pnpm-lock.yaml"
 MODULES_META="$REPO_ROOT/node_modules/.modules.yaml"
+FRONTEND_NODE_MAX_OLD_SPACE_SIZE="${FRONTEND_NODE_MAX_OLD_SPACE_SIZE:-4096}"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -127,7 +128,10 @@ if [ "$SKIP_BUILD" = false ]; then
     fi
 
     echo -e "${YELLOW}[2/2] Running frontend CI baseline...${NC}"
-    (cd "$REPO_ROOT" && pnpm run ci:frontend) > "$LOG_DIR/frontend-build.log" 2>&1
+    echo -e "${GRAY}  Node heap limit: ${FRONTEND_NODE_MAX_OLD_SPACE_SIZE} MB${NC}"
+    (cd "$REPO_ROOT" && \
+        NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=$FRONTEND_NODE_MAX_OLD_SPACE_SIZE" \
+        pnpm run ci:frontend) > "$LOG_DIR/frontend-build.log" 2>&1
     if [ $? -ne 0 ]; then
         echo -e "${RED}  Frontend CI baseline failed! Check logs/frontend-build.log${NC}"
         tail -20 "$LOG_DIR/frontend-build.log"
