@@ -5,7 +5,8 @@
 #   powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package.ps1 -Upload
 
 param(
-    [switch]$Upload
+    [switch]$Upload,
+    [switch]$AllowSameVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,6 +34,60 @@ function Get-Sha256 {
     }
 }
 
+function Convert-ToWslPath {
+    param([string]$Path)
+    if ($Path -match '^([A-Za-z]):\\(.*)$') {
+        $drive = $Matches[1].ToLowerInvariant()
+        $rest = $Matches[2] -replace '\\', '/'
+        return "/mnt/$drive/$rest"
+    }
+    return $null
+}
+
+function Get-GitMetadata {
+    param([string]$RepoRoot)
+
+    try {
+        $commitLines = @(& git -C $RepoRoot rev-parse HEAD 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $commitLines.Count -gt 0) {
+            $branchLines = @(& git -C $RepoRoot rev-parse --abbrev-ref HEAD 2>$null)
+            $statusLines = @(& git -C $RepoRoot status --porcelain 2>$null)
+            return @{
+                commit = ([string]$commitLines[0]).Trim()
+                branch = if ($branchLines.Count -gt 0) { ([string]$branchLines[0]).Trim() } else { "" }
+                dirty = [bool]($statusLines -join "")
+            }
+        }
+    }
+    catch {
+        # Try WSL below. This is needed for worktrees whose .git file contains a Linux path.
+    }
+
+    $wslRepoRoot = Convert-ToWslPath -Path $RepoRoot
+    if (-not $wslRepoRoot -or -not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    $distroLines = @(& wsl.exe --list --quiet 2>$null)
+    foreach ($rawDistro in $distroLines) {
+        $distro = ([string]$rawDistro).Replace([char]0, "").Trim()
+        if (-not $distro) { continue }
+
+        $commitLines = @(& wsl.exe -d $distro -- git -C $wslRepoRoot rev-parse HEAD 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $commitLines.Count -eq 0) { continue }
+
+        $branchLines = @(& wsl.exe -d $distro -- git -C $wslRepoRoot rev-parse --abbrev-ref HEAD 2>$null)
+        $statusLines = @(& wsl.exe -d $distro -- git -C $wslRepoRoot status --porcelain 2>$null)
+        return @{
+            commit = ([string]$commitLines[0]).Trim()
+            branch = if ($branchLines.Count -gt 0) { ([string]$branchLines[0]).Trim() } else { "" }
+            dirty = [bool]($statusLines -join "")
+        }
+    }
+
+    return $null
+}
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ToolDir = Split-Path -Parent $ScriptDir
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $ToolDir)
@@ -53,15 +108,20 @@ $buildTimeUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 $gitCommit = ""
 $gitBranch = ""
 $gitDirty = $false
-try {
-    $gitCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null).Trim()
-    $gitBranch = (& git -C $RepoRoot rev-parse --abbrev-ref HEAD 2>$null).Trim()
-    $gitDirty = [bool]((& git -C $RepoRoot status --porcelain 2>$null) -join "")
+$gitMetadata = Get-GitMetadata -RepoRoot $RepoRoot
+if ($gitMetadata) {
+    $gitCommit = [string]$gitMetadata.commit
+    $gitBranch = [string]$gitMetadata.branch
+    $gitDirty = [bool]$gitMetadata.dirty
 }
-catch {
-    $gitCommit = ""
-    $gitBranch = ""
-    $gitDirty = $false
+elseif ($Upload) {
+    throw "Could not resolve git metadata. Refusing to publish an untraceable release."
+}
+else {
+    Write-Host "Could not resolve git metadata; local package will not be traceable." -ForegroundColor Yellow
+}
+if ($Upload -and $gitDirty) {
+    throw "Refusing to publish from a dirty git worktree."
 }
 $features = @(
     "config-check",
@@ -170,6 +230,17 @@ Write-Host "Archive: $archivePath" -ForegroundColor Green
 Write-Host "SHA256:  $sha" -ForegroundColor Green
 
 if ($Upload) {
-    & powershell -ExecutionPolicy Bypass -File (Join-Path $ScriptDir "upload.ps1") -Version $version
+    if ($AllowSameVersion) {
+        & powershell -ExecutionPolicy Bypass -File (Join-Path $ScriptDir "upload.ps1") -Version $version -AllowSameVersion
+    }
+    else {
+        & powershell -ExecutionPolicy Bypass -File (Join-Path $ScriptDir "upload.ps1") -Version $version
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "CLI upload failed"
+    }
     & powershell -ExecutionPolicy Bypass -File (Join-Path $ScriptDir "package-skill.ps1") -Version $version -Upload
+    if ($LASTEXITCODE -ne 0) {
+        throw "Skill upload failed"
+    }
 }
