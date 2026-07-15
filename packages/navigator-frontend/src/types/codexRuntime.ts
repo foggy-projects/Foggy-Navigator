@@ -73,6 +73,7 @@ export interface CodexAppServerEndpointSync {
   endpoint: CodexAppServerEndpoint
   runtime?: CodexRuntime
   runtimeCreated: boolean
+  runtimeRestored?: boolean
 }
 
 export interface CodexRuntimeAvailability {

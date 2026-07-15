@@ -3,9 +3,10 @@ package com.foggy.navigator.codex.worker.spi;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
-import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
+import com.foggy.navigator.codex.worker.model.command.CodexTaskCreateCommand;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,7 +54,7 @@ class CodexWorkerFacadeImplTest {
     @Test
     void createTaskForcesSdkProvider() {
         when(taskService.createTask(eq("user-1"), eq("tenant-1"), any()))
-                .thenReturn(CodexTaskDTO.builder().taskId("task-1").build());
+                .thenReturn(DispatchTaskDTO.builder().taskId("task-1").build());
 
         facade.createTask("user-1", Map.of(
                 "tenantId", "tenant-1",
@@ -61,8 +62,7 @@ class CodexWorkerFacadeImplTest {
                 "prompt", "hello",
                 "providerType", CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE));
 
-        var form = ArgumentCaptor.forClass(
-                com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm.class);
+        var form = ArgumentCaptor.forClass(CodexTaskCreateCommand.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), form.capture());
         assertEquals(CodexTaskService.CODEX_PROVIDER_TYPE, form.getValue().getProviderType());
     }
@@ -92,6 +92,32 @@ class CodexWorkerFacadeImplTest {
         assertEquals("Final answer", result.get("resultText"));
         assertEquals(new BigDecimal("0.12"), result.get("costUsd"));
         assertNull(result.get("error"));
+    }
+
+    @Test
+    void syncQueryUsesLatestCompletedAssistantItemInsteadOfJoiningDeltas() {
+        mockSdkWorker();
+        when(taskService.createTrackedSyncTask(
+                "user-1", "worker-1", null, "check repo", "D:/repo", null,
+                "thread-0", "gpt-5.6-sol"))
+                .thenReturn("local-task-1");
+        when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("thread-0"),
+                eq("gpt-5.6-sol"), eq(2), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(Flux.just(
+                        sse("""
+                                {"type":"assistant_text","subtype":"text_delta","task_id":"worker-task-9","session_id":"thread-1","content":"old fragment"}
+                                """),
+                        sse("""
+                                {"type":"assistant_text","subtype":"commentary","task_id":"worker-task-9","session_id":"thread-1","content":"working"}
+                                """),
+                        sse("""
+                                {"type":"assistant_text","task_id":"worker-task-9","session_id":"thread-1","content":"LATEST_COMPLETED_ITEM"}
+                                """)));
+
+        Map<String, Object> result = facade.syncQuery(
+                "user-1", "worker-1", "check repo", "D:/repo", "thread-0", 2, null);
+
+        assertEquals("LATEST_COMPLETED_ITEM", result.get("resultText"));
     }
 
     @Test
@@ -147,7 +173,7 @@ class CodexWorkerFacadeImplTest {
 
     @Test
     void statusUsesSdkProviderScope() {
-        CodexTaskDTO task = CodexTaskDTO.builder()
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
                 .taskId("task-1")
                 .providerType(CodexTaskService.CODEX_PROVIDER_TYPE)
                 .build();

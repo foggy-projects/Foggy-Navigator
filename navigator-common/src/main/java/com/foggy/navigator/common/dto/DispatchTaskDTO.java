@@ -42,6 +42,8 @@ public class DispatchTaskDTO {
     private Long durationMs;
     private Integer numTurns;
     private String resultText;
+    /** Provider-produced structured result payload serialized as JSON. */
+    private String structuredOutput;
     private String errorMessage;
     private Integer lastAckedSeq;
     private LocalDateTime lastOutputAt;
@@ -50,6 +52,8 @@ public class DispatchTaskDTO {
     private Long responseTimeoutThresholdSeconds;
     private String source;
     private LocalDateTime createdAt;
+    /** Exact creation instant used by operations/canary consumers without timezone inference. */
+    private Long createdAtEpochMs;
     private LocalDateTime updatedAt;
 
     // Session summary fields populated by paged history APIs.

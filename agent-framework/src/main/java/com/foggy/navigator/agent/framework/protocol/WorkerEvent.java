@@ -43,6 +43,13 @@ public class WorkerEvent {
     private String model;
     private String error;
 
+    /**
+     * Codex App Server item identity. It associates text deltas with the
+     * completed agent message so client renderers never merge separate items.
+     */
+    @JsonProperty("stream_id")
+    private String streamId;
+
     // ── Claude 特有字段（Codex 中为 null） ──
 
     @JsonProperty("permission_id")

@@ -4,7 +4,11 @@
       <span class="sender-label">{{ senderLabel }}</span>
       <span class="timestamp">{{ formattedTime }}</span>
     </div>
-    <div ref="contentRef" class="bubble-content markdown-body" v-html="renderedContent"></div>
+    <div
+      ref="contentRef"
+      class="bubble-content markdown-body"
+      v-html="renderedContent"
+    ></div>
     <ExecutionReportInline
       :report-ref="props.message.executionReportRef"
       :digest="props.message.executionReportDigest"
@@ -38,6 +42,12 @@
         @click.stop="emit('forward')"
       >&#10150; 转发</span>
       <span
+        v-if="props.message.sender === 'assistant'"
+        class="action-btn"
+        title="查看本会话逐条记录"
+        @click.stop="emit('view-records')"
+      >&#128196; 查看记录</span>
+      <span
         v-if="rewindable"
         class="action-btn"
         title="回退到此"
@@ -64,6 +74,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'rewind'): void
   (e: 'forward'): void
+  (e: 'view-records'): void
   (e: 'link-click', payload: { href: string; text: string }): void
 }>()
 

@@ -28,6 +28,7 @@ final class TaskOperationRouter {
     private final UnifiedAgentResolver agentResolver;
     private final SessionBindingService bindingService;
     private final SessionRepository sessionRepository;
+    private final SessionTaskResourceAccessService resourceAccessService;
     @Nullable
     private final SessionTaskRepository sessionTaskRepository;
     @Nullable
@@ -39,6 +40,7 @@ final class TaskOperationRouter {
     TaskOperationRouter(UnifiedAgentResolver agentResolver,
                         SessionBindingService bindingService,
                         SessionRepository sessionRepository,
+                        SessionTaskResourceAccessService resourceAccessService,
                         @Nullable SessionTaskRepository sessionTaskRepository,
                         @Nullable NativeSubtaskStateRepository nativeSubtaskStateRepository,
                         TaskQueryProviderRegistry taskQueryProviderRegistry,
@@ -47,6 +49,7 @@ final class TaskOperationRouter {
         this.agentResolver = agentResolver;
         this.bindingService = bindingService;
         this.sessionRepository = sessionRepository;
+        this.resourceAccessService = resourceAccessService;
         this.sessionTaskRepository = sessionTaskRepository;
         this.nativeSubtaskStateRepository = nativeSubtaskStateRepository;
         this.taskQueryProviderRegistry = taskQueryProviderRegistry;
@@ -55,6 +58,7 @@ final class TaskOperationRouter {
     }
 
     Optional<DispatchTaskDTO> getTask(String taskId, AgentResolveContext context) {
+        requireOwnedTask(taskId, context);
         if (sessionTaskRepository != null) {
             Optional<DispatchTaskDTO> unified = context.getUserId() != null
                     ? sessionTaskRepository.findByTaskIdAndUserId(taskId, context.getUserId())
@@ -101,7 +105,8 @@ final class TaskOperationRouter {
             return;
         }
 
-        String effectiveAgentId = firstNonBlank(agentId, task != null ? task.getAgentId() : null);
+        // Caller-supplied agentId is routing input, never authorization or ownership evidence.
+        String effectiveAgentId = task != null ? task.getAgentId() : null;
         String providerType = task != null ? task.getProviderType() : null;
 
         if (providerType != null && !providerType.isBlank()) {
@@ -125,27 +130,32 @@ final class TaskOperationRouter {
         log.info("Cancelled task via A2a Agent: taskId={}, agentId={}", taskId, effectiveAgentId);
     }
 
-    void respondToTask(String taskId, String userId, Map<String, Object> response) {
+    void respondToTask(String taskId, AgentResolveContext context, Map<String, Object> response) {
+        requireOwnedTask(taskId, context);
         TaskCommandProvider provider = findProviderForTask(taskId);
-        provider.respondToTask(taskId, userId, response);
+        provider.respondToTask(taskId, context.getUserId(), response);
     }
 
-    void reconnectTask(String taskId, String userId) {
+    void reconnectTask(String taskId, AgentResolveContext context) {
+        requireOwnedTask(taskId, context);
         TaskCommandProvider provider = findProviderForTask(taskId);
-        provider.reconnectTask(taskId, userId);
+        provider.reconnectTask(taskId, context.getUserId());
     }
 
-    Object resyncTask(String taskId, String userId) {
+    Object resyncTask(String taskId, AgentResolveContext context) {
+        requireOwnedTask(taskId, context);
         TaskCommandProvider provider = findProviderForTask(taskId);
-        return provider.resyncTask(taskId, userId);
+        return provider.resyncTask(taskId, context.getUserId());
     }
 
-    Object rewindTask(String taskId, String userId, Map<String, Object> params) {
+    Object rewindTask(String taskId, AgentResolveContext context, Map<String, Object> params) {
+        requireOwnedTask(taskId, context);
         TaskCommandProvider provider = findProviderForTask(taskId);
-        return provider.rewindTask(taskId, userId, params);
+        return provider.rewindTask(taskId, context.getUserId(), params);
     }
 
     DispatchTaskDTO resumeTask(TaskDispatchRequest request, AgentResolveContext context) {
+        requireOwnedSession(request != null ? request.getSessionId() : null, context);
         String providerType = resolveResumeProviderType(request, context);
         normalizeResumeRequest(request, providerType);
         validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
@@ -163,7 +173,9 @@ final class TaskOperationRouter {
      * The unified projection is deliberately removed last: if a later cleanup fails,
      * it remains the ownership and routing marker for an idempotent retry.
      */
-    void deleteTask(String taskId, String userId) {
+    void deleteTask(String taskId, AgentResolveContext context) {
+        requireOwnedTask(taskId, context);
+        String userId = context.getUserId();
         TaskCommandProvider provider = findProviderForTask(taskId);
         boolean ownsUnifiedProjection = sessionTaskRepository != null
                 && sessionTaskRepository.findByTaskIdAndUserId(taskId, userId).isPresent();
@@ -188,9 +200,24 @@ final class TaskOperationRouter {
         }
     }
 
-    Object scanCheckpoints(String taskId, String userId) {
+    Object scanCheckpoints(String taskId, AgentResolveContext context) {
+        requireOwnedTask(taskId, context);
         TaskCommandProvider provider = findProviderForTask(taskId);
-        return provider.scanCheckpoints(taskId, userId);
+        return provider.scanCheckpoints(taskId, context.getUserId());
+    }
+
+    private void requireOwnedTask(String taskId, AgentResolveContext context) {
+        resourceAccessService.requireOwnedTask(
+                taskId,
+                context != null ? context.getUserId() : null,
+                context != null ? context.getTenantId() : null);
+    }
+
+    private void requireOwnedSession(String sessionId, AgentResolveContext context) {
+        resourceAccessService.requireOwnedSession(
+                sessionId,
+                context != null ? context.getUserId() : null,
+                context != null ? context.getTenantId() : null);
     }
 
     void validateRequestedProviderTypeCompatibility(String requestedProviderType, String resolvedProviderType) {

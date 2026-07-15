@@ -1091,7 +1091,8 @@ public class CodexStreamRelay {
             // 使用 AgentMessageBuilder 标准化 payload 字段名
             AgentMessageBuilder mb = AgentMessageBuilder.create(sessionId, providerType)
                     .taskId(taskId)
-                    .put("codexThreadId", detectedCodexThreadId.get());
+                    .put("codexThreadId", detectedCodexThreadId.get())
+                    .put("streamId", event.getStreamId());
 
             switch (type) {
                 case "assistant_text" -> {
@@ -1487,7 +1488,7 @@ public class CodexStreamRelay {
         }
         // The local path is useful only inside the Worker/Java bridge and must not leak to clients.
         result.remove("local_path");
-        result.put("url", "/api/v1/codex-tasks/" + taskId
+        result.put("url", "/api/v1/tasks/" + taskId
                 + "/generated-images/" + artifactId);
         return result;
     }

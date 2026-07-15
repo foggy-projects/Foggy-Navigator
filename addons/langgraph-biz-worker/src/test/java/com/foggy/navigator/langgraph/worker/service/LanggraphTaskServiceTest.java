@@ -1,5 +1,6 @@
 package com.foggy.navigator.langgraph.worker.service;
 
+import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
@@ -18,7 +19,7 @@ import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -105,9 +106,9 @@ class LanggraphTaskServiceTest {
     void exposes_only_supported_task_provider_ports() {
         assertInstanceOf(TaskLookupProvider.class, service);
         assertInstanceOf(TaskCommandProvider.class, service);
-        assertFalse(service instanceof TaskQueryProvider);
         assertFalse(service instanceof TaskListingProvider);
         assertFalse(service instanceof WorkerSessionQueryProvider);
+        assertTrue(service.supports(TaskQueryCapability.RESPOND_TO_TASK));
     }
 
     // -- createTask ----------------------------------------------------------
@@ -483,6 +484,9 @@ class LanggraphTaskServiceTest {
         void stubExistingTask() {
             existingTask = new LanggraphTaskEntity();
             existingTask.setTaskId("lgt_existing");
+            existingTask.setSessionId(SESSION_ID);
+            existingTask.setUserId(USER_ID);
+            existingTask.setAgentId(AGENT_ID);
             existingTask.setStatus("PENDING");
             when(taskRepository.findByTaskId("lgt_existing"))
                     .thenReturn(Optional.of(existingTask));
@@ -507,6 +511,22 @@ class LanggraphTaskServiceTest {
             assertEquals("{\"key\":\"val\"}", existingTask.getStructuredOutput());
             assertEquals(1234L, existingTask.getDurationMs());
             verify(taskRepository).save(existingTask);
+
+            TaskStatusChangeEvent event = captureStatusChangeEvent();
+            assertEquals("lgt_existing", event.getTaskId());
+            assertEquals("PENDING", event.getPreviousStatus());
+            assertEquals("COMPLETED", event.getStatus());
+            assertEquals("AWAITING_REPLY", event.getInteractionState());
+            assertEquals(Boolean.FALSE, event.getRecoverable());
+        }
+
+        @Test
+        void providerLookupProjectsStructuredOutput() {
+            existingTask.setStructuredOutput("{\"type\":\"OPEN_ARTIFACT\"}");
+
+            var projected = service.getTaskById("lgt_existing").orElseThrow();
+
+            assertEquals("{\"type\":\"OPEN_ARTIFACT\"}", projected.getStructuredOutput());
         }
 
         @Test
@@ -547,6 +567,12 @@ class LanggraphTaskServiceTest {
             assertEquals("FAILED", existingTask.getTaskSubStatus());
             assertEquals("connection timeout", existingTask.getErrorMessage());
             verify(taskRepository).save(existingTask);
+
+            TaskStatusChangeEvent event = captureStatusChangeEvent();
+            assertEquals("PENDING", event.getPreviousStatus());
+            assertEquals("FAILED", event.getStatus());
+            assertEquals("connection timeout", event.getErrorMessage());
+            assertEquals(Boolean.FALSE, event.getRecoverable());
         }
 
         @Test
@@ -559,6 +585,11 @@ class LanggraphTaskServiceTest {
             assertEquals(true, existingTask.getRecoverable());
             assertEquals("Cancelled by user", existingTask.getErrorMessage());
             verify(taskRepository).save(existingTask);
+
+            TaskStatusChangeEvent event = captureStatusChangeEvent();
+            assertEquals("PENDING", event.getPreviousStatus());
+            assertEquals("ABORTED", event.getStatus());
+            assertEquals(Boolean.TRUE, event.getRecoverable());
         }
 
         @Test
@@ -613,6 +644,13 @@ class LanggraphTaskServiceTest {
             service.startTask("nonexistent");
             // Should not throw, just skip
             verify(taskRepository, never()).save(any());
+        }
+
+        private TaskStatusChangeEvent captureStatusChangeEvent() {
+            ArgumentCaptor<TaskStatusChangeEvent> captor =
+                    ArgumentCaptor.forClass(TaskStatusChangeEvent.class);
+            verify(eventPublisher).publishEvent(captor.capture());
+            return captor.getValue();
         }
     }
 

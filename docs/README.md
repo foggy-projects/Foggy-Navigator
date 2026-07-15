@@ -33,14 +33,14 @@
 | [跨项目编排](./02-modules/cross-project-orchestration.md) | 多阶段、多目录、多 Agent 任务编排 |
 | [平台设置与资源治理](./02-modules/platform-governance.md) | Git/LLM/凭证/记忆/Worker/助手治理 |
 | [用户与访问控制](./02-modules/user-and-access-control.md) | 登录、用户、角色与 API Key 管理 |
-| [监控、通知与开放集成](./02-modules/observability-notification-integration.md) | 监控事件、SSE、Open API 与 SDK |
+| [通知、基础观测与开放集成](./02-modules/observability-notification-integration.md) | SSE、日志/健康检查、受控 Open API 与 SDK |
 
 ### 当前关键模块设计
 
 | 文档 | 说明 |
 |------|------|
 | [会话模块](./02-modules/session-module.md) | 会话管理、统一任务分发、SSE 与绑定模型 |
-| [可观察性系统](./02-modules/observability-system.md) | 监控、日志、追踪设计 |
+| [可观察性系统](./02-modules/observability-system.md) | 当前日志、健康检查、有限指标、SSE 与治理审计边界 |
 | [工具模块](./02-modules/tool-module.md) | `agent-framework` 工具能力说明 |
 
 ---

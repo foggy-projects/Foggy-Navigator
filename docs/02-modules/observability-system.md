@@ -1,134 +1,65 @@
 # 可观察性系统
 
-> 当前实现与规划边界明确区分的可观察性说明
+> 当前实现与后续治理边界明确区分的可观察性说明
 
 ## 1. 文档定位
 
-本文档只描述当前 Foggy Navigator 中已经形成或已经能从代码中确认的可观察性能力，并单独标出仍属于规划的部分。
+Foggy Navigator 当前没有自研的完整 Observability Platform。1.4.2 已在 dev 阶段移除旧 `monitoring-module`、`tools/foggy-monitor`、PC Monitoring 页面/API 及其配置残留；本文只描述仍然存在的运行诊断能力。
 
-它不再把“完整监控中台”作为当前既成事实。
+## 2. 当前可确认的能力
 
-## 2. 当前已实现能力
+### 2.1 应用日志与上下文
 
-### 2.1 监控事件面板
+后端使用结构化日志和滚动文件，并在相关链路携带 `traceId`、`sessionId`、`agentId` 等上下文。这是排障基础，不等同于集中式日志平台或完整 tracing。
 
-当前前端已具备：
+### 2.2 健康检查与有限指标
 
-- 监控事件列表
-- 按服务过滤
-- 按级别过滤
-- 最近 1 小时 / 24 小时错误统计
-- 事件详情查看
+Launcher 保留 Spring Boot 健康检查；部分组件通过 Micrometer 暴露有限指标，例如 `UnifiedSseEmitter` 的连接指标。当前没有承诺统一 Prometheus、告警中心或容量看板。
 
-对应后端接口：
+### 2.3 SSE 实时链路
 
-- `GET /api/v1/monitoring/events`
-- `GET /api/v1/monitoring/stats`
+平台采用每用户统一 SSE 连接模型，承载会话消息、任务状态、助手通知和 heartbeat。该实现当前是单 JVM 内存态，多实例事件总线已明确延后。
 
-### 2.2 统一 SSE 实时链路
+### 2.4 治理审计
 
-当前平台采用每用户统一 SSE 连接模型，而不是按会话多连接模型。
+BusinessTask、BusinessFunction、ClientApp、task-scoped token、审批、恢复、取消、拒绝和失败等审计按 1.4.2 计划分级治理。规划目标或待补能力不能写成已经完成，实际状态以版本 Progress 和证据为准。
 
-当前可确认的事件类型包括：
+## 3. 已移除边界
 
-- `session_event`
-- `assistant_notification`
-- `task_update`
-- `heartbeat`
+以下能力不再属于当前产品或默认部署：
 
-这套链路支撑：
+- `/api/v1/monitoring/events`、`/api/v1/monitoring/stats`
+- Monitoring 前端页面和 API client
+- RabbitMQ 日志事件 publisher/consumer
+- `monitoring_events` 的应用侧持久化与旧告警规则引擎
+- `scripts/start-all.sh` 中的 `foggy-monitor` 安装步骤
 
-- 会话消息更新
-- 任务状态更新
-- 助手通知
-- 前端保活
+本轮没有直接操作数据库或 RabbitMQ 外部资源。dev 数据可按 Owner 授权丢弃；任何共享/生产资源必须另行确认，Git revert 也不会自动恢复外部资源或数据。
 
-### 2.3 日志与 Trace 上下文
+## 4. 推荐理解方式
 
-从当前配置和代码可确认：
+当前运行可见性分为四层：
 
-- 后端日志已包含结构化上下文字段
-- 已使用 `traceId`、`sessionId`、`agentId` 等维度
-- 日志写入文件并支持滚动策略
+1. 应用日志：用于排障与问题回溯。
+2. 健康检查和有限指标：用于判断实例基本状态。
+3. SSE 运行信号：用于用户侧消息、任务和通知实时反馈。
+4. 治理审计：用于追溯身份、任务、审批、恢复、拒绝和失败。
 
-这意味着平台已经具备基础排障能力，但还不是完整 tracing 平台。
+## 5. 后续可选方向
 
-### 2.4 SSE 连接指标
+以下内容只能作为后续独立需求，不能描述为当前已实现：
 
-`UnifiedSseEmitter` 已对活跃 SSE 连接数暴露 gauge 指标。
-
-这说明系统已经开始接入 Micrometer 风格指标，但目前覆盖面有限。
-
-## 3. 当前实现边界
-
-### 3.1 当前真正落地的是“事件可见性”
-
-当前系统最稳定、最明确的可观察性能力是：
-
-- 事件记录
-- 事件查询
-- 实时通知
-- 错误统计
-
-### 3.2 当前尚未形成“完整指标平台”
-
-以下内容在历史文档中被大量描述，但不能视为当前完整落地：
-
-- 完整任务控制中台
-- 多维指标仓库
-- Trace 存储系统
-- 告警规则平台
-- 仪表盘系统
-- 容量与性能分析平台
-
-## 4. 当前模块关系
-
-| 模块 | 当前作用 |
-|------|------|
-| `monitoring-module` | 源码保留但当前暂停，不纳入 `launcher` 或默认部署 |
-| `session-module` | 提供统一 SSE 推送与通知通道 |
-| `addons/task-assistant` | 产出助手通知事件 |
-| `agent-framework` | 提供部分指标常量和执行上下文信息 |
-| `launcher` | 提供日志与基础运行配置 |
-
-## 5. 推荐理解方式
-
-当前应把可观察性理解成三层：
-
-### 5.1 第一层：日志
-
-用于排障和问题回溯。
-
-### 5.2 第二层：事件
-
-用于前端监控面板与异常查看。
-
-### 5.3 第三层：实时推送
-
-用于把消息、任务和通知实时送到用户界面。
-
-## 6. 当前仍属规划的方向
-
-以下能力可以保留为后续规划，但不能写成“已实现”：
-
-- 丰富 Micrometer 指标
-- Prometheus 指标暴露体系
-- 告警规则与告警中心
+- 集中日志与检索
+- Prometheus 指标体系和告警规则
 - 完整链路追踪
-- 资源与容量分析看板
+- 多实例 SSE 事件总线
+- 资源、容量和性能分析看板
 
-## 7. 当前对产品的实际价值
+新方案应优先接入受维护的通用观测组件，并与安全审计的权威事实源分开设计；不默认恢复已删除的自研 RabbitMQ Monitoring 切片。
 
-从产品角度看，当前可观察性已经足够支撑：
+## 6. 关联文档
 
-- 用户看到任务和会话的实时变化
-- 管理员快速定位错误事件
-- 系统保有基础运行诊断能力
-
-但还不适合宣传为完整 Observability Platform。
-
-## 8. 关联文档
-
-- [监控、通知与开放集成](./observability-notification-integration.md)
+- [通知、基础观测与开放集成](./observability-notification-integration.md)
 - [Session Module](./session-module.md)
 - [系统架构概览](../00-system-overview.md)
+- [1.4.2 平台治理与历史能力收口](../version-tracker/1.4.2-SNAPSHOT/README.md)

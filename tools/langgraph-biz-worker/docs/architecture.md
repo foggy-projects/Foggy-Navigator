@@ -152,7 +152,7 @@ Root/parent 只看到显式 Agent frame 的 promoted result，不默认看到 Ag
 ### Java 侧对接（Phase 1 Java）
 
 - `addons/langgraph-biz-worker/` Maven 模块
-- `A2aAgentProvider` + `TaskQueryProvider` 适配
+- `A2aAgentProvider` + 按能力实现 `TaskLookupProvider`、`TaskCommandProvider`、`TaskListingProvider` 等窄端口
 - `WorkerClient` 调用 Python Worker HTTP API
 - `SSE Relay` 转发事件到前端
 - `SecurityConfig` 权限配置

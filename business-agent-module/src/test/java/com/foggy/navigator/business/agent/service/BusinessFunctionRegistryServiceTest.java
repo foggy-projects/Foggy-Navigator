@@ -320,6 +320,19 @@ class BusinessFunctionRegistryServiceTest {
     }
 
     @Test
+    void resolveClientAppFunction_rejectsConflictingInlineAndExplicitVersions() {
+        when(clientAppService.requireActiveClientApp("tenant_1", "app_01"))
+                .thenReturn(new ClientAppEntity());
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                registryService.resolveClientAppFunction(
+                        "tenant_1", "app_01", "func_01@v1", "v2"));
+
+        assertEquals("function version conflicts with inline version", error.getMessage());
+        verifyNoInteractions(functionRepository, versionRepository, grantRepository);
+    }
+
+    @Test
     void resolveClientAppFunction_acceptsBaseIdWithVersionWhenStoredIdIsVersioned() {
         when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
         when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "world-sim.actor.tms-order-save-print"))

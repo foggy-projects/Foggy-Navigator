@@ -12,6 +12,23 @@ import java.util.Map;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class LanggraphWorkerHealthDTO {
 
+    private String status;
+
+    private Boolean ready;
+
+    private String mode;
+
+    @JsonProperty("external_enabled")
+    private Boolean externalEnabled;
+
+    @JsonProperty("external_ready")
+    private Boolean externalReady;
+
+    @JsonProperty("auth_configured")
+    private Boolean authConfigured;
+
+    private List<String> reasons;
+
     private String hostname;
 
     private String version;

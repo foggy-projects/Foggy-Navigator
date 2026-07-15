@@ -190,15 +190,6 @@ public class LanggraphWorkerClient {
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {});
     }
 
-    /**
-     * Resume a suspended task on the Python Worker.
-     * contextId is required by the Worker to locate the session-sharded frame.
-     */
-    @Deprecated(forRemoval = false)
-    public Mono<Map<String, Object>> resumeTask(String taskId, String approvalResult, String comment) {
-        return Mono.error(new IllegalArgumentException("contextId is required for LangGraph worker resume"));
-    }
-
     public Mono<Map<String, Object>> resumeTask(
             String taskId,
             String sessionId,

@@ -8,9 +8,11 @@ import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
+import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.session.dto.UnifiedSessionDTO;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.session.service.SessionMetadataService;
+import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
 import com.foggyframework.core.ex.RX;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -34,14 +36,17 @@ public class SessionController {
     private final AgentInvoker agentInvoker;
     private final SessionRepository sessionRepository;
     private final SessionMetadataService sessionMetadataService;
+    private final SessionTaskResourceAccessService resourceAccessService;
 
     public SessionController(SessionManager sessionManager, AgentInvoker agentInvoker,
                              SessionRepository sessionRepository,
-                             SessionMetadataService sessionMetadataService) {
+                             SessionMetadataService sessionMetadataService,
+                             SessionTaskResourceAccessService resourceAccessService) {
         this.sessionManager = sessionManager;
         this.agentInvoker = agentInvoker;
         this.sessionRepository = sessionRepository;
         this.sessionMetadataService = sessionMetadataService;
+        this.resourceAccessService = resourceAccessService;
     }
 
     /**
@@ -51,6 +56,11 @@ public class SessionController {
     public RX<Session> createSession(@RequestBody CreateSessionForm form) {
         CurrentUser user = UserContext.getCurrentUser();
         log.info("Create session: agentId={}, user={}", form.getAgentId(), user.getUsername());
+
+        if (form.getParentSessionId() != null && !form.getParentSessionId().isBlank()) {
+            resourceAccessService.requireOwnedSession(
+                    form.getParentSessionId(), user.getUserId(), user.getTenantId());
+        }
 
         String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
                 .userId(user.getUserId())
@@ -74,26 +84,20 @@ public class SessionController {
         CurrentUser user = UserContext.getCurrentUser();
         List<Session> sessions;
         if (agentId != null && !agentId.isBlank()) {
-            sessions = sessionRepository.findByUserIdAndAgentIdOrderByUpdatedAtDesc(
-                            user.getUserId(), agentId)
+            sessions = sessionRepository.findByUserIdAndTenantIdAndAgentIdOrderByUpdatedAtDesc(
+                            user.getUserId(), user.getTenantId(), agentId)
                     .stream()
-                    .map(entity -> Session.builder()
-                            .id(entity.getId())
-                            .userId(entity.getUserId())
-                            .tenantId(entity.getTenantId())
-                            .agentId(entity.getAgentId())
-                            .parentSessionId(entity.getParentSessionId())
-                            .status(com.foggy.navigator.agent.framework.session.SessionStatus.valueOf(entity.getStatus()))
-                            .taskName(entity.getTitle())
-                            .createdAt(entity.getCreatedAt())
-                            .updatedAt(entity.getUpdatedAt())
-                            .build())
+                    .map(SessionController::toSession)
                     .collect(Collectors.toList());
         } else {
-            sessions = sessionManager.findByUser(user.getUserId());
+            sessions = sessionRepository.findByUserIdAndTenantIdOrderByUpdatedAtDesc(
+                            user.getUserId(), user.getTenantId())
+                    .stream()
+                    .map(SessionController::toSession)
+                    .collect(Collectors.toList());
         }
 
-        // claude-worker 会话由 /claude-tasks 页面独立管理，不在聊天列表中显示
+        // claude-worker 会话由 Workers 工作台独立管理，不在通用聊天列表中显示
         sessions = sessions.stream()
                 .filter(s -> !"claude-worker".equals(s.getAgentId()))
                 .collect(Collectors.toList());
@@ -110,6 +114,8 @@ public class SessionController {
      */
     @GetMapping("/{id}")
     public RX<Session> getSession(@PathVariable String id) {
+        CurrentUser user = UserContext.getCurrentUser();
+        resourceAccessService.requireOwnedSession(id, user.getUserId(), user.getTenantId());
         Session session = sessionManager.getSession(id);
         if (session == null) {
             throw RX.throwB("Session not found: " + id);
@@ -122,9 +128,11 @@ public class SessionController {
      */
     @DeleteMapping("/{id}")
     public RX<Void> deleteSession(@PathVariable String id) {
+        CurrentUser user = UserContext.getCurrentUser();
+        resourceAccessService.requireOwnedSession(id, user.getUserId(), user.getTenantId());
         log.info("Delete session: id={}", id);
         try {
-            sessionMetadataService.deleteConversation(id, UserContext.getCurrentUserId());
+            sessionMetadataService.deleteConversation(id, user.getUserId());
         } catch (IllegalStateException e) {
             return RX.failB(e.getMessage());
         }
@@ -136,6 +144,8 @@ public class SessionController {
      */
     @GetMapping("/{id}/messages")
     public RX<List<Message>> getMessages(@PathVariable String id) {
+        CurrentUser user = UserContext.getCurrentUser();
+        resourceAccessService.requireOwnedSession(id, user.getUserId(), user.getTenantId());
         List<Message> messages = sessionManager.getAllMessages(id);
         return RX.ok(messages);
     }
@@ -153,6 +163,8 @@ public class SessionController {
             @PathVariable String id,
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(defaultValue = "0") int offset) {
+        CurrentUser user = UserContext.getCurrentUser();
+        resourceAccessService.requireOwnedSession(id, user.getUserId(), user.getTenantId());
         long total = sessionManager.countMessages(id);
         List<Message> messages = sessionManager.getLatestMessages(id, limit, offset);
 
@@ -175,10 +187,8 @@ public class SessionController {
         CurrentUser user = UserContext.getCurrentUser();
         log.info("Send message: sessionId={}, user={}", id, user.getUsername());
 
-        Session session = sessionManager.getSession(id);
-        if (session == null) {
-            throw RX.throwB("Session not found: " + id);
-        }
+        SessionEntity session = resourceAccessService.requireOwnedSession(
+                id, user.getUserId(), user.getTenantId());
 
         // 1. 持久化用户消息
         Message userMessage = Message.user(id, form.getContent());
@@ -189,6 +199,21 @@ public class SessionController {
         agentInvoker.invokeAsync(id, session.getAgentId(), userMessage);
 
         return RX.ok(userMessage);
+    }
+
+    private static Session toSession(SessionEntity entity) {
+        return Session.builder()
+                .id(entity.getId())
+                .userId(entity.getUserId())
+                .tenantId(entity.getTenantId())
+                .agentId(entity.getAgentId())
+                .parentSessionId(entity.getParentSessionId())
+                .status(com.foggy.navigator.agent.framework.session.SessionStatus.valueOf(entity.getStatus()))
+                .taskName(entity.getTitle())
+                .summary(entity.getSummary())
+                .createdAt(entity.getCreatedAt())
+                .updatedAt(entity.getUpdatedAt())
+                .build();
     }
 
     /**

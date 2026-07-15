@@ -37,13 +37,6 @@
             <version>${project.version}</version>
         </dependency>
 
-        <!-- Metadata Query Module - 元数据查询模块 -->
-        <dependency>
-            <groupId>com.foggy.navigator</groupId>
-            <artifactId>metadata-query-module</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
         <!-- Claude Worker Agent - Claude Code 远程控制模块 -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>
@@ -68,13 +61,6 @@
         <dependency>
             <groupId>com.foggy.navigator</groupId>
             <artifactId>langgraph-biz-worker</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <!-- Echo Agent - 模拟 Agent（验证框架扩展性） -->
-        <dependency>
-            <groupId>com.foggy.navigator</groupId>
-            <artifactId>echo-agent</artifactId>
             <version>${project.version}</version>
         </dependency>
 

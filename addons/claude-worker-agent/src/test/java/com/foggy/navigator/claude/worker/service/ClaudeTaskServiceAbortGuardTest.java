@@ -1,9 +1,12 @@
 package com.foggy.navigator.claude.worker.service;
 
+import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -15,6 +18,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 /**
@@ -34,11 +40,13 @@ class ClaudeTaskServiceAbortGuardTest {
     private ClaudeWorkerService workerService;
     private TransactionTemplate txTemplate;
     private ApplicationEventPublisher publisher;
+    private SessionEntityRepository sessionEntityRepository;
 
     private static final String TASK_ID = "task-abort-001";
     private static final String SESSION_ID = "session-abort-001";
     private static final String WORKER_ID = "worker-abort-001";
     private static final String USER_ID = "user-abort-001";
+    private static final String TENANT_ID = "tenant-abort-001";
 
     @BeforeEach
     void setUp() {
@@ -47,6 +55,7 @@ class ClaudeTaskServiceAbortGuardTest {
         workerService = mock(ClaudeWorkerService.class);
         txTemplate = mock(TransactionTemplate.class);
         publisher = mock(ApplicationEventPublisher.class);
+        sessionEntityRepository = mock(SessionEntityRepository.class);
 
         var sessionManager = mock(SessionManager.class);
         var agentTeamsConfigService = mock(AgentTeamsConfigService.class);
@@ -77,6 +86,9 @@ class ClaudeTaskServiceAbortGuardTest {
             var field = ClaudeTaskService.class.getDeclaredField("streamRelay");
             field.setAccessible(true);
             field.set(service, streamRelay);
+            var sessionRepositoryField = ClaudeTaskService.class.getDeclaredField("sessionEntityRepository");
+            sessionRepositoryField.setAccessible(true);
+            sessionRepositoryField.set(service, sessionEntityRepository);
         } catch (Exception e) {
             throw new RuntimeException("Failed to inject streamRelay", e);
         }
@@ -139,6 +151,12 @@ class ClaudeTaskServiceAbortGuardTest {
             org.junit.jupiter.api.Assertions.assertEquals("FAILED", entity.getStatus());
             org.junit.jupiter.api.Assertions.assertEquals("real error", entity.getErrorMessage());
             verify(taskRepository).save(entity);
+            verify(publisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                    TASK_ID.equals(event.getTaskId())
+                            && "RUNNING".equals(event.getPreviousStatus())
+                            && "FAILED".equals(event.getStatus())
+                            && TENANT_ID.equals(event.getTenantId())
+                            && Boolean.TRUE.equals(event.getRecoverable())));
         }
 
         @Test
@@ -154,6 +172,63 @@ class ClaudeTaskServiceAbortGuardTest {
             org.junit.jupiter.api.Assertions.assertEquals("FAILED", entity.getStatus());
             verify(taskRepository).save(entity);
         }
+    }
+
+    @Test
+    void resetToRunningPublishesNonTerminalRecoveryTransition() {
+        ClaudeTaskEntity entity = createRunningTask();
+        entity.setStatus("FAILED");
+        entity.setErrorMessage("temporary stream failure");
+        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.resetToRunning(TASK_ID);
+
+        org.junit.jupiter.api.Assertions.assertEquals("RUNNING", entity.getStatus());
+        org.junit.jupiter.api.Assertions.assertNull(entity.getErrorMessage());
+        verify(publisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                TASK_ID.equals(event.getTaskId())
+                        && "FAILED".equals(event.getPreviousStatus())
+                        && "RUNNING".equals(event.getStatus())
+                        && event.getRecoverable() == null));
+    }
+
+    @Test
+    void definitiveTerminalEventFallsBackToSessionTenantForLegacyTask() {
+        ClaudeTaskEntity entity = createRunningTask();
+        entity.setTenantId(null);
+        SessionEntity session = new SessionEntity();
+        session.setId(SESSION_ID);
+        session.setTenantId("tenant-from-session");
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
+        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.completeTask(TASK_ID, "worker-task-1", "claude-session-1",
+                "done", null, null, null, null, null, null);
+
+        assertEquals("tenant-from-session", entity.getTenantId());
+        verify(publisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                TASK_ID.equals(event.getTaskId())
+                        && "tenant-from-session".equals(event.getTenantId())
+                        && Boolean.FALSE.equals(event.getRecoverable())));
+    }
+
+    @Test
+    void definitiveTerminalEventWithoutAnyTenantFailsClosed() {
+        ClaudeTaskEntity entity = createRunningTask();
+        entity.setTenantId(null);
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.empty());
+        when(taskRepository.findByTaskId(TASK_ID)).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(null);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.completeTask(TASK_ID, "worker-task-1", "claude-session-1",
+                        "done", null, null, null, null, null, null));
+
+        assertTrue(error.getMessage().startsWith("CLAUDE_TASK_TENANT_MISSING"));
+        verify(publisher, never()).publishEvent(any(TaskStatusChangeEvent.class));
     }
 
     // -----------------------------------------------------------------------
@@ -246,6 +321,7 @@ class ClaudeTaskServiceAbortGuardTest {
         entity.setSessionId(SESSION_ID);
         entity.setWorkerId(WORKER_ID);
         entity.setUserId(USER_ID);
+        entity.setTenantId(TENANT_ID);
         entity.setStatus("RUNNING");
         entity.setCwd("D:\\projects");
         return entity;
@@ -255,6 +331,7 @@ class ClaudeTaskServiceAbortGuardTest {
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
         worker.setWorkerId(WORKER_ID);
         worker.setUserId(USER_ID);
+        worker.setTenantId(TENANT_ID);
         worker.setStatus("ONLINE");
         return worker;
     }

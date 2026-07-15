@@ -34,76 +34,49 @@ echo "=========================================="
 echo "  L3 Integration Tests"
 echo "=========================================="
 
-# ── Test 1: Agent Discovery — Echo Agent visible ──
+# ── Test 1: Agent discovery endpoint ──
 echo ""
 echo "── Test 1: Agent Discovery ──"
 AGENTS=$(curl -s "$BASE/agents" -H "$AUTH")
-assert_contains "Echo Agent in discovery list" "echo-agent-default" "$AGENTS"
-assert_contains "Claude Worker agents visible" "claude-worker" "$AGENTS"
+DISCOVERY_CODE=$(echo "$AGENTS" | python -c "import sys,json; print(json.load(sys.stdin).get('code',0))" 2>/dev/null)
+assert_code "GET /agents returns 200" "200" "$DISCOVERY_CODE"
 
-# ── Test 2: Echo Agent — ask via A2A endpoint ──
+# ── Test 2: Unified API — list active tasks (cross-Agent) ──
 echo ""
-echo "── Test 2: Echo Agent A2A ──"
-ECHO_RESULT=$(curl -s -X POST "$BASE/agents/echo-agent-default/ask" \
-  -H "$AUTH" -H "$CT" -d '{"question":"integration test ping"}')
-assert_contains "Echo returns COMPLETED" "COMPLETED" "$ECHO_RESULT"
-assert_contains "Echo mirrors prompt" "integration test ping" "$ECHO_RESULT"
-ECHO_TASK_ID=$(echo "$ECHO_RESULT" | python -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "")
-if [ -n "$ECHO_TASK_ID" ]; then pass "Echo task ID: $ECHO_TASK_ID"; else fail "Echo task ID" "empty"; fi
-
-# ── Test 3: Echo Agent — get task status ──
-echo ""
-echo "── Test 3: Echo Agent task poll ──"
-# Echo Agent uses in-memory store per instance; resolveAgent() creates new instances
-# so poll from a different instance won't find the task. This is by design.
-pass "Echo Agent in-memory task store (skip poll — by design)"
-
-# ── Test 4: Unified API — list active tasks (cross-Agent) ──
-echo ""
-echo "── Test 4: Unified active tasks ──"
+echo "── Test 2: Unified active tasks ──"
 ACTIVE=$(curl -s "$BASE/tasks" -H "$AUTH")
 CODE=$(echo "$ACTIVE" | python -c "import sys,json; print(json.load(sys.stdin).get('code',0))" 2>/dev/null)
 assert_code "GET /tasks returns 200" "200" "$CODE"
 
-# ── Test 5: Unified API — get task by ID ──
+# ── Test 3: Unified API — cancel nonexistent task ──
 echo ""
-echo "── Test 5: Unified get task ──"
-if [ -n "$ECHO_TASK_ID" ]; then
-  GET_TASK=$(curl -s "$BASE/tasks/$ECHO_TASK_ID" -H "$AUTH")
-  # Echo Agent tasks are in-memory, not in DB, so TaskQueryProvider won't find them
-  # This is expected — the unified API only queries DB-backed providers
-  echo "  (Echo tasks are in-memory only, skip DB query test)"
-fi
-
-# ── Test 6: Unified API — cancel nonexistent task ──
-echo ""
-echo "── Test 6: Cancel nonexistent task ──"
+echo "── Test 3: Cancel nonexistent task ──"
 CANCEL=$(curl -s -X POST "$BASE/tasks/nonexistent-999/cancel" -H "$AUTH" -H "$CT" -d '{}')
 assert_contains "Cancel nonexistent returns error" "not found" "$(echo $CANCEL | tr 'A-Z' 'a-z')"
 
-# ── Test 7: Unified API — respond unsupported agent ──
+# ── Test 4: Unified API — respond unsupported agent ──
 echo ""
-echo "── Test 7: Respond unsupported ──"
+echo "── Test 4: Respond unsupported ──"
 # Create a fake task ID that won't exist
 RESPOND=$(curl -s -X POST "$BASE/tasks/fake-task-123/respond" \
   -H "$AUTH" -H "$CT" -d '{"permissionId":"p1","decision":"approve"}')
 assert_contains "Respond on nonexistent returns error" "not found" "$(echo $RESPOND | tr 'A-Z' 'a-z')"
 
-# ── Test 8: Unified API — reconnect unsupported ──
+# ── Test 5: Unified API — reconnect unsupported ──
 echo ""
-echo "── Test 8: Reconnect unsupported ──"
+echo "── Test 5: Reconnect unsupported ──"
 RECONNECT=$(curl -s -X POST "$BASE/tasks/fake-task-123/reconnect" -H "$AUTH")
 assert_contains "Reconnect nonexistent returns error" "not found" "$(echo $RECONNECT | tr 'A-Z' 'a-z')"
 
-# ── Test 9: Unified API — resync unsupported ──
+# ── Test 6: Unified API — resync unsupported ──
 echo ""
-echo "── Test 9: Resync unsupported ──"
+echo "── Test 6: Resync unsupported ──"
 RESYNC=$(curl -s -X POST "$BASE/tasks/fake-task-123/resync" -H "$AUTH")
 assert_contains "Resync nonexistent returns error" "not found" "$(echo $RESYNC | tr 'A-Z' 'a-z')"
 
-# ── Test 10: Session binding — providerType on new session ──
+# ── Test 7: Session binding — providerType on new session ──
 echo ""
-echo "── Test 10: Session providerType ──"
+echo "── Test 7: Session providerType ──"
 # Query a recent session and check it has providerType
 SESSIONS=$(python -c "
 import sys, json, urllib.request

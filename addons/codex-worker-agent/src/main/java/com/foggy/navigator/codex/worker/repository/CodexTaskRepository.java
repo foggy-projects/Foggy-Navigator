@@ -54,6 +54,8 @@ public interface CodexTaskRepository extends JpaRepository<CodexTaskEntity, Long
 
     List<CodexTaskEntity> findByUserIdOrderByCreatedAtDesc(String userId);
 
+    List<CodexTaskEntity> findByUserIdAndTenantIdOrderByCreatedAtDesc(String userId, String tenantId);
+
     Page<CodexTaskEntity> findByUserIdOrderByCreatedAtDesc(String userId, Pageable pageable);
 
     List<CodexTaskEntity> findByDirectoryIdAndUserIdOrderByCreatedAtDesc(String directoryId, String userId);

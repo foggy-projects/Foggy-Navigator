@@ -8,7 +8,7 @@ Foggy Navigator 是一个面向企业研发与业务自动化场景的多 Agent 
 
 当前系统主轴可以概括为三层：
 
-1. **统一入口**：提供登录、会话、任务、Workers、跨项目任务、监控和设置页面。
+1. **统一入口**：提供登录、会话、任务、Workers、跨项目任务和设置页面。
 2. **Agent 编排平台**：负责会话管理、任务分发、Agent 发现、模型配置、权限治理和实时事件推送。
 3. **Worker 执行网络**：连接 Claude、Codex、Gemini、LangGraph 业务 Worker 等执行端，把具体任务落到远程机器、项目目录或业务流程中。
 
@@ -22,7 +22,7 @@ Foggy Navigator 是一个面向企业研发与业务自动化场景的多 Agent 
 
 表现层
   -> packages/navigator-frontend
-  -> 登录、Workers、会话、任务、跨项目、监控、设置、用户管理
+  -> 登录、Workers、会话、任务、跨项目、设置、用户管理
 
 平台服务层
   -> launcher
@@ -31,10 +31,7 @@ Foggy Navigator 是一个面向企业研发与业务自动化场景的多 Agent 
 核心业务层
   -> session-module                 会话、消息、任务、SSE、共享访问
   -> user-auth-module               登录、用户、角色、API Key
-  -> metadata-config-module         Git、LLM、凭证、记忆、Worker 等配置写入
-  -> metadata-query-module          平台配置查询
-  -> monitoring-module              监控事件与统计
-  -> tutor-agent                    默认引导型 Agent
+  -> metadata-config-module         Git、LLM、凭证、记忆、Worker 等平台配置
 
 Agent 与执行层
   -> agent-framework                Agent 调用、工具、Skill、上下文编排底座
@@ -58,6 +55,8 @@ Agent 与执行层
   -> 本地或云端 LLM 服务            OpenAI 兼容模型、Claude、Gemini 等
 ```
 
+`metadata-config-module` 继续作为活跃的平台配置能力。旧 `metadata-query-module` 已在 1.4.2 dev 阶段物理退役，不再是当前部署或启动依赖；LangGraph FSScript 不属于该退役范围。
+
 ## 3. 核心能力架构
 
 ### 3.1 Web 控制台
@@ -72,7 +71,6 @@ Web 控制台是平台的主要使用入口，面向研发用户、管理员和�
 | 跨项目 | 把复杂目标拆成多阶段、多目录、多 Agent 的可审核流程 |
 | 设置 | 管理 Git Provider、LLM 模型、凭证、记忆、Worker 和助手配置 |
 | 用户 | 管理用户、角色、状态和 API Key |
-| 监控 | 查看运行事件、错误统计和通知链路 |
 
 ### 3.2 Agent 编排与任务治理
 
@@ -110,11 +108,11 @@ Worker 是执行任务的远程节点，通常运行在用户自己的机器、�
 - LLM 模型配置、连通性测试和 Agent 模型覆盖。
 - Git Provider、凭证、记忆和 Worker 配置管理。
 - Worker 健康检查、进程查看和指定进程终止。
-- 监控事件、错误统计、SSE 通知和任务助手通知。
+- 应用日志、健康检查、有限指标、SSE 通知、任务助手通知和安全审计。
 
 ## 4. 对外提供的能力
 
-Foggy Navigator 不只提供内部 Web UI，也提供面向外部系统的集成能力。
+Foggy Navigator 当前首先服务于 dev/internal 使用，同时保留面向上游系统的集成能力。外部运行模式必须通过显式、默认关闭的开关启用，并在身份、任务作用域、Worker readiness 和审计门禁完成前保持关闭。
 
 ### 4.1 Open API
 
@@ -299,7 +297,7 @@ docker compose up -d nginx
 3. 配置凭证、记忆和默认模型策略。
 4. 创建或导入用户。
 5. 创建 Worker Token 或注册 Worker。
-6. 验证 Workers、会话、任务和监控页面是否可用。
+6. 验证 Workers、会话、任务页面以及日志、健康检查和通知链路是否可用。
 
 ## 7. 用户侧 Worker 安装与接入
 
@@ -455,6 +453,6 @@ Claude Worker 可以把 `AGENT_WORKER_ANTHROPIC_BASE_URL` 指向本地 Proxy，�
 - [系统架构概览](./00-system-overview.md)
 - [功能架构说明](./02-modules/functional-architecture.md)
 - [工作区与 Worker 中心](./02-modules/worker-workspace-center.md)
-- [监控、通知与开放集成](./02-modules/observability-notification-integration.md)
+- [通知、基础观测与开放集成](./02-modules/observability-notification-integration.md)
 - [员工工具安装指南](./employee-install-guide.md)
 - [Docker 环境说明](../docker/README.md)

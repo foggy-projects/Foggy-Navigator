@@ -80,9 +80,24 @@ agent:
 
 # 凭证加密配置
 navigator:
+  external:
+    # Internal-only by default. Opening the public API surface requires an explicit opt-in.
+    enabled: ${NAVIGATOR_EXTERNAL_ENABLED:false}
+  worker-gateway:
+    # Headerless task-token access is only an internal-dev compatibility mode.
+    external-enabled: ${NAVIGATOR_WORKER_GATEWAY_EXTERNAL_ENABLED:false}
+  business-agent:
+    task-token:
+      # Capability tokens are short-lived; the implementation hard-caps TTL at 60 minutes.
+      ttl: ${NAVIGATOR_TASK_TOKEN_TTL:PT30M}
+      max-ttl: ${NAVIGATOR_TASK_TOKEN_MAX_TTL:PT60M}
   security:
     credential-key: ${NAVIGATOR_CREDENTIAL_KEY:default-dev-key-change-in-prod}
     credential-salt: ${NAVIGATOR_CREDENTIAL_SALT:abcdef0123456789}
+  codex:
+    runtime:
+      # Empty by default: compatible Codex CLI patch versions may coexist.
+      expected-cli-version: ${NAVIGATOR_CODEX_RUNTIME_EXPECTED_CLI_VERSION:}
 
 # Foggy Navigator 配置
 foggy:

@@ -17,7 +17,7 @@ import com.foggy.navigator.claude.worker.model.dto.MessageSyncReport;
 import com.foggy.navigator.claude.worker.model.dto.ResyncResult;
 import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
 import com.foggy.navigator.claude.worker.model.dto.SessionSearchResultDTO;
-import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
+import com.foggy.navigator.claude.worker.model.command.ClaudeTaskCreateCommand;
 import com.foggy.navigator.claude.worker.model.entity.AgentTeamsConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
@@ -26,7 +26,6 @@ import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
-import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
@@ -60,6 +59,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -133,7 +133,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      * 创建任务
      */
     @Transactional
-    public TaskDTO createTask(String userId, String tenantId, CreateTaskForm form) {
+    public DispatchTaskDTO createTask(String userId, String tenantId, ClaudeTaskCreateCommand form) {
         // 1. 验证 Worker 归属
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(form.getWorkerId());
         if (!worker.getUserId().equals(userId)) {
@@ -210,6 +210,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         entity.setSessionId(sessionId);
         entity.setWorkerId(form.getWorkerId());
         entity.setUserId(userId);
+        entity.setTenantId(normalizeTenantId(tenantId));
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
@@ -270,14 +271,14 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                         navigatorApiKey, navigatorApiBase, extraEnvVars))
                 .build());
 
-        return toDTO(entity);
+        return toDispatchDTO(entity);
     }
 
     /**
      * 恢复任务（resume Claude Code 会话）
      */
     @Transactional
-    public TaskDTO resumeTask(String userId, String tenantId, ResumeTaskForm form) {
+    public DispatchTaskDTO resumeTask(String userId, String tenantId, ResumeTaskForm form) {
         // Resume 必须指定 claudeSessionId 和 sessionId
         if (form.getClaudeSessionId() == null || form.getClaudeSessionId().isEmpty()) {
             throw new IllegalArgumentException("resume 操作必须指定 claudeSessionId");
@@ -373,6 +374,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         entity.setSessionId(sessionId);
         entity.setWorkerId(form.getWorkerId());
         entity.setUserId(userId);
+        entity.setTenantId(normalizeTenantId(tenantId));
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
@@ -430,7 +432,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                         navigatorApiKey, navigatorApiBase, extraEnvVars))
                 .build());
 
-        return toDTO(entity);
+        return toDispatchDTO(entity);
     }
 
     /**
@@ -458,6 +460,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         entity.setSessionId(sessionId);
         entity.setWorkerId(workerId);
         entity.setUserId(userId);
+        entity.setTenantId(resolveTaskTenantId(entity));
         entity.setPrompt(truncate(prompt, 200));
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
@@ -506,57 +509,15 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     /**
      * 获取任务状态
      */
-    public TaskDTO getTask(String userId, String taskId) {
+    public DispatchTaskDTO getTask(String userId, String taskId) {
         ClaudeTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-        return toDTO(entity);
+        return toDispatchDTO(entity);
     }
 
-    /**
-     * 列出用户所有进行中的任务（RUNNING + AWAITING_PERMISSION），额外填充 directoryName
-     */
-    public List<TaskDTO> listActiveTasks(String userId) {
-        List<ClaudeTaskEntity> entities = taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
-                userId, List.of("RUNNING", "AWAITING_PERMISSION"));
-        return entities.stream().map(e -> {
-            TaskDTO dto = toDTO(e);
-            if (e.getDirectoryId() != null) {
-                workingDirectoryRepository.findByDirectoryId(e.getDirectoryId())
-                        .ifPresent(dir -> dto.setDirectoryName(dir.getProjectName()));
-            }
-            return dto;
-        }).toList();
-    }
-
-    /**
-     * 列出用户所有待回复的任务（interactionState = AWAITING_REPLY），额外填充 directoryName
-     */
-    public List<TaskDTO> listAwaitingReplyTasks(String userId) {
-        // 1. 从 SessionEntity 查询所有 AWAITING_REPLY 状态的 sessionId
-        List<String> awaitingSessionIds = findSessionIdsByInteractionStateDirect(
-                userId, "AWAITING_REPLY");
-
-        if (awaitingSessionIds.isEmpty()) {
-            return List.of();
-        }
-
-        // 2. 查询这些 session 的最新任务（按 sessionId 分组，每组取最新的任务）
-        List<ClaudeTaskEntity> latestTasks = taskRepository.findLatestBySessionIdIn(awaitingSessionIds);
-
-        // 3. 转换为 DTO 并填充 directoryName
-        return latestTasks.stream().map(e -> {
-            TaskDTO dto = toDTO(e);
-            if (e.getDirectoryId() != null) {
-                workingDirectoryRepository.findByDirectoryId(e.getDirectoryId())
-                        .ifPresent(dir -> dto.setDirectoryName(dir.getProjectName()));
-            }
-            return dto;
-        }).toList();
-    }
-
-    public List<TaskDTO> listTasks(String userId) {
+    public List<DispatchTaskDTO> listTasks(String userId) {
         return taskRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-                .map(this::toDTO)
+                .map(this::toDispatchDTO)
                 .toList();
     }
 
@@ -606,21 +567,10 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         }
 
         // 获取这些 session 的所有任务
-        List<TaskDTO> tasks = taskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(sessionIds, userId)
-                .stream().map(this::toDTO).toList();
+        List<DispatchTaskDTO> tasks = taskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(sessionIds, userId)
+                .stream().map(this::toDispatchDTO).toList();
         return SessionPageDTO.builder()
                 .content(tasks).totalSessions(totalSessions).page(page).size(size).build();
-    }
-
-    /**
-     * 按目录列出任务（内部 DTO）
-     * @deprecated 前端迁移到统一 API 后，改用 SPI 方法 {@link #listTasksByDirectory(String, String)}
-     */
-    @Deprecated
-    public List<TaskDTO> listTasksByDirectoryDTO(String userId, String directoryId) {
-        return taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId).stream()
-                .map(this::toDTO)
-                .toList();
     }
 
     /**
@@ -666,8 +616,8 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             return SessionPageDTO.builder()
                     .content(List.of()).totalSessions(totalSessions).page(page).size(size).build();
         }
-        List<TaskDTO> tasks = taskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(sessionIds, userId)
-                .stream().map(this::toDTO).toList();
+        List<DispatchTaskDTO> tasks = taskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(sessionIds, userId)
+                .stream().map(this::toDispatchDTO).toList();
         return SessionPageDTO.builder()
                 .content(tasks).totalSessions(totalSessions).page(page).size(size).build();
     }
@@ -855,14 +805,14 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
      *
      * @param dedupKey      去重键 (hash of userId + agentId + prompt)
      * @param windowSeconds 时间窗口（秒），只查找此时间段内的任务
-     * @return 如果存在近期重复任务则返回对应 TaskDTO
+     * @return 如果存在近期重复任务则返回统一任务视图
      */
     @Transactional(readOnly = true)
-    public Optional<TaskDTO> findRecentByDedupKey(String dedupKey, int windowSeconds) {
+    public Optional<DispatchTaskDTO> findRecentByDedupKey(String dedupKey, int windowSeconds) {
         if (dedupKey == null) return Optional.empty();
         LocalDateTime cutoff = LocalDateTime.now().minusSeconds(windowSeconds);
         return taskRepository.findFirstByDedupKeyAndCreatedAtAfterOrderByCreatedAtDesc(dedupKey, cutoff)
-                .map(this::toDTO);
+                .map(this::toDispatchDTO);
     }
 
     /**
@@ -1252,6 +1202,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             entity.setSessionId(sessionId);
             entity.setWorkerId(workerId);
             entity.setUserId(userId);
+            entity.setTenantId(normalizeTenantId(tenantId));
             entity.setPrompt(prompt);
             entity.setCwd(cwd);
             entity.setDirectoryId(directoryId);
@@ -2454,16 +2405,72 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
 
     private void publishStatusChange(ClaudeTaskEntity entity, String previousStatus) {
         String interactionState = deriveInteractionState(entity.getStatus());
+        Boolean recoverable = terminalRecoverability(entity.getStatus());
+        String tenantId = resolveTaskTenantId(entity);
+        if (Boolean.FALSE.equals(recoverable) && !StringUtils.hasText(tenantId)) {
+            throw new IllegalStateException(
+                    "CLAUDE_TASK_TENANT_MISSING: refusing definitive terminal event for task "
+                            + entity.getTaskId());
+        }
         eventPublisher.publishEvent(TaskStatusChangeEvent.builder()
                 .taskId(entity.getTaskId())
                 .sessionId(entity.getSessionId())
                 .userId(entity.getUserId())
+                .tenantId(tenantId)
                 .agentId(AGENT_ID)
                 .status(entity.getStatus())
                 .previousStatus(previousStatus)
                 .errorMessage(entity.getErrorMessage())
                 .interactionState(interactionState)
+                .recoverable(recoverable)
                 .build());
+    }
+
+    private String resolveTaskTenantId(ClaudeTaskEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        String tenantId = normalizeTenantId(entity.getTenantId());
+        if (tenantId != null) {
+            return tenantId;
+        }
+        if (sessionEntityRepository != null && StringUtils.hasText(entity.getSessionId())) {
+            tenantId = sessionEntityRepository.findById(entity.getSessionId())
+                    .map(SessionEntity::getTenantId)
+                    .map(this::normalizeTenantId)
+                    .orElse(null);
+        }
+        if (tenantId == null && StringUtils.hasText(entity.getWorkerId())) {
+            try {
+                ClaudeWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
+                tenantId = worker == null ? null : normalizeTenantId(worker.getTenantId());
+            } catch (RuntimeException e) {
+                log.debug("Unable to resolve tenant from Worker for Claude task {}: {}",
+                        entity.getTaskId(), e.getMessage());
+            }
+        }
+        if (tenantId != null) {
+            entity.setTenantId(tenantId);
+        }
+        return tenantId;
+    }
+
+    private String normalizeTenantId(String tenantId) {
+        return StringUtils.hasText(tenantId) ? tenantId.trim() : null;
+    }
+
+    private Boolean terminalRecoverability(String status) {
+        if ("FAILED".equals(status)) {
+            // FAILED can be reset/resynced while the Claude CLI session is
+            // still alive, so it must never create a permanent tombstone.
+            return Boolean.TRUE;
+        }
+        if ("COMPLETED".equals(status) || "ABORTED".equals(status)
+                || "REJECTED".equals(status) || "TIMED_OUT".equals(status)
+                || "CANCELLED".equals(status) || "CANCELED".equals(status)) {
+            return Boolean.FALSE;
+        }
+        return null;
     }
 
     private String deriveInteractionState(String taskStatus) {
@@ -2476,6 +2483,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     }
 
     private ClaudeTaskEntity persistTask(ClaudeTaskEntity entity) {
+        // Backfill legacy rows whenever they are next written. New create,
+        // resume and sync paths already capture tenantId directly.
+        resolveTaskTenantId(entity);
         ClaudeTaskEntity saved = taskRepository.save(entity);
         syncSessionTask(saved);
         syncSessionProjection(saved);
@@ -2497,8 +2507,9 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         sessionTask.setWorkerId(entity.getWorkerId());
         sessionTask.setUserId(entity.getUserId());
         sessionTask.setAgentId(agentId);
-        // ClaudeTaskEntity 没有 tenantId 字段，从 SessionEntity 获取
-        if (sessionEntityRepository != null && entity.getSessionId() != null) {
+        sessionTask.setTenantId(normalizeTenantId(entity.getTenantId()));
+        if (sessionTask.getTenantId() == null
+                && sessionEntityRepository != null && entity.getSessionId() != null) {
             sessionEntityRepository.findById(entity.getSessionId())
                     .ifPresent(session -> sessionTask.setTenantId(session.getTenantId()));
         }
@@ -2779,12 +2790,6 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         abortTask(taskId);
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public void cancelTask(String taskId, String userId) {
-        cancelTaskDirect(taskId, userId);
-    }
-
     @Override
     public Optional<DispatchTaskDTO> getTaskById(String taskId) {
         return taskRepository.findByTaskId(taskId).map(this::toDispatchDTO);
@@ -2813,8 +2818,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
     @Override
     public DispatchTaskDTO createTaskDirect(java.util.Map<String, Object> params,
                                              String userId, String tenantId) {
-        // 构造旧 CreateTaskForm，复用完整的 createTask 路径（含 session 创建 + 事件发布）
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setAgentId((String) params.get("agentId"));
         form.setWorkerId((String) params.get("workerId"));
         form.setPrompt((String) params.get("prompt"));
@@ -2830,9 +2834,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
         }
-        TaskDTO taskDTO = createTask(userId, tenantId, form);
-        // 转为统一 DispatchTaskDTO
-        return getTaskById(taskDTO.getTaskId()).orElseThrow();
+        return createTask(userId, tenantId, form);
     }
 
     @Override
@@ -2997,7 +2999,7 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         if (claudeSessionId == null || claudeSessionId.isEmpty()) {
             // 首轮回退后 claudeSessionId 已被清空，降级为 createTask（新建 CLI 会话，复用 sessionId）
             log.info("resumeTask fallback to createTask: claudeSessionId is null for session {}", sessionId);
-            CreateTaskForm createForm = new CreateTaskForm();
+            ClaudeTaskCreateCommand createForm = new ClaudeTaskCreateCommand();
             createForm.setAgentId(form.getAgentId());
             createForm.setWorkerId(form.getWorkerId());
             createForm.setPrompt(form.getPrompt());
@@ -3012,13 +3014,11 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
             createForm.setMaxTurns(form.getMaxTurns());
             createForm.setAgentTeamsJson(form.getAgentTeamsJson());
             createForm.setAgentTeamsConfigId(form.getAgentTeamsConfigId());
-            TaskDTO taskDTO = createTask(userId, tenantId, createForm);
-            return getTaskById(taskDTO.getTaskId()).orElseThrow();
+            return createTask(userId, tenantId, createForm);
         }
 
         form.setClaudeSessionId(claudeSessionId);
-        TaskDTO taskDTO = resumeTask(userId, tenantId, form);
-        return getTaskById(taskDTO.getTaskId()).orElseThrow();
+        return resumeTask(userId, tenantId, form);
     }
 
     // deleteTask(String userId, String taskId) is already defined above at line ~986
@@ -3053,24 +3053,11 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
         return TaskPageResult.of(result.getContent(), result.getTotalSessions(), result.getPage(), result.getSize());
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Object listTasksPaged(String userId, int page, int size, String state) {
-        return listTaskPage(userId, page, size, state);
-    }
-
     @Override
     public TaskSearchResult searchSessionPage(String userId, String keyword, String workerId,
                                               String directoryId, int page, int size) {
         SessionSearchResultDTO.Page result = searchSessionsPage(userId, keyword, workerId, directoryId, page, size);
         return TaskSearchResult.of(result.getResults(), result.getTotal(), result.getPage(), result.getSize());
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Object searchSessions(String userId, String keyword, String workerId,
-                                 String directoryId, int page, int size) {
-        return searchSessionPage(userId, keyword, workerId, directoryId, page, size);
     }
 
     @Override
@@ -3085,13 +3072,6 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                                                 int page, int size, String state) {
         SessionPageDTO result = listTasksByDirectorySession(userId, directoryId, page, size, state);
         return TaskPageResult.of(result.getContent(), result.getTotalSessions(), result.getPage(), result.getSize());
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Object listTasksByDirectoryPaged(String userId, String directoryId,
-                                            int page, int size, String state) {
-        return listDirectoryTaskPage(userId, directoryId, page, size, state);
     }
 
     static Map<String, String> normalizeTaskResponseAnswers(Object value) {
@@ -3205,40 +3185,4 @@ public class ClaudeTaskService implements TaskLookupProvider, TaskCommandProvide
                 .orElse(null);
     }
 
-    private TaskDTO toDTO(ClaudeTaskEntity entity) {
-        return TaskDTO.builder()
-                .taskId(entity.getTaskId())
-                .workerTaskId(entity.getWorkerTaskId())
-                .sessionId(entity.getSessionId())
-                .workerId(entity.getWorkerId())
-                .prompt(entity.getPrompt())
-                .cwd(entity.getCwd())
-                .directoryId(entity.getDirectoryId())
-                .status(entity.getStatus())
-                .claudeSessionId(entity.getClaudeSessionId())
-                .costUsd(entity.getCostUsd())
-                .inputTokens(entity.getInputTokens())
-                .outputTokens(entity.getOutputTokens())
-                .durationMs(entity.getDurationMs())
-                .numTurns(entity.getNumTurns())
-                .model(entity.getModel())
-                .modelConfigId(entity.getModelConfigId())
-                .errorMessage(entity.getErrorMessage())
-                .resultText(entity.getResultText())
-                .contextId(entity.getContextId())
-                .checkpoints(entity.getCheckpoints())
-                .lastAckedSeq(entity.getLastAckedSeq())
-                .lastOutputAt(entity.getLastOutputAt())
-                .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
-                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
-                .silentForSeconds(TaskResponseTimeoutSupport.silentForSeconds(
-                        entity.getStatus(), entity.getLastOutputAt(), entity.getCreatedAt(), LocalDateTime.now()))
-                .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
-                .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
-                .source(entity.getSource())
-                .agentTeamsConfigId(entity.getAgentTeamsConfigId())
-                .createdAt(entity.getCreatedAt())
-                .updatedAt(entity.getUpdatedAt())
-                .build();
-    }
 }

@@ -9,6 +9,7 @@ import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppControlCredentialService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.business.agent.service.A2AgentResourceResolver;
+import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenTaskMessagesResponse;
@@ -63,6 +64,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
@@ -668,20 +670,23 @@ class OpenApiControllerMessageMappingTest {
         when(credentialResolver.resolveAccessToken(
                 nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
-        when(taskService.issueOpenApiTaskScopedToken(
+        when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
                 eq("app-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
                 any(),
-                nullable(String.class)))
-                .thenReturn("btt_open_api_1");
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(preparedOpenApiToken("btt_open_api_1"));
         when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
         when(agent.sendTask(any())).thenReturn(A2aTask.builder()
                 .id("lgt_visible_1")
                 .contextId("ctx-1")
-                .metadata(Map.of("sessionId", "worker_session_1"))
+                .metadata(Map.of(
+                        "sessionId", "worker_session_1",
+                        "workerId", "preselected-worker"))
                 .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
                 .build());
 
@@ -692,12 +697,249 @@ class OpenApiControllerMessageMappingTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> runtimeContext = (Map<String, Object>) captor.getValue().getMetadata().get("runtimeContext");
         assertEquals("btt_open_api_1", runtimeContext.get("task_scoped_token"));
+        assertEquals("preselected-worker", runtimeContext.get("worker_id"));
+        assertEquals("bwl_test_01", runtimeContext.get("worker_lease_id"));
         assertFalse(runtimeContext.containsKey("skill_name"));
         verify(taskService).bindOpenApiTaskScopedTokenToWorkerTask(
                 "tenant-1",
                 "btt_open_api_1",
                 "lgt_visible_1",
-                "worker_session_1");
+                "worker_session_1",
+                "preselected-worker",
+                "bwl_test_01");
+    }
+
+    @Test
+    void askAgent_submitsNonBizProviderWithoutWorkerGatewayCapability() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2AgentResourceResolver resourceResolver = mock(A2AgentResourceResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        A2AgentResourceResolver.ResolvedAgentResource agentResource =
+                new A2AgentResourceResolver.ResolvedAgentResource(
+                        "agent-1",
+                        ResourceOwnerType.CLIENT_APP,
+                        "app-1",
+                        "app-1",
+                        "agent-1",
+                        null,
+                        null,
+                        null,
+                        null,
+                        "CLAUDE_CODE",
+                        null,
+                        null,
+                        null,
+                        null,
+                        "model-claude",
+                        null,
+                        null,
+                        "AGENT:CLIENT_APP");
+        A2AgentResourceResolver.ResolvedModelResource modelResource =
+                new A2AgentResourceResolver.ResolvedModelResource(
+                        "model-claude",
+                        null,
+                        null,
+                        LlmModelCategory.GENERAL,
+                        "claude-sonnet",
+                        "MODEL_CONFIG_DEFAULT",
+                        "CLAUDE_CODE",
+                        "AGENT_DEFAULT_MODEL:DEFAULT_MODEL_GRANT");
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                taskService,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                defaultRouteService(),
+                resourceResolver);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("提交 Claude 任务");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(resourceResolver.resolveRequiredAgent(
+                "tenant-1", "app-1", "upstream-a", "agent-1"))
+                .thenReturn(agentResource);
+        when(resourceResolver.resolveRequiredModelForAgent(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq(agentResource),
+                nullable(String.class),
+                nullable(String.class),
+                eq(LlmModelCategory.GENERAL)))
+                .thenReturn(modelResource);
+        when(taskService.prepareOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class),
+                argThat(selection -> "CLAUDE_CODE".equals(selection.getWorkerBackend()))))
+                .thenReturn(null);
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("claude-task-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNotNull(result.getData());
+        var messageCaptor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(messageCaptor.capture());
+        assertFalse(messageCaptor.getValue().getMetadata().containsKey("runtimeContext"));
+        verify(taskService, never()).bindOpenApiTaskScopedTokenToWorkerTask(
+                any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void askAgent_revokesOpenApiBusinessRuntimeTokenWhenWorkerTaskBindingFails() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("创建车辆并走审批");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.prepareOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(preparedOpenApiToken("btt_bind_failure"));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("lgt_bind_failure")
+                .contextId("ctx-1")
+                .metadata(Map.of(
+                        "sessionId", "worker_session_1",
+                        "workerId", "preselected-worker"))
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+        doThrow(new IllegalStateException("worker task token binding rejected"))
+                .when(taskService)
+                .bindOpenApiTaskScopedTokenToWorkerTask(
+                        "tenant-1",
+                        "btt_bind_failure",
+                        "lgt_bind_failure",
+                        "worker_session_1",
+                        "preselected-worker",
+                        "bwl_test_01");
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("worker task token binding rejected"));
+        verify(taskService).revokeOpenApiTaskScopedToken(
+                "tenant-1",
+                "btt_bind_failure",
+                "system",
+                "open api task token binding failed");
+    }
+
+    @Test
+    void askAgent_revokesOpenApiBusinessRuntimeTokenBeforeRethrowingUnexpectedSubmitFailure() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("触发未知提交异常");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.prepareOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(preparedOpenApiToken("btt_unexpected_submit_failure"));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenThrow(new UnsupportedOperationException("unexpected submit failure"));
+
+        UnsupportedOperationException failure = assertThrows(
+                UnsupportedOperationException.class,
+                () -> controller.askAgent("agent-1", form, request));
+
+        assertEquals("unexpected submit failure", failure.getMessage());
+        verify(taskService).revokeOpenApiTaskScopedToken(
+                "tenant-1",
+                "btt_unexpected_submit_failure",
+                "system",
+                "open api task submission failed");
+    }
+
+    @Test
+    void askAgent_revokesOpenApiBusinessRuntimeTokenWhenSubmitReturnsTaskWithoutId() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("返回缺少任务编号的任务");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.prepareOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(preparedOpenApiToken("btt_missing_task_id"));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        var result = controller.askAgent("agent-1", form, request);
+
+        assertNull(result.getData());
+        assertEquals("open api task submission returned no task id", result.getMsg());
+        verify(taskService).revokeOpenApiTaskScopedToken(
+                "tenant-1",
+                "btt_missing_task_id",
+                "system",
+                "open api task submission returned no task id");
+        verify(taskService, never()).bindOpenApiTaskScopedTokenToWorkerTask(
+                any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -794,14 +1036,15 @@ class OpenApiControllerMessageMappingTest {
         when(credentialResolver.resolveAccessToken(
                 nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
-        when(taskService.issueOpenApiTaskScopedToken(
+        when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
                 eq("app-1"),
                 eq("app-1"),
                 eq("upstream-missing-grant"),
                 eq("agent-1"),
                 any(),
-                nullable(String.class)))
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
                 .thenThrow(new IllegalStateException("Upstream user is not granted access to this Client App"));
         when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
 
@@ -812,7 +1055,7 @@ class OpenApiControllerMessageMappingTest {
         assertTrue(error.getMessage().contains("Upstream user is not granted access to this Client App"));
         verify(agent, never()).sendTask(any());
         verify(taskService, never()).bindOpenApiTaskScopedTokenToWorkerTask(
-                any(), any(), any(), any());
+                any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -846,19 +1089,21 @@ class OpenApiControllerMessageMappingTest {
                         "app-1",
                         true,
                         false));
-        when(taskService.issueOpenApiTaskScopedToken(
+        when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
                 eq("app-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("tms.navigator.agent"),
                 any(),
-                nullable(String.class)))
-                .thenReturn("btt_open_api_1");
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(preparedOpenApiToken("btt_open_api_1"));
         when(agentResolver.resolveAgent(eq("root-agent"), any())).thenReturn(Optional.of(agent));
         when(agent.sendTask(any())).thenReturn(A2aTask.builder()
                 .id("task-1")
                 .contextId("ctx-1")
+                .metadata(Map.of("workerId", "preselected-worker"))
                 .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
                 .build());
 
@@ -912,19 +1157,21 @@ class OpenApiControllerMessageMappingTest {
         when(credentialResolver.resolveAccessToken(
                 nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
-        when(taskService.issueOpenApiTaskScopedToken(
+        when(taskService.prepareOpenApiTaskScopedToken(
                 eq("tenant-1"),
                 eq("app-1"),
                 eq("app-1"),
                 eq("upstream-a"),
                 eq("agent-1"),
                 any(),
-                nullable(String.class)))
-                .thenReturn("btt_owner_runtime_1");
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(preparedOpenApiToken("btt_owner_runtime_1"));
         when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
         when(agent.sendTask(any())).thenReturn(A2aTask.builder()
                 .id("task-1")
                 .contextId("ctx-1")
+                .metadata(Map.of("workerId", "preselected-worker"))
                 .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
                 .build());
 
@@ -1599,6 +1846,7 @@ class OpenApiControllerMessageMappingTest {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
         BusinessAgentSessionService sessionService = mock(BusinessAgentSessionService.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
         CodingAgentRepository codingAgentRepository = mock(CodingAgentRepository.class);
         OpenApiSessionQueryService sessionQueryService = mock(OpenApiSessionQueryService.class);
         A2aAgent agent = mock(A2aAgent.class);
@@ -1606,6 +1854,7 @@ class OpenApiControllerMessageMappingTest {
                 agentResolver,
                 credentialResolver,
                 sessionService,
+                taskService,
                 codingAgentRepository,
                 sessionQueryService);
         HttpServletRequest request = mock(HttpServletRequest.class);
@@ -1620,6 +1869,16 @@ class OpenApiControllerMessageMappingTest {
                 .thenReturn(Optional.of(credential()));
         when(sessionService.getSession("tenant-1", "app-1", "upstream-a", STANDARD_CONTEXT_ID))
                 .thenReturn(new BusinessAgentSessionDTO());
+        when(taskService.prepareOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                eq(STANDARD_CONTEXT_ID),
+                nullable(String.class),
+                any(BusinessAgentWorkerTaskLaunchRequest.class)))
+                .thenReturn(preparedOpenApiToken("btt_submit_failure"));
         CodingAgentEntity agentEntity = new CodingAgentEntity();
         agentEntity.setAgentId("agent-1");
         agentEntity.setTenantId("tenant-1");
@@ -1632,6 +1891,13 @@ class OpenApiControllerMessageMappingTest {
         when(agent.sendTask(any())).thenThrow(new IllegalStateException(
                 "CONTEXT_RUNTIME_BUSY: contextId " + STANDARD_CONTEXT_ID
                         + " already has active task lgt_45e01f2e4dfd42e9"));
+        doThrow(new IllegalStateException("revocation storage failure"))
+                .when(taskService)
+                .revokeOpenApiTaskScopedToken(
+                        "tenant-1",
+                        "btt_submit_failure",
+                        "system",
+                        "open api task submission failed");
 
         var result = controller.askAgent("agent-1", form, request);
 
@@ -1640,6 +1906,11 @@ class OpenApiControllerMessageMappingTest {
         assertTrue(result.getMsg().contains("lgt_45e01f2e4dfd42e9"));
         verify(sessionService, never()).bindOpenApiSession(
                 any(), any(), any(), any(), any(), any(), any(), any());
+        verify(taskService).revokeOpenApiTaskScopedToken(
+                "tenant-1",
+                "btt_submit_failure",
+                "system",
+                "open api task submission failed");
     }
 
     @Test
@@ -2335,6 +2606,17 @@ class OpenApiControllerMessageMappingTest {
                         null,
                         "WORKING_DIRECTORY:USER_PRIVATE"));
         return resourceResolver;
+    }
+
+    private BusinessAgentTaskService.PreparedOpenApiTaskScopedToken preparedOpenApiToken(
+            String plainToken) {
+        return new BusinessAgentTaskService.PreparedOpenApiTaskScopedToken(
+                plainToken,
+                "tst_test_01",
+                "preselected-worker",
+                "bwl_test_01",
+                "pool-1",
+                "LANGGRAPH_BIZ");
     }
 
     private ResolvedClientAppCredentialDTO credential() {

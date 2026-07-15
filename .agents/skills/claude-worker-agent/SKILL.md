@@ -31,7 +31,7 @@ description: Claude Worker Agent 全栈开发指导（Java 后端 + Python Worke
 统一分派层 (session-module)
   │  TaskDispatchFacade.createTask(request, context)
   │  ├── [A2A 路由] agentId → UnifiedAgentResolver → ClaudeWorkerA2aAgent
-  │  └── [Direct 路由] providerType=claude-worker → TaskQueryProvider.createTaskDirect()
+  │  └── [Direct 路由] providerType=claude-worker → TaskCommandProvider.createTaskDirect()
   │  SessionBindingService.getOrBind() ← 建立/验证 Session ↔ Agent 绑定
   ▼
   返回 DispatchTaskDTO（统一任务视图，含 providerType + logicalAgentId）
@@ -75,7 +75,6 @@ addons/claude-worker-agent/
 ├── src/main/java/com/foggy/navigator/claude/worker/
 │   ├── controller/
 │   │   ├── ClaudeWorkerController.java     # Worker CRUD API
-│   │   ├── ClaudeTaskController.java       # 任务 + 会话配置 API
 │   │   ├── WorkingDirectoryController.java # 工作目录 API
 │   │   ├── FileBrowserController.java      # 文件浏览代理（目录/文件/搜索/diff/ignore）
 │   │   └── SshProxyController.java         # SSH 终端代理
@@ -95,13 +94,13 @@ addons/claude-worker-agent/
 │   │   │   ├── ClaudeTaskEntity.java
 │   │   │   ├── WorkingDirectoryEntity.java  # +directoryType, parentProjectId, worktree 等
 │   │   │   └── ConversationConfigEntity.java
+│   │   ├── command/
+│   │   │   └── ClaudeTaskCreateCommand.java # Provider 内部创建命令，非 HTTP Form
 │   │   ├── dto/
 │   │   │   ├── WorkerDTO.java
-│   │   │   ├── TaskDTO.java
 │   │   │   ├── WorkingDirectoryDTO.java     # +children, directoryType, worktree 等
 │   │   │   └── ConversationConfigDTO.java
 │   │   ├── form/
-│   │   │   ├── CreateTaskForm.java
 │   │   │   ├── CreateWorkingDirectoryForm.java  # +directoryType, parentProjectId
 │   │   │   ├── UpdateWorkingDirectoryForm.java  # +projectTaskPrompt, parentProjectId
 │   │   │   ├── ResumeTaskForm.java
@@ -343,7 +342,8 @@ SSE 桥接组件，监听 `ClaudeTaskStartEvent`，消费 Worker SSE 流，转�
 
 ```
 前端: WorkingDirectory.agentTeamsConfig (JSON string)
-  → CreateTaskForm.agentTeamsJson
+  → TaskDispatchRequest.agentTeamsJson
+  → ClaudeTaskCreateCommand.agentTeamsJson
   → ClaudeTaskStartEvent.agentTeamsJson
   → ClaudeWorkerClient.streamQuery(agentTeamsJson)
     body.extra_args = { "agents": agentTeamsJson }
@@ -485,32 +485,40 @@ Worker (福安-PC-win)
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| POST | `/api/v1/claude-tasks` | 创建任务 |
-| POST | `/api/v1/claude-tasks/resume` | 恢复任务 |
-| GET | `/api/v1/claude-tasks/{taskId}` | 获取任务 |
-| GET | `/api/v1/claude-tasks` | 列出所有任务 |
-| GET | `/api/v1/claude-tasks/page` | 分页列出任务 |
-| POST | `/api/v1/claude-tasks/{taskId}/abort` | 中止任务 |
-| DELETE | `/api/v1/claude-tasks/{taskId}` | 删除任务 |
-| GET | `/api/v1/claude-tasks/directory/{directoryId}` | 按目录列出任务 |
+| POST | `/api/v1/tasks` | 统一创建任务 |
+| POST | `/api/v1/tasks/resume` | 续接已有会话 |
+| GET | `/api/v1/tasks/{taskId}` | 获取当前用户拥有的任务 |
+| GET | `/api/v1/tasks?sessionId={sessionId}` | 按会话列出任务 |
+| GET | `/api/v1/tasks/page` | 分页列出任务 |
+| POST | `/api/v1/tasks/{taskId}/cancel` | 取消任务 |
+| POST | `/api/v1/tasks/{taskId}/respond` | 回复权限请求或用户问题 |
+| POST | `/api/v1/tasks/{taskId}/reconnect` | 重连任务 SSE 流 |
+| POST | `/api/v1/tasks/{taskId}/resync` | 重新同步任务状态 |
+| POST | `/api/v1/tasks/{taskId}/rewind` | 回退到检查点 |
+| POST | `/api/v1/tasks/{taskId}/scan-checkpoints` | 扫描检查点 |
+| DELETE | `/api/v1/tasks/{taskId}` | 删除任务 |
+| GET | `/api/v1/tasks/directory/{directoryId}` | 按目录列出任务 |
 
 #### Worker 会话
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| GET | `/api/v1/claude-tasks/worker/{workerId}/sessions` | 列出 Worker 本地会话 |
-| GET | `/api/v1/claude-tasks/worker/{workerId}/sessions/{sessionId}/messages` | 读取会话历史 |
-| POST | `/api/v1/claude-tasks/worker/{workerId}/sessions/sync` | 同步本地会话 |
+| GET | `/api/v1/tasks/workers/{workerId}/sessions` | 列出 Worker 本地会话 |
+| GET | `/api/v1/tasks/workers/{workerId}/sessions/{sessionId}/message-count` | 读取会话消息数 |
+| GET | `/api/v1/tasks/workers/{workerId}/sessions/{sessionId}/messages` | 读取会话历史 |
+| POST | `/api/v1/tasks/workers/{workerId}/sessions/sync` | 同步本地会话 |
 
 #### 会话配置
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| PATCH | `/api/v1/claude-tasks/conversations/{sessionId}/pin` | 置顶/取消置顶 |
-| PATCH | `/api/v1/claude-tasks/conversations/{sessionId}/title` | 设置标题 |
-| POST | `/api/v1/claude-tasks/conversations/{sessionId}/bind-auth` | 绑定 Auth |
-| POST | `/api/v1/claude-tasks/conversations/batch-bind-auth` | 批量绑定 Auth |
-| GET | `/api/v1/claude-tasks/conversation-configs?sessionIds=` | 批量获取配置 |
+| PATCH | `/api/v1/sessions/{sessionId}/config/tags` | 更新标签 |
+| PATCH | `/api/v1/sessions/{sessionId}/config/pin` | 置顶/取消置顶 |
+| PATCH | `/api/v1/sessions/{sessionId}/config/title` | 设置标题 |
+| POST | `/api/v1/sessions/{sessionId}/config/bind-auth` | 首次绑定 Auth |
+| PATCH | `/api/v1/sessions/{sessionId}/config/auth` | 更新 Auth |
+| POST | `/api/v1/sessions/configs` | 批量获取会话配置 |
+| POST | `/api/v1/sessions/configs/batch-bind-auth` | 批量绑定 Auth |
 
 #### CLI 进程管理
 

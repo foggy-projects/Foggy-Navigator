@@ -2,6 +2,12 @@ package com.foggy.navigator.session.registry;
 
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
+import com.foggy.navigator.common.dto.a2a.A2aArtifact;
+import com.foggy.navigator.common.dto.a2a.A2aMessage;
+import com.foggy.navigator.common.dto.a2a.A2aPart;
+import com.foggy.navigator.common.dto.a2a.A2aTask;
+import com.foggy.navigator.common.dto.a2a.A2aTaskState;
+import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
@@ -13,7 +19,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -293,6 +302,39 @@ class UnifiedAgentResolverTest {
         verify(provider2, never()).resolveAgent(anyString(), any(AgentResolveContext.class));
     }
 
+    @Test
+    void inMemoryA2aFixture_isDiscoverableAndExercisesTaskLifecycle() {
+        A2aAgentProvider fixtureProvider = new InMemoryA2aFixtureProvider();
+        UnifiedAgentResolver fixtureResolver = new UnifiedAgentResolver(
+                List.of(fixtureProvider), llmModelManager);
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("fixture-user")
+                .tenantId("fixture-tenant")
+                .requestSource("TEST")
+                .build();
+
+        List<A2aAgentCard> cards = fixtureResolver.listAgents(context);
+        A2aAgent agent = fixtureResolver.resolveAgent("test-fixture-agent", context).orElseThrow();
+        A2aTask task = agent.sendTask(A2aMessage.builder()
+                .role("user")
+                .contextId("fixture-context")
+                .parts(List.of(A2aPart.text("fixture ping")))
+                .build());
+
+        assertEquals(List.of("test-fixture-agent"),
+                cards.stream().map(A2aAgentCard::getId).toList());
+        assertEquals(A2aTaskState.COMPLETED, task.getStatus().getState());
+        assertEquals("fixture-context", task.getContextId());
+        assertEquals("[Test Fixture] fixture ping",
+                task.getArtifacts().get(0).getParts().get(0).getText());
+        assertSame(task, agent.getTask(task.getId()).orElseThrow());
+
+        agent.cancelTask(task.getId());
+
+        assertEquals(A2aTaskState.CANCELED,
+                agent.getTask(task.getId()).orElseThrow().getStatus().getState());
+    }
+
     // ---- helpers ----
 
     private A2aAgentCard card(String id) {
@@ -301,5 +343,92 @@ class UnifiedAgentResolverTest {
 
     private AgentResolveContext ctx(String userId) {
         return AgentResolveContext.builder().userId(userId).build();
+    }
+
+    /**
+     * Test-only replacement for the retired production Echo addon. It keeps
+     * provider discovery and the basic A2A lifecycle reproducible without
+     * registering a synthetic Agent in the launcher.
+     */
+    private static final class InMemoryA2aFixtureProvider implements A2aAgentProvider {
+
+        private static final String AGENT_ID = "test-fixture-agent";
+        private final A2aAgent agent = new InMemoryA2aFixtureAgent();
+
+        @Override
+        public List<A2aAgentCard> listAgentCards(String userId) {
+            return List.of(agent.getAgentCard());
+        }
+
+        @Override
+        public Optional<A2aAgent> resolveAgent(String agentId, String userId) {
+            return AGENT_ID.equals(agentId) ? Optional.of(agent) : Optional.empty();
+        }
+
+        @Override
+        public String getProviderType() {
+            return "test-fixture";
+        }
+    }
+
+    private static final class InMemoryA2aFixtureAgent implements A2aAgent {
+
+        private final Map<String, A2aTask> tasks = new LinkedHashMap<>();
+        private int nextTaskId = 1;
+
+        @Override
+        public A2aAgentCard getAgentCard() {
+            return A2aAgentCard.builder()
+                    .id(InMemoryA2aFixtureProvider.AGENT_ID)
+                    .name("Test Fixture Agent")
+                    .description("In-memory A2A fixture")
+                    .version("test")
+                    .build();
+        }
+
+        @Override
+        public A2aTask sendTask(A2aMessage message) {
+            String prompt = message.getParts() == null
+                    ? "(no parts)"
+                    : message.getParts().stream()
+                            .filter(part -> "text".equals(part.getType()) && part.getText() != null)
+                            .map(A2aPart::getText)
+                            .findFirst()
+                            .orElse("(no text)");
+            A2aTask task = A2aTask.builder()
+                    .id("fixture-task-" + nextTaskId++)
+                    .contextId(message.getContextId())
+                    .status(status(A2aTaskState.COMPLETED, "Fixture completed"))
+                    .artifacts(List.of(A2aArtifact.builder()
+                            .artifactId("fixture-result")
+                            .name("Fixture Result")
+                            .parts(List.of(A2aPart.text("[Test Fixture] " + prompt)))
+                            .build()))
+                    .metadata(Map.of("providerType", "test-fixture"))
+                    .build();
+            tasks.put(task.getId(), task);
+            return task;
+        }
+
+        @Override
+        public Optional<A2aTask> getTask(String taskId) {
+            return Optional.ofNullable(tasks.get(taskId));
+        }
+
+        @Override
+        public void cancelTask(String taskId) {
+            A2aTask task = tasks.get(taskId);
+            if (task != null) {
+                task.setStatus(status(A2aTaskState.CANCELED, "Fixture canceled"));
+            }
+        }
+
+        private A2aTaskStatus status(A2aTaskState state, String description) {
+            return A2aTaskStatus.builder()
+                    .state(state)
+                    .description(description)
+                    .timestamp(Instant.now())
+                    .build();
+        }
     }
 }

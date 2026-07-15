@@ -1,7 +1,8 @@
 # 新 Agent 接入指南
 
-> 统一任务分发重构后，新增 Agent 只需实现 2 个 SPI 接口 + 1 个 Spring 注解，
-> 无需修改任何现有 Controller、路由逻辑或前端代码。
+> 统一任务分发重构后，最小 A2A Agent 只需实现 `A2aAgentProvider`、`A2aAgent`
+> 并注册为 Spring Bean；需要 Direct Provider、分页或 Worker Session 能力时，再按需实现窄任务端口。
+> 无需修改中心 Controller、路由逻辑或前端代码。
 
 ## 架构概览
 
@@ -10,8 +11,10 @@
 ───────────         ──────────────         ─────────────────
 /api/v1/tasks  →  TaskDispatchFacade  →  A2aAgentProvider (@Component)
                   SessionBindingService      └─ A2aAgent (sendTask/getTask/cancelTask)
-                  UnifiedAgentResolver       └─ TaskQueryProvider (查询)
-                  TaskQueryProvider[]     →  YourTaskService (implements TaskQueryProvider)
+                  UnifiedAgentResolver
+                  typed task ports       →  YourTaskService
+                    ├─ TaskLookupProvider / TaskCommandProvider
+                    └─ TaskListingProvider / WorkerSessionQueryProvider（按需）
 ```
 
 ## 必须实现的接口
@@ -79,11 +82,13 @@ public class YourA2aAgent implements A2aAgent {
 }
 ```
 
-### 3. `TaskQueryProvider` — 统一查询（推荐在 TaskService 上实现）
+### 3. typed task ports — Direct 路由与统一查询（按能力实现）
+
+旧聚合 `TaskQueryProvider` 已删除。Provider 不得重新引入一个包含全部能力的兼容接口；只实现实际支持的窄端口，并通过 `TaskQueryCapability` 声明列表、搜索和 Worker Session 能力。
 
 ```java
 @Service
-public class YourTaskService implements TaskQueryProvider {
+public class YourTaskService implements TaskLookupProvider, TaskCommandProvider {
 
     @Override
     public String getProviderType() { return "your-agent"; }
@@ -99,15 +104,22 @@ public class YourTaskService implements TaskQueryProvider {
 
     @Override
     public List<DispatchTaskDTO> listActiveDispatchTasks(String userId) { /* ... */ }
+
+    @Override
+    public DispatchTaskDTO createTaskDirect(Map<String, Object> params,
+                                            String userId,
+                                            String tenantId) { /* ... */ }
 }
 ```
+
+需要分页历史时实现 `TaskListingProvider`；需要 Worker 会话查询时实现 `WorkerSessionQueryProvider`。所有端口使用 typed DTO/result，HTTP 边界所需的 Map 由 `session-module` 统一投影。
 
 ## 自动生效，无需修改的部分
 
 | 组件 | 说明 |
 |------|------|
 | `UnifiedAgentResolver` | 自动发现你的 `@Component` Provider |
-| `TaskDispatchFacade` | 自动聚合你的 `TaskQueryProvider` |
+| `TaskDispatchFacade` | 自动聚合你的 typed narrow task ports |
 | `TaskController /api/v1/tasks` | 自动支持你的 Agent 创建/查询/取消 |
 | `AgentDiscoveryController /api/v1/agents` | 自动列出你的 Agent |
 | `OpenApiController /api/v1/open/agents` | 自动支持租户维度（如果覆写了 context 方法） |
@@ -138,11 +150,11 @@ public class YourTaskService implements TaskQueryProvider {
 
 | 维度 | 重构前 | 重构后 |
 |------|--------|--------|
-| 路由逻辑 | 改 `ClaudeTaskController.isCodexBackend()` | 不改 |
+| 路由逻辑 | 在中心 Controller 增加 Provider 分支 | 不改 |
 | Controller | 加分支或新 Controller | 不改 |
 | OpenAPI | 改 `OpenApiController` 注入 | 不改 |
 | SSE/事件 | 手写 payload Map | 用 `AgentMessageBuilder` |
 | 前端 | 加 API + 改调用 | 不改（统一走 `/api/v1/tasks`） |
 | 会话管理 | 无绑定 | 自动绑定 + 防漂移 |
-| 任务查询 | 各 Controller 各查各的 | `TaskQueryProvider` 自动聚合 |
-| **总改动点** | **5-8 处** | **1 个新模块（2 个接口 + @Component）** |
+| 任务查询 | 各 Controller 各查各的 | typed narrow task ports 自动聚合 |
+| **总改动点** | **5-8 处** | **1 个新模块；最小 A2A 为 2 个接口 + Bean** |

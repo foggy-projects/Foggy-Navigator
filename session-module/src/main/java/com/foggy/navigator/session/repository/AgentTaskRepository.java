@@ -10,6 +10,8 @@ public interface AgentTaskRepository extends JpaRepository<AgentTaskEntity, Stri
 
     List<AgentTaskEntity> findByParentSessionId(String parentSessionId);
 
+    List<AgentTaskEntity> findByParentSessionIdAndUserId(String parentSessionId, String userId);
+
     Optional<AgentTaskEntity> findByTaskId(String taskId);
 
     Optional<AgentTaskEntity> findByExternalTaskIdAndTaskType(String externalTaskId, String taskType);

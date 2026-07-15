@@ -137,4 +137,24 @@ class CodexSdkBackendConnectionTesterTest {
 
         assertEquals("CODEX_SDK_WORKER_UNAVAILABLE", error.getMessage());
     }
+
+    @Test
+    void testConnectionRejectsExplicitlyUnreadySdkWorker() {
+        CodexConfig config = CodexConfig.builder()
+                .baseUrl("http://127.0.0.1:3032")
+                .build();
+        when(workerManagementFacade.getCodexConfig("worker-1")).thenReturn(config);
+        when(clientFactory.getOrCreate("worker-1:codex", "http://127.0.0.1:3032", null))
+                .thenReturn(client);
+        when(client.healthCheck()).thenReturn(Mono.just(Map.of(
+                "status", "degraded",
+                "ready", false,
+                "reasons", java.util.List.of("EXTERNAL_EXECUTION_POLICY_PENDING")
+        )));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> tester.testConnection("user-1", "tenant-1", "worker-1", null));
+
+        assertEquals("CODEX_SDK_WORKER_UNREADY", error.getMessage());
+    }
 }

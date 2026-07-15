@@ -1,0 +1,462 @@
+package com.foggy.navigator.codex.worker.controller;
+
+import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
+import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
+import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
+import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
+import com.foggy.navigator.codex.worker.service.CodexRuntimeRegistryService;
+import com.foggy.navigator.codex.worker.service.CodexTaskService;
+import com.foggy.navigator.common.annotation.RequireAuth;
+import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.dto.CurrentUser;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
+import com.foggy.navigator.spi.agent.TaskPageResult;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
+import com.foggyframework.core.ex.RX;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.RequestMapping;
+import reactor.core.publisher.Mono;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class CodexTaskExtensionControllerTest {
+
+    private static final String TASK_ID = "task-1";
+    private static final String USER_ID = "user-1";
+    private static final String TENANT_ID = "tenant-1";
+    private static final String ARTIFACT_ID = "0123456789abcdef0123456789abcdef";
+
+    @Mock
+    private SessionTaskResourceAccessService resourceAccessService;
+
+    @Mock
+    private CodexTaskService taskService;
+
+    @Mock
+    private WorkerManagementFacade workerManagementFacade;
+
+    @Mock
+    private CodexWorkerClientFactory clientFactory;
+
+    @Mock
+    private CodexRuntimeRegistryService runtimeRegistryService;
+
+    @Mock
+    private CodexWorkerClient client;
+
+    private CodexTaskExtensionController controller;
+
+    @BeforeEach
+    void setUp() {
+        setCurrentUser(USER_ID, TENANT_ID);
+        controller = new CodexTaskExtensionController(
+                resourceAccessService, taskService, workerManagementFacade,
+                clientFactory, runtimeRegistryService);
+    }
+
+    @AfterEach
+    void tearDown() {
+        UserContext.clear();
+    }
+
+    @Test
+    void controllerRequiresAuthenticationAndUsesUnifiedTaskRoute() {
+        assertNotNull(CodexTaskExtensionController.class.getAnnotation(RequireAuth.class));
+        RequestMapping mapping = CodexTaskExtensionController.class.getAnnotation(RequestMapping.class);
+        assertArrayEquals(new String[]{"/api/v1/tasks"}, mapping.value());
+    }
+
+    @Test
+    void listCodexCanaryTasks_returnsCurrentUsersTypedAppServerPage() {
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
+                .taskId(TASK_ID)
+                .userId(USER_ID)
+                .providerType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE)
+                .build();
+        TaskPageResult page = TaskPageResult.of(List.of(task), 1L, 2, 25);
+        when(taskService.listTasksPagedForProvider(
+                USER_ID, TENANT_ID, 2, 25, null, "worker-1",
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE))
+                .thenReturn(page);
+
+        RX<TaskPageResult> response = controller.listCodexCanaryTasks(2, 25, "worker-1");
+
+        assertEquals(page, response.getData());
+        assertEquals(DispatchTaskDTO.class, response.getData().content().get(0).getClass());
+        verify(taskService).listTasksPagedForProvider(
+                USER_ID, TENANT_ID, 2, 25, null, "worker-1",
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+    }
+
+    @Test
+    void listCodexCanaryTasks_missingAuthenticatedPrincipalIsRejected() {
+        UserContext.clear();
+
+        assertThrows(SecurityException.class,
+                () -> controller.listCodexCanaryTasks(0, 20, null));
+
+        verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void listCodexCanaryTasks_rejectsInvalidPageAndSizeWithoutQuerying() {
+        assertThrows(IllegalArgumentException.class,
+                () -> controller.listCodexCanaryTasks(-1, 20, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> controller.listCodexCanaryTasks(0, 0, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> controller.listCodexCanaryTasks(0, 201, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> controller.listCodexCanaryTasks(Integer.MAX_VALUE, 2, null));
+
+        verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void getSessionFileHints_ownerUsesTaskBoundThreadAndFiltersPrivateWorkerFields() {
+        CodexTaskEntity task = sdkTask();
+        stubOwnedTask(CodexTaskService.CODEX_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        when(workerManagementFacade.getCodexConfig("worker-1")).thenReturn(CodexConfig.builder()
+                .baseUrl("http://localhost:3051")
+                .authToken("worker-secret")
+                .build());
+        when(clientFactory.getOrCreate(
+                "worker-1:codex", "http://localhost:3051", "worker-secret"))
+                .thenReturn(client);
+
+        Map<String, Object> file = new LinkedHashMap<>();
+        file.put("filePath", "D:/repo/src/app.ts");
+        file.put("pathScope", "inside_cwd");
+        file.put("openableInFileBrowser", true);
+        file.put("local_path", "/worker/private/file-hints.jsonl");
+        file.put("auth_token", "nested-secret");
+        Map<String, Object> workerResult = new LinkedHashMap<>();
+        workerResult.put("taskId", "attacker-task");
+        workerResult.put("sessionId", "attacker-session");
+        workerResult.put("files", List.of(file));
+        workerResult.put("total", 1);
+        workerResult.put("local_path", "/worker/private/file-hints.jsonl");
+        workerResult.put("apiKey", "root-secret");
+        when(client.getSessionFileHints("thread-1", 7, "2026-06-01", "2026-06-28"))
+                .thenReturn(Mono.just(workerResult));
+
+        RX<Map<String, Object>> response = controller.getSessionFileHints(
+                TASK_ID, 7, "2026-06-01", "2026-06-28");
+
+        Map<String, Object> body = response.getData();
+        assertEquals(TASK_ID, body.get("taskId"));
+        assertEquals("session-1", body.get("sessionId"));
+        assertEquals("thread-1", body.get("codexThreadId"));
+        assertEquals("dir-1", body.get("directoryId"));
+        assertEquals("D:/repo", body.get("cwd"));
+        assertFalse(body.containsKey("local_path"));
+        assertFalse(body.containsKey("apiKey"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> returnedFile = (Map<String, Object>) ((List<?>) body.get("files")).get(0);
+        assertEquals("D:/repo/src/app.ts", returnedFile.get("filePath"));
+        assertFalse(returnedFile.containsKey("local_path"));
+        assertFalse(returnedFile.containsKey("auth_token"));
+
+        InOrder order = inOrder(resourceAccessService, taskService, workerManagementFacade, client);
+        order.verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
+        order.verify(taskService).getTaskEntity(TASK_ID);
+        order.verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+        order.verify(client).getSessionFileHints("thread-1", 7, "2026-06-01", "2026-06-28");
+    }
+
+    @Test
+    void getSessionFileHints_crossUserIsRejectedBeforeCodexLookup() {
+        setCurrentUser("other-user", TENANT_ID);
+        when(resourceAccessService.requireOwnedTask(TASK_ID, "other-user", TENANT_ID))
+                .thenThrow(new SecurityException("Resource access denied"));
+
+        assertThrows(SecurityException.class,
+                () -> controller.getSessionFileHints(TASK_ID, 30, null, null));
+
+        verifyNoInteractions(taskService, workerManagementFacade, clientFactory, client,
+                runtimeRegistryService);
+    }
+
+    @Test
+    void getSessionFileHints_crossTenantIsRejectedBeforeCodexLookup() {
+        setCurrentUser(USER_ID, "other-tenant");
+        when(resourceAccessService.requireOwnedTask(TASK_ID, USER_ID, "other-tenant"))
+                .thenThrow(new SecurityException("Resource access denied"));
+
+        assertThrows(SecurityException.class,
+                () -> controller.getSessionFileHints(TASK_ID, 30, null, null));
+
+        verifyNoInteractions(taskService, workerManagementFacade, clientFactory, client,
+                runtimeRegistryService);
+    }
+
+    @Test
+    void getSessionFileHints_providerMismatchIsRejectedBeforePrivateTaskLookup() {
+        stubOwnedTask("claude-worker");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> controller.getSessionFileHints(TASK_ID, 30, null, null));
+
+        assertEquals("Task not found: " + TASK_ID, error.getMessage());
+        verifyNoInteractions(taskService, workerManagementFacade, clientFactory, client,
+                runtimeRegistryService);
+    }
+
+    @Test
+    void getSessionFileHints_runtimeMismatchDoesNotReachWorker() {
+        CodexTaskEntity task = sdkTask();
+        task.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        stubOwnedTask(CodexTaskService.CODEX_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> controller.getSessionFileHints(TASK_ID, 30, null, null));
+
+        verifyNoInteractions(workerManagementFacade, clientFactory, client, runtimeRegistryService);
+    }
+
+    @Test
+    void getSessionFileHints_missingThreadReturnsBoundEmptyResultWithoutWorkerCredentials() {
+        CodexTaskEntity task = sdkTask();
+        task.setCodexThreadId(null);
+        stubOwnedTask(CodexTaskService.CODEX_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+
+        RX<Map<String, Object>> response = controller.getSessionFileHints(
+                TASK_ID, 30, null, null);
+
+        assertEquals(List.of(), response.getData().get("files"));
+        assertEquals(0, response.getData().get("total"));
+        assertEquals(TASK_ID, response.getData().get("taskId"));
+        verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+        verify(workerManagementFacade, never()).getCodexConfig("worker-1");
+        verifyNoInteractions(clientFactory, client, runtimeRegistryService);
+    }
+
+    @Test
+    void getGeneratedImage_ownerUsesPinnedRuntimeAndCopiesOnlySafeHeaders() {
+        byte[] image = new byte[]{(byte) 0x89, 0x50, 0x4e, 0x47};
+        CodexTaskEntity task = appServerTask();
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        CodexRuntimeBinding binding = appServerBinding();
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a")).thenReturn(binding);
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
+                .thenReturn(client);
+        when(client.getGeneratedImage("worker-task-1", ARTIFACT_ID)).thenReturn(Mono.just(
+                ResponseEntity.ok()
+                        .contentType(MediaType.IMAGE_PNG)
+                        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=generated.png")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer worker-secret")
+                        .header("X-Worker-Local-Path", "/worker/generated/private.png")
+                        .body(image)));
+
+        ResponseEntity<byte[]> response = controller.getGeneratedImage(TASK_ID, ARTIFACT_ID);
+
+        assertEquals(200, response.getStatusCode().value());
+        assertEquals(MediaType.IMAGE_PNG, response.getHeaders().getContentType());
+        assertEquals("inline",
+                response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION));
+        assertEquals("private, no-store", response.getHeaders().getCacheControl());
+        assertEquals("nosniff", response.getHeaders().getFirst("X-Content-Type-Options"));
+        assertNull(response.getHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+        assertNull(response.getHeaders().getFirst("X-Worker-Local-Path"));
+        assertArrayEquals(image, response.getBody());
+
+        InOrder order = inOrder(resourceAccessService, taskService, workerManagementFacade,
+                runtimeRegistryService, clientFactory, client);
+        order.verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
+        order.verify(taskService).getTaskEntity(TASK_ID);
+        order.verify(workerManagementFacade).validateWorkerAccess(USER_ID, TENANT_ID, "worker-1");
+        order.verify(runtimeRegistryService).resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a");
+        order.verify(clientFactory).getOrCreate(
+                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a");
+        order.verify(client).getGeneratedImage("worker-task-1", ARTIFACT_ID);
+    }
+
+    @Test
+    void getGeneratedImage_invalidArtifactIdIsRejectedInsideOwnedTaskBoundary() {
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(appServerTask());
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> controller.getGeneratedImage(TASK_ID, "../../private.png"));
+
+        assertEquals("artifactId is invalid", error.getMessage());
+        InOrder order = inOrder(resourceAccessService, taskService);
+        order.verify(resourceAccessService).requireOwnedTask(TASK_ID, USER_ID, TENANT_ID);
+        order.verify(taskService).getTaskEntity(TASK_ID);
+        verifyNoInteractions(workerManagementFacade, runtimeRegistryService, clientFactory, client);
+    }
+
+    @Test
+    void getGeneratedImage_providerMismatchIsRejectedBeforePrivateTaskLookup() {
+        stubOwnedTask(CodexTaskService.CODEX_PROVIDER_TYPE);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> controller.getGeneratedImage(TASK_ID, ARTIFACT_ID));
+
+        verifyNoInteractions(taskService, workerManagementFacade, runtimeRegistryService,
+                clientFactory, client);
+    }
+
+    @Test
+    void getGeneratedImage_missingPinnedInstanceDoesNotFallBackToAnotherRuntime() {
+        CodexTaskEntity task = appServerTask();
+        task.setRuntimeInstanceId(null);
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> controller.getGeneratedImage(TASK_ID, ARTIFACT_ID));
+
+        verifyNoInteractions(workerManagementFacade, runtimeRegistryService, clientFactory, client);
+    }
+
+    @Test
+    void getGeneratedImage_neverForwardsWorkerFilename() {
+        CodexTaskEntity task = appServerTask();
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        CodexRuntimeBinding binding = appServerBinding();
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a")).thenReturn(binding);
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
+                .thenReturn(client);
+        when(client.getGeneratedImage("worker-task-1", ARTIFACT_ID)).thenReturn(Mono.just(
+                ResponseEntity.ok()
+                        .contentType(MediaType.IMAGE_PNG)
+                        .header(HttpHeaders.CONTENT_DISPOSITION,
+                                "inline; filename=/worker/generated/private.png")
+                        .body(new byte[]{1})));
+
+        ResponseEntity<byte[]> response = controller.getGeneratedImage(TASK_ID, ARTIFACT_ID);
+
+        assertEquals("inline", response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION));
+        assertEquals("private, no-store", response.getHeaders().getCacheControl());
+    }
+
+    @Test
+    void getGeneratedImage_rejectsNonRasterWorkerResponse() {
+        CodexTaskEntity task = appServerTask();
+        stubOwnedTask(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        when(taskService.getTaskEntity(TASK_ID)).thenReturn(task);
+        CodexRuntimeBinding binding = appServerBinding();
+        when(runtimeRegistryService.resolveBoundRuntime(
+                "app-main", 3, "worker-1", "instance-a")).thenReturn(binding);
+        when(clientFactory.getOrCreate(
+                "runtime:app-main:3", "http://127.0.0.1:3062", "runtime-secret", "instance-a"))
+                .thenReturn(client);
+        when(client.getGeneratedImage("worker-task-1", ARTIFACT_ID)).thenReturn(Mono.just(
+                ResponseEntity.ok()
+                        .contentType(MediaType.TEXT_HTML)
+                        .body("<script>nope</script>".getBytes())));
+
+        ResponseEntity<byte[]> response = controller.getGeneratedImage(TASK_ID, ARTIFACT_ID);
+
+        assertEquals(500, response.getStatusCode().value());
+        assertNull(response.getBody());
+        assertNull(response.getHeaders().getContentType());
+        assertEquals("private, no-store", response.getHeaders().getCacheControl());
+        assertEquals("nosniff", response.getHeaders().getFirst("X-Content-Type-Options"));
+    }
+
+    private void setCurrentUser(String userId, String tenantId) {
+        UserContext.setCurrentUser(CurrentUser.builder()
+                .userId(userId)
+                .tenantId(tenantId)
+                .build());
+    }
+
+    private SessionTaskEntity stubOwnedTask(String providerType) {
+        SessionTaskEntity task = new SessionTaskEntity();
+        task.setTaskId(TASK_ID);
+        task.setSessionId("session-1");
+        task.setProviderType(providerType);
+        task.setWorkerId("worker-1");
+        task.setUserId(USER_ID);
+        task.setTenantId(TENANT_ID);
+        when(resourceAccessService.requireOwnedTask(TASK_ID, USER_ID, TENANT_ID)).thenReturn(task);
+        return task;
+    }
+
+    private CodexTaskEntity sdkTask() {
+        CodexTaskEntity task = baseTask();
+        task.setProviderType(CodexTaskService.CODEX_PROVIDER_TYPE);
+        task.setRuntimeId("legacy-sdk:worker-1");
+        task.setRuntimeRevision(1);
+        task.setRuntimeType("SDK_EXEC");
+        task.setCodexThreadId("thread-1");
+        return task;
+    }
+
+    private CodexTaskEntity appServerTask() {
+        CodexTaskEntity task = baseTask();
+        task.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        task.setRuntimeId("app-main");
+        task.setRuntimeRevision(3);
+        task.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        task.setRuntimeInstanceId("instance-a");
+        task.setWorkerTaskId("worker-task-1");
+        return task;
+    }
+
+    private CodexTaskEntity baseTask() {
+        CodexTaskEntity task = new CodexTaskEntity();
+        task.setTaskId(TASK_ID);
+        task.setSessionId("session-1");
+        task.setDirectoryId("dir-1");
+        task.setWorkerId("worker-1");
+        task.setUserId(USER_ID);
+        task.setTenantId(TENANT_ID);
+        task.setCwd("D:/repo");
+        task.setStatus("COMPLETED");
+        return task;
+    }
+
+    private CodexRuntimeBinding appServerBinding() {
+        return CodexRuntimeBinding.builder()
+                .runtimeId("app-main")
+                .runtimeRevision(3)
+                .runtimeType(CodexRuntimeType.APP_SERVER)
+                .workerId("worker-1")
+                .endpointUrl("http://127.0.0.1:3062")
+                .authToken("runtime-secret")
+                .instanceId("instance-a")
+                .routingEpoch(7L)
+                .build();
+    }
+}

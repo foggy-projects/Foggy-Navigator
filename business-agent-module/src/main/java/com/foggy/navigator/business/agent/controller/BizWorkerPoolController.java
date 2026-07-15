@@ -9,6 +9,7 @@ import com.foggy.navigator.business.agent.model.form.UpdateStatusForm;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -38,7 +39,9 @@ public class BizWorkerPoolController {
     @GetMapping("/worker-pools")
     @RequireAuth
     public RX<List<BizWorkerPoolDTO>> listPools() {
-        return RX.ok(workerPoolService.listPools(resolveTenantId()));
+        String tenantId = resolveTenantId();
+        return RX.ok(workerPoolService.listPools(
+                tenantId, ResourceOwnerType.PLATFORM, tenantId));
     }
 
     @PostMapping("/worker-pools")
@@ -51,7 +54,9 @@ public class BizWorkerPoolController {
     @RequireAuth
     public RX<Void> addMember(@PathVariable String poolId,
                               @RequestBody AddWorkerPoolMemberForm form) {
-        workerPoolService.addMember(resolveTenantId(), poolId, form);
+        String tenantId = resolveTenantId();
+        workerPoolService.addMember(
+                tenantId, ResourceOwnerType.PLATFORM, tenantId, poolId, form);
         return RX.ok(null);
     }
 
@@ -59,7 +64,12 @@ public class BizWorkerPoolController {
     @RequireAuth
     public RX<BizWorkerPoolDTO> updatePoolStatus(@PathVariable String poolId,
                                                  @RequestBody UpdateStatusForm form) {
+        String tenantId = resolveTenantId();
         return RX.ok(workerPoolService.updatePoolStatus(
-                resolveTenantId(), poolId, form == null ? null : form.getStatus()));
+                tenantId,
+                ResourceOwnerType.PLATFORM,
+                tenantId,
+                poolId,
+                form == null ? null : form.getStatus()));
     }
 }

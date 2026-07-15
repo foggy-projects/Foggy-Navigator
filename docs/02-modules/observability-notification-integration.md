@@ -1,91 +1,72 @@
-# 通知与开放集成（监控暂停）
+# 通知、基础观测与开放集成
 
 ## 1. 功能定位
 
-该功能域当前负责消息通知链路以及对外开放接口；RabbitMQ 监控事件链路已暂停，不纳入 `launcher` 或默认部署。
+该功能域负责任务实时通知、最低限度的运行诊断以及受治理的上游集成。旧自研 RabbitMQ Monitoring 切片已经在 1.4.2 dev 阶段物理移除，不再提供 Monitoring 页面和 `/api/v1/monitoring/**` 接口。
 
-对应前端入口：
-
-- `监控`（当前暂停）
-
-对应后端模块：
+当前相关模块包括：
 
 - `session-module`
 - `addons/task-assistant`
 - `addons/claude-worker-agent`
+- `business-agent-module`
 - `navigator-open-sdk`
+- `tools/navigator-chat-observer-bff`
 
-## 2. 功能范围
+## 2. 当前功能范围
 
-### 2.1 监控事件（当前暂停）
+### 2.1 SSE 与任务通知
 
-- `monitoring-module` 源码保留
-- RabbitMQ 消费、事件持久化、监控事件 API 当前不纳入主线运行
+- 统一消息流与任务状态更新
+- 用户通知和任务助手通知
+- 订阅管理与连接保活
 
-### 2.2 SSE 通知
+`UnifiedSseEmitter` 当前是单 JVM 内存态实现；多实例事件总线不属于 1.4.2 范围。
 
-- 统一消息流
-- 任务状态更新
-- 用户通知
-- 助手通知
-- 订阅管理
+### 2.2 基础运行观测
 
-### 2.3 任务助手通知
+当前保留的最低观测能力是：
 
-- 监听任务事件
-- 聚合事件
-- 调用助手生成通知
-- 支持测试通知和摘要类能力
+- 应用结构化日志与滚动文件
+- Spring Boot 健康检查
+- 有限的 Micrometer 指标
+- 任务、调用、审批、恢复、拒绝等治理审计（按 1.4.2 计划渐进补齐）
 
-### 2.4 Open API
+退役旧 Monitoring 不等于取消日志、健康检查、指标或安全审计。若未来需要集中日志、指标和告警，应另立需求选择受维护的观测方案，不原样恢复旧 RabbitMQ 日志采集切片。
 
-当前 Claude Worker addon 已提供面向外部系统的接口能力，包括：
+### 2.3 Open API、SDK 与上游接入
 
-- Worker 注册与查询
-- 目录初始化与管理
-- 员工 Provision
-- Agent 查询与问答
-- 任务查询与取消
-- Worker 进程治理
+平台已有 Worker、目录、Agent、BusinessFunction/BusinessTask 等集成能力，以及 Java SDK、上游 CLI 和嵌入式聊天交付物。
 
-### 2.5 SDK
+当前产品阶段仍以 dev/internal 使用为主。外部运行模式必须显式开启，默认关闭；在调用方身份、tenant/ClientApp/upstream user 映射、task-scoped token、Worker 能力边界、readiness 和审计门禁完成前，不得把内部开发配置解释为外部启用批准。
 
-`navigator-open-sdk` 已提供 Java SDK，包括：
+## 3. 已移除的旧 Monitoring 切片
 
-- `AgentApi`
-- `DirectoryApi`
-- `EmployeeApi`
-- `WorkerApi`
+1. `monitoring-module` Java API、RabbitMQ consumer、事件持久化和告警规则。
+2. `tools/foggy-monitor` Python 日志 publisher。
+3. PC `MonitoringView.vue` 和 `api/monitoring.ts`。
+4. SecurityConfig 中旧 Monitoring 放行项。
+5. `scripts/start-all.sh` 中的安装、计数和状态提示。
 
-## 3. 设计特点
-
-### 3.1 监控能力当前暂停
-
-后续如果恢复监控，需要重新接入 `monitoring-module`、RabbitMQ 和前端监控入口。
-
-### 3.2 SSE 是平台内部实时总线
-
-前端多个页面都依赖统一 SSE：
-
-- 会话
-- 通知
-- 任务状态
-- 助手通知
-
-### 3.3 Open API 是平台外扩的重要锚点
-
-从当前接口面看，平台已经不只是内部 UI，而是开始具备被外部系统调用的能力。
+本次代码变更没有操作数据库表、RabbitMQ queue/exchange、GitLab 或任何独立部署资源。Owner 已允许 dev 数据丢弃；若以后发现共享或生产资源，必须停止自动清理并单独确认目标和回滚方式。
 
 ## 4. 典型使用场景
 
-### 场景 1：排查异常
+### 场景 1：排查内部环境异常
 
-管理员通过监控页查看错误事件和堆栈信息。
+开发或运维人员先查看应用日志、健康状态和相关任务审计，再按 Worker/Session/Task 标识定位链路。
 
 ### 场景 2：接收任务通知
 
-用户在前端接收统一 SSE 通知，获知任务开始、完成、失败或助手建议。
+用户通过统一 SSE 获知任务开始、进展、完成、失败或助手建议。
 
-### 场景 3：外部系统接入
+### 场景 3：受控的上游接入
 
-外部系统通过 Open API 或 Java SDK 管理 Worker、目录和 Agent 调用。
+本机孵化的上游通过 ClientApp 和现有 mapping/grant 联调；未来对外开放前必须显式启用 external 模式并满足 1.4.2 信任边界门禁。
+
+## 5. 关联文档
+
+- [系统架构概览](../00-system-overview.md)
+- [可观察性系统](./observability-system.md)
+- [Session Module](./session-module.md)
+- [1.4.2 平台治理与历史能力收口](../version-tracker/1.4.2-SNAPSHOT/README.md)

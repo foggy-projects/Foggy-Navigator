@@ -3,6 +3,7 @@ import { nextTick } from 'vue'
 
 const mocks = vi.hoisted(() => ({
   getLatestMessages: vi.fn(),
+  getMessages: vi.fn(),
   getTaskUnified: vi.fn(),
   getNativeSubtasks: vi.fn(),
   subscribeSession: vi.fn(),
@@ -13,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/api/session', () => ({
   getLatestMessages: mocks.getLatestMessages,
-  getMessages: vi.fn(),
+  getMessages: mocks.getMessages,
 }))
 
 vi.mock('@/api/claudeWorker', () => ({
@@ -200,6 +201,80 @@ describe('useTaskPane native subtasks', () => {
         recoveredFromTask: true,
       },
     })
+    pane.dispose()
+  })
+
+  it('does not add a task-result recovery beside an existing final message for that task', async () => {
+    mocks.getLatestMessages.mockResolvedValue({
+      messages: [{
+        id: 'persisted-final', sessionId: 'session-result-existing', role: 'ASSISTANT',
+        content: 'The streamed final has presentation-specific formatting.',
+        metadata: {
+          type: 'TEXT_COMPLETE',
+          taskId: 'task-result-existing',
+          content: 'The streamed final has presentation-specific formatting.',
+        },
+        createdAt: '2026-07-12T06:01:00Z',
+      }],
+      total: 1,
+      hasMore: false,
+    })
+
+    const pane = useTaskPane('pane-result-existing')
+    pane.task.value = {
+      taskId: 'task-result-existing',
+      sessionId: 'session-result-existing',
+      workerId: 'worker-1',
+      providerType: 'codex-worker',
+      prompt: 'finish the work',
+      status: 'COMPLETED',
+      resultText: 'The task projection normalized this text differently.',
+      createdAt: '2026-07-12T06:00:00Z',
+      updatedAt: '2026-07-12T06:01:00Z',
+    }
+
+    await pane.connect('session-result-existing')
+
+    expect(pane.chatState.messages.value).toHaveLength(1)
+    expect(pane.chatState.messages.value[0]).toMatchObject({
+      id: 'persisted-final',
+      content: 'The streamed final has presentation-specific formatting.',
+    })
+    pane.dispose()
+  })
+
+  it('returns complete record history independently of visible-pane deduplication', async () => {
+    mocks.getLatestMessages.mockResolvedValue({
+      messages: [{
+        id: 'visible-answer', sessionId: 'session-records', role: 'ASSISTANT', content: 'latest answer',
+        metadata: { type: 'TEXT_COMPLETE', messageId: 'event-latest', content: 'latest answer' },
+        createdAt: '2026-07-12T06:01:00Z',
+      }],
+      total: 2,
+      hasMore: true,
+    })
+    mocks.getMessages.mockResolvedValue([
+      {
+        id: 'older-question', sessionId: 'session-records', role: 'USER', content: 'first question',
+        createdAt: '2026-07-12T06:00:00Z',
+      },
+      {
+        id: 'visible-answer', sessionId: 'session-records', role: 'ASSISTANT', content: 'latest answer',
+        metadata: { type: 'TEXT_COMPLETE', messageId: 'event-latest', content: 'latest answer' },
+        createdAt: '2026-07-12T06:01:00Z',
+      },
+    ])
+
+    const pane = useTaskPane('pane-records')
+    pane.task.value = {
+      taskId: 'task-records', sessionId: 'session-records', workerId: 'worker-1', providerType: 'codex-worker',
+      prompt: 'show records', status: 'COMPLETED', createdAt: '', updatedAt: '',
+    }
+
+    await pane.connect('session-records')
+    const records = await pane.getAllHistoryMessages()
+
+    expect(records.map(message => message.id)).toEqual(['older-question', 'visible-answer'])
     pane.dispose()
   })
 
@@ -477,6 +552,56 @@ describe('useTaskPane native subtasks', () => {
 
     expect(pane.task.value?.status).toBe('AWAITING_INPUT')
     expect(pane.chatState.messages.value.at(-1)?.reconnectable).toBe(true)
+    pane.dispose()
+  })
+
+  it('does not render an SSE replay twice and ignores another task in the same session', async () => {
+    const finalPayload = {
+      type: 'TEXT_COMPLETE',
+      content: 'final answer',
+      taskId: 'task-current',
+      streamId: 'item-current',
+    }
+    mocks.getLatestMessages.mockResolvedValue({
+      messages: [{
+        id: 'codex-event:task-current:2',
+        sessionId: 'session-shared',
+        role: 'ASSISTANT',
+        content: 'final answer',
+        metadata: finalPayload,
+        createdAt: '2026-07-13T00:00:00Z',
+      }],
+      total: 1,
+      hasMore: false,
+    })
+
+    const pane = useTaskPane('pane-message-replay')
+    pane.task.value = {
+      taskId: 'task-current', sessionId: 'session-shared', workerId: 'worker-1', providerType: 'codex-app-server-worker',
+      prompt: 'current', status: 'RUNNING', createdAt: '', updatedAt: '',
+    }
+    await pane.connect('session-shared')
+
+    const callback = mocks.sessionCallbacks.get('session-shared')
+    callback?.({
+      messageId: 'codex-event:task-current:2',
+      type: 'TEXT_COMPLETE',
+      sessionId: 'session-shared',
+      timestamp: 2,
+      payload: finalPayload,
+    })
+    callback?.({
+      messageId: 'codex-event:task-previous:9',
+      type: 'TEXT_COMPLETE',
+      sessionId: 'session-shared',
+      timestamp: 3,
+      payload: { type: 'TEXT_COMPLETE', content: 'old task output', taskId: 'task-previous', streamId: 'item-old' },
+    })
+
+    expect(pane.chatState.messages.value).toHaveLength(1)
+    expect(pane.chatState.messages.value[0]).toMatchObject({
+      content: 'final answer', taskId: 'task-current', streamId: 'item-current',
+    })
     pane.dispose()
   })
 })

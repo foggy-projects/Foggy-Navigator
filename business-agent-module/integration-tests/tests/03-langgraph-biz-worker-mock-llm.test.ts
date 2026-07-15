@@ -148,8 +148,7 @@ describe.skipIf(!TEST_CONFIG.enableLanggraphWorkerSmoke)(
 
       const workerTask = await waitForLanggraphTask(
         tenantClient,
-        created.workerTaskId!,
-        created.navigatorEffectiveUserId
+        created.workerTaskId!
       );
       expect(workerTask.resultText).toBe('OK_JAVA_NAVI_COMMAND_MOCK_LLM_E2E');
       expect(JSON.parse(workerTask.structuredOutput ?? '{}')).toMatchObject({
@@ -220,13 +219,12 @@ async function registerMockScript(traceId: string, command: string): Promise<voi
 
 async function waitForLanggraphTask(
   client: BusinessAgentClient,
-  taskId: string,
-  userId: string
+  taskId: string
 ): Promise<LanggraphTask> {
   const deadline = Date.now() + 90000;
   let lastTask: LanggraphTask | undefined;
   while (Date.now() < deadline) {
-    lastTask = await client.getLanggraphTask(taskId, userId);
+    lastTask = await client.getLanggraphTask(taskId);
     if (lastTask.status === 'COMPLETED') {
       return lastTask;
     }

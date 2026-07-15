@@ -449,6 +449,58 @@ test('an empty Worker token disables HTTP authentication for every control API',
   await waitFor(() => manager.get('no-auth-task')?.status === 'terminal')
 })
 
+test('external mode exposes health state but fails closed for every business API', async t => {
+  const stateDir = await tempDirectory('codex-app-external-gate-')
+  const config = testConfig(stateDir, { externalEnabled: true, workerToken: '' })
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const manager = new TaskManager(config, store, new FakeExecutor())
+  await manager.initialize({ resume: false })
+  const server = createApp(config, manager).listen(0, '127.0.0.1')
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  t.after(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await fs.rm(stateDir, { recursive: true, force: true })
+  })
+
+  const healthResponse = await fetch(`${baseUrl}/health`)
+  assert.equal(healthResponse.status, 200)
+  const health = await healthResponse.json() as Record<string, any>
+  assert.equal(health.status, 'degraded')
+  assert.equal(health.ready, false)
+  assert.equal(health.mode, 'external-enabled')
+  assert.equal(health.external_enabled, true)
+  assert.equal(health.external_ready, false)
+  assert.equal(health.auth_configured, false)
+  assert.ok(health.reasons.includes('EXTERNAL_AUTH_TOKEN_REQUIRED'))
+  assert.ok(health.reasons.includes('EXTERNAL_EXECUTION_POLICY_PENDING'))
+
+  for (const path of ['/api/v1/capabilities', '/api/v1/tasks/missing/status']) {
+    const response = await fetch(`${baseUrl}${path}`)
+    assert.equal(response.status, 503)
+    assert.deepEqual(await response.json(), {
+      error: 'EXTERNAL_WORKER_UNREADY',
+      reasons: ['EXTERNAL_AUTH_TOKEN_REQUIRED', 'EXTERNAL_EXECUTION_POLICY_PENDING'],
+    })
+  }
+
+  config.workerToken = 'external-secret-sentinel'
+  const tokenHealth = await (await fetch(`${baseUrl}/health`)).json() as Record<string, any>
+  assert.equal(tokenHealth.auth_configured, true)
+  assert.deepEqual(tokenHealth.reasons.filter((reason: string) => reason.startsWith('EXTERNAL_')), [
+    'EXTERNAL_EXECUTION_POLICY_PENDING',
+  ])
+  assert.equal(JSON.stringify(tokenHealth).includes(config.workerToken), false)
+  const stillClosed = await fetch(`${baseUrl}/api/v1/capabilities`, {
+    headers: { Authorization: `Bearer ${config.workerToken}` },
+  })
+  assert.equal(stillClosed.status, 503)
+  assert.deepEqual(await stillClosed.json(), {
+    error: 'EXTERNAL_WORKER_UNREADY',
+    reasons: ['EXTERNAL_EXECUTION_POLICY_PENDING'],
+  })
+})
+
 test('malformed JSON returns a stable 400 without echoing parser details or body', async t => {
   const stateDir = await tempDirectory('codex-app-invalid-json-')
   const config = testConfig(stateDir)

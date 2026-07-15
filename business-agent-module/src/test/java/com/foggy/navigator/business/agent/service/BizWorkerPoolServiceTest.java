@@ -14,6 +14,7 @@ import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.common.enums.ResourceOwnerType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.Optional;
 
@@ -54,6 +55,11 @@ class BizWorkerPoolServiceTest {
         assertEquals(BizWorkerPoolService.PLATFORM_OWNER_ID, dto.getOwnerId());
         assertEquals(BizWorkerPoolService.STATUS_ENABLED, dto.getStatus());
         assertEquals(BizWorkerPoolService.HEALTHY, dto.getHealthStatus());
+        assertEquals(0, dto.getCredentialVersion());
+        ArgumentCaptor<BizWorkerIdentityEntity> saved = ArgumentCaptor.forClass(BizWorkerIdentityEntity.class);
+        verify(identityRepository).save(saved.capture());
+        assertEquals(SecretTokenSupport.sha256("token"), saved.getValue().getTokenHash());
+        assertNull(saved.getValue().getCredentialExpiresAt());
     }
 
     @Test
@@ -74,6 +80,79 @@ class BizWorkerPoolServiceTest {
     }
 
     @Test
+    void registerWorkerIdentity_rejectsExistingWorkerOwnedByAnotherUpstream() {
+        BizWorkerIdentityEntity existing = worker(
+                "LANGGRAPH_BIZ", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
+        existing.setBaseUrl("http://original-worker");
+        when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(existing));
+
+        RegisterWorkerIdentityForm form = workerIdentityForm(
+                "worker-1", "LANGGRAPH_BIZ", "http://attacker-worker");
+
+        assertThrows(SecurityException.class, () -> service.registerWorkerIdentity(
+                ResourceOwnerType.UPSTREAM_SYSTEM, "ups-2", form));
+
+        assertEquals("ups-1", existing.getOwnerId());
+        assertEquals("http://original-worker", existing.getBaseUrl());
+        verify(identityRepository, never()).save(any());
+    }
+
+    @Test
+    void registerWorkerIdentity_rejectsExistingWorkerBackendChange() {
+        BizWorkerIdentityEntity existing = worker(
+                "LANGGRAPH_BIZ", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
+        when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(existing));
+
+        RegisterWorkerIdentityForm form = workerIdentityForm(
+                "worker-1", "OPENAI_CODEX", "http://worker");
+
+        assertThrows(IllegalArgumentException.class, () -> service.registerWorkerIdentity(
+                ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1", form));
+
+        assertEquals("LANGGRAPH_BIZ", existing.getWorkerBackend());
+        verify(identityRepository, never()).save(any());
+    }
+
+    @Test
+    void registerWorkerIdentity_sameOwnerUpdatePreservesStatusAndHealth() {
+        BizWorkerIdentityEntity existing = worker(
+                "LANGGRAPH_BIZ", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
+        existing.setStatus(BizWorkerPoolService.STATUS_DISABLED);
+        existing.setHealthStatus(BizWorkerPoolService.UNHEALTHY);
+        existing.setBaseUrl("http://old-worker");
+        when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(existing));
+
+        RegisterWorkerIdentityForm form = workerIdentityForm(
+                "worker-1", "LANGGRAPH_BIZ", "http://new-worker");
+
+        BizWorkerIdentityDTO result = service.registerWorkerIdentity(
+                ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1", form);
+
+        assertEquals("http://new-worker", result.getBaseUrl());
+        assertEquals(BizWorkerPoolService.STATUS_DISABLED, result.getStatus());
+        assertEquals(BizWorkerPoolService.UNHEALTHY, result.getHealthStatus());
+    }
+
+    @Test
+    void registerWorkerIdentity_cannotOverwriteModernCredentialWithLegacyIdentityToken() {
+        BizWorkerIdentityEntity existing = worker(
+                "LANGGRAPH_BIZ", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
+        existing.setCredentialVersion(2);
+        existing.setTokenHash("modern-hash");
+        when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(existing));
+        RegisterWorkerIdentityForm form = workerIdentityForm(
+                "worker-1", "LANGGRAPH_BIZ", "http://worker");
+        form.setIdentityToken("attacker-selected-token");
+
+        assertThrows(IllegalStateException.class, () -> service.registerWorkerIdentity(
+                ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1", form));
+
+        assertEquals(2, existing.getCredentialVersion());
+        assertEquals("modern-hash", existing.getTokenHash());
+        verify(identityRepository, never()).save(any());
+    }
+
+    @Test
     void registerWorkerIdentity_rejectsClientAppOwner() {
         RegisterWorkerIdentityForm form = new RegisterWorkerIdentityForm();
         form.setWorkerId("worker-1");
@@ -87,6 +166,20 @@ class BizWorkerPoolServiceTest {
     }
 
     @Test
+    void registerWorkerIdentity_rejectsRouteIdAlreadyUsedByPool() {
+        when(poolRepository.findByPoolId("shared-route"))
+                .thenReturn(Optional.of(pool("tenant-1")));
+        RegisterWorkerIdentityForm form = workerIdentityForm(
+                "shared-route", "LANGGRAPH_BIZ", "http://worker");
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> service.registerWorkerIdentity(form));
+
+        assertEquals("worker route id is already used by a worker pool", failure.getMessage());
+        verify(identityRepository, never()).save(any());
+    }
+
+    @Test
     void createPool_rejects_duplicate_pool_id() {
         when(poolRepository.findByPoolId("pool-1")).thenReturn(Optional.of(pool("tenant-1")));
 
@@ -95,8 +188,21 @@ class BizWorkerPoolServiceTest {
     }
 
     @Test
+    void createPool_rejectsRouteIdAlreadyUsedByWorkerIdentity() {
+        when(identityRepository.findByWorkerId("shared-route"))
+                .thenReturn(Optional.of(worker("LANGGRAPH_BIZ")));
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> service.createPool("tenant-1", createPoolForm("shared-route")));
+
+        assertEquals("worker route id is already used by a worker identity", failure.getMessage());
+        verify(poolRepository, never()).save(any());
+    }
+
+    @Test
     void addMember_rejects_backend_mismatch() {
-        when(poolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.PLATFORM, "tenant-1"))
                 .thenReturn(Optional.of(pool("tenant-1")));
         BizWorkerIdentityEntity worker = worker("PYTHON_OTHER");
         when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker));
@@ -107,7 +213,8 @@ class BizWorkerPoolServiceTest {
 
     @Test
     void addMember_rejects_duplicate_member() {
-        when(poolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.PLATFORM, "tenant-1"))
                 .thenReturn(Optional.of(pool("tenant-1")));
         when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker("LANGGRAPH_BIZ")));
         when(memberRepository.findByPoolIdAndWorkerId("pool-1", "worker-1"))
@@ -118,13 +225,52 @@ class BizWorkerPoolServiceTest {
     }
 
     @Test
+    void addMember_normalizesPoolIdForLookupDuplicateCheckAndSave() {
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.PLATFORM, "tenant-1"))
+                .thenReturn(Optional.of(pool("tenant-1")));
+        when(identityRepository.findByWorkerId("worker-1"))
+                .thenReturn(Optional.of(worker("LANGGRAPH_BIZ")));
+
+        service.addMember("tenant-1", "  pool-1  ", addMemberForm("worker-1"));
+
+        verify(poolRepository).findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.PLATFORM, "tenant-1");
+        verify(memberRepository).findByPoolIdAndWorkerId("pool-1", "worker-1");
+        ArgumentCaptor<BizWorkerPoolMemberEntity> memberCaptor =
+                ArgumentCaptor.forClass(BizWorkerPoolMemberEntity.class);
+        verify(memberRepository).save(memberCaptor.capture());
+        assertEquals("pool-1", memberCaptor.getValue().getPoolId());
+    }
+
+    @Test
     void requireAvailablePool_rejects_disabled_pool() {
         BizWorkerPoolEntity pool = pool("tenant-1");
         pool.setStatus(BizWorkerPoolService.STATUS_DISABLED);
-        when(poolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1")).thenReturn(Optional.of(pool));
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.PLATFORM, "tenant-1"))
+                .thenReturn(Optional.of(pool));
 
         assertThrows(IllegalStateException.class,
                 () -> service.requireAvailablePool("tenant-1", "pool-1"));
+    }
+
+    @Test
+    void requireAvailablePool_rejectsPoolOwnedByAnotherUpstreamSystem() {
+        BizWorkerPoolEntity ownerBPool = pool(
+                "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-b");
+        when(poolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+                .thenReturn(Optional.of(ownerBPool));
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-a"))
+                .thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class, () -> service.requireAvailablePool(
+                "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-a", "pool-1"));
+
+        verify(poolRepository).findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-a");
+        verify(poolRepository, never()).findByPoolIdAndTenantId(anyString(), anyString());
     }
 
     @Test
@@ -135,6 +281,27 @@ class BizWorkerPoolServiceTest {
         assertEquals(ResourceOwnerType.PLATFORM, dto.getOwnerType());
         assertEquals("tenant-1", dto.getOwnerId());
         assertEquals(BizWorkerPoolService.STATUS_ENABLED, dto.getStatus());
+    }
+
+    @Test
+    void createPool_normalizesPersistedLookupKeysAndTextFields() {
+        CreateWorkerPoolForm form = createPoolForm("  pool-1  ");
+        form.setName("  Default Pool  ");
+        form.setWorkerBackend("  LANGGRAPH_BIZ  ");
+        form.setRoutingPolicy("  ROUND_ROBIN  ");
+
+        service.createPool("  tenant-1  ", form);
+
+        verify(poolRepository).findByPoolId("pool-1");
+        ArgumentCaptor<BizWorkerPoolEntity> saved =
+                ArgumentCaptor.forClass(BizWorkerPoolEntity.class);
+        verify(poolRepository).save(saved.capture());
+        assertEquals("pool-1", saved.getValue().getPoolId());
+        assertEquals("tenant-1", saved.getValue().getTenantId());
+        assertEquals("tenant-1", saved.getValue().getOwnerId());
+        assertEquals("Default Pool", saved.getValue().getName());
+        assertEquals("LANGGRAPH_BIZ", saved.getValue().getWorkerBackend());
+        assertEquals("ROUND_ROBIN", saved.getValue().getRoutingPolicy());
     }
 
     @Test
@@ -163,25 +330,145 @@ class BizWorkerPoolServiceTest {
 
     @Test
     void addMember_rejects_upstreamSystem_worker_from_other_owner() {
-        when(poolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1"))
                 .thenReturn(Optional.of(pool("tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1")));
         BizWorkerIdentityEntity worker = worker("LANGGRAPH_BIZ", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-2");
         when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker));
 
         assertThrows(SecurityException.class,
-                () -> service.addMember("tenant-1", "pool-1", addMemberForm("worker-1")));
+                () -> service.addMember(
+                        "tenant-1",
+                        ResourceOwnerType.UPSTREAM_SYSTEM,
+                        "ups-1",
+                        "pool-1",
+                        addMemberForm("worker-1")));
     }
 
     @Test
     void addMember_rejectsUpstreamSystemWorkerInPlatformPool() {
-        when(poolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
-                .thenReturn(Optional.of(pool("tenant-1", ResourceOwnerType.PLATFORM, BizWorkerPoolService.PLATFORM_OWNER_ID)));
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.PLATFORM, "tenant-1"))
+                .thenReturn(Optional.of(pool("tenant-1")));
         BizWorkerIdentityEntity worker = worker("LANGGRAPH_BIZ", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
         when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker));
 
         assertThrows(SecurityException.class,
                 () -> service.addMember("tenant-1", "pool-1", addMemberForm("worker-1")));
 
+        verify(memberRepository, never()).save(any());
+    }
+
+    @Test
+    void addMember_rejectsDisabledWorker() {
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.PLATFORM, "tenant-1"))
+                .thenReturn(Optional.of(pool("tenant-1")));
+        BizWorkerIdentityEntity worker = worker("LANGGRAPH_BIZ");
+        worker.setStatus(BizWorkerPoolService.STATUS_DISABLED);
+        when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.addMember("tenant-1", "pool-1", addMemberForm("worker-1")));
+
+        verify(memberRepository, never()).save(any());
+    }
+
+    @Test
+    void addMember_rejectsUnhealthyWorker() {
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.PLATFORM, "tenant-1"))
+                .thenReturn(Optional.of(pool("tenant-1")));
+        BizWorkerIdentityEntity worker = worker("LANGGRAPH_BIZ");
+        worker.setHealthStatus(BizWorkerPoolService.UNHEALTHY);
+        when(identityRepository.findByWorkerId("worker-1")).thenReturn(Optional.of(worker));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.addMember("tenant-1", "pool-1", addMemberForm("worker-1")));
+
+        verify(memberRepository, never()).save(any());
+    }
+
+    @Test
+    void listPools_usesExactOwnerScope() {
+        BizWorkerPoolEntity owned = pool(
+                "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
+        when(poolRepository.findByTenantIdAndOwnerTypeAndOwnerIdOrderByCreatedAtDesc(
+                "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1"))
+                .thenReturn(java.util.List.of(owned));
+
+        java.util.List<BizWorkerPoolDTO> result = service.listPools(
+                "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
+
+        assertEquals(1, result.size());
+        assertEquals("ups-1", result.get(0).getOwnerId());
+        verify(poolRepository).findByTenantIdAndOwnerTypeAndOwnerIdOrderByCreatedAtDesc(
+                "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
+        verify(poolRepository, never()).findByTenantIdOrderByCreatedAtDesc(anyString());
+    }
+
+    @Test
+    void updatePoolStatus_rejectsUnsupportedStatus() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.updatePoolStatus("tenant-1", "pool-1", "DRAINING"));
+
+        verify(poolRepository, never()).save(any());
+    }
+
+    @Test
+    void updatePoolStatus_usesExactOwnerScopeAndNormalizesAllowedStatus() {
+        BizWorkerPoolEntity owned = pool(
+                "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1"))
+                .thenReturn(Optional.of(owned));
+
+        BizWorkerPoolDTO result = service.updatePoolStatus(
+                "tenant-1",
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                "ups-1",
+                "pool-1",
+                " disabled ");
+
+        assertEquals(BizWorkerPoolService.STATUS_DISABLED, result.getStatus());
+        verify(poolRepository).findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-1");
+    }
+
+    @Test
+    void internalAddMemberCannotManageUpstreamOwnedPool() {
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.PLATFORM, "tenant-1"))
+                .thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.addMember("tenant-1", "pool-1", addMemberForm("worker-1")));
+
+        verify(identityRepository, never()).findByWorkerId(anyString());
+        verify(memberRepository, never()).save(any());
+    }
+
+    @Test
+    void upstreamCredentialACannotAddMemberToPoolOwnedByUpstreamB() {
+        BizWorkerPoolEntity ownerBPool = pool(
+                "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-b");
+        when(poolRepository.findByPoolIdAndTenantId("pool-1", "tenant-1"))
+                .thenReturn(Optional.of(ownerBPool));
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-a"))
+                .thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class, () -> service.addMember(
+                "tenant-1",
+                ResourceOwnerType.UPSTREAM_SYSTEM,
+                "ups-a",
+                "pool-1",
+                addMemberForm("worker-1")));
+
+        verify(poolRepository).findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                "pool-1", "tenant-1", ResourceOwnerType.UPSTREAM_SYSTEM, "ups-a");
+        verify(poolRepository, never()).findByPoolIdAndTenantId(anyString(), anyString());
+        verify(identityRepository, never()).findByWorkerId(anyString());
         verify(memberRepository, never()).save(any());
     }
 
@@ -196,6 +483,15 @@ class BizWorkerPoolServiceTest {
     private AddWorkerPoolMemberForm addMemberForm(String workerId) {
         AddWorkerPoolMemberForm form = new AddWorkerPoolMemberForm();
         form.setWorkerId(workerId);
+        return form;
+    }
+
+    private RegisterWorkerIdentityForm workerIdentityForm(
+            String workerId, String backend, String baseUrl) {
+        RegisterWorkerIdentityForm form = new RegisterWorkerIdentityForm();
+        form.setWorkerId(workerId);
+        form.setWorkerBackend(backend);
+        form.setBaseUrl(baseUrl);
         return form;
     }
 

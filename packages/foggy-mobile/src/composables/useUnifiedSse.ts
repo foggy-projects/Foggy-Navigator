@@ -28,6 +28,7 @@ let transport: SseTransport | null = null
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 let retryCount = 0
 let manuallyClosed = false
+let connectionGeneration = 0
 const MAX_RETRIES = 10
 const BASE_DELAY = 2000
 const MAX_DELAY = 60000
@@ -71,14 +72,24 @@ function dispatchEvent(eventType: string, data: string) {
 }
 
 // ---- connection management ----
-function scheduleReconnect() {
-  if (manuallyClosed) return
+function clearRetryTimer() {
+  if (retryTimer != null) {
+    clearTimeout(retryTimer)
+    retryTimer = null
+  }
+}
+
+function scheduleReconnect(generation: number) {
+  // Fetch SSE reports both `onError` and `onClose` for one broken transport.
+  // One timer per current transport keeps those callbacks from opening two
+  // replacement connections and replaying the same session events twice.
+  if (manuallyClosed || generation !== connectionGeneration || retryTimer != null) return
   if (retryCount < MAX_RETRIES) {
     const delay = Math.min(BASE_DELAY * Math.pow(2, retryCount), MAX_DELAY)
     retryCount++
     retryTimer = setTimeout(() => {
       retryTimer = null
-      if (!manuallyClosed) doConnect()
+      if (!manuallyClosed && generation === connectionGeneration) doConnect()
     }, delay)
   } else {
     connected.value = false
@@ -86,6 +97,13 @@ function scheduleReconnect() {
 }
 
 function doConnect() {
+  const previousTransport = transport
+  // Invalidate callbacks before closing: some transports synchronously invoke
+  // onClose, which must not schedule a retry for the superseded connection.
+  const generation = ++connectionGeneration
+  transport = null
+  previousTransport?.close()
+
   const token = getToken()
   const sseUrl = `${getSseBaseUrl()}/sse/unified`
 
@@ -96,14 +114,14 @@ function doConnect() {
     },
     onEvent: dispatchEvent,
     onError: () => {
-      if (manuallyClosed) return
+      if (manuallyClosed || generation !== connectionGeneration) return
       connected.value = false
-      scheduleReconnect()
+      scheduleReconnect(generation)
     },
     onClose: () => {
-      if (!manuallyClosed) {
+      if (!manuallyClosed && generation === connectionGeneration) {
         connected.value = false
-        scheduleReconnect()
+        scheduleReconnect(generation)
       }
     },
   })
@@ -164,10 +182,8 @@ export function useUnifiedSse() {
   function disconnect() {
     manuallyClosed = true
     connected.value = false
-    if (retryTimer != null) {
-      clearTimeout(retryTimer)
-      retryTimer = null
-    }
+    clearRetryTimer()
+    connectionGeneration++
     if (transport) {
       transport.close()
       transport = null
@@ -176,13 +192,11 @@ export function useUnifiedSse() {
 
   function forceReconnect() {
     // 强制重连：关闭当前连接，重置重试计数，重新建立连接
+    clearRetryTimer()
+    connectionGeneration++
     if (transport) {
       transport.close()
       transport = null
-    }
-    if (retryTimer != null) {
-      clearTimeout(retryTimer)
-      retryTimer = null
     }
     manuallyClosed = false
     retryCount = 0

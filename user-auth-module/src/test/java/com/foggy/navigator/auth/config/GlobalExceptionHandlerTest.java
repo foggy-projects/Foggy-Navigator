@@ -12,6 +12,17 @@ class GlobalExceptionHandlerTest {
     private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
 
     @Test
+    void handleExRuntimeException_preservesBusinessEnvelope() {
+        ResponseEntity<RX<?>> response = handler.handleExRuntimeException(
+                RX.throwB("operation failed"));
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals(600, response.getBody().getCode());
+        assertEquals("B600", response.getBody().getExCode());
+        assertEquals("operation failed", response.getBody().getMsg());
+    }
+
+    @Test
     void handleSecurityException_returns401ForUnauthenticatedUser() {
         ResponseEntity<RX<?>> response = handler.handleSecurityException(
                 new SecurityException("未登录，请先登录"));

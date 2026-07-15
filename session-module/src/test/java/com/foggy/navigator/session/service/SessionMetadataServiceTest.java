@@ -4,6 +4,7 @@ import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
@@ -482,8 +483,7 @@ class SessionMetadataServiceTest {
         SessionEntity session = session("session-1");
         session.setCurrentWorkerId("worker-1");
 
-        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
-        modelConfig.setId("cfg-1");
+        LlmModelConfigDTO modelConfig = modelConfig("cfg-1");
         modelConfig.setBaseUrl("");
 
         when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
@@ -500,7 +500,10 @@ class SessionMetadataServiceTest {
         assertEquals("encrypted", session.getAuthTokenCiphertext());
         assertEquals("cfg-1", session.getAuthModelConfigId());
         assertNotNull(session.getAuthBoundAt());
-        verify(llmModelManager).validateModelAccessForWorker("cfg-1", "worker-1");
+        var order = inOrder(llmModelManager);
+        order.verify(llmModelManager).getModelConfig("cfg-1");
+        order.verify(llmModelManager).validateModelAccessForWorker("cfg-1", "worker-1");
+        order.verify(llmModelManager).getDecryptedApiKey("cfg-1");
     }
 
     @Test
@@ -522,8 +525,7 @@ class SessionMetadataServiceTest {
         SessionEntity session = session("session-1");
         session.setCurrentWorkerId("worker-1");
 
-        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
-        modelConfig.setId("cfg-1");
+        LlmModelConfigDTO modelConfig = modelConfig("cfg-1");
 
         when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
         when(llmModelManager.getModelConfig("cfg-1")).thenReturn(Optional.of(modelConfig));
@@ -547,8 +549,7 @@ class SessionMetadataServiceTest {
         SessionEntity session = session("session-1");
         session.setCurrentWorkerId("worker-1");
 
-        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
-        modelConfig.setId("cfg-subscription");
+        LlmModelConfigDTO modelConfig = modelConfig("cfg-subscription");
         modelConfig.setWorkerBackend("CLAUDE_CODE");
         modelConfig.setHasApiKey(false);
 
@@ -568,14 +569,113 @@ class SessionMetadataServiceTest {
         verify(llmModelManager, never()).getDecryptedApiKey("cfg-subscription");
     }
 
+    @Test
+    void bindAuth_rejectsMissingModelConfigBeforeWorkerGrantOrDecrypt() {
+        SessionEntity session = session("session-1");
+        session.setCurrentWorkerId("worker-1");
+        when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
+        when(llmModelManager.getModelConfig("missing-config")).thenReturn(Optional.empty());
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.bindAuth("session-1", "user-1",
+                        null, null, null, "missing-config"));
+
+        assertEquals("LLM model config is not available for this session", error.getMessage());
+        verify(llmModelManager, never()).validateModelAccessForWorker(anyString(), anyString());
+        verify(llmModelManager, never()).getDecryptedApiKey(anyString());
+        verify(credentialEncryptor, never()).encrypt(anyString());
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void bindAuth_rejectsDisabledModelConfigBeforeWorkerGrantOrDecrypt() {
+        SessionEntity session = session("session-1");
+        session.setCurrentWorkerId("worker-1");
+        LlmModelConfigDTO modelConfig = modelConfig("disabled-config");
+        modelConfig.setEnabled(false);
+        when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
+        when(llmModelManager.getModelConfig("disabled-config")).thenReturn(Optional.of(modelConfig));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.bindAuth("session-1", "user-1",
+                        null, null, null, "disabled-config"));
+
+        verify(llmModelManager, never()).validateModelAccessForWorker(anyString(), anyString());
+        verify(llmModelManager, never()).getDecryptedApiKey(anyString());
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void bindAuth_rejectsCrossTenantModelConfigBeforeDecryptEvenWithoutWorker() {
+        SessionEntity session = session("session-1");
+        LlmModelConfigDTO modelConfig = modelConfig("other-tenant-config");
+        modelConfig.setTenantId("tenant-2");
+        when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
+        when(llmModelManager.getModelConfig("other-tenant-config")).thenReturn(Optional.of(modelConfig));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.bindAuth("session-1", "user-1",
+                        null, null, null, "other-tenant-config"));
+
+        verify(llmModelManager, never()).validateModelAccessForWorker(anyString(), anyString());
+        verify(llmModelManager, never()).getDecryptedApiKey(anyString());
+        verify(credentialEncryptor, never()).encrypt(anyString());
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void bindAuth_rejectsModelConfigWhenSessionTenantIsMissing() {
+        SessionEntity session = session("session-1");
+        session.setTenantId(null);
+        LlmModelConfigDTO modelConfig = modelConfig("cfg-1");
+        when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
+        when(llmModelManager.getModelConfig("cfg-1")).thenReturn(Optional.of(modelConfig));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.bindAuth("session-1", "user-1",
+                        null, null, null, "cfg-1"));
+
+        verify(llmModelManager, never()).getDecryptedApiKey(anyString());
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void bindAuth_rejectsModelConfigWithMissingOwnerBeforeDecrypt() {
+        SessionEntity session = session("session-1");
+        session.setCurrentWorkerId("worker-1");
+        LlmModelConfigDTO modelConfig = modelConfig("ownerless-config");
+        modelConfig.setOwnerId(null);
+        when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
+        when(llmModelManager.getModelConfig("ownerless-config")).thenReturn(Optional.of(modelConfig));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.bindAuth("session-1", "user-1",
+                        null, null, null, "ownerless-config"));
+
+        verify(llmModelManager, never()).validateModelAccessForWorker(anyString(), anyString());
+        verify(llmModelManager, never()).getDecryptedApiKey(anyString());
+        verify(sessionRepository, never()).save(any());
+    }
+
     private SessionEntity session(String sessionId) {
         SessionEntity session = new SessionEntity();
         session.setId(sessionId);
         session.setUserId("user-1");
+        session.setTenantId("tenant-1");
         session.setStatus("ACTIVE");
         session.setCreatedAt(LocalDateTime.of(2026, 3, 24, 9, 0));
         session.setUpdatedAt(LocalDateTime.of(2026, 3, 24, 9, 0));
         return session;
+    }
+
+    private LlmModelConfigDTO modelConfig(String modelConfigId) {
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setId(modelConfigId);
+        modelConfig.setTenantId("tenant-1");
+        modelConfig.setEnabled(true);
+        modelConfig.setOwnerType(ResourceOwnerType.PLATFORM);
+        modelConfig.setOwnerId("platform");
+        return modelConfig;
     }
 
     private SessionTaskEntity taskProjection(String sessionId, String taskId, String status) {

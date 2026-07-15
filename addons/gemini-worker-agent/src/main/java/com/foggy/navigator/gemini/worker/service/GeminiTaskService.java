@@ -474,12 +474,6 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
         }
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public void cancelTask(String taskId, String userId) {
-        cancelTaskDirect(taskId, userId);
-    }
-
     @Override
     @Transactional
     public void deleteTask(String userId, String taskId) {
@@ -610,12 +604,20 @@ public class GeminiTaskService implements TaskLookupProvider, TaskCommandProvide
                 .taskId(entity.getTaskId())
                 .sessionId(entity.getSessionId())
                 .userId(entity.getUserId())
+                .tenantId(entity.getTenantId())
                 .agentId(AGENT_ID)
                 .status(entity.getStatus())
                 .previousStatus(previousStatus)
                 .errorMessage(entity.getErrorMessage())
                 .interactionState(mapInteractionState(entity.getStatus()))
+                .recoverable(isDefinitiveTerminalStatus(entity.getStatus()) ? Boolean.FALSE : null)
                 .build());
+    }
+
+    private boolean isDefinitiveTerminalStatus(String status) {
+        return "COMPLETED".equals(status) || "FAILED".equals(status) || "ABORTED".equals(status)
+                || "REJECTED".equals(status) || "TIMED_OUT".equals(status)
+                || "CANCELLED".equals(status) || "CANCELED".equals(status);
     }
 
     private String mapInteractionState(String status) {

@@ -16,7 +16,7 @@
 
 ## 版本目标
 
-新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持固定 CLI `0.144.1` 已验证的全部模型与 reasoning 档位。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径和非 Ultra 行为、最高支持 Max，并拒绝所有 Ultra 请求；它不承载 app-server。OPT-005/006 已在 2026-07-12 完成独立 Backend、Provider、Session 与 Endpoint-synced Runtime 联合隔离签收：Endpoint Profile 是 App Server endpoint/token 唯一人工写源，Runtime 只保存同步派生状态与 affinity，两 Provider 不互相 fallback。P3 生产样本、72 小时 soak、轮换与 release owner 批准仍未完成，隔离签收不等于生产批准。P7 SDK retirement 已延后，不属于 `1.4.0-SNAPSHOT` 的交付范围。
+新增独立部署的 `codex-app-server-worker`，以 Codex app-server 作为执行引擎并支持通过 capability/schema 验证的模型与 reasoning 档位；不同 Codex CLI patch 版本默认可共存，只有显式配置平台版本约束时才要求精确匹配。现有 `codex-agent-worker` 保持 SDK / `codex exec` 稳定路径和非 Ultra 行为、最高支持 Max，并拒绝所有 Ultra 请求；它不承载 app-server。OPT-005/006 已在 2026-07-12 完成独立 Backend、Provider、Session 与 Endpoint-synced Runtime 联合隔离签收：Endpoint Profile 是 App Server endpoint/token 唯一人工写源，Runtime 只保存同步派生状态与 affinity，两 Provider 不互相 fallback。P3 生产样本、72 小时 soak、轮换与 release owner 批准仍未完成，隔离签收不等于生产批准。P7 SDK retirement 已延后，不属于 `1.4.0-SNAPSHOT` 的交付范围。
 
 ## 已确认决策
 
@@ -27,7 +27,7 @@
 5. PC 继续使用统一 SSE/snapshot 展示 app-server 原生子任务；不暴露 endpoint、token、Codex Home 或原始子线程内容。
 6. SDK retirement 已按产品决定延后，不属于本版本目标；未来改变该决定必须另建 workitem。
 7. App Server Endpoint 配置与 Runtime 分离：Endpoint Profile 按物理 Worker 归属保存 URL 与加密服务令牌（可为空），支持增删改；Runtime 只保存某次同步后的不可变连接快照和能力结果。
-8. 点击 Endpoint “同步”后读取 `/api/v1/capabilities`：配置和能力指纹未变则保留当前 Runtime；变更则新建受控 Runtime revision，旧 revision 停止新任务路由。新 revision 初始为 Disabled + Dark，必须由 Owner 显式启用。
+8. 点击 Endpoint “同步”后读取 `/api/v1/capabilities`：配置和能力指纹未变则保留当前 Runtime；若匹配 Runtime 已归档，则原地恢复为 Disabled + Dark；变更则新建受控 Runtime revision，旧 revision 停止新任务路由。新 revision 初始为 Disabled + Dark，必须由 Owner 显式启用。
 9. Physical Worker 的 App Server 页签复用 owner-bound Endpoint Profile 管理，不新增 `codexAppServerConfig`；公开手工 Runtime endpoint/token 注册入口从目标基线移除。
 
 ## 阶段状态
@@ -84,6 +84,7 @@ P3-P6 是 OPT-001 同 Provider 双 Runtime 方案的历史 gate，不再作为 O
 - [OPT-005 实施计划](./workitems/OPT-005-codex-app-server-independent-provider-plan.md)
 - [OPT-005 Ultra 执行提示词](./workitems/OPT-005-codex-app-server-independent-provider-execution-prompt.md)
 - [OPT-006 App Server Endpoint 与 Runtime 同步](./workitems/OPT-006-codex-app-server-endpoint-runtime-sync.md)
+- [BUG-025 Endpoint 同步未恢复匹配的归档 Runtime](./workitems/BUG-025-endpoint-sync-does-not-restore-archived-runtime.md)
 - [OPT-005/006 联合实现质量检查](./quality/OPT-005-codex-app-server-independent-provider-implementation-quality.md)
 - [OPT-005/006 联合测试覆盖审计](./coverage/OPT-005-codex-app-server-independent-provider-coverage-audit.md)
 - [OPT-005/006 联合隔离验收记录](./acceptance/OPT-005-codex-app-server-independent-provider-acceptance.md)
@@ -132,6 +133,7 @@ P3-P6 是 OPT-001 同 Provider 双 Runtime 方案的历史 gate，不再作为 O
 - [BUG-014 Linux 安装测试 glob 阻断](./workitems/BUG-014-app-worker-linux-test-glob-install-blocker.md)
 - [BUG-015 Node 18 `import.meta.dirname` 阻断](./workitems/BUG-015-app-worker-node18-import-meta-dirname.md)
 - [BUG-016 Codex Runtime list Java 签名兼容](./workitems/BUG-016-codex-runtime-list-source-compatibility.md)
+- [BUG-024 Codex Runtime CLI 版本过度约束](./workitems/BUG-024-codex-runtime-cli-version-overconstraint.md)
 
 ## 当前边界
 

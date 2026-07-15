@@ -28,6 +28,7 @@
 - [1.3.3-SNAPSHOT](./1.3.3-SNAPSHOT/)
 - [1.4.0-SNAPSHOT](./1.4.0-SNAPSHOT/)
 - [1.4.1-SNAPSHOT](./1.4.1-SNAPSHOT/)
+- [1.4.2-SNAPSHOT](./1.4.2-SNAPSHOT/)
 - [1.0.2-APP](./1.0.2-APP/)
 
 ## 说明

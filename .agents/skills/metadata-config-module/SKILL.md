@@ -255,7 +255,7 @@ class ConfigurationManagerTest {
 - 如果需要级联操作 → 在同一事务中处理，先子后父
 - 如果状态变更需要通知 → 发布 STATUS_CHANGED 事件
 - 如果涉及敏感信息 → 存储时加密（TODO: 待实现）
-- 如果修改 Entity → 检查是否影响 metadata-query-module 的查询
+- 如果修改 Entity → 检查当前配置读写 API、前端设置页和持久化迁移是否同步；旧 `metadata-query-module` 已退役，不再作为依赖方
 
 ## 常用命令
 
@@ -283,9 +283,8 @@ metadata-config-module
 └── foggy-core         # 核心框架（RX 返回类型）
 ```
 
-## 与 metadata-query-module 的关系
+## 当前模块边界
 
-- **config-module**：负责配置的写入（增删改）
-- **query-module**：负责配置的读取（查询）
-- 共享 Entity 定义（在 navigator-common 中）
-- 配置变更后，query-module 通过事件或直接查询获取最新数据
+- `metadata-config-module` 是仍在使用的平台配置读写与设置能力，不能因历史包名 `com.foggy.navigator.metadata.query.config.*` 被当作旧查询模块删除。
+- 旧 `metadata-query-module` 及 `/api/metadata/query/**` 已在 1.4.2 dev 治理中退役，不再是本模块的读取侧或下游消费者。
+- 修改配置 Entity、服务或 API 时，应直接核对当前 `/api/v1/config/platform/**` 等真实消费者、数据库迁移和设置页，不再维护已退役查询模板的兼容。

@@ -10,7 +10,8 @@ public interface LanggraphApprovalRepository extends JpaRepository<LanggraphAppr
 
     List<LanggraphApprovalEntity> findByTaskId(String taskId);
 
-    Optional<LanggraphApprovalEntity> findByTaskIdAndStatus(String taskId, String status);
+    Optional<LanggraphApprovalEntity> findByTaskIdAndUserIdAndStatus(
+            String taskId, String userId, String status);
 
     List<LanggraphApprovalEntity> findBySessionId(String sessionId);
 }

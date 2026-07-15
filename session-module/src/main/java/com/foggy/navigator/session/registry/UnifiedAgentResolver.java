@@ -17,7 +17,7 @@ import java.util.Optional;
  * 统一 Agent 解析器 —— 聚合所有 A2aAgentProvider，
  * 通过 AgentResolveContext 自动路由 user / tenant / A2A 等维度。
  * <p>
- * 本质是 DefaultA2aAgentRegistry 的上下文感知版本。
+ * 按调用上下文解析 Provider 暴露的 A2A Agent。
  */
 @Slf4j
 @Component

@@ -387,9 +387,9 @@ export function createChatState(): ChatState {
       case AipMessageType.TEXT_CHUNK: {
         const p = aip.payload as TextPayload
         isThinking.value = false
-        const lastChunk = [...messages.value].reverse().find(
-          (m) => m.type === AipMessageType.TEXT_CHUNK && m.sender === 'assistant',
-        )
+        const taskId = textTaskId(p, raw)
+        const streamId = textStreamId(p, raw)
+        const lastChunk = findTextStream(taskId, streamId)
         if (lastChunk) {
           lastChunk.content += p.content
           applyExecutionReport(lastChunk, report)
@@ -399,6 +399,9 @@ export function createChatState(): ChatState {
             type: aip.type,
             sender: 'assistant',
             content: p.content,
+            taskId,
+            streamId,
+            raw: aip.payload,
             timestamp: aip.timestamp,
             ...executionReportProps(report),
             ...uiActionProps(uiActions),
@@ -410,13 +413,16 @@ export function createChatState(): ChatState {
       case AipMessageType.TEXT_COMPLETE: {
         const p = aip.payload as TextPayload
         isThinking.value = false
+        const taskId = textTaskId(p, raw)
+        const streamId = textStreamId(p, raw)
         // Newer Codex SDKs emit progress as commentary and the only final answer
         // in the terminal result. Render that result unless an identical final
         // assistant message already exists in the current user turn.
         if (raw?.isResult === true) {
           const content = p.content || ''
           const previousConversationMessage = [...messages.value].reverse().find(
-            (message) => message.sender === 'assistant' || message.sender === 'user',
+            (message) => (message.sender === 'assistant' || message.sender === 'user')
+              && (!taskId || !messageTaskId(message) || messageTaskId(message) === taskId),
           )
           if (content && previousConversationMessage?.sender === 'assistant'
             && previousConversationMessage.content === content) {
@@ -439,12 +445,13 @@ export function createChatState(): ChatState {
           }
           break
         }
-        const lastChunk = [...messages.value].reverse().find(
-          (m) => m.type === AipMessageType.TEXT_CHUNK && m.sender === 'assistant',
-        )
+        const lastChunk = findTextStream(taskId, streamId)
         if (lastChunk) {
           lastChunk.content = p.content
           lastChunk.type = AipMessageType.TEXT_COMPLETE
+          lastChunk.taskId = taskId
+          lastChunk.streamId = streamId
+          lastChunk.raw = aip.payload
           applyExecutionReport(lastChunk, report)
         } else {
           if (!p.content && appendExecutionReportMessage(aip, report)) break
@@ -453,6 +460,9 @@ export function createChatState(): ChatState {
             type: aip.type,
             sender: 'assistant',
             content: p.content,
+            taskId,
+            streamId,
+            raw: aip.payload,
             timestamp: aip.timestamp,
             ...executionReportProps(report),
             ...uiActionProps(extractUiActions(raw, p.content)),
@@ -827,7 +837,35 @@ export function createChatState(): ChatState {
     }
   }
 
+  /**
+   * App Server can emit multiple assistant items in one turn. Only an exact
+   * task + stream match may append/complete a text chunk; missing stream IDs
+   * deliberately never fall back to an arbitrary historical pending chunk.
+   */
+  function findTextStream(taskId: string | undefined, streamId: string | undefined): ChatMessage | undefined {
+    if (!streamId) return undefined
+    return [...messages.value].reverse().find(
+      (message) => message.sender === 'assistant'
+        && message.type === AipMessageType.TEXT_CHUNK
+        && message.taskId === taskId
+        && message.streamId === streamId,
+    )
+  }
+
+  function textTaskId(payload: TextPayload, raw: Record<string, unknown> | undefined): string | undefined {
+    return payload.taskId ?? stringValue(raw?.taskId)
+  }
+
+  function textStreamId(payload: TextPayload, raw: Record<string, unknown> | undefined): string | undefined {
+    return payload.streamId ?? stringValue(raw?.streamId)
+  }
+
+  function stringValue(value: unknown): string | undefined {
+    return typeof value === 'string' && value ? value : undefined
+  }
+
   function messageTaskId(message: ChatMessage): string | undefined {
+    if (message.taskId) return message.taskId
     if (!message.raw || typeof message.raw !== 'object') return undefined
     const taskId = (message.raw as Record<string, unknown>).taskId
     return typeof taskId === 'string' ? taskId : undefined

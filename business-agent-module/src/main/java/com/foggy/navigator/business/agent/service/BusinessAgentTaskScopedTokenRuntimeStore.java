@@ -3,9 +3,7 @@ package com.foggy.navigator.business.agent.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -18,34 +16,29 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class BusinessAgentTaskScopedTokenRuntimeStore {
 
-    private final Map<String, TokenEntry> store = new ConcurrentHashMap<>();
+    private final Map<TokenKey, TokenEntry> store = new ConcurrentHashMap<>();
 
     /**
      * Register a new task-scoped token.
      * @param tenantId The tenant ID.
      * @param sessionId The session ID.
-     * @param taskId The task ID (optional, can be null).
+     * @param taskId The required task ID.
      * @param plainToken The generated plain token.
      * @param expiresAt The explicit expiration time matching the DB record.
      */
     public void registerToken(String tenantId, String sessionId, String taskId, String plainToken, LocalDateTime expiresAt) {
-        if (tenantId == null || sessionId == null || plainToken == null || expiresAt == null) {
-            log.warn("Cannot register token with null keys/values: tenantId={}, sessionId={}, expiresAt={}", tenantId, sessionId, expiresAt);
+        if (tenantId == null || sessionId == null || taskId == null || taskId.isBlank() ||
+                plainToken == null || expiresAt == null) {
+            log.warn("Cannot register task-scoped token with incomplete keys/values: " +
+                            "tenantId={}, sessionId={}, taskId={}, expiresAt={}",
+                    tenantId, sessionId, taskId, expiresAt);
             return;
         }
 
-        long expiresAtMillis = expiresAt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-        TokenEntry entry = new TokenEntry(plainToken, expiresAtMillis);
+        TokenEntry entry = new TokenEntry(plainToken, expiresAt);
 
-        // Register under session scope
-        String sessionKey = generateSessionKey(tenantId, sessionId);
-        store.put(sessionKey, entry);
-
-        // Register under exact task scope if available
-        if (taskId != null && !taskId.isBlank()) {
-            String taskKey = generateTaskKey(tenantId, sessionId, taskId);
-            store.put(taskKey, entry);
-        }
+        TokenKey taskKey = new TokenKey(tenantId, sessionId, taskId);
+        store.put(taskKey, entry);
 
         log.debug("Registered task-scoped token in runtime store for tenantId={}, sessionId={}, taskId={}", tenantId, sessionId, taskId);
 
@@ -57,32 +50,21 @@ public class BusinessAgentTaskScopedTokenRuntimeStore {
      * Retrieve a plain token. Returns null if missing or expired.
      * @param tenantId The tenant ID.
      * @param sessionId The session ID.
-     * @param taskId The task ID (optional).
+     * @param taskId The required task ID. Missing task identity fails closed.
      */
     public String getToken(String tenantId, String sessionId, String taskId) {
-        if (tenantId == null || sessionId == null) {
+        if (tenantId == null || sessionId == null || taskId == null || taskId.isBlank()) {
             return null;
         }
 
-        TokenEntry entry = null;
-        String key = null;
-
-        // Prefer exact task match
-        if (taskId != null && !taskId.isBlank()) {
-            key = generateTaskKey(tenantId, sessionId, taskId);
-            entry = store.get(key);
-            // DO NOT fallback to session match if a specific taskId was requested
-        } else {
-            // Fallback to session match only if no taskId was provided
-            key = generateSessionKey(tenantId, sessionId);
-            entry = store.get(key);
-        }
+        TokenKey key = new TokenKey(tenantId, sessionId, taskId);
+        TokenEntry entry = store.get(key);
 
         if (entry == null) {
             return null;
         }
 
-        if (System.currentTimeMillis() > entry.expiresAt) {
+        if (!entry.expiresAt.isAfter(LocalDateTime.now())) {
             store.remove(key);
             log.debug("Token expired in runtime store for key={}", key);
             return null;
@@ -91,18 +73,29 @@ public class BusinessAgentTaskScopedTokenRuntimeStore {
         return entry.plainToken;
     }
 
-    private String generateSessionKey(String tenantId, String sessionId) {
-        return tenantId + ":" + sessionId;
+    /**
+     * Remove the exact task alias only when it still points to the
+     * token represented by {@code tokenHash}. This prevents revoking an older
+     * token from accidentally deleting a newer task alias.
+     */
+    public void removeTokenIfMatches(String tenantId, String sessionId, String taskId, String tokenHash) {
+        if (tenantId == null || sessionId == null || taskId == null || taskId.isBlank() || tokenHash == null) {
+            return;
+        }
+        removeIfHashMatches(new TokenKey(tenantId, sessionId, taskId), tokenHash);
     }
 
-    private String generateTaskKey(String tenantId, String sessionId, String taskId) {
-        return tenantId + ":" + sessionId + ":" + taskId;
+    private void removeIfHashMatches(TokenKey key, String tokenHash) {
+        store.computeIfPresent(key, (ignored, entry) ->
+                tokenHash.equals(SecretTokenSupport.sha256(entry.plainToken)) ? null : entry);
     }
 
     private void cleanupExpired() {
-        long now = System.currentTimeMillis();
-        store.entrySet().removeIf(entry -> now > entry.getValue().expiresAt);
+        LocalDateTime now = LocalDateTime.now();
+        store.entrySet().removeIf(entry -> !entry.getValue().expiresAt.isAfter(now));
     }
 
-    private record TokenEntry(String plainToken, long expiresAt) {}
+    private record TokenKey(String tenantId, String sessionId, String taskId) {}
+
+    private record TokenEntry(String plainToken, LocalDateTime expiresAt) {}
 }

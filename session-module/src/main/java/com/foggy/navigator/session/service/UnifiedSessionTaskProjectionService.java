@@ -176,6 +176,7 @@ final class UnifiedSessionTaskProjectionService {
         putIfPresent(item, "responseTimeoutThresholdSeconds", readProperty(task, "responseTimeoutThresholdSeconds"));
         putIfPresent(item, "source", readProperty(task, "source"));
         putIfPresent(item, "createdAt", readProperty(task, "createdAt"));
+        putIfPresent(item, "createdAtEpochMs", readProperty(task, "createdAtEpochMs"));
         putIfPresent(item, "updatedAt", readProperty(task, "updatedAt"));
         putIfPresent(item, "sessionTaskCount", readProperty(task, "sessionTaskCount"));
         putIfPresent(item, "sessionTotalCostUsd", readProperty(task, "sessionTotalCostUsd"));
@@ -463,6 +464,7 @@ final class UnifiedSessionTaskProjectionService {
         item.put("responseTimeoutThresholdSeconds", TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS);
         item.put("source", latestTask.getSource());
         item.put("createdAt", latestTask.getCreatedAt());
+        item.put("createdAtEpochMs", asLong(state.get(ProviderStateCodec.FIELD_CREATED_AT_EPOCH_MS)));
         item.put("updatedAt", latestTask.getUpdatedAt());
         item.put("sessionTaskCount", view.tasks().size());
         item.put("sessionTotalCostUsd", sumCost(view.tasks()));
@@ -578,6 +580,7 @@ final class UnifiedSessionTaskProjectionService {
                 .durationMs(entity.getDurationMs())
                 .numTurns(entity.getNumTurns())
                 .resultText(entity.getResultText())
+                .structuredOutput(asString(state.get(ProviderStateCodec.FIELD_STRUCTURED_OUTPUT)))
                 .errorMessage(entity.getErrorMessage())
                 .lastAckedSeq(entity.getLastAckedSeq())
                 .lastOutputAt(entity.getLastOutputAt())
@@ -588,6 +591,7 @@ final class UnifiedSessionTaskProjectionService {
                 .responseTimeoutThresholdSeconds(TaskResponseTimeoutSupport.DEFAULT_RESPONSE_TIMEOUT_SECONDS)
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
+                .createdAtEpochMs(asLong(state.get(ProviderStateCodec.FIELD_CREATED_AT_EPOCH_MS)))
                 .updatedAt(entity.getUpdatedAt())
                 .directoryName(directoryId == null ? null : directoryNames.get(directoryId))
                 .claudeSessionId(asString(state.get("claudeSessionId")))

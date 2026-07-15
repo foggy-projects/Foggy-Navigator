@@ -105,4 +105,23 @@ describe('useUnifiedSse', () => {
     expect(mockTransportClose).toHaveBeenCalled()
     expect(connected.value).toBe(false)
   })
+
+  it('uses one reconnect timer when a broken transport reports both error and close', async () => {
+    vi.useFakeTimers()
+    try {
+      const { useUnifiedSse } = await import('@/composables/useUnifiedSse')
+      const { subscribeSession } = useUnifiedSse()
+      subscribeSession('session-1', vi.fn())
+
+      const firstTransportOptions = capturedOptions
+      firstTransportOptions.onError()
+      firstTransportOptions.onClose()
+
+      expect(mockCreateFetchSseTransport).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(mockCreateFetchSseTransport).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

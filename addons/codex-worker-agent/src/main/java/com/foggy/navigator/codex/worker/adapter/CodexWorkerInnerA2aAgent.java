@@ -1,7 +1,6 @@
 package com.foggy.navigator.codex.worker.adapter;
 
-import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
-import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
+import com.foggy.navigator.codex.worker.model.command.CodexTaskCreateCommand;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.*;
@@ -86,7 +85,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         String effectiveDirectoryId = requestedDirectoryId != null ? requestedDirectoryId : entity.getDefaultDirectoryId();
 
         // 通过 CodexTaskService.createTask() 创建任务并发布 WorkerTaskStartEvent
-        CreateCodexTaskForm form = new CreateCodexTaskForm();
+        CodexTaskCreateCommand form = new CodexTaskCreateCommand();
         form.setAgentId(entity.getAgentId());
         form.setWorkerId(effectiveWorkerId);
         form.setPrompt(prompt);
@@ -106,7 +105,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         // 复用 Navigator 平台 session（由 decorator 从 context store 解析）
         form.setSessionId(context.getNavigatorSessionId());
 
-        CodexTaskDTO task = taskService.createTask(entity.getUserId(), entity.getTenantId(), form);
+        DispatchTaskDTO task = taskService.createTask(entity.getUserId(), entity.getTenantId(), form);
 
         log.info("Codex A2A sendTask: agentId={}, taskId={}, contextId={}",
                 entity.getAgentId(), task.getTaskId(), context.getContextId());
@@ -165,20 +164,6 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
     }
 
     private A2aTask toA2aTask(DispatchTaskDTO dto) {
-        return toA2aTask(CodexTaskDTO.builder()
-                .taskId(dto.getTaskId())
-                .workerTaskId(dto.getWorkerTaskId())
-                .sessionId(dto.getSessionId())
-                .workerId(dto.getWorkerId())
-                .status(dto.getStatus())
-                .codexThreadId(dto.getCodexThreadId())
-                .lastAckedSeq(dto.getLastAckedSeq())
-                .resultText(dto.getResultText())
-                .errorMessage(dto.getErrorMessage())
-                .build());
-    }
-
-    private A2aTask toA2aTask(CodexTaskDTO dto) {
         A2aTaskState state = switch (dto.getStatus()) {
             case "PENDING" -> A2aTaskState.SUBMITTED;
             case "RUNNING" -> A2aTaskState.WORKING;

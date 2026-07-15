@@ -271,7 +271,9 @@
           <div>
             <span class="meta-label">CLI</span>
             <span :class="{ mismatch: cliMismatch(runtime) }">
-              {{ runtime.cliVersion || '-' }} / {{ runtime.expectedCliVersion || '-' }}
+              {{ runtime.cliVersion || '-' }}<template v-if="runtime.expectedCliVersion">
+                / {{ runtime.expectedCliVersion }}
+              </template>
             </span>
           </div>
           <div>
@@ -836,7 +838,12 @@ async function handleSyncEndpoint(endpoint: CodexAppServerEndpoint): Promise<voi
       void loadRuntimeRateLimits(result.runtime)
     }
     emit('capabilityChanged')
-    ElMessage.success(result.runtimeCreated ? 'Endpoint 已同步，已创建新的 Dark Runtime' : 'Endpoint 已同步，Runtime 保持不变')
+    const message = result.runtimeCreated
+      ? 'Endpoint 已同步，已创建新的 Dark Runtime'
+      : result.runtimeRestored
+        ? 'Endpoint 已同步，已恢复归档 Runtime 为 Disabled + Dark'
+        : 'Endpoint 已同步，Runtime 保持不变'
+    ElMessage.success(message)
   } catch {
     if (isCurrentWorkerOperation(workerId, operationGeneration)) {
       ElMessage.error('Endpoint 同步失败')

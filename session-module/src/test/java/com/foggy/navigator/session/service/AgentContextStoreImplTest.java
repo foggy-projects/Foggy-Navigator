@@ -25,6 +25,7 @@ import static org.mockito.Mockito.*;
 class AgentContextStoreImplTest {
 
     @Mock private AgentConversationContextRepository repository;
+    @Mock private AgentContextOwnershipClaimWriter ownershipClaimWriter;
 
     @InjectMocks private AgentContextStoreImpl store;
 
@@ -190,7 +191,7 @@ class AgentContextStoreImplTest {
     }
 
     @Test
-    void findSessionRefForAgent_nullTargetAgentId_noException() {
+    void findSessionRefForAgent_nullTargetAgentId_failsClosed() {
         AgentConversationContextEntity entity = new AgentConversationContextEntity();
         entity.setContextId("ctx-1");
         entity.setUserId("u1");
@@ -201,9 +202,9 @@ class AgentContextStoreImplTest {
         when(repository.findByContextIdAndUserId("ctx-1", "u1"))
                 .thenReturn(Optional.of(entity));
 
-        Optional<String> result = store.findSessionRefForAgent("ctx-1", "u1", "any-agent");
-        assertTrue(result.isPresent());
-        assertEquals("session-ref", result.get());
+        SecurityException error = assertThrows(SecurityException.class,
+                () -> store.findSessionRefForAgent("ctx-1", "u1", "any-agent"));
+        assertEquals("Resource access denied", error.getMessage());
     }
 
     // ---- saveSessionRef ----
@@ -211,13 +212,11 @@ class AgentContextStoreImplTest {
     @Test
     void saveSessionRef_newContext_creates() {
         when(repository.findById("ctx-new")).thenReturn(Optional.empty());
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         store.saveSessionRef("ctx-new", "claude-worker", "remote-session-123", "u1", "agent-1");
 
         ArgumentCaptor<AgentConversationContextEntity> captor =
                 ArgumentCaptor.forClass(AgentConversationContextEntity.class);
-        verify(repository).save(captor.capture());
+        verify(ownershipClaimWriter).insert(captor.capture());
 
         AgentConversationContextEntity saved = captor.getValue();
         assertEquals("ctx-new", saved.getContextId());
@@ -229,43 +228,154 @@ class AgentContextStoreImplTest {
     }
 
     @Test
-    void saveSessionRef_existingContext_updates() {
+    void saveSessionRef_existingSameOwnerAndAgent_updatesIdempotently() {
         AgentConversationContextEntity existing = new AgentConversationContextEntity();
         existing.setContextId("ctx-1");
-        existing.setAgentType("old-type");
-        existing.setAgentSessionRef("old-session");
+        existing.setUserId("u1");
+        existing.setTargetAgentId("agent-2");
+        existing.setAgentType("claude-worker");
+        existing.setAgentSessionRef("same-session");
         existing.setLastAccessedAt(LocalDateTime.now().minusDays(1));
 
         when(repository.findById("ctx-1")).thenReturn(Optional.of(existing));
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(repository.updateSessionRefIfOwned(
+                eq("ctx-1"), eq("claude-worker"), eq("same-session"),
+                eq("u1"), eq("agent-2"), any(LocalDateTime.class)))
+                .thenReturn(1);
 
-        store.saveSessionRef("ctx-1", "claude-worker", "new-session", "u1", "agent-2");
+        store.saveSessionRef("ctx-1", "claude-worker", "same-session", "u1", "agent-2");
 
-        verify(repository).save(existing);
-        assertEquals("claude-worker", existing.getAgentType());
-        assertEquals("new-session", existing.getAgentSessionRef());
-        assertTrue(existing.getLastAccessedAt().isAfter(LocalDateTime.now().minusMinutes(1)));
+        verify(repository).updateSessionRefIfOwned(
+                eq("ctx-1"), eq("claude-worker"), eq("same-session"),
+                eq("u1"), eq("agent-2"), any(LocalDateTime.class));
+        verifyNoInteractions(ownershipClaimWriter);
+    }
+
+    @Test
+    void saveSessionRef_existingContextOwnedByDifferentUser_failsClosed() {
+        AgentConversationContextEntity existing = context(
+                "ctx-1", "owner-user", "agent-1");
+        when(repository.findById("ctx-1")).thenReturn(Optional.of(existing));
+
+        SecurityException error = assertThrows(SecurityException.class,
+                () -> store.saveSessionRef(
+                        "ctx-1", "claude-worker", "new-session", "other-user", "agent-1"));
+
+        assertEquals("Resource access denied", error.getMessage());
+        verify(repository, never()).updateSessionRefIfOwned(
+                anyString(), anyString(), any(), anyString(), anyString(), any());
+        verifyNoInteractions(ownershipClaimWriter);
+    }
+
+    @Test
+    void saveSessionRef_existingContextBoundToDifferentAgent_failsClosed() {
+        AgentConversationContextEntity existing = context(
+                "ctx-1", "user-1", "agent-A");
+        when(repository.findById("ctx-1")).thenReturn(Optional.of(existing));
+
+        ContextAgentMismatchException error = assertThrows(
+                ContextAgentMismatchException.class,
+                () -> store.saveSessionRef(
+                        "ctx-1", "claude-worker", "new-session", "user-1", "agent-B"));
+
+        assertEquals("agent-A", error.getBoundAgentId());
+        assertEquals("agent-B", error.getRequestedAgentId());
+        verify(repository, never()).updateSessionRefIfOwned(
+                anyString(), anyString(), any(), anyString(), anyString(), any());
+        verifyNoInteractions(ownershipClaimWriter);
+    }
+
+    @Test
+    void saveSessionRef_concurrentFirstCreateSameBinding_rereadsAndUpdatesWinner() {
+        AgentConversationContextEntity winner = context(
+                "ctx-race", "user-1", "agent-1");
+        when(repository.findById("ctx-race"))
+                .thenReturn(Optional.empty(), Optional.of(winner));
+        doThrow(new DataIntegrityViolationException("duplicate primary key"))
+                .when(ownershipClaimWriter).insert(any());
+        when(repository.updateSessionRefIfOwned(
+                eq("ctx-race"), eq("claude-worker"), eq("session-1"),
+                eq("user-1"), eq("agent-1"), any(LocalDateTime.class)))
+                .thenReturn(1);
+
+        assertDoesNotThrow(() -> store.saveSessionRef(
+                "ctx-race", "claude-worker", "session-1", "user-1", "agent-1"));
+
+        verify(repository).updateSessionRefIfOwned(
+                eq("ctx-race"), eq("claude-worker"), eq("session-1"),
+                eq("user-1"), eq("agent-1"), any(LocalDateTime.class));
+    }
+
+    @Test
+    void saveSessionRef_concurrentFirstCreateDifferentUser_failsClosed() {
+        AgentConversationContextEntity winner = context(
+                "ctx-race", "winner-user", "agent-1");
+        when(repository.findById("ctx-race"))
+                .thenReturn(Optional.empty(), Optional.of(winner));
+        doThrow(new DataIntegrityViolationException("duplicate primary key"))
+                .when(ownershipClaimWriter).insert(any());
+
+        assertThrows(SecurityException.class, () -> store.saveSessionRef(
+                "ctx-race", "claude-worker", "session-1", "loser-user", "agent-1"));
+
+        verify(repository, never()).updateSessionRefIfOwned(
+                anyString(), anyString(), any(), anyString(), anyString(), any());
     }
 
     @Test
     void saveSessionRef_preservesUserId_onNew() {
         when(repository.findById("ctx-new")).thenReturn(Optional.empty());
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         store.saveSessionRef("ctx-new", "type", "ref", "user-42", "agent-x");
 
         ArgumentCaptor<AgentConversationContextEntity> captor =
                 ArgumentCaptor.forClass(AgentConversationContextEntity.class);
-        verify(repository).save(captor.capture());
+        verify(ownershipClaimWriter).insert(captor.capture());
         assertEquals("user-42", captor.getValue().getUserId());
         assertEquals("agent-x", captor.getValue().getTargetAgentId());
     }
 
     @Test
+    void saveSessionRefFull_existingSameOwnerAndAgent_updatesAllMutableFields() {
+        AgentConversationContextEntity existing = context(
+                "ctx-1", "user-1", "agent-1");
+        when(repository.findById("ctx-1")).thenReturn(Optional.of(existing));
+        when(repository.updateSessionRefFullIfOwned(
+                eq("ctx-1"), eq("claude-worker"), eq("remote-1"), eq("nav-1"),
+                eq("user-1"), eq("agent-1"), eq("alias-1"), any(LocalDateTime.class)))
+                .thenReturn(1);
+
+        store.saveSessionRefFull(
+                "ctx-1", "claude-worker", "remote-1", "nav-1",
+                "user-1", "agent-1", "alias-1");
+
+        verify(repository).updateSessionRefFullIfOwned(
+                eq("ctx-1"), eq("claude-worker"), eq("remote-1"), eq("nav-1"),
+                eq("user-1"), eq("agent-1"), eq("alias-1"), any(LocalDateTime.class));
+        verifyNoInteractions(ownershipClaimWriter);
+    }
+
+    @Test
+    void saveSessionRefFull_existingContextBoundToDifferentAgent_failsClosed() {
+        AgentConversationContextEntity existing = context(
+                "ctx-1", "user-1", "agent-A");
+        when(repository.findById("ctx-1")).thenReturn(Optional.of(existing));
+
+        assertThrows(ContextAgentMismatchException.class,
+                () -> store.saveSessionRefFull(
+                        "ctx-1", "claude-worker", "remote-1", "nav-1",
+                        "user-1", "agent-B", "alias-1"));
+
+        verify(repository, never()).updateSessionRefFullIfOwned(
+                anyString(), anyString(), any(), any(), anyString(), anyString(), any(), any());
+        verifyNoInteractions(ownershipClaimWriter);
+    }
+
+    @Test
     void saveSessionRefFull_aliasLookupMissWithNewContextId_bubblesUniqueConstraint() {
         when(repository.findById("ctx-new")).thenReturn(Optional.empty());
-        when(repository.save(any())).thenThrow(new DataIntegrityViolationException(
-                "Duplicate entry 'daily-alias-user-1-agent-1' for key 'agent_conversation_contexts.idx_acc_alias_user_agent'"));
+        doThrow(new DataIntegrityViolationException(
+                "Duplicate entry 'daily-alias-user-1-agent-1' for key 'agent_conversation_contexts.idx_acc_alias_user_agent'"))
+                .when(ownershipClaimWriter).insert(any());
 
         DataIntegrityViolationException ex = assertThrows(
                 DataIntegrityViolationException.class,
@@ -274,8 +384,8 @@ class AgentContextStoreImplTest {
                         "user-1", "agent-1", "daily-alias"));
 
         assertTrue(ex.getMessage().contains("idx_acc_alias_user_agent"));
-        verify(repository).findById("ctx-new");
-        verify(repository).save(any(AgentConversationContextEntity.class));
+        verify(repository, times(2)).findById("ctx-new");
+        verify(ownershipClaimWriter).insert(any(AgentConversationContextEntity.class));
     }
 
     @Test
@@ -290,5 +400,17 @@ class AgentContextStoreImplTest {
         store.deleteByNavigatorSessionId("  ");
 
         verify(repository, never()).deleteByNavigatorSessionId(any());
+    }
+
+    private AgentConversationContextEntity context(
+            String contextId, String userId, String targetAgentId) {
+        AgentConversationContextEntity entity = new AgentConversationContextEntity();
+        entity.setContextId(contextId);
+        entity.setUserId(userId);
+        entity.setTargetAgentId(targetAgentId);
+        entity.setAgentType("claude-worker");
+        entity.setAgentSessionRef("existing-session");
+        entity.setLastAccessedAt(LocalDateTime.now().minusHours(1));
+        return entity;
     }
 }

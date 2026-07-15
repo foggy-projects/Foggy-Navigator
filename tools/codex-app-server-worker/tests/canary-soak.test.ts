@@ -255,7 +255,7 @@ test('once sampling resumes checkpoints, skips before due time, and accumulates 
   const fetchMock = (async (input: string | URL | Request, init?: RequestInit) => {
     calls++
     const url = String(input)
-    if (url.includes('/api/v1/codex-tasks')) {
+    if (url.includes('/api/v1/tasks/operations/codex-canary')) {
       assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer navigator-token-value')
       return Response.json({ code: 200, data: tasks })
     }
@@ -323,6 +323,43 @@ test('once sampling resumes checkpoints, skips before due time, and accumulates 
   assert.equal(Object.values(reset.state.worker_samples)[0].rotations, 0)
 })
 
+test('Navigator task polling traverses the authenticated unified operations pages', async () => {
+  const directory = await tempDirectory('codex-canary-pages-')
+  const config = localConfig(path.join(directory, 'checkpoint.json'))
+  const now = new Date('2026-07-10T00:00:00.000Z')
+  const requestedPages: number[] = []
+  const fetchMock = (async (input: string | URL | Request) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/api/v1/tasks/operations/codex-canary') {
+      const page = Number(url.searchParams.get('page'))
+      requestedPages.push(page)
+      assert.equal(url.searchParams.get('size'), '100')
+      return Response.json({
+        code: 200,
+        data: {
+          content: [task(`page-${page}`, 'COMPLETED', now.toISOString())],
+          totalSessions: 101,
+          page,
+          size: 100,
+        },
+      })
+    }
+    return Response.json(workerHealth('worker-instance-raw', 1))
+  }) as typeof fetch
+
+  const sampled = await sampleCanarySoak(config, undefined, {
+    fetch: fetchMock,
+    env: {
+      NAVIGATOR_CANARY_TOKEN: 'navigator-token-value',
+      CODEX_CANARY_PRIVACY_MARKER: 'privacy-marker-value',
+    },
+    now: () => now,
+  })
+
+  assert.deepEqual(requestedPages, [0, 1])
+  assert.equal(Object.keys(sampled.state.terminal_tasks).length, 2)
+})
+
 test('local smoke report is permanently marked as non-production evidence', () => {
   const config = localConfig('C:\local-smoke.json')
   const report = renderCanarySoakReport(
@@ -362,7 +399,7 @@ test('production sampling counts only the exact healthy Ultra cohort and classif
   const sampled = await sampleCanarySoak(config, undefined, {
     now: () => now,
     env: productionEnv(cohortMarker),
-    fetch: (async (input: string | URL | Request) => String(input).includes('/codex-tasks')
+    fetch: (async (input: string | URL | Request) => String(input).includes('/tasks/operations/codex-canary')
       ? Response.json({ code: 200, data: tasks })
       : Response.json(workerHealth('production-instance', 7))) as typeof fetch,
   })
@@ -394,7 +431,7 @@ test('invalid runtime instances are deduplicated as sanitized affinity violation
   const sampled = await sampleCanarySoak(config, undefined, {
     now: () => now,
     env: productionEnv(cohortMarker),
-    fetch: (async (input: string | URL | Request) => String(input).includes('/codex-tasks')
+    fetch: (async (input: string | URL | Request) => String(input).includes('/tasks/operations/codex-canary')
       ? Response.json({ code: 200, data: [valid, missing, unknown, unknown] })
       : Response.json(workerHealth('production-instance', 7))) as typeof fetch,
   })
@@ -438,7 +475,7 @@ test('production cohort time is epoch-authoritative across legacy timezone repre
   const sampled = await sampleCanarySoak(config, undefined, {
     now: () => now,
     env: productionEnv(cohortMarker),
-    fetch: (async (input: string | URL | Request) => String(input).includes('/codex-tasks')
+    fetch: (async (input: string | URL | Request) => String(input).includes('/tasks/operations/codex-canary')
       ? Response.json({ code: 200, data: tasks })
       : Response.json(workerHealth('production-instance', 7))) as typeof fetch,
   })
@@ -459,7 +496,7 @@ test('health samples deduplicate actual instances, enforce revision, and continu
   const duplicate = await sampleCanarySoak(duplicateConfig, undefined, {
     now: () => now,
     env: productionEnv('cohort-marker-value'),
-    fetch: (async (input: string | URL | Request) => String(input).includes('/codex-tasks')
+    fetch: (async (input: string | URL | Request) => String(input).includes('/tasks/operations/codex-canary')
       ? Response.json({ code: 200, data: [] })
       : Response.json(workerHealth('same-instance', 7))) as typeof fetch,
   })
@@ -470,7 +507,7 @@ test('health samples deduplicate actual instances, enforce revision, and continu
   const revision = await sampleCanarySoak(revisionConfig, undefined, {
     now: () => now,
     env: productionEnv('cohort-marker-value'),
-    fetch: (async (input: string | URL | Request) => String(input).includes('/codex-tasks')
+    fetch: (async (input: string | URL | Request) => String(input).includes('/tasks/operations/codex-canary')
       ? Response.json({ code: 200, data: [] })
       : Response.json(workerHealth('revision-instance', 8))) as typeof fetch,
   })
@@ -483,7 +520,7 @@ test('health samples deduplicate actual instances, enforce revision, and continu
   let crashes = 3
   let rejected = 4
   let acquireTimeouts = 2
-  const resetFetch = (async (input: string | URL | Request) => String(input).includes('/codex-tasks')
+  const resetFetch = (async (input: string | URL | Request) => String(input).includes('/tasks/operations/codex-canary')
     ? Response.json({ code: 200, data: [] })
     : Response.json(workerHealth('counter-instance', 1, {
       retired_total: retired,
@@ -519,7 +556,7 @@ test('state lease reclaims only a dead local pid and fails closed for live or cr
     NAVIGATOR_CANARY_TOKEN: 'navigator-token-value',
     CODEX_CANARY_PRIVACY_MARKER: 'privacy-marker-value',
   }
-  const fetchMock = (async (input: string | URL | Request) => String(input).includes('/codex-tasks')
+  const fetchMock = (async (input: string | URL | Request) => String(input).includes('/tasks/operations/codex-canary')
     ? Response.json({ code: 200, data: [] })
     : Response.json(workerHealth('lease-instance', 1))) as typeof fetch
 

@@ -19,6 +19,7 @@ from ..tools.business_function_tools import (
     get_business_function_schema,
     invoke_business_function,
     list_business_functions,
+    worker_gateway_runtime_context,
 )
 from ..tools.mock_biz_tools import (
     mock_get_order,
@@ -199,14 +200,15 @@ class LlmToolDispatcher:
             if not token:
                 return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
             try:
-                return {
-                    "ok": True,
-                    "result": list_business_functions_fn(
-                        token,
-                        domain=args.get("domain"),
-                        risk_level=args.get("risk_level"),
-                    ),
-                }
+                with worker_gateway_runtime_context(context.runtime_context):
+                    return {
+                        "ok": True,
+                        "result": list_business_functions_fn(
+                            token,
+                            domain=args.get("domain"),
+                            risk_level=args.get("risk_level"),
+                        ),
+                    }
             except BusinessFunctionToolError as exc:
                 return exc.to_tool_result()
 
@@ -215,14 +217,15 @@ class LlmToolDispatcher:
             if not token:
                 return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
             try:
-                return {
-                    "ok": True,
-                    "result": get_business_function_schema_fn(
-                        token,
-                        function_id=args.get("function_id", ""),
-                        version=args.get("version"),
-                    ),
-                }
+                with worker_gateway_runtime_context(context.runtime_context):
+                    return {
+                        "ok": True,
+                        "result": get_business_function_schema_fn(
+                            token,
+                            function_id=args.get("function_id", ""),
+                            version=args.get("version"),
+                        ),
+                    }
             except BusinessFunctionToolError as exc:
                 return exc.to_tool_result()
 
@@ -254,13 +257,14 @@ class LlmToolDispatcher:
                 tool_call_id=args.get("tool_call_id"),
             )
             try:
-                gateway_result = invoke_business_function_fn(
-                    token,
-                    function_id=function_id,
-                    version=version,
-                    input_data=input_data,
-                    idempotency_key=idempotency_key,
-                )
+                with worker_gateway_runtime_context(context.runtime_context):
+                    gateway_result = invoke_business_function_fn(
+                        token,
+                        function_id=function_id,
+                        version=version,
+                        input_data=input_data,
+                        idempotency_key=idempotency_key,
+                    )
                 result = {"ok": True, "result": gateway_result}
                 return finalize_business_function_call(
                     task_id=context.task_id,
@@ -311,13 +315,14 @@ class LlmToolDispatcher:
                 tool_call_id=args.get("tool_call_id"),
             )
             try:
-                gateway_result = invoke_business_function_fn(
-                    token,
-                    function_id=function_id,
-                    version=resolved_version,
-                    input_data=input_data,
-                    idempotency_key=idempotency_key,
-                )
+                with worker_gateway_runtime_context(context.runtime_context):
+                    gateway_result = invoke_business_function_fn(
+                        token,
+                        function_id=function_id,
+                        version=resolved_version,
+                        input_data=input_data,
+                        idempotency_key=idempotency_key,
+                    )
                 result = {"ok": True, "result": gateway_result}
                 return finalize_business_function_call(
                     task_id=context.task_id,

@@ -30,15 +30,19 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 |------|------|
 | 聚合启动 | `launcher` |
 | 底座与 SPI | `navigator-common`、`navigator-spi`、`agent-framework` |
-| 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module`、`metadata-query-module` |
-| Worker / Agent addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/echo-agent`、`addons/task-assistant` |
+| 核心业务 | `session-module`、`business-agent-module`、`user-auth-module`、`metadata-config-module` |
+| Worker / Agent addon | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`addons/gemini-worker-agent`、`addons/langgraph-biz-worker`、`addons/task-assistant` |
 | 对外 SDK / 本地 BFF | `navigator-open-sdk`、`tools/navigator-chat-observer-bff` |
 
-`addons/code-review-agent` 目前存在源码目录，但未纳入根 `pom.xml`，开发前先确认是否仍为实验模块或待接入模块。
+实验性的 `addons/code-review-agent` 源码已移除，当前不属于根 Maven reactor、`launcher` 或默认部署；如需恢复 GitLab MR 自动审查，应作为新接入重新完成消费者、鉴权和运行态审计。
 
 旧独立“会话”入口及其配套 `tutor-agent` 模块已移除；不要再把它当作当前主线模块设计新能力。
 
-`monitoring-module` 与 `tools/foggy-monitor` 当前仅保留源码，不纳入根 Maven reactor、`launcher` 运行时或默认部署；不要把 RabbitMQ 作为启动前置依赖。
+旧自研 `monitoring-module` 与 `tools/foggy-monitor` 已在 1.4.2 dev 阶段移除；不要把 RabbitMQ 或旧 Monitoring API/页面作为启动前置或当前能力。应用日志、健康检查、有限指标和安全审计仍需保留。
+
+旧 `metadata-query-module` 已在 1.4.2 dev 阶段物理退役，不得再将其加回根 reactor、`launcher` 或当前模块清单。`metadata-config-module` 仍是活跃的平台配置能力，不得因名称相近将其误删；LangGraph FSScript 也不属于本次退役范围。
+
+旧 `addons/echo-agent` 已在 1.4.2 dev 阶段从源码、根 reactor 和 `launcher` 物理退役，默认制品不再注册 Echo Agent。A2A discovery/resolve/send/query/cancel 回归由 `session-module` 内的 test-only 内存 fixture 覆盖；`LocalEchoBusinessFunctionAdapterInvoker` 是独立的 BusinessFunction 本地适配能力，仍保留。
 
 ### 前端与移动端
 
@@ -61,7 +65,7 @@ Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 | `tools/langgraph-biz-worker` | LangGraph Biz Worker Python 服务 |
 | `tools/mock-llm-service` | Mock LLM 端点 |
 | `tools/navigator-upstream`、`tools/navigator-upstream-cli` | 上游接入工具与 CLI |
-| `tools/code-server`、`tools/foggy-monitor` | 开发辅助；`tools/foggy-monitor` 当前暂停接入 |
+| `tools/code-server` | 远程代码服务辅助能力 |
 | `tools/claude-code-proxy`、`tools/llm-gateway`、`tools/llm-recorder-proxy` | LLM / Claude Code 调试与代理工具 |
 
 ## 项目启动
@@ -130,8 +134,10 @@ powershell -ExecutionPolicy Bypass -File scripts/stop-launcher.ps1
 powershell -ExecutionPolicy Bypass -File scripts/start-frontend.ps1
 
 # 手动启动
-cd packages/navigator-frontend
-pnpm install && pnpm dev
+nvm use
+corepack enable
+pnpm install --frozen-lockfile
+pnpm --filter @foggy/navigator-frontend dev
 ```
 
 前端端口：5174，登录账号：root / root123
@@ -158,12 +164,11 @@ bash scripts/build-frontend.sh
 所有 Agent（无论底层实现）统一通过 A2A / provider 路由接入会话与任务分发链路。
 
 - **SPI 接口**: `A2aAgent`（执行）+ `A2aAgentProvider`（提供者模式），位于 `navigator-spi/spi/agent/`
-- **统一注册**: `DefaultA2aAgentRegistry`（session-module）聚合所有 Provider
-- **统一解析**: `UnifiedAgentResolver`（session-module）按 `agentId` / `providerType` / `modelConfigId` 解析目标
+- **统一注册/解析**: `UnifiedAgentResolver`（session-module）聚合 `A2aAgentProvider`，并按 `agentId` / `providerType` / `modelConfigId` 解析目标
 - **统一分派**: `TaskDispatchFacade`（session-module）是 Worker / Agent 任务入口，支持 A2A 路由和 Direct Provider 路由
 - **会话绑定**: `SessionBindingService`（session-module）管理 Session ↔ Agent 绑定生命周期，绑定后不可切换
 - **REST 端点**: `GET /api/v1/agents`（发现）、`POST /api/v1/agents/{id}/ask`（调用）、`POST /api/v1/tasks`（任务分派）
-- **当前 Provider**: Claude Worker、Codex Worker、Gemini Worker、LangGraph Biz Worker、Echo Agent
+- **当前 Provider**: Claude Worker、Codex Worker、Gemini Worker、LangGraph Biz Worker
 - **三个核心语义**（需求 26）：`logicalAgentId`（逻辑 Agent）、`providerType`（执行后端）、`modelConfigId`（模型配置）— 禁止混淆
 - **扩展**: 新 addon 只需实现 `A2aAgentProvider` + `@Component`，自动注入 Registry
 

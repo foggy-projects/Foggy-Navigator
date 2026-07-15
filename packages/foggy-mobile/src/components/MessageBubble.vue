@@ -33,7 +33,11 @@
 
     <!-- 助手消息 -->
     <view v-else-if="message.sender === 'assistant'" class="copyable-group">
-      <view class="bubble assistant-bubble" @longpress="handleCopy">
+      <view
+        class="bubble assistant-bubble"
+        :class="{ 'assistant-bubble-collapsed': isLongAssistantMessage && !assistantExpanded }"
+        @longpress="handleCopy"
+      >
         <template v-for="(part, index) in renderedParts" :key="index">
           <rich-text v-if="part.type === 'markdown'" :nodes="part.html" />
           <view v-else class="message-code-block" @tap.stop>
@@ -49,7 +53,15 @@
           </view>
         </template>
       </view>
-      <text v-if="copyable" class="copy-action" @tap.stop="handleCopy">{{ copyLabel }}</text>
+      <view class="assistant-actions">
+        <text v-if="copyable" class="copy-action" @tap.stop="handleCopy">{{ copyLabel }}</text>
+        <text
+          v-if="isLongAssistantMessage"
+          class="copy-action secondary-action"
+          @tap.stop="assistantExpanded = !assistantExpanded"
+        >{{ assistantExpanded ? '收起全文' : '展开全文' }}</text>
+        <text class="copy-action secondary-action" @tap.stop="$emit('view-records')">查看记录</text>
+      </view>
     </view>
 
     <!-- 工具调用 -->
@@ -120,11 +132,13 @@ defineEmits<{
   (e: 'plan-respond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'question-respond', permissionId: string, answers: Record<string, string>): void
   (e: 'permission-respond', permissionId: string, decision: string, scope: string): void
+  (e: 'view-records'): void
 }>()
 
 const senderClass = computed(() => `sender-${props.message.sender}`)
 const isCopied = ref(false)
 const copiedCodeIndex = ref<number | null>(null)
+const assistantExpanded = ref(false)
 
 const renderedParts = computed(() => {
   if (!props.message.content) return []
@@ -152,6 +166,11 @@ const copyText = computed(() => {
 })
 
 const copyable = computed(() => copyText.value.length > 0)
+// Keep the normal conversation readable even if a worker returns a very long
+// final record. The complete, copyable text remains available on demand.
+const isLongAssistantMessage = computed(() =>
+  props.message.sender === 'assistant' && copyText.value.length > 1600,
+)
 const hasFormattedContent = computed(() => hasMarkdownSyntax(copyText.value))
 const copyLabel = computed(() => {
   if (isCopied.value) return '已复制'
@@ -266,6 +285,34 @@ onBeforeUnmount(() => {
   color: #303133;
   border-bottom-left-radius: 6rpx;
   border: 1rpx solid #e8e8e8;
+}
+.assistant-bubble-collapsed {
+  position: relative;
+  max-height: 560rpx;
+  overflow: hidden;
+}
+.assistant-bubble-collapsed::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 80rpx;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0), #ffffff 88%);
+}
+.assistant-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10rpx;
+}
+.assistant-actions .copy-action {
+  align-self: auto;
+}
+.secondary-action {
+  color: #606266;
+  background: #f4f4f5;
 }
 .tool-area {
   width: 85%;

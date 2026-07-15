@@ -178,8 +178,17 @@ class BizWorkerControlPlaneAuthorizationTest {
     void testWorkerGatewayController_hasNoTenantAdminRole() throws Exception {
         // Internal gateway should not require TENANT_ADMIN role
         assertNull(WorkerGatewayController.class.getAnnotation(RequireAuth.class));
-        assertNull(WorkerGatewayController.class.getMethod("listBusinessFunctions", String.class, String.class, String.class, String.class).getAnnotation(RequireAuth.class));
-        assertNull(WorkerGatewayController.class.getMethod("getBusinessFunctionSchema", String.class, String.class, String.class).getAnnotation(RequireAuth.class));
-        assertNull(WorkerGatewayController.class.getMethod("invokeBusinessFunction", String.class, String.class, com.foggy.navigator.business.agent.model.form.WorkerGatewayInvokeForm.class).getAnnotation(RequireAuth.class));
+        assertGatewayMethodHasNoRole("listBusinessFunctions");
+        assertGatewayMethodHasNoRole("getBusinessFunctionSchema");
+        assertGatewayMethodHasNoRole("invokeBusinessFunction");
+        assertGatewayMethodHasNoRole("reportToolMessage");
+    }
+
+    private void assertGatewayMethodHasNoRole(String methodName) {
+        Method[] methods = Arrays.stream(WorkerGatewayController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals(methodName))
+                .toArray(Method[]::new);
+        assertEquals(1, methods.length, "unexpected Worker Gateway method overload count");
+        assertNull(methods[0].getAnnotation(RequireAuth.class));
     }
 }

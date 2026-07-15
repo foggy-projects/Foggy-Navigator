@@ -53,46 +53,33 @@ echo ""
 
 # Check pnpm
 if ! command -v pnpm &> /dev/null; then
-    echo -e "${RED}  pnpm not found! Install: npm install -g pnpm${NC}"
+    echo -e "${RED}  pnpm not found! Use Node 22.23.1 and run: corepack enable${NC}"
     exit 1
 fi
 
 # Install dependencies if needed
 if needs_pnpm_install; then
-    echo -e "${YELLOW}[1/4] Installing dependencies (workspace missing/stale)...${NC}"
-    (cd "$REPO_ROOT" && pnpm install --no-frozen-lockfile)
+    echo -e "${YELLOW}[1/3] Installing dependencies (workspace missing/stale)...${NC}"
+    (cd "$REPO_ROOT" && pnpm install --frozen-lockfile)
     if [ $? -ne 0 ]; then
         echo -e "${RED}  pnpm install failed!${NC}"
         exit 1
     fi
 else
-    echo -e "${GREEN}[1/4] Dependencies already installed${NC}"
+    echo -e "${GREEN}[1/3] Dependencies already installed${NC}"
 fi
 
-# Build workspace packages if dist is missing
-if [ ! -d "$REPO_ROOT/packages/foggy-chat-core/dist" ] || [ ! -d "$REPO_ROOT/packages/foggy-chat/dist" ]; then
-    echo -e "${YELLOW}[2/4] Building workspace packages...${NC}"
-    (cd "$REPO_ROOT/packages/foggy-chat-core" && pnpm build) && (cd "$REPO_ROOT/packages/foggy-chat" && pnpm build)
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}  Workspace package build failed!${NC}"
-        exit 1
-    fi
-else
-    echo -e "${GREEN}[2/4] Workspace packages already built${NC}"
-fi
-
-# Build frontend
-echo -e "${YELLOW}[3/4] Building frontend...${NC}"
-cd "$FRONTEND_DIR"
-NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=$FRONTEND_NODE_MAX_OLD_SPACE_SIZE" pnpm build
+# Run the canonical frontend type-check, test, and build matrix.
+echo -e "${YELLOW}[2/3] Running frontend CI baseline...${NC}"
+cd "$REPO_ROOT"
+NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=$FRONTEND_NODE_MAX_OLD_SPACE_SIZE" pnpm run ci:frontend
 if [ $? -ne 0 ]; then
-    echo -e "${RED}  Frontend build failed!${NC}"
+    echo -e "${RED}  Frontend CI baseline failed!${NC}"
     exit 1
 fi
-cd "$REPO_ROOT"
 
 # Move build output to nginx directory
-echo -e "${YELLOW}[4/4] Preparing nginx directory...${NC}"
+echo -e "${YELLOW}[3/3] Preparing nginx directory...${NC}"
 mkdir -p "$BUILD_OUTPUT_DIR"
 rm -rf "${BUILD_OUTPUT_DIR:?}"/*
 cp -r "$FRONTEND_DIR/dist/"* "$BUILD_OUTPUT_DIR/"

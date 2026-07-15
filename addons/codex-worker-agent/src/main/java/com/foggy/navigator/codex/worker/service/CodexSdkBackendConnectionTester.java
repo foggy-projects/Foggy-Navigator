@@ -62,6 +62,9 @@ public class CodexSdkBackendConnectionTester implements WorkerBackendConnectionT
         if (health == null) {
             throw new IllegalStateException("CODEX_SDK_WORKER_UNAVAILABLE");
         }
+        if (health.containsKey("ready") && !Boolean.TRUE.equals(health.get("ready"))) {
+            throw new IllegalStateException("CODEX_SDK_WORKER_UNREADY");
+        }
         return "Codex SDK Worker READY";
     }
 }

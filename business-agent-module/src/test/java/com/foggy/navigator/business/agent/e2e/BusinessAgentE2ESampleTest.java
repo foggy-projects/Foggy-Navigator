@@ -81,6 +81,7 @@ class BusinessAgentE2ESampleTest {
     @Mock BusinessObjectRepository businessObjectRepository;
     @Mock BusinessAgentTaskRepository taskRepository;
     @Mock BusinessTaskScopedTokenRepository tokenRepository;
+    @Mock BusinessTaskTerminalStateRepository terminalStateRepository;
     @Mock BizWorkerPoolRepository poolRepository;
     @Mock BizWorkerPoolMemberRepository poolMemberRepository;
     @Mock BizWorkerIdentityRepository identityRepository;
@@ -156,12 +157,22 @@ class BusinessAgentE2ESampleTest {
                 java.util.List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, identityRepository, java.util.List.of());
+        BusinessTaskScopedTokenPolicyService tokenPolicyService = new BusinessTaskScopedTokenPolicyService(
+                functionGrantRepository,
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new com.foggy.navigator.business.agent.config.BusinessTaskScopedTokenProperties());
+        BusinessTaskScopedTokenLifecycleService tokenLifecycleService =
+                new BusinessTaskScopedTokenLifecycleService(
+                        tokenRepository, terminalStateRepository, tokenPolicyService, tokenRuntimeStore);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService,
+                bizWorkerPoolService, resourceResolver, userGrantService, skillRegistryService,
+                businessAgentSessionService, identityRepository, tokenLifecycleService, java.util.List.of());
         authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService, skillRegistryService, functionRegistryService);
-        auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
+        auditService = new BusinessFunctionRuntimeAuditService(
+                auditRepository, new BusinessFunctionRuntimeAuditWriter(auditRepository));
         com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker adapterInvoker = new com.foggy.navigator.business.agent.service.adapter.LocalEchoBusinessFunctionAdapterInvoker(objectMapper);
         suspensionService = new BusinessFunctionSuspensionService(suspensionRepository, eventPublisher, auditService, authorizationService, adapterInvoker);
-        workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, clientAppUserGrantService, suspensionService, adapterInvoker, objectMapper, auditService);
+        workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, clientAppUserGrantService, suspensionService, adapterInvoker, objectMapper, auditService, tokenPolicyService);
     }
 
     // ===== Helper: build active ClientApp entity =====
@@ -288,6 +299,9 @@ class BusinessAgentE2ESampleTest {
         pool.setHealthStatus("HEALTHY");
         pool.setWorkerBackend("LANGGRAPH_BIZ");
         when(poolRepository.findByPoolIdAndTenantId(POOL_ID, TENANT)).thenReturn(Optional.of(pool));
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                POOL_ID, TENANT, ResourceOwnerType.PLATFORM, TENANT))
+                .thenReturn(Optional.of(pool));
 
         CodingAgentEntity agent = new CodingAgentEntity();
         agent.setAgentId(AGENT_ID);

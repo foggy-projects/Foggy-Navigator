@@ -1,14 +1,19 @@
 package com.foggy.navigator.langgraph.worker.service;
 
+import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolMemberEntity;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberRepository;
+import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
+import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -23,6 +28,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import reactor.core.publisher.Mono;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -31,6 +37,9 @@ import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class LanggraphBusinessAgentWorkerTaskLauncherTest {
+
+    @Mock
+    private BizWorkerPoolRepository poolRepository;
 
     @Mock
     private BizWorkerPoolMemberRepository poolMemberRepository;
@@ -43,6 +52,12 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
 
     @InjectMocks
     private LanggraphBusinessAgentWorkerTaskLauncher launcher;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(poolRepository.findByPoolIdAndTenantId("pool_01", "tenant_01"))
+                .thenReturn(Optional.of(platformPool()));
+    }
 
     @Test
     void getWorkerBackend_returnsLanggraphBiz() {
@@ -59,7 +74,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         worker.setWorkerId("worker_01");
         worker.setTenantId("tenant_01");
-        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01")).thenReturn(worker);
 
         LanggraphTaskDTO taskDTO = LanggraphTaskDTO.builder()
                 .taskId("lgt_01")
@@ -111,6 +127,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertFalse(form.getContext().containsKey("skillName"));
         Map<String, Object> runtimeContext = form.getRuntimeContext();
         assertEquals("rt_token", runtimeContext.get("task_scoped_token"));
+        assertEquals("worker_01", runtimeContext.get("worker_id"));
+        assertEquals("bwl_test_01", runtimeContext.get("worker_lease_id"));
         assertEquals("skill_01", runtimeContext.get("skill_name"));
         assertEquals("vision_model_01", runtimeContext.get("vision_model_config_id"));
         @SuppressWarnings("unchecked")
@@ -128,6 +146,55 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
     }
 
     @Test
+    void resolveWorkerId_selectsFromDatabaseWithoutAllocatingContextOrCreatingTask() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus(BizWorkerPoolService.STATUS_ENABLED);
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01"))
+                .thenReturn(List.of(member));
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_01");
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01"))
+                .thenReturn(worker);
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setContextId(null);
+        request.setSelectedWorkerId(null);
+
+        String workerId = launcher.resolveWorkerId(request);
+
+        assertEquals("worker_01", workerId);
+        verify(workerService, never()).createClient(any());
+        verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void launch_rejectsTaskCreatedOnDifferentWorker() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus(BizWorkerPoolService.STATUS_ENABLED);
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01"))
+                .thenReturn(List.of(member));
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        worker.setWorkerId("worker_01");
+        worker.setTenantId("tenant_01");
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01"))
+                .thenReturn(worker);
+        when(taskService.createTask(
+                eq("actor_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class)))
+                .thenReturn(LanggraphTaskDTO.builder()
+                        .taskId("lgt_other")
+                        .workerId("worker_other")
+                        .build());
+
+        SecurityException error = assertThrows(
+                SecurityException.class, () -> launcher.launch(request()));
+
+        assertEquals("LangGraph task was created on a different worker", error.getMessage());
+    }
+
+    @Test
     void launch_allocatesContextFromWorkerWhenMissing() {
         BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
         member.setWorkerId("worker_01");
@@ -137,7 +204,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         worker.setWorkerId("worker_01");
         worker.setTenantId("tenant_01");
-        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01")).thenReturn(worker);
 
         LanggraphWorkerClient client = mock(LanggraphWorkerClient.class);
         when(workerService.createClient(worker)).thenReturn(client);
@@ -175,7 +243,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         worker.setWorkerId("worker_01");
         worker.setTenantId("tenant_01");
-        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01")).thenReturn(worker);
 
         LanggraphWorkerClient client = mock(LanggraphWorkerClient.class);
         when(workerService.createClient(worker)).thenReturn(client);
@@ -217,7 +286,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         worker.setWorkerId("worker_01");
         worker.setTenantId("tenant_01");
-        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01")).thenReturn(worker);
 
         LanggraphTaskDTO taskDTO = LanggraphTaskDTO.builder()
                 .taskId("lgt_01")
@@ -252,7 +322,8 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         worker.setWorkerId("worker_01");
         worker.setTenantId("tenant_01");
-        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01")).thenReturn(worker);
 
         LanggraphTaskDTO taskDTO = LanggraphTaskDTO.builder()
                 .taskId("lgt_01")
@@ -285,7 +356,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         disabled.setStatus("DISABLED");
         when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01")).thenReturn(List.of(disabled));
 
-        assertThrows(IllegalStateException.class, () -> launcher.launch(request()));
+        assertThrows(SecurityException.class, () -> launcher.launch(request()));
         verifyNoInteractions(taskService);
     }
 
@@ -299,10 +370,79 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         worker.setWorkerId("worker_01");
         worker.setTenantId("tenant_other");
-        when(workerService.getWorkerEntity("worker_01")).thenReturn(worker);
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01")).thenReturn(worker);
 
         assertThrows(SecurityException.class, () -> launcher.launch(request()));
         verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void launch_rejectsPhysicalWorkerThatIsNotEnabledPoolMember() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus(BizWorkerPoolService.STATUS_ENABLED);
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01"))
+                .thenReturn(List.of(member));
+
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setSelectedWorkerId("worker_other");
+
+        assertThrows(SecurityException.class, () -> launcher.launch(request));
+        verifyNoInteractions(workerService, taskService);
+    }
+
+    @Test
+    void launch_rejectsIdentityThatBecameUnavailableAfterMemberWasAdded() {
+        BizWorkerPoolMemberEntity member = new BizWorkerPoolMemberEntity();
+        member.setWorkerId("worker_01");
+        member.setStatus(BizWorkerPoolService.STATUS_ENABLED);
+        when(poolMemberRepository.findByPoolIdOrderByCreatedAtAsc("pool_01"))
+                .thenReturn(List.of(member));
+        when(workerService.getBusinessAgentWorkerEntity(
+                "worker_01", ResourceOwnerType.PLATFORM, "tenant_01"))
+                .thenThrow(new IllegalStateException("LangGraph worker identity is not healthy: worker_01"));
+
+        assertThrows(IllegalStateException.class, () -> launcher.launch(request()));
+        verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void launch_rejectsCrossTenantPoolInsteadOfTreatingItAsPhysicalRoute() {
+        when(poolRepository.findByPoolIdAndTenantId("pool_01", "tenant_01"))
+                .thenReturn(Optional.empty());
+        BizWorkerPoolEntity otherTenantPool = platformPool();
+        otherTenantPool.setTenantId("tenant_other");
+        when(poolRepository.findByPoolId("pool_01")).thenReturn(Optional.of(otherTenantPool));
+
+        BusinessAgentWorkerTaskLaunchRequest request = request();
+        request.setPhysicalWorkerId("pool_01");
+
+        assertThrows(SecurityException.class, () -> launcher.launch(request));
+        verifyNoInteractions(poolMemberRepository, workerService, taskService);
+    }
+
+    @Test
+    void launch_rejectsPoolBackendMismatch() {
+        BizWorkerPoolEntity pool = platformPool();
+        pool.setWorkerBackend("CODEX");
+        when(poolRepository.findByPoolIdAndTenantId("pool_01", "tenant_01"))
+                .thenReturn(Optional.of(pool));
+
+        assertThrows(IllegalStateException.class, () -> launcher.launch(request()));
+        verifyNoInteractions(poolMemberRepository, workerService, taskService);
+    }
+
+    private BizWorkerPoolEntity platformPool() {
+        BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
+        pool.setPoolId("pool_01");
+        pool.setTenantId("tenant_01");
+        pool.setOwnerType(ResourceOwnerType.PLATFORM);
+        pool.setOwnerId("tenant_01");
+        pool.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        pool.setStatus(BizWorkerPoolService.STATUS_ENABLED);
+        pool.setHealthStatus(BizWorkerPoolService.HEALTHY);
+        return pool;
     }
 
     private BusinessAgentWorkerTaskLaunchRequest request() {
@@ -318,6 +458,10 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
                 .skillId("skill_01")
                 .skillName("skill_01")
                 .workerPoolId("pool_01")
+                .workerPoolOwnerType(ResourceOwnerType.PLATFORM)
+                .workerPoolOwnerId("tenant_01")
+                .selectedWorkerId("worker_01")
+                .workerLeaseId("bwl_test_01")
                 .workerBackend("LANGGRAPH_BIZ")
                 .modelConfigId("model_01")
                 .visionModelConfigId("vision_model_01")

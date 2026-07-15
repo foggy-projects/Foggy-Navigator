@@ -85,9 +85,6 @@ public class SecurityConfig {
                                 "/api/v1/codex-app-server-endpoints/**").permitAll()
                         .requestMatchers("/api/v1/langgraph-workers", "/api/v1/langgraph-workers/**").permitAll()
                         .requestMatchers("/api/v1/gemini-workers", "/api/v1/gemini-workers/**").permitAll()
-                        .requestMatchers("/api/v1/claude-tasks", "/api/v1/claude-tasks/**").permitAll()
-                        .requestMatchers("/api/v1/codex-tasks", "/api/v1/codex-tasks/**").permitAll()
-                        .requestMatchers("/api/v1/langgraph-tasks", "/api/v1/langgraph-tasks/**").permitAll()
                         .requestMatchers("/api/v1/tasks", "/api/v1/tasks/**").permitAll()
                         .requestMatchers("/api/v1/working-directories", "/api/v1/working-directories/**").permitAll()
                         .requestMatchers("/api/v1/ssh/connect", "/api/v1/ssh/connect/**").permitAll()
@@ -102,7 +99,6 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/task-assistant/", "/api/v1/task-assistant/**").permitAll()
                         .requestMatchers("/api/v1/notifications/stream", "/api/v1/notifications/stream/", "/api/v1/notifications/stream/**").permitAll()
                         .requestMatchers("/api/v1/sse/", "/api/v1/sse/**").permitAll()
-                        .requestMatchers("/api/v1/monitoring/", "/api/v1/monitoring/**").permitAll()
                         // UserController uses AuthInterceptor + @RequireAuth for user/API key management.
                         .requestMatchers("/api/v1/users", "/api/v1/users/**").permitAll()
                         .requestMatchers("/api/v1/auth/me").permitAll()

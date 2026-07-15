@@ -2,8 +2,10 @@ package com.foggy.navigator.session.controller;
 
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.entity.AgentTaskEntity;
 import com.foggy.navigator.session.repository.AgentTaskRepository;
+import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +26,7 @@ import java.util.Map;
 public class AgentTaskController {
 
     private final AgentTaskRepository agentTaskRepository;
+    private final SessionTaskResourceAccessService resourceAccessService;
 
     /**
      * 列出当前用户的所有任务（按创建时间降序）
@@ -43,7 +46,11 @@ public class AgentTaskController {
      */
     @GetMapping("/session/{sessionId}")
     public RX<List<Map<String, Object>>> listTasksBySession(@PathVariable String sessionId) {
-        List<Map<String, Object>> tasks = agentTaskRepository.findByParentSessionId(sessionId)
+        CurrentUser currentUser = UserContext.getCurrentUser();
+        resourceAccessService.requireOwnedSession(
+                sessionId, currentUser.getUserId(), currentUser.getTenantId());
+        List<Map<String, Object>> tasks = agentTaskRepository
+                .findByParentSessionIdAndUserId(sessionId, currentUser.getUserId())
                 .stream()
                 .map(this::toMap)
                 .toList();

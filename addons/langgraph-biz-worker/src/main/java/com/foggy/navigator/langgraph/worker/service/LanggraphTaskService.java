@@ -2,6 +2,7 @@ package com.foggy.navigator.langgraph.worker.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.MessageRole;
@@ -17,7 +18,6 @@ import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphApprovalEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
-import com.foggy.navigator.langgraph.worker.model.form.ApproveTaskForm;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalRepository;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
@@ -61,6 +61,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Set<TaskQueryCapability> CAPABILITIES = Set.of(
             TaskQueryCapability.CREATE_TASK_DIRECT,
+            TaskQueryCapability.RESPOND_TO_TASK,
             TaskQueryCapability.CANCEL_TASK,
             TaskQueryCapability.DELETE_TASK);
 
@@ -76,7 +77,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     @Value("${foggy.navigator.langgraph.worker.include-recent-conversation:false}")
     private boolean includeRecentConversation;
 
-    // ── TaskQueryProvider SPI ──────────────────────────────────────────────
+    // ── Typed task-provider ports ──────────────────────────────────────────
 
     @Override
     public String getProviderType() {
@@ -150,6 +151,47 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
 
         LanggraphTaskDTO task = createTask(userId, tenantId, form);
         return getTaskById(task.getTaskId()).orElseThrow();
+    }
+
+    /**
+     * Resolve a pending approval through the unified task command port.
+     * The caller identity comes exclusively from the authenticated routing context.
+     */
+    @Override
+    @Transactional
+    public void respondToTask(String taskId, String userId, Map<String, Object> response) {
+        if (!StringUtils.hasText(taskId) || !StringUtils.hasText(userId)) {
+            throw new IllegalArgumentException("taskId and authenticated userId are required");
+        }
+
+        LanggraphTaskEntity task = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        LanggraphApprovalEntity approval = approvalRepository
+                .findByTaskIdAndUserIdAndStatus(taskId, userId, "PENDING")
+                .orElseThrow(() -> new IllegalStateException(
+                        "No pending approval for task: " + taskId));
+
+        String approvalResult = normalizeApprovalResult(responseValue(
+                response, "approvalResult", "approval_result", "decision"));
+        String comment = responseValue(response, "comment");
+
+        approval.setApprovalResult(approvalResult);
+        approval.setComment(comment);
+        approval.setReviewedBy(userId);
+        approval.setStatus("approved".equals(approvalResult) ? "APPROVED" : "REJECTED");
+        approval.setReviewedAt(java.time.LocalDateTime.now());
+        approvalRepository.save(approval);
+
+        if (!StringUtils.hasText(task.getContextId())) {
+            throw new IllegalStateException(
+                    "Task contextId is required for LangGraph worker resume: " + taskId);
+        }
+        LanggraphWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+        var client = workerService.createClient(worker);
+        client.resumeTask(taskId, task.getSessionId(), task.getContextId(), approvalResult, comment)
+                .doOnSuccess(ignored -> log.info("Worker resume success: taskId={}", taskId))
+                .doOnError(error -> log.error("Worker resume failed: taskId={}", taskId, error))
+                .subscribe();
     }
 
     // ── Task lifecycle ────────────────────────────────────────────────────
@@ -355,6 +397,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void completeTask(String taskId, String resultText, String structuredOutput, Long durationMs) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String previousStatus = entity.getStatus();
             entity.setStatus("COMPLETED");
             entity.setResultText(resultText);
             entity.setStructuredOutput(structuredOutput);
@@ -364,6 +407,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
             entity.setInterruptionMessage(null);
             entity.setRecoverable(false);
             persistTask(entity);
+            publishStatusChange(entity, previousStatus);
             log.info("Task completed: taskId={}", taskId);
         });
     }
@@ -371,12 +415,15 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void failTask(String taskId, String errorMessage) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String previousStatus = entity.getStatus();
             entity.setStatus("FAILED");
             entity.setErrorMessage(errorMessage);
             if (!StringUtils.hasText(entity.getTaskSubStatus())) {
                 entity.setTaskSubStatus("FAILED");
             }
+            entity.setRecoverable(false);
             persistTask(entity);
+            publishStatusChange(entity, previousStatus);
             log.warn("Task failed: taskId={}, error={}", taskId, errorMessage);
         });
     }
@@ -389,6 +436,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         if (!"RUNNING".equals(entity.getStatus()) && !"PENDING".equals(entity.getStatus())) {
             return;
         }
+        String previousStatus = entity.getStatus();
         entity.setStatus("ABORTED");
         entity.setTaskSubStatus("INTERRUPTED");
         entity.setInterruptionReason("user_cancelled");
@@ -396,15 +444,9 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         entity.setRecoverable(true);
         entity.setErrorMessage("Cancelled by user");
         persistTask(entity);
+        publishStatusChange(entity, previousStatus);
         recordRecoverableInterruption(entity, "user_cancelled", "Cancelled by user");
         log.info("Task cancelled: taskId={}", taskId);
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    @Transactional
-    public void cancelTask(String taskId, String userId) {
-        cancelTaskDirect(taskId, userId);
     }
 
     public void recordTaskInterruption(String taskId, String reason, String errorMessage) {
@@ -568,7 +610,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
     private String buildTaskStateJson(LanggraphTaskEntity entity, String existingJson) {
         Map<String, Object> state = new LinkedHashMap<>();
         putIfNotBlank(state, ProviderStateCodec.FIELD_CONTEXT_ID, entity.getContextId());
-        putIfNotBlank(state, "structuredOutput", entity.getStructuredOutput());
+        putIfNotBlank(state, ProviderStateCodec.FIELD_STRUCTURED_OUTPUT, entity.getStructuredOutput());
         putIfNotBlank(state, "taskSubStatus", entity.getTaskSubStatus());
         putIfNotBlank(state, "interruptionReason", entity.getInterruptionReason());
         putIfNotBlank(state, "interruptionMessage", entity.getInterruptionMessage());
@@ -613,36 +655,6 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         return entity;
     }
 
-    /**
-     * Approve/reject a pending approval and call Worker resume.
-     */
-    @Transactional
-    public void approveTask(String taskId, ApproveTaskForm form) {
-        LanggraphApprovalEntity approval = approvalRepository.findByTaskIdAndStatus(taskId, "PENDING")
-                .orElseThrow(() -> new IllegalArgumentException("No pending approval for task: " + taskId));
-
-        approval.setApprovalResult(form.getApprovalResult());
-        approval.setComment(form.getComment());
-        approval.setReviewedBy(form.getReviewedBy());
-        approval.setStatus("approved".equalsIgnoreCase(form.getApprovalResult()) ? "APPROVED" : "REJECTED");
-        approval.setReviewedAt(java.time.LocalDateTime.now());
-        approvalRepository.save(approval);
-
-        // Call Worker resume API with the persisted context locator.
-        LanggraphTaskEntity task = taskRepository.findByTaskId(taskId)
-                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
-        if (!StringUtils.hasText(task.getContextId())) {
-            throw new IllegalStateException("Task contextId is required for LangGraph worker resume: " + taskId);
-        }
-        LanggraphWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
-        var client = workerService.createClient(worker);
-
-        client.resumeTask(taskId, task.getSessionId(), task.getContextId(), form.getApprovalResult(), form.getComment())
-                .doOnSuccess(resp -> log.info("Worker resume success: taskId={}", taskId))
-                .doOnError(e -> log.error("Worker resume failed: taskId={}", taskId, e))
-                .subscribe();
-    }
-
     public LanggraphTaskDTO getTask(String userId, String taskId) {
         LanggraphTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
@@ -667,6 +679,7 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
                 .cwd(entity.getCwd())
                 .contextId(entity.getContextId())
                 .resultText(entity.getResultText())
+                .structuredOutput(entity.getStructuredOutput())
                 .errorMessage(entity.getErrorMessage())
                 .durationMs(entity.getDurationMs())
                 .createdAt(entity.getCreatedAt())
@@ -697,6 +710,31 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
                 .build();
     }
 
+    private void publishStatusChange(LanggraphTaskEntity entity, String previousStatus) {
+        eventPublisher.publishEvent(TaskStatusChangeEvent.builder()
+                .taskId(entity.getTaskId())
+                .sessionId(entity.getSessionId())
+                .userId(entity.getUserId())
+                .tenantId(entity.getTenantId())
+                .agentId(resolveAgentId(entity))
+                .status(entity.getStatus())
+                .previousStatus(previousStatus)
+                .errorMessage(entity.getErrorMessage())
+                .interactionState(deriveInteractionState(entity.getStatus()))
+                .recoverable(entity.getRecoverable())
+                .build());
+    }
+
+    private String deriveInteractionState(String status) {
+        if ("RUNNING".equals(status) || "PENDING".equals(status)) {
+            return "PROCESSING";
+        }
+        if ("COMPLETED".equals(status) || "FAILED".equals(status) || "ABORTED".equals(status)) {
+            return "AWAITING_REPLY";
+        }
+        return null;
+    }
+
     private static String truncate(String s, int maxLen) {
         return (s != null && s.length() > maxLen) ? s.substring(0, maxLen) : s;
     }
@@ -705,6 +743,31 @@ public class LanggraphTaskService implements TaskLookupProvider, TaskCommandProv
         if (value != null && !value.isBlank()) {
             target.put(key, value);
         }
+    }
+
+    private static String responseValue(Map<String, Object> response, String... keys) {
+        if (response == null || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = response.get(key);
+            if (value instanceof String text && StringUtils.hasText(text)) {
+                return text.trim();
+            }
+        }
+        return null;
+    }
+
+    private static String normalizeApprovalResult(String value) {
+        if (!StringUtils.hasText(value)) {
+            throw new IllegalArgumentException("approvalResult is required");
+        }
+        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "approve", "approved", "allow" -> "approved";
+            case "reject", "rejected", "deny" -> "rejected";
+            default -> throw new IllegalArgumentException(
+                    "approvalResult must be approved or rejected");
+        };
     }
 
     private static String runtimeContextText(Map<String, Object> runtimeContext, String... keys) {

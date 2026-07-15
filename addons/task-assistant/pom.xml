@@ -45,13 +45,6 @@
             <version>${project.version}</version>
         </dependency>
 
-        <!-- Foggy Core (RX统一返回) -->
-        <dependency>
-            <groupId>com.foggysource</groupId>
-            <artifactId>foggy-core</artifactId>
-            <version>8.1.10.beta</version>
-        </dependency>
-
         <!-- Spring Boot -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

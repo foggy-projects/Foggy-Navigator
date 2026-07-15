@@ -52,6 +52,10 @@ export interface AipMessage<T = unknown> {
 export interface TextPayload {
   content: string
   messageId?: string
+  /** Platform task that owns this text event. */
+  taskId?: string
+  /** Stable provider text-stream identity, shared by delta and completion. */
+  streamId?: string
 }
 
 export interface ToolCallStartPayload {

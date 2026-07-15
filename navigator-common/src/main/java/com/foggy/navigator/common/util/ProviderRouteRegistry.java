@@ -7,7 +7,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Shared route metadata between model workerBackend and A2A/TaskQueryProvider types.
+ * Shared route metadata between model workerBackend and A2A/typed task-provider routes.
  */
 public final class ProviderRouteRegistry {
 

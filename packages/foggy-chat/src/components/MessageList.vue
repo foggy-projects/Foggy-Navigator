@@ -80,6 +80,7 @@
               :forwardable="isForwardable(item.msg)"
               @rewind="handleRewind(item.msg)"
               @forward="emit('forward', item.msg)"
+              @view-records="emit('view-records')"
               @link-click="(payload) => emit('link-click', payload)"
             />
             <ToolCallBlock
@@ -228,6 +229,7 @@ const emit = defineEmits<{
   (e: 'loadMore'): void
   (e: 'loadAll', limit?: number): void
   (e: 'forward', message: ChatMessage): void
+  (e: 'view-records'): void
   (e: 'skillApprovalRespond', taskId: string, decision: string, comment: string): void
   (e: 'link-click', payload: { href: string; text: string }): void
   (e: 'artifact-open', action: NonNullable<ChatMessage['uiActions']>[number]): void

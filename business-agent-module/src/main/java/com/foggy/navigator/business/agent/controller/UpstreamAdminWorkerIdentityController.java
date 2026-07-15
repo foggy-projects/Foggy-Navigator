@@ -28,7 +28,7 @@ public class UpstreamAdminWorkerIdentityController {
                                                            @RequestBody RegisterWorkerIdentityForm form) {
         UpstreamClientAppAdminPrincipal principal = adminCredentialService.requireAccess(
                 request,
-                UpstreamBootstrapRequestService.SCOPE_WORKER_POOL_MANAGE);
+                UpstreamBootstrapRequestService.SCOPE_WORKER_MANAGE);
         return RX.ok(workerPoolService.registerWorkerIdentity(
                 ResourceOwnerType.UPSTREAM_SYSTEM,
                 principal.getUpstreamSystemId(),

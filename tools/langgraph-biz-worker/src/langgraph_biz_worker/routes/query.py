@@ -185,7 +185,11 @@ async def _event_generator(
             if isinstance(item, BaseException):
                 raise item
             item = _event_with_context_id(item, context_id)
-            event_key = item.model_dump_json()
+            # event_id is assigned only when an event leaves this generator. The
+            # graph may return the same event that was already emitted through
+            # the live progress sink, so transport identity must not participate
+            # in semantic de-duplication.
+            event_key = item.model_dump_json(exclude={"event_id"})
             if event_key in emitted_keys:
                 continue
             emitted_keys.add(event_key)

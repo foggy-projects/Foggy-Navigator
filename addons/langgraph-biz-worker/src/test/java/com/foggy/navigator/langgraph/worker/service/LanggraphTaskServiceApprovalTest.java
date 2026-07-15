@@ -7,7 +7,6 @@ import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphApprovalEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
-import com.foggy.navigator.langgraph.worker.model.form.ApproveTaskForm;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalRepository;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
@@ -26,7 +25,7 @@ import static org.mockito.Mockito.*;
 
 /**
  * Tests for LanggraphTaskService approval chain:
- * createApprovalRecord() and approveTask().
+ * createApprovalRecord() and the unified respondToTask command.
  */
 class LanggraphTaskServiceApprovalTest {
 
@@ -128,29 +127,28 @@ class LanggraphTaskServiceApprovalTest {
         }
     }
 
-    // -- approveTask ---------------------------------------------------------
+    // -- respondToTask -------------------------------------------------------
 
     @Nested
-    class ApproveTask {
+    class RespondToTask {
 
         @BeforeEach
         void setUpApproval() {
-            when(approvalRepository.findByTaskIdAndStatus(TASK_ID, "PENDING"))
+            when(approvalRepository.findByTaskIdAndUserIdAndStatus(TASK_ID, USER_ID, "PENDING"))
                     .thenReturn(Optional.of(makePendingApproval()));
-            when(taskRepository.findByTaskId(TASK_ID))
+            when(taskRepository.findByTaskIdAndUserId(TASK_ID, USER_ID))
                     .thenReturn(Optional.of(makeTaskEntity()));
             when(workerClient.resumeTask(anyString(), anyString(), anyString(), anyString(), anyString()))
                     .thenReturn(Mono.just(Map.of("status", "RUNNING")));
         }
 
         @Test
-        void approve_sets_status_to_approved() {
-            ApproveTaskForm form = new ApproveTaskForm();
-            form.setApprovalResult("approved");
-            form.setComment("looks good");
-            form.setReviewedBy("reviewer-1");
-
-            service.approveTask(TASK_ID, form);
+        void approve_uses_authenticated_user_as_reviewer_and_ignores_spoofed_identity() {
+            service.respondToTask(TASK_ID, USER_ID, Map.of(
+                    "approvalResult", "approved",
+                    "comment", "looks good",
+                    "reviewedBy", "spoofed-reviewer",
+                    "userId", "spoofed-user"));
 
             ArgumentCaptor<LanggraphApprovalEntity> captor =
                     ArgumentCaptor.forClass(LanggraphApprovalEntity.class);
@@ -160,17 +158,17 @@ class LanggraphTaskServiceApprovalTest {
             assertEquals("APPROVED", saved.getStatus());
             assertEquals("approved", saved.getApprovalResult());
             assertEquals("looks good", saved.getComment());
-            assertEquals("reviewer-1", saved.getReviewedBy());
+            assertEquals(USER_ID, saved.getReviewedBy());
             assertNotNull(saved.getReviewedAt());
+            verify(taskRepository).findByTaskIdAndUserId(TASK_ID, USER_ID);
+            verify(approvalRepository).findByTaskIdAndUserIdAndStatus(TASK_ID, USER_ID, "PENDING");
         }
 
         @Test
         void reject_sets_status_to_rejected() {
-            ApproveTaskForm form = new ApproveTaskForm();
-            form.setApprovalResult("rejected");
-            form.setComment("not ready");
-
-            service.approveTask(TASK_ID, form);
+            service.respondToTask(TASK_ID, USER_ID, Map.of(
+                    "approvalResult", "rejected",
+                    "comment", "not ready"));
 
             ArgumentCaptor<LanggraphApprovalEntity> captor =
                     ArgumentCaptor.forClass(LanggraphApprovalEntity.class);
@@ -180,38 +178,41 @@ class LanggraphTaskServiceApprovalTest {
 
         @Test
         void calls_worker_resume_with_correct_params() {
-            ApproveTaskForm form = new ApproveTaskForm();
-            form.setApprovalResult("approved");
-            form.setComment("ok");
-
-            service.approveTask(TASK_ID, form);
+            service.respondToTask(TASK_ID, USER_ID, Map.of(
+                    "decision", "allow",
+                    "comment", "ok"));
 
             verify(workerClient).resumeTask(TASK_ID, SESSION_ID, CONTEXT_ID, "approved", "ok");
         }
 
         @Test
         void throws_when_no_pending_approval() {
-            when(approvalRepository.findByTaskIdAndStatus(TASK_ID, "PENDING"))
+            when(approvalRepository.findByTaskIdAndUserIdAndStatus(TASK_ID, USER_ID, "PENDING"))
                     .thenReturn(Optional.empty());
 
-            ApproveTaskForm form = new ApproveTaskForm();
-            form.setApprovalResult("approved");
-
-            assertThrows(IllegalArgumentException.class, () ->
-                    service.approveTask(TASK_ID, form));
+            assertThrows(IllegalStateException.class, () ->
+                    service.respondToTask(TASK_ID, USER_ID, Map.of("approvalResult", "approved")));
             verify(workerClient, never()).resumeTask(any(), any(), any(), any(), any());
         }
 
         @Test
-        void throws_when_task_not_found() {
-            when(taskRepository.findByTaskId(TASK_ID))
+        void rejects_task_not_owned_by_authenticated_user_before_approval_lookup() {
+            when(taskRepository.findByTaskIdAndUserId(TASK_ID, USER_ID))
                     .thenReturn(Optional.empty());
 
-            ApproveTaskForm form = new ApproveTaskForm();
-            form.setApprovalResult("approved");
-
             assertThrows(IllegalArgumentException.class, () ->
-                    service.approveTask(TASK_ID, form));
+                    service.respondToTask(TASK_ID, USER_ID, Map.of("approvalResult", "approved")));
+            verify(approvalRepository, never()).findByTaskIdAndUserIdAndStatus(any(), any(), any());
+            verify(workerClient, never()).resumeTask(any(), any(), any(), any(), any());
+        }
+
+        @Test
+        void rejects_invalid_decision_without_persisting_or_resuming() {
+            assertThrows(IllegalArgumentException.class, () ->
+                    service.respondToTask(TASK_ID, USER_ID, Map.of("approvalResult", "later")));
+
+            verify(approvalRepository, never()).save(any());
+            verify(workerClient, never()).resumeTask(any(), any(), any(), any(), any());
         }
     }
 }

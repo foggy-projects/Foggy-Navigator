@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
 import {
   assertSdkCodexConfigSupported,
+  CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY,
   CODEX_ULTRA_APP_SERVER_REQUIRED,
   CODEX_BIZ_HOME_ROOT_REQUIRED_ERROR,
   CodexUltraAppServerRequiredError,
@@ -15,6 +16,7 @@ import {
   UnsupportedCodexModelError,
   UNSUPPORTED_CODEX_MODEL,
 } from '../codex/sdk-wrapper.js'
+import { isNavigatorBusinessMcpEnabled } from '../business-mcp/navigator-business-mcp-server.js'
 import type { WorkerEvent } from '../models.js'
 
 const SSE_HEARTBEAT_INTERVAL_MS = 15_000
@@ -77,6 +79,16 @@ export function requiresAppServerForUltra(
   }
 }
 
+export function resolveNavigatorBusinessMcpPreflightError(
+  context: Record<string, unknown> | undefined,
+  localWorkerId: string = config.navigatorWorkerId,
+  credentialConfigured: boolean = Boolean(config.navigatorWorkerCredential),
+): string | undefined {
+  if (!isNavigatorBusinessMcpEnabled(context)) return undefined
+  if (!localWorkerId && !credentialConfigured) return undefined
+  return CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY
+}
+
 const router = Router()
 
 /**
@@ -105,6 +117,16 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     return
   }
   const body = validation.value
+  const businessMcpPreflightError = resolveNavigatorBusinessMcpPreflightError(
+    body.business_runtime_context,
+  )
+  if (businessMcpPreflightError) {
+    res.status(503).json({
+      code: businessMcpPreflightError,
+      error: businessMcpPreflightError,
+    })
+    return
+  }
   console.log(
     `[query] received request: cwd=${body.cwd ?? ''} session_id=${body.session_id ?? ''} model=${body.model ?? ''} has_api_key=${Boolean(body.api_key)} has_base_url=${Boolean(body.base_url)} env_var_keys=${body.env_vars ? Object.keys(body.env_vars).join(',') : ''} images=${body.images?.length ?? 0}`
   )

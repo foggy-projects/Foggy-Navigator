@@ -20,13 +20,16 @@ class BusinessFunctionRuntimeAuditServiceTest {
     @Mock
     private BusinessFunctionRuntimeAuditRepository repository;
 
+    @Mock
+    private BusinessFunctionRuntimeAuditWriter writer;
+
     private BusinessFunctionRuntimeAuditService auditService;
 
     private BusinessTaskScopedTokenDTO token;
 
     @BeforeEach
     void setUp() {
-        auditService = new BusinessFunctionRuntimeAuditService(repository);
+        auditService = new BusinessFunctionRuntimeAuditService(repository, writer);
 
         token = new BusinessTaskScopedTokenDTO();
         token.setTenantId("tenant1");
@@ -40,12 +43,10 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void recordInvokeStarted_persists_entity_with_correct_fields() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         auditService.recordInvokeStarted(token, "fn1", "v1", "hash123");
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
         BusinessFunctionRuntimeAuditEntity entity = captor.getValue();
 
         assertNotNull(entity.getAuditId());
@@ -66,12 +67,10 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void recordInvokeSuccess_persists_output_hash_and_duration() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         auditService.recordInvokeSuccess(token, "fn1", "v1", "outhash", 42L);
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
         BusinessFunctionRuntimeAuditEntity entity = captor.getValue();
 
         assertEquals("INVOKE_SUCCESS", entity.getEventType());
@@ -82,12 +81,10 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void recordInvokeSuccess_withSuspendId_persists_suspend_id() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         auditService.recordInvokeSuccess(token, "fn1", "v1", "sus_123", "outhash", 42L);
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
         BusinessFunctionRuntimeAuditEntity entity = captor.getValue();
 
         assertEquals("INVOKE_SUCCESS", entity.getEventType());
@@ -97,12 +94,10 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void recordInvokeSuspended_persists_suspend_id() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         auditService.recordInvokeSuspended(token, "fn1", "v1", "sus_123");
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
         BusinessFunctionRuntimeAuditEntity entity = captor.getValue();
 
         assertEquals("INVOKE_SUSPENDED", entity.getEventType());
@@ -111,12 +106,10 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void recordInvokeFailed_persists_error_details() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         auditService.recordInvokeFailed(token, "fn1", "v1", "ADAPTER_ERROR", "Connection refused", 100L);
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
         BusinessFunctionRuntimeAuditEntity entity = captor.getValue();
 
         assertEquals("INVOKE_FAILED", entity.getEventType());
@@ -128,12 +121,10 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void recordInvokeFailed_withSuspendId_persists_suspend_id() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         auditService.recordInvokeFailed(token, "fn1", "v1", "sus_123", "ADAPTER_ERROR", "Connection refused", 100L);
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
         BusinessFunctionRuntimeAuditEntity entity = captor.getValue();
 
         assertEquals("INVOKE_FAILED", entity.getEventType());
@@ -143,12 +134,10 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void recordToolMessage_persists_tool_info() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         auditService.recordToolMessage(token, "invoke_business_function", "fn1", "SUCCESS", "completed");
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
         BusinessFunctionRuntimeAuditEntity entity = captor.getValue();
 
         assertEquals("TOOL_MESSAGE", entity.getEventType());
@@ -159,12 +148,10 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void recordResumeRequested_persists_suspend_and_user() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         auditService.recordResumeRequested("tenant1", "sus_1", "admin");
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
         BusinessFunctionRuntimeAuditEntity entity = captor.getValue();
 
         assertEquals("RESUME_REQUESTED", entity.getEventType());
@@ -175,24 +162,20 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void recordResumeDispatched_persists_dispatched_status() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         auditService.recordResumeDispatched("tenant1", "sus_1");
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
 
         assertEquals("RESUME_DISPATCHED", captor.getValue().getEventType());
     }
 
     @Test
     void recordResumeFailed_persists_error() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         auditService.recordResumeFailed("tenant1", "sus_1", "Input hash mismatch");
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
 
         assertEquals("RESUME_FAILED", captor.getValue().getEventType());
         assertEquals("Input hash mismatch", captor.getValue().getErrorMessage());
@@ -200,7 +183,8 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void bestEffort_audit_write_failure_does_not_throw() {
-        when(repository.save(any())).thenThrow(new RuntimeException("DB unavailable"));
+        doThrow(new RuntimeException("DB unavailable during transaction completion"))
+                .when(writer).write(any());
 
         // This must NOT throw
         assertDoesNotThrow(() ->
@@ -222,13 +206,11 @@ class BusinessFunctionRuntimeAuditServiceTest {
 
     @Test
     void errorMessage_is_bounded_at_500_chars() {
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
         String longMessage = "x".repeat(600);
         auditService.recordInvokeFailed(token, "fn1", "v1", "ERR", longMessage, 1L);
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(repository).save(captor.capture());
+        verify(writer).write(captor.capture());
 
         assertEquals(500, captor.getValue().getErrorMessage().length());
     }

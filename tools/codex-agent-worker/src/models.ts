@@ -66,6 +66,12 @@ export interface WorkerEvent {
  */
 export interface HealthResponse {
   status: string
+  ready: boolean
+  reasons: string[]
+  mode: 'internal-dev' | 'external-enabled'
+  external_enabled: boolean
+  external_ready: boolean
+  auth_configured: boolean
   hostname: string
   version: string
   worker_name: string

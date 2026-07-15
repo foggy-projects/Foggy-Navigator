@@ -2,7 +2,7 @@
   "profile": "production",
   "navigator": {
     "baseUrl": "http://127.0.0.1:8112",
-    "tasksPath": "/api/v1/codex-tasks",
+    "tasksPath": "/api/v1/tasks/operations/codex-canary",
     "tokenEnv": "NAVIGATOR_CANARY_TOKEN",
     "runtimeId": "codex-app-server-canary",
     "runtimeRevision": 1,

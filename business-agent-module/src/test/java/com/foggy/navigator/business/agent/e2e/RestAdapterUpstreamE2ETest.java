@@ -87,6 +87,7 @@ class RestAdapterUpstreamE2ETest {
     @Mock BusinessObjectRepository businessObjectRepository;
     @Mock BusinessAgentTaskRepository taskRepository;
     @Mock BusinessTaskScopedTokenRepository tokenRepository;
+    @Mock BusinessTaskTerminalStateRepository terminalStateRepository;
     @Mock BizWorkerPoolRepository poolRepository;
     @Mock BizWorkerPoolMemberRepository poolMemberRepository;
     @Mock BizWorkerIdentityRepository identityRepository;
@@ -183,10 +184,20 @@ class RestAdapterUpstreamE2ETest {
                 java.util.List.of(),
                 agentDirectoryBindingRepository,
                 agentModelBindingRepository);
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, resourceResolver, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, identityRepository, java.util.List.of());
+        BusinessTaskScopedTokenPolicyService tokenPolicyService = new BusinessTaskScopedTokenPolicyService(
+                functionGrantRepository,
+                objectMapper,
+                new com.foggy.navigator.business.agent.config.BusinessTaskScopedTokenProperties());
+        BusinessTaskScopedTokenLifecycleService tokenLifecycleService =
+                new BusinessTaskScopedTokenLifecycleService(
+                        tokenRepository, terminalStateRepository, tokenPolicyService, tokenRuntimeStore);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService,
+                bizWorkerPoolService, resourceResolver, userGrantService1, skillRegistryService,
+                businessAgentSessionService, identityRepository, tokenLifecycleService, java.util.List.of());
         BusinessFunctionAuthorizationService authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService1, skillRegistryService, functionRegistryService);
 
-        auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
+        auditService = new BusinessFunctionRuntimeAuditService(
+                auditRepository, new BusinessFunctionRuntimeAuditWriter(auditRepository));
 
         // Build composite adapter with real REST invoker
         RestTemplate restTemplate = new RestTemplate();
@@ -199,7 +210,7 @@ class RestAdapterUpstreamE2ETest {
         );
         suspensionService = new BusinessFunctionSuspensionService(suspensionRepository, eventPublisher, auditService, authorizationService, adapterInvoker);
 
-        workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, userGrantService1, suspensionService, adapterInvoker, objectMapper, auditService);
+        workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, userGrantService1, suspensionService, adapterInvoker, objectMapper, auditService, tokenPolicyService);
     }
 
     @AfterEach
@@ -220,7 +231,7 @@ class RestAdapterUpstreamE2ETest {
         stubPoolAndTask();
         stubTokenResolution();
 
-        when(auditRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(auditRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
 
         // 1. Create task
         CreateBusinessAgentTaskForm taskForm = new CreateBusinessAgentTaskForm();
@@ -279,7 +290,7 @@ class RestAdapterUpstreamE2ETest {
         // 6. Assert audit rows were created (INVOKE_STARTED + INVOKE_SUCCESS)
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> auditCaptor =
                 ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(auditRepository, atLeast(2)).save(auditCaptor.capture());
+        verify(auditRepository, atLeast(2)).saveAndFlush(auditCaptor.capture());
 
         List<BusinessFunctionRuntimeAuditEntity> audits = auditCaptor.getAllValues();
         assertTrue(audits.stream().anyMatch(a -> "INVOKE_STARTED".equals(a.getEventType())));
@@ -303,7 +314,7 @@ class RestAdapterUpstreamE2ETest {
         stubPoolAndTask();
         stubTokenResolution();
 
-        when(auditRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(auditRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
         when(suspensionRepository.save(any(BusinessFunctionSuspensionEntity.class))).thenAnswer(inv -> {
             suspensionEntity = inv.getArgument(0);
             return suspensionEntity;
@@ -365,7 +376,7 @@ class RestAdapterUpstreamE2ETest {
 
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> auditCaptor =
                 ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
-        verify(auditRepository, atLeastOnce()).save(auditCaptor.capture());
+        verify(auditRepository, atLeastOnce()).saveAndFlush(auditCaptor.capture());
         List<BusinessFunctionRuntimeAuditEntity> audits = auditCaptor.getAllValues();
         assertTrue(audits.stream()
                 .anyMatch(a -> "INVOKE_SUCCESS".equals(a.getEventType()) && suspendId.equals(a.getSuspendId())));
@@ -519,6 +530,8 @@ class RestAdapterUpstreamE2ETest {
         funcGrant.setStatus("ENABLED");
         when(functionGrantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion(TENANT, APP_ID, FUNCTION_ID, VERSION))
                 .thenReturn(Optional.of(funcGrant));
+        when(functionGrantRepository.findByTenantIdAndClientAppId(TENANT, APP_ID))
+                .thenReturn(List.of(funcGrant));
     }
 
     private BusinessSuspensionResumeDecisionEvent captureBusinessDecisionEvent() {
@@ -557,6 +570,9 @@ class RestAdapterUpstreamE2ETest {
         pool.setHealthStatus("HEALTHY");
         pool.setWorkerBackend("LANGGRAPH_BIZ");
         when(poolRepository.findByPoolIdAndTenantId(POOL_ID, TENANT)).thenReturn(Optional.of(pool));
+        when(poolRepository.findByPoolIdAndTenantIdAndOwnerTypeAndOwnerId(
+                POOL_ID, TENANT, ResourceOwnerType.PLATFORM, TENANT))
+                .thenReturn(Optional.of(pool));
 
         CodingAgentEntity agent = new CodingAgentEntity();
         agent.setAgentId(AGENT_ID);

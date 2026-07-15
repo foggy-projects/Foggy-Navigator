@@ -3,18 +3,25 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import express from 'express'
-import { taskBroadcasts } from '../src/codex/sdk-wrapper.ts'
+import { config } from '../src/config.ts'
+import {
+  CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY,
+  taskBroadcasts,
+  taskRegistry,
+} from '../src/codex/sdk-wrapper.ts'
 import {
   CODEX_ULTRA_APP_SERVER_REQUIRED,
   default as queryRouter,
   isPathWithinAllowedCwd,
   isUnsupportedCodexModelRequest,
   requiresAppServerForUltra,
+  resolveNavigatorBusinessMcpPreflightError,
 } from '../src/routes/query.ts'
 import { UNSUPPORTED_CODEX_MODEL } from '../src/codex/sdk-wrapper.ts'
 import {
   acquireCodexThreadReservation,
   clearCodexThreadReservationsForTests,
+  getCodexThreadReservations,
 } from '../src/codex/thread-reservations.ts'
 
 const TEST_ALIASES = {
@@ -47,6 +54,71 @@ test('all Ultra queries fail closed for the independent app-server runtime', () 
     { model_reasoning_effort: ' ULTRA ' },
   ), true)
   assert.equal(requiresAppServerForUltra('codex-max', 'codex-latest', TEST_ALIASES), false)
+})
+
+test('business MCP credential preflight leaves internal token-only and non-business requests unchanged', () => {
+  assert.equal(resolveNavigatorBusinessMcpPreflightError(undefined, 'worker-a', true), undefined)
+  assert.equal(resolveNavigatorBusinessMcpPreflightError({
+    task_scoped_token: 'btt_task',
+    allowed_tools: ['filesystem.read'],
+  }, 'worker-a', true), undefined)
+  assert.equal(resolveNavigatorBusinessMcpPreflightError({
+    task_scoped_token: 'btt_task',
+    allowed_tools: ['business.functions.invoke'],
+  }, '', false), undefined)
+})
+
+test('query route rejects configured credential business MCP before SSE, reservation, or task state', async () => {
+  const previousWorkerId = config.navigatorWorkerId
+  const previousWorkerCredential = config.navigatorWorkerCredential
+  config.navigatorWorkerId = 'worker-a'
+  config.navigatorWorkerCredential = 'bwc_route_secret'
+  clearCodexThreadReservationsForTests()
+
+  const app = express()
+  app.use(express.json())
+  app.use(queryRouter)
+  const server = app.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address() as AddressInfo
+  const broadcastCountBefore = taskBroadcasts.size
+  const taskCountBefore = taskRegistry.size
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: 'must fail before task allocation',
+        session_id: 'thread-business-preflight',
+        business_runtime_context: {
+          task_scoped_token: 'btt_route_secret',
+          allowed_tools: ['business.functions.invoke'],
+          worker_id: 'worker-a',
+          worker_lease_id: 'lease-a',
+        },
+      }),
+    })
+    const responseText = await response.text()
+
+    assert.equal(response.status, 503)
+    assert.match(response.headers.get('content-type') || '', /^application\/json/)
+    assert.deepEqual(JSON.parse(responseText), {
+      code: CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY,
+      error: CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY,
+    })
+    assert.doesNotMatch(responseText, /bwc_route_secret|btt_route_secret|lease-a/)
+    assert.equal(taskBroadcasts.size, broadcastCountBefore)
+    assert.equal(taskRegistry.size, taskCountBefore)
+    assert.equal(getCodexThreadReservations().has('thread-business-preflight'), false)
+  } finally {
+    config.navigatorWorkerId = previousWorkerId
+    config.navigatorWorkerCredential = previousWorkerCredential
+    clearCodexThreadReservationsForTests()
+    await new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve())
+    })
+  }
 })
 
 test('query route rejects new and resumed Ultra sessions before creating Worker task state', async () => {

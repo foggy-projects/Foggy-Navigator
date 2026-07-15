@@ -1,10 +1,9 @@
 package com.foggy.navigator.session.controller;
 
-import com.foggy.navigator.agent.framework.session.Session;
-import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
+import com.foggy.navigator.session.service.SessionTaskResourceAccessService;
 import com.foggy.navigator.session.sse.UnifiedSseEmitter;
 import com.foggyframework.core.ex.RX;
 import lombok.Data;
@@ -31,7 +30,7 @@ import java.util.Set;
 public class UnifiedSseController {
 
     private final UnifiedSseEmitter unifiedSseEmitter;
-    private final SessionManager sessionManager;
+    private final SessionTaskResourceAccessService resourceAccessService;
 
     @GetMapping("/unified")
     public SseEmitter stream() {
@@ -48,17 +47,11 @@ public class UnifiedSseController {
         }
 
         for (String sessionId : form.getSessionIds()) {
-            // Validate session belongs to current user
-            try {
-                Session session = sessionManager.getSession(sessionId);
-                if (session == null || !user.getUserId().equals(session.getUserId())) {
-                    log.debug("Subscribe skipped (not owned): userId={}, sessionId={}", user.getUserId(), sessionId);
-                    continue;
-                }
-                unifiedSseEmitter.subscribe(user.getUserId(), sessionId);
-            } catch (Exception e) {
-                log.debug("Subscribe skipped (error): userId={}, sessionId={}", user.getUserId(), sessionId, e);
-            }
+            resourceAccessService.requireOwnedSession(
+                    sessionId, user.getUserId(), user.getTenantId());
+        }
+        for (String sessionId : form.getSessionIds()) {
+            unifiedSseEmitter.subscribe(user.getUserId(), sessionId);
         }
         return RX.ok();
     }

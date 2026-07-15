@@ -58,15 +58,6 @@ src/test/java/com/foggy/navigator/metadata/query/config/
 └── TestConfig.java
 ```
 
-### metadata-query-module（2 个测试文件）
-```
-src/test/java/com/foggy/navigator/metadata/query/
-├── service/
-│   └── ...
-└── controller/
-    └── MetadataQueryControllerTest.java
-```
-
 ### user-auth-module（1 个测试文件）
 ```
 src/test/java/com/foggy/navigator/auth/

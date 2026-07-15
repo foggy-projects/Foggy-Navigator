@@ -24,6 +24,13 @@ async def test_health_returns_200(client, monkeypatch):
     assert data["capabilities"]["agent_delegation"]["nested_agent_delegation_allowed"] is False
     assert data["capabilities"]["agent_delegation"]["child_agent_inherits_parent_tools"] is False
     assert data["capabilities"]["agent_delegation"]["tools"]["spawn_agent"]["tool_name"] == "invoke_business_agent"
+    assert data["status"] == "ok"
+    assert data["ready"] is True
+    assert data["mode"] == "internal-dev"
+    assert data["external_enabled"] is False
+    assert data["external_ready"] is False
+    assert data["auth_configured"] is False
+    assert data["reasons"] == []
 
 
 @pytest.mark.asyncio

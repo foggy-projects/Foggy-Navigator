@@ -2,12 +2,12 @@ package com.foggy.navigator.claude.worker.spi;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
-import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
+import com.foggy.navigator.claude.worker.model.command.ClaudeTaskCreateCommand;
 import com.foggy.navigator.claude.worker.model.dto.WorkerDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
-import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
@@ -81,11 +81,11 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
     @Override
     public Map<String, Object> createTask(String userId, Map<String, Object> params) {
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId((String) params.get("workerId"));
         form.setPrompt((String) params.get("prompt"));
         form.setCwd((String) params.get("cwd"));
-        TaskDTO dto = taskService.createTask(userId, (String) params.get("tenantId"), form);
+        DispatchTaskDTO dto = taskService.createTask(userId, (String) params.get("tenantId"), form);
         return taskToMap(dto);
     }
 
@@ -112,7 +112,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         form.setClaudeSessionId((String) params.get("claudeSessionId"));
         form.setPrompt((String) params.get("prompt"));
         form.setCwd((String) params.get("cwd"));
-        TaskDTO dto = taskService.resumeTask(userId, (String) params.get("tenantId"), form);
+        DispatchTaskDTO dto = taskService.resumeTask(userId, (String) params.get("tenantId"), form);
         return taskToMap(dto);
     }
 
@@ -567,7 +567,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         return map;
     }
 
-    private Map<String, Object> taskToMap(TaskDTO dto) {
+    private Map<String, Object> taskToMap(DispatchTaskDTO dto) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("taskId", dto.getTaskId());
         map.put("workerTaskId", dto.getWorkerTaskId());

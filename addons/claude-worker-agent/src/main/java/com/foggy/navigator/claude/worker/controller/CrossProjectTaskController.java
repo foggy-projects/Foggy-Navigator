@@ -2,12 +2,12 @@ package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.model.dto.CrossProjectPhaseDTO;
 import com.foggy.navigator.claude.worker.model.dto.CrossProjectTaskDTO;
-import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.form.AdvancePhaseForm;
 import com.foggy.navigator.claude.worker.model.form.CreateCrossProjectTaskForm;
 import com.foggy.navigator.claude.worker.service.CrossProjectTaskService;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -56,7 +56,7 @@ public class CrossProjectTaskController {
     }
 
     @PostMapping("/{contextId}/review")
-    public RX<TaskDTO> triggerReview(@PathVariable String contextId) {
+    public RX<DispatchTaskDTO> triggerReview(@PathVariable String contextId) {
         String userId = UserContext.getCurrentUserId();
         String tenantId = UserContext.getCurrentTenantId();
         return RX.ok(taskService.triggerReview(userId, tenantId, contextId));

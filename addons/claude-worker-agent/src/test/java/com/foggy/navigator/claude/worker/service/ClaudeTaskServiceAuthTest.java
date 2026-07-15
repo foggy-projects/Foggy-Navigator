@@ -3,10 +3,9 @@ package com.foggy.navigator.claude.worker.service;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
-import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
+import com.foggy.navigator.claude.worker.model.command.ClaudeTaskCreateCommand;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
-import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.SessionEntity;
@@ -21,7 +20,6 @@ import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -93,6 +91,7 @@ class ClaudeTaskServiceAuthTest {
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
         worker.setWorkerId(WORKER_ID);
         worker.setUserId(USER_ID);
+        worker.setTenantId(TENANT_ID);
         worker.setStatus("ONLINE");
         when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(worker);
 
@@ -133,7 +132,6 @@ class ClaudeTaskServiceAuthTest {
         assertFalse(service.supports(TaskQueryCapability.GET_WORKER_SESSION_MESSAGE_COUNT));
         assertFalse(service.supports(TaskQueryCapability.GET_WORKER_SESSION_MESSAGES));
         assertFalse(service.supports(TaskQueryCapability.SYNC_WORKER_SESSIONS));
-        assertFalse(service instanceof TaskQueryProvider);
     }
 
     @Test
@@ -145,19 +143,21 @@ class ClaudeTaskServiceAuthTest {
         when(llmModelManager.getDecryptedApiKey(modelConfigId)).thenReturn("sk-test-key-123");
         when(credentialEncryptor.encrypt("sk-test-key-123")).thenReturn("encrypted-sk-test-key-123");
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Test task");
         form.setCwd("/test/path");
         form.setModelConfigId(modelConfigId);
 
         // Act
-        TaskDTO result = service.createTask(USER_ID, TENANT_ID, form);
+        DispatchTaskDTO result = service.createTask(USER_ID, TENANT_ID, form);
 
         // Assert: Task created successfully
         assertNotNull(result);
         assertEquals(SESSION_ID, result.getSessionId());
         assertEquals(WORKER_ID, result.getWorkerId());
+        verify(taskRepository, atLeastOnce()).save(argThat((ClaudeTaskEntity entity) ->
+                TENANT_ID.equals(entity.getTenantId())));
 
         // Verify SessionEntity was saved with auth fields
         verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
@@ -177,7 +177,7 @@ class ClaudeTaskServiceAuthTest {
 
     @Test
     void createTask_withExplicitLogicalAgentId_persistsItIntoSessionAndTaskProjection() {
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setAgentId("agent-claude-1");
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Test task");
@@ -207,7 +207,7 @@ class ClaudeTaskServiceAuthTest {
         existingProjection.setTaskStateJson("{\"originalTaskId\":\"task-original\"}");
         when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.of(existingProjection));
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Test task");
         form.setCwd("/test/path");
@@ -236,7 +236,7 @@ class ClaudeTaskServiceAuthTest {
         when(llmModelManager.getDecryptedApiKey(modelConfigId)).thenReturn("sk-ant-key-456");
         when(credentialEncryptor.encrypt("sk-ant-key-456")).thenReturn("encrypted-sk-ant-key-456");
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Test task");
         form.setCwd("/test/path");
@@ -320,6 +320,8 @@ class ClaudeTaskServiceAuthTest {
         service.resumeTask(USER_ID, TENANT_ID, form);
 
         // Assert: auth should be saved to SessionEntity
+        verify(taskRepository, atLeastOnce()).save(argThat((ClaudeTaskEntity entity) ->
+                TENANT_ID.equals(entity.getTenantId())));
         verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
                 SESSION_ID.equals(entity.getId())
                         && "CUSTOM_ENDPOINT".equals(entity.getAuthMode())
@@ -486,7 +488,7 @@ class ClaudeTaskServiceAuthTest {
         when(directoryService.getDecryptedDefaultAuth(dir)).thenReturn(new String[]{"API_KEY", "dir-key-123", null});
         when(credentialEncryptor.encrypt("dir-key-123")).thenReturn("encrypted-dir-key-123");
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Test task");
         form.setDirectoryId(directoryId);
@@ -520,7 +522,7 @@ class ClaudeTaskServiceAuthTest {
         when(workingDirectoryRepository.findByDirectoryIdAndUserId(directoryId, USER_ID))
                 .thenReturn(Optional.of(dir));
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Use subscription");
         form.setDirectoryId(directoryId);
@@ -557,7 +559,7 @@ class ClaudeTaskServiceAuthTest {
         when(workingDirectoryRepository.findByDirectoryIdAndUserId(directoryId, USER_ID))
                 .thenReturn(Optional.of(dir));
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Use directory subscription");
         form.setDirectoryId(directoryId);
@@ -599,7 +601,7 @@ class ClaudeTaskServiceAuthTest {
         doThrow(new IllegalArgumentException("该模型未授权给当前 Worker 使用: Restricted-Model"))
                 .when(llmModelManager).validateModelAccessForWorker(modelConfigId, WORKER_ID);
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Test task");
         form.setCwd("/test/path");
@@ -650,7 +652,7 @@ class ClaudeTaskServiceAuthTest {
         when(llmModelManager.getDecryptedApiKey(overrideConfigId)).thenReturn("sk-override-key");
         when(credentialEncryptor.encrypt("sk-override-key")).thenReturn("encrypted-override");
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Test task");
         form.setCwd("/test/path");
@@ -692,7 +694,7 @@ class ClaudeTaskServiceAuthTest {
         ReflectionTestUtils.setField(localService, "sessionTaskRepository", sessionTaskRepository);
         ReflectionTestUtils.setField(localService, "sessionEntityRepository", sessionEntityRepository);
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Test task");
         form.setCwd("/test/path");
@@ -720,7 +722,7 @@ class ClaudeTaskServiceAuthTest {
         when(llmModelManager.resolveModelForAgent(anyString(), anyString(), isNull()))
                 .thenReturn(Optional.of(overrideConfig));
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Test task");
         form.setCwd("/test/path");
@@ -743,7 +745,7 @@ class ClaudeTaskServiceAuthTest {
         when(llmModelManager.getDecryptedApiKey(modelConfigId)).thenReturn("sk-test");
         when(credentialEncryptor.encrypt("sk-test")).thenReturn("encrypted");
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Continue task");
         form.setCwd("/test/path");
@@ -770,7 +772,7 @@ class ClaudeTaskServiceAuthTest {
         when(llmModelManager.getDecryptedApiKey(modelConfigId)).thenReturn("sk-test");
         when(credentialEncryptor.encrypt("sk-test")).thenReturn("encrypted");
 
-        CreateTaskForm form = new CreateTaskForm();
+        ClaudeTaskCreateCommand form = new ClaudeTaskCreateCommand();
         form.setWorkerId(WORKER_ID);
         form.setPrompt("New task");
         form.setCwd("/test/path");

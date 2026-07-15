@@ -61,14 +61,6 @@ public class ClaudeWorkerSessionQueryService implements WorkerSessionQueryProvid
         }
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
-        return listWorkerSessionSummaries(workerId, userId).stream()
-                .map(WorkerSessionSummary::toMap)
-                .toList();
-    }
-
     @Override
     public WorkerSessionMessageCount getWorkerSessionMessageCountResult(String workerId, String sessionId,
                                                                         String userId) {
@@ -84,12 +76,6 @@ public class ClaudeWorkerSessionQueryService implements WorkerSessionQueryProvid
                     workerId, sessionId, e.getMessage());
             return WorkerSessionMessageCount.empty();
         }
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
-        return getWorkerSessionMessageCountResult(workerId, sessionId, userId).toMap();
     }
 
     @Override
@@ -114,15 +100,6 @@ public class ClaudeWorkerSessionQueryService implements WorkerSessionQueryProvid
         }
     }
 
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
-                                                              String userId, Integer offset, Integer limit) {
-        return listWorkerSessionMessages(workerId, sessionId, userId, offset, limit).stream()
-                .map(WorkerSessionMessage::toMap)
-                .toList();
-    }
-
     @Override
     public WorkerSessionSyncResult syncWorkerSessionState(String workerId, String userId, String tenantId) {
         ClaudeWorkerEntity worker = requireWorker(workerId, userId);
@@ -142,12 +119,6 @@ public class ClaudeWorkerSessionQueryService implements WorkerSessionQueryProvid
             log.warn("Failed to sync sessions on worker: workerId={}, error={}", workerId, e.getMessage());
             throw new RuntimeException("同步失败: " + e.getMessage(), e);
         }
-    }
-
-    @Deprecated(since = "1.3.1", forRemoval = false)
-    @Override
-    public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
-        return syncWorkerSessionState(workerId, userId, tenantId).toMap();
     }
 
     private ClaudeWorkerEntity requireWorker(String workerId, String userId) {

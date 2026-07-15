@@ -4,8 +4,11 @@ import {
   checkCodexSdkAvailable,
   resolveCodexAuthMode,
   resolveCodexBizReadiness,
+  resolveNavigatorWorkerCredentialReadiness,
   resolveWorkerHealthStatus,
 } from '../src/routes/health.ts'
+import { CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY } from '../src/codex/sdk-wrapper.ts'
+import { resolveExternalModeState } from '../src/external-mode.ts'
 
 test('resolveCodexAuthMode prefers api key over codex login', () => {
   assert.equal(resolveCodexAuthMode('sk-test', true), 'api_key')
@@ -37,5 +40,37 @@ test('resolveCodexBizReadiness exposes only non-sensitive scoped home state', ()
   assert.deepEqual(resolveCodexBizReadiness('  '), {
     codex_biz_home_root_configured: false,
     codex_biz_scoped_home_ready: false,
+  })
+})
+
+test('configured Navigator Worker credential keeps Codex Worker unready without exposing it', () => {
+  const reasons = resolveNavigatorWorkerCredentialReadiness('worker-a', true)
+
+  assert.deepEqual(reasons, [CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY])
+  assert.equal(reasons.some(reason => /bwc_|credential-value/.test(reason)), false)
+  assert.deepEqual(resolveNavigatorWorkerCredentialReadiness('', false), [])
+})
+
+test('external mode never treats a configured bearer token as execution readiness', () => {
+  assert.deepEqual(resolveExternalModeState({ externalEnabled: false, workerToken: '' }), {
+    mode: 'internal-dev',
+    external_enabled: false,
+    external_ready: false,
+    auth_configured: false,
+    reasons: [],
+  })
+  assert.deepEqual(resolveExternalModeState({ externalEnabled: true, workerToken: '' }), {
+    mode: 'external-enabled',
+    external_enabled: true,
+    external_ready: false,
+    auth_configured: false,
+    reasons: ['EXTERNAL_AUTH_TOKEN_REQUIRED', 'EXTERNAL_EXECUTION_POLICY_PENDING'],
+  })
+  assert.deepEqual(resolveExternalModeState({ externalEnabled: true, workerToken: 'secret' }), {
+    mode: 'external-enabled',
+    external_enabled: true,
+    external_ready: false,
+    auth_configured: true,
+    reasons: ['EXTERNAL_EXECUTION_POLICY_PENDING'],
   })
 })

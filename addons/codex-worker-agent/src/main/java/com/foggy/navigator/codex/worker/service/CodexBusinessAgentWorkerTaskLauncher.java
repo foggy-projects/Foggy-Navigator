@@ -1,6 +1,7 @@
 package com.foggy.navigator.codex.worker.service;
 
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolMemberEntity;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberRepository;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
@@ -24,7 +25,8 @@ import java.util.Map;
 public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorkerTaskLauncher {
 
     private final BizWorkerPoolMemberRepository poolMemberRepository;
-    private final CodexTaskService codexTaskService;
+    private final BizWorkerPoolService bizWorkerPoolService;
+    private final CodexBizTaskProvider codexBizTaskProvider;
 
     @Override
     public String getWorkerBackend() {
@@ -32,8 +34,19 @@ public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorker
     }
 
     @Override
+    public String resolveWorkerId(BusinessAgentWorkerTaskLaunchRequest request) {
+        return resolveWorkerId(request, request.getPhysicalWorkerId());
+    }
+
+    @Override
     public BusinessAgentWorkerTaskLaunchResult launch(BusinessAgentWorkerTaskLaunchRequest request) {
-        String workerId = resolveWorkerId(request);
+        String selectedWorkerId = requireText(
+                request.getSelectedWorkerId(), "selectedWorkerId is required before launch");
+        requireText(request.getWorkerLeaseId(), "workerLeaseId is required before launch");
+        String workerId = resolveWorkerId(request, selectedWorkerId);
+        if (!selectedWorkerId.equals(workerId)) {
+            throw new SecurityException("resolved worker changed before launch");
+        }
         Map<String, Object> params = new LinkedHashMap<>();
         putText(params, "agentId", request.getAgentId());
         putText(params, "workerId", workerId);
@@ -55,7 +68,13 @@ public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorker
         }
         putStringList(params, "additionalDirectories", request.getAllowedDirs());
 
-        DispatchTaskDTO workerTask = codexTaskService.createTaskDirect(params, request.getActorUserId(), request.getTenantId());
+        DispatchTaskDTO workerTask = codexBizTaskProvider.createTaskDirect(
+                params, request.getActorUserId(), request.getTenantId());
+        if (workerTask == null
+                || !StringUtils.hasText(workerTask.getWorkerId())
+                || !workerId.equals(workerTask.getWorkerId().trim())) {
+            throw new SecurityException("Codex task was created on a different worker");
+        }
         return BusinessAgentWorkerTaskLaunchResult.builder()
                 .workerTaskId(workerTask.getTaskId())
                 .workerSessionId(workerTask.getSessionId())
@@ -65,16 +84,51 @@ public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorker
                 .build();
     }
 
-    private String resolveWorkerId(BusinessAgentWorkerTaskLaunchRequest request) {
-        if (StringUtils.hasText(request.getPhysicalWorkerId())) {
-            return request.getPhysicalWorkerId().trim();
+    private String resolveWorkerId(
+            BusinessAgentWorkerTaskLaunchRequest request,
+            String requestedWorkerId) {
+        requireCodexBackend(request);
+        String routeId = requireText(request.getWorkerPoolId(), "workerPoolId is required");
+        if (request.getWorkerPoolOwnerType() == null) {
+            String physicalWorkerId = requireText(
+                    requestedWorkerId, "physicalWorkerId is required when worker pool is absent");
+            if (!routeId.equals(physicalWorkerId)) {
+                throw new IllegalStateException("worker pool owner is missing for pooled route: " + routeId);
+            }
+            return physicalWorkerId;
         }
-        BizWorkerPoolMemberEntity member = poolMemberRepository.findByPoolIdOrderByCreatedAtAsc(request.getWorkerPoolId())
+
+        BizWorkerPoolEntity pool = bizWorkerPoolService.requireAvailablePool(
+                requireText(request.getTenantId(), "tenantId is required"),
+                request.getWorkerPoolOwnerType(),
+                requireText(request.getWorkerPoolOwnerId(), "workerPoolOwnerId is required"),
+                routeId);
+        if (!getWorkerBackend().equals(pool.getWorkerBackend())) {
+            throw new IllegalStateException("worker pool backend mismatch: " + routeId);
+        }
+        List<BizWorkerPoolMemberEntity> enabledMembers = poolMemberRepository
+                .findByPoolIdOrderByCreatedAtAsc(routeId)
                 .stream()
                 .filter(item -> BizWorkerPoolService.STATUS_ENABLED.equals(item.getStatus()))
+                .toList();
+        if (StringUtils.hasText(requestedWorkerId)) {
+            String normalizedWorkerId = requestedWorkerId.trim();
+            return enabledMembers.stream()
+                    .map(BizWorkerPoolMemberEntity::getWorkerId)
+                    .filter(StringUtils::hasText)
+                    .map(String::trim)
+                    .filter(normalizedWorkerId::equals)
+                    .findFirst()
+                    .orElseThrow(() -> new SecurityException(
+                            "physical worker is not an enabled pool member: " + normalizedWorkerId));
+        }
+        return enabledMembers.stream()
+                .map(BizWorkerPoolMemberEntity::getWorkerId)
+                .filter(StringUtils::hasText)
+                .map(String::trim)
                 .findFirst()
-                .orElseThrow(() -> new IllegalStateException("worker pool has no enabled members: " + request.getWorkerPoolId()));
-        return member.getWorkerId();
+                .orElseThrow(() -> new IllegalStateException(
+                        "worker pool has no enabled members: " + routeId));
     }
 
     private String resolveCodexAccountKey(BusinessAgentWorkerTaskLaunchRequest request) {
@@ -122,6 +176,8 @@ public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorker
         putText(context, "directory_id", request.getDirectoryId());
         putText(context, "workdir", request.getWorkdir());
         putText(context, "task_scoped_token", request.getTaskScopedToken());
+        putText(context, "worker_id", request.getSelectedWorkerId());
+        putText(context, "worker_lease_id", request.getWorkerLeaseId());
         putStringList(context, "allowed_dirs", request.getAllowedDirs());
         putStringList(context, "allowed_tools", request.getAllowedTools());
         return context;
@@ -183,5 +239,19 @@ public class CodexBusinessAgentWorkerTaskLauncher implements BusinessAgentWorker
             }
         }
         return null;
+    }
+
+    private void requireCodexBackend(BusinessAgentWorkerTaskLaunchRequest request) {
+        String backend = requireText(request.getWorkerBackend(), "workerBackend is required");
+        if (!getWorkerBackend().equals(backend)) {
+            throw new IllegalStateException("worker backend mismatch: " + backend);
+        }
+    }
+
+    private String requireText(String value, String message) {
+        if (!StringUtils.hasText(value)) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.trim();
     }
 }

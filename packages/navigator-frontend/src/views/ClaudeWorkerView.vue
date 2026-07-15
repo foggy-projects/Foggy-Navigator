@@ -3365,7 +3365,7 @@ let narrowViewportMediaQuery: MediaQueryList | null = null
 
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
-const editWorkerActiveTab = ref<'basic' | 'remote-access' | 'codex' | 'gemini'>('basic')
+const editWorkerActiveTab = ref<'basic' | 'remote-access' | 'codex' | 'codex-app-server' | 'gemini'>('basic')
 const showAddDirectoryDialog = ref(false)
 const showEditDirectoryDialog = ref(false)
 const saving = ref(false)
@@ -6598,9 +6598,10 @@ async function handleSkillApprovalRespond(paneId: string, taskId: string, decisi
 
   try {
     const { approveTask } = await import('@/api/langgraphWorker')
-    await approveTask(taskId, { approvalResult: decision, comment })
-    pane.chatState.resolveSkillApproval(taskId, decision === 'approved' ? 'approved' : 'rejected')
-    syncSidebarAfterRespond(pane, decision === 'approved' ? 'allow' : 'deny')
+    const approvalResult = decision === 'approved' ? 'approved' : 'rejected'
+    await approveTask(taskId, { approvalResult, comment })
+    pane.chatState.resolveSkillApproval(taskId, approvalResult)
+    syncSidebarAfterRespond(pane, approvalResult === 'approved' ? 'allow' : 'deny')
   } catch {
     ElMessage.error('Skill approval response failed')
   }
@@ -7348,7 +7349,7 @@ async function divertCrossProviderResume(
       cwd: sourceTask.cwd,
       directoryId: sourceTask.directoryId,
       model: taskForm.value.model,
-      maxTurns: taskForm.value.maxTurns,
+      maxTurns: taskForm.value.maxTurns ?? undefined,
       modelConfigId: platformModelConfigId.value || undefined,
       providerType: targetProviderType,
     }

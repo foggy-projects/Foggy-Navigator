@@ -81,7 +81,7 @@ public class CodexTaskEntity {
     @Transient
     private String contextId;
 
-    /** Immutable TaskQueryProvider route used for reconnect and command isolation. */
+    /** Immutable task-provider route used for reconnect and command isolation. */
     @Column(length = 32, nullable = false)
     private String providerType;
 

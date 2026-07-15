@@ -7,11 +7,13 @@ import path from 'node:path'
 import type { ThreadItem } from '@openai/codex-sdk'
 import {
   applyResolvedReasoningEffort,
+  assertNavigatorBusinessMcpCredentialIsolation,
   asCollabToolCallItem,
   buildCodexInput,
   buildCodexProcessEnv,
   buildCodexTaskEnv,
   CODEX_ULTRA_APP_SERVER_REQUIRED,
+  CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY,
   CodexUltraAppServerRequiredError,
   ensureNavigatorBusinessMcpHomeConfig,
   formatCollabToolDiagnostic,
@@ -450,6 +452,103 @@ test('buildCodexTaskEnv pins effective OpenAI settings into child env', () => {
   assert.equal(env.OPENAI_BASE_URL, 'https://api.example.com/v1')
   assert.equal(env.FOGGY_CODEX_TASK_ID, 'task-2')
   assert.equal(env.FOGGY_CODEX_THREAD_ID, 'thread-2')
+})
+
+test('buildCodexTaskEnv strips Worker control credentials case-insensitively', () => {
+  const env = buildCodexTaskEnv(
+    {
+      Codex_Worker_Token: 'inbound-secret',
+      CODEX_NAVIGATOR_WORKER_ID: 'worker-a',
+      Codex_Navigator_Worker_Credential: 'bwc_secret',
+      navigator_task_scoped_token: 'btt_stale',
+      NAVIGATOR_WORKER_LEASE_ID: 'lease-1',
+      SAFE_VALUE: 'kept',
+    },
+    { taskId: 'task-secret-boundary' },
+  )
+
+  assert.equal(env.Codex_Worker_Token, undefined)
+  assert.equal(env.CODEX_NAVIGATOR_WORKER_ID, undefined)
+  assert.equal(env.Codex_Navigator_Worker_Credential, undefined)
+  assert.equal(env.navigator_task_scoped_token, undefined)
+  assert.equal(env.NAVIGATOR_WORKER_LEASE_ID, undefined)
+  assert.equal(env.SAFE_VALUE, 'kept')
+  assert.doesNotMatch(JSON.stringify(env), /inbound-secret|bwc_secret|btt_stale|lease-1/)
+})
+
+test('Navigator business MCP injects only the current task token after generic env filtering', () => {
+  const env = buildCodexTaskEnv(
+    { NAVIGATOR_TASK_SCOPED_TOKEN: 'btt_stale' },
+    { taskId: 'task-current-token' },
+  )
+  const mcpEnv = buildNavigatorBusinessMcpEnv(
+    {
+      task_scoped_token: 'btt_current',
+      allowed_tools: ['business.functions.invoke'],
+    },
+    'http://navigator.example.com:8080',
+  )
+
+  assert.equal(env.NAVIGATOR_TASK_SCOPED_TOKEN, undefined)
+  assert.ok(mcpEnv)
+  Object.assign(env, mcpEnv)
+  assert.equal(env.NAVIGATOR_TASK_SCOPED_TOKEN, 'btt_current')
+  assert.doesNotMatch(JSON.stringify(env), /btt_stale/)
+})
+
+test('Navigator business MCP keeps internal-dev token-only compatibility without local identity', () => {
+  assert.doesNotThrow(() => assertNavigatorBusinessMcpCredentialIsolation(
+    {
+      task_scoped_token: 'btt_task',
+      allowed_tools: ['business.functions.invoke'],
+      worker_id: 'runtime-worker',
+      worker_lease_id: 'lease-1',
+    },
+    '',
+    false,
+  ))
+})
+
+test('Navigator business MCP strict identity fails closed on missing or mismatched runtime binding', () => {
+  assert.throws(() => assertNavigatorBusinessMcpCredentialIsolation(
+    { task_scoped_token: 'btt_task', allowed_tools: ['business.functions.invoke'] },
+    'worker-a',
+    true,
+  ), /runtime worker_id is required/)
+  assert.throws(() => assertNavigatorBusinessMcpCredentialIsolation(
+    {
+      task_scoped_token: 'btt_task',
+      allowed_tools: ['business.functions.invoke'],
+      worker_id: 'worker-b',
+      worker_lease_id: 'lease-1',
+    },
+    'worker-a',
+    true,
+  ), /does not match/)
+  assert.throws(() => assertNavigatorBusinessMcpCredentialIsolation(
+    {
+      task_scoped_token: 'btt_task',
+      allowed_tools: ['business.functions.invoke'],
+      worker_id: 'worker-a',
+    },
+    'worker-a',
+    true,
+  ), /runtime worker_lease_id is required/)
+})
+
+test('Navigator business MCP blocks configured credential until MCP process isolation exists', () => {
+  assert.throws(() => assertNavigatorBusinessMcpCredentialIsolation(
+    {
+      task_scoped_token: 'btt_task',
+      allowed_tools: ['business.functions.invoke'],
+      worker_id: 'worker-a',
+      worker_lease_id: 'lease-1',
+    },
+    'worker-a',
+    true,
+  ), (error: unknown) => error instanceof Error
+    && error.message === CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY
+    && !/bwc_|btt_/.test(error.message))
 })
 
 test('saveAttachments writes image and non-image attachments separately', async () => {

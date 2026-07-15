@@ -77,6 +77,7 @@ curl http://localhost:3061/health
 | `BIZ_WORKER_PORT` | 3061 | 服务端口 |
 | `BIZ_WORKER_HOST` | 0.0.0.0 | 监听地址 |
 | `BIZ_WORKER_WORKER_TOKEN` | （空） | Bearer Token，空=开发模式免认证 |
+| `BIZ_WORKER_EXTERNAL_ENABLED` | false | 外部运行面显式开关；当前开启后仍因执行策略待治理而 fail closed/unready |
 | `BIZ_WORKER_WORKER_NAME` | （空） | Worker 显示名称 |
 | `BIZ_WORKER_MAX_CONCURRENT_TASKS` | 5 | 最大并发任务数 |
 | `BIZ_WORKER_MAX_AGENT_NESTING_DEPTH` | 1 | Agent 委派深度；默认只允许 Root 创建直接子 Agent，不允许子 Agent 再创建子 Agent |

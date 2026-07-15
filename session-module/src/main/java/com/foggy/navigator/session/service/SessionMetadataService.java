@@ -33,6 +33,8 @@ import java.util.stream.Collectors;
 public class SessionMetadataService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String MODEL_CONFIG_ACCESS_DENIED =
+            "LLM model config is not available for this session";
     private static final Set<String> ACTIVE_TASK_STATUSES = Set.of(
             "PENDING", "RUNNING", "AWAITING_PERMISSION", "AWAITING_INPUT");
 
@@ -331,14 +333,13 @@ public class SessionMetadataService {
             return new ResolvedAuth(blankToNull(authMode), blankToNull(authToken), blankToNull(baseUrl), null);
         }
 
+        LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(modelConfigId)
+                .orElseThrow(() -> new IllegalArgumentException(MODEL_CONFIG_ACCESS_DENIED));
+        requireModelConfigOwnedBySessionTenant(session, modelConfig);
+
         String workerId = blankToNull(session.getCurrentWorkerId());
         if (workerId != null) {
             llmModelManager.validateModelAccessForWorker(modelConfigId, workerId);
-        }
-
-        LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
-        if (modelConfig == null) {
-            return new ResolvedAuth(blankToNull(authMode), blankToNull(authToken), blankToNull(baseUrl), null);
         }
 
         if (isSubscriptionConfig(modelConfig)) {
@@ -354,6 +355,25 @@ public class SessionMetadataService {
                 ? "CUSTOM_ENDPOINT"
                 : "API_KEY";
         return new ResolvedAuth(resolvedMode, decryptedApiKey, blankToNull(modelConfig.getBaseUrl()), modelConfigId);
+    }
+
+    /**
+     * An explicit model configuration is a credential-bearing resource.  Session
+     * ownership alone does not authorize a configuration from another tenant or
+     * a legacy configuration whose ownership metadata is incomplete.
+     */
+    private void requireModelConfigOwnedBySessionTenant(
+            SessionEntity session, LlmModelConfigDTO modelConfig) {
+        String sessionTenantId = blankToNull(session.getTenantId());
+        String modelTenantId = blankToNull(modelConfig.getTenantId());
+        if (!Boolean.TRUE.equals(modelConfig.getEnabled())
+                || sessionTenantId == null
+                || modelTenantId == null
+                || !sessionTenantId.equals(modelTenantId)
+                || modelConfig.getOwnerType() == null
+                || blankToNull(modelConfig.getOwnerId()) == null) {
+            throw new IllegalArgumentException(MODEL_CONFIG_ACCESS_DENIED);
+        }
     }
 
     private boolean isSubscriptionConfig(LlmModelConfigDTO modelConfig) {

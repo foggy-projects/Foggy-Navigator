@@ -52,6 +52,7 @@ public class SessionForwardService {
     private final SessionManager sessionManager;
     private final TaskDispatchFacade taskDispatchFacade;
     private final AgentSubmitPipeline agentSubmitPipeline;
+    private final SessionTaskResourceAccessService resourceAccessService;
 
     @Transactional
     public SessionForwardCreateResponse forwardToNewSession(
@@ -59,7 +60,8 @@ public class SessionForwardService {
             String userId,
             String tenantId
     ) {
-        SessionEntity sourceSession = findOwnedSession(request.getSourceSessionId(), userId, "Source session not found: ");
+        SessionEntity sourceSession = findOwnedSession(request.getSourceSessionId(), userId, tenantId,
+                "Source session not found: ");
         SessionMessageEntity sourceMessage = sessionMessageRepository.findById(request.getSourceMessageId())
                 .filter(message -> sourceSession.getId().equals(message.getSessionId()))
                 .orElseThrow(() -> new IllegalArgumentException("Source message not found: " + request.getSourceMessageId()));
@@ -78,12 +80,12 @@ public class SessionForwardService {
     }
 
     @Transactional(readOnly = true)
-    public SessionRelationDTO findIncomingForwardRelation(String targetSessionId, String userId) {
+    public SessionRelationDTO findIncomingForwardRelation(String targetSessionId, String userId, String tenantId) {
         String normalizedTargetSessionId = blankToNull(targetSessionId);
         if (normalizedTargetSessionId == null) {
             throw new IllegalArgumentException("targetSessionId is required");
         }
-        findOwnedSession(normalizedTargetSessionId, userId, "Target session not found: ");
+        findOwnedSession(normalizedTargetSessionId, userId, tenantId, "Target session not found: ");
         return sessionRelationRepository
                 .findFirstByUserIdAndRelationTypeAndTargetSessionIdOrderByCreatedAtDesc(
                         userId,
@@ -106,7 +108,7 @@ public class SessionForwardService {
         normalizeTargetContext(request, targetDirectory);
         String targetMilestoneId = resolveTargetMilestoneId(request, sourceSession, targetDirectory);
 
-        String rootSessionId = resolveRootSessionId(sourceSession, userId);
+        String rootSessionId = resolveRootSessionId(sourceSession, userId, tenantId);
         String targetSessionId = sessionManager.createSession(SessionCreateRequest.builder()
                 .userId(userId)
                 .tenantId(tenantId)
@@ -180,9 +182,10 @@ public class SessionForwardService {
             throw new IllegalArgumentException("targetSessionId is required for EXISTING_SESSION");
         }
 
-        SessionEntity targetSession = findOwnedSession(targetSessionId, userId, "Target session not found: ");
-        ensureExistingForwardTargetAllowed(sourceSession, targetSession, userId);
-        SessionTaskEntity latestTask = resolveLatestTask(targetSession, userId);
+        SessionEntity targetSession = findOwnedSession(targetSessionId, userId, tenantId,
+                "Target session not found: ");
+        ensureExistingForwardTargetAllowed(sourceSession, targetSession, userId, tenantId);
+        SessionTaskEntity latestTask = resolveLatestTask(targetSession, userId, tenantId);
 
         String targetWorkerId = firstNonBlank(latestTask.getWorkerId(), targetSession.getCurrentWorkerId());
         if (targetWorkerId == null) {
@@ -225,10 +228,12 @@ public class SessionForwardService {
         return buildResponse(relation.getId(), "EXISTING_SESSION", sourceSession.getId(), sourceMessage.getId(), targetSession.getId(), task);
     }
 
-    private SessionEntity findOwnedSession(String sessionId, String userId, String messagePrefix) {
-        return sessionRepository.findByIdAndUserId(sessionId, userId)
-                .filter(session -> session.getDeletedAt() == null)
-                .orElseThrow(() -> new IllegalArgumentException(messagePrefix + sessionId));
+    private SessionEntity findOwnedSession(String sessionId, String userId, String tenantId, String messagePrefix) {
+        SessionEntity session = resourceAccessService.requireOwnedSession(sessionId, userId, tenantId);
+        if (session.getDeletedAt() != null) {
+            throw new IllegalArgumentException(messagePrefix + sessionId);
+        }
+        return session;
     }
 
     private String resolvePrompt(SessionForwardCreateRequest request, SessionMessageEntity sourceMessage) {
@@ -387,13 +392,16 @@ public class SessionForwardService {
         return sourceMilestoneId;
     }
 
-    private void ensureExistingForwardTargetAllowed(SessionEntity sourceSession, SessionEntity targetSession, String userId) {
+    private void ensureExistingForwardTargetAllowed(SessionEntity sourceSession,
+                                                    SessionEntity targetSession,
+                                                    String userId,
+                                                    String tenantId) {
         if (sourceSession.getId().equals(targetSession.getId())) {
             throw new IllegalArgumentException("Target session cannot be the same as source session");
         }
         boolean isDirectChild = sourceSession.getId().equals(blankToNull(targetSession.getParentSessionId()));
-        String sourceRootId = resolveRootSessionId(sourceSession, userId);
-        String targetRootId = resolveRootSessionId(targetSession, userId);
+        String sourceRootId = resolveRootSessionId(sourceSession, userId, tenantId);
+        String targetRootId = resolveRootSessionId(targetSession, userId, tenantId);
         boolean isSameRootBranch = sourceRootId.equals(targetRootId)
                 && !targetSession.getId().equals(targetRootId);
         boolean hasForwardRelation = sessionRelationRepository.existsByUserIdAndRelationTypeAndSourceSessionIdAndTargetSessionId(
@@ -407,19 +415,14 @@ public class SessionForwardService {
         }
     }
 
-    private String resolveRootSessionId(SessionEntity session, String userId) {
+    private String resolveRootSessionId(SessionEntity session, String userId, String tenantId) {
         String rootId = session.getId();
         String parentId = blankToNull(session.getParentSessionId());
         Set<String> seen = new HashSet<>();
         seen.add(rootId);
 
         while (parentId != null && !seen.contains(parentId)) {
-            SessionEntity parent = sessionRepository.findByIdAndUserId(parentId, userId)
-                    .filter(candidate -> candidate.getDeletedAt() == null)
-                    .orElse(null);
-            if (parent == null) {
-                break;
-            }
+            SessionEntity parent = findOwnedSession(parentId, userId, tenantId, "Parent session not found: ");
             rootId = parent.getId();
             seen.add(rootId);
             parentId = blankToNull(parent.getParentSessionId());
@@ -428,15 +431,23 @@ public class SessionForwardService {
         return rootId;
     }
 
-    private SessionTaskEntity resolveLatestTask(SessionEntity session, String userId) {
+    private SessionTaskEntity resolveLatestTask(SessionEntity session, String userId, String tenantId) {
         String latestTaskId = blankToNull(session.getLatestTaskId());
         if (latestTaskId != null) {
-            SessionTaskEntity latestTask = sessionTaskRepository.findByTaskIdAndUserId(latestTaskId, userId).orElse(null);
+            SessionTaskEntity latestTask = sessionTaskRepository
+                    .findByTaskIdAndUserIdAndTenantId(latestTaskId, userId, tenantId)
+                    .orElse(null);
             if (latestTask != null) {
+                if (!session.getId().equals(blankToNull(latestTask.getSessionId()))) {
+                    throw new IllegalStateException(
+                            "Target session latest task binding is invalid");
+                }
                 return latestTask;
             }
         }
-        return sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(session.getId()).stream()
+        return sessionTaskRepository
+                .findBySessionIdAndUserIdAndTenantIdOrderByCreatedAtDesc(session.getId(), userId, tenantId)
+                .stream()
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Target session has no task history: " + session.getId()));
     }

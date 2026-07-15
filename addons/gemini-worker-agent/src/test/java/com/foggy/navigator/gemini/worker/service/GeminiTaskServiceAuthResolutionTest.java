@@ -1,5 +1,6 @@
 package com.foggy.navigator.gemini.worker.service;
 
+import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.MessageRole;
@@ -16,7 +17,6 @@ import com.foggy.navigator.gemini.worker.repository.GeminiTaskRepository;
 import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
@@ -91,9 +91,39 @@ class GeminiTaskServiceAuthResolutionTest {
     void exposesOnlySupportedTaskProviderPorts() {
         assertInstanceOf(TaskLookupProvider.class, taskService);
         assertInstanceOf(TaskCommandProvider.class, taskService);
-        assertFalse(taskService instanceof TaskQueryProvider);
         assertFalse(taskService instanceof TaskListingProvider);
         assertFalse(taskService instanceof WorkerSessionQueryProvider);
+    }
+
+    @Test
+    void completeTaskPublishesTenantScopedDefinitiveTerminalEvent() {
+        GeminiTaskEntity task = terminalCandidate("task-complete");
+        savedTasks.put(task.getTaskId(), task);
+
+        taskService.completeTask(task.getTaskId(), "worker-task-1", "gemini-session-1",
+                "done", null, null, null, null, null, "gemini-flash");
+
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-complete".equals(event.getTaskId())
+                        && "tenant-1".equals(event.getTenantId())
+                        && "RUNNING".equals(event.getPreviousStatus())
+                        && "COMPLETED".equals(event.getStatus())
+                        && Boolean.FALSE.equals(event.getRecoverable())));
+    }
+
+    @Test
+    void failTaskPublishesTenantScopedDefinitiveTerminalEvent() {
+        GeminiTaskEntity task = terminalCandidate("task-fail");
+        savedTasks.put(task.getTaskId(), task);
+
+        taskService.failTask(task.getTaskId(), "worker-task-2", "gemini-session-2", "failed");
+
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-fail".equals(event.getTaskId())
+                        && "tenant-1".equals(event.getTenantId())
+                        && "RUNNING".equals(event.getPreviousStatus())
+                        && "FAILED".equals(event.getStatus())
+                        && Boolean.FALSE.equals(event.getRecoverable())));
     }
 
     @Test
@@ -266,6 +296,18 @@ class GeminiTaskServiceAuthResolutionTest {
         verify(taskRepository).delete(task);
         verifyNoInteractions(sessionManager);
         verify(sessionEntityRepository, never()).save(any());
+    }
+
+    private GeminiTaskEntity terminalCandidate(String taskId) {
+        GeminiTaskEntity task = new GeminiTaskEntity();
+        task.setTaskId(taskId);
+        task.setSessionId("session-1");
+        task.setWorkerId("worker-1");
+        task.setUserId("user-1");
+        task.setTenantId("tenant-1");
+        task.setPrompt("prompt");
+        task.setStatus("RUNNING");
+        return task;
     }
 
     @Test

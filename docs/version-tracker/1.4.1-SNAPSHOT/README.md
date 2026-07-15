@@ -9,13 +9,13 @@
 ## 版本状态
 
 - status: in-progress
-- primary_workitems: `OPT-001`, `BUG-001`
+- primary_workitems: `OPT-001`, `BUG-001`, `BUG-002`
 - implementation_started: yes
 - production_migration_started: no
 
 ## 版本目标
 
-在不重新引入 Codex durable stream poison event 的前提下，将大型工具输出从 MySQL 消息正文中分离：MySQL 只保存可检索的消息、预览和载荷描述，完整工具输出保存在可配置的持久化载荷存储中，并由用户主动打开详情时读取。最终 Assistant 回复继续完整保存在消息/任务投影中，默认加载即可完整展示。
+在不重新引入 Codex durable stream poison event 的前提下，将大型工具输出从 MySQL 消息正文中分离：MySQL 只保存可检索的消息、预览和载荷描述，完整工具输出保存在可配置的持久化载荷存储中，并由用户主动打开详情时读取。最终 Assistant 回复继续完整保存在消息/任务投影中；超长回复在主时间线紧凑预览，完整内容按需逐条查看或复制。
 
 同时修复 Codex CLI 被用户主动或意外关闭后，Worker 内存任务与 Thread reservation 未及时回收、导致相同会话无法继续的问题。锁继续由 Worker 管理，Java 侧不新增锁。
 
@@ -24,7 +24,7 @@
 1. 超过内联阈值的工具输出不再以接近 48 KiB 的正文写入 `session_messages.metadata`。
 2. 消息列表、会话恢复和分页查询不得读取外置载荷，也不得提前生成对象存储签名 URL。
 3. 用户点击“查看完整输出”“详情”或“下载”后，才鉴权并读取完整载荷。
-4. 最终 Assistant 回复不按工具输出规则截断，受支持范围内完整持久化并默认完整展示。
+4. 最终 Assistant 回复不按工具输出规则截断，受支持范围内完整持久化；超长正文不撑开主时间线，完整内容可按需查看或复制。
 5. 载荷写入失败不得阻塞事件 ACK、终态收敛或后续消息持久化；失败必须显式可观察。
 6. 过期清理不删除消息记录，只清理完整载荷并保留 `EXPIRED` 描述状态。
 7. 相关 Java、前端、MySQL 迁移、Playwright 和故障注入测试全部运行通过后，才可进入验收。
@@ -50,3 +50,4 @@
 - [OPT-001 实施进度](./workitems/OPT-001-session-message-large-payload-tiered-storage-progress.md)
 - [BUG-001 Codex CLI 退出后 Thread 锁未自动回收](./workitems/BUG-001-codex-thread-lock-stale-after-cli-exit.md)
 - [BUG-001 Implementation Quality Gate](./quality/BUG-001-codex-thread-lock-stale-fix-quality-review.md)
+- [BUG-002 会话末条可读性与移动端重复消息](./workitems/BUG-002-session-message-display-and-mobile-deduplication.md)

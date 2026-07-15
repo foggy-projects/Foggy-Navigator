@@ -1,7 +1,7 @@
 package com.foggy.navigator.spi.agent;
 
 /**
- * Optional capability descriptor for TaskQueryProvider operations.
+ * Optional capability descriptor for typed task-provider port operations.
  * <p>
  * Providers may declare capabilities incrementally. Callers must keep backward
  * compatibility with older providers that do not declare this metadata yet.

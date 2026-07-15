@@ -22,7 +22,9 @@ public class BusinessAgentToolRuntimeContextProvider implements ToolRuntimeConte
     @Override
     public Map<String, Object> provide(ToolRuntimeContextRequest request) {
         String tenantId = request.getTenantId();
-        if (tenantId == null || tenantId.isBlank() || request.getSessionId() == null || request.getSessionId().isBlank()) {
+        if (tenantId == null || tenantId.isBlank() ||
+                request.getSessionId() == null || request.getSessionId().isBlank() ||
+                request.getTaskId() == null || request.getTaskId().isBlank()) {
             return Map.of();
         }
 

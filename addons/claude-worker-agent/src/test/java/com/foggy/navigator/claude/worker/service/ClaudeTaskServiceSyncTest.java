@@ -37,6 +37,7 @@ class ClaudeTaskServiceSyncTest {
     private WorkingDirectoryRepository directoryRepository;
     private SessionEntityRepository sessionEntityRepository;
     private SessionManager sessionManager;
+    private ClaudeWorkerService workerService;
     private ClaudeTaskService service;
 
     private static final String USER_ID = "user-1";
@@ -50,7 +51,7 @@ class ClaudeTaskServiceSyncTest {
         sessionEntityRepository = mock(SessionEntityRepository.class);
         sessionManager = mock(SessionManager.class);
 
-        ClaudeWorkerService workerService = mock(ClaudeWorkerService.class);
+        workerService = mock(ClaudeWorkerService.class);
         WorkingDirectoryService dirService = mock(WorkingDirectoryService.class);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
 
@@ -84,6 +85,12 @@ class ClaudeTaskServiceSyncTest {
         when(sessionEntityRepository.findById(anyString())).thenReturn(Optional.empty());
         when(sessionEntityRepository.findDeletedByWorkerIdAndUserId(anyString(), anyString()))
                 .thenReturn(List.of());
+
+        var worker = new com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity();
+        worker.setWorkerId(WORKER_ID);
+        worker.setUserId(USER_ID);
+        worker.setTenantId(TENANT_ID);
+        when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(worker);
     }
 
     @Test
@@ -105,6 +112,20 @@ class ClaudeTaskServiceSyncTest {
         ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
         verify(taskRepository).save(captor.capture());
         assertEquals("dir-1", captor.getValue().getDirectoryId());
+        assertEquals(TENANT_ID, captor.getValue().getTenantId());
+    }
+
+    @Test
+    void createTrackedSyncTask_capturesTenantFromWorkerWhenSessionIsMissing() {
+        when(sessionEntityRepository.findById("missing-session")).thenReturn(Optional.empty());
+
+        service.createTrackedSyncTask(USER_ID, WORKER_ID, "missing-session",
+                "tracked", "/repo", null, null);
+
+        verify(taskRepository).save(argThat((ClaudeTaskEntity task) ->
+                TENANT_ID.equals(task.getTenantId())
+                        && "missing-session".equals(task.getSessionId())
+                        && "RUNNING".equals(task.getStatus())));
     }
 
     @Test

@@ -50,7 +50,7 @@ Frontend / OpenAPI / SDK
 | 术语 | 含义 |
 | --- | --- |
 | `logicalAgentId` / `agentId` | 平台侧可发现、可绑定的逻辑 Agent。 |
-| `providerType` | 执行后端类型，例如 `claude-worker`、`codex-worker`、`codex-app-server-worker`、`codex-biz-worker`、`gemini-worker`、`langgraph-biz-worker`、`echo-agent`。 |
+| `providerType` | 执行后端类型，例如 `claude-worker`、`codex-worker`、`codex-app-server-worker`、`codex-biz-worker`、`gemini-worker`、`langgraph-biz-worker`。 |
 | `modelConfigId` | 平台 LLM 模型配置，通常决定模型、凭证、baseUrl 和 worker backend 兼容性。 |
 | `workerBackend` | 模型配置中的物理执行后端标识，例如 `CLAUDE_CODE`、`OPENAI_CODEX`、`GEMINI_CLI`、`LANGGRAPH_BIZ`。 |
 | `A2aAgentProvider` | 某类 Agent 来源的 Spring Bean，负责列出和解析 Agent。 |
@@ -184,7 +184,8 @@ Stage 2.2~2.5 后：
 | Codex Biz Route | `codex-biz-worker` | `addons/codex-worker-agent` | OpenAPI / 业务侧 Codex 直连路由，无独立可发现 Agent；可复用 `OPENAI_CODEX` modelConfig。 |
 | Gemini Worker | `gemini-worker` | `addons/gemini-worker-agent` | Gemini CLI Worker 任务通道。 |
 | LangGraph Biz Worker | `langgraph-biz-worker` | `addons/langgraph-biz-worker` | 业务 Agent / Skill / Function 执行通道。 |
-| Echo Agent | `echo-agent` | `addons/echo-agent` | 示例和测试型 Provider。 |
+
+旧 `echo-agent` 已在 1.4.2 dev 阶段退出源码、根 reactor 和默认 `launcher`，因此不再是当前 Provider。`UnifiedAgentResolverTest` 中的 test-only 内存 fixture 独立覆盖 discovery、resolve、send、query 和 cancel，不会向默认运行时注册合成 Agent。
 
 ## 8. 任务路由语义
 

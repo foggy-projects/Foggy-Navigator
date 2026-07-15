@@ -7,8 +7,6 @@ import com.foggy.navigator.business.agent.repository.BusinessFunctionRuntimeAudi
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
@@ -41,10 +39,10 @@ public class BusinessFunctionRuntimeAuditService {
     public static final String EVENT_BUSINESS_EXECUTION_SKIPPED = "BUSINESS_EXECUTION_SKIPPED";
 
     private final BusinessFunctionRuntimeAuditRepository repository;
+    private final BusinessFunctionRuntimeAuditWriter writer;
 
     // ---- Invoke lifecycle ----
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordInvokeStarted(BusinessTaskScopedTokenDTO token, String functionId, String version, String inputHash) {
         try {
             BusinessFunctionRuntimeAuditEntity entity = buildFromToken(token);
@@ -53,18 +51,16 @@ public class BusinessFunctionRuntimeAuditService {
             entity.setEventType(EVENT_INVOKE_STARTED);
             entity.setStatus("STARTED");
             entity.setInputHash(inputHash);
-            repository.save(entity);
+            writer.write(entity);
         } catch (Exception e) {
             log.warn("Best-effort audit write failed for INVOKE_STARTED: {}", e.getMessage());
         }
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordInvokeSuccess(BusinessTaskScopedTokenDTO token, String functionId, String version, String outputHash, Long durationMs) {
         recordInvokeSuccess(token, functionId, version, null, outputHash, durationMs);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordInvokeSuccess(BusinessTaskScopedTokenDTO token, String functionId, String version,
                                     String suspendId, String outputHash, Long durationMs) {
         try {
@@ -76,13 +72,12 @@ public class BusinessFunctionRuntimeAuditService {
             entity.setStatus("SUCCESS");
             entity.setOutputHash(outputHash);
             entity.setDurationMs(durationMs);
-            repository.save(entity);
+            writer.write(entity);
         } catch (Exception e) {
             log.warn("Best-effort audit write failed for INVOKE_SUCCESS: {}", e.getMessage());
         }
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordInvokeSuspended(BusinessTaskScopedTokenDTO token, String functionId, String version, String suspendId) {
         try {
             BusinessFunctionRuntimeAuditEntity entity = buildFromToken(token);
@@ -91,19 +86,17 @@ public class BusinessFunctionRuntimeAuditService {
             entity.setEventType(EVENT_INVOKE_SUSPENDED);
             entity.setStatus("SUSPENDED");
             entity.setSuspendId(suspendId);
-            repository.save(entity);
+            writer.write(entity);
         } catch (Exception e) {
             log.warn("Best-effort audit write failed for INVOKE_SUSPENDED: {}", e.getMessage());
         }
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordInvokeFailed(BusinessTaskScopedTokenDTO token, String functionId, String version,
                                     String errorCode, String errorMessage, Long durationMs) {
         recordInvokeFailed(token, functionId, version, null, errorCode, errorMessage, durationMs);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordInvokeFailed(BusinessTaskScopedTokenDTO token, String functionId, String version,
                                     String suspendId, String errorCode, String errorMessage, Long durationMs) {
         try {
@@ -116,7 +109,7 @@ public class BusinessFunctionRuntimeAuditService {
             entity.setErrorCode(errorCode);
             entity.setErrorMessage(boundMessage(errorMessage));
             entity.setDurationMs(durationMs);
-            repository.save(entity);
+            writer.write(entity);
         } catch (Exception e) {
             log.warn("Best-effort audit write failed for INVOKE_FAILED: {}", e.getMessage());
         }
@@ -124,7 +117,6 @@ public class BusinessFunctionRuntimeAuditService {
 
     // ---- Tool message ----
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordToolMessage(BusinessTaskScopedTokenDTO token, String toolName, String functionId,
                                    String status, String message) {
         try {
@@ -133,7 +125,7 @@ public class BusinessFunctionRuntimeAuditService {
             entity.setEventType(EVENT_TOOL_MESSAGE);
             entity.setStatus(status);
             entity.setErrorMessage(boundMessage(toolName + ": " + message));
-            repository.save(entity);
+            writer.write(entity);
         } catch (Exception e) {
             log.warn("Best-effort audit write failed for TOOL_MESSAGE: {}", e.getMessage());
         }
@@ -141,7 +133,6 @@ public class BusinessFunctionRuntimeAuditService {
 
     // ---- Resume lifecycle ----
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordResumeRequested(String tenantId, String suspendId, String userId) {
         try {
             BusinessFunctionRuntimeAuditEntity entity = new BusinessFunctionRuntimeAuditEntity();
@@ -151,13 +142,12 @@ public class BusinessFunctionRuntimeAuditService {
             entity.setEventType(EVENT_RESUME_REQUESTED);
             entity.setStatus("REQUESTED");
             entity.setUpstreamUserId(userId);
-            repository.save(entity);
+            writer.write(entity);
         } catch (Exception e) {
             log.warn("Best-effort audit write failed for RESUME_REQUESTED: {}", e.getMessage());
         }
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordResumeDispatched(String tenantId, String suspendId) {
         try {
             BusinessFunctionRuntimeAuditEntity entity = new BusinessFunctionRuntimeAuditEntity();
@@ -166,13 +156,12 @@ public class BusinessFunctionRuntimeAuditService {
             entity.setSuspendId(suspendId);
             entity.setEventType(EVENT_RESUME_DISPATCHED);
             entity.setStatus("DISPATCHED");
-            repository.save(entity);
+            writer.write(entity);
         } catch (Exception e) {
             log.warn("Best-effort audit write failed for RESUME_DISPATCHED: {}", e.getMessage());
         }
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordResumeFailed(String tenantId, String suspendId, String errorMessage) {
         try {
             BusinessFunctionRuntimeAuditEntity entity = new BusinessFunctionRuntimeAuditEntity();
@@ -182,13 +171,12 @@ public class BusinessFunctionRuntimeAuditService {
             entity.setEventType(EVENT_RESUME_FAILED);
             entity.setStatus("FAILED");
             entity.setErrorMessage(boundMessage(errorMessage));
-            repository.save(entity);
+            writer.write(entity);
         } catch (Exception e) {
             log.warn("Best-effort audit write failed for RESUME_FAILED: {}", e.getMessage());
         }
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordBusinessExecutionRequested(BusinessTaskScopedTokenDTO token, String functionId, String version, String suspendId) {
         try {
             BusinessFunctionRuntimeAuditEntity entity = buildFromToken(token);
@@ -197,13 +185,12 @@ public class BusinessFunctionRuntimeAuditService {
             entity.setSuspendId(suspendId);
             entity.setEventType(EVENT_BUSINESS_EXECUTION_REQUESTED);
             entity.setStatus("REQUESTED");
-            repository.save(entity);
+            writer.write(entity);
         } catch (Exception e) {
             log.warn("Best-effort audit write failed for BUSINESS_EXECUTION_REQUESTED: {}", e.getMessage());
         }
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordBusinessExecutionSkipped(BusinessTaskScopedTokenDTO token, String functionId, String version,
                                                String suspendId, String reason) {
         try {
@@ -214,7 +201,7 @@ public class BusinessFunctionRuntimeAuditService {
             entity.setEventType(EVENT_BUSINESS_EXECUTION_SKIPPED);
             entity.setStatus("SKIPPED");
             entity.setErrorMessage(boundMessage(reason));
-            repository.save(entity);
+            writer.write(entity);
         } catch (Exception e) {
             log.warn("Best-effort audit write failed for BUSINESS_EXECUTION_SKIPPED: {}", e.getMessage());
         }

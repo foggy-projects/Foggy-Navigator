@@ -38,7 +38,6 @@ Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以
 - `/c/:id`：会话深链兼容入口，主要用于跨项目阶段回跳等历史路径
 - `/tasks`：任务看板
 - `/cross-tasks`：跨项目任务
-- `/monitoring`：监控事件（当前暂停）
 - `/users`：用户管理
 - `/settings`：平台设置
 - `/files`：文件浏览器
@@ -68,13 +67,11 @@ Launcher
   -> business-agent-module
   -> user-auth-module
   -> metadata-config-module
-  -> metadata-query-module
   -> addons/claude-worker-agent
   -> addons/codex-worker-agent
   -> addons/gemini-worker-agent
   -> addons/langgraph-biz-worker
   -> addons/task-assistant
-  -> addons/echo-agent
 
 平台底座层
   -> agent-framework
@@ -105,11 +102,12 @@ Launcher
 | `session-module` | 会话、消息、统一任务分发、SSE、分享与 Agent 发现 |
 | `business-agent-module` | 业务 Agent、上游接入资源、业务动作与开放集成治理 |
 | `user-auth-module` | 登录认证、用户管理、API Key 管理 |
-| `metadata-config-module` | 平台配置写接口，管理 Git/LLM/凭证/记忆/覆盖配置 |
-| `metadata-query-module` | 平台配置读接口与查询能力 |
+| `metadata-config-module` | 活跃的平台配置能力，管理 Git/LLM/凭证/记忆/覆盖配置 |
 旧独立“会话”入口配套的 `tutor-agent` 已从源码目录、根 `pom.xml` 与 `launcher` 运行时依赖中移除；当前主线不再保留旧引导 Agent。
 
-`monitoring-module` 源码当前保留，但不纳入根 `pom.xml`、`launcher` 运行时依赖或部署脚本；RabbitMQ 不再是当前主线前置依赖。
+旧自研 `monitoring-module`、`tools/foggy-monitor` 及 PC Monitoring 页面/API 已在 1.4.2 dev 阶段物理移除；RabbitMQ 不再是当前主线前置依赖。平台继续保留应用日志、健康检查、有限的 Micrometer 指标、SSE 运行信号与安全审计，退役旧 Monitoring 不等于取消运行观测。
+
+旧 `metadata-query-module` 已在 1.4.2 dev 阶段从源码、根 reactor 和 `launcher` 物理退役。该结论不延伸到 `metadata-config-module` 或 LangGraph FSScript：前者仍是当前平台配置能力，后者仍按其现有 Worker 边界保留。
 
 ### 3.3 Addon 能力模块
 
@@ -120,7 +118,8 @@ Launcher
 | `addons/gemini-worker-agent` | Gemini Worker 任务和进程治理 |
 | `addons/langgraph-biz-worker` | LangGraph Biz Worker 接入与业务 Agent 执行通道 |
 | `addons/task-assistant` | 针对任务生命周期生成通知和摘要的助手能力 |
-| `addons/echo-agent` | 示例/测试型 Agent |
+
+`addons/echo-agent` 已在 1.4.2 dev 阶段从源码、根 reactor 和 `launcher` 物理退役，默认制品不再注册 Echo Agent。有价值的 A2A discovery/resolve/send/query/cancel 行为由 `session-module` 的 test-only 内存 fixture 回归；普通 BusinessFunction 的 `LocalEchoBusinessFunctionAdapterInvoker` 不在退役范围内。
 
 ## 4. 当前核心业务流程
 
@@ -180,7 +179,7 @@ Launcher
 - 跨项目阶段式任务编排
 - 平台级 Git/LLM/凭证/记忆治理
 - 用户管理与 API Key
-- 监控事件与统计
+- 应用日志、健康检查、有限指标与运行审计
 - 对外 Open API / SDK / 上游 CLI
 - 嵌入式聊天组件与移动端入口
 
@@ -188,7 +187,7 @@ Launcher
 
 - PC 顶部独立 `/chat` 会话入口已下线；`/c/:id` 暂作为深链兼容入口，不是主导航入口
 - 旧独立会话入口及其配套 `tutor-agent` 已移除
-- `echo-agent` 属于示例/测试能力
+- 旧 `echo-agent` 示例 Provider 已退出默认制品，仅保留 test-only A2A fixture 作为回归替代
 - 历史文档中的“语义层管理、数据分析 Agent、权限建模平台”不再是当前产品主线
 
 ## 6. 文档使用建议
@@ -214,10 +213,10 @@ Launcher
 - [跨项目编排](./02-modules/cross-project-orchestration.md)
 - [平台设置与资源治理](./02-modules/platform-governance.md)
 - [用户与访问控制](./02-modules/user-and-access-control.md)
-- [监控、通知与开放集成](./02-modules/observability-notification-integration.md)
+- [通知、基础观测与开放集成](./02-modules/observability-notification-integration.md)
 
 ---
 
-**文档版本**: 4.1.0
-**更新日期**: 2026-05-31
+**文档版本**: 4.1.1
+**更新日期**: 2026-07-14
 **基准**: 当前仓库代码结构、前端路由、Provider 实现、控制器接口与模块依赖

@@ -127,6 +127,39 @@ class CodexRuntimeRegistryServiceTest {
     }
 
     @Test
+    void endpointSyncRestoresArchivedRuntimeWhenCapabilityFingerprintIsUnchanged() throws Exception {
+        CodexAppServerEndpointEntity endpoint = endpoint("endpoint-0123456789abcdef");
+        Map<String, Object> manifest = topLevelManifest("codex-app-server-primary", 2,
+                CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
+        CodexRuntimeEntity archived = runtime("DARK", 0);
+        archived.setRuntimeId("appserver-0123456789abcdef");
+        archived.setRuntimeSource("ENDPOINT_SYNC");
+        archived.setEndpointId(endpoint.getEndpointId());
+        archived.setReportedRuntimeId("codex-app-server-primary");
+        archived.setReportedRuntimeRevision(2);
+        archived.setArchivedAt(LocalDateTime.of(2026, 7, 13, 20, 0));
+        archived.setCapabilityFingerprint(ReflectionTestUtils.invokeMethod(
+                service, "capabilityFingerprint", endpoint, manifest, "instance-a"));
+        when(endpointRepository.findByEndpointIdForUpdate(endpoint.getEndpointId()))
+                .thenReturn(Optional.of(endpoint));
+        when(repository.findByEndpointIdOrderByRevisionDesc(endpoint.getEndpointId()))
+                .thenReturn(List.of(archived));
+        when(clientFactory.getOrCreate(anyString(), anyString(), any(), any())).thenReturn(client);
+        when(client.probeCapabilities()).thenReturn(Mono.just(probe(manifest)));
+
+        var result = service.synchronizeEndpoint(endpoint.getEndpointId());
+
+        assertEquals(false, result.getRuntimeCreated());
+        assertEquals(true, result.getRuntimeRestored());
+        assertFalse(result.getRuntime().getArchived());
+        assertEquals(false, result.getRuntime().getEnabled());
+        assertEquals("DARK", result.getRuntime().getRoutingPolicy());
+        assertEquals(0, result.getRuntime().getRolloutPercentage());
+        assertEquals(2L, result.getRuntime().getRoutingEpoch());
+        verify(repository, never()).findMaxRevision(anyString());
+    }
+
+    @Test
     void routingCannotJumpDirectlyFromDarkToAllDefault() {
         CodexRuntimeEntity entity = runtime("DARK", 0);
         when(repository.findByRuntimeIdAndRevisionForUpdate("app-main", 1)).thenReturn(Optional.of(entity));
@@ -217,6 +250,35 @@ class CodexRuntimeRegistryServiceTest {
         assertEquals("http://127.0.0.1:3062", result.getEndpointDisplay());
         assertEquals(true, result.getCapabilityFresh());
         assertEquals(true, result.getSupportsUltra());
+    }
+
+    @Test
+    void refreshCapabilitiesAcceptsDifferentCliVersionWhenNoVersionConstraintIsConfigured() throws Exception {
+        CodexRuntimeEntity entity = runtime("ULTRA_DEFAULT", 100);
+        Map<String, Object> manifest = topLevelManifest(
+                "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
+        manifest.put("cli_version", "0.144.3");
+        stubRefresh(entity, manifest);
+
+        var result = service.refreshCapabilities("app-main", 1);
+
+        assertEquals("READY", result.getReadinessStatus());
+        assertEquals("0.144.3", result.getCliVersion());
+        assertEquals("", result.getExpectedCliVersion());
+    }
+
+    @Test
+    void refreshCapabilitiesRejectsDifferentCliVersionWhenEnvConstraintIsConfigured() throws Exception {
+        ReflectionTestUtils.setField(service, "expectedCliVersion", "0.144.3");
+        CodexRuntimeEntity entity = runtime("ULTRA_DEFAULT", 100);
+        stubRefresh(entity, topLevelManifest(
+                "app-main", 1, CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST));
+
+        var result = service.refreshCapabilities("app-main", 1);
+
+        assertEquals("INCOMPATIBLE", result.getReadinessStatus());
+        assertEquals("0.144.3", result.getExpectedCliVersion());
+        assertTrue(result.getReadinessMessage().contains("CAPABILITY_CLI_VERSION_MISMATCH"));
     }
 
     @Test
@@ -1279,7 +1341,7 @@ class CodexRuntimeRegistryServiceTest {
         entity.setPriority(10);
         entity.setRoutingEpoch(1L);
         entity.setReadinessStatus("PENDING");
-        entity.setExpectedCliVersion(CodexRuntimeRegistryService.PINNED_APP_SERVER_CLI_VERSION);
+        entity.setExpectedCliVersion("");
         entity.setExpectedSchemaDigest(CodexRuntimeRegistryService.PINNED_SCHEMA_DIGEST);
         return entity;
     }

@@ -789,6 +789,7 @@ class CodexStreamRelayTest {
                   "subtype":"sdk_diagnostic",
                   "task_id":"worker-task-1",
                   "session_id":"thread-1",
+                  "stream_id":"item-1",
                   "seq":1,
                   "content":"This session was recorded with a different model."
                 }
@@ -798,6 +799,7 @@ class CodexStreamRelayTest {
                   "type":"result",
                   "task_id":"worker-task-1",
                   "session_id":"thread-1",
+                  "stream_id":"item-1",
                   "seq":2,
                   "content":"received",
                   "model":"gpt-5.6-sol"
@@ -859,6 +861,7 @@ class CodexStreamRelayTest {
                   "subtype":"text_delta",
                   "task_id":"worker-task-1",
                   "session_id":"thread-1",
+                  "stream_id":"item-1",
                   "seq":1,
                   "content":"B_FULL"
                 }
@@ -868,6 +871,7 @@ class CodexStreamRelayTest {
                   "type":"assistant_text",
                   "task_id":"worker-task-1",
                   "session_id":"thread-1",
+                  "stream_id":"item-1",
                   "seq":2,
                   "content":"B_FULL_CHAIN_OK"
                 }
@@ -885,6 +889,12 @@ class CodexStreamRelayTest {
         verify(sessionEventListener, times(2)).handleMessageDurably(messages.capture());
         assertEquals(List.of(MessageType.TEXT_CHUNK, MessageType.TEXT_COMPLETE),
                 messages.getAllValues().stream().map(AgentMessage::getType).toList());
+        for (AgentMessage message : messages.getAllValues()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+            assertEquals("local-task-1", payload.get("taskId"));
+            assertEquals("item-1", payload.get("streamId"));
+        }
         verify(taskService).recordWorkerProgress(
                 "local-task-1", "worker-task-1", "thread-1", null, 2, false, true);
     }
@@ -1036,7 +1046,7 @@ class CodexStreamRelayTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> image = (Map<String, Object>) payload.get("data");
         assertEquals(artifactId, image.get("artifact_id"));
-        assertEquals("/api/v1/codex-tasks/local-task-1/generated-images/" + artifactId,
+        assertEquals("/api/v1/tasks/local-task-1/generated-images/" + artifactId,
                 image.get("url"));
         assertFalse(image.containsKey("local_path"));
         verify(taskService).recordWorkerProgress(

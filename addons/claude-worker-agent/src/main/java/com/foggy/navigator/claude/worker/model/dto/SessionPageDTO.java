@@ -1,5 +1,6 @@
 package com.foggy.navigator.claude.worker.model.dto;
 
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import lombok.Builder;
 import lombok.Data;
 
@@ -13,7 +14,7 @@ import java.util.List;
 @Builder
 public class SessionPageDTO {
     /** 当前页所有会话的任务列表 */
-    private List<TaskDTO> content;
+    private List<DispatchTaskDTO> content;
     /** 会话总数 */
     private long totalSessions;
     /** 当前页码（0-based） */

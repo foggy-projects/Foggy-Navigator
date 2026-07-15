@@ -15,6 +15,7 @@ export interface AppConfig {
   openaiApiKey: string
   openaiBaseUrl: string
   workerToken: string
+  externalEnabled: boolean
   allowedCwds: string[]
   maxConcurrentTasks: number
   threadWatchdogIntervalMs: number
@@ -24,6 +25,10 @@ export interface AppConfig {
   codexBizHomeRoot: string
   /** Navigator gateway base URL used by the built-in business MCP bridge. */
   navigatorWorkerGatewayBaseUrl: string
+  /** Worker identity installed locally for outbound Navigator Gateway calls. */
+  navigatorWorkerId: string
+  /** One-time rotated credential; never forward through the generic Codex process environment. */
+  navigatorWorkerCredential: string
   /**
    * Worker 兜底默认模型（请求未显式指定 model 时使用）。
    *
@@ -95,6 +100,29 @@ function parseToken(rawToken: string | undefined): string {
     throw new Error('CODEX_WORKER_TOKEN must not contain whitespace')
   }
   return token
+}
+
+function parseOptionalWorkerIdentityValue(
+  rawValue: string | undefined,
+  field: string,
+  maxLength: number,
+): string {
+  const value = (rawValue || '').trim()
+  if (!value) return ''
+  if (/\s/.test(value)) {
+    throw new Error(`${field} must not contain whitespace`)
+  }
+  if (value.length > maxLength) {
+    throw new Error(`${field} is too long`)
+  }
+  return value
+}
+
+function parseBoolean(rawValue: string | undefined, field: string, fallback = false): boolean {
+  const value = (rawValue || String(fallback)).trim().toLowerCase()
+  if (value === 'true') return true
+  if (value === 'false') return false
+  throw new Error(`${field} must be true or false`)
 }
 
 function parseApiKey(rawApiKey: string): string {
@@ -287,6 +315,21 @@ function parseModelAliases(rawValue: string | undefined): Record<string, string>
 
 export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const openaiApiKey = parseApiKey(getOptionalEnvFromEnv(env, 'OPENAI_API_KEY'))
+  const navigatorWorkerId = parseOptionalWorkerIdentityValue(
+    env.CODEX_NAVIGATOR_WORKER_ID,
+    'CODEX_NAVIGATOR_WORKER_ID',
+    128,
+  )
+  const navigatorWorkerCredential = parseOptionalWorkerIdentityValue(
+    env.CODEX_NAVIGATOR_WORKER_CREDENTIAL,
+    'CODEX_NAVIGATOR_WORKER_CREDENTIAL',
+    512,
+  )
+  if (Boolean(navigatorWorkerId) !== Boolean(navigatorWorkerCredential)) {
+    throw new Error(
+      'CODEX_NAVIGATOR_WORKER_ID and CODEX_NAVIGATOR_WORKER_CREDENTIAL must be configured together'
+    )
+  }
 
   return {
     port: parsePort(env.CODEX_WORKER_PORT),
@@ -295,6 +338,7 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     openaiApiKey,
     openaiBaseUrl: getOptionalEnvFromEnv(env, 'OPENAI_BASE_URL') || '',
     workerToken: parseToken(env.CODEX_WORKER_TOKEN),
+    externalEnabled: parseBoolean(env.CODEX_WORKER_EXTERNAL_ENABLED, 'CODEX_WORKER_EXTERNAL_ENABLED'),
     allowedCwds: parseAllowedCwds(env.CODEX_ALLOWED_CWDS),
     maxConcurrentTasks: parseMaxConcurrentTasks(env.CODEX_MAX_CONCURRENT_TASKS),
     threadWatchdogIntervalMs: parseBoundedMilliseconds(
@@ -318,6 +362,8 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       'CODEX_NAVIGATOR_WORKER_GATEWAY_BASE_URL',
       'http://localhost:8080'
     ),
+    navigatorWorkerId,
+    navigatorWorkerCredential,
     defaultModel: parseDefaultModel(env.CODEX_DEFAULT_MODEL),
     modelAliases: parseModelAliases(env.CODEX_MODEL_ALIASES),
   }

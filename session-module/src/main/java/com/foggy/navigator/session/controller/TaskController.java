@@ -23,7 +23,7 @@ import java.util.Set;
 /**
  * 统一任务 API —— 屏蔽 Claude / Codex / 未来 Agent 差异。
  * <p>
- * 所有前端任务操作逐步迁移到这组端点，旧 /api/v1/claude-tasks 保持兼容。
+ * 内部 UI 的任务创建、查询和生命周期操作统一使用这组端点。
  */
 @Slf4j
 @RestController
@@ -91,8 +91,10 @@ public class TaskController {
     @GetMapping("/{taskId}")
     public RX<DispatchTaskDTO> getTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId(userId)
+                .tenantId(tenantId)
                 .requestSource("UI")
                 .build();
 
@@ -108,8 +110,10 @@ public class TaskController {
     @GetMapping("/{taskId}/native-subtasks")
     public RX<NativeSubtaskSnapshotResponseDTO> getNativeSubtasks(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId(userId)
+                .tenantId(tenantId)
                 .requestSource("UI")
                 .build();
 
@@ -125,7 +129,7 @@ public class TaskController {
     @GetMapping
     public RX<List<DispatchTaskDTO>> listTasks(@RequestParam(required = false) String sessionId) {
         if (sessionId != null && !sessionId.isBlank()) {
-            return RX.ok(taskDispatchFacade.listTasksBySession(sessionId));
+            return RX.ok(taskDispatchFacade.listTasksBySession(sessionId, currentUiContext()));
         }
         // 无 sessionId 时返回当前用户的活跃任务
         String userId = UserContext.getCurrentUserId();
@@ -141,8 +145,10 @@ public class TaskController {
     public RX<String> cancelTask(@PathVariable String taskId,
                                   @RequestBody(required = false) Map<String, String> body) {
         String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId(userId)
+                .tenantId(tenantId)
                 .requestSource("UI")
                 .build();
 
@@ -158,14 +164,10 @@ public class TaskController {
             return RX.ok("Task already in terminal state: " + task.getStatus());
         }
 
-        // 优先使用请求体传入的 agentId，否则从任务记录回填
-        String agentId = body != null ? body.get("agentId") : null;
-        if (agentId == null || agentId.isBlank()) {
-            agentId = task.getAgentId();
-        }
-
         try {
-            taskDispatchFacade.cancelTask(taskId, agentId, context);
+            // The authorized task projection is the only routing authority;
+            // a request-body agentId must never redirect cancellation.
+            taskDispatchFacade.cancelTask(taskId, task.getAgentId(), context);
             return RX.ok("Task cancelled");
         } catch (org.springframework.dao.PessimisticLockingFailureException e) {
             // 死锁兜底：cancel 线程与 SSE reactor 线程同时更新任务行导致 MySQL 死锁
@@ -187,9 +189,8 @@ public class TaskController {
     @PostMapping("/{taskId}/respond")
     public RX<String> respondToTask(@PathVariable String taskId,
                                      @RequestBody Map<String, Object> body) {
-        String userId = UserContext.getCurrentUserId();
         try {
-            taskDispatchFacade.respondToTask(taskId, userId, body);
+            taskDispatchFacade.respondToTask(taskId, currentUiContext(), body);
             return RX.ok("Response sent");
         } catch (UnsupportedOperationException e) {
             return RX.failA(e.getMessage());
@@ -205,9 +206,8 @@ public class TaskController {
      */
     @PostMapping("/{taskId}/reconnect")
     public RX<String> reconnectTask(@PathVariable String taskId) {
-        String userId = UserContext.getCurrentUserId();
         try {
-            taskDispatchFacade.reconnectTask(taskId, userId);
+            taskDispatchFacade.reconnectTask(taskId, currentUiContext());
             return RX.ok("Reconnect initiated");
         } catch (UnsupportedOperationException e) {
             return RX.failA(e.getMessage());
@@ -219,9 +219,8 @@ public class TaskController {
      */
     @PostMapping("/{taskId}/resync")
     public RX<?> resyncTask(@PathVariable String taskId) {
-        String userId = UserContext.getCurrentUserId();
         try {
-            Object result = taskDispatchFacade.resyncTask(taskId, userId);
+            Object result = taskDispatchFacade.resyncTask(taskId, currentUiContext());
             return RX.ok(result);
         } catch (UnsupportedOperationException | IllegalStateException | IllegalArgumentException e) {
             return RX.failA(e.getMessage());
@@ -234,9 +233,8 @@ public class TaskController {
     @PostMapping("/{taskId}/rewind")
     public RX<?> rewindTask(@PathVariable String taskId,
                              @RequestBody Map<String, Object> body) {
-        String userId = UserContext.getCurrentUserId();
         try {
-            Object result = taskDispatchFacade.rewindTask(taskId, userId, body);
+            Object result = taskDispatchFacade.rewindTask(taskId, currentUiContext(), body);
             return RX.ok(result);
         } catch (UnsupportedOperationException e) {
             return RX.failA(e.getMessage());
@@ -278,9 +276,8 @@ public class TaskController {
      */
     @DeleteMapping("/{taskId}")
     public RX<Map<String, Object>> deleteTask(@PathVariable String taskId) {
-        String userId = UserContext.getCurrentUserId();
         try {
-            taskDispatchFacade.deleteTask(taskId, userId);
+            taskDispatchFacade.deleteTask(taskId, currentUiContext());
             return RX.ok(Map.of("taskId", taskId, "deleted", true));
         } catch (UnsupportedOperationException e) {
             return RX.failA(e.getMessage());
@@ -294,9 +291,8 @@ public class TaskController {
      */
     @PostMapping("/{taskId}/scan-checkpoints")
     public RX<?> scanCheckpoints(@PathVariable String taskId) {
-        String userId = UserContext.getCurrentUserId();
         try {
-            Object result = taskDispatchFacade.scanCheckpoints(taskId, userId);
+            Object result = taskDispatchFacade.scanCheckpoints(taskId, currentUiContext());
             return RX.ok(result);
         } catch (UnsupportedOperationException e) {
             return RX.failA(e.getMessage());
@@ -339,6 +335,14 @@ public class TaskController {
         return RX.ok(taskDispatchFacade.listTasksByDirectory(userId, directoryId));
     }
 
+    private AgentResolveContext currentUiContext() {
+        return AgentResolveContext.builder()
+                .userId(UserContext.getCurrentUserId())
+                .tenantId(UserContext.getCurrentTenantId())
+                .requestSource("UI")
+                .build();
+    }
+
     /**
      * 按目录分页查询任务列表
      */
@@ -352,7 +356,7 @@ public class TaskController {
         return RX.ok(taskDispatchFacade.listTasksByDirectoryPaged(userId, directoryId, page, size, state));
     }
 
-    // ── Worker Session 查询（统一端点，迁移自 ClaudeTaskController） ──
+    // ── Worker Session 统一查询端点 ──
 
     /**
      * 列出指定 Worker 上的会话列表

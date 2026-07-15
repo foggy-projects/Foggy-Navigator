@@ -81,3 +81,17 @@ test('readiness rejects unavailable or wholly private workspace roots', t => {
     allowedCwds: [stateDir],
   }, '0.144.3', true).reasons, ['ALLOWED_CWDS_UNAVAILABLE'])
 })
+
+test('external readiness requires auth and remains closed while execution policy is pending', () => {
+  const config = testConfig('C:\\state', { externalEnabled: true, workerToken: '' })
+  assert.deepEqual(evaluateRuntimeReadiness(config, '0.144.3', true).reasons, [
+    'EXTERNAL_AUTH_TOKEN_REQUIRED',
+    'EXTERNAL_EXECUTION_POLICY_PENDING',
+  ])
+  assert.deepEqual(evaluateRuntimeReadiness({
+    ...config,
+    workerToken: 'configured-secret',
+  }, '0.144.3', true).reasons, [
+    'EXTERNAL_EXECUTION_POLICY_PENDING',
+  ])
+})

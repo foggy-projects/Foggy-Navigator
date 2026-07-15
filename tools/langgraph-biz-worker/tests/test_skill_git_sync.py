@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from langgraph_biz_worker.runtime.skill_git_sync import (
     _discover_skills,
     sync_public_skills,
 )
+from langgraph_biz_worker.runtime import skill_git_sync
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +41,82 @@ class TestDiscoverSkills:
 
 
 class TestSyncPublicSkills:
+    def test_git_subprocess_uses_safe_allowlist_environment(self, monkeypatch):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            captured["env"] = kwargs["env"]
+            return MagicMock(returncode=0, stderr="")
+
+        secret_env = {
+            "ANTHROPIC_API_KEY": "llm-secret",
+            "AWS_ACCESS_KEY_ID": "aws-access-key",
+            "AWS_SECRET_ACCESS_KEY": "aws-secret-key",
+            "BIZ_WORKER_LLM_API_KEY": "provider-secret",
+            "BIZ_WORKER_NAVIGATOR_WORKER_CREDENTIAL": "bwc_secret",
+            "BIZ_WORKER_NAVIGATOR_WORKER_ID": "worker-a",
+            "BIZ_WORKER_SKILL_GIT_TOKEN": "skill-secret",
+            "BIZ_WORKER_SKILL_WEBHOOK_SECRET": "webhook-secret",
+            "BIZ_WORKER_WORKER_TOKEN": "inbound-secret",
+            "DATABASE_URL": "postgresql://user:secret@db/runtime",
+            "MYSQL_PWD": "mysql-secret",
+            "OPENAI_API_KEY": "openai-secret",
+        }
+        for key, value in secret_env.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin")
+        monkeypatch.setenv("JAVA_HOME", "/opt/jdk")
+        monkeypatch.setattr(skill_git_sync.subprocess, "run", fake_run)
+
+        skill_git_sync._run_git(["status"])
+
+        assert captured["argv"] == ["git", "-c", "credential.helper=", "status"]
+        assert all(key not in captured["env"] for key in secret_env)
+        assert captured["env"]["PATH"] == "/usr/local/bin:/usr/bin"
+        assert captured["env"]["JAVA_HOME"] == "/opt/jdk"
+        assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+    def test_git_askpass_keeps_token_out_of_argv_and_script_and_cleans_up(self, monkeypatch):
+        token = "glpat-never-write-me"
+        captured: dict[str, object] = {}
+
+        def fake_run(argv, **kwargs):
+            helper = Path(kwargs["env"]["GIT_ASKPASS"])
+            captured["argv"] = argv
+            captured["helper"] = helper
+            captured["script"] = helper.read_text(encoding="utf-8")
+            captured["env_token"] = kwargs["env"]["FOGGY_SKILL_GIT_TOKEN"]
+            return MagicMock(returncode=0, stderr="")
+
+        monkeypatch.setattr(skill_git_sync.subprocess, "run", fake_run)
+
+        skill_git_sync._run_git(
+            ["clone", "https://gitlab.example.com/group/skills.git", "/tmp/skills"],
+            token=token,
+        )
+
+        assert token not in " ".join(captured["argv"])
+        assert token not in captured["script"]
+        assert captured["env_token"] == token
+        assert not captured["helper"].exists()
+        assert not captured["helper"].parent.exists()
+
+    def test_git_askpass_is_cleaned_up_when_subprocess_raises(self, monkeypatch):
+        captured: dict[str, Path] = {}
+
+        def fake_run(argv, **kwargs):
+            captured["helper"] = Path(kwargs["env"]["GIT_ASKPASS"])
+            raise RuntimeError("git failed")
+
+        monkeypatch.setattr(skill_git_sync.subprocess, "run", fake_run)
+
+        with pytest.raises(RuntimeError, match="git failed"):
+            skill_git_sync._run_git(["fetch", "origin", "main"], token="temporary-token")
+
+        assert not captured["helper"].exists()
+        assert not captured["helper"].parent.exists()
+
     def test_no_repo_returns_failure(self, tmp_path):
         result = sync_public_skills("", tmp_path / "public")
         assert not result.success
@@ -60,9 +138,19 @@ class TestSyncPublicSkills:
 
         mock_git.side_effect = side_effect
 
-        result = sync_public_skills("https://gitlab.example.com/repo.git", target)
+        token = "glpat-clone-secret"
+        result = sync_public_skills(
+            "https://oauth2:legacy-secret@gitlab.example.com/repo.git?private_token=legacy-secret",
+            target,
+            token=token,
+        )
         assert result.success
         assert "my-skill" in result.skills_found
+        clone_args = mock_git.call_args.args[0]
+        assert clone_args[-2] == "https://gitlab.example.com/repo.git"
+        assert token not in " ".join(clone_args)
+        assert "legacy-secret" not in " ".join(clone_args)
+        assert mock_git.call_args.kwargs["token"] == token
 
     @patch("langgraph_biz_worker.runtime.skill_git_sync._run_git")
     def test_pull_when_already_cloned(self, mock_git, tmp_path):
@@ -74,11 +162,18 @@ class TestSyncPublicSkills:
 
         mock_git.return_value = MagicMock(returncode=0, stderr="")
 
-        result = sync_public_skills("https://gitlab.example.com/repo.git", target)
+        token = "glpat-fetch-secret"
+        result = sync_public_skills("https://gitlab.example.com/repo.git", target, token=token)
         assert result.success
-        # Should have called fetch then reset
+        # Sanitize a previously persisted origin before authenticated fetch.
         calls = [c[0][0] for c in mock_git.call_args_list]
-        assert calls == [["fetch", "origin", "main"], ["reset", "--hard", "origin/main"]]
+        assert calls == [
+            ["remote", "set-url", "origin", "https://gitlab.example.com/repo.git"],
+            ["fetch", "origin", "main"],
+            ["reset", "--hard", "origin/main"],
+        ]
+        assert mock_git.call_args_list[1].kwargs["token"] == token
+        assert token not in " ".join(mock_git.call_args_list[1].args[0])
 
     @patch("langgraph_biz_worker.runtime.skill_git_sync._run_git")
     def test_clone_failure(self, mock_git, tmp_path):
@@ -86,6 +181,28 @@ class TestSyncPublicSkills:
         result = sync_public_skills("https://bad.url/repo.git", tmp_path / "public")
         assert not result.success
         assert "clone failed" in result.message
+
+    @patch("langgraph_biz_worker.runtime.skill_git_sync._run_git")
+    def test_clone_failure_redacts_token_and_url_credentials(self, mock_git, tmp_path):
+        token = "glpat-diagnostic-secret"
+        mock_git.return_value = MagicMock(
+            returncode=128,
+            stderr=(
+                "fatal: unable to access "
+                f"https://oauth2:{token}@gitlab.example.com/repo.git: Authorization: Bearer {token}"
+            ),
+        )
+
+        result = sync_public_skills(
+            "https://gitlab.example.com/repo.git",
+            tmp_path / "public",
+            token=token,
+        )
+
+        assert not result.success
+        assert token not in result.message
+        assert "oauth2:" not in result.message
+        assert "git-credentials-redacted" in result.message
 
     def test_git_not_found(self, tmp_path):
         with patch("langgraph_biz_worker.runtime.skill_git_sync._run_git", side_effect=FileNotFoundError):

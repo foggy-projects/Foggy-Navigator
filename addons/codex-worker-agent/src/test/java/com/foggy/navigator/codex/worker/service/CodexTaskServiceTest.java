@@ -7,8 +7,7 @@ import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
-import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
-import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
+import com.foggy.navigator.codex.worker.model.command.CodexTaskCreateCommand;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeBinding;
 import com.foggy.navigator.codex.worker.model.CodexRuntimeType;
 import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
@@ -27,7 +26,6 @@ import com.foggy.navigator.spi.agent.TaskCommandProvider;
 import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
@@ -170,7 +168,6 @@ class CodexTaskServiceTest {
         assertInstanceOf(TaskLookupProvider.class, service);
         assertInstanceOf(TaskCommandProvider.class, service);
         assertInstanceOf(TaskListingProvider.class, service);
-        assertFalse(service instanceof TaskQueryProvider);
         assertFalse(service instanceof WorkerSessionQueryProvider);
         assertTrue(service.getCapabilities().contains(TaskQueryCapability.RESPOND_TO_TASK));
     }
@@ -564,9 +561,9 @@ class CodexTaskServiceTest {
         TimeZone originalTimeZone = TimeZone.getDefault();
         try {
             TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
-            CodexTaskDTO utcResult = service.getTask("user-1", "task-biz");
+            DispatchTaskDTO utcResult = service.getTask("user-1", "task-biz");
             TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
-            CodexTaskDTO shanghaiResult = service.getTask("user-1", "task-biz");
+            DispatchTaskDTO shanghaiResult = service.getTask("user-1", "task-biz");
 
             assertEquals(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE, utcResult.getProviderType());
             assertEquals(createdAtEpochMs, utcResult.getCreatedAtEpochMs());
@@ -588,6 +585,10 @@ class CodexTaskServiceTest {
                 "task-session", "session-2", "worker-1", null, "COMPLETED", createdAt.minusMinutes(1));
         CodexTaskEntity defaultFallback = createTask(
                 "task-default", null, "worker-1", null, "COMPLETED", createdAt.minusMinutes(2));
+        List.of(taskProjection, sessionFallback, defaultFallback).forEach(task -> {
+            task.setResolvedAgentId("agent-1");
+            task.setContextId("context-" + task.getTaskId());
+        });
         when(taskRepository.findByUserIdOrderByCreatedAtDesc("user-1"))
                 .thenReturn(List.of(taskProjection, sessionFallback, defaultFallback));
 
@@ -601,13 +602,13 @@ class CodexTaskServiceTest {
         session.setProviderType(CodexTaskService.CODEX_BIZ_PROVIDER_TYPE);
         when(sessionEntityRepository.findAllById(any())).thenReturn(List.of(session));
 
-        List<CodexTaskDTO> result = service.listTasks("user-1");
+        List<DispatchTaskDTO> result = service.listTasks("user-1");
 
         assertEquals(List.of(
                         CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
                         CodexTaskService.CODEX_BIZ_PROVIDER_TYPE,
                         CodexTaskService.CODEX_PROVIDER_TYPE),
-                result.stream().map(CodexTaskDTO::getProviderType).toList());
+                result.stream().map(DispatchTaskDTO::getProviderType).toList());
         verify(sessionTaskRepository).findByTaskIdIn(any());
         verify(sessionEntityRepository).findAllById(any());
         verify(sessionTaskRepository, never()).findByTaskId(anyString());
@@ -805,6 +806,35 @@ class CodexTaskServiceTest {
         Map<?, ?> result = assertInstanceOf(Map.class, search.results().get(0));
         assertEquals("session-biz", result.get("sessionId"));
         assertEquals("task-biz", result.get("latestTaskId"));
+    }
+
+    @Test
+    void canaryPageScopesTasksByUserTenantWorkerAndPreservesCreationEpoch() {
+        CodexTaskEntity included = createTask(
+                "task-included", "session-included", "worker-1", "dir-1", "COMPLETED",
+                LocalDateTime.of(2026, 7, 10, 18, 30));
+        included.setTenantId("tenant-1");
+        included.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+        included.setCreatedAtEpochMs(1_783_685_415_123L);
+
+        CodexTaskEntity otherWorker = createTask(
+                "task-other-worker", "session-other", "worker-2", "dir-1", "COMPLETED",
+                LocalDateTime.of(2026, 7, 10, 18, 29));
+        otherWorker.setTenantId("tenant-1");
+        otherWorker.setProviderType(CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+
+        when(taskRepository.findByUserIdAndTenantIdOrderByCreatedAtDesc("user-1", "tenant-1"))
+                .thenReturn(List.of(included, otherWorker));
+
+        TaskPageResult page = service.listTasksPagedForProvider(
+                "user-1", "tenant-1", 0, 20, null, "worker-1",
+                CodexTaskService.CODEX_APP_SERVER_PROVIDER_TYPE);
+
+        assertEquals(1L, page.totalSessions());
+        DispatchTaskDTO task = assertInstanceOf(DispatchTaskDTO.class, page.content().get(0));
+        assertEquals("task-included", task.getTaskId());
+        assertEquals(1_783_685_415_123L, task.getCreatedAtEpochMs());
+        verify(taskRepository).findByUserIdAndTenantIdOrderByCreatedAtDesc("user-1", "tenant-1");
     }
 
     @Test
@@ -1152,7 +1182,7 @@ class CodexTaskServiceTest {
 
     @Test
     void createTask_rejectsLegacyCodexBizProviderWithoutScopedHomeKey() {
-        CreateCodexTaskForm form = new CreateCodexTaskForm();
+        CodexTaskCreateCommand form = new CodexTaskCreateCommand();
         form.setProviderType("codex-biz-worker");
         form.setWorkerId("worker-1");
         form.setPrompt("hello");
@@ -1703,6 +1733,7 @@ class CodexTaskServiceTest {
                         && "RUNNING".equals(event.getPreviousStatus())
                         && "COMPLETED".equals(event.getStatus())
                         && "AWAITING_REPLY".equals(event.getInteractionState())
+                        && Boolean.FALSE.equals(event.getRecoverable())
         ));
     }
 
@@ -1723,7 +1754,64 @@ class CodexTaskServiceTest {
                         && "RUNNING".equals(event.getPreviousStatus())
                         && "worker timeout".equals(event.getErrorMessage())
                         && "AWAITING_REPLY".equals(event.getInteractionState())
+                        && Boolean.TRUE.equals(event.getRecoverable())
         ));
+    }
+
+    @Test
+    void preAcceptanceFailurePublishesDefinitiveTerminalEvent() {
+        CodexTaskEntity entity = createTask(
+                "task-not-accepted", "session-2", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 7, 14, 12, 0)
+        );
+        entity.setTenantId("tenant-1");
+        entity.setRuntimeType(CodexRuntimeType.APP_SERVER.name());
+        entity.setRuntimeAcceptanceState("PREPARED");
+        entity.setWorkerTaskId(null);
+        when(taskRepository.findByTaskIdForUpdate("task-not-accepted"))
+                .thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertTrue(service.failTaskIfAcceptanceNotStarted(
+                "task-not-accepted", "CODEX_RUNTIME_ACCEPT_FAILED"));
+
+        assertEquals("FAILED", entity.getStatus());
+        assertEquals("TERMINAL", entity.getRuntimeAcceptanceState());
+        assertNull(entity.getWorkerTaskId(),
+                "A task rejected before acceptance has no Worker task to reconnect");
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-not-accepted".equals(event.getTaskId())
+                        && "tenant-1".equals(event.getTenantId())
+                        && "RUNNING".equals(event.getPreviousStatus())
+                        && "FAILED".equals(event.getStatus())
+                        && Boolean.FALSE.equals(event.getRecoverable())
+        ));
+    }
+
+    @Test
+    void resyncFailedTaskPublishesNonTerminalRecoveryTransition() {
+        CodexTaskEntity entity = createTask(
+                "task-resync", "session-resync", "worker-1", "dir-1", "FAILED",
+                LocalDateTime.of(2026, 3, 26, 11, 30)
+        );
+        entity.setWorkerTaskId("worker-task-resync");
+        when(taskRepository.findByTaskIdAndUserIdForUpdate("task-resync", "user-1"))
+                .thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.resyncTaskForProvider(
+                CodexTaskService.CODEX_PROVIDER_TYPE, "task-resync", "user-1");
+
+        assertEquals("RUNNING", entity.getStatus());
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-resync".equals(event.getTaskId())
+                        && "FAILED".equals(event.getPreviousStatus())
+                        && "RUNNING".equals(event.getStatus())
+                        && event.getRecoverable() == null
+        ));
+        verify(streamRelay).reconnectTask("task-resync", "session-resync", "worker-1");
     }
 
     @Test

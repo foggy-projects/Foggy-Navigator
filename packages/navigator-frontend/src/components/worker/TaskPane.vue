@@ -91,6 +91,7 @@
         @load-more="paneState.loadMoreHistory()"
         @load-all="(limit?: number) => paneState.loadAllHistory(limit)"
         @forward="(message) => emit('forward', props.paneState.paneId, message)"
+        @view-records="handleShowMessageRecords"
         @link-click="(payload) => emit('link-click', props.paneState.paneId, payload)"
         @artifact-open="(action) => emit('artifactOpen', props.paneState.paneId, action)"
       >
@@ -251,6 +252,69 @@
         <el-button type="primary" @click="fileHintsVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="messageRecordsVisible"
+      title="会话逐条记录"
+      width="900px"
+      append-to-body
+      class="message-records-dialog"
+    >
+      <div class="message-record-identifiers">
+        <div class="message-record-identifier">
+          <span class="message-record-identifier-label">Session ID</span>
+          <code :title="sessionId || undefined">{{ sessionId || '未关联' }}</code>
+          <el-button
+            size="small"
+            text
+            :disabled="!sessionId"
+            @click="handleCopyIdentifier('Session ID', sessionId)"
+          >复制</el-button>
+        </div>
+        <div class="message-record-identifier">
+          <span class="message-record-identifier-label">Codex Thread ID</span>
+          <code :title="codexThreadId || undefined">{{ codexThreadId || '未关联' }}</code>
+          <el-button
+            size="small"
+            text
+            :disabled="!codexThreadId"
+            @click="handleCopyIdentifier('Codex Thread ID', codexThreadId)"
+          >复制</el-button>
+        </div>
+      </div>
+
+      <el-alert
+        v-if="messageRecordsError"
+        class="message-records-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="messageRecordsError"
+      />
+
+      <div v-loading="messageRecordsLoading" class="message-records-list">
+        <el-empty
+          v-if="!messageRecordsLoading && messageRecords.length === 0"
+          description="当前会话暂无可展示的消息记录"
+          :image-size="72"
+        />
+        <article
+          v-for="(message, index) in messageRecords"
+          :key="`${message.id}-${index}`"
+          class="message-record-item"
+        >
+          <div class="message-record-item-header">
+            <el-tag size="small" effect="plain">{{ messageRoleLabel(message) }}</el-tag>
+            <span class="message-record-time">{{ formatMessageTime(message.timestamp) || '时间未知' }}</span>
+          </div>
+          <pre class="message-record-content">{{ messageRecordText(message) }}</pre>
+        </article>
+      </div>
+
+      <template #footer>
+        <el-button type="primary" @click="messageRecordsVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -310,6 +374,13 @@ const fileHintsLoading = ref(false)
 const fileHintsResponse = ref<SessionFileHintsResponse | null>(null)
 const fileHintFiles = computed(() => fileHintsResponse.value?.files ?? [])
 const canShowFileHints = computed(() => inferTaskWorkerBackend(props.paneState.task.value) === 'OPENAI_CODEX')
+const messageRecordsVisible = ref(false)
+const messageRecordsLoading = ref(false)
+const messageRecordsError = ref('')
+const messageRecords = ref<ChatMessage[]>([])
+const sessionId = computed(() => props.paneState.task.value?.sessionId ?? '')
+const codexThreadId = computed(() => props.paneState.task.value?.codexThreadId ?? '')
+let messageRecordsRequest = 0
 // --- Input memory: draft persistence + history for pane input ---
 const paneInputScope = computed(() => {
   const sid = props.paneState.task.value?.sessionId
@@ -456,6 +527,30 @@ async function handleShowFileHints() {
   await loadFileHints()
 }
 
+async function handleShowMessageRecords() {
+  const request = ++messageRecordsRequest
+  messageRecordsVisible.value = true
+  messageRecordsError.value = ''
+  // Show what is already on screen immediately; replace it with the complete
+  // persisted history when the fetch finishes.
+  messageRecords.value = [...props.paneState.chatState.sortedMessages.value]
+  messageRecordsLoading.value = true
+
+  try {
+    const history = await props.paneState.getAllHistoryMessages()
+    if (request !== messageRecordsRequest) return
+    if (history.length > 0 || messageRecords.value.length === 0) {
+      messageRecords.value = history
+    }
+  } catch (error) {
+    if (request !== messageRecordsRequest) return
+    console.error('加载会话逐条记录失败:', error)
+    messageRecordsError.value = '完整会话记录加载失败，当前仅展示已加载的消息。'
+  } finally {
+    if (request === messageRecordsRequest) messageRecordsLoading.value = false
+  }
+}
+
 async function loadFileHints() {
   const taskId = props.paneState.task.value?.taskId
   if (!taskId) {
@@ -504,6 +599,16 @@ async function handleCopyFileHintPath(file: SessionFileHintFile) {
   const ok = await copyToClipboard(file.filePath)
   if (ok) {
     ElMessage.success('已复制文件路径')
+  } else {
+    ElMessage.error('复制失败')
+  }
+}
+
+async function handleCopyIdentifier(label: string, value: string) {
+  if (!value) return
+  const ok = await copyToClipboard(value)
+  if (ok) {
+    ElMessage.success(`已复制 ${label}`)
   } else {
     ElMessage.error('复制失败')
   }
@@ -561,6 +666,21 @@ function formatMessageForCopy(message: ChatMessage): string {
   }
 
   return lines.join('\n')
+}
+
+function messageRecordText(message: ChatMessage): string {
+  const sections: string[] = []
+  if (message.toolName) sections.push(`TOOL: ${message.toolName}`)
+  if (message.thought) sections.push(`THOUGHT:\n${message.thought}`)
+  if (message.content) sections.push(message.toolName ? `COMMAND:\n${message.content}` : message.content)
+  if (message.toolOutput !== undefined) sections.push(`OUTPUT:\n${message.toolOutput}`)
+  if (message.error) sections.push(`ERROR:\n${message.error}`)
+  if (message.plan) sections.push(`PLAN:\n${message.plan}`)
+  if (message.questions?.length) {
+    sections.push(`QUESTIONS:\n${message.questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n')}`)
+  }
+  if (sections.length === 0 && message.raw) sections.push(`RAW:\n${safeStringify(message.raw)}`)
+  return sections.join('\n\n') || '（无可展示正文）'
 }
 
 function messageRoleLabel(message: ChatMessage): string {
@@ -870,6 +990,97 @@ function truncate(text: string, maxLen: number) {
   color: #606266;
   font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
   font-size: 12px;
+}
+
+.message-record-identifiers {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.message-record-identifier {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.message-record-identifier-label {
+  color: #606266;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.message-record-identifier code {
+  min-width: 0;
+  overflow: hidden;
+  color: #303133;
+  font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-records-alert {
+  margin-bottom: 12px;
+}
+
+.message-records-list {
+  min-height: 120px;
+  max-height: min(60vh, 620px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.message-record-item {
+  padding: 10px 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.message-record-item + .message-record-item {
+  margin-top: 8px;
+}
+
+.message-record-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.message-record-time {
+  color: #909399;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.message-record-content {
+  margin: 0;
+  color: #303133;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@container (max-width: 520px) {
+  .message-record-identifier {
+    grid-template-columns: 1fr auto;
+  }
+
+  .message-record-identifier-label {
+    grid-column: 1 / -1;
+  }
 }
 
 </style>

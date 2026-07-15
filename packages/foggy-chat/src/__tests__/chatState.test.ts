@@ -42,8 +42,12 @@ describe('createChatState', () => {
     })
 
     it('appends to existing chunk message', () => {
-      state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, { content: 'Hello' }))
-      state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, { content: ' World' }))
+      state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, {
+        content: 'Hello', taskId: 'task-1', streamId: 'stream-1',
+      }))
+      state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, {
+        content: ' World', taskId: 'task-1', streamId: 'stream-1',
+      }))
 
       expect(state.messages.value).toHaveLength(1)
       expect(state.messages.value[0].content).toBe('Hello World')
@@ -54,14 +58,51 @@ describe('createChatState', () => {
       state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, { content: 'Hi' }))
       expect(state.isThinking.value).toBe(false)
     })
+
+    it('keeps interleaved Codex item streams separate', () => {
+      state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, {
+        content: 'A-part', taskId: 'task-1', streamId: 'item-a',
+      }, { timestamp: 1 }))
+      state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, {
+        content: 'B-part', taskId: 'task-1', streamId: 'item-b',
+      }, { timestamp: 2 }))
+      state.processAipMessage(makeAip(AipMessageType.TEXT_COMPLETE, {
+        content: 'B complete', taskId: 'task-1', streamId: 'item-b',
+      }, { timestamp: 3 }))
+      state.processAipMessage(makeAip(AipMessageType.TEXT_COMPLETE, {
+        content: 'A complete', taskId: 'task-1', streamId: 'item-a',
+      }, { timestamp: 4 }))
+
+      expect(state.messages.value).toHaveLength(2)
+      expect(state.messages.value.map(message => ({ content: message.content, streamId: message.streamId })))
+        .toEqual([
+          { content: 'A complete', streamId: 'item-a' },
+          { content: 'B complete', streamId: 'item-b' },
+        ])
+    })
+
+    it('does not merge an unassociated legacy delta into a pending stream', () => {
+      state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, {
+        content: 'known', taskId: 'task-1', streamId: 'item-a',
+      }))
+      state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, { content: 'unknown' }))
+
+      expect(state.messages.value).toHaveLength(2)
+      expect(state.messages.value[0].content).toBe('known')
+      expect(state.messages.value[1].content).toBe('unknown')
+    })
   })
 
   // ========== TEXT_COMPLETE ==========
 
   describe('TEXT_COMPLETE', () => {
     it('replaces content of last chunk', () => {
-      state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, { content: 'partial' }))
-      state.processAipMessage(makeAip(AipMessageType.TEXT_COMPLETE, { content: 'Full response' }))
+      state.processAipMessage(makeAip(AipMessageType.TEXT_CHUNK, {
+        content: 'partial', taskId: 'task-1', streamId: 'stream-1',
+      }))
+      state.processAipMessage(makeAip(AipMessageType.TEXT_COMPLETE, {
+        content: 'Full response', taskId: 'task-1', streamId: 'stream-1',
+      }))
 
       expect(state.messages.value).toHaveLength(1)
       expect(state.messages.value[0].content).toBe('Full response')

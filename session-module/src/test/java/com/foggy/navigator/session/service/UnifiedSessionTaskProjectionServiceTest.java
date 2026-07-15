@@ -3,7 +3,6 @@ package com.foggy.navigator.session.service;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.session.repository.SessionRepository;
-import com.foggy.navigator.spi.agent.TaskListingProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
 import org.junit.jupiter.api.Test;
@@ -44,41 +43,6 @@ class UnifiedSessionTaskProjectionServiceTest {
     }
 
     @Test
-    void taskListingProviderTypedMethodsAdaptLegacyEnvelopes() {
-        TaskListingProvider provider = new TaskListingProvider() {
-            @Override
-            public String getProviderType() {
-                return "legacy";
-            }
-
-            @Override
-            public Object listTasksPaged(String userId, int page, int size, String state) {
-                return Map.of(
-                        "content", List.of(Map.of("taskId", "task-legacy")),
-                        "totalSessions", "2");
-            }
-
-            @Override
-            public Object searchSessions(String userId, String keyword, String workerId,
-                                         String directoryId, int page, int size) {
-                return new LegacySearchPage(List.of(Map.of("sessionId", "session-legacy")), 4L);
-            }
-        };
-
-        TaskPageResult page = provider.listTaskPage("user-1", 1, 10, null);
-        TaskSearchResult search = provider.searchSessionPage("user-1", "auth", null, null, 2, 5);
-
-        assertEquals(2L, page.totalSessions());
-        assertEquals(1, page.page());
-        assertEquals(10, page.size());
-        assertEquals("task-legacy", assertInstanceOf(Map.class, page.content().get(0)).get("taskId"));
-        assertEquals(4L, search.total());
-        assertEquals(2, search.page());
-        assertEquals(5, search.size());
-        assertEquals("session-legacy", assertInstanceOf(Map.class, search.results().get(0)).get("sessionId"));
-    }
-
-    @Test
     void toTaskPageEnvelope_keepsLegacyMapFallback() {
         Map<String, Object> task = Map.of("taskId", "task-legacy");
         Map<String, Object> legacy = Map.of("content", List.of(task), "totalSessions", "2");
@@ -112,6 +76,36 @@ class UnifiedSessionTaskProjectionServiceTest {
 
         assertNull(projected.getRuntimeRevision());
         assertNull(projected.getRoutingEpoch());
+    }
+
+    @Test
+    void taskProjectionReadsAuthoritativeCreationEpochFromVersionedState() {
+        SessionTaskEntity entity = new SessionTaskEntity();
+        entity.setTaskId("task-created-epoch");
+        entity.setSessionId("session-created-epoch");
+        entity.setTaskStateJson("{\"" + ProviderStateCodec.FIELD_SCHEMA_VERSION + "\":"
+                + ProviderStateCodec.CURRENT_SCHEMA_VERSION + ",\""
+                + ProviderStateCodec.FIELD_CREATED_AT_EPOCH_MS + "\":1783685415123}");
+
+        var projected = service.toDispatchTaskDTO(entity);
+
+        assertEquals(1_783_685_415_123L, projected.getCreatedAtEpochMs());
+    }
+
+    @Test
+    void taskProjectionReadsStructuredOutputFromVersionedProviderState() {
+        SessionTaskEntity entity = new SessionTaskEntity();
+        entity.setTaskId("task-structured-output");
+        entity.setSessionId("session-structured-output");
+        entity.setTaskStateJson(ProviderStateCodec.mergeTaskValue(
+                null,
+                "langgraph-biz-worker",
+                ProviderStateCodec.FIELD_STRUCTURED_OUTPUT,
+                "{\"type\":\"OPEN_ARTIFACT\"}"));
+
+        var projected = service.toDispatchTaskDTO(entity);
+
+        assertEquals("{\"type\":\"OPEN_ARTIFACT\"}", projected.getStructuredOutput());
     }
 
     public static class LegacySearchPage {

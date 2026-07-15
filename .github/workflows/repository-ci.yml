@@ -1,0 +1,151 @@
+name: Repository CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: repository-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  java:
+    name: Java clean test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Verify Java and Maven versions
+        run: |
+          java -version
+          mvn -version
+
+      - name: Test launcher dependency chain from clean state
+        run: mvn -B -pl launcher -am clean test
+
+  frontend:
+    name: Frontend clean checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22.23.1
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.1'
+
+      - name: Activate pnpm 10.34.5 through Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+
+      - name: Verify frontend toolchain versions
+        shell: bash
+        run: |
+          test "$(node --version)" = "v22.23.1"
+          test "$(pnpm --version)" = "10.34.5"
+
+      - name: Install frozen workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check, test, and build frontend workspace
+        run: pnpm run ci:frontend
+
+  node-workers:
+    name: Node Worker (${{ matrix.worker }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - worker: codex-sdk
+            directory: tools/codex-agent-worker
+          - worker: codex-app-server
+            directory: tools/codex-app-server-worker
+          - worker: gemini
+            directory: tools/gemini-agent-worker
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22.23.1
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.1'
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+
+      - name: Install frozen Worker dependencies
+        run: npm ci
+
+      - name: Verify Node.js and npm versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Type-check Worker
+        run: npm run --if-present typecheck
+
+      - name: Test Worker
+        run: npm run --if-present test
+
+      - name: Build Worker
+        run: npm run --if-present build
+
+  python-workers:
+    name: Python Worker (${{ matrix.worker }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - worker: claude
+            directory: tools/claude-agent-worker
+          - worker: langgraph-biz
+            directory: tools/langgraph-biz-worker
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: ${{ matrix.directory }}/pyproject.toml
+
+      - name: Install Worker and build tooling
+        run: |
+          python --version
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" build
+          python -m pip check
+
+      - name: Test Worker without credentialed E2E
+        run: python -m pytest -m "not e2e"
+        env:
+          NO_PROXY: 127.0.0.1,localhost
+
+      - name: Build Worker wheel and sdist
+        run: python -m build

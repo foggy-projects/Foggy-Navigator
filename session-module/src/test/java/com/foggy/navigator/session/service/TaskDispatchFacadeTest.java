@@ -21,10 +21,13 @@ import com.foggy.navigator.session.repository.AgentConversationContextRepository
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentTaskSubmitRequest;
-import com.foggy.navigator.spi.agent.TaskQueryCapability;
+import com.foggy.navigator.spi.agent.TaskCommandProvider;
+import com.foggy.navigator.spi.agent.TaskListingProvider;
+import com.foggy.navigator.spi.agent.TaskLookupProvider;
 import com.foggy.navigator.spi.agent.TaskPageResult;
-import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.agent.TaskQueryCapability;
 import com.foggy.navigator.spi.agent.WorkerSessionMessage;
 import com.foggy.navigator.spi.agent.WorkerSessionMessageCount;
 import com.foggy.navigator.spi.agent.WorkerSessionQueryProvider;
@@ -70,9 +73,11 @@ class TaskDispatchFacadeTest {
     @Mock
     private SessionRepository sessionRepository;
     @Mock
+    private SessionTaskResourceAccessService resourceAccessService;
+    @Mock
     private A2aAgent agent;
     @Mock
-    private TaskQueryProvider taskQueryProvider;
+    private TypedTaskProvider taskQueryProvider;
     @Mock
     private LlmModelManager llmModelManager;
     @Mock
@@ -83,6 +88,8 @@ class TaskDispatchFacadeTest {
     private WorkingDirectoryRepository workingDirectoryRepository;
     @Mock
     private AgentConversationContextRepository agentConversationContextRepository;
+    @Mock
+    private AgentContextStore agentContextStore;
 
     private TaskDispatchFacade facade;
 
@@ -91,16 +98,19 @@ class TaskDispatchFacadeTest {
         facade = createFacade(List.of(taskQueryProvider));
     }
 
-    private TaskDispatchFacade createFacade(List<? extends TaskQueryProvider> providers) {
-        return new TaskDispatchFacade(
+    private TaskDispatchFacade createFacade(List<? extends TypedTaskProvider> providers) {
+        TaskDispatchFacade created = new TaskDispatchFacade(
                 agentResolver,
                 bindingService,
                 sessionRepository,
+                resourceAccessService,
                 providers,
                 providers,
                 providers,
                 providers,
                 llmModelManager);
+        ReflectionTestUtils.setField(created, "agentContextStore", agentContextStore);
+        return created;
     }
 
     @Test
@@ -146,25 +156,25 @@ class TaskDispatchFacadeTest {
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("attacker")
+                .tenantId("tenant-1")
                 .sessionId("session-private")
                 .requestSource("UI")
                 .build();
-        SessionEntity session = new SessionEntity();
-        session.setId("session-private");
-        session.setUserId("owner");
-        when(sessionRepository.findById("session-private")).thenReturn(Optional.of(session));
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedSession("session-private", "attacker", "tenant-1");
 
-        IllegalArgumentException error = assertThrows(
-                IllegalArgumentException.class, () -> facade.createTask(request, context));
+        SecurityException error = assertThrows(
+                SecurityException.class, () -> facade.createTask(request, context));
 
-        assertTrue(error.getMessage().contains("SESSION_ACCESS_DENIED"));
+        assertEquals("Resource access denied", error.getMessage());
         verifyNoInteractions(agentResolver, bindingService, taskQueryProvider);
     }
 
     @Test
     void createTask_sdkSessionRejectsDirectAppServerRouteBeforeProviderInvocation() {
-        TaskQueryProvider sdkProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider appServerProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider sdkProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider appServerProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(sdkProvider, appServerProvider));
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .sessionId("session-sdk-1")
@@ -192,8 +202,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void createTask_appServerSessionRejectsDirectSdkRouteBeforeProviderInvocation() {
-        TaskQueryProvider sdkProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider appServerProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider sdkProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider appServerProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(sdkProvider, appServerProvider));
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .sessionId("session-app-1")
@@ -409,8 +419,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void createTask_usesExplicitCodexBizProviderWithOpenAICodexModelConfig() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
@@ -461,8 +471,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void createTask_directCodexBizPersistsScopedHomeBindingInSessionState() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
         ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
 
@@ -499,7 +509,6 @@ class TaskDispatchFacadeTest {
         when(codexBizProvider.getProviderType()).thenReturn("codex-biz-worker");
         when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(modelConfig));
         when(codexBizProvider.createTaskDirect(any(), eq("user-1"), eq("tenant-1"))).thenReturn(directTask);
-        when(agentConversationContextRepository.findById("ctx-codex-biz-new")).thenReturn(Optional.empty());
         when(sessionRepository.findById("session-codex-biz-new")).thenReturn(Optional.of(session));
 
         DispatchTaskDTO result = facade.createTask(request, context);
@@ -518,18 +527,22 @@ class TaskDispatchFacadeTest {
                     && "tenant/world-sim/scenario-1/actor-1".equals(
                     state.get(ProviderStateCodec.FIELD_CODEX_PRIVATE_ACCOUNT_ID));
         }));
-        verify(agentConversationContextRepository).save(argThat(saved ->
-                "ctx-codex-biz-new".equals(saved.getContextId())
-                        && "session-codex-biz-new".equals(saved.getNavigatorSessionId())
-                        && "codex-biz-worker".equals(saved.getAgentType())));
+        verify(agentContextStore).saveSessionRefFull(
+                "ctx-codex-biz-new",
+                "codex-biz-worker",
+                null,
+                "session-codex-biz-new",
+                "user-1",
+                "codex-biz-worker",
+                null);
         verify(codexProvider, never()).createTaskDirect(any(), anyString(), anyString());
         verifyNoInteractions(agentResolver, bindingService, agent);
     }
 
     @Test
     void createTask_usesExplicitCodexBizProviderEvenWhenLogicalAgentIdIsPresent() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
@@ -584,8 +597,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void createTask_usesExplicitCodexBizProviderFromDirectoryDefaultCodexModelConfig() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
         ReflectionTestUtils.setField(facade, "workingDirectoryRepository", workingDirectoryRepository);
 
@@ -640,8 +653,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void createTask_rejectsExplicitCodexBizProviderWithNonCodexModelConfig() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
@@ -956,8 +969,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void listTasksPaged_aggregatesSessionsAcrossProviders() {
-        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider claudeProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(claudeProvider, codexProvider));
 
         DispatchTaskDTO claudeTask = DispatchTaskDTO.builder()
@@ -1063,8 +1076,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void resumeTask_prefersSessionBoundProviderTypeOverLookupFallback() {
-        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider claudeProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(claudeProvider, codexProvider));
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
@@ -1111,8 +1124,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void resumeTask_rejectsModelConfigThatConflictsWithSessionBoundProvider() {
-        TaskQueryProvider geminiProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider geminiProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(geminiProvider, codexProvider));
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
@@ -1185,7 +1198,7 @@ class TaskDispatchFacadeTest {
 
     @Test
     void resumeTask_appServerSessionRejectsSdkModelConfig() {
-        TaskQueryProvider appServerProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider appServerProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(appServerProvider));
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .sessionId("session-app-server-1")
@@ -1509,7 +1522,7 @@ class TaskDispatchFacadeTest {
         when(sessionTaskRepository.findByTaskId("task-codex-1")).thenReturn(Optional.of(task));
         when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
 
-        facade.respondToTask("task-codex-1", "user-1", Map.of("decision", "approve"));
+        facade.respondToTask("task-codex-1", uiContext("user-1"), Map.of("decision", "approve"));
 
         verify(taskQueryProvider).respondToTask("task-codex-1", "user-1", Map.of("decision", "approve"));
         verify(taskQueryProvider, never()).getTaskById("task-codex-1");
@@ -1527,7 +1540,8 @@ class TaskDispatchFacadeTest {
         when(taskQueryProvider.rewindTask(eq("task-claude-1"), eq("user-1"), any()))
                 .thenReturn(Map.of("status", "rewound", "taskId", "task-claude-1"));
 
-        Object result = facade.rewindTask("task-claude-1", "user-1", Map.of("mode", "conversation_fork"));
+        Object result = facade.rewindTask(
+                "task-claude-1", uiContext("user-1"), Map.of("mode", "conversation_fork"));
 
         assertEquals(Map.of("status", "rewound", "taskId", "task-claude-1"), result);
         verify(taskQueryProvider).rewindTask("task-claude-1", "user-1", Map.of("mode", "conversation_fork"));
@@ -1544,7 +1558,7 @@ class TaskDispatchFacadeTest {
         when(sessionTaskRepository.findByTaskId("task-codex-reconnect")).thenReturn(Optional.of(task));
         when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
 
-        facade.reconnectTask("task-codex-reconnect", "user-1");
+        facade.reconnectTask("task-codex-reconnect", uiContext("user-1"));
 
         verify(taskQueryProvider).reconnectTask("task-codex-reconnect", "user-1");
         verify(taskQueryProvider, never()).getTaskById("task-codex-reconnect");
@@ -1562,7 +1576,7 @@ class TaskDispatchFacadeTest {
         when(taskQueryProvider.resyncTask("task-claude-resync", "user-1"))
                 .thenReturn(Map.of("status", "synced", "taskId", "task-claude-resync"));
 
-        Object result = facade.resyncTask("task-claude-resync", "user-1");
+        Object result = facade.resyncTask("task-claude-resync", uiContext("user-1"));
 
         assertEquals(Map.of("status", "synced", "taskId", "task-claude-resync"), result);
         verify(taskQueryProvider).resyncTask("task-claude-resync", "user-1");
@@ -1581,7 +1595,7 @@ class TaskDispatchFacadeTest {
         when(taskQueryProvider.scanCheckpoints("task-claude-checkpoints", "user-1"))
                 .thenReturn(Map.of("checkpoints", List.of(Map.of("id", "ckpt-1"))));
 
-        Object result = facade.scanCheckpoints("task-claude-checkpoints", "user-1");
+        Object result = facade.scanCheckpoints("task-claude-checkpoints", uiContext("user-1"));
 
         assertEquals(Map.of("checkpoints", List.of(Map.of("id", "ckpt-1"))), result);
         verify(taskQueryProvider).scanCheckpoints("task-claude-checkpoints", "user-1");
@@ -1662,12 +1676,121 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void getTask_rejectsUnownedResourceBeforeRepositoryOrProviderLookup() {
+        AgentResolveContext context = uiContext("attacker");
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedTask("task-private", "attacker", "tenant-1");
+
+        assertThrows(SecurityException.class, () -> facade.getTask("task-private", context));
+
+        verifyNoInteractions(taskQueryProvider);
+    }
+
+    @Test
+    void listTasksBySession_authorizesParentBeforeAnyChildQuery() {
+        AgentResolveContext context = uiContext("user-1");
+
+        assertEquals(List.of(), facade.listTasksBySession("session-1", context));
+
+        InOrder ordered = inOrder(resourceAccessService, sessionRepository);
+        ordered.verify(resourceAccessService)
+                .requireOwnedSession("session-1", "user-1", "tenant-1");
+        ordered.verify(sessionRepository).findById("session-1");
+    }
+
+    @Test
+    void listTasksBySession_primaryProjectionUsesUserAndTenantScope() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        AgentResolveContext context = uiContext("user-1");
+        SessionTaskEntity task = sessionTask(
+                "task-1", "session-1", "codex-worker", "worker-1", "dir-1",
+                "RUNNING", LocalDateTime.of(2026, 7, 14, 16, 0), null);
+        task.setTenantId("tenant-1");
+        when(sessionTaskRepository.findBySessionIdAndUserIdAndTenantIdOrderByCreatedAtDesc(
+                "session-1", "user-1", "tenant-1"))
+                .thenReturn(List.of(task));
+
+        List<DispatchTaskDTO> result = facade.listTasksBySession("session-1", context);
+
+        assertEquals(List.of("task-1"), result.stream().map(DispatchTaskDTO::getTaskId).toList());
+        InOrder ordered = inOrder(resourceAccessService, sessionTaskRepository);
+        ordered.verify(resourceAccessService)
+                .requireOwnedSession("session-1", "user-1", "tenant-1");
+        ordered.verify(sessionTaskRepository)
+                .findBySessionIdAndUserIdAndTenantIdOrderByCreatedAtDesc(
+                        "session-1", "user-1", "tenant-1");
+        verify(sessionTaskRepository, never())
+                .findBySessionIdAndUserIdOrderByCreatedAtDesc(anyString(), anyString());
+    }
+
+    @Test
+    void respondToTask_rejectsUnownedResourceBeforeProviderRouting() {
+        AgentResolveContext context = uiContext("attacker");
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedTask("task-private", "attacker", "tenant-1");
+
+        assertThrows(SecurityException.class,
+                () -> facade.respondToTask("task-private", context, Map.of("decision", "approve")));
+
+        verifyNoInteractions(taskQueryProvider);
+    }
+
+    @Test
+    void taskMutationsRejectUnownedResourceBeforeProviderRouting() {
+        AgentResolveContext context = uiContext("attacker");
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedTask("task-private", "attacker", "tenant-1");
+
+        assertThrows(SecurityException.class,
+                () -> facade.reconnectTask("task-private", context));
+        assertThrows(SecurityException.class,
+                () -> facade.resyncTask("task-private", context));
+        assertThrows(SecurityException.class,
+                () -> facade.rewindTask("task-private", context, Map.of()));
+        assertThrows(SecurityException.class,
+                () -> facade.scanCheckpoints("task-private", context));
+        assertThrows(SecurityException.class,
+                () -> facade.deleteTask("task-private", context));
+
+        verify(resourceAccessService, times(5))
+                .requireOwnedTask("task-private", "attacker", "tenant-1");
+        verifyNoInteractions(taskQueryProvider);
+    }
+
+    @Test
+    void resumeTask_rejectsUnownedSessionBeforeProviderRouting() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-private")
+                .providerType("claude-worker")
+                .prompt("continue")
+                .build();
+        AgentResolveContext context = uiContext("attacker");
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedSession("session-private", "attacker", "tenant-1");
+
+        assertThrows(SecurityException.class, () -> facade.resumeTask(request, context));
+
+        verifyNoInteractions(taskQueryProvider);
+    }
+
+    @Test
     void cancelTask_routesViaSessionStore() {
-        // cancelTask resolves agent through agentResolver, then calls agent.cancelTask
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
+                .taskId("task-cancel-1")
+                .agentId("agent-1")
+                .status("RUNNING")
+                .build();
+        when(taskQueryProvider.getTaskByIdAndUser("task-cancel-1", "user-1"))
+                .thenReturn(Optional.of(task));
         when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
 
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")
+                .tenantId("tenant-1")
                 .requestSource("UI")
                 .build();
 
@@ -1727,7 +1850,7 @@ class TaskDispatchFacadeTest {
 
     @Test
     void cancelTask_mappedAppServerProviderMissing_doesNotFallbackToSdkProvider() {
-        TaskQueryProvider sdkProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider sdkProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(sdkProvider));
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
         SessionTaskEntity task = sessionTask(
@@ -1805,11 +1928,17 @@ class TaskDispatchFacadeTest {
 
     @Test
     void cancelTask_failsFastWhenAgentNotResolvable() {
-        // agentResolver 找不到 "codex-worker"（不是有效的 agent 实体 ID）
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
+                .taskId("task-codex-1")
+                .agentId("codex-worker")
+                .status("RUNNING")
+                .build();
+        when(taskQueryProvider.getTaskByIdAndUser("task-codex-1", "user-1"))
+                .thenReturn(Optional.of(task));
         when(agentResolver.resolveAgent(eq("codex-worker"), any())).thenReturn(Optional.empty());
 
         AgentResolveContext context = AgentResolveContext.builder()
-                .userId("user-1").requestSource("UI").build();
+                .userId("user-1").tenantId("tenant-1").requestSource("UI").build();
 
         // 不再 fallback 到 Provider，直接 fail-fast
         assertThrows(IllegalArgumentException.class,
@@ -1831,7 +1960,6 @@ class TaskDispatchFacadeTest {
         assertEquals(2, result.size());
         assertEquals("s1", result.get(0).get("sessionId"));
         verify(taskQueryProvider).listWorkerSessionSummaries("worker-1", "user-1");
-        verify(taskQueryProvider, never()).listWorkerSessions("worker-1", "user-1");
     }
 
     @Test
@@ -1840,6 +1968,7 @@ class TaskDispatchFacadeTest {
                 agentResolver,
                 bindingService,
                 sessionRepository,
+                resourceAccessService,
                 List.of(),
                 List.of(),
                 List.of(),
@@ -1855,8 +1984,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void listWorkerSessions_skipsProviderWhenWorkerBelongsToAnotherBackend() {
-        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider claudeProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider langgraphProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         List<Map<String, Object>> sessions = List.of(Map.of("session_id", "lg-session-1"));
@@ -1873,8 +2002,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void getWorkerSessionMessageCount_skipsProviderWhenWorkerBelongsToAnotherBackend() {
-        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider claudeProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider langgraphProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         Map<String, Object> count = Map.of("user_count", 1, "assistant_count", 1, "total", 2);
@@ -1890,8 +2019,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void getWorkerSessionMessages_skipsProviderWhenWorkerBelongsToAnotherBackend() {
-        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider claudeProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider langgraphProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         List<Map<String, Object>> messages = List.of(Map.of("role", "assistant", "content", "ok"));
@@ -1916,13 +2045,12 @@ class TaskDispatchFacadeTest {
 
         assertEquals(5, result.get("synced"));
         verify(taskQueryProvider).syncWorkerSessionState("worker-1", "user-1", "tenant-1");
-        verify(taskQueryProvider, never()).syncWorkerSessions("worker-1", "user-1", "tenant-1");
     }
 
     @Test
     void syncWorkerSessions_skipsProviderWhenWorkerBelongsToAnotherBackend() {
-        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider claudeProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider langgraphProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(claudeProvider, langgraphProvider));
 
         Map<String, Object> syncResult = Map.of("synced", 0, "total", 1);
@@ -1937,8 +2065,8 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
-    void workerSessionTypedDefaultsAdaptLegacyMaps() {
-        LegacyWorkerSessionProvider provider = new LegacyWorkerSessionProvider();
+    void workerSessionProvidersUseTypedContracts() {
+        TypedWorkerSessionProvider provider = new TypedWorkerSessionProvider();
 
         assertEquals("legacy-session", provider.listWorkerSessionSummaries("worker-1", "user-1")
                 .get(0).sessionId());
@@ -1951,8 +2079,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void resumeTask_usesExplicitCodexBizProviderWithOpenAICodexModelConfigWhenSessionIsUnbound() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
 
         TaskDispatchRequest request = TaskDispatchRequest.builder()
@@ -2004,8 +2132,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void resumeTask_keepsCodexBizMetadataWhenSessionIsBoundToCodexBizProvider() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
 
         Map<String, Object> metadata = new LinkedHashMap<>();
@@ -2067,8 +2195,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void createTask_withKnownContextIdAndResumeFlagContinuesBoundCodexBizSessionWithoutProviderType() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
         ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
 
@@ -2136,8 +2264,45 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_withKnownContextRejectsUnownedBoundSessionBeforeRepositoryOrProvider() {
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
+        facade = createFacade(List.of(codexBizProvider));
+        ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .contextId("ctx-owned-context")
+                .prompt("continue")
+                .resume(true)
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("OPEN_API")
+                .build();
+
+        AgentConversationContextEntity boundContext = new AgentConversationContextEntity();
+        boundContext.setContextId("ctx-owned-context");
+        boundContext.setUserId("user-1");
+        boundContext.setTargetAgentId("agent-1");
+        boundContext.setNavigatorSessionId("session-owned-by-other-tenant");
+
+        when(agentConversationContextRepository.findByContextIdAndUserId("ctx-owned-context", "user-1"))
+                .thenReturn(Optional.of(boundContext));
+        doThrow(new SecurityException("Resource access denied"))
+                .when(resourceAccessService)
+                .requireOwnedSession("session-owned-by-other-tenant", "user-1", "tenant-1");
+
+        SecurityException error = assertThrows(SecurityException.class,
+                () -> facade.createTask(request, context));
+
+        assertEquals("Resource access denied", error.getMessage());
+        verify(sessionRepository, never()).findById("session-owned-by-other-tenant");
+        verifyNoInteractions(codexBizProvider, agentResolver);
+    }
+
+    @Test
     void createTask_withKnownLangGraphBizContextCreatesDirectTaskWhenNotExplicitResume() {
-        TaskQueryProvider langgraphBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider langgraphBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(langgraphBizProvider));
         ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
@@ -2207,17 +2372,20 @@ class TaskDispatchFacadeTest {
                 eq("agent-owner-1"),
                 eq("tenant-1"));
         verify(langgraphBizProvider, never()).resumeTask(anyString(), anyString(), any());
-        verify(agentConversationContextRepository).save(argThat(saved ->
-                "bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28".equals(saved.getContextId())
-                        && "session-langgraph-biz-bound".equals(saved.getNavigatorSessionId())
-                        && "tms-tenant-88800-root-agent".equals(saved.getTargetAgentId())
-                        && "langgraph-biz-worker".equals(saved.getAgentType())));
+        verify(agentContextStore).saveSessionRefFull(
+                "bctx_20260705_c0_c099d8fbf57e4762828a284c8198bb28",
+                "langgraph-biz-worker",
+                null,
+                "session-langgraph-biz-bound",
+                "agent-owner-1",
+                "tms-tenant-88800-root-agent",
+                null);
         verifyNoInteractions(agentResolver);
     }
 
     @Test
     void createTask_withKnownLangGraphBizContextRejectsDirectTaskWhenSessionHasActiveTask() {
-        TaskQueryProvider langgraphBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider langgraphBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(langgraphBizProvider));
         ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
@@ -2284,8 +2452,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void createTask_withKnownContextIdRejectsConflictingProviderType() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
         ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
 
@@ -2325,8 +2493,8 @@ class TaskDispatchFacadeTest {
 
     @Test
     void createTask_withKnownContextIdRejectsConflictingCodexBizScopedHome() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
-        TaskQueryProvider codexBizProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
+        TypedTaskProvider codexBizProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider, codexBizProvider));
         ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
 
@@ -2373,7 +2541,7 @@ class TaskDispatchFacadeTest {
 
     @Test
     void createTask_withContextIdBoundToAnotherUserRejectsBeforeDispatch() {
-        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        TypedTaskProvider codexProvider = mock(TypedTaskProvider.class);
         facade = createFacade(List.of(codexProvider));
         ReflectionTestUtils.setField(facade, "agentConversationContextRepository", agentConversationContextRepository);
 
@@ -2500,7 +2668,7 @@ class TaskDispatchFacadeTest {
         Map<?, ?> beforeDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
         assertEquals(1L, beforeDelete.get("totalSessions"));
 
-        facade.deleteTask("task-delete-1", "user-1");
+        facade.deleteTask("task-delete-1", uiContext("user-1"));
 
         Map<?, ?> afterDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
         assertEquals(0L, afterDelete.get("totalSessions"));
@@ -2642,7 +2810,7 @@ class TaskDispatchFacadeTest {
         Map<?, ?> beforeDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
         assertEquals(1L, beforeDelete.get("totalSessions"));
 
-        assertDoesNotThrow(() -> facade.deleteTask("task-stale-1", "user-1"));
+        assertDoesNotThrow(() -> facade.deleteTask("task-stale-1", uiContext("user-1")));
 
         Map<?, ?> afterDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
         assertEquals(0L, afterDelete.get("totalSessions"));
@@ -2670,7 +2838,7 @@ class TaskDispatchFacadeTest {
                 .when(nativeSubtaskStateRepository).deleteByTaskId("task-stale-retry");
 
         assertThrows(IllegalStateException.class,
-                () -> facade.deleteTask("task-stale-retry", "user-1"));
+                () -> facade.deleteTask("task-stale-retry", uiContext("user-1")));
 
         verify(sessionTaskRepository, never()).deleteByTaskId("task-stale-retry");
     }
@@ -2679,24 +2847,29 @@ class TaskDispatchFacadeTest {
     void deleteTask_doesNotCleanAnotherUsersProjectionWhenProviderReportsMissing() {
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
         ReflectionTestUtils.setField(facade, "nativeSubtaskStateRepository", nativeSubtaskStateRepository);
-        SessionTaskEntity otherUsersTask = sessionTask(
-                "task-owned-by-other", "session-other", "claude-worker", "worker-1", "dir-1",
-                "COMPLETED", LocalDateTime.of(2026, 7, 10, 12, 0), null
-        );
-        otherUsersTask.setUserId("owner");
-        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
-        when(sessionTaskRepository.findByTaskId("task-owned-by-other"))
-                .thenReturn(Optional.of(otherUsersTask));
-        when(sessionTaskRepository.findByTaskIdAndUserId("task-owned-by-other", "attacker"))
-                .thenReturn(Optional.empty());
-        doThrow(new IllegalArgumentException("Task not found: task-owned-by-other"))
-                .when(taskQueryProvider).deleteTask("attacker", "task-owned-by-other");
+        doThrow(new SecurityException("resource is not accessible"))
+                .when(resourceAccessService)
+                .requireOwnedTask("task-owned-by-other", "attacker", "tenant-1");
 
-        assertThrows(IllegalArgumentException.class,
-                () -> facade.deleteTask("task-owned-by-other", "attacker"));
+        assertThrows(SecurityException.class,
+                () -> facade.deleteTask("task-owned-by-other", uiContext("attacker")));
 
         verify(sessionTaskRepository, never()).deleteByTaskId("task-owned-by-other");
         verify(nativeSubtaskStateRepository, never()).deleteByTaskId("task-owned-by-other");
+    }
+
+    private AgentResolveContext uiContext(String userId) {
+        return AgentResolveContext.builder()
+                .userId(userId)
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+    }
+
+    private interface TypedTaskProvider extends TaskLookupProvider,
+            TaskCommandProvider,
+            TaskListingProvider,
+            WorkerSessionQueryProvider {
     }
 
     private static final class WorkerSessionOnlyProvider implements WorkerSessionQueryProvider {
@@ -2712,16 +2885,16 @@ class TaskDispatchFacadeTest {
         }
 
         @Override
-        public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
-            return List.of(Map.of("sessionId", "worker-only-session"));
+        public List<WorkerSessionSummary> listWorkerSessionSummaries(String workerId, String userId) {
+            return WorkerSessionSummary.fromList(List.of(Map.of("sessionId", "worker-only-session")));
         }
     }
 
-    private static final class LegacyWorkerSessionProvider implements WorkerSessionQueryProvider {
+    private static final class TypedWorkerSessionProvider implements WorkerSessionQueryProvider {
 
         @Override
         public String getProviderType() {
-            return "legacy-worker-session";
+            return "typed-worker-session";
         }
 
         @Override
@@ -2734,24 +2907,28 @@ class TaskDispatchFacadeTest {
         }
 
         @Override
-        public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
-            return List.of(Map.of("session_id", "legacy-session", "status", "RUNNING"));
+        public List<WorkerSessionSummary> listWorkerSessionSummaries(String workerId, String userId) {
+            return WorkerSessionSummary.fromList(
+                    List.of(Map.of("session_id", "legacy-session", "status", "RUNNING")));
         }
 
         @Override
-        public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
-            return Map.of("user_count", 1, "assistant_count", 1, "total", 2);
+        public WorkerSessionMessageCount getWorkerSessionMessageCountResult(
+                String workerId, String sessionId, String userId) {
+            return WorkerSessionMessageCount.from(
+                    Map.of("user_count", 1, "assistant_count", 1, "total", 2));
         }
 
         @Override
-        public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
-                                                                  String userId, Integer offset, Integer limit) {
-            return List.of(Map.of("role", "assistant", "content", "ok"));
+        public List<WorkerSessionMessage> listWorkerSessionMessages(
+                String workerId, String sessionId, String userId, Integer offset, Integer limit) {
+            return WorkerSessionMessage.fromList(
+                    List.of(Map.of("role", "assistant", "content", "ok")));
         }
 
         @Override
-        public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
-            return Map.of("synced", 0, "total", 1);
+        public WorkerSessionSyncResult syncWorkerSessionState(String workerId, String userId, String tenantId) {
+            return WorkerSessionSyncResult.from(Map.of("synced", 0, "total", 1));
         }
     }
 }

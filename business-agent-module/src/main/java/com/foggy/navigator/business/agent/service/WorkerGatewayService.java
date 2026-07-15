@@ -33,11 +33,18 @@ public class WorkerGatewayService {
     private final BusinessFunctionAdapterInvoker adapterInvoker;
     private final ObjectMapper objectMapper;
     private final BusinessFunctionRuntimeAuditService auditService;
+    private final BusinessTaskScopedTokenPolicyService tokenPolicyService;
 
     @Transactional(readOnly = true)
     public WorkerGatewayFunctionListDTO listBusinessFunctions(String tokenStr, String domain, String riskLevel) {
-        BusinessTaskScopedTokenDTO token = taskService.resolveTaskScopedToken(tokenStr);
+        return listBusinessFunctions(taskService.resolveTaskScopedToken(tokenStr), domain, riskLevel);
+    }
+
+    @Transactional(readOnly = true)
+    public WorkerGatewayFunctionListDTO listBusinessFunctions(
+            BusinessTaskScopedTokenDTO token, String domain, String riskLevel) {
         requireCompleteToken(token);
+        tokenPolicyService.requireGatewayToken(token);
 
         // Pre-validate App/User/Skill grants to ensure the session is active before returning any lists
         userGrantService.checkUpstreamUserAccess(token.getTenantId(), token.getClientAppId(), token.getUpstreamUserId());
@@ -50,6 +57,7 @@ public class WorkerGatewayService {
         // Runtime visibility follows ClientApp function grants. Skill allowlist is
         // only a materialization/recommendation hint and is not a hard gate here.
         List<WorkerGatewayFunctionSummaryDTO> summaries = appFunctions.stream()
+                .filter(f -> tokenPolicyService.allowsFunction(token, f.getFunctionId(), f.getVersion()))
                 .filter(f -> !StringUtils.hasText(domain) || domain.equals(f.getDomain()))
                 .filter(f -> !StringUtils.hasText(riskLevel) || riskLevel.equals(f.getRiskLevel()))
                 .map(f -> {
@@ -74,8 +82,15 @@ public class WorkerGatewayService {
 
     @Transactional(readOnly = true)
     public WorkerGatewayFunctionSchemaDTO getBusinessFunctionSchema(String tokenStr, String functionId, String version) {
-        BusinessTaskScopedTokenDTO token = taskService.resolveTaskScopedToken(tokenStr);
+        return getBusinessFunctionSchema(
+                taskService.resolveTaskScopedToken(tokenStr), functionId, version);
+    }
+
+    @Transactional(readOnly = true)
+    public WorkerGatewayFunctionSchemaDTO getBusinessFunctionSchema(
+            BusinessTaskScopedTokenDTO token, String functionId, String version) {
         requireCompleteToken(token);
+        tokenPolicyService.requireGatewayToken(token);
 
         // This method does a full fail-closed authorization check
         BusinessFunctionRuntimeContextDTO context = authorizationService.resolveExecutableBusinessFunction(
@@ -86,6 +101,10 @@ public class WorkerGatewayService {
                 functionId,
                 version
         );
+        tokenPolicyService.requireFunctionAllowed(
+                token,
+                context.getFunction().getFunctionId(),
+                context.getVersionData().getVersion());
 
         WorkerGatewayFunctionSchemaDTO schemaDTO = new WorkerGatewayFunctionSchemaDTO();
         schemaDTO.setFunctionId(context.getFunction().getFunctionId());
@@ -104,6 +123,15 @@ public class WorkerGatewayService {
 
     @Transactional
     public WorkerGatewayInvokeResponseDTO invokeBusinessFunction(String tokenStr, String functionId, com.foggy.navigator.business.agent.model.form.WorkerGatewayInvokeForm form) {
+        return invokeBusinessFunction(
+                taskService.resolveTaskScopedToken(tokenStr), functionId, form);
+    }
+
+    @Transactional
+    public WorkerGatewayInvokeResponseDTO invokeBusinessFunction(
+            BusinessTaskScopedTokenDTO token,
+            String functionId,
+            com.foggy.navigator.business.agent.model.form.WorkerGatewayInvokeForm form) {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
@@ -111,8 +139,8 @@ public class WorkerGatewayService {
             throw new IllegalArgumentException("inputJson or input is required");
         }
 
-        BusinessTaskScopedTokenDTO token = taskService.resolveTaskScopedToken(tokenStr);
         requireCompleteToken(token);
+        tokenPolicyService.requireGatewayToken(token);
 
         // This method does a full fail-closed authorization check
         BusinessFunctionRuntimeContextDTO context = authorizationService.resolveExecutableBusinessFunction(
@@ -126,6 +154,7 @@ public class WorkerGatewayService {
         attachTokenContext(context, token);
         String resolvedFunctionId = context.getFunction().getFunctionId();
         String resolvedVersion = context.getVersionData().getVersion();
+        tokenPolicyService.requireFunctionAllowed(token, resolvedFunctionId, resolvedVersion);
 
         // Normalize inputJson
         String finalInputJson = form.getInputJson();
@@ -193,12 +222,19 @@ public class WorkerGatewayService {
     public com.foggy.navigator.business.agent.model.dto.WorkerGatewayToolMessageResponseDTO reportToolMessage(
             String tokenStr,
             com.foggy.navigator.business.agent.model.form.WorkerGatewayToolMessageForm form) {
+        return reportToolMessage(taskService.resolveTaskScopedToken(tokenStr), form);
+    }
+
+    @Transactional
+    public com.foggy.navigator.business.agent.model.dto.WorkerGatewayToolMessageResponseDTO reportToolMessage(
+            BusinessTaskScopedTokenDTO token,
+            com.foggy.navigator.business.agent.model.form.WorkerGatewayToolMessageForm form) {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
 
-        BusinessTaskScopedTokenDTO token = taskService.resolveTaskScopedToken(tokenStr);
         requireCompleteToken(token);
+        tokenPolicyService.requireGatewayToken(token);
 
         log.info("Tool message received: tool={}, functionId={}, status={}, suspendId={}, taskId={}, tenantId={}",
                 form.getToolName(), form.getFunctionId(), form.getStatus(),

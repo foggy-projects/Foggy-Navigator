@@ -28,7 +28,7 @@
 | [跨项目编排](./02-modules/cross-project-orchestration.md) | 当前有效 | 多项目任务编排说明 |
 | [平台设置与资源治理](./02-modules/platform-governance.md) | 当前有效 | Git、LLM、凭证、记忆、Worker、助手治理说明 |
 | [用户与访问控制](./02-modules/user-and-access-control.md) | 当前有效 | 登录、用户、角色、API Key 说明 |
-| [监控、通知与开放集成](./02-modules/observability-notification-integration.md) | 当前有效 | 监控、通知、Open API、SDK 说明 |
+| [通知、基础观测与开放集成](./02-modules/observability-notification-integration.md) | 当前有效 | SSE、日志/健康检查、受控 Open API、SDK 说明；旧自研 Monitoring 已移除 |
 
 ## 3. 当前模块设计文档
 

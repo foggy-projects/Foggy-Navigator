@@ -60,8 +60,6 @@ class BusinessAgentToolRuntimeContextProviderTest {
 
     @Test
     void provide_noToken_returnsEmptyMap() {
-        when(tokenStore.getToken("tenant1", "session1", null)).thenReturn(null);
-
         ToolRuntimeContextRequest request = ToolRuntimeContextRequest.builder()
                 .tenantId("tenant1")
                 .sessionId("session1")
@@ -72,5 +70,6 @@ class BusinessAgentToolRuntimeContextProviderTest {
 
         assertNotNull(context);
         assertTrue(context.isEmpty());
+        verifyNoInteractions(tokenStore);
     }
 }

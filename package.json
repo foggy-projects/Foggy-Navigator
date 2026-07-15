@@ -1,8 +1,17 @@
 {
   "private": true,
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=22.23.1 <23",
+    "pnpm": "10.34.5"
+  },
   "scripts": {
-    "test": "pnpm -r run test",
-    "build:frontend": "pnpm --filter @foggy/chat build && pnpm --filter @foggy/navigator-frontend build"
+    "prepare:frontend": "pnpm --filter @foggy/chat-core run build && pnpm --filter @foggy/chat run build",
+    "typecheck:frontend": "pnpm run prepare:frontend && pnpm --filter @foggy/navigator-frontend run type-check && pnpm --filter @foggy/mobile run type-check",
+    "test:frontend": "pnpm -r --if-present run test",
+    "build:frontend": "pnpm run prepare:frontend && pnpm --filter @foggy/navigator-chat-widget run build && pnpm --filter @foggy/navigator-frontend run build:check && pnpm --filter @foggy/mobile run build:h5",
+    "ci:frontend": "pnpm run typecheck:frontend && pnpm run test:frontend && pnpm run build:frontend",
+    "test": "pnpm run test:frontend"
   },
   "workspaces": [
     "packages/*"

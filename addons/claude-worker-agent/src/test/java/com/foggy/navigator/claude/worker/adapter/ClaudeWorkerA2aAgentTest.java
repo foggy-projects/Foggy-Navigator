@@ -1,8 +1,8 @@
 package com.foggy.navigator.claude.worker.adapter;
 
-import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
-import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
+import com.foggy.navigator.claude.worker.model.command.ClaudeTaskCreateCommand;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
@@ -79,8 +79,8 @@ class ClaudeWorkerA2aAgentTest {
                 .build();
     }
 
-    private TaskDTO defaultTaskDTO() {
-        return TaskDTO.builder()
+    private DispatchTaskDTO defaultTaskDTO() {
+        return DispatchTaskDTO.builder()
                 .taskId("task-1")
                 .sessionId("session-1")
                 .workerId("worker-1")
@@ -95,7 +95,7 @@ class ClaudeWorkerA2aAgentTest {
     @Test
     void sendTask_usesRequestedDirectoryAndCwd() {
         when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
-        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(TaskDTO.builder()
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(DispatchTaskDTO.builder()
                 .taskId("task-1")
                 .sessionId("session-1")
                 .workerId("worker-1")
@@ -114,7 +114,7 @@ class ClaudeWorkerA2aAgentTest {
 
         agent.sendTask(message);
 
-        ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+        ArgumentCaptor<ClaudeTaskCreateCommand> captor = ArgumentCaptor.forClass(ClaudeTaskCreateCommand.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
         assertEquals("dir-requested", captor.getValue().getDirectoryId());
         assertEquals("D:\\requested", captor.getValue().getCwd());
@@ -150,7 +150,7 @@ class ClaudeWorkerA2aAgentTest {
 
         agent.sendTask(message);
 
-        ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+        ArgumentCaptor<ClaudeTaskCreateCommand> captor = ArgumentCaptor.forClass(ClaudeTaskCreateCommand.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
         assertTrue(captor.getValue().getPrompt().contains("[Initial Message]"));
         assertTrue(captor.getValue().getPrompt().contains("Repository rules"));
@@ -171,7 +171,7 @@ class ClaudeWorkerA2aAgentTest {
 
         agent.sendTask(message);
 
-        ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+        ArgumentCaptor<ClaudeTaskCreateCommand> captor = ArgumentCaptor.forClass(ClaudeTaskCreateCommand.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
         String prompt = captor.getValue().getPrompt();
         assertEquals(1, countOccurrences(prompt, "[Initial Message]"));
@@ -183,7 +183,7 @@ class ClaudeWorkerA2aAgentTest {
     class Dedup {
         @Test
         void dedupHit_returnsExistingTask() {
-            TaskDTO existing = TaskDTO.builder()
+            DispatchTaskDTO existing = DispatchTaskDTO.builder()
                     .taskId("existing-task")
                     .sessionId("existing-session")
                     .status("RUNNING")
@@ -261,12 +261,12 @@ class ClaudeWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            // claudeSessionId 应被传递给 CreateTaskForm（通过 A2aContext.agentSessionRef）
+            // claudeSessionId 应被传递给 ClaudeTaskCreateCommand（通过 A2aContext.agentSessionRef）
             verify(contextStore).findContextForAgent("ctx-1", "user-1", "agent-1");
-            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            ArgumentCaptor<ClaudeTaskCreateCommand> captor = ArgumentCaptor.forClass(ClaudeTaskCreateCommand.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("claude-sess-existing", captor.getValue().getClaudeSessionId(),
-                    "contextStore 查到的 claudeSessionId 应通过 A2aContext 传给 CreateTaskForm");
+                    "contextStore 查到的 claudeSessionId 应通过 A2aContext 传给 ClaudeTaskCreateCommand");
             assertEquals("nav-sess-existing", captor.getValue().getSessionId());
         }
 
@@ -287,7 +287,7 @@ class ClaudeWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            ArgumentCaptor<ClaudeTaskCreateCommand> captor = ArgumentCaptor.forClass(ClaudeTaskCreateCommand.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertNull(captor.getValue().getClaudeSessionId(),
                     "contextStore 查不到时 claudeSessionId 应为 null");
@@ -309,7 +309,7 @@ class ClaudeWorkerA2aAgentTest {
 
             // 没有 contextId → 不查 findSessionRefForAgent → claudeSessionId 为 null
             verify(contextStore, never()).findContextForAgent(anyString(), anyString(), anyString());
-            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            ArgumentCaptor<ClaudeTaskCreateCommand> captor = ArgumentCaptor.forClass(ClaudeTaskCreateCommand.class);
             verify(taskService).createTask(anyString(), anyString(), captor.capture());
             assertNull(captor.getValue().getClaudeSessionId());
         }
@@ -369,7 +369,7 @@ class ClaudeWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            ArgumentCaptor<ClaudeTaskCreateCommand> captor = ArgumentCaptor.forClass(ClaudeTaskCreateCommand.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("claude-sess-alias", captor.getValue().getClaudeSessionId(),
                     "Alias resolution should provide claudeSessionId");
@@ -428,7 +428,7 @@ class ClaudeWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            ArgumentCaptor<ClaudeTaskCreateCommand> captor = ArgumentCaptor.forClass(ClaudeTaskCreateCommand.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("continue work", captor.getValue().getPrompt());
         }
@@ -452,7 +452,7 @@ class ClaudeWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            ArgumentCaptor<ClaudeTaskCreateCommand> captor = ArgumentCaptor.forClass(ClaudeTaskCreateCommand.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("continue work", captor.getValue().getPrompt());
             assertEquals("nav-sess-existing", captor.getValue().getSessionId());
@@ -464,7 +464,7 @@ class ClaudeWorkerA2aAgentTest {
             ctxEntity.setContextId("ctx-continue");
             when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
-            TaskDTO existing = TaskDTO.builder()
+            DispatchTaskDTO existing = DispatchTaskDTO.builder()
                     .taskId("existing-task")
                     .sessionId("session-existing")
                     .status("RUNNING")
@@ -527,7 +527,7 @@ class ClaudeWorkerA2aAgentTest {
             assertNotNull(result);
 
             // Should use defaults: defaultCwd and entity's defaultDirectoryId
-            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            ArgumentCaptor<ClaudeTaskCreateCommand> captor = ArgumentCaptor.forClass(ClaudeTaskCreateCommand.class);
             verify(taskService).createTask(anyString(), anyString(), captor.capture());
             assertEquals("D:\\default", captor.getValue().getCwd());
             assertEquals("dir-default", captor.getValue().getDirectoryId());
@@ -540,7 +540,7 @@ class ClaudeWorkerA2aAgentTest {
     class TaskLifecycle {
         @Test
         void getTask_found_mapsRunningToWorking() {
-            TaskDTO dto = TaskDTO.builder()
+            DispatchTaskDTO dto = DispatchTaskDTO.builder()
                     .taskId("task-1").status("RUNNING").build();
             when(taskService.getTask("user-1", "task-1")).thenReturn(dto);
 
@@ -553,7 +553,7 @@ class ClaudeWorkerA2aAgentTest {
 
         @Test
         void getTask_completed_includesArtifacts() {
-            TaskDTO dto = TaskDTO.builder()
+            DispatchTaskDTO dto = DispatchTaskDTO.builder()
                     .taskId("task-1").status("COMPLETED").resultText("done!").build();
             when(taskService.getTask("user-1", "task-1")).thenReturn(dto);
 
@@ -569,7 +569,7 @@ class ClaudeWorkerA2aAgentTest {
 
         @Test
         void getTask_failed_includesErrorDescription() {
-            TaskDTO dto = TaskDTO.builder()
+            DispatchTaskDTO dto = DispatchTaskDTO.builder()
                     .taskId("task-1").status("FAILED").errorMessage("boom").build();
             when(taskService.getTask("user-1", "task-1")).thenReturn(dto);
 

@@ -15,6 +15,7 @@ import java.time.LocalDateTime;
     @Index(name = "idx_ct_session_id", columnList = "sessionId"),
     @Index(name = "idx_ct_worker_id", columnList = "workerId"),
     @Index(name = "idx_ct_user_id", columnList = "userId"),
+    @Index(name = "idx_ct_tenant_id", columnList = "tenantId"),
     @Index(name = "idx_ct_directory_id", columnList = "directoryId"),
     @Index(name = "idx_ct_dedup_key", columnList = "dedupKey")
 })
@@ -39,6 +40,10 @@ public class ClaudeTaskEntity {
 
     @Column(length = 64, nullable = false)
     private String userId;
+
+    /** Tenant captured when the task is created; terminal authorization must not depend on a join. */
+    @Column(length = 64)
+    private String tenantId;
 
     @Column(columnDefinition = "TEXT", nullable = false)
     private String prompt;

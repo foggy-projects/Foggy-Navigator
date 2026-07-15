@@ -19,6 +19,9 @@ public class BizWorkerIdentityEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Version
+    private Long rowVersion;
+
     @Column(length = 64, nullable = false, unique = true)
     private String workerId;
 
@@ -46,6 +49,22 @@ public class BizWorkerIdentityEntity {
 
     @Column(length = 128)
     private String tokenHash;
+
+    /**
+     * Version 0 is the registration-time legacy token format. It is retained
+     * only for development compatibility and is never accepted by strict
+     * Worker authentication.
+     */
+    @Column(nullable = false)
+    private Integer credentialVersion = 0;
+
+    private LocalDateTime credentialIssuedAt;
+
+    private LocalDateTime credentialExpiresAt;
+
+    private LocalDateTime credentialRevokedAt;
+
+    private LocalDateTime credentialRotatedAt;
 
     @Column(columnDefinition = "TEXT")
     private String capabilitiesJson;

@@ -5,6 +5,7 @@ import subprocess
 import sys
 from unittest.mock import patch
 
+import pytest
 
 
 class TestSettingsDefaults:
@@ -22,6 +23,17 @@ class TestSettingsDefaults:
         from langgraph_biz_worker.config import Settings
         s = Settings(_env_file=None)
         assert s.worker_token == ""
+
+    def test_default_empty_navigator_worker_identity(self):
+        from langgraph_biz_worker.config import Settings
+        s = Settings(_env_file=None)
+        assert s.navigator_worker_id == ""
+        assert s.navigator_worker_credential == ""
+
+    def test_external_mode_disabled_by_default(self):
+        from langgraph_biz_worker.config import Settings
+        s = Settings(_env_file=None)
+        assert s.external_enabled is False
 
     def test_default_max_concurrent_tasks(self):
         from langgraph_biz_worker.config import Settings
@@ -68,6 +80,44 @@ class TestSettingsEnvOverride:
         with patch.dict(os.environ, {"BIZ_WORKER_WORKER_TOKEN": "my-secret"}):
             s = Settings(_env_file=None)
             assert s.worker_token == "my-secret"
+
+    def test_navigator_worker_identity_pair_from_env(self):
+        from langgraph_biz_worker.config import Settings
+        with patch.dict(os.environ, {
+            "BIZ_WORKER_NAVIGATOR_WORKER_ID": "worker-a",
+            "BIZ_WORKER_NAVIGATOR_WORKER_CREDENTIAL": "bwc_secret",
+        }):
+            s = Settings(_env_file=None)
+            assert s.navigator_worker_id == "worker-a"
+            assert s.navigator_worker_credential == "bwc_secret"
+            assert "bwc_secret" not in repr(s)
+            assert "navigator_worker_credential" not in s.model_dump()
+
+    @pytest.mark.parametrize("configured_key", [
+        "BIZ_WORKER_NAVIGATOR_WORKER_ID",
+        "BIZ_WORKER_NAVIGATOR_WORKER_CREDENTIAL",
+    ])
+    def test_navigator_worker_identity_rejects_partial_configuration(self, configured_key):
+        from langgraph_biz_worker.config import Settings
+        configured_value = "bwc_must_not_appear" if configured_key.endswith("CREDENTIAL") else "worker-a"
+        with patch.dict(os.environ, {configured_key: configured_value}):
+            with pytest.raises(ValueError, match="must be configured together") as exc_info:
+                Settings(_env_file=None)
+        assert "bwc_must_not_appear" not in str(exc_info.value)
+
+    @pytest.mark.parametrize("raw, expected", [(" TrUe ", True), (" FALSE ", False)])
+    def test_external_mode_from_env(self, raw, expected):
+        from langgraph_biz_worker.config import Settings
+        with patch.dict(os.environ, {"BIZ_WORKER_EXTERNAL_ENABLED": raw}):
+            s = Settings(_env_file=None)
+            assert s.external_enabled is expected
+
+    @pytest.mark.parametrize("ambiguous", ["yes", "on", "1"])
+    def test_external_mode_rejects_ambiguous_values(self, ambiguous):
+        from langgraph_biz_worker.config import Settings
+        with patch.dict(os.environ, {"BIZ_WORKER_EXTERNAL_ENABLED": ambiguous}):
+            with pytest.raises(ValueError, match="BIZ_WORKER_EXTERNAL_ENABLED must be true or false"):
+                Settings(_env_file=None)
 
     def test_extra_env_vars_ignored(self):
         from langgraph_biz_worker.config import Settings

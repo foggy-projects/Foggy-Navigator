@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
@@ -3345,6 +3347,7 @@ class UpstreamCliTest {
     }
 
     @Test
+    @ResourceLock(Resources.SYSTEM_PROPERTIES)
     void workerHostInstallRunsEnabledInstallersAndStartersWithRequestedWslUser() throws Exception {
         Files.createDirectories(tempDir.resolve(".navigator"));
         Files.writeString(tempDir.resolve(".navigator").resolve("worker-host.json"), """
@@ -3363,19 +3366,30 @@ class UpstreamCliTest {
         List<List<String>> commands = new ArrayList<>();
         List<Long> timeouts = new ArrayList<>();
 
-        int code = run(new String[]{"upstream", "worker-host", "install",
-                "--file", ".navigator/worker-host.json",
-                "--install-shell", "wsl",
-                "--wsl-distro", "Ubuntu",
-                "--wsl-user", "navigator",
-                "--timeout-seconds", "7"}, Map.of(), (command, timeout) -> {
-            commands.add(command);
-            timeouts.add(timeout.toSeconds());
-            return new UpstreamCli.CommandResult(0, "installed token=installer-secret\n");
-        });
+        String originalOsName = System.getProperty("os.name");
+        int code;
+        try {
+            System.setProperty("os.name", "Windows 11");
+            code = run(new String[]{"upstream", "worker-host", "install",
+                    "--file", ".navigator/worker-host.json",
+                    "--install-shell", "wsl",
+                    "--wsl-distro", "Ubuntu",
+                    "--wsl-user", "navigator",
+                    "--timeout-seconds", "7"}, Map.of(), (command, timeout) -> {
+                commands.add(command);
+                timeouts.add(timeout.toSeconds());
+                return new UpstreamCli.CommandResult(0, "installed token=installer-secret\n");
+            });
+        } finally {
+            if (originalOsName == null) {
+                System.clearProperty("os.name");
+            } else {
+                System.setProperty("os.name", originalOsName);
+            }
+        }
 
         String output = stdout.toString(StandardCharsets.UTF_8);
-        assertEquals(0, code);
+        assertEquals(0, code, stderr.toString(StandardCharsets.UTF_8));
         assertNull(lastPath);
         assertEquals(6, commands.size());
         assertEquals(List.of(7L, 7L, 7L, 7L, 7L, 7L), timeouts);

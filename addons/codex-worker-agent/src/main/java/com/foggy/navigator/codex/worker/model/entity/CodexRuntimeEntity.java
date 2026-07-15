@@ -129,7 +129,7 @@ public class CodexRuntimeEntity {
         if (routingEpoch == null) routingEpoch = 1L;
         if (readinessStatus == null) readinessStatus = "PENDING";
         if (runtimeSource == null) runtimeSource = "MANUAL";
-        if (expectedCliVersion == null) expectedCliVersion = "0.144.1";
+        if (expectedCliVersion == null) expectedCliVersion = "";
         if (expectedSchemaDigest == null) {
             expectedSchemaDigest = "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f";
         }

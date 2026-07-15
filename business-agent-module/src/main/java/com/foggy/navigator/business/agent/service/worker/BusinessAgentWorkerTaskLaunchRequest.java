@@ -1,5 +1,6 @@
 package com.foggy.navigator.business.agent.service.worker;
 
+import com.foggy.navigator.common.enums.ResourceOwnerType;
 import lombok.Builder;
 import lombok.Data;
 
@@ -19,7 +20,13 @@ public class BusinessAgentWorkerTaskLaunchRequest {
     private String skillId;
     private String skillName;
     private String workerPoolId;
+    private ResourceOwnerType workerPoolOwnerType;
+    private String workerPoolOwnerId;
     private String physicalWorkerId;
+    /** Server-resolved immutable dispatch target. Never populate from caller input. */
+    private String selectedWorkerId;
+    /** Server-generated logical authorization lease bound to the task token. */
+    private String workerLeaseId;
     private String workerBackend;
     private String modelConfigId;
     private String model;

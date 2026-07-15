@@ -158,7 +158,23 @@ public class SharingKeyService {
     @Transactional
     public SharingKeyEntity validateAndConsume(String sharingKey) {
         SharingKeyEntity entity = validateBase(sharingKey);
+        return consumeQuota(entity);
+    }
 
+    /**
+     * 在同一事务中复核操作授权并消费额度。
+     *
+     * <p>Controller 可先用 {@link #validateForKeyOnly(String)} 解析 owner/tenant 并确认
+     * Agent readiness；只有准备提交任务时才调用本方法，避免无权限或不可用请求耗尽额度。
+     */
+    @Transactional
+    public SharingKeyEntity validateOperationAndConsume(String sharingKey, String operation) {
+        SharingKeyEntity entity = validateBase(sharingKey);
+        checkOperation(entity, operation);
+        return consumeQuota(entity);
+    }
+
+    private SharingKeyEntity consumeQuota(SharingKeyEntity entity) {
         // 每日限额检查（日期变更时重置计数）
         LocalDate today = LocalDate.now();
         if (entity.getCallDate() == null || !entity.getCallDate().equals(today)) {

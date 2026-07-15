@@ -117,19 +117,21 @@ export class AppServerEventBridge {
   private handleAgentMessageDelta(params: Record<string, unknown>): void {
     const delta = readStringPreserveWhitespace(params.delta)
     const itemId = readString(params.itemId)
-    if (!delta) return
-    if (itemId) {
-      if (this.completedAgentMessageIds.has(itemId)) return
-      this.streamedAgentMessageText.set(
-        itemId,
-        `${this.streamedAgentMessageText.get(itemId) || ''}${delta}`,
-      )
-    }
+    // A delta without an item identity cannot be safely attached to a later
+    // completed message. Drop it and wait for the completed item instead of
+    // allowing a client to merge it into an unrelated pending stream.
+    if (!delta || !itemId) return
+    if (this.completedAgentMessageIds.has(itemId)) return
+    this.streamedAgentMessageText.set(
+      itemId,
+      `${this.streamedAgentMessageText.get(itemId) || ''}${delta}`,
+    )
     this.emit({
       type: 'assistant_text',
       subtype: 'text_delta',
       task_id: this.taskId,
       session_id: this.rootThreadId,
+      stream_id: itemId,
       content: delta,
     })
   }
@@ -172,6 +174,7 @@ export class AppServerEventBridge {
           type: 'assistant_text',
           task_id: this.taskId,
           session_id: this.rootThreadId,
+          stream_id: itemId,
           content: text,
         })
         break

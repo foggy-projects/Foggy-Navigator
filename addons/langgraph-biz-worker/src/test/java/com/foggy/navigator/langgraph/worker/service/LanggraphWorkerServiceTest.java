@@ -27,6 +27,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -107,7 +110,6 @@ class LanggraphWorkerServiceTest {
     void getWorkerEntityReturnsIdentityBackedWorkerWhenLegacyEntityIsMissing() {
         LanggraphWorkerService serviceWithIdentity =
                 new LanggraphWorkerService(workerRepository, workerIdentityRepository);
-        when(workerRepository.findByWorkerId("biz_worker_01")).thenReturn(Optional.empty());
         when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
                 .thenReturn(Optional.of(identity("biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND)));
 
@@ -125,7 +127,6 @@ class LanggraphWorkerServiceTest {
                 new LanggraphWorkerService(workerRepository, workerIdentityRepository);
         BizWorkerIdentityEntity identity = identity("biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
         identity.setCapabilitiesJson("{\"agent_delegation\":{\"nested_agent_delegation_allowed\":false}}");
-        when(workerRepository.findByWorkerId("biz_worker_01")).thenReturn(Optional.empty());
         when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
                 .thenReturn(Optional.of(identity));
 
@@ -142,10 +143,136 @@ class LanggraphWorkerServiceTest {
     }
 
     @Test
+    void getBusinessAgentWorkerEntityIgnoresSameNamedLegacyWorker() {
+        LanggraphWorkerService serviceWithIdentity =
+                new LanggraphWorkerService(workerRepository, workerIdentityRepository);
+        LanggraphWorkerEntity legacy = worker("biz_worker_01", "ONLINE");
+        legacy.setBaseUrl("http://legacy.invalid:9999");
+        legacy.setAuthToken("legacy-secret");
+        lenient().when(workerRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(legacy));
+        BizWorkerIdentityEntity identity = identity(
+                "biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        identity.setBaseUrl("http://127.0.0.1:3161");
+        identity.setTokenHash("sha256-digest-not-a-bearer-secret");
+        when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(identity));
+
+        LanggraphWorkerEntity resolved = serviceWithIdentity.getBusinessAgentWorkerEntity(
+                "biz_worker_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups_01");
+
+        assertEquals("http://127.0.0.1:3161", resolved.getBaseUrl());
+        assertEquals("", resolved.getAuthToken());
+        assertEquals("IDENTITY", resolved.getAuthMode());
+        verify(workerRepository, never()).findByWorkerId("biz_worker_01");
+    }
+
+    @Test
+    void getWorkerEntityKeepsGovernedIdentityPrecedenceAfterLaunch() {
+        LanggraphWorkerService serviceWithIdentity =
+                new LanggraphWorkerService(workerRepository, workerIdentityRepository);
+        LanggraphWorkerEntity legacy = worker("biz_worker_01", "ONLINE");
+        legacy.setBaseUrl("http://legacy.invalid:9999");
+        lenient().when(workerRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(legacy));
+        BizWorkerIdentityEntity identity = identity(
+                "biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        identity.setBaseUrl("http://127.0.0.1:3161");
+        when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(identity));
+
+        LanggraphWorkerEntity resolved = serviceWithIdentity.getWorkerEntity("biz_worker_01");
+
+        assertEquals("http://127.0.0.1:3161", resolved.getBaseUrl());
+        assertEquals("IDENTITY", resolved.getAuthMode());
+        verify(workerRepository, never()).findByWorkerId("biz_worker_01");
+    }
+
+    @Test
+    void getBusinessAgentWorkerEntityAllowsCanonicalPlatformIdentityForUpstreamPool() {
+        LanggraphWorkerService serviceWithIdentity =
+                new LanggraphWorkerService(workerRepository, workerIdentityRepository);
+        BizWorkerIdentityEntity identity = identity(
+                "biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        identity.setOwnerType(ResourceOwnerType.PLATFORM);
+        identity.setOwnerId(BizWorkerPoolService.PLATFORM_OWNER_ID);
+        when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(identity));
+
+        LanggraphWorkerEntity resolved = serviceWithIdentity.getBusinessAgentWorkerEntity(
+                "biz_worker_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups_01");
+
+        assertEquals("biz_worker_01", resolved.getWorkerId());
+    }
+
+    @Test
+    void getBusinessAgentWorkerEntityRejectsNonCanonicalPlatformIdentityOwner() {
+        LanggraphWorkerService serviceWithIdentity =
+                new LanggraphWorkerService(workerRepository, workerIdentityRepository);
+        BizWorkerIdentityEntity identity = identity(
+                "biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        identity.setOwnerType(ResourceOwnerType.PLATFORM);
+        identity.setOwnerId("tenant_01");
+        when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(identity));
+
+        assertThrows(SecurityException.class, () -> serviceWithIdentity.getBusinessAgentWorkerEntity(
+                "biz_worker_01", ResourceOwnerType.PLATFORM, "tenant_01"));
+    }
+
+    @Test
+    void getBusinessAgentWorkerEntityRejectsUpstreamOwnerMismatch() {
+        LanggraphWorkerService serviceWithIdentity =
+                new LanggraphWorkerService(workerRepository, workerIdentityRepository);
+        when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(identity(
+                        "biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND)));
+
+        assertThrows(SecurityException.class, () -> serviceWithIdentity.getBusinessAgentWorkerEntity(
+                "biz_worker_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups_other"));
+    }
+
+    @Test
+    void getBusinessAgentWorkerEntityRejectsUpstreamIdentityOnPhysicalOnlyRoute() {
+        LanggraphWorkerService serviceWithIdentity =
+                new LanggraphWorkerService(workerRepository, workerIdentityRepository);
+        when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(identity(
+                        "biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND)));
+
+        assertThrows(SecurityException.class, () -> serviceWithIdentity.getBusinessAgentWorkerEntity(
+                "biz_worker_01", null, null));
+    }
+
+    @Test
+    void getBusinessAgentWorkerEntityRejectsBackendMismatch() {
+        LanggraphWorkerService serviceWithIdentity =
+                new LanggraphWorkerService(workerRepository, workerIdentityRepository);
+        when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(identity("biz_worker_01", "CODEX")));
+
+        assertThrows(IllegalStateException.class, () -> serviceWithIdentity.getBusinessAgentWorkerEntity(
+                "biz_worker_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups_01"));
+    }
+
+    @Test
+    void getBusinessAgentWorkerEntityRejectsUnhealthyIdentity() {
+        LanggraphWorkerService serviceWithIdentity =
+                new LanggraphWorkerService(workerRepository, workerIdentityRepository);
+        BizWorkerIdentityEntity identity = identity(
+                "biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        identity.setHealthStatus(BizWorkerPoolService.UNHEALTHY);
+        when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
+                .thenReturn(Optional.of(identity));
+
+        assertThrows(IllegalStateException.class, () -> serviceWithIdentity.getBusinessAgentWorkerEntity(
+                "biz_worker_01", ResourceOwnerType.UPSTREAM_SYSTEM, "ups_01"));
+    }
+
+    @Test
     void resolveTaskWorkerIdReturnsPreferredIdentityWorkerWhenLegacyEntityIsMissing() {
         LanggraphWorkerService serviceWithIdentity =
                 new LanggraphWorkerService(workerRepository, workerIdentityRepository);
-        when(workerRepository.findByWorkerId("biz_worker_01")).thenReturn(Optional.empty());
         when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
                 .thenReturn(Optional.of(identity("biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND)));
 
@@ -157,7 +284,6 @@ class LanggraphWorkerServiceTest {
         LanggraphWorkerService serviceWithIdentity =
                 new LanggraphWorkerService(workerRepository, workerIdentityRepository);
         ReflectionTestUtils.setField(serviceWithIdentity, "defaultWorkerId", "biz_worker_01");
-        when(workerRepository.findByWorkerId("biz_worker_01")).thenReturn(Optional.empty());
         when(workerIdentityRepository.findByWorkerId("biz_worker_01"))
                 .thenReturn(Optional.of(identity("biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND)));
 
@@ -170,7 +296,6 @@ class LanggraphWorkerServiceTest {
                 new LanggraphWorkerService(workerRepository, workerIdentityRepository);
         BizWorkerIdentityEntity identity = identity("biz_worker_01", ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
         identity.setStatus(BizWorkerPoolService.STATUS_DISABLED);
-        when(workerRepository.findByWorkerId("biz_worker_01")).thenReturn(Optional.empty());
         when(workerIdentityRepository.findByWorkerId("biz_worker_01")).thenReturn(Optional.of(identity));
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
@@ -204,6 +329,30 @@ class LanggraphWorkerServiceTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> spawnAgent = (Map<String, Object>) tools.get("spawn_agent");
         assertEquals("invoke_business_agent", spawnAgent.get("tool_name"));
+    }
+
+    @Test
+    void applyHealthSnapshotDoesNotPromoteExplicitlyUnreadyWorker() {
+        LanggraphWorkerEntity worker = worker("worker_01", "UNKNOWN");
+        LanggraphWorkerHealthDTO health = new LanggraphWorkerHealthDTO();
+        health.setReady(false);
+        health.setMode("external-enabled");
+        health.setReasons(List.of("EXTERNAL_EXECUTION_POLICY_PENDING"));
+        health.setHostname("external-worker-host");
+
+        service.applyHealthSnapshot(worker, health);
+
+        assertEquals("OFFLINE", worker.getStatus());
+        assertEquals("external-worker-host", worker.getHostname());
+    }
+
+    @Test
+    void applyHealthSnapshotTreatsMissingResponseAsOffline() {
+        LanggraphWorkerEntity worker = worker("worker_01", "ONLINE");
+
+        service.applyHealthSnapshot(worker, null);
+
+        assertEquals("OFFLINE", worker.getStatus());
     }
 
     private LanggraphWorkerEntity worker(String workerId, String status) {

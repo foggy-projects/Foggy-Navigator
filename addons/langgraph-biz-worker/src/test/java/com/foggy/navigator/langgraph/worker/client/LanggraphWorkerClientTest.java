@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,6 +33,7 @@ class LanggraphWorkerClientTest {
             assertEquals("/health", server.path());
             assertEquals("worker-host-1", health.getHostname());
             assertEquals("1.0.0", health.getVersion());
+            assertNull(health.getReady());
             assertEquals("agent-delegation.v1",
                     health.getCapabilities().getAgentDelegation().getContractVersion());
             assertEquals(1, health.getCapabilities().getAgentDelegation().getMaxAgentNestingDepth());

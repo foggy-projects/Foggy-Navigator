@@ -81,6 +81,11 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   const hasMoreHistory = ref(false)
   const totalMessages = ref(0)
   let currentSessionId = ''
+  /**
+   * Session history and the live SSE stream overlap during reconnects. Keep
+   * the durable AgentMessage identity so replay cannot render a second copy.
+   */
+  const knownMessageIds = new Set<string>()
 
   const nativeSubtaskState = shallowRef(createNativeSubtaskState())
   const nativeSubtasks = computed(() => selectNativeSubtasks(nativeSubtaskState.value))
@@ -176,7 +181,18 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
    * @param msg       The DB message
    * @param nextMsg   The next message in sequence (for waiting-hint suppression)
    */
-  function convertAndPushDbMessage(msg: Message, nextMsg?: Message, targetState: ChatState = chatState): number {
+  function convertAndPushDbMessage(
+    msg: Message,
+    nextMsg?: Message,
+    targetState: ChatState = chatState,
+    seenMessageIds?: Set<string>,
+  ): number {
+    const storedEventId = typeof msg.metadata?.messageId === 'string' && msg.metadata.messageId
+      ? msg.metadata.messageId
+      : undefined
+    if (seenMessageIds?.has(msg.id) || (storedEventId && seenMessageIds?.has(storedEventId))) return 0
+    seenMessageIds?.add(msg.id)
+    if (storedEventId) seenMessageIds?.add(storedEventId)
     let counted = 0
     if (msg.role === 'USER' || msg.role === 'ASSISTANT') {
       counted = 1
@@ -233,11 +249,17 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     const resultText = currentTask?.resultText?.trim()
     if (currentTask?.status !== 'COMPLETED' || !resultText) return
 
-    const previousConversationMessage = [...chatState.messages.value].reverse().find(
-      (message) => message.sender === 'assistant' || message.sender === 'user',
-    )
-    if (previousConversationMessage?.sender === 'assistant'
-      && previousConversationMessage.content?.trim() === resultText) return
+    const hasPersistedResult = chatState.messages.value.some((message) => {
+      if (message.sender !== 'assistant' || message.type !== AipMessageType.TEXT_COMPLETE) return false
+      const messageTaskId = taskIdOfMessage(message)
+      // A task-owned final message is authoritative even when the task
+      // projection normalizes its text differently (for example whitespace or
+      // rendered report formatting). Legacy unowned rows remain conservative:
+      // only the same content can suppress a recovery for a later task.
+      return messageTaskId === currentTask.taskId
+        || (messageTaskId == null && message.content?.trim() === resultText)
+    })
+    if (hasPersistedResult) return
 
     chatState.messages.value.push({
       id: `task-result-${currentTask.taskId}`,
@@ -247,6 +269,13 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       raw: { taskId: currentTask.taskId, isResult: true, recoveredFromTask: true },
       timestamp: currentTask.updatedAt ? new Date(currentTask.updatedAt).getTime() : Date.now(),
     })
+  }
+
+  function taskIdOfMessage(message: ChatMessage): string | undefined {
+    if (message.taskId) return message.taskId
+    if (!message.raw || typeof message.raw !== 'object') return undefined
+    const taskId = (message.raw as Record<string, unknown>).taskId
+    return typeof taskId === 'string' && taskId ? taskId : undefined
   }
 
   /** SSE event handler — shared by connect and resumeInPlace */
@@ -269,15 +298,26 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       return
     }
 
-    // 1. Pass through adapter for chat messages
+    const payload = raw.payload && typeof raw.payload === 'object'
+      ? raw.payload as Record<string, unknown>
+      : undefined
+
+    // Ignore a replay for a previous task before it reaches chat-state. This
+    // matters when a session contains several task turns and their SSE feeds
+    // briefly overlap during a reconnect.
+    if (task.value && typeof payload?.taskId === 'string' && payload.taskId !== task.value.taskId) return
+
+    // 1. Pass through adapter for chat messages, de-duplicated against both
+    // persisted history and already-received SSE events.
     const msgs = agentMessageAdapter.convert(raw, raw.sessionId)
     for (const msg of msgs) {
+      if (msg.messageId && knownMessageIds.has(msg.messageId)) continue
+      if (msg.messageId) knownMessageIds.add(msg.messageId)
       chatState.processAipMessage(msg)
     }
 
     // 2. Handle raw events for task state tracking
     if (!task.value) return
-    const payload = raw.payload as Record<string, unknown> | undefined
     if (!payload?.taskId) return
 
     // taskId guard: ignore events from previous tasks in the same session
@@ -458,6 +498,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
     // Reset pagination state
     currentSessionId = sessionId
+    knownMessageIds.clear()
     totalDbMessages = 0
     dbLoadedOffset = 0
     allDbLoaded = false
@@ -480,7 +521,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i]
         if (!msg) continue
-        convertAndPushDbMessage(msg, messages[i + 1])
+        convertAndPushDbMessage(msg, messages[i + 1], chatState, knownMessageIds)
       }
       // Attach pending images to the first user message (for newly created tasks)
       if (pendingImages && pendingImages.length > 0) {
@@ -597,7 +638,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         const nextMsg = i < result.messages.length - 1
           ? result.messages[i + 1]
           : undefined // no peek across boundary for waiting-hint (conservative: render it)
-        convertAndPushDbMessage(msg, nextMsg)
+        convertAndPushDbMessage(msg, nextMsg, chatState, knownMessageIds)
       }
 
       // Extract newly pushed messages and move them to the front
@@ -627,6 +668,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     loadingMore.value = true
     try {
       chatState.clearMessages()
+      knownMessageIds.clear()
 
       if (limit == null) {
         // Load ALL messages (no pagination)
@@ -635,7 +677,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         for (let i = 0; i < allMessages.length; i++) {
           const msg = allMessages[i]
           if (!msg) continue
-          convertAndPushDbMessage(msg, allMessages[i + 1])
+          convertAndPushDbMessage(msg, allMessages[i + 1], chatState, knownMessageIds)
         }
 
         totalDbMessages = allMessages.length
@@ -650,7 +692,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         for (let i = 0; i < result.messages.length; i++) {
           const msg = result.messages[i]
           if (!msg) continue
-          convertAndPushDbMessage(msg, result.messages[i + 1])
+          convertAndPushDbMessage(msg, result.messages[i + 1], chatState, knownMessageIds)
         }
 
         totalDbMessages = result.total
@@ -672,10 +714,14 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
     const allMessages = await sessionApi.getMessages(sessionId)
     const exportState = createChatState()
+    // This is an independent viewer/export reducer. It must not reuse the
+    // visible-pane dedup set, otherwise every already-rendered row would be
+    // filtered out of the complete record list.
+    const exportMessageIds = new Set<string>()
     for (let i = 0; i < allMessages.length; i++) {
       const msg = allMessages[i]
       if (!msg) continue
-      convertAndPushDbMessage(msg, allMessages[i + 1], exportState)
+      convertAndPushDbMessage(msg, allMessages[i + 1], exportState, exportMessageIds)
     }
     return [...exportState.sortedMessages.value]
   }

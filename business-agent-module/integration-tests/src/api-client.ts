@@ -277,10 +277,9 @@ export class BusinessAgentClient {
     return unwrapData<BusinessAgentTask>(response.data);
   }
 
-  async getLanggraphTask(taskId: string, userId: string): Promise<LanggraphTask> {
+  async getLanggraphTask(taskId: string): Promise<LanggraphTask> {
     const response = await this.client.get(
-      `/api/v1/langgraph-tasks/${encodeURIComponent(taskId)}`,
-      { params: { userId } }
+      `/api/v1/tasks/${encodeURIComponent(taskId)}`
     );
     return unwrapData<LanggraphTask>(response.data);
   }

@@ -4,10 +4,14 @@ import os from 'os'
 import path from 'path'
 import { Codex } from '@openai/codex-sdk'
 import { config } from '../config.js'
-import { taskRegistry } from '../codex/sdk-wrapper.js'
+import {
+  CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY,
+  taskRegistry,
+} from '../codex/sdk-wrapper.js'
 import type { HealthResponse } from '../models.js'
 import { resolveCodexSdkRuntimeStatus } from '../runtime-requirements.js'
 import { APP_VERSION } from '../version.js'
+import { resolveExternalModeState } from '../external-mode.js'
 
 const router = Router()
 
@@ -43,6 +47,15 @@ export function resolveCodexBizReadiness(
   }
 }
 
+export function resolveNavigatorWorkerCredentialReadiness(
+  workerId: string,
+  credentialConfigured: boolean,
+): string[] {
+  return workerId || credentialConfigured
+    ? [CODEX_NAVIGATOR_WORKER_CREDENTIAL_FORWARDING_UNREADY]
+    : []
+}
+
 /**
  * GET /health — Worker health check
  */
@@ -57,9 +70,24 @@ router.get('/health', (_req: Request, res: Response) => {
   }))
   const codexSdkStatus = resolveCodexSdkRuntimeStatus()
   const codexBizReadiness = resolveCodexBizReadiness(config.codexBizHomeRoot)
+  const external = resolveExternalModeState(config)
+  const reasons = [...external.reasons]
+  reasons.push(...resolveNavigatorWorkerCredentialReadiness(
+    config.navigatorWorkerId,
+    Boolean(config.navigatorWorkerCredential),
+  ))
+  if (!codexSdkAvailable) reasons.push('CODEX_SDK_UNAVAILABLE')
+  if (!codexSdkStatus.compatible) reasons.push('CODEX_SDK_VERSION_INCOMPATIBLE')
+  const ready = reasons.length === 0
 
   const response: HealthResponse = {
-    status: resolveWorkerHealthStatus(codexSdkAvailable, codexSdkStatus.compatible),
+    status: ready ? 'ok' : 'degraded',
+    ready,
+    reasons,
+    mode: external.mode,
+    external_enabled: external.external_enabled,
+    external_ready: external.external_ready,
+    auth_configured: external.auth_configured,
     hostname: os.hostname(),
     version: APP_VERSION,
     worker_name: config.workerName,

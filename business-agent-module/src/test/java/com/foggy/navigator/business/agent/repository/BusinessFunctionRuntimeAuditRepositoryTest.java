@@ -17,11 +17,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import com.foggy.navigator.business.agent.service.BusinessFunctionRuntimeAuditService;
+import com.foggy.navigator.business.agent.service.BusinessFunctionRuntimeAuditWriter;
 
 @DataJpaTest
 @ActiveProfiles("test")
 @ContextConfiguration(classes = com.foggy.navigator.business.agent.TestApplication.class)
-@Import({BusinessFunctionRuntimeAuditService.class, BusinessFunctionRuntimeAuditRepositoryTest.OuterTransactionService.class})
+@Import({BusinessFunctionRuntimeAuditService.class, BusinessFunctionRuntimeAuditWriter.class,
+        BusinessFunctionRuntimeAuditRepositoryTest.OuterTransactionService.class})
 class BusinessFunctionRuntimeAuditRepositoryTest {
 
     @Service

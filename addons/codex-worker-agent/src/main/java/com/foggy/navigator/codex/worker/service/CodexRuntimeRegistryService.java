@@ -56,7 +56,6 @@ public class CodexRuntimeRegistryService {
                             Comparator.nullsLast(Comparator.naturalOrder()));
 
     public static final String CAPABILITY_CONTRACT_VERSION = "1";
-    public static final String PINNED_APP_SERVER_CLI_VERSION = "0.144.1";
     public static final String PINNED_SCHEMA_DIGEST =
             "6f2550bb528581f17c4c3a3857dca92c860406aa3274e314cfa726c32e395d8f";
     public static final String ULTRA_AVAILABILITY_BLOCK_REASON =
@@ -104,6 +103,13 @@ public class CodexRuntimeRegistryService {
     private long capabilityMaxAgeSeconds = 120;
 
     /**
+     * Optional exact CLI version gate. By default CLI patch versions may coexist;
+     * operators can opt into a pin with NAVIGATOR_CODEX_RUNTIME_EXPECTED_CLI_VERSION.
+     */
+    @Value("${navigator.codex.runtime.expected-cli-version:}")
+    private String expectedCliVersion = "";
+
+    /**
      * Probes an endpoint profile and creates a new platform runtime revision only
      * when its execution fingerprint changes. Endpoint profiles themselves stay
      * editable; a runtime stores a credential snapshot for historical task affinity.
@@ -142,6 +148,7 @@ public class CodexRuntimeRegistryService {
             return CodexAppServerEndpointSyncDTO.builder()
                     .endpoint(toEndpointDTO(endpoint))
                     .runtimeCreated(false)
+                    .runtimeRestored(false)
                     .build();
         }
 
@@ -152,19 +159,32 @@ public class CodexRuntimeRegistryService {
                 .filter(entity -> "ENDPOINT_SYNC".equals(entity.getRuntimeSource()))
                 .findFirst()
                 .orElse(null);
-        boolean created = current == null || !fingerprint.equals(current.getCapabilityFingerprint());
+        CodexRuntimeEntity matching = revisions.stream()
+                .filter(entity -> "ENDPOINT_SYNC".equals(entity.getRuntimeSource()))
+                .filter(entity -> fingerprint.equals(entity.getCapabilityFingerprint()))
+                .findFirst()
+                .orElse(null);
+        boolean created = matching == null;
         CodexRuntimeEntity runtime;
         if (created) {
             runtime = createSyncedRuntime(endpoint, manifest, fingerprint);
-            if (current != null && current.getArchivedAt() == null) {
-                current.setEnabled(false);
-                current.setRoutingPolicy(CodexRuntimeRoutingPolicy.DRAINING.name());
-                current.setRolloutPercentage(0);
-                current.setRoutingEpoch(current.getRoutingEpoch() + 1);
-                runtimeRepository.save(current);
-            }
         } else {
-            runtime = current;
+            runtime = matching;
+        }
+        if (current != null && current != runtime && current.getArchivedAt() == null) {
+            current.setEnabled(false);
+            current.setRoutingPolicy(CodexRuntimeRoutingPolicy.DRAINING.name());
+            current.setRolloutPercentage(0);
+            current.setRoutingEpoch(current.getRoutingEpoch() + 1);
+            runtimeRepository.save(current);
+        }
+        boolean restored = runtime.getArchivedAt() != null;
+        if (restored) {
+            runtime.setEnabled(false);
+            runtime.setRoutingPolicy(CodexRuntimeRoutingPolicy.DARK.name());
+            runtime.setRolloutPercentage(0);
+            runtime.setArchivedAt(null);
+            runtime.setRoutingEpoch(runtime.getRoutingEpoch() + 1);
         }
 
         try {
@@ -184,6 +204,7 @@ public class CodexRuntimeRegistryService {
                 .endpoint(toEndpointDTO(endpoint))
                 .runtime(toDTO(runtime))
                 .runtimeCreated(created)
+                .runtimeRestored(restored)
                 .build();
     }
 
@@ -613,6 +634,8 @@ public class CodexRuntimeRegistryService {
         entity.setContractVersion(contractVersion);
         entity.setCliVersion(cliVersion);
         entity.setSchemaDigest(schemaDigest);
+        String configuredCliVersion = configuredExpectedCliVersion();
+        entity.setExpectedCliVersion(configuredCliVersion);
         String registeredInstanceId = entity.getInstanceId();
         boolean mayBindInitialInstance = (registeredInstanceId == null || registeredInstanceId.isBlank())
                 && isValidIdentifier(instanceId, 128)
@@ -647,7 +670,7 @@ public class CodexRuntimeRegistryService {
         if (!entity.getRuntimeType().equals(runtimeType)) {
             incompatibilities.add("CAPABILITY_RUNTIME_TYPE_MISMATCH");
         }
-        if (!entity.getExpectedCliVersion().equals(cliVersion)) {
+        if (!configuredCliVersion.isBlank() && !configuredCliVersion.equals(cliVersion)) {
             incompatibilities.add("CAPABILITY_CLI_VERSION_MISMATCH");
         }
         if (!entity.getExpectedSchemaDigest().equals(schemaDigest)) {
@@ -1009,9 +1032,13 @@ public class CodexRuntimeRegistryService {
         entity.setPriority(0);
         entity.setRoutingEpoch(1L);
         entity.setReadinessStatus("PENDING");
-        entity.setExpectedCliVersion(PINNED_APP_SERVER_CLI_VERSION);
+        entity.setExpectedCliVersion(configuredExpectedCliVersion());
         entity.setExpectedSchemaDigest(PINNED_SCHEMA_DIGEST);
         return entity;
+    }
+
+    private String configuredExpectedCliVersion() {
+        return expectedCliVersion == null ? "" : expectedCliVersion.trim();
     }
 
     private boolean hasLiveEndpointProfile(CodexRuntimeEntity entity) {

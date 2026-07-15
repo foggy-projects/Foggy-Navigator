@@ -107,9 +107,9 @@ test('root message deltas remain transient and item completion emits one durable
 
   await broadcast.flush()
   const messages = broadcast.getEventsAfter(0).filter(event => event.type === 'assistant_text')
-  assert.deepEqual(messages.map(event => ({ subtype: event.subtype, content: event.content })), [
-    { subtype: 'text_delta', content: '_CHAIN_OK' },
-    { subtype: undefined, content: 'B_FULL_CHAIN_OK' },
+  assert.deepEqual(messages.map(event => ({ subtype: event.subtype, content: event.content, streamId: event.stream_id })), [
+    { subtype: 'text_delta', content: '_CHAIN_OK', streamId: 'message-1' },
+    { subtype: undefined, content: 'B_FULL_CHAIN_OK', streamId: 'message-1' },
   ])
   assert.equal(bridge.getResult().assistantText, 'B_FULL_CHAIN_OK')
 })

@@ -2,11 +2,10 @@
 # Foggy Navigator - One-Click Start All Services
 #
 # Starts:
-#   1. foggy-monitor    (pip install library)
-#   2. Backend          (Spring Boot · port 8112)
-#   3. Frontend         (Vue 3 · port 5174)
-#   4. Claude Agent Worker  (Python · port 3031)
-#   5. Code Server      (Web VS Code · port 18443)
+#   1. Backend          (Spring Boot · port 8112)
+#   2. Frontend         (Vue 3 · port 5174)
+#   3. Claude Agent Worker  (Python · port 3031)
+#   4. Code Server      (Web VS Code · port 18443)
 #
 # Usage:
 #   ./scripts/start-all.sh               # full build + start all
@@ -35,7 +34,7 @@ done
 
 # ── State tracking ────────────────────────────────────────────────────────────
 declare -A SVC_STATUS   # ok | fail | warn | skip
-TOTAL=5
+TOTAL=4
 FAIL_COUNT=0
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -65,29 +64,10 @@ else
 fi
 echo -e "${GRAY}  $(date '+%Y-%m-%d %H:%M:%S')${NC}"
 
-# ══ 1. foggy-monitor (library install) ═══════════════════════════════════════
+# ══ 1. Backend ════════════════════════════════════════════════════════════════
 echo ""
 sep
-echo -e "${BOLD}[1/${TOTAL}] foggy-monitor${NC}  ${GRAY}(Python library · pip install)${NC}"
-sep
-MONITOR_DIR="$REPO_ROOT/tools/foggy-monitor"
-if [ -f "$MONITOR_DIR/pyproject.toml" ]; then
-    if pip install -e "$MONITOR_DIR" -q --disable-pip-version-check 2>/dev/null; then
-        echo -e "${GREEN}  ✓ foggy-monitor installed${NC}"
-        SVC_STATUS["foggy-monitor"]="ok"
-    else
-        echo -e "${YELLOW}  ⚠ pip install failed (non-critical)${NC}"
-        SVC_STATUS["foggy-monitor"]="warn"
-    fi
-else
-    echo -e "${GRAY}  − tools/foggy-monitor not found, skipped${NC}"
-    SVC_STATUS["foggy-monitor"]="skip"
-fi
-
-# ══ 2. Backend ════════════════════════════════════════════════════════════════
-echo ""
-sep
-echo -e "${BOLD}[2/${TOTAL}] Backend${NC}  ${GRAY}(Spring Boot · http://localhost:8112)${NC}"
+echo -e "${BOLD}[1/${TOTAL}] Backend${NC}  ${GRAY}(Spring Boot · http://localhost:8112)${NC}"
 sep
 if bash "$SCRIPT_DIR/start-launcher.sh" $SKIP_BUILD; then
     SVC_STATUS["backend"]="ok"
@@ -97,10 +77,10 @@ else
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
-# ══ 3. Frontend (Build + Nginx) ═══════════════════════════════════════════════
+# ══ 2. Frontend (Build + Nginx) ═══════════════════════════════════════════════
 echo ""
 sep
-echo -e "${BOLD}[3/${TOTAL}] Frontend${NC}  ${GRAY}(Nginx · http://localhost:80)${NC}"
+echo -e "${BOLD}[2/${TOTAL}] Frontend${NC}  ${GRAY}(Nginx · http://localhost:80)${NC}"
 sep
 if bash "$SCRIPT_DIR/start-build-frontend.sh" $SKIP_BUILD; then
     SVC_STATUS["frontend"]="ok"
@@ -110,10 +90,10 @@ else
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
-# ══ 4. Claude Agent Worker ════════════════════════════════════════════════════
+# ══ 3. Claude Agent Worker ════════════════════════════════════════════════════
 echo ""
 sep
-echo -e "${BOLD}[4/${TOTAL}] Claude Agent Worker${NC}  ${GRAY}(Python · http://localhost:3031)${NC}"
+echo -e "${BOLD}[3/${TOTAL}] Claude Agent Worker${NC}  ${GRAY}(Python · http://localhost:3031)${NC}"
 sep
 WORKER_START="$REPO_ROOT/tools/claude-agent-worker/start.sh"
 if [ -f "$WORKER_START" ]; then
@@ -129,10 +109,10 @@ else
     SVC_STATUS["agent-worker"]="warn"
 fi
 
-# ══ 5. Code Server ════════════════════════════════════════════════════════════
+# ══ 4. Code Server ════════════════════════════════════════════════════════════
 echo ""
 sep
-echo -e "${BOLD}[5/${TOTAL}] Code Server${NC}  ${GRAY}(Web VS Code · http://localhost:18443)${NC}"
+echo -e "${BOLD}[4/${TOTAL}] Code Server${NC}  ${GRAY}(Web VS Code · http://localhost:18443)${NC}"
 sep
 CODE_SERVER_START="$HOME/.local/lib/code-server/start.sh"
 if [ -x "$CODE_SERVER_START" ]; then
@@ -156,7 +136,6 @@ echo -e "${CYAN}${BOLD}╔══════════════════
 echo -e "${CYAN}${BOLD}║                   Summary                      ║${NC}"
 echo -e "${CYAN}${BOLD}╚════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  $(status_icon "${SVC_STATUS[foggy-monitor]:-skip}")  foggy-monitor     (library)"
 echo -e "  $(status_icon "${SVC_STATUS[backend]:-skip}")  Backend           http://localhost:8112"
 echo -e "  $(status_icon "${SVC_STATUS[frontend]:-skip}")  Frontend (Nginx)  http://localhost:80"
 echo -e "  $(status_icon "${SVC_STATUS[agent-worker]:-skip}")  Claude Agent Worker  http://localhost:3031"

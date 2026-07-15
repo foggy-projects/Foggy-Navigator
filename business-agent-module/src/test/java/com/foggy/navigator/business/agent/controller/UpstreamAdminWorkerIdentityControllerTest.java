@@ -39,7 +39,7 @@ class UpstreamAdminWorkerIdentityControllerTest {
                 .credentialId("cred-1")
                 .upstreamSystemId("ups-1")
                 .authorizedTenantIds(Set.of("tenant-1"))
-                .scopes(Set.of(UpstreamBootstrapRequestService.SCOPE_WORKER_POOL_MANAGE))
+                .scopes(Set.of(UpstreamBootstrapRequestService.SCOPE_WORKER_MANAGE))
                 .build();
         BizWorkerIdentityDTO dto = new BizWorkerIdentityDTO();
         dto.setWorkerId("lgw-1");
@@ -47,7 +47,7 @@ class UpstreamAdminWorkerIdentityControllerTest {
         dto.setOwnerId("ups-1");
         when(adminCredentialService.requireAccess(
                 same(request),
-                eq(UpstreamBootstrapRequestService.SCOPE_WORKER_POOL_MANAGE)))
+                eq(UpstreamBootstrapRequestService.SCOPE_WORKER_MANAGE)))
                 .thenReturn(principal);
         when(workerPoolService.registerWorkerIdentity(
                 eq(ResourceOwnerType.UPSTREAM_SYSTEM),
@@ -60,6 +60,8 @@ class UpstreamAdminWorkerIdentityControllerTest {
         assertEquals("lgw-1", result.getData().getWorkerId());
         assertEquals(ResourceOwnerType.UPSTREAM_SYSTEM, result.getData().getOwnerType());
         assertEquals("ups-1", result.getData().getOwnerId());
+        verify(adminCredentialService).requireAccess(
+                request, UpstreamBootstrapRequestService.SCOPE_WORKER_MANAGE);
         verify(workerPoolService).registerWorkerIdentity(
                 ResourceOwnerType.UPSTREAM_SYSTEM,
                 "ups-1",

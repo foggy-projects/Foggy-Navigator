@@ -30,6 +30,10 @@ export interface ChatMessage {
   sender: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   timestamp: number
+  /** Platform task that owns this message when supplied by the Worker. */
+  taskId?: string
+  /** Stable provider stream identity used to associate text deltas and completion. */
+  streamId?: string
   toolCallId?: string
   toolName?: string
   toolOutput?: string

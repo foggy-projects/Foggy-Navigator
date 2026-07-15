@@ -44,15 +44,11 @@ class CommonRepositoryOwnershipContextTest {
         assertThat(repository.count()).isZero();
 
         RestTemplate defaultClient = applicationContext.getBean("navigatorDefaultRestTemplate", RestTemplate.class);
-        RestTemplate metadataClient = applicationContext.getBean("metadataQueryRestTemplate", RestTemplate.class);
         RestTemplate businessClient = applicationContext.getBean("businessAgentRestTemplate", RestTemplate.class);
         RestTemplate codeReviewClient = applicationContext.getBean("codeReviewRestTemplate", RestTemplate.class);
 
         assertThat(applicationContext.getBean(RestTemplate.class)).isSameAs(defaultClient);
-        assertThat(defaultClient).isNotSameAs(metadataClient)
-                .isNotSameAs(businessClient)
-                .isNotSameAs(codeReviewClient);
-        assertThat(metadataClient).isNotSameAs(businessClient)
+        assertThat(defaultClient).isNotSameAs(businessClient)
                 .isNotSameAs(codeReviewClient);
         assertThat(businessClient).isNotSameAs(codeReviewClient);
     }

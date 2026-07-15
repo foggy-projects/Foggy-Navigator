@@ -288,7 +288,7 @@ function Invoke-NMinusOneCrudSmoke {
     )
 
     $headers = Get-NMinusOneHeaders -Port $Port
-    $createBody = @{ title = 'N-1 migration CRUD'; agentId = 'echo-agent' } | ConvertTo-Json
+    $createBody = @{ title = 'N-1 migration CRUD'; agentId = 'migration-fixture-agent' } | ConvertTo-Json
     $created = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/api/v1/sessions" `
         -Headers $headers -ContentType 'application/json' -Body $createBody
     $createdData = Assert-RxSuccess -Response $created -Label 'N-1 session create' -RequireData

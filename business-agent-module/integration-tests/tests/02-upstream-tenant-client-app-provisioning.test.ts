@@ -38,7 +38,12 @@ describe('02 - Upstream tenant ClientApp provisioning', () => {
     await adminClient.approveUpstreamAdminKeyRequest(adminKeyRequest.requestCode, {
       authorizedTenantIds: [navigatorTenantId],
       authorizedClientAppNamespace: sourceSystem,
-      scopes: ['CLIENT_APP_MANAGE', 'CLIENT_APP_CONTROL_KEY_ISSUE', 'WORKER_POOL_MANAGE']
+      scopes: [
+        'CLIENT_APP_MANAGE',
+        'CLIENT_APP_CONTROL_KEY_ISSUE',
+        'WORKER_MANAGE',
+        'WORKER_POOL_MANAGE'
+      ]
     });
 
     const claimed = await bootstrapClient.claimUpstreamAdminKey(adminKeyRequest.requestCode, {
@@ -57,6 +62,7 @@ describe('02 - Upstream tenant ClientApp provisioning', () => {
     expect(inspected.authorizedClientAppNamespace).toBe(sourceSystem);
     expect(inspected.scopes).toContain('CLIENT_APP_MANAGE');
     expect(inspected.scopes).toContain('CLIENT_APP_CONTROL_KEY_ISSUE');
+    expect(inspected.scopes).toContain('WORKER_MANAGE');
     expect(inspected.scopes).toContain('WORKER_POOL_MANAGE');
     expect(inspected.status).toBe('ACTIVE');
 

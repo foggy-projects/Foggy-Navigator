@@ -32,6 +32,8 @@ Authorization: Bearer <CODEX_WORKER_TOKEN>
 
 如果服务端未配置 `CODEX_WORKER_TOKEN`，则不需要这个 Header。
 
+`CODEX_WORKER_EXTERNAL_ENABLED` 默认是 `false`，用于区分现有内部开发模式与外部运行面。当前即使显式设置为 `true`，Worker 也会在工作目录、工具、sandbox、approval 和网络策略完成治理前保持 `external_ready=false`，除 `/health` 外统一返回 `503 EXTERNAL_WORKER_UNREADY`。仅配置 Token 不代表可以对外启用。
+
 ### 2.2 Codex/OpenAI 调用鉴权
 
 支持两种模式：

@@ -17,18 +17,6 @@ public record TaskPageResult(List<Object> content, long totalSessions, int page,
         return new TaskPageResult(copy(content), totalSessions, page, size);
     }
 
-    public static TaskPageResult from(Object pageResult, int defaultPage, int defaultSize) {
-        if (pageResult instanceof TaskPageResult result) {
-            return result;
-        }
-        List<Object> content = TaskResultEnvelopeAdapters.listProperty(pageResult, "content");
-        return new TaskPageResult(
-                content,
-                TaskResultEnvelopeAdapters.longProperty(pageResult, "totalSessions", content.size()),
-                TaskResultEnvelopeAdapters.intProperty(pageResult, "page", defaultPage),
-                TaskResultEnvelopeAdapters.intProperty(pageResult, "size", defaultSize));
-    }
-
     public static TaskPageResult empty(int page, int size) {
         return new TaskPageResult(List.of(), 0L, page, size);
     }

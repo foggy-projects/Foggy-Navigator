@@ -1,7 +1,9 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolMemberEntity;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.repository.BizWorkerPoolMemberRepository;
+import com.foggy.navigator.business.agent.repository.BizWorkerPoolRepository;
 import com.foggy.navigator.business.agent.service.BizWorkerPoolService;
 import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
@@ -25,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -33,6 +36,7 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
 
     private static final Duration CONTEXT_ALLOCATION_TIMEOUT = Duration.ofSeconds(10);
 
+    private final BizWorkerPoolRepository poolRepository;
     private final BizWorkerPoolMemberRepository poolMemberRepository;
     private final LanggraphWorkerService workerService;
     private final LanggraphTaskService taskService;
@@ -43,9 +47,20 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
     }
 
     @Override
+    public String resolveWorkerId(BusinessAgentWorkerTaskLaunchRequest request) {
+        return resolveWorker(request, request.getPhysicalWorkerId()).getWorkerId();
+    }
+
+    @Override
     public BusinessAgentWorkerTaskLaunchResult launch(BusinessAgentWorkerTaskLaunchRequest request) {
-        String workerId = resolveWorkerId(request);
-        LanggraphWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        String selectedWorkerId = requireText(
+                request.getSelectedWorkerId(), "selectedWorkerId is required before launch");
+        requireText(request.getWorkerLeaseId(), "workerLeaseId is required before launch");
+        LanggraphWorkerEntity worker = resolveWorker(request, selectedWorkerId);
+        String workerId = worker.getWorkerId();
+        if (!selectedWorkerId.equals(workerId)) {
+            throw new SecurityException("resolved worker changed before launch");
+        }
         if (StringUtils.hasText(worker.getTenantId()) && !Objects.equals(worker.getTenantId(), request.getTenantId())) {
             throw new SecurityException("worker tenant mismatch");
         }
@@ -67,6 +82,11 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         form.setRuntimeContext(buildRuntimeContext(request, skillName));
 
         LanggraphTaskDTO workerTask = taskService.createTask(request.getActorUserId(), request.getTenantId(), form);
+        if (workerTask == null
+                || !StringUtils.hasText(workerTask.getWorkerId())
+                || !workerId.equals(workerTask.getWorkerId().trim())) {
+            throw new SecurityException("LangGraph task was created on a different worker");
+        }
         return BusinessAgentWorkerTaskLaunchResult.builder()
                 .workerTaskId(workerTask.getTaskId())
                 .workerSessionId(workerTask.getSessionId())
@@ -76,16 +96,111 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
                 .build();
     }
 
-    private String resolveWorkerId(BusinessAgentWorkerTaskLaunchRequest request) {
-        if (StringUtils.hasText(request.getPhysicalWorkerId())) {
-            return request.getPhysicalWorkerId().trim();
+    private LanggraphWorkerEntity resolveWorker(
+            BusinessAgentWorkerTaskLaunchRequest request,
+            String requestedWorkerId) {
+        requireLanggraphBackend(request);
+        String tenantId = requireText(request.getTenantId(), "tenantId is required");
+        String routeId = requireText(request.getWorkerPoolId(), "workerPoolId is required");
+        Optional<BizWorkerPoolEntity> pool = poolRepository.findByPoolIdAndTenantId(routeId, tenantId);
+        if (pool.isPresent()) {
+            BizWorkerPoolEntity entity = pool.get();
+            requireAvailablePool(entity, tenantId, request.getWorkerBackend());
+            String workerId = resolvePoolMemberWorkerId(requestedWorkerId, entity);
+            return workerService.getBusinessAgentWorkerEntity(
+                    workerId, entity.getOwnerType(), entity.getOwnerId());
         }
-        BizWorkerPoolMemberEntity member = poolMemberRepository.findByPoolIdOrderByCreatedAtAsc(request.getWorkerPoolId())
+
+        if (poolRepository.findByPoolId(routeId).isPresent()) {
+            throw new SecurityException("worker pool tenant mismatch: " + routeId);
+        }
+
+        String physicalWorkerId = requireText(
+                requestedWorkerId, "physicalWorkerId is required when worker pool is absent");
+        if (!routeId.equals(physicalWorkerId)) {
+            throw new IllegalStateException("worker pool not found: " + routeId);
+        }
+        // A physical-only request does not carry an independently trusted
+        // upstream owner. The identity service therefore accepts only the
+        // canonical shared PLATFORM/platform identity in this compatibility path.
+        return workerService.getBusinessAgentWorkerEntity(physicalWorkerId, null, null);
+    }
+
+    private String resolvePoolMemberWorkerId(
+            String requestedWorkerId,
+            BizWorkerPoolEntity pool) {
+        List<BizWorkerPoolMemberEntity> enabledMembers = poolMemberRepository
+                .findByPoolIdOrderByCreatedAtAsc(pool.getPoolId())
                 .stream()
                 .filter(item -> BizWorkerPoolService.STATUS_ENABLED.equals(item.getStatus()))
+                .toList();
+        if (StringUtils.hasText(requestedWorkerId)) {
+            String normalizedRequestedWorkerId = requestedWorkerId.trim();
+            return enabledMembers.stream()
+                    .map(BizWorkerPoolMemberEntity::getWorkerId)
+                    .filter(StringUtils::hasText)
+                    .map(String::trim)
+                    .filter(normalizedRequestedWorkerId::equals)
+                    .findFirst()
+                    .orElseThrow(() -> new SecurityException(
+                            "physical worker is not an enabled pool member: " + normalizedRequestedWorkerId));
+        }
+        return enabledMembers.stream()
+                .map(BizWorkerPoolMemberEntity::getWorkerId)
+                .filter(StringUtils::hasText)
+                .map(String::trim)
                 .findFirst()
-                .orElseThrow(() -> new IllegalStateException("worker pool has no enabled members: " + request.getWorkerPoolId()));
-        return member.getWorkerId();
+                .orElseThrow(() -> new IllegalStateException(
+                        "worker pool has no enabled members: " + pool.getPoolId()));
+    }
+
+    private void requireAvailablePool(
+            BizWorkerPoolEntity pool,
+            String tenantId,
+            String requestBackend) {
+        if (!tenantId.equals(pool.getTenantId())) {
+            throw new SecurityException("worker pool tenant mismatch: " + pool.getPoolId());
+        }
+        if (!BizWorkerPoolService.STATUS_ENABLED.equals(pool.getStatus())
+                || !BizWorkerPoolService.HEALTHY.equals(pool.getHealthStatus())) {
+            throw new IllegalStateException("worker pool is not available: " + pool.getPoolId());
+        }
+        String backend = StringUtils.hasText(pool.getWorkerBackend())
+                ? pool.getWorkerBackend().trim()
+                : null;
+        if (!ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND.equals(backend)
+                || !backend.equals(requestBackend.trim())) {
+            throw new IllegalStateException("worker pool backend mismatch: " + pool.getPoolId());
+        }
+        if (pool.getOwnerType() == null || !StringUtils.hasText(pool.getOwnerId())) {
+            throw new IllegalStateException("worker pool owner is not configured: " + pool.getPoolId());
+        }
+        switch (pool.getOwnerType()) {
+            case PLATFORM -> {
+                if (!tenantId.equals(pool.getOwnerId().trim())) {
+                    throw new SecurityException("platform worker pool owner mismatch: " + pool.getPoolId());
+                }
+            }
+            case UPSTREAM_SYSTEM -> {
+                // The upstream owner is re-used as the exact identity boundary below.
+            }
+            case CLIENT_APP, UPSTREAM_USER -> throw new SecurityException(
+                    "worker pool ownerType is not allowed for runtime: " + pool.getPoolId());
+        }
+    }
+
+    private void requireLanggraphBackend(BusinessAgentWorkerTaskLaunchRequest request) {
+        String backend = requireText(request.getWorkerBackend(), "workerBackend is required");
+        if (!ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND.equals(backend)) {
+            throw new IllegalStateException("worker backend mismatch: " + backend);
+        }
+    }
+
+    private String requireText(String value, String message) {
+        if (!StringUtils.hasText(value)) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.trim();
     }
 
     private String resolveContextId(LanggraphWorkerEntity worker, String requestedContextId) {
@@ -150,6 +265,8 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         if (StringUtils.hasText(request.getTaskScopedToken())) {
             runtimeContext.put("task_scoped_token", request.getTaskScopedToken());
         }
+        putText(runtimeContext, "worker_id", request.getSelectedWorkerId());
+        putText(runtimeContext, "worker_lease_id", request.getWorkerLeaseId());
         putText(runtimeContext, "skill_name", skillName);
         if (StringUtils.hasText(request.getVisionModelConfigId())) {
             runtimeContext.put("vision_model_config_id", request.getVisionModelConfigId());
