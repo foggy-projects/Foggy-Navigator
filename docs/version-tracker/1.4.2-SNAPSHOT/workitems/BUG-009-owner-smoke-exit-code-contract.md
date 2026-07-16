@@ -3,7 +3,7 @@ doc_type: delivery-spec
 delivery_type: bug
 version: 1.4.2-SNAPSHOT
 ticket: BUG-009
-status: BLOCKED
+status: READY_FOR_SIGNOFF
 canonical: true
 execution_mode: ultra
 approved_by: repository owner
@@ -46,11 +46,11 @@ open_questions: []
 
 ## Acceptance Criteria
 
-- [ ] AC-1: `owner-smoke` 在 readiness `FAIL` 且资源解析完整时返回 `2`，并输出 readiness FAIL 与 `resources SKIPPED` 诊断。
-- [ ] AC-2: readiness `OK` 的 owner-smoke 继续返回 `0`。
-- [ ] AC-3: `navi.cmd` 将其 PowerShell 子进程的 `%ERRORLEVEL%` 显式返回给调用 shell；发布包仍从该模板复制包装器。
-- [ ] AC-4: 相关 Maven 自动化与包装器静态/可执行验证通过，且不产生真实 task/token/provider 副作用。
-- [ ] AC-5: WSL/Linux 可生成、安装并自更新原生 `tar.gz` CLI；发布器同时上传 Windows ZIP 和 Linux TAR.GZ，并原子更新双平台 `latest.json`。
+- [x] AC-1: `owner-smoke` 在 readiness `FAIL` 且资源解析完整时返回 `2`，并输出 readiness FAIL 与 `resources SKIPPED` 诊断。
+- [x] AC-2: readiness `OK` 的 owner-smoke 继续返回 `0`。
+- [x] AC-3: `navi.cmd` 将其 PowerShell 子进程的 `%ERRORLEVEL%` 显式返回给调用 shell；发布包仍从该模板复制包装器。
+- [x] AC-4: 相关 Maven 自动化与包装器静态/可执行验证通过，且不产生真实 task/token/provider 副作用。
+- [x] AC-5: WSL/Linux 可生成、安装并自更新原生 `tar.gz` CLI；发布器同时上传 Windows ZIP 和 Linux TAR.GZ，并原子更新双平台 `latest.json`。
 
 ## Contract / Data / Security Constraints
 
@@ -114,11 +114,15 @@ open_questions: []
   - `bash -n tools/navigator-upstream-cli/dist/bin/navi tools/navigator-upstream-cli/dist/bin/navi-e2e tools/navigator-upstream-cli/dist/install.sh tools/navigator-upstream-cli/dist/remote-install.sh tools/navigator-upstream-cli/dist/package.sh tools/navigator-upstream-cli/dist/upload.sh`：通过。
   - `bash tools/navigator-upstream-cli/dist/package.sh`：通过，离线生成 `navigator-upstream-cli-1.0.21-windows.zip` 和 `navigator-upstream-cli-1.0.21-linux.tar.gz`。
   - 离线安装 smoke：从 Linux TAR.GZ 安装后 `navi version` 输出 `1.0.21`、`upstream --help` 可用、`upstream ask --not-a-real-option` 返回 `2`；Windows ZIP root/bin CMD 包装器均包含 `exit /b %ERRORLEVEL%`。
-  - 干净 release worktree（commit `59f277225e966aa1f42fb0ec22d1d6f0ed9bb7dd`、`gitDirty=false`）已生成正式双平台制品；上传前后的远端 `latest.json` 均为 `1.0.20`，确认没有半发布或 metadata 覆盖。
-- manual_or_experience_evidence: Windows 与 Linux 包均从同一 `1.0.21` SDK JAR 和依赖生成；Linux 安装器只在上游项目根目录写入 gitignored profile，调用 Java 时使用 `exec` 保留退出码。未执行真实 `owner-smoke`，避免访问真实 profile 与上游运行态。发布工作目录为 `temp/test-artifacts/BUG-009-release-worktree-20260716`，仅含已推送 commit 和 gitignored release `.env`。
+-  - `bash -n tools/navigator-upstream-cli/dist/upload.sh` 与 `git diff --check -- tools/navigator-upstream-cli/dist/upload.sh tools/navigator-upstream-cli/.env.example`：通过；发布器支持 `OBSUTIL_CONFIG_FILE` 显式选择 WSL 挂载的宿主配置。
+  - 原生 Linux `obsutil 5.8.3` 安装后，`obsutil ls <release-bucket> -limit=1 -config=/mnt/c/Users/oldse/.obsutilconfig`：通过，只读验证发布桶访问权限。
+  - 干净 release worktree（commit `a458866e3a89591662eb55d2901df50ddb03c58c`、`gitDirty=false`）重新生成正式双平台制品。
+  - `OBSUTIL_BIN=~/.local/opt/obsutil/obsutil OBSUTIL_CONFIG_FILE=/mnt/c/Users/oldse/.obsutilconfig bash tools/navigator-upstream-cli/dist/upload.sh --version 1.0.21`：通过；Windows ZIP、Linux TAR.GZ、`latest.json`、`install.ps1` 与 `install.sh` 均返回 OBS HTTP 200，且远端 Linux 安装/命令冒烟通过。
+  - `curl <release-base>/latest.json`：通过；远端版本为 `1.0.21`，`gitCommit=a458866e3a89591662eb55d2901df50ddb03c58c`、`gitDirty=false`，同时声明 Windows/Linux 文件和 SHA-256。
+- manual_or_experience_evidence: Windows 与 Linux 包均从同一 `1.0.21` SDK JAR 和依赖生成；Linux 安装器只在上游项目根目录写入 gitignored profile，调用 Java 时使用 `exec` 保留退出码。未执行真实 `owner-smoke`，避免访问真实 profile 与上游运行态。发布工作目录为 `temp/test-artifacts/BUG-009-release-worktree-20260716`，仅含已推送 commit 和 gitignored release `.env`。正式发布使用 WSL 原生 `obsutil` 与宿主挂载配置，远端 `latest.json` 已从 `1.0.20` 更新为 `1.0.21`。
 - deviations: 未改变 Java production 分支，因为该分支已经在 readiness 非 OK 时返回 `2`；本次修复发布入口的退出码穿透缺口并为核心条件增加回归。现有 Windows PowerShell 发布脚本保留作为兼容路径；本次双平台正式发布以新增 WSL `package.sh` / `upload.sh` 为准。
-- residual_risks: 当前 Linux 环境未安装 `cmd.exe`、`powershell` 或 `pwsh`，不能执行 Windows CMD 包装器的端到端 smoke；发布到 Windows 前应以一个已知返回 `2` 的 CLI 调用确认 `%ERRORLEVEL%` 为 `2`。本机无 `obsutil` 可执行文件，且现有 `~/.obsutilconfig` 凭据不被 OBS 接受（Authorization header invalid）；没有可用环境变量凭据。因而不能上传制品或更新远端 `latest.json`，远端 install smoke 未执行。
-- readiness: BLOCKED
+- residual_risks: 当前 Linux 环境未安装 `cmd.exe`、`powershell` 或 `pwsh`，不能执行 Windows CMD 包装器的端到端 smoke；应在一个 Windows 调用环境以已知返回 `2` 的 CLI 调用确认 `%ERRORLEVEL%` 为 `2`。这不阻塞已完成的双平台发布与 Linux 远端安装冒烟。
+- readiness: READY_FOR_SIGNOFF
 
 ## References
 
