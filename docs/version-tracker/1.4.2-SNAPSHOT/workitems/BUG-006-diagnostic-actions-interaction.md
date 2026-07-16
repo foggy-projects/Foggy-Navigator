@@ -4,11 +4,12 @@ bug_source: user-report
 version: 1.4.2-SNAPSHOT
 ticket: BUG-006
 severity: major
-status: ready-for-verification
+status: in-progress
 reproduction_status: confirmed
 test_strategy: unit-test
 automation_decision: required
 owner: Navigator frontend
+permanent_fix_status: pending-scheduling
 ---
 
 # 错误诊断操作闪退与复制失败
@@ -62,6 +63,7 @@ PC 端失败任务的错误卡片中，“查看错误详情”短暂展开后�
 - [x] 补齐单元回归并执行相关测试。
 - [x] 临时将详情改为 Teleport 弹窗，脱离虚拟列表项高度计算。
 - [x] 确认原自动收起根因不是延时机制，而是 `DynamicScrollerItem` 未跟踪异步详情导致的尺寸缓存回收。
+- [ ] 待排期：恢复内联详情并为虚拟列表项补尺寸依赖或显式重新测量。
 
 ## Verification
 
@@ -74,6 +76,13 @@ PC 端失败任务的错误卡片中，“查看错误详情”短暂展开后�
 
 临时弹窗使用 `Teleport to="body"`，不再改变虚拟行高度；后续若恢复内联展示，必须在 `MessageList` 为该项提供可观察的尺寸依赖或调用虚拟列表的重新测量接口。
 
+## Deferred Permanent Fix
+
+- status: pending-scheduling
+- scope：保留弹窗作为当前稳定方案；后续恢复内联详情时，使异步诊断加载状态成为 `DynamicScrollerItem` 的尺寸依赖，或在加载完成后精确触发该项重新测量。
+- required regression：诊断详情内联展开/收起、滚动越界回收、重复打开、错误卡片重渲染，以及多条消息场景下的列表高度与滚动位置。
+- exit criteria：内联详情在真实虚拟列表中连续打开/关闭后保持可见，不发生组件回收导致的状态丢失；弹窗降级可在该验证通过后再评估是否移除。
+
 ## Execution Check-in
 
 - 完成：错误详情、复制与分享按钮均阻止向 `TaskPane` 聚焦容器冒泡，并显式声明 `type="button"`；错误卡片改用 `copyToClipboard`，使 HTTP/Clipboard API 不可用时走 `execCommand` 降级；详情临时改为 Teleport 弹窗。
@@ -81,6 +90,6 @@ PC 端失败任务的错误卡片中，“查看错误详情”短暂展开后�
 - 自动化：`pnpm --filter @foggy/chat test` 通过，6 个测试文件共 114 项通过；新增用例覆盖详情弹窗不冒泡、弹窗保留，以及统一复制 helper 的成功/失败提示。
 - 构建：`pnpm --filter @foggy/chat build` 与 `pnpm --filter @foggy/navigator-frontend build:check` 通过。运行节点为 v24，和仓库声明的 Node 22 基线不一致，因此保留 engine warning；未将其视为 Node 22 基线证据。
 - 部署：Navigator 前端静态产物已更新；本机 HTTP 响应的 `Last-Modified` 与新 `dist/index.html` 时间一致。
-- 体验：待 PC 端手动验证详情弹窗稳定保留及 HTTP 复制。
-- self_check_decision: `self-check-only`；本次为局部 UI 交互修复，单元回归和前端构建已通过。
-- acceptance_readiness: `ready-for-verification`。
+- 体验：待 PC 端手动验证详情弹窗稳定保留及 HTTP 复制；永久内联修复已按用户决定登记为待排期，不在本次继续实现。
+- self_check_decision: `self-check-only`；临时修复已完成，永久内联修复待排期。
+- acceptance_readiness: `temporary-fix-ready-for-verification`。
