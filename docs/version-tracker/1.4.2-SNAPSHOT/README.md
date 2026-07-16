@@ -93,6 +93,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 - `EXEC-142-014` 已启动 P3 Session/Task ownership：新增统一 `userId + tenantId` 资源门面，Session/Task/Agent/SSE/config/shared/forward 首批路径先授权；Task route 不信任请求体 agent；context assigned-ID 使用独立事务 `persist + flush` 与 owner 条件更新；Provider 返回 sessionId 后重新授权；显式 model config 校验 enabled/tenant/owner metadata/Worker grant；Sharing Key quota 在授权和 readiness 后原子消费；软删除资源 fail closed。P3 定向 Maven 176 tests 通过；随后 `mvn -B -pl launcher -am clean test` 15/15 reactor、2426 tests 全通过，exit 0（日志有测试 JVM 退出后 30 秒 fork kill 非失败提示）。`EXEC-142-018` 又以隔离 H2、真实 UI/API/SSE 和同 tenant 双账号验证 Session owner 可访问、非 owner 列表不可见且 deep-link/history/SSE/direct read 被拒绝；Task live Provider fixture、共享数据库、L3、全列表 tenant、SessionMetadata service invariant、model owner/grant 语义、Provider taskId 和 admin/system 显式通路仍未完成，因此 GOV-003 只标记 `in-progress / partial`。
 - `EXEC-142-019` 记录并修复 [BUG-003](./workitems/BUG-003-tenantless-session-owner-access-regression.md)：P3 首批门面曾把非空 tenantId 当成所有主体的前置条件，导致按设计 tenantId 为 null 的平台账号无法访问自己的无租户 Session。修复新增 tenantless exact-owner scope，只允许同 userId 且资源 tenantId 为 null，不形成 SUPER_ADMIN 跨主体旁路；`/sessions/configs` 只读批次过滤无权/失效 ID，写批次继续原子拒绝。定向 27 tests 与 session 依赖链 clean 748 tests 均通过；dev PC 三个报告入口尚待使用新令牌复测，BUG 状态为 `ready-for-verification`。
 - `EXEC-142-020` 记录并修复 [BUG-004](./workitems/BUG-004-blank-tenant-task-ownership-regression.md)：legacy JWT/API Key 中的空字符串 tenant 曾原样进入 `CurrentUser` 并写入新 Task/Session，而 tenantless ownership 只查询 `tenant_id IS NULL`，导致同一用户刚创建的 Codex Task 随即无法读取。新签发与认证入口将空白 tenant 规范为 null，tenantless repository 同时兼容历史 NULL/空白行且继续精确匹配 userId；定向 66 tests 与 session 依赖链 clean 753 tests 均通过。该缺陷与 Codex model config 的 `availableModels` grant 拒绝相互独立，尚待部署后使用新令牌复测 create/get/respond/cancel。
+- `EXEC-142-021` 已完成 REQ-002 的实现切片：Provider 无关错误信封和版本化脱敏、Codex SDK/App Server 安全错误元数据、Task/SSE/chat 兼容、90 天 owner-scoped 快照、默认关闭且可撤销的 7/30 天 hash-token 分享，以及无脚本匿名页面和安全响应头。Java 定向 19 tests、两类 Worker 全量测试/typecheck、前端 typecheck 与 chatState 51 tests 通过；当前 Node 18 不满足项目 Node 22 基线，ErrorBlock 组件/build、MySQL migration、launcher clean、浏览器矩阵和正式门禁重验仍待执行，因此状态为 `ready-for-verification`，分享仍未启用。
 - P5 已物理移除 Monitoring、`addons/code-review-agent` 和 Echo Agent 三个 dev-only 切片；metadata-query 也已 `completed-local`。Echo 的 5 个 tracked addon 文件及 root reactor/launcher 装配已退出，`UnifiedAgentResolverTest` 的 test-only 内存 fixture 覆盖 discovery/resolve/send/query/cancel，定向 16/16 tests 和 launcher 定向 14 modules、6/6 tests 通过。P6 的旧契约子切片也已完成仓内消费者迁移和物理收口：提交 `50351ada`、`73d31a19`、`97240642`、`fb11137d`、`9f3f1422`、`edee0fc4`、`9008c554` 移除 Claude/Codex/LangGraph 旧 Provider HTTP 入口、deprecated SPI/DTO，并将审批等调用迁入统一 Task API；更广泛的 Provider state schema 和超大类治理仍未完成。
 - `2a859336` 以 Navigator 自有 clean-room 兼容层固定现用 REST `RX` wire contract，并移除 clean runner 无法解析的 `foggy-core` 外部 Maven 依赖。head `9008c554` 的 [Repository CI run 29323068427](https://github.com/foggy-projects/Foggy-Navigator/actions/runs/29323068427) 首次在 hosted runner 完成 Repository CI 7-job 矩阵；浏览器测试提交后的、截至正式闸门的最新已验证实现 head `9d03bee9` 又由 [run 29324741945](https://github.com/foggy-projects/Foggy-Navigator/actions/runs/29324741945) 复验。两次均为 Java launcher 依赖链、前端、Codex SDK Worker、Codex app-server Worker、Gemini Worker、Claude Worker、LangGraph Biz Worker 共 7 个 jobs 全部 `success`；Java lane 不含 `navigator-open-sdk` 和 `tools/navigator-chat-observer-bff`。main 当前未配置 required check/分支保护，修复后的 nightly 也未实跑。
 - `9d03bee9` 新增受显式环境变量保护的 Session ownership live Playwright；隔离 H2 + loopback 前后端下 1 passed（Playwright `2.9s`，编排总时 `3.9s`），全量 mock Playwright 为 17 passed、1 skipped（`35.2s`）。mock suite 不构成运行态 ownership 证据，hosted workflow 的成功也不代表 guarded live 用例在 hosted 环境执行；共享数据库因没有明确隔离目标和授权而 `not-run`，Task live Provider fixture 也为 `not-run`。隔离验证不等于生产批准。
@@ -104,7 +105,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 
 | Workitem | 范围 | 计划阶段 | 当前状态 |
 |---|---|---|---|
-| [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) | 结构化错误、诊断快照、内部详情与临时分享链接 | P8 | approved-for-implementation |
+| [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) | 结构化错误、诊断快照、内部详情与临时分享链接 | P8 | ready-for-verification |
 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | 内部控制面与外部运行面信任边界 | P0、P2、P3 | in-progress |
 | [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | Biz Worker、ClientApp、upstream user、凭据与 task token | P2 | in-progress |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | Session/Task ownership 与审批、恢复、取消约束 | P3 | in-progress |
@@ -132,7 +133,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 | P5 | 按 dev-only 授权独立移除 Monitoring、metadata-query、code-review，并用 test-only fixture 替代 Echo 后退出默认装配 | in-progress | 无生产环境，`production_routing_changed: no`；但 `launcher_default_agent_inventory_changed: yes`，默认制品不再注册 Echo；hosted CI 和版本正式门禁已执行，签收为 `rejected`，切片专项浏览器/PowerShell/模块级签收仍待补 |
 | P6 | 渐进治理超大类和 Provider 状态 schema；仓内迁移后直接移除旧 API/SPI/DTO | in-progress（legacy contract slice completed） | 旧 HTTP/SPI/DTO 已迁入统一入口后物理收口，当前 dev 外部契约发生变化但生产路由未改变；Provider state schema 和超大类渐进治理仍未完成 |
 | P7 | 执行质量检查、覆盖审计、体验验证和正式签收 | completed-formal-review / rejected | 质量闸门 `ready-with-risks`、覆盖审计 `needs-more-tests`、签收 `rejected`；不改变路由，隔离验收不等于生产批准 |
-| P8 | 实施结构化错误诊断、诊断快照、登录态详情和按需临时分享链接 | approved-for-implementation / not-started | 新增可选错误契约、诊断数据与匿名只读 surface；分享默认关闭，实施前后均不自动启用 external runtime |
+| P8 | 实施结构化错误诊断、诊断快照、登录态详情和按需临时分享链接 | implementation-complete / verification-partial | 可选错误契约、诊断数据、登录态详情和匿名只读 surface 已落地；分享默认关闭。Node 22 前端组件/build、migration、浏览器和正式门禁待补，不自动启用 external runtime |
 
 各阶段的输入、模块、实施内容、测试、手工验证、风险、回滚和完成判据以 [实施计划](./implementation-plan.md) 为准，执行状态统一回写到 [进度记录](./progress.md)。
 
@@ -148,7 +149,7 @@ Owner 决策于 `2026-07-14` 完成后已启动实施。当前已经形成以下
 
 正式门禁材料：已执行切片的 [Implementation Quality Gate](./quality/executed-governance-slices-implementation-quality.md) 为 `ready-with-risks`；版本级 [Test Coverage Audit](./coverage/1.4.2-coverage-audit.md) 为 `needs-more-tests`。拒绝结论表示当前版本不能签收，不否定已完成切片，也不改变 `external_enablement: no` 或生产路由。
 
-`REQ-002` 于 `2026-07-15` 在上述签收之后新增并获方案确认，尚未实施，不受既有质量、覆盖和签收结果覆盖。P8 完成后必须重新执行实现质量、覆盖审计和正式签收。
+`REQ-002` 于 `2026-07-15` 在上述签收之后新增并获方案确认，并于 `2026-07-16` 完成实现切片；它不受既有质量、覆盖和签收结果覆盖。完成 Node 22 构建、migration、浏览器矩阵后仍必须重新执行实现质量、覆盖审计和正式签收。
 
 ## 明确非目标
 

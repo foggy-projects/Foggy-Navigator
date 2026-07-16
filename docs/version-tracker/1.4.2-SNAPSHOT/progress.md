@@ -4,7 +4,7 @@
 
 - doc_type: progress
 - intended_for: root-controller | execution-agent | reviewer | signoff-owner
-- purpose: 按 P0-P7 记录实现、测试、体验、证据、风险和后置评审状态。
+- purpose: 按 P0-P8 记录实现、测试、体验、证据、风险和后置评审状态。
 
 ## 基本信息
 
@@ -14,7 +14,7 @@
 - implementation_plan: [Implementation Plan](./implementation-plan.md)
 - owner_decision_review: [Owner Decision Review](./owner-decision-review.md)
 - implementation_started_at: `2026-07-14`
-- last_updated_at: `2026-07-15`
+- last_updated_at: `2026-07-16`
 - production_routing_changed: no
 - launcher_default_agent_inventory_changed: yes
 - external_contract_changed: yes
@@ -52,6 +52,10 @@
 | 2026-07-15 | REQ-002 及 6 份顶层关联文档的相对链接和 Markdown 表格列数 | passed | 7 个 Markdown 的相对目标存在，表格列数一致 |
 | 2026-07-15 | 工作树范围 | scoped-pass-with-user-changes | 本轮只修改 `docs/version-tracker/1.4.2-SNAPSHOT/`；既有 `packages/foggy-chat` 三个错误展示文件保持原状，未覆盖或回退 |
 | 2026-07-15 | 业务构建、单测和浏览器验证 | not-run | 本轮只生成已确认方案，未修改业务代码；按 P8 各 Step 实施时执行并回写 |
+| 2026-07-16 | P8 Java 定向回归 | passed-local | agent-framework/session 依赖链 6/6 reactor SUCCESS；脱敏、快照、ownership、分享、撤销/清理、公开响应头、HTML 转义、Task SSE/投影共 19 tests，0 failure/error/skipped |
+| 2026-07-16 | Codex 两类 Worker 全量测试与类型检查 | passed-local | SDK Worker 177 tests：176 passed/1 Windows-only skipped；App Server Worker 275 tests：274 passed/1 skipped；两者 typecheck exit 0 |
+| 2026-07-16 | 前端类型与状态回归 | partial-passed-local | `foggy-chat` 与 Navigator 前端 typecheck 通过；chatState 51 tests passed；ErrorBlock 组件测试和 Vite 7 build 被当前 Node `18.19.1` 缺少 `crypto.hash` 阻断，项目规定 Node `22.23.1` 下待复验 |
+| 2026-07-16 | 浏览器、共享数据库 migration 与正式门禁 | not-run | 当前未启动隔离运行态或共享数据库；匿名访问/撤销/过期浏览器矩阵、MySQL forward/rollback、launcher clean、quality/coverage/signoff 仍须补证 |
 
 ## 前置条件
 
@@ -77,13 +81,13 @@
 | P5 | Monitoring、metadata-query、code-review、echo dev-only 独立收口 | in-progress | Monitoring/code-review 已移除，metadata-query 已 completed-local；Echo 已 completed-local/verification-partial，5 个 addon tracked files 与 reactor/launcher 装配退出，test-only fixture 定向 16/16 及 launcher 定向 6/6 tests 通过；hosted CI 已通过，版本正式门禁已执行并拒绝，切片专项浏览器/PS parser/模块级签收未跑 |
 | P6 | 超大类、Provider state schema 和旧 API 渐进治理 | in-progress | 旧 Provider HTTP/SPI/DTO 子切片已完成仓内迁移、物理删除、定向 clean matrix 与 hosted CI；Provider state schema 和超大类渐进治理未开始；见 `EXEC-142-016`、`EXEC-142-017` |
 | P7 | 质量检查、覆盖审计、体验验证和正式签收 | completed-formal-review / rejected | [质量闸门](./quality/executed-governance-slices-implementation-quality.md) `ready-with-risks`；[覆盖审计](./coverage/1.4.2-coverage-audit.md) `needs-more-tests`；[正式签收](./acceptance/version-signoff.md) `rejected` |
-| P8 | 结构化错误诊断、诊断快照、登录态详情和临时分享链接 | approved-for-implementation / not-started | `2026-07-15` 已确认两阶段、90 天快照、7/30 天分享、匿名脱敏和 Provider 无关协议；[REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) 与 P8 计划已落档，尚未修改业务代码或运行测试 |
+| P8 | 结构化错误诊断、诊断快照、登录态详情和临时分享链接 | implementation-complete / verification-partial | Provider 无关错误信封、Codex 两类 Worker、90 天快照、owner/tenant 隔离、7/30 天 hash-token 分享、匿名安全页面、Task/SSE/chat UI 已落地；分享默认关闭。Java 19 tests、Worker 全量测试/typecheck、前端 typecheck/chatState 测试通过；Node 22 组件/build、migration、浏览器和正式门禁待补，见 `EXEC-142-021` |
 
 ## Workitem Progress
 
 | Workitem | 状态 | Development | Testing | Experience | Evidence |
 |---|---|---|---|---|---|
-| [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) | approved-for-implementation | planning-complete / implementation-not-started：公共错误信封、快照、ownership、留存、内部详情、分享 token 和匿名页面边界已冻结 | not-run：当前仅生成方案文档 | not-run：当前仅生成方案文档 | `INPUT-010`；现有源码只读审计确认 SDK raw error 在 Java relay 稳定化时丢失、App Server 主动收敛 raw detail，实施按 P8 Step 8.1-8.6 推进 |
+| [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) | ready-for-verification | implementation-complete：公共错误信封、版本化脱敏、快照/ownership/留存、内部详情、hash-token 分享、匿名页面及错误卡片已落地；分享默认关闭 | partial-passed-local：Java 19 tests；SDK Worker 176 pass/1 skip、App Server 274 pass/1 skip；两类 Worker 和前端 typecheck；chatState 51 passed。Node 22 前端组件/build、MySQL migration、launcher clean 未运行 | not-run：登录态详情、无权拒绝、生成/访问/过期/撤销及匿名页面敏感扫描尚未做真实浏览器验证 | `EXEC-142-021`；当前 Node 18 与项目基线 Node 22 不一致，不能把组件测试/build 阻断记为实现失败，也不能据此标记验收通过 |
 | [GOV-001](./workitems/GOV-001-internal-external-trust-boundary.md) | in-progress | partial：平台 Open API 默认关闭、三类 Worker external profile、readiness、task capability v2、持久化终态门禁、Worker identity/pool、Gateway strict principal/lease 与 P3 首批 ownership 已落地 | partial-passed-local-and-hosted：P2 launcher/Worker、P3 定向 176 tests、既有 migration 双 MySQL 版本及 Repository CI 7/7 均通过 | partial-passed-isolated：内部登录/Session ownership 错误反馈已验证；真实 external/network/Task 体验未验证 | `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`、`EXEC-142-014`、`EXEC-142-016`、`EXEC-142-017`、`EXEC-142-018`；开关组合、Codex 安全转发、OS 隔离、可靠 audit、ownership 全列表/显式系统主体仍未完成 |
 | [GOV-002](./workitems/GOV-002-biz-worker-and-upstream-user-boundary.md) | in-progress | partial：显式开关、task function scope/TTL/revoke、持久化 terminal tombstone、Worker credential rotate/revoke、pool owner/identity、Gateway strict principal/lease、DB preselect/prebind 与 audit writer 事务隔离已落地；非 Biz Open API 不签发 Gateway capability | partial-passed-local-and-hosted：launcher 依赖链 15/15 clean reactor、2357 tests；LangGraph 780 pytest + ruff；Codex 175 tests 中 174 pass/1 Windows skip、typecheck；既有 MySQL migration；hosted 7/7 jobs | not-run：ClientApp 双主体、审批恢复、非 loopback 部署和 Worker 错误体验未验证 | `EXEC-142-008`、`EXEC-142-011`、`EXEC-142-012`、`EXEC-142-013`、`EXEC-142-017`；Codex credential 安全转发、generation/pause、outbox、L3 未完成 |
 | [GOV-003](./workitems/GOV-003-session-task-resource-ownership.md) | in-progress | partial：租户主体 userId+tenantId 精确匹配；tenantless 仅同 userId+tenant null/blank，认证和 Session 新写入规范为 null；Session/Task/Agent/SSE/config/shared/forward 先授权；context 条件 claim/update；Provider sessionId 再授权；model config 与 quota 顺序收紧；LangGraph 审批迁入统一 respond 并绑定认证主体 | partial-passed：P3 定向 176 tests；launcher clean 15/15 reactor、2426 tests；hosted CI；隔离 H2 Session 双账号 live 1 passed；BUG-003 定向 27/clean 748；BUG-004 定向 66/clean 753 | partial-passed-isolated / dev-retest-pending：同 tenant 双账号真实登录与 Session ownership 已验证；tenantless dev PC Session 三入口和 Codex Task create/get/respond/cancel、共享 DB 与完整内部任务主链未运行 | `EXEC-142-014`、`EXEC-142-016`、`EXEC-142-017`、`EXEC-142-018`、`EXEC-142-019`、`EXEC-142-020`；全列表 tenant、SessionMetadata service invariant、model owner/grant、Provider taskId、显式 admin/system 通路仍缺失 |
@@ -114,7 +118,7 @@
 | INPUT-007 | 已修复基线 | 根前端脚本覆盖 chat-core/chat/widget/PC/mobile 的 type/test/build | `pnpm run typecheck:frontend`、`pnpm run ci:frontend`、`pnpm run build:frontend` | passed-local | 存在既有测试 stderr/构建 chunk warning；命令 exit 0，浏览器体验未运行 |
 | INPUT-008 | Owner 阶段假设 | Monitoring 等候选处于 dev-only、本机孵化范围，旧数据可丢弃 | `2026-07-14` Owner 明确确认 + 每切片静态复核 | approved-assumption | 不替代共享/生产资源防误删；发现冲突证据即停止 |
 | INPUT-009 | Owner 阶段假设 | 旧 Provider API 无生产/外部兼容义务，所有上游仍在本机孵化 | `2026-07-14` Owner 明确确认 + 仓内消费者扫描 | approved-assumption | 取消仓外窗口，不取消仓内迁移、安全语义和 clean build |
-| INPUT-010 | Owner 已确认需求口径 | 错误诊断采用两阶段；快照 90 天；分享默认 7 天、最大 30 天、可撤销；匿名页不含原始堆栈/Prompt/路径/工具数据；协议 Provider 无关 | `2026-07-15` 用户确认 + [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) | approved-for-implementation | 当前只完成规划落档，尚无实现、测试或验收证据；既有 `2026-07-14` 签收不覆盖本需求 |
+| INPUT-010 | Owner 已确认需求口径 | 错误诊断采用两阶段；快照 90 天；分享默认 7 天、最大 30 天、可撤销；匿名页不含原始堆栈/Prompt/路径/工具数据；协议 Provider 无关 | `2026-07-15` 用户确认 + [REQ-002](./requirements/REQ-002-structured-error-diagnostics-and-share-links.md) | confirmed-and-implemented | 本条仍只代表需求输入；实现与测试证据见 `EXEC-142-021`，既有 `2026-07-14` 签收不覆盖本需求 |
 | DEC-001 | 决策项 | 明确受支持的 Node/pnpm/Corepack 版本 | ODR-142-001 + P1 | approved-and-applied | Node `22.23.1`、pnpm `10.34.5`；Corepack 只负责激活；Repository CI 7-job 矩阵已通过；main required checks/branch protection 未配置，修复后 nightly 未实跑 |
 | DEC-002 | 决策项 | 外部 credential 与 task token 的签发、轮换和撤销权威 | ODR-142-002 至 ODR-142-005 + P2 | implementation-partial | Worker credential v1 的 owner-scoped rotate/revoke/schema、Gateway strict principal/lease 与 LangGraph 调用方传播已落地；Codex 安全转发、pause/generation、开关组合与可靠撤销传播仍待实施 |
 | DEC-003 | 决策项 | envelope v1 的 typed schema 演进、未知版本策略与兼容窗口 | P6 provider owners 决策 | pending-decision | 不允许无迁移链切换 |
@@ -150,6 +154,7 @@
 | EXEC-142-018 | 隔离浏览器 ownership 与前端 mock 回归 | 新增显式 guard 的 Session ownership live Playwright；同 tenant 双用户经真实登录 UI，owner 创建/列表/深链/history/删除成功，非 owner 列表不可见且 history/SSE/direct read 被 403 拒绝并显示通用无权提示 | 提交 `9d03bee9`；隔离 H2 + loopback launcher/Vite；全量 Chromium mock Playwright | passed-isolated-partial-scope | live 1 passed（Playwright `2.9s`，编排总时 `3.9s`）；mock 17 passed、1 skipped（`35.2s`）。mock suite 不是运行态 ownership 证据；共享数据库因无明确隔离目标/授权而 `not-run`，Task live Provider fixture 因无安全隔离 fixture 而 `not-run`；隔离验证不等于生产批准 |
 | EXEC-142-019 | BUG-003 tenantless ownership 回归 | tenantless exact-owner Session/Task 查询；config 只读批次安全过滤；写批次保持全量 fail closed | 用户 dev PC 报告（凭据未落档/未复用）；test-first 定向 Maven；`mvn -B -pl session-module -am clean test` | ready-for-dev-verification | test-first 先因缺少 null-tenant repository 方法失败；实现后定向 27 tests、clean 6/6 reactor/748 tests 均 0 failure/error/skipped。Spring JPA 上下文成功解析新增查询；尚未部署或使用新令牌复测 dev PC 的 configs/latest/SSE，不得标记 closed |
 | EXEC-142-020 | BUG-004 blank-tenant Task ownership 回归 | JWT/API Key tenant 入口规范化；Session 新写入规范化；tenantless Session/Task 查询兼容 NULL/空白并保持 exact userId | 用户 dev PC 报告（凭据未落档/未复用）；test-first 定向 Maven；`mvn -B -pl session-module -am clean test` | ready-for-dev-verification | test-first 3 个预期失败；实现后定向 6/6 reactor、66 tests，clean 6/6 reactor、753 tests，均 0 failure/error/skipped。H2 真实空字符串行同 owner 可读、跨 user 拒绝；未部署、未连接共享 DB、未用新令牌复测 Codex create/get/respond/cancel，不得标记 closed。Codex model config `availableModels` grant 拒绝是独立结果 |
+| EXEC-142-021 | REQ-002 结构化错误诊断与临时分享实现 | Provider 无关错误信封与脱敏；Codex SDK/App Server safe metadata；Task/SSE/chat 兼容；90 天 owner-scoped 快照；默认关闭、7/30 天、只存 hash、可撤销的匿名单快照分享；无脚本公开页面与安全响应头 | Java 定向 Maven；两类 Worker 全量 test/typecheck；`foggy-chat`/Navigator typecheck；chatState Vitest；代码与配置审计 | implementation-complete-verification-partial | Java 6/6 reactor、19 tests 全通过；SDK Worker 176 pass/1 Windows skip，App Server 274 pass/1 skip；前端 typecheck 与 chatState 51 tests 通过。当前 Node 18.19.1 不满足项目 Node 22.23.1 基线，Vite 7 `crypto.hash` 阻断 ErrorBlock 组件与 build；MySQL migration、launcher clean、真实浏览器和重新执行正式 quality/coverage/signoff 未运行；分享配置仍为 false，未启用 external runtime |
 
 ## P2 Execution Check-in（`EXEC-142-008`）
 
@@ -424,6 +429,17 @@
 | 11. 获批退役项按完整功能切片退出；retain/migrate/defer 有 Owner 记录 | partial | Monitoring/code-review 代码切片已退出；metadata-query completed-local；Echo completed-local/verification-partial |
 | 12. 当前文档不再把 tutor、旧 chat-first 或语义层写成主线 | in-progress | 当前总览/功能架构/观测/安装指引已对齐；失效 Skill 和早期设计文档分级仍待继续 |
 | 13. 隔离验收不等同于生产批准 | process-boundary-recorded | `EXEC-142-018` 明确限定一次性 H2/loopback，共享数据库与 Task Provider live 为 not-run；正式签收虽为 `rejected`，`production_enablement: not-applicable`、`external_enablement: no` 和生产路由均未被提升 |
+
+### REQ-002 Acceptance Criteria Tracking
+
+| Acceptance Criteria | 状态 | Evidence |
+|---|---|---|
+| ED-AC-01..03 公共信封兼容与两类 Codex Worker 安全信息层级 | passed-local | `EXEC-142-021`：旧 `error/errorMessage` 保留，Worker/AgentMessage/Task/SSE 增加可选安全字段；两类 Worker 全量测试与 typecheck 通过 |
+| ED-AC-04..05 ownership、统一拒绝、90 天留存与清理 | passed-local-unit / migration-pending | owner/tenant 精确查询、统一 unavailable、默认 90 天和幂等清理有 Java 测试；共享数据库 migration/rollback 未运行 |
+| ED-AC-06..10 分享 token、TTL、撤销、匿名最小权限和默认关闭 | passed-local-unit / browser-pending | 256-bit token、只存 SHA-256 hash、7/30 天限制、撤销/关闭 fail closed、公开响应头与 HTML 转义有测试；真实匿名浏览器和过期时钟矩阵未运行 |
+| ED-AC-11..12 旧 payload 与错误卡片/详情/复制/分享操作 | partial-passed-local | chatState 51 tests 与前端 typecheck 通过；ErrorBlock 组件测试受 Node 18/Vite 7 环境阻断，真实浏览器未运行 |
+| ED-AC-13 全栈测试、类型检查与构建 | partial-passed-local | Java 定向、Worker 全量/typecheck、前端 typecheck/chatState 通过；Node 22 build、launcher clean、migration 未运行 |
+| ED-AC-14 浏览器全链路和敏感信息扫描 | not-run | 需在隔离部署显式开启分享后验证登录态详情、越权、生成/访问/过期/撤销和页面/网络敏感信息；完成前不得签收 REQ-002 |
 
 ## Formal Gate Results
 

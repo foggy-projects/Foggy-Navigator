@@ -346,7 +346,9 @@ Schema 精确新增字段如下；forward/rollback 脚本已在一次性 MySQL 8
 | root | `metadata-config-module/` | 配置模块 | do-not-touch | 与旧 metadata-query 不是同一退役结论 |
 | root | `docs/version-tracker/1.3.*/`、`1.4.0-SNAPSHOT/`、`1.4.1-SNAPSHOT/` | 历史证据 | do-not-touch | 可加更正文档链接，不篡改既有验收事实 |
 
-## REQ-002 P8 计划代码清单
+## REQ-002 P8 实施代码清单
+
+`2026-07-16` 实施复核后的归属如下：跨模块错误枚举、信封、输入模型和脱敏器位于 `agent-framework/.../diagnostic`；JPA 实体及 startup migration 位于 `navigator-common` 以符合现有统一实体扫描；repository/service/controller/config 位于 `session-module`；Codex addon 只调用窄诊断服务。匿名页面由后端输出自包含 HTML，因此没有新增公开前端路由或第三方资源。下列最初计划路径仍保留用于展示计划到实现的对应关系，实际新增文件以 Git diff 与 `EXEC-142-021` 为准。
 
 ```yaml
 code_inventory:
@@ -462,7 +464,7 @@ code_inventory:
     notes: 明确诊断快照不是通用日志/Monitoring 平台
 ```
 
-执行前必须再次用 `rg` 核对实际 SecurityConfig、Task DTO、SSE 状态通知和前端路由落点。上述目录级 `create` 不锁死类名；如发现更符合现有依赖方向的归属，先回写本清单和 [Progress](./progress.md)，再实施。
+实现已用 `rg` 复核 SecurityConfig、Task DTO、SSE 状态通知和前端消费落点。与初始清单相比的明确偏差是：SDK Worker 分类器落在独立 `src/diagnostics.ts` 并由 `event-mapper.ts` 调用；App Server 分类器同样独立；匿名页面由 `ErrorDiagnosticSharePageController` 服务端渲染；JPA 实体继续放 `navigator-common`，治理逻辑归 `session-module`。
 
 ## 清单维护规则
 

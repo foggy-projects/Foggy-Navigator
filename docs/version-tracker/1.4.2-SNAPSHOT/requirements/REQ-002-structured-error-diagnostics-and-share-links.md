@@ -3,8 +3,9 @@ type: requirement
 version: 1.4.2-SNAPSHOT
 ticket: REQ-002
 priority: high
-status: approved-for-implementation
+status: ready-for-verification
 decision_status: confirmed
+implementation_status: implementation-complete-verification-partial
 source: user-confirmed-error-diagnostics-expansion
 owner: root-workspace
 ---
