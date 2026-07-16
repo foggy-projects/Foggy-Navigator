@@ -35,7 +35,7 @@ management:
 navigator:
   error-diagnostics:
     retention-days: ${NAVIGATOR_ERROR_DIAGNOSTIC_RETENTION_DAYS:90}
-    public-sharing-enabled: ${NAVIGATOR_ERROR_DIAGNOSTIC_PUBLIC_SHARING_ENABLED:false}
+    public-sharing-enabled: ${NAVIGATOR_ERROR_DIAGNOSTIC_PUBLIC_SHARING_ENABLED:true}
     default-share-days: ${NAVIGATOR_ERROR_DIAGNOSTIC_DEFAULT_SHARE_DAYS:7}
     max-share-days: ${NAVIGATOR_ERROR_DIAGNOSTIC_MAX_SHARE_DAYS:30}
     include-safe-stack: ${NAVIGATOR_ERROR_DIAGNOSTIC_INCLUDE_SAFE_STACK:false}

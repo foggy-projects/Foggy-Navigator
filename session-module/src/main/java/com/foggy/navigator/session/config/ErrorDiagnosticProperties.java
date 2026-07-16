@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "navigator.error-diagnostics")
 public class ErrorDiagnosticProperties {
     private int retentionDays = 90;
-    private boolean publicSharingEnabled = false;
+    private boolean publicSharingEnabled = true;
     private int defaultShareDays = 7;
     private int maxShareDays = 30;
     private boolean includeSafeStack = false;
