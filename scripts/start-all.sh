@@ -51,6 +51,35 @@ status_icon() {
     esac
 }
 
+verify_diagnostic_share_routing() {
+    local attempt headers status
+
+    if ! command -v curl &> /dev/null; then
+        echo -e "${YELLOW}  ⚠ curl is unavailable; skipped diagnostic-share routing check.${NC}"
+        return 0
+    fi
+
+    # A deliberately missing token must reach the backend controller. It returns
+    # 404 with this header; the SPA fallback would instead return index.html/200.
+    # start-launcher reports success when the port starts listening, so allow the
+    # application context a short time to finish registering its routes.
+    for ((attempt = 1; attempt <= 30; attempt++)); do
+        headers="$(curl --silent --show-error --connect-timeout 2 --max-time 5 --dump-header - --output /dev/null \
+            "http://localhost/diagnostic-share/__startup_routing_probe__" 2>/dev/null || true)"
+        status="$(printf '%s\n' "$headers" | awk 'toupper($1) ~ /^HTTP\// { code = $2 } END { print code }')"
+
+        if [ "$status" = "404" ] && printf '%s\n' "$headers" | grep -qi '^X-Robots-Tag: noindex, nofollow'; then
+            echo -e "${GREEN}  ✓ Diagnostic-share routing verified${NC}"
+            return 0
+        fi
+
+        sleep 1
+    done
+
+    echo -e "${RED}  ✗ Diagnostic-share routing check failed (expected backend 404, got ${status:-no response})${NC}"
+    return 1
+}
+
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}${BOLD}╔════════════════════════════════════════════════╗${NC}"
@@ -95,6 +124,12 @@ echo -e "${BOLD}[2/${TOTAL}] Backend${NC}  ${GRAY}(Spring Boot · http://localho
 sep
 if bash "$SCRIPT_DIR/start-launcher.sh" $SKIP_BUILD; then
     SVC_STATUS["backend"]="ok"
+    if ! verify_diagnostic_share_routing; then
+        if [ "${SVC_STATUS[frontend]:-skip}" != "fail" ]; then
+            SVC_STATUS["frontend"]="fail"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+    fi
 else
     echo -e "${RED}  ✗ Backend startup failed — continuing with other services${NC}"
     SVC_STATUS["backend"]="fail"
