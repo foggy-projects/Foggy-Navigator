@@ -4,7 +4,7 @@ bug_source: user-report
 version: 1.4.2-SNAPSHOT
 ticket: BUG-005
 severity: major
-status: in-progress
+status: ready-for-verification
 reproduction_status: confirmed
 test_strategy: integration-test
 automation_decision: required
@@ -61,7 +61,7 @@ Navigator 的错误详情页支持展示脱敏后的诊断说明、异常类型�
 
 - [x] 确认诊断快照字段为空而非前端隐藏。
 - [x] 确认目标 Worker 为 `1.0.14`，低于包含结构化诊断的发布候选。
-- [ ] 发布包含结构化错误协议的 `1.0.16` Worker。
+- [x] 发布包含结构化错误协议的 `1.0.16` Worker。
 - [ ] 升级目标 Worker 并确认 `/health` 版本。
 - [ ] 对失败任务验证脱敏诊断详情可见。
 
@@ -74,3 +74,11 @@ Navigator 的错误详情页支持展示脱敏后的诊断说明、异常类型�
 ## Blockers
 
 - 目标 Worker 的 SSH 公钥认证当前被拒绝；发布后升级需要该主机的 SSH 权限，或由其管理员执行 `codex-worker upgrade --force`。
+
+## Execution Check-in
+
+- 发布：`1.0.16` 已发布到既有 Worker 更新源；公开 `latest.json` 确认版本为 `1.0.16`，对应提交 `e02fffb2`。
+- 构建与测试：`npm run package:release -- --platform all --smoke full` 通过；177 个测试中 176 通过、1 个仅 Windows 用例跳过，类型检查、构建、三平台包和 full smoke 均通过。
+- 发布验证：发布器已回读并校验 Linux、macOS、Windows 包、校验文件及发布证据后才更新 `latest.json`。
+- 剩余：目标 Worker 尚为 `1.0.14`，需升级并复现 Terra 失败，确认诊断接口出现非空、已脱敏的详情；未完成前不得关闭本 BUG。
+- self_check_decision: `continue-in-progress`；候选发布已完成，运行态端到端验证仍被目标主机访问权限阻断。
