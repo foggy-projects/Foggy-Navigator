@@ -694,14 +694,27 @@ export function createChatState(): ChatState {
         // Backend may store error text as 'content' (WorkerStreamRelay) or 'error' (ErrorPayload)
         const raw = aip.payload as Record<string, unknown>
         const errorText = p.error || (raw?.content as string) || ''
+        const errorEnvelope = {
+          errorCode: raw?.errorCode as string | undefined,
+          message: raw?.message as string | undefined,
+          category: raw?.category as string | undefined,
+          runtimePhase: raw?.runtimePhase as string | undefined,
+          recoverable: raw?.recoverable as boolean | undefined,
+          diagnosticRef: raw?.diagnosticRef as string | undefined,
+          occurredAt: raw?.occurredAt as string | undefined,
+          taskId: raw?.taskId as string | undefined,
+          providerType: raw?.providerType as string | undefined,
+          runtimeType: raw?.runtimeType as string | undefined,
+        }
         messages.value.push({
           id: aip.messageId,
           type: aip.type,
           sender: 'system',
           content: '',
           error: errorText,
+          errorEnvelope,
           reconnectable: raw?.reconnectable === true,
-          raw: { taskId: raw?.taskId, reconnectable: raw?.reconnectable },
+          raw,
           timestamp: aip.timestamp,
           ...executionReportProps(report),
         })

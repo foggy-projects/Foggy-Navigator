@@ -101,7 +101,15 @@
               任务已中止
             </template>
             <template v-else-if="paneState.task.value?.status === 'FAILED'">
-              任务失败{{ paneState.task.value?.errorMessage ? ': ' + paneState.task.value.errorMessage : '' }}
+              <ErrorBlock
+                v-if="paneState.task.value.error"
+                :error="paneState.task.value.errorMessage || paneState.task.value.error.errorCode || 'TASK_FAILED'"
+                :error-envelope="paneState.task.value.error"
+                :task-id="paneState.task.value.taskId"
+              />
+              <template v-else>
+                任务失败{{ paneState.task.value?.errorMessage ? ': ' + paneState.task.value.errorMessage : '' }}
+              </template>
             </template>
             <template v-else-if="paneState.task.value?.status === 'COMPLETED'">
               任务已完成
@@ -320,7 +328,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ChatPanel } from '@foggy/chat'
+import { ChatPanel, ErrorBlock } from '@foggy/chat'
 import type { ChatMessage, NavigatorUiAction, UserQuestionAnswers } from '@foggy/chat'
 import { ElMessage } from 'element-plus'
 import { getCodexTaskFileHints } from '@/api/claudeWorker'

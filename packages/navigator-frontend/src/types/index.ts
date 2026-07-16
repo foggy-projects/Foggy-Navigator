@@ -129,6 +129,7 @@ export interface ClaudeTask {
   /** 创建任务时使用的平台 LLM 模型配置 ID */
   modelConfigId?: string
   errorMessage?: string
+  error?: import('@foggy/chat').ErrorEnvelope
   /** Final task output; also used to recover legacy sessions whose terminal SSE was not persisted. */
   resultText?: string
   /** JSON array of checkpoint objects: [{id, turnIndex, timestamp}] */

@@ -20,6 +20,30 @@
           <code>{{ props.taskId }}</code>
         </span>
       </div>
+      <div v-if="diagnosticRef" class="diagnostic-actions">
+        <button class="diagnostic-btn" :disabled="loading" @click="loadDiagnostic">
+          {{ loading ? '读取中...' : '查看错误详情' }}
+        </button>
+        <button class="diagnostic-btn" @click="copyDiagnostic">复制诊断信息</button>
+      </div>
+      <p v-if="actionMessage" class="diagnostic-status" role="status">{{ actionMessage }}</p>
+      <section v-if="diagnostic" class="diagnostic-panel" aria-label="错误诊断详情">
+        <dl>
+          <template v-for="row in diagnosticRows" :key="row.label">
+            <dt>{{ row.label }}</dt><dd>{{ row.value }}</dd>
+          </template>
+        </dl>
+        <div v-if="diagnostic.publicSharingEnabled" class="share-panel">
+          <button v-if="!activeShare" class="diagnostic-btn" :disabled="sharing" @click="createShare">
+            {{ sharing ? '生成中...' : `生成临时公开链接（${diagnostic.defaultShareDays || 7} 天）` }}
+          </button>
+          <template v-else>
+            <code class="share-url">{{ absoluteShareUrl }}</code>
+            <button class="diagnostic-btn" @click="copyShareUrl">复制链接</button>
+            <button class="diagnostic-btn danger" @click="revokeShare">撤销链接</button>
+          </template>
+        </div>
+      </section>
       <ExecutionReportInline :report-ref="props.reportRef" :digest="props.digest" />
     </div>
     <button
@@ -35,8 +59,11 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import type { ErrorEnvelope } from '@foggy/chat-core'
 import type { ExecutionReportDigest } from '../types/chat'
+import type { ErrorDiagnostic, ErrorDiagnosticShare } from '../types/diagnostics'
 import { presentError } from '../utils/errorPresentation'
+import { getErrorDiagnosticClient } from '../utils/errorDiagnostics'
 import ExecutionReportInline from './ExecutionReportInline.vue'
 
 const props = defineProps<{
@@ -45,6 +72,7 @@ const props = defineProps<{
   taskId?: string
   reportRef?: string
   digest?: ExecutionReportDigest
+  errorEnvelope?: ErrorEnvelope
 }>()
 
 const emit = defineEmits<{
@@ -52,12 +80,107 @@ const emit = defineEmits<{
 }>()
 
 const reconnecting = ref(false)
-const presentation = computed(() => presentError(props.error))
+const loading = ref(false)
+const sharing = ref(false)
+const diagnostic = ref<ErrorDiagnostic>()
+const activeShare = ref<ErrorDiagnosticShare>()
+const actionMessage = ref('')
+const diagnosticRef = computed(() => props.errorEnvelope?.diagnosticRef)
+const visibleError = computed(() => props.errorEnvelope?.errorCode || props.error)
+const presentation = computed(() => {
+  const value = presentError(visibleError.value)
+  if (props.errorEnvelope?.message) value.description = props.errorEnvelope.message
+  return value
+})
+const diagnosticRows = computed(() => {
+  const value = diagnostic.value
+  if (!value) return []
+  return [
+    ['错误码', value.errorCode], ['分类', value.category], ['阶段', value.runtimePhase],
+    ['安全摘要', value.safeMessage || value.message], ['Provider 状态', value.providerStatus],
+    ['HTTP 状态', value.httpStatus], ['重试次数', value.retryCount],
+    ['异常类型', value.exceptionType], ['诊断说明', value.diagnosticText],
+    ['发生时间', value.occurredAt], ['保留至', value.expiresAt],
+  ].filter((row) => row[1] !== undefined && row[1] !== null && row[1] !== '')
+    .map(([label, value]) => ({ label: String(label), value: String(value) }))
+})
+const absoluteShareUrl = computed(() => {
+  const value = activeShare.value?.shareUrl
+  if (!value) return ''
+  return typeof window === 'undefined' ? value : new URL(value, window.location.origin).toString()
+})
 
 function handleReconnect() {
   if (reconnecting.value || !props.taskId) return
   reconnecting.value = true
   emit('reconnect', props.taskId)
+}
+
+async function loadDiagnostic() {
+  const client = getErrorDiagnosticClient()
+  if (!client || !diagnosticRef.value || loading.value) return
+  loading.value = true
+  actionMessage.value = ''
+  try {
+    diagnostic.value = await client.getDiagnostic(diagnosticRef.value)
+  } catch {
+    actionMessage.value = '诊断详情不可用或已过期。'
+  } finally {
+    loading.value = false
+  }
+}
+
+function safeCopyText(): string {
+  const envelope = props.errorEnvelope
+  const rows = [
+    ['错误码', envelope?.errorCode || props.error], ['说明', envelope?.message],
+    ['分类', envelope?.category], ['阶段', envelope?.runtimePhase],
+    ['可恢复', envelope?.recoverable], ['诊断引用', envelope?.diagnosticRef],
+    ['任务 ID', envelope?.taskId || props.taskId], ['Provider', envelope?.providerType],
+    ['运行时', envelope?.runtimeType], ['发生时间', envelope?.occurredAt],
+  ]
+  return rows.filter((row) => row[1] !== undefined && row[1] !== null && row[1] !== '')
+    .map(([label, value]) => `${label}: ${String(value)}`).join('\n')
+}
+
+async function copyText(value: string, success: string) {
+  try {
+    await navigator.clipboard.writeText(value)
+    actionMessage.value = success
+  } catch {
+    actionMessage.value = '复制失败，请手动选择文本。'
+  }
+}
+
+function copyDiagnostic() { return copyText(safeCopyText(), '诊断信息已复制。') }
+function copyShareUrl() { return copyText(absoluteShareUrl.value, '公开链接已复制。') }
+
+async function createShare() {
+  const client = getErrorDiagnosticClient()
+  if (!client || !diagnosticRef.value || !diagnostic.value || sharing.value) return
+  sharing.value = true
+  actionMessage.value = ''
+  try {
+    activeShare.value = await client.createShare(
+      diagnosticRef.value, diagnostic.value.defaultShareDays || 7,
+    )
+  } catch {
+    actionMessage.value = '临时公开链接生成失败。'
+  } finally {
+    sharing.value = false
+  }
+}
+
+async function revokeShare() {
+  const client = getErrorDiagnosticClient()
+  if (!client || !diagnosticRef.value || !activeShare.value) return
+  try {
+    await client.revokeShare(diagnosticRef.value, activeShare.value.shareId)
+    activeShare.value = undefined
+    actionMessage.value = '公开链接已撤销。'
+  } catch {
+    actionMessage.value = '公开链接撤销失败。'
+  }
 }
 </script>
 
@@ -176,4 +299,16 @@ function handleReconnect() {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+.diagnostic-actions, .share-panel { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+.diagnostic-btn { padding: 4px 9px; color: #7f1d1d; background: #fff; border: 1px solid #e8b4b4; border-radius: 5px; cursor: pointer; font-size: 12px; }
+.diagnostic-btn:hover:not(:disabled) { border-color: #d92d20; background: #fff4f4; }
+.diagnostic-btn.danger { color: #b42318; }
+.diagnostic-btn:disabled { opacity: .55; cursor: wait; }
+.diagnostic-status { margin: 7px 0 0; color: #754343; font-size: 12px; }
+.diagnostic-panel { margin-top: 10px; padding: 10px; background: rgba(255,255,255,.72); border: 1px solid #f0d4d4; border-radius: 6px; }
+.diagnostic-panel dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 10px; margin: 0; font-size: 12px; }
+.diagnostic-panel dt { color: #8b4c4c; font-weight: 600; }
+.diagnostic-panel dd { margin: 0; color: #542f2f; overflow-wrap: anywhere; white-space: pre-wrap; }
+.share-url { max-width: 100%; overflow-wrap: anywhere; padding: 3px 5px; background: #f8eeee; border-radius: 4px; font-size: 11px; }
 </style>

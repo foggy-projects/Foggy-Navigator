@@ -140,6 +140,9 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         } else if (newStatus === 'FAILED' && detail.summary) {
           task.value.errorMessage = String(detail.summary)
         }
+        if (detail.error && typeof detail.error === 'object') {
+          task.value.error = detail.error
+        }
         if (['COMPLETED', 'FAILED', 'ABORTED'].includes(newStatus)) {
           options?.onTaskFinished?.(paneId)
         }
@@ -359,6 +362,18 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         task.value.errorMessage = payload.errorMessage
       } else if (typeof payload.content === 'string') {
         task.value.errorMessage = payload.content
+      }
+      task.value.error = {
+        errorCode: typeof payload.errorCode === 'string' ? payload.errorCode : undefined,
+        message: typeof payload.message === 'string' ? payload.message : undefined,
+        category: typeof payload.category === 'string' ? payload.category : undefined,
+        runtimePhase: typeof payload.runtimePhase === 'string' ? payload.runtimePhase : undefined,
+        recoverable: typeof payload.recoverable === 'boolean' ? payload.recoverable : undefined,
+        diagnosticRef: typeof payload.diagnosticRef === 'string' ? payload.diagnosticRef : undefined,
+        occurredAt: typeof payload.occurredAt === 'string' ? payload.occurredAt : undefined,
+        taskId: typeof payload.taskId === 'string' ? payload.taskId : task.value.taskId,
+        providerType: typeof payload.providerType === 'string' ? payload.providerType : undefined,
+        runtimeType: typeof payload.runtimeType === 'string' ? payload.runtimeType : undefined,
       }
       options?.onTaskFinished?.(paneId)
     }

@@ -9,6 +9,7 @@ export type {
   ThinkingPayload,
   StateSyncPayload,
   ErrorPayload,
+  ErrorEnvelope,
   TaskCompletedPayload,
   CheckpointPayload,
   ConfirmationRequestPayload,

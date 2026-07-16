@@ -572,6 +572,27 @@ describe('createChatState', () => {
       expect(state.messages.value[0].sender).toBe('system')
       expect(state.messages.value[0].error).toBe('Server error')
     })
+
+    it('preserves the structured diagnostic envelope', () => {
+      state.processAipMessage(makeAip(AipMessageType.ERROR, {
+        content: 'CODEX_TIMEOUT',
+        errorCode: 'CODEX_TIMEOUT',
+        message: '执行超时，可重试。',
+        category: 'TIMEOUT',
+        runtimePhase: 'TURN_EXECUTION',
+        recoverable: true,
+        diagnosticRef: 'diagnostic://dg_abc',
+        taskId: 'task-1',
+      }))
+
+      expect(state.messages.value[0].errorEnvelope).toMatchObject({
+        errorCode: 'CODEX_TIMEOUT',
+        category: 'TIMEOUT',
+        diagnosticRef: 'diagnostic://dg_abc',
+        taskId: 'task-1',
+      })
+      expect(state.messages.value[0].raw).toMatchObject({ diagnosticRef: 'diagnostic://dg_abc' })
+    })
   })
 
   // ========== TASK_COMPLETED ==========

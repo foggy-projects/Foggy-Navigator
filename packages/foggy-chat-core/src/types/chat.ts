@@ -1,4 +1,4 @@
-import type { AipMessageType, UserQuestionAnswer, UserQuestionItem, AllowedPrompt } from './aip'
+import type { AipMessageType, UserQuestionAnswer, UserQuestionItem, AllowedPrompt, ErrorEnvelope } from './aip'
 
 export type NavigatorUiArtifactKind = 'route' | 'iframe' | 'link'
 export type NavigatorUiArtifactOpenMode = 'side_panel' | 'dialog' | 'new_tab' | 'current_page'
@@ -40,6 +40,7 @@ export interface ChatMessage {
   toolSuccess?: boolean
   thought?: string
   error?: string
+  errorEnvelope?: ErrorEnvelope
   raw?: unknown
   permissionId?: string
   permissionStatus?: 'pending' | 'approved' | 'denied'

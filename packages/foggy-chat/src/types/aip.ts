@@ -8,6 +8,7 @@ export {
   type ThinkingPayload,
   type StateSyncPayload,
   type ErrorPayload,
+  type ErrorEnvelope,
   type TaskCompletedPayload,
   type ConfirmationRequestPayload,
   type UserQuestionAnswer,

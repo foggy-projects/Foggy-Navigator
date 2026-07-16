@@ -9,6 +9,7 @@ export type {
   ThinkingPayload,
   StateSyncPayload,
   ErrorPayload,
+  ErrorEnvelope,
   TaskCompletedPayload,
   ConfirmationRequestPayload,
   UserQuestionAnswer,
@@ -34,6 +35,8 @@ export type {
   BusinessSuspensionStatus,
   BusinessSuspensionType,
 } from './types/suspension'
+export type { ErrorDiagnostic, ErrorDiagnosticShare, ErrorDiagnosticClient } from './types/diagnostics'
+export { configureErrorDiagnosticClient } from './utils/errorDiagnostics'
 
 // Store
 export { useChatStore } from './store/useChatStore'

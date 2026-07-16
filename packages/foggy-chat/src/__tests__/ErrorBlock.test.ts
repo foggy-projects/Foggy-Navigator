@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ErrorBlock from '../components/ErrorBlock.vue'
+import { configureErrorDiagnosticClient } from '../utils/errorDiagnostics'
 
 describe('ErrorBlock', () => {
+  afterEach(() => configureErrorDiagnosticClient(undefined))
   it('explains stable worker errors with recovery guidance and keeps diagnostics', () => {
     const wrapper = mount(ErrorBlock, {
       props: {
@@ -52,5 +54,29 @@ describe('ErrorBlock', () => {
 
     expect(wrapper.emitted('reconnect')).toEqual([['task-reconnect']])
     expect(wrapper.get('button.reconnect-btn').text()).toBe('重连中...')
+  })
+
+  it('loads safe details and exposes sharing only when the server enables it', async () => {
+    const getDiagnostic = vi.fn().mockResolvedValue({
+      diagnosticId: 'dg_abc', errorCode: 'CODEX_TIMEOUT', safeMessage: '执行超时',
+      category: 'TIMEOUT', runtimePhase: 'TURN_EXECUTION', diagnosticText: 'deadline exceeded',
+      publicSharingEnabled: true, defaultShareDays: 7, maxShareDays: 30,
+    })
+    configureErrorDiagnosticClient({
+      getDiagnostic,
+      createShare: vi.fn().mockResolvedValue({ shareId: 'ds_1', diagnosticId: 'dg_abc', shareUrl: '/diagnostic-share/token' }),
+      revokeShare: vi.fn(),
+    })
+    const wrapper = mount(ErrorBlock, { props: {
+      error: 'CODEX_TIMEOUT',
+      errorEnvelope: { errorCode: 'CODEX_TIMEOUT', diagnosticRef: 'diagnostic://dg_abc' },
+    } })
+
+    await wrapper.get('button.diagnostic-btn').trigger('click')
+    await Promise.resolve()
+
+    expect(getDiagnostic).toHaveBeenCalledWith('diagnostic://dg_abc')
+    expect(wrapper.text()).toContain('deadline exceeded')
+    expect(wrapper.text()).toContain('生成临时公开链接（7 天）')
   })
 })

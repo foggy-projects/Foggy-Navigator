@@ -97,9 +97,24 @@ export interface StateSyncPayload {
 }
 
 export interface ErrorPayload {
-  error: string
+  error?: string
+  content?: string
   source?: string
+  errorCode?: string
+  message?: string
+  category?: string
+  runtimePhase?: string
+  recoverable?: boolean
+  diagnosticRef?: string
+  occurredAt?: string
+  taskId?: string
+  providerType?: string
+  runtimeType?: string
 }
+
+export type ErrorEnvelope = Pick<ErrorPayload,
+  'errorCode' | 'message' | 'category' | 'runtimePhase' | 'recoverable' |
+  'diagnosticRef' | 'occurredAt' | 'taskId' | 'providerType' | 'runtimeType'>
 
 export interface TaskCompletedPayload {
   taskId: string
