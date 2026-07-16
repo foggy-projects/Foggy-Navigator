@@ -71,6 +71,23 @@ type AuthorizedProcessTermination = {
   completion: Deferred<AuthorizedProcessTerminationOutcome>
 }
 
+type ActiveTurnContext = {
+  id: string
+  threadId?: string
+  turnId?: string
+  turnRequestIssued: boolean
+  providerTerminalObserved: boolean
+  onNotification?: (notification: AppServerNotification) => void
+  onServerRequest?: (request: UserInputServerRequest) => Promise<UserInputWireResponse>
+  onFatal?: (error: Error) => void
+  settleAuthorizedTermination?: (outcome: AuthorizedProcessTerminationOutcome) => void
+}
+
+type UnverifiedTurn = {
+  threadId?: string
+  turnId?: string
+}
+
 type RequestOptions = {
   timeoutMs?: number
   fatalOnTimeout?: boolean
@@ -235,21 +252,17 @@ export function buildBundledAppServerArgs(ephemeralApiKeyAuth: boolean): string[
 }
 
 export class AppServerRuntimeInstance {
-  private active = false
   private healthy = true
+  private readonly activeTurns = new Set<ActiveTurnContext>()
+  private readonly activeThreadIds = new Set<string>()
   /** A turn may still be running even though this Worker lost observability. */
-  private attentionRequired = false
+  private readonly unverifiedTurns = new Map<string, UnverifiedTurn>()
+  /** Provider-terminal evidence remains addressable until task cleanup consumes it. */
+  private readonly observedProviderTerminals = new Map<string, UnverifiedTurn>()
+  private readonly serverRequestOwners = new Map<string, ActiveTurnContext>()
   private readonly fatalHandlers = new Set<(error: Error) => void>()
   private readonly rateLimitsUpdatedHandlers = new Set<() => void>()
   private authorizedTermination?: AuthorizedProcessTermination
-  private activeTurnAuthorizedTermination?: (outcome: AuthorizedProcessTerminationOutcome) => void
-  /**
-   * A matching provider `turn/completed` is terminal evidence even while the
-   * execute() caller is still unwinding.  Keep that fact on the runtime so a
-   * late signed PID request cannot signal a process whose root turn already
-   * completed naturally.
-   */
-  private providerTerminalObserved = false
 
   private constructor(private readonly client: AppServerJsonRpcClient) {
     client.onFatal(error => this.markFatal(error))
@@ -257,7 +270,9 @@ export class AppServerRuntimeInstance {
       if (isAccountRateLimitsUpdated(notification.method, notification.params)) {
         this.emitRateLimitsUpdated()
       }
+      this.routeNotification(notification)
     })
+    client.onServerRequest(request => this.routeServerRequest(request))
   }
 
   static async start(options: {
@@ -336,20 +351,39 @@ export class AppServerRuntimeInstance {
   }
 
   isActive(): boolean {
-    return this.active
+    return this.activeTurns.size > 0
   }
 
   requiresAttention(): boolean {
-    return this.attentionRequired
+    return this.unverifiedTurns.size > 0
   }
 
-  hasProviderTerminalObserved(): boolean {
-    return this.providerTerminalObserved
+  hasProviderTerminalObserved(threadId?: string, turnId?: string): boolean {
+    return [...this.activeTurns].some(context => (
+      context.providerTerminalObserved
+      && (!threadId || context.threadId === threadId)
+      && (!turnId || context.turnId === turnId)
+    )) || [...this.observedProviderTerminals.values()].some(observed => (
+      (!threadId || observed.threadId === threadId)
+      && (!turnId || observed.turnId === turnId)
+    ))
   }
 
   /** Called only after thread/read or a verified manual kill proves the turn ended. */
-  markObservedTerminal(): void {
-    this.attentionRequired = false
+  markObservedTerminal(threadId?: string, turnId?: string): void {
+    if (!threadId && !turnId && this.unverifiedTurns.size === 1) {
+      this.unverifiedTurns.clear()
+    }
+    for (const [key, unverified] of this.unverifiedTurns) {
+      if ((!threadId || unverified.threadId === threadId) && (!turnId || unverified.turnId === turnId)) {
+        this.unverifiedTurns.delete(key)
+      }
+    }
+    for (const [key, observed] of this.observedProviderTerminals) {
+      if ((!threadId || observed.threadId === threadId) && (!turnId || observed.turnId === turnId)) {
+        this.observedProviderTerminals.delete(key)
+      }
+    }
   }
 
   onFatal(handler: (error: Error) => void): () => void {
@@ -373,6 +407,7 @@ export class AppServerRuntimeInstance {
 
   private markFatal(error: Error): void {
     this.healthy = false
+    for (const context of this.activeTurns) context.onFatal?.(error)
     for (const handler of this.fatalHandlers) {
       try {
         handler(error)
@@ -390,6 +425,65 @@ export class AppServerRuntimeInstance {
         // Account observability must never fail the runtime transport.
       }
     }
+  }
+
+  private routeNotification(notification: AppServerNotification): void {
+    const params = notification.params || {}
+    if (notification.method === 'serverRequest/resolved') {
+      const requestId = params.requestId
+      if (typeof requestId !== 'string' && !Number.isSafeInteger(requestId)) return
+      const key = requestIdKey(requestId as string | number)
+      const owner = this.serverRequestOwners.get(key)
+      if (!owner || params.threadId !== owner.threadId) return
+      owner.onNotification?.(notification)
+      this.serverRequestOwners.delete(key)
+      return
+    }
+
+    const threadId = readString(params.threadId)
+    if (!threadId) return
+    const turnId = readString(params.turnId) || readString(asRecord(params.turn)?.id)
+    for (const context of this.activeTurns) {
+      if (context.threadId !== threadId) continue
+      if (turnId && context.turnId && context.turnId !== turnId) continue
+      if (turnId && !context.turnId && !context.turnRequestIssued) continue
+      context.onNotification?.(notification)
+    }
+  }
+
+  private async routeServerRequest(request: AppServerServerRequest): Promise<Record<string, unknown>> {
+    const parsed = parseUserInputServerRequest(request)
+    let owner = [...this.activeTurns].find(context => (
+      context.threadId === parsed.threadId && context.turnId === parsed.turnId
+    ))
+    if (!owner) {
+      const pending = [...this.activeTurns].filter(context => (
+        context.threadId === parsed.threadId && !context.turnId && context.turnRequestIssued
+      ))
+      if (pending.length === 1) owner = pending[0]
+    }
+    if (!owner?.onServerRequest) throw new Error('USER_INPUT_REQUEST_AFFINITY_MISMATCH')
+    this.serverRequestOwners.set(requestIdKey(parsed.requestId), owner)
+    try {
+      return await owner.onServerRequest(parsed)
+    } catch (error) {
+      this.serverRequestOwners.delete(requestIdKey(parsed.requestId))
+      throw error
+    }
+  }
+
+  private bindContextThread(context: ActiveTurnContext, threadId: string): void {
+    if (context.threadId === threadId) return
+    if (this.activeThreadIds.has(threadId)) {
+      throw new AppServerRuntimeError('Codex app-server thread already has an active root turn', {
+        executionCommitted: false,
+        threadId,
+        code: 'APP_SERVER_THREAD_ALREADY_ACTIVE',
+      })
+    }
+    if (context.threadId) this.activeThreadIds.delete(context.threadId)
+    context.threadId = threadId
+    this.activeThreadIds.add(threadId)
   }
 
   async readThread(threadId: string, includeTurns = true): Promise<Record<string, unknown>> {
@@ -419,7 +513,7 @@ export class AppServerRuntimeInstance {
   }
 
   async runTurn(options: PersistentTurnOptions): Promise<AppServerTurnResult> {
-    if (this.attentionRequired) {
+    if (this.requiresAttention()) {
       throw new AppServerRuntimeError('Codex app-server runtime has an unverified prior turn', {
         executionCommitted: true,
         turnMayHaveStarted: true,
@@ -434,33 +528,42 @@ export class AppServerRuntimeInstance {
         threadId: options.threadId,
       })
     }
-    if (this.active) {
-      throw new AppServerRuntimeError('Codex app-server instance already has an active root turn', {
+    if (options.threadId && this.activeThreadIds.has(options.threadId)) {
+      throw new AppServerRuntimeError('Codex app-server thread already has an active root turn', {
         executionCommitted: false,
         threadId: options.threadId,
+        code: 'APP_SERVER_THREAD_ALREADY_ACTIVE',
       })
     }
-    // This runtime may be reused after a completed turn.  The provider-terminal
-    // fence belongs to the new root turn, not to an older completed task.
-    this.providerTerminalObserved = false
-    this.active = true
+    const context: ActiveTurnContext = {
+      id: randomUUID(),
+      threadId: options.threadId,
+      turnRequestIssued: false,
+      providerTerminalObserved: false,
+    }
+    this.activeTurns.add(context)
+    if (context.threadId) this.activeThreadIds.add(context.threadId)
     try {
-      return await this.executeTurn(options)
+      return await this.executeTurn(options, context)
     } finally {
-      this.active = false
+      this.activeTurns.delete(context)
+      if (context.threadId) this.activeThreadIds.delete(context.threadId)
+      for (const [requestId, owner] of this.serverRequestOwners) {
+        if (owner === context) this.serverRequestOwners.delete(requestId)
+      }
       // The turn has consumed any authorized-close outcome.  A later manual
       // operation must create fresh evidence rather than inherit this one.
-      this.authorizedTermination = undefined
+      if (this.activeTurns.size === 0) this.authorizedTermination = undefined
     }
   }
 
   close(timeoutMs = 2_000): Promise<void> {
-    if (this.active || this.attentionRequired) {
+    if (this.isActive() || this.requiresAttention()) {
       return Promise.reject(new AppServerRuntimeError(
         'Refusing to close an app-server runtime with an active or unverified turn',
         {
-          executionCommitted: this.active || this.attentionRequired,
-          turnMayHaveStarted: this.active || this.attentionRequired,
+          executionCommitted: this.isActive() || this.requiresAttention(),
+          turnMayHaveStarted: this.isActive() || this.requiresAttention(),
           reason: 'runtime',
           code: 'APP_SERVER_PROCESS_UNVERIFIED',
         },
@@ -478,16 +581,28 @@ export class AppServerRuntimeInstance {
   async forceTerminateForAuthorizedOperation(
     expectedPid: number,
     verificationTimeoutMs = 2_000,
+    threadId?: string,
+    turnId?: string,
   ): Promise<boolean> {
     if (!this.client.pid || this.client.pid !== expectedPid) {
       throw new AppServerRuntimeError('Authorized PID did not match this app-server runtime', {
-        executionCommitted: this.active || this.attentionRequired,
-        turnMayHaveStarted: this.active || this.attentionRequired,
+        executionCommitted: this.isActive() || this.requiresAttention(),
+        turnMayHaveStarted: this.isActive() || this.requiresAttention(),
         reason: 'runtime',
         code: 'APP_SERVER_PROCESS_IDENTITY_MISMATCH',
       })
     }
-    if (this.providerTerminalObserved) {
+    if (this.activeTurns.size > 1) {
+      throw new AppServerRuntimeError('Refusing task-scoped PID termination for a shared app-server child', {
+        executionCommitted: true,
+        turnMayHaveStarted: true,
+        threadId,
+        turnId,
+        reason: 'runtime',
+        code: 'APP_SERVER_SHARED_PROCESS_ACTIVE',
+      })
+    }
+    if (this.hasProviderTerminalObserved(threadId, turnId)) {
       // The provider terminal event won the race.  Do not dispatch SIGTERM or
       // SIGKILL merely because the task-manager terminal transition has not
       // finished persisting yet.
@@ -506,12 +621,13 @@ export class AppServerRuntimeInstance {
     // Install this before signaling.  If close() rejects a pending turn/start
     // RPC, executeTurn will wait for this authoritative outcome instead of
     // treating the generic transport error as a separate observation.
-    this.attentionRequired = true
+    const activeContext = [...this.activeTurns][0]
+    if (activeContext) this.markAttention(new Error('Authorized process termination pending'), activeContext)
     this.healthy = false
     const settle = (outcome: AuthorizedProcessTerminationOutcome): void => {
       termination.completion.resolve(outcome)
-      this.activeTurnAuthorizedTermination?.(outcome)
-      if (!this.active && this.authorizedTermination === termination) {
+      activeContext?.settleAuthorizedTermination?.(outcome)
+      if (!this.isActive() && this.authorizedTermination === termination) {
         this.authorizedTermination = undefined
       }
     }
@@ -521,7 +637,10 @@ export class AppServerRuntimeInstance {
       // Preserve the indeterminate lease/task when that event is absent.
       await this.client.close(verificationTimeoutMs)
       const outcome = { observedExit: this.client.hasExited() }
-      if (outcome.observedExit) this.markObservedTerminal()
+      if (outcome.observedExit) {
+        this.unverifiedTurns.clear()
+        this.markObservedTerminal(threadId, turnId)
+      }
       settle(outcome)
       return outcome.observedExit
     } catch (error) {
@@ -532,7 +651,7 @@ export class AppServerRuntimeInstance {
     }
   }
 
-  private async executeTurn(options: PersistentTurnOptions): Promise<AppServerTurnResult> {
+  private async executeTurn(options: PersistentTurnOptions, context: ActiveTurnContext): Promise<AppServerTurnResult> {
     let executionCommitted = false
     let resolvedThreadId = options.threadId
     let resolvedTurnId: string | undefined
@@ -563,7 +682,7 @@ export class AppServerRuntimeInstance {
         },
       ))
     }
-    this.activeTurnAuthorizedTermination = settleAuthorizedTermination
+    context.settleAuthorizedTermination = settleAuthorizedTermination
     const turnCorrelation = deferred<void>()
     void turnCorrelation.promise.catch(() => undefined)
     let notificationSideEffects = Promise.resolve()
@@ -577,7 +696,11 @@ export class AppServerRuntimeInstance {
       return Boolean(notificationTurnId && notificationTurnId === resolvedTurnId)
     }
     const observeProviderTerminal = (): void => {
-      this.providerTerminalObserved = true
+      context.providerTerminalObserved = true
+      this.observedProviderTerminals.set(context.id, {
+        threadId: resolvedThreadId,
+        turnId: resolvedTurnId,
+      })
     }
     void terminal.promise.catch(() => undefined)
     const clearStallTimer = (): void => {
@@ -597,7 +720,7 @@ export class AppServerRuntimeInstance {
           reason: 'stalled',
           code: 'APP_SERVER_TURN_STALLED',
         })
-        this.markAttention(error)
+        this.markAttention(error, context)
         terminal.reject(error)
       }, options.turnStallTimeoutMs ?? DEFAULT_TURN_STALL_TIMEOUT_MS)
     }
@@ -623,7 +746,7 @@ export class AppServerRuntimeInstance {
             code: 'APP_SERVER_UNEXPECTED_IMAGE_GENERATION',
           },
         )
-        this.markAttention(error)
+        this.markAttention(error, context)
         terminal.reject(error)
         return
       }
@@ -648,7 +771,7 @@ export class AppServerRuntimeInstance {
         )
       }
     }
-    const unsubscribeNotification = this.client.onNotification(notification => {
+    context.onNotification = notification => {
       if (turnRequestIssued && !turnNotificationsReady) {
         // `turn/start` responses and notifications can arrive in the same
         // stream batch.  Once the response has supplied the turn id, a
@@ -662,13 +785,12 @@ export class AppServerRuntimeInstance {
         return
       }
       dispatchNotification(notification)
-    })
-    const unsubscribeServerRequest = this.client.onServerRequest(async request => {
-      if (request.method !== USER_INPUT_SERVER_METHOD || !options.onUserInputRequest) {
+    }
+    context.onServerRequest = async parsed => {
+      if (!options.onUserInputRequest) {
         throw new Error('UNSUPPORTED_SERVER_REQUEST')
       }
       await turnCorrelation.promise
-      const parsed = parseUserInputServerRequest(request)
       if (parsed.threadId !== resolvedThreadId || parsed.turnId !== resolvedTurnId) {
         throw new Error('USER_INPUT_REQUEST_AFFINITY_MISMATCH')
       }
@@ -678,8 +800,8 @@ export class AppServerRuntimeInstance {
       } finally {
         resumeStallTimer()
       }
-    })
-    const unsubscribeFatal = this.client.onFatal(error => terminal.reject(error))
+    }
+    context.onFatal = error => terminal.reject(error)
 
     const abort = (): void => {
       abortRequested = true
@@ -712,7 +834,7 @@ export class AppServerRuntimeInstance {
             reason: 'runtime',
             code: 'APP_SERVER_ABORT_UNCONFIRMED',
           })
-          this.markAttention(error)
+          this.markAttention(error, context)
           terminal.reject(error)
         }, options.interruptTimeoutMs ?? 5_000)
       }
@@ -726,6 +848,7 @@ export class AppServerRuntimeInstance {
         : await this.client.request('thread/start', buildThreadParams(options, false))
       resolvedThreadId = readString(asRecord(threadResponse.thread)?.id) || options.threadId
       if (!resolvedThreadId) throw new Error('Codex app-server did not return a thread id')
+      this.bindContextThread(context, resolvedThreadId)
       await options.onThreadResolved?.(resolvedThreadId)
       throwIfAborted(options.signal, resolvedThreadId)
 
@@ -739,13 +862,14 @@ export class AppServerRuntimeInstance {
       }
       if (abortRequested || options.signal.aborted) {
         throw new AppServerRuntimeError('Codex app-server turn aborted after durable commit but before start', {
-        executionCommitted: true,
+          executionCommitted: true,
           turnMayHaveStarted: false,
           threadId: resolvedThreadId,
           reason: 'aborted',
         })
       }
       turnRequestIssued = true
+      context.turnRequestIssued = true
       const turnStartRequest = this.client.request('turn/start', {
         threadId: resolvedThreadId,
         input: toAppServerInput(options.input),
@@ -766,6 +890,7 @@ export class AppServerRuntimeInstance {
       ])
       resolvedTurnId = readString(asRecord(turnResponse.turn)?.id) || resolvedTurnId
       if (!resolvedTurnId) throw new Error('Codex app-server did not return a turn id')
+      context.turnId = resolvedTurnId
       // Notifications received before the RPC continuation did not yet have a
       // turn id to compare.  Recheck them now, before onTurnStarted can yield
       // to a concurrent signed manual-PID route.
@@ -832,7 +957,7 @@ export class AppServerRuntimeInstance {
             cause: error,
           })
       turnCorrelation.reject(runtimeError)
-      if (requiresAttentionError(runtimeError)) this.markAttention(runtimeError)
+      if (requiresAttentionError(runtimeError)) this.markAttention(runtimeError, context)
       else if (turnRequestIssued && this.healthy) this.markFatal(runtimeError)
       throw runtimeError
     } finally {
@@ -840,11 +965,11 @@ export class AppServerRuntimeInstance {
       turnWatchdogStarted = false
       clearStallTimer()
       options.signal.removeEventListener('abort', abort)
-      unsubscribeNotification()
-      unsubscribeServerRequest()
-      unsubscribeFatal()
-      if (this.activeTurnAuthorizedTermination === settleAuthorizedTermination) {
-        this.activeTurnAuthorizedTermination = undefined
+      context.onNotification = undefined
+      context.onServerRequest = undefined
+      context.onFatal = undefined
+      if (context.settleAuthorizedTermination === settleAuthorizedTermination) {
+        context.settleAuthorizedTermination = undefined
       }
       // Do not close here. A transport/stall/protocol failure after turn/start
       // is not proof that the CLI stopped, and close() would SIGTERM/SIGKILL a
@@ -853,8 +978,11 @@ export class AppServerRuntimeInstance {
     }
   }
 
-  private markAttention(_error: Error): void {
-    this.attentionRequired = true
+  private markAttention(_error: Error, context: ActiveTurnContext): void {
+    this.unverifiedTurns.set(context.id, {
+      threadId: context.threadId,
+      turnId: context.turnId,
+    })
   }
 }
 

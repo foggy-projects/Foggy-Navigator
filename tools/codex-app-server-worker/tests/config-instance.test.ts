@@ -99,14 +99,16 @@ test('default model cannot target the retired Mini model', () => {
   }
 })
 
-test('concurrency cannot exceed the worst-case single-lane pool capacity', () => {
-  assert.throws(() => createConfig({
+test('single-child capacity is fixed while different Threads retain task concurrency', () => {
+  const config = createConfig({
     ...process.env,
-    CODEX_APP_SERVER_MAX_CONCURRENT_TASKS: '10',
+    CODEX_APP_SERVER_MAX_CONCURRENT_TASKS: '32',
     CODEX_APP_SERVER_POOL_MAX_INSTANCES: '8',
-    CODEX_APP_SERVER_POOL_MAX_INSTANCES_PER_LANE: '2',
-    CODEX_APP_SERVER_POOL_MAX_QUEUE: '4',
-  }), /per-lane instances plus pool queue/)
+    CODEX_APP_SERVER_POOL_MAX_INSTANCES_PER_LANE: '4',
+  })
+  assert.equal(config.poolMaxInstances, 1)
+  assert.equal(config.poolMaxInstancesPerLane, 1)
+  assert.equal(config.maxConcurrentTasks, 32)
 })
 
 test('turn stall watchdog has a bounded configurable timeout', () => {

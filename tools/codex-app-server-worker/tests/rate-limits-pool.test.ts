@@ -79,7 +79,7 @@ test('pool keeps one TTL and singleflight cache per lane', async () => {
   await pool.drain(1_000)
 })
 
-test('pool isolates lanes and quota state never gates task leases', async () => {
+test('quota reads reuse the resident lane and cannot replace it with an incompatible lane', async () => {
   const stateDir = await tempDirectory('codex-rate-limit-lanes-')
   const runtimes = new Map<string, RateLimitRuntime>()
   const pool = new AppServerPool(testConfig(stateDir), async lane => {
@@ -92,8 +92,10 @@ test('pool isolates lanes and quota state never gates task leases', async () => 
   const availableLane = testLane('lane-available')
 
   assert.equal((await pool.readRateLimits(limitedLane, true)).state, 'LIMIT_REACHED')
-  assert.equal((await pool.readRateLimits(availableLane, true)).state, 'AVAILABLE')
-  assert.equal(runtimes.size, 2)
+  const incompatible = await pool.readRateLimits(availableLane, true)
+  assert.equal(incompatible.state, 'UNKNOWN')
+  assert.equal(incompatible.error_code, 'RATE_LIMITS_SOURCE_UNAVAILABLE')
+  assert.equal(runtimes.size, 1)
 
   const lease = await pool.acquire(limitedLane)
   assert.equal(lease.runtime, runtimes.get('lane-limited'))

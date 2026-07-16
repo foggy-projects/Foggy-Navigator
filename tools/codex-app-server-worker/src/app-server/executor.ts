@@ -119,6 +119,7 @@ type TaskRuntimeLease = {
   lease: Awaited<ReturnType<AppServerPool['acquire']>>
   threadId?: string
   turnId?: string
+  turnActive: boolean
   retainLease: boolean
 }
 
@@ -158,7 +159,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
         ? await this.pool.acquireForThread(context.lane, options.request.session_id, options.signal)
         : await this.pool.acquire(context.lane, options.signal)
       const runtimeInstanceId = lease.instanceId
-      taskRuntime = { lease, retainLease: false }
+      taskRuntime = { lease, turnActive: false, retainLease: false }
       this.taskRuntimeLeases.set(options.taskId, taskRuntime)
       await options.callbacks.onInstanceResolved(runtimeInstanceId, context.lane.key)
       const bridge = new AppServerEventBridge({
@@ -169,6 +170,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
           ? new GeneratedImageStore(this.config)
           : undefined,
       })
+      taskRuntime.turnActive = true
       const result = await lease.runtime.runTurn({
         taskId: options.taskId,
         model: context.model,
@@ -200,6 +202,8 @@ export class StrictAppServerExecutor implements TaskExecutor {
         onNotification: notification => bridge.handle(notification),
         onUserInputRequest: request => options.callbacks.onUserInputRequest(request, runtimeInstanceId),
         onUserInputResolved: resolution => options.callbacks.onUserInputResolved(resolution, runtimeInstanceId),
+      }).finally(() => {
+        if (taskRuntime) taskRuntime.turnActive = false
       })
       const turnId = readString(result.turn.id)
       const bridged = bridge.getResult()
@@ -243,7 +247,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
         // timeout/protocol failure is not evidence that the underlying turn
         // stopped, so pool retirement must not call runtime.close().
       } else if (lease) {
-        lease.runtime.markObservedTerminal?.()
+        lease.runtime.markObservedTerminal?.(taskRuntime?.threadId, taskRuntime?.turnId)
         lease.release(lease.runtime.isHealthy() && !retireLease)
         if (this.taskRuntimeLeases.get(options.taskId) === taskRuntime) {
           this.taskRuntimeLeases.delete(options.taskId)
@@ -277,7 +281,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
         // A lease can briefly be assigned before runTurn starts.  Do not
         // publish that idle process as task-bound; retain an unverified lease
         // only because it may still own an indeterminate live turn.
-        if (!retained.lease.runtime.isActive() && !retained.retainLease) return []
+        if (!retained.turnActive && !retained.retainLease) return []
         if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1) return []
         return [{
           taskId,
@@ -315,7 +319,11 @@ export class StrictAppServerExecutor implements TaskExecutor {
     if (record.turn_id && record.turn_id !== retained.turnId) {
       return { observed_exit: false }
     }
-    if (retained.lease.runtime.hasProviderTerminalObserved?.()) {
+    const sharedOwner = [...this.taskRuntimeLeases.entries()].some(([otherTaskId, other]) => (
+      otherTaskId !== taskId && other.lease.runtime === retained.lease.runtime
+    ))
+    if (sharedOwner) return { observed_exit: false }
+    if (retained.lease.runtime.hasProviderTerminalObserved?.(retained.threadId, retained.turnId)) {
       return { observed_exit: false, provider_terminal_observed: true }
     }
     // The original execute() call can unwind as close() rejects its pending
@@ -325,7 +333,12 @@ export class StrictAppServerExecutor implements TaskExecutor {
     retained.retainLease = true
     let observedExit: boolean | void
     try {
-      observedExit = await retained.lease.runtime.forceTerminateForAuthorizedOperation(pid)
+      observedExit = await retained.lease.runtime.forceTerminateForAuthorizedOperation(
+        pid,
+        undefined,
+        retained.threadId,
+        retained.turnId,
+      )
     } catch (error) {
       if (error instanceof AppServerRuntimeError
           && error.code === 'APP_SERVER_PROVIDER_TERMINAL_OBSERVED') {
@@ -341,7 +354,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
     // exited.  Keep the retained lease for reconciliation unless the runtime
     // explicitly observed its process exit event.
     if (observedExit !== true) return { observed_exit: false }
-    retained.lease.runtime.markObservedTerminal?.()
+    retained.lease.runtime.markObservedTerminal?.(retained.threadId, retained.turnId)
     retained.lease.release(false)
     if (this.taskRuntimeLeases.get(taskId) === retained) this.taskRuntimeLeases.delete(taskId)
     return { observed_exit: true }
@@ -374,7 +387,7 @@ export class StrictAppServerExecutor implements TaskExecutor {
           context.lane.key,
         )
         if (result.status !== 'unknown') {
-          retained.lease.runtime.markObservedTerminal?.()
+          retained.lease.runtime.markObservedTerminal?.(retained.threadId, retained.turnId)
           retained.lease.release(retained.lease.runtime.isHealthy())
           if (this.taskRuntimeLeases.get(options.taskId) === retained) this.taskRuntimeLeases.delete(options.taskId)
         }
@@ -450,6 +463,8 @@ export class StrictAppServerExecutor implements TaskExecutor {
     const codexHome = await this.resolveCodexHome(undefined)
     const lane = await buildAppServerLane({
       cliVersion: VALIDATED_APP_SERVER_CLI_VERSION,
+      apiKey: this.config.openaiApiKey || undefined,
+      baseUrl: this.config.openaiBaseUrl || undefined,
       codexHome,
     })
     return this.pool.readRateLimits(lane, refresh)

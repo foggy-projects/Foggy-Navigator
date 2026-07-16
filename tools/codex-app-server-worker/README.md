@@ -75,12 +75,19 @@ Independent Foggy Navigator runtime backed only by `codex app-server`. It does n
   paths and, on Windows, `C:\` even when it is absent from the allowlist. Run broad defaults only
   for trusted tasks on a dedicated OS account/host, or enforce a separate container/OS boundary.
 
-P2 uses a long-lived exclusive-lease pool. A process serves only one root turn at a time; parallel
-turns scale to separate instances in the same lane. Lanes are keyed by exact CLI, CODEX_HOME,
-authentication fingerprint, base URL, and process-environment fingerprint. The pool is an execution
-and resource-management detail: upstream Java/Navigator code supplies the session and resolved
-model/runtime configuration, never a child-process identity or routing decision. Metrics expose only
-digests and counts, never credentials or home paths.
+P2 owns at most one long-lived `codex app-server` child. Tasks with the same exact startup lane share
+that child, and turns for different Threads may overlap on the same JSON-RPC connection. The Worker
+still serializes the complete lifecycle of tasks for the same Thread because fixed CLI 0.144.3 can
+steer a second `turn/start` into an active normal turn. Public Codex documentation does not promise
+cross-Thread concurrency across versions, so a CLI upgrade must revalidate the pinned protocol/source
+behavior and these regressions.
+
+The startup lane is keyed by exact CLI, `CODEX_HOME`, authentication fingerprint, base URL, and
+process-environment fingerprint. A different lane is rejected with
+`APP_SERVER_POOL_SINGLE_INSTANCE_LANE_MISMATCH`; it never replaces a healthy resident child or runs
+with the wrong startup environment. Legacy pool-capacity variables remain accepted for upgrade
+compatibility but cannot enable a second child. Healthy idle/lifetime/task-count rotation is suppressed;
+drain, crash, failed health verification, and process-tree safety retain their fail-closed behavior.
 
 Turns for different Threads may run concurrently even when they use the same working directory and
 have write access. The Worker serializes only turns belonging to the same Thread; it does not provide

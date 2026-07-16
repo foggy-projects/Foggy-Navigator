@@ -14,16 +14,16 @@ import {
 import { EventBroadcast } from '../src/persistence/event-store.js'
 import { tempDirectory, testConfig, waitFor } from './helpers.js'
 
-test('different write threads in the same cwd run concurrently on separate exclusive instances', async t => {
+test('different write threads in the same cwd run concurrently on one shared child', async t => {
   const fixture = await createFixture(t)
   const first = fixture.execute('write-one', { prompt: 'one', cwd: fixture.cwd, session_id: 'thread-one' })
   const second = fixture.execute('write-two', { prompt: 'two', cwd: fixture.cwd, session_id: 'thread-two' })
   await waitFor(() => fixture.controller.started.length === 2)
-  assert.equal(fixture.pool.metrics().busy, 2)
+  assert.equal(fixture.pool.metrics().busy, 1)
   fixture.controller.complete('write-one')
   fixture.controller.complete('write-two')
   await Promise.all([first, second])
-  assert.equal(fixture.pool.metrics().created_total, 2)
+  assert.equal(fixture.pool.metrics().created_total, 1)
 })
 
 test('write threads through canonical cwd aliases are not serialized', async t => {
@@ -41,7 +41,7 @@ test('write threads through canonical cwd aliases are not serialized', async t =
   const first = fixture.execute('canonical-one', { prompt: 'one', cwd: fixture.cwd, session_id: 'canonical-thread-one' })
   const second = fixture.execute('canonical-two', { prompt: 'two', cwd: alias, session_id: 'canonical-thread-two' })
   await waitFor(() => fixture.controller.started.length === 2)
-  assert.equal(fixture.pool.metrics().busy, 2)
+  assert.equal(fixture.pool.metrics().busy, 1)
   fixture.controller.complete('canonical-one')
   fixture.controller.complete('canonical-two')
   await Promise.all([first, second])
@@ -64,7 +64,7 @@ test('executor serializes the same thread even for read-only turns', async t => 
   await Promise.all([first, second])
 })
 
-test('different read-only threads run concurrently on separate exclusive instances', async t => {
+test('different read-only threads run concurrently on one shared child', async t => {
   const fixture = await createFixture(t)
   const first = fixture.execute('parallel-one', {
     prompt: 'one', cwd: fixture.cwd, session_id: 'thread-one', sandbox_mode: 'read-only',
@@ -73,7 +73,7 @@ test('different read-only threads run concurrently on separate exclusive instanc
     prompt: 'two', cwd: fixture.cwd, session_id: 'thread-two', sandbox_mode: 'read-only',
   })
   await waitFor(() => fixture.controller.started.length === 2)
-  assert.equal(fixture.pool.metrics().busy, 2)
+  assert.equal(fixture.pool.metrics().busy, 1)
   fixture.controller.complete('parallel-one')
   fixture.controller.complete('parallel-two')
   await Promise.all([first, second])
@@ -327,19 +327,18 @@ class TurnController {
 class ControlledRuntime implements PoolRuntimeInstance {
   readonly pid = 1
   private healthy = true
-  private active = false
+  private active = 0
   constructor(private readonly controller: TurnController) {}
   isHealthy(): boolean { return this.healthy }
-  isActive(): boolean { return this.active }
+  isActive(): boolean { return this.active > 0 }
   async runTurn(options: PersistentTurnOptions): Promise<AppServerTurnResult> {
-    assert.equal(this.active, false)
-    this.active = true
+    this.active++
     const threadId = options.threadId || `thread-${options.taskId}`
     await options.onThreadResolved?.(threadId)
     await options.onExecutionCommitted?.(threadId)
     await options.onTurnStarted?.(threadId, `turn-${options.taskId}`)
     await this.controller.wait(options.taskId)
-    this.active = false
+    this.active--
     return { threadId, turn: { id: `turn-${options.taskId}`, status: 'completed' } }
   }
   async readThread(): Promise<Record<string, unknown>> { return { turns: [] } }

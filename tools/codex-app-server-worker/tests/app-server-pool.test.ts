@@ -11,6 +11,7 @@ import {
   AppServerPoolDrainTimeoutError,
   AppServerPoolDrainingError,
   AppServerPoolOverloadedError,
+  AppServerPoolSingleInstanceLaneMismatchError,
   type AppServerLane,
   type PoolRuntimeInstance,
 } from '../src/app-server/pool.js'
@@ -28,7 +29,7 @@ const lane = (key: string): AppServerLane => ({
   env: {},
 })
 
-test('exclusive leases reuse idle instances and scale parallel turns to separate instances', async t => {
+test('compatible leases share one resident child without queueing', async t => {
   const runtimes: FakeRuntime[] = []
   const pool = new AppServerPool(testConfig('C:\\state'), async () => {
     const runtime = new FakeRuntime()
@@ -39,150 +40,92 @@ test('exclusive leases reuse idle instances and scale parallel turns to separate
 
   const first = await pool.acquire(lane('a'))
   const second = await pool.acquire(lane('a'))
-  assert.notEqual(first.instanceId, second.instanceId)
-  assert.equal(pool.metrics().busy, 2)
-  const thirdPromise = pool.acquire(lane('a'))
-  await new Promise(resolve => setTimeout(resolve, 5))
-  assert.equal(pool.metrics().queued, 1)
-  const firstId = first.instanceId
+  const third = await pool.acquire(lane('a'))
+  assert.equal(second.instanceId, first.instanceId)
+  assert.equal(third.instanceId, first.instanceId)
+  assert.equal(pool.metrics().busy, 1)
+  assert.equal(pool.metrics().queued, 0)
+  assert.equal(pool.metrics().reused_total, 2)
   first.release()
-  const third = await thirdPromise
-  assert.equal(third.instanceId, firstId)
-  assert.equal(pool.metrics().reused_total, 1)
   second.release()
   third.release()
-  assert.equal(runtimes.length, 2)
+  assert.equal(runtimes.length, 1)
 })
 
-test('full pool replaces the least-recently-used idle instance for a new lane', async t => {
-  let now = 100
+test('an incompatible lane is rejected without replacing a healthy idle child', async t => {
   const runtimes: Array<{ laneKey: string, runtime: FakeRuntime }> = []
-  const config = testConfig('C:\\state', {
-    poolMaxInstances: 2,
-    poolMaxInstancesPerLane: 2,
-    poolAcquireTimeoutMs: 500,
-    poolIdleTtlMs: 10_000,
-  })
-  const pool = new AppServerPool(config, async requestedLane => {
+  const pool = new AppServerPool(testConfig('C:\\state'), async requestedLane => {
     const runtime = new FakeRuntime()
     runtimes.push({ laneKey: requestedLane.key, runtime })
     return runtime
-  }, () => now)
+  })
   t.after(() => pool.drain(100))
 
   const firstA = await pool.acquire(lane('a'))
   firstA.release()
-  now = 200
-  const firstB = await pool.acquire(lane('b'))
-  firstB.release()
-  now = 300
-  const recentA = await pool.acquire(lane('a'))
-  recentA.release()
+  await assert.rejects(pool.acquire(lane('b')), AppServerPoolSingleInstanceLaneMismatchError)
 
-  const leaseC = await pool.acquire(lane('c'))
-  assert.equal(runtimes.find(item => item.laneKey === 'b')?.runtime.closed, true)
-  assert.equal(runtimes.find(item => item.laneKey === 'a')?.runtime.closed, false)
-  assert.equal(runtimes.find(item => item.laneKey === 'c')?.runtime, leaseC.runtime)
-  assert.equal(pool.metrics().instances, 2)
-  assert.equal(pool.metrics().created_total, 3)
-  assert.equal(pool.metrics().reused_total, 1)
-  assert.equal(pool.metrics().retired_total, 1)
-  leaseC.release()
+  assert.equal(runtimes.length, 1)
+  assert.equal(runtimes[0]?.runtime.closed, false)
+  assert.equal(pool.metrics().instances, 1)
+  assert.equal(pool.metrics().created_total, 1)
+  assert.equal(pool.metrics().retired_total, 0)
 })
 
-test('cross-lane replacement never retires a busy instance', async t => {
+test('an incompatible lane is rejected without disturbing active compatible leases', async t => {
   const runtimes: Array<{ laneKey: string, runtime: FakeRuntime }> = []
-  const config = testConfig('C:\\state', {
-    poolMaxInstances: 2,
-    poolMaxInstancesPerLane: 2,
-    poolAcquireTimeoutMs: 500,
-    poolIdleTtlMs: 10_000,
-  })
-  const pool = new AppServerPool(config, async requestedLane => {
+  const pool = new AppServerPool(testConfig('C:\\state'), async requestedLane => {
     const runtime = new FakeRuntime()
     runtimes.push({ laneKey: requestedLane.key, runtime })
     return runtime
   })
   t.after(() => pool.drain(100))
 
-  const busyA = await pool.acquire(lane('a'))
-  const idleB = await pool.acquire(lane('b'))
-  idleB.release()
-  const leaseC = await pool.acquire(lane('c'))
+  const first = await pool.acquire(lane('a'))
+  const second = await pool.acquire(lane('a'))
+  await assert.rejects(pool.acquire(lane('b')), AppServerPoolSingleInstanceLaneMismatchError)
 
-  assert.equal(runtimes.find(item => item.laneKey === 'a')?.runtime.closed, false)
-  assert.equal(runtimes.find(item => item.laneKey === 'b')?.runtime.closed, true)
-  assert.equal(pool.metrics().busy, 2)
-  busyA.release()
-  leaseC.release()
+  assert.equal(first.instanceId, second.instanceId)
+  assert.equal(runtimes.length, 1)
+  assert.equal(runtimes[0]?.runtime.closed, false)
+  assert.equal(pool.metrics().busy, 1)
+  first.release()
+  second.release()
 })
 
-test('concurrent cross-lane replacements wait for slow closes and never exceed global capacity', async t => {
+test('concurrent compatible acquisition never creates more than one child', async t => {
   let openChildren = 0
   let maxOpenChildren = 0
-  let maxReservedCapacity = 0
-  let pool!: AppServerPool
-  const config = testConfig('C:\\state', {
-    poolMaxInstances: 2,
-    poolMaxInstancesPerLane: 2,
-    poolAcquireTimeoutMs: 1_000,
-    poolIdleTtlMs: 10_000,
-  })
-  pool = new AppServerPool(config, async () => {
+  const pool = new AppServerPool(testConfig('C:\\state'), async () => {
     openChildren++
     maxOpenChildren = Math.max(maxOpenChildren, openChildren)
-    const metrics = pool.metrics()
-    maxReservedCapacity = Math.max(maxReservedCapacity, metrics.instances + metrics.creating)
     return new SlowCloseRuntime(25, () => { openChildren-- })
   })
   t.after(() => pool.drain(500))
 
-  const idleA = await pool.acquire(lane('a'))
-  idleA.release()
-  const idleB = await pool.acquire(lane('b'))
-  idleB.release()
-
-  const [leaseC, leaseD] = await Promise.all([
-    pool.acquire(lane('c')),
-    pool.acquire(lane('d')),
+  const leases = await Promise.all([
+    pool.acquire(lane('a')),
+    pool.acquire(lane('a')),
+    pool.acquire(lane('a')),
   ])
-  assert.equal(maxOpenChildren, 2)
-  assert.ok(maxReservedCapacity <= config.poolMaxInstances)
-  assert.equal(pool.metrics().instances + pool.metrics().creating, 2)
-  assert.equal(pool.metrics().created_total, 4)
-  assert.equal(pool.metrics().retired_total, 2)
-  leaseC.release()
-  leaseD.release()
+  assert.equal(maxOpenChildren, 1)
+  assert.equal(new Set(leases.map(lease => lease.instanceId)).size, 1)
+  assert.equal(pool.metrics().instances + pool.metrics().creating, 1)
+  assert.equal(pool.metrics().created_total, 1)
+  for (const lease of leases) lease.release()
 })
 
 test('a rejected idle close fails closed and makes drain report retirement failure', async () => {
-  let now = 100
-  const runtimes: PoolRuntimeInstance[] = []
-  const config = testConfig('C:\\state', {
-    poolMaxInstances: 2,
-    poolMaxInstancesPerLane: 2,
-    poolAcquireTimeoutMs: 500,
-    poolIdleTtlMs: 10_000,
-  })
-  const pool = new AppServerPool(config, async () => {
-    const runtime = runtimes.length === 0 ? new RejectingCloseRuntime() : new FakeRuntime()
-    runtimes.push(runtime)
-    return runtime
-  }, () => now)
+  const pool = new AppServerPool(testConfig('C:\\state'), async () => new RejectingCloseRuntime())
+  const lease = await pool.acquire(lane('a'))
+  lease.release()
 
-  const idleA = await pool.acquire(lane('a'))
-  idleA.release()
-  now = 200
-  const idleB = await pool.acquire(lane('b'))
-  idleB.release()
-  await assert.rejects(pool.acquire(lane('c')), AppServerPoolDrainingError)
-
-  assert.equal(pool.isDraining(), true)
-  assert.equal(pool.metrics().instances, 1)
-  assert.equal(pool.metrics().created_total, 2)
-  assert.equal(pool.metrics().retired_total, 1)
   await assert.rejects(pool.drain(500), AggregateError)
+  assert.equal(pool.isDraining(), true)
   assert.equal(pool.metrics().instances, 0)
+  assert.equal(pool.metrics().created_total, 1)
+  assert.equal(pool.metrics().retired_total, 1)
+  await assert.rejects(pool.acquire(lane('a')), AppServerPoolDrainingError)
 })
 
 test('process-tree safety failure rejects the current acquire and permanently fails the pool closed', async () => {
@@ -224,6 +167,109 @@ test('pool enforces global bounded queue and rejects new leases while draining',
   assert.equal(pool.metrics().instances, 0)
 })
 
+test('single app-server child shares compatible leases concurrently without normal pool rotation', async t => {
+  let now = 1_000
+  const runtimes: FakeRuntime[] = []
+  const pool = new AppServerPool(testConfig('C:\\state', {
+    poolMaxInstances: 6,
+    poolMaxInstancesPerLane: 4,
+    poolIdleTtlMs: 100,
+    poolMaxLifetimeMs: 200,
+    poolMaxTasksPerInstance: 1,
+  }), async () => {
+    const runtime = new FakeRuntime()
+    runtimes.push(runtime)
+    return runtime
+  }, () => now)
+  t.after(() => pool.drain(100))
+
+  const first = await pool.acquire(lane('shared'))
+  const secondPromise = pool.acquire(lane('shared'))
+  let resolvedBeforeRelease = false
+  void secondPromise.then(() => { resolvedBeforeRelease = true })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  if (!resolvedBeforeRelease) first.release()
+  const second = await secondPromise
+  assert.equal(second.instanceId, first.instanceId)
+  assert.equal(resolvedBeforeRelease, true, 'compatible leases must share the resident child without queueing')
+  assert.equal(pool.metrics().queued, 0)
+  assert.equal(pool.metrics().busy, 1)
+  first.release()
+  second.release()
+
+  now += 1_000
+  pool.sweep()
+  const third = await pool.acquire(lane('shared'))
+  assert.equal(third.instanceId, first.instanceId)
+  third.release()
+  assert.equal(runtimes.length, 1)
+  assert.equal(pool.metrics().retired_total, 0)
+})
+
+test('single-child pool rejects an incompatible startup lane instead of replacing its resident child', async t => {
+  const runtimes: FakeRuntime[] = []
+  const pool = new AppServerPool(testConfig('C:\\state', {
+    poolAcquireTimeoutMs: 100,
+  }), async () => {
+    const runtime = new FakeRuntime()
+    runtimes.push(runtime)
+    return runtime
+  })
+  t.after(() => pool.drain(100))
+
+  const resident = await pool.acquire(lane('first'))
+  resident.release()
+  await assert.rejects(pool.acquire(lane('different')), AppServerPoolSingleInstanceLaneMismatchError)
+  assert.equal(runtimes.length, 1)
+  assert.equal(runtimes[0]?.closed, false)
+  assert.equal(pool.metrics().retired_total, 0)
+})
+
+test('a shared child crash waits for every lease before retirement and replacement', async t => {
+  const runtimes: FakeRuntime[] = []
+  const pool = new AppServerPool(testConfig('C:\\state'), async () => {
+    const runtime = new FakeRuntime()
+    runtimes.push(runtime)
+    return runtime
+  })
+  t.after(() => pool.drain(100))
+
+  const first = await pool.acquire(lane('shared-crash'))
+  const second = await pool.acquire(lane('shared-crash'))
+  const crashed = first.runtime as FakeRuntime
+  crashed.crash()
+  first.release(false)
+  assert.equal(crashed.closed, false, 'another task still owns the crashed child lease')
+  assert.equal(pool.metrics().instances, 1)
+
+  second.release(false)
+  assert.equal(crashed.closed, true)
+  assert.equal(pool.metrics().crashes_total, 1)
+  const replacement = await pool.acquire(lane('shared-crash'))
+  assert.notEqual(replacement.instanceId, first.instanceId)
+  assert.equal(runtimes.length, 2)
+  replacement.release()
+})
+
+test('drain waits for all shared leases and closes the child only after the last release', async () => {
+  const runtime = new FakeRuntime()
+  const pool = new AppServerPool(testConfig('C:\\state'), async () => runtime)
+  const first = await pool.acquire(lane('shared-drain'))
+  const second = await pool.acquire(lane('shared-drain'))
+  let drained = false
+  const draining = pool.drain(1_000).then(() => { drained = true })
+
+  await waitFor(() => pool.isDraining())
+  first.release()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(drained, false)
+  assert.equal(runtime.closed, false)
+  second.release()
+  await draining
+  assert.equal(runtime.closed, true)
+  assert.equal(pool.metrics().instances, 0)
+})
+
 test('pool drain waits for in-flight instance creation and retires the created child within its deadline', async () => {
   let finishCreation!: (runtime: FakeRuntime) => void
   const factoryGate = new Promise<FakeRuntime>(resolve => { finishCreation = resolve })
@@ -253,7 +299,7 @@ test('pool drain rejects instead of releasing shutdown ownership while close is 
   assert.equal(pool.metrics().instances, 0)
 })
 
-test('idle TTL retirement cleans the tracked app-server descendant before drain settles', async t => {
+test('drain cleans a tracked app-server descendant even after the legacy idle TTL elapses', async t => {
   let now = 1_000
   const fixture = await createStubbornProcessTreeFixture(t)
   const config = testConfig(fixture.stateDir, {
@@ -301,7 +347,7 @@ test('pool drain does not resolve until a tracked app-server descendant is gone'
   assert.equal(pool.metrics().instances, 0)
 })
 
-test('idle TTL, task-count retirement, and child crashes evict only the affected instance', async t => {
+test('healthy TTL and task-count thresholds do not rotate the resident child, but a crash does', async t => {
   let now = 1_000
   const runtimes: FakeRuntime[] = []
   const config = testConfig('C:\\state', {
@@ -320,11 +366,12 @@ test('idle TTL, task-count retirement, and child crashes evict only the affected
   first.release()
   now += 101
   pool.sweep()
-  assert.equal(runtimes[0]?.closed, true)
-  assert.equal(pool.metrics().instances, 0)
+  assert.equal(runtimes[0]?.closed, false)
+  assert.equal(pool.metrics().instances, 1)
 
   const second = await pool.acquire(lane('a'))
   const secondRuntime = second.runtime as FakeRuntime
+  assert.equal(second.instanceId, first.instanceId)
   secondRuntime.crash()
   second.release()
   assert.equal(secondRuntime.closed, true)
@@ -336,10 +383,10 @@ test('idle TTL, task-count retirement, and child crashes evict only the affected
   const fourth = await pool.acquire(lane('a'))
   assert.equal(fourth.instanceId, thirdId)
   fourth.release()
-  assert.equal((fourth.runtime as FakeRuntime).closed, true, 'max task count retires the instance')
+  assert.equal((fourth.runtime as FakeRuntime).closed, false, 'normal task count does not rotate a healthy child')
 })
 
-test('idle processes rotate without retaining session ownership', async t => {
+test('healthy idle processes remain resident across TTL sweeps', async t => {
   let now = 1_000
   const config = testConfig('C:\\state', {
     poolIdleTtlMs: 100,
@@ -355,13 +402,13 @@ test('idle processes rotate without retaining session ownership', async t => {
   now += 101
   pool.sweep()
 
-  assert.equal(pool.metrics().instances, 0)
-  const replacement = await pool.acquire(lane('resume-capable'))
-  assert.notEqual(replacement.instanceId, firstId)
-  replacement.release()
+  assert.equal(pool.metrics().instances, 1)
+  const reused = await pool.acquire(lane('resume-capable'))
+  assert.equal(reused.instanceId, firstId)
+  reused.release()
 })
 
-test('continuations prefer an idle app-server instance that already has the thread loaded', async t => {
+test('continuations reuse the resident app-server child that has the thread loaded', async t => {
   const pool = new AppServerPool(testConfig('C:\\state'), async () => new FakeRuntime())
   t.after(() => pool.drain(100))
 
@@ -377,7 +424,7 @@ test('continuations prefer an idle app-server instance that already has the thre
   resumed.release()
 })
 
-test('a busy loaded instance is a soft preference and never blocks a compatible idle fallback', async t => {
+test('an active compatible lease never blocks a continuation from sharing the resident child', async t => {
   const pool = new AppServerPool(testConfig('C:\\state'), async () => new FakeRuntime())
   t.after(() => pool.drain(100))
 
@@ -393,7 +440,7 @@ test('a busy loaded instance is a soft preference and never blocks a compatible 
   busyLoaded.release()
 })
 
-test('loaded-thread preference cannot reuse an instance that expires before lease assignment', async t => {
+test('loaded-thread lookup does not rotate a healthy resident child after its legacy TTL', async t => {
   let now = 1_000
   let expireAfterNextRead = false
   const config = testConfig('C:\\state', {
@@ -419,8 +466,8 @@ test('loaded-thread preference cannot reuse an instance that expires before leas
 
   expireAfterNextRead = true
   const resumed = await pool.acquireForThread(lane('expiring-loaded-thread'), 'thread-expiring')
-  assert.notEqual(resumed.instanceId, loadedInstanceId)
-  assert.equal(loadedRuntime.closed, true)
+  assert.equal(resumed.instanceId, loadedInstanceId)
+  assert.equal(loadedRuntime.closed, false)
   resumed.release()
 })
 

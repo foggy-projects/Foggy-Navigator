@@ -86,8 +86,16 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     allowedCwds: absolutePathList(env.CODEX_APP_SERVER_ALLOWED_CWDS),
     maxConcurrentTasks: integer(env.CODEX_APP_SERVER_MAX_CONCURRENT_TASKS, 32, 1, 128, 'CODEX_APP_SERVER_MAX_CONCURRENT_TASKS'),
     maxQueuedTasks: integer(env.CODEX_APP_SERVER_MAX_QUEUED_TASKS, 64, 1, 1_024, 'CODEX_APP_SERVER_MAX_QUEUED_TASKS'),
-    poolMaxInstances: integer(env.CODEX_APP_SERVER_POOL_MAX_INSTANCES, 6, 1, 64, 'CODEX_APP_SERVER_POOL_MAX_INSTANCES'),
-    poolMaxInstancesPerLane: integer(env.CODEX_APP_SERVER_POOL_MAX_INSTANCES_PER_LANE, 4, 1, 64, 'CODEX_APP_SERVER_POOL_MAX_INSTANCES_PER_LANE'),
+    // Legacy capacity variables remain parseable for upgrade compatibility,
+    // but the Worker contract is now unconditionally one resident child.
+    poolMaxInstances: fixedSingleChildCapacity(
+      env.CODEX_APP_SERVER_POOL_MAX_INSTANCES,
+      'CODEX_APP_SERVER_POOL_MAX_INSTANCES',
+    ),
+    poolMaxInstancesPerLane: fixedSingleChildCapacity(
+      env.CODEX_APP_SERVER_POOL_MAX_INSTANCES_PER_LANE,
+      'CODEX_APP_SERVER_POOL_MAX_INSTANCES_PER_LANE',
+    ),
     poolMaxQueue: integer(env.CODEX_APP_SERVER_POOL_MAX_QUEUE, 32, 1, 1_024, 'CODEX_APP_SERVER_POOL_MAX_QUEUE'),
     poolAcquireTimeoutMs: integer(env.CODEX_APP_SERVER_POOL_ACQUIRE_TIMEOUT_MS, 30_000, 100, 600_000, 'CODEX_APP_SERVER_POOL_ACQUIRE_TIMEOUT_MS'),
     poolIdleTtlMs: integer(env.CODEX_APP_SERVER_POOL_IDLE_TTL_MS, 300_000, 100, 86_400_000, 'CODEX_APP_SERVER_POOL_IDLE_TTL_MS'),
@@ -111,15 +119,6 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     defaultModel: supportedDefaultModel(env.CODEX_DEFAULT_MODEL || 'codex-latest'),
     modelAliases: aliases(env.CODEX_MODEL_ALIASES),
   }
-  if (result.poolMaxInstancesPerLane > result.poolMaxInstances) {
-    throw new Error('CODEX_APP_SERVER_POOL_MAX_INSTANCES_PER_LANE must not exceed CODEX_APP_SERVER_POOL_MAX_INSTANCES')
-  }
-  if (result.maxConcurrentTasks > result.poolMaxInstances + result.poolMaxQueue) {
-    throw new Error('CODEX_APP_SERVER_MAX_CONCURRENT_TASKS must not exceed pool instances plus pool queue')
-  }
-  if (result.maxConcurrentTasks > result.poolMaxInstancesPerLane + result.poolMaxQueue) {
-    throw new Error('CODEX_APP_SERVER_MAX_CONCURRENT_TASKS must not exceed per-lane instances plus pool queue')
-  }
   if (result.poolIdleTtlMs > result.poolMaxLifetimeMs) {
     throw new Error('CODEX_APP_SERVER_POOL_IDLE_TTL_MS must not exceed CODEX_APP_SERVER_POOL_MAX_LIFETIME_MS')
   }
@@ -127,6 +126,11 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     assertCodexHomeIsolation(result)
   }
   return result
+}
+
+function fixedSingleChildCapacity(raw: string | undefined, field: string): number {
+  integer(raw, 1, 1, 64, field)
+  return 1
 }
 
 function imageGenerationMode(raw: string | undefined): AppConfig['imageGenerationMode'] {

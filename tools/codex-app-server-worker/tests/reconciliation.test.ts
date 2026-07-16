@@ -8,7 +8,11 @@ import {
   type ReconciliationResult,
   type TaskExecutor,
 } from '../src/app-server/executor.js'
-import { AppServerPool, type PoolRuntimeInstance } from '../src/app-server/pool.js'
+import {
+  AppServerPool,
+  AppServerPoolSingleInstanceLaneMismatchError,
+  type PoolRuntimeInstance,
+} from '../src/app-server/pool.js'
 import type { AppServerTurnResult, PersistentTurnOptions } from '../src/app-server/runtime.js'
 import { AppServerRuntimeError } from '../src/app-server/runtime.js'
 import type { StoredTaskRecord } from '../src/models.js'
@@ -270,6 +274,32 @@ test('a pre-turn transport exception is diagnostic-only until an observed outcom
   assert.equal(diagnostic?.terminal_status, undefined)
 })
 
+test('a deterministic single-child lane mismatch fails terminally without recovery retry', async t => {
+  const stateDir = await tempDirectory('codex-app-preturn-lane-mismatch-')
+  t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
+  const config = testConfig(stateDir)
+  const store = new TaskStore({ stateDir, encryptionKey: config.stateEncryptionKey! })
+  const executor = new LaneMismatchExecutor()
+  const manager = new TaskManager(config, store, executor)
+  await manager.initialize()
+  await manager.accept('preturn-lane-mismatch', { prompt: 'must not retry' })
+  await waitUntil(() => manager.get('preturn-lane-mismatch')?.status === 'terminal')
+
+  await new Promise(resolve => setTimeout(resolve, 50))
+  const record = manager.get('preturn-lane-mismatch')
+  assert.equal(record?.outcome, 'failed')
+  assert.equal(record?.error_code, 'APP_SERVER_POOL_SINGLE_INSTANCE_LANE_MISMATCH')
+  assert.equal(record?.attention?.length || 0, 0)
+  assert.equal(record?.recovery_required, false)
+  assert.equal(executor.executeCalls, 1)
+  const errors = manager.getBroadcast('preturn-lane-mismatch').getEventsAfter(0)
+    .filter(event => event.type === 'error')
+  assert.equal(errors.length, 1)
+  assert.equal(errors[0]?.subtype, 'APP_SERVER_POOL_SINGLE_INSTANCE_LANE_MISMATCH')
+  assert.equal(errors[0]?.terminal_observed, true)
+  assert.equal(errors[0]?.terminal_status, 'FAILED')
+})
+
 test('ambiguous interrupt remains cancel-requested until thread reconciliation proves a terminal state', async t => {
   const stateDir = await tempDirectory('codex-app-abort-reconcile-')
   t.after(() => fs.rm(stateDir, { recursive: true, force: true }))
@@ -497,6 +527,15 @@ class UncertainFailureExecutor implements TaskExecutor {
 class PreTurnFailureExecutor implements TaskExecutor {
   async execute(): Promise<ExecutionResult> {
     throw new Error('transport failed before a terminal observation')
+  }
+}
+
+class LaneMismatchExecutor implements TaskExecutor {
+  executeCalls = 0
+
+  async execute(): Promise<ExecutionResult> {
+    this.executeCalls++
+    throw new AppServerPoolSingleInstanceLaneMismatchError()
   }
 }
 

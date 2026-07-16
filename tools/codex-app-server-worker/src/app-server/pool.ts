@@ -33,19 +33,24 @@ export interface PoolRuntimeInstance {
   isHealthy(): boolean
   isActive(): boolean
   requiresAttention?(): boolean
-  markObservedTerminal?(): void
+  markObservedTerminal?(threadId?: string, turnId?: string): void
   /**
    * True only after this runtime observed a matching provider terminal event
    * for its current root turn.  It is a no-signal fence for a late manual PID
    * operation while TaskManager is still persisting that terminal result.
    */
-  hasProviderTerminalObserved?(): boolean
+  hasProviderTerminalObserved?(threadId?: string, turnId?: string): boolean
   /**
    * The boolean is deliberately an observation result, not a dispatch ACK.
    * A signed manual PID operation may signal a process, but TaskManager must
    * retain the task unless the runtime also verified that its child exited.
    */
-  forceTerminateForAuthorizedOperation?(expectedPid: number): boolean | void | Promise<boolean | void>
+  forceTerminateForAuthorizedOperation?(
+    expectedPid: number,
+    verificationTimeoutMs?: number,
+    threadId?: string,
+    turnId?: string,
+  ): boolean | void | Promise<boolean | void>
   runTurn(options: PersistentTurnOptions): ReturnType<AppServerRuntimeInstance['runTurn']>
   readThread(threadId: string, includeTurns?: boolean): Promise<Record<string, unknown>>
   listLoadedThreads?(): Promise<string[]>
@@ -98,6 +103,19 @@ export class AppServerPoolAcquireTimeoutError extends Error {
   }
 }
 
+/**
+ * The Worker owns at most one resident child. Reusing it across an
+ * auth/home/environment boundary would silently run work with the wrong
+ * startup credentials or CODEX_HOME, so incompatible lanes fail closed.
+ */
+export class AppServerPoolSingleInstanceLaneMismatchError extends Error {
+  readonly code = 'APP_SERVER_POOL_SINGLE_INSTANCE_LANE_MISMATCH'
+  constructor() {
+    super('The resident app-server child is bound to a different execution lane')
+    this.name = 'AppServerPoolSingleInstanceLaneMismatchError'
+  }
+}
+
 export class AppServerPoolDrainTimeoutError extends Error {
   readonly code = 'APP_SERVER_POOL_DRAIN_TIMEOUT'
   constructor() {
@@ -110,7 +128,7 @@ type InstanceRecord = {
   id: string
   laneKey: string
   runtime: PoolRuntimeInstance
-  busy: boolean
+  activeLeases: number
   crashed: boolean
   createdAt: number
   lastUsedAt: number
@@ -183,13 +201,9 @@ export class AppServerPool {
 
   constructor(
     private readonly config: Pick<AppConfig,
-      | 'poolMaxInstances'
-      | 'poolMaxInstancesPerLane'
       | 'poolMaxQueue'
       | 'poolAcquireTimeoutMs'
       | 'poolIdleTtlMs'
-      | 'poolMaxLifetimeMs'
-      | 'poolMaxTasksPerInstance'
       | 'stateDir'>,
     factory: PoolInstanceFactory = async (lane, signal) => AppServerRuntimeInstance.start({
       env: lane.env,
@@ -220,7 +234,7 @@ export class AppServerPool {
       this.counters.rejected++
       throw new AppServerPoolOverloadedError()
     }
-    const preferredInstanceId = await this.findIdleLoadedThreadInstance(lane.key, threadId, signal)
+    const preferredInstanceId = await this.findLoadedThreadInstance(lane.key, threadId, signal)
     return this.enqueueAcquire(lane, signal, preferredInstanceId)
   }
 
@@ -278,8 +292,8 @@ export class AppServerPool {
     const records = [...this.instances.values()]
     return {
       instances: records.length,
-      busy: records.filter(record => record.busy || record.runtime.requiresAttention?.()).length,
-      idle: records.filter(record => !record.busy && !record.runtime.requiresAttention?.()).length,
+      busy: records.filter(record => record.activeLeases > 0 || record.runtime.requiresAttention?.()).length,
+      idle: records.filter(record => record.activeLeases === 0 && !record.runtime.requiresAttention?.()).length,
       creating: this.creating,
       queued: this.waiters.length,
       lanes: new Set(records.map(record => record.laneKey)).size,
@@ -314,15 +328,9 @@ export class AppServerPool {
       // An unverified runtime is deliberately retained until a terminal
       // observation or a separately authorized kill.  Do not let periodic
       // pool maintenance turn an observability failure into a process kill.
-      if (record.busy || record.runtime.isActive() || record.runtime.requiresAttention?.()) continue
+      if (record.activeLeases > 0 || record.runtime.isActive() || record.runtime.requiresAttention?.()) continue
       if (!record.runtime.isHealthy() || record.crashed) {
         this.retire(record, true)
-      } else if (
-        now - record.lastUsedAt >= this.config.poolIdleTtlMs
-        || now - record.createdAt >= this.config.poolMaxLifetimeMs
-        || record.taskCount >= this.config.poolMaxTasksPerInstance
-      ) {
-        this.retire(record, false)
       }
     }
     for (const [laneKey, cached] of this.rateLimitsCache) {
@@ -345,19 +353,19 @@ export class AppServerPool {
       for (const waiter of [...this.waiters]) this.rejectWaiter(waiter, new AppServerPoolDrainingError())
       for (const controller of this.creationControllers) controller.abort('Pool draining')
       for (const record of [...this.instances.values()]) {
-        if (!record.busy && !record.runtime.isActive() && !record.runtime.requiresAttention?.()) {
+        if (record.activeLeases === 0 && !record.runtime.isActive() && !record.runtime.requiresAttention?.()) {
           this.retire(record, false)
         }
       }
       while (([...this.instances.values()].some(record => (
-        record.busy || record.runtime.isActive() || record.runtime.requiresAttention?.()
+        record.activeLeases > 0 || record.runtime.isActive() || record.runtime.requiresAttention?.()
       )) || this.creating > 0) && Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 25))
       }
       // Never retire a lane that still owns an active or unverified turn.
       // runtime.close() may SIGTERM/SIGKILL the app-server process tree.
       for (const record of [...this.instances.values()]) {
-        if (!record.busy && !record.runtime.isActive() && !record.runtime.requiresAttention?.()) {
+        if (record.activeLeases === 0 && !record.runtime.isActive() && !record.runtime.requiresAttention?.()) {
           this.retire(record, false)
         }
       }
@@ -446,7 +454,7 @@ export class AppServerPool {
   private async ensureRateLimitsSource(lane: AppServerLane): Promise<InstanceRecord | undefined> {
     const existing = this.findRateLimitsSource(lane.key)
     if (existing) return existing
-    if (this.draining || !this.canCreate(lane.key)) return undefined
+    if (this.draining || this.hasIncompatibleResidentLane(lane.key) || !this.canCreate()) return undefined
     const controller = new AbortController()
     this.reserveCreation(lane.key, controller)
     try {
@@ -507,7 +515,7 @@ export class AppServerPool {
       id: crypto.randomUUID(),
       laneKey,
       runtime,
-      busy: false,
+      activeLeases: 0,
       crashed: false,
       createdAt: now,
       lastUsedAt: now,
@@ -547,7 +555,7 @@ export class AppServerPool {
         if (
           preferred
           && preferred.laneKey === waiter.lane.key
-          && this.isIdleReusable(preferred, this.now())
+          && this.isReusable(preferred)
         ) {
           this.removeWaiter(waiter)
           this.counters.reused++
@@ -555,14 +563,18 @@ export class AppServerPool {
           continue
         }
       }
-      const idle = this.findReusable(waiter.lane.key)
-      if (idle) {
+      const reusable = this.findReusable(waiter.lane.key)
+      if (reusable) {
         this.removeWaiter(waiter)
         this.counters.reused++
-        this.resolveWaiter(waiter, this.lease(idle))
+        this.resolveWaiter(waiter, this.lease(reusable))
         continue
       }
-      if (this.canCreate(waiter.lane.key)) {
+      if (this.hasIncompatibleResidentLane(waiter.lane.key)) {
+        this.removeWaiter(waiter)
+        this.counters.rejected++
+        this.rejectWaiter(waiter, new AppServerPoolSingleInstanceLaneMismatchError())
+      } else if (this.canCreate()) {
         this.removeWaiter(waiter)
         waiter.settled = true
         clearTimeout(waiter.timer)
@@ -600,55 +612,28 @@ export class AppServerPool {
             : failure)
           this.schedulePump()
         })
-      } else if (this.retireIdleForReplacement(waiter.lane.key)) {
-        this.schedulePump()
       }
     }
   }
 
-  private canCreate(laneKey: string): boolean {
+  private canCreate(): boolean {
     // A retiring child still owns its global slot until close() settles.
     const total = this.instances.size + this.creating + this.retirements.size
-    if (total >= this.config.poolMaxInstances) return false
-    return this.hasLaneCreationCapacity(laneKey)
+    return total < 1
   }
 
-  private hasLaneCreationCapacity(laneKey: string): boolean {
-    const laneInstances = [...this.instances.values()].filter(record => record.laneKey === laneKey).length
-      + (this.creatingByLane.get(laneKey) || 0)
-    return laneInstances < this.config.poolMaxInstancesPerLane
-  }
-
-  private retireIdleForReplacement(laneKey: string): boolean {
-    // Serialize replacements so concurrent waiters cannot over-evict idle lanes.
-    if (
-      this.retirements.size > 0
-      || this.instances.size + this.creating < this.config.poolMaxInstances
-      || !this.hasLaneCreationCapacity(laneKey)
-    ) {
-      return false
-    }
-    const candidate = [...this.instances.values()]
-      .filter(record => !record.busy && !record.runtime.isActive() && !record.runtime.requiresAttention?.())
-      .sort((left, right) => {
-        const leftSameLane = left.laneKey === laneKey ? 1 : 0
-        const rightSameLane = right.laneKey === laneKey ? 1 : 0
-        return leftSameLane - rightSameLane
-          || left.lastUsedAt - right.lastUsedAt
-          || left.createdAt - right.createdAt
-          || left.id.localeCompare(right.id)
-      })[0]
-    if (!candidate) return false
-    this.retire(candidate, candidate.crashed || !candidate.runtime.isHealthy())
-    return true
+  private hasIncompatibleResidentLane(laneKey: string): boolean {
+    return [...this.instances.values()].some(record => record.laneKey !== laneKey)
+      || [...this.creatingByLane.keys()].some(creatingLaneKey => creatingLaneKey !== laneKey)
   }
 
   private findReusable(laneKey: string): InstanceRecord | undefined {
-    const now = this.now()
     for (const record of [...this.instances.values()]) {
-      if (record.laneKey !== laneKey || record.busy) continue
-      if (!this.isIdleReusable(record, now)) {
-        this.retire(record, record.crashed || !record.runtime.isHealthy())
+      if (record.laneKey !== laneKey) continue
+      if (!this.isReusable(record)) {
+        if (record.activeLeases === 0) {
+          this.retire(record, record.crashed || !record.runtime.isHealthy())
+        }
         continue
       }
       return record
@@ -656,7 +641,7 @@ export class AppServerPool {
     return undefined
   }
 
-  private async findIdleLoadedThreadInstance(
+  private async findLoadedThreadInstance(
     laneKey: string,
     threadId: string,
     signal?: AbortSignal,
@@ -677,25 +662,20 @@ export class AppServerPool {
       }
     }))
     if (signal?.aborted) throw abortError()
-    const now = this.now()
     return loaded
       .filter((record): record is InstanceRecord => Boolean(record))
       .filter(record => (
         this.instances.get(record.id) === record
-        && this.isIdleReusable(record, now)
+        && this.isReusable(record)
       ))
       .sort((left, right) => left.lastUsedAt - right.lastUsedAt || left.id.localeCompare(right.id))[0]
       ?.id
   }
 
-  private isIdleReusable(record: InstanceRecord, now: number): boolean {
-    return !record.busy
-      && !record.crashed
+  private isReusable(record: InstanceRecord): boolean {
+    return !record.crashed
       && !record.runtime.requiresAttention?.()
       && record.runtime.isHealthy()
-      && now - record.lastUsedAt < this.config.poolIdleTtlMs
-      && now - record.createdAt < this.config.poolMaxLifetimeMs
-      && record.taskCount < this.config.poolMaxTasksPerInstance
   }
 
   private reserveCreation(laneKey: string, controller: AbortController): void {
@@ -713,20 +693,19 @@ export class AppServerPool {
   }
 
   private lease(record: InstanceRecord): AppServerLease {
-    record.busy = true
+    record.activeLeases++
     return new AppServerLease(record.id, record.runtime, healthy => {
-      if (!record.busy) return
-      record.busy = false
+      if (record.activeLeases <= 0) return
+      record.activeLeases--
       record.lastUsedAt = this.now()
       record.taskCount++
-      if (!healthy || record.crashed || !record.runtime.isHealthy()) {
-        this.retire(record, true)
-      } else if (
-        this.draining
-        || record.taskCount >= this.config.poolMaxTasksPerInstance
-        || record.lastUsedAt - record.createdAt >= this.config.poolMaxLifetimeMs
-      ) {
-        this.retire(record, false)
+      if (!healthy) record.crashed = true
+      if (record.activeLeases === 0) {
+        if (record.crashed || !record.runtime.isHealthy()) {
+          this.retire(record, true)
+        } else if (this.draining) {
+          this.retire(record, false)
+        }
       }
       this.schedulePump()
     })
@@ -735,14 +714,14 @@ export class AppServerPool {
   private handleFatal(record: InstanceRecord): void {
     if (record.crashed) return
     record.crashed = true
-    if (!record.busy) {
+    if (record.activeLeases === 0) {
       this.retire(record, true)
       this.schedulePump()
     }
   }
 
   private retire(record: InstanceRecord, crashed: boolean): void {
-    if (record.busy || record.runtime.isActive() || record.runtime.requiresAttention?.()) {
+    if (record.activeLeases > 0 || record.runtime.isActive() || record.runtime.requiresAttention?.()) {
       return
     }
     if (!this.instances.delete(record.id)) return

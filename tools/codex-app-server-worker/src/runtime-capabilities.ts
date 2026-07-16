@@ -177,7 +177,7 @@ export function buildCapabilityManifest(config: AppConfig, manager: TaskManager)
       pool_max_tasks_per_instance: config.poolMaxTasksPerInstance,
       active_tasks: manager.activeCount(),
       queued_tasks: manager.queuedCount(),
-      pool_mode: 'exclusive-lease',
+      pool_mode: 'single-child-thread-multiplexed',
       ...manager.runtimeMetrics(),
     },
     readiness: {

@@ -1077,6 +1077,13 @@ export class TaskManager {
           turn_id: runtimeError.turnId,
         })
       }
+      if (latest && latest.status !== 'terminal' && !aborted && isDeterministicNoExecutionFailure(error)) {
+        const code = stableExecutionErrorCode(error)
+        this.emitError(broadcast, taskId, latest.thread_id, code, 'FAILED', 'NO_EXECUTION_CONFIRMED')
+        await broadcast.flush()
+        await this.transitionTerminal(taskId, { outcome: 'failed', error_code: code })
+        return
+      }
       const mayHaveExecuted = latest?.status === 'running'
         || runtimeError?.turnMayHaveStarted === true
         || (!runtimeError && latest?.status === 'committed')
@@ -1506,6 +1513,7 @@ function stableExecutionErrorCode(error: unknown): string {
     'APP_SERVER_POOL_OVERLOADED',
     'APP_SERVER_POOL_DRAINING',
     'APP_SERVER_POOL_ACQUIRE_TIMEOUT',
+    'APP_SERVER_POOL_SINGLE_INSTANCE_LANE_MISMATCH',
     'APP_SERVER_TURN_STALLED',
     'APP_SERVER_UNEXPECTED_IMAGE_GENERATION',
     'APP_SERVER_ABORT_UNCONFIRMED',
@@ -1522,4 +1530,10 @@ function stableExecutionErrorCode(error: unknown): string {
   ].includes(code)
     ? code
     : 'APP_SERVER_RUNTIME_FAILED'
+}
+
+function isDeterministicNoExecutionFailure(error: unknown): boolean {
+  return error instanceof Error
+    && 'code' in error
+    && error.code === 'APP_SERVER_POOL_SINGLE_INSTANCE_LANE_MISMATCH'
 }

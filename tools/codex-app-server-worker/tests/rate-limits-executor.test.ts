@@ -16,7 +16,7 @@ const EMPTY_RATE_LIMITS: PoolRateLimitsView = {
   error_code: null,
 }
 
-test('default rate-limit reads use the default ChatGPT CODEX_HOME instead of service API credentials', async t => {
+test('default rate-limit reads use the same configured startup lane as task execution', async t => {
   const stateDir = await tempDirectory('codex-rate-limit-executor-')
   const config = testConfig(stateDir, {
     openaiApiKey: 'sk-service-api-key',
@@ -43,15 +43,14 @@ test('default rate-limit reads use the default ChatGPT CODEX_HOME instead of ser
   assert.equal(await executor.readDefaultRateLimits(true), EMPTY_RATE_LIMITS)
   assert.ok(capturedLane)
   assert.equal(capturedRefresh, true)
-  assert.equal(capturedLane.env.OPENAI_API_KEY, undefined)
-  assert.equal(capturedLane.env.CODEX_API_KEY, undefined)
-  assert.equal(capturedLane.env.OPENAI_BASE_URL, undefined)
-
-  const expectedChatGptLane = await buildAppServerLane({
+  const expectedTaskLane = await buildAppServerLane({
     cliVersion: VALIDATED_APP_SERVER_CLI_VERSION,
-    baseEnv: {},
+    baseEnv: process.env,
+    apiKey: config.openaiApiKey,
+    baseUrl: config.openaiBaseUrl,
     codexHome: capturedLane.env.CODEX_HOME!,
   })
-  assert.equal(capturedLane.authFingerprint, expectedChatGptLane.authFingerprint)
-  assert.equal(capturedLane.baseUrlFingerprint, expectedChatGptLane.baseUrlFingerprint)
+  assert.equal(capturedLane.key, expectedTaskLane.key)
+  assert.equal(capturedLane.authFingerprint, expectedTaskLane.authFingerprint)
+  assert.equal(capturedLane.baseUrlFingerprint, expectedTaskLane.baseUrlFingerprint)
 })

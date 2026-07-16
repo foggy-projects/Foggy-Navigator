@@ -135,6 +135,64 @@ test('manual PID termination keeps a managed task pending when the runtime canno
   await execution
 })
 
+test('manual PID termination is rejected without signaling when another task shares the child', async t => {
+  const stateDir = await tempDirectory('codex-app-managed-process-shared-')
+  const workspace = `${stateDir}-workspace`
+  await fs.mkdir(workspace, { recursive: true })
+  const config = testConfig(stateDir, { allowedCwds: [workspace] })
+  const runtime = new MultiBlockingManagedRuntime()
+  const pool = new AppServerPool(config, async () => runtime)
+  const executor = new StrictAppServerExecutor(config, pool)
+  t.after(async () => {
+    runtime.completeAll()
+    await pool.drain(100).catch(() => undefined)
+    await fs.rm(stateDir, { recursive: true, force: true })
+    await fs.rm(workspace, { recursive: true, force: true })
+  })
+
+  const execute = (taskId: string, threadId: string) => executor.execute({
+    taskId,
+    request: { prompt: 'remain running', cwd: workspace, session_id: threadId },
+    signal: new AbortController().signal,
+    broadcast: new EventBroadcast(taskId, path.join(stateDir, 'events')),
+    callbacks: {
+      onInstanceResolved: () => undefined,
+      onThreadResolved: () => undefined,
+      onExecutionCommitted: () => undefined,
+      onTurnStarted: () => undefined,
+      onUserInputRequest: async () => ({ answers: {} }),
+      onUserInputResolved: () => undefined,
+    },
+  })
+  const first = execute('shared-process-a', 'thread-a')
+  const second = execute('shared-process-b', 'thread-b')
+  await waitFor(() => runtime.activeCount === 2)
+
+  const snapshot = executor.listManagedTaskProcesses().find(item => item.taskId === 'shared-process-a')
+  assert.ok(snapshot)
+  const result = await executor.manualPidKill(
+    'shared-process-a',
+    runtime.pid,
+    {
+      schema_version: 1,
+      task_id: 'shared-process-a',
+      request_hash: 'request-hash',
+      status: 'running',
+      thread_id: 'thread-a',
+      turn_id: 'turn-thread-a',
+      app_server_instance_id: snapshot.instanceId,
+      created_at: new Date(0).toISOString(),
+      updated_at: new Date(0).toISOString(),
+    },
+    manualOperation('shared-process-a', `app-server-instance:${snapshot.instanceId}`),
+  )
+
+  assert.deepEqual(result, { observed_exit: false })
+  assert.deepEqual(runtime.forceTerminateCalls, [], 'a task-scoped capability must not kill a shared child')
+  runtime.completeAll()
+  await Promise.all([first, second])
+})
+
 function manualOperation(taskId: string, expectedProcessIdentity: string): TerminationOperationSummary {
   const issuedAt = new Date().toISOString()
   return {
@@ -199,5 +257,42 @@ class BlockingManagedRuntime implements PoolRuntimeInstance {
   complete(): void {
     this.completion?.()
     this.completion = undefined
+  }
+}
+
+class MultiBlockingManagedRuntime implements PoolRuntimeInstance {
+  readonly pid = 4343
+  healthy = true
+  activeCount = 0
+  readonly forceTerminateCalls: number[] = []
+  private readonly completions = new Map<string, () => void>()
+
+  isHealthy(): boolean { return this.healthy }
+  isActive(): boolean { return this.activeCount > 0 }
+
+  async runTurn(options: PersistentTurnOptions): Promise<AppServerTurnResult> {
+    const threadId = options.threadId || `thread-${options.taskId}`
+    const turnId = `turn-${threadId}`
+    this.activeCount++
+    await options.onThreadResolved?.(threadId)
+    await options.onExecutionCommitted?.(threadId)
+    await options.onTurnStarted?.(threadId, turnId)
+    await new Promise<void>(resolve => this.completions.set(options.taskId, resolve))
+    this.activeCount--
+    return { threadId, turn: { id: turnId, status: 'completed' } }
+  }
+
+  async readThread(): Promise<Record<string, unknown>> { return { turns: [] } }
+
+  async forceTerminateForAuthorizedOperation(pid: number): Promise<boolean> {
+    this.forceTerminateCalls.push(pid)
+    return false
+  }
+
+  close(): void { this.healthy = false }
+
+  completeAll(): void {
+    for (const completion of this.completions.values()) completion()
+    this.completions.clear()
   }
 }

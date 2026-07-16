@@ -9,7 +9,7 @@ import { AppServerEventBridge } from '../src/app-server/event-bridge.js'
 import { buildCodexConfig } from '../src/app-server/executor.js'
 import { EventBroadcast } from '../src/persistence/event-store.js'
 import { GeneratedImageStore } from '../src/generated-image-store.js'
-import { testConfig } from './helpers.js'
+import { testConfig, waitFor } from './helpers.js'
 import {
   AppServerRuntimeError,
   AppServerRuntimeInstance,
@@ -241,6 +241,96 @@ class FakeProcess extends EventEmitter {
   }
 }
 
+class MultiplexProcess extends EventEmitter {
+  readonly stdin = new PassThrough()
+  readonly stdout = new PassThrough()
+  readonly stderr = new PassThrough()
+  readonly pid = 101
+  killed = false
+  private buffer = ''
+
+  constructor(readonly received: JsonMessage[]) {
+    super()
+    this.stdin.on('data', chunk => {
+      this.buffer += String(chunk)
+      while (this.buffer.includes('\n')) {
+        const index = this.buffer.indexOf('\n')
+        const line = this.buffer.slice(0, index)
+        this.buffer = this.buffer.slice(index + 1)
+        if (!line) continue
+        const message = JSON.parse(line) as JsonMessage
+        this.received.push(message)
+        this.handle(message)
+      }
+    })
+  }
+
+  kill(signal: NodeJS.Signals | number = 'SIGTERM'): boolean {
+    this.killed = true
+    queueMicrotask(() => this.emit('exit', 0, signal))
+    return true
+  }
+
+  send(message: JsonMessage): void {
+    this.stdout.write(`${JSON.stringify(message)}\n`)
+  }
+
+  complete(threadId: string, status = 'completed'): void {
+    this.send({
+      method: 'turn/completed',
+      params: { threadId, turn: { id: `turn-${threadId}`, status } },
+    })
+  }
+
+  delta(threadId: string, delta: string): void {
+    this.send({
+      method: 'item/agentMessage/delta',
+      params: { threadId, turnId: `turn-${threadId}`, itemId: `item-${threadId}`, delta },
+    })
+  }
+
+  requestUserInput(threadId: string, requestId: string): void {
+    this.send({
+      id: requestId,
+      method: 'item/tool/requestUserInput',
+      params: {
+        threadId,
+        turnId: `turn-${threadId}`,
+        itemId: `input-${threadId}`,
+        questions: [{
+          id: 'mode', header: 'Mode', question: `Choose for ${threadId}`,
+          options: [{ label: 'Safe', description: 'Use safe mode' }],
+        }],
+      },
+    })
+  }
+
+  private handle(message: JsonMessage): void {
+    if (message.method === 'initialize') this.send({ id: message.id, result: {} })
+    if (message.method === 'thread/resume') {
+      this.send({ id: message.id, result: { thread: { id: message.params.threadId } } })
+    }
+    if (message.method === 'thread/unsubscribe') {
+      this.send({ id: message.id, result: { status: 'notLoaded' } })
+    }
+    if (message.method === 'turn/start') {
+      const threadId = message.params.threadId
+      this.send({ id: message.id, result: { turn: { id: `turn-${threadId}`, status: 'inProgress' } } })
+    }
+    if (message.method === 'turn/interrupt') {
+      this.send({ id: message.id, result: {} })
+      this.complete(message.params.threadId, 'interrupted')
+    }
+    if (typeof message.id === 'string' && message.id.startsWith('input-') && (message.result || message.error)) {
+      const threadId = message.id.slice('input-'.length)
+      this.send({
+        method: 'serverRequest/resolved',
+        params: { threadId, requestId: message.id },
+      })
+    }
+  }
+}
+
 test('strict runtime persists committed before turn/start and has no SDK fallback path', async () => {
   const received: JsonMessage[] = []
   let committed = false
@@ -381,6 +471,149 @@ test('persistent runtime initializes once and serves sequential exclusive turns'
   assert.equal(process.killed, false)
   instance.close()
   assert.equal(process.killed, true)
+})
+
+test('persistent runtime multiplexes different threads without crossing notifications or terminal results', async () => {
+  const received: JsonMessage[] = []
+  const process = new MultiplexProcess(received)
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+  const notifications = new Map<string, JsonMessage[]>()
+  const run = (threadId: string) => instance.runTurn({
+    taskId: `task-${threadId}`,
+    model: 'gpt-5.6-sol',
+    threadId,
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: `inspect ${threadId}`,
+    signal: new AbortController().signal,
+    onNotification: notification => {
+      const list = notifications.get(threadId) || []
+      list.push(notification)
+      notifications.set(threadId, list)
+    },
+  })
+
+  const first = run('thread-a')
+  const second = run('thread-b')
+  await new Promise(resolve => setTimeout(resolve, 25))
+  if (received.filter(message => message.method === 'turn/start').length < 2) {
+    process.complete('thread-a')
+    await Promise.allSettled([first, second])
+  }
+  assert.equal(received.filter(message => message.method === 'turn/start').length, 2)
+  assert.equal(instance.isActive(), true)
+
+  process.delta('thread-b', 'B')
+  process.delta('thread-a', 'A')
+  process.complete('thread-b')
+  const secondResult = await second
+  assert.equal(secondResult.threadId, 'thread-b')
+  assert.equal(secondResult.turn.id, 'turn-thread-b')
+  assert.equal(instance.isActive(), true, 'the other thread remains active after one terminal event')
+  process.complete('thread-a')
+  const firstResult = await first
+
+  assert.equal(firstResult.turn.id, 'turn-thread-a')
+  assert.deepEqual([...new Set(notifications.get('thread-a')?.map(item => item.params?.threadId))], ['thread-a'])
+  assert.deepEqual([...new Set(notifications.get('thread-b')?.map(item => item.params?.threadId))], ['thread-b'])
+  assert.equal(instance.isActive(), false)
+  await instance.close()
+})
+
+test('concurrent turns isolate targeted abort and request_user_input ownership', async () => {
+  const received: JsonMessage[] = []
+  const process = new MultiplexProcess(received)
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+  const firstAbort = new AbortController()
+  const requested: string[] = []
+  const resolved: string[] = []
+  const run = (threadId: string, signal: AbortSignal) => instance.runTurn({
+    taskId: `interactive-${threadId}`,
+    model: 'gpt-5.6-sol',
+    threadId,
+    sandboxMode: 'read-only',
+    codexConfig: { 'features.default_mode_request_user_input': true },
+    input: `inspect ${threadId}`,
+    signal,
+    onNotification: () => undefined,
+    onUserInputRequest: async request => {
+      requested.push(`${request.threadId}:${String(request.requestId)}`)
+      return { answers: { mode: { answers: ['Safe'] } } }
+    },
+    onUserInputResolved: resolution => {
+      resolved.push(`${resolution.threadId}:${String(resolution.requestId)}`)
+    },
+  })
+
+  const first = run('thread-a', firstAbort.signal)
+  const second = run('thread-b', new AbortController().signal)
+  await new Promise(resolve => setTimeout(resolve, 25))
+  if (received.filter(message => message.method === 'turn/start').length < 2) {
+    process.complete('thread-a')
+    await Promise.allSettled([first, second])
+  }
+  assert.equal(received.filter(message => message.method === 'turn/start').length, 2)
+  process.requestUserInput('thread-a', 'input-thread-a')
+  process.requestUserInput('thread-b', 'input-thread-b')
+  await waitFor(() => requested.length === 2 && resolved.length === 2)
+
+  firstAbort.abort()
+  await first
+  const interrupt = received.find(message => message.method === 'turn/interrupt')
+  assert.deepEqual(interrupt?.params, { threadId: 'thread-a', turnId: 'turn-thread-a' })
+  assert.equal(instance.isActive(), true)
+  process.complete('thread-b')
+  await second
+
+  assert.deepEqual(requested.sort(), [
+    'thread-a:input-thread-a',
+    'thread-b:input-thread-b',
+  ])
+  assert.deepEqual(resolved.sort(), [
+    'thread-a:input-thread-a',
+    'thread-b:input-thread-b',
+  ])
+  await instance.close()
+})
+
+test('a shared transport fatal rejects every active turn context and marks the child unverified', async () => {
+  const received: JsonMessage[] = []
+  const process = new MultiplexProcess(received)
+  const instance = await AppServerRuntimeInstance.start({
+    env: {},
+    spawnProcess: () => process as unknown as AppServerProcess,
+    requestTimeoutMs: 1_000,
+  })
+  const run = (threadId: string) => instance.runTurn({
+    taskId: `fatal-${threadId}`,
+    model: 'gpt-5.6-sol',
+    threadId,
+    sandboxMode: 'read-only',
+    codexConfig: {},
+    input: `inspect ${threadId}`,
+    signal: new AbortController().signal,
+    onNotification: () => undefined,
+  })
+
+  const first = run('thread-a')
+  const second = run('thread-b')
+  await waitFor(() => received.filter(message => message.method === 'turn/start').length === 2)
+  process.stdout.write('{malformed json\n')
+  const outcomes = await Promise.allSettled([first, second])
+
+  assert.deepEqual(outcomes.map(outcome => outcome.status), ['rejected', 'rejected'])
+  assert.equal(instance.isHealthy(), false)
+  assert.equal(instance.isActive(), false)
+  assert.equal(instance.requiresAttention(), true)
+  assert.equal(process.killed, false, 'transport fatal does not implicitly terminate an unverified shared child')
 })
 
 test('persistent runtime reports thread IDs loaded in its own app-server memory', async () => {
