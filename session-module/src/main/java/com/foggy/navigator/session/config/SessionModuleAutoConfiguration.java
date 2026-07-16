@@ -3,6 +3,7 @@ package com.foggy.navigator.session.config;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.core.task.AsyncTaskExecutor;
@@ -29,6 +30,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 @EnableJpaRepositories(basePackages = {
     "com.foggy.navigator.session.repository"
 })
+@EnableConfigurationProperties(ErrorDiagnosticProperties.class)
 @EnableAsync
 @EnableScheduling
 public class SessionModuleAutoConfiguration {
