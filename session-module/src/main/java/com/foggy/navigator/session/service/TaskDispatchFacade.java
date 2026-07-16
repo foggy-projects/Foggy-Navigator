@@ -89,6 +89,10 @@ public class TaskDispatchFacade {
 
     @Autowired(required = false)
     @Nullable
+    private ErrorDiagnosticService errorDiagnosticService;
+
+    @Autowired(required = false)
+    @Nullable
     private AgentConversationContextRepository agentConversationContextRepository;
 
     @Autowired(required = false)
@@ -129,7 +133,8 @@ public class TaskDispatchFacade {
     }
 
     private UnifiedSessionTaskProjectionService projectionService() {
-        return new UnifiedSessionTaskProjectionService(sessionRepository, workingDirectoryRepository);
+        return new UnifiedSessionTaskProjectionService(
+                sessionRepository, workingDirectoryRepository, errorDiagnosticService);
     }
 
     private TaskOperationRouter operationRouter() {

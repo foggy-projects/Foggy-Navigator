@@ -11,6 +11,7 @@ import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.util.ProviderStateCodec;
 import com.foggy.navigator.common.util.TaskResponseTimeoutSupport;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorEnvelope;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.TaskPageResult;
 import com.foggy.navigator.spi.agent.TaskSearchResult;
@@ -33,11 +34,20 @@ final class UnifiedSessionTaskProjectionService {
     private final SessionRepository sessionRepository;
     @Nullable
     private final WorkingDirectoryRepository workingDirectoryRepository;
+    @Nullable
+    private final ErrorDiagnosticService errorDiagnosticService;
+
+    UnifiedSessionTaskProjectionService(SessionRepository sessionRepository,
+                                        @Nullable WorkingDirectoryRepository workingDirectoryRepository,
+                                        @Nullable ErrorDiagnosticService errorDiagnosticService) {
+        this.sessionRepository = sessionRepository;
+        this.workingDirectoryRepository = workingDirectoryRepository;
+        this.errorDiagnosticService = errorDiagnosticService;
+    }
 
     UnifiedSessionTaskProjectionService(SessionRepository sessionRepository,
                                         @Nullable WorkingDirectoryRepository workingDirectoryRepository) {
-        this.sessionRepository = sessionRepository;
-        this.workingDirectoryRepository = workingDirectoryRepository;
+        this(sessionRepository, workingDirectoryRepository, null);
     }
 
     Object listTasksPagedFromSessionStore(SessionTaskRepository sessionTaskRepository,
@@ -582,6 +592,7 @@ final class UnifiedSessionTaskProjectionService {
                 .resultText(entity.getResultText())
                 .structuredOutput(asString(state.get(ProviderStateCodec.FIELD_STRUCTURED_OUTPUT)))
                 .errorMessage(entity.getErrorMessage())
+                .error(errorMap(entity))
                 .lastAckedSeq(entity.getLastAckedSeq())
                 .lastOutputAt(entity.getLastOutputAt())
                 .responseTimedOut(TaskResponseTimeoutSupport.isResponseTimedOut(
@@ -775,6 +786,27 @@ final class UnifiedSessionTaskProjectionService {
 
     private String asString(Object value) {
         return value != null ? value.toString() : null;
+    }
+
+    private Map<String, Object> errorMap(SessionTaskEntity entity) {
+        if (errorDiagnosticService == null || entity == null || !"FAILED".equals(entity.getStatus())) {
+            return null;
+        }
+        ErrorEnvelope error = errorDiagnosticService.findLatestEnvelope(entity.getTaskId());
+        if (error == null) return null;
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("errorCode", error.getErrorCode());
+        value.put("message", error.getMessage());
+        value.put("category", error.getCategory());
+        value.put("runtimePhase", error.getRuntimePhase());
+        value.put("recoverable", error.getRecoverable());
+        value.put("diagnosticRef", error.getDiagnosticRef());
+        value.put("occurredAt", error.getOccurredAt());
+        value.put("taskId", error.getTaskId());
+        value.put("providerType", error.getProviderType());
+        value.put("runtimeType", error.getRuntimeType());
+        value.values().removeIf(Objects::isNull);
+        return value;
     }
 
     private Boolean asBoolean(Object value) {

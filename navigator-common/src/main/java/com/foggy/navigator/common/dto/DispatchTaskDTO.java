@@ -5,6 +5,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Map;
 
 /**
  * 统一任务 DTO —— 屏蔽 Claude / Codex 等后端差异，
@@ -45,6 +46,8 @@ public class DispatchTaskDTO {
     /** Provider-produced structured result payload serialized as JSON. */
     private String structuredOutput;
     private String errorMessage;
+    /** Safe structured failure summary; nullable for legacy/non-failed tasks. */
+    private Map<String, Object> error;
     private Integer lastAckedSeq;
     private LocalDateTime lastOutputAt;
     private Boolean responseTimedOut;

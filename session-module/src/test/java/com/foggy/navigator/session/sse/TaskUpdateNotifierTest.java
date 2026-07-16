@@ -2,6 +2,7 @@ package com.foggy.navigator.session.sse;
 
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorEnvelope;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.spi.notification.UserNotificationSender;
@@ -49,6 +50,7 @@ class TaskUpdateNotifierTest {
                 .previousStatus("RUNNING")
                 .agentId("claude-worker")
                 .errorMessage("need approval")
+                .error(ErrorEnvelope.builder().errorCode("CODEX_TIMEOUT").diagnosticRef("diagnostic://dg_1").build())
                 .interactionState("AWAITING_REPLY")
                 .build();
 
@@ -62,6 +64,7 @@ class TaskUpdateNotifierTest {
         assertEquals("RUNNING", update.get("previousStatus"));
         assertEquals("claude-worker", update.get("agent"));
         assertEquals("need approval", update.get("errorMessage"));
+        assertEquals("CODEX_TIMEOUT", ((ErrorEnvelope) update.get("error")).getErrorCode());
         assertEquals("AWAITING_REPLY", update.get("interactionState"));
         assertNotNull(update.get("timestamp"));
     }

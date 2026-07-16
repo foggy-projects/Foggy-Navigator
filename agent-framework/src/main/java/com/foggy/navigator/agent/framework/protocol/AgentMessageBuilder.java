@@ -1,5 +1,7 @@
 package com.foggy.navigator.agent.framework.protocol;
 
+import com.foggy.navigator.agent.framework.diagnostic.ErrorEnvelope;
+
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -139,6 +141,26 @@ public class AgentMessageBuilder {
     public AgentMessageBuilder error(String content) {
         this.type = MessageType.ERROR;
         payload.put("content", content);
+        return this;
+    }
+
+    /** Adds the safe structured error fields while retaining content for compatibility. */
+    public AgentMessageBuilder error(ErrorEnvelope envelope) {
+        this.type = MessageType.ERROR;
+        if (envelope == null) {
+            return this;
+        }
+        payload.put("content", envelope.getErrorCode());
+        put("errorCode", envelope.getErrorCode());
+        put("message", envelope.getMessage());
+        put("category", envelope.getCategory());
+        put("runtimePhase", envelope.getRuntimePhase());
+        put("recoverable", envelope.getRecoverable());
+        put("diagnosticRef", envelope.getDiagnosticRef());
+        put("occurredAt", envelope.getOccurredAt());
+        put("taskId", envelope.getTaskId());
+        put("providerType", envelope.getProviderType());
+        put("runtimeType", envelope.getRuntimeType());
         return this;
     }
 

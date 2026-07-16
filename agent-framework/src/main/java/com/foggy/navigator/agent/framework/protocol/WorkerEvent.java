@@ -1,9 +1,12 @@
 package com.foggy.navigator.agent.framework.protocol;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorCategory;
+import com.foggy.navigator.agent.framework.diagnostic.ErrorRuntimePhase;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -42,6 +45,36 @@ public class WorkerEvent {
 
     private String model;
     private String error;
+
+    // ── Provider-neutral structured error summary (all optional) ──
+
+    @JsonProperty("error_code")
+    private String errorCode;
+    @JsonProperty("error_message")
+    private String errorMessage;
+    @JsonProperty("error_category")
+    private ErrorCategory errorCategory;
+    @JsonProperty("runtime_phase")
+    private ErrorRuntimePhase runtimePhase;
+    private Boolean recoverable;
+    @JsonProperty("diagnostic_ref")
+    private String diagnosticRef;
+    @JsonProperty("occurred_at")
+    private Instant occurredAt;
+    @JsonProperty("provider_type")
+    private String providerType;
+    @JsonProperty("runtime_type")
+    private String runtimeType;
+    @JsonProperty("exception_type")
+    private String exceptionType;
+    @JsonProperty("diagnostic_text")
+    private String diagnosticText;
+    @JsonProperty("provider_status")
+    private String providerStatus;
+    @JsonProperty("http_status")
+    private Integer httpStatus;
+    @JsonProperty("retry_count")
+    private Integer retryCount;
 
     /**
      * Codex App Server item identity. It associates text deltas with the

@@ -65,6 +65,7 @@ public class TaskUpdateNotifier {
         data.put("previousStatus", event.getPreviousStatus());
         data.put("agent", event.getAgentId());
         data.put("errorMessage", event.getErrorMessage());
+        data.put("error", event.getError());
         data.put("interactionState", event.getInteractionState());
         data.put("timestamp", Instant.now().toString());
 

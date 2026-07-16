@@ -1,5 +1,6 @@
 package com.foggy.navigator.agent.framework.event;
 
+import com.foggy.navigator.agent.framework.diagnostic.ErrorEnvelope;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -26,6 +27,8 @@ public class TaskStatusChangeEvent {
     private String status;          // RUNNING / COMPLETED / FAILED / AWAITING_PERMISSION / ABORTED
     private String previousStatus;
     private String errorMessage;
+    /** Safe structured failure metadata. Raw diagnostic text is never carried here. */
+    private ErrorEnvelope error;
     private String interactionState;  // PROCESSING / AWAITING_REPLY / ARCHIVED
     /**
      * Explicit lifecycle contract: false means definitive terminal, true means

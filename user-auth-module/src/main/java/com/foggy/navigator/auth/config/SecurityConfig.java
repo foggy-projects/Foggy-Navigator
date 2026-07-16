@@ -58,6 +58,10 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // 开放登录和注册接口
                         .requestMatchers("/api/v1/auth/login", "/api/v1/auth/register").permitAll()
+                        // Temporary diagnostic share is a narrow bearer capability; internal endpoints
+                        // below are still protected by AuthInterceptor + @RequireAuth.
+                        .requestMatchers("/diagnostic-share/**", "/api/v1/diagnostic-shares/**").permitAll()
+                        .requestMatchers("/api/v1/error-diagnostics/**").permitAll()
                         // 开放健康检查接口
                         .requestMatchers("/api/v1/health/**", "/actuator/**").permitAll()
                         // 开放静态资源（前端构建产物）
