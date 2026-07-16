@@ -5,23 +5,18 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 
 /**
- * 将平台 Skill（如 ask-agent）推送到在线 Worker 的 ~/.agents/skills/。
+ * 请求在线 Worker 按其本地打包资源 reconcile 平台 Skill。
  * <p>
- * ask-agent 仅为 scheduled-task 的显式 A2A 调用提供协议参考。
+ * Skill 正文由 Worker 单一维护；控制面不再持有或推送重复模板。
  */
 @Slf4j
 @Component
@@ -30,11 +25,6 @@ public class PlatformSkillSyncer {
 
     private final ClaudeWorkerRepository workerRepository;
     private final ClaudeWorkerService workerService;
-
-    @Value("${navigator.api.external-url:http://localhost:${server.port:8112}}")
-    private String navigatorApiBase;
-
-    private String skillTemplate;
 
     /**
      * 启动后异步推送（延迟等 health checker 先跑一轮）
@@ -57,7 +47,7 @@ public class PlatformSkillSyncer {
         var workers = workerRepository.findAll().stream()
                 .filter(w -> "ONLINE".equals(w.getStatus()))
                 .toList();
-        log.info("Syncing ask-agent skill to {} online workers", workers.size());
+        log.info("Reconciling platform skills on {} online workers", workers.size());
         for (var worker : workers) {
             syncWorkerSkills(worker);
         }
@@ -74,34 +64,13 @@ public class PlatformSkillSyncer {
 
     private void syncWorkerSkills(ClaudeWorkerEntity worker) {
         try {
-            String skillContent = generateAskAgentSkill();
             ClaudeWorkerClient client = workerService.createClient(worker);
-            client.deploySkills(Map.of("ask-agent", skillContent))
+            client.deploySkills(Map.of())
                     .block(Duration.ofSeconds(10));
-            log.info("Synced ask-agent skill to worker: {} ({})", worker.getName(), worker.getWorkerId());
+            log.info("Reconciled platform skills on worker: {} ({})", worker.getName(), worker.getWorkerId());
         } catch (Exception e) {
             log.warn("Failed to sync skills to worker {} ({}): {}",
                     worker.getName(), worker.getWorkerId(), e.getMessage());
         }
-    }
-
-    private String generateAskAgentSkill() {
-        return loadTemplate().replace("{{NAVIGATOR_API_BASE}}", navigatorApiBase);
-    }
-
-    private String loadTemplate() {
-        if (skillTemplate != null) {
-            return skillTemplate;
-        }
-        try {
-            ClassPathResource resource = new ClassPathResource("platform-skills/ask-agent/SKILL.md.template");
-            try (InputStream is = resource.getInputStream()) {
-                skillTemplate = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-            }
-        } catch (IOException e) {
-            log.error("Failed to load ask-agent SKILL.md template", e);
-            throw new IllegalStateException("Missing ask-agent SKILL.md template", e);
-        }
-        return skillTemplate;
     }
 }

@@ -1,7 +1,8 @@
-"""Deploy platform skills to ~/.agents/skills/ on Worker startup.
+"""Reconcile Navigator-managed skills under the user's agent skill roots.
 
-Templates may contain ``{{NAVIGATOR_API_BASE}}`` which is replaced with the
-actual Navigator backend URL at deploy time.
+The Worker package is the source of truth for current platform skills.  On
+startup it deploys the current bundles and removes only legacy files that can
+be identified as Navigator-generated content.
 """
 
 from __future__ import annotations
@@ -19,34 +20,69 @@ logger = logging.getLogger(__name__)
 
 _SKILLS_DIR = Path(__file__).parent
 
-# Mapping: target directory name -> source template file in this package
+# Simple one-file skills retained outside the three-router consolidation.
 _SKILL_TEMPLATES = {
-    "ask-agent": "ask_agent.md",
     "company-skill-marketplace": "company_skill_marketplace.md",
-    "navigator-admin": "navigator_admin.md",
-    "scheduled-task": "scheduled_task.md",
 }
 
-_RETIRED_SKILL_NAME = "cross-project-task"
-_RETIRED_SKILL_SIGNATURES = (
-    "name: cross-project-task",
-    "/api/v1/cross-project-tasks",
-)
+# Current multi-file platform skills.  These directories are copied as skill
+# bundles so references and product metadata remain available on demand.
+_SKILL_BUNDLES = {
+    "navigator-ops": "navigator_ops",
+}
 
-_ASK_AGENT_MANAGED_SIGNATURES = (
-    (
-        "name: ask-agent",
-        "# 咨询协作 Agent",
-        "NAVIGATOR_TOKEN",
-        "/api/v1/agents/",
+_MANAGED_SKILL_MARKERS = {
+    "navigator-ops": "<!-- foggy-navigator-platform-skill:v1; name=navigator-ops -->",
+}
+
+# Each tuple is one recognized historical shape.  Matching is intentionally
+# strict: every signature in a shape must be present before a file is removed.
+_RETIRED_SKILL_SIGNATURES: dict[str, tuple[tuple[str, ...], ...]] = {
+    "cross-project-task": (
+        (
+            "name: cross-project-task",
+            "/api/v1/cross-project-tasks",
+        ),
     ),
-    (
-        "name: ask-agent",
-        "# 定时任务 A2A 调用",
-        "[NAVIGATOR_SCHEDULED_A2A]",
-        "/api/v1/agents/",
+    "ask-agent": (
+        (
+            "name: ask-agent",
+            "# 咨询协作 Agent",
+            "NAVIGATOR_TOKEN",
+            "/api/v1/agents/",
+        ),
+        (
+            "name: ask-agent",
+            "# 定时任务 A2A 调用",
+            "[NAVIGATOR_SCHEDULED_A2A]",
+            "/api/v1/agents/",
+        ),
     ),
-)
+    "navigator-admin": (
+        (
+            "name: navigator-admin",
+            "# Foggy Navigator 平台管理",
+            "NAVIGATOR_TOKEN",
+            "/api/v1/claude-workers",
+        ),
+    ),
+    "scheduled-task": (
+        (
+            "name: scheduled-task",
+            "# AI 定时任务配置向导",
+            "NAVIGATOR_TOKEN",
+            "/api/v1/sharing-keys",
+        ),
+    ),
+    "sharing-key": (
+        (
+            "name: sharing-key",
+            "# Sharing Key 管理向导",
+            "NAVIGATOR_TOKEN",
+            "/api/v1/sharing-keys",
+        ),
+    ),
+}
 
 _TEMPLATE_VARS = {
     "{{NAVIGATOR_API_BASE}}": lambda: settings.navigator_api_base,
@@ -55,9 +91,18 @@ _TEMPLATE_VARS = {
 
 
 def deploy_platform_skills() -> None:
-    """Read bundled skill templates, substitute placeholders, and write to ~/.agents/skills/<name>/SKILL.md."""
-    remove_retired_platform_skills()
-    skills_dir = user_skills_dir()
+    """Backward-compatible startup entry point for platform skill reconciliation."""
+    reconcile_platform_skills()
+
+
+def reconcile_platform_skills(
+    skills_dir: Path | None = None,
+    skill_roots: Iterable[Path] | None = None,
+) -> None:
+    """Deploy current platform skills and retire recognized legacy copies."""
+    resolved_skills_dir = skills_dir or user_skills_dir()
+    remove_retired_platform_skills(skill_roots or default_skill_roots(resolved_skills_dir))
+
     for skill_name, template_file in _SKILL_TEMPLATES.items():
         try:
             source = _SKILLS_DIR / template_file
@@ -65,25 +110,50 @@ def deploy_platform_skills() -> None:
                 logger.warning("Skill template not found: %s", source)
                 continue
 
-            content = source.read_text(encoding="utf-8")
-            for placeholder, value_fn in _TEMPLATE_VARS.items():
-                content = content.replace(placeholder, value_fn())
-
-            target = deploy_skill(skills_dir, skill_name, content)
-            if target is None:
-                continue
-            logger.info("Deployed platform skill: %s -> %s (apiBase=%s)", skill_name, target, settings.navigator_api_base)
+            content = _render_template(source.read_text(encoding="utf-8"))
+            target = deploy_skill(resolved_skills_dir, skill_name, content)
+            if target is not None:
+                logger.info("Deployed platform skill: %s -> %s", skill_name, target)
         except Exception:
             logger.warning("Failed to deploy platform skill: %s", skill_name, exc_info=True)
 
-    remove_legacy_ask_agent_copies()
+    for skill_name, bundle_dir in _SKILL_BUNDLES.items():
+        try:
+            source_dir = _SKILLS_DIR / bundle_dir
+            target = deploy_skill_bundle(resolved_skills_dir, skill_name, source_dir)
+            if target is not None:
+                logger.info("Deployed platform skill bundle: %s -> %s", skill_name, target.parent)
+        except Exception:
+            logger.warning("Failed to deploy platform skill bundle: %s", skill_name, exc_info=True)
+
+
+def default_skill_roots(canonical_skills_dir: Path | None = None) -> tuple[Path, ...]:
+    """Return the canonical and historical user-level skill roots once each."""
+    home = Path.home()
+    candidates = (
+        canonical_skills_dir or user_skills_dir(),
+        home / ".agent" / "skills",
+        home / ".claude" / "skills",
+    )
+    return tuple(dict.fromkeys(candidates))
 
 
 def deploy_skill(skills_dir: Path, skill_name: str, content: str) -> Path | None:
+    """Deploy a non-bundled skill unless its name is retired or locally owned."""
+    if is_retired_platform_skill_name(skill_name):
+        logger.warning("Skipped retired platform skill deployment: %s", skill_name)
+        return None
+    if skill_name in _SKILL_BUNDLES:
+        logger.warning("Skipped remote replacement of locally bundled platform skill: %s", skill_name)
+        return None
+
     target_dir = skills_dir / skill_name
     target = target_dir / "SKILL.md"
-
-    if skill_name == "ask-agent" and not _can_manage_ask_agent(target_dir, target):
+    if _is_link_or_reparse_point(target_dir) or _is_link_or_reparse_point(target):
+        logger.warning("Skipped linked platform skill target: %s", target)
+        return None
+    if target.exists() and not target.is_file():
+        logger.warning("Skipped non-file platform skill target: %s", target)
         return None
 
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -91,63 +161,113 @@ def deploy_skill(skills_dir: Path, skill_name: str, content: str) -> Path | None
     return target
 
 
-def _can_manage_ask_agent(target_dir: Path, target: Path) -> bool:
-    if _is_link_or_reparse_point(target_dir) or _is_link_or_reparse_point(target):
-        logger.warning("Skipped linked ask-agent target: %s", target)
+def deploy_skill_bundle(
+    skills_dir: Path,
+    skill_name: str,
+    source_dir: Path,
+) -> Path | None:
+    """Deploy one managed multi-file skill without overwriting unknown content."""
+    source_skill = source_dir / "SKILL.md"
+    if not source_skill.is_file():
+        logger.warning("Skill bundle is missing SKILL.md: %s", source_dir)
+        return None
+
+    target_dir = skills_dir / skill_name
+    target_skill = target_dir / "SKILL.md"
+    marker = _MANAGED_SKILL_MARKERS[skill_name]
+
+    if not _can_manage_bundle(target_dir, target_skill, marker):
+        return None
+
+    source_files = tuple(path for path in source_dir.rglob("*") if path.is_file())
+    for source in source_files:
+        relative = source.relative_to(source_dir)
+        target = target_dir / relative
+        if _has_linked_or_non_directory_parent(target_dir, relative.parent):
+            logger.warning("Skipped unsafe platform skill bundle target: %s", target)
+            return None
+        if _is_link_or_reparse_point(target) or (target.exists() and not target.is_file()):
+            logger.warning("Skipped unsafe platform skill bundle file: %s", target)
+            return None
+
+    for source in source_files:
+        relative = source.relative_to(source_dir)
+        target = target_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_render_template(source.read_text(encoding="utf-8")), encoding="utf-8")
+
+    return target_skill
+
+
+def _can_manage_bundle(target_dir: Path, target_skill: Path, marker: str) -> bool:
+    if _is_link_or_reparse_point(target_dir) or _is_link_or_reparse_point(target_skill):
+        logger.warning("Skipped linked platform skill bundle: %s", target_skill)
         return False
-    if not target.exists():
+    if not target_skill.exists():
         return True
-    if not target.is_file():
-        logger.warning("Skipped non-file ask-agent target: %s", target)
+    if not target_skill.is_file():
+        logger.warning("Skipped non-file platform skill bundle: %s", target_skill)
         return False
 
-    content = target.read_text(encoding="utf-8")
-    if _is_managed_ask_agent(content):
+    content = target_skill.read_text(encoding="utf-8")
+    if marker in content:
         return True
 
-    logger.warning("Skipped unrecognized ask-agent file: %s", target)
+    logger.warning("Skipped unrecognized platform skill bundle: %s", target_skill)
     return False
 
 
-def remove_legacy_ask_agent_copies(skill_dirs: Iterable[Path] | None = None) -> None:
-    """Remove recognized Navigator ask-agent copies from obsolete skill roots."""
-    if skill_dirs is None:
-        home = Path.home()
-        skill_dirs = (
-            home / ".agent" / "skills" / "ask-agent",
-            home / ".claude" / "skills" / "ask-agent",
-        )
+def _has_linked_or_non_directory_parent(target_dir: Path, relative_parent: Path) -> bool:
+    current = target_dir
+    if _is_link_or_reparse_point(current) or (current.exists() and not current.is_dir()):
+        return True
+    for part in relative_parent.parts:
+        current = current / part
+        if _is_link_or_reparse_point(current) or (current.exists() and not current.is_dir()):
+            return True
+    return False
 
-    for skill_dir in skill_dirs:
+
+def _render_template(content: str) -> str:
+    for placeholder, value_fn in _TEMPLATE_VARS.items():
+        content = content.replace(placeholder, value_fn())
+    return content
+
+
+def is_retired_platform_skill_name(skill_name: str) -> bool:
+    return skill_name in _RETIRED_SKILL_SIGNATURES
+
+
+def remove_retired_platform_skills(skill_roots: Iterable[Path] | None = None) -> None:
+    """Remove every recognized retired Navigator skill from all supplied roots."""
+    roots = tuple(skill_roots or default_skill_roots())
+    for skill_name in _RETIRED_SKILL_SIGNATURES:
+        remove_retired_platform_skill(skill_name, roots)
+
+
+def remove_retired_platform_skill(
+    skill_name: str,
+    skill_roots: Iterable[Path] | None = None,
+) -> None:
+    """Remove one retired Navigator skill only when its historical shape is recognized."""
+    signatures = _RETIRED_SKILL_SIGNATURES.get(skill_name)
+    if signatures is None:
+        return
+
+    for root in tuple(skill_roots or default_skill_roots()):
+        skill_dir = root / skill_name
         try:
-            _remove_managed_skill_file(skill_dir, _is_managed_ask_agent, "legacy ask-agent")
-        except Exception:
-            logger.warning("Failed to remove legacy ask-agent at %s", skill_dir, exc_info=True)
-
-
-def remove_retired_platform_skills(skill_dirs: Iterable[Path] | None = None) -> None:
-    """Remove retired Navigator-managed Skill files without deleting user content."""
-    if skill_dirs is None:
-        home = Path.home()
-        skill_dirs = (
-            home / ".agents" / "skills" / _RETIRED_SKILL_NAME,
-            home / ".agent" / "skills" / _RETIRED_SKILL_NAME,
-            home / ".claude" / "skills" / _RETIRED_SKILL_NAME,
-        )
-
-    for skill_dir in skill_dirs:
-        try:
-            _remove_retired_skill_file(skill_dir)
+            _remove_managed_skill_file(
+                skill_dir,
+                lambda content, variants=signatures: _matches_any_signature(content, variants),
+                f"retired platform skill {skill_name}",
+            )
         except Exception:
             logger.warning("Failed to retire platform skill at %s", skill_dir, exc_info=True)
 
 
-def _remove_retired_skill_file(skill_dir: Path) -> None:
-    _remove_managed_skill_file(
-        skill_dir,
-        lambda content: all(signature in content for signature in _RETIRED_SKILL_SIGNATURES),
-        "retired platform skill",
-    )
+def _matches_any_signature(content: str, variants: tuple[tuple[str, ...], ...]) -> bool:
+    return any(all(signature in content for signature in variant) for variant in variants)
 
 
 def _remove_managed_skill_file(
@@ -174,13 +294,6 @@ def _remove_managed_skill_file(
         # Preserve the directory when it contains user-managed files.
         pass
     logger.info("Removed %s: %s", label, skill_file)
-
-
-def _is_managed_ask_agent(content: str) -> bool:
-    return any(
-        all(signature in content for signature in signatures)
-        for signatures in _ASK_AGENT_MANAGED_SIGNATURES
-    )
 
 
 def _is_link_or_reparse_point(path: Path) -> bool:

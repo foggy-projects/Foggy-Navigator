@@ -1,7 +1,7 @@
-# scheduled-task A2A / ask-agent 功能测试用例
+# navigator-ops scheduled-task A2A 功能测试用例
 
-> 初始测试日期：2026-03-10；本轮更新：2026-07-10
-> 测试目标：验证 scheduled-task 显式 A2A 链路（API → Agent 路由 → Worker 执行 → 结果返回）。`ask-agent` Skill 仅在 Prompt 同时包含 `[NAVIGATOR_SCHEDULED_A2A]` 和精确目标时使用；普通会话和 Provider 原生子 Agent 委派不得触发。底层 A2A 对外 API、Agent Card、Sharing Key 和轮询能力继续保留。
+> 初始测试日期：2026-03-10；本轮更新：2026-07-16
+> 测试目标：验证 `navigator-ops` 的 scheduled-task 显式 A2A 分支（API → Agent 路由 → Worker 执行 → 结果返回）。该分支仅在 Prompt 同时包含 `[NAVIGATOR_SCHEDULED_A2A]` 和精确目标时使用；普通会话和 Provider 原生子 Agent 委派不得触发。底层 A2A 对外 API、Agent Card、Sharing Key 和轮询能力继续保留。
 
 ---
 
@@ -255,13 +255,21 @@ done
 
 ---
 
-### TC-10：Skill 推送验证
+### TC-10：navigator-ops 对账与旧 Skill 清理验证
 
-**目的**：验证 Worker 启动部署或 PlatformSkillSyncer 推送后，唯一受管目录中的 ask-agent 已收窄为 scheduled-only 版本
+**目的**：验证 Worker 启动部署或 PlatformSkillSyncer 请求对账后，`navigator-ops` 已完整部署，旧 Worker 生成的独立 Skill 不会复活
 
 ```bash
-# 唯一受管安装位置
-cat ~/.agents/skills/ask-agent/SKILL.md
+# 当前受管路由及 scheduled-task A2A 参考
+cat ~/.agents/skills/navigator-ops/SKILL.md
+cat ~/.agents/skills/navigator-ops/references/scheduled-a2a.md
+
+# 三个历史发现根中不应再有旧 Worker 生成副本
+for root in ~/.agents/skills ~/.agent/skills ~/.claude/skills; do
+  for name in ask-agent navigator-admin scheduled-task sharing-key; do
+    test ! -e "$root/$name/SKILL.md" || echo "legacy skill remains: $root/$name"
+  done
+done
 
 # 也可通过 Worker API 查看；启用 Worker Token 时补 Authorization 请求头
 curl -sG http://localhost:3031/api/v1/skills \
@@ -270,10 +278,11 @@ curl -sG http://localhost:3031/api/v1/skills \
 ```
 
 **检查项**：
-- [ ] `~/.agents/skills/ask-agent/SKILL.md` 存在，包含 `[NAVIGATOR_SCHEDULED_A2A]` 和 `targetAgentId`
-- [ ] 文件不包含动态 Agent 列表、`{{AGENT_TABLE}}`、`targetAgentName` 或通用裸 `@Agent` 路由说明
-- [ ] `{{NAVIGATOR_API_BASE}}` 已替换为实际地址
-- [ ] `.agent/skills/ask-agent` 与 `.claude/skills/ask-agent` 中已识别的 Navigator 旧副本被清理
+- [ ] `~/.agents/skills/navigator-ops/SKILL.md` 存在，包含受管 marker，并将 scheduled-task A2A 路由到 `references/scheduled-a2a.md`
+- [ ] `scheduled-a2a.md` 包含 `[NAVIGATOR_SCHEDULED_A2A]` 和 `targetAgentId`，且不包含动态 Agent 列表、`{{AGENT_TABLE}}`、`targetAgentName` 或通用裸 `@Agent` 路由说明
+- [ ] 路由包中的 `{{NAVIGATOR_API_BASE}}` 已替换为 Worker 当前配置地址
+- [ ] `~/.agents/skills`、`~/.agent/skills` 与 `~/.claude/skills` 中已识别的 `ask-agent`、`navigator-admin`、`scheduled-task`、`sharing-key` 旧副本均被清理
+- [ ] 旧控制面再次推送 retired 名称时，Worker 先执行对账并拒绝写回；新控制面的空 `skills` 请求可触发对账
 - [ ] 同名但无法识别为 Navigator 管理的用户文件、目录内其他文件以及链接未被删除或覆盖
 
 ---
@@ -295,7 +304,7 @@ P1~P4 前置检查
   ├─→ TC-08 空 question
   │
   ├─→ TC-09 按准确 agentId 轮询任务
-  └─→ TC-10 Skill 推送验证
+  └─→ TC-10 navigator-ops 对账与旧 Skill 清理验证
 ```
 
 ## 已知问题

@@ -1,4 +1,4 @@
-"""Platform skills deployment endpoint — receives skill content from Navigator and writes to ~/.agents/skills/."""
+"""Platform skill reconciliation and backward-compatible deployment endpoint."""
 
 from __future__ import annotations
 
@@ -24,25 +24,27 @@ class DeploySkillsRequest(BaseModel):
 
 
 def _write_skill_file(skills_dir: Path, name: str, content: str) -> bool:
-    """Write one platform skill to disk."""
-    if name == "ask-agent":
-        target = platform_skill_deployer.deploy_skill(skills_dir, name, content)
-        if target is None:
-            return False
-        platform_skill_deployer.remove_legacy_ask_agent_copies()
-        return True
-
-    target_dir = skills_dir / name
-    target_dir.mkdir(parents=True, exist_ok=True)
-    (target_dir / "SKILL.md").write_text(content, encoding="utf-8")
-    return True
+    """Write one non-retired, remotely supplied skill to disk."""
+    return platform_skill_deployer.deploy_skill(skills_dir, name, content) is not None
 
 
 @router.post("/platform-skills/deploy")
 async def deploy_skills(request: DeploySkillsRequest):
-    """Receive skill content pushed from Navigator and write to ~/.agents/skills/<name>/SKILL.md."""
+    """Reconcile local platform skills, then accept compatible extra skills.
+
+    Older control planes may still send retired skill names.  Reconciliation
+    runs first and the deployer rejects those names, so they cannot be revived.
+    An empty ``skills`` map is the current control-plane reconcile request.
+    """
     deployed = []
     skills_dir = user_skills_dir()
+    skill_roots = platform_skill_deployer.default_skill_roots(skills_dir)
+
+    await asyncio.to_thread(
+        platform_skill_deployer.reconcile_platform_skills,
+        skills_dir,
+        skill_roots,
+    )
 
     for name, content in request.skills.items():
         try:

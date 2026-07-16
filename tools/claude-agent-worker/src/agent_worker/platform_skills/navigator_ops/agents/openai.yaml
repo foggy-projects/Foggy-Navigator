@@ -1,0 +1,6 @@
+interface:
+  display_name: "Navigator Ops"
+  short_description: "Route explicit Navigator administration and automation workflows."
+  default_prompt: "Use $navigator-ops to perform the requested Foggy Navigator operational workflow safely."
+policy:
+  allow_implicit_invocation: false

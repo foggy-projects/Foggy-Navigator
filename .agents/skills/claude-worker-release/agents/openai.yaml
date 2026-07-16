@@ -1,0 +1,6 @@
+interface:
+  display_name: "Claude Worker Release"
+  short_description: "Route Proxy and Claude Agent Worker release workflows."
+  default_prompt: "Use $claude-worker-release to package or publish the requested Claude Proxy or Agent Worker release."
+policy:
+  allow_implicit_invocation: false
